@@ -11,9 +11,8 @@ import {
 } from "@oh-my-pi/pi-natives";
 import type { EditorTheme, MarkdownTheme, SelectListTheme, SymbolTheme } from "@oh-my-pi/pi-tui";
 import { adjustHsv, getCustomThemesDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
-import { TypeCompiler } from "@sinclair/typebox/compiler";
 import chalk from "chalk";
+import * as z from "zod/v4";
 // Embed theme JSON files at build time
 import darkThemeJson from "./dark.json" with { type: "json" };
 import { defaultThemes } from "./defaults";
@@ -807,118 +806,111 @@ const SPINNER_FRAMES: Record<SymbolPreset, Record<SpinnerType, string[]>> = {
 // Types & Schema
 // ============================================================================
 
-const ColorValueSchema = Type.Union([
-	Type.String(), // hex "#ff0000", var ref "primary", or empty ""
-	Type.Integer({ minimum: 0, maximum: 255 }), // 256-color index
+const colorValueSchema = z.union([
+	z.string(), // hex "#ff0000", var ref "primary", or empty ""
+	z.number().int().min(0).max(255), // 256-color index
 ]);
 
-type ColorValue = Static<typeof ColorValueSchema>;
+type ColorValue = z.infer<typeof colorValueSchema>;
 
-// Use Type.Union here (not StringEnum) because TypeCompiler doesn't support Type.Unsafe
-const SymbolPresetSchema = Type.Union([Type.Literal("unicode"), Type.Literal("nerd"), Type.Literal("ascii")]);
+const THEME_COLOR_KEYS = [
+	"accent",
+	"border",
+	"borderAccent",
+	"borderMuted",
+	"success",
+	"error",
+	"warning",
+	"muted",
+	"dim",
+	"text",
+	"thinkingText",
+	"selectedBg",
+	"userMessageBg",
+	"userMessageText",
+	"customMessageBg",
+	"customMessageText",
+	"customMessageLabel",
+	"toolPendingBg",
+	"toolSuccessBg",
+	"toolErrorBg",
+	"toolTitle",
+	"toolOutput",
+	"mdHeading",
+	"mdLink",
+	"mdLinkUrl",
+	"mdCode",
+	"mdCodeBlock",
+	"mdCodeBlockBorder",
+	"mdQuote",
+	"mdQuoteBorder",
+	"mdHr",
+	"mdListBullet",
+	"toolDiffAdded",
+	"toolDiffRemoved",
+	"toolDiffContext",
+	"syntaxComment",
+	"syntaxKeyword",
+	"syntaxFunction",
+	"syntaxVariable",
+	"syntaxString",
+	"syntaxNumber",
+	"syntaxType",
+	"syntaxOperator",
+	"syntaxPunctuation",
+	"thinkingOff",
+	"thinkingMinimal",
+	"thinkingLow",
+	"thinkingMedium",
+	"thinkingHigh",
+	"thinkingXhigh",
+	"bashMode",
+	"pythonMode",
+	"statusLineBg",
+	"statusLineSep",
+	"statusLineModel",
+	"statusLinePath",
+	"statusLineGitClean",
+	"statusLineGitDirty",
+	"statusLineContext",
+	"statusLineSpend",
+	"statusLineStaged",
+	"statusLineDirty",
+	"statusLineUntracked",
+	"statusLineOutput",
+	"statusLineCost",
+	"statusLineSubagents",
+] as const;
 
-const SymbolsSchema = Type.Optional(
-	Type.Object({
-		preset: Type.Optional(SymbolPresetSchema),
-		overrides: Type.Optional(Type.Record(Type.String(), Type.String())),
-	}),
+const themeColorsSchema = z.object(
+	Object.fromEntries(THEME_COLOR_KEYS.map(key => [key, colorValueSchema])) as unknown as {
+		[K in (typeof THEME_COLOR_KEYS)[number]]: typeof colorValueSchema;
+	},
 );
 
-const ThemeJsonSchema = Type.Object({
-	$schema: Type.Optional(Type.String()),
-	name: Type.String(),
-	vars: Type.Optional(Type.Record(Type.String(), ColorValueSchema)),
-	colors: Type.Object({
-		// Core UI (10 colors)
-		accent: ColorValueSchema,
-		border: ColorValueSchema,
-		borderAccent: ColorValueSchema,
-		borderMuted: ColorValueSchema,
-		success: ColorValueSchema,
-		error: ColorValueSchema,
-		warning: ColorValueSchema,
-		muted: ColorValueSchema,
-		dim: ColorValueSchema,
-		text: ColorValueSchema,
-		thinkingText: ColorValueSchema,
-		// Backgrounds & Content Text (11 colors)
-		selectedBg: ColorValueSchema,
-		userMessageBg: ColorValueSchema,
-		userMessageText: ColorValueSchema,
-		customMessageBg: ColorValueSchema,
-		customMessageText: ColorValueSchema,
-		customMessageLabel: ColorValueSchema,
-		toolPendingBg: ColorValueSchema,
-		toolSuccessBg: ColorValueSchema,
-		toolErrorBg: ColorValueSchema,
-		toolTitle: ColorValueSchema,
-		toolOutput: ColorValueSchema,
-		// Markdown (10 colors)
-		mdHeading: ColorValueSchema,
-		mdLink: ColorValueSchema,
-		mdLinkUrl: ColorValueSchema,
-		mdCode: ColorValueSchema,
-		mdCodeBlock: ColorValueSchema,
-		mdCodeBlockBorder: ColorValueSchema,
-		mdQuote: ColorValueSchema,
-		mdQuoteBorder: ColorValueSchema,
-		mdHr: ColorValueSchema,
-		mdListBullet: ColorValueSchema,
-		// Tool Diffs (3 colors)
-		toolDiffAdded: ColorValueSchema,
-		toolDiffRemoved: ColorValueSchema,
-		toolDiffContext: ColorValueSchema,
-		// Syntax Highlighting (9 colors)
-		syntaxComment: ColorValueSchema,
-		syntaxKeyword: ColorValueSchema,
-		syntaxFunction: ColorValueSchema,
-		syntaxVariable: ColorValueSchema,
-		syntaxString: ColorValueSchema,
-		syntaxNumber: ColorValueSchema,
-		syntaxType: ColorValueSchema,
-		syntaxOperator: ColorValueSchema,
-		syntaxPunctuation: ColorValueSchema,
-		// Thinking Level Borders (6 colors)
-		thinkingOff: ColorValueSchema,
-		thinkingMinimal: ColorValueSchema,
-		thinkingLow: ColorValueSchema,
-		thinkingMedium: ColorValueSchema,
-		thinkingHigh: ColorValueSchema,
-		thinkingXhigh: ColorValueSchema,
-		// Bash Mode (1 color)
-		bashMode: ColorValueSchema,
-		// Python Mode (1 color)
-		pythonMode: ColorValueSchema,
-		// Footer Status Line
-		statusLineBg: ColorValueSchema,
-		statusLineSep: ColorValueSchema,
-		statusLineModel: ColorValueSchema,
-		statusLinePath: ColorValueSchema,
-		statusLineGitClean: ColorValueSchema,
-		statusLineGitDirty: ColorValueSchema,
-		statusLineContext: ColorValueSchema,
-		statusLineSpend: ColorValueSchema,
-		statusLineStaged: ColorValueSchema,
-		statusLineDirty: ColorValueSchema,
-		statusLineUntracked: ColorValueSchema,
-		statusLineOutput: ColorValueSchema,
-		statusLineCost: ColorValueSchema,
-		statusLineSubagents: ColorValueSchema,
-	}),
-	export: Type.Optional(
-		Type.Object({
-			pageBg: Type.Optional(ColorValueSchema),
-			cardBg: Type.Optional(ColorValueSchema),
-			infoBg: Type.Optional(ColorValueSchema),
-		}),
-	),
-	symbols: SymbolsSchema,
+const symbolPresetSchema = z.enum(["unicode", "nerd", "ascii"]);
+
+const themeJsonSchema = z.object({
+	$schema: z.string().optional(),
+	name: z.string(),
+	vars: z.record(z.string(), colorValueSchema).optional(),
+	colors: themeColorsSchema,
+	export: z
+		.object({
+			pageBg: colorValueSchema.optional(),
+			cardBg: colorValueSchema.optional(),
+			infoBg: colorValueSchema.optional(),
+		})
+		.optional(),
+	symbols: z
+		.object({
+			preset: symbolPresetSchema.optional(),
+			overrides: z.record(z.string(), z.string()).optional(),
+		})
+		.optional(),
 });
 
-type ThemeJson = Static<typeof ThemeJsonSchema>;
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- TypeBox CJS/ESM type mismatch
-const validateThemeJson = TypeCompiler.Compile(ThemeJsonSchema as any);
+type ThemeJson = z.infer<typeof themeJsonSchema>;
 
 export type ThemeColor =
 	| "accent"
@@ -1638,18 +1630,20 @@ async function loadThemeJson(name: string): Promise<ThemeJson> {
 	} catch (error) {
 		throw new Error(`Failed to parse theme ${name}: ${error}`);
 	}
-	if (!validateThemeJson.Check(json)) {
-		const errors = Array.from(validateThemeJson.Errors(json));
+	const parsed = themeJsonSchema.safeParse(json);
+	if (!parsed.success) {
 		const missingColors: string[] = [];
 		const otherErrors: string[] = [];
 
-		for (const e of errors) {
-			// Check for missing required color properties
-			const match = e.path.match(/^\/colors\/(\w+)$/);
-			if (match && e.message.includes("Required")) {
-				missingColors.push(match[1]);
+		for (const issue of parsed.error.issues) {
+			const parts = issue.path;
+			const colorKey = parts.length === 2 && parts[0] === "colors" && typeof parts[1] === "string" ? parts[1] : null;
+
+			if (colorKey && issue.code === "invalid_type" && (issue as { received?: unknown }).received === undefined) {
+				missingColors.push(colorKey);
 			} else {
-				otherErrors.push(`  - ${e.path}: ${e.message}`);
+				const pathStr = parts.length === 0 ? "/" : `/${parts.map(String).join("/")}`;
+				otherErrors.push(`  - ${pathStr}: ${issue.message}`);
 			}
 		}
 
@@ -1666,7 +1660,7 @@ async function loadThemeJson(name: string): Promise<ThemeJson> {
 
 		throw new Error(errorMessage);
 	}
-	return json as ThemeJson;
+	return parsed.data;
 }
 
 interface CreateThemeOptions {

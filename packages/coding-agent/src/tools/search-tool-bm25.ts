@@ -1,7 +1,8 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { type Component, Text } from "@oh-my-pi/pi-tui";
+import type { Component } from "@oh-my-pi/pi-tui";
+import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import searchToolBm25Description from "../prompts/tools/search-tool-bm25.md" with { type: "text" };
@@ -30,15 +31,12 @@ const COLLAPSED_MATCH_LIMIT = 5;
 const MATCH_LABEL_LEN = 72;
 const MATCH_DESCRIPTION_LEN = 96;
 
-const searchToolBm25Schema = Type.Object({
-	query: Type.String({
-		description: "tool search query",
-		examples: ["kubernetes pod", "image processing", "git commit"],
-	}),
-	limit: Type.Optional(Type.Integer({ description: "max matches", minimum: 1 })),
+const searchToolBm25Schema = z.object({
+	query: z.string().describe("tool search query"),
+	limit: z.number().int().min(1).optional().describe("max matches"),
 });
 
-type SearchToolBm25Params = Static<typeof searchToolBm25Schema>;
+type SearchToolBm25Params = z.infer<typeof searchToolBm25Schema>;
 
 interface SearchToolBm25Match {
 	name: string;

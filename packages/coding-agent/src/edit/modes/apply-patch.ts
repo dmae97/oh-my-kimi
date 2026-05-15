@@ -8,19 +8,20 @@
  * the `patch` mode.
  */
 
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { parseApplyPatch, parseApplyPatchStreaming } from "../apply-patch/parser";
 import { ApplyPatchError } from "../diff";
 import type { PatchEditEntry } from "./patch";
 
-export const applyPatchSchema = Type.Object({
-	input: Type.String({
-		description:
+export const applyPatchSchema = z.object({
+	input: z
+		.string()
+		.describe(
 			"Full Codex apply_patch envelope, including '*** Begin Patch' and '*** End Patch'. Contains any mix of Add/Delete/Update (with optional Move to) file operations.",
-	}),
+		),
 });
 
-export type ApplyPatchParams = Static<typeof applyPatchSchema>;
+export type ApplyPatchParams = z.infer<typeof applyPatchSchema>;
 
 export type ApplyPatchEntry = PatchEditEntry & { path: string };
 

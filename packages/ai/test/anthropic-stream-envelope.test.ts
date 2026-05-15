@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Messages } from "@anthropic-ai/sdk/resources/messages/messages";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { streamAnthropic } from "../src/providers/anthropic";
 import type { AssistantMessageEvent, Context, Model, ProviderSessionState } from "../src/types";
 
@@ -294,7 +294,7 @@ describe("anthropic stream envelope handling", () => {
 					name: "edit",
 					description: "Edit a value",
 					strict: true,
-					parameters: Type.Object({ query: Type.String() }),
+					parameters: z.object({ query: z.string() }),
 				},
 			],
 		};
@@ -350,7 +350,7 @@ describe("anthropic stream envelope handling", () => {
 					name: "edit",
 					description: "Edit a value",
 					strict: true,
-					parameters: Type.Object({ query: Type.String() }),
+					parameters: z.object({ query: z.string() }),
 				},
 			],
 		};
@@ -486,7 +486,7 @@ describe("anthropic stream envelope handling", () => {
 				{
 					name: "lookup_weather",
 					description: "Lookup weather",
-					parameters: Type.Object({ city: Type.String() }),
+					parameters: z.object({ city: z.string() }),
 				},
 			],
 		};

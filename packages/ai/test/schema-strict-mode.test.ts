@@ -1,6 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { enforceStrictSchema, sanitizeSchemaForStrictMode, tryEnforceStrictSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { Type } from "@sinclair/typebox";
+import {
+	enforceStrictSchema,
+	sanitizeSchemaForStrictMode,
+	tryEnforceStrictSchema,
+	zodToWireSchema,
+} from "@oh-my-pi/pi-ai/utils/schema";
+import * as z from "zod/v4";
 
 describe("sanitizeSchemaForStrictMode", () => {
 	it("infers object type, strips non-structural keywords, and converts const to enum", () => {
@@ -233,12 +238,14 @@ describe("sanitizeSchemaForStrictMode", () => {
 
 describe("enforceStrictSchema", () => {
 	it("converts optional properties to nullable schemas and requires all object keys", () => {
-		const schema = Type.Object({
-			requiredText: Type.String(),
-			optionalCount: Type.Optional(Type.Number()),
-		});
+		const schema = zodToWireSchema(
+			z.object({
+				requiredText: z.string(),
+				optionalCount: z.number().optional(),
+			}),
+		);
 
-		const strict = enforceStrictSchema(schema as unknown as Record<string, unknown>);
+		const strict = enforceStrictSchema(schema);
 		const properties = strict.properties as Record<string, Record<string, unknown>>;
 
 		expect(strict.required).toEqual(["requiredText", "optionalCount"]);
@@ -248,16 +255,18 @@ describe("enforceStrictSchema", () => {
 	});
 
 	it("never emits undefined as a schema type", () => {
-		const schema = Type.Object({
-			questions: Type.Array(
-				Type.Object({
-					id: Type.String(),
-					recommended: Type.Optional(Type.Number()),
-				}),
-			),
-		});
+		const schema = zodToWireSchema(
+			z.object({
+				questions: z.array(
+					z.object({
+						id: z.string(),
+						recommended: z.number().optional(),
+					}),
+				),
+			}),
+		);
 
-		const strict = enforceStrictSchema(schema as unknown as Record<string, unknown>);
+		const strict = enforceStrictSchema(schema);
 		const serialized = JSON.stringify(strict);
 
 		expect(serialized.includes('"undefined"')).toBe(false);
@@ -452,27 +461,29 @@ describe("tryEnforceStrictSchema", () => {
 	});
 
 	it("keeps shared object schemas strict-compatible after adaptation", () => {
-		const sharedTaskSchema = Type.Object({
-			content: Type.String(),
-			status: Type.Optional(Type.String()),
-			notes: Type.Optional(Type.String()),
+		const sharedTaskSchema = z.object({
+			content: z.string(),
+			status: z.string().optional(),
+			notes: z.string().optional(),
 		});
-		const schema = Type.Object({
-			ops: Type.Array(
-				Type.Union([
-					Type.Object({
-						op: Type.Literal("replace"),
-						tasks: Type.Array(sharedTaskSchema),
-					}),
-					Type.Object({
-						op: Type.Literal("update"),
-						tasks: Type.Optional(Type.Array(sharedTaskSchema)),
-					}),
-				]),
-			),
-		});
+		const schema = zodToWireSchema(
+			z.object({
+				ops: z.array(
+					z.union([
+						z.object({
+							op: z.literal("replace"),
+							tasks: z.array(sharedTaskSchema),
+						}),
+						z.object({
+							op: z.literal("update"),
+							tasks: z.array(sharedTaskSchema).optional(),
+						}),
+					]),
+				),
+			}),
+		);
 
-		const result = tryEnforceStrictSchema(schema as unknown as Record<string, unknown>);
+		const result = tryEnforceStrictSchema(schema);
 		const rootProperties = result.schema.properties as Record<string, Record<string, unknown>>;
 		const opBranches = ((rootProperties.ops.items as Record<string, unknown>).anyOf ?? []) as Array<
 			Record<string, unknown>

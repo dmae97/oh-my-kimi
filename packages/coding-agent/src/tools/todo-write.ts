@@ -1,10 +1,9 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { StringEnum } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
 import chalk from "chalk";
+import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import todoWriteDescription from "../prompts/tools/todo-write.md" with { type: "text" };
@@ -45,45 +44,38 @@ export interface TodoWriteToolDetails {
 // Schema
 // =============================================================================
 
-const TodoOp = StringEnum(["init", "start", "done", "rm", "drop", "append", "note"] as const, {
-	description: "operation to apply",
+const TodoOp = z
+	.enum(["init", "start", "done", "rm", "drop", "append", "note"] as const)
+	.describe("operation to apply");
+
+const InitListEntry = z.object({
+	phase: z.string().describe("phase name (short noun phrase)"),
+	items: z
+		.array(z.string().describe("task content (5-10 words)"))
+		.min(1)
+		.describe("tasks for this phase, in execution order; all start as pending"),
 });
 
-const InitListEntry = Type.Object({
-	phase: Type.String({ description: "phase name (short noun phrase)", examples: ["Foundation", "Auth"] }),
-	items: Type.Array(Type.String({ description: "task content (5-10 words)" }), {
-		minItems: 1,
-		description: "tasks for this phase, in execution order; all start as pending",
-	}),
-});
-
-const TodoOpEntry = Type.Object({
+const TodoOpEntry = z.object({
 	op: TodoOp,
-	list: Type.Optional(Type.Array(InitListEntry, { description: "phased task list for op=init" })),
-	task: Type.Optional(
-		Type.String({ description: "task content for start/done/rm/drop/note", examples: ["Run tests"] }),
-	),
-	phase: Type.Optional(Type.String({ description: "phase name for done/rm/drop/append", examples: ["Auth"] })),
-	items: Type.Optional(
-		Type.Array(Type.String({ description: "task content (5-10 words)" }), {
-			minItems: 1,
-			description: "tasks to append to `phase` for op=append",
-		}),
-	),
-	text: Type.Optional(Type.String({ description: "note text for op=note (appended with newline)" })),
+	list: z.array(InitListEntry).optional().describe("phased task list for op=init"),
+	task: z.string().optional().describe("task content for start/done/rm/drop/note"),
+	phase: z.string().optional().describe("phase name for done/rm/drop/append"),
+	items: z
+		.array(z.string().describe("task content (5-10 words)"))
+		.min(1)
+		.optional()
+		.describe("tasks to append to `phase` for op=append"),
+	text: z.string().optional().describe("note text for op=note (appended with newline)"),
 });
 
-const todoWriteSchema = Type.Object(
-	{
-		ops: Type.Array(TodoOpEntry, {
-			minItems: 1,
-			description: "ordered todo operations",
-		}),
-	},
-	{ description: "Apply ordered todo operations" },
-);
+const todoWriteSchema = z
+	.object({
+		ops: z.array(TodoOpEntry).min(1).describe("ordered todo operations"),
+	})
+	.describe("Apply ordered todo operations");
 
-type TodoWriteParams = Static<typeof todoWriteSchema>;
+type TodoWriteParams = z.infer<typeof todoWriteSchema>;
 type TodoOpEntryValue = TodoWriteParams["ops"][number];
 
 // =============================================================================

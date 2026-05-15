@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import * as typebox from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { GreenCommand } from "../../../src/extensibility/custom-commands/bundled/ci-green";
 import type { CustomCommandAPI } from "../../../src/extensibility/custom-commands/types";
 import type { HookCommandContext } from "../../../src/extensibility/hooks/types";
@@ -19,7 +19,8 @@ function createApi(): CustomCommandAPI {
 			code: 0,
 			killed: false,
 		}),
-		typebox,
+		typebox: {} as unknown as typeof import("../../../src/extensibility/typebox"),
+		zod: z,
 		pi: piCodingAgent,
 	};
 }

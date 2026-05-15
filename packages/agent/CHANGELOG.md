@@ -1,12 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Removed legacy telemetry constants from the public enum surface (including `AGGREGATE_ATTR`, `GenAIAttr.System`, and old `gen_ai.*` extension keys such as `gen_ai.request.service_tier`/cost/tool status/handoff fields) and replaced them with `OpenAIAttr`, `PiGenAIAttr`, and `PiGenAIAggregateAttr`
 
 ### Added
 
+- Added support for defining `AgentTool` schemas with Zod, with legacy TypeBox schemas still supported when generating tool schemas for model calls
 - Added `OpenAIAttr`, `PiGenAIAttr`, and `PiGenAIAggregateAttr` exports so consumers can reference the new `openai.*` and `pi.gen_ai.*` telemetry attribute keys directly
 - Added `onChatUsage` to `AgentTelemetryConfig`, an always-fired hook receiving a `ChatUsageEvent` for every chat step that produced usage. The event carries the chat `span`, `agent`, `conversationId`, `stepNumber`, `model`, `provider`, `serviceTier`, `usage`, optional `cost`, and resolved dynamic `attributes` — independent of whether a `costEstimator` is configured.
 - Added `agentLoopDetailed(...)` and `agentLoopContinueDetailed(...)` helpers that return the same event stream plus a `detailed()` result with run `telemetry` and `coverage`
@@ -32,6 +34,7 @@
 
 ### Fixed
 
+- Fixed intent-field injection for tool schemas defined with Zod by converting them to wire schema before mutation
 - Fixed token accounting in `ChatUsageEvent` and usage summaries so `inputTokens` and `totalTokens` now include cached read/write input tokens
 - Fixed `execute_tool` span attributes so `pi.gen_ai.tool.status` and `error.type` now reflect run-level tool outcomes (`ok`, `error`, `skipped`, `blocked`, `timeout`, `aborted`) instead of mapping all non-ok cases the same way
 - Fixed `onRunEnd` callbacks to be safe and idempotent by invoking them once per run and swallowing thrown callback errors so they cannot fail or duplicate successful runs

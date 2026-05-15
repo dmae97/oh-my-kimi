@@ -1,49 +1,39 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { validateToolCall } from "@oh-my-pi/pi-ai";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { ChangelogCategory, ConventionalAnalysis } from "./types";
 import { extractTextContent, extractToolCall, normalizeAnalysis, parseJsonPayload } from "./utils";
 
+const changelogCategoryLiteral = z.enum([
+	"Added",
+	"Changed",
+	"Fixed",
+	"Deprecated",
+	"Removed",
+	"Security",
+	"Breaking Changes",
+]);
+
 /**
- * Shared TypeBox schema for the `create_conventional_analysis` tool used by
+ * Shared Zod schema for the `create_conventional_analysis` tool used by
  * both the single-pass analysis call and the map-reduce reduce phase. Schemas
  * are identical across phases — only the surrounding tool `description`
  * differs to reflect the input the phase is summarizing.
  */
-export const conventionalAnalysisParameters = Type.Object({
-	type: Type.Union([
-		Type.Literal("feat"),
-		Type.Literal("fix"),
-		Type.Literal("refactor"),
-		Type.Literal("docs"),
-		Type.Literal("test"),
-		Type.Literal("chore"),
-		Type.Literal("style"),
-		Type.Literal("perf"),
-		Type.Literal("build"),
-		Type.Literal("ci"),
-		Type.Literal("revert"),
-	]),
-	scope: Type.Union([Type.String(), Type.Null()]),
-	details: Type.Array(
-		Type.Object({
-			text: Type.String(),
-			changelog_category: Type.Optional(
-				Type.Union([
-					Type.Literal("Added"),
-					Type.Literal("Changed"),
-					Type.Literal("Fixed"),
-					Type.Literal("Deprecated"),
-					Type.Literal("Removed"),
-					Type.Literal("Security"),
-					Type.Literal("Breaking Changes"),
-				]),
-			),
-			user_visible: Type.Optional(Type.Boolean()),
-		}),
-	),
-	issue_refs: Type.Array(Type.String()),
-});
+export const conventionalAnalysisParameters = z
+	.object({
+		type: z.enum(["feat", "fix", "refactor", "docs", "test", "chore", "style", "perf", "build", "ci", "revert"]),
+		scope: z.union([z.string(), z.null()]),
+		details: z.array(
+			z.object({
+				text: z.string(),
+				changelog_category: changelogCategoryLiteral.optional(),
+				user_visible: z.boolean().optional(),
+			}),
+		),
+		issue_refs: z.array(z.string()),
+	})
+	.strict();
 
 export interface ConventionalAnalysisTool {
 	name: "create_conventional_analysis";
@@ -80,7 +70,7 @@ export function parseConventionalAnalysisResponse(
 ): ConventionalAnalysis {
 	const toolCall = extractToolCall(message, tool.name);
 	if (toolCall) {
-		const parsed = validateToolCall([tool], toolCall) as ParsedConventionalAnalysis;
+		const parsed = validateToolCall([tool], toolCall) as z.infer<typeof conventionalAnalysisParameters>;
 		return normalizeAnalysis(parsed);
 	}
 	const text = extractTextContent(message);

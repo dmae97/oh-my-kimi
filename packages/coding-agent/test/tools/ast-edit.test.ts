@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { adaptSchemaForStrict } from "@oh-my-pi/pi-ai/utils/schema";
+import { adaptSchemaForStrict, toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -36,7 +36,7 @@ describe("ast_edit tool schema", () => {
 		const tools = await createTools(createTestSession());
 		const tool = tools.find(entry => entry.name === "ast_edit");
 		expect(tool).toBeDefined();
-		const schema = asSchemaObject(tool?.parameters);
+		const schema = toolWireSchema(tool!);
 		const properties = asSchemaObject(schema.properties);
 		const ops = asSchemaObject(properties.ops);
 
@@ -54,7 +54,7 @@ describe("ast_edit tool schema", () => {
 		const tools = await createTools(createTestSession());
 		const tool = tools.find(entry => entry.name === "ast_edit");
 		expect(tool).toBeDefined();
-		const schema = asSchemaObject(tool?.parameters);
+		const schema = toolWireSchema(tool!);
 
 		const strict = adaptSchemaForStrict(schema, true);
 		expect(strict.strict).toBe(true);

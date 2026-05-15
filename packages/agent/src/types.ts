@@ -7,13 +7,14 @@ import type {
 	Message,
 	Model,
 	SimpleStreamOptions,
+	Static,
 	streamSimple,
 	TextContent,
 	Tool,
 	ToolChoice,
 	ToolResultMessage,
+	TSchema,
 } from "@oh-my-pi/pi-ai";
-import type { Static, TSchema } from "@sinclair/typebox";
 import type { HarmonyAuditEvent } from "./harmony-leak";
 import type { AgentRunCoverage, AgentRunSummary } from "./run-collector";
 import type { AgentTelemetryConfig } from "./telemetry";

@@ -5,7 +5,7 @@
  * fallback strategies for finding text in files.
  */
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
 import type { ToolSession } from "../../tools";
 import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
@@ -976,25 +976,23 @@ export function findContextLine(
 	return { index: undefined, confidence: bestScore };
 }
 
-export const replaceEditEntrySchema = Type.Object(
-	{
-		old_text: Type.String({ description: "Text to find (fuzzy whitespace matching enabled)" }),
-		new_text: Type.String({ description: "Replacement text" }),
-		all: Type.Optional(Type.Boolean({ description: "Replace all occurrences (default: unique match required)" })),
-	},
-	{ additionalProperties: false },
-);
+export const replaceEditEntrySchema = z
+	.object({
+		old_text: z.string().describe("Text to find (fuzzy whitespace matching enabled)"),
+		new_text: z.string().describe("Replacement text"),
+		all: z.boolean().describe("Replace all occurrences (default: unique match required)").optional(),
+	})
+	.strict();
 
-export const replaceEditSchema = Type.Object(
-	{
-		path: Type.String({ description: "file path for edits" }),
-		edits: Type.Array(replaceEditEntrySchema, { description: "Replacements", minItems: 1 }),
-	},
-	{ additionalProperties: false },
-);
+export const replaceEditSchema = z
+	.object({
+		path: z.string().describe("file path for edits"),
+		edits: z.array(replaceEditEntrySchema).min(1).describe("Replacements"),
+	})
+	.strict();
 
-export type ReplaceEditEntry = Static<typeof replaceEditEntrySchema>;
-export type ReplaceParams = Static<typeof replaceEditSchema>;
+export type ReplaceEditEntry = z.infer<typeof replaceEditEntrySchema>;
+export type ReplaceParams = z.infer<typeof replaceEditSchema>;
 
 export interface ExecuteReplaceSingleOptions {
 	session: ToolSession;

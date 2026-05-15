@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Effort, type Model } from "@oh-my-pi/pi-ai";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { Settings } from "../src/config/settings";
 import type { CustomTool } from "../src/extensibility/custom-tools/types";
 import { AgentSession } from "../src/session/agent-session";
@@ -26,7 +26,7 @@ function createModel(): Model<"openai-responses"> {
 }
 
 function createBasicTool(name: string, label: string): AgentTool {
-	const schema = Type.Object({ value: Type.String() });
+	const schema = z.object({ value: z.string() });
 	return {
 		name,
 		label,
@@ -46,12 +46,12 @@ function createMcpTool(
 	description: string,
 	schemaKeys: string[],
 ): AgentTool {
-	const properties = Object.fromEntries(schemaKeys.map(key => [key, Type.String()]));
+	const properties = Object.fromEntries(schemaKeys.map(key => [key, z.string()]));
 	return {
 		name,
 		label: `${serverName}/${mcpToolName}`,
 		description,
-		parameters: Type.Object(properties),
+		parameters: z.object(properties),
 		strict: true,
 		mcpServerName: serverName,
 		mcpToolName,
@@ -68,12 +68,12 @@ function createMcpCustomTool(
 	description: string,
 	schemaKeys: string[],
 ): CustomTool {
-	const properties = Object.fromEntries(schemaKeys.map(key => [key, Type.String()]));
+	const properties = Object.fromEntries(schemaKeys.map(key => [key, z.string()]));
 	return {
 		name,
 		label: `${serverName}/${mcpToolName}`,
 		description,
-		parameters: Type.Object(properties),
+		parameters: z.object(properties),
 		mcpServerName: serverName,
 		mcpToolName,
 		async execute() {

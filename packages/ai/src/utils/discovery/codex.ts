@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod/v4";
 import { CODEX_BASE_URL, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../../providers/openai-codex/constants";
 import type { Model } from "../../types";
 import { isRecord } from "../../utils";

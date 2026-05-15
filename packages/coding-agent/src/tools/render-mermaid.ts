@@ -1,22 +1,22 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type MermaidAsciiRenderOptions, prompt, renderMermaidAscii } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import renderMermaidDescription from "../prompts/tools/render-mermaid.md" with { type: "text" };
 import type { ToolSession } from "./index";
 
-const renderMermaidSchema = Type.Object({
-	mermaid: Type.String({ description: "mermaid source", examples: ["graph TD; A-->B"] }),
-	config: Type.Optional(
-		Type.Object({
-			useAscii: Type.Optional(Type.Boolean()),
-			paddingX: Type.Optional(Type.Number()),
-			paddingY: Type.Optional(Type.Number()),
-			boxBorderPadding: Type.Optional(Type.Number()),
-		}),
-	),
+const renderMermaidSchema = z.object({
+	mermaid: z.string().describe("mermaid source"),
+	config: z
+		.object({
+			useAscii: z.boolean().optional(),
+			paddingX: z.number().optional(),
+			paddingY: z.number().optional(),
+			boxBorderPadding: z.number().optional(),
+		})
+		.optional(),
 });
 
-type RenderMermaidParams = Static<typeof renderMermaidSchema>;
+type RenderMermaidParams = z.infer<typeof renderMermaidSchema>;
 
 function sanitizeRenderConfig(config: MermaidAsciiRenderOptions | undefined): MermaidAsciiRenderOptions | undefined {
 	if (!config) return undefined;

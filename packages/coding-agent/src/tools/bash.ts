@@ -3,7 +3,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { ImageProtocol, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { $env, getProjectDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { AsyncJobManager } from "../async";
 import { type BashResult, executeBash } from "../exec/bash-executor";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -44,30 +44,16 @@ async function saveBashOriginalArtifact(session: ToolSession, originalText: stri
 	}
 }
 
-const bashSchemaBase = Type.Object({
-	command: Type.String({ description: "command to execute", examples: ["ls -la", "echo hi"] }),
-	env: Type.Optional(
-		Type.Record(Type.String({ pattern: BASH_ENV_NAME_PATTERN.source }), Type.String(), {
-			description: "extra env vars",
-		}),
-	),
-	timeout: Type.Optional(Type.Number({ description: "timeout in seconds", default: 300 })),
-	cwd: Type.Optional(Type.String({ description: "working directory", examples: ["src/", "/tmp"] })),
-
-	pty: Type.Optional(
-		Type.Boolean({
-			description: "run in pty mode",
-		}),
-	),
+const bashSchemaBase = z.object({
+	command: z.string().describe("command to execute"),
+	env: z.record(z.string().regex(BASH_ENV_NAME_PATTERN), z.string()).optional().describe("extra env vars"),
+	timeout: z.number().default(300).describe("timeout in seconds").optional(),
+	cwd: z.string().describe("working directory").optional(),
+	pty: z.boolean().describe("run in pty mode").optional(),
 });
 
-const bashSchemaWithAsync = Type.Object({
-	...bashSchemaBase.properties,
-	async: Type.Optional(
-		Type.Boolean({
-			description: "run in background",
-		}),
-	),
+const bashSchemaWithAsync = bashSchemaBase.extend({
+	async: z.boolean().describe("run in background").optional(),
 });
 
 type BashToolSchema = typeof bashSchemaBase | typeof bashSchemaWithAsync;

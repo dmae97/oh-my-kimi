@@ -1,12 +1,12 @@
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { DiffHunk, FileHunks } from "../../../commit/types";
 import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
 
-const gitHunkSchema = Type.Object({
-	file: Type.String({ description: "File path" }),
-	hunks: Type.Optional(Type.Array(Type.Number({ description: "1-based hunk indices" }), { minItems: 1 })),
-	staged: Type.Optional(Type.Boolean({ description: "Use staged changes (default: true)" })),
+const gitHunkSchema = z.object({
+	file: z.string().describe("File path"),
+	hunks: z.array(z.number().describe("1-based hunk indices")).min(1).optional(),
+	staged: z.boolean().describe("Use staged changes (default: true)").optional(),
 });
 
 function selectHunks(fileHunks: FileHunks, requested?: number[]): DiffHunk[] {

@@ -1,17 +1,15 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { logger, untilAborted } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { formatCurrentTime, formatMemories } from "../hindsight/content";
 import recallDescription from "../prompts/tools/recall.md" with { type: "text" };
 import type { ToolSession } from ".";
 
-const hindsightRecallSchema = Type.Object({
-	query: Type.String({
-		description: "Natural language search query. Be specific about what you need to know.",
-	}),
+const hindsightRecallSchema = z.object({
+	query: z.string().describe("Natural language search query. Be specific about what you need to know."),
 });
 
-export type HindsightRecallParams = Static<typeof hindsightRecallSchema>;
+export type HindsightRecallParams = z.infer<typeof hindsightRecallSchema>;
 
 export class HindsightRecallTool implements AgentTool<typeof hindsightRecallSchema> {
 	readonly name = "recall";

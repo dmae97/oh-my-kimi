@@ -1,18 +1,32 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed the extension and hook runtime API by moving schema typing from direct TypeBox imports to `TSchema` from `@oh-my-pi/pi-ai`, requiring callers who use TypeScript imports of `Type` to migrate via provided injected modules
 
 ### Added
 
+- Added `zod` to the Extension, Custom Tool, Hook, and Custom Command APIs as `pi.zod` so extension and plugin authors can define tool schemas with Zod without separate imports
+- Added `pi.zod` as a canonical schema API for examples and extension plugins while keeping `typebox` available as legacy compatibility
 - Added a `telemetry` option to `createAgentSession` for passing OpenTelemetry configuration through to the underlying Agent
 
 ### Changed
 
+- Changed tool parameter schemas across the agent to use the shared Pi schema pipeline (`TSchema` and `fromTypeBox`) instead of direct AJV/TypeBox compilation for stricter schema validation compatibility
+- Changed GitHub tool input schema shape to expose operation fields in a flat schema form without legacy `run_watch`-style nesting
 - Changed Python session pooling to remove the previous 4-session retention cap and 5-minute idle-session eviction, so kernels now stay alive for a session until explicitly disposed via `disposeKernelSessionsByOwner` or `disposeAllKernelSessions`
 - Changed kernel cleanup behavior to avoid automatic eviction by idle timeout and capacity pressure, so additional Python sessions are not queued behind retained-session shutdown retries
+- Replaced the bundled `@sinclair/typebox` runtime dependency with an in-repo Zod-backed shim exposed through `pi.typebox.Type.*`. Common builders (`Object`, `String`, `Number`, `Integer`, `Boolean`, `Array`, `Tuple`, `Union`, `Intersect`, `Literal`, `Enum`, `Optional`, `Nullable`, `Record`, `Partial`, `Required`, `Pick`, `Omit`, `Composite`, …) keep their existing call signatures but now return Zod schemas that flow through the same validation/wire pipeline as `pi.zod`. Plugins that imported `@sinclair/typebox` directly (rather than through `pi.typebox`) or relied on TypeBox-only APIs (`TypeCompiler`, `TypeRegistry`, the `Symbol(TypeBox.Kind)` marker) must now vendor `@sinclair/typebox` in their own package.
+
+### Deprecated
+
+- Deprecated direct TypeBox-only examples for plugin schemas by updating example documentation to prefer `pi.zod`
 
 ### Fixed
 
+- Fixed subagent execution hangs by enforcing `task.maxRuntimeMs` as a wall-clock limit even when inference streaming stalls, so stuck subagents now abort and report runtime-limit exceeded
+- Fixed tool schema compatibility validation by routing TypeBox schemas through shared conversion and Zod-based validation to avoid strict-schema provider mismatches
 - Fixed Python execution cancellation and timeouts by escalating to kernel shutdown if `SIGINT` did not terminate a running cell within 2 seconds, preventing indefinite hangs in queued or stuck sessions
 - Fixed cleanup blocking during long-running executions by forcing a kernel shutdown path when interrupt-based cancellation is ignored
 - Fixed bash output emitting a spurious `[… 0 lines elided (NB) …]` marker (and reordering the artifact link before the command output) when the shell minimizer rewrote a small command's output. After `OutputSink.replace()` swapped the minimized text into the buffer, the subsequent `sink.push("[raw output: artifact://N]\n")` chunk was funneled back into the (now empty) head-retention window while the pre-replace `#totalBytes` still tracked the original raw stream — so `dump()` composed `<head=artifact-link> + <middle-elision marker against stale totals> + <tail=minimized text>` instead of `<minimized text> + <artifact link>`. `replace()` now realigns `#totalBytes`/`#totalLines`/`#sawData`/`#truncated` to the authoritative buffer and disables head retention for the lifetime of the sink, so further pushes append to the tail buffer in order. The bash executor also drops the leading `\n` on the artifact-link push when the minimized text already ends with one so the separator stays single-newline.

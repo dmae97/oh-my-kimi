@@ -1,5 +1,4 @@
-export type { Static, TSchema } from "@sinclair/typebox";
-export { Type } from "@sinclair/typebox";
+export { type ZodType, z } from "zod/v4";
 export * from "./api-registry";
 export * from "./auth-storage";
 export * from "./model-cache";

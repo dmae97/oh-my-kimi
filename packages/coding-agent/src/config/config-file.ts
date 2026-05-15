@@ -1,10 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import type { TSchema } from "@sinclair/typebox";
-import { Value } from "@sinclair/typebox/value";
-import type { ErrorObject } from "ajv";
 import { JSONC, YAML } from "bun";
+import type { ZodType } from "zod/v4";
+
+/** Minimal subset of the AJV ConfigSchemaError shape this module actually relies on. */
+interface ConfigSchemaError {
+	instancePath: string;
+	message: string | undefined;
+}
 
 function migrateJsonToYml(jsonPath: string, ymlPath: string) {
 	try {
@@ -25,7 +29,7 @@ function migrateJsonToYml(jsonPath: string, ymlPath: string) {
 
 export interface IConfigFile<T> {
 	readonly id: string;
-	readonly schema: TSchema;
+	readonly schema: ZodType<T>;
 	path?(): string;
 	load(): T | null;
 	invalidate?(): void;
@@ -35,7 +39,7 @@ export class ConfigError extends Error {
 	readonly #message: string;
 	constructor(
 		public readonly id: string,
-		public readonly schemaErrors: ErrorObject[] | null | undefined,
+		public readonly schemaErrors: ConfigSchemaError[] | null | undefined,
 		public readonly other?: { err: unknown; stage: string },
 	) {
 		let messages: string[] | undefined;
@@ -68,7 +72,6 @@ export class ConfigError extends Error {
 				break;
 			default:
 				message = `${title}\n${messages!.map(m => `  - ${m}`).join("\n")}`;
-				break;
 		}
 
 		super(message, { cause });
@@ -99,7 +102,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 
 	constructor(
 		readonly id: string,
-		readonly schema: TSchema,
+		readonly schema: ZodType<T>,
 		configPath: string = path.join(getAgentDir(), `${id}.yml`),
 	) {
 		this.#basePath = configPath;
@@ -146,7 +149,14 @@ export class ConfigFile<T> implements IConfigFile<T> {
 	}
 
 	createDefault(): T {
-		return Value.Default(this.schema, [], undefined) as T;
+		const parsed = this.schema.safeParse({});
+		if (parsed.success) return parsed.data;
+		const fallback = this.schema.safeParse(undefined);
+		if (fallback.success) return fallback.data;
+		throw new ConfigError(this.id, undefined, {
+			err: new Error("Schema produced no default value"),
+			stage: "createDefault",
+		});
 	}
 
 	#storeCache(result: LoadResult<T>): LoadResult<T> {
@@ -169,17 +179,29 @@ export class ConfigFile<T> implements IConfigFile<T> {
 				throw new Error(`Invalid config file path: ${this.#basePath}`);
 			}
 
-			if (!Value.Check(this.schema, parsed)) {
-				const schemaErrors: ErrorObject[] = [];
-				for (const err of Value.Errors(this.schema, parsed)) {
-					schemaErrors.push({ instancePath: err.path, message: err.message } as ErrorObject);
+			const checked = this.schema.safeParse(parsed);
+			if (!checked.success) {
+				const schemaErrors: ConfigSchemaError[] = [];
+				for (const issue of checked.error.issues) {
+					const instancePath = issue.path.length === 0 ? "" : `/${issue.path.map(String).join("/")}`;
+					schemaErrors.push({ instancePath, message: issue.message });
 					if (schemaErrors.length >= 50) break;
 				}
 				const error = new ConfigError(this.id, schemaErrors);
 				logger.warn("Failed to parse config file", { path: this.path(), error });
 				return this.#storeCache({ error, status: "error" });
 			}
-			return this.#storeCache({ value: parsed as T, status: "ok" });
+			const value = checked.data;
+			try {
+				this.#auxValidate?.(value);
+			} catch (error) {
+				const wrapped =
+					error instanceof ConfigError
+						? error
+						: new ConfigError(this.id, undefined, { err: error, stage: "AuxValidate" });
+				return this.#storeCache({ error: wrapped, status: "error" });
+			}
+			return this.#storeCache({ value, status: "ok" });
 		} catch (error) {
 			if (isEnoent(error)) {
 				return this.#storeCache({ status: "not-found" });

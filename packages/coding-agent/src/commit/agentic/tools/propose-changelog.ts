@@ -1,29 +1,29 @@
-import { type TSchema, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { CommitAgentState } from "../../../commit/agentic/state";
 import { CHANGELOG_CATEGORIES, type ChangelogCategory } from "../../../commit/types";
 import type { CustomTool } from "../../../extensibility/custom-tools/types";
 
-const changelogEntryProperties = CHANGELOG_CATEGORIES.reduce<Record<ChangelogCategory, TSchema>>(
+const changelogEntryProperties = CHANGELOG_CATEGORIES.reduce<Record<ChangelogCategory, z.ZodType>>(
 	(acc, category) => {
-		acc[category] = Type.Optional(Type.Array(Type.String()));
+		acc[category] = z.array(z.string()).optional();
 		return acc;
 	},
-	{} as Record<ChangelogCategory, TSchema>,
+	{} as Record<ChangelogCategory, z.ZodType>,
 );
 
-const changelogEntriesSchema = Type.Object(changelogEntryProperties);
-const changelogDeletionsSchema = Type.Object(changelogEntryProperties, {
-	description: "Entries to remove from existing changelog sections (case-insensitive match)",
-});
+const changelogEntriesSchema = z.object(changelogEntryProperties);
+const changelogDeletionsSchema = z
+	.object(changelogEntryProperties)
+	.describe("Entries to remove from existing changelog sections (case-insensitive match)");
 
-const changelogEntrySchema = Type.Object({
-	path: Type.String(),
+const changelogEntrySchema = z.object({
+	path: z.string(),
 	entries: changelogEntriesSchema,
-	deletions: Type.Optional(changelogDeletionsSchema),
+	deletions: changelogDeletionsSchema.optional(),
 });
 
-const proposeChangelogSchema = Type.Object({
-	entries: Type.Array(changelogEntrySchema),
+const proposeChangelogSchema = z.object({
+	entries: z.array(changelogEntrySchema),
 });
 
 interface ChangelogResponse {

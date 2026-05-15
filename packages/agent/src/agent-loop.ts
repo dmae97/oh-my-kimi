@@ -7,9 +7,12 @@ import {
 	type AssistantMessageEvent,
 	type Context,
 	EventStream,
+	isZodSchema,
 	streamSimple,
 	type ToolResultMessage,
+	type TSchema,
 	validateToolArguments,
+	zodToWireSchema,
 } from "@oh-my-pi/pi-ai";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 import {
@@ -27,6 +30,7 @@ import {
 	finishExecuteToolSpan,
 	finishInvokeAgentSpan,
 	fireOnRunEnd,
+	PiGenAIAttr,
 	recordSkippedTool,
 	resolveTelemetry,
 	runInActiveSpan,
@@ -363,10 +367,15 @@ function normalizeTools(tools: AgentContext["tools"], injectIntent: boolean): Co
 	injectIntent = injectIntent && Bun.env.PI_NO_INTENT !== "1";
 	return tools?.map(t => {
 		const intentMode = resolveIntentMode(t.intent);
-		const parameters =
-			injectIntent && intentMode !== "omit"
-				? (injectIntentIntoSchema(t.parameters, intentMode) as typeof t.parameters)
-				: t.parameters;
+		let parameters: TSchema = t.parameters;
+		if (injectIntent && intentMode !== "omit") {
+			if (isZodSchema(parameters)) {
+				const wired = zodToWireSchema(parameters);
+				parameters = injectIntentIntoSchema(wired, intentMode) as TSchema;
+			} else {
+				parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
+			}
+		}
 		const description = t.description ?? "";
 		return { ...t, parameters, description };
 	});

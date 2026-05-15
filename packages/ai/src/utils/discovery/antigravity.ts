@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod/v4";
 import { getAntigravityUserAgent } from "../../providers/google-gemini-headers";
 import type { Model } from "../../types";
 import { toPositiveNumber } from "../../utils";

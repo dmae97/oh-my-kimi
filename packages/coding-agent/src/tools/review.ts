@@ -6,18 +6,15 @@
  * Reviewers finish via `yield` tool with SubmitReviewDetails schema.
  */
 // ─────────────────────────────────────────────────────────────────────────────
-// Subprocess tool handlers - registered for extraction/rendering in task tool
-// ─────────────────────────────────────────────────────────────────────────────
+
 import path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { StringEnum } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Container, Text } from "@oh-my-pi/pi-tui";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { Theme, ThemeColor } from "../modes/theme/theme";
 import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
-
 export type FindingPriority = "P0" | "P1" | "P2" | "P3";
 
 export interface FindingPriorityInfo {
@@ -53,27 +50,18 @@ function getPriorityDisplay(
 }
 
 // report_finding schema
-const ReportFindingParams = Type.Object({
-	title: Type.String({
-		description: "prefixed imperative title",
-		examples: ["[P1] un-padding wrong dimension"],
-	}),
-	body: Type.String({
-		description: "problem explanation",
-	}),
-	priority: StringEnum(["P0", "P1", "P2", "P3"], {
-		description: "priority 0-3",
-	}),
-	confidence: Type.Number({
-		minimum: 0,
-		maximum: 1,
-		description: "confidence score",
-		examples: [0.0, 0.5, 1.0],
-	}),
-	file_path: Type.String({ description: "file path" }),
-	line_start: Type.Number({ description: "start line" }),
-	line_end: Type.Number({ description: "end line" }),
-});
+// report_finding schema
+const ReportFindingParams = z
+	.object({
+		title: z.string().describe("prefixed imperative title"),
+		body: z.string().describe("problem explanation"),
+		priority: z.enum(["P0", "P1", "P2", "P3"] as const).describe("priority 0-3"),
+		confidence: z.number().min(0).max(1).describe("confidence score"),
+		file_path: z.string().describe("file path"),
+		line_start: z.number().describe("start line"),
+		line_end: z.number().describe("end line"),
+	})
+	.strict();
 
 interface ReportFindingDetails {
 	title: string;

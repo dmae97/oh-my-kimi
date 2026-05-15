@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Text } from "@oh-my-pi/pi-tui";
 import { formatBytes } from "@oh-my-pi/pi-utils";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateTail } from "../../session/streaming-output";
@@ -26,8 +26,8 @@ import { openAutoresearchStorageIfExists } from "../storage";
 import type { AutoresearchToolFactoryOptions, RunDetails, RunExperimentProgressDetails } from "../types";
 import { DEFAULT_HARNESS_COMMAND } from "./init-experiment";
 
-const runExperimentSchema = Type.Object({
-	timeout_seconds: Type.Optional(Type.Number({ description: "Timeout in seconds. Defaults to 600." })),
+const runExperimentSchema = z.object({
+	timeout_seconds: z.number().describe("Timeout in seconds. Defaults to 600.").optional(),
 });
 
 interface ProcessExecutionResult {

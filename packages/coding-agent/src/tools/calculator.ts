@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import calculatorDescription from "../prompts/tools/calculator.md" with { type: "text" };
@@ -28,15 +28,16 @@ type Token =
 	| { type: "operator"; value: Operator }
 	| { type: "paren"; value: "(" | ")" };
 
-const calculatorSchema = Type.Object({
-	calculations: Type.Array(
-		Type.Object({
-			expression: Type.String({ description: "math expression", examples: ["2 + 2", "sqrt(16)"] }),
-			prefix: Type.String({ description: "prefix text" }),
-			suffix: Type.String({ description: "suffix text" }),
-		}),
-		{ description: "calculations to evaluate" },
-	),
+const calculatorSchema = z.object({
+	calculations: z
+		.array(
+			z.object({
+				expression: z.string().describe("math expression"),
+				prefix: z.string().describe("prefix text"),
+				suffix: z.string().describe("suffix text"),
+			}),
+		)
+		.describe("calculations to evaluate"),
 });
 
 export interface CalculatorToolDetails {
@@ -385,7 +386,7 @@ function formatResult(value: number): string {
 // Tool Class
 // ═══════════════════════════════════════════════════════════════════════════
 
-type CalculatorParams = Static<typeof calculatorSchema>;
+type CalculatorParams = z.infer<typeof calculatorSchema>;
 
 /**
  * Calculator tool for evaluating mathematical expressions.

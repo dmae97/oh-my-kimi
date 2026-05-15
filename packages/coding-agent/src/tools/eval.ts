@@ -3,7 +3,7 @@ import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Markdown, Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { jsBackend, parseEvalInput, pythonBackend, sniffEvalLanguage } from "../eval";
 import type { ExecutorBackend } from "../eval/backend";
 import evalGrammar from "../eval/eval.lark" with { type: "text" };
@@ -29,12 +29,10 @@ import { clampTimeout } from "./tool-timeouts";
 
 export const EVAL_DEFAULT_PREVIEW_LINES = 10;
 
-export const evalSchema = Type.Object({
-	input: Type.String({
-		description: 'eval input as a sequence of `*** Cell <lang>:"title"` cell headers followed by code',
-	}),
+export const evalSchema = z.object({
+	input: z.string().describe('eval input as a sequence of `*** Cell <lang>:"title"` cell headers followed by code'),
 });
-export type EvalToolParams = Static<typeof evalSchema>;
+export type EvalToolParams = z.infer<typeof evalSchema>;
 
 export type EvalToolResult = {
 	content: Array<{ type: "text"; text: string }>;
@@ -228,7 +226,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly parameters = evalSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
-	readonly intent = (args: Partial<Static<typeof evalSchema>>): string | undefined => {
+	readonly intent = (args: Partial<z.infer<typeof evalSchema>>): string | undefined => {
 		const input = args.input;
 		if (input) {
 			try {
@@ -254,7 +252,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 
 	async execute(
 		_toolCallId: string,
-		params: Static<typeof evalSchema>,
+		params: z.infer<typeof evalSchema>,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback,
 		_ctx?: AgentToolContext,

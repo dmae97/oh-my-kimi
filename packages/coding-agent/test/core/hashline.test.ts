@@ -24,7 +24,6 @@ import {
 	tryRecoverHashlineWithCache,
 } from "@oh-my-pi/pi-coding-agent/edit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { Value } from "@sinclair/typebox/value";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -556,11 +555,13 @@ describe("hashline executor", () => {
 
 describe("hashlineEditParamsSchema — extra-field tolerance", () => {
 	it("accepts extra `path` field alongside `input`", () => {
-		expect(Value.Check(hashlineEditParamsSchema, { path: "x.ts", input: `@x.ts\n+ BOF\n${pl("x")}` })).toBe(true);
+		expect(hashlineEditParamsSchema.safeParse({ path: "x.ts", input: `@x.ts\n+ BOF\n${pl("x")}` }).success).toBe(
+			true,
+		);
 	});
 
 	it("still requires `input`", () => {
-		expect(Value.Check(hashlineEditParamsSchema, { path: "x.ts" })).toBe(false);
+		expect(hashlineEditParamsSchema.safeParse({ path: "x.ts" }).success).toBe(false);
 	});
 });
 

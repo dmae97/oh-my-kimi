@@ -1,16 +1,16 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { logger, untilAborted } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { ensureBankMission } from "../hindsight/bank";
 import reflectDescription from "../prompts/tools/reflect.md" with { type: "text" };
 import type { ToolSession } from ".";
 
-const hindsightReflectSchema = Type.Object({
-	query: Type.String({ description: "The question to answer using long-term memory." }),
-	context: Type.Optional(Type.String({ description: "Optional additional context to guide the reflection." })),
+const hindsightReflectSchema = z.object({
+	query: z.string().describe("The question to answer using long-term memory."),
+	context: z.string().describe("Optional additional context to guide the reflection.").optional(),
 });
 
-export type HindsightReflectParams = Static<typeof hindsightReflectSchema>;
+export type HindsightReflectParams = z.infer<typeof hindsightReflectSchema>;
 
 export class HindsightReflectTool implements AgentTool<typeof hindsightReflectSchema> {
 	readonly name = "reflect";

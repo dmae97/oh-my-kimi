@@ -22,7 +22,7 @@ import type {
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 
 // ---------------------------------------------------------------------------
 // Shared setup
@@ -38,7 +38,7 @@ function makeFakeTool(name: string): AgentTool & { executeCalls: number } {
 		name,
 		label: name,
 		description: `Fake ${name}`,
-		parameters: Type.Object({ command: Type.Optional(Type.String()) }),
+		parameters: z.object({ command: z.string().optional() }),
 		executeCalls: 0,
 		async execute() {
 			tool.executeCalls++;

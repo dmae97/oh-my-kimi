@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import type { TSchema } from "@sinclair/typebox";
 import {
 	buildRequest,
 	parseGeminiCliCredentials,
 	shouldRefreshGeminiCliCredentials,
 	streamGoogleGeminiCli,
 } from "../src/providers/google-gemini-cli";
-import type { Context, Model } from "../src/types";
+import type { Context, Model, TJsonSchema } from "../src/types";
 import { getOAuthApiKey } from "../src/utils/oauth";
 
 function createModel(provider: "google-gemini-cli" | "google-antigravity"): Model<"google-gemini-cli"> {
@@ -183,7 +182,7 @@ describe("Google Gemini CLI alignment", () => {
 							},
 						},
 						required: ["rules"],
-					} as unknown as TSchema,
+					} as TJsonSchema,
 				},
 			],
 		};

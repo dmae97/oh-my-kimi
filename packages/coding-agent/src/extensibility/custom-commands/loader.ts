@@ -1,15 +1,16 @@
 /**
  * Custom command loader - loads TypeScript command modules using native Bun import.
  *
- * Dependencies (@sinclair/typebox and pi-coding-agent) are injected via the CustomCommandAPI
- * to avoid import resolution issues with custom commands loaded from user directories.
+ * Dependencies (the zod-backed typebox shim and pi-coding-agent) are injected via the
+ * CustomCommandAPI to avoid import resolution issues with custom commands loaded from user directories.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, getProjectDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import * as typebox from "@sinclair/typebox";
+import * as zod from "zod/v4";
 import { getConfigDirs } from "../../config";
 import { execCommand } from "../../exec/exec";
+import * as typebox from "../typebox";
 import { GreenCommand } from "./bundled/ci-green";
 import { ReviewCommand } from "./bundled/review";
 import type {
@@ -183,6 +184,7 @@ export async function loadCustomCommands(options: LoadCustomCommandsOptions = {}
 		exec: (command: string, args: string[], execOptions) =>
 			execCommand(command, args, execOptions?.cwd ?? cwd, execOptions),
 		typebox,
+		zod,
 		pi: await import("@oh-my-pi/pi-coding-agent"),
 	};
 

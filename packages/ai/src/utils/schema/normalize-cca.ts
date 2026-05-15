@@ -1,8 +1,7 @@
 import { logger } from "@oh-my-pi/pi-utils";
-import type { AnySchema } from "ajv";
-import Ajv2020 from "ajv/dist/2020.js";
 import { areJsonValuesEqual, mergePropertySchemas } from "./equality";
 import { CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS, CLOUD_CODE_ASSIST_TYPE_SPECIFIC_KEYS } from "./fields";
+import { isValidJsonSchema } from "./meta-validator";
 import { sanitizeSchemaForCCA } from "./sanitize-google";
 import type { JsonObject } from "./types";
 import { isJsonObject } from "./types";
@@ -384,34 +383,13 @@ function normalizeNullablePropertiesForCloudCodeAssist(
 }
 
 /**
- * Lazy singleton AJV instance. Only used for validateSchema() — never compile().
- * Do NOT use compile() on this instance: compiled schemas accumulate and leak memory.
- * Note: Not thread-safe if Bun workers share this module.
- */
-let cloudCodeAssistSchemaValidator: Ajv2020 | null = null;
-function getCloudCodeAssistSchemaValidator(): Ajv2020 {
-	if (cloudCodeAssistSchemaValidator) {
-		return cloudCodeAssistSchemaValidator;
-	}
-
-	cloudCodeAssistSchemaValidator = new Ajv2020({
-		allErrors: true,
-		strict: false,
-		validateSchema: true,
-	});
-	return cloudCodeAssistSchemaValidator;
-}
-
-/**
  * Keep validation synchronous in this request path.
+ * Replaces the previous AJV-based meta-schema check with a tiny
+ * structural validator that catches the failure modes the CCA pipeline
+ * actually produces.
  */
 function isValidCCASchema(schema: unknown): boolean {
-	try {
-		const result = getCloudCodeAssistSchemaValidator().validateSchema(schema as AnySchema);
-		return typeof result === "boolean" ? result : false;
-	} catch {
-		return false;
-	}
+	return isValidJsonSchema(schema);
 }
 
 /** See COMBINATOR_KEYS in fields.ts — CCA forbids all three combiners. */

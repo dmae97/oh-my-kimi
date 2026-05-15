@@ -1,5 +1,4 @@
 import { fetchWithRetry } from "@oh-my-pi/pi-utils";
-import type { TSchema } from "@sinclair/typebox";
 import { getEnvApiKey } from "../stream";
 import type {
 	Api,
@@ -19,6 +18,7 @@ import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
+import { toolWireSchema } from "../utils/schema/wire";
 import { transformMessages } from "./transform-messages";
 
 export interface OllamaChatOptions extends StreamOptions {
@@ -31,7 +31,7 @@ type OllamaFunctionTool = {
 	function: {
 		name: string;
 		description: string;
-		parameters: TSchema;
+		parameters: Record<string, unknown>;
 	};
 };
 
@@ -223,7 +223,7 @@ function convertTools(tools: Tool[] | undefined): OllamaFunctionTool[] | undefin
 		function: {
 			name: tool.name,
 			description: tool.description,
-			parameters: tool.parameters,
+			parameters: toolWireSchema(tool),
 		},
 	}));
 }

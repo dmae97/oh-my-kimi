@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { CommitAgentState } from "../../../commit/agentic/state";
 import {
 	capDetails,
@@ -15,12 +15,12 @@ import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
 import { commitTypeSchema, detailSchema } from "./schemas.js";
 
-const proposeCommitSchema = Type.Object({
+const proposeCommitSchema = z.object({
 	type: commitTypeSchema,
-	scope: Type.Union([Type.String(), Type.Null()]),
-	summary: Type.String(),
-	details: Type.Array(detailSchema),
-	issue_refs: Type.Array(Type.String()),
+	scope: z.union([z.string(), z.null()]),
+	summary: z.string(),
+	details: z.array(detailSchema),
+	issue_refs: z.array(z.string()),
 });
 
 interface ProposalResponse {

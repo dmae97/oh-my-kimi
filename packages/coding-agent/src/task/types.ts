@@ -1,7 +1,7 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
-import { type Static, type TSchema, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { getTaskSimpleModeCapabilities, type TaskSimpleMode } from "./simple-mode";
 import type { NestedRepoPatch } from "./worktree";
 
@@ -63,65 +63,65 @@ const assignmentDescriptionForContextDisabled =
 	"Complete per-task instructions the subagent executes. Must follow the Target/Change/Edge Cases/Acceptance structure, and include any background that would otherwise live in `context` since shared context is disabled in this mode.";
 
 const createTaskItemSchema = (contextEnabled: boolean) =>
-	Type.Object({
-		id: Type.String({
-			description: "CamelCase identifier, max 48 chars",
-			maxLength: 48,
-		}),
-		description: Type.String({
-			description: "Short one-liner for UI display only — not seen by the subagent",
-		}),
-		assignment: Type.String({
-			description: contextEnabled ? assignmentDescriptionForContextEnabled : assignmentDescriptionForContextDisabled,
-		}),
+	z.object({
+		id: z.string().max(48).describe("CamelCase identifier, max 48 chars"),
+		description: z.string().describe("Short one-liner for UI display only — not seen by the subagent"),
+		assignment: z
+			.string()
+			.describe(contextEnabled ? assignmentDescriptionForContextEnabled : assignmentDescriptionForContextDisabled),
 	});
 
 /** Single task item for parallel execution (default shape with context enabled). */
 export const taskItemSchema = createTaskItemSchema(true);
-export type TaskItem = Static<typeof taskItemSchema>;
+export type TaskItem = z.infer<typeof taskItemSchema>;
 
 const createTaskSchema = (options: { isolationEnabled: boolean; simpleMode: TaskSimpleMode }) => {
 	const { contextEnabled, customSchemaEnabled } = getTaskSimpleModeCapabilities(options.simpleMode);
 	const itemSchema = createTaskItemSchema(contextEnabled);
-	const properties: Record<string, TSchema> = {
-		agent: Type.String({ description: "Agent type for all tasks in this batch" }),
-		tasks: Type.Array(itemSchema, {
-			description: contextEnabled
-				? "Tasks to execute in parallel. Each must be small-scoped (3-5 files max) and self-contained given context + assignment."
-				: "Tasks to execute in parallel. Each must be small-scoped (3-5 files max) and fully self-contained inside assignment because shared context is disabled.",
-		}),
-	};
+
+	let schema = z.object({
+		agent: z.string().describe("Agent type for all tasks in this batch"),
+		tasks: z
+			.array(itemSchema)
+			.describe(
+				contextEnabled
+					? "Tasks to execute in parallel. Each must be small-scoped (3-5 files max) and self-contained given context + assignment."
+					: "Tasks to execute in parallel. Each must be small-scoped (3-5 files max) and fully self-contained inside assignment because shared context is disabled.",
+			),
+	});
 
 	if (contextEnabled) {
-		properties.context = Type.Optional(
-			Type.String({
-				description:
+		schema = schema.extend({
+			context: z
+				.string()
+				.optional()
+				.describe(
 					"Shared background prepended to every task's assignment. Put goal, non-goals, constraints, conventions, reference paths, API contracts, and global acceptance commands here once — instead of duplicating across assignments.",
-			}),
-		);
-	}
-
-	if (customSchemaEnabled) {
-		properties.schema = Type.Optional(
-			Type.String({
-				description:
-					"JSON-encoded JTD schema defining expected response structure. Output format belongs here — never in context or assignment.",
-			}),
-		);
-	}
-
-	if (options.isolationEnabled) {
-		return Type.Object({
-			...properties,
-			isolated: Type.Optional(
-				Type.Boolean({
-					description: "Run in isolated environment; returns patches. Use when tasks edit overlapping files.",
-				}),
-			),
+				),
 		});
 	}
 
-	return Type.Object(properties);
+	if (customSchemaEnabled) {
+		schema = schema.extend({
+			schema: z
+				.string()
+				.optional()
+				.describe(
+					"JSON-encoded JTD schema defining expected response structure. Output format belongs here — never in context or assignment.",
+				),
+		});
+	}
+
+	if (options.isolationEnabled) {
+		schema = schema.extend({
+			isolated: z
+				.boolean()
+				.optional()
+				.describe("Run in isolated environment; returns patches. Use when tasks edit overlapping files."),
+		});
+	}
+
+	return schema;
 };
 
 export const taskSchema = createTaskSchema({ isolationEnabled: true, simpleMode: "default" });
@@ -141,6 +141,8 @@ const ALL_TASK_SCHEMAS = [
 
 type DynamicTaskSchema = (typeof ALL_TASK_SCHEMAS)[number];
 export type TaskSchema = typeof taskSchema;
+/** Active task tool parameter schema for the current simple-mode / isolation flags */
+export type TaskToolSchemaInstance = DynamicTaskSchema;
 
 export function getTaskSchema(options: { isolationEnabled: boolean; simpleMode: TaskSimpleMode }): DynamicTaskSchema {
 	switch (options.simpleMode) {

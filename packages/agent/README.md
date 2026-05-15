@@ -279,17 +279,17 @@ const agent = new Agent({
 
 ## Tools
 
-Define tools using `AgentTool`:
+Define tools using `AgentTool` with a Zod parameter schema (via `z` from `@oh-my-pi/pi-ai`). Legacy TypeBox-authored schemas are still accepted at runtime and are lifted to Zod internally.
 
 ```typescript
-import { Type } from "@sinclair/typebox";
+import { z } from "@oh-my-pi/pi-ai";
 
 const readFileTool: AgentTool = {
 	name: "read_file",
 	label: "Read File", // For UI display
 	description: "Read a file's contents",
-	parameters: Type.Object({
-		path: Type.String({ description: "File path" }),
+	parameters: z.object({
+		path: z.string().describe("File path"),
 	}),
 	execute: async (toolCallId, params, signal, onUpdate, context) => {
 		const content = await fs.readFile(params.path, "utf-8");
@@ -461,7 +461,7 @@ const runCoverage = aggregateAgentRunCoverage(coverages);
 
 ### Tool status reporting
 
-`execute_tool` spans carry `gen_ai.tool.status` ∈
+`execute_tool` spans carry `pi.gen_ai.tool.status` ∈
 `"ok" | "error" | "skipped" | "blocked" | "timeout" | "aborted"`.
 `beforeToolCall` blocks throw a distinguishable `ToolCallBlockedError`
 internally; the catch path reports `status: "blocked"` instead of conflating

@@ -1,7 +1,9 @@
 import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
-import Ajv from "ajv";
-import addFormats from "ajv-formats";
+import { type ZodType, z } from "zod/v4";
+import type { $ZodIssue as ZodIssue } from "zod/v4/core";
 import type { Tool, ToolCall } from "../types";
+import { fromTypeBox } from "./schema/from-typebox";
+import { isZodSchema, zodToWireSchema } from "./schema/wire";
 
 // ============================================================================
 // Type Coercion Utilities
@@ -12,10 +14,11 @@ import type { Tool, ToolCall } from "../types";
 // example, an array parameter might arrive as `"[1, 2, 3]"` instead of `[1, 2, 3]`.
 //
 // Rather than rejecting these outright, we attempt automatic coercion:
-//   1. AJV validates the arguments and reports type errors
+//   1. Validate against the tool's schema (Zod, derived from TypeBox when the
+//      tool was authored with TypeBox).
 //   2. For each type error where the actual value is a string, we check if
-//      parsing it as JSON yields a value matching the expected type
-//   3. If so, we replace the string with the parsed value and re-validate
+//      parsing it as JSON yields a value matching the expected type.
+//   3. If so, we replace the string with the parsed value and re-validate.
 //
 // This is intentionally conservative: we only parse strings that look like
 // valid JSON literals (objects, arrays, booleans, null, numbers) and only
@@ -27,19 +30,6 @@ const JSON_NUMBER_PATTERN = /^[+-]?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 
 /** Regex matching numeric strings (allows leading zeros) */
 const NUMERIC_STRING_PATTERN = /^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
-
-/**
- * Normalizes AJV's `params.type` into a consistent string array.
- * AJV may report the expected type as a single string or an array of strings
- * (for union types like `["string", "null"]`).
- */
-function normalizeExpectedTypes(typeParam: unknown): string[] {
-	if (typeof typeParam === "string") return [typeParam];
-	if (Array.isArray(typeParam)) {
-		return typeParam.filter((entry): entry is string => typeof entry === "string");
-	}
-	return [];
-}
 
 /**
  * Checks if a value matches any of the expected JSON Schema types.
@@ -198,6 +188,7 @@ function cleanLiteralEscapes(value: string): string {
 	}
 	return result;
 }
+
 /**
  * Escape raw control characters (0x00–0x1F) that appear *inside* JSON string
  * literals. LLMs sometimes emit literal newlines/tabs/etc. inside string
@@ -347,9 +338,9 @@ function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: 
 	try {
 		const parsed = JSON.parse(trimmed) as unknown;
 		// If the string was "null", we parsed it to actual null.
-		// Accept this even if null isn't in expectedTypes - the LLM meant "no value".
+		// Accept this even if null isn't in expectedTypes — the LLM meant "no value".
 		// normalizeOptionalNullsForSchema will strip it from optional fields, and
-		// AJV will correctly error on required fields.
+		// the validator will correctly error on required fields.
 		if (parsed === null && trimmed === "null") {
 			return { value: null, changed: true };
 		}
@@ -391,9 +382,17 @@ function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: 
 // JSON Pointer Utilities (RFC 6901)
 // ============================================================================
 //
-// AJV reports error locations using JSON Pointer syntax (e.g., `/foo/0/bar`).
-// These utilities allow reading and writing values at those paths.
+// Internally we still address error locations using JSON Pointer syntax
+// (e.g., `/foo/0/bar`).  These utilities let coercion read and write values at
+// those paths regardless of whether the original error came from Zod or
+// from JSON-Schema-shaped normalization.
 // ============================================================================
+
+/** Encode a structured Zod issue path as a JSON Pointer. */
+function pathToPointer(path: ReadonlyArray<PropertyKey>): string {
+	if (path.length === 0) return "";
+	return `/${path.map(seg => String(seg).replace(/~/g, "~0").replace(/\//g, "~1")).join("/")}`;
+}
 
 /**
  * Decodes a JSON Pointer string into path segments.
@@ -469,6 +468,30 @@ function setValueAtPointer(root: unknown, pointer: string, value: unknown): unkn
 	return root;
 }
 
+// ============================================================================
+// JSON-Schema-driven normalization passes (LLM quirks).
+// ============================================================================
+
+/**
+ * Resolve a JSON-Schema branch (used inside `anyOf`/`oneOf`) into a Zod
+ * schema we can probe for branch-membership during nullable-strip
+ * normalization. Cached so repeated traversals of the same schema reuse the
+ * compiled Zod schema.
+ */
+const branchZodCache = new WeakMap<object, ZodType>();
+function branchAsZod(branch: unknown): ZodType | null {
+	if (!branch || typeof branch !== "object") return null;
+	let cached = branchZodCache.get(branch as object);
+	if (cached) return cached;
+	try {
+		cached = z.fromJSONSchema(branch as Parameters<typeof z.fromJSONSchema>[0]) as ZodType;
+	} catch {
+		return null;
+	}
+	branchZodCache.set(branch as object, cached);
+	return cached;
+}
+
 function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { value: unknown; changed: boolean } {
 	if (value === null || value === undefined) return { value, changed: false };
 	if (schema === null || typeof schema !== "object") return { value, changed: false };
@@ -485,13 +508,9 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 			const normalized = normalizeOptionalNullsForSchema(branch, value);
 			if (!normalized.changed) continue;
 
-			try {
-				const validateBranch = ajv.compile(branch);
-				if (validateBranch(normalized.value)) {
-					return normalized;
-				}
-			} catch {
-				// Ignore branch-level compilation/validation errors and keep scanning.
+			const branchSchema = branchAsZod(branch);
+			if (branchSchema?.safeParse(normalized.value).success) {
+				return normalized;
 			}
 
 			if (!changedCandidate) {
@@ -542,8 +561,7 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 
 	// Coerce string → number/integer when the schema branch declares those types.
 	// This fixes anyOf:[{type:"number"},{type:"null"}] (i.e. Optional<number>) where
-	// AJV reports an "anyOf" error rather than a "type" error, bypassing
-	// coerceArgsFromErrors which only handles keyword:"type" errors.
+	// the validator reports an "anyOf" error rather than a "type" error.
 	if ((schemaObject.type === "number" || schemaObject.type === "integer") && typeof value === "string") {
 		return tryParseNumberString(value, [schemaObject.type as string]);
 	}
@@ -626,83 +644,145 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 	return { value: changed ? nextValue : value, changed };
 }
 
+// ============================================================================
+// Zod issue → coercion bridge
+// ============================================================================
+
+interface FlatIssue {
+	keyword: "type" | "other";
+	instancePath: string;
+	expectedTypes: string[];
+}
+
+/**
+ * Translate the Zod expected-type marker into the JSON-Schema type name our
+ * coercion helpers already understand.
+ */
+function mapZodExpectedToJsonSchemaType(expected: unknown): string | null {
+	if (typeof expected !== "string") return null;
+	switch (expected) {
+		case "string":
+		case "number":
+		case "boolean":
+		case "array":
+		case "object":
+		case "null":
+			return expected;
+		case "int":
+		case "bigint":
+			return "integer";
+		case "nan":
+			return "number";
+		default:
+			return null;
+	}
+}
+
+/**
+ * Flatten Zod issues into a list of (path, expected-types) records suitable
+ * for the coercion pass. Recurses through `invalid_union` so each inner
+ * candidate produces independent coercion attempts.
+ */
+function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
+	const out: FlatIssue[] = [];
+	const walk = (issue: ZodIssue, prefix: ReadonlyArray<PropertyKey>): void => {
+		const fullPath = prefix.length === 0 ? issue.path : [...prefix, ...issue.path];
+		if (issue.code === "invalid_type") {
+			const mapped = mapZodExpectedToJsonSchemaType((issue as { expected?: unknown }).expected);
+			if (mapped) {
+				out.push({ keyword: "type", instancePath: pathToPointer(fullPath), expectedTypes: [mapped] });
+				return;
+			}
+		}
+		if (issue.code === "invalid_union") {
+			const inner = (issue as unknown as { errors?: ReadonlyArray<ReadonlyArray<ZodIssue>> }).errors;
+			if (inner) {
+				for (const branch of inner) {
+					for (const child of branch) {
+						walk(child, fullPath);
+					}
+				}
+			}
+			return;
+		}
+		out.push({ keyword: "other", instancePath: pathToPointer(fullPath), expectedTypes: [] });
+	};
+	for (const issue of issues) walk(issue, []);
+	return out;
+}
+
 /**
  * Attempts to fix type errors by parsing JSON-encoded strings.
  *
- * When AJV reports type errors, this function checks if the offending values
- * are strings that contain valid JSON matching the expected type. If so, it
- * returns a new args object with those strings replaced by their parsed values.
+ * For each `type` issue where the offending value is a string that contains
+ * valid JSON matching the expected type, returns a new args object with
+ * those strings replaced by their parsed values.
  *
- * The function is designed to be safe and conservative:
+ * The function is safe and conservative:
  *   - Only processes "type" errors (not format, pattern, etc.)
  *   - Only attempts coercion on string values
  *   - Only accepts parsed results that match the expected type
  *   - Clones the args object before mutation (copy-on-write)
  */
-function coerceArgsFromErrors(
-	args: unknown,
-	errors: Array<{ keyword?: string; instancePath?: string; params?: { type?: unknown } }> | null | undefined,
-): { value: unknown; changed: boolean } {
-	if (!errors || errors.length === 0) return { value: args, changed: false };
+function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unknown; changed: boolean } {
+	if (issues.length === 0) return { value: args, changed: false };
 
 	let changed = false;
 	let nextArgs: unknown = args;
 
-	for (const error of errors) {
-		// Only handle type mismatch errors
-		if (error.keyword !== "type") continue;
+	for (const issue of issues) {
+		if (issue.keyword !== "type") continue;
+		if (issue.expectedTypes.length === 0) continue;
 
-		const instancePath = error.instancePath ?? "";
-		const expectedTypes = normalizeExpectedTypes(error.params?.type);
-		if (expectedTypes.length === 0) continue;
-
-		// Get the current value at the error location
-		const currentValue = getValueAtPointer(nextArgs, instancePath);
+		const currentValue = getValueAtPointer(nextArgs, issue.instancePath);
 		if (typeof currentValue !== "string") continue;
 
-		// Try to parse the string as JSON
-		const result = tryParseJsonForTypes(currentValue, expectedTypes);
+		const result = tryParseJsonForTypes(currentValue, issue.expectedTypes);
 		if (!result.changed) continue;
 
-		// Clone on first modification (copy-on-write)
 		if (!changed) {
 			nextArgs = structuredCloneJSON(nextArgs);
 			changed = true;
 		}
-		nextArgs = setValueAtPointer(nextArgs, instancePath, result.value);
+		nextArgs = setValueAtPointer(nextArgs, issue.instancePath, result.value);
 	}
 
 	return { value: changed ? nextArgs : args, changed };
 }
 
-// Create a singleton AJV instance with formats (only if not in browser extension)
-// AJV requires 'unsafe-eval' CSP which is not allowed in Manifest V3
-//
-// Silent logger: MCP servers may declare non-standard format keywords (e.g. "uint")
-// which cause Ajv to emit console.warn() with strict:false — corrupting TUI output.
-const ajv = new Ajv({
-	allErrors: true,
-	strict: false,
-	logger: false,
-});
-addFormats(ajv);
+// ============================================================================
+// Public API
+// ============================================================================
 
-// Cache compiled validators by schema object identity to avoid
-// re-compiling the same tool schema on every call.
-const compiledSchemaCache = new WeakMap<object, import("ajv").ValidateFunction>();
-function compileSchema(schema: object): import("ajv").ValidateFunction {
-	let validate = compiledSchemaCache.get(schema);
-	if (!validate) {
-		validate = ajv.compile(schema);
-		compiledSchemaCache.set(schema, validate);
-	}
-	return validate;
+interface ValidationContext {
+	zod: ZodType;
+	json: Record<string, unknown>;
 }
 
-const MAX_TYPE_COERCION_PASSES = 5;
+/**
+ * Cache the (zod, json) pair derived from a tool's parameters schema.
+ * Keyed by the parameters object identity, which is stable across tool
+ * registrations.
+ */
+const validationContextCache = new WeakMap<object, ValidationContext>();
+function getValidationContext(tool: Tool): ValidationContext {
+	const params = tool.parameters as object;
+	let ctx = validationContextCache.get(params);
+	if (ctx) return ctx;
+	if (isZodSchema(params)) {
+		ctx = { zod: params, json: zodToWireSchema(params) };
+	} else {
+		const json = params as unknown as Record<string, unknown>;
+		ctx = { zod: fromTypeBox(json), json };
+	}
+	validationContextCache.set(params, ctx);
+	return ctx;
+}
+
+const MAX_COERCION_PASSES = 5;
 
 /**
- * Finds a tool by name and validates the tool call arguments against its TypeBox schema
+ * Finds a tool by name and validates the tool call arguments against its schema.
  * @param tools Array of tool definitions
  * @param toolCall The tool call from the LLM
  * @returns The validated arguments
@@ -717,57 +797,54 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): ToolCall["a
 }
 
 /**
- * Validates tool call arguments against the tool's TypeBox schema
- * @param tool The tool definition with TypeBox schema
- * @param toolCall The tool call from the LLM
- * @returns The validated arguments
- * @throws Error with formatted message if validation fails
+ * Validates tool call arguments against the tool's schema (Zod, or TypeBox
+ * lifted into Zod). Applies LLM-quirk coercions (numeric strings, JSON-string
+ * containers, null-for-optional, null-for-default) before declaring failure.
+ *
+ * @throws Error with a formatted message when validation cannot be reconciled.
  */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall["arguments"] {
 	const originalArgs = toolCall.arguments;
+	const { zod, json } = getValidationContext(tool);
 
-	const validate = compileSchema(tool.parameters);
-
-	// Always normalize first - strip null and string "null" from optional fields.
-	// This handles LLM outputting string "null" to mean "no value" even when
-	// validation would pass (e.g., optional string field where "null" is a valid string).
+	// Always normalize first — strip null and string "null" from optional
+	// fields and substitute defaults. Handles LLM outputting string "null"
+	// to mean "no value" even when validation would otherwise pass.
 	let normalizedArgs: unknown = originalArgs;
 	let changed = false;
-
-	const initialNormalization = normalizeOptionalNullsForSchema(tool.parameters, normalizedArgs);
+	const initialNormalization = normalizeOptionalNullsForSchema(json, normalizedArgs);
 	if (initialNormalization.changed) {
 		normalizedArgs = initialNormalization.value;
 		changed = true;
 	}
 
-	// Validate after normalization
-	if (validate(normalizedArgs)) {
-		return normalizedArgs as ToolCall["arguments"];
-	}
+	let result = zod.safeParse(normalizedArgs);
+	if (result.success) return result.data as ToolCall["arguments"];
 
-	for (let pass = 0; pass < MAX_TYPE_COERCION_PASSES; pass += 1) {
-		const coercion = coerceArgsFromErrors(normalizedArgs, validate.errors);
+	for (let pass = 0; pass < MAX_COERCION_PASSES; pass += 1) {
+		const flat = flattenIssues(result.error.issues);
+		const coercion = coerceArgsFromIssues(normalizedArgs, flat);
 		if (!coercion.changed) break;
 
 		normalizedArgs = coercion.value;
 		changed = true;
 
-		const nullNormalization = normalizeOptionalNullsForSchema(tool.parameters, normalizedArgs);
+		const nullNormalization = normalizeOptionalNullsForSchema(json, normalizedArgs);
 		if (nullNormalization.changed) {
 			normalizedArgs = nullNormalization.value;
 		}
 
-		if (validate(normalizedArgs)) {
-			return normalizedArgs as ToolCall["arguments"];
-		}
+		result = zod.safeParse(normalizedArgs);
+		if (result.success) return result.data as ToolCall["arguments"];
 	}
 
-	// Format validation errors nicely
+	// Format validation errors nicely. The header phrase is asserted by
+	// existing tests; the detailed body is informational.
 	const errors =
-		validate.errors
-			?.map((err: any) => {
-				const path = err.instancePath ? err.instancePath.substring(1) : err.params.missingProperty || "root";
-				return `  - ${path}: ${err.message}`;
+		result.error.issues
+			.map(issue => {
+				const path = issue.path.length === 0 ? "root" : issue.path.map(seg => String(seg)).join("/");
+				return `  - ${path}: ${issue.message}`;
 			})
 			.join("\n") || "Unknown validation error";
 

@@ -12,7 +12,7 @@ import type {
 import type { AssistantMessage, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { createAssistantMessage, createUserMessage } from "./helpers";
 
 // Simple identity converter for tests - just passes through standard messages
@@ -172,7 +172,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("provides tool call batch context", async () => {
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = z.object({ value: z.string() });
 		const contexts: ToolCallContext[] = [];
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -227,7 +227,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("should handle tool calls and results", async () => {
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = z.object({ value: z.string() });
 		const executed: string[] = [];
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -274,7 +274,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("injects and strips intent when intent tracing is enabled", async () => {
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = z.object({ value: z.string() });
 		const executedParams: Record<string, unknown>[] = [];
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -323,7 +323,9 @@ describe("agentLoop with AgentMessage", () => {
 		) as AssistantMessage | undefined;
 		const tracedToolCall = assistantWithToolCall?.content.find(content => content.type === "toolCall");
 
-		const firstRequestToolSchema = mock.calls[0]?.context.tools?.[0]?.parameters;
+		const firstRequestToolSchema = mock.calls[0]?.context.tools?.[0]?.parameters as
+			| { properties?: Record<string, unknown>; required?: string[] }
+			| undefined;
 		expect(firstRequestToolSchema?.properties).toMatchObject({
 			value: { type: "string" },
 			[INTENT_FIELD]: { type: "string" },
@@ -337,7 +339,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("runs shared tools in parallel and emits completion-ordered results", async () => {
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = z.object({ value: z.string() });
 		const startTimes: Record<string, number> = {};
 		const finishTimes: Record<string, number> = {};
 		const { promise: slowContinue, resolve: slowResolve } = Promise.withResolvers<void>();
@@ -468,7 +470,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("should skip remaining tool calls when steering is queued", async () => {
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = z.object({ value: z.string() });
 		const executed: string[] = [];
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -557,7 +559,7 @@ describe("agentLoop with AgentMessage", () => {
 });
 
 it("refreshes tools and system prompt between same-turn model calls", async () => {
-	const toolSchema = Type.Object({ value: Type.String() });
+	const toolSchema = z.object({ value: z.string() });
 	let activeSystemPrompt = "prompt-one";
 	let activeTools: Array<AgentTool<typeof toolSchema, { value: string }>> = [];
 	const betaTool: AgentTool<typeof toolSchema, { value: string }> = {
@@ -722,7 +724,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 	});
 
 	it("blocks tool execution when beforeToolCall returns block", async () => {
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = z.object({ value: z.string() });
 		const executed: string[] = [];
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -768,7 +770,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 	});
 
 	it("passes beforeToolCall args mutations into tool.execute without revalidation", async () => {
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = z.object({ value: z.string() });
 		const executed: Array<string | number> = [];
 		const tool: AgentTool<typeof toolSchema, { value: string | number }> = {
 			name: "echo",
@@ -810,7 +812,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 	});
 
 	it("afterToolCall overrides content and isError on the emitted tool result", async () => {
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = z.object({ value: z.string() });
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
 			label: "Echo",
@@ -874,7 +876,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 	});
 
 	it("surfaces afterToolCall errors as a tool error result", async () => {
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = z.object({ value: z.string() });
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
 			label: "Echo",

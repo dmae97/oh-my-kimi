@@ -12,7 +12,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 type ObservedPromptCall = {
@@ -121,7 +121,7 @@ describe("AgentSession eager todo enforcement", () => {
 			name: "bash",
 			label: "Bash",
 			description: "Mock bash tool",
-			parameters: Type.Object({}),
+			parameters: z.object({}),
 			execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
 		};
 

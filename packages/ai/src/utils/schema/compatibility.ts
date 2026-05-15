@@ -1,11 +1,10 @@
-import type { AnySchema } from "ajv";
-import Ajv2020 from "ajv/dist/2020.js";
 import {
 	CCA_UNSUPPORTED_SCHEMA_FIELDS,
 	COMBINATOR_KEYS,
 	NON_STRUCTURAL_SCHEMA_KEYS,
 	UNSUPPORTED_SCHEMA_FIELDS,
 } from "./fields";
+import { isValidJsonSchema } from "./meta-validator";
 import { isJsonObject, type JsonObject } from "./types";
 
 export type SchemaCompatibilityProvider = "openai-strict" | "google" | "cloud-code-assist-claude";
@@ -236,15 +235,6 @@ function validateGoogleNode(node: JsonObject, state: TraversalState): SchemaComp
 	return violations;
 }
 
-let cloudCodeAssistSchemaValidator: Ajv2020 | null = null;
-function getCloudCodeAssistSchemaValidator(): Ajv2020 {
-	if (cloudCodeAssistSchemaValidator) {
-		return cloudCodeAssistSchemaValidator;
-	}
-	cloudCodeAssistSchemaValidator = new Ajv2020({ allErrors: true, strict: false, validateSchema: true });
-	return cloudCodeAssistSchemaValidator;
-}
-
 function validateCloudCodeAssistNode(node: JsonObject, state: TraversalState): SchemaCompatibilityViolation[] {
 	const violations: SchemaCompatibilityViolation[] = [];
 
@@ -316,23 +306,16 @@ function validateCloudCodeAssistNode(node: JsonObject, state: TraversalState): S
 }
 
 function validateCloudCodeAssistSchema(schema: unknown): SchemaCompatibilityViolation[] {
-	try {
-		const valid = getCloudCodeAssistSchemaValidator().validateSchema(schema as AnySchema);
-		if (valid === true) {
-			return [];
-		}
-		return [
-			createViolation(
-				"root",
-				"cca-ajv-schema-validation",
-				"Cloud Code Assist schema is not a valid JSON Schema (AJV 2020)",
-			),
-		];
-	} catch {
-		return [
-			createViolation("root", "cca-ajv-schema-validation", "Cloud Code Assist schema validation threw unexpectedly"),
-		];
+	if (isValidJsonSchema(schema)) {
+		return [];
 	}
+	return [
+		createViolation(
+			"root",
+			"cca-meta-schema-validation",
+			"Cloud Code Assist schema is not a structurally valid JSON Schema",
+		),
+	];
 }
 
 export function validateSchemaCompatibility(

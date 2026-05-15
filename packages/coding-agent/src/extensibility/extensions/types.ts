@@ -17,12 +17,13 @@ import type {
 	Model,
 	ProviderResponseMetadata,
 	SimpleStreamOptions,
+	Static,
 	TextContent,
+	TSchema,
 } from "@oh-my-pi/pi-ai";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import type * as piCodingAgent from "@oh-my-pi/pi-coding-agent";
 import type { AutocompleteItem, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
-import type { Static, TSchema } from "@sinclair/typebox";
 import type { KeybindingsManager } from "../../config/keybindings";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
@@ -355,7 +356,7 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	label: string;
 	/** Description for LLM */
 	description: string;
-	/** Parameter schema (TypeBox) */
+	/** Parameter schema (Zod, or TypeBox for legacy/extension compat). */
 	parameters: TParams;
 	/** If true, tool is excluded unless explicitly listed in --tools or agent's tools field */
 	hidden?: boolean;
@@ -833,8 +834,11 @@ export interface ExtensionAPI {
 	/** File logger for error/warning/debug messages */
 	logger: typeof import("@oh-my-pi/pi-utils").logger;
 
-	/** Injected @sinclair/typebox module for defining tool parameters */
-	typebox: typeof import("@sinclair/typebox");
+	/** Injected zod-backed typebox shim for legacy `Type.Object(...)` parameter authoring. */
+	typebox: typeof import("../typebox");
+
+	/** Injected zod module for Zod-authored extension tools (canonical going forward). */
+	zod: typeof import("zod/v4");
 
 	/** Injected pi-coding-agent exports for accessing SDK utilities */
 	pi: typeof piCodingAgent;

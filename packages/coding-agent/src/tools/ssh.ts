@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { SSHHost } from "../capability/ssh";
 import { sshCapability } from "../capability/ssh";
 import { loadCapability } from "../discovery";
@@ -21,11 +21,11 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
 
-const sshSchema = Type.Object({
-	host: Type.String({ description: "ssh host", examples: ["my-server", "prod-1"] }),
-	command: Type.String({ description: "remote command", examples: ["ls -la", "uptime"] }),
-	cwd: Type.Optional(Type.String({ description: "remote working directory", examples: ["/var/log"] })),
-	timeout: Type.Optional(Type.Number({ description: "timeout in seconds", default: 60 })),
+const sshSchema = z.object({
+	host: z.string().describe("ssh host"),
+	command: z.string().describe("remote command"),
+	cwd: z.string().optional().describe("remote working directory"),
+	timeout: z.number().optional().describe("timeout in seconds").default(60),
 });
 
 export interface SSHToolDetails {
@@ -116,7 +116,7 @@ async function loadHosts(session: ToolSession): Promise<{
 	return { hostNames, hostsByName };
 }
 
-type SshToolParams = Static<typeof sshSchema>;
+type SshToolParams = z.infer<typeof sshSchema>;
 
 export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 	readonly name = "ssh";

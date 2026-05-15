@@ -58,7 +58,7 @@ import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { isCopilotTransientModelError } from "../utils/retry";
-import { COMBINATOR_KEYS, NO_STRICT } from "../utils/schema";
+import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
 import {
 	buildCopilotDynamicHeaders,
@@ -2072,7 +2072,7 @@ export function convertAnthropicMessages(
 	return params;
 }
 
-const ANTHROPIC_UNSUPPORTED_TOOL_SCHEMA_FIELDS = new Set(["maxItems", "patternProperties"]);
+const ANTHROPIC_UNSUPPORTED_TOOL_SCHEMA_FIELDS = new Set(["maxItems", "patternProperties", "propertyNames"]);
 const ANTHROPIC_STRICT_TOOL_ALLOWLIST = new Set(["bash", "python", "edit", "find"]);
 const MAX_ANTHROPIC_STRICT_TOOLS = 20;
 const MAX_ANTHROPIC_STRICT_OPTIONAL_PARAMETERS = 24;
@@ -2314,7 +2314,7 @@ function normalizeAnthropicStrictSchema(
 }
 
 function buildAnthropicBaseToolInputSchema(tool: Tool): Record<string, unknown> {
-	const jsonSchema = tool.parameters as Record<string, unknown>;
+	const jsonSchema = toolWireSchema(tool);
 	return normalizeAnthropicToolSchema({
 		...jsonSchema,
 		type: "object",

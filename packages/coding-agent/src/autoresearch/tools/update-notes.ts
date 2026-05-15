@@ -1,5 +1,5 @@
 import { Text } from "@oh-my-pi/pi-tui";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
@@ -8,16 +8,16 @@ import { buildExperimentState } from "../state";
 import { openAutoresearchStorageIfExists } from "../storage";
 import type { AutoresearchToolFactoryOptions } from "../types";
 
-const updateNotesSchema = Type.Object({
-	body: Type.String({
-		description: "Replacement markdown body for the active autoresearch session's notes (your durable playbook).",
-	}),
-	append_idea: Type.Optional(
-		Type.String({
-			description:
-				"When set, append this string as a new bullet under an Ideas section instead of replacing the body. `body` is ignored.",
-		}),
-	),
+const updateNotesSchema = z.object({
+	body: z
+		.string()
+		.describe("Replacement markdown body for the active autoresearch session's notes (your durable playbook)."),
+	append_idea: z
+		.string()
+		.describe(
+			"When set, append this string as a new bullet under an Ideas section instead of replacing the body. `body` is ignored.",
+		)
+		.optional(),
 });
 
 interface UpdateNotesDetails {

@@ -18,8 +18,7 @@ import {
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
-import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
-import type { TSchema } from "@sinclair/typebox";
+import type { Context, Model, TJsonSchema, Tool } from "@oh-my-pi/pi-ai/types";
 import { withEnv } from "./helpers";
 
 const ANTHROPIC_MODEL: Model<"anthropic-messages"> = {
@@ -345,10 +344,14 @@ describe("Anthropic request fingerprint alignment", () => {
 							patternProperties: {
 								"^[A-Za-z_][A-Za-z0-9_]*$": { type: "string" },
 							},
+							propertyNames: {
+								type: "string",
+								pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
+							},
 						},
 					},
 					required: ["target"],
-				} as unknown as TSchema,
+				} as TJsonSchema,
 			},
 		];
 
@@ -373,7 +376,11 @@ describe("Anthropic request fingerprint alignment", () => {
 			type?: string;
 			items?: { additionalProperties?: boolean; required?: string[] };
 		};
-		const env = properties.env as { additionalProperties?: boolean; patternProperties?: unknown };
+		const env = properties.env as {
+			additionalProperties?: boolean;
+			patternProperties?: unknown;
+			propertyNames?: unknown;
+		};
 
 		expect(inputSchema?.additionalProperties).toBe(false);
 		expect(inputSchema?.required).toEqual(["target"]);
@@ -384,6 +391,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(target).not.toHaveProperty("patternProperties");
 		expect(env.additionalProperties).toBe(false);
 		expect(env).not.toHaveProperty("patternProperties");
+		expect(env).not.toHaveProperty("propertyNames");
 		expect(inputSchema?.properties).toHaveProperty("target");
 		expect(originalNestedSchema).not.toHaveProperty("additionalProperties");
 		expect(originalNestedSchema).toHaveProperty("patternProperties");
@@ -410,7 +418,7 @@ describe("Anthropic request fingerprint alignment", () => {
 						},
 					},
 					required: ["sub"],
-				} as unknown as TSchema,
+				} as TJsonSchema,
 			},
 		];
 
@@ -449,7 +457,7 @@ describe("Anthropic request fingerprint alignment", () => {
 						},
 					},
 					required: ["block"],
-				} as unknown as TSchema,
+				} as TJsonSchema,
 			},
 		];
 
@@ -478,7 +486,7 @@ describe("Anthropic request fingerprint alignment", () => {
 					type: "object",
 					properties: { requiredValue: { type: "string" } },
 					required: ["requiredValue"],
-				} as unknown as TSchema,
+				} as TJsonSchema,
 			})),
 			...(["write", "grep", "read", "task", "todo_write", "web_search", "ast_grep"] as const).map(name => ({
 				name,
@@ -488,7 +496,7 @@ describe("Anthropic request fingerprint alignment", () => {
 					type: "object",
 					properties: { requiredValue: { type: "string" } },
 					required: ["requiredValue"],
-				} as unknown as TSchema,
+				} as TJsonSchema,
 			})),
 		];
 
@@ -520,7 +528,7 @@ describe("Anthropic request fingerprint alignment", () => {
 					type: "object",
 					properties: { requiredValue: { type: "string" } },
 					required: ["requiredValue"],
-				} as unknown as TSchema,
+				} as TJsonSchema,
 			},
 			{
 				name: "python",
@@ -530,7 +538,7 @@ describe("Anthropic request fingerprint alignment", () => {
 					type: "object",
 					properties: { requiredValue: { type: "string" } },
 					required: ["requiredValue"],
-				} as unknown as TSchema,
+				} as TJsonSchema,
 			},
 			{
 				name: "write",
@@ -539,7 +547,7 @@ describe("Anthropic request fingerprint alignment", () => {
 					type: "object",
 					properties: { requiredValue: { type: "string" } },
 					required: ["requiredValue"],
-				} as unknown as TSchema,
+				} as TJsonSchema,
 			},
 			{
 				name: "grep",
@@ -549,7 +557,7 @@ describe("Anthropic request fingerprint alignment", () => {
 					type: "object",
 					properties: { requiredValue: { type: "string" } },
 					required: ["requiredValue"],
-				} as unknown as TSchema,
+				} as TJsonSchema,
 			},
 		];
 

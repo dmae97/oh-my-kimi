@@ -55,7 +55,7 @@ import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
-import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
+import { adaptSchemaForStrict, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { type HealedToolCall, modelMayLeakKimiToolCalls, ToolCallHealer } from "../utils/tool-call-healing";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
@@ -181,7 +181,7 @@ function hasToolHistory(messages: Message[]): boolean {
  * Role-only `delta: { role: "assistant" }` preambles do NOT count; we want the
  * (longer) first-event timeout to keep governing until real output appears.
  */
-function isOpenAICompletionsProgressChunk(chunk: unknown): boolean {
+export function isOpenAICompletionsProgressChunk(chunk: unknown): boolean {
 	if (!chunk || typeof chunk !== "object") return false;
 	const record = chunk as {
 		usage?: unknown;
@@ -1670,7 +1670,7 @@ function convertTools(
 ): BuiltOpenAICompletionTools {
 	const adaptedTools = tools.map(tool => {
 		const strict = !NO_STRICT && compat.supportsStrictMode !== false && tool.strict !== false;
-		const baseParameters = tool.parameters as unknown as Record<string, unknown>;
+		const baseParameters = toolWireSchema(tool);
 		const adapted = adaptSchemaForStrict(baseParameters, strict);
 		return {
 			tool,

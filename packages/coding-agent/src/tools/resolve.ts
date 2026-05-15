@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import resolveDescription from "../prompts/tools/resolve.md" with { type: "text" };
@@ -11,18 +11,18 @@ import type { ToolSession } from ".";
 import { replaceTabs } from "./render-utils";
 import { ToolError } from "./tool-errors";
 
-const resolveSchema = Type.Object({
-	action: Type.Union([Type.Literal("apply"), Type.Literal("discard")]),
-	reason: Type.String({ description: "reason for action", examples: ["approved by user"] }),
-	extra: Type.Optional(
-		Type.Record(Type.String(), Type.Unknown(), {
-			description:
-				'Free-form metadata interpreted by the resolving tool (e.g. plan-mode approval requires `{ title: "<PLAN_TITLE>" }`).',
-		}),
-	),
+const resolveSchema = z.object({
+	action: z.union([z.literal("apply"), z.literal("discard")]),
+	reason: z.string().describe("reason for action"),
+	extra: z
+		.record(z.string(), z.unknown())
+		.optional()
+		.describe(
+			'Free-form metadata interpreted by the resolving tool (e.g. plan-mode approval requires `{ title: "<PLAN_TITLE>" }`).',
+		),
 });
 
-type ResolveParams = Static<typeof resolveSchema>;
+type ResolveParams = z.infer<typeof resolveSchema>;
 
 export interface ResolveToolDetails {
 	action: "apply" | "discard";

@@ -29,7 +29,7 @@ The following extension registers a slash command, a tool, and a session-start h
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 export default function myExtension(pi: ExtensionAPI) {
-  const { Type } = pi.typebox;
+  const z = pi.zod;
 
   // Runs once when the session loads
   pi.on("session_start", async (_event, ctx) => {
@@ -59,8 +59,8 @@ export default function myExtension(pi: ExtensionAPI) {
     name: "word_count",
     label: "Word Count",
     description: "Count the words in a string",
-    parameters: Type.Object({
-      text: Type.String({ description: "Text to count" }),
+    parameters: z.object({
+      text: z.string().describe("Text to count"),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       const count = params.text.split(/\s+/).filter(Boolean).length;
@@ -154,18 +154,18 @@ pi.registerCommand("my-cmd", {
 
 ## Registering tools
 
-Tools are called by the LLM. Parameters use [TypeBox](https://github.com/sinclairzx81/typebox) schemas, available at `pi.typebox`:
+Tools are called by the LLM. Parameters use [Zod](https://zod.dev) schemas, available at `pi.zod`:
 
 ```ts
-const { Type } = pi.typebox;
+const z = pi.zod;
 
 pi.registerTool({
   name: "search_notes",           // snake_case, unique
   label: "Search Notes",          // human-readable label for TUI
   description: "Full-text search through project notes",
-  parameters: Type.Object({
-    query: Type.String({ description: "Search query" }),
-    limit: Type.Optional(Type.Number({ description: "Max results", default: 10 })),
+  parameters: z.object({
+    query: z.string().describe("Search query"),
+    limit: z.number().default(10).describe("Max results").optional(),
   }),
   async execute(toolCallId, params, signal, onUpdate, ctx) {
     if (signal?.aborted) {

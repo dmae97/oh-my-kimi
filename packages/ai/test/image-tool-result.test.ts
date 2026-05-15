@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { Api, Context, Model, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { complete, getBundledModel } from "@oh-my-pi/pi-ai";
 import type { OptionsForApi } from "@oh-my-pi/pi-ai/types";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { e2eApiKey, resolveApiKey } from "./oauth";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -37,7 +37,7 @@ async function handleToolWithImageResult<TApi extends Api>(model: Model<TApi>, o
 	const base64Image = imageBuffer.toBase64();
 
 	// Define a tool that returns only an image (no text)
-	const getImageSchema = Type.Object({});
+	const getImageSchema = z.object({});
 	const getImageTool: Tool<typeof getImageSchema> = {
 		name: "get_circle",
 		description: "Returns a circle image for visualization",
@@ -125,7 +125,7 @@ async function handleToolWithTextAndImageResult<TApi extends Api>(model: Model<T
 	const base64Image = imageBuffer.toBase64();
 
 	// Define a tool that returns both text and an image
-	const getImageSchema = Type.Object({});
+	const getImageSchema = z.object({});
 	const getImageTool: Tool<typeof getImageSchema> = {
 		name: "get_circle_with_description",
 		description: "Returns a circle image with a text description",

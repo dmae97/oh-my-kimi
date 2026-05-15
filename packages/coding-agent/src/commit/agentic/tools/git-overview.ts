@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { CommitAgentState, GitOverviewSnapshot } from "../../../commit/agentic/state";
 import { extractScopeCandidates } from "../../../commit/analysis/scope";
 import type { CustomTool } from "../../../extensibility/custom-tools/types";
@@ -42,9 +42,9 @@ function filterExcludedFiles(files: string[]): { filtered: string[]; excluded: s
 	return { filtered, excluded };
 }
 
-const gitOverviewSchema = Type.Object({
-	staged: Type.Optional(Type.Boolean({ description: "Use staged changes (default: true)" })),
-	include_untracked: Type.Optional(Type.Boolean({ description: "Include untracked files when staged=false" })),
+const gitOverviewSchema = z.object({
+	staged: z.boolean().describe("Use staged changes (default: true)").optional(),
+	include_untracked: z.boolean().describe("Include untracked files when staged=false").optional(),
 });
 
 export function createGitOverviewTool(cwd: string, state: CommitAgentState): CustomTool<typeof gitOverviewSchema> {

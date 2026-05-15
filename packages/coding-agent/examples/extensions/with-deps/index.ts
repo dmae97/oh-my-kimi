@@ -5,17 +5,18 @@
  * Requires: npm install in this directory
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
 import ms from "ms";
 
 export default function (pi: ExtensionAPI) {
+	const { z } = pi.zod;
+
 	// Register a tool that uses ms
 	pi.registerTool({
 		name: "parse_duration",
 		label: "Parse Duration",
 		description: "Parse a human-readable duration string (e.g., '2 days', '1h', '5m') to milliseconds",
-		parameters: Type.Object({
-			duration: Type.String({ description: "Duration string like '2 days', '1h', '5m'" }),
+		parameters: z.object({
+			duration: z.string().describe("Duration string like '2 days', '1h', '5m'"),
 		}),
 		execute: async (_toolCallId, params) => {
 			const result = ms(params.duration as ms.StringValue);

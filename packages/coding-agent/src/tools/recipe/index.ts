@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme } from "../../modes/theme/theme";
 import recipeDescription from "../../prompts/tools/recipe.md" with { type: "text" };
@@ -11,14 +11,12 @@ import { createRecipeToolRenderer, type RecipeRenderArgs } from "./render";
 import { buildPromptModel, type DetectedRunner, resolveCommand } from "./runner";
 import { RUNNERS } from "./runners";
 
-const recipeSchema = Type.Object({
-	op: Type.String({
-		description: 'task name and args, e.g. "test" or "build --release"',
-		examples: ["test", "build --release", "pkg:test --watch"],
-	}),
-});
-
-type RecipeParams = Static<typeof recipeSchema>;
+const recipeSchema = z
+	.object({
+		op: z.string().describe('task name and args, e.g. "test" or "build --release"'),
+	})
+	.strict();
+type RecipeParams = z.infer<typeof recipeSchema>;
 
 type RecipeRenderResult = {
 	content: Array<{ type: string; text?: string }>;

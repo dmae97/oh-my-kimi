@@ -3,9 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { StringEnum } from "@oh-my-pi/pi-ai";
+
 import { getWorktreesDir, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { Settings } from "../config/settings";
 import githubDescription from "../prompts/tools/github.md" with { type: "text" };
 import * as git from "../utils/git";
@@ -197,135 +197,78 @@ const RUN_SUCCESS_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 const RUN_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
 const JOB_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required"]);
 
-const githubSchema = Type.Object({
-	op: StringEnum(
-		[
-			"repo_view",
-			"pr_create",
-			"pr_checkout",
-			"pr_push",
-			"search_issues",
-			"search_prs",
-			"search_code",
-			"search_commits",
-			"search_repos",
-			"run_watch",
-		],
-		{ description: "github operation" },
-	),
-	repo: Type.Optional(
-		Type.String({
-			description: "owner/repo (any op)",
-			examples: ["facebook/react"],
-		}),
-	),
-	branch: Type.Optional(
-		Type.String({
-			description: "branch (repo_view, pr_push local branch, run_watch)",
-			examples: ["main", "develop"],
-		}),
-	),
-	pr: Type.Optional(
-		Type.Union(
-			[
-				Type.String({ examples: ["123", "feature-branch"] }),
-				Type.Array(Type.String(), {
-					examples: [["123", "456"]],
-				}),
-			],
-			{
-				description:
-					"pr number, url, or branch (pr_checkout); pass an array to batch-process multiple pull requests in one call",
-			},
-		),
-	),
-	force: Type.Optional(Type.Boolean({ description: "reset existing local branch (pr_checkout)" })),
-	forceWithLease: Type.Optional(Type.Boolean({ description: "force-with-lease push (pr_push)" })),
-	title: Type.Optional(
-		Type.String({
-			description: "PR title (pr_create)",
-			examples: ["Fix login bug"],
-		}),
-	),
-	body: Type.Optional(
-		Type.String({
-			description: "PR body markdown (pr_create); mutually exclusive with fill",
-		}),
-	),
-	base: Type.Optional(
-		Type.String({
-			description: "PR base branch (pr_create); defaults to repo default branch",
-			examples: ["main"],
-		}),
-	),
-	head: Type.Optional(
-		Type.String({
-			description: "PR head branch (pr_create); defaults to current branch",
-			examples: ["feature/foo"],
-		}),
-	),
-	draft: Type.Optional(Type.Boolean({ description: "open PR as draft (pr_create)" })),
-	fill: Type.Optional(
-		Type.Boolean({
-			description: "auto-fill PR title/body from commits (pr_create); mutually exclusive with title/body",
-		}),
-	),
-	reviewer: Type.Optional(
-		Type.Array(Type.String(), {
-			description: "reviewers to request (pr_create); accepts users or org/team",
-			examples: [["octocat", "myorg/team"]],
-		}),
-	),
-	assignee: Type.Optional(
-		Type.Array(Type.String(), {
-			description: "assignees (pr_create); use @me for the authenticated user",
-			examples: [["@me"]],
-		}),
-	),
-	label: Type.Optional(
-		Type.Array(Type.String(), {
-			description: "labels to apply (pr_create)",
-			examples: [["bug", "enhancement"]],
-		}),
-	),
-	query: Type.Optional(
-		Type.String({
-			description: "search query (search_issues, search_prs, search_code, search_commits, search_repos)",
-			examples: ["is:open label:bug"],
-		}),
-	),
-	since: Type.Optional(
-		Type.String({
-			description:
+const githubSchema = z
+	.object({
+		op: z
+			.enum([
+				"repo_view",
+				"pr_create",
+				"pr_checkout",
+				"pr_push",
+				"search_issues",
+				"search_prs",
+				"search_code",
+				"search_commits",
+				"search_repos",
+				"run_watch",
+			] as const)
+			.describe("github operation"),
+		repo: z.string().describe("owner/repo (any op)").optional(),
+		branch: z.string().describe("branch (repo_view, pr_push local branch, run_watch)").optional(),
+		pr: z
+			.union([z.string(), z.array(z.string())])
+			.describe(
+				"pr number, url, or branch (pr_checkout); pass an array to batch-process multiple pull requests in one call",
+			)
+			.optional(),
+		force: z.boolean().describe("reset existing local branch (pr_checkout)").optional(),
+		forceWithLease: z.boolean().describe("force-with-lease push (pr_push)").optional(),
+		title: z.string().describe("PR title (pr_create)").optional(),
+		body: z.string().describe("PR body markdown (pr_create); mutually exclusive with fill").optional(),
+		base: z.string().describe("PR base branch (pr_create); defaults to repo default branch").optional(),
+		head: z.string().describe("PR head branch (pr_create); defaults to current branch").optional(),
+		draft: z.boolean().describe("open PR as draft (pr_create)").optional(),
+		fill: z
+			.boolean()
+			.describe("auto-fill PR title/body from commits (pr_create); mutually exclusive with title/body")
+			.optional(),
+		reviewer: z.array(z.string()).describe("reviewers to request (pr_create); accepts users or org/team").optional(),
+		assignee: z.array(z.string()).describe("assignees (pr_create); use @me for the authenticated user").optional(),
+		label: z.array(z.string()).describe("labels to apply (pr_create)").optional(),
+		query: z
+			.string()
+			.describe("search query (search_issues, search_prs, search_code, search_commits, search_repos)")
+			.optional(),
+		since: z
+			.string()
+			.describe(
 				"lower-bound date for search_issues/search_prs/search_commits/search_repos. Accepts a relative duration (`<n><unit>` with unit `m`/`h`/`d`/`w`/`mo`/`y`, e.g. `3d`, `12h`, `2w`) or an ISO date (`YYYY-MM-DD`) / datetime. Translated to a `created:>=…` (or `committer-date:`/`pushed:`) qualifier; not supported by search_code.",
-			examples: ["3d", "2w", "2026-05-01"],
-		}),
-	),
-	until: Type.Optional(
-		Type.String({
-			description:
+			)
+			.optional(),
+		until: z
+			.string()
+			.describe(
 				"upper-bound date in the same format as `since`. With both, builds a `field:since..until` range qualifier.",
-			examples: ["1d", "2026-05-09"],
-		}),
-	),
-	dateField: Type.Optional(
-		StringEnum(["created", "updated"], {
-			description:
+			)
+			.optional(),
+		dateField: z
+			.enum(["created", "updated"] as const)
+			.describe(
 				"date field used by `since`/`until`. issues/prs: `created` (default) or `updated`. repos: `created` (default) or `updated` (mapped to GitHub's `pushed:`). commits: ignored — always uses `committer-date`.",
-			default: "created",
-		}),
-	),
-	limit: Type.Optional(
-		Type.Number({
-			description: "max results (search_issues, search_prs, search_code, search_commits, search_repos)",
-			default: 10,
-		}),
-	),
-	run: Type.Optional(Type.String({ description: "actions run id or url (run_watch)", examples: ["123456"] })),
-	tail: Type.Optional(Type.Number({ description: "log lines per failed job (run_watch)", default: 15 })),
-});
+			)
+			.default("created")
+			.optional(),
+		limit: z
+			.number()
+			.default(10)
+			.describe("max results (search_issues, search_prs, search_code, search_commits, search_repos)")
+			.optional(),
+		run: z.string().describe("actions run id or url (run_watch)").optional(),
+		tail: z.number().default(15).describe("log lines per failed job (run_watch)").optional(),
+	})
+	.strict();
 
-type GithubInput = Static<typeof githubSchema>;
+type GithubInput = z.infer<typeof githubSchema>;
 
 export interface GhToolDetails {
 	meta?: OutputMeta;

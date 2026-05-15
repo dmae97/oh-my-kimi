@@ -1,5 +1,5 @@
 import { prompt } from "@oh-my-pi/pi-utils";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import analyzeFilePrompt from "../../../commit/agentic/prompts/analyze-file.md" with { type: "text" };
 import type { CommitAgentState } from "../../../commit/agentic/state";
 import type { NumstatEntry } from "../../../commit/types";
@@ -12,9 +12,9 @@ import type { TaskParams } from "../../../task/types";
 import type { ToolSession } from "../../../tools";
 import { getFilePriority } from "./git-file-diff";
 
-const analyzeFileSchema = Type.Object({
-	files: Type.Array(Type.String({ description: "File path" }), { minItems: 1 }),
-	goal: Type.Optional(Type.String({ description: "Optional analysis focus" })),
+const analyzeFileSchema = z.object({
+	files: z.array(z.string().describe("File path")).min(1),
+	goal: z.string().describe("Optional analysis focus").optional(),
 });
 
 const analyzeFileOutputSchema = {

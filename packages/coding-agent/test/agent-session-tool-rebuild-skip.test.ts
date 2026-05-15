@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { Settings } from "../src/config/settings";
 import type { CustomTool } from "../src/extensibility/custom-tools/types";
 import { AgentSession } from "../src/session/agent-session";
@@ -32,7 +32,7 @@ function createBasicTool(name: string, label: string, description = `${label} to
 		name,
 		label,
 		description,
-		parameters: Type.Object({ value: Type.String() }),
+		parameters: z.object({ value: z.string() }),
 		strict: true,
 		async execute() {
 			return { content: [{ type: "text", text: `${name} executed` }] };
@@ -45,7 +45,7 @@ function createMcpCustomTool(name: string, serverName: string, mcpToolName: stri
 		name,
 		label: `${serverName}/${mcpToolName}`,
 		description,
-		parameters: Type.Object({ q: Type.String() }),
+		parameters: z.object({ q: z.string() }),
 		strict: true,
 		mcpServerName: serverName,
 		mcpToolName,

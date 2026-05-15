@@ -12,6 +12,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools/gh";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import * as z from "zod/v4";
 
 function createSession(
 	cwd: string = "/tmp/test",
@@ -868,7 +869,8 @@ describe("github tool", () => {
 
 	it("exposes a flat op-based schema without legacy run_watch parameters", () => {
 		const tool = new GithubTool(createSession());
-		const properties = tool.parameters.properties as Record<string, unknown>;
+		const wire = z.toJSONSchema(tool.parameters, { target: "draft-7" }) as Record<string, unknown>;
+		const properties = wire.properties as Record<string, unknown>;
 		expect(properties.op).toBeDefined();
 		expect(properties.interval).toBeUndefined();
 		expect(properties.grace).toBeUndefined();

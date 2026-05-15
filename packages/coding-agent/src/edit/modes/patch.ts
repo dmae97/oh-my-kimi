@@ -8,9 +8,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { StringEnum } from "@oh-my-pi/pi-ai";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import {
 	type FileDiagnosticsResult,
 	flushLspWritethroughBatch,
@@ -1577,29 +1576,23 @@ export async function computePatchDiff(
 	}
 }
 
-export const patchEditEntrySchema = Type.Object(
-	{
-		op: Type.Optional(
-			StringEnum(["create", "delete", "update"], {
-				description: "Operation (default: update)",
-			}),
-		),
-		rename: Type.Optional(Type.String({ description: "New path for move" })),
-		diff: Type.Optional(Type.String({ description: "Diff hunks (update) or full content (create)" })),
-	},
-	{ additionalProperties: false },
-);
+export const patchEditEntrySchema = z
+	.object({
+		op: z.enum(["create", "delete", "update"]).optional().describe("Operation (default: update)"),
+		rename: z.string().describe("New path for move").optional(),
+		diff: z.string().describe("Diff hunks (update) or full content (create)").optional(),
+	})
+	.strict();
 
-export const patchEditSchema = Type.Object(
-	{
-		path: Type.String({ description: "file path for edits" }),
-		edits: Type.Array(patchEditEntrySchema, { description: "Patch operations", minItems: 1 }),
-	},
-	{ additionalProperties: false },
-);
+export const patchEditSchema = z
+	.object({
+		path: z.string().describe("file path for edits"),
+		edits: z.array(patchEditEntrySchema).min(1).describe("Patch operations"),
+	})
+	.strict();
 
-export type PatchEditEntry = Static<typeof patchEditEntrySchema>;
-export type PatchParams = Static<typeof patchEditSchema>;
+export type PatchEditEntry = z.infer<typeof patchEditEntrySchema>;
+export type PatchParams = z.infer<typeof patchEditSchema>;
 
 export interface ExecutePatchSingleOptions {
 	session: ToolSession;

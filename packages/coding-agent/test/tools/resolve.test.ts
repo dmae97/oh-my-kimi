@@ -4,6 +4,7 @@ import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ResolveTool, resolveToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
+import * as z from "zod/v4";
 
 function createSession(handler?: (input: unknown) => Promise<unknown>): ToolSession {
 	return {
@@ -23,8 +24,8 @@ function getText(result: { content: Array<{ type: string; text?: string }> }): s
 describe("ResolveTool", () => {
 	it("requires action and reason in schema", () => {
 		const tool = new ResolveTool(createSession());
-		const schema = tool.parameters as { required?: string[] };
-		expect(schema.required).toEqual(["action", "reason"]);
+		const wire = z.toJSONSchema(tool.parameters, { target: "draft-7" }) as { required?: string[] };
+		expect(wire.required).toEqual(["action", "reason"]);
 	});
 
 	it("errors when there is no pending action", async () => {

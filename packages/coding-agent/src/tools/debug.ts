@@ -5,10 +5,9 @@ import type {
 	AgentToolUpdateCallback,
 	RenderResultOptions,
 } from "@oh-my-pi/pi-agent-core";
-import { StringEnum } from "@oh-my-pi/pi-ai";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import {
 	type DapBreakpointRecord,
 	type DapCapabilities,
@@ -51,8 +50,8 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
 
-const debugSchema = Type.Object({
-	action: StringEnum([
+const debugSchema = z.object({
+	action: z.enum([
 		"launch",
 		"attach",
 		"set_breakpoint",
@@ -81,47 +80,45 @@ const debugSchema = Type.Object({
 		"output",
 		"terminate",
 		"sessions",
-	]),
-	program: Type.Optional(Type.String({ description: "program path" })),
-	args: Type.Optional(Type.Array(Type.String(), { description: "program arguments" })),
-	adapter: Type.Optional(Type.String({ description: "debugger adapter (gdb, lldb-dap, debugpy, dlv)" })),
-	cwd: Type.Optional(Type.String()),
-	file: Type.Optional(Type.String({ description: "source file" })),
-	line: Type.Optional(Type.Number({ description: "source line" })),
-	function: Type.Optional(Type.String({ description: "function name" })),
-	name: Type.Optional(Type.String({ description: "variable or data name" })),
-	condition: Type.Optional(Type.String({ description: "breakpoint condition" })),
-	hit_condition: Type.Optional(Type.String()),
-	expression: Type.Optional(Type.String({ description: "expression to evaluate" })),
-	context: Type.Optional(
-		Type.String({ description: "evaluate context: watch | repl | hover | variables | clipboard" }),
-	),
-	frame_id: Type.Optional(Type.Number()),
-	scope_id: Type.Optional(Type.Number({ description: "scope variables reference" })),
-	variable_ref: Type.Optional(Type.Number({ description: "variable reference" })),
-	pid: Type.Optional(Type.Number({ description: "process id for attach" })),
-	port: Type.Optional(Type.Number({ description: "remote attach port" })),
-	host: Type.Optional(Type.String({ description: "remote attach host" })),
-	levels: Type.Optional(Type.Number({ description: "max stack frames" })),
-	memory_reference: Type.Optional(Type.String({ description: "memory reference or address" })),
-	instruction_reference: Type.Optional(Type.String()),
-	instruction_count: Type.Optional(Type.Number()),
-	instruction_offset: Type.Optional(Type.Number()),
-	count: Type.Optional(Type.Number({ description: "bytes to read" })),
-	data: Type.Optional(Type.String({ description: "base64 memory payload" })),
-	data_id: Type.Optional(Type.String({ description: "data breakpoint id" })),
-	access_type: Type.Optional(StringEnum(["read", "write", "readWrite"])),
-	command: Type.Optional(Type.String({ description: "custom dap request command" })),
-	arguments: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "custom request arguments" })),
-	offset: Type.Optional(Type.Number()),
-	resolve_symbols: Type.Optional(Type.Boolean()),
-	allow_partial: Type.Optional(Type.Boolean()),
-	start_module: Type.Optional(Type.Number()),
-	module_count: Type.Optional(Type.Number()),
-	timeout: Type.Optional(Type.Number({ description: "per-request timeout seconds" })),
+	] as const),
+	program: z.string().describe("program path").optional(),
+	args: z.array(z.string()).describe("program arguments").optional(),
+	adapter: z.string().describe("debugger adapter (gdb, lldb-dap, debugpy, dlv)").optional(),
+	cwd: z.string().optional(),
+	file: z.string().describe("source file").optional(),
+	line: z.number().describe("source line").optional(),
+	function: z.string().describe("function name").optional(),
+	name: z.string().describe("variable or data name").optional(),
+	condition: z.string().describe("breakpoint condition").optional(),
+	hit_condition: z.string().optional(),
+	expression: z.string().describe("expression to evaluate").optional(),
+	context: z.string().describe("evaluate context: watch | repl | hover | variables | clipboard").optional(),
+	frame_id: z.number().optional(),
+	scope_id: z.number().describe("scope variables reference").optional(),
+	variable_ref: z.number().describe("variable reference").optional(),
+	pid: z.number().describe("process id for attach").optional(),
+	port: z.number().describe("remote attach port").optional(),
+	host: z.string().describe("remote attach host").optional(),
+	levels: z.number().describe("max stack frames").optional(),
+	memory_reference: z.string().describe("memory reference or address").optional(),
+	instruction_reference: z.string().optional(),
+	instruction_count: z.number().optional(),
+	instruction_offset: z.number().optional(),
+	count: z.number().describe("bytes to read").optional(),
+	data: z.string().describe("base64 memory payload").optional(),
+	data_id: z.string().describe("data breakpoint id").optional(),
+	access_type: z.enum(["read", "write", "readWrite"] as const).optional(),
+	command: z.string().describe("custom dap request command").optional(),
+	arguments: z.record(z.string(), z.any()).describe("custom request arguments").optional(),
+	offset: z.number().optional(),
+	resolve_symbols: z.boolean().optional(),
+	allow_partial: z.boolean().optional(),
+	start_module: z.number().optional(),
+	module_count: z.number().optional(),
+	timeout: z.number().describe("per-request timeout seconds").optional(),
 });
 
-export type DebugParams = Static<typeof debugSchema>;
+export type DebugParams = z.infer<typeof debugSchema>;
 export type DebugAction = DebugParams["action"];
 
 interface DebugToolDetails {

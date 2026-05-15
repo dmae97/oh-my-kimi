@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { StringEnum } from "@oh-my-pi/pi-ai";
+
 import { Text } from "@oh-my-pi/pi-tui";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
@@ -36,46 +36,37 @@ import type {
 
 const EXPERIMENT_TOOL_NAMES = ["init_experiment", "run_experiment", "log_experiment", "update_notes"];
 
-const logExperimentSchema = Type.Object({
-	metric: Type.Number({
-		description: "Primary metric value for this run. May differ from the parsed value; deviation is recorded.",
-	}),
-	status: StringEnum(["keep", "discard", "crash", "checks_failed"], {
-		description: "Outcome for this run.",
-	}),
-	description: Type.String({ description: "Short description of the experiment." }),
-	metrics: Type.Optional(
-		Type.Record(Type.String(), Type.Number(), { description: "Secondary metrics for this run." }),
-	),
-	asi: Type.Optional(
-		Type.Object(
-			{},
-			{
-				additionalProperties: Type.Unknown(),
-				description: "Free-form structured metadata captured for this run (hypothesis, learnings, etc.).",
-			},
-		),
-	),
-	commit: Type.Optional(
-		Type.String({ description: "Override the commit hash recorded for this run. Defaults to the current HEAD." }),
-	),
-	justification: Type.Optional(
-		Type.String({
-			description:
-				"Required when the run modifies paths outside scope or inside off-limits and you still want it kept. Free-form explanation.",
-		}),
-	),
-	flag_runs: Type.Optional(
-		Type.Array(
-			Type.Object({
-				run_id: Type.Number({ description: "Run id (#) of a previously logged run to flag as suspect." }),
-				reason: Type.String({
-					description: "Why this earlier run is suspect (e.g. reward-hacked, broken metric).",
-				}),
+const logExperimentSchema = z.object({
+	metric: z
+		.number()
+		.describe("Primary metric value for this run. May differ from the parsed value; deviation is recorded."),
+	status: z.enum(["keep", "discard", "crash", "checks_failed"] as const).describe("Outcome for this run."),
+	description: z.string().describe("Short description of the experiment."),
+	metrics: z.record(z.string(), z.number()).describe("Secondary metrics for this run.").optional(),
+	asi: z
+		.object({})
+		.passthrough()
+		.describe("Free-form structured metadata captured for this run (hypothesis, learnings, etc.).")
+		.optional(),
+	commit: z
+		.string()
+		.describe("Override the commit hash recorded for this run. Defaults to the current HEAD.")
+		.optional(),
+	justification: z
+		.string()
+		.describe(
+			"Required when the run modifies paths outside scope or inside off-limits and you still want it kept. Free-form explanation.",
+		)
+		.optional(),
+	flag_runs: z
+		.array(
+			z.object({
+				run_id: z.number().describe("Run id (#) of a previously logged run to flag as suspect."),
+				reason: z.string().describe("Why this earlier run is suspect (e.g. reward-hacked, broken metric)."),
 			}),
-			{ description: "Mark earlier runs as flagged. Flagged runs are excluded from baseline and best-metric math." },
-		),
-	),
+		)
+		.describe("Mark earlier runs as flagged. Flagged runs are excluded from baseline and best-metric math.")
+		.optional(),
 });
 
 export function createLogExperimentTool(

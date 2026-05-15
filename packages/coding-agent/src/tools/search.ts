@@ -1,11 +1,10 @@
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-
 import { type GrepMatch, GrepOutputMode, type GrepResult, grep } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { getFileReadCache } from "../edit/file-read-cache";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
@@ -31,25 +30,23 @@ import {
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const searchSchema = Type.Object({
-	pattern: Type.String({ description: "regex pattern", examples: ["function\\s+\\w+", "TODO"] }),
-	paths: Type.Array(Type.String({ description: "file, directory, glob, or internal URL to search" }), {
-		minItems: 1,
-		description: "files, directories, globs, or internal URLs to search",
-		examples: [["src/"], ["src/foo.ts"], ["src/**/*.ts"], ["src/", "packages/"]],
-	}),
-	i: Type.Optional(Type.Boolean({ description: "case-insensitive search", default: false })),
-	gitignore: Type.Optional(Type.Boolean({ description: "respect gitignore", default: true })),
-	skip: Type.Optional(
-		Type.Number({
-			description:
-				"files to skip before collecting results — use to paginate when the prior call hit the file limit",
-			default: 0,
-		}),
-	),
-});
+const searchSchema = z
+	.object({
+		pattern: z.string().describe("regex pattern"),
+		paths: z
+			.array(z.string().describe("file, directory, glob, or internal URL to search"))
+			.min(1)
+			.describe("files, directories, globs, or internal URLs to search"),
+		i: z.boolean().optional().describe("case-insensitive search"),
+		gitignore: z.boolean().optional().describe("respect gitignore"),
+		skip: z
+			.number()
+			.optional()
+			.describe("files to skip before collecting results — use to paginate when the prior call hit the file limit"),
+	})
+	.strict();
 
-export type SearchToolInput = Static<typeof searchSchema>;
+export type SearchToolInput = z.infer<typeof searchSchema>;
 
 /** Maximum number of distinct files surfaced in a single response. The
  * agent paginates further pages via `skip`. */
@@ -89,7 +86,7 @@ export interface SearchToolDetails {
 	missingPaths?: string[];
 }
 
-type SearchParams = Static<typeof searchSchema>;
+type SearchParams = z.infer<typeof searchSchema>;
 
 export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDetails> {
 	readonly name = "search";

@@ -18,7 +18,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type Component, Container, Markdown, renderInlineMarkdown, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { getMarkdownTheme, type Theme, theme } from "../modes/theme/theme";
 import askDescription from "../prompts/tools/ask.md" with { type: "text" };
@@ -31,23 +31,23 @@ import { ToolAbortError } from "./tool-errors";
 // Types
 // =============================================================================
 
-const OptionItem = Type.Object({
-	label: Type.String({ description: "display label" }),
+const OptionItem = z.object({
+	label: z.string().describe("display label"),
 });
 
-const QuestionItem = Type.Object({
-	id: Type.String({ description: "question id", examples: ["auth", "cache"] }),
-	question: Type.String({ description: "question text" }),
-	options: Type.Array(OptionItem, { description: "available options" }),
-	multi: Type.Optional(Type.Boolean({ description: "allow multiple selections" })),
-	recommended: Type.Optional(Type.Number({ description: "recommended option index" })),
+const QuestionItem = z.object({
+	id: z.string().describe("question id"),
+	question: z.string().describe("question text"),
+	options: z.array(OptionItem).describe("available options"),
+	multi: z.boolean().describe("allow multiple selections").optional(),
+	recommended: z.number().describe("recommended option index").optional(),
 });
 
-const askSchema = Type.Object({
-	questions: Type.Array(QuestionItem, { description: "questions to ask", minItems: 1 }),
+const askSchema = z.object({
+	questions: z.array(QuestionItem).min(1).describe("questions to ask"),
 });
 
-export type AskToolInput = Static<typeof askSchema>;
+export type AskToolInput = z.infer<typeof askSchema>;
 
 /** Result for a single question */
 export interface QuestionResult {

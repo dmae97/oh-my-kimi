@@ -30,7 +30,7 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
-import { prepareSchemaForCCA, sanitizeSchemaForGoogle } from "../utils/schema";
+import { prepareSchemaForCCA, sanitizeSchemaForGoogle, toolWireSchema } from "../utils/schema";
 import { transformMessages } from "./transform-messages";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 
@@ -340,8 +340,8 @@ export function convertTools(
 				name: tool.name,
 				description: tool.description || "",
 				...(useParameters
-					? { parameters: prepareSchemaForCCA(tool.parameters) }
-					: { parametersJsonSchema: tool.parameters }),
+					? { parameters: prepareSchemaForCCA(toolWireSchema(tool)) }
+					: { parametersJsonSchema: toolWireSchema(tool) }),
 			})),
 		},
 	];

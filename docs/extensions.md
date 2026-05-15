@@ -66,9 +66,10 @@ Important constraint from `loader.ts`:
 
 ```ts
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
 
 export default function (pi: ExtensionAPI) {
+  const { z } = pi.zod;
+
   pi.setLabel("Safety + Utilities");
 
   pi.on("session_start", async (_event, ctx) => {
@@ -85,7 +86,7 @@ export default function (pi: ExtensionAPI) {
     name: "hello_extension",
     label: "Hello Extension",
     description: "Return a greeting",
-    parameters: Type.Object({ name: Type.String() }),
+    parameters: z.object({ name: z.string() }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       return {
         content: [{ type: "text", text: `Hello, ${params.name}` }],
@@ -124,7 +125,8 @@ In interactive mode, `input` handlers run before the built-in first-message auto
 Also exposed:
 
 - `pi.logger`
-- `pi.typebox`
+- `pi.zod` (injected `zod` module — **preferred** for new tool schemas)
+- `pi.typebox` (zod-backed `Type.*` shim — retained for legacy extension compat)
 - `pi.pi` (package exports)
 
 ### Message delivery semantics
@@ -239,11 +241,13 @@ execute(
 Template:
 
 ```ts
+const { z } = pi.zod;
+
 pi.registerTool({
   name: "my_tool",
   label: "My Tool",
   description: "...",
-  parameters: Type.Object({}),
+  parameters: z.object({}),
   async execute(_id, _params, signal, onUpdate, ctx) {
     if (signal?.aborted) {
       return { content: [{ type: "text", text: "Cancelled" }] };

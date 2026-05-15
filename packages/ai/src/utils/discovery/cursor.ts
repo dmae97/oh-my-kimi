@@ -1,6 +1,6 @@
 import * as http2 from "node:http2";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
-import { z } from "zod";
+import * as z from "zod/v4";
 import { getBundledModels } from "../../models";
 import { GetUsableModelsRequestSchema, GetUsableModelsResponseSchema } from "../../providers/cursor/gen/agent_pb";
 import type { Model } from "../../types";

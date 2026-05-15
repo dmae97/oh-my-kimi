@@ -30,6 +30,7 @@ import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
+import { toolWireSchema } from "../utils/schema/wire";
 import type { McpToolDefinition } from "./cursor/gen/agent_pb";
 import {
 	AgentClientMessageSchema,
@@ -2067,7 +2068,7 @@ function buildMcpToolDefinitions(tools: Tool[] | undefined): McpToolDefinition[]
 	}
 
 	return advertisedTools.map(tool => {
-		const jsonSchema = tool.parameters as Record<string, unknown> | undefined;
+		const jsonSchema = toolWireSchema(tool);
 		const schemaValue: JsonValue =
 			jsonSchema && typeof jsonSchema === "object"
 				? (jsonSchema as JsonValue)

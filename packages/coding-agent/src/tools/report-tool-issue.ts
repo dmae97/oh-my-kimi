@@ -9,13 +9,13 @@ import { Database } from "bun:sqlite";
 import path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { $flag, getAgentDir, logger, VERSION } from "@oh-my-pi/pi-utils";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { Settings } from "..";
 import type { ToolSession } from "./index";
 
-const ReportToolIssueParams = Type.Object({
-	tool: Type.String({ description: "tool name", examples: ["bash", "read"] }),
-	report: Type.String({ description: "unexpected behavior" }),
+const ReportToolIssueParams = z.object({
+	tool: z.string().describe("tool name"),
+	report: z.string().describe("unexpected behavior"),
 });
 
 export function isAutoQaEnabled(settings?: Settings): boolean {

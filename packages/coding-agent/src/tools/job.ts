@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { type AsyncJob, AsyncJobManager, isBackgroundJobSupportEnabled } from "../async";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
@@ -22,28 +22,21 @@ import {
 } from "./render-utils";
 import { ToolError } from "./tool-errors";
 
-const jobSchema = Type.Object({
-	poll: Type.Optional(
-		Type.Array(Type.String(), {
-			description: "background job ids to wait for; omit (with no `cancel`) to wait on all running jobs",
-			examples: [["job-1234"]],
-		}),
-	),
-	cancel: Type.Optional(
-		Type.Array(Type.String(), {
-			description: "background job ids to cancel",
-			examples: [["job-1234"]],
-		}),
-	),
-	list: Type.Optional(
-		Type.Boolean({
-			description:
-				"Return an immediate snapshot of every job spawned by this agent (running + completed within retention). Read-only \u2014 cannot be combined with `poll` or `cancel`.",
-		}),
-	),
+const jobSchema = z.object({
+	poll: z
+		.array(z.string())
+		.optional()
+		.describe("background job ids to wait for; omit (with no `cancel`) to wait on all running jobs"),
+	cancel: z.array(z.string()).optional().describe("background job ids to cancel"),
+	list: z
+		.boolean()
+		.optional()
+		.describe(
+			"Return an immediate snapshot of every job spawned by this agent (running + completed within retention). Read-only \u2014 cannot be combined with `poll` or `cancel`.",
+		),
 });
 
-type JobParams = Static<typeof jobSchema>;
+type JobParams = z.infer<typeof jobSchema>;
 
 const WAIT_DURATION_MS: Record<string, number> = {
 	"5s": 5_000,

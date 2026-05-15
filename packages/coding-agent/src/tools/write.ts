@@ -5,7 +5,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { stripHashlinePrefixes } from "../edit";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
@@ -58,12 +58,12 @@ async function loadFflate(): Promise<typeof import("fflate")> {
 	return fflateModulePromise;
 }
 
-const writeSchema = Type.Object({
-	path: Type.String({ description: "file path", examples: ["src/new.ts"] }),
-	content: Type.String({ description: "file content" }),
+const writeSchema = z.object({
+	path: z.string().describe("file path"),
+	content: z.string().describe("file content"),
 });
 
-export type WriteToolInput = Static<typeof writeSchema>;
+export type WriteToolInput = z.infer<typeof writeSchema>;
 
 /** Details returned by the write tool for TUI rendering */
 export interface WriteToolDetails {

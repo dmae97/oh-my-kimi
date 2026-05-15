@@ -1,39 +1,35 @@
 /**
  * API Demo Extension
  *
- * Demonstrates using ExtensionAPI's logger, typebox, and pi module access.
+ * Demonstrates using ExtensionAPI's logger, injected `pi.zod`, and pi module access.
  * These features are now exposed directly on the ExtensionAPI, matching
  * the CustomToolAPI interface.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
-	// 1. Access TypeBox directly from pi.typebox (no separate import needed)
-	const { Type } = pi.typebox;
+	const { z } = pi.zod;
 
-	// 2. Access the logger for debugging
-	pi.logger.debug("API demo extension loaded");
-
-	// 3. Register a tool that uses all three API features
-	// Import StringEnum from typebox helpers
+	// Access shared schema helpers from package exports (e.g. StringEnum for Google-safe enums)
 	const { StringEnum } = pi.pi;
+
+	// Access the logger for debugging
+	pi.logger.debug("API demo extension loaded");
 
 	pi.registerTool({
 		name: "api_demo",
 		label: "API Demo",
-		description: "Demonstrates ExtensionAPI capabilities: logger, typebox, and pi module access",
-		parameters: Type.Object({
-			message: Type.String({ description: "Test message" }),
-			logLevel: Type.Optional(
-				StringEnum(["error", "warn", "debug"], {
-					description: "Log level to use",
-					default: "debug",
-				}),
-			),
+		description: "Demonstrates ExtensionAPI capabilities: logger, zod, and pi module access",
+		parameters: z.object({
+			message: z.string().describe("Test message"),
+			logLevel: StringEnum(["error", "warn", "debug"], {
+				description: "Log level to use",
+				default: "debug",
+			}),
 		}),
 
 		async execute(_toolCallId, params, _onUpdate, ctx, _signal) {
-			const { message, logLevel = "debug" } = params as { message: string; logLevel?: "error" | "warn" | "debug" };
+			const { message, logLevel } = params;
 
 			// Use logger at specified level
 			pi.logger[logLevel]("API demo tool executed", { message, logLevel });
@@ -58,7 +54,7 @@ export default function (pi: ExtensionAPI) {
 							``,
 							`Features demonstrated:`,
 							`1. ✓ Logger access via pi.logger`,
-							`2. ✓ TypeBox access via pi.typebox`,
+							`2. ✓ Zod access via pi.zod`,
 							`3. ✓ Pi module access via pi.pi`,
 							``,
 							`Context:`,

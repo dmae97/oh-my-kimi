@@ -46,6 +46,7 @@ import { normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
+import { toolWireSchema } from "../utils/schema/wire";
 import { transformMessages } from "./transform-messages";
 
 export interface BedrockOptions extends StreamOptions {
@@ -668,7 +669,12 @@ function convertToolConfig(
 		toolSpec: {
 			name: tool.name,
 			description: tool.description || "",
-			inputSchema: { json: tool.parameters },
+			// Wire schema is structurally a JSON Schema document; the Bedrock SDK
+			// types it as the recursive `DocumentType` from `@smithy/types`, which
+			// `Record<string, unknown>` does not directly satisfy at the type
+			// level. Cast through `unknown` so the actual JSON value passes the
+			// type checker without changing runtime behavior.
+			inputSchema: { json: toolWireSchema(tool) as unknown as Record<string, never> },
 		},
 	}));
 

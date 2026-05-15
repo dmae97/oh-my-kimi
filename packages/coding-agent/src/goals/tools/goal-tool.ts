@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { formatNumber, prompt } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme, ThemeColor } from "../../modes/theme/theme";
 import goalDescription from "../../prompts/tools/goal.md" with { type: "text" };
@@ -14,19 +14,13 @@ import { renderStatusLine, truncateToWidth } from "../../tui";
 import { completionBudgetReport, remainingTokens } from "../runtime";
 import type { Goal, GoalStatus, GoalToolDetails } from "../state";
 
-const goalSchema = Type.Object({
-	op: Type.Union([Type.Literal("create"), Type.Literal("get"), Type.Literal("complete")], {
-		description: "Goal operation.",
-	}),
-	objective: Type.Optional(Type.String({ description: "Goal objective. Required when op=create." })),
-	token_budget: Type.Optional(
-		Type.Integer({
-			description: "Optional positive token budget. Only honored when op=create.",
-		}),
-	),
+const goalSchema = z.object({
+	op: z.union([z.literal("create"), z.literal("get"), z.literal("complete")]).describe("Goal operation."),
+	objective: z.string().describe("Goal objective. Required when op=create.").optional(),
+	token_budget: z.number().int().describe("Optional positive token budget. Only honored when op=create.").optional(),
 });
 
-export type GoalToolInput = Static<typeof goalSchema>;
+export type GoalToolInput = z.infer<typeof goalSchema>;
 
 export interface GoalToolResponse {
 	goal: Goal | null;

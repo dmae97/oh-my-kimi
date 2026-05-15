@@ -5,6 +5,7 @@ import {
 	type SchemaCompatibilityProvider,
 	type SchemaCompatibilityResult,
 	sanitizeSchemaForGoogle,
+	toolWireSchema,
 	validateSchemaCompatibility,
 	validateStrictSchemaEnforcement,
 } from "@oh-my-pi/pi-ai/utils/schema";
@@ -38,8 +39,8 @@ async function collectToolSchemas(): Promise<ToolSchemaEntry[]> {
 	const byToolName = new Map<string, Record<string, unknown>>();
 
 	for (const tool of await createTools(session)) {
-		const schema = asSchemaObject(tool.parameters);
-		if (!schema) {
+		const schema = toolWireSchema(tool);
+		if (!asSchemaObject(schema)) {
 			continue;
 		}
 		byToolName.set(tool.name, schema);
@@ -50,8 +51,8 @@ async function collectToolSchemas(): Promise<ToolSchemaEntry[]> {
 		if (!tool) {
 			continue;
 		}
-		const schema = asSchemaObject(tool.parameters);
-		if (!schema) {
+		const schema = toolWireSchema(tool);
+		if (!asSchemaObject(schema)) {
 			continue;
 		}
 		byToolName.set(name, schema);

@@ -3,7 +3,7 @@ import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import type { Context, Model, OpenAICompat, ProviderSessionState, Tool } from "@oh-my-pi/pi-ai/types";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 
 const originalFetch = global.fetch;
 
@@ -15,8 +15,8 @@ afterEach(() => {
 const testTool: Tool = {
 	name: "echo",
 	description: "Echo input",
-	parameters: Type.Object({
-		text: Type.String(),
+	parameters: z.object({
+		text: z.string(),
 	}),
 };
 
@@ -134,8 +134,8 @@ describe("OpenAI tool strict mode", () => {
 				{
 					name: "dynamic_map",
 					description: "Dynamic object map",
-					parameters: Type.Object({
-						values: Type.Optional(Type.Record(Type.String(), Type.String())),
+					parameters: z.object({
+						values: z.record(z.string(), z.string()).optional(),
 					}),
 				},
 			],

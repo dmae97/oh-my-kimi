@@ -1,5 +1,4 @@
-import type { Static } from "@sinclair/typebox";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { LspBatchRequest } from "../edit/renderer";
 import type { WritethroughCallback, WritethroughDeferredHandle } from "../lsp";
 import type { ToolSession } from "../tools";
@@ -26,8 +25,9 @@ export type HashlineEdit =
 	| { kind: "insert"; cursor: HashlineCursor; text: string; lineNum: number; index: number }
 	| { kind: "delete"; anchor: Anchor; lineNum: number; index: number; oldAssertion?: string };
 
-export const hashlineEditParamsSchema = Type.Object({ input: Type.String() });
-export type HashlineParams = Static<typeof hashlineEditParamsSchema>;
+/** `path` is accepted by the edit tool runtime; other extra keys are preserved. */
+export const hashlineEditParamsSchema = z.object({ input: z.string(), path: z.string().optional() }).passthrough();
+export type HashlineParams = z.infer<typeof hashlineEditParamsSchema>;
 
 export interface HashlineStreamOptions {
 	/** First line number to use when formatting (1-indexed). */

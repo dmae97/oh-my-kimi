@@ -1,5 +1,5 @@
 import { $flag } from "@oh-my-pi/pi-utils";
-import { type TUnsafe, Type } from "@sinclair/typebox";
+import { type ZodType, z } from "zod/v4";
 import { areJsonValuesEqual } from "./equality";
 import { COMBINATOR_KEYS, NON_STRUCTURAL_SCHEMA_KEYS } from "./fields";
 import { isJsonObject } from "./types";
@@ -13,19 +13,27 @@ import { isJsonObject } from "./types";
  *   description: "The operation to perform"
  * });
  *
- * type Operation = Static<typeof OperationSchema>; // "add" | "subtract" | "multiply" | "divide"
+ * type Operation = z.infer<typeof OperationSchema>; // "add" | "subtract" | ...
  */
 export function StringEnum<const T extends readonly string[]>(
 	values: T,
 	options?: { description?: string; default?: T[number]; examples?: readonly T[number][] },
-): TUnsafe<T[number]> {
-	return Type.Unsafe<T[number]>({
-		type: "string",
-		enum: values as unknown as string[],
-		...(options?.description && { description: options.description }),
-		...(options?.default && { default: options.default }),
-		...(options?.examples && { examples: options.examples }),
-	});
+): ZodType<T[number]> {
+	if (values.length === 0) {
+		throw new Error("StringEnum requires at least one allowed value");
+	}
+	const tuple = values as unknown as [string, ...string[]];
+	let schema: z.ZodTypeAny = z.enum(tuple);
+	if (options?.description) {
+		schema = schema.describe(options.description);
+	}
+	if (options?.default !== undefined) {
+		schema = schema.default(options.default);
+	}
+	if (options?.examples?.length) {
+		schema = schema.meta({ examples: [...options.examples] });
+	}
+	return schema as ZodType<T[number]>;
 }
 
 export const NO_STRICT = $flag("PI_NO_STRICT");

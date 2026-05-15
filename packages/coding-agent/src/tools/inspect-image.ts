@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type Api, completeSimple, type Model } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { extractTextContent } from "../commit/utils";
 import { expandRoleAlias, resolveModelFromString } from "../config/model-resolver";
 import inspectImageDescription from "../prompts/tools/inspect-image.md" with { type: "text" };
@@ -15,15 +15,14 @@ import {
 import type { ToolSession } from "./index";
 import { ToolError } from "./tool-errors";
 
-const inspectImageSchema = Type.Object(
-	{
-		path: Type.String({ description: "image path", examples: ["image.png"] }),
-		question: Type.String({ description: "question about image", examples: ["What is in this image?"] }),
-	},
-	{ additionalProperties: false },
-);
+const inspectImageSchema = z
+	.object({
+		path: z.string().describe("image path"),
+		question: z.string().describe("question about image"),
+	})
+	.strict();
 
-export type InspectImageParams = Static<typeof inspectImageSchema>;
+export type InspectImageParams = z.infer<typeof inspectImageSchema>;
 
 export interface InspectImageToolDetails {
 	model: string;

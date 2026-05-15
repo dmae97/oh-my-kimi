@@ -3,12 +3,13 @@
  */
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
-import * as typebox from "@sinclair/typebox";
+import * as zod from "zod/v4";
 import { hookCapability } from "../../capability/hook";
 import type { Hook } from "../../discovery";
 import { loadCapability } from "../../discovery";
 import type { HookMessage } from "../../session/messages";
 import type { SessionManager } from "../../session/session-manager";
+import * as typebox from "../typebox";
 import { resolvePath } from "../utils";
 import { execCommand } from "./runner";
 import type { ExecOptions, HookAPI, HookFactory, HookMessageRenderer, RegisteredCommand } from "./types";
@@ -136,6 +137,7 @@ async function createHookAPI(
 		},
 		logger,
 		typebox,
+		zod,
 		pi: await import("@oh-my-pi/pi-coding-agent"),
 	} as HookAPI;
 

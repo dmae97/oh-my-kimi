@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { complete } from "@oh-my-pi/pi-ai/stream";
 import type { Api, Context, Model, OptionsForApi, Tool } from "@oh-my-pi/pi-ai/types";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { e2eApiKey, resolveApiKey } from "./oauth";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -16,8 +16,8 @@ const oauthTokens = await Promise.all([
 const [anthropicOAuthToken, githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
 
 // Simple calculate tool
-const calculateSchema = Type.Object({
-	expression: Type.String({ description: "The mathematical expression to evaluate" }),
+const calculateSchema = z.object({
+	expression: z.string().describe("The mathematical expression to evaluate"),
 });
 
 const calculateTool: Tool = {

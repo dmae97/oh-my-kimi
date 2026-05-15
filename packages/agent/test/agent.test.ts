@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { SimpleStreamOptions } from "@oh-my-pi/pi-ai";
+import { z } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { Type } from "@sinclair/typebox";
 import { createAssistantMessage } from "./helpers";
 
 describe("Agent", () => {
@@ -81,7 +81,7 @@ describe("Agent", () => {
 	});
 
 	it("prompt() refreshes tools and system prompt between same-turn model calls", async () => {
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = z.object({ value: z.string() });
 		type Details = { value: string };
 
 		const betaTool: AgentTool<typeof toolSchema, Details> = {
@@ -141,7 +141,7 @@ describe("Agent", () => {
 	});
 
 	it("prompt() drops stale forced toolChoice after same-turn tool refresh", async () => {
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = z.object({ value: z.string() });
 		type Details = { value: string };
 
 		const betaTool: AgentTool<typeof toolSchema, Details> = {
@@ -199,7 +199,7 @@ describe("Agent", () => {
 	});
 
 	it("re-reads thinking level for each model call within a run", async () => {
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = z.object({ value: z.string() });
 		type Details = { value: string };
 		const alphaTool: AgentTool<typeof toolSchema, Details> = {
 			name: "alpha",

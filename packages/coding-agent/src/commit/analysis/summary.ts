@@ -2,7 +2,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple, validateToolCall } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import summarySystemPrompt from "../../commit/prompts/summary-system.md" with { type: "text" };
 import summaryUserPrompt from "../../commit/prompts/summary-user.md" with { type: "text" };
 import type { CommitSummary } from "../../commit/types";
@@ -12,8 +12,8 @@ import { extractTextContent, extractToolCall } from "../utils";
 const SummaryTool = {
 	name: "create_commit_summary",
 	description: "Generate the summary line for a conventional commit message.",
-	parameters: Type.Object({
-		summary: Type.String(),
+	parameters: z.object({
+		summary: z.string(),
 	}),
 };
 
@@ -83,7 +83,7 @@ function renderSummaryPrompt({
 function parseSummaryFromResponse(message: AssistantMessage, commitType: string, scope: string | null): CommitSummary {
 	const toolCall = extractToolCall(message, "create_commit_summary");
 	if (toolCall) {
-		const parsed = validateToolCall([SummaryTool], toolCall) as { summary: string };
+		const parsed = validateToolCall([SummaryTool], toolCall) as z.infer<(typeof SummaryTool)["parameters"]>;
 		return { summary: stripTypePrefix(parsed.summary, commitType, scope) };
 	}
 	const text = extractTextContent(message);

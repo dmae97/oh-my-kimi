@@ -19,8 +19,10 @@ export interface CustomCommandAPI {
 	cwd: string;
 	/** Execute a shell command */
 	exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
-	/** Injected @sinclair/typebox module */
-	typebox: typeof import("@sinclair/typebox");
+	/** Injected zod-backed typebox shim (legacy/compat). */
+	typebox: typeof import("../typebox");
+	/** Injected zod module for Zod-authored custom commands. */
+	zod: typeof import("zod/v4");
 	/** Injected pi-coding-agent exports */
 	pi: typeof import("../..");
 }

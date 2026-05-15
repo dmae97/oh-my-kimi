@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAntigravityUserAgent, getEnvApiKey, type Model, StringEnum } from "@oh-my-pi/pi-ai";
+import { getAntigravityUserAgent, getEnvApiKey, type Model } from "@oh-my-pi/pi-ai";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
@@ -18,7 +18,7 @@ import {
 	Snowflake,
 	untilAborted,
 } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import packageJson from "../../package.json" with { type: "json" };
 import { isAuthenticated, type ModelRegistry } from "../config/model-registry";
 import type { CustomTool } from "../extensibility/custom-tools/types";
@@ -46,87 +46,37 @@ interface ImageApiKey {
 	model?: Model;
 }
 
-const responseModalitySchema = StringEnum(["IMAGE", "TEXT"]);
-const aspectRatioSchema = StringEnum(["1:1", "3:4", "4:3", "9:16", "16:9"], {
-	description: "aspect ratio",
-	examples: ["1:1", "3:4", "16:9"],
-});
-const imageSizeSchema = StringEnum(["1024x1024", "1536x1024", "1024x1536"], {
-	description: "image size",
-	examples: ["1024x1024", "1536x1024"],
-});
+const responseModalitySchema = z.enum(["IMAGE", "TEXT"] as const);
+const aspectRatioSchema = z.enum(["1:1", "3:4", "4:3", "9:16", "16:9"] as const).describe("aspect ratio");
+const imageSizeSchema = z.enum(["1024x1024", "1536x1024", "1024x1536"] as const).describe("image size");
 
-const inputImageSchema = Type.Object(
-	{
-		path: Type.Optional(Type.String({ description: "input image path" })),
-		data: Type.Optional(Type.String({ description: "base64 image data" })),
-		mime_type: Type.Optional(Type.String({ description: "mime type" })),
-	},
-	{ additionalProperties: false },
-);
+const inputImageSchema = z
+	.object({
+		path: z.string().describe("input image path").optional(),
+		data: z.string().describe("base64 image data").optional(),
+		mime_type: z.string().describe("mime type").optional(),
+	})
+	.strict();
 
-const baseImageSchema = Type.Object(
-	{
-		subject: Type.String({
-			description: "main subject",
-			examples: ["a stoic robot barista", "a weathered lighthouse"],
-		}),
-		action: Type.Optional(
-			Type.String({
-				description: "what subject is doing",
-				examples: ["pouring latte art", "standing against waves"],
-			}),
-		),
-		scene: Type.Optional(
-			Type.String({
-				description: "location or environment",
-				examples: ["futuristic café on mars", "thunderstorm at dusk"],
-			}),
-		),
-		composition: Type.Optional(
-			Type.String({
-				description: "camera angle and framing",
-				examples: ["low-angle close-up", "wide establishing shot"],
-			}),
-		),
-		lighting: Type.Optional(
-			Type.String({
-				description: "lighting setup",
-				examples: ["warm rim lighting", "golden hour backlight"],
-			}),
-		),
-		style: Type.Optional(
-			Type.String({
-				description: "artistic style",
-				examples: ["film noir", "studio ghibli watercolor", "photorealistic"],
-			}),
-		),
-		text: Type.Optional(
-			Type.String({
-				description: "text to render",
-				examples: ["headline 'urban explorer' top center"],
-			}),
-		),
-		changes: Type.Optional(
-			Type.Array(Type.String(), {
-				description: "edits to make",
-				examples: [["change tie to green", "remove car"]],
-			}),
-		),
-		aspect_ratio: Type.Optional(aspectRatioSchema),
-		image_size: Type.Optional(imageSizeSchema),
-		input: Type.Optional(
-			Type.Array(inputImageSchema, {
-				description: "input images",
-			}),
-		),
-	},
-	{ additionalProperties: false },
-);
+const baseImageSchema = z
+	.object({
+		subject: z.string().describe("main subject"),
+		action: z.string().describe("what subject is doing").optional(),
+		scene: z.string().describe("location or environment").optional(),
+		composition: z.string().describe("camera angle and framing").optional(),
+		lighting: z.string().describe("lighting setup").optional(),
+		style: z.string().describe("artistic style").optional(),
+		text: z.string().describe("text to render").optional(),
+		changes: z.array(z.string()).describe("edits to make").optional(),
+		aspect_ratio: aspectRatioSchema.optional(),
+		image_size: imageSizeSchema.optional(),
+		input: z.array(inputImageSchema).describe("input images").optional(),
+	})
+	.strict();
 
 export const imageGenSchema = baseImageSchema;
-export type ImageGenParams = Static<typeof imageGenSchema>;
-export type GeminiResponseModality = Static<typeof responseModalitySchema>;
+export type ImageGenParams = z.infer<typeof imageGenSchema>;
+export type GeminiResponseModality = z.infer<typeof responseModalitySchema>;
 
 /**
  * Assembles a structured prompt from the provided parameters.

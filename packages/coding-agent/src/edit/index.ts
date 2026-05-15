@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
-import type { Static } from "@sinclair/typebox";
+import type * as z from "zod/v4";
 import {
 	executeHashlineSingle,
 	HashlineMismatchError,
@@ -53,7 +53,7 @@ type TInput =
 	| typeof vimSchema
 	| typeof applyPatchSchema;
 
-type VimParams = Static<typeof vimSchema>;
+type VimParams = z.infer<typeof vimSchema>;
 type EditParams = ReplaceParams | PatchParams | HashlineParams | VimParams | ApplyPatchParams;
 type EditToolResultDetails = EditToolDetails | VimToolDetails;
 

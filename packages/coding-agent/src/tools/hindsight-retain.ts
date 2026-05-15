@@ -1,27 +1,25 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import retainDescription from "../prompts/tools/retain.md" with { type: "text" };
 import type { ToolSession } from ".";
 
-const hindsightRetainSchema = Type.Object({
-	items: Type.Array(
-		Type.Object({
-			content: Type.String({
-				description: "The information to remember. Be specific and self-contained — include who, what, when, why.",
+const hindsightRetainSchema = z.object({
+	items: z
+		.array(
+			z.object({
+				content: z
+					.string()
+					.describe("The information to remember. Be specific and self-contained — include who, what, when, why."),
+				context: z.string().describe("Optional context describing where this information came from.").optional(),
 			}),
-			context: Type.Optional(
-				Type.String({ description: "Optional context describing where this information came from." }),
-			),
-		}),
-		{
-			minItems: 1,
-			description:
-				"One or more memories to retain. Batch related facts in a single call rather than calling retain repeatedly — they are deduplicated and consolidated together.",
-		},
-	),
+		)
+		.min(1)
+		.describe(
+			"One or more memories to retain. Batch related facts in a single call rather than calling retain repeatedly — they are deduplicated and consolidated together.",
+		),
 });
 
-export type HindsightRetainParams = Static<typeof hindsightRetainSchema>;
+export type HindsightRetainParams = z.infer<typeof hindsightRetainSchema>;
 export class HindsightRetainTool implements AgentTool<typeof hindsightRetainSchema> {
 	readonly name = "retain";
 	readonly label = "Retain";

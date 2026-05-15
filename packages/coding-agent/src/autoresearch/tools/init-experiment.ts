@@ -1,7 +1,7 @@
 import * as path from "node:path";
-import { StringEnum } from "@oh-my-pi/pi-ai";
+
 import { Text } from "@oh-my-pi/pi-tui";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
@@ -16,46 +16,43 @@ export const HARNESS_FILENAME = "autoresearch.sh";
 export const DEFAULT_HARNESS_COMMAND = `bash ${HARNESS_FILENAME}`;
 const HARNESS_COMMIT_TITLE = "autoresearch: harness setup";
 
-const initExperimentSchema = Type.Object({
-	name: Type.String({ description: "Human-readable experiment name." }),
-	goal: Type.Optional(Type.String({ description: "Free-form description of what this session optimizes." })),
-	primary_metric: Type.String({
-		description:
+const initExperimentSchema = z.object({
+	name: z.string().describe("Human-readable experiment name."),
+	goal: z.string().describe("Free-form description of what this session optimizes.").optional(),
+	primary_metric: z
+		.string()
+		.describe(
 			"Primary metric name shown in the dashboard. Match the `METRIC <name>=<value>` lines printed by the benchmark.",
-	}),
-	metric_unit: Type.Optional(
-		Type.String({ description: "Unit for the primary metric (e.g. ms, µs, mb). Empty when unitless." }),
-	),
-	direction: Type.Optional(
-		StringEnum(["lower", "higher"], { description: "Whether lower or higher values are better. Defaults to lower." }),
-	),
-	secondary_metrics: Type.Optional(
-		Type.Array(Type.String(), {
-			description: "Names of secondary metrics tracked alongside the primary metric.",
-		}),
-	),
-	scope_paths: Type.Optional(
-		Type.Array(Type.String(), {
-			description:
-				"Files or directories the agent expects to modify. Used post-hoc to flag scope deviations on log_experiment; never used to block edits.",
-		}),
-	),
-	off_limits: Type.Optional(
-		Type.Array(Type.String(), {
-			description:
-				"Paths the agent SHOULD NOT modify. Used post-hoc to flag scope deviations on log_experiment; never used to block edits.",
-		}),
-	),
-	constraints: Type.Optional(
-		Type.Array(Type.String(), { description: "Free-form constraints (e.g. 'no api break')." }),
-	),
-	max_iterations: Type.Optional(Type.Number({ description: "Soft cap on iterations per segment. Optional." })),
-	new_segment: Type.Optional(
-		Type.Boolean({
-			description:
-				"When true, bump to a new segment even when an active session exists. New baselines and best-metric reset.",
-		}),
-	),
+		),
+	metric_unit: z.string().describe("Unit for the primary metric (e.g. ms, µs, mb). Empty when unitless.").optional(),
+	direction: z
+		.enum(["lower", "higher"] as const)
+		.describe("Whether lower or higher values are better. Defaults to lower.")
+		.optional(),
+	secondary_metrics: z
+		.array(z.string())
+		.describe("Names of secondary metrics tracked alongside the primary metric.")
+		.optional(),
+	scope_paths: z
+		.array(z.string())
+		.describe(
+			"Files or directories the agent expects to modify. Used post-hoc to flag scope deviations on log_experiment; never used to block edits.",
+		)
+		.optional(),
+	off_limits: z
+		.array(z.string())
+		.describe(
+			"Paths the agent SHOULD NOT modify. Used post-hoc to flag scope deviations on log_experiment; never used to block edits.",
+		)
+		.optional(),
+	constraints: z.array(z.string()).describe("Free-form constraints (e.g. 'no api break').").optional(),
+	max_iterations: z.number().describe("Soft cap on iterations per segment. Optional.").optional(),
+	new_segment: z
+		.boolean()
+		.describe(
+			"When true, bump to a new segment even when an active session exists. New baselines and best-metric reset.",
+		)
+		.optional(),
 });
 
 interface InitExperimentDetails {

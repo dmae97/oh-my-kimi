@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { Settings } from "../../src/config/settings";
 import { TaskTool } from "../../src/task";
 import * as discoveryModule from "../../src/task/discovery";
@@ -25,7 +26,8 @@ function createSession(overrides: Partial<Record<string, unknown>> = {}): ToolSe
 }
 
 function getSchemaProperties(tool: TaskTool): Record<string, unknown> {
-	return ((tool.parameters as { properties?: Record<string, unknown> }).properties ?? {}) as Record<string, unknown>;
+	const wire = toolWireSchema(tool) as { properties?: Record<string, unknown> };
+	return wire.properties ?? {};
 }
 
 function getAssignmentDescription(tool: TaskTool): string {

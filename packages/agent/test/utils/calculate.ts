@@ -1,5 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core/types";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 
 export interface CalculateResult extends AgentToolResult<undefined> {
 	content: Array<{ type: "text"; text: string }>;
@@ -15,11 +15,11 @@ export function calculate(expression: string): CalculateResult {
 	}
 }
 
-const calculateSchema = Type.Object({
-	expression: Type.String({ description: "The mathematical expression to evaluate" }),
+const calculateSchema = z.object({
+	expression: z.string().describe("The mathematical expression to evaluate"),
 });
 
-type CalculateParams = Static<typeof calculateSchema>;
+type CalculateParams = z.infer<typeof calculateSchema>;
 
 export const calculateTool: AgentTool<typeof calculateSchema, undefined> = {
 	label: "Calculator",

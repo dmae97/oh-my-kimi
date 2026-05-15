@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { CommitAgentState } from "../../../commit/agentic/state";
 import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
@@ -131,9 +131,9 @@ function processDiffs(files: string[], diffs: Map<string, string>): { result: st
 	return { result: parts.join("\n\n"), truncatedFiles };
 }
 
-const gitFileDiffSchema = Type.Object({
-	files: Type.Array(Type.String({ description: "Files to diff" }), { minItems: 1, maxItems: 10 }),
-	staged: Type.Optional(Type.Boolean({ description: "Use staged changes (default: true)" })),
+const gitFileDiffSchema = z.object({
+	files: z.array(z.string().describe("Files to diff")).min(1).max(10),
+	staged: z.boolean().describe("Use staged changes (default: true)").optional(),
 });
 
 export function createGitFileDiffTool(cwd: string, state: CommitAgentState): CustomTool<typeof gitFileDiffSchema> {

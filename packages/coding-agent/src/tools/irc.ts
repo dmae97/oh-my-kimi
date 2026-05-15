@@ -20,39 +20,27 @@
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import ircDescription from "../prompts/tools/irc.md" with { type: "text" };
 import type { AgentRef, AgentRegistry } from "../registry/agent-registry";
 import type { ToolSession } from ".";
 
-const ircSchema = Type.Object({
-	op: Type.Union(
-		[
-			Type.Literal("send", { description: "Send a message to one peer or to all peers" }),
-			Type.Literal("list", { description: "List currently visible peers" }),
-		],
-		{ description: "IRC operation" },
-	),
-	to: Type.Optional(
-		Type.String({
-			description: 'Recipient agent id (e.g. "0-Main", "0-AuthLoader") or "all" to broadcast',
-			examples: ["0-Main", "all"],
-		}),
-	),
-	message: Type.Optional(
-		Type.String({
-			description: "Message body to deliver",
-			examples: ["Should we use JWT or session cookies?"],
-		}),
-	),
-	awaitReply: Type.Optional(
-		Type.Boolean({
-			description: "Wait for the recipient's prose reply (default: true for DM, false for broadcast)",
-		}),
-	),
+const ircSchema = z.object({
+	op: z
+		.union([
+			z.literal("send").describe("Send a message to one peer or to all peers"),
+			z.literal("list").describe("List currently visible peers"),
+		])
+		.describe("IRC operation"),
+	to: z.string().optional().describe('Recipient agent id (e.g. "0-Main", "0-AuthLoader") or "all" to broadcast'),
+	message: z.string().optional().describe("Message body to deliver"),
+	awaitReply: z
+		.boolean()
+		.optional()
+		.describe("Wait for the recipient's prose reply (default: true for DM, false for broadcast)"),
 });
 
-type IrcParams = Static<typeof ircSchema>;
+type IrcParams = z.infer<typeof ircSchema>;
 
 interface IrcReply {
 	from: string;

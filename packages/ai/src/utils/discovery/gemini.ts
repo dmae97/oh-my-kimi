@@ -1,5 +1,5 @@
 import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "@oh-my-pi/pi-ai";
-import { z } from "zod";
+import * as z from "zod/v4";
 import { getBundledModels } from "../../models";
 import type { Model } from "../../types";
 

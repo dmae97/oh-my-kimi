@@ -18,7 +18,6 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
-import type { TSchema } from "@sinclair/typebox";
 import type { ToolSession } from "..";
 import { AsyncJobManager } from "../async";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
@@ -29,6 +28,15 @@ import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.m
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
 import { formatBytes, formatDuration } from "../tools/render-utils";
+import {
+	type AgentDefinition,
+	type AgentProgress,
+	getTaskSchema,
+	type SingleResult,
+	type TaskParams,
+	type TaskToolDetails,
+	type TaskToolSchemaInstance,
+} from "./types";
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
 import type { LocalProtocolOptions } from "../internal-urls";
@@ -40,14 +48,6 @@ import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { renderResult, renderCall as renderTaskCall } from "./render";
 import { getTaskSimpleModeCapabilities, type TaskSimpleMode } from "./simple-mode";
-import {
-	type AgentDefinition,
-	type AgentProgress,
-	getTaskSchema,
-	type SingleResult,
-	type TaskParams,
-	type TaskToolDetails,
-} from "./types";
 import {
 	applyNestedPatches,
 	captureBaseline,
@@ -198,7 +198,7 @@ function validateTaskModeParams(simpleMode: TaskSimpleMode, params: TaskParams):
  * Requires async initialization to discover available agents.
  * Use `TaskTool.create(session)` to instantiate.
  */
-export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
+export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetails, Theme> {
 	readonly name = "task";
 	readonly label = "Task";
 	readonly summary = "Spawn a subagent to complete a parallel task";
@@ -208,7 +208,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 	readonly #discoveredAgents: AgentDefinition[];
 	readonly #blockedAgent: string | undefined;
 
-	get parameters(): TSchema {
+	get parameters(): TaskToolSchemaInstance {
 		const isolationEnabled = this.session.settings.get("task.isolation.mode") !== "none";
 		return getTaskSchema({ isolationEnabled, simpleMode: this.#getTaskSimpleMode() });
 	}

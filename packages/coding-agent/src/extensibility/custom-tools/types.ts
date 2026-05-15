@@ -5,9 +5,8 @@
  * They can provide custom rendering for tool calls and results in the TUI.
  */
 import type { AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { Model, Static, TSchema } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
-import type { Static, TSchema } from "@sinclair/typebox";
 import type { Rule } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
@@ -52,8 +51,10 @@ export interface CustomToolAPI {
 	hasUI: boolean;
 	/** File logger for error/warning/debug messages */
 	logger: typeof import("@oh-my-pi/pi-utils").logger;
-	/** Injected @sinclair/typebox module */
-	typebox: typeof import("@sinclair/typebox");
+	/** Injected zod-backed typebox shim (legacy/compat — Zod-authored tools are preferred). */
+	typebox: typeof import("../typebox");
+	/** Injected zod module for Zod-authored custom tools. */
+	zod: typeof import("zod/v4");
 	/** Injected pi-coding-agent exports */
 	pi: typeof import("../..");
 	/** Push a preview action that can later be resolved with the hidden resolve tool */
@@ -180,7 +181,7 @@ export interface CustomTool<TParams extends TSchema = TSchema, TDetails = any> {
 	strict?: boolean;
 	/** Description for LLM */
 	description: string;
-	/** Parameter schema (TypeBox) */
+	/** Parameter schema (Zod or TypeBox; TypeBox is auto-lifted to Zod at registration). */
 	parameters: TParams;
 	/** If true, tool is excluded unless explicitly listed in --tools or agent's tools field */
 	hidden?: boolean;

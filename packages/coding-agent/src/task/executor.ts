@@ -7,9 +7,8 @@
 import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentTelemetryConfig, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
+import { fromTypeBox } from "@oh-my-pi/pi-ai/utils/schema";
 import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import type { TSchema } from "@sinclair/typebox";
-import Ajv, { type ValidateFunction } from "ajv";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelOverrideWithAuthFallback } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
@@ -52,7 +51,6 @@ import {
 } from "./types";
 
 const MCP_CALL_TIMEOUT_MS = 60_000;
-const ajv = new Ajv({ allErrors: true, strict: false, logger: false });
 
 /** Agent event types to forward for progress tracking. */
 const agentEventTypes = new Set<AgentEvent["type"]>([
@@ -206,13 +204,14 @@ function parseStringifiedJson(value: unknown): unknown {
 	}
 }
 
-function buildOutputValidator(schema: unknown): { validate?: ValidateFunction; error?: string } {
+function buildOutputValidator(schema: unknown): { validate?: (value: unknown) => boolean; error?: string } {
 	const { normalized, error } = normalizeSchema(schema);
 	if (error) return { error };
 	if (normalized === undefined) return {};
 	const jsonSchema = jtdToJsonSchema(normalized);
 	try {
-		return { validate: ajv.compile(jsonSchema as any) };
+		const zod = fromTypeBox(jsonSchema);
+		return { validate: value => zod.safeParse(value).success };
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}
@@ -418,14 +417,14 @@ function getUsageTokens(usage: unknown): number {
 /**
  * Create proxy tools that reuse the parent's MCP connections.
  */
-function createMCPProxyTools(mcpManager: MCPManager): CustomTool<TSchema>[] {
+function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
 	return mcpManager.getTools().map(tool => {
 		const mcpTool = tool as { mcpToolName?: string; mcpServerName?: string };
 		return {
 			name: tool.name,
 			label: tool.label ?? tool.name,
 			description: tool.description ?? "",
-			parameters: tool.parameters as TSchema,
+			parameters: tool.parameters,
 			execute: async (_toolCallId, params, _onUpdate, _ctx, signal) => {
 				if (signal?.aborted) {
 					throw new ToolAbortError();

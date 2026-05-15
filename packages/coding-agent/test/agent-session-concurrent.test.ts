@@ -19,7 +19,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 // Mock stream that mimics AssistantMessageEventStream
@@ -590,7 +590,7 @@ describe("AgentSession TTSR resume gate", () => {
 			name: "mock_edit",
 			label: "Mock Edit",
 			description: "A mock edit tool",
-			parameters: Type.Object({}),
+			parameters: z.object({}),
 			execute: async () => {
 				await Bun.sleep(100);
 				toolExecutionFinished = true;

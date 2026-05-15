@@ -1,49 +1,41 @@
-import { StringEnum } from "@oh-my-pi/pi-ai";
 import type { ptree } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 
 // =============================================================================
 // Tool Schema
 // =============================================================================
 
-export const lspSchema = Type.Object({
-	action: StringEnum(
-		[
-			"diagnostics",
-			"definition",
-			"references",
-			"hover",
-			"symbols",
-			"rename",
-			"rename_file",
-			"code_actions",
-			"type_definition",
-			"implementation",
-			"status",
-			"reload",
-			"capabilities",
-			"request",
-		],
-		{ description: "LSP operation" },
-	),
-	file: Type.Optional(Type.String({ description: "File path or source path for rename_file" })),
-	line: Type.Optional(Type.Number({ description: "Line number (1-indexed)" })),
-	symbol: Type.Optional(Type.String({ description: "Symbol/substring to locate on the line" })),
-	query: Type.Optional(
-		Type.String({ description: "Search query, code-action selector, or LSP method name for action=request" }),
-	),
-	new_name: Type.Optional(Type.String({ description: "New name for rename, or destination path for rename_file" })),
-	apply: Type.Optional(Type.Boolean({ description: "Apply edits (default: true for rename/rename_file)" })),
-	timeout: Type.Optional(Type.Number({ description: "Request timeout in seconds" })),
-	payload: Type.Optional(
-		Type.String({
-			description:
-				"JSON-encoded params for action=request. When omitted, params are auto-built from file/line/symbol.",
-		}),
-	),
+export const lspSchema = z.object({
+	action: z.enum([
+		"diagnostics",
+		"definition",
+		"references",
+		"hover",
+		"symbols",
+		"rename",
+		"rename_file",
+		"code_actions",
+		"type_definition",
+		"implementation",
+		"status",
+		"reload",
+		"capabilities",
+		"request",
+	]),
+	file: z.string().describe("File path or source path for rename_file").optional(),
+	line: z.number().describe("Line number (1-indexed)").optional(),
+	symbol: z.string().describe("Symbol/substring to locate on the line").optional(),
+	query: z.string().describe("Search query, code-action selector, or LSP method name for action=request").optional(),
+	new_name: z.string().describe("New name for rename, or destination path for rename_file").optional(),
+	apply: z.boolean().describe("Apply edits (default: true for rename/rename_file)").optional(),
+	timeout: z.number().describe("Request timeout in seconds").optional(),
+	payload: z
+		.string()
+		.describe("JSON-encoded params for action=request. When omitted, params are auto-built from file/line/symbol.")
+		.optional(),
 });
 
-export type LspParams = Static<typeof lspSchema>;
+export type LspParams = z.infer<typeof lspSchema>;
 
 export interface LspToolDetails {
 	serverName?: string;

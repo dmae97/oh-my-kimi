@@ -1,0 +1,162 @@
+import * as z from "zod/v4";
+
+const OpenRouterRoutingSchema = z.object({
+	only: z.array(z.string()).optional(),
+	order: z.array(z.string()).optional(),
+});
+
+const VercelGatewayRoutingSchema = z.object({
+	only: z.array(z.string()).optional(),
+	order: z.array(z.string()).optional(),
+});
+
+const ReasoningEffortMapSchema = z.object({
+	minimal: z.string().optional(),
+	low: z.string().optional(),
+	medium: z.string().optional(),
+	high: z.string().optional(),
+	xhigh: z.string().optional(),
+});
+
+export const OpenAICompatSchema = z.object({
+	supportsStore: z.boolean().optional(),
+	supportsDeveloperRole: z.boolean().optional(),
+	supportsReasoningEffort: z.boolean().optional(),
+	reasoningEffortMap: ReasoningEffortMapSchema.optional(),
+	maxTokensField: z.enum(["max_completion_tokens", "max_tokens"]).optional(),
+	supportsUsageInStreaming: z.boolean().optional(),
+	requiresToolResultName: z.boolean().optional(),
+	requiresMistralToolIds: z.boolean().optional(),
+	requiresAssistantAfterToolResult: z.boolean().optional(),
+	requiresThinkingAsText: z.boolean().optional(),
+	reasoningContentField: z.enum(["reasoning_content", "reasoning", "reasoning_text"]).optional(),
+	requiresReasoningContentForToolCalls: z.boolean().optional(),
+	requiresAssistantContentForToolCalls: z.boolean().optional(),
+	supportsToolChoice: z.boolean().optional(),
+	disableReasoningOnForcedToolChoice: z.boolean().optional(),
+	thinkingFormat: z.enum(["openai", "openrouter", "zai", "qwen", "qwen-chat-template"]).optional(),
+	openRouterRouting: OpenRouterRoutingSchema.optional(),
+	vercelGatewayRouting: VercelGatewayRoutingSchema.optional(),
+	extraBody: z.record(z.string(), z.unknown()).optional(),
+	supportsStrictMode: z.boolean().optional(),
+	toolStrictMode: z.enum(["all_strict", "none"]).optional(),
+});
+
+const EffortSchema = z.enum(["minimal", "low", "medium", "high", "xhigh"]);
+
+const ThinkingControlModeSchema = z.enum([
+	"effort",
+	"budget",
+	"google-level",
+	"anthropic-adaptive",
+	"anthropic-budget-effort",
+]);
+
+const ModelThinkingSchema = z.object({
+	minLevel: EffortSchema,
+	maxLevel: EffortSchema,
+	mode: ThinkingControlModeSchema,
+	defaultLevel: EffortSchema.optional(),
+});
+
+const ModelDefinitionSchema = z.object({
+	id: z.string().min(1),
+	name: z.string().min(1).optional(),
+	api: z
+		.enum([
+			"openai-completions",
+			"openai-responses",
+			"openai-codex-responses",
+			"azure-openai-responses",
+			"anthropic-messages",
+			"google-generative-ai",
+			"google-vertex",
+		])
+		.optional(),
+	baseUrl: z.string().min(1).optional(),
+	reasoning: z.boolean().optional(),
+	thinking: ModelThinkingSchema.optional(),
+	input: z.array(z.enum(["text", "image"])).optional(),
+	cost: z
+		.object({
+			input: z.number(),
+			output: z.number(),
+			cacheRead: z.number(),
+			cacheWrite: z.number(),
+		})
+		.optional(),
+	premiumMultiplier: z.number().optional(),
+	contextWindow: z.number().optional(),
+	maxTokens: z.number().optional(),
+	headers: z.record(z.string(), z.string()).optional(),
+	compat: OpenAICompatSchema.optional(),
+	contextPromotionTarget: z.string().min(1).optional(),
+});
+
+export const ModelOverrideSchema = z.object({
+	name: z.string().min(1).optional(),
+	reasoning: z.boolean().optional(),
+	thinking: ModelThinkingSchema.optional(),
+	input: z.array(z.enum(["text", "image"])).optional(),
+	cost: z
+		.object({
+			input: z.number().optional(),
+			output: z.number().optional(),
+			cacheRead: z.number().optional(),
+			cacheWrite: z.number().optional(),
+		})
+		.optional(),
+	premiumMultiplier: z.number().optional(),
+	contextWindow: z.number().optional(),
+	maxTokens: z.number().optional(),
+	headers: z.record(z.string(), z.string()).optional(),
+	compat: OpenAICompatSchema.optional(),
+	contextPromotionTarget: z.string().min(1).optional(),
+});
+
+export type ModelOverride = z.infer<typeof ModelOverrideSchema>;
+
+export const ProviderDiscoverySchema = z.object({
+	type: z.enum(["ollama", "llama.cpp", "lm-studio", "openai-models-list"]),
+});
+
+export const ProviderAuthSchema = z.enum(["apiKey", "none", "oauth"]);
+
+export type ProviderAuthMode = z.infer<typeof ProviderAuthSchema>;
+export type ProviderDiscovery = z.infer<typeof ProviderDiscoverySchema>;
+
+const ProviderConfigSchema = z.object({
+	baseUrl: z.string().min(1).optional(),
+	apiKey: z.string().min(1).optional(),
+	api: z
+		.enum([
+			"openai-completions",
+			"openai-responses",
+			"openai-codex-responses",
+			"azure-openai-responses",
+			"anthropic-messages",
+			"google-generative-ai",
+			"google-vertex",
+		])
+		.optional(),
+	headers: z.record(z.string(), z.string()).optional(),
+	compat: OpenAICompatSchema.optional(),
+	authHeader: z.boolean().optional(),
+	auth: ProviderAuthSchema.optional(),
+	discovery: ProviderDiscoverySchema.optional(),
+	models: z.array(ModelDefinitionSchema).optional(),
+	modelOverrides: z.record(z.string(), ModelOverrideSchema).optional(),
+	disableStrictTools: z.boolean().optional(),
+});
+
+const EquivalenceConfigSchema = z.object({
+	overrides: z.record(z.string(), z.string().min(1)).optional(),
+	exclude: z.array(z.string().min(1)).optional(),
+});
+
+export const ModelsConfigSchema = z.object({
+	providers: z.record(z.string(), ProviderConfigSchema).optional(),
+	equivalence: EquivalenceConfigSchema.optional(),
+});
+
+export type ModelsConfig = z.infer<typeof ModelsConfigSchema>;

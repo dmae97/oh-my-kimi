@@ -1,4 +1,4 @@
-import type { TSchema } from "@sinclair/typebox";
+import type { ZodType, z } from "zod/v4";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { AzureOpenAIResponsesOptions } from "./providers/azure-openai-responses";
@@ -536,6 +536,23 @@ export interface CursorExecHandlers {
 	mcp?: (call: CursorMcpCall) => Promise<CursorExecHandlerResult<McpResult>>;
 	onToolResult?: CursorToolResultHandler;
 }
+
+/**
+ * Plain JSON Schema document used by extension-authored tools (legacy TypeBox
+ * emits this shape). Distinguished from Zod at runtime via {@link isZodSchema}.
+ */
+export type TJsonSchema = Record<string, unknown>;
+
+/**
+ * Schema type accepted by the {@link Tool} interface.
+ *
+ * Canonical authoring uses Zod. Extension compat may supply a JSON Schema
+ * object (including TypeBox static schema objects).
+ */
+export type TSchema = ZodType | TJsonSchema;
+
+/** Resolve parameter types for tool execution / handlers. */
+export type Static<S> = S extends ZodType ? z.infer<S> : unknown;
 
 export interface Tool<TParameters extends TSchema = TSchema> {
 	name: string;

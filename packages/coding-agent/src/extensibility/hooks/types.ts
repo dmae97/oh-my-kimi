@@ -571,8 +571,10 @@ export interface HookAPI {
 
 	/** File logger for error/warning/debug messages */
 	logger: typeof import("@oh-my-pi/pi-utils").logger;
-	/** Injected @sinclair/typebox module */
-	typebox: typeof import("@sinclair/typebox");
+	/** Injected zod-backed typebox shim (legacy/compat — prefer `zod`). */
+	typebox: typeof import("../typebox");
+	/** Injected zod module for Zod-authored hooks. */
+	zod: typeof import("zod/v4");
 	/** Injected pi-coding-agent exports */
 	pi: typeof import("../..");
 }

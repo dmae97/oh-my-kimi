@@ -9,7 +9,7 @@ import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 
 function createMcpCustomTool(name: string, serverName: string, mcpToolName: string): CustomTool {
 	return {
@@ -18,7 +18,7 @@ function createMcpCustomTool(name: string, serverName: string, mcpToolName: stri
 		description: `Tool ${mcpToolName} from ${serverName}`,
 		mcpServerName: serverName,
 		mcpToolName,
-		parameters: Type.Object({ query: Type.String() }),
+		parameters: z.object({ query: z.string() }),
 		async execute() {
 			return { content: [{ type: "text", text: `${name} executed` }] };
 		},

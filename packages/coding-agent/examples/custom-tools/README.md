@@ -47,7 +47,6 @@ See [docs/custom-tools.md](../../docs/custom-tools.md) for full documentation.
 **Factory pattern:**
 
 ```typescript
-import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@oh-my-pi/pi-ai";
 import { Text } from "@oh-my-pi/pi-tui";
 import type { CustomToolFactory } from "@oh-my-pi/pi-coding-agent";
@@ -56,7 +55,7 @@ const factory: CustomToolFactory = (pi) => ({
 	name: "my_tool",
 	label: "My Tool",
 	description: "Tool description for LLM",
-	parameters: Type.Object({
+	parameters: pi.zod.object({
 		action: StringEnum(["list", "add"] as const),
 	}),
 
@@ -78,6 +77,8 @@ const factory: CustomToolFactory = (pi) => ({
 export default factory;
 ```
 
+**Legacy:** `parameters: pi.typebox.Type.Object({ ... })` still works; the injected `typebox` is a small Zod-backed shim, and schemas flow through the same Zod pipeline as `pi.zod` schemas.
+
 **Custom rendering:**
 
 ```typescript
@@ -96,14 +97,17 @@ renderResult(result, { expanded, isPartial }, theme) {
 },
 ```
 
-**Use StringEnum for string parameters** (required for Google API compatibility):
+**Use `StringEnum` for discriminated string tool args** (required for Google API compatibility):
 
 ```typescript
 import { StringEnum } from "@oh-my-pi/pi-ai";
 
-// Good
-action: StringEnum(["list", "add"] as const);
+const { z } = pi.zod;
 
-// Bad - doesn't work with Google
-action: Type.Union([Type.Literal("list"), Type.Literal("add")]);
+// Good — Google-safe enum wiring
+parameters: z.object({
+	action: StringEnum(["list", "add"] as const),
+});
+
+// Avoid raw union-of-literals patterns that don't degrade well for strict JSON Schema providers
 ```

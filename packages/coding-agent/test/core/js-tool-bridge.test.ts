@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "bun:test";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { callSessionTool } from "../../src/eval/js/tool-bridge";
 
 function createTool(
@@ -13,7 +13,7 @@ function createTool(
 		name,
 		label: name,
 		description: `${name} tool`,
-		parameters: Type.Object({}),
+		parameters: z.object({}),
 		concurrency: "parallel",
 		execute,
 	} as unknown as AgentTool;

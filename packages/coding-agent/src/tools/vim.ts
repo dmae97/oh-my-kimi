@@ -2,8 +2,8 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { extractSegments, sliceWithWidth, Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
 import * as Diff from "diff";
+import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { createLspWritethrough, type FileDiagnosticsResult, type WritethroughCallback, writethroughNoop } from "../lsp";
 import { getLanguageFromPath, highlightCode, type Theme } from "../modes/theme/theme";
@@ -36,35 +36,19 @@ import { toolResult } from "./tool-result";
 const INTERNAL_URL_PREFIX = /^(agent|artifact|skill|rule|local|mcp):\/\//;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
-const vimStepSchema = Type.Object({
-	kbd: Type.Array(Type.String(), {
-		description: "vim key sequences",
-		examples: [["ggdGi"], ["3Go"], ["dd"]],
-	}),
-	insert: Type.Optional(
-		Type.String({
-			description: "raw text to insert",
-			examples: ["hello world"],
-		}),
-	),
+const vimStepSchema = z.object({
+	kbd: z.array(z.string()).describe("vim key sequences"),
+	insert: z.string().optional().describe("raw text to insert"),
 });
 
-const vimSchema = Type.Object({
-	file: Type.String({ description: "file path", examples: ["src/foo.ts"] }),
-	steps: Type.Optional(
-		Type.Array(vimStepSchema, {
-			description: "editing steps",
-		}),
-	),
-	pause: Type.Optional(
-		Type.Boolean({
-			description: "skip auto-save",
-		}),
-	),
+const vimSchema = z.object({
+	file: z.string().describe("file path"),
+	steps: z.array(vimStepSchema).optional().describe("editing steps"),
+	pause: z.boolean().optional().describe("skip auto-save"),
 });
 
-type VimParams = Static<typeof vimSchema>;
-type VimStep = Static<typeof vimStepSchema>;
+type VimParams = z.infer<typeof vimSchema>;
+type VimStep = z.infer<typeof vimStepSchema>;
 
 interface VimRenderStep {
 	kbd?: string[];

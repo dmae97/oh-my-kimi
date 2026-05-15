@@ -7,7 +7,7 @@ import { glob, type SummaryResult, summarizeCode } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { getFileReadCache } from "../edit/file-read-cache";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -473,14 +473,13 @@ function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: 
 	return text ? `${notice}\n${text}` : notice;
 }
 
-const readSchema = Type.Object({
-	path: Type.String({
-		description: 'path or url; append :<sel> for line ranges or raw mode (e.g. "src/foo.ts:50-100")',
-		examples: ["src/foo.ts", "src/foo.ts:50-100", "https://example.com/:1-40"],
-	}),
-});
+const readSchema = z
+	.object({
+		path: z.string().describe('path or url; append :<sel> for line ranges or raw mode (e.g. "src/foo.ts:50-100")'),
+	})
+	.strict();
 
-export type ReadToolInput = Static<typeof readSchema>;
+export type ReadToolInput = z.infer<typeof readSchema>;
 
 export interface ReadToolDetails {
 	kind?: "file" | "url";

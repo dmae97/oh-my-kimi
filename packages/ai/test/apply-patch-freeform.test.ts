@@ -14,8 +14,8 @@ import {
 	processResponsesStream,
 } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
 import type { AssistantMessage, Model, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
-import { Type } from "@sinclair/typebox";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses";
+import * as z from "zod/v4";
 
 const GRAMMAR = [
 	"// top-level comment",
@@ -63,14 +63,14 @@ const editTool: Tool = {
 	name: "edit",
 	customWireName: "apply_patch",
 	description: "edit files",
-	parameters: Type.Object({ input: Type.String() }),
+	parameters: z.object({ input: z.string() }),
 	customFormat: { syntax: "lark", definition: GRAMMAR },
 };
 
 const plainTool: Tool = {
 	name: "read_file",
 	description: "read a file",
-	parameters: Type.Object({ path: Type.String() }),
+	parameters: z.object({ path: z.string() }),
 };
 
 const unionBranches = [
@@ -404,13 +404,13 @@ describe("dispatcher wire-name matching", () => {
 			name: "edit",
 			customWireName: "apply_patch",
 			description: "edit files",
-			parameters: Type.Object({ input: Type.String() }),
+			parameters: z.object({ input: z.string() }),
 			customFormat: { syntax: "lark", definition: GRAMMAR },
 		};
 		const readTool: Tool = {
 			name: "read_file",
 			description: "read",
-			parameters: Type.Object({ path: Type.String() }),
+			parameters: z.object({ path: z.string() }),
 		};
 		const tools = [editLikeTool, readTool];
 		const toolCall = { name: "apply_patch" };
@@ -431,13 +431,13 @@ describe("dispatcher wire-name matching", () => {
 		const nameMatch: Tool = {
 			name: "foo",
 			description: "",
-			parameters: Type.Object({}),
+			parameters: z.object({}),
 		};
 		const wireMatch: Tool & { customWireName: string } = {
 			name: "bar",
 			customWireName: "foo",
 			description: "",
-			parameters: Type.Object({}),
+			parameters: z.object({}),
 		};
 		const tools = [wireMatch, nameMatch]; // wireMatch listed first
 		const toolCall = { name: "foo" };

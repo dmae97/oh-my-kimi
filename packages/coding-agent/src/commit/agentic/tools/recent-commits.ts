@@ -1,9 +1,9 @@
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
 
-const recentCommitsSchema = Type.Object({
-	count: Type.Optional(Type.Number({ description: "Number of commits to fetch", minimum: 1, maximum: 50 })),
+const recentCommitsSchema = z.object({
+	count: z.number().min(1).max(50).describe("Number of commits to fetch").optional(),
 });
 
 interface RecentCommitStats {

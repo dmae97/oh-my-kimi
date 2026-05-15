@@ -4,7 +4,7 @@ import { type AstReplaceChange, type AstReplaceFileChange, astEdit } from "@oh-m
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { $envpos, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { computeLineHash, HL_BODY_SEP } from "../hashline/hash";
 import type { Theme } from "../modes/theme/theme";
@@ -33,21 +33,17 @@ import { queueResolveHandler } from "./resolve";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const astEditOpSchema = Type.Object({
-	pat: Type.String({ description: "ast pattern", examples: ["oldFn($$$ARGS)"] }),
-	out: Type.String({ description: "replacement template", examples: ["newFn($$$ARGS)"] }),
+const astEditOpSchema = z.object({
+	pat: z.string().describe("ast pattern"),
+	out: z.string().describe("replacement template"),
 });
 
-const astEditSchema = Type.Object({
-	ops: Type.Array(astEditOpSchema, {
-		minItems: 1,
-		description: "rewrite ops",
-	}),
-	paths: Type.Array(Type.String({ description: "file, directory, glob, or internal URL to rewrite" }), {
-		minItems: 1,
-		description: "files, directories, globs, or internal URLs to rewrite",
-		examples: [["src/"], ["src/foo.ts"], ["src/**/*.ts"], ["src/", "packages/"]],
-	}),
+const astEditSchema = z.object({
+	ops: z.array(astEditOpSchema).min(1).describe("rewrite ops"),
+	paths: z
+		.array(z.string().describe("file, directory, glob, or internal URL to rewrite"))
+		.min(1)
+		.describe("files, directories, globs, or internal URLs to rewrite"),
 });
 
 interface AstEditCallOptions {
@@ -174,7 +170,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 
 	async execute(
 		_toolCallId: string,
-		params: Static<typeof astEditSchema>,
+		params: z.infer<typeof astEditSchema>,
 		signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback<AstEditToolDetails>,
 		_context?: AgentToolContext,

@@ -65,8 +65,8 @@ const factory: CustomToolFactory = (pi) => ({
   name: "batch_rename_preview",
   label: "Batch Rename Preview",
   description: "Previews renames and defers commit to resolve",
-  parameters: pi.typebox.Type.Object({
-    files: pi.typebox.Type.Array(pi.typebox.Type.String()),
+  parameters: pi.zod.object({
+    files: pi.zod.array(pi.zod.string()),
   }),
 
   async execute(_toolCallId, params) {

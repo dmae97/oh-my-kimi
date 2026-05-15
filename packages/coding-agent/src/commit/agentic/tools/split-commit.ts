@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { CommitAgentState, SplitCommitGroup, SplitCommitPlan } from "../../../commit/agentic/state";
 import { computeDependencyOrder } from "../../../commit/agentic/topo-sort";
 import {
@@ -15,31 +15,32 @@ import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
 import { commitTypeSchema, detailSchema } from "./schemas.js";
 
-const hunkSelectorSchema = Type.Union([
-	Type.Object({ type: Type.Literal("all") }),
-	Type.Object({ type: Type.Literal("indices"), indices: Type.Array(Type.Number(), { minItems: 1 }) }),
-	Type.Object({ type: Type.Literal("lines"), start: Type.Number(), end: Type.Number() }),
+const hunkSelectorSchema = z.discriminatedUnion("type", [
+	z.object({ type: z.literal("all") }),
+	z.object({ type: z.literal("indices"), indices: z.array(z.number()).min(1) }),
+	z.object({ type: z.literal("lines"), start: z.number(), end: z.number() }),
 ]);
 
-const fileChangeSchema = Type.Object({
-	path: Type.String(),
+const fileChangeSchema = z.object({
+	path: z.string(),
 	hunks: hunkSelectorSchema,
 });
 
-const splitCommitSchema = Type.Object({
-	commits: Type.Array(
-		Type.Object({
-			changes: Type.Array(fileChangeSchema, { minItems: 1 }),
-			type: commitTypeSchema,
-			scope: Type.Union([Type.String(), Type.Null()]),
-			summary: Type.String(),
-			details: Type.Optional(Type.Array(detailSchema)),
-			issue_refs: Type.Optional(Type.Array(Type.String())),
-			rationale: Type.Optional(Type.String()),
-			dependencies: Type.Optional(Type.Array(Type.Number())),
-		}),
-		{ minItems: 2 },
-	),
+const splitCommitSchema = z.object({
+	commits: z
+		.array(
+			z.object({
+				changes: z.array(fileChangeSchema).min(1),
+				type: commitTypeSchema,
+				scope: z.union([z.string(), z.null()]),
+				summary: z.string(),
+				details: z.array(detailSchema).optional(),
+				issue_refs: z.array(z.string()).optional(),
+				rationale: z.string().optional(),
+				dependencies: z.array(z.number()).optional(),
+			}),
+		)
+		.min(2),
 });
 
 interface SplitCommitResponse {

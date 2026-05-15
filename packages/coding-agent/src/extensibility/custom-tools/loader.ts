@@ -1,19 +1,20 @@
 /**
  * Custom tool loader - loads TypeScript tool modules using native Bun import.
  *
- * Dependencies (@sinclair/typebox and pi-coding-agent) are injected via the CustomToolAPI
- * to avoid import resolution issues with custom tools loaded from user directories.
+ * Dependencies (the zod-backed typebox shim and pi-coding-agent) are injected via the
+ * CustomToolAPI to avoid import resolution issues with custom tools loaded from user directories.
  */
 import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
-import * as typebox from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { toolCapability } from "../../capability/tool";
 import { type CustomTool, loadCapability } from "../../discovery";
 import type { ExecOptions } from "../../exec/exec";
 import { execCommand } from "../../exec/exec";
 import type { HookUIContext } from "../../extensibility/hooks/types";
 import { getAllPluginToolPaths } from "../../extensibility/plugins/loader";
+import * as typebox from "../typebox";
 import { createNoOpUIContext, resolvePath } from "../utils";
 import type { CustomToolAPI, CustomToolFactory, LoadedCustomTool, ToolLoadError } from "./types";
 
@@ -103,6 +104,7 @@ export class CustomToolLoader {
 			hasUI: false,
 			logger,
 			typebox,
+			zod: z,
 			pi,
 			pushPendingAction: action => {
 				if (!pushPendingAction) {

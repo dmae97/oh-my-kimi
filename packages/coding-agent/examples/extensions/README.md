@@ -71,9 +71,10 @@ See [docs/extensions.md](../../docs/extensions.md) for full documentation.
 
 ```typescript
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
 
 export default function (pi: ExtensionAPI) {
+	const z = pi.zod;
+
 	// Subscribe to lifecycle events
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName === "bash" && event.input.command?.includes("rm -rf")) {
@@ -87,8 +88,8 @@ export default function (pi: ExtensionAPI) {
 		name: "greet",
 		label: "Greeting",
 		description: "Generate a greeting",
-		parameters: Type.Object({
-			name: Type.String({ description: "Name to greet" }),
+		parameters: z.object({
+			name: z.string().describe("Name to greet"),
 		}),
 		async execute(toolCallId, params, onUpdate, ctx, signal) {
 			return {
@@ -108,18 +109,28 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
+**Legacy TypeBox-style schemas** (`pi.typebox`) remain available for older extensions and are backed by a tiny Zod-shim — prefer `pi.zod` directly for new code.
+
+```typescript
+const { Type } = pi.typebox;
+parameters: Type.Object({ name: Type.String() });
+```
+
 ## Key Patterns
 
-**Use StringEnum for string parameters** (required for Google API compatibility):
+**Use `StringEnum` for discriminated string tool args** (required for Google API compatibility):
 
 ```typescript
 import { StringEnum } from "@oh-my-pi/pi-ai";
 
-// Good
-action: StringEnum(["list", "add"] as const);
+const { z } = pi.zod;
 
-// Bad - doesn't work with Google
-action: Type.Union([Type.Literal("list"), Type.Literal("add")]);
+// Good — Google-safe enum wiring
+parameters: z.object({
+	action: StringEnum(["list", "add"] as const),
+});
+
+// Avoid raw union-of-literals patterns that don't degrade well for strict JSON Schema providers
 ```
 
 **State persistence via details:**

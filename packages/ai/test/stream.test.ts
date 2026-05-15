@@ -8,7 +8,7 @@ import { complete, getEnvApiKey, stream } from "@oh-my-pi/pi-ai/stream";
 import type { Api, Context, ImageContent, Model, OptionsForApi, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { StringEnum } from "@oh-my-pi/pi-ai/utils/schema";
 import { $which } from "@oh-my-pi/pi-utils";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import { e2eApiKey, resolveApiKey } from "./oauth";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -35,10 +35,10 @@ function hasBedrockCredentials(): boolean {
 
 // Calculator tool definition (same as examples)
 // Note: Using StringEnum helper because Google's API doesn't support anyOf/const patterns
-// that Type.Enum generates. Google requires { type: "string", enum: [...] } format.
-const calculatorSchema = Type.Object({
-	a: Type.Number({ description: "First number" }),
-	b: Type.Number({ description: "Second number" }),
+// that some schema authors emit for string unions. Google requires { type: "string", enum: [...] } format.
+const calculatorSchema = z.object({
+	a: z.number().describe("First number"),
+	b: z.number().describe("Second number"),
 	operation: StringEnum(["add", "subtract", "multiply", "divide"], {
 		description: "The operation to perform. One of 'add', 'subtract', 'multiply', 'divide'.",
 	}),

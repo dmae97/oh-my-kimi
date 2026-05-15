@@ -2,27 +2,23 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple, validateToolCall } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { type TSchema, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import changelogSystemPrompt from "../../commit/prompts/changelog-system.md" with { type: "text" };
 import changelogUserPrompt from "../../commit/prompts/changelog-user.md" with { type: "text" };
 import { CHANGELOG_CATEGORIES, type ChangelogCategory, type ChangelogGenerationResult } from "../../commit/types";
 import { toReasoningEffort } from "../../thinking";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../utils";
 
-const changelogEntryProperties = CHANGELOG_CATEGORIES.reduce<Record<ChangelogCategory, TSchema>>(
-	(acc, category) => {
-		acc[category] = Type.Optional(Type.Array(Type.String()));
-		return acc;
-	},
-	{} as Record<ChangelogCategory, TSchema>,
-);
+const changelogEntryShape = Object.fromEntries(
+	CHANGELOG_CATEGORIES.map(c => [c, z.array(z.string()).optional()] as const),
+) as Record<ChangelogCategory, z.ZodOptional<z.ZodArray<z.ZodString>>>;
 
-const changelogEntriesSchema = Type.Object(changelogEntryProperties);
+const changelogEntriesSchema = z.object(changelogEntryShape);
 
 export const changelogTool = {
 	name: "create_changelog_entries",
 	description: "Generate changelog entries grouped by Keep a Changelog categories.",
-	parameters: Type.Object({
+	parameters: z.object({
 		entries: changelogEntriesSchema,
 	}),
 };
@@ -72,7 +68,7 @@ export async function generateChangelogEntries({
 function parseChangelogResponse(message: AssistantMessage): ChangelogGenerationResult {
 	const toolCall = extractToolCall(message, "create_changelog_entries");
 	if (toolCall) {
-		const parsed = validateToolCall([changelogTool], toolCall) as ChangelogGenerationResult;
+		const parsed = validateToolCall([changelogTool], toolCall) as z.infer<(typeof changelogTool)["parameters"]>;
 		return { entries: parsed.entries ?? {} };
 	}
 

@@ -4,8 +4,8 @@ const factory: CustomToolFactory = pi => ({
 	name: "hello",
 	label: "Hello",
 	description: "A simple greeting tool",
-	parameters: pi.typebox.Type.Object({
-		name: pi.typebox.Type.String({ description: "Name to greet" }),
+	parameters: pi.zod.object({
+		name: pi.zod.string().describe("Name to greet"),
 	}),
 
 	async execute(_toolCallId, params, _onUpdate, _ctx, _signal) {

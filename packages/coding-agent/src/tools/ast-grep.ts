@@ -4,7 +4,7 @@ import { type AstFindMatch, astGrep } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import astGrepDescription from "../prompts/tools/ast-grep.md" with { type: "text" };
@@ -32,14 +32,13 @@ import {
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const astGrepSchema = Type.Object({
-	pat: Type.String({ description: "ast pattern", examples: ["console.log($$$)"] }),
-	paths: Type.Array(Type.String({ description: "file, directory, glob, or internal URL to search" }), {
-		minItems: 1,
-		description: "files, directories, globs, or internal URLs to search",
-		examples: [["src/"], ["src/foo.ts"], ["src/**/*.ts"], ["src/", "packages/"]],
-	}),
-	skip: Type.Optional(Type.Number({ description: "matches to skip", default: 0 })),
+const astGrepSchema = z.object({
+	pat: z.string().describe("ast pattern"),
+	paths: z
+		.array(z.string().describe("file, directory, glob, or internal URL to search"))
+		.min(1)
+		.describe("files, directories, globs, or internal URLs to search"),
+	skip: z.number().default(0).describe("matches to skip").optional(),
 });
 
 async function runMultiTargetAstGrep(
@@ -129,7 +128,7 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 
 	async execute(
 		_toolCallId: string,
-		params: Static<typeof astGrepSchema>,
+		params: z.infer<typeof astGrepSchema>,
 		signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback<AstGrepToolDetails>,
 		_context?: AgentToolContext,

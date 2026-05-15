@@ -8,8 +8,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Model, TextContent } from "@oh-my-pi/pi-ai";
 import type { KeyId } from "@oh-my-pi/pi-tui";
 import { hasFsCode, isEacces, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import type { TSchema } from "@sinclair/typebox";
-import * as TypeBox from "@sinclair/typebox";
+import * as Zod from "zod/v4";
 import { type ExtensionModule, extensionModuleCapability } from "../../capability/extension-module";
 import { loadCapability } from "../../discovery";
 import { getExtensionNameFromPath } from "../../discovery/helpers";
@@ -19,6 +18,7 @@ import type { CustomMessage } from "../../session/messages";
 import { EventBus } from "../../utils/event-bus";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "../plugins/legacy-pi-compat";
 import { getAllPluginExtensionPaths } from "../plugins/loader";
+import * as TypeBox from "../typebox";
 
 import { resolvePath } from "../utils";
 import type {
@@ -119,6 +119,7 @@ export class ExtensionRuntime implements IExtensionRuntime {
 class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 	readonly logger = logger;
 	readonly typebox = TypeBox;
+	readonly zod = Zod;
 	readonly flagValues = new Map<string, boolean | string>();
 	readonly pendingProviderRegistrations: Array<{
 		name: string;
@@ -140,7 +141,10 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		this.extension.handlers.set(event, list);
 	}
 
-	registerTool<TParams extends TSchema = TSchema, TDetails = unknown>(tool: ToolDefinition<TParams, TDetails>): void {
+	registerTool<
+		TParams extends import("@oh-my-pi/pi-ai").TSchema = import("@oh-my-pi/pi-ai").TSchema,
+		TDetails = unknown,
+	>(tool: ToolDefinition<TParams, TDetails>): void {
 		this.extension.tools.set(tool.name, {
 			definition: tool,
 			extensionPath: this.extension.path,

@@ -43,7 +43,6 @@
 	"devDependencies": {
 		"@opentelemetry/context-async-hooks": "catalog:",
 		"@opentelemetry/sdk-trace-base": "catalog:",
-		"@sinclair/typebox": "catalog:",
 		"@types/bun": "catalog:"
 	},
 	"engines": {

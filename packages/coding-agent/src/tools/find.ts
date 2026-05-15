@@ -5,8 +5,7 @@ import * as natives from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import type { Static } from "@sinclair/typebox";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
@@ -35,17 +34,15 @@ import {
 import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const findSchema = Type.Object({
-	paths: Type.Array(Type.String({ description: "glob including search path" }), {
-		minItems: 1,
-		description: "globs including search paths",
-		examples: [["src/**/*.ts"], ["lib/*.json"], ["apps/", "packages/"], ["*.ts"]],
-	}),
-	hidden: Type.Optional(Type.Boolean({ description: "include hidden files", default: true })),
-	limit: Type.Optional(Type.Number({ description: "max results", default: 1000 })),
-});
+const findSchema = z
+	.object({
+		paths: z.array(z.string().describe("glob including search path")).min(1).describe("globs including search paths"),
+		hidden: z.boolean().default(true).describe("include hidden files").optional(),
+		limit: z.number().default(1000).describe("max results").optional(),
+	})
+	.strict();
 
-export type FindToolInput = Static<typeof findSchema>;
+export type FindToolInput = z.infer<typeof findSchema>;
 
 const DEFAULT_LIMIT = 1000;
 const GLOB_TIMEOUT_MS = 5000;
@@ -107,7 +104,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 
 	async execute(
 		_toolCallId: string,
-		params: Static<typeof findSchema>,
+		params: z.infer<typeof findSchema>,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<FindToolDetails>,
 		_context?: AgentToolContext,
