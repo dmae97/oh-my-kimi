@@ -19,15 +19,17 @@ import {
 	isHarmonyLeakMitigationTarget,
 	signalListLabel,
 } from "./harmony-leak";
+import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import {
 	type AgentTelemetry,
+	failChatSpan,
 	finishChatSpan,
 	finishExecuteToolSpan,
 	finishInvokeAgentSpan,
+	recordSkippedTool,
 	resolveTelemetry,
 	runInActiveSpan,
 	type Span,
-	SpanStatusCode,
 	startChatSpan,
 	startExecuteToolSpan,
 	startInvokeAgentSpan,
@@ -184,6 +186,110 @@ function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
 		(event: AgentEvent) => event.type === "agent_end",
 		(event: AgentEvent) => (event.type === "agent_end" ? event.messages : []),
 	);
+}
+
+/**
+ * Build the `agent_end` event payload. When telemetry is enabled, snapshots
+ * the run collector so consumers receive {@link AgentRunSummary} +
+ * {@link AgentRunCoverage} alongside the messages without parsing OTEL spans.
+ * When telemetry is unset, returns the bare event for backwards compatibility.
+ */
+function buildAgentEndEvent(
+	messages: AgentMessage[],
+	telemetry: AgentTelemetry | undefined,
+	stepCount: number,
+): Extract<AgentEvent, { type: "agent_end" }> {
+	if (!telemetry) return { type: "agent_end", messages };
+	const snapshot = telemetry.collector.snapshot({ stepCount });
+	return { type: "agent_end", messages, telemetry: snapshot.summary, coverage: snapshot.coverage };
+}
+
+/**
+ * Detailed-result handle returned by {@link agentLoopDetailed}. Adds the
+ * run-level telemetry/coverage rollup to the existing `AgentMessage[]`
+ * payload without changing the resolved type of `stream.result()`.
+ */
+export interface AgentLoopDetailedResult {
+	readonly messages: AgentMessage[];
+	readonly telemetry: AgentRunSummary | undefined;
+	readonly coverage: AgentRunCoverage | undefined;
+}
+
+/**
+ * Convenience wrapper over {@link agentLoop} that exposes the run-level
+ * summary + coverage alongside the messages. The returned `stream` is the
+ * same `EventStream` callers already consume; `detailed()` awaits the
+ * stream's `agent_end` event and returns the additive fields.
+ *
+ * Existing `stream.result()` semantics are preserved — it still resolves to
+ * `AgentMessage[]`. Use {@link agentLoopDetailed} when you need the rollup;
+ * use {@link agentLoop} when you do not.
+ */
+export function agentLoopDetailed(
+	prompts: AgentMessage[],
+	context: AgentContext,
+	config: AgentLoopConfig,
+	signal?: AbortSignal,
+	streamFn?: StreamFn,
+): {
+	readonly stream: EventStream<AgentEvent, AgentMessage[]>;
+	readonly detailed: () => Promise<AgentLoopDetailedResult>;
+} {
+	const capture = createDetailedCapture(config);
+	const stream = agentLoop(prompts, context, capture.config, signal, streamFn);
+	return { stream, detailed: () => capture.detailed(stream) };
+}
+
+/**
+ * Like {@link agentLoopDetailed} but built on top of
+ * {@link agentLoopContinue}.
+ */
+export function agentLoopContinueDetailed(
+	context: AgentContext,
+	config: AgentLoopConfig,
+	signal?: AbortSignal,
+	streamFn?: StreamFn,
+): {
+	readonly stream: EventStream<AgentEvent, AgentMessage[]>;
+	readonly detailed: () => Promise<AgentLoopDetailedResult>;
+} {
+	const capture = createDetailedCapture(config);
+	const stream = agentLoopContinue(context, capture.config, signal, streamFn);
+	return { stream, detailed: () => capture.detailed(stream) };
+}
+
+/**
+ * Wire an `onRunEnd` telemetry hook onto `config` so the detailed helper can
+ * capture the run summary without consuming the event stream. Preserves any
+ * existing `onRunEnd` the caller had set.
+ */
+function createDetailedCapture(config: AgentLoopConfig): {
+	readonly config: AgentLoopConfig;
+	readonly detailed: (stream: EventStream<AgentEvent, AgentMessage[]>) => Promise<AgentLoopDetailedResult>;
+} {
+	let captured: { summary: AgentRunSummary; coverage: AgentRunCoverage } | undefined;
+	const userHook = config.telemetry?.onRunEnd;
+	const wired: AgentLoopConfig = {
+		...config,
+		telemetry: {
+			...(config.telemetry ?? {}),
+			onRunEnd: (summary, coverage) => {
+				captured = { summary, coverage };
+				userHook?.(summary, coverage);
+			},
+		},
+	};
+	return {
+		config: wired,
+		detailed: async stream => {
+			const messages = await stream.result();
+			return {
+				messages,
+				telemetry: captured?.summary,
+				coverage: captured?.coverage,
+			};
+		},
+	};
 }
 
 function normalizeMessagesForProvider(
@@ -424,7 +530,7 @@ async function runLoopBody(
 					toolResults.push(result);
 				}
 				stream.push({ type: "turn_end", message, toolResults });
-				stream.push({ type: "agent_end", messages: newMessages });
+				stream.push(buildAgentEndEvent(newMessages, telemetry, stepCounter.count));
 				stream.end(newMessages);
 				return;
 			}
@@ -471,7 +577,7 @@ async function runLoopBody(
 		break;
 	}
 
-	stream.push({ type: "agent_end", messages: newMessages });
+	stream.push(buildAgentEndEvent(newMessages, telemetry, stepCounter.count));
 	stream.end(newMessages);
 }
 
@@ -694,17 +800,7 @@ async function streamAssistantResponse(
 			return trailing;
 		});
 	} catch (err) {
-		if (chatSpan) {
-			if (err instanceof Error) {
-				chatSpan.recordException(err);
-				chatSpan.setAttribute("error.type", err.name || "Error");
-			}
-			chatSpan.setStatus({
-				code: SpanStatusCode.ERROR,
-				message: err instanceof Error ? err.message : String(err),
-			});
-			chatSpan.end();
-		}
+		failChatSpan(telemetry, chatSpan, { errorObject: err });
 		throw err;
 	}
 }
@@ -864,6 +960,11 @@ async function executeToolCalls(
 	const runTool = async (record: (typeof records)[number], index: number): Promise<void> => {
 		if (interruptState.triggered) {
 			record.skipped = true;
+			recordSkippedTool(telemetry, {
+				toolCallId: record.toolCall.id,
+				toolName: record.toolCall.name,
+				status: "skipped",
+			});
 			return;
 		}
 
@@ -936,7 +1037,7 @@ async function executeToolCalls(
 						toolSignal,
 					);
 					if (beforeResult?.block) {
-						throw new Error(beforeResult.reason || "Tool execution was blocked");
+						throw new ToolCallBlockedError(beforeResult.reason);
 					}
 				}
 				// Reflect post-hook args so emitted tool results / afterToolCall see what actually executed.
@@ -1009,7 +1110,8 @@ async function executeToolCalls(
 			}
 		});
 
-		if (interruptState.triggered) {
+		const interrupted = interruptState.triggered;
+		if (interrupted) {
 			record.skipped = true;
 			emitToolResult(record, createSkippedToolResult(), true);
 		} else {
@@ -1019,9 +1121,17 @@ async function executeToolCalls(
 		const firstTextBlock = result.content?.[0];
 		const errorMessageForSpan =
 			caughtError === undefined && isError && firstTextBlock?.type === "text" ? firstTextBlock.text : undefined;
+		const status = interrupted
+			? "aborted"
+			: caughtError instanceof ToolCallBlockedError
+				? "blocked"
+				: isError
+					? "error"
+					: "ok";
 		finishExecuteToolSpan(telemetry, toolSpan, {
 			result,
 			isError,
+			status,
 			errorMessage: errorMessageForSpan,
 			errorObject: caughtError,
 			toolCallId: toolCall.id,
@@ -1054,6 +1164,11 @@ async function executeToolCalls(
 	for (const record of records) {
 		if (!record.toolResultMessage) {
 			record.skipped = true;
+			recordSkippedTool(telemetry, {
+				toolCallId: record.toolCall.id,
+				toolName: record.toolCall.name,
+				status: "skipped",
+			});
 			emitToolResult(record, createSkippedToolResult(), true);
 		}
 	}

@@ -35,6 +35,7 @@ import {
 	type Tracer,
 	trace,
 } from "@opentelemetry/api";
+import { AgentRunCollector, type AgentRunCoverage, type AgentRunSummary, type ToolStatus } from "./run-collector";
 import type { AgentTool } from "./types";
 
 /** Default tracer name. Override via {@link AgentTelemetryConfig.tracerName}. */
@@ -228,6 +229,17 @@ export interface AgentTelemetryConfig {
 	 * that depends on the final result.
 	 */
 	readonly onSpanEnd?: (ctx: TelemetryHookContext) => void;
+	/**
+	 * Fired once per `invoke_agent`, immediately after the run-level summary
+	 * is built and aggregate attributes are stamped on the `invoke_agent`
+	 * span. Use this to persist, log, or forward the {@link AgentRunSummary} /
+	 * {@link AgentRunCoverage} value without parsing OTEL spans.
+	 *
+	 * **Non-fatal.** Exceptions thrown from this callback are caught, logged
+	 * via `console.warn`, and swallowed — a misbehaving telemetry consumer can
+	 * NEVER turn a successful agent run into a failed one.
+	 */
+	readonly onRunEnd?: (summary: AgentRunSummary, coverage: AgentRunCoverage) => void;
 }
 
 /**
@@ -240,6 +252,8 @@ export interface AgentTelemetry {
 	readonly captureMessageContent: boolean;
 	readonly conversationId: string | undefined;
 	readonly agent: AgentIdentity | undefined;
+	/** Per-invocation event collector. See {@link AgentRunCollector}. */
+	readonly collector: AgentRunCollector;
 }
 
 /** Lazily resolve the {@link AgentTelemetry} handle. Returns `undefined` when disabled. */
@@ -255,6 +269,7 @@ export function resolveTelemetry(
 		captureMessageContent: config.captureMessageContent ?? readContentCaptureEnv(),
 		conversationId: config.conversationId ?? sessionId,
 		agent: config.agent,
+		collector: new AgentRunCollector(),
 	};
 }
 
@@ -379,8 +394,12 @@ export function startChatSpan(
 		stepNumber: options.stepNumber,
 		attributes: buildChatRequestAttributes(options.stepNumber, options.request),
 	});
-	if (span && telemetry?.captureMessageContent) {
-		applyContentCaptureForRequest(span, options.request);
+	if (span) {
+		telemetry?.collector.beginChat(span, { stepNumber: options.stepNumber, model });
+		telemetry?.collector.noteAvailableTools(options.request.tools);
+		if (telemetry?.captureMessageContent) {
+			applyContentCaptureForRequest(span, options.request);
+		}
 	}
 	return span;
 }
@@ -462,7 +481,7 @@ export function finishChatSpan(
 	if (!span) return;
 	applyChatResponseAttributes(span, message);
 	applyUsageAttributes(span, message.usage);
-	applyCostEstimate(telemetry, span, message, options.serviceTier);
+	const cost = applyCostEstimate(telemetry, span, message, options.serviceTier);
 	if (telemetry?.captureMessageContent) {
 		span.setAttribute(GenAIAttr.OutputMessages, JSON.stringify([message]));
 	}
@@ -475,6 +494,34 @@ export function finishChatSpan(
 		stepNumber: options.stepNumber,
 	});
 	applyTerminalStatus(span, message.stopReason, message.errorMessage);
+	telemetry?.collector.endChat(span, message, cost);
+	span.end();
+}
+
+/**
+ * Record a chat that failed before producing a final `AssistantMessage`
+ * (e.g. the provider stream threw mid-iteration). Mirrors `finishChatSpan`'s
+ * span-end side effects and pushes a failed `ChatRecord` to the collector so
+ * the run summary still reflects the failed step.
+ */
+export function failChatSpan(
+	telemetry: AgentTelemetry | undefined,
+	span: Span | undefined,
+	options: { readonly errorObject: unknown; readonly errorType?: string },
+): void {
+	if (!span) return;
+	const err = options.errorObject;
+	if (err instanceof Error) {
+		span.recordException(err);
+		span.setAttribute(GenAIAttr.ErrorType, options.errorType ?? err.name ?? "Error");
+		span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+	} else {
+		span.setAttribute(GenAIAttr.ErrorType, options.errorType ?? "Error");
+		span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+	}
+	telemetry?.collector.failChat(span, {
+		errorType: options.errorType ?? (err instanceof Error ? err.name || "Error" : "Error"),
+	});
 	span.end();
 }
 
@@ -509,11 +556,11 @@ function applyCostEstimate(
 	span: Span,
 	message: AssistantMessage,
 	serviceTier: ServiceTier | undefined,
-): void {
+): { readonly costUsd: number | undefined; readonly costUnavailableReason: string | undefined } {
 	const estimator = telemetry?.config.costEstimator;
-	if (!estimator) return;
+	if (!estimator) return EMPTY_COST;
 	const usage = message.usage;
-	if (!usage) return;
+	if (!usage) return EMPTY_COST;
 	const snapshot: ChatUsageSnapshot = {
 		inputTokens: usage.input ?? 0,
 		outputTokens: usage.output ?? 0,
@@ -528,15 +575,18 @@ function applyCostEstimate(
 		serviceTier,
 		usage: snapshot,
 	});
-	if (!result) return;
+	if (!result) return EMPTY_COST;
 	if ("unavailable" in result) {
 		span.setAttribute(GenAIAttr.CostUnavailableReason, result.unavailable);
-		return;
+		return { costUsd: undefined, costUnavailableReason: result.unavailable };
 	}
 	span.setAttribute(GenAIAttr.CostEstimatedUsd, result.usd);
 	if (result.inputUsd != null) span.setAttribute(GenAIAttr.CostInputUsd, result.inputUsd);
 	if (result.outputUsd != null) span.setAttribute(GenAIAttr.CostOutputUsd, result.outputUsd);
+	return { costUsd: result.usd, costUnavailableReason: undefined };
 }
+
+const EMPTY_COST = Object.freeze({ costUsd: undefined, costUnavailableReason: undefined });
 
 function mapStopReason(reason: StopReason | undefined): string | undefined {
 	switch (reason) {
@@ -589,15 +639,21 @@ export function startExecuteToolSpan(
 		toolName: options.toolName,
 		attributes: attrs,
 	});
-	if (span && telemetry?.captureMessageContent) {
-		span.setAttribute(GenAIAttr.ToolCallArguments, safeJson(options.args));
+	if (span) {
+		telemetry?.collector.beginTool(span, { toolCallId: options.toolCallId, toolName: options.toolName });
+		if (telemetry?.captureMessageContent) {
+			span.setAttribute(GenAIAttr.ToolCallArguments, safeJson(options.args));
+		}
 	}
 	return span;
 }
 
 /**
- * End an `execute_tool` span. `isError` true marks ERROR status; pass
- * `errorObject` (the thrown value) to record an exception with stack.
+ * End an `execute_tool` span. Pass `status` to specify the terminal status
+ * explicitly (`"ok" | "error" | "skipped" | "blocked" | "timeout" |
+ * "aborted"`); when omitted, `status` is derived from `isError`. Passing
+ * `errorObject` (the thrown value) additionally records an exception with
+ * stack.
  */
 export function finishExecuteToolSpan(
 	telemetry: AgentTelemetry | undefined,
@@ -605,6 +661,7 @@ export function finishExecuteToolSpan(
 	options: {
 		readonly result?: unknown;
 		readonly isError: boolean;
+		readonly status?: ToolStatus;
 		readonly errorMessage?: string;
 		readonly errorObject?: unknown;
 		readonly toolCallId: string;
@@ -624,25 +681,79 @@ export function finishExecuteToolSpan(
 		toolCallId: options.toolCallId,
 		toolName: options.toolName,
 	});
+	const status: ToolStatus = options.status ?? (options.isError ? "error" : "ok");
+	let errorType: string | undefined;
 	if (options.errorObject instanceof Error) {
 		span.recordException(options.errorObject);
-		span.setAttribute(GenAIAttr.ErrorType, options.errorObject.name || "Error");
+		errorType = options.errorObject.name || "Error";
+		span.setAttribute(GenAIAttr.ErrorType, errorType);
+		span.setAttribute(EXECUTE_TOOL_STATUS_ATTR, status);
 		span.setStatus({ code: SpanStatusCode.ERROR, message: options.errorObject.message });
-	} else if (options.isError) {
-		span.setAttribute(GenAIAttr.ErrorType, "tool_error");
-		span.setStatus({ code: SpanStatusCode.ERROR, message: options.errorMessage ?? "tool returned error" });
+	} else if (status !== "ok") {
+		errorType = STATUS_ERROR_TYPE[status];
+		span.setAttribute(GenAIAttr.ErrorType, errorType);
+		span.setAttribute(EXECUTE_TOOL_STATUS_ATTR, status);
+		span.setStatus({ code: SpanStatusCode.ERROR, message: options.errorMessage ?? errorType });
+	} else {
+		span.setAttribute(EXECUTE_TOOL_STATUS_ATTR, status);
 	}
+	telemetry?.collector.endTool(span, { status, errorType });
 	span.end();
 }
 
-/** End an `invoke_agent` span, recording an error if one was thrown. */
+/** Span attribute carrying the terminal {@link ToolStatus}. */
+export const EXECUTE_TOOL_STATUS_ATTR = "gen_ai.tool.status";
+
+/**
+ * Mapping from non-ok {@link ToolStatus} values to the `error.type` attribute
+ * string written on the span when no thrown error is available. The wire
+ * format intentionally matches the status string so dashboards can group on
+ * one column.
+ */
+const STATUS_ERROR_TYPE: Record<Exclude<ToolStatus, "ok">, string> = {
+	error: "tool_error",
+	skipped: "tool_skipped",
+	blocked: "tool_blocked",
+	timeout: "tool_timeout",
+	aborted: "tool_aborted",
+};
+
+/**
+ * Record a tool that bypassed the span lifecycle entirely (pre-run
+ * interrupt, post-execution tail sweep for calls that never produced a
+ * result message). The LLM still asked for the tool, so it counts toward
+ * coverage and toward the relevant `tools.<status>` counter; no span is
+ * emitted because the loop never started one.
+ */
+export function recordSkippedTool(
+	telemetry: AgentTelemetry | undefined,
+	options: {
+		readonly toolCallId: string;
+		readonly toolName: string;
+		readonly status: Extract<ToolStatus, "skipped" | "aborted">;
+	},
+): void {
+	telemetry?.collector.recordOrphanTool(options);
+}
+
+/**
+ * End an `invoke_agent` span. Snapshots the run collector, stamps aggregate
+ * `gen_ai.agent.*` attributes on the span, fires the non-fatal
+ * {@link AgentTelemetryConfig.onRunEnd} hook, then records any uncaught
+ * error and ends the span.
+ */
 export function finishInvokeAgentSpan(
 	telemetry: AgentTelemetry | undefined,
 	span: Span | undefined,
 	options: { readonly stepCount: number; readonly errorObject?: unknown },
-): void {
-	if (!span) return;
+): { readonly summary: AgentRunSummary; readonly coverage: AgentRunCoverage } | undefined {
+	if (!span) return undefined;
 	applyInvokeAgentFinish(span, options.stepCount);
+	let snapshot: { readonly summary: AgentRunSummary; readonly coverage: AgentRunCoverage } | undefined;
+	if (telemetry) {
+		snapshot = telemetry.collector.snapshot({ stepCount: options.stepCount });
+		applyAggregateAttributes(span, snapshot.summary, snapshot.coverage);
+	}
 	telemetry?.config.onSpanEnd?.({
 		span,
 		kind: "invoke_agent",
@@ -650,12 +761,83 @@ export function finishInvokeAgentSpan(
 		agent: telemetry.agent,
 		conversationId: telemetry.conversationId,
 	});
+	if (telemetry?.config.onRunEnd && snapshot) {
+		try {
+			telemetry.config.onRunEnd(snapshot.summary, snapshot.coverage);
+		} catch (err) {
+			// Telemetry consumers cannot turn a successful run into a failed one.
+			console.warn("[pi-agent] onRunEnd threw; swallowing:", err);
+		}
+	}
 	if (options.errorObject instanceof Error) {
 		span.recordException(options.errorObject);
 		span.setAttribute(GenAIAttr.ErrorType, options.errorObject.name || "Error");
 		span.setStatus({ code: SpanStatusCode.ERROR, message: options.errorObject.message });
 	}
 	span.end();
+	return snapshot;
+}
+
+/** Aggregate `gen_ai.agent.*` attributes stamped on the `invoke_agent` span. */
+export const AGGREGATE_ATTR = {
+	ChatsCount: "gen_ai.agent.chats.count",
+	ChatsTotalLatencyMs: "gen_ai.agent.chats.total_latency_ms",
+	ChatsStopReasonPrefix: "gen_ai.agent.chats.stop_reason.",
+	ToolsCount: "gen_ai.agent.tools.count",
+	ToolsOkCount: "gen_ai.agent.tools.ok.count",
+	ToolsErrorCount: "gen_ai.agent.tools.error.count",
+	ToolsSkippedCount: "gen_ai.agent.tools.skipped.count",
+	ToolsBlockedCount: "gen_ai.agent.tools.blocked.count",
+	ToolsTimeoutCount: "gen_ai.agent.tools.timeout.count",
+	ToolsAbortedCount: "gen_ai.agent.tools.aborted.count",
+	ToolsTotalLatencyMs: "gen_ai.agent.tools.total_latency_ms",
+	ToolsInvoked: "gen_ai.agent.tools.invoked",
+	ToolsAvailable: "gen_ai.agent.tools.available",
+	ToolsUnused: "gen_ai.agent.tools.unused",
+	UsageInputTokensTotal: "gen_ai.agent.usage.input_tokens.total",
+	UsageOutputTokensTotal: "gen_ai.agent.usage.output_tokens.total",
+	UsageCachedInputTokensTotal: "gen_ai.agent.usage.cached_input_tokens.total",
+	UsageCacheWriteTokensTotal: "gen_ai.agent.usage.cache_write_tokens.total",
+	UsageReasoningOutputTokensTotal: "gen_ai.agent.usage.reasoning_output_tokens.total",
+	UsageTotalTokensTotal: "gen_ai.agent.usage.total_tokens.total",
+	CostEstimatedUsdTotal: "gen_ai.agent.cost.estimated_usd.total",
+	ErrorsCount: "gen_ai.agent.errors.count",
+} as const;
+
+/** Stamp the aggregate `gen_ai.agent.*` attributes on the given span. */
+function applyAggregateAttributes(span: Span, summary: AgentRunSummary, coverage: AgentRunCoverage): void {
+	span.setAttribute(AGGREGATE_ATTR.ChatsCount, summary.chats.total);
+	span.setAttribute(AGGREGATE_ATTR.ChatsTotalLatencyMs, summary.chats.totalLatencyMs);
+	for (const [reason, count] of Object.entries(summary.chats.byStopReason)) {
+		span.setAttribute(`${AGGREGATE_ATTR.ChatsStopReasonPrefix}${reason}.count`, count);
+	}
+	span.setAttribute(AGGREGATE_ATTR.ToolsCount, summary.tools.total);
+	span.setAttribute(AGGREGATE_ATTR.ToolsOkCount, summary.tools.ok);
+	span.setAttribute(AGGREGATE_ATTR.ToolsErrorCount, summary.tools.error);
+	span.setAttribute(AGGREGATE_ATTR.ToolsSkippedCount, summary.tools.skipped);
+	span.setAttribute(AGGREGATE_ATTR.ToolsBlockedCount, summary.tools.blocked);
+	span.setAttribute(AGGREGATE_ATTR.ToolsTimeoutCount, summary.tools.timeout);
+	span.setAttribute(AGGREGATE_ATTR.ToolsAbortedCount, summary.tools.aborted);
+	span.setAttribute(AGGREGATE_ATTR.ToolsTotalLatencyMs, summary.tools.totalLatencyMs);
+	if (coverage.toolsInvoked.length > 0) {
+		span.setAttribute(AGGREGATE_ATTR.ToolsInvoked, [...coverage.toolsInvoked]);
+	}
+	if (coverage.toolsAvailable.length > 0) {
+		span.setAttribute(AGGREGATE_ATTR.ToolsAvailable, [...coverage.toolsAvailable]);
+	}
+	if (coverage.toolsUnused.length > 0) {
+		span.setAttribute(AGGREGATE_ATTR.ToolsUnused, [...coverage.toolsUnused]);
+	}
+	span.setAttribute(AGGREGATE_ATTR.UsageInputTokensTotal, summary.usage.inputTokens);
+	span.setAttribute(AGGREGATE_ATTR.UsageOutputTokensTotal, summary.usage.outputTokens);
+	span.setAttribute(AGGREGATE_ATTR.UsageCachedInputTokensTotal, summary.usage.cachedInputTokens);
+	span.setAttribute(AGGREGATE_ATTR.UsageCacheWriteTokensTotal, summary.usage.cacheWriteTokens);
+	span.setAttribute(AGGREGATE_ATTR.UsageReasoningOutputTokensTotal, summary.usage.reasoningOutputTokens);
+	span.setAttribute(AGGREGATE_ATTR.UsageTotalTokensTotal, summary.usage.totalTokens);
+	if (summary.cost.estimatedUsd > 0) {
+		span.setAttribute(AGGREGATE_ATTR.CostEstimatedUsdTotal, summary.cost.estimatedUsd);
+	}
+	span.setAttribute(AGGREGATE_ATTR.ErrorsCount, summary.errors.total);
 }
 
 /**
