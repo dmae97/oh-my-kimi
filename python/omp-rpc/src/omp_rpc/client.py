@@ -278,6 +278,9 @@ class RpcClient:
         session_dir: str | Path | None = None,
         cwd: str | Path | None = None,
         env: Mapping[str, str] | None = None,
+        user: int | str | None = None,
+        group: int | str | None = None,
+        extra_groups: Sequence[int | str] | None = None,
         thinking: ThinkingLevel | None = None,
         append_system_prompt: str | None = None,
         provider_session_id: str | None = None,
@@ -302,6 +305,9 @@ class RpcClient:
         self._session_dir = Path(session_dir) if session_dir is not None else None
         self._cwd = Path(cwd) if cwd is not None else None
         self._env = dict(env or {})
+        self._user = user
+        self._group = group
+        self._extra_groups = list(extra_groups) if extra_groups is not None else None
         self._thinking = thinking
         self._append_system_prompt = append_system_prompt
         self._provider_session_id = provider_session_id
@@ -403,6 +409,9 @@ class RpcClient:
             list(self._build_command()),
             cwd=str(self._cwd) if self._cwd is not None else None,
             env={**os.environ, **self._env},
+            user=self._user,
+            group=self._group,
+            extra_groups=self._extra_groups,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
