@@ -397,6 +397,62 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(originalNestedSchema).toHaveProperty("patternProperties");
 	});
 
+	it("preserves an explicit additionalProperties schema for record-style fields (issue #1104)", async () => {
+		// Mirrors the shape Zod's `z.record(z.string(), z.unknown())` emits — the
+		// resolve tool's `extra` parameter and any other free-form map. Without
+		// preservation the model sees `additionalProperties: false` and cannot
+		// pass `{ title: "..." }`, blocking plan approval.
+		const tools: Tool[] = [
+			{
+				name: "resolve",
+				description: "resolve a pending action",
+				parameters: {
+					type: "object",
+					properties: {
+						action: { type: "string" },
+						extra: {
+							type: "object",
+							propertyNames: { type: "string" },
+							additionalProperties: {},
+						},
+						extraTyped: {
+							type: "object",
+							additionalProperties: { type: "string" },
+						},
+					},
+					required: ["action"],
+				} as TJsonSchema,
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: ["Stay concise."],
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			tools,
+		})) as {
+			tools?: Array<{
+				input_schema?: {
+					additionalProperties?: boolean;
+					properties?: Record<string, unknown>;
+				};
+			}>;
+		};
+
+		const inputSchema = payload.tools?.[0]?.input_schema;
+		const properties = inputSchema?.properties as Record<string, Record<string, unknown>>;
+		const extra = properties.extra as { additionalProperties?: unknown; propertyNames?: unknown };
+		const extraTyped = properties.extraTyped as { additionalProperties?: unknown };
+
+		expect(inputSchema?.additionalProperties).toBe(false);
+		// The unsupported `propertyNames` keyword is still stripped …
+		expect(extra).not.toHaveProperty("propertyNames");
+		// … but the explicit open-map schema survives.
+		expect(extra.additionalProperties).toEqual({});
+		// A typed value schema is preserved verbatim (and would be recursed into
+		// if it were an object — covered separately).
+		expect(extraTyped.additionalProperties).toEqual({ type: "string" });
+	});
+
 	it("removes Anthropic-unsupported array item count constraints", async () => {
 		const tools: Tool[] = [
 			{
