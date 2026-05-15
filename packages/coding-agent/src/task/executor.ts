@@ -598,6 +598,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	type AbortReason = "signal" | "terminate" | "timeout";
 	let abortSent = false;
 	let abortReason: AbortReason | undefined;
+	let runtimeLimitExceeded = false;
 	const listenerController = new AbortController();
 	const listenerSignal = listenerController.signal;
 	const abortController = new AbortController();
@@ -618,8 +619,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	let hasUsage = false;
 
 	const requestAbort = (reason: AbortReason) => {
+		if (reason === "timeout") {
+			runtimeLimitExceeded = true;
+		}
 		if (abortSent) {
-			if (reason === "signal" && abortReason !== "signal") {
+			if (reason === "signal" && abortReason !== "signal" && abortReason !== "timeout") {
 				abortReason = "signal";
 			}
 			return;
@@ -671,7 +675,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		return "Cancelled by caller";
 	};
 	const resolveAbortReasonText = (): string => {
-		if (abortReason === "timeout") {
+		if (runtimeLimitExceeded) {
 			return `Subagent runtime limit exceeded (task.maxRuntimeMs=${maxRuntimeMs})`;
 		}
 		return resolveSignalAbortReason();
@@ -984,12 +988,29 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		let abortReasonText: string | undefined;
 		const checkAbort = () => {
 			if (abortSignal.aborted) {
-				aborted = abortReason === "signal" || abortReason === "timeout" || abortReason === undefined;
+				aborted = abortReason === "signal" || runtimeLimitExceeded || abortReason === undefined;
 				if (aborted) {
 					abortReasonText ??= resolveAbortReasonText();
 				}
 				exitCode = 1;
 				throw new ToolAbortError();
+			}
+		};
+		const awaitAbortable = async <T>(promise: Promise<T>): Promise<T> => {
+			checkAbort();
+			const { promise: abortPromise, reject } = Promise.withResolvers<never>();
+			const onAbort = () => {
+				try {
+					checkAbort();
+				} catch (err) {
+					reject(err);
+				}
+			};
+			abortSignal.addEventListener("abort", onAbort, { once: true });
+			try {
+				return await Promise.race([promise, abortPromise]);
+			} finally {
+				abortSignal.removeEventListener("abort", onAbort);
 			}
 		};
 
@@ -998,7 +1019,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// Pin authStorage to modelRegistry.authStorage — mirrors the createAgentSession invariant.
 			const registryFromParent = options.modelRegistry !== undefined;
 			const modelRegistry =
-				options.modelRegistry ?? new ModelRegistry(options.authStorage ?? (await discoverAuthStorage()));
+				options.modelRegistry ??
+				new ModelRegistry(options.authStorage ?? (await awaitAbortable(discoverAuthStorage())));
 			const authStorage = modelRegistry.authStorage;
 			if (options.authStorage && options.authStorage !== authStorage) {
 				throw new Error(
@@ -1007,7 +1029,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 			checkAbort();
 			if (!registryFromParent) {
-				await modelRegistry.refresh();
+				await awaitAbortable(modelRegistry.refresh());
 			} else {
 				logger.debug("runSubagent: reusing parent modelRegistry; skipping refresh");
 			}
@@ -1018,11 +1040,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				thinkingLevel: resolvedThinkingLevel,
 				explicitThinkingLevel,
 				authFallbackUsed,
-			} = await resolveModelOverrideWithAuthFallback(
-				modelPatterns,
-				options.parentActiveModelPattern,
-				modelRegistry,
-				settings,
+			} = await awaitAbortable(
+				resolveModelOverrideWithAuthFallback(
+					modelPatterns,
+					options.parentActiveModelPattern,
+					modelRegistry,
+					settings,
+				),
 			);
 			if (authFallbackUsed && model) {
 				logger.warn("Subagent model has no working credentials; falling back to parent session model", {
@@ -1040,7 +1064,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				: (thinkingLevel ?? resolvedThinkingLevel);
 
 			const sessionManager = sessionFile
-				? await SessionManager.open(sessionFile)
+				? await awaitAbortable(SessionManager.open(sessionFile))
 				: SessionManager.inMemory(worktree ?? cwd);
 			if (options.parentArtifactManager) {
 				sessionManager.adoptArtifactManager(options.parentArtifactManager);
@@ -1081,50 +1105,52 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			const { normalized: normalizedOutputSchema } = normalizeSchema(outputSchema);
 
-			const { session } = await createAgentSession({
-				cwd: worktree ?? cwd,
-				authStorage,
-				modelRegistry,
-				settings: subagentSettings,
-				model,
-				thinkingLevel: effectiveThinkingLevel,
-				toolNames,
-				outputSchema,
-				requireYieldTool: true,
-				contextFiles: options.contextFiles,
-				skills: options.skills,
-				promptTemplates: options.promptTemplates,
-				workspaceTree: options.workspaceTree,
-				systemPrompt: defaultPrompt => {
-					const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
-						agent: agent.systemPrompt,
-						context: options.context?.trim() ?? "",
-						worktree: worktree ?? "",
-						outputSchema: normalizedOutputSchema,
-						contextFile: contextFileForPrompt,
-						ircPeers: ircEnabled ? renderIrcPeerRoster(id) : "",
-						ircSelfId: ircEnabled ? id : "",
-					});
-					return defaultPrompt.length === 0
-						? [subagentPrompt]
-						: [...defaultPrompt.slice(0, -1), subagentPrompt, defaultPrompt[defaultPrompt.length - 1]];
-				},
-				sessionManager,
-				hasUI: false,
-				spawns: spawnsEnv,
-				taskDepth: childDepth,
-				parentHindsightSessionState: options.parentHindsightSessionState,
-				parentTaskPrefix: id,
-				agentId: id,
-				agentDisplayName: agent.name,
-				enableLsp: lspEnabled,
-				skipPythonPreflight,
-				enableMCP,
-				mcpManager: options.mcpManager,
-				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
-				localProtocolOptions: options.localProtocolOptions,
-				telemetry: subagentTelemetry,
-			});
+			const { session } = await awaitAbortable(
+				createAgentSession({
+					cwd: worktree ?? cwd,
+					authStorage,
+					modelRegistry,
+					settings: subagentSettings,
+					model,
+					thinkingLevel: effectiveThinkingLevel,
+					toolNames,
+					outputSchema,
+					requireYieldTool: true,
+					contextFiles: options.contextFiles,
+					skills: options.skills,
+					promptTemplates: options.promptTemplates,
+					workspaceTree: options.workspaceTree,
+					systemPrompt: defaultPrompt => {
+						const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
+							agent: agent.systemPrompt,
+							context: options.context?.trim() ?? "",
+							worktree: worktree ?? "",
+							outputSchema: normalizedOutputSchema,
+							contextFile: contextFileForPrompt,
+							ircPeers: ircEnabled ? renderIrcPeerRoster(id) : "",
+							ircSelfId: ircEnabled ? id : "",
+						});
+						return defaultPrompt.length === 0
+							? [subagentPrompt]
+							: [...defaultPrompt.slice(0, -1), subagentPrompt, defaultPrompt[defaultPrompt.length - 1]];
+					},
+					sessionManager,
+					hasUI: false,
+					spawns: spawnsEnv,
+					taskDepth: childDepth,
+					parentHindsightSessionState: options.parentHindsightSessionState,
+					parentTaskPrefix: id,
+					agentId: id,
+					agentDisplayName: agent.name,
+					enableLsp: lspEnabled,
+					skipPythonPreflight,
+					enableMCP,
+					mcpManager: options.mcpManager,
+					customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
+					localProtocolOptions: options.localProtocolOptions,
+					telemetry: subagentTelemetry,
+				}),
+			);
 
 			activeSession = session;
 
@@ -1145,7 +1171,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const parentOwnedToolNames = new Set(["todo_write"]);
 			const filteredSubagentTools = subagentToolNames.filter(name => !parentOwnedToolNames.has(name));
 			if (filteredSubagentTools.length !== subagentToolNames.length) {
-				await session.setActiveToolsByName(filteredSubagentTools);
+				await awaitAbortable(session.setActiveToolsByName(filteredSubagentTools));
 			}
 
 			session.sessionManager.appendSessionInit({
@@ -1220,7 +1246,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				extensionRunner.onError(err => {
 					logger.error("Extension error", { path: err.extensionPath, error: err.error });
 				});
-				await extensionRunner.emit({ type: "session_start" });
+				await awaitAbortable(extensionRunner.emit({ type: "session_start" }));
 			}
 
 			const MAX_YIELD_RETRIES = 3;
@@ -1238,8 +1264,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			});
 
 			checkAbort();
-			await session.prompt(task, { attribution: "agent" });
-			await session.waitForIdle();
+			await awaitAbortable(session.prompt(task, { attribution: "agent" }));
+			await awaitAbortable(session.waitForIdle());
 
 			const reminderToolChoice = buildNamedToolChoice("yield", session.model);
 
@@ -1253,11 +1279,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					});
 
 					const isFinalRetry = retryCount >= MAX_YIELD_RETRIES;
-					await session.prompt(reminder, {
-						attribution: "agent",
-						...(isFinalRetry && reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
-					});
-					await session.waitForIdle();
+					await awaitAbortable(
+						session.prompt(reminder, {
+							attribution: "agent",
+							...(isFinalRetry && reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
+						}),
+					);
+					await awaitAbortable(session.waitForIdle());
 				} catch (err) {
 					logger.error("Subagent prompt failed", {
 						error: err instanceof Error ? err.message : String(err),
@@ -1265,7 +1293,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 			}
 
-			await session.waitForIdle();
+			await awaitAbortable(session.waitForIdle());
 			if (!yieldCalled && !abortSignal.aborted) {
 				exitCode = 0;
 			}
@@ -1273,7 +1301,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const lastAssistant = session.getLastAssistantMessage();
 			if (lastAssistant) {
 				if (lastAssistant.stopReason === "aborted") {
-					aborted = abortReason === "signal" || abortReason === "timeout" || abortReason === undefined;
+					aborted = abortReason === "signal" || runtimeLimitExceeded || abortReason === undefined;
 					if (aborted) {
 						abortReasonText ??= resolveAbortReasonText();
 					}
@@ -1290,7 +1318,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 		} finally {
 			if (abortSignal.aborted) {
-				aborted = abortReason === "signal" || abortReason === "timeout" || abortReason === undefined;
+				aborted = abortReason === "signal" || runtimeLimitExceeded || abortReason === undefined;
 				if (aborted) {
 					abortReasonText ??= resolveAbortReasonText();
 				}
@@ -1390,7 +1418,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	// while we were tearing the session down. The yield data is still surfaced
 	// to the caller via `progress.extractedToolData`, but the exit status must
 	// reflect the timeout so on-call doesn't mistake a stuck run for success.
-	const runtimeLimitExceeded = abortReason === "timeout";
 	if (runtimeLimitExceeded && exitCode === 0) {
 		exitCode = 1;
 	}
