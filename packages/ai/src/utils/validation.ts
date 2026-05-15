@@ -485,7 +485,11 @@ function branchMatchesSchema(branch: unknown, value: unknown): boolean {
 	return isJsonSchemaValueValid(branch, value);
 }
 
-function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { value: unknown; changed: boolean } {
+function normalizeOptionalNullsForSchema(
+	schema: unknown,
+	value: unknown,
+	isRoot = true,
+): { value: unknown; changed: boolean } {
 	if (value === null || value === undefined) return { value, changed: false };
 	if (schema === null || typeof schema !== "object") return { value, changed: false };
 
@@ -498,7 +502,7 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 		let changedCandidate: { value: unknown; changed: true } | null = null;
 
 		for (const branch of branches) {
-			const normalized = normalizeOptionalNullsForSchema(branch, value);
+			const normalized = normalizeOptionalNullsForSchema(branch, value, isRoot);
 			if (!normalized.changed) continue;
 
 			if (branchMatchesSchema(branch, normalized.value)) {
@@ -523,7 +527,7 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 		let changed = false;
 		let nextValue: unknown = value;
 		for (const branch of schemaObject.allOf) {
-			const normalized = normalizeOptionalNullsForSchema(branch, nextValue);
+			const normalized = normalizeOptionalNullsForSchema(branch, nextValue, isRoot);
 			if (!normalized.changed) continue;
 			nextValue = normalized.value;
 			changed = true;
@@ -540,7 +544,7 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 		let changed = false;
 		let nextValue = value;
 		for (let i = 0; i < value.length; i += 1) {
-			const normalized = normalizeOptionalNullsForSchema(itemSchema, value[i]);
+			const normalized = normalizeOptionalNullsForSchema(itemSchema, value[i], false);
 			if (!normalized.changed) continue;
 			if (!changed) {
 				nextValue = [...value];
@@ -603,7 +607,7 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 				continue;
 			}
 		}
-		const normalized = normalizeOptionalNullsForSchema(propertySchema, currentValue);
+		const normalized = normalizeOptionalNullsForSchema(propertySchema, currentValue, false);
 		if (!normalized.changed) continue;
 
 		if (!changed) {
@@ -619,7 +623,13 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 	// these the same as null on known optional fields is a safer fallback. Keys
 	// with non-null unknown values are left intact so genuine schema mistakes
 	// still surface as validation errors.
-	if (schemaObject.additionalProperties === false) {
+	//
+	// At the ROOT level we deliberately keep unknown null-valued keys intact:
+	// Zod-emitted wire schemas always set `additionalProperties: false`, but the
+	// post-validation `preserveUnknownRootFields` pass re-attaches root extras
+	// so callers can observe (and reject) hallucinated fields. Stripping here
+	// would erase the field before that snapshot, hiding the rejection signal.
+	if (!isRoot && schemaObject.additionalProperties === false) {
 		const knownKeys = new Set(Object.keys(properties));
 		for (const key of Object.keys(nextValue)) {
 			if (knownKeys.has(key)) continue;

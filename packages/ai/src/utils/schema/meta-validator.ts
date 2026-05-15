@@ -64,6 +64,9 @@ function checkNode(node: Json, seen: WeakSet<object>): boolean {
 		if (key in node && !checkSchemaArray(node[key], seen)) return false;
 	}
 	if ("not" in node && !checkNode(node.not, seen)) return false;
+	for (const key of ["if", "then", "else"] as const) {
+		if (key in node && !checkNode(node[key], seen)) return false;
+	}
 
 	for (const key of ["properties", "patternProperties", "$defs", "definitions"] as const) {
 		if (key in node && !checkSchemaMap(node[key], seen)) return false;
@@ -109,6 +112,17 @@ function checkNode(node: Json, seen: WeakSet<object>): boolean {
 		if (!isPlainObject(value)) return false;
 		for (const entry of Object.values(value)) {
 			if (!Array.isArray(entry) || !entry.every(item => typeof item === "string")) return false;
+		}
+	}
+
+	// Draft-07 `dependencies`: each entry is either a schema or a string[].
+	if ("dependencies" in node) {
+		const value = node.dependencies;
+		if (!isPlainObject(value)) return false;
+		for (const entry of Object.values(value)) {
+			if (Array.isArray(entry)) {
+				if (!entry.every(item => typeof item === "string")) return false;
+			} else if (!checkNode(entry, seen)) return false;
 		}
 	}
 

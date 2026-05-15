@@ -1,10 +1,14 @@
 import { describe, expect, it } from "bun:test";
+import type { Tool, ToolCall } from "@oh-my-pi/pi-ai/types";
 import {
 	enforceStrictSchema,
+	isJsonSchemaValueValid,
+	isValidJsonSchema,
 	sanitizeSchemaForStrictMode,
 	tryEnforceStrictSchema,
 	zodToWireSchema,
 } from "@oh-my-pi/pi-ai/utils/schema";
+import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import * as z from "zod/v4";
 
 describe("sanitizeSchemaForStrictMode", () => {
@@ -501,5 +505,132 @@ describe("tryEnforceStrictSchema", () => {
 		expect(replaceTasks.required).toEqual(["content", "status", "notes"]);
 		expect(updateTasks.additionalProperties).toBe(false);
 		expect(updateTasks.required).toEqual(["content", "status", "notes"]);
+	});
+});
+
+describe("json-schema validator unsupported-keyword regressions", () => {
+	it("rejects values with keys that fail the propertyNames schema", () => {
+		const schema = {
+			type: "object",
+			propertyNames: { type: "string", pattern: "^[a-z]+$" },
+		};
+		expect(isJsonSchemaValueValid(schema, { abc: 1 })).toBe(true);
+		expect(isJsonSchemaValueValid(schema, { "BAD-KEY": 1 })).toBe(false);
+	});
+
+	it("rejects patternProperties mismatches", () => {
+		const schema = {
+			type: "object",
+			patternProperties: { "^id_": { type: "number" } },
+		};
+		expect(isJsonSchemaValueValid(schema, { id_a: 1 })).toBe(true);
+		expect(isJsonSchemaValueValid(schema, { id_a: "not-a-number" })).toBe(false);
+	});
+
+	it("rejects values that violate dependentRequired", () => {
+		const schema = {
+			type: "object",
+			dependentRequired: { credit_card: ["billing_address"] },
+		};
+		expect(isJsonSchemaValueValid(schema, { credit_card: "x", billing_address: "y" })).toBe(true);
+		expect(isJsonSchemaValueValid(schema, { credit_card: "x" })).toBe(false);
+	});
+
+	it("applies then when if matches and rejects missing required fields", () => {
+		const schema = {
+			type: "object",
+			properties: { kind: { type: "string" }, extra: { type: "string" } },
+			if: { properties: { kind: { const: "a" } }, required: ["kind"] },
+			// biome-ignore lint/suspicious/noThenProperty: JSON Schema if/then/else keyword
+			then: { required: ["extra"] },
+		};
+		expect(isJsonSchemaValueValid(schema, { kind: "b" })).toBe(true);
+		expect(isJsonSchemaValueValid(schema, { kind: "a", extra: "ok" })).toBe(true);
+		expect(isJsonSchemaValueValid(schema, { kind: "a" })).toBe(false);
+	});
+
+	it("validates contains against array elements", () => {
+		const schema = { type: "array", contains: { type: "number" } };
+		expect(isJsonSchemaValueValid(schema, ["a", 1])).toBe(true);
+		expect(isJsonSchemaValueValid(schema, ["a", "b"])).toBe(false);
+	});
+
+	it("validates prefixItems by index", () => {
+		const schema = { type: "array", prefixItems: [{ type: "string" }, { type: "number" }] };
+		expect(isJsonSchemaValueValid(schema, ["x", 1])).toBe(true);
+		expect(isJsonSchemaValueValid(schema, [1, "x"])).toBe(false);
+	});
+
+	it("recursively validates nested values through self-referential $ref", () => {
+		const schema = {
+			$ref: "#/definitions/Node",
+			definitions: {
+				Node: {
+					type: "object",
+					properties: {
+						name: { type: "string" },
+						child: { $ref: "#/definitions/Node" },
+					},
+					required: ["name"],
+					additionalProperties: false,
+				},
+			},
+		};
+		// Nested shape conforming — should validate.
+		expect(isJsonSchemaValueValid(schema, { name: "root", child: { name: "leaf" } })).toBe(true);
+		// Nested child violates the inner shape: previously short-circuited to true
+		// because the second occurrence of the $ref was treated as a seen ref.
+		expect(isJsonSchemaValueValid(schema, { name: "root", child: { name: 123 } })).toBe(false);
+		expect(isJsonSchemaValueValid(schema, { name: "root", child: { child: { name: "x" } } })).toBe(false);
+	});
+});
+
+describe("meta-validator conditional keywords", () => {
+	it("accepts well-formed if/then/else", () => {
+		expect(
+			isValidJsonSchema({
+				type: "object",
+				if: { properties: { kind: { const: "a" } } },
+				// biome-ignore lint/suspicious/noThenProperty: JSON Schema if/then/else keyword
+				then: { required: ["extra"] },
+				else: { required: ["other"] },
+			}),
+		).toBe(true);
+	});
+
+	it("rejects malformed if (must be a schema, not an array)", () => {
+		expect(isValidJsonSchema({ type: "object", if: [] })).toBe(false);
+	});
+
+	it("rejects malformed then", () => {
+		// biome-ignore lint/suspicious/noThenProperty: JSON Schema if/then/else keyword
+		expect(isValidJsonSchema({ type: "object", then: "not-a-schema" })).toBe(false);
+	});
+
+	it("accepts draft-07 dependencies as schemas or string arrays", () => {
+		expect(isValidJsonSchema({ type: "object", dependencies: { a: ["b"], c: { type: "object" } } })).toBe(true);
+		expect(isValidJsonSchema({ type: "object", dependencies: { a: 1 } })).toBe(false);
+		expect(isValidJsonSchema({ type: "object", dependencies: { a: [1] } })).toBe(false);
+	});
+});
+
+describe("Zod root extras preserved through normalize", () => {
+	it("retains a null-valued unknown root key after tool-argument validation so downstream rejection still triggers", () => {
+		const tool: Tool = {
+			name: "simple_tool",
+			description: "",
+			parameters: z.object({ assignment: z.string() }),
+		};
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-zod-null-root",
+			name: "simple_tool",
+			arguments: { assignment: "do thing", schema: null },
+		};
+
+		const result = validateToolArguments(tool, toolCall) as Record<string, unknown>;
+		expect(result.assignment).toBe("do thing");
+		expect("schema" in result).toBe(true);
+		expect(result.schema).toBeNull();
 	});
 });

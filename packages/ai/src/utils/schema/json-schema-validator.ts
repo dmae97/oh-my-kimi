@@ -1,3 +1,4 @@
+import { logger } from "@oh-my-pi/pi-utils";
 import { areJsonValuesEqual } from "./equality";
 
 export interface JsonSchemaValidationIssue {
@@ -12,9 +13,34 @@ export interface JsonSchemaValidationResult {
 	issues: JsonSchemaValidationIssue[];
 }
 
+/**
+ * Cycle bookkeeping for recursive `$ref` schemas. We track pairs of (resolved
+ * ref, value identity) rather than refs alone: returning `true` for every
+ * nested occurrence of a ref previously allowed recursive schemas to silently
+ * validate values they should have rejected. For primitive values we fall back
+ * to a depth counter capped at MAX_REF_DEPTH so a self-referential schema can
+ * still bottom out without infinite recursion.
+ */
 interface ValidationContext {
 	root: unknown;
-	seenRefs: Set<string>;
+	seenPairs: Set<string>;
+	objectIds: WeakMap<object, number>;
+	nextObjectId: { value: number };
+	refDepth: number;
+}
+
+const MAX_REF_DEPTH = 64;
+
+/** Module-level guard so the unevaluatedItems/unevaluatedProperties warning fires once per process. */
+let seenUnevaluatedWarning = false;
+
+function getValueIdentity(ctx: ValidationContext, value: object): number {
+	let id = ctx.objectIds.get(value);
+	if (id !== undefined) return id;
+	id = ctx.nextObjectId.value;
+	ctx.nextObjectId.value += 1;
+	ctx.objectIds.set(value, id);
+	return id;
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
@@ -111,15 +137,28 @@ function validateSchemaNode(
 
 	const ref = schema.$ref;
 	if (typeof ref === "string") {
-		if (ctx.seenRefs.has(ref)) return true;
 		const resolved = resolveLocalRef(ctx.root, ref);
 		if (resolved === undefined) {
 			pushIssue(issues, path, `unresolved reference ${ref}`, { keyword: "$ref" });
 			return false;
 		}
-		ctx.seenRefs.add(ref);
+		// Cycle detection: for object/array values we key on (ref, value-identity)
+		// so the same schema applied to a different value still recurses; only an
+		// exact (schema, value) repeat short-circuits as a true cycle. For
+		// primitives we fall back to a depth counter so self-referential schemas
+		// without a base case still terminate.
+		let pairKey: string | undefined;
+		if (value !== null && typeof value === "object") {
+			pairKey = `${ref}:${getValueIdentity(ctx, value)}`;
+			if (ctx.seenPairs.has(pairKey)) return true;
+			ctx.seenPairs.add(pairKey);
+		} else {
+			if (ctx.refDepth >= MAX_REF_DEPTH) return true;
+			ctx.refDepth += 1;
+		}
 		const ok = validateSchemaNode(resolved, value, path, ctx, issues);
-		ctx.seenRefs.delete(ref);
+		if (pairKey !== undefined) ctx.seenPairs.delete(pairKey);
+		else ctx.refDepth -= 1;
 		return ok;
 	}
 
@@ -191,6 +230,33 @@ function validateSchemaNode(
 		}
 	}
 
+	// if/then/else: validate the if-branch silently; based on its outcome,
+	// validate against then/else. Each sub-schema is treated as a schema node
+	// (no requirement that branches be objects). This is a minimal correct
+	// semantic — schemas where the if-branch references properties only present
+	// after applying then will still resolve consistently for the LLM-emitted
+	// shapes we encounter.
+	if ("if" in schema) {
+		const ifIssues: JsonSchemaValidationIssue[] = [];
+		const ifOk = validateSchemaNode(schema.if, value, path, ctx, ifIssues);
+		const branch = ifOk ? schema.then : schema.else;
+		if (branch !== undefined) {
+			valid = validateSchemaNode(branch, value, path, ctx, issues) && valid;
+		}
+	}
+
+	// `unevaluatedProperties` / `unevaluatedItems` require tracking which
+	// keys/indices were "evaluated" by sibling keywords across composed
+	// schemas — expensive bookkeeping we do not implement. Warn once so tool
+	// authors who rely on them know the keyword is silently permissive in
+	// this validator.
+	if (("unevaluatedProperties" in schema || "unevaluatedItems" in schema) && !seenUnevaluatedWarning) {
+		seenUnevaluatedWarning = true;
+		logger.warn(
+			"JSON Schema unevaluatedProperties/unevaluatedItems are not enforced by the in-tree validator; treating as permissive",
+		);
+	}
+
 	if (isJsonObject(value)) {
 		valid = validateObjectKeywords(schema, value, path, ctx, issues) && valid;
 	}
@@ -237,6 +303,70 @@ function validateObjectKeywords(
 	}
 
 	const known = new Set(Object.keys(properties));
+	if (isJsonObject(schema.patternProperties)) {
+		for (const [pattern, patternSchema] of Object.entries(schema.patternProperties)) {
+			let re: RegExp;
+			try {
+				re = new RegExp(pattern);
+			} catch {
+				pushIssue(issues, path, `invalid patternProperties regex ${pattern}`, { keyword: "patternProperties" });
+				valid = false;
+				continue;
+			}
+			for (const [key, entry] of Object.entries(value)) {
+				if (!re.test(key)) continue;
+				known.add(key);
+				valid = validateSchemaNode(patternSchema, entry, [...path, key], ctx, issues) && valid;
+			}
+		}
+	}
+
+	if (isJsonObject(schema.dependentRequired)) {
+		for (const [key, deps] of Object.entries(schema.dependentRequired)) {
+			if (!(key in value)) continue;
+			if (!Array.isArray(deps)) continue;
+			for (const dep of deps) {
+				if (typeof dep !== "string") continue;
+				if (!(dep in value)) {
+					pushIssue(issues, [...path, dep], `is required when "${key}" is present`, {
+						keyword: "dependentRequired",
+					});
+					valid = false;
+				}
+			}
+		}
+	}
+
+	if (isJsonObject(schema.dependentSchemas)) {
+		for (const [key, depSchema] of Object.entries(schema.dependentSchemas)) {
+			if (!(key in value)) continue;
+			valid = validateSchemaNode(depSchema, value, path, ctx, issues) && valid;
+		}
+	}
+
+	// Draft-07 `dependencies`: each entry is either a schema (validate value
+	// when key present) or a string[] of additional required keys.
+	if (isJsonObject(schema.dependencies)) {
+		for (const [key, dep] of Object.entries(schema.dependencies)) {
+			if (!(key in value)) continue;
+			if (Array.isArray(dep)) {
+				for (const required of dep) {
+					if (typeof required !== "string") continue;
+					if (!(required in value)) {
+						pushIssue(issues, [...path, required], `is required when "${key}" is present`, {
+							keyword: "dependencies",
+						});
+						valid = false;
+					}
+				}
+			} else if (dep !== undefined) {
+				valid = validateSchemaNode(dep, value, path, ctx, issues) && valid;
+			}
+		}
+	}
+
+	// `known` includes property names and any keys matched by patternProperties
+	// above, so additionalProperties only governs the genuine leftovers.
 	const additional = schema.additionalProperties;
 	if (additional === false) {
 		for (const key of Object.keys(value)) {
@@ -289,25 +419,55 @@ function validateArrayKeywords(
 		}
 	}
 
+	// Tuple validation: when `prefixItems` is present (draft 2020-12) it gives
+	// per-index schemas, and `items` then applies to the remainder. When
+	// `items` is itself an array (draft-07 tuple form), we keep the legacy
+	// behavior and validate by index.
+	const prefixItems = Array.isArray(schema.prefixItems) ? schema.prefixItems : undefined;
 	const items = schema.items;
-	if (Array.isArray(items)) {
-		const limit = Math.min(items.length, value.length);
+	const tupleSchemas = prefixItems ?? (Array.isArray(items) ? items : undefined);
+	if (tupleSchemas) {
+		const limit = Math.min(tupleSchemas.length, value.length);
 		for (let i = 0; i < limit; i += 1) {
-			valid = validateSchemaNode(items[i], value[i], [...path, i], ctx, issues) && valid;
+			valid = validateSchemaNode(tupleSchemas[i], value[i], [...path, i], ctx, issues) && valid;
 		}
-		if (schema.additionalItems === false && value.length > items.length) {
-			for (let i = items.length; i < value.length; i += 1) {
+		// Items after the tuple prefix:
+		// - draft-07 tuple form (items: array): `additionalItems` governs the rest.
+		// - draft 2020-12 (prefixItems + items: schema): `items` validates the rest.
+		const remainderSchema = prefixItems && !Array.isArray(items) ? items : (schema.additionalItems as unknown);
+		if (remainderSchema === false && value.length > tupleSchemas.length) {
+			for (let i = tupleSchemas.length; i < value.length; i += 1) {
 				pushIssue(issues, [...path, i], "must not be present", { keyword: "additionalItems" });
 				valid = false;
 			}
-		} else if (schema.additionalItems !== undefined && schema.additionalItems !== true) {
-			for (let i = items.length; i < value.length; i += 1) {
-				valid = validateSchemaNode(schema.additionalItems, value[i], [...path, i], ctx, issues) && valid;
+		} else if (remainderSchema !== undefined && remainderSchema !== true) {
+			for (let i = tupleSchemas.length; i < value.length; i += 1) {
+				valid = validateSchemaNode(remainderSchema, value[i], [...path, i], ctx, issues) && valid;
 			}
 		}
 	} else if (items !== undefined) {
 		for (let i = 0; i < value.length; i += 1) {
 			valid = validateSchemaNode(items, value[i], [...path, i], ctx, issues) && valid;
+		}
+	}
+
+	if (schema.contains !== undefined) {
+		const minContains = typeof schema.minContains === "number" ? schema.minContains : 1;
+		const maxContains = typeof schema.maxContains === "number" ? schema.maxContains : Infinity;
+		let count = 0;
+		for (let i = 0; i < value.length; i += 1) {
+			const containsIssues: JsonSchemaValidationIssue[] = [];
+			if (validateSchemaNode(schema.contains, value[i], [...path, i], ctx, containsIssues)) {
+				count += 1;
+			}
+		}
+		if (count < minContains) {
+			pushIssue(issues, path, `must contain at least ${minContains} matching item(s)`, { keyword: "contains" });
+			valid = false;
+		}
+		if (count > maxContains) {
+			pushIssue(issues, path, `must contain at most ${maxContains} matching item(s)`, { keyword: "maxContains" });
+			valid = false;
 		}
 	}
 
@@ -386,7 +546,13 @@ function validateNumberKeywords(
 
 export function validateJsonSchemaValue(schema: unknown, value: unknown): JsonSchemaValidationResult {
 	const issues: JsonSchemaValidationIssue[] = [];
-	const success = validateSchemaNode(schema, value, [], { root: schema, seenRefs: new Set() }, issues);
+	const success = validateSchemaNode(
+		schema,
+		value,
+		[],
+		{ root: schema, seenPairs: new Set(), objectIds: new WeakMap(), nextObjectId: { value: 0 }, refDepth: 0 },
+		issues,
+	);
 	return { success, issues };
 }
 
