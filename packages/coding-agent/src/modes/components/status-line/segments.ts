@@ -199,7 +199,8 @@ const pathSegment: StatusLineSegment = {
 			pwd = `${ellipsis}${pwd.slice(-sliceLen)}`;
 		}
 
-		const icon = scratch ? theme.icon.scratchFolder : theme.icon.folder;
+		const showScratchIcon = scratch && opts.stripWorkPrefix !== false;
+		const icon = showScratchIcon ? theme.icon.scratchFolder : theme.icon.folder;
 		const content = withIcon(icon, pwd);
 		return { content: theme.fg("statusLinePath", content), visible: true };
 	},

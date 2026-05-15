@@ -47,6 +47,7 @@
 - Fixed `task.maxRuntimeMs` losing wall-clock aborts that fired during pre-prompt session setup by re-checking the abort signal immediately before issuing the model prompt, so a stalled subagent now exits with the runtime-limit reason instead of hanging through setup races
 - Fixed late `yield` events landing after a wall-clock timeout from flipping a timed-out subagent to a successful exit, so the reported `aborted` flag and exit code now always reflect the runtime-limit breach while yield payloads remain in `extractedToolData`
 - Fixed async-task progress consumer to copy `contextTokens` and `contextWindow` from the completed `SingleResult` onto `AgentProgress`, so UI gauges keep showing per-turn context after a backgrounded task finishes
+- Fixed the status-line `path` segment ignoring `stripWorkPrefix: false` when selecting the folder icon for scratch directories. The icon selection now respects the same gate as the scratch path stripping, so disabling `stripWorkPrefix` keeps the regular `folder` icon even when the project directory is inside a scratch root.
 
 ## [15.0.2] - 2026-05-15
 

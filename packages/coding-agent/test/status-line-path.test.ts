@@ -124,6 +124,22 @@ describe("status line path segment", () => {
 		}
 	});
 
+	it("keeps the folder icon for scratch paths when stripWorkPrefix is disabled", () => {
+		const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-status-line-scratch-noprefix-"));
+		try {
+			setProjectDir(scratchDir);
+
+			const ctx = createPathContext();
+			ctx.options.path = { ...ctx.options.path, stripWorkPrefix: false };
+			const rendered = renderSegment("path", ctx);
+			expect(rendered.visible).toBe(true);
+			expect(rendered.content).toContain(theme.icon.folder);
+			expect(rendered.content).not.toContain(theme.icon.scratchFolder);
+		} finally {
+			fs.rmSync(scratchDir, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps the folder icon for paths outside any scratch root", () => {
 		const projectsRoot = path.join(os.homedir(), "Projects");
 		fs.mkdirSync(projectsRoot, { recursive: true });
