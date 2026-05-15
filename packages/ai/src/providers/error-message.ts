@@ -1,4 +1,4 @@
-import type { Api, Model } from "../../types";
+import type { Api, Model } from "../types";
 
 export function createProviderErrorMessage(model: Model<Api>, err: unknown) {
 	return {

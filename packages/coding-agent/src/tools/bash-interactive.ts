@@ -27,7 +27,7 @@ export interface BashInteractiveResult extends OutputSummary {
 }
 
 function normalizeCaptureChunk(chunk: string): string {
-	const normalized = chunk.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
+	const normalized = chunk.replace(/\r\n?/gu, "\n");
 	return sanitizeWithOptionalSixelPassthrough(normalized, sanitizeText);
 }
 

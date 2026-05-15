@@ -358,7 +358,7 @@ export class Input implements Component, Focusable {
 		this.#pushUndo();
 
 		// Clean the pasted text - remove newlines and carriage returns, then normalize tabs.
-		const cleanText = replaceTabs(pastedText.replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, ""));
+		const cleanText = replaceTabs(pastedText.replace(/[\r\n]/g, ""));
 
 		// Insert at cursor position
 		this.#value = this.#value.slice(0, this.#cursor) + cleanText + this.#value.slice(this.#cursor);
