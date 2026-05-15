@@ -1045,7 +1045,10 @@ fn terminate_background_jobs(shell: &BrushShell) {
 /// `Command` scope. Returns `true` when a scope was pushed (so the caller
 /// can pop it after the command runs), `false` when there were no vars and
 /// the existing scopes remain untouched.
-fn apply_command_env(shell: &mut BrushShell, env: Option<&HashMap<String, String>>) -> Result<bool> {
+fn apply_command_env(
+	shell: &mut BrushShell,
+	env: Option<&HashMap<String, String>>,
+) -> Result<bool> {
 	let Some(env) = env else {
 		return Ok(false);
 	};

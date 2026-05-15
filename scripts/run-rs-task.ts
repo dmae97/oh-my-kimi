@@ -48,7 +48,7 @@ if (!isRustTaskName(taskName)) {
 	process.exit(1);
 }
 
-if (!(isCI() || (await hasRustAffectingChanges()))) {
+if (taskName !== "fmt:rs" && !(isCI() || (await hasRustAffectingChanges()))) {
 	console.log(`Skipping ${taskName} (not in CI and no Rust-affecting changes were found).`);
 	process.exit(0);
 }
