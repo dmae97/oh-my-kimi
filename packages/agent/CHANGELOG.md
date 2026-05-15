@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [15.1.2] - 2026-05-15
+### Added
+
+- Added `responseHeaders` to `ChatUsageEvent` and `ManualChatTelemetryOptions` so telemetry hooks receive captured lowercase upstream response headers for each chat span
+- Added automatic gateway/proxy detection from response headers (`litellm`, `helicone`, `portkey`, `openrouter`) and stamped `pi.gen_ai.gateway.*` span attributes for detected routing metadata
+- Added exported `detectGatewayFromHeaders` API for header-based gateway detection
+
 ## [15.1.0] - 2026-05-15
 ### Breaking Changes
 

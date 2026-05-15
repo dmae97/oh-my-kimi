@@ -235,7 +235,7 @@ function computeIndentDistanceForDiff(expected: string, actual: string): number 
 }
 
 function normalizeLineEndings(value: string): string {
-	return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	return value.replace(/\r\n?/g, "\n");
 }
 
 /** Collapse runs of 2+ blank lines into a single blank line. */

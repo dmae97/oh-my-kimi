@@ -23,7 +23,7 @@ export function detectLineEnding(content: string): LineEnding {
 
 /** Normalize all line endings to LF */
 export function normalizeToLF(text: string): string {
-	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	return text.replace(/\r\n?/g, "\n");
 }
 
 /** Restore line endings to the specified type */

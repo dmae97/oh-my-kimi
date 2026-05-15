@@ -1,3 +1,17 @@
+/**
+ * In-tree JSON Schema validator.
+ *
+ * Used by `validation.ts` for tools authored as plain JSON Schema (no Zod
+ * runtime). Covers the keyword set tool authors actually rely on — type,
+ * enum, const, combinators, if/then/else, object/array/string/number
+ * constraints, $ref, prefixItems/items, contains, propertyNames, pattern &
+ * dependent* — but treats `unevaluatedProperties` / `unevaluatedItems` as
+ * permissive (with a one-shot warning) since those require evaluation
+ * tracking we do not implement.
+ *
+ * Compared to AJV this is single-pass, synchronous, dependency-free, and
+ * tolerates non-standard shapes (`nullable`) that LLM-emitted schemas carry.
+ */
 import { logger } from "@oh-my-pi/pi-utils";
 import { areJsonValuesEqual } from "./equality";
 
@@ -63,6 +77,8 @@ function typeOfJsonValue(value: unknown): string {
 	return typeof value;
 }
 
+/** Push a validation issue with a copied path so later mutations to `path` do not corrupt earlier issues. */
+
 function matchesJsonSchemaType(value: unknown, type: string): boolean {
 	switch (type) {
 		case "string":
@@ -84,6 +100,8 @@ function matchesJsonSchemaType(value: unknown, type: string): boolean {
 	}
 }
 
+/** Decide whether `value` satisfies a single JSON-Schema `type` keyword string. `integer` is a refinement of `number`. */
+
 function schemaTypes(schema: Record<string, unknown>): string[] {
 	const raw = schema.type;
 	const types =
@@ -98,9 +116,13 @@ function schemaTypes(schema: Record<string, unknown>): string[] {
 	return types;
 }
 
+/** Extract the effective `type` list from a schema, treating `nullable: true` as adding `"null"`. */
+
 function decodePointerToken(token: string): string {
 	return token.replace(/~1/g, "/").replace(/~0/g, "~");
 }
+
+/** RFC 6901 token decode: `~1` → `/`, `~0` → `~`. */
 
 function resolveLocalRef(root: unknown, ref: string): unknown | undefined {
 	if (ref === "#") return root;
@@ -114,10 +136,20 @@ function resolveLocalRef(root: unknown, ref: string): unknown | undefined {
 	return current;
 }
 
+/** Resolve a `#/path/to/node` pointer against the root schema. Returns `undefined` for external/unsupported refs. */
+
 function isRequiredSet(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every(entry => typeof entry === "string");
 }
 
+/** Narrow `required: unknown` to `required: string[]` — the spec allows it to be missing but rejects non-string entries. */
+
+/**
+ * Core validator. Walks a schema node, applies every applicable keyword to
+ * `value`, and accumulates issues. Returns `true` only if no keyword
+ * rejected; combinators may add issues but still return true (e.g. `anyOf`
+ * succeeds if at least one branch matches).
+ */
 function validateSchemaNode(
 	schema: unknown,
 	value: unknown,
@@ -276,6 +308,7 @@ function validateSchemaNode(
 	return valid;
 }
 
+/** Apply object-shaped JSON-Schema keywords: `required`, `properties`, `propertyNames`, `patternProperties`, `dependentRequired`, `dependentSchemas`, `additionalProperties`, and the `min/maxProperties` counts. */
 function validateObjectKeywords(
 	schema: Record<string, unknown>,
 	value: Record<string, unknown>,
@@ -294,9 +327,9 @@ function validateObjectKeywords(
 		}
 	}
 
-	for (const [key, propertySchema] of Object.entries(properties)) {
+	for (const key in properties) {
 		if (!(key in value)) continue;
-		valid = validateSchemaNode(propertySchema, value[key], [...path, key], ctx, issues) && valid;
+		valid = validateSchemaNode(properties[key], value[key], [...path, key], ctx, issues) && valid;
 	}
 
 	if (schema.propertyNames !== undefined) {
@@ -307,7 +340,9 @@ function validateObjectKeywords(
 
 	const known = new Set(Object.keys(properties));
 	if (isJsonObject(schema.patternProperties)) {
-		for (const [pattern, patternSchema] of Object.entries(schema.patternProperties)) {
+		const patternProperties = schema.patternProperties;
+		for (const pattern in patternProperties) {
+			const patternSchema = patternProperties[pattern];
 			let re: RegExp;
 			try {
 				re = new RegExp(pattern);
@@ -316,16 +351,18 @@ function validateObjectKeywords(
 				valid = false;
 				continue;
 			}
-			for (const [key, entry] of Object.entries(value)) {
+			for (const key in value) {
 				if (!re.test(key)) continue;
 				known.add(key);
-				valid = validateSchemaNode(patternSchema, entry, [...path, key], ctx, issues) && valid;
+				valid = validateSchemaNode(patternSchema, value[key], [...path, key], ctx, issues) && valid;
 			}
 		}
 	}
 
 	if (isJsonObject(schema.dependentRequired)) {
-		for (const [key, deps] of Object.entries(schema.dependentRequired)) {
+		const dependentRequired = schema.dependentRequired;
+		for (const key in dependentRequired) {
+			const deps = dependentRequired[key];
 			if (!(key in value)) continue;
 			if (!Array.isArray(deps)) continue;
 			for (const dep of deps) {
@@ -341,30 +378,10 @@ function validateObjectKeywords(
 	}
 
 	if (isJsonObject(schema.dependentSchemas)) {
-		for (const [key, depSchema] of Object.entries(schema.dependentSchemas)) {
+		const dependentSchemas = schema.dependentSchemas;
+		for (const key in dependentSchemas) {
 			if (!(key in value)) continue;
-			valid = validateSchemaNode(depSchema, value, path, ctx, issues) && valid;
-		}
-	}
-
-	// Draft-07 `dependencies`: each entry is either a schema (validate value
-	// when key present) or a string[] of additional required keys.
-	if (isJsonObject(schema.dependencies)) {
-		for (const [key, dep] of Object.entries(schema.dependencies)) {
-			if (!(key in value)) continue;
-			if (Array.isArray(dep)) {
-				for (const required of dep) {
-					if (typeof required !== "string") continue;
-					if (!(required in value)) {
-						pushIssue(issues, [...path, required], `is required when "${key}" is present`, {
-							keyword: "dependencies",
-						});
-						valid = false;
-					}
-				}
-			} else if (dep !== undefined) {
-				valid = validateSchemaNode(dep, value, path, ctx, issues) && valid;
-			}
+			valid = validateSchemaNode(dependentSchemas[key], value, path, ctx, issues) && valid;
 		}
 	}
 
@@ -378,9 +395,9 @@ function validateObjectKeywords(
 			valid = false;
 		}
 	} else if (additional !== undefined && additional !== true) {
-		for (const [key, entry] of Object.entries(value)) {
+		for (const key in value) {
 			if (known.has(key)) continue;
-			valid = validateSchemaNode(additional, entry, [...path, key], ctx, issues) && valid;
+			valid = validateSchemaNode(additional, value[key], [...path, key], ctx, issues) && valid;
 		}
 	}
 
@@ -396,6 +413,7 @@ function validateObjectKeywords(
 	return valid;
 }
 
+/** Apply array-shaped keywords: `min/maxItems`, `uniqueItems`, `prefixItems` + `items` tuple validation, and `contains` with `min/maxContains`. */
 function validateArrayKeywords(
 	schema: Record<string, unknown>,
 	value: unknown[],
@@ -422,30 +440,23 @@ function validateArrayKeywords(
 		}
 	}
 
-	// Tuple validation: when `prefixItems` is present (draft 2020-12) it gives
-	// per-index schemas, and `items` then applies to the remainder. When
-	// `items` is itself an array (draft-07 tuple form), we keep the legacy
-	// behavior and validate by index.
+	// Tuple validation uses JSON Schema 2020-12 `prefixItems` for per-index
+	// schemas. When present, `items` is the schema for every remaining element.
 	const prefixItems = Array.isArray(schema.prefixItems) ? schema.prefixItems : undefined;
 	const items = schema.items;
-	const tupleSchemas = prefixItems ?? (Array.isArray(items) ? items : undefined);
-	if (tupleSchemas) {
-		const limit = Math.min(tupleSchemas.length, value.length);
+	if (Array.isArray(items)) {
+		pushIssue(issues, path, "array-valued items is not valid in JSON Schema 2020-12; use prefixItems", {
+			keyword: "items",
+		});
+		valid = false;
+	} else if (prefixItems) {
+		const limit = Math.min(prefixItems.length, value.length);
 		for (let i = 0; i < limit; i += 1) {
-			valid = validateSchemaNode(tupleSchemas[i], value[i], [...path, i], ctx, issues) && valid;
+			valid = validateSchemaNode(prefixItems[i], value[i], [...path, i], ctx, issues) && valid;
 		}
-		// Items after the tuple prefix:
-		// - draft-07 tuple form (items: array): `additionalItems` governs the rest.
-		// - draft 2020-12 (prefixItems + items: schema): `items` validates the rest.
-		const remainderSchema = prefixItems && !Array.isArray(items) ? items : (schema.additionalItems as unknown);
-		if (remainderSchema === false && value.length > tupleSchemas.length) {
-			for (let i = tupleSchemas.length; i < value.length; i += 1) {
-				pushIssue(issues, [...path, i], "must not be present", { keyword: "additionalItems" });
-				valid = false;
-			}
-		} else if (remainderSchema !== undefined && remainderSchema !== true) {
-			for (let i = tupleSchemas.length; i < value.length; i += 1) {
-				valid = validateSchemaNode(remainderSchema, value[i], [...path, i], ctx, issues) && valid;
+		if (items !== undefined) {
+			for (let i = prefixItems.length; i < value.length; i += 1) {
+				valid = validateSchemaNode(items, value[i], [...path, i], ctx, issues) && valid;
 			}
 		}
 	} else if (items !== undefined) {
@@ -477,6 +488,7 @@ function validateArrayKeywords(
 	return valid;
 }
 
+/** Apply string-shaped keywords: `min/maxLength`, `pattern`. Invalid regexes flag the schema itself rather than the value. */
 function validateStringKeywords(
 	schema: Record<string, unknown>,
 	value: string,
@@ -506,6 +518,7 @@ function validateStringKeywords(
 	return valid;
 }
 
+/** Apply number-shaped keywords: `minimum`/`maximum`, `exclusiveMinimum`/`exclusiveMaximum` (both numeric draft 2020-12 and boolean draft-07 forms), and `multipleOf`. */
 function validateNumberKeywords(
 	schema: Record<string, unknown>,
 	value: number,

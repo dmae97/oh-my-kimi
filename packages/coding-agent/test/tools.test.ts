@@ -1419,6 +1419,24 @@ function b() {
 			expect(output).toMatch(/\*5\|match two/);
 		});
 
+		it("inserts a gap separator between non-contiguous match blocks", async () => {
+			const testFile = path.join(testDir, "gaps.txt");
+			const lines = Array.from({ length: 10 }, (_, idx) => (idx === 0 || idx === 5 ? "match" : `filler ${idx}`));
+			fs.writeFileSync(testFile, lines.join("\n"));
+
+			const noContextSettings = Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 });
+			const noContextSearchTool = wrapToolWithMetaNotice(
+				new SearchTool(createTestToolSession(testDir, noContextSettings)),
+			);
+			const result = await noContextSearchTool.execute("test-call-12-gap", {
+				pattern: "match",
+				paths: [testFile],
+			});
+
+			const output = getTextOutput(result);
+			expect(output).toMatch(/\*1\|match\n\.\.\.\n\*6\|match/);
+		});
+
 		it("should paginate files via the skip parameter", async () => {
 			const skipDir = path.join(testDir, "skip-dir");
 			fs.mkdirSync(skipDir, { recursive: true });

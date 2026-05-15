@@ -112,18 +112,22 @@ describe("Tool argument coercion", () => {
 		expect(result).toEqual({ env: { FOO: "bar" } });
 	});
 
-	it("validates legacy draft-07 JSON Schema without converting it through Zod", () => {
+	it("upgrades draft-07-shaped JSON Schema without $schema before validation", () => {
 		const tool: Tool = {
-			name: "legacy_schema",
+			name: "json_schema",
 			description: "",
 			parameters: {
 				type: "object",
 				properties: {
 					item: { $ref: "#/definitions/Item" },
 					name: { type: "string", nullable: true },
-					ids: { type: "array", items: { type: "string" }, uniqueItems: true },
+					pair: {
+						type: "array",
+						items: [{ type: "string" }, { type: "integer" }],
+						additionalItems: false,
+					},
 				},
-				required: ["item", "name", "ids"],
+				required: ["item", "name", "pair"],
 				definitions: {
 					Item: { type: "string" },
 				},
@@ -132,20 +136,29 @@ describe("Tool argument coercion", () => {
 
 		const valid = validateToolArguments(tool, {
 			type: "toolCall",
-			id: "call-legacy-ok",
-			name: "legacy_schema",
-			arguments: { item: "ok", name: null, ids: ["a", "b"] },
+			id: "call-json-ok",
+			name: "json_schema",
+			arguments: { item: "ok", name: null, pair: ["a", 1] },
 		});
-		expect(valid).toEqual({ item: "ok", name: null, ids: ["a", "b"] });
+		expect(valid).toEqual({ item: "ok", name: null, pair: ["a", 1] });
 
 		expect(() =>
 			validateToolArguments(tool, {
 				type: "toolCall",
-				id: "call-legacy-bad",
-				name: "legacy_schema",
-				arguments: { item: "ok", name: null, ids: ["a", "a"] },
+				id: "call-json-bad",
+				name: "json_schema",
+				arguments: { item: "ok", name: null, pair: ["a", "not-an-integer"] },
 			}),
-		).toThrow("unique");
+		).toThrow("integer");
+
+		expect(() =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "call-json-extra",
+				name: "json_schema",
+				arguments: { item: "ok", name: null, pair: ["a", 1, "extra"] },
+			}),
+		).toThrow("false schema");
 	});
 
 	it("parses nested JSON arrays in string values", () => {

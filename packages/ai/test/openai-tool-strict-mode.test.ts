@@ -20,6 +20,34 @@ const testTool: Tool = {
 	}),
 };
 
+const looseYieldTool: Tool = {
+	name: "yield",
+	description: "Submit result",
+	strict: false,
+	parameters: {
+		type: "object",
+		additionalProperties: false,
+		properties: {
+			result: {
+				anyOf: [
+					{
+						type: "object",
+						additionalProperties: false,
+						properties: {
+							data: {
+								type: "object",
+								additionalProperties: true,
+							},
+						},
+						required: ["data"],
+					},
+				],
+			},
+		},
+		required: ["result"],
+	},
+};
+
 const testContext: Context = {
 	messages: [
 		{
@@ -35,6 +63,21 @@ function createAbortedSignal(): AbortSignal {
 	const controller = new AbortController();
 	controller.abort();
 	return controller.signal;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+	return value != null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function getYieldDataSchema(parameters: unknown): Record<string, unknown> {
+	const resultSchema = toRecord(toRecord(parameters).properties).result;
+	const variants = toRecord(resultSchema).anyOf;
+	if (!Array.isArray(variants)) return {};
+	for (const variant of variants) {
+		const dataSchema = toRecord(toRecord(variant).properties).data;
+		if (dataSchema !== undefined) return toRecord(dataSchema);
+	}
+	return {};
 }
 
 function createSseResponse(events: unknown[]): Response {
@@ -58,9 +101,9 @@ function captureCompletionsPayload(
 	return promise;
 }
 
-function captureResponsesPayload(model: Model<"openai-responses">): Promise<unknown> {
+function captureResponsesPayload(model: Model<"openai-responses">, context: Context = testContext): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
-	streamOpenAIResponses(model, testContext, {
+	streamOpenAIResponses(model, context, {
 		apiKey: "test-key",
 		signal: createAbortedSignal(),
 		onPayload: payload => resolve(payload),
@@ -92,6 +135,23 @@ describe("OpenAI tool strict mode", () => {
 			tools?: Array<{ function?: { strict?: boolean } }>;
 		};
 		expect(payload.tools?.[0]?.function?.strict).toBeUndefined();
+	});
+
+	it("keeps loose yield schemas non-strict for openai-completions", async () => {
+		const model: Model<"openai-completions"> = {
+			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
+			api: "openai-completions",
+		};
+		const payload = (await captureCompletionsPayload(model, {
+			...testContext,
+			tools: [looseYieldTool],
+		})) as {
+			tools?: Array<{ function?: { strict?: boolean; parameters?: Record<string, unknown> } }>;
+		};
+		const fn = payload.tools?.[0]?.function;
+
+		expect(fn?.strict).toBeUndefined();
+		expect(getYieldDataSchema(fn?.parameters).additionalProperties).toBe(true);
 	});
 
 	it("sends strict=true for openai-completions tool schemas on GitHub Copilot", async () => {
@@ -346,6 +406,20 @@ describe("OpenAI tool strict mode", () => {
 			tools?: Array<{ strict?: boolean }>;
 		};
 		expect(payload.tools?.[0]?.strict).toBe(true);
+	});
+
+	it("keeps loose yield schemas non-strict for openai-responses", async () => {
+		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const payload = (await captureResponsesPayload(model, {
+			...testContext,
+			tools: [looseYieldTool],
+		})) as {
+			tools?: Array<{ strict?: boolean; parameters?: Record<string, unknown> }>;
+		};
+		const tool = payload.tools?.[0];
+
+		expect(tool?.strict).toBeUndefined();
+		expect(getYieldDataSchema(tool?.parameters).additionalProperties).toBe(true);
 	});
 
 	it("sends strict=true for openai-responses tool schemas on GitHub Copilot", async () => {

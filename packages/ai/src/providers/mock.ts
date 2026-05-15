@@ -89,6 +89,16 @@ export interface MockResponse {
 	throw?: string | Error;
 	/** Delay before any event is emitted. Honors the call's AbortSignal. */
 	delayMs?: number;
+	/**
+	 * If set, the mock synthesizes a {@link ProviderResponseMetadata} and fires
+	 * `options.onResponse` once before streaming events. Headers are forwarded
+	 * verbatim (keys lowercased to match real provider plumbing).
+	 */
+	responseHeaders?: Readonly<Record<string, string>>;
+	/** HTTP status code paired with {@link responseHeaders}. Defaults to 200. */
+	responseStatus?: number;
+	/** Pre-set requestId surfaced via {@link ProviderResponseMetadata.requestId}. */
+	responseRequestId?: string;
 }
 
 /** Handler resolved per call: static script or function. */
@@ -299,6 +309,26 @@ async function runMock(
 	} catch (err) {
 		stream.fail(err);
 		return;
+	}
+
+	if (response.responseHeaders && options?.onResponse) {
+		const headers: Record<string, string> = {};
+		for (const [key, value] of Object.entries(response.responseHeaders)) {
+			headers[key.toLowerCase()] = value;
+		}
+		try {
+			await options.onResponse(
+				{
+					status: response.responseStatus ?? 200,
+					headers,
+					...(response.responseRequestId !== undefined ? { requestId: response.responseRequestId } : {}),
+				},
+				model,
+			);
+		} catch (err) {
+			stream.fail(err);
+			return;
+		}
 	}
 
 	if (response.delayMs && response.delayMs > 0) {

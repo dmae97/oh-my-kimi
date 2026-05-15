@@ -55,8 +55,7 @@ function formatCodeBlock(
 ): string | null {
 	if (!code) return null;
 
-	const normalized = code.replace(/\r\n/g, "\n").trimEnd();
-	const codeLines = normalized.split("\n");
+	const codeLines = code.trimEnd().split(/\r?\n/);
 	const languageTag = typeof language === "string" ? language.trim().toLowerCase() : "";
 
 	let displayLines = codeLines;

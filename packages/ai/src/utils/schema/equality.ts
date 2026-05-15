@@ -19,17 +19,14 @@ export function areJsonValuesEqual(left: unknown, right: unknown): boolean {
 	if (!isJsonObject(left) || !isJsonObject(right)) {
 		return false;
 	}
-	const leftKeys = Object.keys(left);
-	const rightKeys = Object.keys(right);
-	if (leftKeys.length !== rightKeys.length) {
-		return false;
+	let rightLen = 0;
+	for (const _ in right) rightLen++;
+	let leftLen = 0;
+	for (const key in left) {
+		leftLen++;
+		if (!(key in right) || !areJsonValuesEqual(left[key], right[key])) return false;
 	}
-	for (const key of leftKeys) {
-		if (!(key in right) || !areJsonValuesEqual(left[key], right[key])) {
-			return false;
-		}
-	}
-	return true;
+	return leftLen === rightLen;
 }
 
 export function mergeCompatibleEnumSchemas(existing: unknown, incoming: unknown): JsonObject | null {
@@ -44,12 +41,19 @@ export function mergeCompatibleEnumSchemas(existing: unknown, incoming: unknown)
 	if (!areJsonValuesEqual(existing.type, incoming.type)) {
 		return null;
 	}
-	const existingKeys = Object.keys(existing).filter(key => key !== "enum");
-	const incomingKeys = Object.keys(incoming).filter(key => key !== "enum");
-	if (existingKeys.length !== incomingKeys.length) {
+	let existingNonEnumCount = 0;
+	for (const key in existing) {
+		if (key !== "enum") existingNonEnumCount++;
+	}
+	let incomingNonEnumCount = 0;
+	for (const key in incoming) {
+		if (key !== "enum") incomingNonEnumCount++;
+	}
+	if (existingNonEnumCount !== incomingNonEnumCount) {
 		return null;
 	}
-	for (const key of existingKeys) {
+	for (const key in existing) {
+		if (key === "enum") continue;
 		if (!(key in incoming) || !areJsonValuesEqual(existing[key], incoming[key])) {
 			return null;
 		}

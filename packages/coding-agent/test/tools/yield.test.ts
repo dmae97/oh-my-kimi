@@ -37,6 +37,7 @@ function getSuccessDataSchema(parameters: Record<string, unknown>): Record<strin
 describe("YieldTool", () => {
 	it("accepts success payload with data", async () => {
 		const tool = new YieldTool(createSession());
+		expect(tool.strict).toBe(false);
 		const result = await tool.execute("call-1", { result: { data: { ok: true } } } as never);
 		expect(result.details).toEqual({ data: { ok: true }, status: "success", error: undefined });
 	});
@@ -49,6 +50,7 @@ describe("YieldTool", () => {
 
 	it("accepts arbitrary data when outputSchema is null", async () => {
 		const tool = new YieldTool(createSession({ outputSchema: null }));
+		expect(tool.strict).toBe(false);
 		const result = await tool.execute("call-null", { result: { data: { nested: { x: 1 }, ok: true } } } as never);
 		expect(result.details).toEqual({
 			data: { nested: { x: 1 }, ok: true },
@@ -61,6 +63,7 @@ describe("YieldTool", () => {
 		const tool = new YieldTool(createSession({ outputSchema: true }));
 		const dataSchema = getSuccessDataSchema(tool.parameters as unknown as Record<string, unknown>);
 
+		expect(tool.strict).toBe(false);
 		expect(dataSchema.type).toBeUndefined();
 		const primitiveResult = await tool.execute("call-true-number", { result: { data: 42 } } as never);
 		expect(primitiveResult.details).toEqual({ data: 42, status: "success", error: undefined });
@@ -71,6 +74,26 @@ describe("YieldTool", () => {
 			status: "success",
 			error: undefined,
 		});
+	});
+
+	it("preserves explicit loose object output schemas and disables strict tool mode", async () => {
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					type: "object",
+					additionalProperties: true,
+				},
+			}),
+		);
+		const dataSchema = getSuccessDataSchema(tool.parameters as unknown as Record<string, unknown>);
+
+		expect(tool.strict).toBe(false);
+		expect(dataSchema.additionalProperties).toBe(true);
+
+		const result = await tool.execute("call-loose-object", {
+			result: { data: { nested: { x: 1 }, ok: true } },
+		} as never);
+		expect(result.details).toEqual({ data: { nested: { x: 1 }, ok: true }, status: "success", error: undefined });
 	});
 	it("repairs strict schema generation for required-only object output schemas", () => {
 		const tool = new YieldTool(
@@ -234,6 +257,7 @@ describe("YieldTool", () => {
 		const dataSchema = getSuccessDataSchema(tool.parameters as unknown as Record<string, unknown>);
 		const dataSchemaProperties = toRecord(dataSchema.properties);
 
+		expect(tool.strict).toBe(false);
 		expect(dataSchema.type).toBe("object");
 		expect(dataSchemaProperties.value).toBeUndefined();
 		expect(Object.keys(dataSchemaProperties)).toHaveLength(0);

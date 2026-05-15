@@ -6,8 +6,10 @@ import {
 	sanitizeSchemaForCCA,
 	sanitizeSchemaForGoogle,
 	sanitizeSchemaForStrictMode,
+	schemaNeedsDraft202012Upgrade,
 	stripResidualCombiners,
 	tryEnforceStrictSchema,
+	upgradeJsonSchemaTo202012,
 } from "@oh-my-pi/pi-ai/utils/schema";
 
 // ---------------------------------------------------------------------------
@@ -91,6 +93,64 @@ describe("sanitizeSchemaForStrictMode", () => {
 		const sanitized = sanitizeSchemaForStrictMode(schema);
 
 		expect(sanitized.enum).toEqual(["A", "B", "C"]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// upgradeJsonSchemaTo202012
+// ---------------------------------------------------------------------------
+
+describe("upgradeJsonSchemaTo202012", () => {
+	it("infers draft-07 tuple and dependency keywords without a $schema URI", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				definitions: { type: "string" },
+				tuple: {
+					type: "array",
+					items: [{ type: "string" }, { type: "integer" }],
+					additionalItems: false,
+				},
+				gated: {
+					type: "object",
+					dependencies: {
+						a: ["b"],
+						c: { required: ["d"] },
+					},
+				},
+			},
+			definitions: {
+				Ref: { type: "string" },
+			},
+		};
+
+		expect(schemaNeedsDraft202012Upgrade(schema)).toBe(true);
+		expect(upgradeJsonSchemaTo202012(schema)).toEqual({
+			type: "object",
+			properties: {
+				definitions: { type: "string" },
+				tuple: {
+					type: "array",
+					prefixItems: [{ type: "string" }, { type: "integer" }],
+					items: false,
+				},
+				gated: {
+					type: "object",
+					dependentRequired: { a: ["b"] },
+					dependentSchemas: { c: { required: ["d"] } },
+				},
+			},
+			$defs: {
+				Ref: { type: "string" },
+			},
+		});
+	});
+
+	it("returns unchanged schemas by identity when no draft upgrade is needed", () => {
+		const schema = { type: "object", properties: { name: { type: "string" } } };
+
+		expect(schemaNeedsDraft202012Upgrade(schema)).toBe(false);
+		expect(upgradeJsonSchemaTo202012(schema)).toBe(schema);
 	});
 });
 
@@ -275,7 +335,7 @@ describe("enforceStrictSchema and tryEnforceStrictSchema", () => {
 	it("enforces strict object constraints inside tuple items", () => {
 		const schema = {
 			type: "array",
-			items: [
+			prefixItems: [
 				{ type: "string" },
 				{
 					type: "object",
@@ -289,7 +349,7 @@ describe("enforceStrictSchema and tryEnforceStrictSchema", () => {
 		} as Record<string, unknown>;
 
 		const result = tryEnforceStrictSchema(schema);
-		const tupleItems = result.schema.items as Array<Record<string, unknown>>;
+		const tupleItems = result.schema.prefixItems as Array<Record<string, unknown>>;
 		const tupleObjectItem = tupleItems[1] as Record<string, unknown>;
 		const tupleProperties = tupleObjectItem.properties as Record<string, Record<string, unknown>>;
 

@@ -11,4 +11,3 @@ export * from "./prefixes";
 export * from "./recovery";
 export * from "./stream";
 export * from "./types";
-export * from "./utils";

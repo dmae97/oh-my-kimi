@@ -11,8 +11,8 @@
 import { ANTHROPIC_THINKING } from "../stream";
 import type { Context, Model, SimpleStreamOptions } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { createProviderErrorMessage } from "./error-message";
 import { streamAnthropic, streamOpenAICompletions } from "./register-builtins";
-import { createProviderErrorMessage } from "./shared/error-message";
 
 export type OpenAIAnthropicApiFormat = "openai" | "anthropic";
 

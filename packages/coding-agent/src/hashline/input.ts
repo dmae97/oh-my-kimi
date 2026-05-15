@@ -2,7 +2,6 @@ import * as path from "node:path";
 import { ABORT_MARKER, BEGIN_PATCH_MARKER, END_PATCH_MARKER, FILE_HEADER_PREFIX } from "./constants";
 import { HL_EDIT_SEP } from "./hash";
 import type { SplitHashlineOptions } from "./types";
-import { stripTrailingCarriageReturn } from "./utils";
 
 export interface HashlineInputSection {
 	path: string;
@@ -64,8 +63,7 @@ function stripLeadingBlankLines(input: string): string {
 }
 
 export function containsRecognizableHashlineOperations(input: string): boolean {
-	for (const rawLine of input.split("\n")) {
-		const line = stripTrailingCarriageReturn(rawLine);
+	for (const line of input.split(/\r?\n/)) {
 		if (/^[+<=-]\s+/.test(line) || line.startsWith(HL_EDIT_SEP)) return true;
 	}
 	return false;
@@ -74,8 +72,8 @@ export function containsRecognizableHashlineOperations(input: string): boolean {
 function normalizeFallbackInput(input: string, options: SplitHashlineOptions): string {
 	const stripped = input.startsWith("\uFEFF") ? input.slice(1) : input;
 	const hasExplicitHeader = stripped
-		.split("\n")
-		.some(rawLine => parseHashlineHeaderLine(stripTrailingCarriageReturn(rawLine), options.cwd) !== null);
+		.split(/\r?\n/)
+		.some(rawLine => parseHashlineHeaderLine(rawLine, options.cwd) !== null);
 	if (hasExplicitHeader) return input;
 
 	if (!options.path || !containsRecognizableHashlineOperations(input)) return input;
@@ -91,8 +89,8 @@ export function splitHashlineInput(input: string, options: SplitHashlineOptions 
 
 export function splitHashlineInputs(input: string, options: SplitHashlineOptions = {}): HashlineInputSection[] {
 	const stripped = stripLeadingBlankLines(normalizeFallbackInput(input, options));
-	const lines = stripped.split("\n");
-	const firstLine = stripTrailingCarriageReturn(lines[0] ?? "");
+	const lines = stripped.split(/\r?\n/);
+	const firstLine = lines[0] ?? "";
 
 	if (parseHashlineHeaderLine(firstLine, options.cwd) === null) {
 		const preview = JSON.stringify(firstLine.slice(0, 120));
@@ -108,13 +106,12 @@ export function splitHashlineInputs(input: string, options: SplitHashlineOptions
 
 	const flush = () => {
 		if (currentPath.length === 0) return;
-		const hasOps = currentLines.some(rawLine => stripTrailingCarriageReturn(rawLine).trim().length > 0);
+		const hasOps = currentLines.some(line => line.trim().length > 0);
 		if (hasOps) sections.push({ path: currentPath, diff: currentLines.join("\n") });
 		currentLines = [];
 	};
 
-	for (const rawLine of lines) {
-		const line = stripTrailingCarriageReturn(rawLine);
+	for (const line of lines) {
 		if (line.trimEnd() === END_PATCH_MARKER || line.trimEnd() === ABORT_MARKER) break;
 		if (isPatchEnvelopeMarker(line)) continue;
 		const header = parseHashlineHeaderLine(line, options.cwd);
@@ -123,7 +120,7 @@ export function splitHashlineInputs(input: string, options: SplitHashlineOptions
 			currentPath = header.path;
 			currentLines = [];
 		} else {
-			currentLines.push(rawLine);
+			currentLines.push(line);
 		}
 	}
 	flush();
