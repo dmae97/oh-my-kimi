@@ -428,7 +428,7 @@
 		"args": ["server"],
 		"fileTypes": [".md", ".markdown"],
 		"rootMarkers": [".marksman.toml", ".git"],
-		"warmupTimeoutMs": 15000
+		"warmupTimeoutMs": 2000
 	},
 	"texlab": {
 		"command": "texlab",

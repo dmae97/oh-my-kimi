@@ -32,10 +32,10 @@ export function installH2Fetch(): void {
 
 	/** Error codes that indicate h2 negotiation/transport failure (not an application error). */
 	const h2FallbackCodes: ReadonlySet<string> = new Set([
-		"HTTP2Unsupported",  // Server selected h1 in ALPN
+		"HTTP2Unsupported", // Server selected h1 in ALPN
 		"ConnectionRefused", // Server refused the h2 connection
-		"ConnectionReset",   // Server reset during h2 handshake
-		"ConnectionClosed",  // Server closed before h2 response
+		"ConnectionReset", // Server reset during h2 handshake
+		"ConnectionClosed", // Server closed before h2 response
 	]);
 	const wrapper = async function h2fetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
 		if (!isHttps(input)) return original(input, init);

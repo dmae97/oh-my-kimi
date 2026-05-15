@@ -154,16 +154,25 @@ function applyRuntimeDefaults(servers: Record<string, ServerConfig>): Record<str
  * Check if any root marker file exists in the directory
  */
 export function hasRootMarkers(cwd: string, markers: string[]): boolean {
+	let entries: string[] | null = null;
 	for (const marker of markers) {
-		// Handle glob-like patterns (e.g., "*.cabal")
+		// Handle glob-like patterns (e.g., "*.cabal"). Root markers live at the
+		// project root, so a one-level readdir is sufficient — and avoids
+		// Bun.Glob descending into node_modules for patterns like "**/*.cabal".
 		if (marker.includes("*")) {
-			try {
-				const scan = new Bun.Glob(marker).scanSync({ cwd, onlyFiles: false });
-				for (const _ of scan) {
+			if (entries === null) {
+				try {
+					entries = fs.readdirSync(cwd);
+				} catch {
+					entries = [];
+					logger.warn("Failed to list directory for glob root marker.", { marker, cwd });
+				}
+			}
+			const glob = new Bun.Glob(marker);
+			for (const entry of entries) {
+				if (glob.match(entry)) {
 					return true;
 				}
-			} catch {
-				logger.warn("Failed to resolve glob root marker.", { marker, cwd });
 			}
 			continue;
 		}
