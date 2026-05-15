@@ -224,11 +224,21 @@ function trimOpenAiCompactInput(
 function collectKnownOpenAiCallIds(items: Array<Record<string, unknown>>): Set<string> {
 	const knownCallIds = new Set<string>();
 	for (const item of items) {
-		if (item.type === "function_call" && typeof item.call_id === "string") {
+		if ((item.type === "function_call" || item.type === "custom_tool_call") && typeof item.call_id === "string") {
 			knownCallIds.add(item.call_id);
 		}
 	}
 	return knownCallIds;
+}
+
+function collectCustomOpenAiCallIds(items: Array<Record<string, unknown>>): Set<string> {
+	const customCallIds = new Set<string>();
+	for (const item of items) {
+		if (item.type === "custom_tool_call" && typeof item.call_id === "string") {
+			customCallIds.add(item.call_id);
+		}
+	}
+	return customCallIds;
 }
 
 // ============================================================================
@@ -257,6 +267,7 @@ export function buildOpenAiNativeHistory(
 
 	let msgIndex = 0;
 	let knownCallIds = collectKnownOpenAiCallIds(input);
+	let customCallIds = collectCustomOpenAiCallIds(input);
 	for (const message of transformedMessages) {
 		if (message.role === "user" || message.role === "developer") {
 			const providerPayload = (message as { providerPayload?: AssistantMessage["providerPayload"] }).providerPayload;
@@ -264,6 +275,7 @@ export function buildOpenAiNativeHistory(
 			if (historyItems) {
 				input.push(...historyItems);
 				knownCallIds = collectKnownOpenAiCallIds(input);
+				customCallIds = collectCustomOpenAiCallIds(input);
 				msgIndex++;
 				continue;
 			}
@@ -310,6 +322,7 @@ export function buildOpenAiNativeHistory(
 					input.splice(0, input.length, ...providerPayload.items);
 				}
 				knownCallIds = collectKnownOpenAiCallIds(input);
+				customCallIds = collectCustomOpenAiCallIds(input);
 				msgIndex++;
 				continue;
 			}
@@ -353,12 +366,27 @@ export function buildOpenAiNativeHistory(
 				}
 
 				if (block.type === "toolCall") {
-					const normalized = normalizeResponsesToolCallId(block.id);
+					const normalized = normalizeResponsesToolCallId(block.id, block.customWireName ? "ctc" : "fc");
 					let itemId: string | undefined = normalized.itemId;
-					if (isDifferentModel && (itemId?.startsWith("fc_") || itemId?.startsWith("fcr_"))) {
+					if (
+						isDifferentModel &&
+						(itemId?.startsWith("fc_") || itemId?.startsWith("fcr_") || itemId?.startsWith("ctc_"))
+					) {
 						itemId = undefined;
 					}
 					knownCallIds.add(normalized.callId);
+					if (block.customWireName) {
+						const rawInput = typeof block.arguments?.input === "string" ? block.arguments.input : "";
+						customCallIds.add(normalized.callId);
+						input.push({
+							type: "custom_tool_call",
+							id: itemId,
+							call_id: normalized.callId,
+							name: block.customWireName,
+							input: rawInput,
+						});
+						continue;
+					}
 					input.push({
 						type: "function_call",
 						id: itemId,
@@ -386,7 +414,7 @@ export function buildOpenAiNativeHistory(
 				.join("\n");
 			const hasImages = message.content.some(block => block.type === "image");
 			input.push({
-				type: "function_call_output",
+				type: customCallIds.has(normalized.callId) ? "custom_tool_call_output" : "function_call_output",
 				call_id: normalized.callId,
 				output: (textOutput.length > 0 ? textOutput : "(see attached image)").toWellFormed(),
 			});
@@ -422,6 +450,7 @@ export async function requestOpenAiRemoteCompaction(
 	apiKey: string,
 	compactInput: Array<Record<string, unknown>>,
 	instructions: string,
+	signal?: AbortSignal,
 ): Promise<OpenAiRemoteCompactionResponse> {
 	const endpoint = resolveOpenAiCompactEndpoint(model);
 	const request: OpenAiRemoteCompactionRequest = {
@@ -449,6 +478,7 @@ export async function requestOpenAiRemoteCompaction(
 		method: "POST",
 		headers,
 		body: JSON.stringify(request),
+		signal,
 	});
 
 	if (!response.ok) {
@@ -493,11 +523,13 @@ export async function requestOpenAiRemoteCompaction(
 export async function requestRemoteCompaction(
 	endpoint: string,
 	request: RemoteCompactionRequest,
+	signal?: AbortSignal,
 ): Promise<RemoteCompactionResponse> {
 	const response = await fetch(endpoint, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(request),
+		signal,
 	});
 
 	if (!response.ok) {

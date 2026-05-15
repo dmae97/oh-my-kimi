@@ -43,6 +43,8 @@
 - Fixed recursive `$ref` schemas being treated as universally valid: the validator previously short-circuited on the second occurrence of any ref it had already seen, so nested values violating the referenced sub-schema passed. Cycle detection now keys on (ref, value-identity) pairs with a depth cap for primitive values, so genuine sub-tree violations are still caught.
 - Fixed JSON Schema meta-validator accepting malformed `if`/`then`/`else` and `dependencies` keywords; each conditional sub-schema is now structurally validated and draft-07 `dependencies` accepts either a schema or a string array of dependent keys.
 - Fixed Zod-emitted wire schemas dropping null-valued unknown root fields before `preserveUnknownRootFields` could snapshot them, so callers like `task.simple` no longer lose a `schema: null` argument and downstream rejection paths fire as intended.
+- Fixed `buildOpenAiNativeHistory` to serialize freeform tool calls (e.g. `apply_patch`) as `custom_tool_call` / `custom_tool_call_output` items matching the live Responses provider, instead of demoting them to `function_call` and breaking remote-compaction replay
+- Threaded an `AbortSignal` through `requestOpenAiRemoteCompaction` and `requestRemoteCompaction` so canceled compaction requests no longer keep the underlying `fetch` alive
 
 ## [15.0.2] - 2026-05-15
 ### Fixed

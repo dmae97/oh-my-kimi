@@ -547,10 +547,14 @@ export async function generateSummary(
 	];
 
 	if (options?.remoteEndpoint) {
-		const remote = await requestRemoteCompaction(options.remoteEndpoint, {
-			systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-			prompt: promptText,
-		});
+		const remote = await requestRemoteCompaction(
+			options.remoteEndpoint,
+			{
+				systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
+				prompt: promptText,
+			},
+			signal,
+		);
 		return remote.summary;
 	}
 
@@ -600,10 +604,14 @@ async function generateShortSummary(
 	promptText += SHORT_SUMMARY_PROMPT;
 
 	if (options?.remoteEndpoint) {
-		const remote = await requestRemoteCompaction(options.remoteEndpoint, {
-			systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-			prompt: promptText,
-		});
+		const remote = await requestRemoteCompaction(
+			options.remoteEndpoint,
+			{
+				systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
+				prompt: promptText,
+			},
+			signal,
+		);
 		return remote.summary;
 	}
 
@@ -819,6 +827,7 @@ export async function compact(
 					apiKey,
 					remoteHistory,
 					summaryOptions.remoteInstructions ?? SUMMARIZATION_SYSTEM_PROMPT,
+					signal,
 				);
 				preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, remote);
 			} catch (err) {
