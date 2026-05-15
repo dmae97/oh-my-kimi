@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in OpenTelemetry instrumentation on the agent loop. Pass `telemetry: {}` (or a richer `AgentTelemetryConfig`) on `AgentLoopConfig` / `AgentOptions` / `createAgentSession({ telemetry })` to emit GenAI-semantic-convention spans:
+  - `invoke_agent {agent.name}` wraps each `agentLoop` invocation with `gen_ai.operation.name=invoke_agent`, agent identity, conversation id, and `gen_ai.agent.step.count`.
+  - `chat {model}` per provider call, parented under `invoke_agent`, with full request/response envelope (`gen_ai.request.{model,temperature,top_p,top_k,max_tokens,presence_penalty,stop_sequences,service_tier,tool.choice,available_tools}`, `gen_ai.response.{model,id,finish_reasons,service_tier}`, `gen_ai.usage.{input_tokens,output_tokens,input_tokens.cached,input_tokens.cache_write,output_tokens.reasoning,total_tokens}`).
+  - `execute_tool {tool.name}` per tool call, parented under `invoke_agent`, with `gen_ai.tool.{name,call.id,description,type}` plus the active context so user/MCP/provider spans created inside `tool.execute()` attach as children.
+  - One-shot `handoff` span available via the public `recordHandoff(...)` helper for agent-to-agent transitions.
+- Added `AgentTelemetryConfig` hooks (`onSpanStart`, `onSpanEnd`, `costEstimator`), `agent` identity, `attributes` envelope merged onto every span, `captureMessageContent` toggle (defaults to the `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` env var) emitting `gen_ai.input.messages` / `gen_ai.output.messages` / `gen_ai.system_instructions` / `gen_ai.tool.call.arguments` / `gen_ai.tool.call.result`, and tracer/tracerName override surfaces.
+- Added `Agent#setTelemetry(config)` so consumers can swap or disable instrumentation between invocations.
+- Added `@opentelemetry/api` as a runtime dependency; SDK setup (exporters, samplers, processors) remains the host's responsibility per standard OTEL conventions. When no SDK is registered, helpers fall through to no-op spans with zero overhead.
 ## [15.0.1] - 2026-05-14
 ### Breaking Changes
 

@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added a `telemetry` option to `createAgentSession` for passing OpenTelemetry configuration through to the underlying Agent
+
+### Fixed
+
+- Fixed bash output emitting a spurious `[… 0 lines elided (NB) …]` marker (and reordering the artifact link before the command output) when the shell minimizer rewrote a small command's output. After `OutputSink.replace()` swapped the minimized text into the buffer, the subsequent `sink.push("[raw output: artifact://N]\n")` chunk was funneled back into the (now empty) head-retention window while the pre-replace `#totalBytes` still tracked the original raw stream — so `dump()` composed `<head=artifact-link> + <middle-elision marker against stale totals> + <tail=minimized text>` instead of `<minimized text> + <artifact link>`. `replace()` now realigns `#totalBytes`/`#totalLines`/`#sawData`/`#truncated` to the authoritative buffer and disables head retention for the lifetime of the sink, so further pushes append to the tail buffer in order. The bash executor also drops the leading `\n` on the artifact-link push when the minimized text already ends with one so the separator stays single-newline.
 
 ### Fixed
 

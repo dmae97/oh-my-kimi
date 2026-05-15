@@ -220,6 +220,13 @@ export interface AgentOptions {
 	 * message are emitted. See {@link AgentLoopConfig.afterToolCall} for full semantics.
 	 */
 	afterToolCall?: AgentLoopConfig["afterToolCall"];
+
+	/**
+	 * Opt-in OpenTelemetry instrumentation. Passing `{}` enables the loop's
+	 * GenAI-semantic-convention spans using the global tracer provider. See
+	 * {@link AgentLoopConfig.telemetry} for the full surface.
+	 */
+	telemetry?: AgentLoopConfig["telemetry"];
 }
 
 export interface AgentPromptOptions {
@@ -283,6 +290,7 @@ export class Agent {
 	#onSseEvent?: SimpleStreamOptions["onSseEvent"];
 	#onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
 	#onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
+	#telemetry?: AgentLoopConfig["telemetry"];
 
 	/** Buffered Cursor tool results with text length at time of call (for correct ordering) */
 	#cursorToolResultBuffer: CursorToolResultEntry[] = [];
@@ -336,6 +344,7 @@ export class Agent {
 		this.#onHarmonyLeak = opts.onHarmonyLeak;
 		this.beforeToolCall = opts.beforeToolCall;
 		this.afterToolCall = opts.afterToolCall;
+		this.#telemetry = opts.telemetry;
 	}
 
 	/**
@@ -393,6 +402,25 @@ export class Agent {
 	 */
 	setMetadataResolver(resolver: ((provider: string) => Record<string, unknown> | undefined) | undefined): void {
 		this.#metadataResolver = resolver;
+	}
+
+	/**
+	 * Read the active OpenTelemetry configuration. Returns `undefined` when
+	 * instrumentation is disabled. Callers spawning child runs (e.g. subagent
+	 * dispatch) forward this to the child's loop so its spans appear under the
+	 * parent's active context with the subagent's own identity stamped.
+	 */
+	get telemetry(): AgentLoopConfig["telemetry"] | undefined {
+		return this.#telemetry;
+	}
+
+	/**
+	 * Replace the active OpenTelemetry configuration. Pass `undefined` to
+	 * disable instrumentation. Applies to the *next* `agentLoop` invocation —
+	 * in-flight loops keep the configuration they started with.
+	 */
+	setTelemetry(telemetry: AgentLoopConfig["telemetry"] | undefined): void {
+		this.#telemetry = telemetry;
 	}
 
 	/**
@@ -906,6 +934,7 @@ export class Agent {
 				return this.#dequeueSteeringMessages();
 			},
 			getFollowUpMessages: async () => this.#dequeueFollowUpMessages(),
+			telemetry: this.#telemetry,
 		};
 
 		let partial: AgentMessage | null = null;

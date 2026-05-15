@@ -2,6 +2,7 @@ import {
 	Agent,
 	type AgentEvent,
 	type AgentMessage,
+	type AgentTelemetryConfig,
 	type AgentTool,
 	INTENT_FIELD,
 	type ThinkingLevel,
@@ -244,6 +245,17 @@ export interface CreateAgentSessionOptions {
 
 	/** Whether UI is available (enables interactive tools like ask). Default: false */
 	hasUI?: boolean;
+
+	/**
+	 * Opt-in OpenTelemetry instrumentation forwarded to the underlying Agent.
+	 * Passing `{}` enables the loop's GenAI-semantic-convention spans. See
+	 * {@link AgentTelemetryConfig} for the full surface (hooks, content capture,
+	 * cost estimator, agent identity).
+	 *
+	 * Safe to enable without an OTEL SDK registered in the host: the
+	 * `@opentelemetry/api` package returns a no-op tracer in that case.
+	 */
+	telemetry?: AgentTelemetryConfig;
 }
 
 /** Result from createAgentSession */
@@ -1746,6 +1758,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			},
 			intentTracing: !!intentField,
 			getToolChoice: () => session?.nextToolChoice(),
+			telemetry: options.telemetry,
 		});
 
 		cursorEventEmitter = event => agent.emitExternalEvent(event);
