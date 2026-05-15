@@ -391,6 +391,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 										: "failed";
 								progress.durationMs = singleResult?.durationMs ?? Math.max(0, Date.now() - startedAt);
 								progress.tokens = singleResult?.tokens ?? 0;
+								progress.contextTokens = singleResult?.contextTokens;
+								progress.contextWindow = singleResult?.contextWindow;
 								progress.cost = singleResult?.usage?.cost.total ?? 0;
 								progress.extractedToolData = singleResult?.extractedToolData;
 							}

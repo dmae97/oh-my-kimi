@@ -1162,6 +1162,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				},
 				{ once: true, signal: sessionAbortController.signal },
 			);
+			// Defensive: if the wall-clock timer (or external signal) fired during
+			// the awaited setup above, the listener registration races the dispatch
+			// and may not observe the already-fired abort event. Mirror it manually.
+			if (abortSignal.aborted) {
+				void session.abort();
+			}
 
 			const extensionRunner = session.extensionRunner;
 			if (extensionRunner) {
@@ -1231,6 +1237,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 			});
 
+			checkAbort();
 			await session.prompt(task, { attribution: "agent" });
 			await session.waitForIdle();
 
@@ -1378,12 +1385,23 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		}
 	}
 
-	// Update final progress
-	const wasAborted = abortedViaYield || (!hasYield && (done.aborted || signal?.aborted || false));
+	// Update final progress. A wall-clock timeout always wins: if the runtime
+	// limit fired we report aborted/failed regardless of whether a yield landed
+	// while we were tearing the session down. The yield data is still surfaced
+	// to the caller via `progress.extractedToolData`, but the exit status must
+	// reflect the timeout so on-call doesn't mistake a stuck run for success.
+	const runtimeLimitExceeded = abortReason === "timeout";
+	if (runtimeLimitExceeded && exitCode === 0) {
+		exitCode = 1;
+	}
+	const wasAborted =
+		runtimeLimitExceeded || abortedViaYield || (!hasYield && (done.aborted || signal?.aborted || false));
 	const finalAbortReason = wasAborted
-		? abortedViaYield
-			? yieldAbortReason
-			: (done.abortReason ?? (signal?.aborted ? resolveSignalAbortReason() : resolveAbortReasonText()))
+		? runtimeLimitExceeded
+			? resolveAbortReasonText()
+			: abortedViaYield
+				? yieldAbortReason
+				: (done.abortReason ?? (signal?.aborted ? resolveSignalAbortReason() : resolveAbortReasonText()))
 		: undefined;
 	progress.status = wasAborted ? "aborted" : exitCode === 0 ? "completed" : "failed";
 	scheduleProgress(true);

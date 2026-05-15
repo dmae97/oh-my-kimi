@@ -157,4 +157,162 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		expect(result.aborted).toBe(false);
 		expect(result.abortReason).toBeUndefined();
 	});
+
+	it("aborts before prompting when the timer fires during session setup", async () => {
+		// Delay createAgentSession longer than maxRuntimeMs so the wall-clock
+		// timer fires while the executor is still doing async setup, well before
+		// it ever calls session.prompt(). The fix must observe abortSignal
+		// immediately before prompting and return the runtime-limit result.
+		const settings = Settings.isolated({ "task.maxRuntimeMs": 30 });
+		const handle = createHangingSession();
+		let promptCalls = 0;
+		const originalPrompt = handle.session.prompt;
+		handle.session.prompt = async (text, options) => {
+			promptCalls += 1;
+			return originalPrompt.call(handle.session, text, options);
+		};
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
+			await new Promise(resolve => setTimeout(resolve, 200));
+			return {
+				session: handle.session,
+				extensionsResult: {} as unknown as LoadExtensionsResult,
+				setToolUIContext: () => {},
+				eventBus: new EventBus(),
+			} satisfies CreateAgentSessionResult;
+		});
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-setup-timeout",
+			settings,
+		});
+
+		expect(result.aborted).toBe(true);
+		expect(result.exitCode).toBe(1);
+		expect(result.abortReason).toContain("runtime limit exceeded");
+		expect(result.abortReason).toContain("task.maxRuntimeMs=30");
+		// The whole point: we never reached session.prompt(), because the abort
+		// was observed before issuing the model call.
+		expect(promptCalls).toBe(0);
+	});
+
+	it("a late successful yield does not flip a timed-out run to success", async () => {
+		// A hung subagent emits a successful `yield` event during teardown (after
+		// the timer has already aborted). Without the fix, `hasYield=true` would
+		// make finalizeSubprocessOutput zero the exit code and `wasAborted`
+		// would resolve to false — silently masking the runtime-limit breach.
+		const settings = Settings.isolated({ "task.maxRuntimeMs": 30 });
+		const { promise: hang, resolve: releaseHang } = Promise.withResolvers<void>();
+		let listenerRef: ((event: AgentSessionEvent) => void) | undefined;
+		let abortCount = 0;
+		const session: Partial<AgentSession> = {
+			state: { messages: [] } as never,
+			agent: { state: { systemPrompt: ["test"] } } as never,
+			extensionRunner: undefined as never,
+			sessionManager: { appendSessionInit: () => {} } as never,
+			getActiveToolNames: () => ["read", "yield"],
+			setActiveToolsByName: async () => {},
+			subscribe: (listener: (event: AgentSessionEvent) => void) => {
+				listenerRef = listener;
+				return () => {};
+			},
+			prompt: async (_text: string, _options?: PromptOptions) => {
+				await hang;
+			},
+			waitForIdle: async () => {
+				await hang;
+			},
+			getLastAssistantMessage: () => undefined,
+			abort: async () => {
+				abortCount += 1;
+				// Simulate a late yield arriving while the executor is tearing
+				// the session down in response to the wall-clock abort.
+				listenerRef?.({
+					type: "tool_execution_end",
+					toolCallId: "tool-late-yield",
+					toolName: "yield",
+					result: {
+						content: [{ type: "text", text: "Result submitted." }],
+						details: { status: "success", data: { lateButLanded: true } },
+					},
+					isError: false,
+				} as AgentSessionEvent);
+				releaseHang();
+			},
+			dispose: async () => {},
+		};
+		mockCreateAgentSession(session as AgentSession);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-late-yield",
+			settings,
+		});
+
+		expect(abortCount).toBeGreaterThanOrEqual(1);
+		expect(result.aborted).toBe(true);
+		expect(result.exitCode).toBe(1);
+		expect(result.abortReason).toContain("runtime limit exceeded");
+		// Yield data is preserved for inspection — the regression was only in
+		// the exit status / abort flag, not in the captured payload.
+		expect(result.extractedToolData?.yield).toBeDefined();
+	});
+
+	it("propagates per-turn context tokens onto the SingleResult", async () => {
+		// Async task consumers (index.ts) copy `singleResult.contextTokens` and
+		// `singleResult.contextWindow` onto AgentProgress. This test pins the
+		// upstream contract: when an assistant message_end carries totalTokens,
+		// executor must surface it on SingleResult.contextTokens.
+		const settings = Settings.isolated({ "task.maxRuntimeMs": 0 });
+		const fastSession: Partial<AgentSession> = {
+			state: { messages: [] } as never,
+			agent: { state: { systemPrompt: ["test"] } } as never,
+			extensionRunner: undefined as never,
+			sessionManager: { appendSessionInit: () => {} } as never,
+			getActiveToolNames: () => ["read", "yield"],
+			setActiveToolsByName: async () => {},
+			subscribe: (listener: (event: AgentSessionEvent) => void) => {
+				queueMicrotask(() => {
+					listener({
+						type: "message_end",
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: "ok" }],
+							usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, totalTokens: 12345 },
+						},
+					} as unknown as AgentSessionEvent);
+					listener({
+						type: "tool_execution_end",
+						toolCallId: "tool-ok",
+						toolName: "yield",
+						result: {
+							content: [{ type: "text", text: "Result submitted." }],
+							details: { status: "success", data: { ok: true } },
+						},
+						isError: false,
+					} as AgentSessionEvent);
+				});
+				return () => {};
+			},
+			prompt: async () => {},
+			waitForIdle: async () => {},
+			getLastAssistantMessage: () => undefined,
+			abort: async () => {},
+			dispose: async () => {},
+		};
+		mockCreateAgentSession(fastSession as AgentSession);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-context-tokens",
+			settings,
+		});
+
+		expect(result.aborted).toBe(false);
+		expect(result.contextTokens).toBe(12345);
+		// contextWindow is only populated when the model registry resolves one;
+		// here we mock createAgentSession so it stays undefined. The async-task
+		// consumer's assignment is a straight copy, so undefined is acceptable.
+		expect(result.contextWindow).toBeUndefined();
+	});
 });
