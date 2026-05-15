@@ -1,15 +1,14 @@
 # Changelog
 
 ## [Unreleased]
-### Fixed
-
-- Fixed loose object output schemas in `YieldTool` so non-strict schemas (for example `additionalProperties: true`) are preserved and accepted instead of being forced into strict mode
-- Fixed unconstrained output schema modes (`outputSchema: true` or absent/non-strict schemas) to run in loose mode for successful results
 
 ## [15.1.2] - 2026-05-15
 ### Fixed
 
+- Fixed loose object output schemas in `YieldTool` so non-strict schemas (for example `additionalProperties: true`) are preserved and accepted instead of being forced into strict mode
+- Fixed unconstrained output schema modes (`outputSchema: true` or absent/non-strict schemas) to run in loose mode for successful results
 - Fixed bash tool calls with `pty: true` hanging indefinitely on Windows by falling back to the non-PTY executor instead of entering the ConPTY-backed interactive path. ([#1103](https://github.com/can1357/oh-my-pi/issues/1103))
+
 ### Changed
 
 - Updated MCP and theme schema metadata to reference JSON Schema draft-2020-12
