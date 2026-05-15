@@ -393,6 +393,85 @@ describe("listClaudePluginRoots", () => {
 		expect(found).toBeDefined();
 		expect(found?.path).toContain(path.join(".claude", "commands", "ship.md"));
 	});
+
+	test("reads slash commands directory from plugin manifest commands field (standard Claude plugin format)", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-commands-key");
+		await fs.mkdir(path.join(pluginsDir), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude", "commands"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-commands-key@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ commands: "./.claude/commands" }),
+		);
+		await fs.writeFile(path.join(pluginPath, ".claude", "commands", "plan.md"), "Plan it\n");
+
+		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		const found = result.all.find(command => command.name === "manifest-commands-key:plan");
+
+		expect(found).toBeDefined();
+		expect(found?.path).toContain(path.join(".claude", "commands", "plan.md"));
+	});
+
+	test("commands field takes precedence over slash-commands field when both are present", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-commands-precedence");
+		await fs.mkdir(path.join(pluginsDir), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		// commands points to .claude/commands, slash-commands points to a different dir
+		await fs.mkdir(path.join(pluginPath, ".claude", "commands"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "legacy-commands"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-commands-precedence@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ commands: "./.claude/commands", "slash-commands": "./legacy-commands" }),
+		);
+		await fs.writeFile(path.join(pluginPath, ".claude", "commands", "ship.md"), "Ship it\n");
+		// This file exists only under the legacy dir — should NOT be found
+		await fs.writeFile(path.join(pluginPath, "legacy-commands", "old.md"), "Old\n");
+
+		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		const found = result.all.find(command => command.name === "manifest-commands-precedence:ship");
+		const notFound = result.all.find(command => command.name === "manifest-commands-precedence:old");
+
+		expect(found).toBeDefined();
+		expect(notFound).toBeUndefined();
+	});
 	test("ignores manifest skills directory that resolves outside plugin root", async () => {
 		const pluginsDir = path.join(tempDir, ".claude", "plugins");
 		const pluginPath = path.join(tempDir, "plugins", "manifest-skills-outside");
