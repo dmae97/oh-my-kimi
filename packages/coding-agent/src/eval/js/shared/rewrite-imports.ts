@@ -22,9 +22,32 @@ type BabelImportDeclaration = {
 	}>;
 };
 
-type BabelLexicalDecl =
-	| { type: "VariableDeclaration"; kind: "const" | "let" | "var"; start: number; end: number }
-	| { type: "ClassDeclaration"; start: number; end: number; id: { start: number; end: number; name: string } | null };
+type BabelBindingPattern = {
+	type: string;
+	name?: string;
+	properties?: ReadonlyArray<unknown>;
+	elements?: ReadonlyArray<unknown | null>;
+	argument?: unknown;
+	left?: unknown;
+	value?: unknown;
+};
+
+type BabelVariableDeclaration = {
+	type: "VariableDeclaration";
+	kind: "const" | "let" | "var";
+	start: number;
+	end: number;
+	declarations?: ReadonlyArray<{ id: BabelBindingPattern }>;
+};
+
+type BabelClassDeclaration = {
+	type: "ClassDeclaration";
+	start: number;
+	end: number;
+	id: { start: number; end: number; name: string } | null;
+};
+
+type BabelLexicalDecl = BabelVariableDeclaration | BabelClassDeclaration;
 
 type BabelExpressionStatement = {
 	type: "ExpressionStatement";
@@ -167,6 +190,53 @@ export function rewriteImports(code: string): string {
 	return result;
 }
 
+function collectBindingNames(pattern: unknown, names: string[]): void {
+	if (!pattern || typeof pattern !== "object") return;
+	const node = pattern as BabelBindingPattern & { parameter?: unknown };
+	switch (node.type) {
+		case "Identifier":
+			if (typeof node.name === "string") names.push(node.name);
+			return;
+		case "ObjectPattern":
+			for (const property of node.properties ?? []) collectBindingNames(property, names);
+			return;
+		case "ObjectProperty":
+		case "Property":
+			collectBindingNames(node.value, names);
+			return;
+		case "ArrayPattern":
+			for (const element of node.elements ?? []) collectBindingNames(element, names);
+			return;
+		case "AssignmentPattern":
+			collectBindingNames(node.left, names);
+			return;
+		case "RestElement":
+			collectBindingNames(node.argument, names);
+			return;
+		case "TSParameterProperty":
+			collectBindingNames(node.parameter, names);
+			return;
+		default:
+			return;
+	}
+}
+
+function getLexicalBindingNames(node: BabelLexicalDecl): string[] {
+	const names: string[] = [];
+	if (node.type === "VariableDeclaration") {
+		for (const declaration of node.declarations ?? []) collectBindingNames(declaration.id, names);
+	} else if (node.id) {
+		names.push(node.id.name);
+	}
+	return names;
+}
+
+function appendGlobalBindingPublish(source: string, names: readonly string[]): string {
+	if (names.length === 0) return source;
+	const assignments = names.map(name => `this[${JSON.stringify(name)}] = ${name};`).join("\n");
+	return `${source};\n${assignments}`;
+}
+
 /**
  * Demote top-level `const`/`let`/`class` declarations to `var` so they persist on the
  * worker's globalThis across indirect `eval` calls. Indirect eval gives each call its own
@@ -177,10 +247,14 @@ export function rewriteImports(code: string): string {
  *   let { a, b } = obj;      -> var { a, b } = obj;
  *   class Foo extends Bar {} -> var Foo = class extends Bar {};
  *
+ * When the source must run inside the async wrapper, demoted `var`s would normally become
+ * function-scoped. In that mode we publish each top-level binding back to the wrapper's
+ * lexical `this`, which is the worker global object.
+ *
  * Nested declarations (inside functions, blocks, classes) are left alone \u2014 they're
  * scoped to their enclosing function/block regardless of `var` vs `let`/`const`.
  */
-function demoteTopLevelLexicals(code: string): string {
+function demoteTopLevelLexicals(code: string, options: { publishGlobals?: boolean } = {}): string {
 	if (!/\b(?:const|let|class)\b/.test(code)) return code;
 
 	const ast = parseProgram(code);
@@ -191,10 +265,10 @@ function demoteTopLevelLexicals(code: string): string {
 	const targets: BabelLexicalDecl[] = [];
 	for (const node of ast.program.body) {
 		if (node.type === "VariableDeclaration") {
-			const decl = node as unknown as BabelLexicalDecl & { kind: string };
-			if (decl.kind === "const" || decl.kind === "let") targets.push(decl as BabelLexicalDecl);
+			const decl = node as unknown as BabelVariableDeclaration;
+			if (decl.kind === "const" || decl.kind === "let") targets.push(decl);
 		} else if (node.type === "ClassDeclaration") {
-			const decl = node as unknown as Extract<BabelLexicalDecl, { type: "ClassDeclaration" }>;
+			const decl = node as unknown as BabelClassDeclaration;
 			if (decl.id) targets.push(decl);
 		}
 	}
@@ -204,6 +278,7 @@ function demoteTopLevelLexicals(code: string): string {
 	let result = code;
 	for (const node of targets) {
 		const segment = result.slice(node.start, node.end);
+		const bindingNames = options.publishGlobals ? getLexicalBindingNames(node) : [];
 		let replacement: string;
 		if (node.type === "VariableDeclaration") {
 			replacement = `var${segment.slice(node.kind.length)}`;
@@ -215,7 +290,8 @@ function demoteTopLevelLexicals(code: string): string {
 			const hasTrailingSemi = segment.endsWith(";");
 			replacement = `var ${id.name} = class${tail}${hasTrailingSemi ? "" : ";"}`;
 		}
-		result = result.slice(0, node.start) + replacement + result.slice(node.end);
+		result =
+			result.slice(0, node.start) + appendGlobalBindingPublish(replacement, bindingNames) + result.slice(node.end);
 	}
 	return result;
 }
@@ -236,6 +312,50 @@ function returnFinalExpression(code: string): { source: string; returned: boolea
 	const semicolonMatch = statement.match(/;\s*$/);
 	const trimmedStatement = semicolonMatch ? statement.slice(0, semicolonMatch.index) : statement;
 	return { source: `${prefix}__omp_set_final_expr__((${trimmedStatement}));${suffix}`, returned: true };
+}
+
+function isExecutionBoundary(type: string): boolean {
+	return (
+		type === "FunctionDeclaration" ||
+		type === "FunctionExpression" ||
+		type === "ArrowFunctionExpression" ||
+		type === "ObjectMethod" ||
+		type === "ClassMethod" ||
+		type === "ClassPrivateMethod" ||
+		type === "PrivateMethod"
+	);
+}
+
+function containsAsyncWrapperSyntax(value: unknown): boolean {
+	if (!value || typeof value !== "object") return false;
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			if (containsAsyncWrapperSyntax(item)) return true;
+		}
+		return false;
+	}
+
+	const node = value as Record<string, unknown>;
+	const type = node.type;
+	if (type === "ReturnStatement" || type === "AwaitExpression") return true;
+	if (type === "ForOfStatement" && node.await === true) return true;
+	if (typeof type === "string" && isExecutionBoundary(type)) return false;
+
+	for (const key in node) {
+		if (key === "loc" || key === "extra" || key === "range") continue;
+		if (key === "leadingComments" || key === "trailingComments" || key === "innerComments") continue;
+		if (containsAsyncWrapperSyntax(node[key])) return true;
+	}
+	return false;
+}
+
+function requiresAsyncWrapper(code: string): boolean {
+	const ast = parseProgram(code);
+	if (!ast) return false;
+	for (const node of ast.program.body) {
+		if (containsAsyncWrapperSyntax(node)) return true;
+	}
+	return false;
 }
 
 /**
@@ -267,11 +387,12 @@ const LOOKS_LIKE_TS =
 export function wrapCode(code: string): { source: string; asyncWrapped: boolean; finalExpressionReturned: boolean } {
 	const stripped = stripTypeScript(code);
 	const finalExpression = returnFinalExpression(stripped);
+	const importsRewritten = rewriteImports(finalExpression.source);
+	const needsAsyncWrapper = requiresAsyncWrapper(importsRewritten);
 	const rewritten = {
-		source: demoteTopLevelLexicals(rewriteImports(finalExpression.source)),
+		source: demoteTopLevelLexicals(importsRewritten, { publishGlobals: needsAsyncWrapper }),
 		returned: finalExpression.returned,
 	};
-	const needsAsyncWrapper = /\bawait\b|\breturn\b/.test(rewritten.source);
 	if (!needsAsyncWrapper) {
 		return { source: rewritten.source, asyncWrapped: false, finalExpressionReturned: rewritten.returned };
 	}

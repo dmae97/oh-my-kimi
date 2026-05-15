@@ -84,6 +84,50 @@ describe("executeJs", () => {
 		expect(resetResult.output.trim()).toBe("undefined");
 	});
 
+	it("persists bindings from cells that contain nested returns", async () => {
+		const first = await executeJs(
+			[
+				"const nestedReturnCarry = { value: 11 };",
+				"const readCarry = () => {",
+				"  return nestedReturnCarry.value;",
+				"};",
+				"readCarry();",
+			].join("\n"),
+			{ sessionId, session, sessionFile },
+		);
+		expect(first.exitCode).toBe(0);
+		expect(first.output.trim()).toBe("11");
+
+		const persisted = await executeJs("return nestedReturnCarry.value + 1;", { sessionId, session, sessionFile });
+		expect(persisted.exitCode).toBe(0);
+		expect(persisted.output.trim()).toBe("12");
+	});
+
+	it("persists bindings from cells that need the async wrapper", async () => {
+		const awaited = await executeJs(
+			"const { value: awaitedCarry } = await Promise.resolve({ value: 6 }); awaitedCarry;",
+			{
+				sessionId,
+				session,
+				sessionFile,
+			},
+		);
+		expect(awaited.exitCode).toBe(0);
+		expect(awaited.output.trim()).toBe("6");
+
+		const returned = await executeJs("const returnedCarry = 7; return returnedCarry;", {
+			sessionId,
+			session,
+			sessionFile,
+		});
+		expect(returned.exitCode).toBe(0);
+		expect(returned.output.trim()).toBe("7");
+
+		const persisted = await executeJs("return awaitedCarry * returnedCarry;", { sessionId, session, sessionFile });
+		expect(persisted.exitCode).toBe(0);
+		expect(persisted.output.trim()).toBe("42");
+	});
+
 	it("persists bindings when auto-displaying the final expression", async () => {
 		const first = await executeJs("const inspected = 40; inspected + 2;", { sessionId, session, sessionFile });
 		expect(first.exitCode).toBe(0);
