@@ -12,6 +12,7 @@ import {
 	type StopReason,
 	type ToolCall,
 } from "@oh-my-pi/pi-ai";
+import { calculateCost } from "@oh-my-pi/pi-ai/models";
 import { parseStreamingJson } from "@oh-my-pi/pi-ai/utils/json-parse";
 import { readSseJson } from "@oh-my-pi/pi-utils";
 
@@ -157,7 +158,7 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 				response.body as ReadableStream<Uint8Array>,
 				options.signal,
 			)) {
-				const parsedEvent = processProxyEvent(event, partial);
+				const parsedEvent = processProxyEvent(model, event, partial);
 				if (parsedEvent) {
 					if (parsedEvent.type === "done" || parsedEvent.type === "error") {
 						sawTerminalEvent = true;
@@ -197,6 +198,7 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
  * Process a proxy event and update the partial message.
  */
 function processProxyEvent(
+	model: Model,
 	proxyEvent: ProxyAssistantMessageEvent,
 	partial: AssistantMessage,
 ): AssistantMessageEvent | undefined {
@@ -311,12 +313,14 @@ function processProxyEvent(
 		case "done":
 			partial.stopReason = proxyEvent.reason;
 			partial.usage = proxyEvent.usage;
+			calculateCost(model, partial.usage);
 			return { type: "done", reason: proxyEvent.reason, message: partial };
 
 		case "error":
 			partial.stopReason = proxyEvent.reason;
 			partial.errorMessage = proxyEvent.errorMessage;
 			partial.usage = proxyEvent.usage;
+			calculateCost(model, partial.usage);
 			return { type: "error", reason: proxyEvent.reason, error: partial };
 	}
 }
