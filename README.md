@@ -174,6 +174,12 @@ _[Watch the capture ↗](https://omp.sh/clips/conflict.mp4)_
 
 _[Watch the capture ↗](https://omp.sh/clips/codemod.mp4)_
 
+### 18 · Drives a _real browser_. _Or your Slack?_
+
+Stealth's on by default, so pages see a normal user instead of a headless bot. The same API drives any Electron app in place — point it at Slack and the agent reads your DMs the way it reads the web.
+
+![omp TUI driving the browser tool against DuckDuckGo](https://omp.sh/captures/browser.webp)
+
 ## Whatever the task needs, _it's already in the box_.
 
 32 tools live in the same namespace as `read` and `bash`. Pin the active set with `--tools read,edit,bash,…` and the rest stay hidden but indexed — `search_tool_bm25` pulls them back in mid-session when `tools.discoveryMode` says so.
@@ -315,14 +321,6 @@ Vuln lookups answer with vendor data, not blog summaries.
 - **CISA KEV** — known exploited vulns
 
 [`web_search` reference ↗](https://omp.sh/docs/tools#web_search)
-
-## Drives a _real browser_. _Or your Slack?_
-
-Stealth's on by default, so pages see a normal user instead of a headless bot. The same API drives any Electron app in place — point it at Slack and the agent reads your DMs the way it reads the web.
-
-![omp TUI driving the browser tool against DuckDuckGo](https://omp.sh/captures/browser.webp)
-
-**Also drives:** localhost dev servers · Electron apps via `app.path` · existing Chromium via `cdp_url`. Tabs persist across tool calls.
 
 ## Roughly **~27,000** lines of Rust, doing the work other harnesses shell out for.
 
