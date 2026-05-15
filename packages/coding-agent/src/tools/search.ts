@@ -328,11 +328,18 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					return nextWidth;
 				}, 0);
 				const cacheEntries: Array<readonly [number, string]> = [];
+				let lastEmittedLine: number | undefined;
+				const gutterPad = " ".repeat(lineNumberWidth + 1);
 				for (const match of fileMatches) {
 					const pushLine = (lineNumber: number, line: string, isMatch: boolean, recordable: boolean) => {
+						if (lastEmittedLine !== undefined && lineNumber > lastEmittedLine + 1) {
+							modelOut.push("...");
+							displayOut.push(`${gutterPad}│...`);
+						}
 						modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
 						displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
 						if (recordable) cacheEntries.push([lineNumber, line] as const);
+						lastEmittedLine = lineNumber;
 					};
 					if (match.contextBefore) {
 						for (const ctx of match.contextBefore) {
