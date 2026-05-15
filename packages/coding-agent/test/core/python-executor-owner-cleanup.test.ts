@@ -387,4 +387,27 @@ describe("python executor owner cleanup", () => {
 		await disposeAllKernelSessions();
 		expect(confirmedShutdown).toHaveBeenCalledTimes(1);
 	});
+
+	it("retains owner mapping when owner-scoped shutdown is not confirmed", async () => {
+		const kernel = new FakeKernel();
+		const unconfirmedShutdown = vi.fn(async (): Promise<KernelShutdownResult> => ({ confirmed: false }));
+		kernel.shutdown = unconfirmedShutdown;
+		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
+		vi.spyOn(PythonKernel, "start").mockResolvedValue(kernel as unknown as PythonKernelInstance);
+
+		await executePython("1", {
+			cwd: "/tmp/unconfirmed-owner-shutdown",
+			sessionId: "unconfirmed-owner-shutdown-session",
+			kernelMode: "session",
+			kernelOwnerId: "owner-a",
+		});
+
+		await disposeKernelSessionsByOwner("owner-a");
+		expect(unconfirmedShutdown).toHaveBeenCalledTimes(1);
+
+		const confirmedShutdown = vi.fn(async (): Promise<KernelShutdownResult> => ({ confirmed: true }));
+		kernel.shutdown = confirmedShutdown;
+		await disposeKernelSessionsByOwner("owner-a");
+		expect(confirmedShutdown).toHaveBeenCalledTimes(1);
+	});
 });
