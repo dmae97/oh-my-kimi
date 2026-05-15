@@ -1,7 +1,6 @@
 import { ABORT_MARKER, ABORT_WARNING, BEGIN_PATCH_MARKER, END_PATCH_MARKER, RANGE_INTERIOR_HASH } from "./constants";
 import { describeAnchorExamples, HL_EDIT_SEP, HL_HASH_CAPTURE_RE_RAW } from "./hash";
 import type { Anchor, HashlineCursor, HashlineEdit } from "./types";
-import { stripTrailingCarriageReturn } from "./utils";
 
 const LID_CAPTURE_RE = new RegExp(`^${HL_HASH_CAPTURE_RE_RAW}$`);
 
@@ -85,9 +84,9 @@ function collectPayload(
 	const payload: string[] = [];
 	let index = startIndex;
 	while (index < lines.length) {
-		const line = stripTrailingCarriageReturn(lines[index]);
+		const line = lines[index];
 		if (line.startsWith(HL_EDIT_SEP)) {
-			payload.push(line.slice(1));
+			payload.push(line.slice(1).trimEnd());
 			index++;
 			continue;
 		}
@@ -100,11 +99,11 @@ function collectPayload(
 		// when inserting a blank line.
 		if (line.length === 0) {
 			let lookahead = index + 1;
-			while (lookahead < lines.length && stripTrailingCarriageReturn(lines[lookahead]).length === 0) {
+			while (lookahead < lines.length && lines[lookahead].length === 0) {
 				lookahead++;
 			}
 			const followedByPayload =
-				lookahead < lines.length && stripTrailingCarriageReturn(lines[lookahead]).startsWith(HL_EDIT_SEP);
+				lookahead < lines.length && lines[lookahead].startsWith(HL_EDIT_SEP);
 			const acceptBareBlank = requirePayload && payload.length === 0;
 			if (followedByPayload || acceptBareBlank) {
 				for (let j = index; j < lookahead; j++) payload.push("");
@@ -127,7 +126,7 @@ export function parseHashline(diff: string): HashlineEdit[] {
 export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]; warnings: string[] } {
 	const edits: HashlineEdit[] = [];
 	const warnings: string[] = [];
-	const lines = diff.split("\n");
+	const lines = diff.split(/\r?\n/);
 	let editIndex = 0;
 
 	const pushInsert = (cursor: HashlineCursor, text: string, lineNum: number) => {
@@ -136,7 +135,7 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 
 	for (let i = 0; i < lines.length; ) {
 		const lineNum = i + 1;
-		const line = stripTrailingCarriageReturn(lines[i]);
+		const line = lines[i];
 
 		if (line.trim().length === 0) {
 			i++;
