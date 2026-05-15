@@ -484,13 +484,18 @@ class RpcClient:
                     process.stderr.close()
                 except OSError:
                     pass
-            self._fail_pending(RpcProcessExitError("RPC process stopped"))
+            # Mark the client closed so any thread blocked in
+            # `_wait_for_agent_end` raises `RpcProcessExitError` instead of
+            # waiting for its request timeout. The stdout reader loop would
+            # normally do this when it observes the closed pipe, but it
+            # guards on `if not self._stopping:` — which is True by the time
+            # we get here — and so skips it. Calling `_mark_closed` directly
+            # closes the gap. It is idempotent: a second call (e.g. from the
+            # reader's exception path) returns early.
+            self._mark_closed(RpcProcessExitError("RPC process stopped"))
             self._pending_host_tool_calls.clear()
             self._pending_host_uri_requests.clear()
             self._process = None
-            self._ready.set()
-            with self._event_condition:
-                self._event_condition.notify_all()
             if self._stdout_thread is not None:
                 self._stdout_thread.join(timeout=1.0)
             if self._stderr_thread is not None:

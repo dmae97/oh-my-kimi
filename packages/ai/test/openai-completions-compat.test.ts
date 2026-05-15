@@ -482,19 +482,68 @@ describe("kimi model detection via detectCompat", () => {
 		};
 	}
 
-	it("requires reasoning_content for tool calls on kimi-k2.5 (opencode-go)", () => {
+	function kimiMoonshotModel(id: string): Model<"openai-completions"> {
+		return {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "moonshot",
+			baseUrl: "https://api.moonshot.ai/v1",
+			id,
+			reasoning: true,
+		};
+	}
+
+	// Regression for #1071: OpenCode-Go/Zen handle reasoning content server-side
+	// and reject client-supplied `reasoning_content` ("Extra inputs are not
+	// permitted"). Kimi on opencode-* MUST NOT have reasoning_content injected,
+	// even though it's still recognized as a Kimi model for other quirks.
+	it("does not require reasoning_content for tool calls on kimi-k2.5 (opencode-go)", () => {
 		const compat = detectCompat(kimiOpenCodeModel("kimi-k2.5"));
-		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
+		expect(compat.requiresReasoningContentForToolCalls).toBe(false);
+		// Kimi-specific quirks still apply even on opencode hosts.
 		expect(compat.requiresAssistantContentForToolCalls).toBe(true);
 	});
 
-	it("injects reasoning_content placeholder when assistant with tool calls has no reasoning field", () => {
+	it("does not inject reasoning_content placeholder for kimi on opencode-go", () => {
 		const model = kimiOpenCodeModel("kimi-k2.5");
 		const compat = detectCompat(model);
 		const toolCallMessage: AssistantMessage = {
 			role: "assistant",
 			content: [
-				// Thinking returned as plain text (as kimi-k2.5 on opencode-go does)
+				{ type: "text", text: "Let me research this." },
+				{
+					type: "toolCall",
+					id: "call_abc123",
+					name: "web_search",
+					arguments: { query: "beads gastownhall" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+		const messages = convertMessages(model, { messages: [toolCallMessage] }, compat);
+		const assistant = messages.find(m => m.role === "assistant");
+		expect(assistant).toBeDefined();
+		expect(Reflect.get(assistant as object, "reasoning_content")).toBeUndefined();
+	});
+
+	it("injects reasoning_content placeholder when kimi-on-moonshot has tool calls without reasoning field", () => {
+		const model = kimiMoonshotModel("kimi-k2.5");
+		const compat = detectCompat(model);
+		const toolCallMessage: AssistantMessage = {
+			role: "assistant",
+			content: [
 				{ type: "text", text: "Let me research this." },
 				{
 					type: "toolCall",
@@ -579,10 +628,15 @@ describe("kimi model detection via detectCompat", () => {
 		};
 		const compat = detectCompat(model);
 		expect(compat.requiresReasoningContentForToolCalls).toBe(false);
+		expect(compat.requiresAssistantContentForToolCalls).toBe(false);
 	});
 
+	// `requiresAssistantContentForToolCalls` keys directly off isKimiModel and
+	// is provider-agnostic, so it's the cleanest signal that the id-pattern
+	// match recognizes every Kimi variant.
 	it.each(["kimi-k2.5", "kimi-k1.5", "kimi-k2-5"])("matches kimi model id: %s", id => {
-		const compat = detectCompat(kimiOpenCodeModel(id));
+		const compat = detectCompat(kimiMoonshotModel(id));
+		expect(compat.requiresAssistantContentForToolCalls).toBe(true);
 		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
 	});
 

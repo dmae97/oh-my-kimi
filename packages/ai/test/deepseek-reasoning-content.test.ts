@@ -495,9 +495,9 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 			const model: Model<"openai-completions"> = {
 				...getBundledModel("openai", "gpt-4o-mini"),
 				api: "openai-completions",
-				provider: "opencode-go",
-				baseUrl: "https://opencode.ai/zen/go/v1",
-				id: "moonshotai/kimi-k2.5",
+				provider: "moonshot",
+				baseUrl: "https://api.moonshot.ai/v1",
+				id: "kimi-k2.5",
 				reasoning: true,
 			};
 			const compat = detectCompat(model);

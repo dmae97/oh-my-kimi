@@ -986,5 +986,87 @@ class RpcClientTests(unittest.TestCase):
         self.assertIn("max_event_history", str(ctx.exception))
 
 
+
+HANGING_SERVER = textwrap.dedent(
+    """
+    import json
+    import sys
+
+    print(json.dumps({"type": "ready"}), flush=True)
+    # Read one line (the prompt) and acknowledge it, then never emit agent_end.
+    # The client's prompt_and_wait should sit in _wait_for_agent_end forever
+    # unless stop() unblocks it.
+    line = sys.stdin.readline()
+    if line:
+        command = json.loads(line)
+        if command.get("type") == "prompt":
+            print(
+                json.dumps(
+                    {
+                        "id": command["id"],
+                        "type": "response",
+                        "command": "prompt",
+                        "success": True,
+                    }
+                ),
+                flush=True,
+            )
+    # Block forever on stdin so the subprocess does not exit on its own.
+    sys.stdin.read()
+    """
+)
+
+
+class StopUnblocksPromptAndWaitTests(unittest.TestCase):
+    """Regression: stop() must wake `_wait_for_agent_end` immediately.
+
+    Previously, the stdout reader's "if not self._stopping:" guard caused
+    `_mark_closed` to be skipped after stop(), so `_closed_error` stayed
+    `None` and `_wait_for_agent_end` blocked on its condition variable until
+    the prompt timeout. The fix sets `_closed_error` from `stop()` itself.
+    """
+
+    def test_stop_during_prompt_unblocks_waiter(self) -> None:
+        from omp_rpc import RpcProcessExitError
+
+        client = RpcClient(
+            command=[sys.executable, "-u", "-c", HANGING_SERVER],
+            startup_timeout=2.0,
+            request_timeout=2.0,
+        )
+        client.start()
+        try:
+            errors: list[BaseException] = []
+
+            def run_prompt() -> None:
+                try:
+                    # 30s is more than enough to let stop() race in; if the
+                    # bug regresses, the worker hangs the full 30s.
+                    client.prompt_and_wait("hang", timeout=30.0)
+                except BaseException as exc:
+                    errors.append(exc)
+
+            thread = threading.Thread(target=run_prompt)
+            thread.start()
+
+            # Wait until the prompt is in flight.
+            deadline = time.time() + 2.0
+            while client._prompt_lifecycle.active_operation != "prompt_and_wait" and time.time() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(client._prompt_lifecycle.active_operation, "prompt_and_wait")
+
+            t0 = time.time()
+            client.stop()
+            thread.join(timeout=2.0)
+            elapsed = time.time() - t0
+
+            self.assertFalse(thread.is_alive(), "prompt_and_wait did not return after stop()")
+            self.assertLess(elapsed, 2.0, f"stop() took {elapsed:.2f}s to unblock prompt_and_wait")
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], RpcProcessExitError)
+        finally:
+            # stop() is idempotent; safe to call again on cleanup paths.
+            client.stop()
+
 if __name__ == "__main__":
     unittest.main()
