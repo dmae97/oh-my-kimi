@@ -237,18 +237,18 @@ describe("hashline parser — block op syntax", () => {
 		expect(applyDiff(source, diff)).toBe(["   });", "added();", "next();"].join("\n"));
 	});
 
-	it("auto-drops a non-structural anchor echo for `+ ANCHOR` by default", () => {
+	it("preserves an intentional non-structural anchor duplicate for `+ ANCHOR` by default", () => {
 		const source = ["aaa", "bbb", "ccc"].join("\n");
 		const diff = [`+ ${tag(2, "bbb")}`, pl("bbb"), pl("NEW")].join("\n");
 
-		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nNEW\nccc");
+		expect(applyDiff(source, diff)).toBe("aaa\nbbb\nbbb\nNEW\nccc");
 	});
 
-	it("auto-drops a non-structural anchor echo for `< ANCHOR` by default", () => {
+	it("preserves an intentional non-structural anchor duplicate for `< ANCHOR` by default", () => {
 		const source = ["aaa", "bbb", "ccc"].join("\n");
 		const diff = [`< ${tag(2, "bbb")}`, pl("NEW"), pl("bbb")].join("\n");
 
-		expect(applyDiff(source, diff)).toBe("aaa\nNEW\nbbb\nccc");
+		expect(applyDiff(source, diff)).toBe("aaa\nNEW\nbbb\nbbb\nccc");
 	});
 
 	it("does not drop a single structural pure-insert suffix when it preserves balance", () => {
@@ -297,7 +297,7 @@ describe("hashline parser — block op syntax", () => {
 		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("NEW\naaa\nbbb\nccc");
 	});
 
-	it("auto-drops a single duplicated anchor line in a pure insert", () => {
+	it("auto-drops a single duplicated anchor line in a pure insert when generic duplicate absorption is enabled", () => {
 		const source = ["aaa", "bbb", "ccc"].join("\n");
 		const diff = [`+ ${tag(2, "bbb")}`, pl("bbb"), pl("NEW")].join("\n");
 

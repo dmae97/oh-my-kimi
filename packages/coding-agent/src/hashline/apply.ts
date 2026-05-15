@@ -382,10 +382,9 @@ interface PureInsertAbsorbResult {
  * Mirror of replacement-absorb's prefix/suffix block check, but for pure
  * inserts: drop payload lines that exactly duplicate the file lines
  * immediately above (leading) or immediately below (trailing) the insertion
- * point. Generic context echo absorption requires a minimum run of 2, but the
- * anchor line itself is also absorbed when a `+ ANCHOR` payload starts with it
- * or a `< ANCHOR` payload ends with it. A single structural closing delimiter
- * still uses the balance-validated structural rule below.
+ * point. Generic context echo absorption requires the caller's opt-in setting;
+ * without it, only single structural closing delimiters use the
+ * balance-validated structural rule below.
  */
 function tryAbsorbPureInsertGroup(
 	group: HashlinePureInsertGroup,
@@ -417,6 +416,7 @@ function tryAbsorbPureInsertGroup(
 	}
 	if (
 		absorbedLeading === 0 &&
+		allowGenericBoundaryAbsorb &&
 		group.cursor.kind === "after_anchor" &&
 		group.payload.length > 0 &&
 		aboveEndIdx >= 0 &&
@@ -460,6 +460,7 @@ function tryAbsorbPureInsertGroup(
 	if (
 		absorbedTrailing === 0 &&
 		group.cursor.kind === "before_anchor" &&
+		allowGenericBoundaryAbsorb &&
 		remaining > 0 &&
 		belowStartIdx < fileLines.length &&
 		!isStructuralClosingBoundaryLine(remainingPayload[remainingPayload.length - 1]) &&
