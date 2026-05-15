@@ -29,6 +29,7 @@ export interface ExaSearchParams {
 	exclude_domains?: string[];
 	start_published_date?: string;
 	end_published_date?: string;
+	signal?: AbortSignal;
 }
 
 interface ExaSearchResult {
@@ -179,6 +180,7 @@ async function callExaSearch(apiKey: string, params: ExaSearchParams): Promise<E
 			"x-api-key": apiKey,
 		},
 		body: JSON.stringify(body),
+		signal: params.signal,
 	});
 
 	if (!response.ok) {
@@ -259,6 +261,7 @@ export class ExaProvider extends SearchProvider {
 		return searchExa({
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,
+			signal: params.signal,
 		});
 	}
 }

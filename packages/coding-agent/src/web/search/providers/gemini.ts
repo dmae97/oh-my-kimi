@@ -39,6 +39,7 @@ export interface GeminiSearchParams extends GeminiToolParams {
 	max_output_tokens?: number;
 	/** Sampling temperature (0–1). Lower = more focused/factual. */
 	temperature?: number;
+	signal?: AbortSignal;
 }
 
 export function buildGeminiRequestTools(params: GeminiToolParams): Array<Record<string, Record<string, unknown>>> {
@@ -235,6 +236,7 @@ async function callGeminiSearch(
 	maxOutputTokens?: number,
 	temperature?: number,
 	toolParams: GeminiToolParams = {},
+	signal?: AbortSignal,
 ): Promise<{
 	answer: string;
 	sources: SearchSource[];
@@ -308,6 +310,7 @@ async function callGeminiSearch(
 			...headers,
 		},
 		body: JSON.stringify(requestBody),
+		signal,
 	});
 	const urlFor = (attempt: number) =>
 		`${endpoints[Math.min(attempt, endpoints.length - 1)]}/v1internal:streamGenerateContent?alt=sse`;
@@ -500,6 +503,7 @@ export async function searchGemini(params: GeminiSearchParams): Promise<SearchRe
 			code_execution: params.code_execution,
 			url_context: params.url_context,
 		},
+		params.signal,
 	);
 
 	let sources = result.sources;
@@ -539,6 +543,7 @@ export class GeminiProvider extends SearchProvider {
 			google_search: params.googleSearch,
 			code_execution: params.codeExecution,
 			url_context: params.urlContext,
+			signal: params.signal,
 		});
 	}
 }
