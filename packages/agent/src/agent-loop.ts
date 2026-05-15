@@ -541,6 +541,16 @@ async function runLoopBody(
 					currentContext.messages.push(result);
 					newMessages.push(result);
 					toolResults.push(result);
+					// The placeholder result above keeps the API's tool_use/tool_result
+					// pairing intact, but no execute_tool span is started for these
+					// calls. Mirror the run-collector entry directly so the run
+					// summary's tool counters and `coverage.toolsInvoked` reflect
+					// what the user actually saw on the wire.
+					recordSkippedTool(telemetry, {
+						toolCallId: toolCall.id,
+						toolName: toolCall.name,
+						status: message.stopReason === "aborted" ? "aborted" : "error",
+					});
 				}
 				stream.push({ type: "turn_end", message, toolResults });
 				stream.push(buildAgentEndEvent(newMessages, telemetry, stepCounter.count));
@@ -972,12 +982,12 @@ async function executeToolCalls(
 
 	const runTool = async (record: (typeof records)[number], index: number): Promise<void> => {
 		if (interruptState.triggered) {
+			// Skip both span emission and the collector orphan record here. The
+			// tail sweep below (after `Promise.allSettled`) is the single path
+			// that handles "no result message was produced" — it calls
+			// `recordSkippedTool` and `emitToolResult` once per record, so any
+			// work we did here would double-count.
 			record.skipped = true;
-			recordSkippedTool(telemetry, {
-				toolCallId: record.toolCall.id,
-				toolName: record.toolCall.name,
-				status: "skipped",
-			});
 			return;
 		}
 

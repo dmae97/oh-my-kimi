@@ -252,6 +252,8 @@ export interface AgentTelemetryWarning {
 		| "on_chat_usage_failed"
 		| "cost_estimator_failed"
 		| "on_run_end_failed"
+		| "on_span_start_failed"
+		| "on_span_end_failed"
 		| "normalize_agent_name_failed"
 		| "normalize_provider_failed"
 		| "on_telemetry_warning_failed";
@@ -463,7 +465,7 @@ function startSpan(
 
 	const ctx = options.parent ? trace.setSpan(context.active(), options.parent) : context.active();
 	const span = telemetry.tracer.startSpan(name, { kind: options.spanKind, attributes: attrs }, ctx);
-	telemetry.config.onSpanStart?.({ ...attrCtx, span });
+	safeOnSpanStart(telemetry, { ...attrCtx, span });
 	return span;
 }
 
@@ -604,6 +606,34 @@ function emitTelemetryWarning(telemetry: AgentTelemetry | undefined, warning: Ag
 		hook(warning);
 	} catch (err) {
 		console.warn("[pi-agent] onTelemetryWarning threw; swallowing:", err);
+	}
+}
+
+function safeOnSpanStart(telemetry: AgentTelemetry | undefined, ctx: TelemetryHookContext): void {
+	const hook = telemetry?.config.onSpanStart;
+	if (!hook) return;
+	try {
+		hook(ctx);
+	} catch (err) {
+		emitTelemetryWarning(telemetry, {
+			code: "on_span_start_failed",
+			message: "onSpanStart threw; swallowing telemetry hook failure",
+			error: err,
+		});
+	}
+}
+
+function safeOnSpanEnd(telemetry: AgentTelemetry | undefined, ctx: TelemetryHookContext): void {
+	const hook = telemetry?.config.onSpanEnd;
+	if (!hook) return;
+	try {
+		hook(ctx);
+	} catch (err) {
+		emitTelemetryWarning(telemetry, {
+			code: "on_span_end_failed",
+			message: "onSpanEnd threw; swallowing telemetry hook failure",
+			error: err,
+		});
 	}
 }
 
@@ -962,7 +992,7 @@ function summarizeTelemetryText(text: string): string {
 	return `${text.slice(0, MAX_TELEMETRY_TEXT_CHARS)} [${text.length - MAX_TELEMETRY_TEXT_CHARS} chars omitted]`;
 }
 
-function summarizeTelemetryValue(value: unknown, depth = 0): unknown {
+function summarizeTelemetryValue(value: unknown, depth = 0, seen?: Set<object>): unknown {
 	if (typeof value === "string") return summarizeTelemetryText(value);
 	if (typeof value === "number" || typeof value === "boolean" || value == null) return value;
 	if (typeof value === "bigint") return value.toString();
@@ -971,24 +1001,40 @@ function summarizeTelemetryValue(value: unknown, depth = 0): unknown {
 		return { name: value.name, message: summarizeTelemetryText(value.message) };
 	}
 	if (Array.isArray(value)) {
-		const items = value.slice(0, MAX_TELEMETRY_ARRAY_ITEMS).map(item => summarizeTelemetryValue(item, depth + 1));
+		// Cap array recursion at the same depth as plain-object recursion so
+		// pathological nested-array shapes (or arrays containing themselves)
+		// cannot blow the stack via `summarizeTelemetryValue`.
+		if (depth >= MAX_TELEMETRY_OBJECT_DEPTH) {
+			return { kind: "array", length: value.length };
+		}
+		const ancestors = seen ?? new Set<object>();
+		if (ancestors.has(value)) return "[Circular]";
+		ancestors.add(value);
+		const items = value
+			.slice(0, MAX_TELEMETRY_ARRAY_ITEMS)
+			.map(item => summarizeTelemetryValue(item, depth + 1, ancestors));
 		if (value.length > MAX_TELEMETRY_ARRAY_ITEMS) {
 			items.push({ kind: "truncated", omittedItems: value.length - MAX_TELEMETRY_ARRAY_ITEMS });
 		}
+		ancestors.delete(value);
 		return items;
 	}
 	if (!isPlainTelemetryRecord(value)) return String(value);
+	const ancestors = seen ?? new Set<object>();
+	if (ancestors.has(value)) return "[Circular]";
 	const entries = Object.entries(value);
 	if (depth >= MAX_TELEMETRY_OBJECT_DEPTH) {
 		return summarizeTelemetryObjectKeys(entries);
 	}
+	ancestors.add(value);
 	const summary: Record<string, unknown> = {};
 	for (const [key, item] of entries.slice(0, MAX_TELEMETRY_OBJECT_KEYS)) {
-		summary[key] = summarizeTelemetryValue(item, depth + 1);
+		summary[key] = summarizeTelemetryValue(item, depth + 1, ancestors);
 	}
 	if (entries.length > MAX_TELEMETRY_OBJECT_KEYS) {
 		summary.telemetrySummary = { omittedKeys: entries.length - MAX_TELEMETRY_OBJECT_KEYS };
 	}
+	ancestors.delete(value);
 	return summary;
 }
 
@@ -1057,12 +1103,12 @@ export async function finishChatSpan(
 	if (telemetry && telemetry.contentCapture !== "none") {
 		applyContentCaptureForResponse(telemetry, span, message);
 	}
-	telemetry?.config.onSpanEnd?.({
+	safeOnSpanEnd(telemetry, {
 		span,
 		kind: "chat",
 		model: undefined,
 		agent: normalizedTelemetryAgent(telemetry),
-		conversationId: telemetry.conversationId,
+		conversationId: telemetry?.conversationId,
 		stepNumber: options.stepNumber,
 	});
 	applyTerminalStatus(span, message.stopReason, message.errorMessage);
@@ -1485,12 +1531,12 @@ export function finishExecuteToolSpan(
 		const result = serializeToolCallResultForTelemetry(telemetry, options.result);
 		if (result) span.setAttribute(GenAIAttr.ToolCallResult, result);
 	}
-	telemetry?.config.onSpanEnd?.({
+	safeOnSpanEnd(telemetry, {
 		span,
 		kind: "execute_tool",
 		model: undefined,
 		agent: normalizedTelemetryAgent(telemetry),
-		conversationId: telemetry.conversationId,
+		conversationId: telemetry?.conversationId,
 		toolCallId: options.toolCallId,
 		toolName: options.toolName,
 	});
@@ -1550,7 +1596,7 @@ export function recordSkippedTool(
 	options: {
 		readonly toolCallId: string;
 		readonly toolName: string;
-		readonly status: Extract<ToolStatus, "skipped" | "aborted">;
+		readonly status: Extract<ToolStatus, "skipped" | "aborted" | "error">;
 	},
 ): void {
 	telemetry?.collector.recordOrphanTool(options);
@@ -1574,12 +1620,12 @@ export function finishInvokeAgentSpan(
 		snapshot = telemetry.collector.snapshot({ stepCount: options.stepCount });
 		applyAggregateAttributes(span, snapshot.summary, snapshot.coverage);
 	}
-	telemetry?.config.onSpanEnd?.({
+	safeOnSpanEnd(telemetry, {
 		span,
 		kind: "invoke_agent",
 		model: undefined,
 		agent: normalizedTelemetryAgent(telemetry),
-		conversationId: telemetry.conversationId,
+		conversationId: telemetry?.conversationId,
 	});
 	if (telemetry && snapshot && telemetry.collector.markRunEnded()) {
 		fireOnRunEnd(telemetry, snapshot.summary, snapshot.coverage);
@@ -1723,7 +1769,7 @@ export function recordHandoff(
 		attributes: { ...attrs, ...options.attributes },
 	});
 	if (!span) return;
-	telemetry.config.onSpanEnd?.({
+	safeOnSpanEnd(telemetry, {
 		span,
 		kind: "handoff",
 		model: undefined,

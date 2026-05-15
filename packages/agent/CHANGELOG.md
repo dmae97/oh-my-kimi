@@ -40,6 +40,11 @@
 - Fixed `onRunEnd` callbacks to be safe and idempotent by invoking them once per run and swallowing thrown callback errors so they cannot fail or duplicate successful runs
 - Fixed run telemetry to count interrupted, blocked, or otherwise skipped tool calls so run coverage and tool counters now include those paths
 - Fixed chat failure handling so failed chat steps are still represented in run summaries when provider streaming throws before yielding an assistant message
+- Fixed double-counting of interrupted tool calls in run summaries: the `runTool` early-return on a queued steering interrupt now defers to the post-batch tail sweep so each call is recorded exactly once
+- Fixed `coverage.toolsInvoked` and run-summary tool counters under-reporting tool calls embedded in an aborted/errored assistant message — those calls now record a collector orphan with status `aborted` or `error`
+- Fixed `AgentRunSummary.usage.inputTokens` so it now includes `cache_read` and `cache_write` input tokens, matching `ChatUsageEvent.inputTokens`
+- Fixed span lifecycle hooks (`onSpanStart`, `onSpanEnd`) so a thrown user callback is caught and surfaced via `onTelemetryWarning` (`on_span_start_failed` / `on_span_end_failed`) instead of leaking and aborting the surrounding span
+- Fixed unbounded recursion in summary content capture when a captured value contains a cyclic or deeply nested array — array recursion now respects the same depth cap as plain-object recursion and replaces back-references with `"[Circular]"`
 
 ## [15.0.1] - 2026-05-14
 ### Breaking Changes

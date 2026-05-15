@@ -200,12 +200,19 @@ export class AgentRunCollector {
 		const start = this.#chatStarts.get(span);
 		this.#chatStarts.delete(span);
 		const usage = message.usage;
-		const inputTokens = usage?.input ?? 0;
-		const outputTokens = usage?.output ?? 0;
+		// Public surface: `inputTokens` is the total cost-bearing input the
+		// provider charged for, so it must include cache_read + cache_write.
+		// The per-bucket fields below preserve the breakdown for callers that
+		// want it. `aggregateAgentRunSummaries` sums each field independently
+		// and never re-derives `inputTokens` from the buckets, so this stays
+		// consistent across run merges.
+		const inputBase = usage?.input ?? 0;
 		const cachedInputTokens = usage?.cacheRead ?? 0;
 		const cacheWriteTokens = usage?.cacheWrite ?? 0;
+		const inputTokens = inputBase + cachedInputTokens + cacheWriteTokens;
+		const outputTokens = usage?.output ?? 0;
 		const reasoningOutputTokens = usage?.reasoningTokens ?? 0;
-		const totalTokens = usage?.totalTokens ?? inputTokens + outputTokens + cachedInputTokens + cacheWriteTokens;
+		const totalTokens = usage?.totalTokens ?? inputTokens + outputTokens;
 		this.#chats.push({
 			stepNumber: start?.stepNumber ?? -1,
 			model: start?.model ?? message.model,

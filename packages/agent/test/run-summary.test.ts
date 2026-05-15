@@ -617,3 +617,179 @@ describe("skipped tools without spans", () => {
 		expect((telemetry?.tools.skipped ?? 0) + (telemetry?.tools.aborted ?? 0)).toBe(1);
 	});
 });
+
+describe("regressions: agent loop telemetry/run summary", () => {
+	it("counts each interrupted tool call exactly once (no double-counting via tail sweep)", async () => {
+		const tracer = new RecordingTracer();
+		// `concurrency: "exclusive"` serializes the batch so we can deterministically
+		// reach the `interruptState.triggered` early-return inside `runTool` for
+		// the second and third call. Pre-fix that path called `recordSkippedTool`
+		// AND the tail sweep called it again, double-counting.
+		const fastTool: AgentTool = {
+			name: "fast",
+			label: "fast",
+			description: "fast",
+			parameters: z.object({ value: z.string().optional() }),
+			intent: "omit",
+			concurrency: "exclusive",
+			execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+		};
+		const callCount = { n: 0 };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "c-1", name: "fast", arguments: { value: "a" } },
+						{ type: "toolCall", id: "c-2", name: "fast", arguments: { value: "b" } },
+						{ type: "toolCall", id: "c-3", name: "fast", arguments: { value: "c" } },
+					],
+				},
+				{ content: ["wrap"] },
+				{ content: ["after-steering"] },
+			],
+		});
+		const detailed = agentLoopDetailed(
+			[createUserMessage("hi")],
+			{ systemPrompt: ["sys"], messages: [], tools: [fastTool] },
+			{
+				model: mock.model,
+				convertToLlm: identityConverter,
+				telemetry: { tracer },
+				interruptMode: "immediate",
+				getSteeringMessages: async () => {
+					callCount.n += 1;
+					// Pre-chat poll (call 1) returns nothing so tools start;
+					// the first post-tool checkSteering (call 2) injects steering
+					// and flips `interruptState.triggered` for the rest of the
+					// batch. Subsequent polls return nothing so the loop drains.
+					if (callCount.n === 2) return [createUserMessage("stop")];
+					return [];
+				},
+			},
+			undefined,
+			mock.stream,
+		);
+		for await (const _ of detailed.stream) {
+			// drain
+		}
+		const { telemetry } = await detailed.detailed();
+		// Three tool calls -> exactly three rows in the run summary, never six.
+		expect(telemetry?.tools.total).toBe(3);
+		expect(telemetry?.tools.ok).toBe(1);
+		expect(telemetry?.tools.skipped).toBe(2);
+	});
+
+	it("records aborted assistant tool calls in coverage.toolsInvoked + tools.aborted", async () => {
+		const tracer = new RecordingTracer();
+		const tool = buildTool({ name: "alpha", behavior: "ok" });
+		// Provider yields an aborted assistant message that still contains tool
+		// calls (e.g. the wire was cut after the model started emitting them).
+		// The agent loop synthesizes placeholder tool results for API parity;
+		// the run summary must reflect that the LLM asked for the tool.
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "a-1", name: "alpha", arguments: { value: "x" } },
+						{ type: "toolCall", id: "a-2", name: "alpha", arguments: { value: "y" } },
+					],
+					stopReason: "aborted",
+				},
+			],
+		});
+		const detailed = agentLoopDetailed(
+			[createUserMessage("hi")],
+			{ systemPrompt: ["sys"], messages: [], tools: [tool] },
+			{ model: mock.model, convertToLlm: identityConverter, telemetry: { tracer } },
+			undefined,
+			mock.stream,
+		);
+		for await (const _ of detailed.stream) {
+			// drain
+		}
+		const { telemetry, coverage } = await detailed.detailed();
+		expect(telemetry?.tools.total).toBe(2);
+		expect(telemetry?.tools.aborted).toBe(2);
+		expect(coverage?.toolsInvoked).toEqual(["alpha"]);
+	});
+
+	it("includes cache_read + cache_write input tokens in the run summary's inputTokens", async () => {
+		const tracer = new RecordingTracer();
+		const mock = createMockModel({
+			responses: [
+				{
+					content: ["ok"],
+					usage: makeUsage(7, 3, 17, { cacheRead: 5, cacheWrite: 2 }),
+				},
+			],
+		});
+		const detailed = agentLoopDetailed(
+			[createUserMessage("hi")],
+			{ systemPrompt: ["sys"], messages: [], tools: [] },
+			{ model: mock.model, convertToLlm: identityConverter, telemetry: { tracer } },
+			undefined,
+			mock.stream,
+		);
+		for await (const _ of detailed.stream) {
+			// drain
+		}
+		const { telemetry } = await detailed.detailed();
+		// inputTokens must equal input + cacheRead + cacheWrite (7 + 5 + 2 = 14).
+		expect(telemetry?.usage.inputTokens).toBe(14);
+		expect(telemetry?.usage.cachedInputTokens).toBe(5);
+		expect(telemetry?.usage.cacheWriteTokens).toBe(2);
+		// outputTokens is unaffected.
+		expect(telemetry?.usage.outputTokens).toBe(3);
+	});
+
+	it("does not throw when a tool result `details` object embeds a cyclic array under summary capture", async () => {
+		const tracer = new RecordingTracer();
+		// Build a self-referential array; this previously blew the stack inside
+		// `summarizeTelemetryValue` because the array branch had no depth guard.
+		const cyclic: unknown[] = [1, 2, 3];
+		cyclic.push(cyclic);
+		const tool: AgentTool = {
+			name: "cyclic",
+			label: "cyclic",
+			description: "returns cyclic details",
+			parameters: z.object({ value: z.string().optional() }),
+			intent: "omit",
+			execute: async () => ({
+				content: [{ type: "text", text: "ok" }],
+				details: { ring: cyclic },
+			}),
+		};
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "c-1", name: "cyclic", arguments: { value: "x" } }] },
+				{ content: ["done"] },
+			],
+		});
+		const detailed = agentLoopDetailed(
+			[createUserMessage("hi")],
+			{ systemPrompt: ["sys"], messages: [], tools: [tool] },
+			{
+				model: mock.model,
+				convertToLlm: identityConverter,
+				telemetry: { tracer, captureMessageContent: "summary" },
+			},
+			undefined,
+			mock.stream,
+		);
+		for await (const _ of detailed.stream) {
+			// drain
+		}
+		const { telemetry } = await detailed.detailed();
+		expect(telemetry?.tools.total).toBe(1);
+		expect(telemetry?.tools.ok).toBe(1);
+		// The execute_tool span must have captured a bounded summary string, not
+		// crashed and not emitted nothing at all.
+		const toolSpan = tracer.findSpan("execute_tool cyclic");
+		expect(toolSpan).toBeDefined();
+		const captured = toolSpan?.attributes[GenAIAttr.ToolCallResult];
+		expect(typeof captured).toBe("string");
+		// Either the cycle is short-circuited as `[Circular]` or the depth cap
+		// truncates it to `{kind:"array",length:N}` — both are bounded.
+		expect(/Circular|"kind":"array"/.test(String(captured))).toBe(true);
+	});
+});
