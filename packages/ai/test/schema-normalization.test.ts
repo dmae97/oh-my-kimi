@@ -275,7 +275,7 @@ describe("enforceStrictSchema and tryEnforceStrictSchema", () => {
 	it("enforces strict object constraints inside tuple items", () => {
 		const schema = {
 			type: "array",
-			items: [
+			prefixItems: [
 				{ type: "string" },
 				{
 					type: "object",
@@ -289,7 +289,7 @@ describe("enforceStrictSchema and tryEnforceStrictSchema", () => {
 		} as Record<string, unknown>;
 
 		const result = tryEnforceStrictSchema(schema);
-		const tupleItems = result.schema.items as Array<Record<string, unknown>>;
+		const tupleItems = result.schema.prefixItems as Array<Record<string, unknown>>;
 		const tupleObjectItem = tupleItems[1] as Record<string, unknown>;
 		const tupleProperties = tupleObjectItem.properties as Record<string, Record<string, unknown>>;
 

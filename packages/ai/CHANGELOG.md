@@ -1,6 +1,21 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Rejected draft-07 tuple and dependency keywords (`items` arrays, `dependencies`, `additionalItems`) in JSON Schema validation
+
+### Added
+
+- Added recursive strict-mode sanitization for array `prefixItems` entries so tuple schemas now enforce object constraints per item
+
+### Changed
+
+- Changed tuple array validation to validate per-index schemas from `prefixItems` and apply `items` only to remaining elements
+
+### Fixed
+
+- Fixed Anthropic tool schema normalization to recurse into `prefixItems` so unsupported constraints inside tuple items are stripped in the generated input schema
 
 ## [15.1.0] - 2026-05-15
 

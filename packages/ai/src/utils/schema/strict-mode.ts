@@ -71,6 +71,13 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, seen
 			}
 		}
 	}
+	if (Array.isArray(schema.prefixItems)) {
+		for (const itemSchema of schema.prefixItems) {
+			if (isJsonObject(itemSchema) && hasUnrepresentableStrictObjectMap(itemSchema, seen)) {
+				return true;
+			}
+		}
+	}
 
 	for (const key of COMBINATOR_KEYS) {
 		const variants = schema[key];
@@ -176,6 +183,13 @@ export function sanitizeSchemaForStrictMode(
 			continue;
 		}
 
+		if (key === "prefixItems" && Array.isArray(value)) {
+			sanitized.prefixItems = value.map(entry =>
+				isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, seen, cache) : entry,
+			);
+			continue;
+		}
+
 		if (COMBINATOR_KEYS.includes(key as (typeof COMBINATOR_KEYS)[number]) && Array.isArray(value)) {
 			sanitized[key] = value.map(entry =>
 				isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, seen, cache) : entry,
@@ -229,7 +243,7 @@ export function sanitizeSchemaForStrictMode(
 		sanitized.type = "object";
 	}
 
-	if (sanitized.type === undefined && sanitized.items !== undefined) {
+	if (sanitized.type === undefined && (sanitized.items !== undefined || sanitized.prefixItems !== undefined)) {
 		sanitized.type = "array";
 	}
 
@@ -346,6 +360,13 @@ export function enforceStrictSchema(
 		} else {
 			result.items = enforceStrictSchema(result.items as Record<string, unknown>, seen, cache);
 		}
+	}
+	if (Array.isArray(result.prefixItems)) {
+		result.prefixItems = result.prefixItems.map(entry =>
+			entry != null && typeof entry === "object" && !Array.isArray(entry)
+				? enforceStrictSchema(entry as Record<string, unknown>, seen, cache)
+				: entry,
+		);
 	}
 	for (const key of COMBINATOR_KEYS) {
 		if (Array.isArray(result[key])) {

@@ -87,20 +87,15 @@ function checkNode(node: Json, seen: WeakSet<object>): boolean {
 
 	if ("items" in node) {
 		const items = node.items;
-		if (Array.isArray(items)) {
-			for (const entry of items) {
-				if (!checkNode(entry, seen)) return false;
-			}
-		} else if (!checkNode(items, seen)) return false;
+		if (Array.isArray(items)) return false;
+		if (!checkNode(items, seen)) return false;
 	}
 	if ("prefixItems" in node && !checkSchemaArray(node.prefixItems, seen)) return false;
+	// Obsolete tuple/dependency keywords are not valid in the 2020-12 schema
+	// shape we emit and forward.
+	if ("additionalItems" in node || "dependencies" in node) return false;
 
-	for (const key of [
-		"additionalProperties",
-		"additionalItems",
-		"unevaluatedProperties",
-		"unevaluatedItems",
-	] as const) {
+	for (const key of ["additionalProperties", "unevaluatedProperties", "unevaluatedItems"] as const) {
 		if (!(key in node)) continue;
 		const value = node[key];
 		if (typeof value !== "boolean" && !checkNode(value, seen)) return false;
@@ -112,17 +107,6 @@ function checkNode(node: Json, seen: WeakSet<object>): boolean {
 		if (!isPlainObject(value)) return false;
 		for (const entry of Object.values(value)) {
 			if (!Array.isArray(entry) || !entry.every(item => typeof item === "string")) return false;
-		}
-	}
-
-	// Draft-07 `dependencies`: each entry is either a schema or a string[].
-	if ("dependencies" in node) {
-		const value = node.dependencies;
-		if (!isPlainObject(value)) return false;
-		for (const entry of Object.values(value)) {
-			if (Array.isArray(entry)) {
-				if (!entry.every(item => typeof item === "string")) return false;
-			} else if (!checkNode(entry, seen)) return false;
 		}
 	}
 

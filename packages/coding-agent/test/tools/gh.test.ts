@@ -869,7 +869,7 @@ describe("github tool", () => {
 
 	it("exposes a flat op-based schema without legacy run_watch parameters", () => {
 		const tool = new GithubTool(createSession());
-		const wire = z.toJSONSchema(tool.parameters, { target: "draft-7" }) as Record<string, unknown>;
+		const wire = z.toJSONSchema(tool.parameters, { target: "draft-2020-12" }) as Record<string, unknown>;
 		const properties = wire.properties as Record<string, unknown>;
 		expect(properties.op).toBeDefined();
 		expect(properties.interval).toBeUndefined();

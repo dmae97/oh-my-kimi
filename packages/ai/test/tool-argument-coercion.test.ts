@@ -112,19 +112,19 @@ describe("Tool argument coercion", () => {
 		expect(result).toEqual({ env: { FOO: "bar" } });
 	});
 
-	it("validates legacy draft-07 JSON Schema without converting it through Zod", () => {
+	it("validates JSON Schema without converting it through Zod", () => {
 		const tool: Tool = {
-			name: "legacy_schema",
+			name: "json_schema",
 			description: "",
 			parameters: {
 				type: "object",
 				properties: {
-					item: { $ref: "#/definitions/Item" },
-					name: { type: "string", nullable: true },
+					item: { $ref: "#/$defs/Item" },
+					name: { type: ["string", "null"] },
 					ids: { type: "array", items: { type: "string" }, uniqueItems: true },
 				},
 				required: ["item", "name", "ids"],
-				definitions: {
+				$defs: {
 					Item: { type: "string" },
 				},
 			},
@@ -132,8 +132,8 @@ describe("Tool argument coercion", () => {
 
 		const valid = validateToolArguments(tool, {
 			type: "toolCall",
-			id: "call-legacy-ok",
-			name: "legacy_schema",
+			id: "call-json-ok",
+			name: "json_schema",
 			arguments: { item: "ok", name: null, ids: ["a", "b"] },
 		});
 		expect(valid).toEqual({ item: "ok", name: null, ids: ["a", "b"] });
@@ -141,8 +141,8 @@ describe("Tool argument coercion", () => {
 		expect(() =>
 			validateToolArguments(tool, {
 				type: "toolCall",
-				id: "call-legacy-bad",
-				name: "legacy_schema",
+				id: "call-json-bad",
+				name: "json_schema",
 				arguments: { item: "ok", name: null, ids: ["a", "a"] },
 			}),
 		).toThrow("unique");

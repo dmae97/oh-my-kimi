@@ -347,8 +347,9 @@ function validateObjectKeywords(
 		}
 	}
 
-	// Draft-07 `dependencies`: each entry is either a schema (validate value
-	// when key present) or a string[] of additional required keys.
+	// Compatibility for older schemas that still use `dependencies`: each entry
+	// is either a schema (validate value when key present) or a string[] of
+	// additional required keys.
 	if (isJsonObject(schema.dependencies)) {
 		for (const [key, dep] of Object.entries(schema.dependencies)) {
 			if (!(key in value)) continue;
@@ -422,30 +423,23 @@ function validateArrayKeywords(
 		}
 	}
 
-	// Tuple validation: when `prefixItems` is present (draft 2020-12) it gives
-	// per-index schemas, and `items` then applies to the remainder. When
-	// `items` is itself an array (draft-07 tuple form), we keep the legacy
-	// behavior and validate by index.
+	// Tuple validation uses JSON Schema 2020-12 `prefixItems` for per-index
+	// schemas. When present, `items` is the schema for every remaining element.
 	const prefixItems = Array.isArray(schema.prefixItems) ? schema.prefixItems : undefined;
 	const items = schema.items;
-	const tupleSchemas = prefixItems ?? (Array.isArray(items) ? items : undefined);
-	if (tupleSchemas) {
-		const limit = Math.min(tupleSchemas.length, value.length);
+	if (Array.isArray(items)) {
+		pushIssue(issues, path, "array-valued items is not valid in JSON Schema 2020-12; use prefixItems", {
+			keyword: "items",
+		});
+		valid = false;
+	} else if (prefixItems) {
+		const limit = Math.min(prefixItems.length, value.length);
 		for (let i = 0; i < limit; i += 1) {
-			valid = validateSchemaNode(tupleSchemas[i], value[i], [...path, i], ctx, issues) && valid;
+			valid = validateSchemaNode(prefixItems[i], value[i], [...path, i], ctx, issues) && valid;
 		}
-		// Items after the tuple prefix:
-		// - draft-07 tuple form (items: array): `additionalItems` governs the rest.
-		// - draft 2020-12 (prefixItems + items: schema): `items` validates the rest.
-		const remainderSchema = prefixItems && !Array.isArray(items) ? items : (schema.additionalItems as unknown);
-		if (remainderSchema === false && value.length > tupleSchemas.length) {
-			for (let i = tupleSchemas.length; i < value.length; i += 1) {
-				pushIssue(issues, [...path, i], "must not be present", { keyword: "additionalItems" });
-				valid = false;
-			}
-		} else if (remainderSchema !== undefined && remainderSchema !== true) {
-			for (let i = tupleSchemas.length; i < value.length; i += 1) {
-				valid = validateSchemaNode(remainderSchema, value[i], [...path, i], ctx, issues) && valid;
+		if (items !== undefined) {
+			for (let i = prefixItems.length; i < value.length; i += 1) {
+				valid = validateSchemaNode(items, value[i], [...path, i], ctx, issues) && valid;
 			}
 		}
 	} else if (items !== undefined) {

@@ -61,7 +61,6 @@ export const NON_STRUCTURAL_SCHEMA_KEYS = new Set([
 	"then",
 	"else",
 	"not",
-	"prefixItems",
 	"unevaluatedProperties",
 	"unevaluatedItems",
 	"patternProperties",

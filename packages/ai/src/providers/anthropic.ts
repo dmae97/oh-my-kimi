@@ -2137,6 +2137,9 @@ function normalizeAnthropicToolSchema(
 	} else if (isRecord(result.items)) {
 		result.items = normalizeAnthropicToolSchema(result.items, cache);
 	}
+	if (Array.isArray(result.prefixItems)) {
+		result.prefixItems = result.prefixItems.map(item => normalizeAnthropicToolSchema(item, cache));
+	}
 
 	for (const key of COMBINATOR_KEYS) {
 		const variants = result[key];
@@ -2272,6 +2275,11 @@ function normalizeAnthropicStrictSchemaNode(
 		const items = normalizeAnthropicStrictSchemaNode(result.items, budget, cache);
 		if (items === undefined) return undefined;
 		result.items = items;
+	}
+	if (Array.isArray(result.prefixItems)) {
+		const prefixItems = normalizeAnthropicStrictSchemaNode(result.prefixItems, budget, cache);
+		if (prefixItems === undefined) return undefined;
+		result.prefixItems = prefixItems;
 	}
 
 	for (const key of COMBINATOR_KEYS) {

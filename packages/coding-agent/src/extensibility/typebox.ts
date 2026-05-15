@@ -12,7 +12,7 @@
  * the agent pipeline:
  *
  *   - `isZodSchema()` keys off the Zod `_zod` marker that every schema carries.
- *   - `zodToWireSchema()` emits the same draft-7 JSON Schema providers expect
+ *   - `zodToWireSchema()` emits the same draft 2020-12 JSON Schema providers expect
  *     from TypeBox-authored tools (defaulted fields treated as optional, etc.).
  *
  * The surface intentionally covers only the common TypeBox builders. Plugins

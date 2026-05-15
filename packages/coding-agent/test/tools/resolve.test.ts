@@ -24,7 +24,7 @@ function getText(result: { content: Array<{ type: string; text?: string }> }): s
 describe("ResolveTool", () => {
 	it("requires action and reason in schema", () => {
 		const tool = new ResolveTool(createSession());
-		const wire = z.toJSONSchema(tool.parameters, { target: "draft-7" }) as { required?: string[] };
+		const wire = z.toJSONSchema(tool.parameters, { target: "draft-2020-12" }) as { required?: string[] };
 		expect(wire.required).toEqual(["action", "reason"]);
 	});
 

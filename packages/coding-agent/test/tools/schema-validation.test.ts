@@ -12,9 +12,9 @@ import { createTools, HIDDEN_TOOLS, type ToolSession } from "@oh-my-pi/pi-coding
  * Prohibited (error):
  * - $schema: Explicit schema declarations
  * - $ref / $defs: Schema references (must inline everything)
- * - prefixItems: Draft 2020-12 feature (use items array)
- * - $dynamicRef / $dynamicAnchor: Draft 2020-12 features
- * - unevaluatedProperties / unevaluatedItems: Draft 2020-12 features
+ * - prefixItems: Unsupported by the Google schema path
+ * - $dynamicRef / $dynamicAnchor: Unsupported by the Google schema path
+ * - unevaluatedProperties / unevaluatedItems: Unsupported by the Google schema path
  * - const: Should be converted to enum by sanitization
  * - examples: Should be stripped
  *
@@ -291,7 +291,7 @@ describe("tool schema validation (post-sanitization)", () => {
 
 describe("validateSchema helper", () => {
 	it("detects $schema declarations", () => {
-		const schema = { $schema: "http://json-schema.org/draft-07/schema#", type: "object" };
+		const schema = { $schema: "https://json-schema.org/draft/2020-12/schema", type: "object" };
 		const violations = validateSchema(schema);
 		expect(violations.some(v => v.key === "$schema")).toBe(true);
 	});
@@ -320,13 +320,13 @@ describe("validateSchema helper", () => {
 		expect(violations.some(v => v.key === "examples")).toBe(true);
 	});
 
-	it("detects prefixItems (Draft 2020-12)", () => {
+	it("detects prefixItems unsupported by the Google schema path", () => {
 		const schema = { type: "array", prefixItems: [{ type: "string" }] };
 		const violations = validateSchema(schema);
 		expect(violations.some(v => v.key === "prefixItems")).toBe(true);
 	});
 
-	it("detects unevaluatedProperties (Draft 2020-12)", () => {
+	it("detects unevaluatedProperties unsupported by the Google schema path", () => {
 		const schema = { type: "object", unevaluatedProperties: false };
 		const violations = validateSchema(schema);
 		expect(violations.some(v => v.key === "unevaluatedProperties")).toBe(true);
@@ -363,10 +363,10 @@ describe("validateSchema helper", () => {
 		expect(violations.find(v => v.key === "$ref")?.path).toContain("nested");
 	});
 
-	it("validates array items", () => {
+	it("validates array prefixItems", () => {
 		const schema = {
 			type: "array",
-			items: [{ const: "first" }, { type: "string" }],
+			prefixItems: [{ const: "first" }, { type: "string" }],
 		};
 		const violations = validateSchema(schema);
 		expect(violations.some(v => v.key === "const")).toBe(true);

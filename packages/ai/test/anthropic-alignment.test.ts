@@ -397,6 +397,50 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(originalNestedSchema).toHaveProperty("patternProperties");
 	});
 
+	it("recurses into 2020-12 prefixItems when sanitizing Anthropic tool schemas", async () => {
+		const tools: Tool[] = [
+			{
+				name: "tuple_tool",
+				description: "tool with tuple input",
+				parameters: {
+					type: "object",
+					properties: {
+						pair: {
+							type: "array",
+							prefixItems: [
+								{
+									type: "object",
+									properties: { id: { type: "string" } },
+									required: ["id"],
+									patternProperties: { "^x-": { type: "string" } },
+								},
+							],
+						},
+					},
+					required: ["pair"],
+				} as TJsonSchema,
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: ["Stay concise."],
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			tools,
+		})) as {
+			tools?: Array<{
+				input_schema?: { properties?: Record<string, unknown> };
+			}>;
+		};
+
+		const pair = payload.tools?.[0]?.input_schema?.properties?.pair as Record<string, unknown> | undefined;
+		const tupleItem = (pair?.prefixItems as Array<Record<string, unknown>> | undefined)?.[0];
+
+		expect(pair?.type).toBe("array");
+		expect(tupleItem?.additionalProperties).toBe(false);
+		expect(tupleItem?.required).toEqual(["id"]);
+		expect(tupleItem).not.toHaveProperty("patternProperties");
+	});
+
 	it("removes Anthropic-unsupported array item count constraints", async () => {
 		const tools: Tool[] = [
 			{
