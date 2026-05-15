@@ -143,4 +143,5 @@ When braces bound your edit, you SHOULD prefer these shapes:
 - `= A..B` deletes the range; payload is what's written. Edge line matches just outside? Widen, or it duplicates.
 - Multiple ops are cheap. SHOULD prefer two narrow ops over one wide `=`.
   - Before `= A..B`, mentally delete A..B. Splits an unclosed bracket/brace/string from above, or orphans a closer inside? You're bisecting a construct.
+- NEVER use this tool to reformat code (indentation, whitespace, line wrapping, style). Run the project's formatter instead.
 </critical>
