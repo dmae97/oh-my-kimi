@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { getAgentDir, getSessionsDir, getStatsDbPath, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { syncAllSessions } from "../src/aggregator";
 import { closeDb, getOverallStats, getRecentRequests } from "../src/db";
+import { parseSessionFile } from "../src/parser";
 
 const originalConfigDir = process.env.PI_CONFIG_DIR;
 const originalAgentDir = getAgentDir();
@@ -183,5 +184,30 @@ describe("priority service-tier premium-request backfill", () => {
 		const request = getRecentRequests(1)[0];
 		expect(request?.entryId).toBe("c1");
 		expect(request?.usage.premiumRequests).toBe(1);
+	});
+
+	it("carries the active service tier across incremental parseSessionFile calls", async () => {
+		// Session opens with priority, then a reply lands after we've already
+		// advanced `fromOffset` past the tier-change entry. The parser must
+		// replay the prefix and still attribute the reply as a premium request.
+		const sessionFile = await writeSession("--tmp--proj", "04.jsonl", {
+			lines: [
+				{ type: "session", version: 1, id: "s4", timestamp: new Date().toISOString(), cwd: "/tmp/proj" },
+				{ type: "service_tier_change", id: "stc", timestamp: new Date().toISOString(), serviceTier: "priority" },
+				assistantEntry({ id: "d1", provider: "openai" }),
+			],
+		});
+
+		// Locate the byte offset immediately past the `service_tier_change`
+		// line so the second sync's `fromOffset` lands between the tier entry
+		// and the assistant reply — the exact window where the regression hid.
+		const bytes = await fs.readFile(sessionFile);
+		const tierLineEnd = bytes.indexOf(0x0a, bytes.indexOf(Buffer.from("service_tier_change"))) + 1;
+		expect(tierLineEnd).toBeGreaterThan(0);
+
+		const second = await parseSessionFile(sessionFile, tierLineEnd);
+		expect(second.stats).toHaveLength(1);
+		expect(second.stats[0]?.entryId).toBe("d1");
+		expect(second.stats[0]?.usage.premiumRequests).toBe(1);
 	});
 });
