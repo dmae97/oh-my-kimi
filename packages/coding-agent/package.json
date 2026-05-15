@@ -3,7 +3,7 @@
 	"name": "@oh-my-pi/pi-coding-agent",
 	"version": "15.0.1",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
-	"homepage": "https://github.com/can1357/oh-my-pi",
+	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
 	"contributors": [
 		"Mario Zechner"

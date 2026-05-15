@@ -3,7 +3,7 @@
 	"name": "@oh-my-pi/pi-agent-core",
 	"version": "15.0.1",
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
-	"homepage": "https://github.com/can1357/oh-my-pi",
+	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
 	"contributors": [
 		"Mario Zechner"
