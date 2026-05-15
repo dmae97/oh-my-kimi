@@ -38,7 +38,7 @@ import type {
  * Default convertToLlm: Keep only LLM-compatible messages, convert attachments.
  */
 function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
+	return messages.filter((m): m is Message => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
 }
 
 function refreshToolChoiceForActiveTools(
@@ -971,7 +971,7 @@ export class Agent {
 			}
 
 			// Handle any remaining partial message
-			if (partial && partial.role === "assistant" && partial.content.length > 0) {
+			if (partial && partial.role === "assistant" && Array.isArray(partial.content) && partial.content.length > 0) {
 				const onlyEmpty = !partial.content.some(
 					c =>
 						(c.type === "thinking" && c.thinking.trim().length > 0) ||
