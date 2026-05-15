@@ -7,6 +7,7 @@
  * caller-supplied hooks.
  */
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
+import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
 import type { ExtensionError, ExtensionUIContext } from "../extensibility/extensions/types";
 import type { AgentSession } from "../session/agent-session";
 
@@ -59,7 +60,7 @@ export async function initializeExtensions(session: AgentSession, options: Initi
 			getActiveTools: () => session.getActiveToolNames(),
 			getAllTools: () => session.getAllToolNames(),
 			setActiveTools: (toolNames: string[]) => session.setActiveToolsByName(toolNames),
-			getCommands: () => [],
+			getCommands: () => getSessionSlashCommands(session),
 			setModel: model => runExtensionSetModel(session, model),
 			getThinkingLevel: () => session.thinkingLevel,
 			setThinkingLevel: level => session.setThinkingLevel(level),
