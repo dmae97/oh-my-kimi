@@ -446,9 +446,6 @@ function applyCodexServiceTierPricing(
 	reqTier: unknown,
 ): void {
 	const resolvedTier = resolveCodexCostServiceTier(resTier, reqTier);
-	if (resolvedTier === "priority") {
-		usage.premiumRequests = (usage.premiumRequests ?? 0) + 1;
-	}
 	const multiplier = getCodexServiceTierCostMultiplier(model, resolvedTier);
 	if (multiplier === 1) return;
 	usage.cost.input *= multiplier;

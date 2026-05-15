@@ -17,7 +17,6 @@ import {
 	type AssistantMessage,
 	type Context,
 	type FetchImpl,
-	getPriorityPremiumRequests,
 	type Message,
 	type MessageAttribution,
 	type Model,
@@ -365,11 +364,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				options?.onSseEvent,
 				options?.fetch,
 			);
-			const priorityPremiumRequests = getPriorityPremiumRequests(options?.serviceTier, model.provider);
-			const premiumRequestsTotal =
-				copilotPremiumRequests !== undefined || priorityPremiumRequests > 0
-					? (copilotPremiumRequests ?? 0) + priorityPremiumRequests
-					: undefined;
+			const premiumRequestsTotal = copilotPremiumRequests;
 			getCapturedErrorResponse = captureErrorResponse;
 			let appliedToolStrictMode: AppliedToolStrictMode = "mixed";
 			const providerSessionState = getOpenAICompletionsProviderSessionState(
