@@ -2,16 +2,15 @@
  * OpenTelemetry instrumentation for the agent loop.
  *
  * Implements the OpenTelemetry GenAI semantic conventions
- * (https://opentelemetry.io/docs/specs/semconv/gen-ai/) plus the
- * Sentry-AI / OpenInference superset attributes that downstream observability
- * UIs (Sentry, Langfuse, Phoenix, Honeycomb, Datadog) need to render an
- * agent run end-to-end.
+ * (https://opentelemetry.io/docs/specs/semconv/gen-ai/) plus `pi.gen_ai.*`
+ * extension attributes for run summaries, dashboard summaries, and cost hints
+ * that are useful to downstream observability UIs.
  *
  * Span hierarchy emitted by the loop:
  *
- *   invoke_agent {agent.name}         (one per runLoop, op = gen_ai.operation.invoke_agent)
- *   ├── chat {model}                  (one per LLM call, op = gen_ai.operation.chat)
- *   ├── execute_tool {tool.name}      (one per tool call, op = gen_ai.operation.execute_tool)
+ *   invoke_agent {agent.name}         (one per runLoop, gen_ai.operation.name=invoke_agent)
+ *   ├── chat {model}                  (one per LLM call, gen_ai.operation.name=chat)
+ *   ├── execute_tool {tool.name}      (one per tool call, gen_ai.operation.name=execute_tool)
  *   └── ...
  *
  * The `handoff` operation is emitted via the public {@link recordHandoff}
@@ -24,7 +23,16 @@
  * cheap pass-throughs.
  */
 
-import type { AssistantMessage, Message, Model, ServiceTier, StopReason, ToolChoice, Usage } from "@oh-my-pi/pi-ai";
+import {
+	type AssistantMessage,
+	type Message,
+	type Model,
+	type ServiceTier,
+	type StopReason,
+	shouldSendServiceTier,
+	type ToolChoice,
+	type Usage,
+} from "@oh-my-pi/pi-ai";
 import {
 	type Attributes,
 	type AttributeValue,
@@ -56,7 +64,6 @@ const MAX_TELEMETRY_TEXT_CHARS = 240;
  */
 export const enum GenAIAttr {
 	// Common identifiers
-	System = "gen_ai.system",
 	ProviderName = "gen_ai.provider.name",
 	OperationName = "gen_ai.operation.name",
 	ConversationId = "gen_ai.conversation.id",
@@ -65,8 +72,6 @@ export const enum GenAIAttr {
 	AgentId = "gen_ai.agent.id",
 	AgentName = "gen_ai.agent.name",
 	AgentDescription = "gen_ai.agent.description",
-	AgentStepNumber = "gen_ai.agent.step.number",
-	AgentStepCount = "gen_ai.agent.step.count",
 	// Request shape
 	RequestModel = "gen_ai.request.model",
 	RequestMaxTokens = "gen_ai.request.max_tokens",
@@ -78,26 +83,18 @@ export const enum GenAIAttr {
 	RequestStopSequences = "gen_ai.request.stop_sequences",
 	RequestSeed = "gen_ai.request.seed",
 	RequestChoiceCount = "gen_ai.request.choice.count",
-	RequestServiceTier = "gen_ai.request.service_tier",
-	RequestReasoningEffort = "gen_ai.request.reasoning.effort",
-	RequestToolChoice = "gen_ai.request.tool.choice",
-	RequestAvailableTools = "gen_ai.request.available_tools",
-	RequestMessages = "gen_ai.request.messages",
+	RequestStream = "gen_ai.request.stream",
 	// Response shape
 	ResponseModel = "gen_ai.response.model",
 	ResponseId = "gen_ai.response.id",
 	ResponseFinishReasons = "gen_ai.response.finish_reasons",
-	ResponseServiceTier = "gen_ai.response.service_tier",
-	ResponseText = "gen_ai.response.text",
-	ResponseToolCalls = "gen_ai.response.tool_calls",
+	ResponseTimeToFirstChunk = "gen_ai.response.time_to_first_chunk",
 	// Usage
 	UsageInputTokens = "gen_ai.usage.input_tokens",
 	UsageOutputTokens = "gen_ai.usage.output_tokens",
-	UsageInputTokensCached = "gen_ai.usage.input_tokens.cached",
-	UsageInputTokensCacheWrite = "gen_ai.usage.input_tokens.cache_write",
-	UsageOutputTokensReasoning = "gen_ai.usage.output_tokens.reasoning",
-	UsageTotalTokens = "gen_ai.usage.total_tokens",
-	UsageServerSideTools = "gen_ai.usage.server_tool_requests",
+	UsageCacheReadInputTokens = "gen_ai.usage.cache_read.input_tokens",
+	UsageCacheCreationInputTokens = "gen_ai.usage.cache_creation.input_tokens",
+	UsageReasoningOutputTokens = "gen_ai.usage.reasoning.output_tokens",
 	// Tools
 	ToolCallId = "gen_ai.tool.call.id",
 	ToolName = "gen_ai.tool.name",
@@ -105,17 +102,43 @@ export const enum GenAIAttr {
 	ToolType = "gen_ai.tool.type",
 	ToolCallArguments = "gen_ai.tool.call.arguments",
 	ToolCallResult = "gen_ai.tool.call.result",
+	ToolDefinitions = "gen_ai.tool.definitions",
 	// Content capture (opt-in)
 	InputMessages = "gen_ai.input.messages",
 	OutputMessages = "gen_ai.output.messages",
 	SystemInstructions = "gen_ai.system_instructions",
-	// Cost (vendor extension; matches Sentry-AI + Langfuse conventions)
-	CostEstimatedUsd = "gen_ai.cost.estimated_usd",
-	CostInputUsd = "gen_ai.cost.input_usd",
-	CostOutputUsd = "gen_ai.cost.output_usd",
-	CostUnavailableReason = "gen_ai.cost.unavailable_reason",
 	// Errors
 	ErrorType = "error.type",
+}
+
+/** OpenAI semantic-convention attribute keys. */
+export const enum OpenAIAttr {
+	RequestServiceTier = "openai.request.service_tier",
+	ResponseServiceTier = "openai.response.service_tier",
+}
+
+/** Project extension attributes. Kept out of the reserved `gen_ai.*` namespace. */
+export const enum PiGenAIAttr {
+	AgentStepNumber = "pi.gen_ai.agent.step.number",
+	AgentStepCount = "pi.gen_ai.agent.step.count",
+	RequestReasoningEffort = "pi.gen_ai.request.reasoning.effort",
+	RequestToolChoice = "pi.gen_ai.request.tool.choice",
+	RequestAvailableTools = "pi.gen_ai.request.available_tools",
+	RequestMessages = "pi.gen_ai.request.messages",
+	ResponseText = "pi.gen_ai.response.text",
+	ResponseToolCalls = "pi.gen_ai.response.tool_calls",
+	UsageTotalTokens = "pi.gen_ai.usage.total_tokens",
+	UsageServerSideTools = "pi.gen_ai.usage.server_tool_requests",
+	CostEstimatedUsd = "pi.gen_ai.cost.estimated_usd",
+	CostInputUsd = "pi.gen_ai.cost.input_usd",
+	CostOutputUsd = "pi.gen_ai.cost.output_usd",
+	CostUnavailableReason = "pi.gen_ai.cost.unavailable_reason",
+	ToolStatus = "pi.gen_ai.tool.status",
+	ToolCallIntent = "pi.gen_ai.tool.call.intent",
+	HandoffFromAgentName = "pi.gen_ai.handoff.from_agent.name",
+	HandoffFromAgentId = "pi.gen_ai.handoff.from_agent.id",
+	HandoffToAgentName = "pi.gen_ai.handoff.to_agent.name",
+	HandoffToAgentId = "pi.gen_ai.handoff.to_agent.id",
 }
 
 /** GenAI operation names — values for {@link GenAIAttr.OperationName}. */
@@ -159,10 +182,9 @@ export interface CostEstimatorContext {
 
 /**
  * Cost estimator result.
- *
- *   { usd: number }                — cost is known; emitted as gen_ai.cost.estimated_usd
+ *   { usd: number }                — cost is known; emitted as pi.gen_ai.cost.estimated_usd
  *   { unavailable: string }        — cost is intentionally unknown; emitted as
- *                                    gen_ai.cost.unavailable_reason
+ *                                    pi.gen_ai.cost.unavailable_reason
  *   undefined                      — no opinion; nothing emitted
  */
 export type CostEstimate =
@@ -428,10 +450,7 @@ function startSpan(
 	if (options.model) {
 		attrs[GenAIAttr.RequestModel] = options.model.id;
 		const provider = normalizeProviderName(telemetry, options.model.provider);
-		if (provider) {
-			attrs[GenAIAttr.System] = provider;
-			attrs[GenAIAttr.ProviderName] = provider;
-		}
+		if (provider) attrs[GenAIAttr.ProviderName] = provider;
 	}
 	if (telemetry.conversationId) {
 		attrs[GenAIAttr.ConversationId] = telemetry.conversationId;
@@ -507,17 +526,42 @@ function normalizeProviderName(
 	telemetry: AgentTelemetry | undefined,
 	provider: string | undefined,
 ): string | undefined {
+	const otelProvider = mapProviderNameToOtel(provider);
 	const normalize = telemetry?.config.normalizeProvider;
-	if (!normalize) return provider;
+	if (!normalize) return otelProvider;
 	try {
-		return normalize(provider) ?? provider;
+		return normalize(provider) ?? otelProvider;
 	} catch (err) {
 		emitTelemetryWarning(telemetry, {
 			code: "normalize_provider_failed",
-			message: "normalizeProvider threw; using the original provider label",
+			message: "normalizeProvider threw; using the OTEL provider label",
 			error: err,
 		});
-		return provider;
+		return otelProvider;
+	}
+}
+
+function mapProviderNameToOtel(provider: string | undefined): string | undefined {
+	switch (provider) {
+		case undefined:
+		case "":
+			return provider;
+		case "amazon-bedrock":
+			return "aws.bedrock";
+		case "google":
+		case "google-antigravity":
+		case "google-gemini-cli":
+			return "gcp.gemini";
+		case "google-vertex":
+			return "gcp.vertex_ai";
+		case "mistral":
+			return "mistral_ai";
+		case "openai-codex":
+			return "openai";
+		case "xai":
+			return "x_ai";
+		default:
+			return provider;
 	}
 }
 
@@ -576,7 +620,7 @@ export function startInvokeAgentSpan(telemetry: AgentTelemetry | undefined, mode
 /** Stamp the final step count on the `invoke_agent` span. */
 export function applyInvokeAgentFinish(span: Span | undefined, stepCount: number): void {
 	if (!span) return;
-	span.setAttribute(GenAIAttr.AgentStepCount, stepCount);
+	span.setAttribute(PiGenAIAttr.AgentStepCount, stepCount);
 }
 
 /**
@@ -597,7 +641,7 @@ export function startChatSpan(
 		model,
 		parent: options.parent,
 		stepNumber: options.stepNumber,
-		attributes: buildChatRequestAttributes(options.stepNumber, options.request),
+		attributes: buildChatRequestAttributes(options.stepNumber, options.request, model.provider),
 	});
 	if (span) {
 		telemetry?.collector.beginChat(span, {
@@ -631,11 +675,11 @@ export interface ChatRequestSnapshot {
 	readonly messages?: readonly Message[];
 }
 
-function buildChatRequestAttributes(stepNumber: number, request: ChatRequestSnapshot): Attributes {
+function buildChatRequestAttributes(stepNumber: number, request: ChatRequestSnapshot, provider: string): Attributes {
 	const attrs: Attributes = {
-		[GenAIAttr.AgentStepNumber]: stepNumber,
-		[GenAIAttr.RequestChoiceCount]: 1,
+		[PiGenAIAttr.AgentStepNumber]: stepNumber,
 		[GenAIAttr.OutputType]: "text",
+		[GenAIAttr.RequestStream]: true,
 	};
 	if (request.maxTokens != null) attrs[GenAIAttr.RequestMaxTokens] = request.maxTokens;
 	if (request.temperature != null) attrs[GenAIAttr.RequestTemperature] = request.temperature;
@@ -647,12 +691,14 @@ function buildChatRequestAttributes(stepNumber: number, request: ChatRequestSnap
 	if (request.stopSequences && request.stopSequences.length > 0) {
 		attrs[GenAIAttr.RequestStopSequences] = [...request.stopSequences];
 	}
-	if (request.serviceTier) attrs[GenAIAttr.RequestServiceTier] = request.serviceTier;
-	if (request.reasoningEffort) attrs[GenAIAttr.RequestReasoningEffort] = request.reasoningEffort;
+	if (request.serviceTier && shouldSendServiceTier(request.serviceTier, provider)) {
+		attrs[OpenAIAttr.RequestServiceTier] = request.serviceTier;
+	}
+	if (request.reasoningEffort) attrs[PiGenAIAttr.RequestReasoningEffort] = request.reasoningEffort;
 	const toolChoice = serializeToolChoice(request.toolChoice);
-	if (toolChoice) attrs[GenAIAttr.RequestToolChoice] = toolChoice;
+	if (toolChoice) attrs[PiGenAIAttr.RequestToolChoice] = toolChoice;
 	if (request.tools && request.tools.length > 0) {
-		attrs[GenAIAttr.RequestAvailableTools] = request.tools.map(tool => tool.name);
+		attrs[PiGenAIAttr.RequestAvailableTools] = request.tools.map(tool => tool.name);
 	}
 	return attrs;
 }
@@ -670,23 +716,22 @@ function serializeToolChoice(toolChoice: ToolChoice | undefined): string | undef
 
 function applyContentCaptureForRequest(telemetry: AgentTelemetry, span: Span, request: ChatRequestSnapshot): void {
 	const requestMessages = serializeRequestMessagesForTelemetry(telemetry, request);
-	if (requestMessages) span.setAttribute(GenAIAttr.RequestMessages, requestMessages);
+	if (requestMessages) span.setAttribute(PiGenAIAttr.RequestMessages, requestMessages);
 	if (telemetry.contentCapture !== "full") return;
-	if (request.systemPrompt && request.systemPrompt.length > 0) {
-		span.setAttribute(GenAIAttr.SystemInstructions, JSON.stringify(request.systemPrompt));
-	}
-	if (request.messages && request.messages.length > 0) {
-		span.setAttribute(GenAIAttr.InputMessages, JSON.stringify(request.messages));
-	}
+	const systemInstructions = serializeFullSystemInstructionsForTelemetry(request);
+	if (systemInstructions) span.setAttribute(GenAIAttr.SystemInstructions, systemInstructions);
+	const inputMessages = serializeFullInputMessagesForTelemetry(request);
+	if (inputMessages) span.setAttribute(GenAIAttr.InputMessages, inputMessages);
 }
 
 function applyContentCaptureForResponse(telemetry: AgentTelemetry, span: Span, message: AssistantMessage): void {
 	const responseText = serializeResponseTextForTelemetry(telemetry, message);
-	if (responseText) span.setAttribute(GenAIAttr.ResponseText, responseText);
+	if (responseText) span.setAttribute(PiGenAIAttr.ResponseText, responseText);
 	const responseToolCalls = serializeResponseToolCallsForTelemetry(telemetry, message);
-	if (responseToolCalls) span.setAttribute(GenAIAttr.ResponseToolCalls, responseToolCalls);
+	if (responseToolCalls) span.setAttribute(PiGenAIAttr.ResponseToolCalls, responseToolCalls);
 	if (telemetry.contentCapture === "full") {
-		span.setAttribute(GenAIAttr.OutputMessages, JSON.stringify([message]));
+		const outputMessages = serializeFullOutputMessagesForTelemetry(message);
+		if (outputMessages) span.setAttribute(GenAIAttr.OutputMessages, outputMessages);
 	}
 }
 
@@ -747,6 +792,121 @@ interface TelemetryToolCallSummary {
 	readonly toolCallId: string;
 	readonly toolName: string;
 	readonly input: unknown;
+}
+
+type OtelMessagePart =
+	| { readonly type: "text"; readonly content: string }
+	| { readonly type: "reasoning"; readonly content: string }
+	| { readonly type: "blob"; readonly modality: "image"; readonly mime_type: string; readonly content: string }
+	| { readonly type: "tool_call"; readonly id?: string; readonly name: string; readonly arguments?: unknown }
+	| { readonly type: "tool_call_response"; readonly id?: string; readonly response: unknown }
+	| { readonly type: string; readonly [key: string]: unknown };
+
+interface OtelInputMessage {
+	readonly role: string;
+	readonly parts: readonly OtelMessagePart[];
+	readonly name?: string;
+}
+
+interface OtelOutputMessage extends OtelInputMessage {
+	readonly finish_reason: string;
+}
+
+function serializeFullSystemInstructionsForTelemetry(request: ChatRequestSnapshot): string | undefined {
+	const systemPrompt = request.systemPrompt;
+	if (!systemPrompt || systemPrompt.length === 0) return undefined;
+	return stringifyJsonAttribute(systemPrompt.map(text => ({ type: "text", content: text }) satisfies OtelMessagePart));
+}
+
+function serializeFullInputMessagesForTelemetry(request: ChatRequestSnapshot): string | undefined {
+	const messages = request.messages;
+	if (!messages || messages.length === 0) return undefined;
+	return stringifyJsonAttribute(messages.map(messageToOtelInputMessage));
+}
+
+function serializeFullOutputMessagesForTelemetry(message: AssistantMessage): string | undefined {
+	return stringifyJsonAttribute([assistantMessageToOtelOutputMessage(message)]);
+}
+
+function messageToOtelInputMessage(message: Message): OtelInputMessage {
+	switch (message.role) {
+		case "assistant":
+			return { role: "assistant", parts: assistantContentToOtelParts(message.content) };
+		case "toolResult":
+			return {
+				role: "tool",
+				name: message.toolName,
+				parts: [
+					{
+						type: "tool_call_response",
+						id: message.toolCallId,
+						response: {
+							content: textOrImageContentToOtelParts(message.content),
+							details: message.details,
+							is_error: message.isError,
+						},
+					},
+				],
+			};
+		default:
+			return { role: message.role, parts: textOrImageContentToOtelParts(message.content) };
+	}
+}
+
+function assistantMessageToOtelOutputMessage(message: AssistantMessage): OtelOutputMessage {
+	return {
+		role: "assistant",
+		parts: assistantContentToOtelParts(message.content),
+		finish_reason: mapStopReason(message.stopReason) ?? message.stopReason ?? "stop",
+	};
+}
+
+function textOrImageContentToOtelParts(content: Message["content"]): OtelMessagePart[] {
+	if (typeof content === "string") return [{ type: "text", content }];
+	const parts: OtelMessagePart[] = [];
+	for (const part of content) {
+		switch (part.type) {
+			case "text":
+				parts.push({ type: "text", content: part.text });
+				break;
+			case "image":
+				parts.push({ type: "blob", modality: "image", mime_type: part.mimeType, content: part.data });
+				break;
+			case "thinking":
+				parts.push({ type: "reasoning", content: part.thinking });
+				break;
+			case "redactedThinking":
+				parts.push({ type: "reasoning", content: part.data });
+				break;
+			case "toolCall":
+				parts.push({ type: "tool_call", id: part.id, name: part.name, arguments: part.arguments });
+				break;
+			default:
+				break;
+		}
+	}
+	return parts;
+}
+
+function assistantContentToOtelParts(content: AssistantMessage["content"]): OtelMessagePart[] {
+	const parts: OtelMessagePart[] = [];
+	for (const part of content) {
+		switch (part.type) {
+			case "text":
+				parts.push({ type: "text", content: part.text });
+				break;
+			case "thinking":
+				parts.push({ type: "reasoning", content: part.thinking });
+				break;
+			case "redactedThinking":
+				parts.push({ type: "reasoning", content: part.data });
+				break;
+			case "toolCall":
+				parts.push({ type: "tool_call", id: part.id, name: part.name, arguments: part.arguments });
+				break;
+		}
+	}
+	return parts;
 }
 
 function callContentSerializer(
@@ -940,26 +1100,29 @@ export function failChatSpan(
 function applyChatResponseAttributes(span: Span, message: AssistantMessage): void {
 	span.setAttribute(GenAIAttr.ResponseModel, message.model);
 	if (message.responseId) span.setAttribute(GenAIAttr.ResponseId, message.responseId);
+	if (message.ttft != null) span.setAttribute(GenAIAttr.ResponseTimeToFirstChunk, message.ttft / 1000);
 	const finishReason = mapStopReason(message.stopReason);
 	if (finishReason) span.setAttribute(GenAIAttr.ResponseFinishReasons, [finishReason]);
 }
 
 function applyUsageAttributes(span: Span, usage: Usage | undefined): void {
 	if (!usage) return;
-	const inputTokens = usage.input ?? 0;
+	const cacheReadTokens = usage.cacheRead ?? 0;
+	const cacheCreationTokens = usage.cacheWrite ?? 0;
+	const inputTokens = (usage.input ?? 0) + cacheReadTokens + cacheCreationTokens;
 	const outputTokens = usage.output ?? 0;
 	span.setAttribute(GenAIAttr.UsageInputTokens, inputTokens);
 	span.setAttribute(GenAIAttr.UsageOutputTokens, outputTokens);
-	const total = usage.totalTokens ?? inputTokens + outputTokens + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-	span.setAttribute(GenAIAttr.UsageTotalTokens, total);
-	if (usage.cacheRead != null) span.setAttribute(GenAIAttr.UsageInputTokensCached, usage.cacheRead);
-	if (usage.cacheWrite != null) span.setAttribute(GenAIAttr.UsageInputTokensCacheWrite, usage.cacheWrite);
+	const total = usage.totalTokens ?? inputTokens + outputTokens;
+	span.setAttribute(PiGenAIAttr.UsageTotalTokens, total);
+	if (usage.cacheRead != null) span.setAttribute(GenAIAttr.UsageCacheReadInputTokens, usage.cacheRead);
+	if (usage.cacheWrite != null) span.setAttribute(GenAIAttr.UsageCacheCreationInputTokens, usage.cacheWrite);
 	if (usage.reasoningTokens != null) {
-		span.setAttribute(GenAIAttr.UsageOutputTokensReasoning, usage.reasoningTokens);
+		span.setAttribute(GenAIAttr.UsageReasoningOutputTokens, usage.reasoningTokens);
 	}
 	if (usage.server) {
 		const sums = (usage.server.webSearch ?? 0) + (usage.server.webFetch ?? 0);
-		if (sums > 0) span.setAttribute(GenAIAttr.UsageServerSideTools, sums);
+		if (sums > 0) span.setAttribute(PiGenAIAttr.UsageServerSideTools, sums);
 	}
 }
 
@@ -1021,7 +1184,7 @@ function applyCostEstimateForUsage(
 	}
 	if (!result) return EMPTY_COST;
 	if ("unavailable" in result) {
-		span.setAttribute(GenAIAttr.CostUnavailableReason, result.unavailable);
+		span.setAttribute(PiGenAIAttr.CostUnavailableReason, result.unavailable);
 		const cost: AppliedCostEstimate = {
 			costUsd: undefined,
 			inputUsd: undefined,
@@ -1043,9 +1206,9 @@ function applyCostEstimateForUsage(
 		});
 		return cost;
 	}
-	span.setAttribute(GenAIAttr.CostEstimatedUsd, result.usd);
-	if (result.inputUsd != null) span.setAttribute(GenAIAttr.CostInputUsd, result.inputUsd);
-	if (result.outputUsd != null) span.setAttribute(GenAIAttr.CostOutputUsd, result.outputUsd);
+	span.setAttribute(PiGenAIAttr.CostEstimatedUsd, result.usd);
+	if (result.inputUsd != null) span.setAttribute(PiGenAIAttr.CostInputUsd, result.inputUsd);
+	if (result.outputUsd != null) span.setAttribute(PiGenAIAttr.CostOutputUsd, result.outputUsd);
 	const cost: AppliedCostEstimate = {
 		costUsd: result.usd,
 		inputUsd: result.inputUsd,
@@ -1070,9 +1233,11 @@ function applyCostEstimateForUsage(
 
 function buildUsageSnapshot(usage: Usage): ChatUsageSnapshot {
 	return {
-		inputTokens: usage.input ?? 0,
+		inputTokens: (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0),
 		outputTokens: usage.output ?? 0,
-		totalTokens: usage.totalTokens ?? 0,
+		totalTokens:
+			usage.totalTokens ??
+			(usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0) + (usage.output ?? 0),
 		cachedInputTokens: usage.cacheRead,
 		cacheWriteTokens: usage.cacheWrite,
 		reasoningOutputTokens: usage.reasoningTokens,
@@ -1210,7 +1375,7 @@ export async function recordManualChatTelemetry(
 		});
 	if (!span) return undefined;
 	if (options.span && options.attributes) span.setAttributes(options.attributes);
-	if (options.stepNumber != null) span.setAttribute(GenAIAttr.AgentStepNumber, options.stepNumber);
+	if (options.stepNumber != null) span.setAttribute(PiGenAIAttr.AgentStepNumber, options.stepNumber);
 	span.setAttribute(GenAIAttr.ResponseModel, options.responseModel ?? options.model.name);
 	if (options.responseId) span.setAttribute(GenAIAttr.ResponseId, options.responseId);
 	const finishReason = mapStopReason(options.finishReason);
@@ -1241,7 +1406,7 @@ export async function recordManualChatTelemetry(
 	}
 	if (options.responseText) {
 		const responseText = stringifyJsonAttribute(summarizeTelemetryTexts([options.responseText]));
-		if (responseText) span.setAttribute(GenAIAttr.ResponseText, responseText);
+		if (responseText) span.setAttribute(PiGenAIAttr.ResponseText, responseText);
 	}
 	if (options.responseToolCalls && options.responseToolCalls.length > 0) {
 		const calls = options.responseToolCalls.map(call => ({
@@ -1250,7 +1415,7 @@ export async function recordManualChatTelemetry(
 			input: summarizeTelemetryValue(call.input),
 		}));
 		const responseToolCalls = stringifyJsonAttribute(limitTelemetryToolCalls(calls));
-		if (responseToolCalls) span.setAttribute(GenAIAttr.ResponseToolCalls, responseToolCalls);
+		if (responseToolCalls) span.setAttribute(PiGenAIAttr.ResponseToolCalls, responseToolCalls);
 	}
 	applyTerminalStatus(span, options.finishReason, undefined);
 	if (options.endSpan ?? options.span === undefined) span.end();
@@ -1357,7 +1522,7 @@ export function finishExecuteToolSpan(
 }
 
 /** Span attribute carrying the terminal {@link ToolStatus}. */
-export const EXECUTE_TOOL_STATUS_ATTR = "gen_ai.tool.status";
+export const EXECUTE_TOOL_STATUS_ATTR = PiGenAIAttr.ToolStatus;
 
 /**
  * Mapping from non-ok {@link ToolStatus} values to the `error.type` attribute
@@ -1449,66 +1614,66 @@ export function fireOnRunEnd(telemetry: AgentTelemetry, summary: AgentRunSummary
 	}
 }
 
-/** Aggregate `gen_ai.agent.*` attributes stamped on the `invoke_agent` span. */
-export const enum AGGREGATE_ATTR {
-	ChatsCount = "gen_ai.agent.chats.count",
-	ChatsTotalLatencyMs = "gen_ai.agent.chats.total_latency_ms",
-	ChatsStopReasonPrefix = "gen_ai.agent.chats.stop_reason.",
-	ToolsCount = "gen_ai.agent.tools.count",
-	ToolsOkCount = "gen_ai.agent.tools.ok.count",
-	ToolsErrorCount = "gen_ai.agent.tools.error.count",
-	ToolsSkippedCount = "gen_ai.agent.tools.skipped.count",
-	ToolsBlockedCount = "gen_ai.agent.tools.blocked.count",
-	ToolsTimeoutCount = "gen_ai.agent.tools.timeout.count",
-	ToolsAbortedCount = "gen_ai.agent.tools.aborted.count",
-	ToolsTotalLatencyMs = "gen_ai.agent.tools.total_latency_ms",
-	ToolsInvoked = "gen_ai.agent.tools.invoked",
-	ToolsAvailable = "gen_ai.agent.tools.available",
-	ToolsUnused = "gen_ai.agent.tools.unused",
-	UsageInputTokensTotal = "gen_ai.agent.usage.input_tokens.total",
-	UsageOutputTokensTotal = "gen_ai.agent.usage.output_tokens.total",
-	UsageCachedInputTokensTotal = "gen_ai.agent.usage.cached_input_tokens.total",
-	UsageCacheWriteTokensTotal = "gen_ai.agent.usage.cache_write_tokens.total",
-	UsageReasoningOutputTokensTotal = "gen_ai.agent.usage.reasoning_output_tokens.total",
-	UsageTotalTokensTotal = "gen_ai.agent.usage.total_tokens.total",
-	CostEstimatedUsdTotal = "gen_ai.agent.cost.estimated_usd.total",
-	ErrorsCount = "gen_ai.agent.errors.count",
+/** Aggregate `pi.gen_ai.agent.*` attributes stamped on the `invoke_agent` span. */
+export const enum PiGenAIAggregateAttr {
+	ChatsCount = "pi.gen_ai.agent.chats.count",
+	ChatsTotalLatencyMs = "pi.gen_ai.agent.chats.total_latency_ms",
+	ChatsStopReasonPrefix = "pi.gen_ai.agent.chats.stop_reason.",
+	ToolsCount = "pi.gen_ai.agent.tools.count",
+	ToolsOkCount = "pi.gen_ai.agent.tools.ok.count",
+	ToolsErrorCount = "pi.gen_ai.agent.tools.error.count",
+	ToolsSkippedCount = "pi.gen_ai.agent.tools.skipped.count",
+	ToolsBlockedCount = "pi.gen_ai.agent.tools.blocked.count",
+	ToolsTimeoutCount = "pi.gen_ai.agent.tools.timeout.count",
+	ToolsAbortedCount = "pi.gen_ai.agent.tools.aborted.count",
+	ToolsTotalLatencyMs = "pi.gen_ai.agent.tools.total_latency_ms",
+	ToolsInvoked = "pi.gen_ai.agent.tools.invoked",
+	ToolsAvailable = "pi.gen_ai.agent.tools.available",
+	ToolsUnused = "pi.gen_ai.agent.tools.unused",
+	UsageInputTokensTotal = "pi.gen_ai.agent.usage.input_tokens.total",
+	UsageOutputTokensTotal = "pi.gen_ai.agent.usage.output_tokens.total",
+	UsageCacheReadInputTokensTotal = "pi.gen_ai.agent.usage.cache_read.input_tokens.total",
+	UsageCacheCreationInputTokensTotal = "pi.gen_ai.agent.usage.cache_creation.input_tokens.total",
+	UsageReasoningOutputTokensTotal = "pi.gen_ai.agent.usage.reasoning.output_tokens.total",
+	UsageTotalTokensTotal = "pi.gen_ai.agent.usage.total_tokens.total",
+	CostEstimatedUsdTotal = "pi.gen_ai.agent.cost.estimated_usd.total",
+	ErrorsCount = "pi.gen_ai.agent.errors.count",
 }
 
-/** Stamp the aggregate `gen_ai.agent.*` attributes on the given span. */
+/** Stamp the aggregate `pi.gen_ai.agent.*` attributes on the given span. */
 function applyAggregateAttributes(span: Span, summary: AgentRunSummary, coverage: AgentRunCoverage): void {
-	span.setAttribute(AGGREGATE_ATTR.ChatsCount, summary.chats.total);
-	span.setAttribute(AGGREGATE_ATTR.ChatsTotalLatencyMs, summary.chats.totalLatencyMs);
+	span.setAttribute(PiGenAIAggregateAttr.ChatsCount, summary.chats.total);
+	span.setAttribute(PiGenAIAggregateAttr.ChatsTotalLatencyMs, summary.chats.totalLatencyMs);
 	for (const [reason, count] of Object.entries(summary.chats.byStopReason)) {
-		span.setAttribute(`${AGGREGATE_ATTR.ChatsStopReasonPrefix}${reason}.count`, count);
+		span.setAttribute(`${PiGenAIAggregateAttr.ChatsStopReasonPrefix}${reason}.count`, count);
 	}
-	span.setAttribute(AGGREGATE_ATTR.ToolsCount, summary.tools.total);
-	span.setAttribute(AGGREGATE_ATTR.ToolsOkCount, summary.tools.ok);
-	span.setAttribute(AGGREGATE_ATTR.ToolsErrorCount, summary.tools.error);
-	span.setAttribute(AGGREGATE_ATTR.ToolsSkippedCount, summary.tools.skipped);
-	span.setAttribute(AGGREGATE_ATTR.ToolsBlockedCount, summary.tools.blocked);
-	span.setAttribute(AGGREGATE_ATTR.ToolsTimeoutCount, summary.tools.timeout);
-	span.setAttribute(AGGREGATE_ATTR.ToolsAbortedCount, summary.tools.aborted);
-	span.setAttribute(AGGREGATE_ATTR.ToolsTotalLatencyMs, summary.tools.totalLatencyMs);
+	span.setAttribute(PiGenAIAggregateAttr.ToolsCount, summary.tools.total);
+	span.setAttribute(PiGenAIAggregateAttr.ToolsOkCount, summary.tools.ok);
+	span.setAttribute(PiGenAIAggregateAttr.ToolsErrorCount, summary.tools.error);
+	span.setAttribute(PiGenAIAggregateAttr.ToolsSkippedCount, summary.tools.skipped);
+	span.setAttribute(PiGenAIAggregateAttr.ToolsBlockedCount, summary.tools.blocked);
+	span.setAttribute(PiGenAIAggregateAttr.ToolsTimeoutCount, summary.tools.timeout);
+	span.setAttribute(PiGenAIAggregateAttr.ToolsAbortedCount, summary.tools.aborted);
+	span.setAttribute(PiGenAIAggregateAttr.ToolsTotalLatencyMs, summary.tools.totalLatencyMs);
 	if (coverage.toolsInvoked.length > 0) {
-		span.setAttribute(AGGREGATE_ATTR.ToolsInvoked, [...coverage.toolsInvoked]);
+		span.setAttribute(PiGenAIAggregateAttr.ToolsInvoked, [...coverage.toolsInvoked]);
 	}
 	if (coverage.toolsAvailable.length > 0) {
-		span.setAttribute(AGGREGATE_ATTR.ToolsAvailable, [...coverage.toolsAvailable]);
+		span.setAttribute(PiGenAIAggregateAttr.ToolsAvailable, [...coverage.toolsAvailable]);
 	}
 	if (coverage.toolsUnused.length > 0) {
-		span.setAttribute(AGGREGATE_ATTR.ToolsUnused, [...coverage.toolsUnused]);
+		span.setAttribute(PiGenAIAggregateAttr.ToolsUnused, [...coverage.toolsUnused]);
 	}
-	span.setAttribute(AGGREGATE_ATTR.UsageInputTokensTotal, summary.usage.inputTokens);
-	span.setAttribute(AGGREGATE_ATTR.UsageOutputTokensTotal, summary.usage.outputTokens);
-	span.setAttribute(AGGREGATE_ATTR.UsageCachedInputTokensTotal, summary.usage.cachedInputTokens);
-	span.setAttribute(AGGREGATE_ATTR.UsageCacheWriteTokensTotal, summary.usage.cacheWriteTokens);
-	span.setAttribute(AGGREGATE_ATTR.UsageReasoningOutputTokensTotal, summary.usage.reasoningOutputTokens);
-	span.setAttribute(AGGREGATE_ATTR.UsageTotalTokensTotal, summary.usage.totalTokens);
+	span.setAttribute(PiGenAIAggregateAttr.UsageInputTokensTotal, summary.usage.inputTokens);
+	span.setAttribute(PiGenAIAggregateAttr.UsageOutputTokensTotal, summary.usage.outputTokens);
+	span.setAttribute(PiGenAIAggregateAttr.UsageCacheReadInputTokensTotal, summary.usage.cachedInputTokens);
+	span.setAttribute(PiGenAIAggregateAttr.UsageCacheCreationInputTokensTotal, summary.usage.cacheWriteTokens);
+	span.setAttribute(PiGenAIAggregateAttr.UsageReasoningOutputTokensTotal, summary.usage.reasoningOutputTokens);
+	span.setAttribute(PiGenAIAggregateAttr.UsageTotalTokensTotal, summary.usage.totalTokens);
 	if (summary.cost.estimatedUsd > 0) {
-		span.setAttribute(AGGREGATE_ATTR.CostEstimatedUsdTotal, summary.cost.estimatedUsd);
+		span.setAttribute(PiGenAIAggregateAttr.CostEstimatedUsdTotal, summary.cost.estimatedUsd);
 	}
-	span.setAttribute(AGGREGATE_ATTR.ErrorsCount, summary.errors.total);
+	span.setAttribute(PiGenAIAggregateAttr.ErrorsCount, summary.errors.total);
 }
 
 /**
@@ -1543,10 +1708,10 @@ export function recordHandoff(
 	const attrs: Attributes = {};
 	const fromAgent = options.fromAgent ? normalizeAgentIdentity(telemetry, options.fromAgent) : undefined;
 	const toAgent = normalizeAgentIdentity(telemetry, options.toAgent);
-	if (fromAgent?.name) attrs["gen_ai.handoff.from_agent.name"] = fromAgent.name;
-	if (fromAgent?.id) attrs["gen_ai.handoff.from_agent.id"] = fromAgent.id;
-	if (toAgent.name) attrs["gen_ai.handoff.to_agent.name"] = toAgent.name;
-	if (toAgent.id) attrs["gen_ai.handoff.to_agent.id"] = toAgent.id;
+	if (fromAgent?.name) attrs[PiGenAIAttr.HandoffFromAgentName] = fromAgent.name;
+	if (fromAgent?.id) attrs[PiGenAIAttr.HandoffFromAgentId] = fromAgent.id;
+	if (toAgent.name) attrs[PiGenAIAttr.HandoffToAgentName] = toAgent.name;
+	if (toAgent.id) attrs[PiGenAIAttr.HandoffToAgentId] = toAgent.id;
 	const name = toAgent.name
 		? fromAgent?.name
 			? `handoff ${fromAgent.name} → ${toAgent.name}`

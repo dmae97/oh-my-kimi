@@ -1,32 +1,39 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed legacy telemetry constants from the public enum surface (including `AGGREGATE_ATTR`, `GenAIAttr.System`, and old `gen_ai.*` extension keys such as `gen_ai.request.service_tier`/cost/tool status/handoff fields) and replaced them with `OpenAIAttr`, `PiGenAIAttr`, and `PiGenAIAggregateAttr`
 
 ### Added
 
+- Added `OpenAIAttr`, `PiGenAIAttr`, and `PiGenAIAggregateAttr` exports so consumers can reference the new `openai.*` and `pi.gen_ai.*` telemetry attribute keys directly
 - Added `onChatUsage` to `AgentTelemetryConfig`, an always-fired hook receiving a `ChatUsageEvent` for every chat step that produced usage. The event carries the chat `span`, `agent`, `conversationId`, `stepNumber`, `model`, `provider`, `serviceTier`, `usage`, optional `cost`, and resolved dynamic `attributes` — independent of whether a `costEstimator` is configured.
-
 - Added `agentLoopDetailed(...)` and `agentLoopContinueDetailed(...)` helpers that return the same event stream plus a `detailed()` result with run `telemetry` and `coverage`
 - Added `onRunEnd` to `AgentTelemetryConfig` to receive `AgentRunSummary` and `AgentRunCoverage` at the end of each invocation
 - Added run-level telemetry and coverage types/helpers (for example `AgentRunSummary`, `AgentRunCoverage`, `aggregateAgentRunSummaries`, and `aggregateAgentRunCoverage`) to package exports
 - Added generic telemetry extension hooks for dynamic span attributes, provider/agent-name normalization, per-step cost deltas, warning callbacks, bounded summary content capture, and manual chat telemetry for non-loop model calls.
-- Added opt-in OpenTelemetry instrumentation on the agent loop. Pass `telemetry: {}` (or a richer `AgentTelemetryConfig`) on `AgentLoopConfig` / `AgentOptions` / `createAgentSession({ telemetry })` to emit GenAI-semantic-convention spans:
-- `invoke_agent {agent.name}` wraps each `agentLoop` invocation with `gen_ai.operation.name=invoke_agent`, agent identity, conversation id, and `gen_ai.agent.step.count`.
-- `chat {model}` per provider call, parented under `invoke_agent`, with full request/response envelope (`gen_ai.request.{model,temperature,top_p,top_k,max_tokens,presence_penalty,stop_sequences,service_tier,tool.choice,available_tools}`, `gen_ai.response.{model,id,finish_reasons,service_tier}`, `gen_ai.usage.{input_tokens,output_tokens,input_tokens.cached,input_tokens.cache_write,output_tokens.reasoning,total_tokens}`).
+- Added opt-in OpenTelemetry instrumentation on the agent loop. Pass `telemetry: {}` (or a richer `AgentTelemetryConfig`) on `AgentLoopConfig` / `AgentOptions` / `createAgentSession({ telemetry })` to emit GenAI-semantic-convention spans plus `pi.gen_ai.*` extension attributes:
+- `invoke_agent {agent.name}` wraps each `agentLoop` invocation with `gen_ai.operation.name=invoke_agent`, agent identity, conversation id, and `pi.gen_ai.agent.step.count`.
+- `chat {model}` per provider call, parented under `invoke_agent`, with OTEL request/response/usage attributes (`gen_ai.request.{model,stream,temperature,top_p,top_k,max_tokens,presence_penalty,stop_sequences}`, `gen_ai.response.{model,id,finish_reasons,time_to_first_chunk}`, `gen_ai.usage.{input_tokens,output_tokens,cache_read.input_tokens,cache_creation.input_tokens,reasoning.output_tokens}`) and project extensions for reasoning effort, tool choice, available tools, usage totals, and cost.
 - `execute_tool {tool.name}` per tool call, parented under `invoke_agent`, with `gen_ai.tool.{name,call.id,description,type}` plus the active context so user/MCP/provider spans created inside `tool.execute()` attach as children.
 - One-shot `handoff` span available via the public `recordHandoff(...)` helper for agent-to-agent transitions.
-- Added `AgentTelemetryConfig` hooks (`onSpanStart`, `onSpanEnd`, `costEstimator`), `agent` identity, `attributes` envelope merged onto every span, `captureMessageContent` toggle (defaults to the `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` env var) emitting `gen_ai.input.messages` / `gen_ai.output.messages` / `gen_ai.system_instructions` / `gen_ai.tool.call.arguments` / `gen_ai.tool.call.result`, and tracer/tracerName override surfaces.
+- Added `AgentTelemetryConfig` hooks (`onSpanStart`, `onSpanEnd`, `costEstimator`), `agent` identity, `attributes` envelope merged onto every span, `captureMessageContent` toggle (defaults to the `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` env var) emitting OTEL-shaped `gen_ai.input.messages` / `gen_ai.output.messages` / `gen_ai.system_instructions` / `gen_ai.tool.call.arguments` / `gen_ai.tool.call.result`, and tracer/tracerName override surfaces.
 - Added `Agent#setTelemetry(config)` so consumers can swap or disable instrumentation between invocations.
 - Added `@opentelemetry/api` as a runtime dependency; SDK setup (exporters, samplers, processors) remains the host's responsibility per standard OTEL conventions. When no SDK is registered, helpers fall through to no-op spans with zero overhead.
 
 ### Changed
 
+- Changed `chat` spans to emit normalized provider identifiers in `gen_ai.provider.name` via OTEL-style values (for example `google` to `gcp.gemini`) instead of the legacy `gen_ai.system` label
+- Changed service-tier telemetry to emit `openai.request.service_tier`/`openai.response.service_tier` only when supported by provider via `shouldSendServiceTier`, rather than always using `gen_ai.request.service_tier`
+- Changed captured message payloads so full capture now records OTEL-structured message parts with `pi.gen_ai.request.messages`, `pi.gen_ai.system_instructions`, and `gen_ai.output.messages` including assistant `finish_reason`
 - Changed the `agent_end` event payload to include optional `telemetry` and `coverage` fields when telemetry is enabled, while keeping the legacy payload shape when disabled
-- Changed `invoke_agent` spans to include aggregate `gen_ai.agent.*` attributes for chat/tool counts, latency, usage, cost, errors, and tool coverage
+- Changed `invoke_agent` spans to include aggregate `pi.gen_ai.agent.*` attributes for chat/tool counts, latency, usage, cost, errors, and tool coverage
 
 ### Fixed
 
-- Fixed `execute_tool` span attributes so `gen_ai.tool.status` and `gen_ai.error.type` now reflect run-level tool outcomes (`ok`, `error`, `skipped`, `blocked`, `timeout`, `aborted`) instead of mapping all non-ok cases the same way
+- Fixed token accounting in `ChatUsageEvent` and usage summaries so `inputTokens` and `totalTokens` now include cached read/write input tokens
+- Fixed `execute_tool` span attributes so `pi.gen_ai.tool.status` and `error.type` now reflect run-level tool outcomes (`ok`, `error`, `skipped`, `blocked`, `timeout`, `aborted`) instead of mapping all non-ok cases the same way
 - Fixed `onRunEnd` callbacks to be safe and idempotent by invoking them once per run and swallowing thrown callback errors so they cannot fail or duplicate successful runs
 - Fixed run telemetry to count interrupted, blocked, or otherwise skipped tool calls so run coverage and tool counters now include those paths
 - Fixed chat failure handling so failed chat steps are still represented in run summaries when provider streaming throws before yielding an assistant message

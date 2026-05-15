@@ -15,9 +15,10 @@ import {
 	emptyAgentRunCoverage,
 	emptyAgentRunSummary,
 } from "@oh-my-pi/pi-agent-core/run-collector";
-import { AGGREGATE_ATTR, EXECUTE_TOOL_STATUS_ATTR, GenAIAttr } from "@oh-my-pi/pi-agent-core/telemetry";
+import { EXECUTE_TOOL_STATUS_ATTR, GenAIAttr, PiGenAIAggregateAttr } from "@oh-my-pi/pi-agent-core/telemetry";
 import type { AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core/types";
 import type { AssistantMessage, Message } from "@oh-my-pi/pi-ai";
+import { z } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import type {
 	AttributeValue,
@@ -28,7 +29,6 @@ import type {
 	TimeInput,
 	Tracer,
 } from "@opentelemetry/api";
-import { Type } from "@sinclair/typebox";
 import { createUserMessage } from "./helpers";
 
 interface RecordedSpan {
@@ -132,7 +132,7 @@ function buildTool(spec: TestTool): AgentTool {
 			name: spec.name,
 			label: spec.name,
 			description: `test tool ${spec.name}`,
-			parameters: Type.Object({ value: Type.Optional(Type.String()) }),
+			parameters: z.object({ value: z.string().optional() }),
 			intent: "omit",
 			execute: async () => {
 				if (spec.behavior === "throw") throw new Error(`${spec.name} boom`);
@@ -145,7 +145,7 @@ function buildTool(spec: TestTool): AgentTool {
 		name: spec.name,
 		label: spec.name,
 		description: `blocked tool ${spec.name}`,
-		parameters: Type.Object({ value: Type.Optional(Type.String()) }),
+		parameters: z.object({ value: z.string().optional() }),
 		intent: "omit",
 		execute: async () => ({ content: [{ type: "text", text: "should not run" }], details: {} }),
 	} satisfies AgentTool;
@@ -321,7 +321,7 @@ describe("AgentRunSummary aggregation", () => {
 		expect(blockedSpan?.attributes[GenAIAttr.ErrorType]).toBe("tool_blocked");
 	});
 
-	it("populates aggregate gen_ai.agent.* attributes on the invoke_agent span", async () => {
+	it("populates aggregate pi.gen_ai.agent.* attributes on the invoke_agent span", async () => {
 		const tracer = new RecordingTracer();
 		const tool = buildTool({ name: "alpha", behavior: "ok" });
 		const mock = createMockModel({
@@ -346,12 +346,12 @@ describe("AgentRunSummary aggregation", () => {
 		await detailed.detailed();
 		const invokeSpan = tracer.findSpan("invoke_agent");
 		expect(invokeSpan).toBeDefined();
-		expect(invokeSpan?.attributes[AGGREGATE_ATTR.ChatsCount]).toBe(2);
-		expect(invokeSpan?.attributes[AGGREGATE_ATTR.ToolsCount]).toBe(1);
-		expect(invokeSpan?.attributes[AGGREGATE_ATTR.ToolsOkCount]).toBe(1);
-		expect(invokeSpan?.attributes[AGGREGATE_ATTR.UsageInputTokensTotal]).toBe(6);
-		expect(invokeSpan?.attributes[AGGREGATE_ATTR.UsageTotalTokensTotal]).toBe(13);
-		expect(invokeSpan?.attributes[AGGREGATE_ATTR.ToolsInvoked]).toEqual(["alpha"]);
+		expect(invokeSpan?.attributes[PiGenAIAggregateAttr.ChatsCount]).toBe(2);
+		expect(invokeSpan?.attributes[PiGenAIAggregateAttr.ToolsCount]).toBe(1);
+		expect(invokeSpan?.attributes[PiGenAIAggregateAttr.ToolsOkCount]).toBe(1);
+		expect(invokeSpan?.attributes[PiGenAIAggregateAttr.UsageInputTokensTotal]).toBe(6);
+		expect(invokeSpan?.attributes[PiGenAIAggregateAttr.UsageTotalTokensTotal]).toBe(13);
+		expect(invokeSpan?.attributes[PiGenAIAggregateAttr.ToolsInvoked]).toEqual(["alpha"]);
 	});
 });
 
@@ -544,7 +544,7 @@ describe("skipped tools without spans", () => {
 			name: "fast",
 			label: "fast",
 			description: "fast",
-			parameters: Type.Object({ value: Type.Optional(Type.String()) }),
+			parameters: z.object({ value: z.string().optional() }),
 			intent: "omit",
 			execute: async () => ({ content: [{ type: "text", text: "fast-ok" }], details: {} }),
 		};
@@ -552,7 +552,7 @@ describe("skipped tools without spans", () => {
 			name: "slow",
 			label: "slow",
 			description: "slow",
-			parameters: Type.Object({ value: Type.Optional(Type.String()) }),
+			parameters: z.object({ value: z.string().optional() }),
 			intent: "omit",
 			// concurrency: shared (default) — both run in parallel; we abort via steering.
 			execute: async (_id, _args, signal) => {

@@ -12,6 +12,8 @@ import {
 	type ChatUsageEvent,
 	GenAIAttr,
 	GenAIOperation,
+	OpenAIAttr,
+	PiGenAIAttr,
 	recordHandoff,
 	recordManualChatTelemetry,
 	resolveTelemetry,
@@ -19,6 +21,7 @@ import {
 } from "@oh-my-pi/pi-agent-core/telemetry";
 import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core/types";
 import type { Message } from "@oh-my-pi/pi-ai";
+import { z } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import type { EventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { context, SpanStatusCode, trace } from "@opentelemetry/api";
@@ -29,7 +32,6 @@ import {
 	type ReadableSpan,
 	SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { Type } from "@sinclair/typebox";
 import { createUserMessage } from "./helpers";
 
 const MOCK_IDENT = { id: "mock-model", provider: "mock-provider" } as const;
@@ -82,7 +84,7 @@ describe("agent-loop OTEL instrumentation", () => {
 		expect(exporter.getFinishedSpans()).toHaveLength(0);
 	});
 
-	it("emits invoke_agent → chat hierarchy with full gen_ai.* attribute envelope", async () => {
+	it("emits invoke_agent → chat hierarchy with OTEL and pi.gen_ai extension attributes", async () => {
 		const mock = createMockModel({
 			...MOCK_IDENT,
 			responses: [
@@ -126,30 +128,76 @@ describe("agent-loop OTEL instrumentation", () => {
 		expect(invoke?.attributes[GenAIAttr.AgentName]).toBe("researcher");
 		expect(invoke?.attributes[GenAIAttr.AgentDescription]).toBe("test-agent");
 		expect(invoke?.attributes[GenAIAttr.ConversationId]).toBe("conv-42");
-		expect(invoke?.attributes[GenAIAttr.AgentStepCount]).toBe(1);
+		expect(invoke?.attributes[PiGenAIAttr.AgentStepCount]).toBe(1);
 
 		// chat envelope
 		expect(chat?.attributes[GenAIAttr.OperationName]).toBe(GenAIOperation.Chat);
-		expect(chat?.attributes[GenAIAttr.System]).toBe("mock-provider");
 		expect(chat?.attributes[GenAIAttr.ProviderName]).toBe("mock-provider");
 		expect(chat?.attributes[GenAIAttr.RequestModel]).toBe("mock-model");
 		expect(chat?.attributes[GenAIAttr.RequestMaxTokens]).toBe(1024);
 		expect(chat?.attributes[GenAIAttr.RequestTemperature]).toBe(0.7);
 		expect(chat?.attributes[GenAIAttr.RequestTopP]).toBe(0.95);
 		expect(chat?.attributes[GenAIAttr.RequestPresencePenalty]).toBe(0.1);
-		expect(chat?.attributes[GenAIAttr.RequestChoiceCount]).toBe(1);
-		expect(chat?.attributes[GenAIAttr.AgentStepNumber]).toBe(0);
+		expect(chat?.attributes[GenAIAttr.RequestChoiceCount]).toBeUndefined();
+		expect(chat?.attributes[PiGenAIAttr.AgentStepNumber]).toBe(0);
+		expect(chat?.attributes[GenAIAttr.RequestStream]).toBe(true);
 		expect(chat?.attributes[GenAIAttr.OutputType]).toBe("text");
 
 		// chat response/usage
 		expect(chat?.attributes[GenAIAttr.ResponseModel]).toBe("mock-model");
 		expect(chat?.attributes[GenAIAttr.ResponseFinishReasons]).toEqual(["stop"]);
-		expect(chat?.attributes[GenAIAttr.UsageInputTokens]).toBe(12);
+		expect(chat?.attributes[GenAIAttr.UsageInputTokens]).toBe(24);
 		expect(chat?.attributes[GenAIAttr.UsageOutputTokens]).toBe(34);
-		expect(chat?.attributes[GenAIAttr.UsageTotalTokens]).toBe(58);
-		expect(chat?.attributes[GenAIAttr.UsageInputTokensCached]).toBe(5);
-		expect(chat?.attributes[GenAIAttr.UsageInputTokensCacheWrite]).toBe(7);
-		expect(chat?.attributes[GenAIAttr.UsageOutputTokensReasoning]).toBe(11);
+		expect(chat?.attributes[PiGenAIAttr.UsageTotalTokens]).toBe(58);
+		expect(chat?.attributes[GenAIAttr.UsageCacheReadInputTokens]).toBe(5);
+		expect(chat?.attributes[GenAIAttr.UsageCacheCreationInputTokens]).toBe(7);
+		expect(chat?.attributes[GenAIAttr.UsageReasoningOutputTokens]).toBe(11);
+	});
+
+	it("normalizes provider and service-tier attributes to OTEL keys", async () => {
+		const googleMock = createMockModel({
+			id: "gemini-mock",
+			provider: "google",
+			responses: [{ content: ["ok"] }],
+		});
+		await runAndDrain(
+			agentLoop(
+				[createUserMessage("hi")],
+				{ systemPrompt: [], messages: [], tools: [] },
+				{ model: googleMock.model, convertToLlm: identityConverter, telemetry: {} },
+				undefined,
+				googleMock.stream,
+			),
+		);
+
+		const googleChat = findSpan(exporter.getFinishedSpans(), "chat gemini-mock");
+		expect(googleChat?.attributes[GenAIAttr.ProviderName]).toBe("gcp.gemini");
+		expect(googleChat?.attributes["gen_ai.system"]).toBeUndefined();
+
+		exporter.reset();
+		const openAiMock = createMockModel({
+			id: "gpt-mock",
+			provider: "openai",
+			responses: [{ content: ["ok"] }],
+		});
+		await runAndDrain(
+			agentLoop(
+				[createUserMessage("hi")],
+				{ systemPrompt: [], messages: [], tools: [] },
+				{
+					model: openAiMock.model,
+					convertToLlm: identityConverter,
+					serviceTier: "priority",
+					telemetry: {},
+				},
+				undefined,
+				openAiMock.stream,
+			),
+		);
+
+		const openAiChat = findSpan(exporter.getFinishedSpans(), "chat gpt-mock");
+		expect(openAiChat?.attributes[OpenAIAttr.RequestServiceTier]).toBe("priority");
+		expect(openAiChat?.attributes["gen_ai.request.service_tier"]).toBeUndefined();
 	});
 
 	it("emits execute_tool spans parented to invoke_agent (not chat) per semconv", async () => {
@@ -165,7 +213,7 @@ describe("agent-loop OTEL instrumentation", () => {
 			convertToLlm: identityConverter,
 			telemetry: {},
 		};
-		const alphaSchema = Type.Object({ value: Type.String() });
+		const alphaSchema = z.object({ value: z.string() });
 		const alphaTool: AgentTool<typeof alphaSchema> = {
 			name: "alpha",
 			label: "Alpha",
@@ -192,8 +240,8 @@ describe("agent-loop OTEL instrumentation", () => {
 		expect(tool?.attributes[GenAIAttr.ToolDescription]).toBe("echoes input");
 		expect(tool?.status.code).toBe(SpanStatusCode.UNSET);
 
-		// invoke_agent.step_count counts chat completions
-		expect(invoke?.attributes[GenAIAttr.AgentStepCount]).toBe(2);
+		// pi.gen_ai.agent.step.count counts chat completions
+		expect(invoke?.attributes[PiGenAIAttr.AgentStepCount]).toBe(2);
 	});
 
 	it("parents downstream spans created during tool execution (active-context propagation)", async () => {
@@ -210,7 +258,7 @@ describe("agent-loop OTEL instrumentation", () => {
 			convertToLlm: identityConverter,
 			telemetry: {},
 		};
-		const probeSchema = Type.Object({ value: Type.String() });
+		const probeSchema = z.object({ value: z.string() });
 		const probeTool: AgentTool<typeof probeSchema> = {
 			name: "probe",
 			label: "Probe",
@@ -246,7 +294,7 @@ describe("agent-loop OTEL instrumentation", () => {
 			convertToLlm: identityConverter,
 			telemetry: {},
 		};
-		const failSchema = Type.Object({ value: Type.String() });
+		const failSchema = z.object({ value: z.string() });
 		const failTool: AgentTool<typeof failSchema> = {
 			name: "fail",
 			label: "Fail",
@@ -304,10 +352,12 @@ describe("agent-loop OTEL instrumentation", () => {
 		const outputs = chat?.attributes[GenAIAttr.OutputMessages] as string | undefined;
 		const systemAttr = chat?.attributes[GenAIAttr.SystemInstructions] as string | undefined;
 		expect(typeof inputs).toBe("string");
-		expect(JSON.parse(inputs!)).toHaveLength(1);
+		expect(JSON.parse(inputs!)).toEqual([{ role: "user", parts: [{ type: "text", content: "hi" }] }]);
 		expect(typeof outputs).toBe("string");
-		expect(JSON.parse(outputs!)[0].content[0].text).toBe("hi back");
-		expect(JSON.parse(systemAttr!)).toEqual(["sys-instruction"]);
+		expect(JSON.parse(outputs!)).toEqual([
+			{ role: "assistant", parts: [{ type: "text", content: "hi back" }], finish_reason: "stop" },
+		]);
+		expect(JSON.parse(systemAttr!)).toEqual([{ type: "text", content: "sys-instruction" }]);
 	});
 
 	it("captures bounded dashboard summary content when requested", async () => {
@@ -324,18 +374,18 @@ describe("agent-loop OTEL instrumentation", () => {
 		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
-		const request = JSON.parse(chat?.attributes[GenAIAttr.RequestMessages] as string) as Array<{
+		const request = JSON.parse(chat?.attributes[PiGenAIAttr.RequestMessages] as string) as Array<{
 			content: unknown;
 			role: string;
 		}>;
-		const responseText = JSON.parse(chat?.attributes[GenAIAttr.ResponseText] as string);
+		const responseText = JSON.parse(chat?.attributes[PiGenAIAttr.ResponseText] as string);
 		expect(request.map(message => message.role)).toEqual(["system", "user"]);
 		expect(responseText).toEqual(["hi back"]);
 		expect(chat?.attributes[GenAIAttr.InputMessages]).toBeUndefined();
 		expect(chat?.attributes[GenAIAttr.OutputMessages]).toBeUndefined();
 	});
 
-	it("invokes costEstimator and stamps gen_ai.cost.estimated_usd", async () => {
+	it("invokes costEstimator and stamps pi.gen_ai.cost.estimated_usd", async () => {
 		const mock = createMockModel({
 			...MOCK_IDENT,
 			responses: [
@@ -367,9 +417,9 @@ describe("agent-loop OTEL instrumentation", () => {
 		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
-		expect(chat?.attributes[GenAIAttr.CostEstimatedUsd]).toBeCloseTo(0.0105, 6);
-		expect(chat?.attributes[GenAIAttr.CostInputUsd]).toBeCloseTo(0.003, 6);
-		expect(chat?.attributes[GenAIAttr.CostOutputUsd]).toBeCloseTo(0.0075, 6);
+		expect(chat?.attributes[PiGenAIAttr.CostEstimatedUsd]).toBeCloseTo(0.0105, 6);
+		expect(chat?.attributes[PiGenAIAttr.CostInputUsd]).toBeCloseTo(0.003, 6);
+		expect(chat?.attributes[PiGenAIAttr.CostOutputUsd]).toBeCloseTo(0.0075, 6);
 	});
 
 	it("applies dynamic attributes, normalization hooks, and cost deltas", async () => {
@@ -414,7 +464,7 @@ describe("agent-loop OTEL instrumentation", () => {
 		const invoke = findSpan(exporter.getFinishedSpans(), "invoke_agent worker");
 		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
 		expect(invoke?.attributes[GenAIAttr.AgentName]).toBe("worker");
-		expect(chat?.attributes[GenAIAttr.System]).toBe("normalized-provider");
+		expect(chat?.attributes[GenAIAttr.ProviderName]).toBe("normalized-provider");
 		expect(chat?.attributes["tenant.id"]).toBe("tenant-1");
 		expect(deltas).toHaveLength(1);
 		expect(deltas[0]?.costUsd).toBe(0.25);
@@ -423,7 +473,7 @@ describe("agent-loop OTEL instrumentation", () => {
 		expect(deltas[0]?.stepNumber).toBe(0);
 	});
 
-	it("emits gen_ai.cost.unavailable_reason when the estimator declines", async () => {
+	it("emits pi.gen_ai.cost.unavailable_reason when the estimator declines", async () => {
 		const mock = createMockModel({
 			...MOCK_IDENT,
 			responses: [{ content: ["ok"], stopReason: "stop" }],
@@ -437,8 +487,8 @@ describe("agent-loop OTEL instrumentation", () => {
 		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
 
 		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
-		expect(chat?.attributes[GenAIAttr.CostUnavailableReason]).toBe("unsupported_tier");
-		expect(chat?.attributes[GenAIAttr.CostEstimatedUsd]).toBeUndefined();
+		expect(chat?.attributes[PiGenAIAttr.CostUnavailableReason]).toBe("unsupported_tier");
+		expect(chat?.attributes[PiGenAIAttr.CostEstimatedUsd]).toBeUndefined();
 	});
 
 	it("fires onChatUsage for every chat step regardless of cost estimator", async () => {
@@ -474,7 +524,7 @@ describe("agent-loop OTEL instrumentation", () => {
 		expect(ev?.provider).toBe("normalized-provider");
 		expect(ev?.stepNumber).toBe(0);
 		expect(ev?.agent).toEqual({ id: "agent-1", name: "worker" });
-		expect(ev?.usage.inputTokens).toBe(50);
+		expect(ev?.usage.inputTokens).toBe(60);
 		expect(ev?.usage.outputTokens).toBe(25);
 		expect(ev?.usage.cachedInputTokens).toBe(10);
 		expect(ev?.usage.totalTokens).toBe(85);
@@ -613,7 +663,7 @@ describe("agent-loop OTEL instrumentation", () => {
 				onSpanEnd: ctx => ends.push(ctx),
 			},
 		};
-		const echoSchema = Type.Object({ value: Type.String() });
+		const echoSchema = z.object({ value: z.string() });
 		const echoTool: AgentTool<typeof echoSchema> = {
 			name: "echo",
 			label: "Echo",
@@ -643,8 +693,8 @@ describe("agent-loop OTEL instrumentation", () => {
 		const span = findSpan(exporter.getFinishedSpans(), "handoff main → specialist");
 		expect(span).toBeDefined();
 		expect(span?.attributes[GenAIAttr.OperationName]).toBe(GenAIOperation.Handoff);
-		expect(span?.attributes["gen_ai.handoff.from_agent.name"]).toBe("main");
-		expect(span?.attributes["gen_ai.handoff.to_agent.name"]).toBe("specialist");
+		expect(span?.attributes[PiGenAIAttr.HandoffFromAgentName]).toBe("main");
+		expect(span?.attributes[PiGenAIAttr.HandoffToAgentName]).toBe("specialist");
 		expect(span?.attributes[GenAIAttr.ConversationId]).toBe("conv-1");
 	});
 
@@ -675,10 +725,10 @@ describe("agent-loop OTEL instrumentation", () => {
 
 		const span = findSpan(exporter.getFinishedSpans(), "chat mock-model");
 		expect(span?.attributes[GenAIAttr.ConversationId]).toBe("manual-conv");
-		expect(span?.attributes[GenAIAttr.AgentStepNumber]).toBe(7);
-		expect(span?.attributes[GenAIAttr.UsageTotalTokens]).toBe(17);
-		expect(span?.attributes[GenAIAttr.CostEstimatedUsd]).toBe(0.02);
-		expect(JSON.parse(span?.attributes[GenAIAttr.ResponseText] as string)).toEqual(["manual ok"]);
+		expect(span?.attributes[PiGenAIAttr.AgentStepNumber]).toBe(7);
+		expect(span?.attributes[PiGenAIAttr.UsageTotalTokens]).toBe(17);
+		expect(span?.attributes[PiGenAIAttr.CostEstimatedUsd]).toBe(0.02);
+		expect(JSON.parse(span?.attributes[PiGenAIAttr.ResponseText] as string)).toEqual(["manual ok"]);
 	});
 
 	it("reads OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT once at first resolveTelemetry call", () => {
@@ -716,7 +766,7 @@ describe("agent-loop OTEL instrumentation", () => {
 			convertToLlm: identityConverter,
 			telemetry: cfg,
 		};
-		const echoSchema = Type.Object({ value: Type.String() });
+		const echoSchema = z.object({ value: z.string() });
 		const tool: AgentTool<typeof echoSchema> = {
 			name: "echo",
 			label: "Echo",
