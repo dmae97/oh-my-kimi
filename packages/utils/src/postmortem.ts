@@ -46,8 +46,7 @@ function runCleanup(reason: Reason): Promise<void> {
 
 	// Call .cleanup() for each callback that is still "armed".
 	// Use Promise.try to handle sync/async, but only those armed.
-	// Create a copy to avoid mutating the original array with reverse()
-	const promises = [...callbackList].reverse().map(callback => {
+	const promises = callbackList.toReversed().map(callback => {
 		return Promise.try(() => callback(reason));
 	});
 

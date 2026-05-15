@@ -346,7 +346,7 @@ export class HindsightSessionState {
 	async maybeRecallOnAgentStart(): Promise<void> {
 		if (!this.config.autoRecall || this.hasRecalledForFirstTurn) return;
 		const messages = extractMessages(this.session.sessionManager);
-		const lastUser = [...messages].reverse().find(m => m.role === "user");
+		const lastUser = messages.findLast(m => m.role === "user");
 		if (!lastUser) return;
 
 		const query = composeRecallQuery(lastUser.content, messages, this.config.recallContextTurns);
@@ -386,7 +386,7 @@ export class HindsightSessionState {
 	}
 
 	async recallForCompaction(messages: HindsightMessage[]): Promise<string | undefined> {
-		const lastUser = [...messages].reverse().find(m => m.role === "user");
+		const lastUser = messages.findLast(m => m.role === "user");
 		if (!lastUser) return undefined;
 
 		const query = composeRecallQuery(lastUser.content, messages, this.config.recallContextTurns);

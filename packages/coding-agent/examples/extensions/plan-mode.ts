@@ -426,7 +426,7 @@ Execute each step in order.`,
 
 		// Extract todos from last message
 		const messages = event.messages;
-		const lastAssistant = [...messages].reverse().find(m => m.role === "assistant");
+		const lastAssistant = messages.findLast(m => m.role === "assistant");
 		if (lastAssistant && Array.isArray(lastAssistant.content)) {
 			const textContent = lastAssistant.content
 				.filter(
