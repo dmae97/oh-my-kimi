@@ -195,7 +195,12 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 			if (locations.length > 0) {
 				update.locations = locations;
 			}
-			return [toSessionNotification(sessionId, update)];
+			const notifications = [toSessionNotification(sessionId, update)];
+			const planUpdate = mapTodoWriteResultToPlanUpdate(event);
+			if (planUpdate) {
+				notifications.push(toSessionNotification(sessionId, planUpdate));
+			}
+			return notifications;
 		}
 		case "todo_reminder": {
 			const entries = event.todos.map(todo => ({
@@ -310,6 +315,66 @@ const todoStatusMap: Record<TodoStatus, "pending" | "in_progress" | "completed">
 
 function mapTodoStatus(status: TodoStatus): "pending" | "in_progress" | "completed" {
 	return todoStatusMap[status];
+}
+
+function mapTodoWriteResultToPlanUpdate(
+	event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
+): SessionUpdate | undefined {
+	if (event.toolName !== "todo_write" || event.isError) {
+		return undefined;
+	}
+	const phases = extractTodoWritePhases(event.result);
+	if (!Array.isArray(phases)) {
+		return undefined;
+	}
+	return {
+		sessionUpdate: "plan",
+		entries: extractTodoEntries(phases).map(todo => ({
+			content: todo.content,
+			priority: "medium" as const,
+			status: mapTodoStatus(todo.status),
+		})),
+	};
+}
+
+function extractTodoWritePhases(result: unknown): unknown {
+	if (typeof result !== "object" || result === null || !("details" in result)) {
+		return undefined;
+	}
+	const details = (result as { details?: unknown }).details;
+	if (typeof details !== "object" || details === null || !("phases" in details)) {
+		return undefined;
+	}
+	return (details as { phases?: unknown }).phases;
+}
+
+function extractTodoEntries(phases: unknown[]): Array<{ content: string; status: TodoStatus }> {
+	const entries: Array<{ content: string; status: TodoStatus }> = [];
+	for (const phase of phases) {
+		if (typeof phase !== "object" || phase === null || !("tasks" in phase)) {
+			continue;
+		}
+		const tasks = (phase as { tasks?: unknown }).tasks;
+		if (!Array.isArray(tasks)) {
+			continue;
+		}
+		for (const task of tasks) {
+			if (typeof task !== "object" || task === null || !("content" in task)) {
+				continue;
+			}
+			const content = (task as { content?: unknown }).content;
+			if (typeof content !== "string" || content.length === 0) {
+				continue;
+			}
+			const status = (task as { status?: TodoStatus }).status;
+			entries.push({ content, status: isTodoStatus(status) ? status : "pending" });
+		}
+	}
+	return entries;
+}
+
+function isTodoStatus(status: unknown): status is TodoStatus {
+	return status === "pending" || status === "in_progress" || status === "completed" || status === "abandoned";
 }
 
 function buildToolTitle(toolName: string, args: unknown, intent: string | undefined): string {

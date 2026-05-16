@@ -801,6 +801,104 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("emits ACP plan updates from live todo_write results", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+
+		session.prompt = async (text: string): Promise<void> => {
+			session.promptCalls.push(text);
+			session.isStreaming = true;
+			for (const listener of session.listeners()) {
+				listener({
+					type: "tool_execution_end",
+					toolCallId: "todo_1",
+					toolName: "todo_write",
+					isError: false,
+					result: {
+						content: [{ type: "text", text: "updated" }],
+						details: {
+							phases: [
+								{
+									name: "Work",
+									tasks: [
+										{ content: "Fix bug", status: "in_progress" },
+										{ content: "Run tests", status: "completed" },
+									],
+								},
+							],
+						},
+					},
+				} as AgentSessionEvent);
+				listener({
+					type: "tool_execution_end",
+					toolCallId: "todo_empty",
+					toolName: "todo_write",
+					isError: false,
+					result: {
+						content: [{ type: "text", text: "cleared" }],
+						details: { phases: [] },
+					},
+				} as AgentSessionEvent);
+				listener({ type: "agent_end", messages: [] } as AgentSessionEvent);
+			}
+			session.isStreaming = false;
+		};
+
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000047",
+			prompt: [{ type: "text", text: "write todos" }],
+		} as PromptRequest);
+
+		expect(harness.updates.map(update => update.update)).toContainEqual({
+			sessionUpdate: "plan",
+			entries: [
+				{ content: "Fix bug", priority: "medium", status: "in_progress" },
+				{ content: "Run tests", priority: "medium", status: "completed" },
+			],
+		});
+		expect(harness.updates.map(update => update.update)).toContainEqual({ sessionUpdate: "plan", entries: [] });
+		expectAcpNotifications(harness.updates);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("replays todo_write tool results as ACP plan updates", async () => {
+		const harness = await createHarness();
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "todo_replay",
+			toolName: "todo_write",
+			content: [{ type: "text", text: "updated" }],
+			details: {
+				phases: [{ name: "Replay", tasks: [{ content: "Restore plan", status: "pending" }] }],
+			},
+			isError: false,
+			timestamp: Date.now(),
+		});
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+
+		expect(harness.updates.map(update => update.update)).toContainEqual({
+			sessionUpdate: "plan",
+			entries: [{ content: "Restore plan", priority: "medium", status: "pending" }],
+		});
+		expectAcpNotifications(harness.updates);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("advertises ACP-safe builtins and skill commands", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
