@@ -1,0 +1,24 @@
+{
+  "name": "robomp-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Glassmorphic SolidJS dashboard bundled by Vite and served by robomp's FastAPI app.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "solid-js": "^1.9.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.14",
+    "@types/node": "^22.10.5",
+    "tailwindcss": "^4.0.14",
+    "typescript": "^5.7.3",
+    "vite": "^5.4.14",
+    "vite-plugin-solid": "^2.11.6"
+  }
+}

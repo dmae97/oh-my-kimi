@@ -1,0 +1,59 @@
+{
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true,
+    "defaultBranch": "main"
+  },
+  "linter": {
+    "enabled": true,
+    "includes": ["**"],
+    "rules": {
+      "recommended": true,
+      "a11y": "off",
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": { "level": "warn", "fix": "none" },
+        "noVoidTypeReturn": "off"
+      },
+      "style": {
+        "noNonNullAssertion": "off",
+        "useConst": "error",
+        "useNodejsImportProtocol": "off"
+      },
+      "suspicious": {
+        "noExplicitAny": "off",
+        "noControlCharactersInRegex": "off",
+        "noEmptyInterface": "off",
+        "noConstEnum": "off"
+      }
+    }
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "lineEnding": "lf"
+  },
+  "javascript": {
+    "formatter": {
+      "semicolons": "always",
+      "quoteStyle": "double",
+      "trailingCommas": "all",
+      "bracketSpacing": true,
+      "arrowParentheses": "always"
+    }
+  },
+  "files": {
+    "includes": [
+      "web/src/**/*.ts",
+      "web/src/**/*.tsx",
+      "web/*.ts",
+      "!**/node_modules/**/*",
+      "!web/dist/**/*",
+      "!src/robomp/static/**/*"
+    ]
+  },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } }
+}

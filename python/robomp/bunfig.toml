@@ -1,0 +1,8 @@
+telemetry = false
+
+[install]
+linker = "hoisted"
+saveTextLockfile = true
+
+[run]
+bun = true
