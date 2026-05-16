@@ -38,6 +38,9 @@ pub struct PtyStartOptions<'env> {
 	pub cols:       Option<u16>,
 	/// PTY row count.
 	pub rows:       Option<u16>,
+	/// Shell binary to use (e.g. "sh", "bash", or an absolute path).
+	/// Defaults to "sh" if not provided.
+	pub shell:      Option<String>,
 }
 
 /// Result of a PTY command run.
@@ -58,6 +61,7 @@ struct PtyRunConfig {
 	env:     Option<HashMap<String, String>>,
 	cols:    u16,
 	rows:    u16,
+	shell:   Option<String>,
 }
 
 enum ReaderEvent {
@@ -116,6 +120,7 @@ impl PtySession {
 			env:     options.env,
 			cols:    options.cols.unwrap_or(120).clamp(20, 400),
 			rows:    options.rows.unwrap_or(40).clamp(5, 200),
+			shell:   options.shell,
 		};
 		let ct = task::CancelToken::new(options.timeout_ms, options.signal);
 		let core = Arc::clone(&self.core);
@@ -247,7 +252,7 @@ fn run_pty_sync(
 			.map_err(|err| Error::from_reason(format!("Failed to open PTY: {err}")))?
 	};
 
-	let mut cmd = CommandBuilder::new("sh");
+	let mut cmd = CommandBuilder::new(config.shell.as_deref().unwrap_or("sh"));
 	cmd.arg("-lc");
 	cmd.arg(&config.command);
 	if let Some(cwd) = config.cwd.as_ref() {
