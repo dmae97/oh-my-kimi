@@ -81,7 +81,7 @@ describe("ModelRegistry", () => {
 	}
 
 	function writeCachedOllamaModels(models: Model<"openai-completions">[]) {
-		writeModelCache("ollama", Date.now(), models, true, cacheDbPath);
+		writeModelCache("ollama", Date.now(), models, true, "", cacheDbPath);
 	}
 
 	function getModelsForProvider(registry: ModelRegistry, provider: string) {
@@ -2206,7 +2206,7 @@ describe("ModelRegistry", () => {
 			contextWindow: 1_000_000,
 			maxTokens: 384_000,
 		};
-		writeModelCache("ollama-cloud", Date.now(), [cachedModel], true, cacheDbPath);
+		writeModelCache("ollama-cloud", Date.now(), [cachedModel], true, "", cacheDbPath);
 
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 

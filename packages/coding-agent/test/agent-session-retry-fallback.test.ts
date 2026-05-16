@@ -671,7 +671,7 @@ describe("AgentSession retry fallback", () => {
 			contextWindow: 1_000_000,
 			maxTokens: 384_000,
 		};
-		writeModelCache("ollama-cloud", Date.now(), [cachedModel], true, path.join(tempDir.path(), "models.db"));
+		writeModelCache("ollama-cloud", Date.now(), [cachedModel], true, "", path.join(tempDir.path(), "models.db"));
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.json"));
 
 		const settings = Settings.isolated({
