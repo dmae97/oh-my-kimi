@@ -41,7 +41,12 @@ import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slas
 import type { Goal, GoalModeState } from "../goals/state";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
-import { normalizePlanTitle, type PlanApprovalDetails, renameApprovedPlanFile } from "../plan-mode/approved-plan";
+import {
+	humanizePlanTitle,
+	normalizePlanTitle,
+	type PlanApprovalDetails,
+	renameApprovedPlanFile,
+} from "../plan-mode/approved-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
@@ -1440,6 +1445,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		options: {
 			planFilePath: string;
 			finalPlanFilePath: string;
+			title: string;
 			preserveContext?: boolean;
 			compactBeforeExecute?: boolean;
 		},
@@ -1521,6 +1527,20 @@ export class InteractiveMode implements InteractiveModeContext {
 				"Plan approved, but compaction was cancelled — execution not dispatched. Submit a turn to continue.",
 			);
 			return;
+		}
+
+		// Approved plans land in a fresh (or compacted) session whose first user-visible
+		// turn is the synthetic plan-approved prompt — that path bypasses the
+		// input-controller's title generation. Seed an auto-name from the plan title
+		// so the session is not left unnamed. `setSessionName("auto")` is a no-op
+		// when the user has already chosen a name (preserveContext paths).
+		const seededName = humanizePlanTitle(options.title);
+		if (seededName && !this.sessionManager.getSessionName()) {
+			const applied = await this.sessionManager.setSessionName(seededName, "auto");
+			if (applied) {
+				setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
+				this.updateEditorBorderColor();
+			}
 		}
 
 		// markPlanReferenceSent fires only on the dispatch path so the synthetic
@@ -1828,6 +1848,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				await this.#approvePlan(latestPlanContent, {
 					planFilePath,
 					finalPlanFilePath,
+					title: details.title,
 					preserveContext: choice !== "Approve and execute",
 					compactBeforeExecute: choice === "Approve and compact context",
 				});
