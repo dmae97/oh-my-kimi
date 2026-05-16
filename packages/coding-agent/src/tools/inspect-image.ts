@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import { instrumentedCompleteSimple, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import { type Api, completeSimple, type Model } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
@@ -118,7 +119,8 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 			throw new ToolError("inspect_image only supports PNG, JPEG, GIF, and WEBP files detected by file content.");
 		}
 
-		const response = await this.completeImageRequest(
+		const telemetry = resolveTelemetry(this.session.getTelemetry?.(), this.session.getSessionId?.() ?? undefined);
+		const response = await instrumentedCompleteSimple(
 			model,
 			{
 				systemPrompt: [prompt.render(inspectImageSystemPromptTemplate)],
@@ -134,6 +136,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 				],
 			},
 			{ apiKey, signal },
+			{ telemetry, oneshotKind: "inspect_image", completeImpl: this.completeImageRequest },
 		);
 
 		if (response.stopReason === "error") {

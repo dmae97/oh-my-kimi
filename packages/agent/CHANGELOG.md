@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added optional `telemetry` support to `generateSummary`, `generateHandoff`, `generateBranchSummary`, and `compact` options so compaction, handoff, and branch summary one-shot LLM calls can emit OpenTelemetry chat telemetry when enabled
+- Added shared oneshot telemetry instrumentation for compaction, handoff, and branch summary calls, tagging spans with `pi.gen_ai.oneshot.kind` values such as `compaction_summary`, `compaction_short_summary`, `compaction_turn_prefix`, `handoff`, and `branch_summary`
 
 ## [15.1.2] - 2026-05-15
 ### Added

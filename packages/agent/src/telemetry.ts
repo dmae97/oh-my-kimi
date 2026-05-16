@@ -24,10 +24,14 @@
  */
 
 import {
+	type Api,
 	type AssistantMessage,
+	type Context,
+	completeSimple,
 	type Message,
 	type Model,
 	type ServiceTier,
+	type SimpleStreamOptions,
 	type StopReason,
 	shouldSendServiceTier,
 	type ToolChoice,
@@ -139,6 +143,10 @@ export const enum PiGenAIAttr {
 	HandoffFromAgentId = "pi.gen_ai.handoff.from_agent.id",
 	HandoffToAgentName = "pi.gen_ai.handoff.to_agent.name",
 	HandoffToAgentId = "pi.gen_ai.handoff.to_agent.id",
+	// Marks chat spans emitted outside the agent loop (compaction, handoff, branch
+	// summary, image inspection, …). Lets dashboards split oneshot cost / latency
+	// from main-turn cost without overloading the semconv `gen_ai.operation.name`.
+	OneshotKind = "pi.gen_ai.oneshot.kind",
 	// Gateway / proxy (LiteLLM, Helicone, Portkey, …) — populated when a known
 	// gateway header pattern is detected on the upstream response. The base
 	// `gen_ai.provider.name` continues to track the *upstream* provider (e.g.
@@ -1571,6 +1579,111 @@ export async function recordManualChatTelemetry(
 	applyTerminalStatus(span, options.finishReason, undefined);
 	if (options.endSpan ?? options.span === undefined) span.end();
 	return span;
+}
+
+/**
+ * Options accepted by {@link instrumentedCompleteSimple}. Mirrors the
+ * `streamAssistantResponse` chat-span lifecycle for oneshot LLM calls
+ * (compaction summaries, handoff document, branch summary, inspect_image).
+ */
+export interface InstrumentedChatSpanOptions {
+	readonly telemetry: AgentTelemetry | undefined;
+	/** Optional explicit parent span. Defaults to `context.active()`. */
+	readonly parent?: Span;
+	/** Step index recorded on the span; defaults to `-1` for non-loop calls. */
+	readonly stepNumber?: number;
+	/**
+	 * Tag stamped onto `pi.gen_ai.oneshot.kind`. Values used by the agent:
+	 * `compaction_summary`, `compaction_short_summary`, `compaction_turn_prefix`,
+	 * `handoff`, `branch_summary`, `inspect_image`. Free-form to allow callers
+	 * outside this package to add new kinds without bumping the helper.
+	 */
+	readonly oneshotKind?: string;
+	/** Extra span attributes applied verbatim. */
+	readonly attributes?: Attributes;
+	/**
+	 * Override for the underlying {@link completeSimple} call. Defaults to
+	 * `completeSimple` from `@oh-my-pi/pi-ai`. Use to retain a test injection
+	 * seam while still going through the chat-span lifecycle.
+	 */
+	readonly completeImpl?: <TApi extends Api>(
+		model: Model<TApi>,
+		ctx: Context,
+		options: SimpleStreamOptions,
+	) => Promise<AssistantMessage>;
+}
+
+/**
+ * Wrap a {@link completeSimple} round-trip with the same chat-span lifecycle
+ * the agent loop uses for streamed turns: `startChatSpan` → run inside the
+ * active span → `finishChatSpan` on success, `failChatSpan` on throw.
+ *
+ * Short-circuits when `telemetry` is `undefined` so cost / overhead stays at
+ * zero for installations without an OTEL SDK.
+ */
+export async function instrumentedCompleteSimple<TApi extends Api>(
+	model: Model<TApi>,
+	ctx: Context,
+	options: SimpleStreamOptions,
+	span: InstrumentedChatSpanOptions,
+): Promise<AssistantMessage> {
+	const { telemetry, parent, oneshotKind } = span;
+	const stepNumber = span.stepNumber ?? -1;
+	const reasoning = options.reasoning;
+	const chatSpan = startChatSpan(telemetry, model, {
+		parent,
+		stepNumber,
+		request: {
+			maxTokens: options.maxTokens,
+			temperature: options.temperature,
+			topP: options.topP,
+			topK: options.topK,
+			presencePenalty: options.presencePenalty,
+			serviceTier: options.serviceTier,
+			reasoningEffort: typeof reasoning === "string" ? reasoning : undefined,
+			toolChoice: options.toolChoice,
+			tools: ctx.tools,
+			systemPrompt: ctx.systemPrompt,
+			messages: ctx.messages,
+		},
+	});
+	if (chatSpan) {
+		if (oneshotKind) chatSpan.setAttribute(PiGenAIAttr.OneshotKind, oneshotKind);
+		if (span.attributes) chatSpan.setAttributes(span.attributes);
+	}
+
+	// Wrap the user-supplied onResponse so we always capture response headers
+	// for the cost / gateway hooks without stealing them from the caller.
+	let capturedHeaders: Readonly<Record<string, string>> | undefined;
+	const userOnResponse = options.onResponse;
+	const captureOnResponse: NonNullable<SimpleStreamOptions["onResponse"]> = (response, modelInfo) => {
+		capturedHeaders = response.headers;
+		return userOnResponse?.(response, modelInfo);
+	};
+
+	try {
+		return await runInActiveSpan(chatSpan, async () => {
+			const complete = span.completeImpl ?? completeSimple;
+			const message = await complete(model, ctx, {
+				...options,
+				onResponse: captureOnResponse,
+			});
+			await finishChatSpan(telemetry, chatSpan, message, {
+				stepNumber,
+				serviceTier: options.serviceTier,
+				responseHeaders: capturedHeaders,
+				baseUrl: model.baseUrl,
+			});
+			return message;
+		});
+	} catch (err) {
+		failChatSpan(telemetry, chatSpan, {
+			errorObject: err,
+			responseHeaders: capturedHeaders,
+			baseUrl: model.baseUrl,
+		});
+		throw err;
+	}
 }
 
 /**

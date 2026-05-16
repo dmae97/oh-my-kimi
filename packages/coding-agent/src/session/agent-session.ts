@@ -24,6 +24,7 @@ import {
 	type AgentMessage,
 	type AgentState,
 	type AgentTool,
+	resolveTelemetry,
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import {
@@ -5249,6 +5250,7 @@ export class AgentSession {
 					convertToLlm,
 					initiatorOverride: "agent",
 					metadata: this.agent.metadataForProvider(model.provider),
+					telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
 				},
 				handoffSignal,
 			);
@@ -5961,6 +5963,7 @@ export class AgentSession {
 		options?: SummaryOptions,
 	): Promise<CompactionResult> {
 		const candidates = this.#getCompactionModelCandidates(this.#modelRegistry.getAvailable());
+		const telemetry = resolveTelemetry(this.agent.telemetry, this.sessionId);
 
 		for (const candidate of candidates) {
 			const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
@@ -5971,6 +5974,7 @@ export class AgentSession {
 					...options,
 					metadata: this.agent.metadataForProvider(candidate.provider),
 					convertToLlm,
+					telemetry,
 				});
 			} catch (error) {
 				if (!this.#isCompactionAuthFailure(error)) {
@@ -6207,6 +6211,7 @@ export class AgentSession {
 			} else {
 				const candidates = this.#getCompactionModelCandidates(availableModels);
 				const retrySettings = this.settings.getGroup("retry");
+				const telemetry = resolveTelemetry(this.agent.telemetry, this.sessionId);
 				let compactResult: CompactionResult | undefined;
 				let lastError: unknown;
 
@@ -6224,6 +6229,7 @@ export class AgentSession {
 								metadata: this.agent.metadataForProvider(candidate.provider),
 								initiatorOverride: "agent",
 								convertToLlm,
+								telemetry,
 							});
 							break;
 						} catch (error) {
@@ -7828,6 +7834,7 @@ export class AgentSession {
 				reserveTokens: branchSummarySettings.reserveTokens,
 				metadata: this.agent.metadataForProvider(model.provider),
 				convertToLlm,
+				telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
 			});
 			this.#branchSummaryAbortController = undefined;
 			if (result.aborted) {

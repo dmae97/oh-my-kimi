@@ -7,7 +7,6 @@
 
 import {
 	type AssistantMessage,
-	completeSimple,
 	Effort,
 	type Message,
 	type MessageAttribution,
@@ -16,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { countTokens } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import type { AgentMessage, AgentTool } from "../types";
 import type { CompactionEntry, SessionEntry } from "./entries";
 import { type ConvertToLlm, convertToLlm, createBranchSummaryMessage, createCustomMessage } from "./messages";
@@ -514,6 +514,13 @@ export interface SummaryOptions {
 	initiatorOverride?: MessageAttribution;
 	metadata?: Record<string, unknown>;
 	convertToLlm?: ConvertToLlm;
+	/**
+	 * Optional telemetry handle. When provided, every LLM call emitted during
+	 * compaction is wrapped in an OTEL chat span tagged with
+	 * `pi.gen_ai.oneshot.kind` (`compaction_summary`, `compaction_short_summary`,
+	 * or `compaction_turn_prefix`). `undefined` keeps the call paths zero-cost.
+	 */
+	telemetry?: AgentTelemetry;
 }
 
 export async function generateSummary(
@@ -570,7 +577,7 @@ export async function generateSummary(
 		return remote.summary;
 	}
 
-	const response = await completeSimple(
+	const response = await instrumentedCompleteSimple(
 		model,
 		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
 		{
@@ -581,6 +588,7 @@ export async function generateSummary(
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 		},
+		{ telemetry: options?.telemetry, oneshotKind: "compaction_summary" },
 	);
 
 	if (response.stopReason === "error") {
@@ -608,6 +616,11 @@ export interface HandoffOptions {
 	convertToLlm?: ConvertToLlm;
 	initiatorOverride?: MessageAttribution;
 	metadata?: Record<string, unknown>;
+	/**
+	 * Optional telemetry handle. When provided, the handoff LLM call is
+	 * wrapped in an OTEL chat span tagged with `pi.gen_ai.oneshot.kind = "handoff"`.
+	 */
+	telemetry?: AgentTelemetry;
 }
 
 export function renderHandoffPrompt(customInstructions?: string): string {
@@ -635,7 +648,7 @@ export async function generateHandoff(
 		},
 	];
 
-	const response = await completeSimple(
+	const response = await instrumentedCompleteSimple(
 		model,
 		{
 			systemPrompt: options.systemPrompt,
@@ -650,6 +663,7 @@ export async function generateHandoff(
 			initiatorOverride: options.initiatorOverride,
 			metadata: options.metadata,
 		},
+		{ telemetry: options.telemetry, oneshotKind: "handoff" },
 	);
 
 	if (response.stopReason === "error") {
@@ -694,7 +708,7 @@ async function generateShortSummary(
 		return remote.summary;
 	}
 
-	const response = await completeSimple(
+	const response = await instrumentedCompleteSimple(
 		model,
 		{
 			systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT],
@@ -708,6 +722,7 @@ async function generateShortSummary(
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 		},
+		{ telemetry: options?.telemetry, oneshotKind: "compaction_short_summary" },
 	);
 
 	if (response.stopReason === "error") {
@@ -889,6 +904,7 @@ export async function compact(
 		initiatorOverride: options?.initiatorOverride,
 		metadata: options?.metadata,
 		convertToLlm: options?.convertToLlm,
+		telemetry: options?.telemetry,
 	};
 
 	let preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, undefined);
@@ -978,6 +994,7 @@ export async function compact(
 			remoteEndpoint: summaryOptions.remoteEndpoint,
 			initiatorOverride: summaryOptions.initiatorOverride,
 			metadata: summaryOptions.metadata,
+			telemetry: summaryOptions.telemetry,
 		},
 	);
 
@@ -1023,7 +1040,7 @@ async function generateTurnPrefixSummary(
 		},
 	];
 
-	const response = await completeSimple(
+	const response = await instrumentedCompleteSimple(
 		model,
 		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
 		{
@@ -1034,6 +1051,7 @@ async function generateTurnPrefixSummary(
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 		},
+		{ telemetry: options?.telemetry, oneshotKind: "compaction_turn_prefix" },
 	);
 
 	if (response.stopReason === "error") {

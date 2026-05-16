@@ -6,8 +6,8 @@
  */
 
 import type { Model } from "@oh-my-pi/pi-ai";
-import { completeSimple } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
+import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import type { AgentMessage } from "../types";
 import { estimateTokens } from "./compaction";
 import type { ReadonlySessionManager, SessionEntry } from "./entries";
@@ -81,6 +81,11 @@ export interface GenerateBranchSummaryOptions {
 	metadata?: Record<string, unknown>;
 	/** Convert app-specific messages before serializing the branch summary prompt. */
 	convertToLlm?: ConvertToLlm;
+	/**
+	 * Optional telemetry handle. When provided, the branch summary LLM call is
+	 * wrapped in an OTEL chat span tagged with `pi.gen_ai.oneshot.kind = "branch_summary"`.
+	 */
+	telemetry?: AgentTelemetry;
 }
 
 // ============================================================================
@@ -299,10 +304,11 @@ export async function generateBranchSummary(
 	];
 
 	// Call LLM for summarization
-	const response = await completeSimple(
+	const response = await instrumentedCompleteSimple(
 		model,
 		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
 		{ apiKey, signal, maxTokens: 2048, metadata },
+		{ telemetry: options.telemetry, oneshotKind: "branch_summary" },
 	);
 
 	// Check if aborted or errored
