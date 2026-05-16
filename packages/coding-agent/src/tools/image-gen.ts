@@ -22,12 +22,23 @@ import * as z from "zod/v4";
 import packageJson from "../../package.json" with { type: "json" };
 import { isAuthenticated, type ModelRegistry } from "../config/model-registry";
 import type { CustomTool } from "../extensibility/custom-tools/types";
+import { ohMyPiXAIUserAgent, resolveXAIHttpCredentials } from "../lib/xai-http";
 import imageGenDescription from "../prompts/tools/image-gen.md" with { type: "text" };
 import { resolveReadPath } from "./path-utils";
 
 const DEFAULT_MODEL = "gemini-3-pro-image-preview";
 const DEFAULT_OPENROUTER_MODEL = "google/gemini-3-pro-image-preview";
 const DEFAULT_ANTIGRAVITY_MODEL = "gemini-3-pro-image";
+const DEFAULT_XAI_IMAGE_MODEL = "grok-imagine-image";
+const XAI_ASPECT = {
+	"1:1": "1:1",
+	"16:9": "16:9",
+	"9:16": "9:16",
+	"4:3": "4:3",
+	"3:4": "3:4",
+	"3:2": "3:2",
+	"2:3": "2:3",
+} as const;
 const IMAGE_TIMEOUT = 3 * 60 * 1000; // 3 minutes
 const MAX_IMAGE_SIZE = 35 * 1024 * 1024;
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -38,7 +49,7 @@ const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 const IMAGE_SYSTEM_INSTRUCTION =
 	"You are an AI image generator. Generate images based on user descriptions. Focus on creating high-quality, visually appealing images that match the user's request.";
 
-type ImageProvider = "antigravity" | "gemini" | "openai" | "openai-codex" | "openrouter";
+type ImageProvider = "antigravity" | "gemini" | "openai" | "openai-codex" | "openrouter" | "xai";
 interface ImageApiKey {
 	provider: ImageProvider;
 	apiKey: string;
@@ -429,6 +440,17 @@ async function findAntigravityCredentials(modelRegistry: ModelRegistry): Promise
 	};
 }
 
+async function findXAIImageCredentials(modelRegistry?: ModelRegistry): Promise<ImageApiKey | null> {
+	if (modelRegistry) {
+		const creds = await resolveXAIHttpCredentials(modelRegistry);
+		if (creds) return { provider: "xai", apiKey: creds.apiKey };
+		return null;
+	}
+	const apiKey = $env.XAI_API_KEY;
+	if (apiKey) return { provider: "xai", apiKey };
+	return null;
+}
+
 async function findOpenAIHostedImageCredentials(
 	modelRegistry: ModelRegistry | undefined,
 	activeModel: Model | undefined,
@@ -468,9 +490,13 @@ async function findImageApiKey(
 		const openRouterKey = getEnvApiKey("openrouter");
 		if (openRouterKey) return { provider: "openrouter", apiKey: openRouterKey };
 		// Fall through to auto-detect if preferred provider key not found.
+	} else if (preferredImageProvider === "xai") {
+		const xai = await findXAIImageCredentials(modelRegistry);
+		if (xai) return xai;
+		// Fall through to auto-detect if preferred provider key not found.
 	}
 
-	// Auto-detect: GPT hosted image generation, then Antigravity, OpenRouter, Gemini.
+	// Auto-detect: GPT hosted image generation, then Antigravity, xAI, OpenRouter, Gemini.
 	const openAI = await findOpenAIHostedImageCredentials(modelRegistry, activeModel, sessionId);
 	if (openAI) return openAI;
 
@@ -478,6 +504,9 @@ async function findImageApiKey(
 		const antigravity = await findAntigravityCredentials(modelRegistry);
 		if (antigravity) return antigravity;
 	}
+
+	const xai = await findXAIImageCredentials(modelRegistry);
+	if (xai) return xai;
 
 	const openRouterKey = getEnvApiKey("openrouter");
 	if (openRouterKey) return { provider: "openrouter", apiKey: openRouterKey };
@@ -922,7 +951,9 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 						? DEFAULT_ANTIGRAVITY_MODEL
 						: provider === "openrouter"
 							? DEFAULT_OPENROUTER_MODEL
-							: DEFAULT_MODEL;
+							: provider === "xai"
+								? DEFAULT_XAI_IMAGE_MODEL
+								: DEFAULT_MODEL;
 			const resolvedModel = provider === "openrouter" ? resolveOpenRouterModel(model) : model;
 			const cwd = ctx.sessionManager.getCwd();
 
@@ -1055,6 +1086,93 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 						images: parsed.images,
 						responseText,
 						usage: parsed.usage,
+					},
+				};
+			}
+
+			if (provider === "xai") {
+				if (!ctx.modelRegistry) {
+					throw new Error("Missing modelRegistry for xAI image generation");
+				}
+				const xaiCreds = await resolveXAIHttpCredentials(ctx.modelRegistry);
+				if (!xaiCreds) {
+					throw new Error(
+						"No xAI credentials. Run /login → xAI Grok OAuth (SuperGrok Subscription) or set XAI_API_KEY.",
+					);
+				}
+
+				const prompt = assemblePrompt(params);
+				const aspectRatio = XAI_ASPECT[params.aspect_ratio ?? "1:1"];
+
+				const xaiResponse = await fetch(`${xaiCreds.baseURL}/images/generations`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${xaiCreds.apiKey}`,
+						"Content-Type": "application/json",
+						"User-Agent": ohMyPiXAIUserAgent(),
+					},
+					body: JSON.stringify({
+						model: resolvedModel,
+						prompt,
+						aspect_ratio: aspectRatio,
+						resolution: "1k",
+						n: 1,
+						response_format: "b64_json",
+					}),
+					signal: requestSignal,
+				});
+
+				const xaiRawText = await xaiResponse.text();
+				if (!xaiResponse.ok) {
+					let message = xaiRawText;
+					try {
+						const parsedErr = JSON.parse(xaiRawText) as { error?: { message?: string } };
+						message = parsedErr.error?.message ?? message;
+					} catch {
+						// Keep raw text.
+					}
+					throw new Error(`xAI image request failed (${xaiResponse.status}): ${message}`);
+				}
+
+				const xaiData = JSON.parse(xaiRawText) as {
+					data?: Array<{ b64_json?: string; url?: string }>;
+				};
+				const xaiInlineImages: InlineImageData[] = [];
+				for (const entry of xaiData.data ?? []) {
+					if (entry.b64_json) {
+						const bytes = Buffer.from(entry.b64_json, "base64");
+						const mimeType = parseImageMetadata(bytes)?.mimeType ?? "image/png";
+						xaiInlineImages.push({ data: entry.b64_json, mimeType });
+					} else if (entry.url) {
+						xaiInlineImages.push(await loadImageFromUrl(entry.url, requestSignal));
+					}
+				}
+
+				if (xaiInlineImages.length === 0) {
+					return {
+						content: [{ type: "text", text: "No image data returned." }],
+						details: {
+							provider,
+							model: resolvedModel,
+							imageCount: 0,
+							imagePaths: [],
+							images: [],
+						},
+					};
+				}
+
+				const xaiImagePaths = await saveImagesToTemp(xaiInlineImages);
+
+				return {
+					content: [
+						{ type: "text", text: buildResponseSummary(provider, resolvedModel, xaiImagePaths, undefined) },
+					],
+					details: {
+						provider,
+						model: resolvedModel,
+						imageCount: xaiInlineImages.length,
+						imagePaths: xaiImagePaths,
+						images: xaiInlineImages,
 					},
 				};
 			}
