@@ -13,8 +13,8 @@ import type { ToolSession } from "../../../tools";
 import { getFilePriority } from "./git-file-diff";
 
 const analyzeFileSchema = z.object({
-	files: z.array(z.string().describe("File path")).min(1),
-	goal: z.string().describe("Optional analysis focus").optional(),
+	files: z.array(z.string().describe("file path")).min(1),
+	goal: z.string().describe("analysis focus").optional(),
 });
 
 const analyzeFileOutputSchema = {

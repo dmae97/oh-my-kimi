@@ -119,7 +119,7 @@ Supported formats:
 
 Behavior:
 
-- Validates parsed data with AJV against a provided TypeBox schema.
+- Validates parsed data against a provided Zod schema.
 - Caches load result until `invalidate()`.
 - Returns tri-state result via `tryLoad()`:
   - `ok`

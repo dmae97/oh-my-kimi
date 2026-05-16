@@ -37,35 +37,21 @@ import type {
 const EXPERIMENT_TOOL_NAMES = ["init_experiment", "run_experiment", "log_experiment", "update_notes"];
 
 const logExperimentSchema = z.object({
-	metric: z
-		.number()
-		.describe("Primary metric value for this run. May differ from the parsed value; deviation is recorded."),
-	status: z.enum(["keep", "discard", "crash", "checks_failed"] as const).describe("Outcome for this run."),
-	description: z.string().describe("Short description of the experiment."),
-	metrics: z.record(z.string(), z.number()).describe("Secondary metrics for this run.").optional(),
-	asi: z
-		.object({})
-		.passthrough()
-		.describe("Free-form structured metadata captured for this run (hypothesis, learnings, etc.).")
-		.optional(),
-	commit: z
-		.string()
-		.describe("Override the commit hash recorded for this run. Defaults to the current HEAD.")
-		.optional(),
-	justification: z
-		.string()
-		.describe(
-			"Required when the run modifies paths outside scope or inside off-limits and you still want it kept. Free-form explanation.",
-		)
-		.optional(),
+	metric: z.number().describe("primary metric value"),
+	status: z.enum(["keep", "discard", "crash", "checks_failed"] as const).describe("run outcome"),
+	description: z.string().describe("short run description"),
+	metrics: z.record(z.string(), z.number()).describe("secondary metrics").optional(),
+	asi: z.object({}).passthrough().describe("free-form structured metadata").optional(),
+	commit: z.string().describe("override recorded commit hash").optional(),
+	justification: z.string().describe("required when keeping a scope-deviating run").optional(),
 	flag_runs: z
 		.array(
 			z.object({
-				run_id: z.number().describe("Run id (#) of a previously logged run to flag as suspect."),
-				reason: z.string().describe("Why this earlier run is suspect (e.g. reward-hacked, broken metric)."),
+				run_id: z.number().describe("run id to flag"),
+				reason: z.string().describe("why this run is suspect"),
 			}),
 		)
-		.describe("Mark earlier runs as flagged. Flagged runs are excluded from baseline and best-metric math.")
+		.describe("flag earlier runs as suspect")
 		.optional(),
 });
 

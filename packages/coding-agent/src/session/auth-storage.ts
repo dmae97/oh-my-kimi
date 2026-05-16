@@ -14,4 +14,4 @@ export type {
 	SerializedAuthStorage,
 	StoredAuthCredential,
 } from "@oh-my-pi/pi-ai";
-export { AuthStorage } from "@oh-my-pi/pi-ai";
+export { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";

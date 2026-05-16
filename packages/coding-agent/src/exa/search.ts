@@ -30,28 +30,16 @@ Parameters:
 - num_results: Maximum number of results to return (default: 10, max: 100)`,
 
 	z.object({
-		query: z.string().describe("Search query"),
-		type: z
-			.enum(["keyword", "neural", "auto"])
-			.describe("Search type - neural (semantic), keyword (exact), or auto")
-			.optional(),
-		include_domains: z.array(z.string()).describe("Only include results from these domains").optional(),
-		exclude_domains: z.array(z.string()).describe("Exclude results from these domains").optional(),
-		start_published_date: z
-			.string()
-			.describe("Filter results published after this date (ISO 8601 format)")
-			.optional(),
-		end_published_date: z.string().describe("Filter results published before this date (ISO 8601 format)").optional(),
-		use_autoprompt: z.boolean().describe("Let Exa optimize your query automatically (default: true)").optional(),
-		text: z.boolean().describe("Include page text content in results (costs more, default: false)").optional(),
-		highlights: z.boolean().describe("Include highlighted relevant snippets (default: false)").optional(),
-		num_results: z
-			.number()
-			.int()
-			.min(1)
-			.max(100)
-			.describe("Maximum number of results to return (default: 10, max: 100)")
-			.optional(),
+		query: z.string().describe("search query"),
+		type: z.enum(["keyword", "neural", "auto"]).describe("search type").optional(),
+		include_domains: z.array(z.string()).describe("include domains").optional(),
+		exclude_domains: z.array(z.string()).describe("exclude domains").optional(),
+		start_published_date: z.string().describe("published after (iso 8601)").optional(),
+		end_published_date: z.string().describe("published before (iso 8601)").optional(),
+		use_autoprompt: z.boolean().describe("autoprompt").optional(),
+		text: z.boolean().describe("include page text").optional(),
+		highlights: z.boolean().describe("include highlights").optional(),
+		num_results: z.number().int().min(1).max(100).describe("max results (1-100)").optional(),
 	}),
 	"web_search_exa",
 );

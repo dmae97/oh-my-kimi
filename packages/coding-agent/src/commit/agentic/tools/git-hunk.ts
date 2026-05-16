@@ -4,9 +4,9 @@ import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
 
 const gitHunkSchema = z.object({
-	file: z.string().describe("File path"),
-	hunks: z.array(z.number().describe("1-based hunk indices")).min(1).optional(),
-	staged: z.boolean().describe("Use staged changes (default: true)").optional(),
+	file: z.string().describe("file path"),
+	hunks: z.array(z.number().describe("1-based hunk index")).min(1).optional(),
+	staged: z.boolean().describe("use staged changes (default true)").optional(),
 });
 
 function selectHunks(fileHunks: FileHunks, requested?: number[]): DiffHunk[] {

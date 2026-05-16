@@ -10,9 +10,6 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 export default function (pi: ExtensionAPI) {
 	const { z } = pi.zod;
 
-	// Access shared schema helpers from package exports (e.g. StringEnum for Google-safe enums)
-	const { StringEnum } = pi.pi;
-
 	// Access the logger for debugging
 	pi.logger.debug("API demo extension loaded");
 
@@ -22,10 +19,7 @@ export default function (pi: ExtensionAPI) {
 		description: "Demonstrates ExtensionAPI capabilities: logger, zod, and pi module access",
 		parameters: z.object({
 			message: z.string().describe("Test message"),
-			logLevel: StringEnum(["error", "warn", "debug"], {
-				description: "Log level to use",
-				default: "debug",
-			}),
+			logLevel: z.enum(["error", "warn", "debug"]).default("debug").describe("Log level to use"),
 		}),
 
 		async execute(_toolCallId, params, _onUpdate, ctx, _signal) {
