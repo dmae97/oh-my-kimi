@@ -151,17 +151,66 @@ export function sanitizeSchemaForStrictMode(
 	schema: Record<string, unknown>,
 	epoch: number = epochNext(),
 	cache: WeakMap<Record<string, unknown>, Record<string, unknown>> = new WeakMap(),
+	root: Record<string, unknown> = schema,
 ): Record<string, unknown> {
 	const cached = cache.get(schema);
 	if (cached) return cached;
 	if (!once(schema, epoch)) return {};
+
+	// Pre-pass: unravel `$ref` with sibling keys by inlining the resolved def.
+	// OpenAI strict mode forbids `{$ref, description, ...}`; the SDK resolves
+	// and merges, with sibling keys taking precedence over the ref'd def.
+	// Cite: openai-python/src/openai/lib/_pydantic.py:96-110 (`_ensure_strict_json_schema`)
+	if (typeof schema.$ref === "string") {
+		let hasSibling = false;
+		for (const k in schema) {
+			if (k !== "$ref" && Object.hasOwn(schema, k)) {
+				hasSibling = true;
+				break;
+			}
+		}
+		if (hasSibling) {
+			const resolved = resolveStrictRef(root, schema.$ref);
+			if (resolved !== undefined) {
+				// Sibling keys on the schema override keys from the resolved def.
+				const merged: Record<string, unknown> = { ...resolved };
+				for (const k in schema) {
+					if (k === "$ref" || !Object.hasOwn(schema, k)) continue;
+					merged[k] = schema[k];
+				}
+				const result = sanitizeSchemaForStrictMode(merged, epoch, cache, root);
+				cache.set(schema, result);
+				return result;
+			}
+		}
+	}
+
+	// Pre-pass: collapse single-element `allOf` by inlining its sole entry.
+	// SDK semantics: `json_schema.update(ensured(all_of[0]))` — the inlined
+	// entry's keys WIN over original sibling keys, then `allOf` is dropped.
+	// Cite: openai-python/src/openai/lib/_pydantic.py:79-83
+	{
+		const allOf = schema.allOf;
+		if (Array.isArray(allOf) && allOf.length === 1 && isJsonObject(allOf[0])) {
+			const merged: Record<string, unknown> = { ...schema };
+			delete merged.allOf;
+			const sole = allOf[0] as Record<string, unknown>;
+			for (const k in sole) {
+				if (Object.hasOwn(sole, k)) merged[k] = sole[k];
+			}
+			const result = sanitizeSchemaForStrictMode(merged, epoch, cache, root);
+			cache.set(schema, result);
+			return result;
+		}
+	}
+
 	const typeValue = schema.type;
 	if (Array.isArray(typeValue)) {
 		const typeVariants = typeValue.filter((entry): entry is string => typeof entry === "string");
 		const schemaWithoutType = { ...schema };
 		delete schemaWithoutType.type;
 
-		const sanitizedWithoutType = sanitizeSchemaForStrictMode(schemaWithoutType, epoch, cache);
+		const sanitizedWithoutType = sanitizeSchemaForStrictMode(schemaWithoutType, epoch, cache, root);
 		if (typeVariants.length === 0) {
 			cache.set(schema, sanitizedWithoutType);
 			return sanitizedWithoutType;
@@ -180,7 +229,7 @@ export function sanitizeSchemaForStrictMode(
 			if (variantType !== "array") {
 				delete variantSchema.items;
 			}
-			return sanitizeSchemaForStrictMode(variantSchema, epoch, cache);
+			return sanitizeSchemaForStrictMode(variantSchema, epoch, cache, root);
 		});
 
 		if (variants.length === 1) {
@@ -210,7 +259,7 @@ export function sanitizeSchemaForStrictMode(
 			for (const propertyName in value) {
 				const propertySchema = value[propertyName];
 				properties[propertyName] = isJsonObject(propertySchema)
-					? sanitizeSchemaForStrictMode(propertySchema, epoch, cache)
+					? sanitizeSchemaForStrictMode(propertySchema, epoch, cache, root)
 					: propertySchema;
 			}
 			sanitized.properties = properties;
@@ -220,10 +269,10 @@ export function sanitizeSchemaForStrictMode(
 
 		if (key === "items") {
 			if (isJsonObject(value)) {
-				sanitized.items = sanitizeSchemaForStrictMode(value, epoch, cache);
+				sanitized.items = sanitizeSchemaForStrictMode(value, epoch, cache, root);
 			} else if (Array.isArray(value)) {
 				sanitized.items = value.map(entry =>
-					isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache) : entry,
+					isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache, root) : entry,
 				);
 			} else {
 				sanitized.items = value;
@@ -234,7 +283,7 @@ export function sanitizeSchemaForStrictMode(
 
 		if (key === "prefixItems" && Array.isArray(value)) {
 			sanitized.prefixItems = value.map(entry =>
-				isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache) : entry,
+				isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache, root) : entry,
 			);
 			continue;
 		}
@@ -242,7 +291,7 @@ export function sanitizeSchemaForStrictMode(
 
 		if (COMBINATOR_KEYS.includes(key as (typeof COMBINATOR_KEYS)[number]) && Array.isArray(value)) {
 			sanitized[key] = value.map(entry =>
-				isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache) : entry,
+				isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache, root) : entry,
 			);
 			continue;
 		}
@@ -253,7 +302,7 @@ export function sanitizeSchemaForStrictMode(
 			for (const definitionName in value) {
 				const definitionSchema = value[definitionName];
 				defs[definitionName] = isJsonObject(definitionSchema)
-					? sanitizeSchemaForStrictMode(definitionSchema, epoch, cache)
+					? sanitizeSchemaForStrictMode(definitionSchema, epoch, cache, root)
 					: definitionSchema;
 			}
 			sanitized[key] = defs;
@@ -487,4 +536,23 @@ export function tryEnforceStrictSchema(schema: Record<string, unknown>) {
 			return { schema: upgraded, strict: false };
 		}
 	});
+}
+
+/**
+ * Resolve a JSON-pointer-style `$ref` against the root schema. Mirrors the
+ * OpenAI SDK's `resolve_ref` helper: only local refs starting with `#/` are
+ * supported, and each segment must dereference to a dictionary.
+ * Cite: openai-python/src/openai/lib/_pydantic.py:118-129
+ */
+function resolveStrictRef(root: Record<string, unknown>, ref: string): Record<string, unknown> | undefined {
+	if (!ref.startsWith("#/")) return undefined;
+	const segments = ref.slice(2).split("/");
+	let cursor: unknown = root;
+	for (const raw of segments) {
+		if (!isJsonObject(cursor)) return undefined;
+		// JSON Pointer unescape: ~1 → "/", ~0 → "~" (must run in that order).
+		const segment = raw.replace(/~1/g, "/").replace(/~0/g, "~");
+		cursor = cursor[segment];
+	}
+	return isJsonObject(cursor) ? cursor : undefined;
 }

@@ -33,6 +33,122 @@ interface SanitizeSchemaOptions {
 	stripNullableKeyword: boolean;
 	unsupportedFields: Record<string, true>;
 	epoch: number;
+	/**
+	 * Apply snake_case → camelCase field renames at every node. Mirrors
+	 * python-genai/_transformers.py:745-752. Safe to enable for any provider
+	 * that consumes camelCase JSON Schema.
+	 */
+	normalizeFieldNames: boolean;
+	/**
+	 * Apply `handle_null_fields` (python-genai/_transformers.py:584-640):
+	 * `{type:'null'}` → `{nullable:true}` and collapse `anyOf` null variants
+	 * into a nullable parent (flattening single-survivor unions). Google-only.
+	 * The CCA pipeline relies on the un-collapsed `anyOf` / `type:null` shape
+	 * surviving sanitize so it can make its own required/optional decisions.
+	 */
+	collapseNullFields: boolean;
+	/**
+	 * Auto-populate `propertyOrdering` on multi-property objects. Mirrors
+	 * python-genai/_transformers.py:817-822 (Gemini structured-output ordering).
+	 */
+	autoPropertyOrdering: boolean;
+}
+
+/**
+ * Spelling normalization applied at the top of every schema node before any
+ * other processing. Mirrors python-genai/_transformers.py:745-752 — accepts
+ * snake_case spellings that pydantic / hand-written dicts may use and rewrites
+ * them to the canonical camelCase form. Insertion order is preserved.
+ */
+const SNAKE_TO_CAMEL_RENAMES: Record<string, string> = {
+	additional_properties: "additionalProperties",
+	any_of: "anyOf",
+	prefix_items: "prefixItems",
+	property_ordering: "propertyOrdering",
+};
+
+/**
+ * Returns `obj` unchanged when no renamable key is present; otherwise returns
+ * a fresh shallow-copy with snake_case keys rewritten. The collision rule
+ * matches upstream (`pop(from)` → `set(to)`): snake_case wins over an
+ * existing camelCase entry, matching python-genai/_transformers.py:751.
+ */
+function applySnakeCaseRenames(obj: Record<string, unknown>): Record<string, unknown> {
+	let needsRename = false;
+	for (const k in SNAKE_TO_CAMEL_RENAMES) {
+		if (Object.hasOwn(obj, k)) {
+			needsRename = true;
+			break;
+		}
+	}
+	if (!needsRename) return obj;
+	const out: Record<string, unknown> = {};
+	for (const k in obj) {
+		const renamed = SNAKE_TO_CAMEL_RENAMES[k];
+		if (renamed !== undefined && Object.hasOwn(obj, k)) {
+			out[renamed] = obj[k];
+		} else if (!(k in SNAKE_TO_CAMEL_RENAMES) && !Object.hasOwn(out, k)) {
+			out[k] = obj[k];
+		}
+	}
+	// Copy non-renamed keys that the loop skipped because of the rename guard.
+	for (const k in obj) {
+		if (k in SNAKE_TO_CAMEL_RENAMES) continue;
+		if (!Object.hasOwn(out, k)) out[k] = obj[k];
+	}
+	return out;
+}
+
+/**
+ * `handle_null_fields` (python-genai/_transformers.py:584-640) applied at the
+ * parent level BEFORE child recursion — matches upstream's call order at
+ * `process_schema` line 768. Returns a new object when changes apply, the
+ * original reference otherwise (zero-allocation fast path).
+ *
+ * Rules:
+ * - `{type:'null'}` → `{nullable:true}` (drop type, preserve siblings).
+ * - `anyOf` containing any `{type:'null'}` variant → set `nullable:true` on
+ *   parent and drop those variants. If a single non-null variant remains,
+ *   flatten its keys into the parent and drop `anyOf` (upstream lines 636-640).
+ */
+function preHandleNullFields(obj: Record<string, unknown>): Record<string, unknown> {
+	if (obj.type === "null") {
+		const out: Record<string, unknown> = {};
+		for (const k in obj) {
+			if (Object.hasOwn(obj, k) && k !== "type") out[k] = obj[k];
+		}
+		out.nullable = true;
+		return out;
+	}
+	if (!Array.isArray(obj.anyOf)) return obj;
+	const variants = obj.anyOf as unknown[];
+	let sawNull = false;
+	const kept: unknown[] = [];
+	for (const v of variants) {
+		if (v && typeof v === "object" && !Array.isArray(v) && (v as Record<string, unknown>).type === "null") {
+			sawNull = true;
+			continue;
+		}
+		kept.push(v);
+	}
+	if (!sawNull) return obj;
+	const out: Record<string, unknown> = {};
+	for (const k in obj) {
+		if (Object.hasOwn(obj, k)) out[k] = obj[k];
+	}
+	out.nullable = true;
+	if (kept.length === 0) {
+		delete out.anyOf;
+	} else if (kept.length === 1) {
+		delete out.anyOf;
+		const only = kept[0] as Record<string, unknown>;
+		for (const k in only) {
+			if (Object.hasOwn(only, k) && !(k in out)) out[k] = only[k];
+		}
+	} else {
+		out.anyOf = kept;
+	}
+	return out;
 }
 
 function inferJsonSchemaTypeFromValue(value: unknown): string | undefined {
@@ -77,7 +193,13 @@ function sanitizeSchemaImpl(value: unknown, options: SanitizeSchemaOptions): unk
 		return value;
 	}
 	if (!once(value as object, options.epoch)) return {};
-	const obj = value as Record<string, unknown>;
+	let obj =
+		options.normalizeFieldNames && !options.insideProperties
+			? applySnakeCaseRenames(value as Record<string, unknown>)
+			: (value as Record<string, unknown>);
+	if (options.collapseNullFields && !options.insideProperties) {
+		obj = preHandleNullFields(obj);
+	}
 	const result: Record<string, unknown> = {};
 	for (const combiner of ["anyOf", "oneOf"] as const) {
 		if (Array.isArray(obj[combiner])) {
@@ -177,6 +299,33 @@ function sanitizeSchemaImpl(value: unknown, options: SanitizeSchemaOptions): unk
 		}
 	}
 
+	// Defensive post-pass: covers cases where `type` became `'null'` AFTER
+	// child processing (e.g. `type: ['null']` collapsed via normalizeTypeArrayToNullable).
+	// Mirrors python-genai/_transformers.py:628-630.
+	if (options.collapseNullFields && result.type === "null") {
+		delete result.type;
+		if (!options.stripNullableKeyword) result.nullable = true;
+	}
+
+	// Auto-populate `propertyOrdering` for objects with >1 property. Mirrors
+	// python-genai/_transformers.py:817-822. Insertion order of `properties`
+	// determines the emitted ordering, matching JS object-key iteration order.
+	if (
+		options.autoPropertyOrdering &&
+		result.type === "object" &&
+		!Object.hasOwn(result, "propertyOrdering") &&
+		result.properties &&
+		typeof result.properties === "object" &&
+		!Array.isArray(result.properties)
+	) {
+		const props = result.properties as Record<string, unknown>;
+		const keys: string[] = [];
+		for (const k in props) {
+			if (Object.hasOwn(props, k)) keys.push(k);
+		}
+		if (keys.length > 1) result.propertyOrdering = keys;
+	}
+
 	// Ensure object schemas have a properties field (some LLM providers require it)
 	if (result.type === "object" && !("properties" in result)) {
 		result.properties = {};
@@ -195,12 +344,18 @@ function sanitizeSchemaImpl(value: unknown, options: SanitizeSchemaOptions): unk
  */
 export function sanitizeSchemaForGoogle(value: unknown): unknown {
 	const upgraded = upgradeJsonSchemaTo202012(value);
-	return sanitizeSchemaImpl(upgraded, {
+	// Mirror python-genai/_transformers.py:754-766: inline `$defs` so the
+	// downstream walk sees the resolved schema instead of dropping `$ref`.
+	const dereferenced = dereferenceJsonSchema(upgraded);
+	return sanitizeSchemaImpl(dereferenced, {
 		insideProperties: false,
 		normalizeTypeArrayToNullable: true,
 		stripNullableKeyword: false,
 		unsupportedFields: UNSUPPORTED_SCHEMA_FIELDS,
 		epoch: epochNext(),
+		normalizeFieldNames: true,
+		collapseNullFields: true,
+		autoPropertyOrdering: true,
 	});
 }
 
@@ -214,12 +369,20 @@ export function sanitizeSchemaForGoogle(value: unknown): unknown {
  */
 export function sanitizeSchemaForCCA(value: unknown): unknown {
 	const upgraded = upgradeJsonSchemaTo202012(value);
-	return sanitizeSchemaImpl(upgraded, {
+	const dereferenced = dereferenceJsonSchema(upgraded);
+	return sanitizeSchemaImpl(dereferenced, {
 		insideProperties: false,
 		normalizeTypeArrayToNullable: true,
 		stripNullableKeyword: true,
 		unsupportedFields: UNSUPPORTED_SCHEMA_FIELDS,
 		epoch: epochNext(),
+		normalizeFieldNames: true,
+		// Leave null-field collapse to the CCA-specific pipeline downstream,
+		// which needs the un-collapsed `anyOf` / `type:null` shape to make
+		// per-property required/optional decisions.
+		collapseNullFields: false,
+		// CCA pipeline assembles its own ordering separately; leave off here.
+		autoPropertyOrdering: false,
 	});
 }
 
@@ -251,5 +414,8 @@ export function sanitizeSchemaForMCP(value: unknown): unknown {
 		stripNullableKeyword: true,
 		unsupportedFields: MCP_UNSUPPORTED_SCHEMA_FIELDS,
 		epoch: epochNext(),
+		normalizeFieldNames: false,
+		collapseNullFields: false,
+		autoPropertyOrdering: false,
 	});
 }

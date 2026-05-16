@@ -198,10 +198,13 @@ describe("sanitizeSchemaForGoogle", () => {
 		expect(sanitized.type).toBeUndefined();
 	});
 
-	it("infers null type when const is null", () => {
+	it("collapses inferred null type to nullable when const is null", () => {
+		// After python-genai parity (handle_null_fields), bare `type: 'null'` is
+		// folded into `nullable: true` so the schema is OpenAPI-compatible.
 		const sanitized = sanitizeSchemaForGoogle({ const: null }) as Record<string, unknown>;
 
-		expect(sanitized.type).toBe("null");
+		expect(sanitized.type).toBeUndefined();
+		expect(sanitized.nullable).toBe(true);
 		expect(sanitized.enum).toEqual([null]);
 	});
 
@@ -231,7 +234,10 @@ describe("sanitizeSchemaForGoogle", () => {
 		expect(sanitizeSchemaForGoogle(schema)).toEqual(schema);
 	});
 
-	it("strips unresolved $ref and $defs entries for Google compatibility", () => {
+	it("inlines local $ref / $defs entries for Google compatibility", () => {
+		// Mirrors python-genai/_transformers.py:754-774 ($defs inlining via
+		// `process_schema`) and tests/transformers/test_schema.py::
+		// test_process_schema_order_properties_propagates_into_defs.
 		const schema = {
 			type: "object",
 			properties: {
@@ -252,7 +258,13 @@ describe("sanitizeSchemaForGoogle", () => {
 		expect(sanitizeSchemaForGoogle(schema)).toEqual({
 			type: "object",
 			properties: {
-				user: {},
+				user: {
+					type: "object",
+					properties: {
+						id: { type: "string" },
+					},
+					required: ["id"],
+				},
 			},
 			required: ["user"],
 		});
