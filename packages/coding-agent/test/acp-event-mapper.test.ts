@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import path from "node:path";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { zSessionNotification } from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
 import { mapAgentSessionEventToAcpSessionUpdates } from "../src/modes/acp/acp-event-mapper";
@@ -240,6 +241,84 @@ describe("ACP event mapper", () => {
 		};
 		expect(update.sessionUpdate).toBe("tool_call_update");
 		expect(update.content).toEqual([{ type: "terminal", terminalId: "term-42" }]);
+	});
+	it("shows bash commands in visible tool call content", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "toolu_bash_1",
+				toolName: "bash",
+				args: { command: "npm run check", cwd: "/repo" },
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			sessionUpdate: string;
+			toolCallId?: string;
+			title?: string;
+			kind?: string;
+			status?: string;
+			rawInput?: unknown;
+			content?: unknown;
+		};
+		expect(update.sessionUpdate).toBe("tool_call");
+		expect(update.toolCallId).toBe("toolu_bash_1");
+		expect(update.title).toBe("bash: npm run check");
+		expect(update.kind).toBe("execute");
+		expect(update.status).toBe("pending");
+		expect(update.rawInput).toEqual({ command: "npm run check", cwd: "/repo" });
+		expect(update.content).toEqual([{ type: "content", content: { type: "text", text: "$ npm run check" } }]);
+	});
+
+	it("does not add command text content to non-command tool starts", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "toolu_read_1",
+				toolName: "read",
+				args: { path: "README.md" },
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			sessionUpdate: string;
+			title?: string;
+			kind?: string;
+			rawInput?: unknown;
+			locations?: { path: string }[];
+			content?: unknown;
+		};
+		expect(update.sessionUpdate).toBe("tool_call");
+		expect(update.title).toBe("read: README.md");
+		expect(update.kind).toBe("read");
+		expect(update.rawInput).toEqual({ path: "README.md" });
+		expect(update.locations).toEqual([{ path: "README.md" }]);
+		expect("content" in update).toBe(false);
+	});
+	it("resolves tool_execution_start locations against mapper cwd", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "toolu_read_cwd",
+				toolName: "read",
+				args: { path: "src/file.ts" },
+			} as AgentSessionEvent,
+			"session-1",
+			{ cwd: "/repo" },
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as { sessionUpdate: string; locations?: { path: string }[]; content?: unknown };
+		expect(update.sessionUpdate).toBe("tool_call");
+		expect(update.locations).toEqual([{ path: path.resolve("/repo", "src/file.ts") }]);
+		expect("content" in update).toBe(false);
 	});
 	it("emits distinct locations for move-style path arguments", () => {
 		const updates = mapAgentSessionEventToAcpSessionUpdates(

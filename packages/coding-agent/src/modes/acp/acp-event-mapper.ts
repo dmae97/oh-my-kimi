@@ -1,6 +1,7 @@
 import type {
 	SessionNotification,
 	SessionUpdate,
+	ToolCall,
 	ToolCallContent,
 	ToolCallLocation,
 	ToolKind,
@@ -144,18 +145,13 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 		case "message_end":
 			return mapAssistantMessageEnd(event, sessionId, options);
 		case "tool_execution_start": {
-			const update: SessionUpdate = {
-				sessionUpdate: "tool_call",
+			const update = buildToolCallStartUpdate({
 				toolCallId: event.toolCallId,
-				title: buildToolTitle(event.toolName, event.args, event.intent),
-				kind: mapToolKind(event.toolName),
-				status: "pending",
-				rawInput: event.args,
-			};
-			const locations = extractToolLocations(event.args, options.cwd);
-			if (locations.length > 0) {
-				update.locations = locations;
-			}
+				toolName: event.toolName,
+				args: event.args,
+				intent: event.intent,
+				cwd: options.cwd,
+			});
 			return [toSessionNotification(sessionId, update)];
 		}
 		case "tool_execution_update": {
@@ -310,6 +306,45 @@ const todoStatusMap: Record<TodoStatus, "pending" | "in_progress" | "completed">
 
 function mapTodoStatus(status: TodoStatus): "pending" | "in_progress" | "completed" {
 	return todoStatusMap[status];
+}
+
+export function buildToolCallStartUpdate(input: {
+	toolCallId: string;
+	toolName: string;
+	args: unknown;
+	intent?: string;
+	cwd?: string;
+	status?: "pending" | "completed";
+}): SessionUpdate {
+	const update: ToolCall & { sessionUpdate: "tool_call" } = {
+		sessionUpdate: "tool_call",
+		toolCallId: input.toolCallId,
+		title: buildToolTitle(input.toolName, input.args, input.intent),
+		kind: mapToolKind(input.toolName),
+		status: input.status ?? "pending",
+		rawInput: input.args,
+	};
+	const content = buildToolStartContent(input.toolName, input.args);
+	if (content.length > 0) {
+		update.content = content;
+	}
+	const locations = extractToolLocations(input.args, input.cwd);
+	if (locations.length > 0) {
+		update.locations = locations;
+	}
+	return update;
+}
+
+function buildToolStartContent(toolName: string, args: unknown): ToolCallContent[] {
+	if (!isCommandToolName(toolName)) {
+		return [];
+	}
+	const command = extractStringProperty<CommandContainer>(args, "command");
+	return command ? [textToolCallContent(`$ ${command}`)] : [];
+}
+
+function isCommandToolName(toolName: string): boolean {
+	return toolName === "bash" || toolName === "shell" || toolName === "exec";
 }
 
 function buildToolTitle(toolName: string, args: unknown, intent: string | undefined): string {
