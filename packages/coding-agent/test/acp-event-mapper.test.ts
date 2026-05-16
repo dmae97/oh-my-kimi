@@ -321,6 +321,71 @@ describe("ACP event mapper", () => {
 		expect(update.content).toContainEqual({ type: "terminal", terminalId: "term-1" });
 	});
 
+	it("keeps terminal content alongside readable error and message fields", () => {
+		const errorUpdates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "tc-terminal-error",
+				toolName: "bash",
+				isError: true,
+				result: { errorMessage: "command failed", details: { terminalId: "term-1" } },
+			} as AgentSessionEvent,
+			"session-1",
+		);
+		const messageUpdates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "tc-terminal-message",
+				toolName: "bash",
+				isError: false,
+				result: { message: "command completed", details: { terminalId: "term-1" } },
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(errorUpdates).toHaveLength(1);
+		expect(messageUpdates).toHaveLength(1);
+		expectAcpNotifications([...errorUpdates, ...messageUpdates]);
+		const errorUpdate = errorUpdates[0]!.update as {
+			content?: Array<{ type: string; terminalId?: string; content?: { type: string; text?: string } }>;
+		};
+		const messageUpdate = messageUpdates[0]!.update as {
+			content?: Array<{ type: string; terminalId?: string; content?: { type: string; text?: string } }>;
+		};
+
+		expect(errorUpdate.content).toContainEqual({ type: "terminal", terminalId: "term-1" });
+		expect(errorUpdate.content).toContainEqual({
+			type: "content",
+			content: { type: "text", text: "command failed" },
+		});
+		expect(messageUpdate.content).toContainEqual({ type: "terminal", terminalId: "term-1" });
+		expect(messageUpdate.content).toContainEqual({
+			type: "content",
+			content: { type: "text", text: "command completed" },
+		});
+	});
+
+	it("keeps plain command output visible without terminal details", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "tc-plain-output",
+				toolName: "bash",
+				isError: false,
+				result: "hello from stdout",
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			content?: Array<{ type: string; content?: { type: string; text?: string } }>;
+		};
+
+		expect(update.content).toEqual([{ type: "content", content: { type: "text", text: "hello from stdout" } }]);
+	});
+
 	it("embeds only terminal content from direct terminalId", () => {
 		const updates = mapAgentSessionEventToAcpSessionUpdates(
 			{
