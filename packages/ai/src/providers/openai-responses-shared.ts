@@ -770,12 +770,15 @@ export function applyResponsesReasoningParams<P extends OpenAI.Responses.Respons
 	options: ReasoningOptions | undefined,
 	messages: ResponseInput,
 	mapEffort?: (effort: string) => string,
+	includeEncryptedReasoning: boolean = true,
 ): void {
 	if (!model.reasoning) return;
 	// Always request encrypted reasoning content so reasoning items can be replayed in
 	// multi-turn conversations when store is false (items aren't persisted server-side, so
 	// we must include the full content). See: https://github.com/can1357/oh-my-pi/issues/41
-	params.include = ["reasoning.encrypted_content"];
+	if (includeEncryptedReasoning) {
+		params.include = ["reasoning.encrypted_content"];
+	}
 
 	if (options?.reasoning || options?.reasoningSummary !== undefined) {
 		const requested = options?.reasoning || "medium";

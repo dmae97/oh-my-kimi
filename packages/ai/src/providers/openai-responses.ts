@@ -98,6 +98,31 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 	 * Azure OpenAI and GitHub Copilot Responses paths require tool results to match prior tool calls.
 	 */
 	strictResponsesPairing?: boolean;
+	/**
+	 * Pass `include: ["reasoning.encrypted_content"]` on requests when the
+	 * model supports reasoning. Default: true (preserves current behavior).
+	 * Set to false when the upstream Responses endpoint rejects replayed
+	 * encrypted reasoning (e.g., xAI Grok under SuperGrok OAuth).
+	 */
+	includeEncryptedReasoning?: boolean;
+	/**
+	 * Strip `type: "reasoning"` items from replayed conversation history
+	 * before they hit the wire. Default: false (preserves current behavior).
+	 * Set to true when the upstream rejects replayed reasoning wrappers.
+	 */
+	filterReasoningHistory?: boolean;
+	/**
+	 * Extra request headers merged onto the underlying client's
+	 * defaultHeaders. Used by adapter wrappers to inject provider-specific
+	 * routing or cache hints.
+	 */
+	headers?: Record<string, string>;
+	/**
+	 * Extra body fields merged into the Responses request payload. Used by
+	 * adapter wrappers to inject provider-specific body keys (e.g.,
+	 * prompt_cache_key for prompt-cache routing).
+	 */
+	extraBody?: Record<string, unknown>;
 }
 
 const OPENAI_RESPONSES_PROVIDER_SESSION_STATE_PREFIX = "openai-responses:";
@@ -389,6 +414,7 @@ function buildParams(
 		context,
 		strictResponsesPairing,
 		providerSessionState,
+		options,
 	);
 	const messages: ResponseInput = [...conversationMessages];
 
@@ -445,8 +471,17 @@ function buildParams(
 		}
 	}
 
-	applyResponsesReasoningParams(params, model, options, messages, effort =>
-		mapReasoningEffort(effort as NonNullable<OpenAIResponsesOptions["reasoning"]>, model.compat?.reasoningEffortMap),
+	applyResponsesReasoningParams(
+		params,
+		model,
+		options,
+		messages,
+		effort =>
+			mapReasoningEffort(
+				effort as NonNullable<OpenAIResponsesOptions["reasoning"]>,
+				model.compat?.reasoningEffortMap,
+			),
+		options?.includeEncryptedReasoning ?? true,
 	);
 
 	return { conversationMessages, params };
@@ -492,7 +527,10 @@ function convertConversationMessages(
 	context: Context,
 	strictResponsesPairing: boolean,
 	providerSessionState: OpenAIResponsesProviderSessionState | undefined,
+	options?: OpenAIResponsesOptions,
 ): ResponseInput {
+	const filterReasoning = <T extends { type?: string }>(items: T[]): T[] =>
+		options?.filterReasoningHistory ? items.filter(i => i?.type !== "reasoning") : items;
 	const messages: ResponseInput = [];
 	let knownCallIds = new Set<string>();
 	const customCallIds = new Set<string>();
@@ -513,7 +551,7 @@ function convertConversationMessages(
 				}) ??
 					false);
 			if (historyItems && shouldReplayPayloadItems) {
-				messages.push(...sanitizeOpenAIResponsesHistoryItemsForReplay(historyItems));
+				messages.push(...sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems)));
 				knownCallIds = collectKnownCallIds(messages);
 				for (const id of collectCustomCallIds(messages)) customCallIds.add(id);
 				msgIndex++;
@@ -529,7 +567,7 @@ function convertConversationMessages(
 				: undefined;
 			const historyItems = providerPayload?.items;
 			if (historyItems) {
-				const sanitizedHistoryItems = sanitizeOpenAIResponsesHistoryItemsForReplay(historyItems);
+				const sanitizedHistoryItems = sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems));
 				if (providerPayload?.dt) {
 					messages.push(...sanitizedHistoryItems);
 				} else {
