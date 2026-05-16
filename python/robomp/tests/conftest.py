@@ -41,7 +41,6 @@ def _ensure_dashboard_bundle() -> None:
     reset_index_cache()
 
 
-
 @pytest.fixture(autouse=True)
 def _open_tmp_path_for_slot_traversal(tmp_path: Path) -> None:
     """Grant traverse (`+x`) on tmp_path's root-owned ancestors so slot
@@ -74,6 +73,7 @@ def _open_tmp_path_for_slot_traversal(tmp_path: Path) -> None:
             except PermissionError:
                 break
         cursor = cursor.parent
+
 
 def _baseline_env(tmp_path: Path) -> dict[str, str]:
     return {

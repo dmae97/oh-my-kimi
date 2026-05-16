@@ -47,17 +47,11 @@ into the `tool_calls` table with credential-redacted args and results.
 ## Setup
 
 Requires Docker Compose v2 and a LiteLLM-style proxy on the host that your
-`~/.omp/agent/models.yml` points at. The oh-my-pi source tree is needed at
-both build and run time; by default `bun run` recipes resolve it via
-`scripts/with-pi-root.sh`:
-
-1. `$PI_ROOT` if set and pointing at a checkout (use this when you already
-   have one — e.g. at `/work/pi`).
-2. `/work/pi` if it exists.
-3. Otherwise auto-cloned into `./.cache/oh-my-pi` on first `bun run`.
-
-Override the clone via `ROBOMP_PI_REPO_URL`, `ROBOMP_PI_REF`,
-`ROBOMP_PI_CACHE_DIR`; force a refresh with `ROBOMP_PI_AUTO_UPDATE=1`.
+`~/.omp/agent/models.yml` points at. roboomp lives inside the oh-my-pi
+monorepo at `python/robomp/`; both the docker build context and the
+`/work/pi` bind mount default to the parent monorepo (`../..`). Override
+`PI_ROOT` only if you want a different oh-my-pi checkout backing the build
+and runtime.
 
 Bot account needs **Write** on every repo in `ROBOMP_REPO_ALLOWLIST`. A
 fine-grained PAT with Contents / Issues / Pull requests RW + Metadata R is
@@ -187,7 +181,7 @@ The integration test spawns a real `omp --mode rpc` against an
 | Symptom | Check |
 |---|---|
 | `401 invalid signature` | `GITHUB_WEBHOOK_SECRET` mismatch with the repo webhook config. |
-| Container exits with `PI_ROOT … missing` | `/work/pi` mount empty inside the container; on the host either set `PI_ROOT` to a valid oh-my-pi checkout or delete `.cache/oh-my-pi` and re-run `bun run up` to re-clone. |
+| Container exits with `PI_ROOT … missing` | `/work/pi` mount empty inside the container; on the host either run `docker compose` from `python/robomp/` so `PI_ROOT` defaults to `../..`, or export `PI_ROOT` to a valid oh-my-pi checkout. |
 | `git push: Authentication required` | Bot PAT lacks push, or `ROBOMP_BOT_LOGIN` ≠ PAT's account. |
 | `refusing to push: commit author identity mismatch` | Some commit not authored as `ROBOMP_GIT_AUTHOR_*`. The error lists the offending shas; `git commit --amend --reset-author --no-edit`. |
 | `refusing to push: working tree is dirty` | Uncommitted agent edits. Or just call `gh_open_pr`, which auto-commits `bun run fix` output. |

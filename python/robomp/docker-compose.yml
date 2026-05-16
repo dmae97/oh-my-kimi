@@ -79,7 +79,7 @@ services:
       - default
       - robomp_internal
     volumes:
-      - ${PI_ROOT:-/work/pi}:/work/pi:ro
+      - ${PI_ROOT:-../..}:/work/pi:ro
       - robomp_data:/data
       # Host agent config is mounted read-only under /srv/agent-home-stage
       # with host-controlled permissions. The entrypoint copies it into
