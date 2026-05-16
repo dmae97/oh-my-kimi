@@ -2094,7 +2094,7 @@ function isJsonSchemaObjectNode(schema: Record<string, unknown>): boolean {
 	return false;
 }
 
-function normalizeAnthropicToolSchema(
+export function normalizeAnthropicToolSchema(
 	schema: unknown,
 	cache: WeakMap<Record<string, unknown>, Record<string, unknown>> = new WeakMap(),
 ): unknown {
@@ -2114,6 +2114,21 @@ function normalizeAnthropicToolSchema(
 		if (typeof minItems === "number" && minItems !== 0 && minItems !== 1) {
 			delete result.minItems;
 		}
+	}
+
+	const nodeType = result.type;
+	const isNumericNode =
+		nodeType === "number" ||
+		nodeType === "integer" ||
+		(Array.isArray(nodeType) && nodeType.some(t => t === "number" || t === "integer"));
+	if (isNumericNode) {
+		// Anthropic rejects numeric range/multipleOf keywords on `number`/`integer`
+		// tool schema nodes ("For 'number' type, properties maximum, minimum are not supported").
+		delete result.minimum;
+		delete result.maximum;
+		delete result.exclusiveMinimum;
+		delete result.exclusiveMaximum;
+		delete result.multipleOf;
 	}
 
 	const type = result.type;
