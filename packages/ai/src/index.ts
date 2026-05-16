@@ -1,5 +1,6 @@
 export { type ZodType, z } from "zod/v4";
 export * from "./api-registry";
+export * from "./auth-broker";
 export * from "./auth-storage";
 export * from "./model-cache";
 export * from "./model-manager";
@@ -38,6 +39,13 @@ export * from "./utils/anthropic-auth";
 export * from "./utils/discovery";
 export * from "./utils/event-stream";
 export * from "./utils/h2-fetch";
+export * from "./utils/oauth";
+export type {
+	OAuthCredentials,
+	OAuthProvider,
+	OAuthProviderId,
+	OAuthProviderInfo,
+} from "./utils/oauth/types";
 export * from "./utils/overflow";
 export * from "./utils/retry";
 export * from "./utils/schema";

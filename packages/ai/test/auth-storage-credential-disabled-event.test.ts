@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthCredentialStore, AuthStorage, type CredentialDisabledEvent } from "../src/auth-storage";
+import {
+	type AuthCredentialStore,
+	AuthStorage,
+	type CredentialDisabledEvent,
+	SqliteAuthCredentialStore,
+} from "../src/auth-storage";
 import * as oauthUtils from "../src/utils/oauth";
 
 // Env vars short-circuit AuthStorage.getApiKey before the OAuth refresh path runs; suppress
@@ -29,7 +34,7 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 	const stores: AuthCredentialStore[] = [];
 
 	const openStorage = async (options?: ConstructorParameters<typeof AuthStorage>[1]): Promise<AuthStorage> => {
-		const store = await AuthCredentialStore.open(path.join(tempDir, `agent-${stores.length}.db`));
+		const store = await SqliteAuthCredentialStore.open(path.join(tempDir, `agent-${stores.length}.db`));
 		stores.push(store);
 		return new AuthStorage(store, options);
 	};

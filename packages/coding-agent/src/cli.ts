@@ -32,6 +32,7 @@ process.title = APP_NAME;
 const commands: CommandEntry[] = [
 	{ name: "launch", load: () => import("./commands/launch").then(m => m.default) },
 	{ name: "acp", load: () => import("./commands/acp").then(m => m.default) },
+	{ name: "auth-broker", load: () => import("./commands/auth-broker").then(m => m.default) },
 	{ name: "agents", load: () => import("./commands/agents").then(m => m.default) },
 	{ name: "commit", load: () => import("./commands/commit").then(m => m.default) },
 	{ name: "config", load: () => import("./commands/config").then(m => m.default) },

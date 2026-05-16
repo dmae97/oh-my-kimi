@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { AuthCredentialStore, AuthStorage } from "../src/auth-storage";
+import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
 import * as kagiModule from "../src/utils/oauth/kagi";
 import * as ollamaCloudModule from "../src/utils/oauth/ollama-cloud";
 
@@ -23,7 +23,7 @@ function countCredentialRows(dbPath: string, provider: string): number {
 describe("AuthStorage api-key login replacement", () => {
 	let tempDir = "";
 	let dbPath = "";
-	let store: AuthCredentialStore | null = null;
+	let store: SqliteAuthCredentialStore | null = null;
 	let authStorage: AuthStorage | null = null;
 	let loginKagiSpy: Mock<typeof kagiModule.loginKagi>;
 	let loginOllamaCloudSpy: Mock<typeof ollamaCloudModule.loginOllamaCloud>;
@@ -31,7 +31,7 @@ describe("AuthStorage api-key login replacement", () => {
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-auth-api-key-login-"));
 		dbPath = path.join(tempDir, "agent.db");
-		store = await AuthCredentialStore.open(dbPath);
+		store = await SqliteAuthCredentialStore.open(dbPath);
 		authStorage = new AuthStorage(store);
 		loginKagiSpy = vi.spyOn(kagiModule, "loginKagi");
 		loginOllamaCloudSpy = vi.spyOn(ollamaCloudModule, "loginOllamaCloud");

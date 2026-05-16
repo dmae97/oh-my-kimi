@@ -93,7 +93,13 @@ import {
 	SecretObfuscator,
 } from "./secrets";
 import { AgentSession } from "./session/agent-session";
-import { AuthStorage } from "./session/auth-storage";
+import { resolveAuthBrokerConfig } from "./session/auth-broker-config";
+import {
+	AuthBrokerClient,
+	AuthStorage,
+	REMOTE_REFRESH_SENTINEL,
+	RemoteAuthCredentialStore,
+} from "./session/auth-storage";
 import { convertToLlm } from "./session/messages";
 import { SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
@@ -317,13 +323,52 @@ function getDefaultAgentDir(): string {
 // Discovery Functions
 
 /**
- * Create an AuthStorage instance with fallback support.
- * Reads from primary path first, then falls back to legacy paths (.pi, .claude).
+ * Create an AuthStorage instance.
+ *
+ * Default: local SQLite store at `<agentDir>/agent.db`.
+ *
+ * Broker mode: when `OMP_AUTH_BROKER_URL` is set, credentials are pulled from
+ * a remote auth-broker over the wire. Refresh tokens never leave the broker;
+ * the client receives access tokens with `refresh = "__remote__"` and calls
+ * back into the broker through the {@link AuthStorageOptions.refreshOAuthCredential}
+ * override to re-mint access tokens when needed.
  */
 export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir()): Promise<AuthStorage> {
+	const brokerConfig = await resolveAuthBrokerConfig();
+	if (brokerConfig) {
+		const client = new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
+		const initialSnapshot = await client.fetchSnapshot();
+		const store = new RemoteAuthCredentialStore({ client, initialSnapshot });
+		const storage = new AuthStorage(store, {
+			configValueResolver: resolveConfigValue,
+			sourceLabel: `broker ${brokerConfig.url}`,
+			refreshOAuthCredential: async (_provider, credentialId, _credential) => {
+				const { entry } = await client.refreshCredential(credentialId);
+				if (entry.credential.type !== "oauth") {
+					throw new Error(`Broker returned non-OAuth credential for id=${credentialId}`);
+				}
+				const refreshed = entry.credential;
+				return {
+					access: refreshed.access,
+					// Sentinel — AuthStorage stores it back into the in-memory snapshot,
+					// but a refresh through the broker is the only legal way to mint tokens.
+					refresh: REMOTE_REFRESH_SENTINEL,
+					expires: refreshed.expires,
+					accountId: refreshed.accountId,
+					email: refreshed.email,
+					projectId: refreshed.projectId,
+					enterpriseUrl: refreshed.enterpriseUrl,
+				};
+			},
+		});
+		await storage.reload();
+		return storage;
+	}
 	const dbPath = getAgentDbPath(agentDir);
-
-	const storage = await AuthStorage.create(dbPath, { configValueResolver: resolveConfigValue });
+	const storage = await AuthStorage.create(dbPath, {
+		configValueResolver: resolveConfigValue,
+		sourceLabel: `local ${dbPath}`,
+	});
 	await storage.reload();
 	return storage;
 }

@@ -374,10 +374,15 @@ export class CommandController {
 			const openaiWebsocketSetting = this.ctx.settings.get("providers.openaiWebsockets") ?? "auto";
 			const preferOpenAICodexWebsockets =
 				openaiWebsocketSetting === "on" ? true : openaiWebsocketSetting === "off" ? false : undefined;
+			const credentialSource = this.ctx.session.modelRegistry.authStorage.describeCredentialSource(
+				model.provider,
+				stats.sessionId,
+			);
 			const providerDetails = getProviderDetails({
 				model,
 				sessionId: stats.sessionId,
 				authMode,
+				credentialSource,
 				preferWebsockets: preferOpenAICodexWebsockets,
 				providerSessionState: this.ctx.session.providerSessionState,
 			});

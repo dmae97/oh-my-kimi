@@ -3,9 +3,9 @@
  * Handles loading, saving, refreshing credentials, and usage tracking.
  *
  * This module defines:
- * - `AuthCredentialStore` interface: abstracting persistence (SQLite, memory, etc.)
+ * - `AuthCredentialStore` interface: persistence abstraction (SQLite, remote vault, …)
  * - `AuthStorage` class: credential management with round-robin, usage limits, OAuth refresh
- * - `AuthCredentialStore`: concrete SQLite-backed implementation
+ * - `SqliteAuthCredentialStore`: concrete SQLite-backed implementation
  */
 import { Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";
@@ -79,6 +79,69 @@ export interface StoredAuthCredential {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Auth Broker Snapshot Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Sentinel value placed in OAuth `refresh` fields when a credential is shared
+ * via {@link AuthStorage.exportSnapshot}. Refresh tokens never leave the broker;
+ * clients must call back to refresh.
+ */
+export const REMOTE_REFRESH_SENTINEL = "__remote__" as const;
+export type RemoteRefreshSentinel = typeof REMOTE_REFRESH_SENTINEL;
+
+/** OAuth credential with refresh token replaced by the broker sentinel. */
+export type RemoteOAuthCredential = Omit<OAuthCredential, "refresh"> & {
+	refresh: RemoteRefreshSentinel;
+};
+
+/** Discriminated credential payload as published by the broker. */
+export type SnapshotCredential = ApiKeyCredential | RemoteOAuthCredential;
+
+export interface AuthCredentialSnapshotEntry {
+	id: number;
+	provider: string;
+	credential: SnapshotCredential;
+	identityKey: string | null;
+}
+
+/**
+ * Wire-shaped snapshot exported by {@link AuthStorage.exportSnapshot} and
+ * served by the auth-broker server on `GET /v1/snapshot`.
+ */
+export interface AuthCredentialSnapshot {
+	generatedAt: number;
+	credentials: AuthCredentialSnapshotEntry[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AuthCredentialStore interface
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Persistence abstraction consumed by {@link AuthStorage}.
+ *
+ * Concrete implementations:
+ * - {@link SqliteAuthCredentialStore} — local SQLite-backed store (default).
+ * - `RemoteAuthCredentialStore` from `./auth-broker` — client-side snapshot of
+ *   a remote broker; mutating methods (`replace*`, `upsert*`, `delete*ForProvider`)
+ *   throw because login flows route through the broker, not the client.
+ */
+export interface AuthCredentialStore {
+	close(): void;
+	listAuthCredentials(provider?: string): StoredAuthCredential[];
+	updateAuthCredential(id: number, credential: AuthCredential): void;
+	deleteAuthCredential(id: number, disabledCause: string): void;
+	tryDisableAuthCredentialIfMatches(id: number, expectedData: string, disabledCause: string): boolean;
+	replaceAuthCredentialsForProvider(provider: string, credentials: AuthCredential[]): StoredAuthCredential[];
+	upsertAuthCredentialForProvider(provider: string, credential: AuthCredential): StoredAuthCredential[];
+	deleteAuthCredentialsForProvider(provider: string, disabledCause: string): void;
+	getCache(key: string): string | null;
+	setCache(key: string, value: string, expiresAtSec: number): void;
+	cleanExpiredCache(): void;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AuthStorage Options
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -117,6 +180,30 @@ export type AuthStorageOptions = {
 	 * duplicate credentials (uninteresting hygiene).
 	 */
 	onCredentialDisabled?: (event: CredentialDisabledEvent) => void | Promise<void>;
+	/**
+	 * Override OAuth refresh. When set, `AuthStorage` calls this instead of the
+	 * per-provider local refresh function. Receives the credential id so the
+	 * implementation can address remote credentials.
+	 *
+	 * Must return updated {@link OAuthCredentials} with at least `access` and
+	 * `expires`. `refresh` may be an opaque sentinel (e.g. `"__remote__"`) when
+	 * the actual refresh token never leaves the broker.
+	 */
+	refreshOAuthCredential?: (
+		provider: Provider,
+		credentialId: number,
+		credential: OAuthCredential,
+	) => Promise<OAuthCredentials>;
+	/**
+	 * Human-readable description of the credential store backing this
+	 * AuthStorage instance. Surfaced through {@link AuthStorage.describeCredentialSource}
+	 * so the TUI can show where a token came from (broker URL or local SQLite path).
+	 *
+	 * Examples:
+	 * - `"local ~/.omp/agent/agent.db"`
+	 * - `"broker http://can.internal:8765"`
+	 */
+	sourceLabel?: string;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -289,6 +376,8 @@ export class AuthStorage {
 	#fallbackResolver?: (provider: string) => string | undefined;
 	#store: AuthCredentialStore;
 	#configValueResolver: (config: string) => Promise<string | undefined>;
+	#refreshOAuthCredentialOverride?: AuthStorageOptions["refreshOAuthCredential"];
+	#sourceLabel?: string;
 	#credentialDisabledListeners: Set<(event: CredentialDisabledEvent) => void | Promise<void>> = new Set();
 	/**
 	 * Buffer for credential_disabled events fired while no listener is subscribed.
@@ -309,6 +398,8 @@ export class AuthStorage {
 		this.#usageCache = new AuthStorageUsageCache(this.#store);
 		this.#usageFetch = options.usageFetch ?? fetch;
 		this.#usageRequestTimeoutMs = options.usageRequestTimeoutMs ?? DEFAULT_USAGE_REQUEST_TIMEOUT_MS;
+		this.#refreshOAuthCredentialOverride = options.refreshOAuthCredential;
+		this.#sourceLabel = options.sourceLabel;
 		if (options.onCredentialDisabled) {
 			// Constructor-registered subscribers are permanent for this AuthStorage's lifetime;
 			// the unsubscribe handle is intentionally discarded.
@@ -328,7 +419,7 @@ export class AuthStorage {
 	 * @param dbPath - Path to SQLite database
 	 */
 	static async create(dbPath: string, options: AuthStorageOptions = {}): Promise<AuthStorage> {
-		const store = await AuthCredentialStore.open(dbPath);
+		const store = await SqliteAuthCredentialStore.open(dbPath);
 		return new AuthStorage(store, options);
 	}
 
@@ -1264,6 +1355,26 @@ export class AuthStorage {
 		};
 	}
 
+	/**
+	 * Find the stored credential id matching a {@link UsageCredential} so the
+	 * refresh override can address the row. Mirrors the matching logic in
+	 * {@link AuthStorage.#persistRefreshedUsageCredential}.
+	 */
+	#findStoredCredentialIdForUsageCredential(provider: Provider, previous: UsageCredential): number | undefined {
+		const entries = this.#getStoredCredentials(provider);
+		const match = entries.find(entry => {
+			if (entry.credential.type !== "oauth") return false;
+			if (previous.refreshToken && entry.credential.refresh === previous.refreshToken) return true;
+			if (previous.accessToken && entry.credential.access === previous.accessToken) return true;
+			return (
+				entry.credential.accountId === previous.accountId &&
+				entry.credential.email === previous.email &&
+				entry.credential.projectId === previous.projectId
+			);
+		});
+		return match?.id;
+	}
+
 	#persistRefreshedUsageCredential(provider: Provider, previous: UsageCredential, next: UsageCredential): void {
 		const entries = this.#getStoredCredentials(provider);
 		const index = entries.findIndex(entry => {
@@ -1312,7 +1423,15 @@ export class AuthStorage {
 			const refreshableCredential = this.#buildRefreshableOauthCredential(request.credential);
 			if (refreshableCredential) {
 				try {
-					const refreshed = await this.#refreshOAuthCredential(request.provider, refreshableCredential);
+					const refreshableCredentialId = this.#findStoredCredentialIdForUsageCredential(
+						request.provider,
+						request.credential,
+					);
+					const refreshed = await this.#refreshOAuthCredential(
+						request.provider,
+						refreshableCredential,
+						refreshableCredentialId,
+					);
 					const refreshedCredential = this.#mergeRefreshedUsageCredential(request.credential, refreshed);
 					this.#persistRefreshedUsageCredential(request.provider, request.credential, refreshedCredential);
 					params = {
@@ -1883,9 +2002,11 @@ export class AuthStorage {
 					return;
 				}
 				try {
+					const credentialId = this.#getStoredCredentials(provider)[candidate.selection.index]?.id;
 					const refreshedCredentials = await this.#refreshOAuthCredential(
 						provider,
 						candidate.selection.credential,
+						credentialId,
 					);
 					candidate.selection.credential = {
 						...candidate.selection.credential,
@@ -1927,17 +2048,25 @@ export class AuthStorage {
 		return undefined;
 	}
 
-	async #refreshOAuthCredential(provider: Provider, credential: OAuthCredential): Promise<OAuthCredentials> {
+	async #refreshOAuthCredential(
+		provider: Provider,
+		credential: OAuthCredential,
+		credentialId: number | undefined,
+	): Promise<OAuthCredentials> {
 		if (Date.now() < credential.expires) return credential;
-		const customProvider = getOAuthProvider(provider);
 		let refreshPromise: Promise<OAuthCredentials>;
-		if (customProvider) {
-			if (!customProvider.refreshToken) {
-				throw new Error(`OAuth provider "${provider}" does not support token refresh`);
-			}
-			refreshPromise = customProvider.refreshToken(credential);
+		if (this.#refreshOAuthCredentialOverride && credentialId !== undefined) {
+			refreshPromise = this.#refreshOAuthCredentialOverride(provider, credentialId, credential);
 		} else {
-			refreshPromise = refreshOAuthToken(provider as OAuthProvider, credential);
+			const customProvider = getOAuthProvider(provider);
+			if (customProvider) {
+				if (!customProvider.refreshToken) {
+					throw new Error(`OAuth provider "${provider}" does not support token refresh`);
+				}
+				refreshPromise = customProvider.refreshToken(credential);
+			} else {
+				refreshPromise = refreshOAuthToken(provider as OAuthProvider, credential);
+			}
 		}
 		// Bound the refresh so a slow/hanging token endpoint cannot stall credential selection.
 		let timeout: NodeJS.Timeout | undefined;
@@ -2014,7 +2143,11 @@ export class AuthStorage {
 			let result: { newCredentials: OAuthCredentials; apiKey: string } | null;
 			const customProvider = getOAuthProvider(provider);
 			if (customProvider) {
-				const refreshedCredentials = await this.#refreshOAuthCredential(provider, selection.credential);
+				const refreshedCredentials = await this.#refreshOAuthCredential(
+					provider,
+					selection.credential,
+					this.#getStoredCredentials(provider)[selection.index]?.id,
+				);
 				const apiKey = customProvider.getApiKey
 					? customProvider.getApiKey(refreshedCredentials)
 					: refreshedCredentials.access;
@@ -2204,10 +2337,171 @@ export class AuthStorage {
 		// Fall back to custom resolver (e.g., models.json custom providers)
 		return this.#fallbackResolver?.(provider) ?? undefined;
 	}
+
+	// ─── Auth Broker integration ────────────────────────────────────────────
+
+	/**
+	 * Build a redacted snapshot of all loaded credentials for the auth-broker
+	 * wire. OAuth refresh tokens are replaced with {@link REMOTE_REFRESH_SENTINEL}
+	 * so clients never see the actual refresh token.
+	 *
+	 * Callers must {@link AuthStorage.reload} first when serving a stale snapshot
+	 * (the broker server's HTTP handler does this).
+	 */
+	exportSnapshot(): AuthCredentialSnapshot {
+		const entries: AuthCredentialSnapshotEntry[] = [];
+		for (const [provider, stored] of this.#data) {
+			for (const entry of stored) {
+				const credential = entry.credential;
+				const redacted: SnapshotCredential =
+					credential.type === "api_key" ? credential : { ...credential, refresh: REMOTE_REFRESH_SENTINEL };
+				entries.push({
+					id: entry.id,
+					provider,
+					credential: redacted,
+					identityKey: resolveCredentialIdentityKey(provider, credential),
+				});
+			}
+		}
+		return { generatedAt: Date.now(), credentials: entries };
+	}
+
+	/**
+	 * Force-refresh the OAuth credential with the given id, bypassing the
+	 * not-yet-expired guard. Used by the auth-broker server to honour
+	 * `POST /v1/credential/:id/refresh`.
+	 *
+	 * Returns the redacted snapshot entry for the refreshed row.
+	 * Throws when no OAuth credential with that id is loaded.
+	 */
+	async forceRefreshCredentialById(id: number): Promise<AuthCredentialSnapshotEntry> {
+		for (const [provider, entries] of this.#data) {
+			const index = entries.findIndex(entry => entry.id === id);
+			if (index === -1) continue;
+			const target = entries[index];
+			if (target.credential.type !== "oauth") {
+				throw new Error(`Credential ${id} is not OAuth (provider=${provider}, type=${target.credential.type})`);
+			}
+			// Pass a clone with expires=0 so the cached not-yet-expired short-circuit
+			// in #refreshOAuthCredential doesn't suppress the requested refresh.
+			const stale: OAuthCredential = { ...target.credential, expires: 0 };
+			const refreshed = await this.#refreshOAuthCredential(provider as Provider, stale, id);
+			const updated: OAuthCredential = {
+				type: "oauth",
+				access: refreshed.access,
+				refresh: refreshed.refresh,
+				expires: refreshed.expires,
+				accountId: refreshed.accountId ?? target.credential.accountId,
+				email: refreshed.email ?? target.credential.email,
+				projectId: refreshed.projectId ?? target.credential.projectId,
+				enterpriseUrl: refreshed.enterpriseUrl ?? target.credential.enterpriseUrl,
+			};
+			this.#replaceCredentialAt(provider, index, updated);
+			return {
+				id,
+				provider,
+				credential: { ...updated, refresh: REMOTE_REFRESH_SENTINEL },
+				identityKey: resolveCredentialIdentityKey(provider, updated),
+			};
+		}
+		throw new Error(`No credential with id=${id}`);
+	}
+
+	/**
+	 * Disable the credential with the given id and emit a
+	 * {@link CredentialDisabledEvent}. Used by the auth-broker server to honour
+	 * `POST /v1/credential/:id/disable`. Returns `false` when no such row exists.
+	 */
+	disableCredentialById(id: number, disabledCause: string): boolean {
+		for (const [provider, entries] of this.#data) {
+			const index = entries.findIndex(entry => entry.id === id);
+			if (index === -1) continue;
+			this.#store.deleteAuthCredential(id, disabledCause);
+			const next = entries.filter((_value, idx) => idx !== index);
+			this.#setStoredCredentials(provider, next);
+			this.#resetProviderAssignments(provider);
+			this.#emitCredentialDisabled({ provider, disabledCause });
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Upsert a credential into the underlying store, refresh the in-memory
+	 * snapshot, and return the redacted snapshot entries for the provider.
+	 *
+	 * Used by the auth-broker server to honour `POST /v1/credential`. The
+	 * persistence layer (`SqliteAuthCredentialStore.upsertAuthCredentialForProvider`)
+	 * does identity-key matching, so re-uploading the same email/account replaces
+	 * the existing row instead of inserting a duplicate.
+	 */
+	upsertCredential(provider: string, credential: AuthCredential): AuthCredentialSnapshotEntry[] {
+		const stored = this.#store.upsertAuthCredentialForProvider(provider, credential);
+		this.#setStoredCredentials(
+			provider,
+			stored.map(entry => ({ id: entry.id, credential: entry.credential })),
+		);
+		this.#resetProviderAssignments(provider);
+		return stored.map(entry => {
+			const persisted = entry.credential;
+			const redacted: SnapshotCredential =
+				persisted.type === "api_key" ? persisted : { ...persisted, refresh: REMOTE_REFRESH_SENTINEL };
+			return {
+				id: entry.id,
+				provider: entry.provider,
+				credential: redacted,
+				identityKey: resolveCredentialIdentityKey(provider, persisted),
+			};
+		});
+	}
+
+	/**
+	 * Describe where the active credential for a provider came from.
+	 *
+	 * Surfaces three layers, highest precedence first:
+	 *   1. Runtime override (`--api-key`).
+	 *   2. Stored credential (the one this session is currently sticky to, or the
+	 *      one round-robin would pick next when no session id is supplied).
+	 *   3. Env var / fallback resolver — when no stored credential exists.
+	 *
+	 * The string is purely informational; consumers must not parse it.
+	 */
+	describeCredentialSource(provider: string, sessionId?: string): string | undefined {
+		if (this.#runtimeOverrides.has(provider)) {
+			return "runtime override (--api-key)";
+		}
+
+		const baseLabel = this.#sourceLabel ?? "local store";
+		const stored = this.#getStoredCredentials(provider);
+		if (stored.length === 0) {
+			if (getEnvApiKey(provider)) return `env ${baseLabel ? `(fallback over ${baseLabel})` : ""}`.trim();
+			if (this.#fallbackResolver?.(provider) !== undefined) return `fallback resolver`;
+			return undefined;
+		}
+
+		const session = sessionId ? this.#sessionLastCredential.get(provider)?.get(sessionId) : undefined;
+		// Same selection logic as #selectCredentialByType for "no session" lookups: prefer
+		// the type with stored credentials, lean OAuth before api_key. We don't run the
+		// full round-robin here because describing the source shouldn't advance the index.
+		const preferredType: AuthCredential["type"] =
+			session?.type ?? (stored.some(entry => entry.credential.type === "oauth") ? "oauth" : "api_key");
+		const typed = stored
+			.map((entry, index) => ({ entry, index }))
+			.filter(({ entry }) => entry.credential.type === preferredType);
+		if (typed.length === 0) return baseLabel;
+		const index = session?.index ?? typed[0].index;
+		const chosen = stored[index] ?? typed[0].entry;
+		const credential = chosen.credential;
+		const identity =
+			credential.type === "oauth"
+				? (credential.email ?? credential.accountId ?? credential.projectId ?? `cred ${chosen.id}`)
+				: `cred ${chosen.id}`;
+		return `${baseLabel} · ${preferredType} #${chosen.id} (${identity})`;
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuthCredentialStore
+// SqliteAuthCredentialStore
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Row shape for auth_credentials table queries */
@@ -2389,11 +2683,14 @@ function extractOAuthTokenIdentifiers(token: string | undefined): string[] | und
 	}
 }
 /**
- * Standalone SQLite-backed implementation of AuthCredentialStore interface.
- * Used by the pi-ai CLI and as the default store for AuthStorage.create().
- * Also has convenience methods for simple CRUD (saveOAuth, getOAuth, etc.).
+ * Default SQLite-backed implementation of {@link AuthCredentialStore}.
+ *
+ * Used by the pi-ai CLI and as the default store for `AuthStorage.create()`.
+ * Also exposes convenience methods (`saveOAuth`, `getOAuth`, `saveApiKey`,
+ * `getApiKey`, `listProviders`, `deleteProvider`) that callers can use directly
+ * without going through `AuthStorage`.
  */
-export class AuthCredentialStore {
+export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#db: Database;
 	#listActiveStmt: Statement;
 	#listActiveByProviderStmt: Statement;
@@ -2447,7 +2744,7 @@ export class AuthCredentialStore {
 		this.#deleteExpiredCacheStmt = this.#db.prepare(`DELETE FROM cache WHERE expires_at <= ${SQLITE_NOW_EPOCH}`);
 	}
 
-	static async open(dbPath: string = getAgentDbPath()): Promise<AuthCredentialStore> {
+	static async open(dbPath: string = getAgentDbPath()): Promise<SqliteAuthCredentialStore> {
 		const dir = path.dirname(dbPath);
 		const dirExists = await fs
 			.stat(dir)
@@ -2464,7 +2761,7 @@ export class AuthCredentialStore {
 			// Ignore chmod failures (e.g., Windows)
 		}
 
-		return new AuthCredentialStore(db);
+		return new SqliteAuthCredentialStore(db);
 	}
 
 	#initializeSchema(): void {
@@ -2493,7 +2790,7 @@ export class AuthCredentialStore {
 		const schemaVersion = this.#readAuthSchemaVersion() ?? this.#inferAuthSchemaVersion();
 		const shouldWriteSchemaVersion = schemaVersion <= AUTH_SCHEMA_VERSION;
 		if (schemaVersion > AUTH_SCHEMA_VERSION) {
-			logger.warn("AuthCredentialStore schema version mismatch", {
+			logger.warn("SqliteAuthCredentialStore schema version mismatch", {
 				current: schemaVersion,
 				expected: AUTH_SCHEMA_VERSION,
 			});
