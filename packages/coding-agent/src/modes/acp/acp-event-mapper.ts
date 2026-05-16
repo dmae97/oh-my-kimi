@@ -127,6 +127,8 @@ export function mapToolKind(toolName: string): ToolKind {
 		case "move":
 			return "move";
 		case "bash":
+		case "shell":
+		case "exec":
 		case "eval":
 			return "execute";
 		case "search":
@@ -163,7 +165,10 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 			return [toSessionNotification(sessionId, update)];
 		}
 		case "tool_execution_update": {
-			const content = extractToolCallContent(event.partialResult);
+			const content = mergeToolUpdateContent(
+				buildToolStartContent(event.toolName, event.args),
+				extractToolCallContent(event.partialResult),
+			);
 			const update: SessionUpdate = {
 				sessionUpdate: "tool_call_update",
 				toolCallId: event.toolCallId,
@@ -357,6 +362,24 @@ function buildToolStartContent(toolName: string, args: unknown): ToolCallContent
 	}
 	const command = extractStringProperty<CommandContainer>(args, "command");
 	return command ? [textToolCallContent(`$ ${command}`)] : [];
+}
+
+function mergeToolUpdateContent(startContent: ToolCallContent[], resultContent: ToolCallContent[]): ToolCallContent[] {
+	if (startContent.length === 0) {
+		return resultContent;
+	}
+	const merged = [...startContent];
+	for (const item of resultContent) {
+		if (
+			item.type === "content" &&
+			item.content.type === "text" &&
+			hasEquivalentTextContent(merged, item.content.text)
+		) {
+			continue;
+		}
+		merged.push(item);
+	}
+	return merged;
 }
 
 function isCommandToolName(toolName: string): boolean {

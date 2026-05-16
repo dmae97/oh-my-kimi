@@ -154,6 +154,14 @@ type ReplayableMessage = {
 	isError?: boolean;
 };
 
+type ReplayableToolItem = {
+	type?: unknown;
+	id?: unknown;
+	name?: unknown;
+	arguments?: unknown;
+	input?: unknown;
+};
+
 type MCPConfigMap = {
 	[name: string]: MCPServerConfig;
 };
@@ -1585,16 +1593,27 @@ export class AcpAgent implements Agent {
 
 	async #replaySessionHistory(record: ManagedSessionRecord): Promise<void> {
 		const cwd = record.session.sessionManager.getCwd();
+		const replayedToolCallIds = new Set<string>();
 		for (const message of record.session.sessionManager.buildSessionContext().messages as ReplayableMessage[]) {
-			for (const notification of this.#messageToReplayNotifications(record.session.sessionId, message, cwd)) {
+			for (const notification of this.#messageToReplayNotifications(
+				record.session.sessionId,
+				message,
+				cwd,
+				replayedToolCallIds,
+			)) {
 				await this.#connection.sessionUpdate(notification);
 			}
 		}
 	}
 
-	#messageToReplayNotifications(sessionId: string, message: ReplayableMessage, cwd: string): SessionNotification[] {
+	#messageToReplayNotifications(
+		sessionId: string,
+		message: ReplayableMessage,
+		cwd: string,
+		replayedToolCallIds: Set<string>,
+	): SessionNotification[] {
 		if (message.role === "assistant") {
-			return this.#replayAssistantMessage(sessionId, message, cwd);
+			return this.#replayAssistantMessage(sessionId, message, cwd, replayedToolCallIds);
 		}
 		if (
 			message.role === "user" ||
@@ -1614,11 +1633,16 @@ export class AcpAgent implements Agent {
 			typeof message.toolCallId === "string" &&
 			typeof message.toolName === "string"
 		) {
-			return this.#replayToolResult(sessionId, cwd, {
-				...message,
-				toolCallId: message.toolCallId,
-				toolName: message.toolName,
-			});
+			return this.#replayToolResult(
+				sessionId,
+				cwd,
+				{
+					...message,
+					toolCallId: message.toolCallId,
+					toolName: message.toolName,
+				},
+				{ includeStart: !replayedToolCallIds.has(message.toolCallId) },
+			);
 		}
 		if (
 			message.role === "bashExecution" ||
@@ -1635,7 +1659,12 @@ export class AcpAgent implements Agent {
 		return [];
 	}
 
-	#replayAssistantMessage(sessionId: string, message: ReplayableMessage, cwd: string): SessionNotification[] {
+	#replayAssistantMessage(
+		sessionId: string,
+		message: ReplayableMessage,
+		cwd: string,
+		replayedToolCallIds: Set<string>,
+	): SessionNotification[] {
 		const notifications: SessionNotification[] = [];
 		const messageId = crypto.randomUUID();
 		if (Array.isArray(message.content)) {
@@ -1670,22 +1699,22 @@ export class AcpAgent implements Agent {
 					});
 					continue;
 				}
+				const toolItem = item as ReplayableToolItem;
 				if (
-					(item.type === "toolCall" || item.type === "tool_use") &&
-					"id" in item &&
-					typeof item.id === "string" &&
-					"name" in item &&
-					typeof item.name === "string"
+					(toolItem.type === "toolCall" || toolItem.type === "tool_use") &&
+					typeof toolItem.id === "string" &&
+					typeof toolItem.name === "string"
 				) {
-					const args = normalizeReplayToolArguments("arguments" in item ? item.arguments : undefined).args;
+					const args = this.#buildReplayAssistantToolArgs(toolItem);
 					const update = buildToolCallStartUpdate({
-						toolCallId: item.id,
-						toolName: item.name,
+						toolCallId: toolItem.id,
+						toolName: toolItem.name,
 						args,
 						status: "completed",
 						cwd,
 					});
 					notifications.push({ sessionId, update });
+					replayedToolCallIds.add(toolItem.id);
 				}
 			}
 		}
@@ -1702,10 +1731,21 @@ export class AcpAgent implements Agent {
 		return notifications;
 	}
 
+	#buildReplayAssistantToolArgs(item: ReplayableToolItem): unknown {
+		if ("arguments" in item) {
+			return normalizeReplayToolArguments(item.arguments).args;
+		}
+		if (item.type === "tool_use" && "input" in item) {
+			return { input: item.input };
+		}
+		return {};
+	}
+
 	#replayToolResult(
 		sessionId: string,
 		cwd: string,
 		message: Required<Pick<ReplayableMessage, "toolCallId" | "toolName">> & ReplayableMessage,
+		options: { includeStart?: boolean } = {},
 	): SessionNotification[] {
 		const args = this.#buildReplayToolArgs(message.details);
 		const startEvent: AgentSessionEvent = {
@@ -1725,10 +1765,11 @@ export class AcpAgent implements Agent {
 				errorMessage: message.errorMessage,
 			},
 		};
-		return [
-			...mapAgentSessionEventToAcpSessionUpdates(startEvent, sessionId, { cwd }),
-			...mapAgentSessionEventToAcpSessionUpdates(endEvent, sessionId, { cwd }),
-		];
+		const notifications = mapAgentSessionEventToAcpSessionUpdates(endEvent, sessionId, { cwd });
+		if (options.includeStart === false) {
+			return notifications;
+		}
+		return [...mapAgentSessionEventToAcpSessionUpdates(startEvent, sessionId, { cwd }), ...notifications];
 	}
 
 	#buildReplayToolArgs(details: unknown): { path?: string } {
