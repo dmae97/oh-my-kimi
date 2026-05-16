@@ -9,7 +9,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { InspectImageTool } from "@oh-my-pi/pi-coding-agent/tools/inspect-image";
 import { inspectImageToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/inspect-image-renderer";
 import { toolRenderers } from "@oh-my-pi/pi-coding-agent/tools/renderers";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 
 const TINY_PNG_BASE64 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
