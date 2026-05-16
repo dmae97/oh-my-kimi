@@ -1126,6 +1126,42 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("rejects a queued prompt when cancel cleanup closes the session", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		harness.agent.setCancelCleanupTimeoutForTesting(10);
+		session.abort = async () => new Promise<void>(() => undefined);
+		const finishPrompt = holdPromptStreaming(session);
+
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000043",
+			prompt: [{ type: "text", text: "stuck cancel before queued" }],
+		} as PromptRequest);
+		await Bun.sleep(0);
+
+		const cancelPrompt = harness.agent.cancel({ sessionId: created.sessionId });
+		await firstPrompt;
+		const queuedPrompt = harness.agent
+			.prompt({
+				sessionId: created.sessionId,
+				messageId: "00000000-0000-4000-8000-000000000044",
+				prompt: [{ type: "text", text: "queued after stuck cancel" }],
+			} as PromptRequest)
+			.catch(error => error);
+
+		await cancelPrompt;
+		const queuedError = await queuedPrompt;
+		expect(queuedError).toBeInstanceOf(Error);
+		expect(queuedError.message).toBe("ACP cancel cleanup timed out");
+		expect(session.promptCalls).toEqual(["stuck cancel before queued"]);
+
+		finishPrompt();
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("executes consumed ACP builtins without prompting the agent", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });

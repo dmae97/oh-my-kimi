@@ -557,7 +557,7 @@ export class AcpAgent implements Agent {
 			const queuedTurn = record.promptTurn;
 			if (queuedTurn && (!queuedTurn.settled || queuedTurn.cleanup)) {
 				await queuedTurn.promise.catch(() => undefined);
-				await queuedTurn.cleanup?.catch(() => undefined);
+				await queuedTurn.cleanup;
 			}
 
 			const converted = this.#convertPromptBlocks(params.prompt);
