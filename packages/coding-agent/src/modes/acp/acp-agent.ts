@@ -1931,7 +1931,18 @@ export class AcpAgent implements Agent {
 
 	async #cancelPromptForClose(record: ManagedSessionRecord): Promise<void> {
 		const promptTurn = record.promptTurn;
-		if (!promptTurn || promptTurn.settled) {
+		if (!promptTurn) {
+			return;
+		}
+		if (promptTurn.cleanup) {
+			try {
+				await promptTurn.cleanup;
+			} catch (error) {
+				logger.warn("Failed to abort ACP prompt during session close", { error });
+			}
+			return;
+		}
+		if (promptTurn.settled) {
 			return;
 		}
 
