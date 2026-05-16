@@ -909,6 +909,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
 			resolveThinkingLevelForModel(resolvedModel, thinkingLevel),
 		);
+		// Fire-and-forget TLS+H2 handshake to the model's host so it overlaps
+		// with the rest of session setup (extension/skill load, tool registry,
+		// system prompt build). Without this, the first `fetch(...)` pays the
+		// full handshake serially — 100–300 ms transcontinental for
+		// api.anthropic.com from a residential IP. Every mode benefits
+		// (interactive, print, rpc, acp).
+		preconnectModelHost(model.baseUrl);
 	}
 
 	let skills: Skill[];
@@ -1923,8 +1930,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		// Start LSP warmup in the background so startup does not block on language server initialization.
+		// Print/script invocations (`hasUI=false`) don't render the warmup status indicator AND typically
+		// finish before LSP servers would have stabilized — warming them just spends CPU parsing big
+		// `initialize` responses concurrently with the LLM stream consumer, jittering perceived latency.
+		// Tools that need an LSP server still spin one up on demand through `getOrCreateClient`.
 		let lspServers: CreateAgentSessionResult["lspServers"];
-		if (enableLsp && settings.get("lsp.diagnosticsOnWrite")) {
+		if (enableLsp && options.hasUI && settings.get("lsp.diagnosticsOnWrite")) {
 			lspServers = discoverStartupLspServers(cwd);
 			if (lspServers.length > 0) {
 				void (async () => {
@@ -2039,5 +2050,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			});
 		}
 		throw error;
+	}
+}
+
+/**
+ * Best-effort preconnect to the model's API host. Bun's `fetch.preconnect`
+ * primes DNS + TCP + TLS + H2 so the first real request reuses the warm
+ * connection. Errors are swallowed: preconnect is an optimization, never a
+ * hard dependency.
+ */
+function preconnectModelHost(baseUrl: string | undefined): void {
+	if (!baseUrl) return;
+	const preconnect = (globalThis.fetch as typeof fetch & { preconnect?: (url: string) => void }).preconnect;
+	if (typeof preconnect !== "function") return;
+	try {
+		preconnect(baseUrl);
+	} catch {
+		// Best effort.
 	}
 }
