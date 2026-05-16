@@ -5,7 +5,7 @@
 # Build is split across three stages:
 #
 #   1) pi-artifacts — pull a pre-built `oh-my-pi/artifacts:dev` image (built
-#      separately from /work/pi/Dockerfile, see `bun run pi-artifacts`):
+#      separately from /work/pi/Dockerfile, see `bun run robomp:pi-artifacts`):
 #        - pi_natives.linux-<arch>.node → /opt/bun/bin/  (the pi loader probes here)
 #        - omp_rpc-*.whl                → pip install
 #   2) web-builder    — Bun + Vite compile the SolidJS dashboard bundle from

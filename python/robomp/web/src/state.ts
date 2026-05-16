@@ -29,7 +29,7 @@ export { isFetching, lastTickAt, lastTickError };
 
 let pollHandle: number | null = null;
 
-export async function tick(): Promise<void> {
+async function tick(): Promise<void> {
   setIsFetching(true);
   try {
     await Promise.all([refetchStatus(), refetchLogs()]);
@@ -112,8 +112,4 @@ export async function runCancel(deliveryId: string): Promise<void> {
     setTriggerStatus({ kind: "err", text: `${status}: ${detail}` });
   }
   void tick();
-}
-
-export function clearTriggerStatus(): void {
-  setTriggerStatus({ kind: "idle", text: "" });
 }

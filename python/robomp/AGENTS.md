@@ -23,48 +23,48 @@ Webhook → durable queue → async dispatcher → per-issue git worktree → om
 - `src/robomp/prompts/` — Mustache-style `{{var}}` templates loaded by `persona.py` via `@cache` and `importlib.resources`. Shipped as package data (`pyproject.toml` `package-data`).
 - `tests/` — pytest suite. `test_worker_smoke.py` is gated on `ROBOMP_INTEGRATION=1`.
 - `data/` — runtime state (sqlite + WAL, `workspaces/`, `logs/`). Never committed.
-- `/work/pi/Dockerfile` — produces `oh-my-pi/artifacts:dev` (pi-natives `.node` + omp-rpc wheel). Built once per pi-source change via `bun run pi-artifacts`; roboomp's runtime image consumes it via `COPY --from=`.
+- `/work/pi/Dockerfile` — produces `oh-my-pi/artifacts:dev` (pi-natives `.node` + omp-rpc wheel). Built once per pi-source change via `bun run robomp:pi-artifacts`; roboomp's runtime image consumes it via `COPY --from=`.
 
 ## Development Commands
 
-Task runner is now `bun` against the root `package.json` (workspaces = `["web"]`). `just` is gone; every recipe lives in the root `scripts` block. Local venv (no docker): `bun run install:py` runs `pip install -e '.[dev]'`. From there:
+Task runner is `bun` against the **monorepo root** `package.json`. roboomp itself no longer ships a `package.json`; every recipe lives at the root under the `robomp:*` namespace. Local venv (no docker): `bun run robomp:install` runs `pip install -e 'python/robomp[dev]'`. From there:
 
 ```
-bun run test                # pytest -x tests/
-bun run test:file <PATH>    # single file
-bun run test:integration    # ROBOMP_INTEGRATION=1, requires omp on PATH
-bun run serve               # python -m robomp serve on the host
+bun run test:py                   # pytest -x python/omp-rpc/tests python/robomp/tests
+bun run robomp:test:integration   # ROBOMP_INTEGRATION=1, requires omp on PATH
+bun run robomp:serve              # python -m robomp serve on the host
 ```
 
 Docker inner loop:
 
 ```
-bun run build               # pi-artifacts (if pi changed) + docker compose build
-bun run dev                 # build + up -d + follow logs
-bun run up / down / restart / logs / sh
-bun run rebuild             # docker compose build --no-cache
+bun run robomp:build              # pi-artifacts (if pi changed) + docker compose build
+bun run robomp:dev                # build + up -d + follow logs
+bun run robomp:up / robomp:down / robomp:restart / robomp:logs
+bun run robomp:rebuild            # docker compose build --no-cache
+bun run robomp:reset              # `down -v` + drop the pi-artifacts image
 ```
 
-Frontend (Vite + SolidJS, in `web/`):
+Frontend (Vite + SolidJS, in `web/` — still a bun workspace):
 
 ```
-bun run web:dev             # vite dev server with proxy to :8080
-bun run web:build           # produce src/robomp/static/ bundle
-bun run web:typecheck       # tsc --noEmit
+bun run robomp:web:dev            # vite dev server with proxy to :8080
+bun run robomp:web:build          # produce src/robomp/static/ bundle
+bun --cwd=python/robomp/web run typecheck   # tsc --noEmit
 ```
 
-In-container CLI (`robomp` console script → `robomp.cli:main`):
+In-container CLI (`robomp` console script → `robomp.cli:main`): no root aliases — invoke directly:
 
 ```
-bun run triage owner/repo#N   # full pipeline against a live issue
-bun run replay <delivery_id>  # re-enqueue a stored webhook
-bun run issue-status          # tabular dump of issues table
-bun run cleanup owner/repo#N  # force workspace removal + state=abandoned
+docker compose --project-directory python/robomp exec robomp robomp triage owner/repo#N
+docker compose --project-directory python/robomp exec robomp robomp replay <delivery_id>
+docker compose --project-directory python/robomp exec robomp robomp status
+docker compose --project-directory python/robomp exec robomp robomp cleanup owner/repo#N
 ```
 
-HTTP/sqlite inspection: `bun run healthz`, `bun run readyz`, `bun run events [N]`, `bun run issues [N]`, `bun run sqlite`, `bun run sql "<SQL>"`, `bun run tool-calls owner/repo#N`, `bun run stuck`. Webhook smoke: `bun run ping`. Danger: `bun run wipe-workspaces`, `bun run nuke-data`, `bun run reset`.
+HTTP / sqlite / webhook inspection is unaliased — use `curl http://localhost:${ROBOMP_BIND_PORT:-8080}/{healthz,readyz,events,issues}` and `docker compose --project-directory python/robomp exec robomp sqlite3 /data/robomp.sqlite` directly.
 
-Lint + format: TypeScript via Biome (config in `biome.json`), Python via Ruff (config in `pyproject.toml`). `bun run lint` checks both; `bun run fix` rewrites both. `bun run lint:ts` / `bun run lint:py` / `bun run fix:ts` / `bun run fix:py` scope to one language. `bun run typecheck` runs `tsc --noEmit` against `web/`. Run before committing non-trivial changes; CI is not yet wired up.
+Lint + format: TypeScript via Biome (config in `biome.json`), Python via Ruff (config in `pyproject.toml`). Root recipes cover both languages — `bun run lint` / `bun run fix` apply to the whole monorepo including roboomp. `bun run lint:py` / `bun run fix:py` scope to Python only.
 
 ## Code Conventions & Common Patterns
 
@@ -108,7 +108,7 @@ Lint + format: TypeScript via Biome (config in `biome.json`), Python via Ruff (c
 - **Task runner**: `bun` (root `package.json` `scripts`). Always reach for an existing `bun run` recipe before invoking `docker compose` or `pytest` directly.
 - **Container runtime**: Docker Compose v2. The image embeds Bun 1.3.14 + a rustup launcher and exposes `omp` via a `/usr/local/bin/omp` shim; `ROBOMP_OMP_COMMAND=omp` should not need changing.
 - **Required env** (set in `.env`, see `.env.example`): `GITHUB_WEBHOOK_SECRET`, `ROBOMP_BOT_LOGIN`, `ROBOMP_GIT_AUTHOR_NAME`, `ROBOMP_GIT_AUTHOR_EMAIL`, `ROBOMP_REPO_ALLOWLIST`, plus model knobs (`ROBOMP_MODEL`, `ROBOMP_THINKING`, optional `ROBOMP_PROVIDER`) and rate-limit / concurrency / timeout overrides. **GitHub auth is mode-exclusive**: either set `ROBOMP_GH_PROXY_URL` + `ROBOMP_GH_PROXY_HMAC_KEY` (gh-proxy mode; PAT lives only in the sidecar container — the bundled compose default), or set `GITHUB_TOKEN` directly (single-process PAT mode). `Settings._validate_proxy_or_pat` rejects a `.env` that sets both.
-- **PI_ROOT resolution**: roboomp lives inside the oh-my-pi monorepo at `python/robomp/`. `bun run pi-artifacts` builds the parent monorepo (`../..`) as its docker build context, and `docker-compose.yml` mounts that same path read-only at `/work/pi`. Override `PI_ROOT` only when pointing the build/mount at a different oh-my-pi checkout. Inside the container the path is always `/work/pi`. Build invalidation stays bounded: Python-only edits in roboomp never trigger a natives recompile.
+- **PI_ROOT resolution**: roboomp lives inside the oh-my-pi monorepo at `python/robomp/`. `bun run robomp:pi-artifacts` builds the parent monorepo (`../..`) as its docker build context, and `docker-compose.yml` mounts that same path read-only at `/work/pi`. Override `PI_ROOT` only when pointing the build/mount at a different oh-my-pi checkout. Inside the container the path is always `/work/pi`. Build invalidation stays bounded: Python-only edits in roboomp never trigger a natives recompile.
 - **Forbidden**: no docker-in-docker, no extra service containers, no new background workers outside `WorkerPool`. The container itself is the isolation boundary; per-issue isolation is the git worktree.
 
 ## Testing & QA
@@ -121,5 +121,5 @@ Lint + format: TypeScript via Biome (config in `biome.json`), Python via Ruff (c
 - **Isolation rules**: any test mutating env via `monkeypatch.setenv` MUST also call `reset_settings_cache()` to invalidate the `@cache`d `get_settings()`.
 - **Async tests**: `test_github_client.py` and `test_host_tools.py` spin custom event loops in background threads to bridge sync-style tests with async client code. Prefer `pytest-asyncio` `auto` mode (`async def test_*`) for new tests; only fall back to the loop helpers if matching the surrounding file's style.
 - **Mocking**: never patch internals; inject test doubles via `httpx.MockTransport` for HTTP and via the `db` / `tmp_path` fixtures for storage. Sandbox tests use a real local bare repo as the upstream.
-- **Integration**: `tests/test_worker_smoke.py` is gated by `ROBOMP_INTEGRATION=1` (uses `pytestmark.skipif`) and needs `omp` on `PATH`. Don't enable it in default `bun run test`.
+- **Integration**: `tests/test_worker_smoke.py` is gated by `ROBOMP_INTEGRATION=1` (uses `pytestmark.skipif`) and needs `omp` on `PATH`. Don't enable it in default `bun run test:py`.
 - **Coverage expectation**: ~80 unit tests currently. New code with a control-flow branch needs a test covering it; new host tools need at minimum a happy path + one validation-failure path mirroring `test_host_tools.py`. Test logical behavior (assertions on observable effects in DB / HTTP requests), not literal strings or default config values.

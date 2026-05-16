@@ -17,7 +17,7 @@ services:
       context: ../..
       dockerfile: python/robomp/Dockerfile
       args:
-        # Tag of the pre-built artifacts image produced by `bun run pi-artifacts`
+        # Tag of the pre-built artifacts image produced by `bun run robomp:pi-artifacts`
         # (sources: pi root /Dockerfile). Override per-environment as needed.
         PI_ARTIFACTS_IMAGE: oh-my-pi/artifacts:dev
     image: robomp:dev

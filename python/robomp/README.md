@@ -63,8 +63,8 @@ $EDITOR .env
 openssl rand -hex 32              # ROBOMP_GH_PROXY_HMAC_KEY
 openssl rand -hex 32              # GITHUB_WEBHOOK_SECRET
 
-bun run pi-artifacts              # build oh-my-pi/artifacts:dev (one-time / on pi change)
-bun run build && bun run up
+bun run robomp:pi-artifacts       # build oh-my-pi/artifacts:dev (one-time / on pi change)
+bun run robomp:build && bun run robomp:up
 curl -fsS http://localhost:8080/healthz
 ```
 
@@ -111,9 +111,9 @@ docker compose exec robomp robomp status                   # dump issues table
 docker compose exec robomp robomp cleanup owner/repo#123   # force workspace removal, state=abandoned
 ```
 
-`bun run …` shortcuts in `package.json` cover the common ones
-(`bun run triage`, `bun run replay`, `bun run sql`, `bun run events`,
-`bun run logs`, `bun run sh`, etc.).
+`bun run robomp:…` shortcuts in the root `package.json` cover the common
+lifecycle commands (`robomp:dev`, `robomp:build`, `robomp:up`, `robomp:down`,
+`robomp:logs`, `robomp:restart`, `robomp:reset`).
 
 ## Tests
 
@@ -124,7 +124,7 @@ ROBOMP_INTEGRATION=1 pytest -x tests/test_worker_smoke.py
 
 The integration test spawns a real `omp --mode rpc` against an
 `httpx.MockTransport` GitHub and a local bare repo, so it needs `omp` on
-`PATH`. `bun run test` runs the unit suite.
+`PATH`. `bun run test:py` runs the unit suite.
 
 ## Security posture
 
@@ -186,7 +186,7 @@ The integration test spawns a real `omp --mode rpc` against an
 | `refusing to push: commit author identity mismatch` | Some commit not authored as `ROBOMP_GIT_AUTHOR_*`. The error lists the offending shas; `git commit --amend --reset-author --no-edit`. |
 | `refusing to push: working tree is dirty` | Uncommitted agent edits. Or just call `gh_open_pr`, which auto-commits `bun run fix` output. |
 | `bun check failed before PR creation` | Fix the reported failure and retry `gh_open_pr`. |
-| `Failed to load pi_natives` | Wrong arch / missing native. `bun run pi-artifacts` then `bun run build`. |
+| `Failed to load pi_natives` | Wrong arch / missing native. `bun run robomp:pi-artifacts` then `bun run robomp:build`. |
 | `No API key found for <provider>` | `~/.omp/agent/models.container.yml` mount missing or provider id mismatch with `ROBOMP_MODEL`. |
 
 ## Layout
