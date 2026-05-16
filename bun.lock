@@ -180,13 +180,13 @@
       "name": "@oh-my-pi/pi-utils",
       "version": "15.1.2",
       "dependencies": {
+        "@oh-my-pi/pi-natives": "catalog:",
         "beautiful-mermaid": "catalog:",
         "handlebars": "catalog:",
         "winston": "catalog:",
         "winston-daily-rotate-file": "catalog:",
       },
       "devDependencies": {
-        "@oh-my-pi/pi-natives": "catalog:",
         "@types/bun": "catalog:",
       },
     },

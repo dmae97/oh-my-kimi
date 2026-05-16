@@ -15,7 +15,6 @@ import {
 	listWorkspace,
 	MacOSPowerAssertion,
 	PtySession,
-	sanitizeText,
 	summarizeCode,
 	truncateToWidth,
 	visibleWidth,
@@ -584,28 +583,11 @@ describe("pi-natives", () => {
 		});
 	});
 
-	describe("sanitizeText", () => {
-		it("should strip ANSI, remove control chars and normalize CR", () => {
-			const input = "\x1b[31mred\x1b[0m\ra\u0000b\tline\ncarriage\r\u0001\u0085";
-			expect(sanitizeText(input)).toBe("redab\tline\ncarriage");
-		});
-
-		it("should remove lone surrogates but keep valid pairs", () => {
-			expect(sanitizeText(`a\ud800b\udc00c`)).toBe("abc");
-			const validPair = "a\u{1f600}b";
-			expect(sanitizeText(validPair)).toBe(validPair);
-		});
-
-		it("should strip OSC sequences", () => {
-			const input = "\x1b]0;title\x07hello";
-			expect(sanitizeText(input)).toBe("hello");
-		});
-		describe("MacOSPowerAssertion", () => {
-			it("should create a stoppable power assertion handle", () => {
-				const assertion = MacOSPowerAssertion.start({ reason: "pi-natives test" });
-				assertion.stop();
-				assertion.stop();
-			});
+	describe("MacOSPowerAssertion", () => {
+		it("should create a stoppable power assertion handle", () => {
+			const assertion = MacOSPowerAssertion.start({ reason: "pi-natives test" });
+			assertion.stop();
+			assertion.stop();
 		});
 	});
 });

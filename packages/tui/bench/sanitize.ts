@@ -1,4 +1,3 @@
-import { sanitizeText as nativeSanitizeText } from "@oh-my-pi/pi-natives";
 import { sanitizeText as currentSanitizeText } from "@oh-my-pi/pi-utils/sanitize-text";
 
 const STRIP_RE = new RegExp(
@@ -313,39 +312,35 @@ console.log(`Text layout benchmark (${ITERATIONS} iterations)\n`);
 
 for (const name in samples) {
 	const text = samples[name as keyof typeof samples];
+	const baseline = currentSanitizeText(text);
 	const jsResult = jsSanitizeText(text);
-	const nativeResult = nativeSanitizeText(text);
-	const currentResult = currentSanitizeText(text);
 	const regexResult = regexSanitizeText(text);
-	if (jsResult !== nativeResult) {
-		console.log(`MISMATCH js/native ${name}`);
+	if (jsResult !== baseline) {
+		console.log(`MISMATCH js/current ${name}`);
 	}
-	if (currentResult !== nativeResult) {
-		console.log(`MISMATCH current/native ${name}: current=${JSON.stringify(currentResult)} native=${JSON.stringify(nativeResult)}`);
-	}
-	if (regexResult !== nativeResult) {
-		console.log(`MISMATCH regex/native ${name}: regex=${JSON.stringify(regexResult)} native=${JSON.stringify(nativeResult)}`);
+	if (regexResult !== baseline) {
+		console.log(`MISMATCH regex/current ${name}: regex=${JSON.stringify(regexResult)} baseline=${JSON.stringify(baseline)}`);
 	}
 	const gatedResult = gatedSanitizeText(text);
 	const skipResult = skipRunSanitizeText(text);
- 	const removalStartResult = removalStartSanitizeText(text);
- 	const wellFormedControlResult = wellFormedControlSanitizeText(text);
- 	const lazyWellFormedResult = lazyWellFormedSanitizeText(text);
-	if (gatedResult !== nativeResult) {
-		console.log(`MISMATCH gated/native ${name}`);
+	const removalStartResult = removalStartSanitizeText(text);
+	const wellFormedControlResult = wellFormedControlSanitizeText(text);
+	const lazyWellFormedResult = lazyWellFormedSanitizeText(text);
+	if (gatedResult !== baseline) {
+		console.log(`MISMATCH gated/current ${name}`);
 	}
-	if (skipResult !== nativeResult) {
-		console.log(`MISMATCH skip/native ${name}: skip=${JSON.stringify(skipResult)} native=${JSON.stringify(nativeResult)}`);
+	if (skipResult !== baseline) {
+		console.log(`MISMATCH skip/current ${name}: skip=${JSON.stringify(skipResult)} baseline=${JSON.stringify(baseline)}`);
 	}
- 	if (removalStartResult !== nativeResult) {
- 		console.log(`MISMATCH removalStart/native ${name}: removalStart=${JSON.stringify(removalStartResult)} native=${JSON.stringify(nativeResult)}`);
- 	}
- 	if (wellFormedControlResult !== nativeResult) {
- 		console.log(`MISMATCH wellFormedControl/native ${name}: wellFormedControl=${JSON.stringify(wellFormedControlResult)} native=${JSON.stringify(nativeResult)}`);
- 	}
- 	if (lazyWellFormedResult !== nativeResult) {
- 		console.log(`MISMATCH lazyWellFormed/native ${name}: lazyWellFormed=${JSON.stringify(lazyWellFormedResult)} native=${JSON.stringify(nativeResult)}`);
- 	}
+	if (removalStartResult !== baseline) {
+		console.log(`MISMATCH removalStart/current ${name}: removalStart=${JSON.stringify(removalStartResult)} baseline=${JSON.stringify(baseline)}`);
+	}
+	if (wellFormedControlResult !== baseline) {
+		console.log(`MISMATCH wellFormedControl/current ${name}: wellFormedControl=${JSON.stringify(wellFormedControlResult)} baseline=${JSON.stringify(baseline)}`);
+	}
+	if (lazyWellFormedResult !== baseline) {
+		console.log(`MISMATCH lazyWellFormed/current ${name}: lazyWellFormed=${JSON.stringify(lazyWellFormedResult)} baseline=${JSON.stringify(baseline)}`);
+	}
 
 	bench(`jsSanitizeText/${name}`, () => {
 		jsSanitizeText(text);
@@ -362,17 +357,14 @@ for (const name in samples) {
 	bench(`skipRunSanitizeText/${name}`, () => {
 		skipRunSanitizeText(text);
 	});
- 	bench(`removalStartSanitizeText/${name}`, () => {
- 		removalStartSanitizeText(text);
- 	});
- 	bench(`wellFormedControlSanitizeText/${name}`, () => {
- 		wellFormedControlSanitizeText(text);
- 	});
- 	bench(`lazyWellFormedSanitizeText/${name}`, () => {
- 		lazyWellFormedSanitizeText(text);
- 	});
-	bench(`nativeSanitizeText/${name}`, () => {
-		nativeSanitizeText(text);
+	bench(`removalStartSanitizeText/${name}`, () => {
+		removalStartSanitizeText(text);
+	});
+	bench(`wellFormedControlSanitizeText/${name}`, () => {
+		wellFormedControlSanitizeText(text);
+	});
+	bench(`lazyWellFormedSanitizeText/${name}`, () => {
+		lazyWellFormedSanitizeText(text);
 	});
 	console.log();
 }
