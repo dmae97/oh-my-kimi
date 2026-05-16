@@ -223,7 +223,7 @@ describe("sanitizeSchemaForStrictMode", () => {
 		expect(retries.description).toBe("retry count (default: 3)");
 	});
 
-	it("inlines defaults through the type-array (nullable) branch", () => {
+	it("hoists shared description to the wrapper when expanding a nullable type-array", () => {
 		const schema = {
 			type: ["number", "null"],
 			description: "timeout",
@@ -233,10 +233,14 @@ describe("sanitizeSchemaForStrictMode", () => {
 		const sanitized = sanitizeSchemaForStrictMode(schema);
 		const variants = sanitized.anyOf as Array<Record<string, unknown>>;
 		const numberVariant = variants.find(v => v.type === "number");
+		const nullVariant = variants.find(v => v.type === "null");
 
-		expect(numberVariant).toBeDefined();
-		expect((numberVariant as Record<string, unknown>).default).toBeUndefined();
-		expect((numberVariant as Record<string, unknown>).description).toBe("timeout (default: 60)");
+		// Description with the inlined `(default: …)` suffix lives on the
+		// wrapper, not duplicated onto each variant — matches the optional-
+		// property wrap shape produced by `enforceStrictSchema`.
+		expect(sanitized.description).toBe("timeout (default: 60)");
+		expect(numberVariant).toEqual({ type: "number" });
+		expect(nullVariant).toEqual({ type: "null" });
 	});
 	// Mirrors: openai-python/tests/lib/test_pydantic.py::test_nested_inline_ref_expansion
 	// SDK behavior: a `$ref` with sibling keys (e.g. description) must be unraveled —
@@ -684,6 +688,42 @@ describe("tryEnforceStrictSchema", () => {
 		expect(replaceTasks.required).toEqual(["content", "status", "notes"]);
 		expect(updateTasks.additionalProperties).toBe(false);
 		expect(updateTasks.required).toEqual(["content", "status", "notes"]);
+	});
+
+	it("falls back to non-strict for mixed-primitive enum roots (no representable type)", () => {
+		// `{enum:[1, "two", null]}` cannot be reduced to a single `type` keyword,
+		// so strict mode cannot accept it. Older releases set `strict: true` with
+		// a typeless `{enum:[...]}` schema that OpenAI strict mode would reject
+		// on the wire; the contract is now to fall back to non-strict instead.
+		const result = tryEnforceStrictSchema({ enum: [1, "two", null] });
+		expect(result.strict).toBe(false);
+		expect(result.schema).toEqual({ enum: [1, "two", null] });
+	});
+
+	it("falls back to non-strict for non-primitive const roots", () => {
+		const objectResult = tryEnforceStrictSchema({ const: { a: 1 } });
+		expect(objectResult.strict).toBe(false);
+		expect(objectResult.schema).toEqual({ const: { a: 1 } });
+
+		const arrayResult = tryEnforceStrictSchema({ const: [1, 2, 3] });
+		expect(arrayResult.strict).toBe(false);
+		expect(arrayResult.schema).toEqual({ const: [1, 2, 3] });
+	});
+
+	it("infers a primitive type from enum/const when calling enforceStrictSchema directly", () => {
+		// `enforceStrictSchema` is a public API. Callers that pass a bare
+		// `{enum:[primitives]}` (without first running sanitize) still get a
+		// `type` filled in so the result is wire-valid.
+		const enumResult = enforceStrictSchema({ enum: ["draft", "published"] });
+		expect(enumResult).toEqual({ type: "string", enum: ["draft", "published"] });
+
+		const constResult = enforceStrictSchema({ const: 7 });
+		expect(constResult).toEqual({ type: "number", const: 7 });
+
+		// Mixed-primitive enum still throws — caller must fall back via tryEnforce.
+		expect(() => enforceStrictSchema({ enum: [1, "two"] })).toThrow();
+		// Non-primitive const still throws — caller must fall back via tryEnforce.
+		expect(() => enforceStrictSchema({ const: { a: 1 } })).toThrow();
 	});
 });
 

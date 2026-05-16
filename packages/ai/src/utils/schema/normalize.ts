@@ -923,6 +923,53 @@ function rewriteOneOfToAnyOf(value: unknown): unknown {
 // ---------------------------------------------------------------------------
 
 /**
+ * Single primitive JSON Schema `type` keyword. Strict mode treats these
+ * scalar types as concrete-enough; aggregate shapes (object, array) are not
+ * included because they're not derivable from a single `enum`/`const` value.
+ */
+type StrictPrimitiveType = "null" | "string" | "number" | "boolean";
+
+function primitiveJsonTypeOf(value: unknown): StrictPrimitiveType | undefined {
+	if (value === null) return "null";
+	switch (typeof value) {
+		case "string":
+			return "string";
+		case "number":
+			return "number";
+		case "boolean":
+			return "boolean";
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Returns the primitive `type` keyword that fully describes the constraint
+ * expressed by this node's `enum` (or `const`), or `undefined` when the
+ * constraint cannot be reduced to a single primitive type.
+ *
+ * Strict mode requires every schema node to declare a concrete `type`. When
+ * the author wrote `{enum:[...]}` or `{const:X}` without a `type`, we can
+ * infer one — but only when every value reduces to the same primitive type.
+ * Mixed-primitive enums (`[1, "two", null]`), enums containing non-primitives
+ * (`[{a:1}]`), and non-primitive consts (`{a:1}`, `[1,2,3]`) all return
+ * undefined: those shapes cannot be described by a single `type` keyword, so
+ * strict mode cannot represent them and the caller must fall back.
+ */
+function inferStrictPrimitiveTypeFromEnumOrConst(node: Record<string, unknown>): StrictPrimitiveType | undefined {
+	const values: unknown[] = Array.isArray(node.enum) ? node.enum : Object.hasOwn(node, "const") ? [node.const] : [];
+	if (values.length === 0) return undefined;
+	let inferred: StrictPrimitiveType | undefined;
+	for (const value of values) {
+		const t = primitiveJsonTypeOf(value);
+		if (t === undefined) return undefined; // non-primitive (object/array) — strict can't represent
+		if (inferred === undefined) inferred = t;
+		else if (inferred !== t) return undefined; // mixed primitives
+	}
+	return inferred;
+}
+
+/**
  * Per-schema-object memoization slot. The result of `tryEnforceStrictSchema`
  * is stamped directly onto the input via `stamp(target, kStrictSchema, …)`
  * so repeated calls (different providers, retries, batching) reuse the same
@@ -1102,9 +1149,15 @@ export function sanitizeSchemaForStrictMode(
 		// Build one variant schema per type. Each variant keeps only the keywords
 		// relevant to that type — object-only keywords stay on the object variant,
 		// array-only keywords on the array variant, etc.
-
+		//
+		// `description` is metadata that applies to the whole union, not to any
+		// single type variant, so hoist it to the wrapper so both branches share
+		// it without duplication. Matches the optional-property wrap in
+		// `enforceStrictSchema` and the typical OpenAI strict-mode "description
+		// on the union" shape.
+		const { description, ...variantBase } = sanitizedWithoutType;
 		const variants = typeVariants.map(variantType => {
-			const variantSchema: Record<string, unknown> = { ...sanitizedWithoutType, type: variantType };
+			const variantSchema: Record<string, unknown> = { ...variantBase, type: variantType };
 			if (variantType !== "object") {
 				delete variantSchema.properties;
 				delete variantSchema.required;
@@ -1117,13 +1170,16 @@ export function sanitizeSchemaForStrictMode(
 		});
 
 		if (variants.length === 1) {
-			cache.set(schema, variants[0] as Record<string, unknown>);
-			return variants[0] as Record<string, unknown>;
+			const sole = variants[0] as Record<string, unknown>;
+			if (description !== undefined && !Object.hasOwn(sole, "description")) {
+				sole.description = description;
+			}
+			cache.set(schema, sole);
+			return sole;
 		}
 
-		const result = {
-			anyOf: variants,
-		};
+		const result: JsonObject = { anyOf: variants };
+		if (description !== undefined) result.description = description;
 		cache.set(schema, result);
 		return result;
 	}
@@ -1234,37 +1290,21 @@ export function sanitizeSchemaForStrictMode(
 		sanitized.type = "array";
 	}
 
-	// Last-resort inference: a bare `enum` with homogeneous primitives gets a `type`.
-	if (sanitized.type === undefined && Array.isArray(sanitized.enum)) {
-		let inferredType: "null" | "string" | "number" | "boolean" | undefined;
-		let conflicting = false;
-		for (const v of sanitized.enum) {
-			const t =
-				v === null
-					? "null"
-					: typeof v === "string"
-						? "string"
-						: typeof v === "number"
-							? "number"
-							: typeof v === "boolean"
-								? "boolean"
-								: undefined;
-			if (t === undefined) continue;
-			if (inferredType === undefined) inferredType = t;
-			else if (inferredType !== t) {
-				conflicting = true;
-				break;
-			}
-		}
-		if (!conflicting && inferredType !== undefined) {
-			sanitized.type = inferredType;
-		}
+	// Last-resort inference: a bare `enum`/`const` with homogeneous primitives gets a `type`.
+	if (sanitized.type === undefined) {
+		const inferred = inferStrictPrimitiveTypeFromEnumOrConst(sanitized);
+		if (inferred !== undefined) sanitized.type = inferred;
 	}
 
 	// `nullable: true` was stripped above — re-introduce it as an `anyOf` wrapper.
+	// `description` hoists to the wrapper so both branches share it without
+	// duplication — matches the optional-property wrap in `enforceStrictSchema`
+	// and the typical OpenAI strict-mode "description on the union" shape.
 	if (schema.nullable === true) {
-		const { nullable: _, ...withoutNullable } = sanitized;
-		return { anyOf: [withoutNullable, { type: "null" }] };
+		const { nullable: _, description, ...withoutNullable } = sanitized;
+		const wrapper: JsonObject = { anyOf: [withoutNullable, { type: "null" }] };
+		if (description !== undefined) wrapper.description = description;
+		return wrapper;
 	}
 
 	return sanitized;
@@ -1392,13 +1432,22 @@ function enforceStrictSchemaBody(
 			result[defsKey] = nextDefs;
 		}
 	}
-	// Strict mode requires every schema node to declare a concrete type (or combinator/$ref/enum/const).
-	// Schemas like `{}` (match anything) or `{items: {}}` are not representable in strict mode.
+	// Strict mode requires every schema node to declare a concrete type (or
+	// combinator / `$ref` / `not`). When `type` is missing, try to infer it
+	// from a homogeneous-primitive `enum` / `const` so direct calls to
+	// `enforceStrictSchema` (which bypass `sanitizeSchemaForStrictMode`'s own
+	// inference pass) still produce wire-valid output.
+	if (result.type === undefined) {
+		const inferred = inferStrictPrimitiveTypeFromEnumOrConst(result);
+		if (inferred !== undefined) result.type = inferred;
+	}
+	// Schemas like `{}`, `{items: {}}`, mixed-primitive enums, and non-primitive
+	// consts are not representable in strict mode — `enum`/`const` are not
+	// accepted as type substitutes here because they did not yield a single
+	// inferable type above.
 	if (
 		result.type === undefined &&
 		result.$ref === undefined &&
-		result.enum === undefined &&
-		result.const === undefined &&
 		!COMBINATOR_KEYS.some(key => Array.isArray(result[key])) &&
 		!isJsonObject(result.not)
 	) {

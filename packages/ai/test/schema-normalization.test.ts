@@ -91,6 +91,24 @@ describe("sanitizeSchemaForStrictMode", () => {
 		});
 	});
 
+	it("hoists description to the wrapper when wrapping `nullable: true` as an anyOf", () => {
+		// Sanitize-side nullable wrap mirrors the optional-property wrap shape
+		// produced by `enforceStrictSchema`: description lives on the wrapper,
+		// branches stay bare. Both top-level entry points share this contract
+		// so downstream consumers don't have to special-case which path produced
+		// the nullable union.
+		const sanitized = sanitizeSchemaForStrictMode({
+			type: "string",
+			nullable: true,
+			description: "label",
+		});
+
+		expect(sanitized).toEqual({
+			anyOf: [{ type: "string" }, { type: "null" }],
+			description: "label",
+		});
+	});
+
 	it("strips not branches", () => {
 		const schema = {
 			type: "object",
