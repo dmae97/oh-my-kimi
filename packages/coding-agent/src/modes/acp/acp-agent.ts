@@ -66,7 +66,11 @@ import {
 import { ACP_BUILTIN_SLASH_COMMANDS, executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { parseThinkingLevel } from "../../thinking";
 import { createAcpClientBridge } from "./acp-client-bridge";
-import { mapAgentSessionEventToAcpSessionUpdates, mapToolKind } from "./acp-event-mapper";
+import {
+	buildToolCallStartUpdate,
+	mapAgentSessionEventToAcpSessionUpdates,
+	normalizeReplayToolArguments,
+} from "./acp-event-mapper";
 import { ACP_TERMINAL_AUTH_FLAG } from "./terminal-auth";
 
 const ACP_DEFAULT_MODE_ID = "default";
@@ -1590,7 +1594,7 @@ export class AcpAgent implements Agent {
 
 	#messageToReplayNotifications(sessionId: string, message: ReplayableMessage, cwd: string): SessionNotification[] {
 		if (message.role === "assistant") {
-			return this.#replayAssistantMessage(sessionId, message);
+			return this.#replayAssistantMessage(sessionId, message, cwd);
 		}
 		if (
 			message.role === "user" ||
@@ -1631,7 +1635,7 @@ export class AcpAgent implements Agent {
 		return [];
 	}
 
-	#replayAssistantMessage(sessionId: string, message: ReplayableMessage): SessionNotification[] {
+	#replayAssistantMessage(sessionId: string, message: ReplayableMessage, cwd: string): SessionNotification[] {
 		const notifications: SessionNotification[] = [];
 		const messageId = crypto.randomUUID();
 		if (Array.isArray(message.content)) {
@@ -1673,16 +1677,14 @@ export class AcpAgent implements Agent {
 					"name" in item &&
 					typeof item.name === "string"
 				) {
-					const update: SessionUpdate = {
-						sessionUpdate: "tool_call",
+					const args = normalizeReplayToolArguments("arguments" in item ? item.arguments : undefined).args;
+					const update = buildToolCallStartUpdate({
 						toolCallId: item.id,
-						title: item.name,
-						kind: mapToolKind(item.name),
+						toolName: item.name,
+						args,
 						status: "completed",
-					};
-					if ("arguments" in item && typeof item.arguments === "string") {
-						update.rawInput = item.arguments;
-					}
+						cwd,
+					});
 					notifications.push({ sessionId, update });
 				}
 			}

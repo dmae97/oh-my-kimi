@@ -2,7 +2,11 @@ import { describe, expect, it } from "bun:test";
 import path from "node:path";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { zSessionNotification } from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
-import { mapAgentSessionEventToAcpSessionUpdates } from "../src/modes/acp/acp-event-mapper";
+import {
+	buildToolCallStartUpdate,
+	mapAgentSessionEventToAcpSessionUpdates,
+	normalizeReplayToolArguments,
+} from "../src/modes/acp/acp-event-mapper";
 import type { AgentSessionEvent } from "../src/session/agent-session";
 import { expectAcpStructure, expectAcpStructureRejects } from "./helpers/acp-schema";
 
@@ -271,6 +275,91 @@ describe("ACP event mapper", () => {
 		expect(update.status).toBe("pending");
 		expect(update.rawInput).toEqual({ command: "npm run check", cwd: "/repo" });
 		expect(update.content).toEqual([{ type: "content", content: { type: "text", text: "$ npm run check" } }]);
+	});
+
+	it("builds replayed bash tool calls from JSON string arguments", () => {
+		const replayArgs = normalizeReplayToolArguments(JSON.stringify({ command: "npm test", cwd: "/repo" }));
+		const update = buildToolCallStartUpdate({
+			toolCallId: "toolu_replay_1",
+			toolName: "bash",
+			args: replayArgs.args,
+			status: "completed",
+		});
+
+		expectAcpStructure(zSessionNotification, { sessionId: "session-1", update });
+		expect(update).toMatchObject({
+			sessionUpdate: "tool_call",
+			toolCallId: "toolu_replay_1",
+			title: "bash: npm test",
+			kind: "execute",
+			status: "completed",
+			rawInput: { command: "npm test", cwd: "/repo" },
+			content: [{ type: "content", content: { type: "text", text: "$ npm test" } }],
+		});
+	});
+
+	it("builds replayed read tool-call locations against the replay cwd", () => {
+		const replayArgs = normalizeReplayToolArguments(JSON.stringify({ path: "src/foo.ts" }));
+		const update = buildToolCallStartUpdate({
+			toolCallId: "toolu_replay_read",
+			toolName: "read",
+			args: replayArgs.args,
+			cwd: path.resolve("/repo"),
+			status: "completed",
+		});
+
+		expectAcpStructure(zSessionNotification, { sessionId: "session-1", update });
+		expect(update).toMatchObject({
+			sessionUpdate: "tool_call",
+			toolCallId: "toolu_replay_read",
+			title: "read: src/foo.ts",
+			kind: "read",
+			status: "completed",
+			rawInput: { path: "src/foo.ts" },
+			locations: [{ path: path.resolve("/repo", "src/foo.ts") }],
+		});
+		expect("content" in update).toBe(false);
+	});
+
+	it("keeps malformed replay arguments as raw input without command content", () => {
+		const replayArgs = normalizeReplayToolArguments("{not json");
+		const update = buildToolCallStartUpdate({
+			toolCallId: "toolu_replay_bad",
+			toolName: "bash",
+			args: replayArgs.args,
+			status: "completed",
+		});
+
+		expectAcpStructure(zSessionNotification, { sessionId: "session-1", update });
+		expect(update).toMatchObject({
+			sessionUpdate: "tool_call",
+			toolCallId: "toolu_replay_bad",
+			title: "bash",
+			kind: "execute",
+			status: "completed",
+			rawInput: "{not json",
+		});
+		expect("content" in update).toBe(false);
+	});
+
+	it("keeps object replay arguments unchanged and builds command content", () => {
+		const rawArgs = { command: "bun test", cwd: "/repo" };
+		const replayArgs = normalizeReplayToolArguments(rawArgs);
+		const update = buildToolCallStartUpdate({
+			toolCallId: "toolu_replay_object",
+			toolName: "bash",
+			args: replayArgs.args,
+			status: "completed",
+		});
+
+		expect(replayArgs.args).toBe(rawArgs);
+		expectAcpStructure(zSessionNotification, { sessionId: "session-1", update });
+		expect(update).toMatchObject({
+			title: "bash: bun test",
+			status: "completed",
+			rawInput: rawArgs,
+			content: [{ type: "content", content: { type: "text", text: "$ bun test" } }],
+		});
 	});
 
 	it("does not add command text content to non-command tool starts", () => {

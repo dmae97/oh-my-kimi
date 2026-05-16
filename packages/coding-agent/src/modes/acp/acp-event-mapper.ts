@@ -335,6 +335,18 @@ export function buildToolCallStartUpdate(input: {
 	return update;
 }
 
+export function normalizeReplayToolArguments(value: unknown): { args: unknown } {
+	if (typeof value !== "string") {
+		return { args: value ?? {} };
+	}
+	try {
+		const parsed: unknown = JSON.parse(value);
+		return { args: parsed };
+	} catch {
+		return { args: value };
+	}
+}
+
 function buildToolStartContent(toolName: string, args: unknown): ToolCallContent[] {
 	if (!isCommandToolName(toolName)) {
 		return [];
