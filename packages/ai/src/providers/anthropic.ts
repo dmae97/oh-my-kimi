@@ -59,6 +59,7 @@ import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { isCopilotTransientModelError } from "../utils/retry";
 import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
+import { spillToDescription } from "../utils/schema/spill";
 import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
 import {
 	buildCopilotDynamicHeaders,
@@ -2142,23 +2143,6 @@ function isJsonSchemaObjectNode(schema: Record<string, unknown>): boolean {
 	if (Array.isArray(schema.type) && schema.type.includes("object")) return true;
 	if (isRecord(schema.properties)) return true;
 	return false;
-}
-
-/**
- * Demote unsupported JSON Schema keywords into the node's `description` so the model
- * still gets the constraint as a natural-language hint after we strip it from the wire
- * schema. Mirrors the trailing description-spill in the Anthropic Python SDK's
- * `lib/_parse/_transform.py::transform_schema`, formatted as `{key: value, ...}`.
- *
- * `entries` are applied in order and only when the value is not `undefined`; an empty
- * input is a no-op so callers can pass the same set unconditionally.
- */
-function spillToDescription(node: Record<string, unknown>, entries: Array<[string, unknown]>): void {
-	const spilled = entries.filter(([, value]) => value !== undefined);
-	if (spilled.length === 0) return;
-	const formatted = `{${spilled.map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(", ")}}`;
-	const existing = typeof node.description === "string" ? node.description : "";
-	node.description = existing ? `${existing}\n\n${formatted}` : formatted;
 }
 
 /**

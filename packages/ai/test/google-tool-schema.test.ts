@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { convertTools } from "@oh-my-pi/pi-ai/providers/google-shared";
 import type { Model, TJsonSchema, Tool } from "@oh-my-pi/pi-ai/types";
-import { prepareSchemaForCCA, sanitizeSchemaForCCA, sanitizeSchemaForGoogle } from "@oh-my-pi/pi-ai/utils/schema";
+import { normalizeSchemaForCCA, normalizeSchemaForGoogle } from "@oh-my-pi/pi-ai/utils/schema";
 
 function createModel(id: string): Model<"google-gemini-cli"> {
 	return {
@@ -37,7 +37,7 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 
 		// normalizeTypeArrayToNullable converts type array to scalar + nullable,
 		// then stripNullableKeyword removes the nullable marker.
-		expect(sanitizeSchemaForCCA(schema)).toEqual({
+		expect(normalizeSchemaForCCA(schema)).toEqual({
 			type: "object",
 			properties: {
 				value: {
@@ -59,7 +59,7 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 			},
 		} as unknown;
 
-		expect(sanitizeSchemaForCCA(schema)).toEqual({
+		expect(normalizeSchemaForCCA(schema)).toEqual({
 			type: "object",
 			properties: {
 				env: {
@@ -290,7 +290,7 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 			required: ["mode"],
 		} as unknown;
 
-		expect(prepareSchemaForCCA(parameters)).toEqual({
+		expect(normalizeSchemaForCCA(parameters)).toEqual({
 			type: "object",
 			properties: {},
 		});
@@ -305,7 +305,7 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 			},
 		} as unknown;
 
-		expect(sanitizeSchemaForGoogle(schema)).toEqual({
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
 			type: "object",
 			properties: {
 				value: {
@@ -320,11 +320,11 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 /**
  * Tests ported from python-genai's `process_schema`/`handle_null_fields`
  * coverage in google/genai/tests/transformers/test_schema.py. The Python
- * suite is the canonical regression set for the rules our `sanitizeSchemaForGoogle`
+ * suite is the canonical regression set for the rules our `normalizeSchemaForGoogle`
  * mirrors (snake_case field renames, null-field collapsing, const→enum,
  * propertyOrdering propagation, $ref cycle handling).
  */
-describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () => {
+describe("normalizeSchemaForGoogle parity with python-genai process_schema", () => {
 	// Mirrors python-genai test_schema.py::test_schema_with_no_null_fields_is_unchanged
 	it("leaves anyOf alone when no variant has type null", () => {
 		const schema = {
@@ -333,7 +333,7 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 			title: "Total Area Sq Mi",
 		} as const;
 
-		expect(sanitizeSchemaForGoogle(schema)).toEqual({
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
 			anyOf: [{ type: "integer" }, { type: "number" }],
 			default: "null",
 			title: "Total Area Sq Mi",
@@ -355,7 +355,7 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 			required: ["name"],
 		} as const;
 
-		const sanitized = sanitizeSchemaForGoogle(schema) as Record<string, unknown>;
+		const sanitized = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
 		const props = sanitized.properties as Record<string, Record<string, unknown>>;
 		expect(props.population?.nullable).toBe(true);
 		expect(props.population?.type).toBe("integer");
@@ -376,7 +376,7 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 			required: ["name", "restaurants_per_capita"],
 		} as const;
 
-		const sanitized = sanitizeSchemaForGoogle(schema) as Record<string, unknown>;
+		const sanitized = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
 		const props = sanitized.properties as Record<string, Record<string, unknown>>;
 		// snake_case any_of must be rewritten to camelCase anyOf.
 		expect(props.restaurants_per_capita?.anyOf).toEqual([{ type: "integer" }, { type: "number" }]);
@@ -426,12 +426,12 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 		} as const;
 
 		// fruit alone is the only top-level property; auto-ordering does not fire.
-		expect(sanitizeSchemaForGoogle(dictSchema)).toEqual(dictSchema);
+		expect(normalizeSchemaForGoogle(dictSchema)).toEqual(dictSchema);
 	});
 
 	// Mirrors python-genai test_schema.py::test_process_schema_converts_const_to_enum
 	it("converts const to a singleton enum", () => {
-		const sanitized = sanitizeSchemaForGoogle({ type: "string", const: "FOO" });
+		const sanitized = normalizeSchemaForGoogle({ type: "string", const: "FOO" });
 		expect(sanitized).toEqual({ type: "string", enum: ["FOO"] });
 	});
 
@@ -440,7 +440,7 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 	// the value as a singleton enum. Google's Schema proto accepts numeric enums
 	// and we prefer permissive normalization over surfacing a transformer-level error.
 	it("accepts non-string const as a singleton enum (intentional deviation from upstream raise)", () => {
-		const sanitized = sanitizeSchemaForGoogle({ type: "integer", const: 123 }) as Record<string, unknown>;
+		const sanitized = normalizeSchemaForGoogle({ type: "integer", const: 123 }) as Record<string, unknown>;
 		expect(sanitized.enum).toEqual([123]);
 		expect(sanitized.type).toBe("integer");
 	});
@@ -460,7 +460,7 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 			},
 		} as const;
 
-		expect(sanitizeSchemaForGoogle(schema)).toEqual({
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
 			type: "object",
 			properties: {
 				foo: { type: "string" },
@@ -483,7 +483,7 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 			},
 		} as const;
 
-		expect(sanitizeSchemaForGoogle(schema)).toEqual({
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
 			type: "array",
 			items: {
 				type: "object",
@@ -512,7 +512,7 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 			},
 		} as const;
 
-		expect(sanitizeSchemaForGoogle(schema)).toEqual({
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
 			type: "object",
 			properties: {
 				xyz: {
@@ -544,7 +544,7 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 			],
 		} as const;
 
-		expect(sanitizeSchemaForGoogle(schema)).toEqual({
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
 			anyOf: [
 				{
 					type: "object",
@@ -576,7 +576,7 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 			},
 		} as const;
 
-		expect(sanitizeSchemaForGoogle(schema)).toEqual({
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
 			type: "object",
 			properties: {
 				recursive: {
@@ -600,7 +600,7 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 			propertyOrdering: [...custom],
 		} as const;
 
-		const sanitized = sanitizeSchemaForGoogle(schema) as Record<string, unknown>;
+		const sanitized = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
 		expect(sanitized.propertyOrdering).toEqual(custom);
 	});
 
@@ -619,7 +619,7 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 			},
 		} as const;
 
-		const sanitized = sanitizeSchemaForGoogle(schema) as Record<string, unknown>;
+		const sanitized = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
 		expect(sanitized.propertyOrdering).toEqual([
 			"name",
 			"population",
@@ -642,7 +642,7 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 			property_ordering: ["bar", "foo"],
 		} as const;
 
-		const sanitized = sanitizeSchemaForGoogle(schema) as Record<string, unknown>;
+		const sanitized = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
 		expect(sanitized.propertyOrdering).toEqual(["bar", "foo"]);
 		expect(sanitized.property_ordering).toBeUndefined();
 	});
@@ -654,20 +654,20 @@ describe("sanitizeSchemaForGoogle parity with python-genai process_schema", () =
 			any_of: [{ type: "integer" }, { type: "number" }],
 		} as const;
 
-		const sanitized = sanitizeSchemaForGoogle(schema) as Record<string, unknown>;
+		const sanitized = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
 		expect(sanitized.anyOf).toEqual([{ type: "integer" }, { type: "number" }]);
 		expect(sanitized.any_of).toBeUndefined();
 	});
 
 	// Covers python-genai _transformers.py:628-630 bare {type:'null'} flatten.
 	it("rewrites a bare {type:'null'} schema as {nullable:true}", () => {
-		expect(sanitizeSchemaForGoogle({ type: "null" })).toEqual({ nullable: true });
+		expect(normalizeSchemaForGoogle({ type: "null" })).toEqual({ nullable: true });
 	});
 
 	// Covers python-genai _transformers.py:631-640 single-non-null anyOf flatten.
 	it("flattens anyOf:[X, {type:'null'}] into X + nullable", () => {
 		expect(
-			sanitizeSchemaForGoogle({
+			normalizeSchemaForGoogle({
 				anyOf: [{ type: "string", title: "Name" }, { type: "null" }],
 			}),
 		).toEqual({ type: "string", title: "Name", nullable: true });

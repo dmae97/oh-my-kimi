@@ -30,11 +30,11 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
-import { prepareSchemaForCCA, sanitizeSchemaForGoogle, toolWireSchema } from "../utils/schema";
+import { normalizeSchemaForCCA, normalizeSchemaForGoogle, toolWireSchema } from "../utils/schema";
 import { transformMessages } from "./transform-messages";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 
-export { sanitizeSchemaForGoogle };
+export { normalizeSchemaForGoogle };
 
 type GoogleApiType = "google-generative-ai" | "google-gemini-cli" | "google-vertex";
 
@@ -340,7 +340,7 @@ export function convertTools(
 				name: tool.name,
 				description: tool.description || "",
 				...(useParameters
-					? { parameters: prepareSchemaForCCA(toolWireSchema(tool)) }
+					? { parameters: normalizeSchemaForCCA(toolWireSchema(tool)) }
 					: { parametersJsonSchema: toolWireSchema(tool) }),
 			})),
 		},
