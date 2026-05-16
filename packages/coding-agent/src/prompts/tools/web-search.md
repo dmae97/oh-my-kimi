@@ -1,4 +1,4 @@
-Searches the web for up-to-date information beyond Claude's knowledge cutoff.
+Searches the web for up-to-date information beyond knowledge cutoff.
 
 <instruction>
 - You SHOULD prefer primary sources (papers, official docs) and corroborate key claims with multiple sources
