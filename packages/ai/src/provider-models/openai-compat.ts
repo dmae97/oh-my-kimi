@@ -451,6 +451,32 @@ function createSimpleOpenAICompletionsOptions(
 	};
 }
 
+function createSimpleOpenAIResponsesOptions(
+	providerId: Parameters<typeof getBundledModels>[0],
+	defaultBaseUrl: string,
+	config?: SimpleProviderConfig,
+): ModelManagerOptions<"openai-responses"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? defaultBaseUrl;
+	const references = createBundledReferenceMap<"openai-responses">(providerId);
+	return {
+		providerId,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-responses",
+					provider: providerId,
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						return mapWithBundledReference(entry, defaults, reference);
+					},
+				}),
+		}),
+	};
+}
+
 function createSimpleAnthropicProviderOptions(
 	providerId: Parameters<typeof getBundledModels>[0],
 	defaultBaseUrlFallback: string,
@@ -584,6 +610,21 @@ export interface XaiModelManagerConfig {
 
 export function xaiModelManagerOptions(config?: XaiModelManagerConfig): ModelManagerOptions<"openai-completions"> {
 	return createSimpleOpenAICompletionsOptions("xai", "https://api.x.ai/v1", config);
+}
+
+export interface XaiOAuthModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function xaiOAuthModelManagerOptions(
+	config?: XaiOAuthModelManagerConfig,
+): ModelManagerOptions<"openai-responses"> {
+	return createSimpleOpenAIResponsesOptions(
+		"xai-oauth" as Parameters<typeof getBundledModels>[0],
+		"https://api.x.ai/v1",
+		config,
+	);
 }
 
 // ---------------------------------------------------------------------------
