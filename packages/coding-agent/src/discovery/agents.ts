@@ -33,13 +33,24 @@ function getUserPathCandidates(ctx: LoadContext, ...segments: string[]): string[
 	return AGENT_DIR_CANDIDATES.map(baseDir => path.join(ctx.home, baseDir, ...segments));
 }
 
-/** Project-level paths: walk up from cwd to repoRoot, returning .agent/<segments> and .agents/<segments> at each level. */
-function getProjectPathCandidates(ctx: LoadContext, ...segments: string[]): string[] {
+/**
+ * Project-level paths: walk up from cwd to repoRoot, returning `.agent/<segments>`
+ * and `.agents/<segments>` at each ancestor.
+ *
+ * The user home directory is skipped: `~/.agent[s]/` is by definition
+ * user-level config and is already enumerated by {@link getUserPathCandidates}.
+ * Without this guard, any cwd under `$HOME` (with no closer git repoRoot) would
+ * walk up to home and yield duplicate project+user entries for the same
+ * directory — see https://github.com/can1357/oh-my-pi/issues/1116.
+ */
+export function getProjectPathCandidates(ctx: LoadContext, ...segments: string[]): string[] {
 	const paths: string[] = [];
 	let current = ctx.cwd;
 	while (true) {
-		for (const baseDir of AGENT_DIR_CANDIDATES) {
-			paths.push(path.join(current, baseDir, ...segments));
+		if (current !== ctx.home) {
+			for (const baseDir of AGENT_DIR_CANDIDATES) {
+				paths.push(path.join(current, baseDir, ...segments));
+			}
 		}
 		if (current === (ctx.repoRoot ?? ctx.home)) break;
 		const parent = path.dirname(current);

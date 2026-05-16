@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { clearCache, readFile } from "@oh-my-pi/pi-coding-agent/capability/fs";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import type { LoadContext } from "@oh-my-pi/pi-coding-agent/capability/types";
+import { getProjectPathCandidates } from "@oh-my-pi/pi-coding-agent/discovery/agents";
 import {
 	buildRuleFromMarkdown,
 	calculateDepth,
@@ -20,23 +21,7 @@ import {
 	scanSkillsFromDir,
 } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 
-const AGENT_DIR_CANDIDATES = [".agent", ".agents"] as const;
 const PROVIDER_ID = "agents";
-
-function getProjectPathCandidates(ctx: LoadContext, ...segments: string[]): string[] {
-	const paths: string[] = [];
-	let current = ctx.cwd;
-	while (true) {
-		for (const baseDir of AGENT_DIR_CANDIDATES) {
-			paths.push(path.join(current, baseDir, ...segments));
-		}
-		if (current === (ctx.repoRoot ?? ctx.home)) break;
-		const parent = path.dirname(current);
-		if (parent === current) break;
-		current = parent;
-	}
-	return paths;
-}
 
 function writeSkill(dir: string, name: string, description: string): void {
 	const skillDir = path.join(dir, name);
@@ -145,24 +130,40 @@ describe("agents provider project-level discovery", () => {
 			expect(names).not.toContain("above-repo-skill");
 		});
 
-		test("walk-up stops at home when no repo root", async () => {
-			// ctx without repoRoot
+		test("project walk-up skips home directory (no repo root)", async () => {
+			// Regression for https://github.com/can1357/oh-my-pi/issues/1116:
+			// when cwd is under $HOME and no closer repoRoot exists, the walk-up
+			// must NOT enumerate `~/.agent[s]/` as project paths — those belong
+			// to the user level and getUserPathCandidates already covers them.
 			const noRepoCtx: LoadContext = { cwd: subProject, home: repoRoot, repoRoot: null };
-			// Skill above home (should NOT be found)
+			// Skill above home (should NOT be found via project walk-up).
 			writeSkill(path.join(tempDir, ".agents", "skills"), "above-home-skill", "Above home");
-			// Skill at home (should be found)
+			// Skill *at* the home directory (must NOT be enumerated as project).
 			writeSkill(path.join(repoRoot, ".agents", "skills"), "home-skill", "At home");
+			// Skill at the sub-project (must still be found).
+			writeSkill(path.join(subProject, ".agents", "skills"), "local-skill", "Sub-project");
+
+			const candidates = getProjectPathCandidates(noRepoCtx, "skills");
+			expect(candidates).not.toContain(path.join(repoRoot, ".agent", "skills"));
+			expect(candidates).not.toContain(path.join(repoRoot, ".agents", "skills"));
 
 			const results = await Promise.all(
-				getProjectPathCandidates(noRepoCtx, "skills").map(dir =>
-					scanSkillsFromDir(noRepoCtx, { dir, providerId: PROVIDER_ID, level: "project" }),
-				),
+				candidates.map(dir => scanSkillsFromDir(noRepoCtx, { dir, providerId: PROVIDER_ID, level: "project" })),
 			);
 			const names = results.flatMap(r => r.items).map(s => s.name);
-			expect(names).toContain("home-skill");
+			expect(names).toContain("local-skill");
+			expect(names).not.toContain("home-skill");
 			expect(names).not.toContain("above-home-skill");
 		});
 
+		test("project and user candidates do not overlap when cwd is under home", () => {
+			// Regression for https://github.com/can1357/oh-my-pi/issues/1116.
+			const noRepoCtx: LoadContext = { cwd: subProject, home: repoRoot, repoRoot: null };
+			const project = getProjectPathCandidates(noRepoCtx, "skills");
+			const user = [".agent", ".agents"].map(b => path.join(repoRoot, b, "skills"));
+			const overlap = project.filter(p => user.includes(p));
+			expect(overlap).toEqual([]);
+		});
 		test("returns empty when no ancestor has skills", async () => {
 			const results = await Promise.all(
 				getProjectPathCandidates(ctx, "skills").map(dir =>
