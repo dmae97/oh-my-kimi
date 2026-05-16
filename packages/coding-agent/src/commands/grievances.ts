@@ -1,20 +1,20 @@
 /**
- * View and clean recently reported tool issues from automated QA.
+ * View, clean, and push reported tool issues from automated QA.
  */
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
-import { cleanGrievances, listGrievances } from "../cli/grievances-cli";
+import { cleanGrievances, listGrievances, pushGrievances } from "../cli/grievances-cli";
 
 export default class Grievances extends Command {
-	static description = "View or clean reported tool issues (auto-QA grievances)";
+	static description = "View, clean, or push reported tool issues (auto-QA grievances)";
 
 	static args = {
-		// Positional action: "list" (default) or "clean". A positional arg keeps
-		// the historical `omp grievances` invocation working unchanged while
-		// reusing the same command surface for the new clean sub-action.
+		// Positional action: "list" (default), "clean", or "push". A positional
+		// arg keeps the historical `omp grievances` invocation working unchanged
+		// while reusing the same command surface for the clean/push verbs.
 		action: Args.string({
-			description: "list (default) or clean",
+			description: "list (default), clean, or push",
 			required: false,
-			options: ["list", "clean"],
+			options: ["list", "clean", "push"],
 			default: "list",
 		}),
 	};
@@ -33,12 +33,17 @@ export default class Grievances extends Command {
 		"omp grievances clean --id 209",
 		"omp grievances clean --tool find",
 		"omp grievances clean --all",
+		"omp grievances push",
 	];
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Grievances);
 		if (args.action === "clean") {
 			await cleanGrievances({ id: flags.id, tool: flags.tool, all: flags.all, json: flags.json });
+			return;
+		}
+		if (args.action === "push") {
+			await pushGrievances({ json: flags.json });
 			return;
 		}
 		await listGrievances({ limit: flags.limit, tool: flags.tool, json: flags.json });
