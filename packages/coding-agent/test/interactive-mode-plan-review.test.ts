@@ -83,7 +83,7 @@ describe("InteractiveMode plan review rendering", () => {
 
 		mode.planModeEnabled = true;
 		mode.planModePlanFilePath = planFilePath;
-		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Stay in plan mode");
+		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Refine plan");
 
 		await mode.handlePlanApproval({
 			planFilePath,
@@ -127,7 +127,7 @@ describe("InteractiveMode plan review rendering", () => {
 
 		mode.planModeEnabled = true;
 		mode.planModePlanFilePath = planFilePath;
-		const selector = vi.spyOn(mode, "showHookSelector").mockResolvedValue("Stay in plan mode");
+		const selector = vi.spyOn(mode, "showHookSelector").mockResolvedValue("Refine plan");
 
 		await mode.handlePlanApproval({
 			planFilePath,
@@ -138,13 +138,7 @@ describe("InteractiveMode plan review rendering", () => {
 
 		expect(selector).toHaveBeenCalledWith(
 			"Plan mode - next step",
-			[
-				"Approve and execute",
-				"Approve and compact context",
-				"Approve and keep context",
-				"Refine plan",
-				"Stay in plan mode",
-			],
+			["Approve and execute", "Approve and compact context", "Approve and keep context", "Refine plan"],
 			expect.any(Object),
 		);
 	});

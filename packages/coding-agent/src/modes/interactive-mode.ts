@@ -1806,13 +1806,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#renderPlanPreview(planContent, { append: true });
 		const choice = await this.showHookSelector(
 			"Plan mode - next step",
-			[
-				"Approve and execute",
-				"Approve and compact context",
-				"Approve and keep context",
-				"Refine plan",
-				"Stay in plan mode",
-			],
+			["Approve and execute", "Approve and compact context", "Approve and keep context", "Refine plan"],
 			{
 				helpText: this.#getPlanReviewHelpText(),
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
@@ -1843,16 +1837,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				);
 			}
 			return;
-		}
-		if (choice === "Refine plan") {
-			const refinement = (await this.showHookInput("What should be refined?"))?.trim();
-			if (refinement) {
-				if (this.onInputCallback) {
-					this.onInputCallback(this.startPendingSubmission({ text: refinement }));
-				} else {
-					this.editor.setText(refinement);
-				}
-			}
 		}
 	}
 
