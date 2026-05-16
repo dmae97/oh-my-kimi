@@ -288,8 +288,12 @@ fn run_pty_sync(
 		.map_err(|err| Error::from_reason(format!("Failed to create PTY writer: {err}")))?;
 	// ConPTY sends ESC[6n (cursor position query) and blocks until we reply.
 	// Reply with cursor at 1,1 so it unblocks the child spawn.
-	let _ = writer.write_all(b"\x1b[1;1R");
-	let _ = writer.flush();
+	// Only needed on Windows; on Unix/macOS this would corrupt stdin.
+	#[cfg(windows)]
+	{
+		let _ = writer.write_all(b"\x1b[1;1R");
+		let _ = writer.flush();
+	}
 	let mut reader = master
 		.try_clone_reader()
 		.map_err(|err| Error::from_reason(format!("Failed to create PTY reader: {err}")))?;
