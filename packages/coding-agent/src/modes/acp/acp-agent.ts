@@ -86,6 +86,7 @@ const SESSION_PAGE_SIZE = 50;
  * wait past this guard without hard-coding the literal.
  */
 export const ACP_BOOTSTRAP_RACE_GUARD_MS = 50;
+const ACP_CANCEL_CLEANUP_TIMEOUT_MS = 5_000;
 
 type AgentImageContent = {
 	type: "image";
@@ -102,6 +103,8 @@ type PromptTurnState = {
 	userMessageId: string;
 	cancelRequested: boolean;
 	settled: boolean;
+	cleanup: Promise<void> | undefined;
+	finishCleanup: (() => void) | undefined;
 	usageBaseline: UsageStatistics;
 	unsubscribe: (() => void) | undefined;
 	resolve: (value: PromptResponse) => void;
@@ -337,11 +340,16 @@ export class AcpAgent implements Agent {
 	#disposePromise: Promise<void> | undefined;
 	#cleanupRegistered = false;
 	#clientCapabilities: ClientCapabilities | undefined;
+	#cancelCleanupTimeoutMs = ACP_CANCEL_CLEANUP_TIMEOUT_MS;
 
 	constructor(connection: AgentSideConnection, initialSession: AgentSession, createSession: CreateAcpSession) {
 		this.#connection = connection;
 		this.#initialSession = initialSession;
 		this.#createSession = createSession;
+	}
+
+	setCancelCleanupTimeoutForTesting(timeoutMs: number): void {
+		this.#cancelCleanupTimeoutMs = Math.max(1, timeoutMs);
 	}
 
 	async initialize(params: InitializeRequest): Promise<InitializeResponse> {
@@ -547,8 +555,9 @@ export class AcpAgent implements Agent {
 		}
 		return await this.#queuePrompt(record, async () => {
 			const queuedTurn = record.promptTurn;
-			if (queuedTurn && !queuedTurn.settled) {
+			if (queuedTurn && (!queuedTurn.settled || queuedTurn.cleanup)) {
 				await queuedTurn.promise.catch(() => undefined);
+				await queuedTurn.cleanup?.catch(() => undefined);
 			}
 
 			const converted = this.#convertPromptBlocks(params.prompt);
@@ -557,6 +566,8 @@ export class AcpAgent implements Agent {
 				userMessageId: params.messageId ?? crypto.randomUUID(),
 				cancelRequested: false,
 				settled: false,
+				cleanup: undefined,
+				finishCleanup: undefined,
 				usageBaseline: this.#cloneUsageStatistics(record.session.sessionManager.getUsageStatistics()),
 				unsubscribe: undefined,
 				resolve: pendingPrompt.resolve,
@@ -677,16 +688,41 @@ export class AcpAgent implements Agent {
 			return;
 		}
 		promptTurn.cancelRequested = true;
+		promptTurn.unsubscribe?.();
+		const cleanup = this.#startCancelledPromptCleanup(record, promptTurn);
+		this.#finishPrompt(record, {
+			stopReason: "cancelled",
+			usage: this.#buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
+			userMessageId: promptTurn.userMessageId,
+		});
 		try {
-			await record.session.abort();
-			this.#finishPrompt(record, {
-				stopReason: "cancelled",
-				usage: this.#buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
-				userMessageId: promptTurn.userMessageId,
-			});
+			await cleanup;
 		} catch (error: unknown) {
-			this.#finishPrompt(record, undefined, error);
+			logger.warn("ACP cancel cleanup timed out; closing session", { sessionId: record.session.sessionId, error });
+			await this.#closeManagedSession(record.session.sessionId, record);
 		}
+	}
+
+	async #startCancelledPromptCleanup(record: ManagedSessionRecord, promptTurn: PromptTurnState): Promise<void> {
+		if (promptTurn.cleanup) {
+			return await promptTurn.cleanup;
+		}
+		const cleanup = (async () => {
+			try {
+				await Promise.race([
+					record.session.abort(),
+					Bun.sleep(this.#cancelCleanupTimeoutMs).then(() => {
+						throw new Error("ACP cancel cleanup timed out");
+					}),
+				]);
+			} finally {
+				promptTurn.cleanup = undefined;
+				promptTurn.finishCleanup?.();
+				promptTurn.finishCleanup = undefined;
+			}
+		})();
+		promptTurn.cleanup = cleanup;
+		return await cleanup;
 	}
 
 	async extMethod(method: string, params: { [key: string]: unknown }): Promise<{ [key: string]: unknown }> {
@@ -950,7 +986,7 @@ export class AcpAgent implements Agent {
 
 	async #handlePromptEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
 		const promptTurn = record.promptTurn;
-		if (!promptTurn || promptTurn.settled) {
+		if (!promptTurn || promptTurn.settled || promptTurn.cancelRequested) {
 			return;
 		}
 
@@ -1019,7 +1055,15 @@ export class AcpAgent implements Agent {
 		}
 		promptTurn.settled = true;
 		promptTurn.unsubscribe?.();
-		record.promptTurn = undefined;
+		if (promptTurn.cleanup) {
+			promptTurn.finishCleanup = () => {
+				if (record.promptTurn === promptTurn) {
+					record.promptTurn = undefined;
+				}
+			};
+		} else {
+			record.promptTurn = undefined;
+		}
 		if (error !== undefined) {
 			promptTurn.reject(error);
 			return;
@@ -1893,16 +1937,17 @@ export class AcpAgent implements Agent {
 
 		promptTurn.cancelRequested = true;
 		promptTurn.unsubscribe?.();
-		try {
-			await record.session.abort();
-		} catch (error) {
-			logger.warn("Failed to abort ACP prompt during session close", { error });
-		}
+		const cleanup = this.#startCancelledPromptCleanup(record, promptTurn);
 		this.#finishPrompt(record, {
 			stopReason: "cancelled",
 			usage: this.#buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
 			userMessageId: promptTurn.userMessageId,
 		});
+		try {
+			await cleanup;
+		} catch (error) {
+			logger.warn("Failed to abort ACP prompt during session close", { error });
+		}
 	}
 
 	async #disposeSessionRecord(record: ManagedSessionRecord): Promise<void> {
