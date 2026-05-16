@@ -1203,6 +1203,48 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("rejects fork while cancel cleanup is pending", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		let releaseAbort!: () => void;
+		const abortBlocked = Promise.withResolvers<void>();
+		const releaseAbortPromise = new Promise<void>(resolve => {
+			releaseAbort = resolve;
+		});
+		session.abort = async () => {
+			session.isStreaming = false;
+			abortBlocked.resolve();
+			await releaseAbortPromise;
+		};
+		const finishPrompt = holdPromptStreaming(session);
+
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000046",
+			prompt: [{ type: "text", text: "cancel before fork" }],
+		} as PromptRequest);
+		await Bun.sleep(0);
+
+		const cancelPrompt = harness.agent.cancel({ sessionId: created.sessionId });
+		await abortBlocked.promise;
+		await firstPrompt;
+
+		await expect(
+			harness.agent.unstable_forkSession({
+				sessionId: created.sessionId,
+				cwd: harness.cwdA,
+				mcpServers: [],
+			}),
+		).rejects.toThrow("ACP session fork is unavailable while a prompt is in progress");
+
+		releaseAbort();
+		await cancelPrompt;
+		finishPrompt();
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("executes consumed ACP builtins without prompting the agent", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
