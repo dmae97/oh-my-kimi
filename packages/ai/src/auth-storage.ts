@@ -1378,6 +1378,14 @@ export class AuthStorage {
 				});
 				break;
 			}
+			case "xai-oauth": {
+				const { loginXAIOAuth } = await import("./utils/oauth/xai-oauth");
+				credentials = await loginXAIOAuth({
+					...ctrl,
+					onManualCodeInput: ctrl.onManualCodeInput ?? manualCodeInput,
+				});
+				break;
+			}
 			case "alibaba-coding-plan": {
 				const { loginAlibabaCodingPlan } = await import("./utils/oauth/alibaba-coding-plan");
 				const apiKey = await loginAlibabaCodingPlan(ctrl);

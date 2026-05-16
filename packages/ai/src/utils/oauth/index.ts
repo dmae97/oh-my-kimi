@@ -225,6 +225,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		name: "Vercel AI Gateway",
 		available: true,
 	},
+	{
+		id: "xai-oauth",
+		name: "xAI Grok OAuth (SuperGrok Subscription)",
+		available: true,
+	},
 ];
 
 const customOAuthProviders = new Map<string, OAuthProviderInterface>();
@@ -313,6 +318,11 @@ export async function refreshOAuthToken(
 		case "cursor": {
 			const { refreshCursorToken } = await import("./cursor");
 			newCredentials = await refreshCursorToken(credentials.refresh);
+			break;
+		}
+		case "xai-oauth": {
+			const { refreshXAIOAuthToken } = await import("./xai-oauth");
+			newCredentials = await refreshXAIOAuthToken(credentials.refresh);
 			break;
 		}
 		case "kilo":
