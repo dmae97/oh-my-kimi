@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed public schema utilities in `@oh-my-pi/pi-ai/utils/schema` by replacing `sanitizeSchemaForGoogle`, `sanitizeSchemaForCCA`, `prepareSchemaForCCA`, and `sanitizeSchemaForMCP` with `normalizeSchemaForGoogle`, `normalizeSchemaForCCA`, and `normalizeSchemaForMCP`
@@ -10,18 +11,33 @@
 
 ### Added
 
+- Added `AuthStorage.setConfigApiKey` / `removeConfigApiKey` / `clearConfigApiKeys` for config-sourced per-provider bearers (e.g. `models.yml` `providers.<name>.apiKey`). The new tier sits between runtime `--api-key` and stored credentials in `getApiKey`/`peekApiKey` resolution, so a bearer pinned in config now beats the broker's OAuth access token. Also suppresses OAuth `account_uuid` attribution when active, since outbound auth is the explicit config bearer, not OAuth. `describeCredentialSource` reports `"config override (models.yml)"` for visibility.
+- Added per-model `additional_rate_limits` parsing to `openaiCodexUsageProvider`. The Codex `wham/usage` endpoint surfaces a separate `GPT-5.3-Codex-Spark` rate limit (`metered_feature: codex_bengalfox`) on Pro accounts; these now emit dedicated `openai-codex:spark:{primary,secondary}` `UsageLimit` entries with `scope.tier = "spark"`, mirroring how Anthropic exposes `anthropic:7d:sonnet` separately from the umbrella `anthropic:7d` bucket. The osx-widgets client already keyed spark detection off `limit.id.includes("spark")`; this populates that contract end-to-end.
+- Added `GET /v1/usage` to the auth-broker API to expose aggregated usage reports from `AuthStorage.fetchUsageReports`
+- Added auth-broker usage polling response handling that returns normalized usage reports plus generation timestamp for clients
 - Added the auth-broker subsystem (`@oh-my-pi/pi-ai/auth-broker`) for sharing OAuth credentials across machines without leaking refresh tokens.
-  - `startAuthBroker(...)` boots a `Bun.serve` HTTP server exposing `GET /v1/healthz`, `GET /v1/snapshot`, `POST /v1/credential` (upsert), `POST /v1/credential/:id/refresh`, and `POST /v1/credential/:id/disable`.
-  - `AuthBrokerClient` is the matching HTTP client used by remote clients.
-  - `RemoteAuthCredentialStore` is a client-side `AuthCredentialStore` that mirrors a broker snapshot in memory; mutating methods (`replace*`, `upsert*`, `delete*ForProvider`) throw because writes are server-side only.
-  - `AuthBrokerRefresher` is the background refresh loop that pre-refreshes credentials within `refreshSkewMs` and disables on definitive failure (`invalid_grant` / non-network 401-403).
+- `startAuthBroker(...)` boots a `Bun.serve` HTTP server exposing `GET /v1/healthz`, `GET /v1/snapshot`, `POST /v1/credential` (upsert), `POST /v1/credential/:id/refresh`, and `POST /v1/credential/:id/disable`.
+- `AuthBrokerClient` is the matching HTTP client used by remote clients.
+- `RemoteAuthCredentialStore` is a client-side `AuthCredentialStore` that mirrors a broker snapshot in memory; mutating methods (`replace*`, `upsert*`, `delete*ForProvider`) throw because writes are server-side only.
+- `AuthBrokerRefresher` is the background refresh loop that pre-refreshes credentials within `refreshSkewMs` and disables on definitive failure (`invalid_grant` / non-network 401-403).
 - Added `AuthStorage.exportSnapshot()`, `AuthStorage.upsertCredential(provider, credential)`, `AuthStorage.forceRefreshCredentialById(id)`, and `AuthStorage.disableCredentialById(id, cause)` public methods consumed by the auth-broker server.
 - Added `AuthStorageOptions.refreshOAuthCredential` override so a remote-store client can route every OAuth refresh through the broker instead of the local OAuth endpoint.
 - Added `REMOTE_REFRESH_SENTINEL` (`"__remote__"`) — the wire placeholder substituted for OAuth refresh tokens in broker snapshots; clients never see the real refresh token.
 - Exposed the OAuth provider catalog (`getOAuthProviders`, `OAuthProvider`, `OAuthProviderInfo`) and `refreshOAuthToken` through the package barrel so the coding-agent CLI can target them without reaching into `utils/oauth`.
+- Added the auth-gateway subsystem (`@oh-my-pi/pi-ai/auth-gateway`) — a forward-proxy that sits between unauthenticated clients (the macOS usage widget, llm-git, robomp containers, …) and the broker. Clients send standard provider-format requests; the gateway parses them into omp's canonical `Context`, dispatches through pi-ai's `streamSimple()`, and translates the canonical event stream back to the matching wire format. `Authorization` is injected server-side so access tokens never leave the gateway host. Wire surface:
+- `GET  /healthz` — unauth liveness.
+- `GET  /v1/usage` — aggregated provider usage; 30s cache via `AuthStorage.fetchUsageReports`.
+- `GET  /v1/models` — model catalog (scoped to providers with credentials).
+- `POST /v1/chat/completions` — OpenAI chat-completions in/out.
+- `POST /v1/messages` — Anthropic messages in/out (text + thinking + tool_use blocks, SSE event taxonomy preserved).
+- `POST /v1/responses` — OpenAI Responses in/out (reasoning items + function_call output items, SSE pass-through).
+- Added exports from `@oh-my-pi/pi-ai/auth-gateway`: `startAuthGateway`, `AuthGatewayServerOptions`, `AuthGatewayBootOptions`, `AuthGatewayServerHandle`, `ModelResolver`, `DEFAULT_AUTH_GATEWAY_BIND`, plus per-format `parseRequest` / `encodeResponse` / `encodeStream` triples under `auth-gateway/formats/{openai-chat,anthropic-messages,openai-responses}`.
+- Added `listProvidersWithEnvKey()` to enumerate every provider with an env-var fallback (used by the new migrate command in coding-agent).
 
 ### Changed
 
+- Changed usage report caching to use a 5-minute per-credential TTL with jittered refresh timing to reduce usage endpoint rate-limit collisions
+- Changed usage polling failure handling so transient errors continue serving the last known report instead of returning null and dropping the credential from usage aggregates after cache expiry
 - Changed `sanitizeSchemaForGoogle` to normalize snake_case schema keys (such as `any_of` and `additional_properties`) to camelCase and auto-generate `propertyOrdering` for multi-property objects
 - Changed strict-mode sanitization to resolve `$ref` nodes with sibling keys by inlining and merging referenced local definitions
 - Changed strict-mode sanitization to flatten single-entry `allOf` nodes and remove the `allOf` wrapper
@@ -30,6 +46,9 @@
 
 ### Fixed
 
+- Fixed Claude usage fetching to retry transient `429` and `5xx` responses with exponential backoff, respecting `Retry-After` before returning failure
+- Fixed auth-gateway request translation to preserve OpenAI Responses string/system message content, reasoning replay payloads, completed item text in stream item-done events, Anthropic tool-result ordering, and OpenAI Chat/Responses cached-token usage totals
+- Fixed auth-gateway failure handling so unsupported request controls, upstream terminal errors, non-streaming aborts, and already-aborted client requests fail explicitly instead of being accepted, ignored, or encoded as successful HTTP 200 responses
 - Fixed Gemini CLI / Antigravity tool schema normalization to run the full Cloud Code Assist pipeline, matching shared Google schema handling for union/object merging and nullable extraction
 - Fixed stripped validation hints to be preserved as description spill text (`{key: value}` blocks) when `normalizeSchemaForGoogle` and `normalizeSchemaForCCA` drop unsupported schema keywords
 - Fixed `sanitizeSchemaForGoogle` to collapse nullability forms (`type:'null'` and null-bearing `anyOf` variants) into `nullable` while preserving remaining variants
@@ -37,6 +56,7 @@
 - Fixed `normalizeAnthropicToolSchema` to handle self-referential schemas without infinite recursion
 - Fixed object schema normalization so explicit open-map declarations (`additionalProperties: true` and schema-valued `additionalProperties`) are preserved instead of being converted to closed objects
 - Fixed unsupported schema constraints on arrays and strings (`maxItems`, `uniqueItems`, `pattern`, `minLength`, `maxLength`, and `minItems` when greater than 1) by demoting them into `description` rather than dropping them
+
 ## [15.1.2] - 2026-05-15
 ### Breaking Changes
 

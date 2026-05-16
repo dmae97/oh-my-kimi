@@ -96,7 +96,7 @@ Lint + format: TypeScript via Biome (config in `biome.json`), Python via Ruff (c
 - `src/robomp/dashboard.py` — single-page HTML dashboard served from `/`.
 - `pyproject.toml` — packaging + pytest config (`asyncio_mode = "auto"`, `testpaths = ["tests"]`).
 - `Dockerfile` — slim runtime; consumes `oh-my-pi/artifacts:dev` (built from `/work/pi/Dockerfile`) for `pi_natives.linux-*.node` + `omp_rpc-*.whl`. Tini entrypoint, exposes `8080`, `VOLUME /data`.
-- `docker-compose.yml` — `build.args.PI_ARTIFACTS_IMAGE`, mounts `$PI_ROOT:/work/pi:ro`, `./data:/data`, `~/.omp/agent/models.yml:ro`, `extra_hosts: llm-gateway.internal:host-gateway`.
+- `docker-compose.yml` — `build.args.PI_ARTIFACTS_IMAGE`, mounts `$PI_ROOT:/work/pi:ro`, `./data:/data`, `~/.omp/agent/models.container.yml:ro` (mapped to `models.yml` inside the container — kept separate from the host's `~/.omp/agent/models.yml` so the host omp doesn't pick up gateway routing intended only for the container), `extra_hosts: llm-gateway.internal:host-gateway`.
 - `entrypoint.sh` — validates `PI_ROOT`, creates `/data/{workspaces,logs}` + build caches.
 - `.env.example` — authoritative list of required runtime env vars.
 - `README.md` — full architecture + operational reference. Authoritative for end-to-end flow, host-tool spec, security posture, and configuration reference.

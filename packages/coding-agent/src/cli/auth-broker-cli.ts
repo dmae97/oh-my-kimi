@@ -8,6 +8,9 @@
  *     via SSH tunnel into a remote broker host.
  *   - `import <file|dir>` — imports CLIProxyAPI-style JSON credentials into
  *     the local SQLite store (typical use: `import ~/.cliproxy/auth`).
+ *   - `migrate --from-local [--include-env] [--include-oauth] [--dry-run]` —
+ *     uploads local SQLite + env API keys to the broker, skipping anything
+ *     the broker already has.
  *   - `status` — health-pings the configured remote broker.
  */
 import * as crypto from "node:crypto";
@@ -16,10 +19,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	AuthBrokerClient,
+	type AuthCredential,
 	AuthStorage,
 	type CredentialDisabledEvent,
 	DEFAULT_AUTH_BROKER_BIND,
+	getEnvApiKey,
 	getOAuthProviders,
+	listProvidersWithEnvKey,
 	type OAuthCredential,
 	type OAuthProvider,
 	SqliteAuthCredentialStore,
@@ -30,7 +36,7 @@ import { $ } from "bun";
 import chalk from "chalk";
 import { resolveAuthBrokerConfig } from "../session/auth-broker-config";
 
-export type AuthBrokerAction = "serve" | "token" | "login" | "logout" | "status" | "import";
+export type AuthBrokerAction = "serve" | "token" | "login" | "logout" | "status" | "import" | "migrate";
 
 export interface AuthBrokerCommandArgs {
 	action: AuthBrokerAction;
@@ -45,10 +51,16 @@ export interface AuthBrokerCommandArgs {
 		source?: string;
 		/** `import`: keep credentials whose JSON had `disabled: true`. */
 		includeDisabled?: boolean;
+		/** `migrate`: also upload local OAuth (default: api_key only, since OAuth is via cliproxy import). */
+		includeOauth?: boolean;
+		/** `migrate`: also capture env-var API keys for providers not yet on broker. */
+		includeEnv?: boolean;
+		/** `migrate`: required `--from-local` source. Reserved for future sources. */
+		fromLocal?: boolean;
 	};
 }
 
-const ACTIONS: readonly AuthBrokerAction[] = ["serve", "token", "login", "logout", "import", "status"];
+const ACTIONS: readonly AuthBrokerAction[] = ["serve", "token", "login", "logout", "import", "migrate", "status"];
 
 /** Callback ports baked from the per-provider OAuth flow modules. */
 const CALLBACK_PORTS: Record<string, number> = {
@@ -453,6 +465,204 @@ async function runImport(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	}
 }
 
+// ─── Migrate: local SQLite + env → broker ──────────────────────────────
+
+interface MigratePlanEntry {
+	source: "local-sqlite" | "env";
+	provider: string;
+	credential: AuthCredential;
+	identity: string;
+}
+
+interface MigrateSkip {
+	source: "local-sqlite" | "env";
+	provider: string;
+	identity: string;
+	reason: string;
+}
+
+function credentialIdentity(provider: string, credential: AuthCredential): string {
+	if (credential.type === "api_key") return "(api key)";
+	return credential.email ?? credential.accountId ?? credential.projectId ?? `<${provider} oauth>`;
+}
+
+/**
+ * Build the set of "identities already on the broker" so re-runs are idempotent.
+ * For OAuth, identity = email|accountId|projectId. For api_key, we collapse
+ * to a single marker per provider (broker has no concept of "multiple api keys
+ * per provider with different identities"; upsert would coalesce them).
+ */
+function indexBrokerSnapshot(snapshot: {
+	credentials: Array<{
+		provider: string;
+		credential: { type: string; email?: string; accountId?: string; projectId?: string };
+	}>;
+}): Map<string, Set<string>> {
+	const out = new Map<string, Set<string>>();
+	for (const entry of snapshot.credentials) {
+		const ids = out.get(entry.provider) ?? new Set<string>();
+		if (entry.credential.type === "api_key") {
+			ids.add("@api_key");
+		} else {
+			if (entry.credential.email) ids.add(`email:${entry.credential.email}`);
+			if (entry.credential.accountId) ids.add(`accountId:${entry.credential.accountId}`);
+			if (entry.credential.projectId) ids.add(`projectId:${entry.credential.projectId}`);
+		}
+		out.set(entry.provider, ids);
+	}
+	return out;
+}
+
+function brokerAlreadyHas(existing: Map<string, Set<string>>, provider: string, credential: AuthCredential): boolean {
+	const ids = existing.get(provider);
+	if (!ids) return false;
+	if (credential.type === "api_key") return ids.has("@api_key");
+	if (credential.email && ids.has(`email:${credential.email}`)) return true;
+	if (credential.accountId && ids.has(`accountId:${credential.accountId}`)) return true;
+	if (credential.projectId && ids.has(`projectId:${credential.projectId}`)) return true;
+	return false;
+}
+
+async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
+	const brokerConfig = await resolveAuthBrokerConfig();
+	if (!brokerConfig) {
+		throw new Error(
+			"OMP_AUTH_BROKER_URL must be set (or `auth.broker.url` in config.yml). `migrate` uploads local credentials to a configured broker.",
+		);
+	}
+	if (flags.fromLocal !== true) {
+		throw new Error(
+			"`omp auth-broker migrate` requires an explicit source. Pass `--from-local` to migrate from the local SQLite store and env vars.",
+		);
+	}
+
+	const client = new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
+	const snapshot = await client.fetchSnapshot();
+	const existing = indexBrokerSnapshot(snapshot);
+
+	const plan: MigratePlanEntry[] = [];
+	const skipped: MigrateSkip[] = [];
+
+	// 1. Local SQLite rows.
+	const localDbPath = getAgentDbPath();
+	const localStore = await SqliteAuthCredentialStore.open(localDbPath);
+	const plannedApiKeyProviders = new Set<string>();
+	try {
+		for (const row of localStore.listAuthCredentials()) {
+			const identity = credentialIdentity(row.provider, row.credential);
+			if (row.credential.type === "oauth" && flags.includeOauth !== true) {
+				skipped.push({
+					source: "local-sqlite",
+					provider: row.provider,
+					identity,
+					reason: "OAuth from local SQLite skipped by default (use --include-oauth)",
+				});
+				continue;
+			}
+			if (brokerAlreadyHas(existing, row.provider, row.credential)) {
+				skipped.push({
+					source: "local-sqlite",
+					provider: row.provider,
+					identity,
+					reason: "already on broker",
+				});
+				continue;
+			}
+			if (row.credential.type === "api_key" && plannedApiKeyProviders.has(row.provider)) {
+				skipped.push({
+					source: "local-sqlite",
+					provider: row.provider,
+					identity,
+					reason: "another local api_key for this provider already planned",
+				});
+				continue;
+			}
+			if (row.credential.type === "api_key") plannedApiKeyProviders.add(row.provider);
+			plan.push({ source: "local-sqlite", provider: row.provider, credential: row.credential, identity });
+		}
+	} finally {
+		localStore.close();
+	}
+
+	// 2. Env-var API keys (opt-in).
+	if (flags.includeEnv === true) {
+		for (const provider of listProvidersWithEnvKey()) {
+			const envValue = getEnvApiKey(provider);
+			if (!envValue) continue;
+			if (envValue === "<authenticated>") continue; // Bedrock/Vertex sentinels — not literal keys.
+			const credential: AuthCredential = { type: "api_key", key: envValue };
+			if (brokerAlreadyHas(existing, provider, credential)) {
+				skipped.push({
+					source: "env",
+					provider,
+					identity: "(api key)",
+					reason: "already on broker (provider has an api_key)",
+				});
+				continue;
+			}
+			// Also skip if local SQLite already produced an entry for this provider in this batch.
+			if (plan.some(p => p.provider === provider && p.credential.type === "api_key")) {
+				skipped.push({
+					source: "env",
+					provider,
+					identity: "(api key)",
+					reason: "local SQLite already supplied an api_key for this provider",
+				});
+				continue;
+			}
+			plan.push({ source: "env", provider, credential, identity: "(api key)" });
+		}
+	}
+
+	if (flags.json) {
+		process.stdout.write(
+			`${JSON.stringify({
+				dryRun: flags.dryRun === true,
+				plan: plan.map(p => ({ source: p.source, provider: p.provider, identity: p.identity })),
+				skipped,
+			})}\n`,
+		);
+	} else {
+		for (const skip of skipped) {
+			process.stdout.write(
+				`${chalk.yellow("skip")} [${skip.source}] ${skip.provider} ${skip.identity}: ${skip.reason}\n`,
+			);
+		}
+	}
+
+	if (plan.length === 0) {
+		if (!flags.json) process.stdout.write("Nothing to migrate.\n");
+		return;
+	}
+
+	if (flags.dryRun === true) {
+		if (!flags.json) {
+			process.stdout.write(`Dry run — would upload ${plan.length} credential(s):\n`);
+			for (const entry of plan) {
+				process.stdout.write(`  [${entry.source}] ${entry.provider} ${entry.identity}\n`);
+			}
+		}
+		return;
+	}
+
+	for (const entry of plan) {
+		try {
+			await client.uploadCredential(entry.provider, entry.credential);
+			if (!flags.json) {
+				process.stdout.write(`${chalk.green("uploaded")} [${entry.source}] ${entry.provider} ${entry.identity}\n`);
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (flags.json) {
+				process.stdout.write(`${JSON.stringify({ error: message, provider: entry.provider })}\n`);
+			} else {
+				process.stdout.write(`${chalk.red("failed")} [${entry.source}] ${entry.provider}: ${message}\n`);
+			}
+			process.exitCode = 1;
+		}
+	}
+}
+
 async function runStatus(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	const cfg = await resolveAuthBrokerConfig();
 	if (!cfg) {
@@ -496,6 +706,9 @@ export async function runAuthBrokerCommand(cmd: AuthBrokerCommandArgs): Promise<
 			return;
 		case "import":
 			await runImport(cmd.flags);
+			return;
+		case "migrate":
+			await runMigrate(cmd.flags);
 			return;
 		case "status":
 			await runStatus(cmd.flags);

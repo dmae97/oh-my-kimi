@@ -47,7 +47,7 @@ into the `tool_calls` table with credential-redacted args and results.
 ## Setup
 
 Requires Docker Compose v2 and a LiteLLM-style proxy on the host that your
-`~/.omp/agent/models.yml` points at. roboomp lives inside the oh-my-pi
+`~/.omp/agent/models.container.yml` points at (mounted into the container as `models.yml`; kept under a separate filename on the host so the host omp doesn't route through the gateway). roboomp lives inside the oh-my-pi
 monorepo at `python/robomp/`; both the docker build context and the
 `/work/pi` bind mount default to the parent monorepo (`../..`). Override
 `PI_ROOT` only if you want a different oh-my-pi checkout backing the build
@@ -187,7 +187,7 @@ The integration test spawns a real `omp --mode rpc` against an
 | `refusing to push: working tree is dirty` | Uncommitted agent edits. Or just call `gh_open_pr`, which auto-commits `bun run fix` output. |
 | `bun check failed before PR creation` | Fix the reported failure and retry `gh_open_pr`. |
 | `Failed to load pi_natives` | Wrong arch / missing native. `bun run pi-artifacts` then `bun run build`. |
-| `No API key found for <provider>` | `~/.omp/agent/models.yml` mount missing or provider id mismatch with `ROBOMP_MODEL`. |
+| `No API key found for <provider>` | `~/.omp/agent/models.container.yml` mount missing or provider id mismatch with `ROBOMP_MODEL`. |
 
 ## Layout
 

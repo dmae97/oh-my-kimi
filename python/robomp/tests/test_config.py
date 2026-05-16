@@ -102,14 +102,14 @@ def test_model_pool_single(env: dict[str, str]) -> None:
 def test_model_pool_csv_parses(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> None:
     monkeypatch.setenv(
         "ROBOMP_MODEL",
-        " p-codex/gpt-5.4 , p-anthropic/claude-sonnet-4-6 ,, p-anthropic/claude-opus-4-7 ",
+        " codex/gpt-5.4 , anthropic/claude-sonnet-4-6 ,, anthropic/claude-opus-4-7 ",
     )
     reset_settings_cache()
     cfg = Settings()  # type: ignore[call-arg]
     assert cfg.model_pool == (
-        "p-codex/gpt-5.4",
-        "p-anthropic/claude-sonnet-4-6",
-        "p-anthropic/claude-opus-4-7",
+        "codex/gpt-5.4",
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-opus-4-7",
     )
 
 

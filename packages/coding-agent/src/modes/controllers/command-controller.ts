@@ -508,7 +508,8 @@ export class CommandController {
 			return;
 		}
 
-		const output = renderUsageReports(usageReports, theme, Date.now());
+		const availableWidth = Math.max(40, (this.ctx.ui.terminal.columns ?? 100) - 2);
+		const output = renderUsageReports(usageReports, theme, Date.now(), availableWidth);
 		this.ctx.chatContainer.addChild(new Spacer(1));
 		this.ctx.chatContainer.addChild(new Text(output, 1, 0));
 		this.ctx.ui.requestRender();
@@ -1242,8 +1243,8 @@ export class CommandController {
 	}
 }
 
-const BAR_WIDTH = 24;
-const COLUMN_WIDTH = BAR_WIDTH + 2;
+const BAR_WIDTH_MAX = 24;
+const BAR_WIDTH_MIN = 4;
 
 function renderJobLine(job: AsyncJobSnapshotItem, now: number): string {
 	const duration = formatDuration(Math.max(0, now - job.startTime));
@@ -1449,20 +1450,42 @@ function resolveStatusColor(status: UsageLimit["status"]): "success" | "warning"
 	return "dim";
 }
 
-function renderUsageBar(limit: UsageLimit, uiTheme: typeof theme): string {
+function renderUsageBar(limit: UsageLimit, uiTheme: typeof theme, barWidth: number): string {
 	const fraction = resolveFraction(limit);
 	if (fraction === undefined) {
-		return uiTheme.fg("dim", `[${"·".repeat(BAR_WIDTH)}]`);
+		return uiTheme.fg("dim", `[${"·".repeat(barWidth)}]`);
 	}
 	const clamped = Math.min(Math.max(fraction, 0), 1);
-	const filled = Math.round(clamped * BAR_WIDTH);
+	const filled = Math.round(clamped * barWidth);
 	const filledBar = "█".repeat(filled);
-	const emptyBar = "░".repeat(Math.max(0, BAR_WIDTH - filled));
+	const emptyBar = "░".repeat(Math.max(0, barWidth - filled));
 	const color = resolveStatusColor(limit.status);
 	return `${uiTheme.fg("dim", "[")}${uiTheme.fg(color, filledBar)}${uiTheme.fg("dim", emptyBar)}${uiTheme.fg("dim", "]")}`;
 }
 
-function renderUsageReports(reports: UsageReport[], uiTheme: typeof theme, nowMs: number): string {
+/**
+ * Pick a per-column width so n bars + a trailing amount string fit in `available` columns.
+ * Falls back to the minimum when the terminal is too narrow rather than wrapping.
+ */
+function resolveColumnWidth(count: number, available: number, trailing: number): number {
+	if (count <= 0) return BAR_WIDTH_MAX + 2;
+	const indent = 2;
+	const gaps = count - 1;
+	const spaceForBars = available - indent - gaps - (trailing > 0 ? trailing + 1 : 0);
+	const ideal = Math.floor(spaceForBars / count);
+	const min = BAR_WIDTH_MIN + 2;
+	const max = BAR_WIDTH_MAX + 2;
+	if (ideal < min) return min;
+	if (ideal > max) return max;
+	return ideal;
+}
+
+function renderUsageReports(
+	reports: UsageReport[],
+	uiTheme: typeof theme,
+	nowMs: number,
+	availableWidth: number,
+): string {
 	const lines: string[] = [];
 	const latestFetchedAt = Math.max(...reports.map(report => report.fetchedAt ?? 0));
 	const headerSuffix = latestFetchedAt ? ` (${formatDuration(nowMs - latestFetchedAt)} ago)` : "";
@@ -1532,12 +1555,18 @@ function renderUsageReports(reports: UsageReport[], uiTheme: typeof theme, nowMs
 
 			const windowSuffix = formatWindowSuffix(group.label, group.windowLabel, uiTheme);
 			lines.push(`${statusIcon} ${uiTheme.bold(group.label)} ${windowSuffix}`.trim());
+			const amountText = formatAggregateAmount(sortedLimits);
+			const columnWidth = resolveColumnWidth(sortedLimits.length, availableWidth, visibleWidth(amountText));
+			const barWidth = columnWidth - 2;
 			const accountLabels = sortedLimits.map((limit, index) =>
-				padColumn(formatAccountHeader(limit, sortedReports[index], index, nowMs), COLUMN_WIDTH),
+				padColumn(
+					truncateJobLabel(formatAccountHeader(limit, sortedReports[index], index, nowMs), columnWidth),
+					columnWidth,
+				),
 			);
 			lines.push(`  ${accountLabels.join(" ")}`.trimEnd());
-			const bars = sortedLimits.map(limit => padColumn(renderUsageBar(limit, uiTheme), COLUMN_WIDTH));
-			lines.push(`  ${bars.join(" ")} ${formatAggregateAmount(sortedLimits)}`.trimEnd());
+			const bars = sortedLimits.map(limit => padColumn(renderUsageBar(limit, uiTheme, barWidth), columnWidth));
+			lines.push(`  ${bars.join(" ")} ${amountText}`.trimEnd());
 			const resetText = sortedLimits.length <= 1 ? resolveResetRange(sortedLimits, nowMs) : null;
 			if (resetText) {
 				lines.push(`  ${uiTheme.fg("dim", resetText)}`.trimEnd());

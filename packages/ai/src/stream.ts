@@ -176,6 +176,15 @@ export function getEnvApiKey(provider: string): string | undefined {
 	return resolver?.();
 }
 
+/**
+ * Enumerate every provider that has an env-var fallback for `getEnvApiKey`.
+ * Used by `omp auth-broker migrate --include-env` to discover env-sourced keys
+ * that should be uploaded to the broker.
+ */
+export function listProvidersWithEnvKey(): string[] {
+	return Object.keys(serviceProviderMap);
+}
+
 export function stream<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,

@@ -792,6 +792,10 @@ export class ModelRegistry {
 		this.#customProviderApiKeys.clear();
 		this.#keylessProviders.clear();
 		this.#discoverableProviders = [];
+		// Drop config-sourced apiKeys from AuthStorage before reload; entries
+		// removed from models.yml must actually disappear from the resolver, not
+		// linger from the previous parse. The post-load setters below repopulate.
+		this.authStorage.clearConfigApiKeys();
 		// Restore runtime API keys before #loadModels — survives because
 		// #loadModels only calls .set() on #customProviderApiKeys, never reassigns it.
 		for (const [k, v] of this.#runtimeProviderApiKeys) {
@@ -1117,9 +1121,14 @@ export class ModelRegistry {
 				});
 			}
 
-			// Always store API key for fallback resolver
+			// Store API key for fallback resolver AND register as config override
+			// so it wins over OAuth tokens from the broker — when the user pins a
+			// bearer in models.yml (e.g. for an auth-gateway baseUrl), that bearer
+			// must authenticate the outbound request.
 			if (providerConfig.apiKey) {
 				this.#customProviderApiKeys.set(providerName, providerConfig.apiKey);
+				const resolved = resolveApiKeyConfig(providerConfig.apiKey);
+				if (resolved) this.authStorage.setConfigApiKey(providerName, resolved);
 			}
 
 			// Parse per-model overrides
@@ -1766,6 +1775,8 @@ export class ModelRegistry {
 			if (modelDefs.length === 0) continue; // Override-only, no custom models
 			if (providerConfig.apiKey) {
 				this.#customProviderApiKeys.set(providerName, providerConfig.apiKey);
+				const resolved = resolveApiKeyConfig(providerConfig.apiKey);
+				if (resolved) this.authStorage.setConfigApiKey(providerName, resolved);
 			}
 			for (const modelDef of modelDefs) {
 				const providerCompat = providerConfig.disableStrictTools
@@ -2008,6 +2019,7 @@ export class ModelRegistry {
 		this.#runtimeProviderApiKeys.delete(providerName);
 		this.#runtimeProviderOverrides.delete(providerName);
 		this.#runtimeModelOverlays = this.#runtimeModelOverlays.filter(overlay => overlay.provider !== providerName);
+		this.authStorage.removeConfigApiKey(providerName);
 	}
 
 	/**
@@ -2115,6 +2127,8 @@ export class ModelRegistry {
 			this.#customProviderApiKeys.set(providerName, config.apiKey);
 			// Persist runtime API keys so they survive #reloadStaticModels() cycles
 			this.#runtimeProviderApiKeys.set(providerName, config.apiKey);
+			const resolved = resolveApiKeyConfig(config.apiKey);
+			if (resolved) this.authStorage.setConfigApiKey(providerName, resolved);
 		}
 
 		if (config.models && config.models.length > 0) {

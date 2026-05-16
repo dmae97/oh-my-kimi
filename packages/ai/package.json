@@ -73,6 +73,22 @@
 			"types": "./src/*.ts",
 			"import": "./src/*.ts"
 		},
+		"./auth-broker": {
+			"types": "./src/auth-broker/index.ts",
+			"import": "./src/auth-broker/index.ts"
+		},
+		"./auth-broker/*": {
+			"types": "./src/auth-broker/*.ts",
+			"import": "./src/auth-broker/*.ts"
+		},
+		"./auth-gateway": {
+			"types": "./src/auth-gateway/index.ts",
+			"import": "./src/auth-gateway/index.ts"
+		},
+		"./auth-gateway/*": {
+			"types": "./src/auth-gateway/*.ts",
+			"import": "./src/auth-gateway/*.ts"
+		},
 		"./models.json": {
 			"types": "./src/models.json.d.ts",
 			"import": "./src/models.json"

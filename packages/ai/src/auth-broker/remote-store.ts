@@ -7,12 +7,17 @@
  * usage reports cache TTL is ~30s, so durability across runs isn't required.
  */
 import { logger } from "@oh-my-pi/pi-utils";
-import type {
-	AuthCredential,
-	AuthCredentialSnapshot,
-	AuthCredentialStore,
-	StoredAuthCredential,
+import {
+	type AuthCredential,
+	type AuthCredentialSnapshot,
+	type AuthCredentialStore,
+	type OAuthCredential,
+	REMOTE_REFRESH_SENTINEL,
+	type StoredAuthCredential,
 } from "../auth-storage";
+import type { Provider } from "../types";
+import type { UsageReport } from "../usage";
+import type { OAuthCredentials } from "../utils/oauth/types";
 import type { AuthBrokerClient } from "./client";
 
 interface CacheEntry {
@@ -134,6 +139,44 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		for (const [key, entry] of this.#cache) {
 			if (entry.expiresAtSec <= nowSec) this.#cache.delete(key);
 		}
+	}
+
+	/**
+	 * Store-level hook consumed by `AuthStorage` — routes refresh through the
+	 * broker so the actual refresh token never leaves the broker host. Returns
+	 * the broker-redacted credential with {@link REMOTE_REFRESH_SENTINEL} in
+	 * the `refresh` slot.
+	 */
+	async refreshOAuthCredential(
+		_provider: Provider,
+		credentialId: number,
+		_credential: OAuthCredential,
+	): Promise<OAuthCredentials> {
+		const { entry } = await this.#client.refreshCredential(credentialId);
+		if (entry.credential.type !== "oauth") {
+			throw new Error(`Broker returned non-OAuth credential for id=${credentialId}`);
+		}
+		const refreshed = entry.credential;
+		return {
+			access: refreshed.access,
+			refresh: REMOTE_REFRESH_SENTINEL,
+			expires: refreshed.expires,
+			accountId: refreshed.accountId,
+			email: refreshed.email,
+			projectId: refreshed.projectId,
+			enterpriseUrl: refreshed.enterpriseUrl,
+		};
+	}
+
+	/**
+	 * Store-level hook consumed by `AuthStorage.fetchUsageReports()` — proxies
+	 * to the broker's `/v1/usage` endpoint. The broker's egress IP isn't
+	 * rate-limited by Anthropic's per-IP `/usage` cap the way a heavy
+	 * residential laptop is, so all credentials surface every cycle.
+	 */
+	async fetchUsageReports(): Promise<UsageReport[] | null> {
+		const body = await this.#client.fetchUsage();
+		return body.reports;
 	}
 
 	close(): void {

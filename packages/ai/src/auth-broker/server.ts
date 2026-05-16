@@ -13,15 +13,14 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../auth-storage";
 import { AuthBrokerRefresher } from "./refresher";
 import type {
-	CredentialDisableRequest,
 	CredentialDisableResponse,
 	CredentialRefreshResponse,
-	CredentialUploadRequest,
 	CredentialUploadResponse,
 	HealthzResponse,
 	SnapshotResponse,
 } from "./types";
 import { DEFAULT_AUTH_BROKER_BIND, DEFAULT_REFRESH_INTERVAL_MS, DEFAULT_REFRESH_SKEW_MS } from "./types";
+import { credentialDisableRequestSchema, credentialUploadRequestSchema } from "./wire-schemas";
 
 export interface AuthBrokerServerOptions {
 	/** Underlying credential storage (wraps the local SQLite store on the broker). */
@@ -53,10 +52,24 @@ interface ParsedBind {
 	port: number;
 }
 
+function parsePort(raw: string, bind: string): number {
+	if (!/^\d+$/.test(raw)) {
+		throw new Error(`Invalid bind '${bind}'; port must be an integer.`);
+	}
+	const port = Number.parseInt(raw, 10);
+	if (!Number.isFinite(port) || port < 0 || port > 65535) {
+		throw new Error(`Invalid bind '${bind}'; port out of range.`);
+	}
+	return port;
+}
+
 function parseBind(raw: string): ParsedBind {
 	const trimmed = raw.trim();
+	if (trimmed.length === 0) {
+		throw new Error("Invalid bind; expected 'host:port' or 'port'.");
+	}
 	if (/^\d+$/.test(trimmed)) {
-		return { hostname: "127.0.0.1", port: Number.parseInt(trimmed, 10) };
+		return { hostname: "127.0.0.1", port: parsePort(trimmed, raw) };
 	}
 	const lastColon = trimmed.lastIndexOf(":");
 	if (lastColon < 0) {
@@ -64,11 +77,10 @@ function parseBind(raw: string): ParsedBind {
 	}
 	const hostPart = trimmed.slice(0, lastColon);
 	const portPart = trimmed.slice(lastColon + 1);
-	const port = Number.parseInt(portPart, 10);
-	if (!Number.isFinite(port) || port < 0 || port > 65535) {
-		throw new Error(`Invalid bind '${raw}'; port out of range.`);
+	if (hostPart.length === 0) {
+		throw new Error(`Invalid bind '${raw}'; host must not be empty.`);
 	}
-	return { hostname: hostPart, port };
+	return { hostname: hostPart, port: parsePort(portPart, raw) };
 }
 
 function json(status: number, body: unknown): Response {
@@ -85,6 +97,38 @@ function isAuthorized(req: Request, tokens: ReadonlySet<string>): boolean {
 	const match = header.match(/^Bearer\s+(.+)$/i);
 	if (!match) return false;
 	return tokens.has(match[1].trim());
+}
+
+/**
+ * Parse + validate a JSON request body against a Zod schema. Returns a
+ * `Response` (400) on parse/validation failure so handlers can early-return.
+ * When `allowEmpty` is set, an empty request body is validated against `{}`.
+ */
+async function parseBody<T>(
+	req: Request,
+	schema: { safeParse(input: unknown): { success: true; data: T } | { success: false; error: { message: string } } },
+	options: { allowEmpty?: boolean } = {},
+): Promise<{ ok: true; data: T } | { ok: false; response: Response }> {
+	let raw: string;
+	try {
+		raw = await req.text();
+	} catch (error) {
+		return { ok: false, response: json(400, { error: `Invalid request body: ${String(error)}` }) };
+	}
+	if (raw.length === 0 && !options.allowEmpty) {
+		return { ok: false, response: json(400, { error: "Request body required" }) };
+	}
+	let parsed: unknown;
+	try {
+		parsed = raw.length === 0 ? {} : JSON.parse(raw);
+	} catch (error) {
+		return { ok: false, response: json(400, { error: `Invalid JSON body: ${String(error)}` }) };
+	}
+	const result = schema.safeParse(parsed);
+	if (!result.success) {
+		return { ok: false, response: json(400, { error: result.error.message }) };
+	}
+	return { ok: true, data: result.data };
 }
 
 const REFRESH_ROUTE = /^\/v1\/credential\/(\d+)\/refresh$/;
@@ -128,6 +172,24 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 					logger.info("auth-broker snapshot served", { peer, credentials: body.credentials.length });
 					return json(200, body);
 				}
+				if (req.method === "GET" && pathname === "/v1/usage") {
+					try {
+						// AuthStorage caches usage reports internally with a 30s TTL
+						// (USAGE_REPORT_TTL_MS) so back-to-back widget polls re-use the
+						// last fetch instead of hitting provider endpoints repeatedly.
+						const reports = (await opts.storage.fetchUsageReports?.()) ?? [];
+						// Drop the `raw` field — it's the provider-specific upstream body,
+						// large and unstable. Everything UI-relevant lives in `limits` and
+						// `metadata`.
+						const trimmed = reports.map(({ raw: _raw, ...rest }) => rest);
+						logger.info("auth-broker usage served", { peer, reports: trimmed.length });
+						return json(200, { generatedAt: Date.now(), reports: trimmed });
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						logger.warn("auth-broker usage fetch failed", { peer, error: message });
+						return json(502, { error: message });
+					}
+				}
 				const refreshMatch = req.method === "POST" ? pathname.match(REFRESH_ROUTE) : null;
 				if (refreshMatch) {
 					const id = Number.parseInt(refreshMatch[1], 10);
@@ -151,13 +213,10 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				const disableMatch = req.method === "POST" ? pathname.match(DISABLE_ROUTE) : null;
 				if (disableMatch) {
 					const id = Number.parseInt(disableMatch[1], 10);
-					let cause = "disabled via auth-broker";
-					try {
-						const body = (await req.json()) as Partial<CredentialDisableRequest>;
-						if (typeof body?.cause === "string" && body.cause.length > 0) cause = body.cause;
-					} catch {
-						// Empty / malformed body — default cause already set.
-					}
+					const parsed = await parseBody(req, credentialDisableRequestSchema, { allowEmpty: true });
+					if (!parsed.ok) return parsed.response;
+					const cause =
+						parsed.data.cause && parsed.data.cause.length > 0 ? parsed.data.cause : "disabled via auth-broker";
 					const ok = opts.storage.disableCredentialById(id, cause);
 					if (!ok) {
 						logger.info("auth-broker disable miss", { id, peer, cause });
@@ -168,32 +227,17 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 					return json(200, response);
 				}
 				if (req.method === "POST" && pathname === "/v1/credential") {
-					let body: Partial<CredentialUploadRequest>;
+					const parsed = await parseBody(req, credentialUploadRequestSchema);
+					if (!parsed.ok) return parsed.response;
+					const { provider, credential } = parsed.data;
 					try {
-						body = (await req.json()) as Partial<CredentialUploadRequest>;
-					} catch (error) {
-						return json(400, { error: `Invalid JSON body: ${String(error)}` });
-					}
-					if (!body || typeof body.provider !== "string" || body.provider.length === 0) {
-						return json(400, { error: "Missing `provider` field" });
-					}
-					if (!body.credential || typeof body.credential !== "object") {
-						return json(400, { error: "Missing `credential` field" });
-					}
-					const credential = body.credential;
-					if (credential.type !== "oauth" && credential.type !== "api_key") {
-						return json(400, {
-							error: `Invalid credential.type: ${String((credential as { type?: unknown }).type)}`,
-						});
-					}
-					try {
-						const entries = opts.storage.upsertCredential(body.provider, credential);
+						const entries = opts.storage.upsertCredential(provider, credential);
 						const identity =
 							credential.type === "oauth"
 								? (credential.email ?? credential.accountId ?? credential.projectId ?? "(no identity)")
 								: "(api key)";
 						logger.info("auth-broker credential upserted", {
-							provider: body.provider,
+							provider,
 							type: credential.type,
 							identity,
 							peer,
@@ -203,7 +247,7 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 						return json(200, response);
 					} catch (error) {
 						const message = error instanceof Error ? error.message : String(error);
-						logger.warn("auth-broker upload failed", { provider: body.provider, peer, error: message });
+						logger.warn("auth-broker upload failed", { provider, peer, error: message });
 						return json(500, { error: message });
 					}
 				}

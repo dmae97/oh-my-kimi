@@ -7,6 +7,7 @@
  */
 
 import type { AuthCredential, AuthCredentialSnapshot, AuthCredentialSnapshotEntry } from "../auth-storage";
+import type { UsageReport } from "../usage";
 
 /** GET /v1/healthz response body. */
 export interface HealthzResponse {
@@ -16,6 +17,12 @@ export interface HealthzResponse {
 
 /** GET /v1/snapshot response body. */
 export type SnapshotResponse = AuthCredentialSnapshot;
+
+/** GET /v1/usage response body — matches the local `AuthStorage.fetchUsageReports` shape. */
+export interface UsageResponse {
+	generatedAt: number;
+	reports: UsageReport[];
+}
 
 /** POST /v1/credential/:id/refresh response body. */
 export interface CredentialRefreshResponse {

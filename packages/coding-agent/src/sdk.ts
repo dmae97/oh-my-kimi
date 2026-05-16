@@ -94,12 +94,7 @@ import {
 } from "./secrets";
 import { AgentSession } from "./session/agent-session";
 import { resolveAuthBrokerConfig } from "./session/auth-broker-config";
-import {
-	AuthBrokerClient,
-	AuthStorage,
-	REMOTE_REFRESH_SENTINEL,
-	RemoteAuthCredentialStore,
-} from "./session/auth-storage";
+import { AuthBrokerClient, AuthStorage, RemoteAuthCredentialStore } from "./session/auth-storage";
 import { convertToLlm } from "./session/messages";
 import { SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
@@ -339,27 +334,11 @@ export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir(
 		const client = new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
 		const initialSnapshot = await client.fetchSnapshot();
 		const store = new RemoteAuthCredentialStore({ client, initialSnapshot });
+		// Refresh + usage hooks live on RemoteAuthCredentialStore; AuthStorage
+		// discovers them automatically when no explicit option overrides them.
 		const storage = new AuthStorage(store, {
 			configValueResolver: resolveConfigValue,
 			sourceLabel: `broker ${brokerConfig.url}`,
-			refreshOAuthCredential: async (_provider, credentialId, _credential) => {
-				const { entry } = await client.refreshCredential(credentialId);
-				if (entry.credential.type !== "oauth") {
-					throw new Error(`Broker returned non-OAuth credential for id=${credentialId}`);
-				}
-				const refreshed = entry.credential;
-				return {
-					access: refreshed.access,
-					// Sentinel — AuthStorage stores it back into the in-memory snapshot,
-					// but a refresh through the broker is the only legal way to mint tokens.
-					refresh: REMOTE_REFRESH_SENTINEL,
-					expires: refreshed.expires,
-					accountId: refreshed.accountId,
-					email: refreshed.email,
-					projectId: refreshed.projectId,
-					enterpriseUrl: refreshed.enterpriseUrl,
-				};
-			},
 		});
 		await storage.reload();
 		return storage;

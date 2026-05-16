@@ -11,11 +11,14 @@ services:
   # ───────────────────────────────────────────────────────────────────────────
   robomp:
     build:
-      context: .
-      dockerfile: Dockerfile
+      # pi root: gives the web-builder stage access to the workspace
+      # bun.lock + catalog (web/package.json refs `catalog:` versions).
+      # python/robomp/data is excluded via pi's .dockerignore.
+      context: ../..
+      dockerfile: python/robomp/Dockerfile
       args:
         # Tag of the pre-built artifacts image produced by `bun run pi-artifacts`
-        # (sources: /work/pi/Dockerfile). Override per-environment as needed.
+        # (sources: pi root /Dockerfile). Override per-environment as needed.
         PI_ARTIFACTS_IMAGE: oh-my-pi/artifacts:dev
     image: robomp:dev
     container_name: robomp
@@ -41,7 +44,7 @@ services:
       ROBOMP_REVIEWER_BOTS: ${ROBOMP_REVIEWER_BOTS:-}
 
       # --- model selection ---
-      ROBOMP_MODEL: ${ROBOMP_MODEL:-p-anthropic/claude-sonnet-4-6}
+      ROBOMP_MODEL: ${ROBOMP_MODEL:-anthropic/claude-sonnet-4-6}
       ROBOMP_PROVIDER: ${ROBOMP_PROVIDER:-}
       ROBOMP_THINKING: ${ROBOMP_THINKING:-high}
 
@@ -86,7 +89,7 @@ services:
       # root-owned, world-readable files under /srv/agent-home; the agent
       # subprocess runs with HOME=/srv/agent-home, so ~/.omp and ~/.agent
       # resolve there without exposing mutable host mounts.
-      - ${HOME}/.omp/agent/models.yml:/srv/agent-home-stage/.omp/agent/models.yml:ro
+      - ${HOME}/.omp/agent/models.container.yml:/srv/agent-home-stage/.omp/agent/models.yml:ro
       - ${HOME}/.agent/AGENT.md:/srv/agent-home-stage/.agent/AGENTS.md:ro
       - ${HOME}/.agent/rules:/srv/agent-home-stage/.agent/rules:ro
     ports:

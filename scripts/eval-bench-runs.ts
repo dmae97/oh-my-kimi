@@ -205,8 +205,7 @@ function fmtNum(value: number): string {
 }
 
 function shortModel(model: string): string {
-	const cleaned = model.replace(/^p-anthropic\//, "anthropic/");
-	const segs = cleaned.split("/");
+	const segs = model.split("/");
 	return segs[segs.length - 1].replace(/:nitro/, "");
 }
 

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7-labs
 ###############################################################################
 # roboomp — orchestrator image
 #
@@ -30,14 +30,14 @@ FROM ${PI_ARTIFACTS_IMAGE} AS pi-artifacts
 ############################
 FROM oven/bun:1.3.14-slim AS web-builder
 WORKDIR /work
-# The repo is a Bun workspace (`workspaces: ["web"]` at the root). Install
-# from the root lockfile so the web subpackage resolves against the same
-# pinned dependency graph used locally.
+# Build context is the pi monorepo root, so the web-builder stage installs
+# from pi's bun.lock — that's how `web/package.json` resolves its `catalog:`
+# references against the workspace-wide catalog declared at pi root.
 COPY package.json bun.lock ./
-COPY web/package.json ./web/package.json
-RUN bun install --frozen-lockfile
-COPY web/ ./web/
-RUN bun --cwd=web run build
+COPY python/robomp/web/package.json ./python/robomp/web/package.json
+RUN bun install --filter robomp-web
+COPY --exclude=node_modules --exclude=dist python/robomp/web/ ./python/robomp/web/
+RUN bun --cwd=python/robomp/web run build
 
 ############################
 # 3) runtime — slim image with everything roboomp needs at boot.
@@ -107,9 +107,9 @@ RUN printf '%s\n' \
 # roboomp itself. Drop the Vite-built dashboard into the package tree before
 # `pip install` so it lands in the installed wheel (`static/**/*` is declared
 # as package-data in pyproject.toml).
-COPY pyproject.toml ./
-COPY src/ ./src/
-COPY --from=web-builder /work/web/dist/ ./src/robomp/static/
+COPY python/robomp/pyproject.toml ./
+COPY python/robomp/src/ ./src/
+COPY --from=web-builder /work/python/robomp/web/dist/ ./src/robomp/static/
 RUN pip install --upgrade pip \
     && pip install \
         "fastapi>=0.112" "uvicorn[standard]>=0.30" "httpx>=0.27" \
@@ -121,7 +121,7 @@ RUN mkdir -p /srv/agent-home/.agent /srv/agent-home/.omp/agent \
     && mkdir -p /srv/agent-home-stage/.agent /srv/agent-home-stage/.omp/agent \
     && printf '[install]\nbackend = "copyfile"\n' > /srv/agent-home/.bunfig.toml
 
-COPY entrypoint.sh /usr/local/bin/robomp-entrypoint
+COPY python/robomp/entrypoint.sh /usr/local/bin/robomp-entrypoint
 RUN chmod +x /usr/local/bin/robomp-entrypoint
 
 VOLUME ["/data"]

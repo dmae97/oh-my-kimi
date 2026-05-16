@@ -5,6 +5,7 @@
  * `omp auth-broker status` (liveness checks). All endpoints except
  * `/v1/healthz` require a bearer token.
  */
+import type { ZodType, infer as zInfer } from "zod/v4";
 import type { AuthCredential } from "../auth-storage";
 import type {
 	CredentialDisableRequest,
@@ -14,7 +15,16 @@ import type {
 	CredentialUploadResponse,
 	HealthzResponse,
 	SnapshotResponse,
+	UsageResponse,
 } from "./types";
+import {
+	credentialDisableResponseSchema,
+	credentialRefreshResponseSchema,
+	credentialUploadResponseSchema,
+	healthzResponseSchema,
+	snapshotResponseSchema,
+	usageResponseSchema,
+} from "./wire-schemas";
 
 export interface AuthBrokerClientOptions {
 	/** Base URL (e.g. `https://broker.tailnet:8765`). Trailing slashes are trimmed. */
@@ -59,30 +69,48 @@ export class AuthBrokerClient {
 	}
 
 	healthz(): Promise<HealthzResponse> {
-		return this.#request<HealthzResponse>("GET", "/v1/healthz", { auth: false });
+		return this.#request("GET", "/v1/healthz", { schema: healthzResponseSchema, auth: false });
 	}
 
 	fetchSnapshot(): Promise<SnapshotResponse> {
-		return this.#request<SnapshotResponse>("GET", "/v1/snapshot");
+		// `snapshotResponseSchema` narrows `refresh` to the sentinel literal where
+		// the public type uses plain `string`; the wire shape is identical.
+		return this.#request("GET", "/v1/snapshot", { schema: snapshotResponseSchema }) as Promise<SnapshotResponse>;
+	}
+
+	fetchUsage(): Promise<UsageResponse> {
+		// `usageResponseSchema` keeps the report array as `unknown[]` — per-provider
+		// usage modules own the inner shape; the broker doesn't re-validate it.
+		return this.#request("GET", "/v1/usage", { schema: usageResponseSchema }) as Promise<UsageResponse>;
 	}
 
 	async refreshCredential(id: number): Promise<CredentialRefreshResponse> {
-		return this.#request<CredentialRefreshResponse>("POST", `/v1/credential/${id}/refresh`);
+		return this.#request("POST", `/v1/credential/${id}/refresh`, {
+			schema: credentialRefreshResponseSchema,
+		}) as Promise<CredentialRefreshResponse>;
 	}
 
 	async disableCredential(id: number, cause: string): Promise<CredentialDisableResponse> {
 		const body: CredentialDisableRequest = { cause };
-		return this.#request<CredentialDisableResponse>("POST", `/v1/credential/${id}/disable`, {
+		return this.#request("POST", `/v1/credential/${id}/disable`, {
 			body,
+			schema: credentialDisableResponseSchema,
 		});
 	}
 
 	async uploadCredential(provider: string, credential: AuthCredential): Promise<CredentialUploadResponse> {
 		const body: CredentialUploadRequest = { provider, credential };
-		return this.#request<CredentialUploadResponse>("POST", "/v1/credential", { body });
+		return this.#request("POST", "/v1/credential", {
+			body,
+			schema: credentialUploadResponseSchema,
+		}) as Promise<CredentialUploadResponse>;
 	}
 
-	async #request<T>(method: "GET" | "POST", path: string, opts: { auth?: boolean; body?: unknown } = {}): Promise<T> {
+	async #request<TSchema extends ZodType>(
+		method: "GET" | "POST",
+		path: string,
+		opts: { schema: TSchema; auth?: boolean; body?: unknown },
+	): Promise<zInfer<TSchema>> {
 		const auth = opts.auth ?? true;
 		const url = `${this.#baseUrl}${path}`;
 		const headers: Record<string, string> = { Accept: "application/json" };
@@ -109,9 +137,9 @@ export class AuthBrokerClient {
 						body: text,
 					});
 				}
-				if (!text) return undefined as T;
+				let raw: unknown;
 				try {
-					return JSON.parse(text) as T;
+					raw = text.length === 0 ? null : JSON.parse(text);
 				} catch (parseError) {
 					throw new AuthBrokerError("Auth broker returned malformed JSON", {
 						status: response.status,
@@ -119,6 +147,14 @@ export class AuthBrokerClient {
 						cause: parseError,
 					});
 				}
+				const validated = opts.schema.safeParse(raw);
+				if (!validated.success) {
+					throw new AuthBrokerError("Auth broker response failed schema validation", {
+						status: response.status,
+						body: validated.error.message,
+					});
+				}
+				return validated.data;
 			} catch (error) {
 				lastError = error;
 				if (error instanceof AuthBrokerError && error.status !== undefined) {

@@ -101,21 +101,21 @@ def test_pragma_value_last_wins() -> None:
 
 
 def test_resolve_model_alias_precedence() -> None:
-    pool = ("p-anthropic/claude-sonnet-4-6", "p-openai/gpt-5.5", "p-openai/gpt-5.5-mini")
+    pool = ("anthropic/claude-sonnet-4-6", "openai/gpt-5.5", "openai/gpt-5.5-mini")
     # Short-name-after-slash beats substring.
-    assert resolve_model_alias("gpt-5.5", pool) == "p-openai/gpt-5.5"
+    assert resolve_model_alias("gpt-5.5", pool) == "openai/gpt-5.5"
     # Substring is fallback.
-    assert resolve_model_alias("gpt", pool) == "p-openai/gpt-5.5"
-    assert resolve_model_alias("claude", pool) == "p-anthropic/claude-sonnet-4-6"
+    assert resolve_model_alias("gpt", pool) == "openai/gpt-5.5"
+    assert resolve_model_alias("claude", pool) == "anthropic/claude-sonnet-4-6"
 
 
 def test_resolve_model_alias_full_id() -> None:
-    pool = ("p-openai/gpt-5.5", "p-anthropic/claude-sonnet-4-6")
-    assert resolve_model_alias("p-openai/gpt-5.5", pool) == "p-openai/gpt-5.5"
+    pool = ("openai/gpt-5.5", "anthropic/claude-sonnet-4-6")
+    assert resolve_model_alias("openai/gpt-5.5", pool) == "openai/gpt-5.5"
 
 
 def test_resolve_model_alias_no_match() -> None:
-    pool = ("p-anthropic/claude-sonnet-4-6",)
+    pool = ("anthropic/claude-sonnet-4-6",)
     assert resolve_model_alias("gpt", pool) is None
     assert resolve_model_alias("", pool) is None
 

@@ -39,7 +39,16 @@ export default class AuthBroker extends Command {
 		"include-disabled": Flags.boolean({
 			description: "Import credentials whose JSON has `disabled: true` (import)",
 		}),
-		"dry-run": Flags.boolean({ description: "Print actions without executing (import / login --via)" }),
+		"from-local": Flags.boolean({
+			description: "migrate source: local SQLite + env vars (required for `migrate`)",
+		}),
+		"include-env": Flags.boolean({
+			description: "Capture env-var API keys for providers not yet on broker (migrate)",
+		}),
+		"include-oauth": Flags.boolean({
+			description: "Also upload OAuth from local SQLite during migrate (default skips them)",
+		}),
+		"dry-run": Flags.boolean({ description: "Print actions without executing (import / login --via / migrate)" }),
 	};
 
 	static examples = [
@@ -51,6 +60,8 @@ export default class AuthBroker extends Command {
 		"# Remote login over SSH tunnel\n  omp auth-broker login anthropic --via=user@broker",
 		"# Import a CLIProxyAPI auth dump\n  omp auth-broker import ~/.cliproxy/auth",
 		"# Import a single CLIProxyAPI JSON, overriding the provider mapping\n  omp auth-broker import ~/.cliproxy/auth/claude-foo.json --provider anthropic",
+		"# Preview a migration from local store + env vars to the configured broker\n  omp auth-broker migrate --from-local --include-env --dry-run",
+		"# Apply the migration\n  omp auth-broker migrate --from-local --include-env",
 		"# Health-check the configured remote broker\n  omp auth-broker status",
 	];
 
@@ -73,6 +84,9 @@ export default class AuthBroker extends Command {
 				provider: action === "import" ? flags.provider : (args.source ?? flags.provider),
 				source: args.source,
 				includeDisabled: flags["include-disabled"],
+				fromLocal: flags["from-local"],
+				includeEnv: flags["include-env"],
+				includeOauth: flags["include-oauth"],
 				dryRun: flags["dry-run"],
 			},
 		};

@@ -136,9 +136,30 @@ export interface AuthCredentialStore {
 	replaceAuthCredentialsForProvider(provider: string, credentials: AuthCredential[]): StoredAuthCredential[];
 	upsertAuthCredentialForProvider(provider: string, credential: AuthCredential): StoredAuthCredential[];
 	deleteAuthCredentialsForProvider(provider: string, disabledCause: string): void;
-	getCache(key: string): string | null;
+	getCache(key: string, options?: { includeExpired?: boolean }): string | null;
 	setCache(key: string, value: string, expiresAtSec: number): void;
 	cleanExpiredCache(): void;
+	/**
+	 * Optional store-supplied OAuth refresh. When present, `AuthStorage` uses
+	 * it before the per-provider local refresh path. `RemoteAuthCredentialStore`
+	 * implements this against the broker; SQLite stores leave it undefined.
+	 *
+	 * Precedence: `AuthStorageOptions.refreshOAuthCredential` > this hook > local.
+	 */
+	refreshOAuthCredential?(
+		provider: Provider,
+		credentialId: number,
+		credential: OAuthCredential,
+	): Promise<OAuthCredentials>;
+	/**
+	 * Optional store-supplied aggregate usage fetch. When present, `AuthStorage`
+	 * routes `fetchUsageReports()` here instead of fanning out per-credential.
+	 * `RemoteAuthCredentialStore` proxies to the broker (whose datacenter IP
+	 * isn't rate-limited like a heavy residential client).
+	 *
+	 * Precedence: `AuthStorageOptions.fetchUsageReports` > this hook > local fan-out.
+	 */
+	fetchUsageReports?(): Promise<UsageReport[] | null>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -204,6 +225,17 @@ export type AuthStorageOptions = {
 	 * - `"broker http://can.internal:8765"`
 	 */
 	sourceLabel?: string;
+	/**
+	 * Override `fetchUsageReports`. When set, `AuthStorage.fetchUsageReports`
+	 * calls this instead of fanning out per-credential. The primary use case is
+	 * routing through a broker that egresses from a less-throttled IP — e.g. a
+	 * residential laptop trips Anthropic's per-IP rate limit on the usage
+	 * endpoint and drops 2-of-5 credentials, while the VPS broker gets all 5.
+	 *
+	 * Implementations may return null when no usage data is available; the
+	 * AuthStorage caller surfaces that to its own consumer unchanged.
+	 */
+	fetchUsageReports?: () => Promise<UsageReport[] | null>;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,8 +270,22 @@ const DEFAULT_USAGE_PROVIDER_MAP = new Map<Provider, UsageProvider>(
 );
 
 const USAGE_CACHE_PREFIX = "usage_cache:";
-const USAGE_REPORT_TTL_MS = 30_000;
-const DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 3_000;
+// 5 min stale tolerance. Anthropic / OpenAI rate-limit /usage hard at the IP
+// level so we can't fetch all N credentials every cycle; with a long cache
+// each credential's last-known value sticks visible while peers retry. UI
+// data (5h / 7d / monthly limits) is fine being a few minutes stale.
+const USAGE_REPORT_TTL_MS = 5 * 60_000;
+const USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000;
+/**
+ * Per-credential cool-down after a usage fetch fails. While this window is
+ * active we serve the last successful value to avoid dropping the credential
+ * from the report; without a previous value we just return null and retry
+ * on the next poll.
+ */
+const USAGE_FAILURE_BACKOFF_MS = 10_000;
+// Bumped from 3s — Claude usage retries up to 3 times with exponential backoff
+// (~3.5s total worst case); a tight per-request budget aborts retries mid-cycle.
+const DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 10_000;
 /**
  * Cap on the buffered credential_disabled backlog held while no handler is attached.
@@ -255,6 +301,7 @@ type UsageCacheEntry<T> = {
 
 interface UsageCache {
 	get<T>(key: string): UsageCacheEntry<T> | undefined;
+	getStale<T>(key: string): UsageCacheEntry<T> | undefined;
 	set<T>(key: string, entry: UsageCacheEntry<T>): void;
 	cleanup?(): void;
 }
@@ -328,9 +375,17 @@ class AuthStorageUsageCache implements UsageCache {
 		return parseUsageCacheEntry<T>(raw);
 	}
 
+	getStale<T>(key: string): UsageCacheEntry<T> | undefined {
+		const raw = this.store.getCache(`${USAGE_CACHE_PREFIX}${key}`, { includeExpired: true });
+		if (!raw) return undefined;
+		return parseUsageCacheEntry<T>(raw);
+	}
+
 	set<T>(key: string, entry: UsageCacheEntry<T>): void {
 		const payload = JSON.stringify({ value: entry.value, expiresAt: entry.expiresAt });
-		this.store.setCache(`${USAGE_CACHE_PREFIX}${key}`, payload, Math.floor(entry.expiresAt / 1000));
+		const durableExpiresAt =
+			entry.value === null ? entry.expiresAt : Math.max(entry.expiresAt, Date.now() + USAGE_LAST_GOOD_RETENTION_MS);
+		this.store.setCache(`${USAGE_CACHE_PREFIX}${key}`, payload, Math.floor(durableExpiresAt / 1000));
 	}
 
 	cleanup(): void {
@@ -359,6 +414,7 @@ export class AuthStorage {
 	/** Provider -> credentials cache, populated from store on reload(). */
 	#data: Map<string, StoredCredential[]> = new Map();
 	#runtimeOverrides: Map<string, string> = new Map();
+	#configOverrides: Map<string, string> = new Map();
 	/** Tracks next credential index per provider:type key for round-robin distribution (non-session use). */
 	#providerRoundRobinIndex: Map<string, number> = new Map();
 	/** Tracks the last used credential per provider for a session (used for rate-limit switching). */
@@ -377,6 +433,7 @@ export class AuthStorage {
 	#store: AuthCredentialStore;
 	#configValueResolver: (config: string) => Promise<string | undefined>;
 	#refreshOAuthCredentialOverride?: AuthStorageOptions["refreshOAuthCredential"];
+	#fetchUsageReportsOverride?: AuthStorageOptions["fetchUsageReports"];
 	#sourceLabel?: string;
 	#credentialDisabledListeners: Set<(event: CredentialDisabledEvent) => void | Promise<void>> = new Set();
 	/**
@@ -399,6 +456,7 @@ export class AuthStorage {
 		this.#usageFetch = options.usageFetch ?? fetch;
 		this.#usageRequestTimeoutMs = options.usageRequestTimeoutMs ?? DEFAULT_USAGE_REQUEST_TIMEOUT_MS;
 		this.#refreshOAuthCredentialOverride = options.refreshOAuthCredential;
+		this.#fetchUsageReportsOverride = options.fetchUsageReports;
 		this.#sourceLabel = options.sourceLabel;
 		if (options.onCredentialDisabled) {
 			// Constructor-registered subscribers are permanent for this AuthStorage's lifetime;
@@ -480,6 +538,35 @@ export class AuthStorage {
 	 */
 	removeRuntimeApiKey(provider: string): void {
 		this.#runtimeOverrides.delete(provider);
+	}
+
+	/**
+	 * Register a per-provider API key sourced from user configuration
+	 * (e.g. `models.yml` `providers.<name>.apiKey`). Higher priority than
+	 * stored credentials and OAuth tokens — when the user pins a key in
+	 * config, that key is what authenticates outbound requests, regardless
+	 * of whatever the broker happens to have loaded for that provider.
+	 *
+	 * Lower priority than {@link setRuntimeApiKey} so a CLI `--api-key`
+	 * still wins for the duration of a single invocation.
+	 */
+	setConfigApiKey(provider: string, apiKey: string): void {
+		this.#configOverrides.set(provider, apiKey);
+	}
+
+	/**
+	 * Remove a single config-sourced API key override.
+	 */
+	removeConfigApiKey(provider: string): void {
+		this.#configOverrides.delete(provider);
+	}
+
+	/**
+	 * Drop every config-sourced API key. Called by `ModelRegistry` before
+	 * re-parsing `models.yml` so removed entries actually disappear.
+	 */
+	clearConfigApiKeys(): void {
+		this.#configOverrides.clear();
 	}
 
 	/**
@@ -879,6 +966,7 @@ export class AuthStorage {
 	 */
 	hasAuth(provider: string): boolean {
 		if (this.#runtimeOverrides.has(provider)) return true;
+		if (this.#configOverrides.has(provider)) return true;
 		if (this.#getCredentialsForProvider(provider).length > 0) return true;
 		if (getEnvApiKey(provider)) return true;
 		if (this.#fallbackResolver?.(provider)) return true;
@@ -913,8 +1001,9 @@ export class AuthStorage {
 		const oauthCredentials = allCredentials.filter((c): c is OAuthCredential => c.type === "oauth");
 		if (oauthCredentials.length === 0) return undefined;
 
-		// Runtime override always returns before recording a session credential.
-		if (this.#runtimeOverrides.has(provider)) return undefined;
+		// Runtime / config overrides bypass OAuth account_uuid attribution — the
+		// caller is authenticating with an explicit key, not the broker's OAuth.
+		if (this.#runtimeOverrides.has(provider) || this.#configOverrides.has(provider)) return undefined;
 
 		// Prefer the session-sticky credential when available.
 		const sessionPref = this.#getSessionCredential(provider, sessionId);
@@ -1467,6 +1556,7 @@ export class AuthStorage {
 		const cacheKey = this.#buildUsageReportCacheKey(request);
 		const now = Date.now();
 		const cached = this.#usageCache.get<UsageReport | null>(cacheKey);
+		// Fresh cache hit: return whatever's there (success or null fallback).
 		if (cached && cached.expiresAt > now) {
 			return cached.value;
 		}
@@ -1476,11 +1566,27 @@ export class AuthStorage {
 
 		const promise = (async () => {
 			const report = await this.#fetchUsageUncached(request, timeoutMs);
+			const ttlJitter = USAGE_REPORT_TTL_MS * (Math.random() * 0.5 - 0.25);
 			if (report !== null) {
-				this.#usageCache.set(cacheKey, { value: report, expiresAt: Date.now() + USAGE_REPORT_TTL_MS });
+				// Success: stagger per-credential cache expiry so all accounts don't
+				// refresh in the same window — Anthropic / OpenAI rate-limit `/usage`
+				// per source IP regardless of account, and synchronized 5-credential
+				// fan-out trips 429s every cycle. With ±25% jitter on TTL the refresh
+				// times decorrelate within a few cycles.
+				this.#usageCache.set(cacheKey, { value: report, expiresAt: Date.now() + USAGE_REPORT_TTL_MS + ttlJitter });
 				return report;
 			}
-			return cached?.value ?? null;
+			// Failure: cache the LAST GOOD value (if any) with a short jittered TTL
+			// so the credential cools down briefly without dropping out of the
+			// report. If we never had a good value, return null this cycle and
+			// don't write — let the next poll retry.
+			const lastGood = this.#usageCache.getStale<UsageReport | null>(cacheKey)?.value ?? null;
+			if (lastGood !== null) {
+				const backoffJitter = USAGE_FAILURE_BACKOFF_MS * (Math.random() * 0.5 - 0.25);
+				const coolDown = Date.now() + USAGE_FAILURE_BACKOFF_MS + backoffJitter;
+				this.#usageCache.set(cacheKey, { value: lastGood, expiresAt: coolDown });
+			}
+			return lastGood;
 		})().finally(() => {
 			this.#usageRequestInFlight.delete(cacheKey);
 		});
@@ -1693,6 +1799,14 @@ export class AuthStorage {
 	async fetchUsageReports(options?: {
 		baseUrlResolver?: (provider: Provider) => string | undefined;
 	}): Promise<UsageReport[] | null> {
+		// Caller override > store-level hook > local per-credential fan-out.
+		// `RemoteAuthCredentialStore` implements the store hook so a gateway
+		// backed by a broker automatically routes usage to the broker without
+		// needing the caller to wire it explicitly.
+		const override = this.#fetchUsageReportsOverride ?? this.#store.fetchUsageReports?.bind(this.#store);
+		if (override) {
+			return override();
+		}
 		if (!this.#usageProviderResolver) return null;
 
 		const requests = this.#collectUsageRequests(options);
@@ -1702,12 +1816,12 @@ export class AuthStorage {
 			providers: [...new Set(requests.map(request => request.provider))].sort(),
 		});
 
+		// Per-credential caching with jitter lives in #fetchUsageCached, so we
+		// don't store the aggregated result here — doing so locks the widget to
+		// a single decorrelation snapshot for 30s, defeating the jitter (some
+		// accounts can be missing from one fetch and present in the next; the
+		// aggregate cache freezes whichever set landed first).
 		const cacheKey = this.#buildUsageReportsCacheKey(requests);
-		const now = Date.now();
-		const cached = this.#usageCache.get<UsageReport[]>(cacheKey);
-		if (cached && cached.expiresAt > now) {
-			return cached.value;
-		}
 
 		const inFlight = this.#usageReportsInFlight.get(cacheKey);
 		if (inFlight) return inFlight;
@@ -1728,10 +1842,8 @@ export class AuthStorage {
 			);
 			const reports = results.filter((report): report is UsageReport => report !== null);
 			const deduped = this.#dedupeUsageReports(reports);
-			if (deduped.length > 0) {
-				this.#usageCache.set(cacheKey, { value: deduped, expiresAt: Date.now() + USAGE_REPORT_TTL_MS });
-			}
-			const resolved = deduped.length > 0 ? deduped : (cached?.value ?? []);
+			// no outer cache write — see comment above.
+			const resolved = deduped;
 			this.#usageLogger?.debug("Usage fetch resolved", {
 				reports: resolved.map(report => {
 					const accountLabel =
@@ -1868,8 +1980,12 @@ export class AuthStorage {
 			primaryDrainRate: number;
 			orderPos: number;
 		}> = [];
-		// Pre-fetch usage reports in parallel for non-blocked credentials
-		const usageResults = await Promise.all(
+		// Pre-fetch usage reports in parallel for non-blocked credentials.
+		// Wrap with a timeout so slow/429'd fetches don't indefinitely block
+		// credential selection — better to pick a credential without usage data
+		// than to hang the agent waiting for rate-limited usage endpoints.
+		const usageTimeout = Math.max(5000, this.#usageRequestTimeoutMs * 1.5);
+		const usagePromise = Promise.all(
 			args.order.map(async idx => {
 				const selection = args.credentials[idx];
 				if (!selection) return null;
@@ -1881,6 +1997,14 @@ export class AuthStorage {
 				});
 				return { selection, usage, usageChecked: true, blockedUntil: undefined as number | undefined };
 			}),
+		);
+		const usageResults = await Promise.race([usagePromise, Bun.sleep(usageTimeout).then(() => null)]).then(
+			result =>
+				result ??
+				args.order.map(idx => {
+					const selection = args.credentials[idx];
+					return selection ? { selection, usage: null, usageChecked: false, blockedUntil: undefined } : null;
+				}),
 		);
 
 		for (let orderPos = 0; orderPos < usageResults.length; orderPos += 1) {
@@ -2055,8 +2179,13 @@ export class AuthStorage {
 	): Promise<OAuthCredentials> {
 		if (Date.now() < credential.expires) return credential;
 		let refreshPromise: Promise<OAuthCredentials>;
-		if (this.#refreshOAuthCredentialOverride && credentialId !== undefined) {
-			refreshPromise = this.#refreshOAuthCredentialOverride(provider, credentialId, credential);
+		// Caller override > store-level hook > local per-provider refresh.
+		// `RemoteAuthCredentialStore` exposes the hook so a broker-backed gateway
+		// routes refresh through the broker without explicit wiring.
+		const storeRefresh = this.#store.refreshOAuthCredential?.bind(this.#store);
+		const overrideRefresh = this.#refreshOAuthCredentialOverride ?? storeRefresh;
+		if (overrideRefresh && credentialId !== undefined) {
+			refreshPromise = overrideRefresh(provider, credentialId, credential);
 		} else {
 			const customProvider = getOAuthProvider(provider);
 			if (customProvider) {
@@ -2273,6 +2402,11 @@ export class AuthStorage {
 			return runtimeKey;
 		}
 
+		const configKey = this.#configOverrides.get(provider);
+		if (configKey) {
+			return configKey;
+		}
+
 		const apiKeySelection = this.#selectCredentialByType(provider, "api_key");
 		if (apiKeySelection) {
 			return this.#configValueResolver(apiKeySelection.credential.key);
@@ -2303,16 +2437,27 @@ export class AuthStorage {
 	 * Get API key for a provider.
 	 * Priority:
 	 * 1. Runtime override (CLI --api-key)
-	 * 2. API key from storage
-	 * 3. OAuth token from storage (auto-refreshed)
-	 * 4. Environment variable
-	 * 5. Fallback resolver (models.json custom providers)
+	 * 2. Config override (models.yml `providers.<name>.apiKey`)
+	 * 3. API key from storage
+	 * 4. OAuth token from storage (auto-refreshed)
+	 * 5. Environment variable
+	 * 6. Fallback resolver (models.yml custom providers, last-resort)
 	 */
 	async getApiKey(provider: string, sessionId?: string, options?: AuthApiKeyOptions): Promise<string | undefined> {
 		// Runtime override takes highest priority
 		const runtimeKey = this.#runtimeOverrides.get(provider);
 		if (runtimeKey) {
 			return runtimeKey;
+		}
+
+		// Config override: explicit apiKey pinned in models.yml beats the broker's
+		// OAuth credentials. The user redirected a provider at a custom baseUrl
+		// (e.g. an auth-gateway) and supplied the bearer for that endpoint —
+		// honor it instead of forwarding an upstream OAuth token that the proxy
+		// won't accept.
+		const configKey = this.#configOverrides.get(provider);
+		if (configKey) {
+			return configKey;
 		}
 
 		const apiKeySelection = this.#selectCredentialByType(provider, "api_key", sessionId);
@@ -2458,17 +2603,21 @@ export class AuthStorage {
 	/**
 	 * Describe where the active credential for a provider came from.
 	 *
-	 * Surfaces three layers, highest precedence first:
+	 * Surfaces four layers, highest precedence first:
 	 *   1. Runtime override (`--api-key`).
-	 *   2. Stored credential (the one this session is currently sticky to, or the
+	 *   2. Config override (`models.yml` `providers.<name>.apiKey`).
+	 *   3. Stored credential (the one this session is currently sticky to, or the
 	 *      one round-robin would pick next when no session id is supplied).
-	 *   3. Env var / fallback resolver — when no stored credential exists.
+	 *   4. Env var / fallback resolver — when no stored credential exists.
 	 *
 	 * The string is purely informational; consumers must not parse it.
 	 */
 	describeCredentialSource(provider: string, sessionId?: string): string | undefined {
 		if (this.#runtimeOverrides.has(provider)) {
 			return "runtime override (--api-key)";
+		}
+		if (this.#configOverrides.has(provider)) {
+			return "config override (models.yml)";
 		}
 
 		const baseLabel = this.#sourceLabel ?? "local store";
@@ -2702,6 +2851,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#deleteByProviderStmt: Statement;
 	#hardDeleteStmt: Statement;
 	#getCacheStmt: Statement;
+	#getCacheIncludingExpiredStmt: Statement;
 	#upsertCacheStmt: Statement;
 	#deleteExpiredCacheStmt: Statement;
 	#closed = false;
@@ -2738,6 +2888,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#getCacheStmt = this.#db.prepare(
 			`SELECT value FROM cache WHERE key = ? AND expires_at > ${SQLITE_NOW_EPOCH}`,
 		);
+		this.#getCacheIncludingExpiredStmt = this.#db.prepare("SELECT value FROM cache WHERE key = ?");
 		this.#upsertCacheStmt = this.#db.prepare(
 			"INSERT INTO cache (key, value, expires_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
 		);
@@ -3154,9 +3305,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
-	getCache(key: string): string | null {
+	getCache(key: string, options?: { includeExpired?: boolean }): string | null {
 		try {
-			const row = this.#getCacheStmt.get(key) as { value?: string } | undefined;
+			const stmt = options?.includeExpired === true ? this.#getCacheIncludingExpiredStmt : this.#getCacheStmt;
+			const row = stmt.get(key) as { value?: string } | undefined;
 			return row?.value ?? null;
 		} catch {
 			return null;
@@ -3259,6 +3411,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#deleteByProviderStmt.finalize();
 		this.#hardDeleteStmt.finalize();
 		this.#getCacheStmt.finalize();
+		this.#getCacheIncludingExpiredStmt.finalize();
 		this.#upsertCacheStmt.finalize();
 		this.#deleteExpiredCacheStmt.finalize();
 		this.#db.close();

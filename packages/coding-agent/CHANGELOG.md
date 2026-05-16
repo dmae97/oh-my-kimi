@@ -10,6 +10,7 @@
 
 ### Added
 
+- `ModelRegistry` now promotes `models.yml` `providers.<name>.apiKey` entries to `AuthStorage`'s new config-override tier (above OAuth, below `--api-key`). Pinning a bearer in `models.yml` was previously a no-op when the broker had an OAuth credential for the same provider — the OAuth access token won and got sent unmodified to whatever `baseUrl` you redirected to, which an auth-gateway in front of that endpoint rightly rejected with 401. The override is now honored, and is cleared/repopulated atomically on `models.yml` reload (`#reloadStaticModels` calls `clearConfigApiKeys` before re-parsing). Use case: route `anthropic` / `openai-codex` to `http://llm-gateway.internal:4000` with the gateway's own bearer.
 - Added `omp auth-broker` subcommand for running and consuming a hosted credential vault.
   - `serve [--bind=host:port]` — boots a local broker against the SQLite store at `$AGENT_DB_PATH`.
   - `token [--regenerate]` — prints (and rotates) the bearer token stored at `~/.omp/auth-broker.token`.
@@ -18,10 +19,23 @@
   - `import <file|dir> [--provider=<id>] [--include-disabled] [--dry-run]` — imports CLIProxyAPI-style JSON credential dumps (`~/.cliproxy/auth/*.json`). When `OMP_AUTH_BROKER_URL` is configured, credentials are uploaded to the remote broker via `POST /v1/credential`; otherwise they go into the local SQLite store. JSON `type` is mapped to omp providers (`claude` → `anthropic`, `codex` → `openai-codex`, `gemini[-cli]` → `google-gemini-cli`, `antigravity` → `google-antigravity`); `--provider` overrides the mapping for unrecognized types.
   - `status` — pings the configured remote broker (`OMP_AUTH_BROKER_URL`).
 - Added remote credential vault support to `discoverAuthStorage`. Configure via env (`OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN`) or by setting `auth.broker.url` and `auth.broker.token` in `~/.omp/agent/config.yml` (hidden from the settings UI; supports `!command` resolution). Falls back to `~/.omp/auth-broker.token` when no token is provided inline. Otherwise behavior is unchanged.
+- Added `omp auth-broker migrate --from-local [--include-env] [--include-oauth] [--dry-run]` — uploads local SQLite credentials (and optionally env-var API keys) to the configured broker. Skips anything already on the broker via identity-key matching. OAuth is skipped by default (handled via `cliproxy` import). Idempotent on re-runs.
+- Added `omp auth-gateway` subcommand for running a forward-proxy that hides access tokens from less-trusted clients:
+  - `serve [--bind=…]` — boots the gateway against the configured broker. Listens on `127.0.0.1:4000` by default.
+  - `token [--regenerate]` — manages the gateway bearer token at `~/.omp/auth-gateway.token` (separate from the broker bearer).
+  - `status` — verifies gateway config and authenticated broker readiness.
+  - One wire surface: `POST /v1/chat/completions` (OpenAI chat-completions), `POST /v1/messages` (Anthropic messages), `POST /v1/responses` (OpenAI Responses), `GET /v1/usage` (aggregated, 30s-cached), `GET /v1/models` (catalog). Model id in the request body selects which omp provider/model services it; the gateway translates wire format ↔ omp canonical `Context` and dispatches through `pi-ai` `streamSimple()`. Container deployments (robomp, etc.) get inference auth without ever holding access tokens or the broker bearer.
 
 ### Changed
 
 - Changed TTSR `interruptMode` semantics so a non-interrupting decision on a tool-source match now folds the rule reminder into that specific tool's `toolResult` content instead of queuing a loop-wide deferred follow-up turn. Text/thinking matches keep the previous deferred-injection behavior.
+
+### Fixed
+
+- Fixed `omp auth-gateway` request handling to reject unsupported OpenAI/Anthropic protocol controls with 400 instead of accepting and ignoring them, propagate upstream error/abort terminal states as failures, preserve Responses reasoning and completed text items, accept string/system Responses messages, and keep Anthropic tool-result ordering valid.
+- Fixed gateway usage reporting to include cached-token totals for OpenAI Chat/Responses and to serve the last good cached report during transient upstream usage fetch failures.
+- Fixed auth-gateway request cancellation for requests that are already aborted before dispatch.
+- Fixed `/login` and `/logout` provider selector overflowing tall provider lists off-screen on small terminals. The selector now scrolls a 10-item window centered on the highlighted entry, shows a `(n/total)` indicator when windowed, and accepts PageUp/PageDown for faster navigation.
 
 ## [15.1.2] - 2026-05-15
 ### Fixed
