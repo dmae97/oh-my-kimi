@@ -75,6 +75,7 @@ const CONTROL_MESSAGES_PER_TICK: usize = 64;
 const READER_EVENTS_PER_TICK: usize = 256;
 const POST_CANCEL_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
 const POST_EXIT_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
+#[cfg(not(windows))]
 const FINAL_READER_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
 
 struct PtySessionCore {
@@ -438,18 +439,49 @@ fn run_pty_sync(
 				exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
 			}
 		} else {
-			let status = child
-				.wait()
-				.map_err(|err| Error::from_reason(format!("Failed waiting PTY process: {err}")))?;
-			exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
+			// On Windows, child.wait() can hang indefinitely in ConPTY.
+			// Poll try_wait() with a short timeout instead.
+			#[cfg(windows)]
+			{
+				let wait_start = Instant::now();
+				while exit_code.is_none() && wait_start.elapsed() < Duration::from_secs(5) {
+					if let Some(status) = child
+						.try_wait()
+						.map_err(|err| Error::from_reason(format!("Failed checking PTY status: {err}")))?
+					{
+						exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
+						break;
+					}
+					std::thread::sleep(Duration::from_millis(50));
+				}
+			}
+			#[cfg(not(windows))]
+			{
+				let status = child
+					.wait()
+					.map_err(|err| Error::from_reason(format!("Failed waiting PTY process: {err}")))?;
+				exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
+			}
 		}
 	}
+	// --- Teardown ---
 
+	// Step 1: Close the ConPTY input pipe first.
+	// Per Microsoft docs, close the input handle before calling ClosePseudoConsole.
+	// This signals to ConPTY that no more input will arrive, allowing its internal
+	// I/O threads to finish processing and eventually close the output pipe.
 	drop(writer);
-	drop(master);
 
+	// Step 2: Drain the reader thread.
+	// After the child exits and input is closed, ConPTY should flush remaining
+	// output and signal EOF on the output pipe, causing the reader thread to exit.
+	// On Windows, use a generous timeout to accommodate ConPTY's async teardown.
 	if !reader_done {
-		let finalize_deadline = Instant::now() + FINAL_READER_DRAIN_TIMEOUT;
+		#[cfg(windows)]
+		let drain_timeout = Duration::from_millis(500);
+		#[cfg(not(windows))]
+		let drain_timeout = FINAL_READER_DRAIN_TIMEOUT;
+		let finalize_deadline = Instant::now() + drain_timeout;
 		while Instant::now() < finalize_deadline {
 			let remaining = finalize_deadline.saturating_duration_since(Instant::now());
 			let wait_duration = remaining.min(Duration::from_millis(5));
@@ -468,6 +500,28 @@ fn run_pty_sync(
 		}
 	}
 
+	// Step 3: Drop master (calls ClosePseudoConsole on Windows).
+	// ClosePseudoConsole can deadlock if ConPTY tries to flush output
+	// while nobody is reading the pipe (microsoft/terminal#1810).
+	// Always offload to a background thread on Windows, then wait with
+	// a timeout so the thread is reclaimed when ClosePseudoConsole
+	// completes cleanly. If it hangs, we walk away — the thread leaks,
+	// but the main thread never blocks.
+	#[cfg(windows)]
+	{
+		let (drop_tx, drop_rx) = mpsc::channel::<()>();
+		std::thread::spawn(move || {
+			drop(master);
+			let _ = drop_tx.send(());
+		});
+		let _ = drop_rx.recv_timeout(Duration::from_secs(2));
+	}
+	#[cfg(not(windows))]
+	{
+		drop(master);
+	}
+
+	// Step 4: Join reader thread if it finished.
 	// A detached descendant can keep the PTY slave open forever; do not block
 	// completion waiting on join when the reader thread did not reach EOF.
 	if reader_done {

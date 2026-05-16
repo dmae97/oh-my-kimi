@@ -10,6 +10,5 @@ export interface BashPtyContext {
 export function canUseInteractiveBashPty(pty: boolean, ctx: BashPtyContext | undefined): boolean {
 	if (!pty) return false;
 	if ($env.PI_NO_PTY === "1") return false;
-	if (process.platform === "win32" && $env.PI_FORCE_PTY !== "1") return false;
 	return ctx?.hasUI === true && ctx.ui !== undefined;
 }
