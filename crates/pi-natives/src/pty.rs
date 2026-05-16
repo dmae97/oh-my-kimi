@@ -252,8 +252,18 @@ fn run_pty_sync(
 			.map_err(|err| Error::from_reason(format!("Failed to open PTY: {err}")))?
 	};
 
-	let mut cmd = CommandBuilder::new(config.shell.as_deref().unwrap_or("sh"));
-	cmd.arg("-lc");
+	let shell = config.shell.as_deref().unwrap_or("sh");
+	let mut cmd = CommandBuilder::new(shell);
+	// Use shell-appropriate command execution flags
+	let lower = shell.to_lowercase();
+	if lower.ends_with("cmd.exe") || lower.ends_with("cmd") {
+		cmd.arg("/c");
+	} else if lower.contains("powershell") || lower.contains("pwsh") {
+		cmd.arg("-Command");
+	} else {
+		// sh/bash/zsh/fish etc.
+		cmd.arg("-lc");
+	}
 	cmd.arg(&config.command);
 	if let Some(cwd) = config.cwd.as_ref() {
 		cmd.cwd(cwd);
@@ -276,6 +286,10 @@ fn run_pty_sync(
 	let mut writer = master
 		.take_writer()
 		.map_err(|err| Error::from_reason(format!("Failed to create PTY writer: {err}")))?;
+	// ConPTY sends ESC[6n (cursor position query) and blocks until we reply.
+	// Reply with cursor at 1,1 so it unblocks the child spawn.
+	let _ = writer.write_all(b"\x1b[1;1R");
+	let _ = writer.flush();
 	let mut reader = master
 		.try_clone_reader()
 		.map_err(|err| Error::from_reason(format!("Failed to create PTY reader: {err}")))?;

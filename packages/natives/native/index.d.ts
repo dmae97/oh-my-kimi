@@ -1137,6 +1137,11 @@ export interface PtyStartOptions {
   cols?: number
   /** PTY row count. */
   rows?: number
+  /**
+   * Shell binary to use (e.g. "sh", "bash", or an absolute path).
+   * Defaults to "sh" if not provided.
+   */
+  shell?: string
 }
 
 /**

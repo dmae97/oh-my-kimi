@@ -61,3 +61,4 @@ python/omp-rpc/src/omp_rpc.egg-info/
 # parallel-agent worktrees
 .wt/
 CPU*.md
+packages/coding-agent/binaries/
