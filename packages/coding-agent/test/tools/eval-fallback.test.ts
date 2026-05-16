@@ -39,9 +39,7 @@ describe("EvalTool language resolution", () => {
 		const pythonExecuteSpy = vi.spyOn(evalIndex.pythonBackend, "execute");
 
 		const tool = new EvalTool(makeSession());
-		await tool.execute("call-1", {
-			input: "```js one\nconst x = 1;\n```\n",
-		});
+		await tool.execute("call-1", { cells: [{ language: "js", code: "```js one\nconst x = 1;\n```\n" }] });
 
 		expect(jsExecuteSpy).toHaveBeenCalledTimes(1);
 		expect(pythonExecuteSpy).not.toHaveBeenCalled();
@@ -53,9 +51,7 @@ describe("EvalTool language resolution", () => {
 		const jsExecuteSpy = vi.spyOn(evalIndex.jsBackend, "execute");
 
 		const tool = new EvalTool(makeSession());
-		await tool.execute("call-2", {
-			input: "```python one\nprint('hi')\n```\n",
-		});
+		await tool.execute("call-2", { cells: [{ language: "js", code: "```python one\nprint('hi')\n```\n" }] });
 
 		expect(pythonExecuteSpy).toHaveBeenCalledTimes(1);
 		expect(jsExecuteSpy).not.toHaveBeenCalled();
@@ -67,9 +63,7 @@ describe("EvalTool language resolution", () => {
 		const jsExecuteSpy = vi.spyOn(evalIndex.jsBackend, "execute");
 
 		const tool = new EvalTool(makeSession());
-		await tool.execute("call-3", {
-			input: "def greet():\n    print('hi')\ngreet()\n",
-		});
+		await tool.execute("call-3", { cells: [{ language: "js", code: "def greet():\n    print('hi')\ngreet()\n" }] });
 
 		expect(pythonExecuteSpy).toHaveBeenCalledTimes(1);
 		expect(jsExecuteSpy).not.toHaveBeenCalled();
