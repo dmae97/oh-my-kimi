@@ -683,6 +683,255 @@ describe("AgentSession TTSR resume gate", () => {
 		expect(streamCallCount).toBeGreaterThanOrEqual(3);
 		expect(session.isStreaming).toBe(false);
 	});
+	it("interruptMode never folds tool-match reminder into the toolResult instead of driving an extra turn", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		let streamCallCount = 0;
+		let toolExecuted = false;
+
+		const ttsrManager = new TtsrManager({
+			enabled: true,
+			contextMode: "discard",
+			interruptMode: "never",
+			repeatMode: "once",
+			repeatGap: 10,
+		});
+		ttsrManager.addRule(testRule);
+
+		const mockTool: AgentTool = {
+			name: "mock_edit",
+			label: "Mock Edit",
+			description: "A mock edit tool",
+			parameters: z.object({ snippet: z.string().optional() }),
+			execute: async () => {
+				toolExecuted = true;
+				return { content: [{ type: "text" as const, text: "edit applied" }] };
+			},
+		};
+
+		const toolCallContent: ToolCall = {
+			type: "toolCall",
+			id: "call_never_001",
+			name: "mock_edit",
+			arguments: { snippet: "let val = result.unwrap()" },
+		};
+
+		const makeToolCallMsg = (): AssistantMessage => ({
+			role: "assistant",
+			content: [toolCallContent],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "mock",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		});
+
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [mockTool] },
+			streamFn: () => {
+				streamCallCount++;
+				const stream = new AssistantMessageEventStream();
+				if (streamCallCount === 1) {
+					// Emit a tool call whose argument delta matches the TTSR rule.
+					queueMicrotask(() => {
+						const partial = makeToolCallMsg();
+						stream.push({ type: "start", partial });
+						stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+						stream.push({
+							type: "toolcall_delta",
+							contentIndex: 0,
+							delta: 'let val = result.unwrap("oops")',
+							partial,
+						});
+						stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: toolCallContent, partial });
+						stream.push({ type: "done", reason: "toolUse", message: partial });
+					});
+				} else {
+					// Continuation after tool result; finish cleanly.
+					setTimeout(() => {
+						const done = makeMsg("ok");
+						stream.push({ type: "start", partial: done });
+						stream.push({ type: "done", reason: "stop", message: done });
+					}, 10);
+				}
+				return stream;
+			},
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-never-tool.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			ttsrManager,
+		});
+
+		await session.prompt("Write some Rust code");
+
+		// Tool ran (no interrupt) and the loop didn't spawn an extra follow-up turn for injection.
+		expect(toolExecuted).toBe(true);
+		expect(streamCallCount).toBe(2);
+
+		// The matched tool's result must carry the in-band reminder.
+		const toolResult = agent.state.messages.find(
+			(m): m is Extract<typeof m, { role: "toolResult" }> =>
+				m.role === "toolResult" && m.toolCallId === toolCallContent.id,
+		);
+		expect(toolResult).toBeDefined();
+		const text = Array.isArray(toolResult?.content)
+			? toolResult.content
+					.filter((c): c is { type: "text"; text: string } => c.type === "text")
+					.map(c => c.text)
+					.join("\n")
+			: "";
+		expect(text).toContain("<system-reminder");
+		expect(text).toContain('rule="no-unwrap"');
+		expect(text).toContain("Do not use .unwrap()");
+		expect(text.indexOf("<system-reminder")).toBeLessThan(text.indexOf("edit applied"));
+	});
+
+	it("interruptMode never deduplicates the reminder across sibling tool calls in one batch", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		let streamCallCount = 0;
+		let executedCount = 0;
+
+		const ttsrManager = new TtsrManager({
+			enabled: true,
+			contextMode: "discard",
+			interruptMode: "never",
+			repeatMode: "once",
+			repeatGap: 10,
+		});
+		ttsrManager.addRule(testRule);
+
+		const mockTool: AgentTool = {
+			name: "mock_edit",
+			label: "Mock Edit",
+			description: "A mock edit tool",
+			parameters: z.object({ snippet: z.string().optional() }),
+			execute: async () => {
+				executedCount++;
+				return { content: [{ type: "text" as const, text: "edit applied" }] };
+			},
+		};
+
+		const toolCallA: ToolCall = {
+			type: "toolCall",
+			id: "call_dup_A",
+			name: "mock_edit",
+			arguments: { snippet: "a.unwrap()" },
+		};
+		const toolCallB: ToolCall = {
+			type: "toolCall",
+			id: "call_dup_B",
+			name: "mock_edit",
+			arguments: { snippet: "b.unwrap()" },
+		};
+		const toolCallC: ToolCall = {
+			type: "toolCall",
+			id: "call_dup_C",
+			name: "mock_edit",
+			arguments: { snippet: "c.unwrap()" },
+		};
+
+		const makeBatchMsg = (): AssistantMessage => ({
+			role: "assistant",
+			content: [toolCallA, toolCallB, toolCallC],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "mock",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		});
+
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [mockTool] },
+			streamFn: () => {
+				streamCallCount++;
+				const stream = new AssistantMessageEventStream();
+				if (streamCallCount === 1) {
+					queueMicrotask(() => {
+						const partial = makeBatchMsg();
+						stream.push({ type: "start", partial });
+						const calls: ToolCall[] = [toolCallA, toolCallB, toolCallC];
+						for (let i = 0; i < calls.length; i++) {
+							const call = calls[i]!;
+							stream.push({ type: "toolcall_start", contentIndex: i, partial });
+							stream.push({
+								type: "toolcall_delta",
+								contentIndex: i,
+								delta: `let val = result.unwrap("oops-${call.id}")`,
+								partial,
+							});
+							stream.push({ type: "toolcall_end", contentIndex: i, toolCall: call, partial });
+						}
+						stream.push({ type: "done", reason: "toolUse", message: partial });
+					});
+				} else {
+					setTimeout(() => {
+						const done = makeMsg("ok");
+						stream.push({ type: "start", partial: done });
+						stream.push({ type: "done", reason: "stop", message: done });
+					}, 10);
+				}
+				return stream;
+			},
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-dup.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			ttsrManager,
+		});
+
+		await session.prompt("Write some Rust code");
+
+		expect(executedCount).toBe(3);
+		const toolResults = agent.state.messages.filter(
+			(m): m is Extract<typeof m, { role: "toolResult" }> => m.role === "toolResult",
+		);
+		expect(toolResults).toHaveLength(3);
+		const withReminder = toolResults.filter(r =>
+			Array.isArray(r.content)
+				? r.content.some(c => c.type === "text" && c.text.includes("<system-reminder"))
+				: false,
+		);
+		expect(withReminder).toHaveLength(1);
+	});
+
 	it("prompt() waits for context-promotion continuation to finish", async () => {
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-promo.db"));
 		authStorages.push(authStorage);
