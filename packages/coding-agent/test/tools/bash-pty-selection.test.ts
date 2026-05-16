@@ -38,14 +38,14 @@ describe("bash PTY selection", () => {
 		setNoPty(originalNoPty);
 	});
 
-	it("disables interactive PTY on Windows even when requested with UI", () => {
+	it("allows interactive PTY on Windows when requested with UI", () => {
 		setPlatform("win32");
 		setNoPty(undefined);
 
-		expect(canUseInteractiveBashPty(true, interactiveContext())).toBe(false);
+		expect(canUseInteractiveBashPty(true, interactiveContext())).toBe(true);
 	});
 
-	it("allows interactive PTY on non-Windows only when requested with UI and not disabled", () => {
+	it("allows interactive PTY on non-Windows when requested with UI and not disabled", () => {
 		setPlatform("linux");
 		setNoPty(undefined);
 
@@ -55,5 +55,10 @@ describe("bash PTY selection", () => {
 
 		setNoPty("1");
 		expect(canUseInteractiveBashPty(true, interactiveContext())).toBe(false);
+	});
+
+	it("disables interactive PTY when pty is false", () => {
+		setPlatform("win32");
+		expect(canUseInteractiveBashPty(false, interactiveContext())).toBe(false);
 	});
 });

@@ -9,6 +9,6 @@ export interface BashPtyContext {
 /** Return whether a bash tool call should use the local interactive PTY overlay. */
 export function canUseInteractiveBashPty(pty: boolean, ctx: BashPtyContext | undefined): boolean {
 	if (!pty) return false;
-	if (process.platform === "win32") return false;
-	return $env.PI_NO_PTY !== "1" && ctx?.hasUI === true && ctx.ui !== undefined;
+	if ($env.PI_NO_PTY === "1") return false;
+	return ctx?.hasUI === true && ctx.ui !== undefined;
 }

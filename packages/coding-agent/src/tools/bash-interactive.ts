@@ -297,6 +297,7 @@ export async function runInteractiveBashPty(
 	},
 ): Promise<BashInteractiveResult> {
 	const settings = await Settings.init();
+	const { shell: resolvedShell } = settings.getShellConfig();
 	const sink = new OutputSink({
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
@@ -363,6 +364,7 @@ export async function runInteractiveBashPty(
 						signal: options.signal,
 						cols,
 						rows,
+						shell: resolvedShell,
 					},
 					(err, chunk) => {
 						if (finished || err || !chunk) return;

@@ -38,6 +38,9 @@ pub struct PtyStartOptions<'env> {
 	pub cols:       Option<u16>,
 	/// PTY row count.
 	pub rows:       Option<u16>,
+	/// Shell binary to use (e.g. "sh", "bash", or an absolute path).
+	/// Defaults to "sh" if not provided.
+	pub shell:      Option<String>,
 }
 
 /// Result of a PTY command run.
@@ -58,6 +61,7 @@ struct PtyRunConfig {
 	env:     Option<HashMap<String, String>>,
 	cols:    u16,
 	rows:    u16,
+	shell:   Option<String>,
 }
 
 enum ReaderEvent {
@@ -75,6 +79,7 @@ const CONTROL_MESSAGES_PER_TICK: usize = 64;
 const READER_EVENTS_PER_TICK: usize = 256;
 const POST_CANCEL_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
 const POST_EXIT_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
+#[cfg(not(windows))]
 const FINAL_READER_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
 
 struct PtySessionCore {
@@ -115,6 +120,7 @@ impl PtySession {
 			env:     options.env,
 			cols:    options.cols.unwrap_or(120).clamp(20, 400),
 			rows:    options.rows.unwrap_or(40).clamp(5, 200),
+			shell:   options.shell,
 		};
 		let ct = task::CancelToken::new(options.timeout_ms, options.signal);
 		let core = Arc::clone(&self.core);
@@ -211,17 +217,53 @@ fn run_pty_sync(
 	ct: task::CancelToken,
 ) -> Result<PtyRunResult> {
 	let pty_system = native_pty_system();
-	let pair = pty_system
-		.openpty(PtySize {
-			rows:         config.rows,
-			cols:         config.cols,
-			pixel_width:  0,
-			pixel_height: 0,
-		})
-		.map_err(|err| Error::from_reason(format!("Failed to open PTY: {err}")))?;
+	ct.heartbeat().map_err(|err| Error::from_reason(format!("PTY setup cancelled before openpty: {err}")))?;
 
-	let mut cmd = CommandBuilder::new("sh");
-	cmd.arg("-lc");
+	const PTY_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+	let pair = if cfg!(windows) {
+		// Windows ConPTY openpty() can hang indefinitely when the console
+		// subsystem isn't properly initialized. Use a short startup timeout
+		// so the Promise rejects instead of hanging forever.
+		let (tx, rx) = mpsc::channel();
+		std::thread::spawn(move || {
+			let result = pty_system.openpty(PtySize {
+				rows: config.rows,
+				cols: config.cols,
+				pixel_width: 0,
+				pixel_height: 0,
+			});
+			let _ = tx.send(result);
+		});
+		match rx.recv_timeout(PTY_STARTUP_TIMEOUT) {
+			Ok(Ok(pair)) => pair,
+			Ok(Err(e)) => return Err(Error::from_reason(format!("Failed to open PTY: {e}"))),
+			Err(_) => return Err(Error::from_reason(
+				"PTY creation timed out (5s). ConPTY may be unavailable on this system.",
+			)),
+		}
+	} else {
+		pty_system
+			.openpty(PtySize {
+				rows: config.rows,
+				cols: config.cols,
+				pixel_width: 0,
+				pixel_height: 0,
+			})
+			.map_err(|err| Error::from_reason(format!("Failed to open PTY: {err}")))?
+	};
+
+	let shell = config.shell.as_deref().unwrap_or("sh");
+	let mut cmd = CommandBuilder::new(shell);
+	// Use shell-appropriate command execution flags
+	let lower = shell.to_lowercase();
+	if lower.ends_with("cmd.exe") || lower.ends_with("cmd") {
+		cmd.arg("/c");
+	} else if lower.contains("powershell") || lower.contains("pwsh") {
+		cmd.arg("-Command");
+	} else {
+		// sh/bash/zsh/fish etc.
+		cmd.arg("-lc");
+	}
 	cmd.arg(&config.command);
 	if let Some(cwd) = config.cwd.as_ref() {
 		cmd.cwd(cwd);
@@ -231,17 +273,27 @@ fn run_pty_sync(
 			cmd.env(key, value);
 		}
 	}
+	ct.heartbeat().map_err(|err| Error::from_reason(format!("PTY setup cancelled before spawn: {err}")))?;
 
 	let mut child = pair
 		.slave
 		.spawn_command(cmd)
 		.map_err(|err| Error::from_reason(format!("Failed to spawn PTY command: {err}")))?;
 	drop(pair.slave);
+	ct.heartbeat().map_err(|err| Error::from_reason(format!("PTY setup cancelled before reader: {err}")))?;
 
 	let master = pair.master;
 	let mut writer = master
 		.take_writer()
 		.map_err(|err| Error::from_reason(format!("Failed to create PTY writer: {err}")))?;
+	// ConPTY sends ESC[6n (cursor position query) and blocks until we reply.
+	// Reply with cursor at 1,1 so it unblocks the child spawn.
+	// Only needed on Windows; on Unix/macOS this would corrupt stdin.
+	#[cfg(windows)]
+	{
+		let _ = writer.write_all(b"\x1b[1;1R");
+		let _ = writer.flush();
+	}
 	let mut reader = master
 		.try_clone_reader()
 		.map_err(|err| Error::from_reason(format!("Failed to create PTY reader: {err}")))?;
@@ -410,18 +462,49 @@ fn run_pty_sync(
 				exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
 			}
 		} else {
-			let status = child
-				.wait()
-				.map_err(|err| Error::from_reason(format!("Failed waiting PTY process: {err}")))?;
-			exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
+			// On Windows, child.wait() can hang indefinitely in ConPTY.
+			// Poll try_wait() with a short timeout instead.
+			#[cfg(windows)]
+			{
+				let wait_start = Instant::now();
+				while exit_code.is_none() && wait_start.elapsed() < Duration::from_secs(5) {
+					if let Some(status) = child
+						.try_wait()
+						.map_err(|err| Error::from_reason(format!("Failed checking PTY status: {err}")))?
+					{
+						exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
+						break;
+					}
+					std::thread::sleep(Duration::from_millis(50));
+				}
+			}
+			#[cfg(not(windows))]
+			{
+				let status = child
+					.wait()
+					.map_err(|err| Error::from_reason(format!("Failed waiting PTY process: {err}")))?;
+				exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
+			}
 		}
 	}
+	// --- Teardown ---
 
+	// Step 1: Close the ConPTY input pipe first.
+	// Per Microsoft docs, close the input handle before calling ClosePseudoConsole.
+	// This signals to ConPTY that no more input will arrive, allowing its internal
+	// I/O threads to finish processing and eventually close the output pipe.
 	drop(writer);
-	drop(master);
 
+	// Step 2: Drain the reader thread.
+	// After the child exits and input is closed, ConPTY should flush remaining
+	// output and signal EOF on the output pipe, causing the reader thread to exit.
+	// On Windows, use a generous timeout to accommodate ConPTY's async teardown.
 	if !reader_done {
-		let finalize_deadline = Instant::now() + FINAL_READER_DRAIN_TIMEOUT;
+		#[cfg(windows)]
+		let drain_timeout = Duration::from_millis(500);
+		#[cfg(not(windows))]
+		let drain_timeout = FINAL_READER_DRAIN_TIMEOUT;
+		let finalize_deadline = Instant::now() + drain_timeout;
 		while Instant::now() < finalize_deadline {
 			let remaining = finalize_deadline.saturating_duration_since(Instant::now());
 			let wait_duration = remaining.min(Duration::from_millis(5));
@@ -440,6 +523,28 @@ fn run_pty_sync(
 		}
 	}
 
+	// Step 3: Drop master (calls ClosePseudoConsole on Windows).
+	// ClosePseudoConsole can deadlock if ConPTY tries to flush output
+	// while nobody is reading the pipe (microsoft/terminal#1810).
+	// Always offload to a background thread on Windows, then wait with
+	// a timeout so the thread is reclaimed when ClosePseudoConsole
+	// completes cleanly. If it hangs, we walk away — the thread leaks,
+	// but the main thread never blocks.
+	#[cfg(windows)]
+	{
+		let (drop_tx, drop_rx) = mpsc::channel::<()>();
+		std::thread::spawn(move || {
+			drop(master);
+			let _ = drop_tx.send(());
+		});
+		let _ = drop_rx.recv_timeout(Duration::from_secs(2));
+	}
+	#[cfg(not(windows))]
+	{
+		drop(master);
+	}
+
+	// Step 4: Join reader thread if it finished.
 	// A detached descendant can keep the PTY slave open forever; do not block
 	// completion waiting on join when the reader thread did not reach EOF.
 	if reader_done {
