@@ -43,6 +43,7 @@ import {
 	streamOpenAIResponses,
 } from "./providers/register-builtins";
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
+import { streamXAIResponses } from "./providers/xai-responses";
 import type {
 	Api,
 	AssistantMessage,
@@ -260,8 +261,12 @@ export function stream<TApi extends Api>(
 		case "openai-completions":
 			return streamOpenAICompletions(model as Model<"openai-completions">, context, providerOptions as any);
 
-		case "openai-responses":
+		case "openai-responses": {
+			if (model.provider === "xai-oauth") {
+				return streamXAIResponses(model as Model<"openai-responses">, context, providerOptions as any);
+			}
 			return streamOpenAIResponses(model as Model<"openai-responses">, context, providerOptions as any);
+		}
 
 		case "azure-openai-responses":
 			return streamAzureOpenAIResponses(model as Model<"azure-openai-responses">, context, providerOptions as any);

@@ -392,6 +392,11 @@ function getOpenAIResponsesPromptCacheKey(
 	return normalizeOpenAIResponsesPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
 }
 
+export function getOpenAIResponsesCacheSessionId(
+	options: Pick<OpenAIResponsesOptions, "cacheRetention" | "sessionId" | "promptCacheKey"> | undefined,
+): string | undefined {
+	return getOpenAIResponsesPromptCacheKey(options);
+}
 function getOpenAIResponsesRoutingSessionId(
 	options: Pick<OpenAIResponsesOptions, "cacheRetention" | "sessionId"> | undefined,
 ): string | undefined {
