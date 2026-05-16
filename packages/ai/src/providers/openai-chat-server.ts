@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolvePromptCacheKey } from "../auth-gateway/http";
 /**
  * Parsed inbound OpenAI chat-completions request, ready to feed into pi-ai
  * `stream(model, context, options)`.
@@ -10,6 +11,7 @@ import type {
 	Context,
 	ImageContent,
 	Message,
+	ServiceTier,
 	StopReason,
 	TextContent,
 	Tool,
@@ -28,11 +30,26 @@ import {
 
 export type { ParsedRequest };
 
+type ReasoningEffort = NonNullable<ParsedRequest["options"]["reasoning"]>;
+
+function isReasoningEffort(value: unknown): value is ReasoningEffort {
+	return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh";
+}
+
+function isServiceTier(value: unknown): value is ServiceTier {
+	return value === "auto" || value === "default" || value === "flex" || value === "scale" || value === "priority";
+}
+
 // ---------------------------------------------------------------------------
 // parseRequest
 // ---------------------------------------------------------------------------
 
-export function parseRequest(body: unknown): ParsedRequest {
+export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
+	// Header capture is centralized in `auth-gateway/server.ts` (allow-listed
+	// headers like openai-organization/openai-project/openai-beta/x-stainless-*
+	// land on `options.headers` automatically). We consult `headers` here too
+	// for `resolvePromptCacheKey` to pull a cache identity out of inbound
+	// vendor-neutral headers when the body doesn't carry one.
 	const parsed = openaiChatRequestSchema.safeParse(body);
 	if (!parsed.success) {
 		throw new Error(`openai-chat: ${parsed.error.message}`);
@@ -67,8 +84,16 @@ export function parseRequest(body: unknown): ParsedRequest {
 				);
 				break;
 			case "tool":
-				messages.push(buildToolMessage(m.content, m.tool_call_id, now));
+				pushToolResultMessages(messages, m.content, m.tool_call_id, undefined, now);
 				break;
+			case "function": {
+				// Legacy `function` role (pre-tools API): the message carries the tool's
+				// name on `name` and its output on `content`. Translate to a canonical
+				// `toolResult` with a synthetic id (no original id on the wire).
+				const fn = m as { role: "function"; name: string; content: string | null };
+				pushToolResultMessages(messages, fn.content ?? "", undefined, fn.name, now);
+				break;
+			}
 		}
 	}
 
@@ -83,39 +108,50 @@ export function parseRequest(body: unknown): ParsedRequest {
 	// Prefer max_completion_tokens (newer) over max_tokens.
 	const maxOutputTokens = data.max_completion_tokens ?? data.max_tokens;
 	const stopSequences = normalizeStop(data.stop);
-	const toolChoice = normalizeToolChoice(data.tool_choice);
+	// Schema accepts the Anthropic-style {type:'tool', name} variant that the SDK
+	// union doesn't model; the normalizer collapses it to a plain name lookup.
+	const toolChoice = normalizeToolChoice(data.tool_choice as Parameters<typeof normalizeToolChoice>[0]);
 	const includeStreamingUsage = data.stream_options?.include_usage === true;
 
+	// `includeStreamingUsage` is the one genuinely-opaque flag — the streaming
+	// encoder reads it later off `options.extra`. Everything else now lives on
+	// a typed field; `extra` stays undefined when only typed values are set.
 	const extra: Record<string, unknown> = {};
 	let hasExtra = false;
-	const carry = <K extends string>(key: K, value: unknown) => {
-		if (value === undefined) return;
-		extra[key] = value;
-		hasExtra = true;
-	};
-	carry("response_format", data.response_format);
-	carry("seed", data.seed);
-	carry("presence_penalty", data.presence_penalty);
-	carry("frequency_penalty", data.frequency_penalty);
-	carry("logit_bias", data.logit_bias);
-	carry("user", data.user);
 	if (includeStreamingUsage) {
 		extra.includeStreamingUsage = true;
 		hasExtra = true;
 	}
 
+	const options: ParsedRequest["options"] = {};
+	if (maxOutputTokens !== undefined) options.maxOutputTokens = maxOutputTokens;
+	if (data.temperature !== undefined) options.temperature = data.temperature;
+	if (data.top_p !== undefined) options.topP = data.top_p;
+	if (stopSequences) options.stopSequences = stopSequences;
+	if (toolChoice !== undefined) options.toolChoice = toolChoice;
+	if (data.presence_penalty !== undefined) options.presencePenalty = data.presence_penalty;
+	if (data.frequency_penalty !== undefined) options.frequencyPenalty = data.frequency_penalty;
+	if (data.seed !== undefined) options.seed = data.seed;
+	if (data.logit_bias !== undefined) options.logitBias = data.logit_bias;
+	if (data.user !== undefined) options.user = data.user;
+	if (data.response_format !== undefined) options.responseFormat = data.response_format;
+	if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
+	if (data.reasoning_effort !== undefined && isReasoningEffort(data.reasoning_effort)) {
+		options.reasoning = data.reasoning_effort;
+	}
+	if (data.service_tier !== undefined && isServiceTier(data.service_tier)) {
+		options.serviceTier = data.service_tier;
+	}
+	if (data.metadata !== undefined) options.metadata = data.metadata;
+	const cacheKey = resolvePromptCacheKey(body, headers);
+	if (cacheKey !== undefined) options.promptCacheKey = cacheKey;
+	if (hasExtra) options.extra = extra;
+
 	return {
 		modelId: data.model,
 		context,
 		stream: data.stream === true,
-		options: {
-			...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
-			...(data.temperature !== undefined ? { temperature: data.temperature } : {}),
-			...(data.top_p !== undefined ? { topP: data.top_p } : {}),
-			...(stopSequences ? { stopSequences } : {}),
-			...(toolChoice !== undefined ? { toolChoice } : {}),
-			...(hasExtra ? { extra } : {}),
-		},
+		options,
 	};
 }
 
@@ -141,6 +177,9 @@ function parseUserLikeContent(
 			continue;
 		}
 		if (part.type !== "image_url") continue;
+		// input_audio / file / refusal / unknown-type parts are accepted by the
+		// schema for forward-compat but dropped here — pi-ai's canonical user
+		// content only models text and image today.
 		const url = typeof part.image_url === "string" ? part.image_url : part.image_url.url;
 		const decoded = decodeDataUri(url);
 		if (decoded) {
@@ -215,21 +254,63 @@ function buildAssistantMessage(
 	};
 }
 
-function buildToolMessage(
-	content: string | OpenAIChatContentPart[] | undefined,
+/**
+ * Walk a wire `tool` (or legacy `function`) message into canonical messages.
+ * Tool-result content may carry images alongside text; pi-ai's
+ * `ToolResultMessage` accepts both, but most downstream providers ignore
+ * images on tool results. To mirror Rust's `encode_messages` behavior we
+ * keep text inside the tool-result message and hoist any image parts into a
+ * follow-up `user` message so they still reach the model.
+ */
+function pushToolResultMessages(
+	messages: Message[],
+	content: string | OpenAIChatContentPart[] | undefined | null,
 	toolCallId: string | undefined,
+	toolName: string | undefined,
 	now: number,
-): ToolResultMessage {
-	return {
+): void {
+	const textParts: TextContent[] = [];
+	const imageParts: ImageContent[] = [];
+
+	if (typeof content === "string") {
+		if (content.length > 0) textParts.push({ type: "text", text: content });
+	} else if (Array.isArray(content)) {
+		for (const part of content) {
+			if (part.type === "text") {
+				textParts.push({ type: "text", text: part.text });
+				continue;
+			}
+			if (part.type !== "image_url") continue;
+			const url = typeof part.image_url === "string" ? part.image_url : part.image_url.url;
+			const decoded = decodeDataUri(url);
+			if (decoded) {
+				imageParts.push({ type: "image", data: decoded.data, mimeType: decoded.mimeType });
+			} else {
+				// No fetcher available; degrade gracefully to a text placeholder.
+				textParts.push({ type: "text", text: `[image: ${url}]` });
+			}
+		}
+	}
+
+	const toolMsg: ToolResultMessage = {
 		role: "toolResult",
 		toolCallId: toolCallId ?? "",
-		// OpenAI chat-completions doesn't carry the tool name on tool-role messages;
-		// downstream providers that need it tolerate an empty string.
-		toolName: "",
-		content: [{ type: "text", text: stringifyContent(content) }],
+		// OpenAI's `tool` role omits the tool name on the wire; the legacy
+		// `function` role supplies it. Downstream providers tolerate empty.
+		toolName: toolName ?? "",
+		content: textParts.length > 0 ? textParts : [{ type: "text", text: "" }],
 		isError: false,
 		timestamp: now,
 	};
+	messages.push(toolMsg);
+
+	if (imageParts.length > 0) {
+		messages.push({
+			role: "user",
+			content: imageParts,
+			timestamp: now,
+		});
+	}
 }
 
 function buildTools(tools: OpenAIChatTool[]): Tool[] | undefined {
@@ -255,7 +336,15 @@ function normalizeStop(value: string | string[] | undefined): string[] | undefin
 function normalizeToolChoice(value: OpenAIChatToolChoice | undefined): ParsedRequest["options"]["toolChoice"] {
 	if (value === undefined) return undefined;
 	if (value === "auto" || value === "none" || value === "required") return value;
-	if ("function" in value) return { name: value.function.name };
+	if (typeof value === "object" && value !== null) {
+		// OpenAI canonical: { type: 'function', function: { name } }
+		if ("function" in value && value.function) return { name: value.function.name };
+		// Anthropic-style passthrough (schema-allowed): { type: 'tool', name }
+		const anthropicLike = value as unknown as { type?: string; name?: string };
+		if (anthropicLike.type === "tool" && typeof anthropicLike.name === "string") {
+			return { name: anthropicLike.name };
+		}
+	}
 	return undefined;
 }
 
@@ -264,12 +353,19 @@ function normalizeToolChoice(value: OpenAIChatToolChoice | undefined): ParsedReq
 // ---------------------------------------------------------------------------
 
 export function encodeResponse(message: AssistantMessage, requestedModelId: string): Record<string, unknown> {
-	const { text, toolCalls } = flattenAssistant(message);
+	const { text, reasoning, toolCalls } = flattenAssistant(message);
 
 	const responseMessage: Record<string, unknown> = {
 		role: "assistant",
 		content: text.length > 0 ? text : null,
+		// pi-ai does not surface real refusals yet; emit `null` so SDKs that
+		// probe `.refusal` see the documented field shape rather than missing.
+		refusal: null,
 	};
+	if (reasoning.length > 0) {
+		// DeepSeek-style / o-series reasoning channel.
+		responseMessage.reasoning_content = reasoning;
+	}
 	if (toolCalls.length > 0) {
 		responseMessage.tool_calls = toolCalls.map(tc => ({
 			id: tc.id,
@@ -283,11 +379,15 @@ export function encodeResponse(message: AssistantMessage, requestedModelId: stri
 		object: "chat.completion",
 		created: Math.floor(Date.now() / 1000),
 		model: requestedModelId,
+		// Real OpenAI always emits this key, even when the value is null. Mirror
+		// the contract so probing SDKs do not throw on a missing field.
+		system_fingerprint: null,
 		choices: [
 			{
 				index: 0,
 				message: responseMessage,
 				finish_reason: mapFinishReason(message.stopReason, toolCalls.length > 0),
+				logprobs: null,
 			},
 		],
 		usage: buildUsage(message),
@@ -296,29 +396,45 @@ export function encodeResponse(message: AssistantMessage, requestedModelId: stri
 
 function buildUsage(message: AssistantMessage): Record<string, unknown> {
 	const promptTokens = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
-	return {
+	const usage: Record<string, unknown> = {
 		prompt_tokens: promptTokens,
 		completion_tokens: message.usage.output,
 		total_tokens: promptTokens + message.usage.output,
 		prompt_tokens_details: { cached_tokens: message.usage.cacheRead },
 	};
+	if (message.usage.reasoningTokens !== undefined) {
+		usage.completion_tokens_details = { reasoning_tokens: message.usage.reasoningTokens };
+	}
+	return usage;
 }
 
-function flattenAssistant(message: AssistantMessage): { text: string; toolCalls: ToolCall[] } {
+function flattenAssistant(message: AssistantMessage): {
+	text: string;
+	reasoning: string;
+	toolCalls: ToolCall[];
+} {
 	let text = "";
+	let reasoning = "";
 	const toolCalls: ToolCall[] = [];
 	for (const part of message.content) {
 		switch (part.type) {
 			case "text":
 				text += part.text;
 				break;
+			case "thinking":
+				reasoning += part.thinking;
+				break;
+			case "redactedThinking":
+				// Opaque blob — surface verbatim on the reasoning channel so the
+				// concatenation round-trips through clients that just echo it.
+				reasoning += part.data;
+				break;
 			case "toolCall":
 				toolCalls.push(part);
 				break;
-			// thinking / redactedThinking: dropped — openai chat-completions has no reasoning channel.
 		}
 	}
-	return { text, toolCalls };
+	return { text, reasoning, toolCalls };
 }
 
 function isOnlyRaw(args: Record<string, unknown>): boolean {
@@ -341,6 +457,8 @@ function stringifyArgs(args: Record<string, unknown>): string {
 function mapFinishReason(reason: StopReason, hasToolCalls: boolean): string {
 	if (reason === "toolUse" || (hasToolCalls && reason === "stop")) return "tool_calls";
 	if (reason === "length") return "length";
+	// pi-ai's StopReason does not currently carry a content-filter signal;
+	// when it does, map it to "content_filter" here.
 	return "stop";
 }
 
@@ -367,7 +485,8 @@ export function encodeStream(
 		object: "chat.completion.chunk",
 		created,
 		model: requestedModelId,
-		choices: [{ index: 0, delta, finish_reason: finishReason }],
+		system_fingerprint: null,
+		choices: [{ index: 0, delta, finish_reason: finishReason, logprobs: null }],
 		...(includeUsage ? { usage: null } : {}),
 	});
 
@@ -381,6 +500,7 @@ export function encodeStream(
 			object: "chat.completion.chunk",
 			created,
 			model: requestedModelId,
+			system_fingerprint: null,
 			choices: [],
 			usage: buildUsage(message),
 		});
@@ -403,6 +523,14 @@ export function encodeStream(
 						case "text_delta":
 							if (event.delta.length > 0) {
 								writeSse(controller, baseChunk({ content: event.delta }, null));
+							}
+							break;
+
+						case "thinking_delta":
+							// DeepSeek-style / o-series reasoning channel. Clients that don't
+							// understand it ignore the unknown delta key.
+							if (event.delta.length > 0) {
+								writeSse(controller, baseChunk({ reasoning_content: event.delta }, null));
 							}
 							break;
 
@@ -463,7 +591,7 @@ export function encodeStream(
 							return;
 						}
 
-						// Drop start / *_start / *_end / thinking_* — chat-completions wire only
+						// Drop start / *_start / *_end — chat-completions wire only
 						// surfaces deltas and the terminal finish_reason.
 						default:
 							break;
@@ -480,5 +608,21 @@ export function encodeStream(
 				controller.close();
 			}
 		},
+	});
+}
+
+// ---------------------------------------------------------------------------
+// formatError
+// ---------------------------------------------------------------------------
+
+/**
+ * OpenAI chat-completions error envelope:
+ *   `{ error: { message, type } }`
+ * Matches the shape the official SDK auto-parses into `APIError`.
+ */
+export function formatError(status: number, type: string, message: string): Response {
+	return new Response(JSON.stringify({ error: { message, type } }), {
+		status,
+		headers: { "Content-Type": "application/json" },
 	});
 }

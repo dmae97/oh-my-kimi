@@ -217,7 +217,8 @@ fn run_pty_sync(
 	ct: task::CancelToken,
 ) -> Result<PtyRunResult> {
 	let pty_system = native_pty_system();
-	ct.heartbeat().map_err(|err| Error::from_reason(format!("PTY setup cancelled before openpty: {err}")))?;
+	ct.heartbeat()
+		.map_err(|err| Error::from_reason(format!("PTY setup cancelled before openpty: {err}")))?;
 
 	const PTY_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 	let pair = if cfg!(windows) {
@@ -227,9 +228,9 @@ fn run_pty_sync(
 		let (tx, rx) = mpsc::channel();
 		std::thread::spawn(move || {
 			let result = pty_system.openpty(PtySize {
-				rows: config.rows,
-				cols: config.cols,
-				pixel_width: 0,
+				rows:         config.rows,
+				cols:         config.cols,
+				pixel_width:  0,
 				pixel_height: 0,
 			});
 			let _ = tx.send(result);
@@ -237,16 +238,18 @@ fn run_pty_sync(
 		match rx.recv_timeout(PTY_STARTUP_TIMEOUT) {
 			Ok(Ok(pair)) => pair,
 			Ok(Err(e)) => return Err(Error::from_reason(format!("Failed to open PTY: {e}"))),
-			Err(_) => return Err(Error::from_reason(
-				"PTY creation timed out (5s). ConPTY may be unavailable on this system.",
-			)),
+			Err(_) => {
+				return Err(Error::from_reason(
+					"PTY creation timed out (5s). ConPTY may be unavailable on this system.",
+				));
+			},
 		}
 	} else {
 		pty_system
 			.openpty(PtySize {
-				rows: config.rows,
-				cols: config.cols,
-				pixel_width: 0,
+				rows:         config.rows,
+				cols:         config.cols,
+				pixel_width:  0,
 				pixel_height: 0,
 			})
 			.map_err(|err| Error::from_reason(format!("Failed to open PTY: {err}")))?
@@ -273,14 +276,16 @@ fn run_pty_sync(
 			cmd.env(key, value);
 		}
 	}
-	ct.heartbeat().map_err(|err| Error::from_reason(format!("PTY setup cancelled before spawn: {err}")))?;
+	ct.heartbeat()
+		.map_err(|err| Error::from_reason(format!("PTY setup cancelled before spawn: {err}")))?;
 
 	let mut child = pair
 		.slave
 		.spawn_command(cmd)
 		.map_err(|err| Error::from_reason(format!("Failed to spawn PTY command: {err}")))?;
 	drop(pair.slave);
-	ct.heartbeat().map_err(|err| Error::from_reason(format!("PTY setup cancelled before reader: {err}")))?;
+	ct.heartbeat()
+		.map_err(|err| Error::from_reason(format!("PTY setup cancelled before reader: {err}")))?;
 
 	let master = pair.master;
 	let mut writer = master

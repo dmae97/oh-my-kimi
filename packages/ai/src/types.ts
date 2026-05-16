@@ -220,6 +220,18 @@ export interface StreamOptions {
 	minP?: number;
 	presencePenalty?: number;
 	repetitionPenalty?: number;
+	/**
+	 * Stop sequences. Anthropic encodes as `stop_sequences` (array, max 4);
+	 * OpenAI chat-completions encodes as `stop` (string or array of up to 4);
+	 * OpenAI Responses API has no `stop` field today (silently dropped by the
+	 * provider when present).
+	 */
+	stopSequences?: string[];
+	/**
+	 * Frequency penalty (OpenAI). Penalizes new tokens based on existing frequency
+	 * in the text so far. Range -2.0 to 2.0. Parallel to {@link presencePenalty}.
+	 */
+	frequencyPenalty?: number;
 	maxTokens?: number;
 	signal?: AbortSignal;
 	apiKey?: string;

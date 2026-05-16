@@ -59,8 +59,7 @@ describe("openai-responses parseRequest", () => {
 		const reasoningItem = {
 			type: "reasoning",
 			id: "rs_abc",
-			summary: [],
-			content: [{ type: "reasoning_text", text: "The user wants arithmetic." }],
+			summary: [{ type: "summary_text", text: "The user wants arithmetic." }],
 		};
 		const parsed = parseRequest({
 			model: "gpt-5.3-codex-spark",
@@ -229,8 +228,7 @@ describe("openai-responses encodeResponse", () => {
 		const reasoningItem = {
 			type: "reasoning",
 			id: "rs_signed",
-			summary: [],
-			content: [{ type: "reasoning_text", text: "thinking aloud" }],
+			summary: [{ type: "summary_text", text: "thinking aloud" }],
 		};
 		const message: AssistantMessage = {
 			role: "assistant",
@@ -328,7 +326,7 @@ describe("openai-responses encodeResponse", () => {
 });
 
 describe("openai-responses encodeStream", () => {
-	it("emits response.created, reasoning_text.delta, output_text.delta, function_call_arguments.delta, response.completed, [DONE]", async () => {
+	it("emits response.created, reasoning_summary_text.delta, output_text.delta, function_call_arguments.delta, response.completed, [DONE]", async () => {
 		const stream = new AssistantMessageEventStream();
 
 		const partial: AssistantMessage = {
@@ -416,8 +414,8 @@ describe("openai-responses encodeStream", () => {
 
 		// Spot-check critical events appear in the expected order.
 		const idxCreated = names.indexOf("response.created");
-		const idxReasoningDelta = names.indexOf("response.reasoning_text.delta");
-		const idxReasoningDone = names.indexOf("response.reasoning_text.done");
+		const idxReasoningDelta = names.indexOf("response.reasoning_summary_text.delta");
+		const idxReasoningDone = names.indexOf("response.reasoning_summary_text.done");
 		const idxTextDelta = names.indexOf("response.output_text.delta");
 		const idxTextDone = names.indexOf("response.output_text.done");
 		const idxArgsDelta = names.indexOf("response.function_call_arguments.delta");
@@ -439,7 +437,7 @@ describe("openai-responses encodeStream", () => {
 		expect(idxArgsDone).toBeGreaterThan(idxArgsDelta);
 		expect(idxCompleted).toBeGreaterThan(idxArgsDone);
 
-		// reasoning_text.delta must carry item_id matching the signature, and output_index 0.
+		// reasoning_summary_text.delta must carry item_id matching the signature, and output_index 0.
 		const reasoningDelta = frames[idxReasoningDelta]!.data as Record<string, unknown>;
 		expect(reasoningDelta.item_id).toBe("rs_s1");
 		expect(reasoningDelta.output_index).toBe(0);

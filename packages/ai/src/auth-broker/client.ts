@@ -68,48 +68,60 @@ export class AuthBrokerClient {
 		this.#fetch = opts.fetchImpl ?? fetch;
 	}
 
-	healthz(): Promise<HealthzResponse> {
-		return this.#request("GET", "/v1/healthz", { schema: healthzResponseSchema, auth: false });
+	healthz(signal?: AbortSignal): Promise<HealthzResponse> {
+		return this.#request("GET", "/v1/healthz", { schema: healthzResponseSchema, auth: false, signal });
 	}
 
-	fetchSnapshot(): Promise<SnapshotResponse> {
+	fetchSnapshot(signal?: AbortSignal): Promise<SnapshotResponse> {
 		// `snapshotResponseSchema` narrows `refresh` to the sentinel literal where
 		// the public type uses plain `string`; the wire shape is identical.
-		return this.#request("GET", "/v1/snapshot", { schema: snapshotResponseSchema }) as Promise<SnapshotResponse>;
+		return this.#request("GET", "/v1/snapshot", {
+			schema: snapshotResponseSchema,
+			signal,
+		}) as Promise<SnapshotResponse>;
 	}
 
-	fetchUsage(): Promise<UsageResponse> {
-		// `usageResponseSchema` keeps the report array as `unknown[]` — per-provider
-		// usage modules own the inner shape; the broker doesn't re-validate it.
-		return this.#request("GET", "/v1/usage", { schema: usageResponseSchema }) as Promise<UsageResponse>;
+	fetchUsage(signal?: AbortSignal): Promise<UsageResponse> {
+		// Validates the envelope (`generatedAt`, `reports[].provider`, `limits`,
+		// `metadata`) but leaves provider-specific extension fields permissive so
+		// the broker can ship new shapes ahead of the client. `raw` is accepted
+		// but normally stripped by the broker before send.
+		return this.#request("GET", "/v1/usage", { schema: usageResponseSchema, signal }) as Promise<UsageResponse>;
 	}
 
-	async refreshCredential(id: number): Promise<CredentialRefreshResponse> {
+	async refreshCredential(id: number, signal?: AbortSignal): Promise<CredentialRefreshResponse> {
 		return this.#request("POST", `/v1/credential/${id}/refresh`, {
 			schema: credentialRefreshResponseSchema,
+			signal,
 		}) as Promise<CredentialRefreshResponse>;
 	}
 
-	async disableCredential(id: number, cause: string): Promise<CredentialDisableResponse> {
+	async disableCredential(id: number, cause: string, signal?: AbortSignal): Promise<CredentialDisableResponse> {
 		const body: CredentialDisableRequest = { cause };
 		return this.#request("POST", `/v1/credential/${id}/disable`, {
 			body,
 			schema: credentialDisableResponseSchema,
+			signal,
 		});
 	}
 
-	async uploadCredential(provider: string, credential: AuthCredential): Promise<CredentialUploadResponse> {
+	async uploadCredential(
+		provider: string,
+		credential: AuthCredential,
+		signal?: AbortSignal,
+	): Promise<CredentialUploadResponse> {
 		const body: CredentialUploadRequest = { provider, credential };
 		return this.#request("POST", "/v1/credential", {
 			body,
 			schema: credentialUploadResponseSchema,
+			signal,
 		}) as Promise<CredentialUploadResponse>;
 	}
 
 	async #request<TSchema extends ZodType>(
 		method: "GET" | "POST",
 		path: string,
-		opts: { schema: TSchema; auth?: boolean; body?: unknown },
+		opts: { schema: TSchema; auth?: boolean; body?: unknown; signal?: AbortSignal },
 	): Promise<zInfer<TSchema>> {
 		const auth = opts.auth ?? true;
 		const url = `${this.#baseUrl}${path}`;
@@ -121,14 +133,25 @@ export class AuthBrokerClient {
 			headers["Content-Type"] = "application/json";
 		}
 
+		// Fast-fail when the caller's signal is already aborted — avoids spinning
+		// up a fetch + timer that the first `await` would just abort anyway.
+		if (opts.signal?.aborted) {
+			throw new AuthBrokerError("Auth broker request aborted", { cause: opts.signal.reason });
+		}
+
 		let lastError: unknown;
 		for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
+			// Compose caller's signal with the per-attempt timeout so either
+			// source can cancel the in-flight fetch. `AbortSignal.any` is the
+			// supported merge primitive in Bun ≥ 1.0 / Node ≥ 20.
+			const timeoutSignal = AbortSignal.timeout(this.#timeoutMs);
+			const signal = opts.signal ? AbortSignal.any([opts.signal, timeoutSignal]) : timeoutSignal;
 			try {
 				const response = await this.#fetch(url, {
 					method,
 					headers,
 					body: payload,
-					signal: AbortSignal.timeout(this.#timeoutMs),
+					signal,
 				});
 				const text = await response.text();
 				if (!response.ok) {
@@ -157,6 +180,10 @@ export class AuthBrokerClient {
 				return validated.data;
 			} catch (error) {
 				lastError = error;
+				// Caller-driven abort wins over retry — the caller said stop.
+				if (opts.signal?.aborted) {
+					throw new AuthBrokerError("Auth broker request aborted", { cause: opts.signal.reason });
+				}
 				if (error instanceof AuthBrokerError && error.status !== undefined) {
 					// HTTP errors (4xx/5xx) don't retry — caller knows what to do.
 					throw error;

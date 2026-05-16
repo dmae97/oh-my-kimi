@@ -118,7 +118,7 @@ describe("anthropic-messages parseRequest", () => {
 		expect(parsed.options.topP).toBe(0.9);
 		expect(parsed.options.stopSequences).toEqual(["\n\n"]);
 		expect(parsed.options.toolChoice).toBe("required");
-		expect(parsed.options.thinkingBudget).toBe(2048);
+		expect(parsed.options.explicitThinkingBudgetTokens).toBe(2048);
 		expect(parsed.options.extra).toBeUndefined();
 
 		expect(parsed.context.tools).toHaveLength(1);
@@ -198,22 +198,24 @@ describe("anthropic-messages parseRequest", () => {
 		expect(onlyResult.context.messages[0]!.role).toBe("toolResult");
 	});
 
-	it("rejects ambiguous user text before tool_result blocks", () => {
-		expect(() =>
-			parseRequest({
-				model: "m",
-				max_tokens: 8,
-				messages: [
-					{
-						role: "user",
-						content: [
-							{ type: "text", text: "this would replay before the tool result" },
-							{ type: "tool_result", tool_use_id: "t1", content: "ok" },
-						],
-					},
-				],
-			}),
-		).toThrow(/tool_result/i);
+	it("splits user text/image blocks into a separate UserMessage before a tool_result", () => {
+		const parsed = parseRequest({
+			model: "m",
+			max_tokens: 8,
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "preface text" },
+						{ type: "tool_result", tool_use_id: "t1", content: "ok" },
+					],
+				},
+			],
+		});
+		// Expect a flush before the tool result: user("preface text") then toolResult(t1).
+		expect(parsed.context.messages).toHaveLength(2);
+		expect(parsed.context.messages[0]).toMatchObject({ role: "user", content: "preface text" });
+		expect(parsed.context.messages[1]!.role).toBe("toolResult");
 	});
 
 	it("rejects missing required fields and unsupported request controls", () => {
@@ -222,9 +224,8 @@ describe("anthropic-messages parseRequest", () => {
 		expect(() => parseRequest({ model: "m", max_tokens: 1 })).toThrow(/messages/);
 		const topK = parseRequest({ model: "m", max_tokens: 1, messages: [{ role: "user", content: "hi" }], top_k: 50 });
 		expect(topK.options.topK).toBe(50);
-		// `metadata` is tolerated permissively now (Anthropic clients ship it
-		// by default with `user_id`); it should parse without throwing and
-		// surface nothing on the parsed options.
+		// `metadata` is tolerated permissively and surfaced on options for
+		// downstream forwarding (Anthropic clients ship `metadata.user_id`).
 		const withMetadata = parseRequest({
 			model: "m",
 			max_tokens: 1,
@@ -232,6 +233,7 @@ describe("anthropic-messages parseRequest", () => {
 			metadata: { user_id: "u_1" },
 		});
 		expect(withMetadata.options.extra).toBeUndefined();
+		expect(withMetadata.options.metadata).toEqual({ user_id: "u_1" });
 	});
 });
 

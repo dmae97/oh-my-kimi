@@ -20,7 +20,17 @@ import { usageReportSchema } from "../usage";
 export const oauthCredentialSchema = z
 	.object({
 		type: z.literal("oauth"),
-		refresh: z.string().min(1),
+		refresh: z
+			.string()
+			.min(1)
+			// Reject the sentinel literal on writes: if a client somehow round-trips
+			// a snapshot back into POST /v1/credential, accepting the sentinel as a
+			// real refresh token would silently break that credential's refresh
+			// forever (the broker would store `"__remote__"` and try to use it as
+			// the upstream refresh token).
+			.refine(value => value !== REMOTE_REFRESH_SENTINEL, {
+				message: `refresh token must not equal the remote sentinel (${REMOTE_REFRESH_SENTINEL})`,
+			}),
 		access: z.string().min(1),
 		expires: z.number(),
 		enterpriseUrl: z.string().optional(),

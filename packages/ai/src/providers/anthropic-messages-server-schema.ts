@@ -38,6 +38,22 @@ export const base64ImageSourceSchema = z.object({
 	media_type: z.string().min(1),
 });
 
+export const urlImageSourceSchema = z.object({
+	type: z.literal("url"),
+	url: z.url(),
+});
+
+export const fileImageSourceSchema = z.object({
+	type: z.literal("file"),
+	file_id: z.string().min(1),
+});
+
+export const imageSourceSchema = z.discriminatedUnion("type", [
+	base64ImageSourceSchema,
+	urlImageSourceSchema,
+	fileImageSourceSchema,
+]);
+
 const textBlockSchema = z.object({
 	type: z.literal("text"),
 	text: z.string(),
@@ -46,7 +62,7 @@ const textBlockSchema = z.object({
 
 const imageBlockSchema = z.object({
 	type: z.literal("image"),
-	source: base64ImageSourceSchema,
+	source: imageSourceSchema,
 	cache_control: cacheControlSchema.optional(),
 });
 
@@ -54,11 +70,13 @@ const thinkingBlockSchema = z.object({
 	type: z.literal("thinking"),
 	thinking: z.string(),
 	signature: z.string().optional(),
+	cache_control: cacheControlSchema.optional(),
 });
 
 const redactedThinkingBlockSchema = z.object({
 	type: z.literal("redacted_thinking"),
 	data: z.string(),
+	cache_control: cacheControlSchema.optional(),
 });
 
 const toolUseBlockSchema = z.object({
@@ -66,6 +84,7 @@ const toolUseBlockSchema = z.object({
 	id: z.string().min(1),
 	name: z.string().min(1),
 	input: z.record(z.string(), z.unknown()).optional(),
+	cache_control: cacheControlSchema.optional(),
 });
 
 const toolResultContentBlockSchema = z.discriminatedUnion("type", [textBlockSchema, imageBlockSchema]);
@@ -77,6 +96,12 @@ const toolResultBlockSchema = z.object({
 	is_error: z.boolean().optional(),
 	cache_control: cacheControlSchema.optional(),
 });
+
+// Catch-all for content block variants Anthropic ships that the gateway doesn't
+// natively understand (server_tool_use, web_search_tool_result, mcp_*,
+// container_upload, code_execution_*, document, …). The walker flattens these
+// to a text placeholder so legitimate Anthropic clients don't get rejected.
+const unknownContentBlockSchema = z.object({ type: z.string() }).loose();
 
 // ─── System ────────────────────────────────────────────────────────────────
 
@@ -90,13 +115,19 @@ export const systemSchema = z.union([z.string(), z.array(systemBlockSchema)]).op
 
 // ─── Messages ──────────────────────────────────────────────────────────────
 
-const userContentBlockSchema = z.discriminatedUnion("type", [textBlockSchema, imageBlockSchema, toolResultBlockSchema]);
+const userContentBlockSchema = z.union([
+	z.discriminatedUnion("type", [textBlockSchema, imageBlockSchema, toolResultBlockSchema]),
+	unknownContentBlockSchema,
+]);
 
-const assistantContentBlockSchema = z.discriminatedUnion("type", [
-	textBlockSchema,
-	thinkingBlockSchema,
-	redactedThinkingBlockSchema,
-	toolUseBlockSchema,
+const assistantContentBlockSchema = z.union([
+	z.discriminatedUnion("type", [
+		textBlockSchema,
+		thinkingBlockSchema,
+		redactedThinkingBlockSchema,
+		toolUseBlockSchema,
+	]),
+	unknownContentBlockSchema,
 ]);
 
 export const userMessageSchema = z.object({
@@ -122,20 +153,18 @@ export const toolSchema = z.object({
 
 // ─── Tool choice ───────────────────────────────────────────────────────────
 
-export const toolChoiceSchema = z
-	.discriminatedUnion("type", [
-		z.object({ type: z.literal("auto"), disable_parallel_tool_use: z.unknown().optional() }),
-		z.object({ type: z.literal("any"), disable_parallel_tool_use: z.unknown().optional() }),
-		z.object({ type: z.literal("none"), disable_parallel_tool_use: z.unknown().optional() }),
-		z.object({
-			type: z.literal("tool"),
-			name: z.string().min(1),
-			disable_parallel_tool_use: z.unknown().optional(),
-		}),
-	])
-	.refine(value => value.disable_parallel_tool_use === undefined, {
-		message: "tool_choice.disable_parallel_tool_use is not supported by this gateway",
-	});
+// `disable_parallel_tool_use` is accepted on every variant; the walker maps it
+// onto `options.parallelToolCalls = !disable_parallel_tool_use`.
+export const toolChoiceSchema = z.discriminatedUnion("type", [
+	z.object({ type: z.literal("auto"), disable_parallel_tool_use: z.boolean().optional() }),
+	z.object({ type: z.literal("any"), disable_parallel_tool_use: z.boolean().optional() }),
+	z.object({ type: z.literal("none"), disable_parallel_tool_use: z.boolean().optional() }),
+	z.object({
+		type: z.literal("tool"),
+		name: z.string().min(1),
+		disable_parallel_tool_use: z.boolean().optional(),
+	}),
+]);
 
 // ─── Thinking ──────────────────────────────────────────────────────────────
 
@@ -175,11 +204,10 @@ export const anthropicMessagesRequestSchema = z.object({
 	stop_sequences: z.array(z.string()).optional(),
 	stream: z.boolean().optional(),
 	thinking: thinkingConfigSchema.optional(),
-	// Spec fields that the gateway tolerates but doesn't translate. Anthropic
-	// clients commonly send `metadata: { user_id }` — failing the request just
-	// because we can't route it is hostile. They're accepted permissively and
-	// silently dropped on the translate path.
-	metadata: z.unknown().optional(),
+	// Anthropic clients commonly send `metadata: { user_id }`; the walker
+	// surfaces it on `options.metadata` for downstream provider forwarding.
+	metadata: z.record(z.string(), z.unknown()).optional(),
+	// Spec fields that the gateway tolerates but doesn't translate yet.
 	container: z.unknown().optional(),
 	context_management: z.unknown().optional(),
 	mcp_servers: z.unknown().optional(),

@@ -115,4 +115,58 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		expect(() => remoteStore.deleteAuthCredentialsForProvider("anthropic", "x")).toThrow(/read-only/);
 		remoteStore.close();
 	});
+
+	test("getUsageReport coalesces parallel callers and matches by identity", async () => {
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			initialSnapshot: { generatedAt: 0, credentials: [] },
+		});
+
+		const reportForA = {
+			provider: "anthropic" as const,
+			fetchedAt: Date.now(),
+			limits: [],
+			metadata: { email: "a@example.com" },
+		};
+		const reportForB = {
+			provider: "anthropic" as const,
+			fetchedAt: Date.now(),
+			limits: [],
+			metadata: { email: "b@example.com" },
+		};
+		const fetchSpy = vi
+			.spyOn(brokerClient, "fetchUsage")
+			.mockResolvedValue({ generatedAt: Date.now(), reports: [reportForA, reportForB] });
+
+		const credA = {
+			type: "oauth" as const,
+			access: "ax",
+			refresh: REMOTE_REFRESH_SENTINEL,
+			expires: Date.now() + 60_000,
+			email: "a@example.com",
+		};
+		const credB = { ...credA, email: "b@example.com" };
+
+		const [resA, resB] = await Promise.all([
+			remoteStore.getUsageReport("anthropic", credA),
+			remoteStore.getUsageReport("anthropic", credB),
+		]);
+		// Parallel callers share a single broker round-trip.
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(resA?.metadata?.email).toBe("a@example.com");
+		expect(resB?.metadata?.email).toBe("b@example.com");
+
+		// Cached on the second call — still one fetch total.
+		const cached = await remoteStore.getUsageReport("anthropic", credA);
+		expect(cached?.metadata?.email).toBe("a@example.com");
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+		// Unknown provider → null, no extra fetch.
+		const miss = await remoteStore.getUsageReport("openai-codex", credA);
+		expect(miss).toBeNull();
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+		remoteStore.close();
+	});
 });

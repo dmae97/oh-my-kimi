@@ -77,6 +77,29 @@ async function writeToken(token: string): Promise<void> {
 	}
 }
 
+/**
+ * Atomically create the token file, refusing to clobber an existing one.
+ * Returns `true` on success, `false` when the file already existed (so the
+ * caller re-reads it instead of racing another concurrent `ensureToken`).
+ */
+async function createTokenExclusive(token: string): Promise<boolean> {
+	const file = getTokenFilePath();
+	await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+	try {
+		// `wx` = O_CREAT | O_EXCL — fails with EEXIST if the file is already there.
+		await fs.writeFile(file, token, { flag: "wx", mode: 0o600 });
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+		throw err;
+	}
+	try {
+		await fs.chmod(file, 0o600);
+	} catch {
+		// Best-effort (e.g. Windows).
+	}
+	return true;
+}
+
 function generateToken(): string {
 	return crypto.randomBytes(32).toString("base64url");
 }
@@ -85,6 +108,12 @@ async function ensureToken(): Promise<string> {
 	const existing = await readToken();
 	if (existing) return existing;
 	const token = generateToken();
+	if (await createTokenExclusive(token)) return token;
+	// Another concurrent invocation won the create race; read what they wrote.
+	const fromRace = await readToken();
+	if (fromRace) return fromRace;
+	// File existed-then-disappeared between EEXIST and read; last resort, write
+	// our generated token unconditionally so callers don't see an empty string.
 	await writeToken(token);
 	return token;
 }

@@ -8149,11 +8149,12 @@ export class AgentSession {
 		};
 	}
 
-	async fetchUsageReports(): Promise<UsageReport[] | null> {
+	async fetchUsageReports(signal?: AbortSignal): Promise<UsageReport[] | null> {
 		const authStorage = this.#modelRegistry.authStorage;
 		if (!authStorage.fetchUsageReports) return null;
 		return authStorage.fetchUsageReports({
 			baseUrlResolver: provider => this.#modelRegistry.getProviderBaseUrl?.(provider),
+			signal,
 		});
 	}
 

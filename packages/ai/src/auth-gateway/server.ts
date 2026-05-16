@@ -10,7 +10,7 @@
  *
  * Endpoints:
  *   GET  /healthz                          → unauth; ok + version
- *   GET  /v1/usage                         → aggregated provider usage (30s cache via AuthStorage)
+ *   GET  /v1/usage                         → aggregated provider usage (5-min per-credential cache via AuthStorage)
  *   GET  /v1/models                        → list known models from the registry
  *   POST /v1/chat/completions              → OpenAI chat-completions in/out
  *   POST /v1/messages                      → Anthropic messages in/out
@@ -24,7 +24,8 @@ import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
 import { streamSimple } from "../stream";
 import type { Api, AssistantMessageEventStream, Model, SimpleStreamOptions } from "../types";
-import { isAuthorized, json, resolvePeer } from "./http";
+import { parseBind } from "../utils/parse-bind";
+import { captureRequestHeaders, corsHeaders, isAuthorized, json, resolvePeer, withCors } from "./http";
 import type {
 	AuthGatewayServerHandle,
 	AuthGatewayServerOptions,
@@ -50,24 +51,8 @@ export interface AuthGatewayBootOptions extends AuthGatewayServerOptions {
 	listModels?: () => Iterable<Model<Api>>;
 }
 
-interface ParsedBind {
-	hostname: string;
-	port: number;
-}
-
-function parseBind(raw: string): ParsedBind {
-	const trimmed = raw.trim();
-	if (/^\d+$/.test(trimmed)) {
-		return { hostname: "127.0.0.1", port: Number.parseInt(trimmed, 10) };
-	}
-	const lastColon = trimmed.lastIndexOf(":");
-	if (lastColon < 0) throw new Error(`Invalid bind '${raw}'; expected 'host:port' or 'port'.`);
-	const port = Number.parseInt(trimmed.slice(lastColon + 1), 10);
-	if (!Number.isFinite(port) || port < 0 || port > 65535) {
-		throw new Error(`Invalid bind '${raw}'; port out of range.`);
-	}
-	return { hostname: trimmed.slice(0, lastColon), port };
-}
+// `parseBind` lives in ../utils/parse-bind so the gateway and broker can't
+// drift on accepted inputs (e.g. empty hostname, IPv6 brackets).
 
 const FORMAT_ROUTES: Record<string, { module: FormatModule; label: string }> = {
 	"/v1/chat/completions": { module: openaiChat, label: "openai-chat" },
@@ -75,55 +60,10 @@ const FORMAT_ROUTES: Record<string, { module: FormatModule; label: string }> = {
 	"/v1/responses": { module: openaiResponses, label: "openai-responses" },
 };
 
-/**
- * Wire path on the upstream provider that each inbound format maps to when
- * passthrough is taken. Same path as the gateway's inbound route in every
- * case — that's what makes the fast-path "passthrough" rather than
- * "rewrite": we forward the bytes to the same logical endpoint on the real
- * provider, with `Authorization` swapped.
- */
-const FORMAT_TO_UPSTREAM_PATH: Record<string, string> = {
-	"openai-chat": "/v1/chat/completions",
-	"anthropic-messages": "/v1/messages",
-	"openai-responses": "/v1/responses",
-};
-
-/**
- * Inbound format → set of model.api values where a 1:1 byte passthrough is
- * legal. When the inbound format matches the model's native API, we skip the
- * translate/rebuild round-trip and forward the request body unchanged with
- * `Authorization` rewritten. Two big wins:
- *   - prompt caching hints (`cache_control`, etc.) flow through to upstream
- *     intact; the gateway no longer breaks anthropic prompt-caching;
- *   - provider-specific options (`metadata`, `service_tier`, `tool_choice`
- *     extensions, …) work without per-field allowlist maintenance here.
- *
- * `openai-codex-responses` is deliberately absent — codex runs over a
- * websocket transport that has no equivalent inbound shape, so it always
- * takes the translate path.
- */
-const FORMAT_TO_PASSTHROUGH_API: Record<string, ReadonlySet<Api>> = {
-	"openai-chat": new Set(["openai-completions"]),
-	"anthropic-messages": new Set(["anthropic-messages"]),
-	"openai-responses": new Set(["openai-responses"]),
-};
-
-/**
- * Hop-by-hop headers per RFC 7230. Stripped from both the inbound (so we don't
- * forward the client's `Authorization` containing only the gateway bearer) and
- * the upstream response (so we don't pass `Transfer-Encoding: chunked` back
- * after we've already buffered).
- */
-const HOP_BY_HOP_HEADERS = new Set<string>([
-	"connection",
-	"keep-alive",
-	"proxy-authenticate",
-	"proxy-authorization",
-	"te",
-	"trailers",
-	"transfer-encoding",
-	"upgrade",
-]);
+// (passthrough fast-path removed — it bypassed pi-ai provider logic, in
+// particular the Anthropic Claude-Code OAuth system-prompt prefix injection.
+// Every request now takes the translate path so credential-specific request
+// shaping always applies.)
 
 // Options the caller's wire format may carry but the resolved provider can't
 // honour are dropped silently in `buildStreamOptions`. We used to 400 here
@@ -132,6 +72,46 @@ const HOP_BY_HOP_HEADERS = new Set<string>([
 // defaults in without knowing which model they'll resolve to. Failing loudly
 // just turned that into per-call config hell. Silent strip is what the
 // upstream provider would do anyway when it ignores extra fields.
+
+/**
+ * Derive a stable cache identity from the parts of the request that don't
+ * change turn-to-turn within a logical conversation: model id, system prompt,
+ * tool definitions, and the first message (the conversation seed). Codex-class
+ * backends only cache prefixes when an explicit `prompt_cache_key` is set;
+ * without one, two requests with the same prefix but different trailing
+ * messages don't coalesce. This bridges Anthropic-style clients (which signal
+ * caching via `cache_control` markers rather than an opaque key) to Codex's
+ * keyed model so cross-protocol caching "just works".
+ *
+ * Including the first message scopes the key to one logical conversation:
+ * two different chats with the same system prompt no longer share a cache
+ * bucket and can't trample each other's prefix-tree entries.
+ *
+ * Anthropic-backed requests ignore `sessionId`; the key is harmless there.
+ */
+function deriveSessionId(parsed: ParsedFormatRequest): string {
+	const { modelId, context } = parsed;
+	const parts: string[] = [modelId];
+	if (context.systemPrompt && context.systemPrompt.length > 0) {
+		parts.push(context.systemPrompt.join("\n\n"));
+	}
+	if (context.tools && context.tools.length > 0) {
+		parts.push(JSON.stringify(context.tools));
+	}
+	const first = context.messages?.[0];
+	if (first) {
+		// Strip timestamp / provider metadata so the hash is stable across turns
+		// of the same conversation (omp re-stamps every parsed Message). role +
+		// content is what's actually on the wire.
+		parts.push(JSON.stringify({ role: first.role, content: first.content }));
+	}
+	const seed = parts.join("\u0000");
+	const hex = new Bun.CryptoHasher("sha256").update(seed).digest("hex");
+	// Format the leading 128 bits as a v4-shape UUID (8-4-4-4-12). Codex's
+	// `normalizeOpenAIResponsesPromptCacheKey` accepts ≤64 chars verbatim, so
+	// the 36-char UUID flows through unchanged.
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
 
 function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: AbortSignal): SimpleStreamOptions {
 	const opts: SimpleStreamOptions = { signal };
@@ -145,24 +125,114 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 	if (options.temperature !== undefined && !isCodex) opts.temperature = options.temperature;
 	if (options.topP !== undefined && !isCodex) opts.topP = options.topP;
 	if (options.topK !== undefined) opts.topK = options.topK;
+	if (options.minP !== undefined) opts.minP = options.minP;
+	if (options.stopSequences !== undefined) opts.stopSequences = options.stopSequences;
+	if (options.presencePenalty !== undefined) opts.presencePenalty = options.presencePenalty;
+	if (options.frequencyPenalty !== undefined) opts.frequencyPenalty = options.frequencyPenalty;
+	if (options.repetitionPenalty !== undefined) opts.repetitionPenalty = options.repetitionPenalty;
+	if (options.metadata !== undefined) opts.metadata = options.metadata;
+	if (options.headers !== undefined) opts.headers = { ...(opts.headers ?? {}), ...options.headers };
 	if (options.toolChoice !== undefined) {
 		opts.toolChoice =
 			typeof options.toolChoice === "object" ? { type: "tool", name: options.toolChoice.name } : options.toolChoice;
 	}
 	if (options.reasoning !== undefined) opts.reasoning = options.reasoning;
+	if (options.disableReasoning !== undefined) opts.disableReasoning = options.disableReasoning;
 	if (options.hideThinkingSummary !== undefined) opts.hideThinkingSummary = options.hideThinkingSummary;
 	if (options.serviceTier !== undefined) opts.serviceTier = options.serviceTier;
-	if (options.presencePenalty !== undefined) opts.presencePenalty = options.presencePenalty;
-	if (options.disableReasoning !== undefined) opts.disableReasoning = options.disableReasoning;
 	if (options.cacheRetention !== undefined) opts.cacheRetention = options.cacheRetention;
-	if (options.thinkingBudget !== undefined) {
-		// Anthropic gives a single budget number with no effort label; bridge it
-		// to pi-ai's per-level map and default the level to "high" so providers
-		// that key off `reasoning` actually surface the budget.
-		opts.thinkingBudgets = { ...(opts.thinkingBudgets ?? {}), [Effort.High]: options.thinkingBudget };
-		opts.reasoning ??= Effort.High;
+	// Client-supplied `prompt_cache_key` wins; otherwise derive a stable
+	// key from the model + system + tools so prefix caching engages on
+	// Codex-class backends across turns of the same logical conversation.
+	opts.sessionId = options.promptCacheKey ?? deriveSessionId(parsed);
+	if (options.thinkingBudgets) {
+		opts.thinkingBudgets = { ...(opts.thinkingBudgets ?? {}), ...options.thinkingBudgets };
+	}
+	if (options.explicitThinkingBudgetTokens !== undefined) {
+		// Mirror Rust's `resolve_thinking_budget`: explicit budget pins onto
+		// whichever effort the client requested (or High when unspecified) and
+		// ALSO sets the effort so providers that gate on `reasoning` actually
+		// surface the budget.
+		const effort = options.reasoning ?? Effort.High;
+		opts.thinkingBudgets = {
+			...(opts.thinkingBudgets ?? {}),
+			[effort]: options.explicitThinkingBudgetTokens,
+		};
+		opts.reasoning ??= effort;
+	}
+	// Fields that don't yet have a matching pi-ai `SimpleStreamOptions` slot.
+	// Surfaced once in debug logs so they show up when wiring a new provider,
+	// but NEVER widened into `options.extra` — every consumer would have to
+	// re-implement the typed parse to read them back out.
+	// TODO(pi-ai): land first-class fields and replace these blocks.
+	if (
+		options.parallelToolCalls !== undefined ||
+		options.previousResponseId !== undefined ||
+		options.seed !== undefined ||
+		options.logitBias !== undefined ||
+		options.user !== undefined ||
+		options.responseFormat !== undefined
+	) {
+		logger.debug("auth-gateway dropped unsupported typed options", {
+			api,
+			parallelToolCalls: options.parallelToolCalls,
+			previousResponseId: options.previousResponseId,
+			seed: options.seed,
+			hasLogitBias: options.logitBias !== undefined,
+			user: options.user,
+			hasResponseFormat: options.responseFormat !== undefined,
+		});
 	}
 	return opts;
+}
+
+/**
+ * Classify an upstream / gateway-internal error into a status code and a
+ * provider-style error type tag. Used by `handleFormatEndpoint` /
+ * `handlePassthrough` to drive `route.module.formatError` so every wire
+ * format emits its native envelope shape.
+ */
+function classifyGatewayError(err: unknown): { status: number; type: string; message: string } {
+	const message = err instanceof Error ? err.message : String(err);
+	const lower = message.toLowerCase();
+
+	// Custom pi-ai errors may attach a numeric `status` property; honor it
+	// when present and pick the matching tag.
+	const statusProp =
+		typeof err === "object" && err !== null && typeof (err as { status?: unknown }).status === "number"
+			? (err as { status: number }).status | 0
+			: undefined;
+	if (statusProp !== undefined) {
+		if (statusProp === 401 || statusProp === 403)
+			return { status: statusProp, type: "authentication_error", message };
+		if (statusProp === 429) return { status: 429, type: "rate_limit_error", message };
+		if (statusProp >= 400 && statusProp < 500) return { status: statusProp, type: "invalid_request_error", message };
+		if (statusProp >= 500) return { status: statusProp, type: "upstream_error", message };
+	}
+
+	if (err instanceof Error && err.name === "AbortError") return { status: 499, type: "request_aborted", message };
+	if (lower.includes("aborted") || lower.includes("abortsignal")) {
+		return { status: 499, type: "request_aborted", message };
+	}
+	if (
+		lower.includes("401") ||
+		lower.includes("403") ||
+		lower.includes("unauthorized") ||
+		lower.includes("forbidden")
+	) {
+		return { status: 401, type: "authentication_error", message };
+	}
+	if (lower.includes("429") || lower.includes("rate") || lower.includes("quota")) {
+		return { status: 429, type: "rate_limit_error", message };
+	}
+	if (lower.includes("unsupported") || lower.includes("invalid")) {
+		return { status: 400, type: "invalid_request_error", message };
+	}
+	return { status: 502, type: "upstream_error", message };
+}
+
+function clientClosedResponse(route: { module: FormatModule }): Response {
+	return route.module.formatError(499, "request_aborted", "client closed request");
 }
 
 function mirrorRequestAbort(req: Request): AbortController {
@@ -175,108 +245,7 @@ function mirrorRequestAbort(req: Request): AbortController {
 	return controller;
 }
 
-function clientClosedResponse(): Response {
-	return json(499, { error: "client closed request" });
-}
-
-/**
- * 1:1 byte passthrough fast-path. When the inbound format matches the model's
- * native API (per {@link FORMAT_TO_PASSTHROUGH_API}), we skip parse + translate
- * + re-emit and forward the request body as-is to the upstream provider with
- * `Authorization` rewritten to the real access token. Provider-specific
- * features (anthropic prompt caching, openai `service_tier`, tool-choice
- * extensions, …) pass through unchanged.
- *
- * `body` is the already-parsed JSON; we re-serialize it to bytes for the
- * upstream request. Re-serialization is intentional — Bun's `Request#json()`
- * consumes the underlying stream, so the original bytes aren't available
- * anyway, and any client-side whitespace/key-order difference is irrelevant
- * to every provider this gateway targets.
- */
-async function handlePassthrough(
-	route: { module: FormatModule; label: string },
-	model: Model<Api>,
-	body: unknown,
-	apiKey: string,
-	req: Request,
-	peer: string,
-	signal: AbortSignal,
-): Promise<Response> {
-	const wirePath = FORMAT_TO_UPSTREAM_PATH[route.label];
-	if (!wirePath) {
-		// Shouldn't happen — caller already confirmed FORMAT_TO_PASSTHROUGH_API
-		// has an entry for this label, which implies a wire path exists.
-		return json(500, { error: `No upstream wire path for format ${route.label}` });
-	}
-	const baseUrl = model.baseUrl.replace(/\/+$/, "");
-	const upstreamUrl = `${baseUrl}${wirePath}`;
-
-	const upstreamHeaders = new Headers();
-	req.headers.forEach((value, key) => {
-		const lower = key.toLowerCase();
-		// Strip every header the client uses to identify itself to the gateway.
-		// The gateway is the only thing that should be telling the upstream
-		// provider who's calling; the client's bearer (or anthropic's `x-api-key`,
-		// which omp's own anthropic provider always sends alongside `Authorization`)
-		// is just access control INTO the gateway and would otherwise leak to
-		// upstream as a 401-inducing bogus credential.
-		if (lower === "authorization" || lower === "x-api-key") return;
-		if (lower === "host" || lower === "content-length") return;
-		if (HOP_BY_HOP_HEADERS.has(lower)) return;
-		upstreamHeaders.set(key, value);
-	});
-	upstreamHeaders.set("Authorization", `Bearer ${apiKey}`);
-
-	let upstream: Response;
-	try {
-		upstream = await fetch(upstreamUrl, {
-			method: req.method,
-			headers: upstreamHeaders,
-			body: JSON.stringify(body),
-			signal,
-		});
-	} catch (error) {
-		if (signal.aborted) return clientClosedResponse();
-		const message = error instanceof Error ? error.message : String(error);
-		logger.warn("auth-gateway passthrough upstream failed", {
-			format: route.label,
-			provider: model.provider,
-			model: model.id,
-			upstream: upstreamUrl,
-			peer,
-			error: message,
-		});
-		return json(502, { error: message });
-	}
-
-	logger.info("auth-gateway passthrough", {
-		format: route.label,
-		provider: model.provider,
-		model: model.id,
-		upstream: upstreamUrl,
-		status: upstream.status,
-		peer,
-	});
-
-	// Pass body straight through without buffering. Strip hop-by-hop headers
-	// from upstream, plus `content-encoding` and `content-length`: Bun's
-	// `fetch` transparently decodes gzip/br/deflate bodies but leaves the
-	// `Content-Encoding` header intact — forwarding it makes the client try to
-	// re-decode plain bytes and crash with `ZlibError`. `content-length` is
-	// stale too once Bun re-frames the response.
-	const outboundHeaders = new Headers();
-	upstream.headers.forEach((value, key) => {
-		const lower = key.toLowerCase();
-		if (HOP_BY_HOP_HEADERS.has(lower)) return;
-		if (lower === "content-encoding" || lower === "content-length") return;
-		outboundHeaders.set(key, value);
-	});
-	return new Response(upstream.body, {
-		status: upstream.status,
-		statusText: upstream.statusText,
-		headers: outboundHeaders,
-	});
-}
+// (handlePassthrough removed — see note above.)
 
 async function handleFormatEndpoint(
 	route: { module: FormatModule; label: string },
@@ -285,32 +254,31 @@ async function handleFormatEndpoint(
 	peer: string,
 ): Promise<Response> {
 	const controller = mirrorRequestAbort(req);
-	if (controller.signal.aborted) return clientClosedResponse();
+	if (controller.signal.aborted) return clientClosedResponse(route);
 
 	let body: unknown;
 	try {
 		body = await req.json();
 	} catch (error) {
-		if (controller.signal.aborted) return clientClosedResponse();
-		return json(400, { error: `Invalid JSON body: ${String(error)}` });
+		if (controller.signal.aborted) return clientClosedResponse(route);
+		return route.module.formatError(400, "invalid_request_error", `Invalid JSON body: ${String(error)}`);
 	}
-	if (controller.signal.aborted) return clientClosedResponse();
+	if (controller.signal.aborted) return clientClosedResponse(route);
 
 	// All three supported wire formats put the model id on a top-level `model`
-	// field. Read it without running the full strict schema so the passthrough
-	// fast-path doesn't block on provider-specific fields the schema would
-	// otherwise reject (anthropic `metadata`, openai `service_tier`, …).
+	// field. Read it without running the full strict schema so the route can
+	// produce a coherent error envelope when the model id is missing.
 	const modelId =
 		typeof body === "object" && body !== null && typeof (body as { model?: unknown }).model === "string"
 			? (body as { model: string }).model
 			: undefined;
 	if (!modelId) {
-		return json(400, { error: "Missing top-level `model` field" });
+		return route.module.formatError(400, "invalid_request_error", "Missing top-level `model` field");
 	}
 
 	const model = bootOpts.resolveModel(modelId);
 	if (!model) {
-		return json(404, { error: `Unknown model: ${modelId}` });
+		return route.module.formatError(404, "invalid_request_error", `Unknown model: ${modelId}`);
 	}
 
 	// pi-ai's stream() does NOT consult AuthStorage — the caller (us) is
@@ -319,40 +287,48 @@ async function handleFormatEndpoint(
 	// broker override on AuthStorage when needed).
 	let apiKey: string | undefined;
 	try {
-		apiKey = await bootOpts.storage.getApiKey(model.provider, undefined, { modelId: model.id });
+		apiKey = await bootOpts.storage.getApiKey(model.provider, undefined, {
+			modelId: model.id,
+			signal: controller.signal,
+		});
 	} catch (error) {
-		if (controller.signal.aborted) return clientClosedResponse();
-		const message = error instanceof Error ? error.message : String(error);
-		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: message });
-		return json(502, { error: message });
+		if (controller.signal.aborted) return clientClosedResponse(route);
+		const classified = classifyGatewayError(error);
+		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
+		return route.module.formatError(classified.status, classified.type, classified.message);
 	}
-	if (controller.signal.aborted) return clientClosedResponse();
+	if (controller.signal.aborted) return clientClosedResponse(route);
 	if (!apiKey) {
-		return json(401, { error: `No credential available for provider ${model.provider}` });
+		return route.module.formatError(
+			401,
+			"authentication_error",
+			`No credential available for provider ${model.provider}`,
+		);
 	}
 
-	// Fast path: 1:1 byte passthrough when the inbound format matches the
-	// model's native API. Skips schema validation entirely — provider-specific
-	// fields (prompt caching, service tier, …) flow through unchanged.
-	const passthroughApis = FORMAT_TO_PASSTHROUGH_API[route.label];
-	if (passthroughApis?.has(model.api)) {
-		return handlePassthrough(route, model, body, apiKey, req, peer, controller.signal);
-	}
-
-	// Translate path: parse + validate against the strict format schema,
-	// rebuild as omp's canonical Context, dispatch through pi-ai's
-	// streamSimple, encode the canonical event stream back to the inbound
-	// format. Used when the inbound wire format and the selected model's
-	// native API differ (e.g. /v1/chat/completions targeting an Anthropic
-	// model, or /v1/responses targeting openai-codex over websocket).
+	// Parse + validate against the strict format schema, rebuild as omp's
+	// canonical Context, dispatch through pi-ai's streamSimple, encode the
+	// canonical event stream back to the inbound format. There is no
+	// passthrough fast-path — every request flows through pi-ai so that
+	// credential-specific request shaping (OAuth Claude-Code prefix, beta
+	// headers, codex websocket transport, …) always applies.
 	let parsed: ParsedFormatRequest;
 	try {
-		parsed = route.module.parseRequest(body);
+		parsed = route.module.parseRequest(body, req.headers);
 	} catch (error) {
+		if (controller.signal.aborted) return clientClosedResponse(route);
 		const message = error instanceof Error ? error.message : String(error);
-		return json(400, { error: message });
+		return route.module.formatError(400, "invalid_request_error", message);
 	}
-	if (controller.signal.aborted) return clientClosedResponse();
+	// Merge gateway-captured passthrough headers under the parser's own
+	// captures. Parsers that set `options.headers` themselves win (they may
+	// have stripped or normalized values); the gateway's allow-list fills in
+	// anything they didn't touch.
+	{
+		const captured = captureRequestHeaders(req.headers);
+		parsed.options.headers = { ...captured, ...(parsed.options.headers ?? {}) };
+	}
+	if (controller.signal.aborted) return clientClosedResponse(route);
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
 	streamOpts.apiKey = apiKey;
@@ -368,17 +344,17 @@ async function handleFormatEndpoint(
 
 	let events: AssistantMessageEventStream;
 	try {
-		if (controller.signal.aborted) return clientClosedResponse();
+		if (controller.signal.aborted) return clientClosedResponse(route);
 		events = streamSimple(model, parsed.context, streamOpts);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		logger.warn("auth-gateway streamSimple threw", { format: route.label, error: message, peer });
-		return json(502, { error: message });
+		const classified = classifyGatewayError(error);
+		logger.warn("auth-gateway streamSimple threw", { format: route.label, error: classified.message, peer });
+		return route.module.formatError(classified.status, classified.type, classified.message);
 	}
 
 	if (!parsed.stream) {
 		try {
-			if (controller.signal.aborted) return clientClosedResponse();
+			if (controller.signal.aborted) return clientClosedResponse(route);
 			const message = await events.result();
 			if (message.stopReason === "aborted" || message.stopReason === "error") {
 				const errorMessage =
@@ -390,17 +366,25 @@ async function handleFormatEndpoint(
 					error: errorMessage,
 					peer,
 				});
-				return json(message.stopReason === "aborted" ? 499 : 502, { error: errorMessage });
+				if (message.stopReason === "aborted") {
+					return route.module.formatError(499, "request_aborted", errorMessage);
+				}
+				const classified = classifyGatewayError(new Error(errorMessage));
+				return route.module.formatError(classified.status, classified.type, errorMessage);
 			}
 			return json(200, route.module.encodeResponse(message, parsed.modelId));
 		} catch (error) {
-			if (controller.signal.aborted) return clientClosedResponse();
-			const errMsg = error instanceof Error ? error.message : String(error);
-			logger.warn("auth-gateway non-streaming aborted", { format: route.label, error: errMsg, peer });
-			return json(502, { error: errMsg });
+			if (controller.signal.aborted) return clientClosedResponse(route);
+			const classified = classifyGatewayError(error);
+			logger.warn("auth-gateway non-streaming aborted", {
+				format: route.label,
+				error: classified.message,
+				peer,
+			});
+			return route.module.formatError(classified.status, classified.type, classified.message);
 		}
 	}
-	if (controller.signal.aborted) return clientClosedResponse();
+	if (controller.signal.aborted) return clientClosedResponse(route);
 
 	const sseStream = route.module.encodeStream(events, parsed.modelId, parsed.options);
 	return new Response(sseStream, {
@@ -409,17 +393,22 @@ async function handleFormatEndpoint(
 			"Content-Type": "text/event-stream; charset=utf-8",
 			"Cache-Control": "no-cache",
 			Connection: "keep-alive",
+			// Disable proxy buffering (nginx and ingress controllers honor this).
+			// Without it the SSE stream gets held until the buffer flushes, which
+			// stalls the long-thinking-budget calls we exist to support.
+			"X-Accel-Buffering": "no",
 		},
 	});
 }
 
 /**
- * Snapshot of `GET /v1/usage` — fetchUsageReports already caches reports at 30s TTL
- * inside AuthStorage, so this handler is a thin wrapper that surfaces the same
- * data to HTTP callers (notably the macOS usage widget).
+ * Snapshot of `GET /v1/usage` — `fetchUsageReports` already caches reports at
+ * a 5-minute per-credential TTL (with jitter, plus last-good fallback on
+ * failure) inside `AuthStorage`, so this handler is a thin wrapper that
+ * surfaces the same data to HTTP callers (notably the macOS usage widget).
  */
-async function handleUsage(storage: AuthStorage): Promise<Response> {
-	const reports = (await storage.fetchUsageReports?.()) ?? [];
+async function handleUsage(storage: AuthStorage, signal: AbortSignal): Promise<Response> {
+	const reports = (await storage.fetchUsageReports?.({ signal })) ?? [];
 	// Drop the heavy provider-specific `raw` payload — UI consumers only need
 	// `limits` + `metadata`. Match the broker's `/v1/usage` shape so a single
 	// client struct (Swift widget, llm-git, ...) works against either endpoint.
@@ -450,34 +439,42 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 			const url = new URL(req.url);
 			const pathname = url.pathname;
 			const peer = resolvePeer(req);
+			// CORS preflight is always answered without auth — browsers send
+			// preflights pre-authentication and a 401 here breaks the actual
+			// request before the bearer is ever attached.
+			if (req.method === "OPTIONS") {
+				return new Response(null, { status: 204, headers: corsHeaders(req) });
+			}
 			try {
 				if (req.method === "GET" && pathname === "/healthz") {
-					return json(200, { ok: true, version });
+					return withCors(json(200, { ok: true, version }), req);
 				}
 				if (!isAuthorized(req, tokens)) {
 					logger.info("auth-gateway request unauthorized", { method: req.method, path: pathname, peer });
-					return json(401, { error: "unauthorized" });
+					return withCors(json(401, { error: "unauthorized" }), req);
 				}
 
-				// Aggregated usage — backed by AuthStorage's 30s cache. Same shape as
-				// the broker's `/v1/usage`, so widget/llm-git speak to either with the
+				// Aggregated usage — backed by AuthStorage's 5-min per-credential cache.
+				// Same shape as the broker's `/v1/usage`, so widget/llm-git speak to either with the
 				// same client struct.
 				if (req.method === "GET" && pathname === "/v1/usage") {
-					return await handleUsage(opts.storage);
+					return withCors(await handleUsage(opts.storage, req.signal), req);
 				}
 
 				// Provider-format dispatch.
 				const formatRoute = FORMAT_ROUTES[pathname];
 				if (formatRoute && req.method === "POST") {
-					return await handleFormatEndpoint(formatRoute, opts, req, peer);
+					return withCors(await handleFormatEndpoint(formatRoute, opts, req, peer), req);
 				}
 
 				// Model catalog.
 				if (req.method === "GET" && pathname === "/v1/models") {
-					return handleModelsList(opts);
+					return withCors(handleModelsList(opts), req);
 				}
 
-				return json(404, { error: `No route: ${req.method} ${pathname}` });
+				// Route-table miss: no format module to defer to, so we emit a
+				// plain JSON 404 rather than guessing at a protocol-specific envelope.
+				return withCors(json(404, { error: `No route: ${req.method} ${pathname}` }), req);
 			} catch (error) {
 				logger.error("auth-gateway handler crashed", {
 					method: req.method,
@@ -485,9 +482,12 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 					peer,
 					error: String(error),
 				});
-				return json(500, { error: "internal error" });
+				return withCors(json(500, { error: "internal error" }), req);
 			}
 		},
+		// Max-out Bun's idle timeout. Long thinking-budget calls can sit idle
+		// for minutes before the first token arrives; the default kills them.
+		idleTimeout: 255,
 	});
 
 	const boundHost = server.hostname ?? bind.hostname;

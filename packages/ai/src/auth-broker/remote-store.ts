@@ -4,7 +4,8 @@
  * `upsert*`, `delete*ForProvider`) throw because login flows are server-side.
  *
  * Cache (`getCache`/`setCache`/`cleanExpiredCache`) is in-memory and ephemeral —
- * usage reports cache TTL is ~30s, so durability across runs isn't required.
+ * usage reports cache TTL is 5 minutes per credential, so durability across
+ * runs isn't required.
  */
 import { logger } from "@oh-my-pi/pi-utils";
 import {
@@ -20,9 +21,22 @@ import type { UsageReport } from "../usage";
 import type { OAuthCredentials } from "../utils/oauth/types";
 import type { AuthBrokerClient } from "./client";
 
+/**
+ * Client-side TTL for the aggregate `/v1/usage` response. Set below the
+ * broker server's own 30s usage cache so we typically pick up the broker's
+ * cached value instead of re-walking the network — but high enough to absorb
+ * the parallel fan-out from `#rankOAuthSelections` into a single round-trip.
+ */
+const USAGE_CACHE_TTL_MS = 15_000;
+
 interface CacheEntry {
 	value: string;
 	expiresAtSec: number;
+}
+
+interface UsageCacheEntry {
+	reports: UsageReport[];
+	fetchedAt: number;
 }
 
 export interface RemoteAuthCredentialStoreOptions {
@@ -38,6 +52,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	readonly #client: AuthBrokerClient;
 	#snapshot: AuthCredentialSnapshot;
 	#cache: Map<string, CacheEntry> = new Map();
+	#usageCache?: UsageCacheEntry;
+	#usageInflight?: Promise<UsageReport[] | null>;
 	#closed = false;
 
 	constructor(opts: RemoteAuthCredentialStoreOptions) {
@@ -151,8 +167,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		_provider: Provider,
 		credentialId: number,
 		_credential: OAuthCredential,
+		signal?: AbortSignal,
 	): Promise<OAuthCredentials> {
-		const { entry } = await this.#client.refreshCredential(credentialId);
+		const { entry } = await this.#client.refreshCredential(credentialId, signal);
 		if (entry.credential.type !== "oauth") {
 			throw new Error(`Broker returned non-OAuth credential for id=${credentialId}`);
 		}
@@ -174,9 +191,78 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * rate-limited by Anthropic's per-IP `/usage` cap the way a heavy
 	 * residential laptop is, so all credentials surface every cycle.
 	 */
-	async fetchUsageReports(): Promise<UsageReport[] | null> {
-		const body = await this.#client.fetchUsage();
-		return body.reports;
+	async fetchUsageReports(signal?: AbortSignal): Promise<UsageReport[] | null> {
+		return this.#raceWithSignal(this.#loadUsageReports(), signal);
+	}
+
+	/**
+	 * Per-credential usage hook consumed by `AuthStorage.#getUsageReport`. Pulls
+	 * the aggregate broker `/v1/usage` once and serves all callers from the
+	 * same response (coalesced + cached), then matches the credential to a
+	 * report by provider + identity (accountId / email / projectId).
+	 *
+	 * The broker already aggregates with its own 30s TTL on the server side; our
+	 * 15s client TTL is below that so we usually re-use the broker's cache too.
+	 */
+	async getUsageReport(
+		provider: Provider,
+		credential: OAuthCredential,
+		signal?: AbortSignal,
+	): Promise<UsageReport | null> {
+		const reports = await this.#raceWithSignal(this.#loadUsageReports(), signal);
+		if (!reports) return null;
+		return matchUsageReport(reports, provider, credential);
+	}
+
+	/**
+	 * Reject the awaited promise when the caller's signal aborts, without
+	 * affecting the shared upstream fetch. Used to give each caller their
+	 * own cancel without one caller's abort cascading into a peer's in-flight
+	 * request through the single-flight `#usageInflight`.
+	 */
+	#raceWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+		if (!signal) return promise;
+		if (signal.aborted) return Promise.reject(new Error("auth-broker request aborted"));
+		return new Promise<T>((resolve, reject) => {
+			const onAbort = (): void => {
+				signal.removeEventListener("abort", onAbort);
+				reject(new Error("auth-broker request aborted"));
+			};
+			signal.addEventListener("abort", onAbort, { once: true });
+			promise.then(
+				value => {
+					signal.removeEventListener("abort", onAbort);
+					resolve(value);
+				},
+				err => {
+					signal.removeEventListener("abort", onAbort);
+					reject(err);
+				},
+			);
+		});
+	}
+
+	#loadUsageReports(): Promise<UsageReport[] | null> {
+		const cached = this.#usageCache;
+		if (cached && Date.now() - cached.fetchedAt < USAGE_CACHE_TTL_MS) {
+			return Promise.resolve(cached.reports);
+		}
+		if (this.#usageInflight) return this.#usageInflight;
+		const inflight = this.#client
+			.fetchUsage()
+			.then(body => {
+				this.#usageCache = { reports: body.reports, fetchedAt: Date.now() };
+				return body.reports;
+			})
+			.catch(error => {
+				logger.warn("auth-broker usage fetch failed", { error: String(error) });
+				return null;
+			})
+			.finally(() => {
+				this.#usageInflight = undefined;
+			});
+		this.#usageInflight = inflight;
+		return inflight;
 	}
 
 	close(): void {
@@ -184,4 +270,60 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		this.#closed = true;
 		this.#cache.clear();
 	}
+}
+
+/**
+ * Match a broker-supplied usage report to a specific OAuth credential. The
+ * broker returns aggregate reports across all credentials it manages, so we
+ * pick the one whose identity (accountId / email / projectId) lines up with
+ * the credential the caller is asking about.
+ *
+ * Falls back to the lone candidate when only one matches the provider; falls
+ * through to `null` when nothing matches, which `AuthStorage` treats as "no
+ * usage data" (ranking proceeds without a usage signal for this credential).
+ */
+function matchUsageReport(reports: UsageReport[], provider: Provider, credential: OAuthCredential): UsageReport | null {
+	const candidates = reports.filter(report => report.provider === provider);
+	if (candidates.length === 0) return null;
+	if (candidates.length === 1) return candidates[0];
+	const accountId = credential.accountId?.trim().toLowerCase();
+	const email = credential.email?.trim().toLowerCase();
+	const projectId = credential.projectId?.trim().toLowerCase();
+	for (const report of candidates) {
+		if (reportMatchesIdentity(report, accountId, email, projectId)) return report;
+	}
+	return null;
+}
+
+function reportMatchesIdentity(
+	report: UsageReport,
+	accountId: string | undefined,
+	email: string | undefined,
+	projectId: string | undefined,
+): boolean {
+	const metadata = (report.metadata ?? {}) as Record<string, unknown>;
+	if (accountId) {
+		const metaAccount = readMetadataString(metadata, "accountId") ?? readMetadataString(metadata, "account_id");
+		if (metaAccount && metaAccount.toLowerCase() === accountId) return true;
+		for (const limit of report.limits) {
+			if (limit.scope.accountId?.toLowerCase() === accountId) return true;
+		}
+	}
+	if (email) {
+		const metaEmail = readMetadataString(metadata, "email");
+		if (metaEmail && metaEmail.toLowerCase() === email) return true;
+	}
+	if (projectId) {
+		const metaProject = readMetadataString(metadata, "projectId") ?? readMetadataString(metadata, "project_id");
+		if (metaProject && metaProject.toLowerCase() === projectId) return true;
+		for (const limit of report.limits) {
+			if (limit.scope.projectId?.toLowerCase() === projectId) return true;
+		}
+	}
+	return false;
+}
+
+function readMetadataString(metadata: Record<string, unknown>, key: string): string | undefined {
+	const value = metadata[key];
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }

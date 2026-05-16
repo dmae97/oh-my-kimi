@@ -7,12 +7,10 @@
  *
  * Spec: https://platform.openai.com/docs/api-reference/responses
  * Inverse direction (source-of-truth for item shapes): ../../providers/openai-responses.ts
- *
- * Note: images and other non-text input/output parts are not emitted by this
- * encoder (omp's TextContent/ImageContent split is preserved on input but the
- * Responses format documents far more part types than we exercise here).
  */
 
+import { logger } from "@oh-my-pi/pi-utils";
+import { resolvePromptCacheKey } from "../auth-gateway/http";
 import type { AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
 import type {
 	AssistantMessage,
@@ -24,8 +22,19 @@ import type {
 	Tool,
 	ToolCall,
 } from "../types";
+import {
+	type OpenAIResponsesFunctionCallItem,
+	type OpenAIResponsesFunctionCallOutputItem,
+	type OpenAIResponsesInputContent,
+	type OpenAIResponsesOutputContent,
+	type OpenAIResponsesReasoningItem,
+	type OpenAIResponsesTool,
+	openaiResponsesRequestSchema,
+} from "./openai-responses-server-schema";
 
 export type { ParsedRequest };
+
+// ─── narrow guards ──────────────────────────────────────────────────────────
 
 function isReasoningEffort(value: unknown): value is NonNullable<ParsedRequest["options"]["reasoning"]> {
 	return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh";
@@ -35,7 +44,15 @@ function isServiceTier(value: unknown): value is NonNullable<ParsedRequest["opti
 	return value === "auto" || value === "default" || value === "flex" || value === "scale" || value === "priority";
 }
 
-// ─── helpers ────────────────────────────────────────────────────────────────
+function isObj(v: unknown): v is Record<string, unknown> {
+	return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function asString(v: unknown): string | undefined {
+	return typeof v === "string" ? v : undefined;
+}
+
+// ─── id helpers ─────────────────────────────────────────────────────────────
 
 function uuidNoDashes(): string {
 	return crypto.randomUUID().replace(/-/g, "");
@@ -57,59 +74,124 @@ function makeFuncCallId(): string {
 	return `fc_${uuidNoDashes()}`;
 }
 
-import {
-	type OpenAIResponsesFunctionCallItem,
-	type OpenAIResponsesFunctionCallOutputItem,
-	type OpenAIResponsesInputContent,
-	type OpenAIResponsesOutputContent,
-	type OpenAIResponsesReasoningItem,
-	type OpenAIResponsesTool,
-	type OpenAIResponsesToolChoice,
-	openaiResponsesRequestSchema,
-} from "./openai-responses-server-schema";
-
-function isObj(v: unknown): v is Record<string, unknown> {
-	return typeof v === "object" && v !== null && !Array.isArray(v);
+function makeCustomCallId(): string {
+	return `ctc_${uuidNoDashes()}`;
 }
 
-function asString(v: unknown): string | undefined {
-	return typeof v === "string" ? v : undefined;
-}
+// ─── once-only warnings ─────────────────────────────────────────────────────
+// Module-scoped so we don't spam logs once per turn.
 
-// ─── inbound parser ─────────────────────────────────────────────────────────
+let warnedImageNotSupported = false;
+let warnedFileNotSupported = false;
+let warnedReasoningSummaryLevel = false;
+
+// ─── inbound parser helpers ─────────────────────────────────────────────────
 
 function extractReasoningTextFromItem(item: OpenAIResponsesReasoningItem): string {
-	const fromContent = (item.content ?? []).map(c => c.text).join("");
-	if (fromContent) return fromContent;
-	return (item.summary ?? []).map(c => c.text).join("");
+	// Prefer `summary[]` — mirrors real OpenAI and the openai-responses provider
+	// which writes the surfaced reasoning summary into `summary[].text`.
+	const fromSummary = (item.summary ?? []).map(c => c.text).join("");
+	if (fromSummary) return fromSummary;
+	return (item.content ?? []).map(c => c.text).join("");
 }
 
-function inputTextOf(blocks: OpenAIResponsesInputContent[] | string | undefined): string | TextContent[] {
+type InputBlockUnion =
+	| { type: "input_text"; text: string }
+	| { type: "text"; text: string }
+	| { type: "input_image"; detail?: "auto" | "low" | "high"; image_url?: string; file_id?: string }
+	| { type: "input_file"; file_id?: string; filename?: string; file_data?: string };
+
+/**
+ * Walk an input message's content array and produce pi-ai's `TextContent[]`.
+ * `input_image`/`input_file` blocks become bracketed text placeholders since
+ * pi-ai's `ImageContent` only carries inline base64 data and we have no
+ * resolver for OpenAI `image_url` / `file_id` references. Logs once per kind.
+ */
+function inputContentParts(blocks: OpenAIResponsesInputContent[] | string | undefined): string | TextContent[] {
 	if (typeof blocks === "string") return blocks;
 	if (!blocks) return [];
 	const parts: TextContent[] = [];
-	for (const block of blocks) {
-		if (block.type === "input_text") parts.push({ type: "text", text: block.text });
+	for (const raw of blocks) {
+		const block = raw as InputBlockUnion;
+		if (block.type === "input_text" || block.type === "text") {
+			parts.push({ type: "text", text: block.text });
+		} else if (block.type === "input_image") {
+			if (!warnedImageNotSupported) {
+				warnedImageNotSupported = true;
+				logger.warn("openai-responses-server: input_image dropped (no pi-ai bridge for image_url/file_id)", {
+					hasUrl: typeof block.image_url === "string",
+					hasFileId: typeof block.file_id === "string",
+				});
+			}
+			const ref = block.image_url ?? block.file_id ?? "?";
+			parts.push({ type: "text", text: `[image: ${ref}]` });
+		} else if (block.type === "input_file") {
+			if (!warnedFileNotSupported) {
+				warnedFileNotSupported = true;
+				logger.warn("openai-responses-server: input_file dropped (no pi-ai bridge for file_id/file_data)", {
+					hasFileId: typeof block.file_id === "string",
+					hasFileData: typeof block.file_data === "string",
+				});
+			}
+			const ref = block.file_id ?? block.filename ?? "?";
+			parts.push({ type: "text", text: `[file: ${ref}]` });
+		}
 	}
 	return parts.length === 1 ? parts[0].text : parts;
 }
+
+type OutputBlockUnion =
+	| { type: "output_text"; text: string }
+	| { type: "text"; text: string }
+	| { type: "refusal"; refusal: string };
 
 function outputTextOf(blocks: OpenAIResponsesOutputContent[] | string | undefined): TextContent[] {
 	if (typeof blocks === "string") return blocks.length > 0 ? [{ type: "text", text: blocks }] : [];
 	if (!blocks) return [];
 	const out: TextContent[] = [];
-	for (const block of blocks) {
-		if (block.type === "output_text") out.push({ type: "text", text: block.text });
+	for (const raw of blocks) {
+		const block = raw as OutputBlockUnion;
+		if (block.type === "output_text" || block.type === "text") {
+			out.push({ type: "text", text: block.text });
+		} else if (block.type === "refusal") {
+			// Preserve the refusal reason so history replay still carries it.
+			out.push({ type: "text", text: `[refusal: ${block.refusal}]` });
+		}
 	}
 	return out;
 }
 
-function mapToolChoice(value: OpenAIResponsesToolChoice | undefined): ParsedRequest["options"]["toolChoice"] {
+// The schema accepts a much wider tool_choice union than the SDK type so the
+// walker narrows against the local schema shape.
+type ParsedToolChoice =
+	| "auto"
+	| "none"
+	| "required"
+	| { type: "function"; name: string }
+	| { type: "custom"; name: string }
+	| {
+			type:
+				| "web_search_preview"
+				| "file_search"
+				| "computer_use_preview"
+				| "code_interpreter"
+				| "image_generation"
+				| "mcp";
+	  }
+	| { type: "allowed_tools"; mode: "auto" | "required"; tools: Array<{ type: string; name?: string }> };
+
+function mapToolChoice(value: ParsedToolChoice | undefined): ParsedRequest["options"]["toolChoice"] {
 	if (value === undefined) return undefined;
 	if (value === "auto" || value === "none" || value === "required") return value;
-	// Schema only validates ToolChoiceFunction; narrow defensively against the
-	// wider SDK union (allowed/types/mcp/custom/apply_patch/shell variants).
-	if ("type" in value && value.type === "function" && "name" in value) return { name: value.name };
+	if ("type" in value) {
+		// `custom` (codex apply_patch) and `function` both resolve to the same
+		// pi-ai shape: pi-ai's dispatcher matches `Tool.name` AND `customWireName`,
+		// so passing the wire name works for either.
+		if (value.type === "function" || value.type === "custom") return { name: value.name };
+		// Hosted tools + allowed_tools — we don't surface these to pi-ai; fall
+		// back to letting the model pick a tool freely.
+		return "auto";
+	}
 	return undefined;
 }
 
@@ -117,7 +199,7 @@ function buildTools(tools: Array<OpenAIResponsesTool | { type: string }> | undef
 	if (!tools) return undefined;
 	const out: Tool[] = [];
 	for (const t of tools) {
-		// Skip non-function tools (web_search_call, file_search_call, …).
+		// Skip non-function tools (web_search, file_search, …).
 		if (t.type !== "function") continue;
 		const fn = t as Extract<OpenAIResponsesTool, { type: "function" }>;
 		const tool: Tool = {
@@ -155,7 +237,32 @@ function ensureAssistantPlaceholder(messages: Message[], modelId: string, now: n
 	return placeholder;
 }
 
-export function parseRequest(body: unknown): ParsedRequest {
+/** Flatten a function_call_output array form (text + refusal) into a single string. */
+function flattenFunctionOutputArray(blocks: readonly unknown[]): string {
+	const parts: string[] = [];
+	for (const raw of blocks) {
+		if (!isObj(raw)) continue;
+		const t = raw.type;
+		if (t === "output_text" || t === "text") {
+			const text = asString(raw.text);
+			if (text) parts.push(text);
+		} else if (t === "refusal") {
+			const refusal = asString(raw.refusal);
+			if (refusal) parts.push(`[refusal: ${refusal}]`);
+		}
+	}
+	return parts.join("");
+}
+
+// ─── parseRequest ───────────────────────────────────────────────────────────
+
+export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
+	// Header capture is centralized in `auth-gateway/server.ts` (the
+	// allow-listed set lands on `options.headers` automatically). We also
+	// consult `headers` here to populate `options.promptCacheKey` when the
+	// client signals a cache identity outside the body — see the
+	// `resolvePromptCacheKey` call further down.
+
 	const parsed = openaiResponsesRequestSchema.safeParse(body);
 	if (!parsed.success) {
 		throw new Error(`openai-responses: ${parsed.error.message}`);
@@ -183,14 +290,14 @@ export function parseRequest(body: unknown): ParsedRequest {
 				};
 				switch (msg.role) {
 					case "system": {
-						const text = inputTextOf(msg.content as OpenAIResponsesInputContent[] | string | undefined);
+						const text = inputContentParts(msg.content as OpenAIResponsesInputContent[] | string | undefined);
 						const flat = typeof text === "string" ? text : text.map(p => p.text).join("");
 						if (flat.length > 0) systemPrompt.push(flat);
 						break;
 					}
 					case "user":
 					case "developer": {
-						const content = inputTextOf(msg.content as OpenAIResponsesInputContent[] | string | undefined);
+						const content = inputContentParts(msg.content as OpenAIResponsesInputContent[] | string | undefined);
 						messages.push({ role: msg.role, content, timestamp: now });
 						break;
 					}
@@ -235,8 +342,8 @@ export function parseRequest(body: unknown): ParsedRequest {
 				const argsRaw = call.arguments ?? "{}";
 				let args: Record<string, unknown>;
 				try {
-					const parsed: unknown = JSON.parse(argsRaw);
-					args = isObj(parsed) ? parsed : {};
+					const parsedArgs: unknown = JSON.parse(argsRaw);
+					args = isObj(parsedArgs) ? parsedArgs : {};
 				} catch {
 					throw new Error(`openai-responses: function_call ${call.call_id} has invalid JSON arguments`);
 				}
@@ -250,26 +357,49 @@ export function parseRequest(body: unknown): ParsedRequest {
 				ensureAssistantPlaceholder(messages, data.model, now).content.push(toolCall);
 				continue;
 			}
+			if (effectiveType === "custom_tool_call") {
+				const call = item as { id?: string; call_id: string; name: string; input: string };
+				// Custom tools carry a raw input string. We stash it in `arguments.input`
+				// matching pi-ai's openai-responses-shared convention, and tag the call
+				// with `customWireName` so encoders re-emit it as `custom_tool_call`.
+				const toolCall: ToolCall = {
+					type: "toolCall",
+					id: call.call_id,
+					name: call.name,
+					arguments: { input: call.input ?? "" },
+					customWireName: call.name,
+					...(call.id ? { thoughtSignature: call.id } : {}),
+				};
+				ensureAssistantPlaceholder(messages, data.model, now).content.push(toolCall);
+				continue;
+			}
 			if (effectiveType === "function_call_output") {
 				const output = item as OpenAIResponsesFunctionCallOutputItem;
-				// Find the matching tool call name from earlier assistant content.
-				let toolName = "";
-				for (let i = messages.length - 1; i >= 0; i--) {
-					const m = messages[i];
-					if (m.role !== "assistant") continue;
-					for (const c of m.content) {
-						if (c.type === "toolCall" && c.id === output.call_id) {
-							toolName = c.name;
-							break;
-						}
-					}
-					if (toolName) break;
-				}
+				const toolName = findToolNameById(messages, output.call_id);
+				const text =
+					typeof output.output === "string"
+						? output.output
+						: Array.isArray(output.output)
+							? flattenFunctionOutputArray(output.output)
+							: "";
 				messages.push({
 					role: "toolResult",
 					toolCallId: output.call_id,
 					toolName,
-					content: [{ type: "text", text: typeof output.output === "string" ? output.output : "" }],
+					content: [{ type: "text", text }],
+					isError: false,
+					timestamp: now,
+				});
+				continue;
+			}
+			if (effectiveType === "custom_tool_call_output") {
+				const output = item as { call_id: string; output: string };
+				const toolName = findToolNameById(messages, output.call_id);
+				messages.push({
+					role: "toolResult",
+					toolCallId: output.call_id,
+					toolName,
+					content: [{ type: "text", text: output.output ?? "" }],
 					isError: false,
 					timestamp: now,
 				});
@@ -292,25 +422,41 @@ export function parseRequest(body: unknown): ParsedRequest {
 	if (data.stop !== undefined && data.stop !== null) {
 		options.stopSequences = typeof data.stop === "string" ? [data.stop] : data.stop;
 	}
-	const toolChoice = mapToolChoice(data.tool_choice);
+	const toolChoice = mapToolChoice(data.tool_choice as ParsedToolChoice | undefined);
 	if (toolChoice !== undefined) options.toolChoice = toolChoice;
 	if (data.reasoning?.effort && isReasoningEffort(data.reasoning.effort)) {
 		options.reasoning = data.reasoning.effort;
 	}
-	// OpenAI summary "auto"|"concise"|"detailed" → request a visible summary;
-	// absent → leave pi-ai's default. The "none" / absence inverse maps to
-	// `hideThinkingSummary: true`.
-	if (data.reasoning?.summary === undefined) {
-		// no-op; provider decides
-	} else if (data.reasoning.summary === "none") {
+	// OpenAI summary: `none` → suppress; `auto`/`concise`/`detailed` → request
+	// visible summary. pi-ai has no per-level plumbing — log once and let the
+	// provider default kick in.
+	if (data.reasoning?.summary === "none") {
 		options.hideThinkingSummary = true;
+	} else if (
+		data.reasoning?.summary === "auto" ||
+		data.reasoning?.summary === "concise" ||
+		data.reasoning?.summary === "detailed"
+	) {
+		if (!warnedReasoningSummaryLevel) {
+			warnedReasoningSummaryLevel = true;
+			logger.debug("openai-responses-server: reasoning.summary level not differentiated", {
+				level: data.reasoning.summary,
+			});
+		}
 	}
 	if (data.service_tier !== undefined && isServiceTier(data.service_tier)) {
 		options.serviceTier = data.service_tier;
 	}
 	if (data.presence_penalty !== undefined) options.presencePenalty = data.presence_penalty;
-	// `store`, `previous_response_id`, `parallel_tool_calls` are accepted by the
-	// schema for forward-compatibility but not yet plumbed through pi-ai.
+	if (data.frequency_penalty !== undefined) options.frequencyPenalty = data.frequency_penalty;
+	if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
+	const cacheKey = resolvePromptCacheKey(body, headers);
+	if (cacheKey !== undefined) options.promptCacheKey = cacheKey;
+	if (data.previous_response_id !== undefined) options.previousResponseId = data.previous_response_id;
+	if (data.user !== undefined) options.user = data.user;
+	if (isObj(data.metadata)) options.metadata = data.metadata;
+	// `store` is a stateful-storage hint that omp's gateway doesn't honour;
+	// silently accepted by the schema. No typed slot — drop.
 
 	return {
 		modelId: data.model,
@@ -320,25 +466,61 @@ export function parseRequest(body: unknown): ParsedRequest {
 	};
 }
 
+function findToolNameById(messages: Message[], callId: string): string {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i];
+		if (m.role !== "assistant") continue;
+		for (const c of m.content) {
+			if (c.type === "toolCall" && c.id === callId) return c.name;
+		}
+	}
+	return "";
+}
+
+// ─── formatError ────────────────────────────────────────────────────────────
+
+export function formatError(status: number, type: string, message: string): Response {
+	return new Response(JSON.stringify({ error: { message, type } }), {
+		status,
+		headers: { "Content-Type": "application/json" },
+	});
+}
+
 // ─── output item builders (shared by streaming + non-streaming encoders) ────
 
 type ReasoningOutputItem = {
 	type: "reasoning";
 	id: string;
-	summary: Array<{ type?: string; text?: string }>;
-	content?: Array<{ type: "reasoning_text"; text: string }>;
+	summary: Array<{ type: "summary_text"; text: string }>;
 } & Record<string, unknown>;
 
-type OutputItem =
-	| ReasoningOutputItem
-	| {
-			type: "message";
-			id: string;
-			role: "assistant";
-			status: "completed";
-			content: Array<{ type: "output_text"; text: string; annotations: never[] }>;
-	  }
-	| { type: "function_call"; id: string; call_id: string; name: string; arguments: string; status: "completed" };
+type MessageOutputItem = {
+	type: "message";
+	id: string;
+	role: "assistant";
+	status: "completed";
+	content: Array<{ type: "output_text"; text: string; annotations: never[] }>;
+};
+
+type FunctionCallOutputItem = {
+	type: "function_call";
+	id: string;
+	call_id: string;
+	name: string;
+	arguments: string;
+	status: "completed";
+};
+
+type CustomToolCallOutputItem = {
+	type: "custom_tool_call";
+	id: string;
+	call_id: string;
+	name: string;
+	input: string;
+	status: "completed";
+};
+
+type OutputItem = ReasoningOutputItem | MessageOutputItem | FunctionCallOutputItem | CustomToolCallOutputItem;
 
 type ResponseStatus = "completed" | "in_progress" | "failed" | "incomplete";
 
@@ -349,22 +531,29 @@ function responseStatusForStopReason(message: AssistantMessage): ResponseStatus 
 }
 
 function buildReasoningItem(part: ThinkingContent): ReasoningOutputItem {
+	const baseId = part.itemId ?? makeReasoningId();
 	if (part.thinkingSignature) {
 		try {
-			const parsed: unknown = JSON.parse(part.thinkingSignature);
-			if (isObj(parsed) && parsed.type === "reasoning") {
-				const id = part.itemId ?? asString(parsed.id) ?? makeReasoningId();
-				return { ...parsed, type: "reasoning", id } as ReasoningOutputItem;
+			const sigParsed: unknown = JSON.parse(part.thinkingSignature);
+			if (isObj(sigParsed) && sigParsed.type === "reasoning") {
+				const id = part.itemId ?? asString(sigParsed.id) ?? makeReasoningId();
+				// Preserve any extra fields (encrypted_content, …) the original carried,
+				// but normalize the summary into the canonical `{type, text}[]` shape.
+				const merged: Record<string, unknown> = { ...sigParsed, type: "reasoning", id };
+				merged.summary = [{ type: "summary_text", text: part.thinking }];
+				// `content[]` is the encrypted/raw side-channel; leave whatever was
+				// already there. If absent, omit — real OpenAI only emits `content[]`
+				// when `include=['reasoning.encrypted_content']` is set.
+				return merged as ReasoningOutputItem;
 			}
 		} catch {
-			// Not a serialized Responses reasoning item; fall back to raw thinking text.
+			// Not a serialized Responses reasoning item; fall through to fresh build.
 		}
 	}
 	return {
 		type: "reasoning",
-		id: part.itemId ?? makeReasoningId(),
-		summary: [],
-		content: [{ type: "reasoning_text", text: part.thinking }],
+		id: baseId,
+		summary: [{ type: "summary_text", text: part.thinking }],
 	};
 }
 
@@ -372,9 +561,9 @@ function reasoningItemId(part: ThinkingContent): string {
 	if (part.itemId) return part.itemId;
 	if (part.thinkingSignature) {
 		try {
-			const parsed: unknown = JSON.parse(part.thinkingSignature);
-			if (isObj(parsed)) {
-				const id = asString(parsed.id);
+			const sigParsed: unknown = JSON.parse(part.thinkingSignature);
+			if (isObj(sigParsed)) {
+				const id = asString(sigParsed.id);
 				if (id) return id;
 			}
 		} catch {
@@ -390,7 +579,7 @@ function reasoningItemId(part: ThinkingContent): string {
  */
 function buildOutputItems(message: AssistantMessage): OutputItem[] {
 	const out: OutputItem[] = [];
-	let pendingMessage: Extract<OutputItem, { type: "message" }> | null = null;
+	let pendingMessage: MessageOutputItem | null = null;
 	const flushMessage = () => {
 		if (pendingMessage) {
 			out.push(pendingMessage);
@@ -415,17 +604,28 @@ function buildOutputItems(message: AssistantMessage): OutputItem[] {
 			out.push(buildReasoningItem(part));
 		} else if (part.type === "toolCall") {
 			flushMessage();
-			const id = part.thoughtSignature ?? makeFuncCallId();
-			out.push({
-				type: "function_call",
-				id,
-				call_id: part.id,
-				name: part.name,
-				arguments: JSON.stringify(part.arguments ?? {}),
-				status: "completed",
-			});
+			if (part.customWireName) {
+				const rawInput = typeof part.arguments?.input === "string" ? (part.arguments.input as string) : "";
+				out.push({
+					type: "custom_tool_call",
+					id: part.thoughtSignature ?? makeCustomCallId(),
+					call_id: part.id,
+					name: part.customWireName,
+					input: rawInput,
+					status: "completed",
+				});
+			} else {
+				out.push({
+					type: "function_call",
+					id: part.thoughtSignature ?? makeFuncCallId(),
+					call_id: part.id,
+					name: part.name,
+					arguments: JSON.stringify(part.arguments ?? {}),
+					status: "completed",
+				});
+			}
 		}
-		// RedactedThinking is silently dropped — no direct Responses wire representation.
+		// RedactedThinking / Image are silently dropped — no direct Responses wire representation.
 	}
 	flushMessage();
 	return out;
@@ -501,6 +701,8 @@ interface OpenFunctionCall {
 	callId: string;
 	name: string;
 	argsText: string;
+	/** Set when the underlying ToolCall is a custom-tool emission. */
+	customWireName?: string;
 }
 type OpenItem = OpenMessage | OpenReasoning | OpenFunctionCall;
 
@@ -528,6 +730,16 @@ export function encodeStream(
 			let outputIndex = 0;
 			const state: { open: OpenItem | null } = { open: null };
 			const finishedItems: OutputItem[] = [];
+
+			const responseSnapshot = (status: ResponseStatus, output: OutputItem[] | []) => ({
+				id: responseId,
+				object: "response",
+				created_at: createdAt,
+				status,
+				model: requestedModelId,
+				output,
+				usage: null,
+			});
 
 			const openMessage = (): OpenMessage => {
 				const itemId = makeMsgId();
@@ -557,10 +769,18 @@ export function encodeStream(
 				const item = {
 					type: "reasoning" as const,
 					id: itemId,
-					summary: [] as never[],
-					content: [] as Array<{ type: "reasoning_text"; text: string }>,
+					summary: [] as Array<{ type: "summary_text"; text: string }>,
 				};
 				emit("response.output_item.added", { output_index: outputIndex, item });
+				// Open the summary part. Real OpenAI streams summary text in the
+				// canonical `reasoning_summary_*` lifecycle; pi-ai's own decoder
+				// reads `summary[].text` from the eventual `output_item.done`.
+				emit("response.reasoning_summary_part.added", {
+					item_id: itemId,
+					output_index: outputIndex,
+					summary_index: 0,
+					part: { type: "summary_text", text: "" },
+				});
 				const next: OpenReasoning = { kind: "reasoning", itemId, outputIndex, reasoningText: "" };
 				state.open = next;
 				return next;
@@ -569,19 +789,41 @@ export function encodeStream(
 			const openToolCall = (partial: AssistantMessage, contentIndex: number): OpenFunctionCall => {
 				const part = partial.content[contentIndex];
 				const tc = part && part.type === "toolCall" ? part : undefined;
-				const itemId = tc?.thoughtSignature ?? makeFuncCallId();
+				const customWireName: string | undefined =
+					tc && typeof tc.customWireName === "string" && tc.customWireName.length > 0
+						? tc.customWireName
+						: undefined;
+				const isCustom = customWireName !== undefined;
+				const itemId = tc?.thoughtSignature ?? (isCustom ? makeCustomCallId() : makeFuncCallId());
 				const callId = tc?.id ?? "";
-				const name = tc?.name ?? "";
-				const item = {
-					type: "function_call" as const,
-					id: itemId,
-					call_id: callId,
-					name,
-					arguments: "",
-					status: "in_progress",
-				};
+				const name = customWireName ?? tc?.name ?? "";
+				const item = isCustom
+					? {
+							type: "custom_tool_call" as const,
+							id: itemId,
+							call_id: callId,
+							name,
+							input: "",
+							status: "in_progress",
+						}
+					: {
+							type: "function_call" as const,
+							id: itemId,
+							call_id: callId,
+							name,
+							arguments: "",
+							status: "in_progress",
+						};
 				emit("response.output_item.added", { output_index: outputIndex, item });
-				const next: OpenFunctionCall = { kind: "function_call", itemId, outputIndex, callId, name, argsText: "" };
+				const next: OpenFunctionCall = {
+					kind: "function_call",
+					itemId,
+					outputIndex,
+					callId,
+					name,
+					argsText: "",
+					...(isCustom ? { customWireName } : {}),
+				};
 				state.open = next;
 				return next;
 			};
@@ -589,8 +831,6 @@ export function encodeStream(
 			const closeOpen = () => {
 				if (!state.open) return;
 				if (state.open.kind === "message") {
-					// (No defensive part-close needed; text_end always flushes the part before
-					// the next non-text event triggers closeOpen.)
 					const item = {
 						type: "message",
 						id: state.open.itemId,
@@ -607,38 +847,57 @@ export function encodeStream(
 						content: state.open.content,
 					});
 				} else if (state.open.kind === "reasoning") {
+					const summary = [{ type: "summary_text" as const, text: state.open.reasoningText ?? "" }];
 					const item = {
 						type: "reasoning",
 						id: state.open.itemId,
-						summary: [],
-						content: [{ type: "reasoning_text", text: state.open.reasoningText ?? "" }],
+						summary,
 					};
 					emit("response.output_item.done", { output_index: state.open.outputIndex, item });
 					finishedItems.push({
 						type: "reasoning",
 						id: state.open.itemId,
-						summary: [],
-						content: [{ type: "reasoning_text", text: state.open.reasoningText ?? "" }],
+						summary,
 					});
 				} else {
-					const args = state.open.argsText ?? "";
-					const item = {
-						type: "function_call",
-						id: state.open.itemId,
-						call_id: state.open.callId ?? "",
-						name: state.open.name ?? "",
-						arguments: args,
-						status: "completed",
-					};
-					emit("response.output_item.done", { output_index: state.open.outputIndex, item });
-					finishedItems.push({
-						type: "function_call",
-						id: state.open.itemId,
-						call_id: state.open.callId ?? "",
-						name: state.open.name ?? "",
-						arguments: args,
-						status: "completed",
-					});
+					const text = state.open.argsText ?? "";
+					if (state.open.customWireName) {
+						const item = {
+							type: "custom_tool_call",
+							id: state.open.itemId,
+							call_id: state.open.callId ?? "",
+							name: state.open.customWireName,
+							input: text,
+							status: "completed",
+						};
+						emit("response.output_item.done", { output_index: state.open.outputIndex, item });
+						finishedItems.push({
+							type: "custom_tool_call",
+							id: state.open.itemId,
+							call_id: state.open.callId ?? "",
+							name: state.open.customWireName,
+							input: text,
+							status: "completed",
+						});
+					} else {
+						const item = {
+							type: "function_call",
+							id: state.open.itemId,
+							call_id: state.open.callId ?? "",
+							name: state.open.name ?? "",
+							arguments: text,
+							status: "completed",
+						};
+						emit("response.output_item.done", { output_index: state.open.outputIndex, item });
+						finishedItems.push({
+							type: "function_call",
+							id: state.open.itemId,
+							call_id: state.open.callId ?? "",
+							name: state.open.name ?? "",
+							arguments: text,
+							status: "completed",
+						});
+					}
 				}
 				outputIndex++;
 				state.open = null;
@@ -652,20 +911,24 @@ export function encodeStream(
 					switch (ev.type) {
 						case "start": {
 							createdAt = Math.floor((ev.partial.timestamp || Date.now()) / 1000);
+							// response.created — initial envelope.
 							controller.enqueue(
 								encoder.encode(
 									sseEvent("response.created", {
 										type: "response.created",
 										sequence_number: seq(),
-										response: {
-											id: responseId,
-											object: "response",
-											created_at: createdAt,
-											status: "in_progress",
-											model: requestedModelId,
-											output: [],
-											usage: null,
-										},
+										response: responseSnapshot("in_progress", []),
+									}),
+								),
+							);
+							// response.in_progress — mirrors real OpenAI; some clients gate
+							// on it before reading items.
+							controller.enqueue(
+								encoder.encode(
+									sseEvent("response.in_progress", {
+										type: "response.in_progress",
+										sequence_number: seq(),
+										response: responseSnapshot("in_progress", []),
 									}),
 								),
 							);
@@ -701,6 +964,9 @@ export function encodeStream(
 								delta: ev.delta,
 								logprobs: [],
 							});
+							// TODO: when pi-ai surfaces output_text annotations
+							// (web_search citations, …), emit
+							// `response.output_text.annotation.added` here.
 							break;
 						}
 						case "text_end": {
@@ -734,10 +1000,10 @@ export function encodeStream(
 							if (!state.open || state.open.kind !== "reasoning") break;
 							const cur: OpenReasoning = state.open;
 							cur.reasoningText += ev.delta;
-							emit("response.reasoning_text.delta", {
+							emit("response.reasoning_summary_text.delta", {
 								item_id: cur.itemId,
 								output_index: cur.outputIndex,
-								content_index: 0,
+								summary_index: 0,
 								delta: ev.delta,
 							});
 							break;
@@ -747,11 +1013,17 @@ export function encodeStream(
 							const cur: OpenReasoning = state.open;
 							const text = ev.content ?? cur.reasoningText;
 							cur.reasoningText = text;
-							emit("response.reasoning_text.done", {
+							emit("response.reasoning_summary_text.done", {
 								item_id: cur.itemId,
 								output_index: cur.outputIndex,
-								content_index: 0,
+								summary_index: 0,
 								text,
+							});
+							emit("response.reasoning_summary_part.done", {
+								item_id: cur.itemId,
+								output_index: cur.outputIndex,
+								summary_index: 0,
+								part: { type: "summary_text", text },
 							});
 							closeOpen();
 							break;
@@ -765,29 +1037,56 @@ export function encodeStream(
 							if (!state.open || state.open.kind !== "function_call") break;
 							const cur: OpenFunctionCall = state.open;
 							cur.argsText += ev.delta;
-							emit("response.function_call_arguments.delta", {
-								item_id: cur.itemId,
-								output_index: cur.outputIndex,
-								delta: ev.delta,
-							});
+							if (cur.customWireName) {
+								emit("response.custom_tool_call_input.delta", {
+									item_id: cur.itemId,
+									output_index: cur.outputIndex,
+									delta: ev.delta,
+								});
+							} else {
+								emit("response.function_call_arguments.delta", {
+									item_id: cur.itemId,
+									output_index: cur.outputIndex,
+									delta: ev.delta,
+								});
+							}
 							break;
 						}
 						case "toolcall_end": {
 							if (!state.open || state.open.kind !== "function_call") break;
 							const cur: OpenFunctionCall = state.open;
-							// Finalize from the canonical ToolCall. arguments live as an object on the omp side;
-							// the wire wants the JSON string the model emitted, which streamed deltas accumulated.
-							const argsJson = cur.argsText || JSON.stringify(ev.toolCall.arguments ?? {});
-							cur.argsText = argsJson;
-							cur.callId = ev.toolCall.id;
-							cur.name = ev.toolCall.name;
-							if (ev.toolCall.thoughtSignature) cur.itemId = ev.toolCall.thoughtSignature;
-							emit("response.function_call_arguments.done", {
-								item_id: cur.itemId,
-								output_index: cur.outputIndex,
-								arguments: argsJson,
-								name: cur.name,
-							});
+							// Promote possibly-late info from the canonical ToolCall.
+							const tc = ev.toolCall;
+							if (tc.customWireName && !cur.customWireName) cur.customWireName = tc.customWireName;
+							if (tc.thoughtSignature) cur.itemId = tc.thoughtSignature;
+							cur.callId = tc.id;
+							cur.name = cur.customWireName ?? tc.name;
+							if (cur.customWireName) {
+								// Custom tool: raw input string. Streamed deltas accumulated
+								// the wire-level body; fall back to `arguments.input` from
+								// the finalized ToolCall when nothing streamed (rare).
+								const rawInput =
+									cur.argsText ||
+									(typeof tc.arguments?.input === "string" ? (tc.arguments.input as string) : "");
+								cur.argsText = rawInput;
+								emit("response.custom_tool_call_input.done", {
+									item_id: cur.itemId,
+									output_index: cur.outputIndex,
+									input: rawInput,
+									name: cur.name,
+								});
+							} else {
+								// Standard JSON tool: arguments object on the omp side, the
+								// wire wants the JSON string the model emitted (= streamed deltas).
+								const argsJson = cur.argsText || JSON.stringify(tc.arguments ?? {});
+								cur.argsText = argsJson;
+								emit("response.function_call_arguments.done", {
+									item_id: cur.itemId,
+									output_index: cur.outputIndex,
+									arguments: argsJson,
+									name: cur.name,
+								});
+							}
 							closeOpen();
 							break;
 						}
@@ -810,12 +1109,7 @@ export function encodeStream(
 								type: "response.failed",
 								sequence_number: seq(),
 								response: {
-									id: responseId,
-									object: "response",
-									created_at: createdAt,
-									status: "failed",
-									model: requestedModelId,
-									output: finishedItems,
+									...responseSnapshot("failed", finishedItems),
 									error: { message: failureMessage.errorMessage ?? "stream failed" },
 								},
 							}),

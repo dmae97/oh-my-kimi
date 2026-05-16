@@ -145,11 +145,16 @@ export interface AuthCredentialStore {
 	 * implements this against the broker; SQLite stores leave it undefined.
 	 *
 	 * Precedence: `AuthStorageOptions.refreshOAuthCredential` > this hook > local.
+	 *
+	 * `signal` propagates the agent's cancel (ESC, request abort, …) all the
+	 * way to the broker fetch so a hung connection can't strand the caller
+	 * for `timeoutMs * (maxRetries + 1)`.
 	 */
 	refreshOAuthCredential?(
 		provider: Provider,
 		credentialId: number,
 		credential: OAuthCredential,
+		signal?: AbortSignal,
 	): Promise<OAuthCredentials>;
 	/**
 	 * Optional store-supplied aggregate usage fetch. When present, `AuthStorage`
@@ -158,8 +163,26 @@ export interface AuthCredentialStore {
 	 * isn't rate-limited like a heavy residential client).
 	 *
 	 * Precedence: `AuthStorageOptions.fetchUsageReports` > this hook > local fan-out.
+	 *
+	 * `signal` propagates the agent's cancel down to the broker fetch.
 	 */
-	fetchUsageReports?(): Promise<UsageReport[] | null>;
+	fetchUsageReports?(signal?: AbortSignal): Promise<UsageReport[] | null>;
+	/**
+	 * Optional store-supplied per-credential usage report lookup. When present,
+	 * `AuthStorage` consults this before its own per-credential upstream fetch
+	 * (`#getUsageReport`). `RemoteAuthCredentialStore` implements this against
+	 * the broker's aggregate `/v1/usage` (one coalesced round-trip shared across
+	 * all callers) so multi-credential ranking on the client never hits the
+	 * upstream provider's rate-limited usage endpoint from the laptop IP.
+	 *
+	 * Returning `null` is authoritative — `AuthStorage` does NOT fall back to
+	 * the local fetch path. The store hook owns the decision, since falling
+	 * back would re-introduce the per-IP rate-limit problem the broker exists
+	 * to avoid.
+	 *
+	 * `signal` propagates the agent's cancel down to the broker fetch.
+	 */
+	getUsageReport?(provider: Provider, credential: OAuthCredential, signal?: AbortSignal): Promise<UsageReport | null>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -214,6 +237,7 @@ export type AuthStorageOptions = {
 		provider: Provider,
 		credentialId: number,
 		credential: OAuthCredential,
+		signal?: AbortSignal,
 	) => Promise<OAuthCredentials>;
 	/**
 	 * Human-readable description of the credential store backing this
@@ -235,7 +259,7 @@ export type AuthStorageOptions = {
 	 * Implementations may return null when no usage data is available; the
 	 * AuthStorage caller surfaces that to its own consumer unchanged.
 	 */
-	fetchUsageReports?: () => Promise<UsageReport[] | null>;
+	fetchUsageReports?: (signal?: AbortSignal) => Promise<UsageReport[] | null>;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -315,6 +339,12 @@ type UsageRequestDescriptor = {
 type AuthApiKeyOptions = {
 	baseUrl?: string;
 	modelId?: string;
+	/**
+	 * Caller's cancel signal. Threaded into any broker-bound OAuth refresh so
+	 * `ESC` / request abort actually kills a hung broker fetch instead of
+	 * stranding the caller for `timeoutMs * (maxRetries + 1)`.
+	 */
+	signal?: AbortSignal;
 };
 
 function requiresOpenAICodexProModel(provider: string, modelId: string | undefined): boolean {
@@ -360,6 +390,33 @@ function parseUsageCacheEntry<T>(raw: string): UsageCacheEntry<T> | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Race `promise` against `signal`, rejecting only this caller when the signal
+ * fires. The underlying promise keeps running so other awaiters on the same
+ * single-flight fetch aren't punished by a peer's cancel.
+ */
+function raceUsageWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+	if (!signal) return promise;
+	if (signal.aborted) return Promise.reject(new Error("usage fetch aborted"));
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = (): void => {
+			signal.removeEventListener("abort", onAbort);
+			reject(new Error("usage fetch aborted"));
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then(
+			value => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			err => {
+				signal.removeEventListener("abort", onAbort);
+				reject(err);
+			},
+		);
+	});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -425,7 +482,7 @@ export class AuthStorage {
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#usageCache: UsageCache;
 	#usageRequestInFlight: Map<string, Promise<UsageReport | null>> = new Map();
-	#usageReportsInFlight: Map<string, Promise<UsageReport[]>> = new Map();
+	#usageReportsInFlight: Map<string, Promise<UsageReport[] | null>> = new Map();
 	#usageFetch: typeof fetch;
 	#usageRequestTimeoutMs: number;
 	#usageLogger?: UsageLogger;
@@ -1520,6 +1577,7 @@ export class AuthStorage {
 						request.provider,
 						refreshableCredential,
 						refreshableCredentialId,
+						timeoutSignal,
 					);
 					const refreshedCredential = this.#mergeRefreshedUsageCredential(request.credential, refreshed);
 					this.#persistRefreshedUsageCredential(request.provider, request.credential, refreshedCredential);
@@ -1788,8 +1846,16 @@ export class AuthStorage {
 	async #getUsageReport(
 		provider: Provider,
 		credential: OAuthCredential,
-		options?: { baseUrl?: string; timeoutMs?: number },
+		options?: { baseUrl?: string; timeoutMs?: number; signal?: AbortSignal },
 	): Promise<UsageReport | null> {
+		// Store-level hook (e.g. `RemoteAuthCredentialStore`) is authoritative
+		// when present: the broker already aggregates usage from a less-throttled
+		// IP, and falling back to the local per-credential fetch would defeat the
+		// whole point of routing through it.
+		const storeHook = this.#store.getUsageReport?.bind(this.#store);
+		if (storeHook) {
+			return storeHook(provider, credential, options?.signal);
+		}
 		return this.#fetchUsageCached(
 			this.#buildUsageRequestForOauth(provider, credential, options?.baseUrl),
 			options?.timeoutMs ?? this.#usageRequestTimeoutMs,
@@ -1798,6 +1864,8 @@ export class AuthStorage {
 
 	async fetchUsageReports(options?: {
 		baseUrlResolver?: (provider: Provider) => string | undefined;
+		/** Caller's cancel signal; only rejects this caller, never the shared upstream fetch. */
+		signal?: AbortSignal;
 	}): Promise<UsageReport[] | null> {
 		// Caller override > store-level hook > local per-credential fan-out.
 		// `RemoteAuthCredentialStore` implements the store hook so a gateway
@@ -1805,7 +1873,21 @@ export class AuthStorage {
 		// needing the caller to wire it explicitly.
 		const override = this.#fetchUsageReportsOverride ?? this.#store.fetchUsageReports?.bind(this.#store);
 		if (override) {
-			return override();
+			// Reuse the in-flight map so concurrent callers (widget poll + format
+			// dispatch + credential selection) coalesce into one upstream call.
+			// Each caller's `signal` only cancels THAT caller's await; the
+			// shared upstream fetch runs to completion so peers aren't punished.
+			const OVERRIDE_KEY = "__override__";
+			let shared = this.#usageReportsInFlight.get(OVERRIDE_KEY);
+			if (!shared) {
+				// Don't forward the caller signal into the shared fetch — first caller's
+				// abort would otherwise cancel the upstream for every peer.
+				shared = override().finally(() => {
+					this.#usageReportsInFlight.delete(OVERRIDE_KEY);
+				});
+				this.#usageReportsInFlight.set(OVERRIDE_KEY, shared);
+			}
+			return raceUsageWithSignal(shared, options?.signal);
 		}
 		if (!this.#usageProviderResolver) return null;
 
@@ -1877,7 +1959,7 @@ export class AuthStorage {
 	async markUsageLimitReached(
 		provider: string,
 		sessionId: string | undefined,
-		options?: { retryAfterMs?: number; baseUrl?: string },
+		options?: { retryAfterMs?: number; baseUrl?: string; signal?: AbortSignal },
 	): Promise<boolean> {
 		const sessionCredential = this.#getSessionCredential(provider, sessionId);
 		if (!sessionCredential) return false;
@@ -1998,14 +2080,23 @@ export class AuthStorage {
 				return { selection, usage, usageChecked: true, blockedUntil: undefined as number | undefined };
 			}),
 		);
-		const usageResults = await Promise.race([usagePromise, Bun.sleep(usageTimeout).then(() => null)]).then(
-			result =>
+		const timeoutSignal = Promise.withResolvers<null>();
+		// `Bun.sleep` keeps the event loop alive even after Promise.race resolves,
+		// which leaks a 7.5–15s timer per credential-selection call. Use an unref'd
+		// timer so the timeout doesn't pin the process and clear it on the happy
+		// path so memory drops immediately.
+		const timer = setTimeout(() => timeoutSignal.resolve(null), usageTimeout);
+		(timer as { unref?: () => void }).unref?.();
+		const usageResults = await Promise.race([usagePromise, timeoutSignal.promise]).then(result => {
+			clearTimeout(timer);
+			return (
 				result ??
 				args.order.map(idx => {
 					const selection = args.credentials[idx];
 					return selection ? { selection, usage: null, usageChecked: false, blockedUntil: undefined } : null;
-				}),
-		);
+				})
+			);
+		});
 
 		for (let orderPos = 0; orderPos < usageResults.length; orderPos += 1) {
 			const result = usageResults[orderPos];
@@ -2131,6 +2222,7 @@ export class AuthStorage {
 						provider,
 						candidate.selection.credential,
 						credentialId,
+						options?.signal,
 					);
 					candidate.selection.credential = {
 						...candidate.selection.credential,
@@ -2176,6 +2268,7 @@ export class AuthStorage {
 		provider: Provider,
 		credential: OAuthCredential,
 		credentialId: number | undefined,
+		signal?: AbortSignal,
 	): Promise<OAuthCredentials> {
 		if (Date.now() < credential.expires) return credential;
 		let refreshPromise: Promise<OAuthCredentials>;
@@ -2185,7 +2278,7 @@ export class AuthStorage {
 		const storeRefresh = this.#store.refreshOAuthCredential?.bind(this.#store);
 		const overrideRefresh = this.#refreshOAuthCredentialOverride ?? storeRefresh;
 		if (overrideRefresh && credentialId !== undefined) {
-			refreshPromise = overrideRefresh(provider, credentialId, credential);
+			refreshPromise = overrideRefresh(provider, credentialId, credential, signal);
 		} else {
 			const customProvider = getOAuthProvider(provider);
 			if (customProvider) {
@@ -2198,17 +2291,29 @@ export class AuthStorage {
 			}
 		}
 		// Bound the refresh so a slow/hanging token endpoint cannot stall credential selection.
+		// Caller-driven abort jumps the gun on the timeout — the agent's ESC must
+		// take priority over the floor timeout.
 		let timeout: NodeJS.Timeout | undefined;
-		const timeoutPromise = new Promise<never>((_, reject) => {
+		let onAbort: (() => void) | undefined;
+		const cancellationPromise = new Promise<never>((_, reject) => {
 			timeout = setTimeout(
 				() => reject(new Error(`OAuth token refresh timed out for provider: ${provider}`)),
 				DEFAULT_OAUTH_REFRESH_TIMEOUT_MS,
 			);
+			if (signal) {
+				if (signal.aborted) {
+					reject(new Error("OAuth token refresh aborted by caller"));
+					return;
+				}
+				onAbort = () => reject(new Error("OAuth token refresh aborted by caller"));
+				signal.addEventListener("abort", onAbort, { once: true });
+			}
 		});
 		try {
-			return await Promise.race([refreshPromise, timeoutPromise]);
+			return await Promise.race([refreshPromise, cancellationPromise]);
 		} finally {
 			if (timeout) clearTimeout(timeout);
+			if (signal && onAbort) signal.removeEventListener("abort", onAbort);
 		}
 	}
 
@@ -2276,6 +2381,7 @@ export class AuthStorage {
 					provider,
 					selection.credential,
 					this.#getStoredCredentials(provider)[selection.index]?.id,
+					options?.signal,
 				);
 				const apiKey = customProvider.getApiKey
 					? customProvider.getApiKey(refreshedCredentials)
@@ -2519,7 +2625,7 @@ export class AuthStorage {
 	 * Returns the redacted snapshot entry for the refreshed row.
 	 * Throws when no OAuth credential with that id is loaded.
 	 */
-	async forceRefreshCredentialById(id: number): Promise<AuthCredentialSnapshotEntry> {
+	async forceRefreshCredentialById(id: number, signal?: AbortSignal): Promise<AuthCredentialSnapshotEntry> {
 		for (const [provider, entries] of this.#data) {
 			const index = entries.findIndex(entry => entry.id === id);
 			if (index === -1) continue;
@@ -2530,7 +2636,7 @@ export class AuthStorage {
 			// Pass a clone with expires=0 so the cached not-yet-expired short-circuit
 			// in #refreshOAuthCredential doesn't suppress the requested refresh.
 			const stale: OAuthCredential = { ...target.credential, expires: 0 };
-			const refreshed = await this.#refreshOAuthCredential(provider as Provider, stale, id);
+			const refreshed = await this.#refreshOAuthCredential(provider as Provider, stale, id, signal);
 			const updated: OAuthCredential = {
 				type: "oauth",
 				access: refreshed.access,

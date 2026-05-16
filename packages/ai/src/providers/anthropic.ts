@@ -15,6 +15,7 @@ import {
 	isEnoent,
 	isRetryableError,
 	isUnexpectedSocketCloseMessage,
+	logger,
 	readSseEvents,
 } from "@oh-my-pi/pi-utils";
 import { hasOpus47ApiRestrictions, mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
@@ -203,6 +204,9 @@ type AnthropicSamplingParams = MessageCreateParamsStreaming & {
 	top_p?: number;
 	top_k?: number;
 };
+
+const ANTHROPIC_STOP_SEQUENCES_MAX = 4;
+let warnedStopSequencesTrim = false;
 
 /**
  * Adaptive thinking `display` is supported starting with Claude Opus 4.7.
@@ -1780,6 +1784,18 @@ function buildParams(
 	}
 	if (options?.topK !== undefined) {
 		params.top_k = options.topK;
+	}
+	if (options?.stopSequences?.length) {
+		const seqs = options.stopSequences;
+		if (seqs.length > ANTHROPIC_STOP_SEQUENCES_MAX && !warnedStopSequencesTrim) {
+			warnedStopSequencesTrim = true;
+			logger.warn("anthropic: stop_sequences exceeds 4; extra entries dropped", {
+				received: seqs.length,
+				kept: ANTHROPIC_STOP_SEQUENCES_MAX,
+			});
+		}
+		params.stop_sequences =
+			seqs.length > ANTHROPIC_STOP_SEQUENCES_MAX ? seqs.slice(0, ANTHROPIC_STOP_SEQUENCES_MAX) : seqs;
 	}
 
 	// Opus 4.7+ rejects non-default sampling parameters with 400 error.

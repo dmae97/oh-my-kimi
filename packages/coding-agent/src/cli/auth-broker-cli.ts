@@ -549,6 +549,19 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 	const plannedApiKeyProviders = new Set<string>();
 	try {
 		for (const row of localStore.listAuthCredentials()) {
+			// Skip placeholder sentinels that pi-ai treats as "authenticated via
+			// out-of-band mechanism" (Bedrock/Vertex `<authenticated>`). They
+			// aren't real keys and uploading them would store garbage on the
+			// broker. Mirrors the env-var path's guard below.
+			if (row.credential.type === "api_key" && row.credential.key === "<authenticated>") {
+				skipped.push({
+					source: "local-sqlite",
+					provider: row.provider,
+					identity: "(api key)",
+					reason: "placeholder sentinel '<authenticated>' is not a real key",
+				});
+				continue;
+			}
 			const identity = credentialIdentity(row.provider, row.credential);
 			if (row.credential.type === "oauth" && flags.includeOauth !== true) {
 				skipped.push({

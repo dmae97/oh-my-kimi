@@ -1,9 +1,11 @@
 /**
  * Zod schemas for the OpenAI Responses API request shape we accept on the
- * gateway. Mirrors https://platform.openai.com/docs/api-reference/responses —
- * only the item types the gateway translation layer understands. Unsupported
- * controls (background/include/metadata/prompt/…) are caught explicitly with
- * `.refine(...)` so the error message names them.
+ * gateway. Mirrors https://platform.openai.com/docs/api-reference/responses.
+ *
+ * Unsupported / opaque controls (background/include/metadata/prompt/…) are
+ * accepted as `z.unknown().optional()` so we silently ignore rather than 400.
+ * Real clients (codex, openai-python, llm-git) routinely send these and a 400
+ * is a worse outcome than dropping them on the floor.
  */
 import type {
 	EasyInputMessage,
@@ -17,16 +19,44 @@ import type {
 } from "openai/resources/responses/responses";
 import * as z from "zod/v4";
 
-// ─── Input items ────────────────────────────────────────────────────────────
+// ─── Input content blocks ───────────────────────────────────────────────────
 
 const inputTextSchema = z.object({
 	type: z.literal("input_text"),
 	text: z.string(),
 });
 
+const plainTextSchema = z.object({
+	type: z.literal("text"),
+	text: z.string(),
+});
+
+const inputImageBlockSchema = z
+	.object({
+		type: z.literal("input_image"),
+		detail: z.enum(["auto", "low", "high"]).optional(),
+		image_url: z.string().optional(),
+		file_id: z.string().optional(),
+	})
+	.refine(v => typeof v.image_url === "string" || typeof v.file_id === "string", {
+		message: "input_image requires at least one of `image_url` or `file_id`",
+	});
+
+const inputFileBlockSchema = z.object({
+	type: z.literal("input_file"),
+	file_id: z.string().optional(),
+	filename: z.string().optional(),
+	file_data: z.string().optional(),
+});
+
 const outputTextSchema = z.object({
 	type: z.literal("output_text"),
 	text: z.string(),
+});
+
+const outputRefusalSchema = z.object({
+	type: z.literal("refusal"),
+	refusal: z.string(),
 });
 
 const summaryTextSchema = z.object({
@@ -39,13 +69,15 @@ const reasoningTextSchema = z.object({
 	text: z.string(),
 });
 
-const plainTextSchema = z.object({
-	type: z.literal("text"),
-	text: z.string(),
-});
+const inputContentBlockSchema = z.union([
+	inputTextSchema,
+	plainTextSchema,
+	inputImageBlockSchema,
+	inputFileBlockSchema,
+]);
+const outputContentBlockSchema = z.union([outputTextSchema, plainTextSchema, outputRefusalSchema]);
 
-const inputContentBlockSchema = z.union([inputTextSchema, plainTextSchema]);
-const outputContentBlockSchema = z.union([outputTextSchema, plainTextSchema]);
+// ─── Input items ────────────────────────────────────────────────────────────
 
 const userMessageItemSchema = z.object({
 	type: z.literal("message").optional(),
@@ -83,7 +115,24 @@ const functionCallItemSchema = z.object({
 const functionCallOutputItemSchema = z.object({
 	type: z.literal("function_call_output"),
 	call_id: z.string().min(1),
-	output: z.string().optional(),
+	// Codex CLI replays multimodal tool results in array form (text + refusal).
+	output: z.union([z.string(), z.array(outputContentBlockSchema)]).optional(),
+});
+
+const customToolCallItemSchema = z.object({
+	type: z.literal("custom_tool_call"),
+	id: z.string().optional(),
+	call_id: z.string().min(1),
+	name: z.string().min(1),
+	// Raw input string — NOT JSON.stringified. apply_patch flow streams a
+	// freeform body and reading it as JSON would corrupt it.
+	input: z.string(),
+});
+
+const customToolCallOutputItemSchema = z.object({
+	type: z.literal("custom_tool_call_output"),
+	call_id: z.string().min(1),
+	output: z.string(),
 });
 
 /**
@@ -98,8 +147,10 @@ export const inputItemSchema = z.union([
 	reasoningItemSchema,
 	functionCallItemSchema,
 	functionCallOutputItemSchema,
+	customToolCallItemSchema,
+	customToolCallOutputItemSchema,
 	// Tolerated but not bridged (file_search_call, web_search_call, …).
-	z.object({ type: z.string() }),
+	z.object({ type: z.string() }).loose(),
 ]);
 
 // Variant types alias the canonical SDK union members so the walker can
@@ -112,6 +163,13 @@ export type OpenAIResponsesReasoningItem = ResponseReasoningItem;
 export type OpenAIResponsesFunctionCallItem = ResponseFunctionToolCall;
 export type OpenAIResponsesFunctionCallOutputItem = ResponseInputItem.FunctionCallOutput;
 
+/** Inferred shape of the custom tool call input item (no canonical SDK alias). */
+export type OpenAIResponsesCustomToolCallItem = z.infer<typeof customToolCallItemSchema>;
+export type OpenAIResponsesCustomToolCallOutputItem = z.infer<typeof customToolCallOutputItemSchema>;
+export type OpenAIResponsesInputImageBlock = z.infer<typeof inputImageBlockSchema>;
+export type OpenAIResponsesInputFileBlock = z.infer<typeof inputFileBlockSchema>;
+export type OpenAIResponsesOutputRefusalBlock = z.infer<typeof outputRefusalSchema>;
+
 // ─── Tools ──────────────────────────────────────────────────────────────────
 
 export const toolSchema = z.object({
@@ -122,13 +180,29 @@ export const toolSchema = z.object({
 	strict: z.boolean().optional(),
 });
 
-// Built-in tool entries (web_search, file_search, …) — accepted but skipped
-// by the walker.
-const builtinToolSchema = z.object({
-	type: z.string(),
-});
+// Built-in / hosted tool entries (web_search_preview, file_search, …) — accepted
+// but skipped by the walker.
+const builtinToolSchema = z
+	.object({
+		type: z.string(),
+	})
+	.loose();
 
 // ─── Tool choice ────────────────────────────────────────────────────────────
+
+const hostedToolType = z.enum([
+	"web_search_preview",
+	"file_search",
+	"computer_use_preview",
+	"code_interpreter",
+	"image_generation",
+	"mcp",
+]);
+
+const allowedToolEntrySchema = z.object({
+	type: z.string(),
+	name: z.string().optional(),
+});
 
 export const toolChoiceSchema = z.union([
 	z.literal("auto"),
@@ -138,13 +212,31 @@ export const toolChoiceSchema = z.union([
 		type: z.literal("function"),
 		name: z.string().min(1),
 	}),
+	// Codex apply_patch flow.
+	z.object({
+		type: z.literal("custom"),
+		name: z.string().min(1),
+	}),
+	// Hosted-tool selection (no extra fields).
+	z.object({
+		type: hostedToolType,
+	}),
+	// `allowed_tools` — walker treats as auto.
+	z.object({
+		type: z.literal("allowed_tools"),
+		mode: z.enum(["auto", "required"]),
+		tools: z.array(allowedToolEntrySchema),
+	}),
 ]);
 
 // ─── Reasoning config ───────────────────────────────────────────────────────
 
 export const reasoningConfigSchema = z.object({
 	effort: z.string().optional(),
-	summary: z.string().optional(),
+	// `none` maps to hideThinkingSummary; auto/concise/detailed mean "show
+	// summary". pi-ai has no per-level plumbing for the latter — walker logs
+	// once and treats them as default.
+	summary: z.enum(["auto", "concise", "detailed", "none"]).optional(),
 });
 
 // ─── Stop ───────────────────────────────────────────────────────────────────
@@ -152,12 +244,6 @@ export const reasoningConfigSchema = z.object({
 export const stopSchema = z.union([z.string(), z.array(z.string()), z.null()]);
 
 // ─── Top-level request ──────────────────────────────────────────────────────
-
-const refuse = (field: string) =>
-	z
-		.unknown()
-		.refine(v => v === undefined, { message: `openai-responses: unsupported option \`${field}\`` })
-		.optional();
 
 export const openaiResponsesRequestSchema = z.object({
 	model: z.string().min(1),
@@ -174,18 +260,21 @@ export const openaiResponsesRequestSchema = z.object({
 	store: z.boolean().optional(),
 	previous_response_id: z.string().optional(),
 	parallel_tool_calls: z.boolean().optional(),
+	prompt_cache_key: z.string().optional(),
+	metadata: z.unknown().optional(),
+	user: z.string().optional(),
 	service_tier: z.string().optional(),
 	presence_penalty: z.number().optional(),
-	// Explicitly rejected.
-	background: refuse("background"),
-	include: refuse("include"),
-	metadata: refuse("metadata"),
-	prompt: refuse("prompt"),
-	safety_identifier: refuse("safety_identifier"),
-	text: refuse("text"),
-	top_logprobs: refuse("top_logprobs"),
-	truncation: refuse("truncation"),
-	user: refuse("user"),
+	frequency_penalty: z.number().optional(),
+	// Accepted-but-ignored: include `reasoning.encrypted_content` is the canonical
+	// way to request reasoning replay — silently accept and drop.
+	background: z.unknown().optional(),
+	include: z.unknown().optional(),
+	prompt: z.unknown().optional(),
+	safety_identifier: z.unknown().optional(),
+	text: z.unknown().optional(),
+	top_logprobs: z.unknown().optional(),
+	truncation: z.unknown().optional(),
 });
 
 /**

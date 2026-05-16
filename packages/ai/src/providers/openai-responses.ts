@@ -171,6 +171,7 @@ type OpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
 	min_p?: number;
 	presence_penalty?: number;
 	repetition_penalty?: number;
+	stream_options?: { include_obfuscation?: boolean };
 };
 
 /**
@@ -404,9 +405,14 @@ function buildParams(
 		prompt_cache_key: promptCacheKey,
 		prompt_cache_retention: promptCacheKey ? getPromptCacheRetention(model.baseUrl, cacheRetention) : undefined,
 		store: false,
+		stream_options: model.provider === "openai" ? { include_obfuscation: false } : undefined,
 	};
 
 	applyCommonResponsesSamplingParams(params, options, model.provider);
+	// TODO: openai responses has no top-level `stop`/`stop_sequences`; surface via reasoning.stop?
+	// `StreamOptions.stopSequences` is intentionally dropped for this provider.
+	// TODO: openai responses has no top-level `frequency_penalty` field as of the current SDK;
+	// `StreamOptions.frequencyPenalty` is intentionally dropped for this provider.
 
 	if (context.tools) {
 		params.tools = convertTools(context.tools, supportsStrictMode(model), model);

@@ -136,10 +136,8 @@ describe("auth-gateway openai-chat: parseRequest", () => {
 		expect(parsed.options.topP).toBe(0.9);
 		expect(parsed.options.stopSequences).toEqual(["\n\n"]);
 		expect(parsed.options.toolChoice).toEqual({ name: "lookup" });
-		expect(parsed.options.extra).toEqual({
-			response_format: { type: "json_object" },
-			includeStreamingUsage: true,
-		});
+		expect(parsed.options.responseFormat).toEqual({ type: "json_object" });
+		expect(parsed.options.extra).toEqual({ includeStreamingUsage: true });
 	});
 
 	it("rejects missing required fields", () => {

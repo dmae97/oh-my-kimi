@@ -18,33 +18,78 @@ export const DEFAULT_AUTH_GATEWAY_BIND = "127.0.0.1:4000";
 export type AuthGatewayToolChoice = "auto" | "none" | "required" | { name: string };
 
 export interface AuthGatewayParsedRequestOptions {
+	// ── Sampling ──────────────────────────────────────────────────────────
 	maxOutputTokens?: number;
 	temperature?: number;
 	topP?: number;
 	topK?: number;
+	/** OpenAI nucleus-min sampling (`min_p`). */
+	minP?: number;
+	/** Anthropic `stop_sequences` / OpenAI `stop`. */
 	stopSequences?: string[];
+	/** OpenAI `presence_penalty`. */
+	presencePenalty?: number;
+	/** OpenAI `frequency_penalty`. */
+	frequencyPenalty?: number;
+	/** OpenRouter / vLLM `repetition_penalty`. */
+	repetitionPenalty?: number;
+	/** OpenAI deterministic-sampling `seed`. */
+	seed?: number;
+	/** OpenAI `logit_bias` map (token id → bias). */
+	logitBias?: Record<string, number>;
+	/** OpenAI `response_format` (text | json_object | json_schema). Opaque passthrough. */
+	responseFormat?: unknown;
+
+	// ── Tools ─────────────────────────────────────────────────────────────
 	toolChoice?: AuthGatewayToolChoice;
+	/** OpenAI `parallel_tool_calls`. */
+	parallelToolCalls?: boolean;
+
+	// ── Reasoning ─────────────────────────────────────────────────────────
 	/** Effort-level reasoning request (OpenAI Responses / Chat `reasoning_effort`). */
 	reasoning?: Effort;
 	/** Force-disable reasoning (Anthropic `thinking: { type: "disabled" }`). */
 	disableReasoning?: boolean;
 	/**
-	 * Token budget for thinking (Anthropic `thinking.budget_tokens`). Bridged to
-	 * pi-ai via `thinkingBudgets[high]` when the wire format only carries a
-	 * single budget number with no effort label.
+	 * Explicit Anthropic `thinking.budget_tokens`. Mirrors Rust's
+	 * `resolve_thinking_budget`: pins onto whichever effort the client
+	 * requested (defaulting to High when unspecified). Preferred over the
+	 * removed legacy single-number `thinkingBudget` for new code.
 	 */
-	thinkingBudget?: number;
+	explicitThinkingBudgetTokens?: number;
+	/** Per-effort thinking budget map. */
+	thinkingBudgets?: Partial<Record<Effort, number>>;
 	/** Suppress the provider's reasoning summary stream. */
 	hideThinkingSummary?: boolean;
+
+	// ── Service / routing ─────────────────────────────────────────────────
 	/** OpenAI service tier (auto|default|flex|scale|priority). */
 	serviceTier?: ServiceTier;
-	/** Presence penalty (OpenAI). */
-	presencePenalty?: number;
 	/** Cache retention hint derived from inbound `cache_control` markers. */
 	cacheRetention?: CacheRetention;
+	/** OpenAI Responses `prompt_cache_key`; bridges to pi-ai `sessionId`. */
+	promptCacheKey?: string;
+	/** OpenAI Responses `previous_response_id` for response chaining. */
+	previousResponseId?: string;
+	/** OpenAI / abuse-tracking `user` field. */
+	user?: string;
+
+	// ── Passthrough ───────────────────────────────────────────────────────
 	/**
-	 * Provider-specific request controls that need server-side routing support
-	 * but aren't yet first-class on this interface.
+	 * Provider-specific metadata. Anthropic uses `metadata.user_id`; OpenRouter
+	 * carries routing hints; xAI uses `search_parameters`; OpenAI accepts a
+	 * free-form bag. The gateway forwards as-is.
+	 */
+	metadata?: Record<string, unknown>;
+	/**
+	 * Captured allow-listed passthrough headers (anthropic-beta,
+	 * anthropic-version, openai-organization, openai-project, openai-beta,
+	 * x-stainless-*). Keys are lowercased.
+	 */
+	headers?: Record<string, string>;
+	/**
+	 * Escape hatch for provider-specific request controls that don't yet have a
+	 * first-class field. Prefer adding a typed field over widening this.
 	 */
 	extra?: Record<string, unknown>;
 }
@@ -57,13 +102,19 @@ export interface AuthGatewayParsedRequest {
 }
 
 export interface AuthGatewayFormatModule {
-	parseRequest(body: unknown): AuthGatewayParsedRequest;
+	parseRequest(body: unknown, headers?: Headers): AuthGatewayParsedRequest;
 	encodeResponse(message: AssistantMessage, requestedModelId: string): Record<string, unknown>;
 	encodeStream(
 		events: AssistantMessageEventStream,
 		requestedModelId: string,
 		options?: AuthGatewayParsedRequestOptions,
 	): ReadableStream<Uint8Array>;
+	/**
+	 * Emit a protocol-specific error envelope. OpenAI returns
+	 * `{ error: { message, type } }`; Anthropic returns
+	 * `{ type: "error", error: { type, message } }`.
+	 */
+	formatError(status: number, type: string, message: string): Response;
 }
 
 export interface AuthGatewayServerOptions {

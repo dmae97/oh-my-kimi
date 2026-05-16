@@ -11,6 +11,7 @@
  */
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../auth-storage";
+import { parseBind } from "../utils/parse-bind";
 import { AuthBrokerRefresher } from "./refresher";
 import type {
 	CredentialDisableResponse,
@@ -45,42 +46,6 @@ export interface AuthBrokerServerHandle {
 	port: number;
 	hostname: string;
 	close(): Promise<void>;
-}
-
-interface ParsedBind {
-	hostname: string;
-	port: number;
-}
-
-function parsePort(raw: string, bind: string): number {
-	if (!/^\d+$/.test(raw)) {
-		throw new Error(`Invalid bind '${bind}'; port must be an integer.`);
-	}
-	const port = Number.parseInt(raw, 10);
-	if (!Number.isFinite(port) || port < 0 || port > 65535) {
-		throw new Error(`Invalid bind '${bind}'; port out of range.`);
-	}
-	return port;
-}
-
-function parseBind(raw: string): ParsedBind {
-	const trimmed = raw.trim();
-	if (trimmed.length === 0) {
-		throw new Error("Invalid bind; expected 'host:port' or 'port'.");
-	}
-	if (/^\d+$/.test(trimmed)) {
-		return { hostname: "127.0.0.1", port: parsePort(trimmed, raw) };
-	}
-	const lastColon = trimmed.lastIndexOf(":");
-	if (lastColon < 0) {
-		throw new Error(`Invalid bind '${raw}'; expected 'host:port' or 'port'.`);
-	}
-	const hostPart = trimmed.slice(0, lastColon);
-	const portPart = trimmed.slice(lastColon + 1);
-	if (hostPart.length === 0) {
-		throw new Error(`Invalid bind '${raw}'; host must not be empty.`);
-	}
-	return { hostname: hostPart, port: parsePort(portPart, raw) };
 }
 
 function json(status: number, body: unknown): Response {
@@ -174,10 +139,12 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				}
 				if (req.method === "GET" && pathname === "/v1/usage") {
 					try {
-						// AuthStorage caches usage reports internally with a 30s TTL
-						// (USAGE_REPORT_TTL_MS) so back-to-back widget polls re-use the
+						// AuthStorage caches usage reports internally with a 5-minute per-credential
+						// TTL (USAGE_REPORT_TTL_MS) so back-to-back widget polls re-use the
 						// last fetch instead of hitting provider endpoints repeatedly.
-						const reports = (await opts.storage.fetchUsageReports?.()) ?? [];
+						// `req.signal` propagates HTTP-client disconnects all the way to the
+						// per-caller cancel without touching the shared upstream fetch.
+						const reports = (await opts.storage.fetchUsageReports?.({ signal: req.signal })) ?? [];
 						// Drop the `raw` field — it's the provider-specific upstream body,
 						// large and unstable. Everything UI-relevant lives in `limits` and
 						// `metadata`.
@@ -194,7 +161,7 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				if (refreshMatch) {
 					const id = Number.parseInt(refreshMatch[1], 10);
 					try {
-						const entry = await opts.storage.forceRefreshCredentialById(id);
+						const entry = await opts.storage.forceRefreshCredentialById(id, req.signal);
 						const body: CredentialRefreshResponse = { entry };
 						logger.info("auth-broker credential refreshed", {
 							id,
