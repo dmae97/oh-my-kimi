@@ -28,7 +28,7 @@ Append `:<sel>` to `path`. The bare path falls back to the default mode.
 
 - Reading a directory path returns a depth-limited dirent listing.
 {{#if IS_HL_MODE}}
-- Reading a file with an explicit selector returns lines prefixed with `line+hash` anchors: `41th|def alpha():`. The 2-char hash is a content fingerprint that `edit` / `apply_patch` consume — copy it verbatim, NEVER fabricate.
+- Reading a file with an explicit selector returns lines prefixed with `line+hash` anchors: `41th|def alpha():`. The 2-char hash is a content fingerprint that `edit` / `apply_patch` consume — copy it verbatim, NEVER fabricate. The pipe character after the hash is a separator, not part of the file content.
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - Reading a file with an explicit selector returns lines prefixed with line numbers: `41|def alpha():`.

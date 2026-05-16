@@ -8,7 +8,7 @@ Searches files using powerful regex matching.
 
 <output>
 {{#if IS_HL_MODE}}
-- Text output is anchor-prefixed: `*5th|content` (match) or ` 9x}|content` (context, leading space). The 2-char suffix is a content fingerprint.
+- Text output is anchor-prefixed: `*5th|content` (match) or ` 9x}|content` (context, leading space). The 2-char suffix is a content fingerprint. The `|` before content is a separator, not part of the file content.
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - Text output is line-number-prefixed
