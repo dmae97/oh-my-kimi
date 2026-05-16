@@ -8,6 +8,5 @@ export * from "./json-schema-validator";
 export * from "./meta-validator";
 export * from "./normalize";
 export * from "./spill";
-export * from "./strict-mode";
 export * from "./types";
 export * from "./wire";
