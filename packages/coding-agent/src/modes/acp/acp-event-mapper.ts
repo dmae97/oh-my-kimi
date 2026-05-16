@@ -31,12 +31,20 @@ interface ContentArrayContainer {
 	content?: unknown;
 }
 
+interface DetailsContainer {
+	details?: unknown;
+}
+
 interface TypedValue {
 	type?: unknown;
 }
 
 interface TextLikeContent extends TypedValue {
 	text?: unknown;
+}
+
+interface TerminalIdContainer {
+	terminalId?: unknown;
 }
 
 interface BinaryLikeContent extends TypedValue {
@@ -155,9 +163,7 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 			return [toSessionNotification(sessionId, update)];
 		}
 		case "tool_execution_update": {
-			const terminalContent = extractTerminalToolCallContent(event.partialResult);
-			const otherContent = terminalContent.length > 0 ? [] : extractToolCallContent(event.partialResult);
-			const content = [...terminalContent, ...otherContent];
+			const content = extractToolCallContent(event.partialResult);
 			const update: SessionUpdate = {
 				sessionUpdate: "tool_call_update",
 				toolCallId: event.toolCallId,
@@ -175,9 +181,7 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 		}
 		case "tool_execution_end": {
 			const diffContent = extractDiffToolCallContent(event.result);
-			const terminalContent = extractTerminalToolCallContent(event.result);
-			const otherContent = extractToolCallContent(event.result);
-			const content = [...diffContent, ...terminalContent, ...otherContent];
+			const content = [...diffContent, ...extractToolCallContent(event.result)];
 			const update: SessionUpdate = {
 				sessionUpdate: "tool_call_update",
 				toolCallId: event.toolCallId,
@@ -465,26 +469,33 @@ function buildDiffContent(entry: unknown): ToolCallContent | undefined {
 	};
 }
 
-/** Emit a `terminal` ToolCallContent when a tool result carries a `details.terminalId` (e.g. bash routed through ACP terminal/*). */
-function extractTerminalToolCallContent(result: unknown): ToolCallContent[] {
-	if (typeof result !== "object" || result === null) return [];
-	const details = (result as { details?: unknown }).details;
-	if (typeof details !== "object" || details === null) return [];
-	const terminalId = (details as { terminalId?: unknown }).terminalId;
-	if (typeof terminalId !== "string" || terminalId.length === 0) return [];
-	return [{ type: "terminal", terminalId }];
+function extractTerminalId(value: unknown): string | undefined {
+	const direct = extractStringProperty<TerminalIdContainer>(value, "terminalId");
+	if (direct) return direct;
+	if (typeof value !== "object" || value === null) return undefined;
+	const details = (value as DetailsContainer).details;
+	return extractStringProperty<TerminalIdContainer>(details, "terminalId");
+}
+
+function terminalToolCallContent(terminalId: string): ToolCallContent {
+	return { type: "terminal", terminalId };
 }
 
 function extractToolCallContent(value: unknown): ToolCallContent[] {
 	const richContent = extractStructuredToolCallContent(value);
+	const terminalId = extractTerminalId(value);
+	const content =
+		terminalId && !hasTerminalContent(richContent, terminalId)
+			? [...richContent, terminalToolCallContent(terminalId)]
+			: richContent;
 	const fallbackText = extractReadableText(value);
 	if (!fallbackText) {
-		return richContent;
+		return content;
 	}
-	if (hasEquivalentTextContent(richContent, fallbackText)) {
-		return richContent;
+	if (hasEquivalentTextContent(content, fallbackText)) {
+		return content;
 	}
-	return [...richContent, textToolCallContent(fallbackText)];
+	return [...content, textToolCallContent(fallbackText)];
 }
 
 function extractStructuredToolCallContent(value: unknown): ToolCallContent[] {
@@ -643,6 +654,10 @@ function hasEquivalentTextContent(content: ToolCallContent[], text: string): boo
 	return content.some(item => item.type === "content" && item.content.type === "text" && item.content.text === text);
 }
 
+function hasTerminalContent(content: ToolCallContent[], terminalId: string): boolean {
+	return content.some(item => item.type === "terminal" && item.terminalId === terminalId);
+}
+
 function extractReadableText(value: unknown): string | undefined {
 	if (typeof value === "string") {
 		return normalizeText(value);
@@ -672,9 +687,22 @@ function extractReadableText(value: unknown): string | undefined {
 			return normalizeText(text);
 		}
 	}
-
+	if (isTerminalOnlyDetails(value)) {
+		return undefined;
+	}
 	const serialized = safeJsonStringify(value);
 	return normalizeText(serialized);
+}
+
+function isTerminalOnlyDetails(value: unknown): boolean {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	if (extractTerminalId(value) === undefined) {
+		return false;
+	}
+	const content = (value as ContentArrayContainer).content;
+	return content === undefined || (Array.isArray(content) && content.length === 0);
 }
 
 function extractAssistantMessageText(value: unknown): string {
