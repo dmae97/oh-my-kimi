@@ -103,6 +103,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	groq: "GROQ_API_KEY",
 	cerebras: "CEREBRAS_API_KEY",
 	xai: "XAI_API_KEY",
+	"xai-oauth": () => $pickenv("XAI_OAUTH_TOKEN", "XAI_API_KEY"),
 	fireworks: "FIREWORKS_API_KEY",
 	firepass: "FIREPASS_API_KEY",
 	openrouter: "OPENROUTER_API_KEY",
