@@ -1035,6 +1035,216 @@ describe("ACP agent", () => {
 		}
 	});
 
+	it("suppresses late updates after cancel and waits cleanup before the next prompt", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		let releaseAbort!: () => void;
+		const abortBlocked = Promise.withResolvers<void>();
+		const releaseAbortPromise = new Promise<void>(resolve => {
+			releaseAbort = resolve;
+		});
+		session.abort = async () => {
+			session.isStreaming = false;
+			abortBlocked.resolve();
+			await releaseAbortPromise;
+		};
+		const finishPrompt = holdPromptStreaming(session);
+
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000039",
+			prompt: [{ type: "text", text: "cancel me" }],
+		} as PromptRequest);
+		await Bun.sleep(0);
+		const beforeCancelUpdates = harness.updates.length;
+
+		const cancelPrompt = harness.agent.cancel({ sessionId: created.sessionId });
+		await abortBlocked.promise;
+		const returnedBeforeCleanup = await Promise.race([firstPrompt.then(() => true), Bun.sleep(0).then(() => false)]);
+		expect(returnedBeforeCleanup).toBe(true);
+		const cancelledResponse = await firstPrompt;
+		expect(cancelledResponse.stopReason).toBe("cancelled");
+
+		for (const listener of session.listeners()) {
+			listener({
+				type: "message_update",
+				message: makeAssistantMessage("late"),
+				assistantMessageEvent: { type: "text_delta", delta: "late" },
+			} as AgentSessionEvent);
+		}
+		expect(harness.updates).toHaveLength(beforeCancelUpdates);
+
+		const secondPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000040",
+			prompt: [{ type: "text", text: "after cancel" }],
+		} as PromptRequest);
+		await Bun.sleep(0);
+		expect(session.promptCalls).toEqual(["cancel me"]);
+
+		releaseAbort();
+		await cancelPrompt;
+		finishPrompt();
+		await secondPrompt;
+		expect(session.promptCalls).toEqual(["cancel me", "after cancel"]);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("closes the ACP session when cancel cleanup times out", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		harness.agent.setCancelCleanupTimeoutForTesting(10);
+		session.abort = async () => new Promise<void>(() => undefined);
+		const finishPrompt = holdPromptStreaming(session);
+
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000041",
+			prompt: [{ type: "text", text: "stuck cancel" }],
+		} as PromptRequest);
+		await Bun.sleep(0);
+
+		const cancelPrompt = harness.agent.cancel({ sessionId: created.sessionId });
+		const returnedBeforeTimeout = await Promise.race([firstPrompt.then(() => true), Bun.sleep(0).then(() => false)]);
+		expect(returnedBeforeTimeout).toBe(true);
+		await expect(cancelPrompt).resolves.toBeUndefined();
+		expect(session.disposed).toBe(true);
+		await expect(
+			harness.agent.prompt({
+				sessionId: created.sessionId,
+				messageId: "00000000-0000-4000-8000-000000000042",
+				prompt: [{ type: "text", text: "after stuck cancel" }],
+			} as PromptRequest),
+		).rejects.toThrow("Unsupported ACP session");
+
+		finishPrompt();
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("rejects a queued prompt when cancel cleanup closes the session", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		harness.agent.setCancelCleanupTimeoutForTesting(10);
+		session.abort = async () => new Promise<void>(() => undefined);
+		const finishPrompt = holdPromptStreaming(session);
+
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000043",
+			prompt: [{ type: "text", text: "stuck cancel before queued" }],
+		} as PromptRequest);
+		await Bun.sleep(0);
+
+		const cancelPrompt = harness.agent.cancel({ sessionId: created.sessionId });
+		await firstPrompt;
+		const queuedPrompt = harness.agent
+			.prompt({
+				sessionId: created.sessionId,
+				messageId: "00000000-0000-4000-8000-000000000044",
+				prompt: [{ type: "text", text: "queued after stuck cancel" }],
+			} as PromptRequest)
+			.catch(error => error);
+
+		await cancelPrompt;
+		const queuedError = await queuedPrompt;
+		expect(queuedError).toBeInstanceOf(Error);
+		expect(queuedError.message).toBe("ACP cancel cleanup timed out");
+		expect(session.promptCalls).toEqual(["stuck cancel before queued"]);
+
+		finishPrompt();
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("keeps closeSession gated while cancel cleanup is pending", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		let releaseAbort!: () => void;
+		const abortBlocked = Promise.withResolvers<void>();
+		const releaseAbortPromise = new Promise<void>(resolve => {
+			releaseAbort = resolve;
+		});
+		session.abort = async () => {
+			session.isStreaming = false;
+			abortBlocked.resolve();
+			await releaseAbortPromise;
+		};
+		const finishPrompt = holdPromptStreaming(session);
+
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000045",
+			prompt: [{ type: "text", text: "cancel before close" }],
+		} as PromptRequest);
+		await Bun.sleep(0);
+
+		const cancelPrompt = harness.agent.cancel({ sessionId: created.sessionId });
+		await abortBlocked.promise;
+		await firstPrompt;
+
+		const closePrompt = harness.agent.closeSession({ sessionId: created.sessionId });
+		await Bun.sleep(0);
+		expect(session.disposed).toBe(false);
+
+		releaseAbort();
+		await cancelPrompt;
+		await closePrompt;
+		expect(session.disposed).toBe(true);
+
+		finishPrompt();
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("rejects fork while cancel cleanup is pending", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		let releaseAbort!: () => void;
+		const abortBlocked = Promise.withResolvers<void>();
+		const releaseAbortPromise = new Promise<void>(resolve => {
+			releaseAbort = resolve;
+		});
+		session.abort = async () => {
+			session.isStreaming = false;
+			abortBlocked.resolve();
+			await releaseAbortPromise;
+		};
+		const finishPrompt = holdPromptStreaming(session);
+
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000046",
+			prompt: [{ type: "text", text: "cancel before fork" }],
+		} as PromptRequest);
+		await Bun.sleep(0);
+
+		const cancelPrompt = harness.agent.cancel({ sessionId: created.sessionId });
+		await abortBlocked.promise;
+		await firstPrompt;
+
+		await expect(
+			harness.agent.unstable_forkSession({
+				sessionId: created.sessionId,
+				cwd: harness.cwdA,
+				mcpServers: [],
+			}),
+		).rejects.toThrow("ACP session fork is unavailable while a prompt is in progress");
+
+		releaseAbort();
+		await cancelPrompt;
+		finishPrompt();
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("executes consumed ACP builtins without prompting the agent", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
