@@ -102,6 +102,23 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		hasAuthoritativeCache,
 		cacheAgeMs,
 	);
+	const staticFingerprint = fingerprintStatic(staticModels);
+
+	// Cold-start fast path: when a fresh, authoritative cache exists, the network
+	// fetch is skipped, AND the static catalog slice is byte-identical to what
+	// was merged in last time, the cache row IS the authoritative merge result.
+	// Re-running `mergeDynamicModels(static, cache)` would just rebuild the same
+	// objects (~800ms in the steady-state cold-start profile for `omp -p hi`).
+	if (
+		!shouldFetchFromNetwork &&
+		cache?.fresh &&
+		hasAuthoritativeCache &&
+		cache.staticFingerprint === staticFingerprint &&
+		cache.staticFingerprint.length > 0
+	) {
+		return { models: normalizeModelList<TApi>(cache.models), stale: false };
+	}
+
 	const [fetchedModelsDevModels, fetchedDynamicModels] = shouldFetchFromNetwork
 		? await Promise.all([fetchModelsDev(options), dynamicFetcher ? fetchDynamicModels(dynamicFetcher) : null])
 		: [null, null];
@@ -117,7 +134,7 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	if (shouldFetchFromNetwork) {
 		if (dynamicFetchSucceeded) {
 			const snapshotModels = mergeDynamicModels(mergeModelSources(staticModels, modelsDevModels), dynamicModels);
-			writeModelCache(options.providerId, now(), snapshotModels, true, dbPath);
+			writeModelCache(options.providerId, now(), snapshotModels, true, staticFingerprint, dbPath);
 		} else {
 			// Dynamic fetch failed — update cache with a non-authoritative snapshot so
 			// stale state remains visible while retry backoff still applies.
@@ -130,6 +147,7 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 					normalizeModelList<TApi>(latestCache?.models ?? cache?.models ?? []),
 				),
 				false,
+				staticFingerprint,
 				dbPath,
 			);
 		}
@@ -194,12 +212,16 @@ function shouldFetchRemoteSources(
 }
 
 function mergeModelSources<TApi extends Api>(...sources: readonly (readonly Model<TApi>[])[]): Model<TApi>[] {
+	// Strip out empty/missing sources up front. The hot path is `(static, [])`
+	// (modelsDev disabled / failed) — a single non-empty source means we can
+	// skip the Map churn entirely and just hand back the array.
+	const nonEmpty = sources.filter(source => source.length > 0);
+	if (nonEmpty.length === 0) return [];
+	if (nonEmpty.length === 1) return [...nonEmpty[0]];
 	const merged = new Map<string, Model<TApi>>();
-	for (const source of sources) {
+	for (const source of nonEmpty) {
 		for (const model of source) {
-			if (!model?.id) {
-				continue;
-			}
+			if (!model?.id) continue;
 			merged.set(model.id, model);
 		}
 	}
@@ -210,6 +232,11 @@ function mergeDynamicModels<TApi extends Api>(
 	baseModels: readonly Model<TApi>[],
 	dynamicModels: readonly Model<TApi>[],
 ): Model<TApi>[] {
+	// Empty-side fast paths: `mergeDynamicModels(base, [])` is the common shape
+	// after we've already merged the first pair, and `(...)` with no base
+	// happens for providers without static catalogs.
+	if (dynamicModels.length === 0) return baseModels.length === 0 ? [] : [...baseModels];
+	if (baseModels.length === 0) return [...dynamicModels];
 	const merged = new Map<string, Model<TApi>>(baseModels.map(model => [model.id, model]));
 	for (const dynamicModel of dynamicModels) {
 		if (!dynamicModel?.id) {
@@ -223,6 +250,24 @@ function mergeDynamicModels<TApi extends Api>(
 		merged.set(dynamicModel.id, mergeDynamicModel(existingModel, dynamicModel));
 	}
 	return Array.from(merged.values());
+}
+
+/**
+ * Stable, low-collision fingerprint of a static catalog slice. Cached by
+ * reference so repeat calls in the same process (e.g. multiple cold-start
+ * arms calling `resolveProviderModels` with the same `staticModels` array)
+ * skip the JSON+hash work after the first call.
+ */
+const STATIC_FINGERPRINT_CACHE = new WeakMap<readonly Model<Api>[], string>();
+function fingerprintStatic<TApi extends Api>(models: readonly Model<TApi>[]): string {
+	if (models.length === 0) return "empty";
+	const cached = STATIC_FINGERPRINT_CACHE.get(models as readonly Model<Api>[]);
+	if (cached !== undefined) return cached;
+	// `Bun.hash` returns a `bigint`; base36 keeps the string short for the
+	// SQLite column without sacrificing distinguishability.
+	const fingerprint = Bun.hash(JSON.stringify(models)).toString(36);
+	STATIC_FINGERPRINT_CACHE.set(models as readonly Model<Api>[], fingerprint);
+	return fingerprint;
 }
 
 function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamicModel: Model<TApi>): Model<TApi> {
