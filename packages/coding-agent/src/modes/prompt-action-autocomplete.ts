@@ -6,6 +6,7 @@ import {
 	type SlashCommand,
 } from "@oh-my-pi/pi-tui";
 import { formatKeyHints, type KeybindingsManager } from "../config/keybindings";
+import { applyEmojiCompletion, getEmojiSuggestions, isEmojiPrefix, tryEmojiInlineReplace } from "./emoji-autocomplete";
 
 interface PromptActionDefinition {
 	id: string;
@@ -126,6 +127,9 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 			}
 		}
 
+		const emojiSuggestions = getEmojiSuggestions(textBeforeCursor);
+		if (emojiSuggestions) return emojiSuggestions;
+
 		return this.#baseProvider.getSuggestions(lines, cursorLine, cursorCol);
 	}
 
@@ -163,6 +167,9 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 			};
 		}
 
+		if (isEmojiPrefix(prefix)) {
+			return applyEmojiCompletion(lines, cursorLine, cursorCol, item, prefix);
+		}
 		return this.#baseProvider.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
 	}
 
@@ -171,6 +178,9 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 	}
 	trySyncSlashCompletion(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null {
 		return this.#baseProvider.trySyncSlashCompletion?.(textBeforeCursor) ?? null;
+	}
+	trySyncInlineReplace(textBeforeCursor: string): { replaceLen: number; insert: string } | null {
+		return tryEmojiInlineReplace(textBeforeCursor);
 	}
 }
 
