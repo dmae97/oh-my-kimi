@@ -591,6 +591,9 @@ export class ProcessTerminal implements Terminal {
 
 	#safeWrite(data: string): void {
 		if (this.#dead) return;
+		// Skip control sequences when stdout isn't a TTY (piped output, tests, log
+		// files). They serve no purpose there and would surface as visible noise.
+		if (!process.stdout.isTTY) return;
 		try {
 			process.stdout.write(data);
 		} catch (err) {

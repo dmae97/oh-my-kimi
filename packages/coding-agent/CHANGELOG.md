@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.1.3] - 2026-05-17
 ### Breaking Changes
 
 - Renamed the embedded-documentation internal URL scheme from `pi://` to `omp://`. `OmpProtocolHandler` replaces `PiProtocolHandler`; update any external references accordingly.
