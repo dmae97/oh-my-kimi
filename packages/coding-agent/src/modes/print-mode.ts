@@ -6,7 +6,7 @@
  * - `omp --mode json "prompt"` - JSON event stream
  */
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
+import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../session/agent-session";
 import { isSilentAbort } from "../session/messages";
 import { initializeExtensions } from "./runtime-init";
@@ -61,12 +61,12 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 
 	// Send initial message with attachments
 	if (initialMessage !== undefined) {
-		await session.prompt(initialMessage, { images: initialImages });
+		await logger.time("print:prompt:initial", () => session.prompt(initialMessage, { images: initialImages }));
 	}
 
 	// Send remaining messages
 	for (const message of messages) {
-		await session.prompt(message);
+		await logger.time("print:prompt:next", () => session.prompt(message));
 	}
 
 	// In text mode, output final response

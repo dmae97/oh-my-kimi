@@ -1,8 +1,13 @@
 /**
- * Centralized file logger for omp.
+ * Centralized logger for omp.
  *
- * Logs to ~/.omp/logs/ with size-based rotation, supporting concurrent omp instances.
- * Each log entry includes process.pid for traceability.
+ * Default: rotating `~/.omp/logs/omp.<DATE>.log`, no console output (writing
+ * to stdout/stderr would corrupt the TUI). Long-running headless services
+ * (the auth broker, etc.) call {@link setTransports} to swap in a console
+ * transport so a process supervisor (pm2, journald, k8s) captures the logs.
+ *
+ * Each entry includes `process.pid` so concurrent omp instances stay
+ * traceable.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
@@ -10,13 +15,12 @@ import winston from "winston";
 import DailyRotateFile from "winston-daily-rotate-file";
 import { getLogsDir } from "./dirs";
 
-/** Ensure logs directory exists */
-function ensureLogsDir(): string {
-	const logsDir = getLogsDir();
-	if (!fs.existsSync(logsDir)) {
-		fs.mkdirSync(logsDir, { recursive: true });
+/** Ensure a logs directory exists; return the resolved path. */
+function ensureDir(dir: string): string {
+	if (!fs.existsSync(dir)) {
+		fs.mkdirSync(dir, { recursive: true });
 	}
-	return logsDir;
+	return dir;
 }
 
 /** Custom format that includes pid and flattens metadata */
@@ -39,24 +43,43 @@ const logFormat = winston.format.combine(
 	}),
 );
 
-/** Size-based rotating file transport */
-const fileTransport = new DailyRotateFile({
-	dirname: ensureLogsDir(),
-	filename: "omp.%DATE%.log",
-	datePattern: "YYYY-MM-DD",
-	maxSize: "10m",
-	maxFiles: 5,
-	zippedArchive: true,
-});
+/** Build a rotating file transport, materializing the target directory lazily. */
+function makeFileTransport(dir?: string): winston.transport {
+	return new DailyRotateFile({
+		dirname: ensureDir(dir ?? getLogsDir()),
+		filename: "omp.%DATE%.log",
+		datePattern: "YYYY-MM-DD",
+		maxSize: "10m",
+		maxFiles: 5,
+		zippedArchive: true,
+	});
+}
 
-/** The winston logger instance */
+function makeConsoleTransport(): winston.transport {
+	return new winston.transports.Console({ format: logFormat });
+}
+
+/** The winston logger instance. Default: file ON (TUI-safe), console OFF. */
 const winstonLogger = winston.createLogger({
 	level: "debug",
 	format: logFormat,
-	transports: [fileTransport],
+	transports: [makeFileTransport()],
 	// Don't exit on error - logging failures shouldn't crash the app
 	exitOnError: false,
 });
+
+/**
+ * Replace the active log transports. Pass `console: true, file: false` for
+ * long-running services (the auth broker, etc.) that want their structured
+ * logs piped into a process supervisor instead of the rotating file.
+ */
+export function setTransports(opts: { console?: boolean; file?: boolean | string }): void {
+	winstonLogger.clear();
+	if (opts.file) {
+		winstonLogger.add(makeFileTransport(typeof opts.file === "string" ? opts.file : undefined));
+	}
+	if (opts.console) winstonLogger.add(makeConsoleTransport());
+}
 
 /**
  * Log an error message.
@@ -79,6 +102,19 @@ export function error(message: string, context?: Record<string, unknown>): void 
 export function warn(message: string, context?: Record<string, unknown>): void {
 	try {
 		winstonLogger.warn(message, context);
+	} catch {
+		// Silently ignore logging failures
+	}
+}
+
+/**
+ * Log an informational message.
+ * @param message - The message to log.
+ * @param context - The context to log.
+ */
+export function info(message: string, context?: Record<string, unknown>): void {
+	try {
+		winstonLogger.info(message, context);
 	} catch {
 		// Silently ignore logging failures
 	}

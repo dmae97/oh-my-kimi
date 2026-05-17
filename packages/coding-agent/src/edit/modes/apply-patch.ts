@@ -14,11 +14,7 @@ import { ApplyPatchError } from "../diff";
 import type { PatchEditEntry } from "./patch";
 
 export const applyPatchSchema = z.object({
-	input: z
-		.string()
-		.describe(
-			"Full Codex apply_patch envelope, including '*** Begin Patch' and '*** End Patch'. Contains any mix of Add/Delete/Update (with optional Move to) file operations.",
-		),
+	input: z.string().describe("apply_patch envelope"),
 });
 
 export type ApplyPatchParams = z.infer<typeof applyPatchSchema>;

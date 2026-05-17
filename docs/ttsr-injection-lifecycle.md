@@ -108,7 +108,27 @@ Pending injections are cleared after content generation.
 
 ### Non-interrupting matches
 
-If matched rules do not permit interruption (`interruptMode: "never"`, or source-specific `prose-only`/`tool-only` mismatch), they are still queued. After a successful non-error, non-aborted assistant message, `AgentSession` injects the hidden `ttsr-injection` custom message as a follow-up and schedules continuation.
+Non-interrupting matches split by `matchContext.source`:
+
+- **`source === "tool"` (tool-source match).** The rule is bucketed into `#perToolTtsrInjections`, keyed by the matched tool call's `id`. There is **no** deferred follow-up turn and the stream is not aborted. When the tool actually produces a result, the `afterToolCall` hook prepends a rendered `ttsr-tool-reminder.md` block to `ctx.result.content` (a single `text` block inserted ahead of the tool's own content), and persists a `ttsr_injection` entry with the consumed rule names. The template payload is:
+
+  ```xml
+  <system-reminder reason="rule_violation" rule="{{name}}" path="{{path}}">
+  ...
+  {{content}}
+  </system-reminder>
+  ```
+
+- **`source === "text"` / `"thinking"` (prose-source match).** Behavior is unchanged: the rule is queued in `#pendingTtsrInjections` and, after a successful non-error, non-aborted assistant message, `AgentSession` injects the hidden `ttsr-injection` custom message as a follow-up and schedules continuation.
+
+Within a single matching batch, each rule is attached to exactly one sibling tool call — if multiple sibling tool calls would satisfy the same rule, deduplication picks one and the others are left untouched. Multiple distinct rules can still fold onto the same tool call.
+
+#### Implications for tool authors and transcript readers
+
+- The tool's own `toolResult` content is preserved verbatim; the reminder is **prepended** as an additional leading text block. Renderers that assume `content[0]` is the tool's primary output must scan past any block whose text begins with `<system-reminder reason="rule_violation"` (or filter on the wrapper tag) to find the real payload.
+- The reminder is in-band on the tool result, not a separate `custom_message`/`ttsr-injection` entry. Transcript readers looking for non-interrupting TTSR activity on tool-source rules MUST inspect tool results (and the persisted `ttsr_injection` entry list), not just synthetic injection entries.
+- A single tool result may carry reminders for several rules concatenated with a blank line between rendered templates.
+- If the assistant message ends with `stopReason === "aborted"` or `"error"` before the matched tools run, the pending per-tool buckets are cleared — those rules are **not** persisted as injected and remain eligible to re-trigger on a future turn (subject to repeat policy).
 
 ## 5. Repeat policy and gap logic
 
@@ -169,7 +189,8 @@ Interactive mode uses `session.isTtsrAbortPending` to suppress showing the abort
 In the current runtime path:
 
 - interrupted injections append a hidden `custom_message` with `customType: "ttsr-injection"` and append a `ttsr_injection` entry via `appendTtsrInjection(...)`
-- deferred non-interrupting injections are marked/persisted when their queued custom message reaches `message_end`
+- deferred non-interrupting prose-source injections are marked/persisted when their queued custom message reaches `message_end`
+- non-interrupting tool-source injections are marked at match time and persisted via `appendTtsrInjection(...)` from the `afterToolCall` hook when the matched tool's result is produced
 - `createAgentSession()` restores `existingSession.injectedTtsrRules` into `ttsrManager`
 
 Net effect: injected-rule suppression is persisted/restored across session reload/resume for the current branch path.
@@ -196,5 +217,6 @@ During the timer window, state can change (user interruption, mode actions, addi
 - Duplicate rule names at capability layer: lower-priority duplicates are shadowed before registration.
 - Duplicate names at manager layer: second registration is ignored.
 - `contextMode: "keep"`: partial violating output can remain in context before reminder retry.
-- `interruptMode: "never"` queues a deferred hidden injection after a successful assistant message rather than aborting mid-stream.
+- `interruptMode: "never"`: prose-source matches queue a deferred hidden injection after a successful assistant message; tool-source matches fold an in-band `<system-reminder>` into the matched tool call's `toolResult` content via the `afterToolCall` hook (no mid-stream abort, no separate follow-up turn).
+- Tool-source non-interrupting buckets are cleared when the parent assistant message ends with `stopReason === "aborted"` or `"error"`, so rules whose target tool never produced a result remain eligible to re-trigger.
 - Repeat-after-gap depends on turn count increments at `turn_end`; mid-turn chunks do not advance gap counters.

@@ -17,42 +17,20 @@ export const DEFAULT_HARNESS_COMMAND = `bash ${HARNESS_FILENAME}`;
 const HARNESS_COMMIT_TITLE = "autoresearch: harness setup";
 
 const initExperimentSchema = z.object({
-	name: z.string().describe("Human-readable experiment name."),
-	goal: z.string().describe("Free-form description of what this session optimizes.").optional(),
-	primary_metric: z
-		.string()
-		.describe(
-			"Primary metric name shown in the dashboard. Match the `METRIC <name>=<value>` lines printed by the benchmark.",
-		),
-	metric_unit: z.string().describe("Unit for the primary metric (e.g. ms, µs, mb). Empty when unitless.").optional(),
+	name: z.string().describe("experiment name"),
+	goal: z.string().describe("session goal").optional(),
+	primary_metric: z.string().describe("primary metric name"),
+	metric_unit: z.string().describe("metric unit (e.g. ms, µs, mb)").optional(),
 	direction: z
 		.enum(["lower", "higher"] as const)
-		.describe("Whether lower or higher values are better. Defaults to lower.")
+		.describe("better direction (default lower)")
 		.optional(),
-	secondary_metrics: z
-		.array(z.string())
-		.describe("Names of secondary metrics tracked alongside the primary metric.")
-		.optional(),
-	scope_paths: z
-		.array(z.string())
-		.describe(
-			"Files or directories the agent expects to modify. Used post-hoc to flag scope deviations on log_experiment; never used to block edits.",
-		)
-		.optional(),
-	off_limits: z
-		.array(z.string())
-		.describe(
-			"Paths the agent SHOULD NOT modify. Used post-hoc to flag scope deviations on log_experiment; never used to block edits.",
-		)
-		.optional(),
-	constraints: z.array(z.string()).describe("Free-form constraints (e.g. 'no api break').").optional(),
-	max_iterations: z.number().describe("Soft cap on iterations per segment. Optional.").optional(),
-	new_segment: z
-		.boolean()
-		.describe(
-			"When true, bump to a new segment even when an active session exists. New baselines and best-metric reset.",
-		)
-		.optional(),
+	secondary_metrics: z.array(z.string()).describe("secondary metric names").optional(),
+	scope_paths: z.array(z.string()).describe("expected-to-modify paths").optional(),
+	off_limits: z.array(z.string()).describe("off-limits paths").optional(),
+	constraints: z.array(z.string()).describe("free-form constraints").optional(),
+	max_iterations: z.number().describe("soft iteration cap per segment").optional(),
+	new_segment: z.boolean().describe("bump to a new segment in existing session").optional(),
 });
 
 interface InitExperimentDetails {

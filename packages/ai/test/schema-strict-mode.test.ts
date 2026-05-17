@@ -223,7 +223,7 @@ describe("sanitizeSchemaForStrictMode", () => {
 		expect(retries.description).toBe("retry count (default: 3)");
 	});
 
-	it("inlines defaults through the type-array (nullable) branch", () => {
+	it("hoists shared description to the wrapper when expanding a nullable type-array", () => {
 		const schema = {
 			type: ["number", "null"],
 			description: "timeout",
@@ -233,10 +233,193 @@ describe("sanitizeSchemaForStrictMode", () => {
 		const sanitized = sanitizeSchemaForStrictMode(schema);
 		const variants = sanitized.anyOf as Array<Record<string, unknown>>;
 		const numberVariant = variants.find(v => v.type === "number");
+		const nullVariant = variants.find(v => v.type === "null");
 
-		expect(numberVariant).toBeDefined();
-		expect((numberVariant as Record<string, unknown>).default).toBeUndefined();
-		expect((numberVariant as Record<string, unknown>).description).toBe("timeout (default: 60)");
+		// Description with the inlined `(default: …)` suffix lives on the
+		// wrapper, not duplicated onto each variant — matches the optional-
+		// property wrap shape produced by `enforceStrictSchema`.
+		expect(sanitized.description).toBe("timeout (default: 60)");
+		expect(numberVariant).toEqual({ type: "number" });
+		expect(nullVariant).toEqual({ type: "null" });
+	});
+	// Mirrors: openai-python/tests/lib/test_pydantic.py::test_nested_inline_ref_expansion
+	// SDK behavior: a `$ref` with sibling keys (e.g. description) must be unraveled —
+	// resolve the ref, merge its contents, then let the sibling keys override the def's.
+	it("unravels `$ref` with sibling keys by inlining the resolved def (siblings win)", () => {
+		const schema = {
+			type: "object",
+			$defs: {
+				Star: {
+					type: "object",
+					properties: { name: { type: "string", description: "The name of the star." } },
+					required: ["name"],
+				},
+			},
+			properties: {
+				largest_star: {
+					$ref: "#/$defs/Star",
+					description: "The largest star in the galaxy.",
+				},
+			},
+			required: ["largest_star"],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		const props = sanitized.properties as Record<string, Record<string, unknown>>;
+		const largest = props.largest_star;
+
+		// $ref dropped; def contents inlined.
+		expect(largest.$ref).toBeUndefined();
+		expect(largest.type).toBe("object");
+		// Sibling description wins over any description in the def.
+		expect(largest.description).toBe("The largest star in the galaxy.");
+		// Nested properties from the def are present.
+		const nested = largest.properties as Record<string, Record<string, unknown>>;
+		expect(nested.name.type).toBe("string");
+	});
+
+	// SDK: a bare `$ref` (no sibling keys) is preserved as-is; only siblings trigger unravel.
+	// Cite: openai-python/src/openai/lib/_pydantic.py:96-110 (`has_more_than_n_keys`)
+	it("preserves bare `$ref` with no sibling keys", () => {
+		const schema = {
+			type: "object",
+			$defs: { Foo: { type: "string" } },
+			properties: { foo: { $ref: "#/$defs/Foo" } },
+			required: ["foo"],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		const props = sanitized.properties as Record<string, Record<string, unknown>>;
+		expect(props.foo).toEqual({ $ref: "#/$defs/Foo" });
+	});
+
+	// SDK: when a `$ref` cannot be resolved (external / unknown segment), leave it alone
+	// rather than dropping data. Our sanitizer falls back to passing it through.
+	it("leaves unresolvable `$ref` siblings intact", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				foo: { $ref: "#/$defs/Missing", description: "x" },
+			},
+			required: ["foo"],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		const props = sanitized.properties as Record<string, Record<string, unknown>>;
+		expect(props.foo.$ref).toBe("#/$defs/Missing");
+		expect(props.foo.description).toBe("x");
+	});
+
+	// Mirrors: openai-python SDK rule — `allOf` with exactly one entry is inlined
+	// and `allOf` is removed; with multiple entries `allOf` is recursed instead.
+	// Cite: openai-python/src/openai/lib/_pydantic.py:79-83
+	it("inlines single-element `allOf` and drops the keyword", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				wrapped: {
+					allOf: [{ type: "string", description: "from allOf" }],
+				},
+			},
+			required: ["wrapped"],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		const props = sanitized.properties as Record<string, Record<string, unknown>>;
+		expect(props.wrapped.allOf).toBeUndefined();
+		expect(props.wrapped.type).toBe("string");
+		expect(props.wrapped.description).toBe("from allOf");
+	});
+
+	// Cite: openai-python/src/openai/lib/_pydantic.py:79-83 — `json_schema.update(ensured)`
+	// means the inlined entry's keys WIN over original sibling keys.
+	it("inlines single-element `allOf` with the inlined entry winning over siblings", () => {
+		const schema = {
+			type: "string",
+			description: "outer",
+			allOf: [{ description: "inner" }],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		expect(sanitized.allOf).toBeUndefined();
+		expect(sanitized.description).toBe("inner");
+	});
+
+	// SDK does NOT inline `allOf` with more than one entry — it recurses each branch.
+	// Cite: openai-python/src/openai/lib/_pydantic.py:84-88
+	it("does not collapse `allOf` when it has multiple entries", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				combo: {
+					allOf: [
+						{ type: "object", properties: { a: { type: "string" } }, required: ["a"] },
+						{ type: "object", properties: { b: { type: "number" } }, required: ["b"] },
+					],
+				},
+			},
+			required: ["combo"],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		const props = sanitized.properties as Record<string, Record<string, unknown>>;
+		const combo = props.combo as Record<string, unknown>;
+		expect(Array.isArray(combo.allOf)).toBe(true);
+		expect((combo.allOf as unknown[]).length).toBe(2);
+	});
+
+	// Mirrors: openai-python/tests/lib/test_pydantic.py::test_nested_inline_ref_expansion
+	// End-to-end via tryEnforceStrictSchema: a tree mixing nested objects and a $ref-with-sibling
+	// description gets `additionalProperties: false` on every object node and every
+	// property forced into `required` — matching the SDK's strict snapshot.
+	it("end-to-end: nested objects all get additionalProperties:false + full required (SDK parity)", () => {
+		const schema = {
+			type: "object",
+			$defs: {
+				Star: {
+					type: "object",
+					properties: { name: { type: "string", description: "The name of the star." } },
+					required: ["name"],
+				},
+			},
+			properties: {
+				name: { type: "string", description: "The name of the universe." },
+				galaxy: {
+					type: "object",
+					properties: {
+						name: { type: "string", description: "The name of the galaxy." },
+						largest_star: { $ref: "#/$defs/Star", description: "The largest star." },
+					},
+					required: ["name", "largest_star"],
+				},
+			},
+			required: ["name", "galaxy"],
+		} as Record<string, unknown>;
+
+		const { schema: strict, strict: isStrict } = tryEnforceStrictSchema(schema);
+		expect(isStrict).toBe(true);
+		expect(strict.additionalProperties).toBe(false);
+		expect(strict.required).toEqual(["name", "galaxy"]);
+
+		const rootProps = strict.properties as Record<string, Record<string, unknown>>;
+		const galaxy = rootProps.galaxy;
+		expect(galaxy.additionalProperties).toBe(false);
+		expect(galaxy.required).toEqual(["name", "largest_star"]);
+
+		const galaxyProps = galaxy.properties as Record<string, Record<string, unknown>>;
+		const largest = galaxyProps.largest_star;
+		// $ref was unraveled — inlined as a real object node.
+		expect(largest.$ref).toBeUndefined();
+		expect(largest.type).toBe("object");
+		expect(largest.additionalProperties).toBe(false);
+		expect(largest.required).toEqual(["name"]);
+		// Sibling description survived the unravel.
+		expect(largest.description).toBe("The largest star.");
+
+		// The original $def was also enforced strict-mode style.
+		const defs = strict.$defs as Record<string, Record<string, unknown>>;
+		expect(defs.Star.additionalProperties).toBe(false);
+		expect(defs.Star.required).toEqual(["name"]);
 	});
 });
 
@@ -505,6 +688,42 @@ describe("tryEnforceStrictSchema", () => {
 		expect(replaceTasks.required).toEqual(["content", "status", "notes"]);
 		expect(updateTasks.additionalProperties).toBe(false);
 		expect(updateTasks.required).toEqual(["content", "status", "notes"]);
+	});
+
+	it("falls back to non-strict for mixed-primitive enum roots (no representable type)", () => {
+		// `{enum:[1, "two", null]}` cannot be reduced to a single `type` keyword,
+		// so strict mode cannot accept it. Older releases set `strict: true` with
+		// a typeless `{enum:[...]}` schema that OpenAI strict mode would reject
+		// on the wire; the contract is now to fall back to non-strict instead.
+		const result = tryEnforceStrictSchema({ enum: [1, "two", null] });
+		expect(result.strict).toBe(false);
+		expect(result.schema).toEqual({ enum: [1, "two", null] });
+	});
+
+	it("falls back to non-strict for non-primitive const roots", () => {
+		const objectResult = tryEnforceStrictSchema({ const: { a: 1 } });
+		expect(objectResult.strict).toBe(false);
+		expect(objectResult.schema).toEqual({ const: { a: 1 } });
+
+		const arrayResult = tryEnforceStrictSchema({ const: [1, 2, 3] });
+		expect(arrayResult.strict).toBe(false);
+		expect(arrayResult.schema).toEqual({ const: [1, 2, 3] });
+	});
+
+	it("infers a primitive type from enum/const when calling enforceStrictSchema directly", () => {
+		// `enforceStrictSchema` is a public API. Callers that pass a bare
+		// `{enum:[primitives]}` (without first running sanitize) still get a
+		// `type` filled in so the result is wire-valid.
+		const enumResult = enforceStrictSchema({ enum: ["draft", "published"] });
+		expect(enumResult).toEqual({ type: "string", enum: ["draft", "published"] });
+
+		const constResult = enforceStrictSchema({ const: 7 });
+		expect(constResult).toEqual({ type: "number", const: 7 });
+
+		// Mixed-primitive enum still throws — caller must fall back via tryEnforce.
+		expect(() => enforceStrictSchema({ enum: [1, "two"] })).toThrow();
+		// Non-primitive const still throws — caller must fall back via tryEnforce.
+		expect(() => enforceStrictSchema({ const: { a: 1 } })).toThrow();
 	});
 });
 

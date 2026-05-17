@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthCredentialStore, AuthStorage } from "../src/auth-storage";
+import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
 import type { UsageLimit, UsageProvider, UsageReport } from "../src/usage";
 import * as oauthUtils from "../src/utils/oauth";
 import type { OAuthCredentials } from "../src/utils/oauth/types";
@@ -120,7 +120,7 @@ describe("AuthStorage codex oauth ranking", () => {
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-auth-codex-selection-"));
-		store = await AuthCredentialStore.open(path.join(tempDir, "agent.db"));
+		store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		authStorage = new AuthStorage(store, {
 			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
 		});
@@ -590,7 +590,7 @@ describe("AuthStorage claude oauth ranking", () => {
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-auth-claude-selection-"));
-		store = await AuthCredentialStore.open(path.join(tempDir, "agent.db"));
+		store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		authStorage = new AuthStorage(store, {
 			usageProviderResolver: provider => (provider === "anthropic" ? usageProvider : undefined),
 		});

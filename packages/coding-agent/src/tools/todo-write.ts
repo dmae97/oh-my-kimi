@@ -49,31 +49,24 @@ const TodoOp = z
 	.describe("operation to apply");
 
 const InitListEntry = z.object({
-	phase: z.string().describe("phase name (short noun phrase)"),
-	items: z
-		.array(z.string().describe("task content (5-10 words)"))
-		.min(1)
-		.describe("tasks for this phase, in execution order; all start as pending"),
+	phase: z.string().describe("phase name"),
+	items: z.array(z.string().describe("task content")).min(1).describe("tasks for this phase"),
 });
 
 const TodoOpEntry = z.object({
 	op: TodoOp,
-	list: z.array(InitListEntry).optional().describe("phased task list for op=init"),
-	task: z.string().optional().describe("task content for start/done/rm/drop/note"),
-	phase: z.string().optional().describe("phase name for done/rm/drop/append"),
-	items: z
-		.array(z.string().describe("task content (5-10 words)"))
-		.min(1)
-		.optional()
-		.describe("tasks to append to `phase` for op=append"),
-	text: z.string().optional().describe("note text for op=note (appended with newline)"),
+	list: z.array(InitListEntry).optional().describe("phased task list (init)"),
+	task: z.string().optional().describe("task content"),
+	phase: z.string().optional().describe("phase name"),
+	items: z.array(z.string().describe("task content")).min(1).optional().describe("tasks to append"),
+	text: z.string().optional().describe("note text"),
 });
 
 const todoWriteSchema = z
 	.object({
 		ops: z.array(TodoOpEntry).min(1).describe("ordered todo operations"),
 	})
-	.describe("Apply ordered todo operations");
+	.describe("apply ordered todo operations");
 
 type TodoWriteParams = z.infer<typeof todoWriteSchema>;
 type TodoOpEntryValue = TodoWriteParams["ops"][number];

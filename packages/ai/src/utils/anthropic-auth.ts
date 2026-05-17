@@ -9,7 +9,7 @@
  *   5. Generic Anthropic fallback (ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL)
  */
 import { $env, getAgentDbPath } from "@oh-my-pi/pi-utils";
-import { type AuthCredential, AuthCredentialStore } from "../auth-storage";
+import { type AuthCredential, type AuthCredentialStore, SqliteAuthCredentialStore } from "../auth-storage";
 import {
 	buildAnthropicHeaders as buildProviderAnthropicHeaders,
 	normalizeAnthropicBaseUrl,
@@ -80,7 +80,7 @@ function toAnthropicOAuthCredential(credential: AuthCredential): AnthropicOAuthC
  */
 async function readAnthropicOAuthCredentials(store?: AuthCredentialStore): Promise<AnthropicOAuthCredential[]> {
 	const ownsStore = !store;
-	const effectiveStore = store ?? (await AuthCredentialStore.open(getAgentDbPath()));
+	const effectiveStore = store ?? (await SqliteAuthCredentialStore.open(getAgentDbPath()));
 	try {
 		const records = effectiveStore.listAuthCredentials("anthropic");
 		const credentials: AnthropicOAuthCredential[] = [];
@@ -133,7 +133,7 @@ export async function findAnthropicAuth(store?: AuthCredentialStore): Promise<An
 
 	// Tiers 3-4 use the credential store; manage lifecycle once
 	const ownsStore = !store;
-	const effectiveStore = store ?? (await AuthCredentialStore.open(getAgentDbPath()));
+	const effectiveStore = store ?? (await SqliteAuthCredentialStore.open(getAgentDbPath()));
 	try {
 		// 3. OAuth credentials in agent.db (with 5-minute expiry buffer)
 		const expiryBuffer = 5 * 60 * 1000; // 5 minutes
@@ -151,12 +151,14 @@ export async function findAnthropicAuth(store?: AuthCredentialStore): Promise<An
 		}
 
 		// 4. API key credentials in agent.db
-		const storedApiKey = effectiveStore.getApiKey("anthropic");
-		if (storedApiKey) {
+		const apiKeyRecord = effectiveStore
+			.listAuthCredentials("anthropic")
+			.find(record => record.credential.type === "api_key");
+		if (apiKeyRecord && apiKeyRecord.credential.type === "api_key") {
 			return {
-				apiKey: storedApiKey,
+				apiKey: apiKeyRecord.credential.key,
 				baseUrl: resolveAnthropicBaseUrlFromEnv() ?? DEFAULT_BASE_URL,
-				isOAuth: isOAuthToken(storedApiKey),
+				isOAuth: isOAuthToken(apiKeyRecord.credential.key),
 			};
 		}
 	} finally {

@@ -374,10 +374,15 @@ export class CommandController {
 			const openaiWebsocketSetting = this.ctx.settings.get("providers.openaiWebsockets") ?? "auto";
 			const preferOpenAICodexWebsockets =
 				openaiWebsocketSetting === "on" ? true : openaiWebsocketSetting === "off" ? false : undefined;
+			const credentialSource = this.ctx.session.modelRegistry.authStorage.describeCredentialSource(
+				model.provider,
+				stats.sessionId,
+			);
 			const providerDetails = getProviderDetails({
 				model,
 				sessionId: stats.sessionId,
 				authMode,
+				credentialSource,
 				preferWebsockets: preferOpenAICodexWebsockets,
 				providerSessionState: this.ctx.session.providerSessionState,
 			});
@@ -503,7 +508,8 @@ export class CommandController {
 			return;
 		}
 
-		const output = renderUsageReports(usageReports, theme, Date.now());
+		const availableWidth = Math.max(40, (this.ctx.ui.terminal.columns ?? 100) - 2);
+		const output = renderUsageReports(usageReports, theme, Date.now(), availableWidth);
 		this.ctx.chatContainer.addChild(new Spacer(1));
 		this.ctx.chatContainer.addChild(new Text(output, 1, 0));
 		this.ctx.ui.requestRender();
@@ -1237,8 +1243,8 @@ export class CommandController {
 	}
 }
 
-const BAR_WIDTH = 24;
-const COLUMN_WIDTH = BAR_WIDTH + 2;
+const BAR_WIDTH_MAX = 24;
+const BAR_WIDTH_MIN = 4;
 
 function renderJobLine(job: AsyncJobSnapshotItem, now: number): string {
 	const duration = formatDuration(Math.max(0, now - job.startTime));
@@ -1266,6 +1272,7 @@ function truncateJobLabel(label: string, maxWidth: number): string {
 
 	return `${out}…`;
 }
+
 function formatProviderName(provider: string): string {
 	return provider
 		.split(/[-_]/g)
@@ -1275,10 +1282,6 @@ function formatProviderName(provider: string): string {
 
 function formatNumber(value: number, maxFractionDigits = 1): string {
 	return new Intl.NumberFormat("en-US", { maximumFractionDigits: maxFractionDigits }).format(value);
-}
-
-function formatUsedAccounts(value: number): string {
-	return `${value.toFixed(2)} used`;
 }
 
 function resolveProviderAuthMode(authStorage: AuthStorage, provider: string): string {
@@ -1364,11 +1367,39 @@ function formatResetShort(limit: UsageLimit, nowMs: number): string | undefined 
 	return undefined;
 }
 
-function formatAccountHeader(limit: UsageLimit, report: UsageReport, index: number, nowMs: number): string {
-	const label = formatAccountLabel(limit, report, index);
-	const reset = formatResetShort(limit, nowMs);
-	if (!reset) return label;
-	return `${label} (${reset})`;
+function formatAccountHeaderRow(
+	limits: UsageLimit[],
+	reports: UsageReport[],
+	nowMs: number,
+	columnWidth: number,
+	uiTheme: typeof theme,
+): string[] {
+	const parts = limits.map((limit, index) => {
+		const reset = formatResetShort(limit, nowMs);
+		return {
+			label: formatAccountLabel(limit, reports[index], index),
+			suffix: reset ? `(${reset})` : "",
+		};
+	});
+	const maxSuffixWidth = parts.reduce((max, p) => Math.max(max, visibleWidth(p.suffix)), 0);
+	const gap = maxSuffixWidth > 0 ? 1 : 0;
+	const prefixBudget = columnWidth - maxSuffixWidth - gap;
+
+	// If suffix can't share the cell with at least `x…`, fall back to whole-label truncation.
+	if (prefixBudget < 2) {
+		return parts.map(p => {
+			const full = p.suffix ? `${p.label} ${p.suffix}` : p.label;
+			return padColumn(truncateJobLabel(full, columnWidth), columnWidth);
+		});
+	}
+
+	return parts.map(p => {
+		const prefix = truncateJobLabel(p.label, prefixBudget);
+		const prefixCell = prefix + " ".repeat(prefixBudget - visibleWidth(prefix));
+		if (!p.suffix) return prefixCell + " ".repeat(maxSuffixWidth + gap);
+		const suffixPad = " ".repeat(maxSuffixWidth - visibleWidth(p.suffix));
+		return `${prefixCell} ${suffixPad}${uiTheme.fg("dim", p.suffix)}`;
+	});
 }
 
 function padColumn(text: string, width: number): string {
@@ -1395,10 +1426,8 @@ function formatAggregateAmount(limits: UsageLimit[]): string {
 		.filter((value): value is number => value !== undefined);
 	if (fractions.length === limits.length && fractions.length > 0) {
 		const sum = fractions.reduce((total, value) => total + value, 0);
-		const usedPct = Math.max(sum * 100, 0);
-		const remainingPct = Math.max(0, limits.length * 100 - usedPct);
-		const avgRemaining = limits.length > 0 ? remainingPct / limits.length : remainingPct;
-		return `${formatUsedAccounts(sum)} (${formatNumber(avgRemaining)}% left)`;
+		const avgRemaining = Math.max(0, ((limits.length - sum) / limits.length) * 100);
+		return `${formatNumber(avgRemaining)}% free`;
 	}
 
 	const amounts = limits
@@ -1407,13 +1436,11 @@ function formatAggregateAmount(limits: UsageLimit[]): string {
 	if (amounts.length === limits.length && amounts.length > 0) {
 		const totalUsed = amounts.reduce((sum, amount) => sum + (amount.used ?? 0), 0);
 		const totalLimit = amounts.reduce((sum, amount) => sum + (amount.limit ?? 0), 0);
-		const usedPct = totalLimit > 0 ? (totalUsed / totalLimit) * 100 : 0;
-		const remainingPct = Math.max(0, 100 - usedPct);
-		const usedAccounts = totalLimit > 0 ? (usedPct / 100) * limits.length : 0;
-		return `${formatUsedAccounts(usedAccounts)} (${formatNumber(remainingPct)}% left)`;
+		const remainingPct = totalLimit > 0 ? Math.max(0, 100 - (totalUsed / totalLimit) * 100) : 0;
+		return `${formatNumber(remainingPct)}% free`;
 	}
 
-	return `Accounts: ${limits.length}`;
+	return `${limits.length} accts`;
 }
 
 function resolveResetRange(limits: UsageLimit[], nowMs: number): string | null {
@@ -1444,20 +1471,47 @@ function resolveStatusColor(status: UsageLimit["status"]): "success" | "warning"
 	return "dim";
 }
 
-function renderUsageBar(limit: UsageLimit, uiTheme: typeof theme): string {
+function renderUsageBar(limit: UsageLimit, uiTheme: typeof theme, barWidth: number): string {
 	const fraction = resolveFraction(limit);
 	if (fraction === undefined) {
-		return uiTheme.fg("dim", `[${"·".repeat(BAR_WIDTH)}]`);
+		return uiTheme.fg("dim", "·".repeat(barWidth));
 	}
 	const clamped = Math.min(Math.max(fraction, 0), 1);
-	const filled = Math.round(clamped * BAR_WIDTH);
-	const filledBar = "█".repeat(filled);
-	const emptyBar = "░".repeat(Math.max(0, BAR_WIDTH - filled));
+	const exact = clamped * barWidth;
+	const fullCells = Math.floor(exact);
+	const remainder = exact - fullCells;
+	let partial = "";
+	if (remainder >= 2 / 3) partial = "▓";
+	else if (remainder >= 1 / 3) partial = "▒";
+	const leading = "█".repeat(fullCells) + partial;
+	const empty = "░".repeat(Math.max(0, barWidth - fullCells - (partial ? 1 : 0)));
 	const color = resolveStatusColor(limit.status);
-	return `${uiTheme.fg("dim", "[")}${uiTheme.fg(color, filledBar)}${uiTheme.fg("dim", emptyBar)}${uiTheme.fg("dim", "]")}`;
+	return `${uiTheme.fg(color, leading)}${uiTheme.fg("dim", empty)}`;
 }
 
-function renderUsageReports(reports: UsageReport[], uiTheme: typeof theme, nowMs: number): string {
+/**
+ * Pick a per-column width so n bars + a trailing amount string fit in `available` columns.
+ * Falls back to the minimum when the terminal is too narrow rather than wrapping.
+ */
+function resolveColumnWidth(count: number, available: number, trailing: number): number {
+	if (count <= 0) return BAR_WIDTH_MAX;
+	const indent = 2;
+	const gaps = count - 1;
+	const spaceForBars = available - indent - gaps - (trailing > 0 ? trailing + 1 : 0);
+	const ideal = Math.floor(spaceForBars / count);
+	const min = BAR_WIDTH_MIN;
+	const max = BAR_WIDTH_MAX;
+	if (ideal < min) return min;
+	if (ideal > max) return max;
+	return ideal;
+}
+
+function renderUsageReports(
+	reports: UsageReport[],
+	uiTheme: typeof theme,
+	nowMs: number,
+	availableWidth: number,
+): string {
 	const lines: string[] = [];
 	const latestFetchedAt = Math.max(...reports.map(report => report.fetchedAt ?? 0));
 	const headerSuffix = latestFetchedAt ? ` (${formatDuration(nowMs - latestFetchedAt)} ago)` : "";
@@ -1506,7 +1560,7 @@ function renderUsageReports(reports: UsageReport[], uiTheme: typeof theme, nowMs
 
 		lines.push(uiTheme.bold(uiTheme.fg("accent", providerName)));
 
-		for (const group of limitGroups.values()) {
+		const renderableGroups = Array.from(limitGroups.values()).map(group => {
 			const entries = group.limits.map((limit, index) => ({
 				limit,
 				report: group.reports[index],
@@ -1521,18 +1575,25 @@ function renderUsageReports(reports: UsageReport[], uiTheme: typeof theme, nowMs
 			});
 			const sortedLimits = entries.map(entry => entry.limit);
 			const sortedReports = entries.map(entry => entry.report);
+			return { group, sortedLimits, sortedReports, amountText: formatAggregateAmount(sortedLimits) };
+		});
 
+		const sectionCount = renderableGroups.reduce((max, g) => Math.max(max, g.sortedLimits.length), 0);
+		const sectionTrailing = renderableGroups.reduce((max, g) => Math.max(max, visibleWidth(g.amountText)), 0);
+		const sectionColumnWidth = resolveColumnWidth(sectionCount, availableWidth, sectionTrailing);
+
+		for (const { group, sortedLimits, sortedReports, amountText } of renderableGroups) {
 			const status = resolveAggregateStatus(sortedLimits);
 			const statusIcon = resolveStatusIcon(status, uiTheme);
 
 			const windowSuffix = formatWindowSuffix(group.label, group.windowLabel, uiTheme);
 			lines.push(`${statusIcon} ${uiTheme.bold(group.label)} ${windowSuffix}`.trim());
-			const accountLabels = sortedLimits.map((limit, index) =>
-				padColumn(formatAccountHeader(limit, sortedReports[index], index, nowMs), COLUMN_WIDTH),
-			);
+			const accountLabels = formatAccountHeaderRow(sortedLimits, sortedReports, nowMs, sectionColumnWidth, uiTheme);
 			lines.push(`  ${accountLabels.join(" ")}`.trimEnd());
-			const bars = sortedLimits.map(limit => padColumn(renderUsageBar(limit, uiTheme), COLUMN_WIDTH));
-			lines.push(`  ${bars.join(" ")} ${formatAggregateAmount(sortedLimits)}`.trimEnd());
+			const bars = sortedLimits.map(limit =>
+				padColumn(renderUsageBar(limit, uiTheme, sectionColumnWidth), sectionColumnWidth),
+			);
+			lines.push(`  ${bars.join(" ")} ${amountText}`.trimEnd());
 			const resetText = sortedLimits.length <= 1 ? resolveResetRange(sortedLimits, nowMs) : null;
 			if (resetText) {
 				lines.push(`  ${uiTheme.fg("dim", resetText)}`.trimEnd());

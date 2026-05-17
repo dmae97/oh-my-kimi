@@ -213,58 +213,34 @@ const githubSchema = z
 				"run_watch",
 			] as const)
 			.describe("github operation"),
-		repo: z.string().describe("owner/repo (any op)").optional(),
-		branch: z.string().describe("branch (repo_view, pr_push local branch, run_watch)").optional(),
+		repo: z.string().describe("owner/repo").optional(),
+		branch: z.string().describe("branch").optional(),
 		pr: z
 			.union([z.string(), z.array(z.string())])
-			.describe(
-				"pr number, url, or branch (pr_checkout); pass an array to batch-process multiple pull requests in one call",
-			)
+			.describe("pr number, url, or branch")
 			.optional(),
-		force: z.boolean().describe("reset existing local branch (pr_checkout)").optional(),
-		forceWithLease: z.boolean().describe("force-with-lease push (pr_push)").optional(),
-		title: z.string().describe("PR title (pr_create)").optional(),
-		body: z.string().describe("PR body markdown (pr_create); mutually exclusive with fill").optional(),
-		base: z.string().describe("PR base branch (pr_create); defaults to repo default branch").optional(),
-		head: z.string().describe("PR head branch (pr_create); defaults to current branch").optional(),
-		draft: z.boolean().describe("open PR as draft (pr_create)").optional(),
-		fill: z
-			.boolean()
-			.describe("auto-fill PR title/body from commits (pr_create); mutually exclusive with title/body")
-			.optional(),
-		reviewer: z.array(z.string()).describe("reviewers to request (pr_create); accepts users or org/team").optional(),
-		assignee: z.array(z.string()).describe("assignees (pr_create); use @me for the authenticated user").optional(),
-		label: z.array(z.string()).describe("labels to apply (pr_create)").optional(),
-		query: z
-			.string()
-			.describe("search query (search_issues, search_prs, search_code, search_commits, search_repos)")
-			.optional(),
-		since: z
-			.string()
-			.describe(
-				"lower-bound date for search_issues/search_prs/search_commits/search_repos. Accepts a relative duration (`<n><unit>` with unit `m`/`h`/`d`/`w`/`mo`/`y`, e.g. `3d`, `12h`, `2w`) or an ISO date (`YYYY-MM-DD`) / datetime. Translated to a `created:>=…` (or `committer-date:`/`pushed:`) qualifier; not supported by search_code.",
-			)
-			.optional(),
-		until: z
-			.string()
-			.describe(
-				"upper-bound date in the same format as `since`. With both, builds a `field:since..until` range qualifier.",
-			)
-			.optional(),
+		force: z.boolean().describe("reset existing local branch").optional(),
+		forceWithLease: z.boolean().describe("force-with-lease push").optional(),
+		title: z.string().describe("pr title").optional(),
+		body: z.string().describe("pr body markdown").optional(),
+		base: z.string().describe("pr base branch").optional(),
+		head: z.string().describe("pr head branch").optional(),
+		draft: z.boolean().describe("open pr as draft").optional(),
+		fill: z.boolean().describe("auto-fill pr title/body from commits").optional(),
+		reviewer: z.array(z.string()).describe("reviewers").optional(),
+		assignee: z.array(z.string()).describe("assignees").optional(),
+		label: z.array(z.string()).describe("labels").optional(),
+		query: z.string().describe("search query").optional(),
+		since: z.string().describe("lower-bound date filter").optional(),
+		until: z.string().describe("upper-bound date filter").optional(),
 		dateField: z
 			.enum(["created", "updated"] as const)
-			.describe(
-				"date field used by `since`/`until`. issues/prs: `created` (default) or `updated`. repos: `created` (default) or `updated` (mapped to GitHub's `pushed:`). commits: ignored — always uses `committer-date`.",
-			)
+			.describe("date field")
 			.default("created")
 			.optional(),
-		limit: z
-			.number()
-			.default(10)
-			.describe("max results (search_issues, search_prs, search_code, search_commits, search_repos)")
-			.optional(),
-		run: z.string().describe("actions run id or url (run_watch)").optional(),
-		tail: z.number().default(15).describe("log lines per failed job (run_watch)").optional(),
+		limit: z.number().default(10).describe("max results").optional(),
+		run: z.string().describe("actions run id or url").optional(),
+		tail: z.number().default(15).describe("log lines per failed job").optional(),
 	})
 	.strict();
 

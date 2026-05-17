@@ -985,6 +985,7 @@ export class Editor implements Component, Focusable {
 						this.#setCursorCol(result.cursorCol);
 
 						this.#cancelAutocomplete();
+						this.onAutocompleteUpdate?.();
 
 						if (this.onChange) {
 							this.onChange(this.getText());
@@ -1044,6 +1045,7 @@ export class Editor implements Component, Focusable {
 						this.#setCursorCol(result.cursorCol);
 
 						this.#cancelAutocomplete();
+						this.onAutocompleteUpdate?.();
 
 						if (this.onChange) {
 							this.onChange(this.getText());
@@ -1493,6 +1495,29 @@ export class Editor implements Component, Focusable {
 			this.onChange(this.getText());
 		}
 
+		// Synchronous inline replacement (e.g. emoji shortcodes `:joy:` → 😂).
+		// Runs before autocomplete trigger so the popup doesn't briefly chase a
+		// prefix that's about to be rewritten.
+		if (char.length === 1 && this.#autocompleteProvider?.trySyncInlineReplace) {
+			const replaceLine = this.#state.lines[this.#state.cursorLine] || "";
+			const textBeforeCursor = replaceLine.slice(0, this.#state.cursorCol);
+			const replacement = this.#autocompleteProvider.trySyncInlineReplace(textBeforeCursor);
+			if (replacement) {
+				const before = replaceLine.slice(0, this.#state.cursorCol - replacement.replaceLen);
+				const after = replaceLine.slice(this.#state.cursorCol);
+				this.#state.lines[this.#state.cursorLine] = before + replacement.insert + after;
+				this.#setCursorCol(before.length + replacement.insert.length);
+				if (this.onChange) {
+					this.onChange(this.getText());
+				}
+				if (this.#autocompleteState) {
+					this.#cancelAutocomplete();
+					this.onAutocompleteUpdate?.();
+				}
+				return;
+			}
+		}
+
 		// Check if we should trigger or update autocomplete
 		if (!this.#autocompleteState) {
 			// Auto-trigger for "/" at the start of a line (slash commands)
@@ -1527,6 +1552,10 @@ export class Editor implements Component, Focusable {
 				}
 				// Check if we're in a # prompt action context
 				else if (textBeforeCursor.match(/#[^\s#]*$/)) {
+					this.#tryTriggerAutocomplete();
+				}
+				// Check if we're in a :emoji shortcode context
+				else if (textBeforeCursor.match(/(?:^|[\s([{>]):[a-zA-Z0-9_+-]*$/)) {
 					this.#tryTriggerAutocomplete();
 				}
 			}

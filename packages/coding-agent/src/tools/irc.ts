@@ -26,18 +26,10 @@ import type { AgentRef, AgentRegistry } from "../registry/agent-registry";
 import type { ToolSession } from ".";
 
 const ircSchema = z.object({
-	op: z
-		.union([
-			z.literal("send").describe("Send a message to one peer or to all peers"),
-			z.literal("list").describe("List currently visible peers"),
-		])
-		.describe("IRC operation"),
-	to: z.string().optional().describe('Recipient agent id (e.g. "0-Main", "0-AuthLoader") or "all" to broadcast'),
-	message: z.string().optional().describe("Message body to deliver"),
-	awaitReply: z
-		.boolean()
-		.optional()
-		.describe("Wait for the recipient's prose reply (default: true for DM, false for broadcast)"),
+	op: z.enum(["send", "list"]).describe("irc operation"),
+	to: z.string().optional().describe('recipient agent id or "all"'),
+	message: z.string().optional().describe("message body"),
+	awaitReply: z.boolean().optional().describe("wait for prose reply"),
 });
 
 type IrcParams = z.infer<typeof ircSchema>;

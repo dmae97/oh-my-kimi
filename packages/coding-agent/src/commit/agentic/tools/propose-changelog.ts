@@ -12,9 +12,7 @@ const changelogEntryProperties = CHANGELOG_CATEGORIES.reduce<Record<ChangelogCat
 );
 
 const changelogEntriesSchema = z.object(changelogEntryProperties);
-const changelogDeletionsSchema = z
-	.object(changelogEntryProperties)
-	.describe("Entries to remove from existing changelog sections (case-insensitive match)");
+const changelogDeletionsSchema = z.object(changelogEntryProperties).describe("entries to remove");
 
 const changelogEntrySchema = z.object({
 	path: z.string(),

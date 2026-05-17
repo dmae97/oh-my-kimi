@@ -18,19 +18,16 @@ export type { Observation, ObservationEntry } from "./browser/tab-protocol";
 const DEFAULT_TAB_NAME = "main";
 
 const appSchema = z.object({
-	path: z.string().describe("absolute path to a binary to spawn (single-instance reuse)").optional(),
-	cdp_url: z.string().describe("existing CDP endpoint to connect to (e.g. http://127.0.0.1:9222)").optional(),
-	args: z.array(z.string()).describe("extra CLI args when spawning").optional(),
-	target: z.string().describe("substring matched against url+title to pick a BrowserWindow").optional(),
+	path: z.string().describe("binary path to spawn").optional(),
+	cdp_url: z.string().describe("existing cdp endpoint").optional(),
+	args: z.array(z.string()).describe("extra cli args").optional(),
+	target: z.string().describe("substring to pick a window").optional(),
 });
 
 const browserSchema = z.object({
-	action: z.enum(["open", "close", "run"] as const).describe("tab/browser operation"),
-	name: z
-		.string()
-		.describe("tab id; default 'main'. Multiple tabs can coexist; reusable across run() calls and subagents.")
-		.optional(),
-	url: z.string().describe("open: navigate after acquiring tab").optional(),
+	action: z.enum(["open", "close", "run"] as const).describe("operation"),
+	name: z.string().describe("tab id (default 'main')").optional(),
+	url: z.string().describe("url to open").optional(),
 	app: appSchema.optional(),
 	viewport: z
 		.object({
@@ -41,21 +38,16 @@ const browserSchema = z.object({
 		.optional(),
 	wait_until: z
 		.enum(["load", "domcontentloaded", "networkidle0", "networkidle2"] as const)
-		.describe("navigation wait condition for url")
+		.describe("navigation wait condition")
 		.optional(),
 	dialogs: z
 		.enum(["accept", "dismiss"] as const)
-		.describe("open: auto-handle alert/confirm/beforeunload dialogs (default: leave for caller to handle)")
+		.describe("auto-handle dialogs")
 		.optional(),
-	code: z
-		.string()
-		.describe(
-			"run: JS body executed with `page`, `browser`, `tab`, `display`, `assert`, `wait` in scope. Treated as the body of an async function. Use `display(value)` to attach text/JSON/images; the function's return value is JSON-serialized as a final block.",
-		)
-		.optional(),
+	code: z.string().describe("js body to run in tab").optional(),
 	timeout: z.number().default(30).describe("timeout in seconds").optional(),
-	all: z.boolean().describe("close: close every tab").optional(),
-	kill: z.boolean().describe("close: also kill spawned-app browsers (default: leave running)").optional(),
+	all: z.boolean().describe("close every tab").optional(),
+	kill: z.boolean().describe("also kill spawned-app browsers").optional(),
 });
 
 /** Input schema for the browser tool. */

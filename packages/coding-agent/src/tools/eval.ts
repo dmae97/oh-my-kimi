@@ -4,10 +4,8 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Markdown, Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { jsBackend, parseEvalInput, pythonBackend, sniffEvalLanguage } from "../eval";
+import { jsBackend, pythonBackend } from "../eval";
 import type { ExecutorBackend } from "../eval/backend";
-import evalGrammar from "../eval/eval.lark" with { type: "text" };
-import { ABORT_WARNING, type ParsedEvalCell } from "../eval/parse";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
@@ -29,8 +27,27 @@ import { clampTimeout } from "./tool-timeouts";
 
 export const EVAL_DEFAULT_PREVIEW_LINES = 10;
 
+/**
+ * Per-cell input. Each cell runs in order; state persists within a language
+ * across cells and across tool calls.
+ */
+const evalCellSchema = z.object({
+	language: z.enum(["py", "js"]).describe('runtime: "py" for the IPython kernel, "js" for the persistent JS VM'),
+	code: z.string().describe("cell body, verbatim. Use top-level await freely."),
+	title: z.string().optional().describe('short label shown in transcript (e.g. "imports", "load config")'),
+	timeout: z.number().int().min(1).max(600).optional().describe("per-cell timeout in seconds (1-600, default 30)"),
+	reset: z
+		.boolean()
+		.optional()
+		.describe("wipe this cell's language kernel before running. Other languages are untouched."),
+});
+export type EvalCellInput = z.infer<typeof evalCellSchema>;
+
 export const evalSchema = z.object({
-	input: z.string().describe('eval input as a sequence of `*** Cell <lang>:"title"` cell headers followed by code'),
+	cells: z
+		.array(evalCellSchema)
+		.min(1)
+		.describe("cells executed in order. State persists within each language across cells and tool calls."),
 });
 export type EvalToolParams = z.infer<typeof evalSchema>;
 
@@ -134,7 +151,6 @@ export interface EvalToolOptions {
 
 interface ResolvedBackend {
 	backend: ExecutorBackend;
-	fallback: boolean;
 	notice?: string;
 }
 
@@ -166,51 +182,21 @@ function timeoutSecondsFromMs(timeoutMs: number): number {
 	return clampTimeout("eval", timeoutMs / 1000);
 }
 
-async function resolveBackend(
-	session: ToolSession,
-	requested: EvalLanguage | undefined,
-	code: string,
-): Promise<ResolvedBackend> {
+async function resolveBackend(session: ToolSession, language: EvalLanguage): Promise<ResolvedBackend> {
 	const allowPy = (session.settings.get("eval.py") as boolean | undefined) ?? true;
 	const allowJs = (session.settings.get("eval.js") as boolean | undefined) ?? true;
 
-	if (requested === "python") {
+	if (language === "python") {
 		if (!allowPy) throw new ToolError("Python backend is disabled (eval.py = false).");
 		if (!(await pythonBackend.isAvailable(session))) {
 			throw new ToolError(
 				'Python backend is unavailable in this session. Pass language: "js" or install the python kernel.',
 			);
 		}
-		return { backend: pythonBackend, fallback: false };
+		return { backend: pythonBackend };
 	}
-	if (requested === "js") {
-		if (!allowJs) throw new ToolError("JavaScript backend is disabled (eval.js = false).");
-		return { backend: jsBackend, fallback: false };
-	}
-	// Auto-detect.
-	const sniffed = sniffEvalLanguage(code);
-	if (sniffed === "python" && allowPy && (await pythonBackend.isAvailable(session))) {
-		return { backend: pythonBackend, fallback: false };
-	}
-	if (sniffed === "js" && allowJs) {
-		return { backend: jsBackend, fallback: false };
-	}
-
-	// Sniffer returned undefined or the preferred backend was disabled. Prefer
-	// python when its kernel is up, else fall back to js.
-	if (allowPy && (await pythonBackend.isAvailable(session))) {
-		const notice =
-			sniffed === "js" ? "JavaScript markers detected but eval.js is disabled; using Python." : undefined;
-		return { backend: pythonBackend, fallback: false, notice };
-	}
-	if (allowJs) {
-		const notice =
-			sniffed === "python"
-				? "Python markers detected but the python kernel is unavailable; using JavaScript."
-				: undefined;
-		return { backend: jsBackend, fallback: true, notice };
-	}
-	throw new ToolError("No eval backend is available; enable eval.py or eval.js.");
+	if (!allowJs) throw new ToolError("JavaScript backend is disabled (eval.js = false).");
+	return { backend: jsBackend };
 }
 
 export class EvalTool implements AgentTool<typeof evalSchema> {
@@ -227,19 +213,14 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly concurrency = "exclusive";
 	readonly strict = true;
 	readonly intent = (args: Partial<z.infer<typeof evalSchema>>): string | undefined => {
-		const input = args.input;
-		if (input) {
-			try {
-				const cells = parseEvalInput(input).cells;
-				return cells.map(cell => cell.title || `running ${cell.language}`).join("\n");
-			} catch {}
-		}
-		return "evaluating";
+		const cells = Array.isArray(args.cells) ? args.cells : [];
+		const first = cells.find(c => c && typeof c === "object");
+		if (!first) return "evaluating";
+		const title = typeof first.title === "string" ? first.title : undefined;
+		const language = typeof first.language === "string" ? first.language : "?";
+		const label = title || `running ${language}`;
+		return cells.length > 1 ? `${label} (+${cells.length - 1})` : label;
 	};
-
-	get customFormat(): { syntax: "lark"; definition: string } {
-		return { syntax: "lark", definition: evalGrammar };
-	}
 
 	readonly #proxyExecutor?: EvalProxyExecutor;
 
@@ -266,19 +247,17 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		}
 		const session = this.session;
 
-		const parsedInput = parseEvalInput(params.input);
-		let previousRuntimeLanguage: EvalLanguage | undefined;
 		const cells: ResolvedEvalCell[] = [];
-		for (const cell of parsedInput.cells) {
-			const requested = cell.languageOrigin === "header" ? cell.language : (previousRuntimeLanguage ?? undefined);
-			const resolved = await resolveBackend(session, requested, cell.code);
-			previousRuntimeLanguage = resolved.backend.id;
+		for (let i = 0; i < params.cells.length; i++) {
+			const cell = params.cells[i];
+			const language: EvalLanguage = cell.language === "py" ? "python" : "js";
+			const resolved = await resolveBackend(session, language);
 			cells.push({
-				index: cell.index,
+				index: i,
 				title: cell.title,
 				code: cell.code,
-				timeoutMs: cell.timeoutMs,
-				reset: cell.reset,
+				timeoutMs: (cell.timeout ?? 30) * 1000,
+				reset: cell.reset ?? false,
 				resolved,
 			});
 		}
@@ -462,11 +441,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						pushUpdate();
 						const errorMsg = result.output || "Command aborted";
 						const combinedOutput = cellOutputs.join("\n\n");
-						const abortSuffix = parsedInput.aborted ? `\n\n${ABORT_WARNING}` : "";
 						const outputText =
-							(cells.length > 1
+							cells.length > 1
 								? `${combinedOutput}\n\nCell ${i + 1} aborted: ${errorMsg}`
-								: combinedOutput || errorMsg) + abortSuffix;
+								: combinedOutput || errorMsg;
 
 						const summaryForMeta = await summarizeFinal(combinedOutput, finalizeOutput);
 						const details: EvalToolDetails = {
@@ -489,13 +467,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						cellResult.status = "error";
 						pushUpdate();
 						const combinedOutput = cellOutputs.join("\n\n");
-						const abortSuffix = parsedInput.aborted ? `\n\n${ABORT_WARNING}` : "";
 						const outputText =
-							(cells.length > 1
+							cells.length > 1
 								? `${combinedOutput}\n\nCell ${i + 1} failed (exit code ${result.exitCode}). Earlier cells succeeded—their state persists. Fix only cell ${i + 1}.`
 								: combinedOutput
 									? `${combinedOutput}\n\nCommand exited with code ${result.exitCode}`
-									: `Command exited with code ${result.exitCode}`) + abortSuffix;
+									: `Command exited with code ${result.exitCode}`;
 
 						const summaryForMeta = await summarizeFinal(combinedOutput, finalizeOutput);
 						const details: EvalToolDetails = {
@@ -519,13 +496,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				}
 
 				const combinedOutput = cellOutputs.join("\n\n");
-				const abortSuffix = parsedInput.aborted ? `\n\n${ABORT_WARNING}` : "";
 				const hasImages = images.length > 0;
 				const outputText =
-					(combinedOutput ||
-						(hasImages
-							? `(displayed ${images.length} image${images.length === 1 ? "" : "s"}; no text output)`
-							: "(no output)")) + abortSuffix;
+					combinedOutput ||
+					(hasImages
+						? `(displayed ${images.length} image${images.length === 1 ? "" : "s"}; no text output)`
+						: "(no output)");
 				const summaryForMeta = await summarizeFinal(combinedOutput, finalizeOutput);
 
 				const details: EvalToolDetails = {
@@ -581,8 +557,14 @@ async function summarizeFinal(
 	};
 }
 
+interface EvalRenderCellArg {
+	language?: string;
+	code?: string;
+	title?: string;
+}
+
 interface EvalRenderArgs {
-	input?: string;
+	cells?: EvalRenderCellArg[];
 	__partialJson?: string;
 }
 
@@ -593,27 +575,30 @@ interface EvalRenderContext {
 	timeout?: number;
 }
 
-function decodePartialJsonStringFragment(fragment: string): string {
-	let text = fragment.replace(/\\u[0-9a-fA-F]{0,3}$/, "");
-	const trailingBackslashes = text.match(/\\+$/)?.[0].length ?? 0;
-	if (trailingBackslashes % 2 === 1) text = text.slice(0, -1);
-	try {
-		return JSON.parse(`"${text}"`) as string;
-	} catch {
-		return text;
+interface EvalRenderCell {
+	language: EvalLanguage;
+	code: string;
+	title?: string;
+}
+
+function normalizeRenderLanguage(value: string | undefined): EvalLanguage {
+	return value === "js" ? "js" : "python";
+}
+
+function getRenderCells(args: EvalRenderArgs | undefined): EvalRenderCell[] {
+	const raw = args?.cells;
+	if (!Array.isArray(raw)) return [];
+	const out: EvalRenderCell[] = [];
+	for (const cell of raw) {
+		if (!cell || typeof cell !== "object") continue;
+		const code = typeof cell.code === "string" ? cell.code : "";
+		out.push({
+			language: normalizeRenderLanguage(typeof cell.language === "string" ? cell.language : undefined),
+			code,
+			title: typeof cell.title === "string" ? cell.title : undefined,
+		});
 	}
-}
-
-function extractPartialJsonString(partialJson: string | undefined, key: string): string | undefined {
-	if (!partialJson) return undefined;
-	const pattern = new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`, "u");
-	const match = pattern.exec(partialJson);
-	if (!match) return undefined;
-	return decodePartialJsonStringFragment(match[1]);
-}
-
-function getRenderInput(args: EvalRenderArgs | undefined): string | undefined {
-	return args?.input ?? extractPartialJsonString(args?.__partialJson, "input");
+	return out;
 }
 
 /** Format a status event as a single line for display. */
@@ -861,15 +846,7 @@ function formatCellOutputLines(
 
 export const evalToolRenderer = {
 	renderCall(args: EvalRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const input = getRenderInput(args);
-		let cells: ParsedEvalCell[] = [];
-		if (input) {
-			try {
-				cells = parseEvalInput(input).cells;
-			} catch {
-				cells = [];
-			}
-		}
+		const cells = getRenderCells(args);
 
 		if (cells.length === 0) {
 			const promptSym = uiTheme.fg("accent", ">>>");
@@ -881,7 +858,7 @@ export const evalToolRenderer = {
 
 		return {
 			render: (width: number): string[] => {
-				const key = `${input?.length ?? 0}`;
+				const key = cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|");
 				if (cached && cached.key === key && cached.width === width) {
 					return cached.result;
 				}

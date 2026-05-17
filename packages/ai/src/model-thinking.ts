@@ -104,6 +104,9 @@ export const CLOUDFLARE_FALLBACK_MODEL: ApiModel<"anthropic-messages"> = {
 	maxTokens: 64000,
 };
 
+const kEnrichedModel = Symbol("model-thinking.enrichedModel");
+type ModelWithEnriched = ApiModel<Api> & { [kEnrichedModel]?: ApiModel<Api> };
+
 /**
  * Returns a copy of the model with canonical thinking metadata attached.
  *
@@ -111,18 +114,32 @@ export const CLOUDFLARE_FALLBACK_MODEL: ApiModel<"anthropic-messages"> = {
  * trust `model.thinking` and avoid inferring capabilities on demand.
  */
 export function enrichModelThinking<TApi extends Api>(model: ApiModel<TApi>): ApiModel<TApi> {
+	const tagged = model as ModelWithEnriched;
+	const cached = tagged[kEnrichedModel];
+	if (cached !== undefined) {
+		return cached as ApiModel<TApi>;
+	}
 	const normalizedThinking = normalizeThinkingConfig(model.thinking);
+	let result: ApiModel<TApi>;
 	if (!model.reasoning) {
-		return normalizedThinking === undefined && model.thinking === undefined
-			? model
-			: { ...model, thinking: undefined };
+		result =
+			normalizedThinking === undefined && model.thinking === undefined ? model : { ...model, thinking: undefined };
+	} else {
+		const thinking = normalizedThinking ?? inferModelThinking(model);
+		result = thinkingsEqual(normalizedThinking, thinking) ? model : { ...model, thinking };
 	}
-
-	const thinking = normalizedThinking ?? inferModelThinking(model);
-	if (thinkingsEqual(normalizedThinking, thinking)) {
-		return model;
-	}
-	return { ...model, thinking };
+	// Stash the enriched copy on a non-enumerable slot so callers that hand us
+	// the same reference twice skip the work. `enumerable: false` is critical:
+	// many call sites build derived models via `{ ...model, ...overrides }`,
+	// which would otherwise copy this cache slot and trick us into returning
+	// the *original* enriched model — silently discarding the overrides.
+	Object.defineProperty(tagged, kEnrichedModel, {
+		value: result,
+		enumerable: false,
+		configurable: true,
+		writable: true,
+	});
+	return result;
 }
 
 /**

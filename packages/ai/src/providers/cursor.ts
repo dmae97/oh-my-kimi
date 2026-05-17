@@ -3,8 +3,7 @@ import * as fs from "node:fs/promises";
 import http2 from "node:http2";
 import { create, fromBinary, fromJson, type JsonValue, toBinary, toJson } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env, sanitizeText } from "@oh-my-pi/pi-utils";
 import { calculateCost } from "../models";
 import type {
 	Api,

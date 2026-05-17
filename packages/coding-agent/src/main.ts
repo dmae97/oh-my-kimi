@@ -940,6 +940,9 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			initialMessage,
 			initialImages,
 		});
+		if ($env.PI_TIMING) {
+			logger.printTimings();
+		}
 		await session.dispose();
 		stopThemeWatcher();
 		await postmortem.quit(0);

@@ -108,29 +108,16 @@ export default function (pi: ExtensionAPI) {
 	});
 }
 ```
-
-**Legacy TypeBox-style schemas** (`pi.typebox`) remain available for older extensions and are backed by a tiny Zod-shim — prefer `pi.zod` directly for new code.
-
-```typescript
-const { Type } = pi.typebox;
-parameters: Type.Object({ name: Type.String() });
-```
-
 ## Key Patterns
 
-**Use `StringEnum` for discriminated string tool args** (required for Google API compatibility):
+**Use `z.enum` for discriminated string tool args:**
 
 ```typescript
-import { StringEnum } from "@oh-my-pi/pi-ai";
-
 const { z } = pi.zod;
 
-// Good — Google-safe enum wiring
 parameters: z.object({
-	action: StringEnum(["list", "add"] as const),
+	action: z.enum(["list", "add"]),
 });
-
-// Avoid raw union-of-literals patterns that don't degrade well for strict JSON Schema providers
 ```
 
 **State persistence via details:**

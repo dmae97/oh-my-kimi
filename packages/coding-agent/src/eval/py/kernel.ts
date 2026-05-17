@@ -626,7 +626,7 @@ export class PythonKernel {
 		const exitedPromise = this.#exitedPromise;
 		const timeout = new Promise<null>(resolve => {
 			const timer = setTimeout(() => resolve(null), Math.max(0, timeoutMs));
-			(timer as { unref?: () => void }).unref?.();
+			timer.unref?.();
 		});
 		return Promise.race([exitedPromise.then(code => code as number | null), timeout]);
 	}

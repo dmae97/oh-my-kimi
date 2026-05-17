@@ -11,7 +11,7 @@
 
 /**
  * Google Generative AI unsupported schema fields.
- * Stripped during sanitizeSchemaForGoogle / sanitizeSchemaForCCA.
+ * Stripped during normalizeSchemaForGoogle / normalizeSchemaForCCA.
  */
 export const UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
 	$schema: true,
@@ -36,6 +36,30 @@ export const UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
 	exclusiveMaximum: true,
 	pattern: true,
 	format: true,
+};
+
+/**
+ * Human-meaningful validation/decorative keywords that can be preserved in a
+ * sibling description when a provider-specific normalizer strips them from the
+ * wire schema.
+ */
+export const LIFTABLE_TO_DESCRIPTION_FIELDS: Record<string, true> = {
+	pattern: true,
+	format: true,
+	minLength: true,
+	maxLength: true,
+	minimum: true,
+	maximum: true,
+	exclusiveMinimum: true,
+	exclusiveMaximum: true,
+	multipleOf: true,
+	minItems: true,
+	maxItems: true,
+	uniqueItems: true,
+	minProperties: true,
+	maxProperties: true,
+	default: true,
+	examples: true,
 };
 
 /**
@@ -146,7 +170,7 @@ export const CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS: Record<string, true> = {
 
 /**
  * Combinator keys used across schema sanitization modules.
- * Defined once to avoid duplication in strict-mode.ts and normalize-cca.ts.
+ * Defined once to avoid duplication in strict-mode.ts and normalize.ts.
  */
 export const COMBINATOR_KEYS = ["anyOf", "allOf", "oneOf"] as const;
 

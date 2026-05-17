@@ -1,5 +1,8 @@
+import * as os from "node:os";
+import * as path from "node:path";
 import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
 import type { Model } from "@oh-my-pi/pi-ai/types";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 
 export async function withEnv(
 	overrides: Record<string, string | undefined>,
@@ -64,4 +67,45 @@ export function createCodexModel(id: string): Model<"openai-codex-responses"> {
 		contextWindow: 272000,
 		maxTokens: 128000,
 	});
+}
+
+export interface AuthGatewayE2EStatus {
+	ok: boolean;
+	token?: string;
+	reason?: string;
+}
+
+export const AUTH_GATEWAY_E2E_URL = Bun.env.OMP_E2E_GATEWAY_URL ?? "http://127.0.0.1:4000";
+
+const AUTH_GATEWAY_TOKEN_PATH = path.join(os.homedir(), ".omp", "auth-gateway.token");
+const AUTH_GATEWAY_HEALTH_TIMEOUT_MS = 500;
+
+let authGatewayE2EStatus: Promise<AuthGatewayE2EStatus> | undefined;
+
+export function checkAuthGatewayE2EAvailable(): Promise<AuthGatewayE2EStatus> {
+	authGatewayE2EStatus ??= readAuthGatewayE2EStatus();
+	return authGatewayE2EStatus;
+}
+
+async function readAuthGatewayE2EStatus(): Promise<AuthGatewayE2EStatus> {
+	if (!Bun.env.E2E) return { ok: false, reason: "E2E env not set" };
+	let token: string;
+	try {
+		token = (await Bun.file(AUTH_GATEWAY_TOKEN_PATH).text()).trim();
+	} catch (err) {
+		if (isEnoent(err)) return { ok: false, reason: `no token at ${AUTH_GATEWAY_TOKEN_PATH}` };
+		throw err;
+	}
+	if (!token) return { ok: false, reason: `empty token at ${AUTH_GATEWAY_TOKEN_PATH}` };
+
+	try {
+		const res = await fetch(`${AUTH_GATEWAY_E2E_URL}/healthz`, {
+			signal: AbortSignal.timeout(AUTH_GATEWAY_HEALTH_TIMEOUT_MS),
+		});
+		if (!res.ok) return { ok: false, reason: `healthz returned ${res.status}` };
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return { ok: false, reason: `healthz unreachable: ${msg}` };
+	}
+	return { ok: true, token };
 }

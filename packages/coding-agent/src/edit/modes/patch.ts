@@ -1578,16 +1578,16 @@ export async function computePatchDiff(
 
 export const patchEditEntrySchema = z
 	.object({
-		op: z.enum(["create", "delete", "update"]).optional().describe("Operation (default: update)"),
-		rename: z.string().describe("New path for move").optional(),
-		diff: z.string().describe("Diff hunks (update) or full content (create)").optional(),
+		op: z.enum(["create", "delete", "update"]).optional().describe("operation (default update)"),
+		rename: z.string().describe("new path for move").optional(),
+		diff: z.string().describe("diff hunks or full content for create").optional(),
 	})
 	.strict();
 
 export const patchEditSchema = z
 	.object({
-		path: z.string().describe("file path for edits"),
-		edits: z.array(patchEditEntrySchema).min(1).describe("Patch operations"),
+		path: z.string().describe("file path"),
+		edits: z.array(patchEditEntrySchema).min(1).describe("patch operations"),
 	})
 	.strict();
 

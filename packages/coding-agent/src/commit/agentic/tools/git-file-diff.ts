@@ -132,8 +132,8 @@ function processDiffs(files: string[], diffs: Map<string, string>): { result: st
 }
 
 const gitFileDiffSchema = z.object({
-	files: z.array(z.string().describe("Files to diff")).min(1).max(10),
-	staged: z.boolean().describe("Use staged changes (default: true)").optional(),
+	files: z.array(z.string().describe("file to diff")).min(1).max(10),
+	staged: z.boolean().describe("use staged changes (default true)").optional(),
 });
 
 export function createGitFileDiffTool(cwd: string, state: CommitAgentState): CustomTool<typeof gitFileDiffSchema> {

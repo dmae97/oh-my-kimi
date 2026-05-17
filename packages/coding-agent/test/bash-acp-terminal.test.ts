@@ -1,4 +1,4 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { ClientBridge, ClientBridgeTerminalHandle } from "../src/session/client-bridge";
 import type { ToolSession } from "../src/tools";
 import { BashTool } from "../src/tools/bash";
@@ -28,6 +28,10 @@ function makeSession(bridge: ClientBridge): ToolSession {
 		getClientBridge: () => bridge,
 	} as unknown as ToolSession;
 }
+
+afterEach(() => {
+	mock.restore();
+});
 
 describe("BashTool ACP terminal routing", () => {
 	it("routes through bridge, emits terminalId update, and releases the handle", async () => {
@@ -139,6 +143,8 @@ describe("BashTool ACP terminal routing", () => {
 		};
 		const killSpy = spyOn(handle, "kill");
 		const releaseSpy = spyOn(handle, "release");
+
+		spyOn(Bun, "sleep").mockImplementation(async () => {});
 
 		const tool = new BashTool(makeSession(bridge));
 

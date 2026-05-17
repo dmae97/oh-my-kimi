@@ -165,10 +165,12 @@ async function pollForGitHubAccessToken(
 	intervalSeconds: number,
 	expiresIn: number,
 	signal?: AbortSignal,
+	pollIntervalFloorMs = 1000,
+	pollIntervalScaleMs = 1000,
 ) {
 	const urls = getUrls(domain);
 	const deadline = Date.now() + expiresIn * 1000;
-	let intervalMs = Math.max(1000, Math.floor(intervalSeconds * 1000));
+	let intervalMs = Math.max(pollIntervalFloorMs, Math.floor(intervalSeconds * pollIntervalScaleMs));
 	let intervalMultiplier = INITIAL_POLL_INTERVAL_MULTIPLIER;
 	let slowDownResponses = 0;
 
@@ -212,7 +214,9 @@ async function pollForGitHubAccessToken(
 			if (error === "slow_down") {
 				slowDownResponses += 1;
 				intervalMs =
-					typeof interval === "number" && interval > 0 ? interval * 1000 : Math.max(1000, intervalMs + 5000);
+					typeof interval === "number" && interval > 0
+						? Math.max(pollIntervalFloorMs, interval * pollIntervalScaleMs)
+						: Math.max(pollIntervalFloorMs, intervalMs + 5 * pollIntervalScaleMs);
 				intervalMultiplier = SLOW_DOWN_POLL_INTERVAL_MULTIPLIER;
 				continue;
 			}
@@ -308,6 +312,8 @@ export async function loginGitHubCopilot(options: {
 	onPrompt: (prompt: { message: string; placeholder?: string; allowEmpty?: boolean }) => Promise<string>;
 	onProgress?: (message: string) => void;
 	signal?: AbortSignal;
+	pollIntervalFloorMs?: number;
+	pollIntervalScaleMs?: number;
 }): Promise<OAuthCredentials> {
 	const input = await options.onPrompt({
 		message: "GitHub Enterprise URL/domain (blank for github.com)",
@@ -337,6 +343,8 @@ export async function loginGitHubCopilot(options: {
 		device.interval,
 		device.expires_in,
 		options.signal,
+		options.pollIntervalFloorMs,
+		options.pollIntervalScaleMs,
 	);
 
 	// With opencode OAuth, the GitHub token is used directly for all API requests

@@ -52,6 +52,7 @@ COPY --parents \
     Cargo.toml Cargo.lock rust-toolchain.toml \
     packages/*/package.json \
     packages/tsconfig.workspace.json \
+    python/robomp/web/package.json \
     crates/*/Cargo.toml \
     /pi/
 
