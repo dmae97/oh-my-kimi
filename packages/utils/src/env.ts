@@ -3,13 +3,32 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, getConfigRootDir } from "./dirs";
 
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export function isValidEnvName(name: string): boolean {
+	return ENV_NAME_RE.test(name);
+}
+
+export function isSafeEnvValue(value: string): boolean {
+	return !value.includes("\0");
+}
+
+export function filterProcessEnv(env: Record<string, string | undefined>): Record<string, string> {
+	const result: Record<string, string> = {};
+	for (const [key, value] of Object.entries(env)) {
+		if (!isValidEnvName(key) || value === undefined || !isSafeEnvValue(value)) continue;
+		result[key] = value;
+	}
+	return result;
+}
+
 /**
  * Parses a .env file synchronously and extracts key-value string pairs.
  * Ignores lines that are empty or start with '#'. Trims whitespace.
  * Allows values to be quoted with single or double quotes.
  * Returns an object of key-value pairs.
  */
-function parseEnvFile(filePath: string): Record<string, string> {
+export function parseEnvFile(filePath: string): Record<string, string> {
 	const result: Record<string, string> = {};
 	try {
 		const content = fs.readFileSync(filePath, "utf-8");
@@ -22,12 +41,15 @@ function parseEnvFile(filePath: string): Record<string, string> {
 			if (eqIndex === -1) continue;
 
 			const key = trimmed.slice(0, eqIndex).trim();
+			if (!isValidEnvName(key)) continue;
+
 			let value = trimmed.slice(eqIndex + 1).trim();
 
 			// Remove surrounding quotes (" or ')
 			if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
 				value = value.slice(1, -1);
 			}
+			if (!isSafeEnvValue(value)) continue;
 
 			result[key] = value;
 		}
@@ -50,6 +72,13 @@ const homeEnv = parseEnvFile(path.join(os.homedir(), ".env"));
 const piEnv = parseEnvFile(path.join(getConfigRootDir(), ".env"));
 const agentEnv = parseEnvFile(path.join(getAgentDir(), ".env"));
 const projectEnv = parseEnvFile(path.join(process.cwd(), ".env"));
+
+for (const key of Object.keys(Bun.env)) {
+	const value = Bun.env[key];
+	if (!isValidEnvName(key) || value === undefined || !isSafeEnvValue(value)) {
+		delete Bun.env[key];
+	}
+}
 
 for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
 	for (const [key, value] of Object.entries(file)) {

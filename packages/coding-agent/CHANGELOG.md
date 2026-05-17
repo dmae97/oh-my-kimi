@@ -53,6 +53,10 @@
 - Fixed auth-gateway request cancellation for requests that are already aborted before dispatch.
 - Fixed `/login` and `/logout` provider selector overflowing tall provider lists off-screen on small terminals. The selector now scrolls a 10-item window centered on the highlighted entry, shows a `(n/total)` indicator when windowed, and accepts PageUp/PageDown for faster navigation.
 
+### Fixed
+
+- Fixed `.env` loading so malformed variable names and NUL-containing values are ignored before they can poison `Bun.env` and break bash/external process execution with `nul byte found in provided data`.
+
 ## [15.1.2] - 2026-05-15
 ### Fixed
 
