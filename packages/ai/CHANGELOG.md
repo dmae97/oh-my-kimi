@@ -1,18 +1,20 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
+- Changed `AuthBrokerClient.fetchSnapshot()` to return status-based results (`200` or `304`) instead of always returning a raw snapshot body, so callers now need to branch on `status`
 - Renamed public schema utilities in `@oh-my-pi/pi-ai/utils/schema` by replacing `sanitizeSchemaForGoogle`, `sanitizeSchemaForCCA`, `prepareSchemaForCCA`, and `sanitizeSchemaForMCP` with `normalizeSchemaForGoogle`, `normalizeSchemaForCCA`, and `normalizeSchemaForMCP`
 - Added MCP schema normalization via `normalizeSchemaForMCP` for compatibility checks
 - Removed the `StringEnum` helper from `@oh-my-pi/pi-ai/utils/schema`. Use `z.enum([...])` directly; Zod's emitted JSON Schema is already wire-compatible with Google and other providers.
 - Renamed the concrete SQLite credential store class from `AuthCredentialStore` to `SqliteAuthCredentialStore`. `AuthCredentialStore` is now the persistence interface implemented by both the SQLite store and the new `RemoteAuthCredentialStore`. Update `new AuthCredentialStore(db)` / `AuthCredentialStore.open(...)` call-sites to `SqliteAuthCredentialStore`; type-position uses (`store: AuthCredentialStore`) continue to work unchanged.
 
 ### Added
+
+- Added `onAuthError` to `StreamOptions` and wired `streamSimple()` to retry once with a replacement API key when the first provider response is a 401 before any assistant events are emitted
+- Added generation-aware snapshot metadata (`generation`, `serverNowMs`, `refresher`, and `rotatesInMs`) to auth-broker snapshot responses to support client-side credential-rotation planning
 - Added `transport: "pi-native"` on `Model` and the matching `streamPiNative` client. When `model.transport === "pi-native"`, `streamSimple` short-circuits the per-provider dispatch and POSTs the canonical `Context` to the auth-gateway's `POST /v1/pi/stream` endpoint. The response is SSE-framed `AssistantMessageEvent`s parsed by `readSseJson` and pushed verbatim into the local `AssistantMessageEventStream` — no wire-format translation, no partial-stripping reconstruction. Used by containerized omp installs (robomp slots, swarm extension, etc.) to route every LLM call through a credential-holding sidecar; the slot itself never sees the real provider tokens. Server-controlled fields (`apiKey`, `signal`, `fetch`, lifecycle callbacks, the provider-session map) are stripped from the wire body — `apiKey` rides in the `Authorization` header as the gateway bearer.
 - Added `POST /v1/pi/stream` to the auth-gateway. Same auth + abort + model-resolution + codex-compat + prefix-cache plumbing as the foreign-wire routes; only the wire-format translation is skipped. Request body is `{ modelId, context, options?, stream? }` where `context` is the canonical pi-ai `Context` and `options` is `SimpleStreamOptions` with non-serializable fields stripped. Response is SSE-framed `AssistantMessageEvent` (terminated by `data: [DONE]`) when streaming, or `{ message: AssistantMessage }` JSON when `stream: false`.
-
 - Added Vertex AI authentication via Google Application Default Credentials from `GOOGLE_APPLICATION_CREDENTIALS`, `~/.config/gcloud/application_default_credentials.json`, or metadata server tokens, with token caching and refresh skew control via `GOOGLE_VERTEX_REFRESH_SKEW_MS`
 - Added support for Anthropic image message parts with `type: "url"` and `type: "file"` sources
 - Added `stopSequences` and `frequencyPenalty` to shared stream options and wired them through to OpenAI request translation
@@ -42,6 +44,7 @@
 
 ### Changed
 
+- Changed `GET /v1/snapshot` to support generation-based polling with `If-None-Match` and `wait` for long-poll updates and to return `304` when no snapshot changes are available
 - Changed Bedrock credential resolution for streaming calls to prefer environment keys, AWS profile/SSO credentials, and IMDSv2 fallback when available
 - Changed auth-gateway parsing for OpenAI chat-completions and Responses to ignore unsupported SDK-only fields instead of rejecting requests
 - Changed auth-gateway protocol handling to include CORS headers on responses and support browser-origin requests
@@ -57,6 +60,8 @@
 
 ### Fixed
 
+- Fixed OAuth credential refresh flow so concurrent manual and background refreshes now share one in-flight attempt per credential, and `RemoteAuthCredentialStore` now re-synchronizes before using near-expiring OAuth credentials
+- Fixed stale-credential handling after auth failures by waiting for updated broker snapshots and refreshing suspect credentials through broker endpoints before continuing
 - Fixed Google Generative AI startup behavior to throw a clear API-key-required error when no key is configured
 - Fixed AWS Bedrock image message serialization to preserve base64 `source.bytes` payloads instead of decoding and rebuilding them
 - Fixed Google provider error handling to extract the API-reported `error.message` from JSON response bodies when available

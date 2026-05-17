@@ -50,6 +50,28 @@ export class AuthBrokerError extends Error {
 	}
 }
 
+export interface FetchSnapshotOptions {
+	ifGenerationGt?: number;
+	waitMs?: number;
+	signal?: AbortSignal;
+}
+
+export type FetchSnapshotResult =
+	| { status: 200; snapshot: SnapshotResponse; generation: number }
+	| { status: 304; generation: number };
+
+function parseGenerationTag(header: string | null): number | undefined {
+	if (!header) return undefined;
+	let value = header.trim();
+	if (value.startsWith("W/")) value = value.slice(2).trim();
+	if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+		value = value.slice(1, -1);
+	}
+	const generation = Number(value);
+	if (!Number.isInteger(generation) || generation < 0) return undefined;
+	return generation;
+}
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RETRIES = 1;
 
@@ -72,13 +94,38 @@ export class AuthBrokerClient {
 		return this.#request("GET", "/v1/healthz", { schema: healthzResponseSchema, auth: false, signal });
 	}
 
-	fetchSnapshot(signal?: AbortSignal): Promise<SnapshotResponse> {
-		// `snapshotResponseSchema` narrows `refresh` to the sentinel literal where
-		// the public type uses plain `string`; the wire shape is identical.
-		return this.#request("GET", "/v1/snapshot", {
-			schema: snapshotResponseSchema,
-			signal,
-		}) as Promise<SnapshotResponse>;
+	async fetchSnapshot(opts: FetchSnapshotOptions = {}): Promise<FetchSnapshotResult> {
+		return this.#fetchSnapshotResult(opts);
+	}
+	async #fetchSnapshotResult(opts: FetchSnapshotOptions): Promise<FetchSnapshotResult> {
+		const query = new URLSearchParams();
+		if (opts.waitMs !== undefined) query.set("wait", String(opts.waitMs));
+		const path = `/v1/snapshot${query.size > 0 ? `?${query.toString()}` : ""}`;
+		const headers: Record<string, string> = {};
+		if (opts.ifGenerationGt !== undefined) headers["If-None-Match"] = `"${opts.ifGenerationGt}"`;
+		const timeoutMs =
+			opts.waitMs !== undefined && opts.waitMs > 0 ? Math.max(this.#timeoutMs, opts.waitMs + 1000) : undefined;
+		const response = await this.#fetchRaw("GET", path, {
+			auth: true,
+			headers,
+			signal: opts.signal,
+			timeoutMs,
+		});
+		const etagGeneration = parseGenerationTag(response.headers.get("etag"));
+		if (response.status === 304) {
+			return { status: 304, generation: etagGeneration ?? opts.ifGenerationGt ?? 0 };
+		}
+		const text = await response.text();
+		const raw = this.#parseJson(text, response.status);
+		const validated = snapshotResponseSchema.safeParse(raw);
+		if (!validated.success) {
+			throw new AuthBrokerError("Auth broker response failed schema validation", {
+				status: response.status,
+				body: validated.error.message,
+			});
+		}
+		const snapshot = validated.data as SnapshotResponse;
+		return { status: 200, snapshot, generation: etagGeneration ?? snapshot.generation };
 	}
 
 	fetchUsage(signal?: AbortSignal): Promise<UsageResponse> {
@@ -123,9 +170,45 @@ export class AuthBrokerClient {
 		path: string,
 		opts: { schema: TSchema; auth?: boolean; body?: unknown; signal?: AbortSignal },
 	): Promise<zInfer<TSchema>> {
+		const response = await this.#fetchRaw(method, path, opts);
+		const text = await response.text();
+		const raw = this.#parseJson(text, response.status);
+		const validated = opts.schema.safeParse(raw);
+		if (!validated.success) {
+			throw new AuthBrokerError("Auth broker response failed schema validation", {
+				status: response.status,
+				body: validated.error.message,
+			});
+		}
+		return validated.data;
+	}
+
+	#parseJson(text: string, status: number): unknown {
+		try {
+			return text.length === 0 ? null : JSON.parse(text);
+		} catch (parseError) {
+			throw new AuthBrokerError("Auth broker returned malformed JSON", {
+				status,
+				body: text,
+				cause: parseError,
+			});
+		}
+	}
+
+	async #fetchRaw(
+		method: "GET" | "POST",
+		path: string,
+		opts: {
+			auth?: boolean;
+			body?: unknown;
+			signal?: AbortSignal;
+			headers?: Record<string, string>;
+			timeoutMs?: number;
+		},
+	): Promise<Response> {
 		const auth = opts.auth ?? true;
 		const url = `${this.#baseUrl}${path}`;
-		const headers: Record<string, string> = { Accept: "application/json" };
+		const headers: Record<string, string> = { Accept: "application/json", ...(opts.headers ?? {}) };
 		if (auth) headers.Authorization = `Bearer ${this.#token}`;
 		let payload: string | undefined;
 		if (opts.body !== undefined) {
@@ -141,10 +224,7 @@ export class AuthBrokerClient {
 
 		let lastError: unknown;
 		for (let attempt = 0; attempt <= this.#maxRetries; attempt += 1) {
-			// Compose caller's signal with the per-attempt timeout so either
-			// source can cancel the in-flight fetch. `AbortSignal.any` is the
-			// supported merge primitive in Bun ≥ 1.0 / Node ≥ 20.
-			const timeoutSignal = AbortSignal.timeout(this.#timeoutMs);
+			const timeoutSignal = AbortSignal.timeout(opts.timeoutMs ?? this.#timeoutMs);
 			const signal = opts.signal ? AbortSignal.any([opts.signal, timeoutSignal]) : timeoutSignal;
 			try {
 				const response = await this.#fetch(url, {
@@ -153,31 +233,14 @@ export class AuthBrokerClient {
 					body: payload,
 					signal,
 				});
-				const text = await response.text();
-				if (!response.ok) {
+				if (!response.ok && response.status !== 304) {
+					const text = await response.text();
 					throw new AuthBrokerError(`Auth broker request failed: ${response.status} ${response.statusText}`, {
 						status: response.status,
 						body: text,
 					});
 				}
-				let raw: unknown;
-				try {
-					raw = text.length === 0 ? null : JSON.parse(text);
-				} catch (parseError) {
-					throw new AuthBrokerError("Auth broker returned malformed JSON", {
-						status: response.status,
-						body: text,
-						cause: parseError,
-					});
-				}
-				const validated = opts.schema.safeParse(raw);
-				if (!validated.success) {
-					throw new AuthBrokerError("Auth broker response failed schema validation", {
-						status: response.status,
-						body: validated.error.message,
-					});
-				}
-				return validated.data;
+				return response;
 			} catch (error) {
 				lastError = error;
 				// Caller-driven abort wins over retry — the caller said stop.

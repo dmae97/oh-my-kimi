@@ -542,8 +542,9 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 	}
 
 	const client = new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
-	const snapshot = await client.fetchSnapshot();
-	const existing = indexBrokerSnapshot(snapshot);
+	const snapshotResult = await client.fetchSnapshot();
+	if (snapshotResult.status !== 200) throw new Error("Auth broker returned no snapshot");
+	const existing = indexBrokerSnapshot(snapshotResult.snapshot);
 
 	const plan: MigratePlanEntry[] = [];
 	const skipped: MigrateSkip[] = [];

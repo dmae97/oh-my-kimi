@@ -15,8 +15,23 @@ export interface HealthzResponse {
 	version?: string;
 }
 
+export interface RefresherSchedule {
+	enabled: boolean;
+	intervalMs: number;
+	skewMs: number;
+	nextSweepInMs: number;
+}
+
+export type SnapshotEntry = AuthCredentialSnapshotEntry & {
+	rotatesInMs: number | null;
+};
+
 /** GET /v1/snapshot response body. */
-export type SnapshotResponse = AuthCredentialSnapshot;
+export interface SnapshotResponse extends Omit<AuthCredentialSnapshot, "credentials"> {
+	serverNowMs: number;
+	refresher: RefresherSchedule;
+	credentials: SnapshotEntry[];
+}
 
 /** GET /v1/usage response body — matches the local `AuthStorage.fetchUsageReports` shape. */
 export interface UsageResponse {

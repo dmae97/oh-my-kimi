@@ -71,7 +71,9 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		const refreshSpy = vi.spyOn(oauthUtils, "refreshOAuthToken").mockResolvedValue(rotated);
 
 		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
-		const initialSnapshot = await brokerClient.fetchSnapshot();
+		const initialResult = await brokerClient.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const initialSnapshot = initialResult.snapshot;
 		expect(initialSnapshot.credentials).toHaveLength(1);
 
 		const remoteStore = new RemoteAuthCredentialStore({
@@ -120,7 +122,13 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
 		const remoteStore = new RemoteAuthCredentialStore({
 			client: brokerClient,
-			initialSnapshot: { generatedAt: 0, credentials: [] },
+			initialSnapshot: {
+				generation: 0,
+				generatedAt: 0,
+				serverNowMs: 0,
+				refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+				credentials: [],
+			},
 		});
 
 		const reportForA = {

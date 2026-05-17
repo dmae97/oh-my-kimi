@@ -235,6 +235,11 @@ export interface StreamOptions {
 	maxTokens?: number;
 	signal?: AbortSignal;
 	apiKey?: string;
+	/**
+	 * Called when a provider returns 401 before any assistant event has been
+	 * emitted. Returning a different key retries the provider request once.
+	 */
+	onAuthError?: (provider: string, apiKey: string, error: unknown) => Promise<string | undefined>;
 	cacheRetention?: CacheRetention;
 	/**
 	 * Additional headers to include in provider requests.

@@ -76,7 +76,9 @@ describe("auth-broker wire surface", () => {
 		expect(unauthorized.status).toBe(401);
 
 		const client = new AuthBrokerClient({ url: handle!.url, token });
-		const snapshot = await client.fetchSnapshot();
+		const snapshotResult = await client.fetchSnapshot();
+		if (snapshotResult.status !== 200) throw new Error("expected snapshot");
+		const snapshot = snapshotResult.snapshot;
 		expect(snapshot.credentials).toHaveLength(1);
 		const entry = snapshot.credentials[0];
 		expect(entry.provider).toBe("anthropic");
@@ -98,8 +100,9 @@ describe("auth-broker wire surface", () => {
 		};
 		vi.spyOn(oauthUtils, "refreshOAuthToken").mockResolvedValue(refreshed);
 
-		const initialSnapshot = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
-		const id = initialSnapshot.credentials[0].id;
+		const initialResult = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const id = initialResult.snapshot.credentials[0].id;
 
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const result = await client.refreshCredential(id);
@@ -117,14 +120,16 @@ describe("auth-broker wire surface", () => {
 
 	test("POST /v1/credential/:id/disable soft-deletes the credential and surfaces 404 thereafter", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
-		const initialSnapshot = await client.fetchSnapshot();
-		const id = initialSnapshot.credentials[0].id;
+		const initialResult = await client.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const id = initialResult.snapshot.credentials[0].id;
 
 		const result = await client.disableCredential(id, "revoked by user");
 		expect(result.ok).toBe(true);
 
-		const after = await client.fetchSnapshot();
-		expect(after.credentials).toHaveLength(0);
+		const afterResult = await client.fetchSnapshot();
+		if (afterResult.status !== 200) throw new Error("expected snapshot");
+		expect(afterResult.snapshot.credentials).toHaveLength(0);
 
 		await expect(client.refreshCredential(id)).rejects.toThrow();
 	});

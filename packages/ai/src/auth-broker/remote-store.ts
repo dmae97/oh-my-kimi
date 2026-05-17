@@ -7,10 +7,10 @@
  * usage reports cache TTL is 5 minutes per credential, so durability across
  * runs isn't required.
  */
+import { scheduler } from "node:timers/promises";
 import { logger } from "@oh-my-pi/pi-utils";
 import {
 	type AuthCredential,
-	type AuthCredentialSnapshot,
 	type AuthCredentialStore,
 	type OAuthCredential,
 	REMOTE_REFRESH_SENTINEL,
@@ -20,6 +20,7 @@ import type { Provider } from "../types";
 import type { UsageReport } from "../usage";
 import type { OAuthCredentials } from "../utils/oauth/types";
 import type { AuthBrokerClient } from "./client";
+import type { SnapshotResponse } from "./types";
 
 /**
  * Client-side TTL for the aggregate `/v1/usage` response. Set below the
@@ -28,6 +29,26 @@ import type { AuthBrokerClient } from "./client";
  * the parallel fan-out from `#rankOAuthSelections` into a single round-trip.
  */
 const USAGE_CACHE_TTL_MS = 15_000;
+const WAIT_THRESHOLD_MS = 1_000;
+const MAX_WAIT_MS = 5_000;
+const BACKGROUND_WAIT_MS = 30_000;
+const BACKGROUND_BACKOFF_INITIAL_MS = 500;
+const BACKGROUND_BACKOFF_MAX_MS = 30_000;
+
+function emptySnapshot(): SnapshotResponse {
+	return {
+		generation: 0,
+		generatedAt: 0,
+		serverNowMs: 0,
+		refresher: {
+			enabled: false,
+			intervalMs: 0,
+			skewMs: 0,
+			nextSweepInMs: Number.MAX_SAFE_INTEGER,
+		},
+		credentials: [],
+	};
+}
 
 interface CacheEntry {
 	value: string;
@@ -45,12 +66,15 @@ export interface RemoteAuthCredentialStoreOptions {
 	 * Initial snapshot. When omitted, callers must call
 	 * {@link RemoteAuthCredentialStore.refreshSnapshot} before the first read.
 	 */
-	initialSnapshot?: AuthCredentialSnapshot;
+	initialSnapshot?: SnapshotResponse;
 }
 
 export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	readonly #client: AuthBrokerClient;
-	#snapshot: AuthCredentialSnapshot;
+	#snapshot: SnapshotResponse = emptySnapshot();
+	#snapshotReceivedAt = Date.now();
+	#generation = 0;
+	#backgroundAbort = new AbortController();
 	#cache: Map<string, CacheEntry> = new Map();
 	#usageCache?: UsageCacheEntry;
 	#usageInflight?: Promise<UsageReport[] | null>;
@@ -58,20 +82,48 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 
 	constructor(opts: RemoteAuthCredentialStoreOptions) {
 		this.#client = opts.client;
-		this.#snapshot = opts.initialSnapshot ?? { generatedAt: 0, credentials: [] };
+		this.#applySnapshot(opts.initialSnapshot ?? emptySnapshot(), opts.initialSnapshot?.generation ?? 0);
+		void this.#runBackgroundLongPoll();
 	}
 
 	get client(): AuthBrokerClient {
 		return this.#client;
 	}
 
-	get snapshot(): AuthCredentialSnapshot {
+	get snapshot(): SnapshotResponse {
 		return this.#snapshot;
 	}
 
+	#applySnapshot(snapshot: SnapshotResponse, generation: number): void {
+		this.#snapshot = snapshot;
+		this.#generation = generation;
+		this.#snapshotReceivedAt = Date.now();
+	}
+
+	async #runBackgroundLongPoll(): Promise<void> {
+		let backoffMs = BACKGROUND_BACKOFF_INITIAL_MS;
+		while (!this.#closed && !this.#backgroundAbort.signal.aborted) {
+			try {
+				const result = await this.#client.fetchSnapshot({
+					ifGenerationGt: this.#generation,
+					waitMs: BACKGROUND_WAIT_MS,
+					signal: this.#backgroundAbort.signal,
+				});
+				if (result.status === 200) this.#applySnapshot(result.snapshot, result.generation);
+				backoffMs = BACKGROUND_BACKOFF_INITIAL_MS;
+			} catch (error) {
+				if (this.#closed || this.#backgroundAbort.signal.aborted) break;
+				logger.debug("auth-broker background snapshot sync failed", { error: String(error) });
+				await scheduler.wait(backoffMs, { signal: this.#backgroundAbort.signal }).catch(() => {});
+				backoffMs = Math.min(BACKGROUND_BACKOFF_MAX_MS, backoffMs * 2);
+			}
+		}
+	}
+
 	/** Re-hydrate the in-memory snapshot from the broker. */
-	async refreshSnapshot(): Promise<AuthCredentialSnapshot> {
-		this.#snapshot = await this.#client.fetchSnapshot();
+	async refreshSnapshot(): Promise<SnapshotResponse> {
+		const result = await this.#client.fetchSnapshot();
+		if (result.status === 200) this.#applySnapshot(result.snapshot, result.generation);
 		return this.#snapshot;
 	}
 
@@ -116,6 +168,28 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		if (!found) return false;
 		this.deleteAuthCredential(id, disabledCause);
 		return true;
+	}
+
+	async waitForFreshSnapshot(maxWaitMs: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
+		const result = await this.#client.fetchSnapshot({
+			ifGenerationGt: this.#generation,
+			waitMs: maxWaitMs,
+			signal: opts.signal,
+		});
+		if (result.status === 200) this.#applySnapshot(result.snapshot, result.generation);
+	}
+
+	async prepareForRequest(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
+		const entry = this.#snapshot.credentials.find(candidate => candidate.id === credentialId);
+		if (!entry || entry.credential.type !== "oauth" || entry.rotatesInMs === null) return;
+		const remainingMs = this.#snapshotReceivedAt + entry.rotatesInMs - Date.now();
+		if (remainingMs > WAIT_THRESHOLD_MS) return;
+		await this.waitForFreshSnapshot(MAX_WAIT_MS, opts);
+	}
+
+	async markCredentialSuspect(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
+		await this.#client.refreshCredential(credentialId, opts.signal);
+		await this.waitForFreshSnapshot(MAX_WAIT_MS, opts);
 	}
 
 	replaceAuthCredentialsForProvider(_provider: string, _credentials: AuthCredential[]): StoredAuthCredential[] {
@@ -170,6 +244,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		signal?: AbortSignal,
 	): Promise<OAuthCredentials> {
 		const { entry } = await this.#client.refreshCredential(credentialId, signal);
+		await this.refreshSnapshot().catch(error => {
+			logger.debug("auth-broker snapshot refresh after credential refresh failed", { error: String(error) });
+		});
 		if (entry.credential.type !== "oauth") {
 			throw new Error(`Broker returned non-OAuth credential for id=${credentialId}`);
 		}
@@ -268,6 +345,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	close(): void {
 		if (this.#closed) return;
 		this.#closed = true;
+		this.#backgroundAbort.abort();
 		this.#cache.clear();
 	}
 }

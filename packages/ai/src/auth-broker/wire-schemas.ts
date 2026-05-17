@@ -66,7 +66,7 @@ export const snapshotCredentialSchema = z.discriminatedUnion("type", [
 
 // ─── Snapshot ──────────────────────────────────────────────────────────────
 
-export const snapshotEntrySchema = z
+export const credentialSnapshotEntrySchema = z
 	.object({
 		id: z.number().int(),
 		provider: z.string().min(1),
@@ -75,9 +75,27 @@ export const snapshotEntrySchema = z
 	})
 	.strict();
 
+export const snapshotEntrySchema = credentialSnapshotEntrySchema
+	.extend({
+		rotatesInMs: z.number().nullable(),
+	})
+	.strict();
+
+export const refresherScheduleSchema = z
+	.object({
+		enabled: z.boolean(),
+		intervalMs: z.number(),
+		skewMs: z.number(),
+		nextSweepInMs: z.number(),
+	})
+	.strict();
+
 export const snapshotResponseSchema = z
 	.object({
+		generation: z.number().int(),
 		generatedAt: z.number(),
+		serverNowMs: z.number(),
+		refresher: refresherScheduleSchema,
 		credentials: z.array(snapshotEntrySchema),
 	})
 	.strict();
@@ -110,7 +128,7 @@ export const usageResponseSchema = z
 
 export const credentialRefreshResponseSchema = z
 	.object({
-		entry: snapshotEntrySchema,
+		entry: credentialSnapshotEntrySchema,
 	})
 	.strict();
 
@@ -139,6 +157,6 @@ export const credentialUploadRequestSchema = z
 
 export const credentialUploadResponseSchema = z
 	.object({
-		entries: z.array(snapshotEntrySchema),
+		entries: z.array(credentialSnapshotEntrySchema),
 	})
 	.strict();

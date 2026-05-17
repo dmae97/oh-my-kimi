@@ -12,12 +12,14 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../auth-storage";
 import { parseBind } from "../utils/parse-bind";
-import { AuthBrokerRefresher } from "./refresher";
+import { AuthBrokerRefresher, type AuthBrokerRefresherSchedule } from "./refresher";
 import type {
 	CredentialDisableResponse,
 	CredentialRefreshResponse,
 	CredentialUploadResponse,
 	HealthzResponse,
+	RefresherSchedule,
+	SnapshotEntry,
 	SnapshotResponse,
 } from "./types";
 import { DEFAULT_AUTH_BROKER_BIND, DEFAULT_REFRESH_INTERVAL_MS, DEFAULT_REFRESH_SKEW_MS } from "./types";
@@ -48,11 +50,15 @@ export interface AuthBrokerServerHandle {
 	close(): Promise<void>;
 }
 
-function json(status: number, body: unknown): Response {
+function json(status: number, body: unknown, headers?: Record<string, string>): Response {
 	return new Response(JSON.stringify(body), {
 		status,
-		headers: { "Content-Type": "application/json" },
+		headers: { "Content-Type": "application/json", ...(headers ?? {}) },
 	});
+}
+
+function empty(status: number, headers?: Record<string, string>): Response {
+	return new Response(null, { status, headers });
 }
 
 function isAuthorized(req: Request, tokens: ReadonlySet<string>): boolean {
@@ -99,6 +105,211 @@ async function parseBody<T>(
 const REFRESH_ROUTE = /^\/v1\/credential\/(\d+)\/refresh$/;
 const DISABLE_ROUTE = /^\/v1\/credential\/(\d+)\/disable$/;
 
+const MAX_SNAPSHOT_WAIT_MS = 30_000;
+const DISABLED_NEXT_SWEEP_IN_MS = Number.MAX_SAFE_INTEGER;
+
+function snapshotHeaders(generation: number): Record<string, string> {
+	return {
+		ETag: `"${generation}"`,
+		"Cache-Control": "no-store",
+	};
+}
+
+function parseGenerationTag(header: string | null): number | undefined {
+	if (!header) return undefined;
+	let value = header.trim();
+	if (value.startsWith("W/")) value = value.slice(2).trim();
+	if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+		value = value.slice(1, -1);
+	}
+	const generation = Number(value);
+	if (!Number.isInteger(generation) || generation < 0) return undefined;
+	return generation;
+}
+
+function parseWaitMs(url: URL): number {
+	const raw = url.searchParams.get("wait");
+	if (raw === null) return 0;
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed)) return 0;
+	return Math.max(0, Math.min(MAX_SNAPSHOT_WAIT_MS, Math.trunc(parsed)));
+}
+
+function delayResult(ms: number): { promise: Promise<"timeout">; cancel: () => void } {
+	const done = Promise.withResolvers<"timeout">();
+	const timer = setTimeout(() => done.resolve("timeout"), ms);
+	timer.unref?.();
+	return {
+		promise: done.promise,
+		cancel: () => clearTimeout(timer),
+	};
+}
+
+class GenerationGate {
+	readonly #storage: AuthStorage;
+	readonly #unsubscribe: () => void;
+	#waiters: Map<number, Set<() => void>> = new Map();
+
+	constructor(storage: AuthStorage) {
+		this.#storage = storage;
+		this.#unsubscribe = storage.onGenerationChanged(generation => this.#wake(generation));
+	}
+
+	waitForChange(afterGeneration: number, signal: AbortSignal): Promise<"changed" | "aborted"> {
+		if (this.#storage.getGeneration() !== afterGeneration) return Promise.resolve("changed");
+		if (signal.aborted) return Promise.resolve("aborted");
+
+		const done = Promise.withResolvers<"changed" | "aborted">();
+		let settled = false;
+		const waiters = this.#waiters.get(afterGeneration) ?? new Set<() => void>();
+		this.#waiters.set(afterGeneration, waiters);
+
+		const cleanup = (): void => {
+			signal.removeEventListener("abort", onAbort);
+			waiters.delete(resolveChanged);
+			if (waiters.size === 0) this.#waiters.delete(afterGeneration);
+		};
+		const settle = (result: "changed" | "aborted"): void => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			done.resolve(result);
+		};
+		const resolveChanged = (): void => settle("changed");
+		const onAbort = (): void => settle("aborted");
+
+		waiters.add(resolveChanged);
+		signal.addEventListener("abort", onAbort, { once: true });
+		return done.promise;
+	}
+
+	close(): void {
+		this.#unsubscribe();
+		for (const waiters of this.#waiters.values()) {
+			for (const resolve of waiters) resolve();
+		}
+		this.#waiters.clear();
+	}
+
+	#wake(generation: number): void {
+		for (const [waitingFor, waiters] of [...this.#waiters]) {
+			if (generation <= waitingFor) continue;
+			for (const resolve of [...waiters]) resolve();
+		}
+	}
+}
+
+function resolveRefresherSchedule(
+	refresher: AuthBrokerRefresher | undefined,
+	serverNowMs: number,
+): { wire: RefresherSchedule; nextSweepAt: number } {
+	if (!refresher) {
+		return {
+			wire: {
+				enabled: false,
+				intervalMs: 0,
+				skewMs: 0,
+				nextSweepInMs: DISABLED_NEXT_SWEEP_IN_MS,
+			},
+			nextSweepAt: DISABLED_NEXT_SWEEP_IN_MS,
+		};
+	}
+	const schedule: AuthBrokerRefresherSchedule = refresher.getSchedule();
+	return {
+		wire: {
+			enabled: schedule.enabled,
+			intervalMs: schedule.intervalMs,
+			skewMs: schedule.skewMs,
+			nextSweepInMs: Math.max(0, schedule.nextSweepAt - serverNowMs),
+		},
+		nextSweepAt: schedule.nextSweepAt,
+	};
+}
+
+function computeRotatesInMs(
+	entry: { credential: { type: string; expires?: number } },
+	schedule: RefresherSchedule,
+	nextSweepAt: number,
+	serverNowMs: number,
+): number | null {
+	if (!schedule.enabled || entry.credential.type !== "oauth") return null;
+	const expires = entry.credential.expires;
+	if (typeof expires !== "number" || !Number.isFinite(expires)) return null;
+	if (!Number.isFinite(nextSweepAt) || !Number.isFinite(schedule.intervalMs) || schedule.intervalMs <= 0) return null;
+
+	const dueAt = expires - schedule.skewMs;
+	const eligibleAt = Math.max(serverNowMs, dueAt);
+	if (dueAt <= serverNowMs && nextSweepAt <= serverNowMs) return 0;
+	if (nextSweepAt >= eligibleAt) return Math.max(0, nextSweepAt - serverNowMs);
+	const steps = Math.ceil((eligibleAt - nextSweepAt) / schedule.intervalMs);
+	const rotatesAt = nextSweepAt + steps * schedule.intervalMs;
+	return Math.max(0, rotatesAt - serverNowMs);
+}
+
+function buildSnapshot(storage: AuthStorage, refresher: AuthBrokerRefresher | undefined): SnapshotResponse {
+	const serverNowMs = Date.now();
+	const base = storage.exportSnapshot();
+	const { wire, nextSweepAt } = resolveRefresherSchedule(refresher, serverNowMs);
+	const credentials: SnapshotEntry[] = base.credentials.map(entry => ({
+		...entry,
+		rotatesInMs: computeRotatesInMs(entry, wire, nextSweepAt, serverNowMs),
+	}));
+	return {
+		generation: base.generation,
+		generatedAt: base.generatedAt,
+		serverNowMs,
+		refresher: wire,
+		credentials,
+	};
+}
+
+async function serveSnapshot(
+	req: Request,
+	url: URL,
+	storage: AuthStorage,
+	gate: GenerationGate,
+	refresher: AuthBrokerRefresher | undefined,
+	peer: string,
+): Promise<Response> {
+	await storage.reload();
+	let currentGeneration = storage.getGeneration();
+	const clientGeneration = parseGenerationTag(req.headers.get("if-none-match"));
+	const waitMs = parseWaitMs(url);
+
+	if (clientGeneration === undefined || currentGeneration !== clientGeneration || waitMs <= 0) {
+		const body = buildSnapshot(storage, refresher);
+		logger.info("auth-broker snapshot served", {
+			peer,
+			credentials: body.credentials.length,
+			generation: body.generation,
+		});
+		return json(200, body, snapshotHeaders(body.generation));
+	}
+
+	const delay = delayResult(waitMs);
+	const waitController = new AbortController();
+	const waitSignal = AbortSignal.any([req.signal, waitController.signal]);
+	const result = await Promise.race([gate.waitForChange(clientGeneration, waitSignal), delay.promise]);
+	delay.cancel();
+	waitController.abort();
+	if (result === "aborted" || req.signal.aborted) return empty(499, snapshotHeaders(currentGeneration));
+
+	await storage.reload();
+	currentGeneration = storage.getGeneration();
+	if (currentGeneration !== clientGeneration) {
+		const body = buildSnapshot(storage, refresher);
+		logger.info("auth-broker snapshot long-poll changed", {
+			peer,
+			credentials: body.credentials.length,
+			generation: body.generation,
+		});
+		return json(200, body, snapshotHeaders(body.generation));
+	}
+
+	logger.info("auth-broker snapshot long-poll unchanged", { peer, generation: currentGeneration });
+	return empty(304, snapshotHeaders(currentGeneration));
+}
+
 /** Boot the broker. Caller owns lifecycle; `handle.close()` to stop. */
 export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServerHandle {
 	const bind = parseBind(opts.bind ?? DEFAULT_AUTH_BROKER_BIND);
@@ -113,6 +324,7 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				refreshIntervalMs: opts.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS,
 			});
 	refresher?.start();
+	const generationGate = new GenerationGate(opts.storage);
 
 	const server = Bun.serve({
 		hostname: bind.hostname,
@@ -132,10 +344,7 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 					return json(401, { error: "unauthorized" });
 				}
 				if (req.method === "GET" && pathname === "/v1/snapshot") {
-					await opts.storage.reload();
-					const body: SnapshotResponse = opts.storage.exportSnapshot();
-					logger.info("auth-broker snapshot served", { peer, credentials: body.credentials.length });
-					return json(200, body);
+					return serveSnapshot(req, url, opts.storage, generationGate, refresher, peer);
 				}
 				if (req.method === "GET" && pathname === "/v1/usage") {
 					try {
@@ -161,7 +370,7 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				if (refreshMatch) {
 					const id = Number.parseInt(refreshMatch[1], 10);
 					try {
-						const entry = await opts.storage.forceRefreshCredentialById(id, req.signal);
+						const entry = await opts.storage.refreshCredentialById(id, req.signal);
 						const body: CredentialRefreshResponse = { entry };
 						logger.info("auth-broker credential refreshed", {
 							id,
@@ -238,6 +447,7 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 		hostname: boundHost,
 		close: async () => {
 			refresher?.stop();
+			generationGate.close();
 			server.stop(true);
 		},
 	};

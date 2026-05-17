@@ -332,8 +332,9 @@ export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir(
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (brokerConfig) {
 		const client = new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
-		const initialSnapshot = await client.fetchSnapshot();
-		const store = new RemoteAuthCredentialStore({ client, initialSnapshot });
+		const initialResult = await client.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("Auth broker returned no initial snapshot");
+		const store = new RemoteAuthCredentialStore({ client, initialSnapshot: initialResult.snapshot });
 		// Refresh + usage hooks live on RemoteAuthCredentialStore; AuthStorage
 		// discovers them automatically when no explicit option overrides them.
 		const storage = new AuthStorage(store, {

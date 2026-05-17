@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $env, $pickenv } from "@oh-my-pi/pi-utils";
+import { $env, $pickenv, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
 import type { Effort } from "./model-thinking";
 import {
@@ -45,7 +45,6 @@ import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
 import type {
 	Api,
 	AssistantMessage,
-	AssistantMessageEventStream,
 	Context,
 	Model,
 	OptionsForApi,
@@ -54,6 +53,7 @@ import type {
 	ThinkingBudgets,
 	ToolChoice,
 } from "./types";
+import { AssistantMessageEventStream } from "./utils/event-stream";
 import { isFoundryEnabled } from "./utils/foundry";
 
 let cachedVertexAdcCredentialsExists: boolean | null = null;
@@ -310,36 +310,87 @@ export function streamSimple<TApi extends Api>(
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
 
-	// GitLab Duo - wraps Anthropic/OpenAI behind GitLab AI Gateway direct access tokens
-	if (isGitLabDuoModel(model)) {
-		return streamGitLabDuo(model, context, {
-			...options,
-			apiKey,
-		});
+	// Dispatch the actual provider stream. `onAuthError` is consumed here and
+	// stripped from downstream options so the inner recursion can't retry
+	// again (one-shot per outer call).
+	const dispatch = (effectiveKey: string): AssistantMessageEventStream => {
+		const downstreamOptions = options ? { ...options, apiKey: effectiveKey, onAuthError: undefined } : undefined;
+
+		// GitLab Duo - wraps Anthropic/OpenAI behind GitLab AI Gateway direct access tokens
+		if (isGitLabDuoModel(model)) {
+			return streamGitLabDuo(model, context, { ...downstreamOptions, apiKey: effectiveKey });
+		}
+
+		// Kimi Code - route to dedicated handler that wraps OpenAI or Anthropic API
+		if (isKimiModel(model)) {
+			return streamKimi(model as Model<"openai-completions">, context, {
+				...downstreamOptions,
+				apiKey: effectiveKey,
+				format: options?.kimiApiFormat ?? "anthropic",
+			});
+		}
+
+		// Synthetic - route to dedicated handler that wraps OpenAI or Anthropic API
+		if (isSyntheticModel(model)) {
+			return streamSynthetic(model as Model<"openai-completions">, context, {
+				...downstreamOptions,
+				apiKey: effectiveKey,
+				format: options?.syntheticApiFormat ?? "openai", // Default to OpenAI format
+			});
+		}
+
+		const providerOptions = mapOptionsForApi(model, downstreamOptions, effectiveKey);
+		return stream(model, context, providerOptions);
+	};
+
+	if (!options?.onAuthError) {
+		return dispatch(apiKey);
 	}
 
-	// Kimi Code - route to dedicated handler that wraps OpenAI or Anthropic API
-	if (isKimiModel(model)) {
-		// Pass raw SimpleStreamOptions - streamKimi handles mapping internally
-		return streamKimi(model as Model<"openai-completions">, context, {
-			...options,
-			apiKey,
-			format: options?.kimiApiFormat ?? "anthropic",
-		});
-	}
-
-	// Synthetic - route to dedicated handler that wraps OpenAI or Anthropic API
-	if (isSyntheticModel(model)) {
-		// Pass raw SimpleStreamOptions - streamSynthetic handles mapping internally
-		return streamSynthetic(model as Model<"openai-completions">, context, {
-			...options,
-			apiKey,
-			format: options?.syntheticApiFormat ?? "openai", // Default to OpenAI format
-		});
-	}
-
-	const providerOptions = mapOptionsForApi(model, options, apiKey);
-	return stream(model, context, providerOptions);
+	// One-shot 401 recovery. Forward events from the inner stream; on a 401
+	// before any event has fired, ask `onAuthError` for a new key and re-dispatch
+	// once. After the first event the request is committed — we cannot replay
+	// partial assistant content, so we surface the error normally.
+	const onAuthError = options.onAuthError;
+	const outer = new AssistantMessageEventStream();
+	const inner = dispatch(apiKey);
+	let emitted = false;
+	void (async () => {
+		try {
+			for await (const event of inner) {
+				emitted = true;
+				outer.push(event);
+				if (outer.done) return;
+			}
+			if (!outer.done) outer.end(await inner.result());
+		} catch (error) {
+			if (emitted || extractHttpStatusFromError(error) !== 401) {
+				outer.fail(error);
+				return;
+			}
+			let nextKey: string | undefined;
+			try {
+				nextKey = await onAuthError(model.provider, apiKey, error);
+			} catch {
+				nextKey = undefined;
+			}
+			if (!nextKey || nextKey === apiKey) {
+				outer.fail(error);
+				return;
+			}
+			try {
+				const retried = dispatch(nextKey);
+				for await (const event of retried) {
+					outer.push(event);
+					if (outer.done) return;
+				}
+				if (!outer.done) outer.end(await retried.result());
+			} catch (retryError) {
+				outer.fail(retryError);
+			}
+		}
+	})();
+	return outer;
 }
 
 export async function completeSimple<TApi extends Api>(

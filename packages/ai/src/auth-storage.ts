@@ -110,6 +110,7 @@ export interface AuthCredentialSnapshotEntry {
  * served by the auth-broker server on `GET /v1/snapshot`.
  */
 export interface AuthCredentialSnapshot {
+	generation: number;
 	generatedAt: number;
 	credentials: AuthCredentialSnapshotEntry[];
 }
@@ -157,6 +158,13 @@ export interface AuthCredentialStore {
 		signal?: AbortSignal,
 	): Promise<OAuthCredentials>;
 	/**
+	 * Optional async pre-read hook invoked after AuthStorage selects a stored
+	 * credential but before it returns that credential for an outbound request.
+	 * Remote broker stores use this to wait out imminent rotations and refresh
+	 * their local snapshot before the caller sees a stale access token.
+	 */
+	prepareForRequest?(credentialId: number, opts?: { signal?: AbortSignal }): Promise<void>;
+	/**
 	 * Optional store-supplied aggregate usage fetch. When present, `AuthStorage`
 	 * routes `fetchUsageReports()` here instead of fanning out per-credential.
 	 * `RemoteAuthCredentialStore` proxies to the broker (whose datacenter IP
@@ -183,6 +191,13 @@ export interface AuthCredentialStore {
 	 * `signal` propagates the agent's cancel down to the broker fetch.
 	 */
 	getUsageReport?(provider: Provider, credential: OAuthCredential, signal?: AbortSignal): Promise<UsageReport | null>;
+	/**
+	 * Optional store hook to invalidate a specific credential after the upstream
+	 * provider returned 401 on a supposedly-fresh key. Remote stores force the
+	 * broker to re-issue the row; local stores can leave it undefined and let
+	 * {@link AuthStorage.invalidateCredentialMatching} fall back to `reload()`.
+	 */
+	markCredentialSuspect?(credentialId: number, opts?: { signal?: AbortSignal }): Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -419,6 +434,50 @@ function raceUsageWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undef
 	});
 }
 
+function raceCredentialRefreshWithSignal<T>(
+	promise: Promise<T>,
+	signal: AbortSignal | undefined,
+	message = "credential refresh aborted",
+): Promise<T> {
+	if (!signal) return promise;
+	if (signal.aborted) return Promise.reject(new Error(message));
+	const abort = Promise.withResolvers<never>();
+	const onAbort = (): void => abort.reject(new Error(message));
+	signal.addEventListener("abort", onAbort, { once: true });
+	return Promise.race([promise, abort.promise]).finally(() => {
+		signal.removeEventListener("abort", onAbort);
+	});
+}
+
+function authCredentialEquals(left: AuthCredential, right: AuthCredential): boolean {
+	if (left.type !== right.type) return false;
+	if (left.type === "api_key") {
+		return right.type === "api_key" && left.key === right.key;
+	}
+	if (right.type !== "oauth") return false;
+	return (
+		left.access === right.access &&
+		left.refresh === right.refresh &&
+		left.expires === right.expires &&
+		left.accountId === right.accountId &&
+		left.email === right.email &&
+		left.projectId === right.projectId &&
+		left.enterpriseUrl === right.enterpriseUrl
+	);
+}
+
+function storedCredentialArraysEqual(left: StoredCredential[], right: StoredCredential[]): boolean {
+	if (left.length !== right.length) return false;
+	for (let index = 0; index < left.length; index += 1) {
+		const leftEntry = left[index];
+		const rightEntry = right[index];
+		if (!leftEntry || !rightEntry) return false;
+		if (leftEntry.id !== rightEntry.id) return false;
+		if (!authCredentialEquals(leftEntry.credential, rightEntry.credential)) return false;
+	}
+	return true;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Usage Cache (backed by AuthCredentialStore)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -502,6 +561,9 @@ export class AuthStorage {
 	 * but a process that runs without subscribers for a long time shouldn't grow this unboundedly).
 	 */
 	#pendingDisabledEvents: CredentialDisabledEvent[] = [];
+	#generation = 1;
+	#generationListeners: Set<(generation: number) => void> = new Set();
+	#oauthRefreshInFlight: Map<number, Promise<AuthCredentialSnapshotEntry>> = new Map();
 	#closed = false;
 
 	constructor(store: AuthCredentialStore, options: AuthStorageOptions = {}) {
@@ -547,6 +609,32 @@ export class AuthStorage {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#store.close();
+	}
+
+	getGeneration(): number {
+		return this.#generation;
+	}
+
+	onGenerationChanged(listener: (generation: number) => void): () => void {
+		this.#generationListeners.add(listener);
+		return () => {
+			this.#generationListeners.delete(listener);
+		};
+	}
+
+	offGenerationChanged(listener: (generation: number) => void): void {
+		this.#generationListeners.delete(listener);
+	}
+
+	#bumpGeneration(reason: string): void {
+		this.#generation += 1;
+		for (const listener of [...this.#generationListeners]) {
+			try {
+				listener(this.#generation);
+			} catch (error) {
+				logger.debug("AuthStorage generation listener failed", { reason, error: String(error) });
+			}
+		}
 	}
 
 	/**
@@ -653,7 +741,15 @@ export class AuthStorage {
 				dedupedGrouped.set(provider, deduped);
 			}
 		}
-		this.#data = dedupedGrouped;
+
+		const removedProviders = new Set(this.#data.keys());
+		for (const [provider, entries] of dedupedGrouped) {
+			this.#setStoredCredentials(provider, entries);
+			removedProviders.delete(provider);
+		}
+		for (const provider of removedProviders) {
+			this.#setStoredCredentials(provider, []);
+		}
 	}
 
 	/**
@@ -672,11 +768,14 @@ export class AuthStorage {
 	 * @param credentials - Array of stored credentials to cache
 	 */
 	#setStoredCredentials(provider: string, credentials: StoredCredential[]): void {
+		const current = this.#data.get(provider) ?? [];
+		if (storedCredentialArraysEqual(current, credentials)) return;
 		if (credentials.length === 0) {
 			this.#data.delete(provider);
 		} else {
 			this.#data.set(provider, credentials);
 		}
+		this.#bumpGeneration("credentials");
 	}
 
 	#resolveOAuthDedupeIdentityKey(provider: string, credential: OAuthCredential): string | null {
@@ -999,7 +1098,7 @@ export class AuthStorage {
 	 */
 	async remove(provider: string): Promise<void> {
 		this.#store.deleteAuthCredentialsForProvider(provider, "deleted by user");
-		this.#data.delete(provider);
+		this.#setStoredCredentials(provider, []);
 		this.#resetProviderAssignments(provider);
 	}
 
@@ -2086,7 +2185,7 @@ export class AuthStorage {
 		// timer so the timeout doesn't pin the process and clear it on the happy
 		// path so memory drops immediately.
 		const timer = setTimeout(() => timeoutSignal.resolve(null), usageTimeout);
-		(timer as { unref?: () => void }).unref?.();
+		timer.unref?.();
 		const usageResults = await Promise.race([usagePromise, timeoutSignal.promise]).then(result => {
 			clearTimeout(timer);
 			return (
@@ -2295,26 +2394,52 @@ export class AuthStorage {
 		// take priority over the floor timeout.
 		let timeout: NodeJS.Timeout | undefined;
 		let onAbort: (() => void) | undefined;
-		const cancellationPromise = new Promise<never>((_, reject) => {
-			timeout = setTimeout(
-				() => reject(new Error(`OAuth token refresh timed out for provider: ${provider}`)),
-				DEFAULT_OAUTH_REFRESH_TIMEOUT_MS,
-			);
-			if (signal) {
-				if (signal.aborted) {
-					reject(new Error("OAuth token refresh aborted by caller"));
-					return;
-				}
-				onAbort = () => reject(new Error("OAuth token refresh aborted by caller"));
+		const cancellation = Promise.withResolvers<never>();
+		timeout = setTimeout(
+			() => cancellation.reject(new Error(`OAuth token refresh timed out for provider: ${provider}`)),
+			DEFAULT_OAUTH_REFRESH_TIMEOUT_MS,
+		);
+		if (signal) {
+			if (signal.aborted) {
+				cancellation.reject(new Error("OAuth token refresh aborted by caller"));
+			} else {
+				onAbort = () => cancellation.reject(new Error("OAuth token refresh aborted by caller"));
 				signal.addEventListener("abort", onAbort, { once: true });
 			}
-		});
+		}
 		try {
-			return await Promise.race([refreshPromise, cancellationPromise]);
+			return await Promise.race([refreshPromise, cancellation.promise]);
 		} finally {
 			if (timeout) clearTimeout(timeout);
 			if (signal && onAbort) signal.removeEventListener("abort", onAbort);
 		}
+	}
+
+	async #prepareOAuthCredentialForRequest(
+		provider: string,
+		selection: { credential: OAuthCredential; index: number },
+		options: AuthApiKeyOptions | undefined,
+	): Promise<boolean> {
+		const prepare = this.#store.prepareForRequest?.bind(this.#store);
+		if (!prepare) return true;
+		const stored = this.#getStoredCredentials(provider);
+		const selected = stored[selection.index];
+		if (!selected || selected.credential.type !== "oauth") return false;
+
+		await prepare(selected.id, { signal: options?.signal });
+
+		const latestRows = this.#store.listAuthCredentials(provider);
+		this.#setStoredCredentials(
+			provider,
+			latestRows.map(row => ({ id: row.id, credential: row.credential })),
+		);
+		const latestIndex = latestRows.findIndex(row => row.id === selected.id);
+		if (latestIndex === -1) return false;
+		const latest = latestRows[latestIndex];
+		if (!latest || latest.credential.type !== "oauth") return false;
+		selection.index = latestIndex;
+		selection.credential = latest.credential;
+		return true;
 	}
 
 	/** Attempts to use a single OAuth credential, checking usage and refreshing token. */
@@ -2340,6 +2465,10 @@ export class AuthStorage {
 			enforceProRequirement,
 		} = usageOptions;
 		if (!allowBlocked && this.#isCredentialBlocked(providerKey, selection.index)) {
+			return undefined;
+		}
+
+		if (!(await this.#prepareOAuthCredentialForRequest(provider, selection, options))) {
 			return undefined;
 		}
 
@@ -2589,6 +2718,54 @@ export class AuthStorage {
 		return this.#fallbackResolver?.(provider) ?? undefined;
 	}
 
+	#extractStructuredApiKeyToken(apiKey: string): string | undefined {
+		if (!apiKey.startsWith("{")) return undefined;
+		try {
+			const parsed = JSON.parse(apiKey) as { token?: unknown };
+			return typeof parsed.token === "string" ? parsed.token : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	async #credentialMatchesApiKey(credential: AuthCredential, apiKey: string): Promise<boolean> {
+		if (credential.type === "api_key") {
+			return (await this.#configValueResolver(credential.key)) === apiKey;
+		}
+		if (credential.access === apiKey) return true;
+		return this.#extractStructuredApiKeyToken(apiKey) === credential.access;
+	}
+
+	async invalidateCredentialMatching(provider: string, apiKey: string, signal?: AbortSignal): Promise<boolean> {
+		const stored = this.#getStoredCredentials(provider);
+		let matchedId: number | undefined;
+		for (const entry of stored) {
+			if (await this.#credentialMatchesApiKey(entry.credential, apiKey)) {
+				matchedId = entry.id;
+				break;
+			}
+		}
+
+		if (matchedId === undefined) {
+			await this.reload();
+			return false;
+		}
+
+		const markSuspect = this.#store.markCredentialSuspect?.bind(this.#store);
+		if (markSuspect) {
+			await markSuspect(matchedId, { signal });
+		} else {
+			await this.reload();
+		}
+
+		const latestRows = this.#store.listAuthCredentials(provider);
+		this.#setStoredCredentials(
+			provider,
+			latestRows.map(row => ({ id: row.id, credential: row.credential })),
+		);
+		return true;
+	}
+
 	// ─── Auth Broker integration ────────────────────────────────────────────
 
 	/**
@@ -2614,7 +2791,32 @@ export class AuthStorage {
 				});
 			}
 		}
-		return { generatedAt: Date.now(), credentials: entries };
+		return { generation: this.#generation, generatedAt: Date.now(), credentials: entries };
+	}
+
+	/**
+	 * Refresh the OAuth credential with the given id through a per-credential
+	 * single-flight. Concurrent callers for the same row await the same upstream
+	 * refresh attempt, which is required for providers that rotate refresh tokens
+	 * on every successful refresh.
+	 */
+	async refreshCredentialById(id: number, signal?: AbortSignal): Promise<AuthCredentialSnapshotEntry> {
+		const existing = this.#oauthRefreshInFlight.get(id);
+		if (existing) return raceCredentialRefreshWithSignal(existing, signal);
+
+		const promise = (async () => {
+			this.#bumpGeneration("credential-refresh-start");
+			try {
+				return await this.#forceRefreshCredentialByIdUnshared(id, signal);
+			} catch (error) {
+				this.#bumpGeneration("credential-refresh-failure");
+				throw error;
+			} finally {
+				this.#oauthRefreshInFlight.delete(id);
+			}
+		})();
+		this.#oauthRefreshInFlight.set(id, promise);
+		return raceCredentialRefreshWithSignal(promise, signal);
 	}
 
 	/**
@@ -2626,6 +2828,10 @@ export class AuthStorage {
 	 * Throws when no OAuth credential with that id is loaded.
 	 */
 	async forceRefreshCredentialById(id: number, signal?: AbortSignal): Promise<AuthCredentialSnapshotEntry> {
+		return this.refreshCredentialById(id, signal);
+	}
+
+	async #forceRefreshCredentialByIdUnshared(id: number, signal?: AbortSignal): Promise<AuthCredentialSnapshotEntry> {
 		for (const [provider, entries] of this.#data) {
 			const index = entries.findIndex(entry => entry.id === id);
 			if (index === -1) continue;

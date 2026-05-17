@@ -123,7 +123,9 @@ function createBrokerClient(brokerConfig: AuthBrokerClientConfig): AuthBrokerCli
 }
 
 async function fetchBrokerSnapshot(client: AuthBrokerClient): Promise<SnapshotResponse> {
-	return client.fetchSnapshot();
+	const result = await client.fetchSnapshot();
+	if (result.status !== 200) throw new Error("Auth broker returned no initial snapshot");
+	return result.snapshot;
 }
 
 async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
