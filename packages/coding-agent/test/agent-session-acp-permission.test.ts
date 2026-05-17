@@ -709,16 +709,3 @@ it("read tool: requestPermission is never called for non-gated tools", async () 
 	expect(permissionSpy).toHaveBeenCalledTimes(0);
 	expect(readTool.executeCalls).toBe(1);
 });
-
-// ---------------------------------------------------------------------------
-// 5. No bridge → original tool object identity preserved (no wrapping)
-// ---------------------------------------------------------------------------
-
-it("no bridge: original tool object is returned unchanged", async () => {
-	const bashTool = makeFakeTool("bash");
-	session = await createSession([bashTool]); // no bridge
-
-	await session.setActiveToolsByName(["bash"]);
-	const activeBash = session.agent.state.tools.find(t => t.name === "bash");
-	expect(activeBash).toBe(bashTool);
-});

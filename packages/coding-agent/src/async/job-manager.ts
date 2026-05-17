@@ -37,6 +37,8 @@ interface AsyncJobDelivery {
 	attempt: number;
 	nextAttemptAt: number;
 	lastError?: string;
+	ownerId?: string;
+	promise?: Promise<void>;
 }
 
 export interface AsyncJobDeliveryState {
@@ -82,6 +84,7 @@ export class AsyncJobManager {
 
 	readonly #jobs = new Map<string, AsyncJob>();
 	readonly #deliveries: AsyncJobDelivery[] = [];
+	readonly #inFlightDeliveries: AsyncJobDelivery[] = [];
 	readonly #suppressedDeliveries = new Set<string>();
 	readonly #watchedJobs = new Set<string>();
 	readonly #evictionTimers = new Map<string, NodeJS.Timeout>();
@@ -221,16 +224,17 @@ export class AsyncJobManager {
 
 	getDeliveryState(filter?: AsyncJobFilter): AsyncJobDeliveryState {
 		const deliveries = this.#filterDeliveries(filter);
+		const inFlightDeliveries = this.#filterInFlightDeliveries(filter);
 		const nextRetryAt = deliveries.reduce<number | undefined>((next, delivery) => {
 			if (next === undefined) return delivery.nextAttemptAt;
 			return Math.min(next, delivery.nextAttemptAt);
 		}, undefined);
 
 		return {
-			queued: deliveries.length,
-			delivering: this.#deliveryLoop !== undefined && deliveries.length > 0,
+			queued: deliveries.length + inFlightDeliveries.length,
+			delivering: inFlightDeliveries.length > 0 || (this.#deliveryLoop !== undefined && deliveries.length > 0),
 			nextRetryAt,
-			pendingJobIds: deliveries.map(delivery => delivery.jobId),
+			pendingJobIds: deliveries.concat(inFlightDeliveries).map(delivery => delivery.jobId),
 		};
 	}
 
@@ -303,6 +307,12 @@ export class AsyncJobManager {
 				if (delivered) continue;
 				return false;
 			}
+			const inFlightDeliveries = this.#filterInFlightDeliveries();
+			if (inFlightDeliveries.length > 0 && this.#filterDeliveries().length === 0) {
+				const delivered = await this.#waitForDeliveryPromise(inFlightDeliveries[0]?.promise, deadline);
+				if (delivered) continue;
+				return false;
+			}
 
 			this.#ensureDeliveryLoop();
 			const loop = this.#deliveryLoop;
@@ -338,6 +348,7 @@ export class AsyncJobManager {
 		this.#clearEvictionTimers();
 		this.#jobs.clear();
 		this.#deliveries.length = 0;
+		this.#inFlightDeliveries.length = 0;
 		this.#suppressedDeliveries.clear();
 		this.#watchedJobs.clear();
 		return drained;
@@ -398,49 +409,51 @@ export class AsyncJobManager {
 
 	#filterDeliveries(filter?: AsyncJobFilter): AsyncJobDelivery[] {
 		const ownerId = filter?.ownerId;
-		if (!ownerId) return this.#deliveries;
-		return this.#deliveries.filter(delivery => this.#jobs.get(delivery.jobId)?.ownerId === ownerId);
+		if (!ownerId) return this.#deliveries.filter(delivery => !this.isDeliverySuppressed(delivery.jobId));
+		return this.#deliveries.filter(
+			delivery => delivery.ownerId === ownerId && !this.isDeliverySuppressed(delivery.jobId),
+		);
+	}
+
+	#filterInFlightDeliveries(filter?: AsyncJobFilter): AsyncJobDelivery[] {
+		const ownerId = filter?.ownerId;
+		if (!ownerId) return this.#inFlightDeliveries.filter(delivery => !this.isDeliverySuppressed(delivery.jobId));
+		return this.#inFlightDeliveries.filter(
+			delivery => delivery.ownerId === ownerId && !this.isDeliverySuppressed(delivery.jobId),
+		);
 	}
 
 	async #deliverNextFiltered(filter: AsyncJobFilter, deadline: number): Promise<boolean> {
-		let selected: AsyncJobDelivery | undefined;
-		for (const delivery of this.#deliveries) {
-			if (this.#jobs.get(delivery.jobId)?.ownerId !== filter.ownerId) continue;
-			if (this.isDeliverySuppressed(delivery.jobId)) continue;
-			if (!selected || delivery.nextAttemptAt < selected.nextAttemptAt) {
-				selected = delivery;
+		while (true) {
+			let selected: AsyncJobDelivery | undefined;
+			for (const delivery of this.#deliveries) {
+				if (delivery.ownerId !== filter.ownerId) continue;
+				if (this.isDeliverySuppressed(delivery.jobId)) continue;
+				if (!selected || delivery.nextAttemptAt < selected.nextAttemptAt) {
+					selected = delivery;
+				}
 			}
-		}
-		if (!selected) return true;
 
-		const now = Date.now();
-		if (selected.nextAttemptAt > now) {
-			if (selected.nextAttemptAt > deadline) return false;
-			await Bun.sleep(selected.nextAttemptAt - now);
-		}
-
-		const index = this.#deliveries.indexOf(selected);
-		if (index === -1) return true;
-
-		try {
-			await this.#onJobComplete(selected.jobId, selected.text, this.#jobs.get(selected.jobId));
-			this.#deliveries.splice(index, 1);
-		} catch (error) {
-			selected.attempt += 1;
-			selected.lastError = error instanceof Error ? error.message : String(error);
-			selected.nextAttemptAt = Date.now() + this.#getRetryDelay(selected.attempt);
-			this.#deliveries.splice(index, 1);
-			if (!this.isDeliverySuppressed(selected.jobId)) {
-				this.#deliveries.push(selected);
+			if (!selected) {
+				const inFlight = this.#filterInFlightDeliveries(filter);
+				if (inFlight.length === 0) return true;
+				return this.#waitForDeliveryPromise(inFlight[0]?.promise, deadline);
 			}
-			logger.warn("Async job completion delivery failed", {
-				jobId: selected.jobId,
-				attempt: selected.attempt,
-				nextRetryAt: selected.nextAttemptAt,
-				error: selected.lastError,
-			});
+
+			const now = Date.now();
+			if (selected.nextAttemptAt > now) {
+				if (selected.nextAttemptAt > deadline) return false;
+				await Bun.sleep(selected.nextAttemptAt - now);
+				continue;
+			}
+
+			const index = this.#deliveries.indexOf(selected);
+			if (index === -1) continue;
+			this.#deliveries.splice(index, 1);
+			if (this.isDeliverySuppressed(selected.jobId)) continue;
+
+			return this.#waitForDeliveryPromise(this.#deliverDelivery(selected), deadline);
 		}
-		return true;
 	}
 
 	isDeliverySuppressed(jobId: string): boolean {
@@ -457,6 +470,7 @@ export class AsyncJobManager {
 			text,
 			attempt: 0,
 			nextAttemptAt: Date.now(),
+			ownerId: this.#jobs.get(jobId)?.ownerId,
 		});
 		this.#ensureDeliveryLoop();
 	}
@@ -492,20 +506,25 @@ export class AsyncJobManager {
 			if (this.#deliveries[0] !== delivery) {
 				continue;
 			}
-			// Check again after sleep
 			if (this.isDeliverySuppressed(delivery.jobId)) {
 				this.#deliveries.shift();
 				continue;
 			}
 
+			this.#deliveries.shift();
+			await this.#deliverDelivery(delivery);
+		}
+	}
+
+	#deliverDelivery(delivery: AsyncJobDelivery): Promise<void> {
+		const promise = (async () => {
+			this.#inFlightDeliveries.push(delivery);
 			try {
 				await this.#onJobComplete(delivery.jobId, delivery.text, this.#jobs.get(delivery.jobId));
-				this.#deliveries.shift();
 			} catch (error) {
 				delivery.attempt += 1;
 				delivery.lastError = error instanceof Error ? error.message : String(error);
 				delivery.nextAttemptAt = Date.now() + this.#getRetryDelay(delivery.attempt);
-				this.#deliveries.shift();
 				if (!this.isDeliverySuppressed(delivery.jobId)) {
 					this.#deliveries.push(delivery);
 				}
@@ -515,8 +534,32 @@ export class AsyncJobManager {
 					nextRetryAt: delivery.nextAttemptAt,
 					error: delivery.lastError,
 				});
+			} finally {
+				const index = this.#inFlightDeliveries.indexOf(delivery);
+				if (index !== -1) this.#inFlightDeliveries.splice(index, 1);
+				if (this.#deliveries.length > 0) this.#ensureDeliveryLoop();
 			}
+		})();
+		delivery.promise = promise;
+		return promise;
+	}
+
+	async #waitForDeliveryPromise(promise: Promise<void> | undefined, deadline: number): Promise<boolean> {
+		if (!promise) return true;
+		if (deadline === Number.POSITIVE_INFINITY) {
+			await promise;
+			return true;
 		}
+		const remainingMs = deadline - Date.now();
+		if (remainingMs <= 0) return false;
+		let timedOut = false;
+		await Promise.race([
+			promise,
+			Bun.sleep(remainingMs).then(() => {
+				timedOut = true;
+			}),
+		]);
+		return !timedOut;
 	}
 
 	#getRetryDelay(attempt: number): number {

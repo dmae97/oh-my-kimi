@@ -2,12 +2,12 @@
  * Tests for OpenTelemetry instrumentation around oneshot LLM calls:
  * compaction summaries, handoff document, branch summary.
  *
- * Mirrors the InMemorySpanExporter + AsyncLocalStorageContextManager setup
- * used by `otel.test.ts`. Spies on `completeSimple` to avoid real HTTP traffic
+ * Uses a per-test InMemorySpanExporter and explicit tracer. Spies on
+ * `completeSimple` to avoid real HTTP traffic
  * while exercising the chat-span lifecycle (`startChatSpan` →
  * `runInActiveSpan` → `finishChatSpan` / `failChatSpan`).
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import {
 	type CompactionPreparation,
 	compact,
@@ -27,8 +27,7 @@ import {
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import type { AssistantMessage, Model, Usage } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
-import { context, SpanStatusCode, trace } from "@opentelemetry/api";
-import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { SpanStatusCode } from "@opentelemetry/api";
 import {
 	BasicTracerProvider,
 	InMemorySpanExporter,
@@ -49,28 +48,18 @@ const MODEL: Model = {
 	maxTokens: 32_768,
 };
 
-const exporter = new InMemorySpanExporter();
+let exporter: InMemorySpanExporter;
 let provider: BasicTracerProvider;
-let contextManager: AsyncLocalStorageContextManager;
 
-beforeAll(() => {
-	trace.disable();
-	context.disable();
-	contextManager = new AsyncLocalStorageContextManager().enable();
-	context.setGlobalContextManager(contextManager);
+beforeEach(() => {
+	exporter = new InMemorySpanExporter();
 	provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
-	trace.setGlobalTracerProvider(provider);
 });
 
-afterEach(() => {
+afterEach(async () => {
 	exporter.reset();
-	vi.restoreAllMocks();
-});
-
-afterAll(async () => {
 	await provider.shutdown();
-	context.disable();
-	trace.disable();
+	vi.restoreAllMocks();
 });
 
 function makeTelemetryConfig(): AgentTelemetryConfig {

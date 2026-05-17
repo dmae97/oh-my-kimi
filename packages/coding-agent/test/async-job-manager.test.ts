@@ -230,35 +230,104 @@ describe("AsyncJobManager", () => {
 	});
 
 	test("scoped delivery drain returns once matching owner deliveries finish", async () => {
-		let firstOwnerAttempts = 0;
-		const secondOwnerCompletions: Array<{ jobId: string; text: string }> = [];
+		let mainJobId = "";
+		let releaseMainDelivery = (): void => {};
+		let notifyMainDeliveryStarted = (): void => {};
+		const mainDeliveryStarted = new Promise<void>(resolve => {
+			notifyMainDeliveryStarted = resolve;
+		});
+		const mainDeliveryReleased = new Promise<void>(resolve => {
+			releaseMainDelivery = resolve;
+		});
+		const subagentCompletions: Array<{ jobId: string; text: string }> = [];
 		const manager = new AsyncJobManager({
-			onJobComplete: async (jobId, text, job) => {
-				if (job?.ownerId === "0-Main") {
-					firstOwnerAttempts++;
-					throw new Error("first owner delivery retry");
+			retentionMs: 0,
+			onJobComplete: async (jobId, text) => {
+				if (jobId === mainJobId) {
+					notifyMainDeliveryStarted();
+					await mainDeliveryReleased;
+					return;
 				}
-				secondOwnerCompletions.push({ jobId, text });
+				subagentCompletions.push({ jobId, text });
 			},
 		});
 
-		manager.register("task", "main job", async () => "main result", { ownerId: "0-Main" });
+		mainJobId = manager.register("task", "main job", async () => "main result", { ownerId: "0-Main" });
 		const targetJobId = manager.register("task", "subagent job", async () => "subagent result", {
 			ownerId: "3-AuthLoader",
 		});
 		await manager.waitForAll();
-		const firstAttemptDeadline = Date.now() + 2_000;
-		while (firstOwnerAttempts === 0) {
-			if (Date.now() >= firstAttemptDeadline) throw new Error("Timed out waiting for first owner delivery attempt");
-			await Bun.sleep(5);
-		}
+		await mainDeliveryStarted;
 
+		expect(manager.hasPendingDeliveries({ ownerId: "0-Main" })).toBe(true);
 		const drained = await manager.drainDeliveries({ timeoutMs: 50, filter: { ownerId: "3-AuthLoader" } });
 
 		expect(drained).toBe(true);
-		expect(secondOwnerCompletions).toEqual([{ jobId: targetJobId, text: "subagent result" }]);
+		expect(subagentCompletions).toEqual([{ jobId: targetJobId, text: "subagent result" }]);
 		expect(manager.hasPendingDeliveries({ ownerId: "3-AuthLoader" })).toBe(false);
-		expect(manager.hasPendingDeliveries({ ownerId: "0-Main" })).toBe(true);
+
+		expect(manager.acknowledgeDeliveries([mainJobId])).toBe(0);
+		expect(manager.hasPendingDeliveries({ ownerId: "0-Main" })).toBe(false);
+		releaseMainDelivery();
+		await Bun.sleep(0);
+	});
+
+	test("scoped delivery drain times out while a matching delivery callback is in flight", async () => {
+		let mainJobId = "";
+		let targetJobId = "";
+		let releaseMainDelivery = (): void => {};
+		let notifyMainDeliveryStarted = (): void => {};
+		let releaseTargetDelivery = (): void => {};
+		let notifyTargetDeliveryStarted = (): void => {};
+		const mainDeliveryStarted = new Promise<void>(resolve => {
+			notifyMainDeliveryStarted = resolve;
+		});
+		const mainDeliveryReleased = new Promise<void>(resolve => {
+			releaseMainDelivery = resolve;
+		});
+		const targetDeliveryStarted = new Promise<void>(resolve => {
+			notifyTargetDeliveryStarted = resolve;
+		});
+		const targetDeliveryReleased = new Promise<void>(resolve => {
+			releaseTargetDelivery = resolve;
+		});
+		const completions: string[] = [];
+		const manager = new AsyncJobManager({
+			onJobComplete: async jobId => {
+				if (jobId === mainJobId) {
+					notifyMainDeliveryStarted();
+					await mainDeliveryReleased;
+					return;
+				}
+				if (jobId === targetJobId) {
+					notifyTargetDeliveryStarted();
+					await targetDeliveryReleased;
+					completions.push(jobId);
+				}
+			},
+		});
+
+		mainJobId = manager.register("task", "main job", async () => "main result", { ownerId: "0-Main" });
+		targetJobId = manager.register("task", "subagent job", async () => "subagent result", {
+			ownerId: "3-AuthLoader",
+		});
+		await manager.waitForAll();
+		await mainDeliveryStarted;
+
+		const timedOut = await manager.drainDeliveries({ timeoutMs: 10, filter: { ownerId: "3-AuthLoader" } });
+		await targetDeliveryStarted;
+
+		expect(timedOut).toBe(false);
+		expect(manager.hasPendingDeliveries({ ownerId: "3-AuthLoader" })).toBe(true);
+		expect(completions).toEqual([]);
+
+		releaseTargetDelivery();
+		const drained = await manager.drainDeliveries({ timeoutMs: 200, filter: { ownerId: "3-AuthLoader" } });
+		expect(drained).toBe(true);
+		expect(completions).toEqual([targetJobId]);
+
+		releaseMainDelivery();
+		expect(await manager.drainDeliveries({ timeoutMs: 200 })).toBe(true);
 	});
 
 	test("cancelAll with ownerId only cancels matching jobs", async () => {

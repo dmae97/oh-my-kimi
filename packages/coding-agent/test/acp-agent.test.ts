@@ -888,7 +888,7 @@ describe("ACP agent", () => {
 			expect.objectContaining({
 				sessionUpdate: "tool_call",
 				toolCallId: "toolu_custom",
-				rawInput: { input: "raw custom payload" },
+				rawInput: "raw custom payload",
 			}),
 		);
 

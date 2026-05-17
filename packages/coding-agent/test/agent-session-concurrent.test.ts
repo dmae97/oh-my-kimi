@@ -10,6 +10,7 @@ import { Agent, AgentBusyError, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { type AssistantMessage, getBundledModel, type Message, type ToolCall } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -45,6 +46,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			fs.rmSync(tempDir, { recursive: true });
 		}
 		vi.restoreAllMocks();
+		AsyncJobManager.resetForTests();
 	});
 
 	async function createSession() {
@@ -334,9 +336,9 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		const sessionManager = SessionManager.inMemory();
 		const settings = Settings.isolated();
-		const authStorage = await AuthStorage.create(":memory:");
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-acp-idle.db"));
 		authStorages.push(authStorage);
-		const modelRegistry = new ModelRegistry(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models-acp-idle.yml"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
 		session = new AgentSession({
@@ -382,6 +384,161 @@ describe("AgentSession concurrent prompt guard", () => {
 				);
 			}),
 		).toBe(true);
+	});
+
+	it("runs drained ACP async completions as owned follow-up turns despite deferred client turns", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+			},
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-acp-async.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models-acp-async.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		const ownerId = "acp-session-a";
+		const deliveryGate = Promise.withResolvers<void>();
+		let deliveryStarted = false;
+		const asyncJobManager = new AsyncJobManager({
+			maxRunningJobs: 2,
+			retentionMs: 1_000,
+			onJobComplete: async () => {
+				deliveryStarted = true;
+				await deliveryGate.promise;
+				await session.sendCustomMessage(
+					{
+						customType: "async-result",
+						content: "Background result",
+						display: true,
+						attribution: "agent",
+					},
+					{ deliverAs: "followUp", triggerTurn: true },
+				);
+			},
+		});
+		AsyncJobManager.setInstance(asyncJobManager);
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			agentId: ownerId,
+			ownedAsyncJobManager: asyncJobManager,
+		});
+		session.setClientBridge({
+			capabilities: {},
+			deferAgentInitiatedTurns: true,
+		});
+
+		await session.prompt("First message");
+		expect(session.isStreaming).toBe(false);
+		const callsAfterFirstPrompt = mock.calls.length;
+
+		try {
+			asyncJobManager.register("bash", "owned job", async () => "Background result", {
+				id: "owned-job",
+				ownerId,
+			});
+			await waitFor(() => deliveryStarted);
+
+			const drainedPromise = session.drainAsyncJobDeliveriesForAcp({ timeoutMs: 1_000 });
+			await waitFor(() => asyncJobManager.getDeliveryState({ ownerId }).delivering);
+			deliveryGate.resolve();
+
+			await expect(drainedPromise).resolves.toBe(true);
+			await session.waitForIdle();
+
+			expect(mock.calls).toHaveLength(callsAfterFirstPrompt + 1);
+			expect(
+				mock.calls.at(-1)?.context.messages.some(message => {
+					if (typeof message.content === "string") {
+						return message.content.includes("Background result");
+					}
+
+					return message.content.some(
+						content => content.type === "text" && content.text.includes("Background result"),
+					);
+				}),
+			).toBe(true);
+		} finally {
+			deliveryGate.resolve();
+		}
+	});
+
+	it("scopes ACP async job snapshots and drains to the owning session id", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-acp-scope.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models-acp-scope.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const settings = Settings.isolated();
+		const deliveryGate = Promise.withResolvers<void>();
+		const delivered: string[] = [];
+		const started = new Set<string>();
+		const asyncJobManager = new AsyncJobManager({
+			maxRunningJobs: 3,
+			retentionMs: 1_000,
+			onJobComplete: async jobId => {
+				started.add(jobId);
+				if (jobId === "job-a") {
+					await deliveryGate.promise;
+				}
+				delivered.push(jobId);
+			},
+		});
+		AsyncJobManager.setInstance(asyncJobManager);
+
+		const agentA = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: createMockModel({ handler: () => ({ content: ["Done"] }) }).stream,
+		});
+		const agentB = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: createMockModel({ handler: () => ({ content: ["Done"] }) }).stream,
+		});
+		const sessionB = new AgentSession({
+			agent: agentB,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			agentId: "acp-session-b",
+		});
+		session = new AgentSession({
+			agent: agentA,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			agentId: "acp-session-a",
+			ownedAsyncJobManager: asyncJobManager,
+		});
+
+		try {
+			asyncJobManager.register("bash", "A", async () => "A", { id: "job-a", ownerId: "acp-session-a" });
+			await waitFor(() => started.has("job-a"));
+			asyncJobManager.register("bash", "B", async () => "B", { id: "job-b", ownerId: "acp-session-b" });
+			await waitFor(() => asyncJobManager.getDeliveryState({ ownerId: "acp-session-b" }).queued > 0);
+
+			expect(sessionB.getAsyncJobSnapshot()?.delivery.pendingJobIds).not.toContain("job-a");
+			await expect(sessionB.drainAsyncJobDeliveriesForAcp({ timeoutMs: 1_000 })).resolves.toBe(true);
+			expect(delivered).toEqual(["job-b"]);
+		} finally {
+			deliveryGate.resolve();
+			await sessionB.dispose();
+		}
 	});
 });
 

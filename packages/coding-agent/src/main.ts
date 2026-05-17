@@ -56,6 +56,7 @@ import {
 	discoverAuthStorage,
 } from "./sdk";
 import type { AgentSession } from "./session/agent-session";
+import type { AuthStorage } from "./session/auth-storage";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
 import { resolvePromptInput } from "./system-prompt";
 import type { LspStartupServerInfo } from "./tools";
@@ -202,7 +203,7 @@ interface AcpSessionFactoryOptions {
 	baseOptions: CreateAgentSessionOptions;
 	settings: Settings;
 	sessionDir?: string;
-	authStorage: Awaited<ReturnType<typeof discoverAuthStorage>>;
+	authStorage: AuthStorage;
 	modelRegistry: ModelRegistry;
 	parsedArgs: Pick<Args, "apiKey">;
 	rawArgs: string[];
@@ -213,6 +214,7 @@ function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSessionFact
 	return async cwd => {
 		const nextSettings = await args.settings.cloneForCwd(cwd);
 		const nextSessionManager = SessionManager.create(cwd, args.sessionDir);
+		const agentId = `acp:${nextSessionManager.getSessionId()}`;
 		const { session: nextSession } = await args.createSession({
 			...args.baseOptions,
 			cwd,
@@ -220,6 +222,7 @@ function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSessionFact
 			settings: nextSettings,
 			authStorage: args.authStorage,
 			modelRegistry: args.modelRegistry,
+			agentId,
 			hasUI: false,
 		});
 		if (args.parsedArgs.apiKey && !args.baseOptions.model && nextSession.model) {

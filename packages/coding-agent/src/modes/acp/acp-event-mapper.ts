@@ -18,6 +18,7 @@ interface MessageProgress {
 interface AcpEventMapperOptions {
 	getMessageId?: (message: unknown) => string | undefined;
 	getMessageProgress?: (message: unknown) => MessageProgress | undefined;
+	getToolArgs?: (toolCallId: string) => unknown;
 	/**
 	 * Session cwd. Tool call locations sent to ACP clients must be absolute
 	 * (the editor host needs them to open or focus files). When provided,
@@ -185,8 +186,11 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 			return [toSessionNotification(sessionId, update)];
 		}
 		case "tool_execution_end": {
-			const diffContent = extractDiffToolCallContent(event.result);
-			const content = [...diffContent, ...extractToolCallContent(event.result)];
+			const resultContent = [...extractDiffToolCallContent(event.result), ...extractToolCallContent(event.result)];
+			const content = mergeToolUpdateContent(
+				buildToolStartContent(event.toolName, getToolExecutionEndArgs(event, options)),
+				resultContent,
+			);
 			const update: SessionUpdate = {
 				sessionUpdate: "tool_call_update",
 				toolCallId: event.toolCallId,
@@ -380,6 +384,7 @@ function extractTodoEntries(phases: unknown[]): Array<{ content: string; status:
 
 function isTodoStatus(status: unknown): status is TodoStatus {
 	return status === "pending" || status === "in_progress" || status === "completed" || status === "abandoned";
+}
 export function buildToolCallStartUpdate(input: {
 	toolCallId: string;
 	toolName: string;
@@ -417,6 +422,16 @@ export function normalizeReplayToolArguments(value: unknown): { args: unknown } 
 	} catch {
 		return { args: value };
 	}
+}
+
+function getToolExecutionEndArgs(
+	event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
+	options: AcpEventMapperOptions,
+): unknown {
+	if ("args" in event) {
+		return (event as { args?: unknown }).args;
+	}
+	return options.getToolArgs?.(event.toolCallId);
 }
 
 function buildToolStartContent(toolName: string, args: unknown): ToolCallContent[] {

@@ -732,6 +732,7 @@ export class AgentSession {
 	#planReferenceSent = false;
 	#planReferencePath = "local://PLAN.md";
 	#clientBridge: ClientBridge | undefined;
+	#allowAcpAgentInitiatedTurns = false;
 	/** Per-session memory of allow_always / reject_always decisions for gated tools. */
 	#acpPermissionDecisions: Map<string, "allow_always" | "reject_always"> = new Map();
 
@@ -2777,9 +2778,15 @@ export class AgentSession {
 		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
 		const before = manager.getDeliveryState(ownerFilter);
 		if (before.queued === 0 && !before.delivering) return false;
-		const drained = await manager.drainDeliveries({ timeoutMs: options?.timeoutMs, filter: ownerFilter });
-		const after = manager.getDeliveryState(ownerFilter);
-		return drained && (before.queued !== after.queued || before.delivering !== after.delivering);
+		const previousAllowAcpAgentInitiatedTurns = this.#allowAcpAgentInitiatedTurns;
+		this.#allowAcpAgentInitiatedTurns = true;
+		try {
+			const drained = await manager.drainDeliveries({ timeoutMs: options?.timeoutMs, filter: ownerFilter });
+			const after = manager.getDeliveryState(ownerFilter);
+			return drained && (before.queued !== after.queued || before.delivering !== after.delivering);
+		} finally {
+			this.#allowAcpAgentInitiatedTurns = previousAllowAcpAgentInitiatedTurns;
+		}
 	}
 
 	/** Most recent assistant message in agent state. */
@@ -4419,7 +4426,7 @@ export class AgentSession {
 
 		if (options?.deliverAs === "nextTurn") {
 			if (options?.triggerTurn) {
-				if (this.#clientBridge?.deferAgentInitiatedTurns) {
+				if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
 					this.#queueHiddenNextTurnMessage(appMessage, false);
 					return;
 				}
@@ -4438,7 +4445,7 @@ export class AgentSession {
 		}
 
 		if (options?.triggerTurn) {
-			if (this.#clientBridge?.deferAgentInitiatedTurns) {
+			if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
 				this.#queueHiddenNextTurnMessage(appMessage, false);
 				return;
 			}
