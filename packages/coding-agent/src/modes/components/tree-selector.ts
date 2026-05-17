@@ -453,6 +453,16 @@ class TreeList implements Component {
 		);
 		const endIndex = Math.min(startIndex + this.maxVisibleLines, this.#filteredNodes.length);
 
+		// Cap the per-row gutter prefix so a content budget is always preserved.
+		// Each indent level renders as 3 cells; deep branching would otherwise eat the
+		// entire viewport (issue #1144). Reserve at least MIN_CONTENT_COLS for entry
+		// text — or half the viewport, whichever is larger — and compress older gutter
+		// levels off-screen behind a leading ellipsis when the row would exceed budget.
+		const MIN_CONTENT_COLS = 24;
+		const OVERHEAD_COLS = 4; // cursor (2) + a touch of breathing room
+		const contentReserve = Math.max(MIN_CONTENT_COLS, Math.floor(width / 2));
+		const maxIndentLevels = Math.max(1, Math.floor((width - contentReserve - OVERHEAD_COLS) / 3));
+
 		for (let i = startIndex; i < endIndex; i++) {
 			const flatNode = this.#filteredNodes[i];
 			const entry = flatNode.node.entry;
@@ -464,29 +474,34 @@ class TreeList implements Component {
 			// If multiple roots, shift display (roots at 0, not 1)
 			const displayIndent = this.#multipleRoots ? Math.max(0, flatNode.indent - 1) : flatNode.indent;
 
-			// Build prefix with gutters at their correct positions
-			// Each gutter has a position (displayIndent where its connector was shown)
+			// Build prefix with gutters at their correct positions, clamped to
+			// `maxIndentLevels` cells so the content always fits. When clamped, the
+			// leftmost cells represent the deepest visible ancestors and a `…` marker
+			// indicates older branch context has been compressed.
 			const hasConnector = flatNode.showConnector && !flatNode.isVirtualRootChild;
 			const connectorSymbol = hasConnector ? (flatNode.isLast ? theme.tree.last : theme.tree.branch) : "";
 			const connectorChars = hasConnector ? Array.from(connectorSymbol) : [];
-			const connectorPosition = hasConnector ? displayIndent - 1 : -1;
+			const renderedIndent = Math.min(displayIndent, maxIndentLevels);
+			const scrollOffset = displayIndent - renderedIndent;
+			const connectorPositionDisplay = hasConnector ? renderedIndent - 1 : -1;
 
 			// Build prefix char by char, placing gutters and connector at their positions
-			const totalChars = displayIndent * 3;
+			const totalChars = renderedIndent * 3;
 			const prefixChars: string[] = [];
 			for (let i = 0; i < totalChars; i++) {
 				const level = Math.floor(i / 3);
+				const originalLevel = level + scrollOffset;
 				const posInLevel = i % 3;
 
-				// Check if there's a gutter at this level
-				const gutter = flatNode.gutters.find(g => g.position === level);
+				// Check if there's a gutter at this level (translated to original tree depth)
+				const gutter = flatNode.gutters.find(g => g.position === originalLevel);
 				if (gutter) {
 					if (posInLevel === 0) {
 						prefixChars.push(gutter.show ? theme.tree.vertical : " ");
 					} else {
 						prefixChars.push(" ");
 					}
-				} else if (hasConnector && level === connectorPosition) {
+				} else if (hasConnector && level === connectorPositionDisplay) {
 					// Connector at this level
 					if (posInLevel === 0) {
 						prefixChars.push(connectorChars[0] ?? " ");
@@ -498,6 +513,10 @@ class TreeList implements Component {
 				} else {
 					prefixChars.push(" ");
 				}
+			}
+			// Mark the leftmost cell when ancestors were compressed off-screen.
+			if (scrollOffset > 0 && prefixChars.length > 0) {
+				prefixChars[0] = "…";
 			}
 			const prefix = prefixChars.join("");
 

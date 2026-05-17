@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed ACP ordinary file-editing calls (`edit`, `write`, `ast_edit`) incorrectly requesting `session/request_permission` before every call, while keeping permission prompts for edit operations that delete or move files; permission requests now report the gated tool call as `pending` so clients can render the approval UI instead of returning `Permission request cancelled` without a visible prompt.
+
+### Fixed
+
+- Fixed the session tree selector to preserve a readable message column when deeply nested branch gutters would otherwise consume the viewport. ([#1144](https://github.com/can1357/oh-my-pi/issues/1144))
 
 ## [15.1.3] - 2026-05-17
 ### Breaking Changes

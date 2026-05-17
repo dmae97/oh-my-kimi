@@ -36,7 +36,7 @@ export function createAcpClientBridge(
 		requestPermission: true,
 	};
 
-	const bridge: ClientBridge = { capabilities };
+	const bridge: ClientBridge = { capabilities, deferAgentInitiatedTurns: true };
 
 	if (capabilities.readTextFile) {
 		bridge.readTextFile = async params => {
@@ -122,6 +122,7 @@ async function requestPermission(
 		toolCallId: toolCall.toolCallId,
 		title: toolCall.title,
 		...(toolCall.kind ? { kind: toolCall.kind as ToolCallUpdate["kind"] } : {}),
+		...(toolCall.status ? { status: toolCall.status as ToolCallUpdate["status"] } : {}),
 		...(toolCall.rawInput !== undefined ? { rawInput: toolCall.rawInput } : {}),
 		...(toolCall.locations ? { locations: toolCall.locations } : {}),
 	};

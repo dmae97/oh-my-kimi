@@ -49,7 +49,12 @@ import type { MCPManager } from "./mcp";
 import { InteractiveMode, runAcpMode, runPrintMode, runRpcMode } from "./modes";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
-import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "./sdk";
+import {
+	type CreateAgentSessionOptions,
+	type CreateAgentSessionResult,
+	createAgentSession,
+	discoverAuthStorage,
+} from "./sdk";
 import type { AgentSession } from "./session/agent-session";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
 import { resolvePromptInput } from "./system-prompt";
@@ -102,9 +107,9 @@ const RPC_DEFAULTED_SETTING_PATHS: SettingPath[] = [
 	"memories.enabled",
 ];
 
-function applyRpcDefaultSettingOverrides(): void {
+function applyRpcDefaultSettingOverrides(targetSettings: Settings = settings): void {
 	for (const settingPath of RPC_DEFAULTED_SETTING_PATHS) {
-		settings.override(settingPath, getDefault(settingPath));
+		targetSettings.override(settingPath, getDefault(settingPath));
 	}
 }
 
@@ -158,6 +163,71 @@ export async function submitInteractiveInput(
 		mode.finishPendingSubmission(input);
 		await mode.checkShutdownRequested();
 	}
+}
+
+function applyExtensionFlagValues(session: AgentSession, rawArgs: string[]): Map<string, boolean | string> {
+	const extensionRunner = session.extensionRunner;
+	if (!extensionRunner) {
+		return new Map();
+	}
+
+	const extFlags = extensionRunner.getFlags();
+	if (extFlags.size > 0) {
+		for (let i = 0; i < rawArgs.length; i++) {
+			const arg = rawArgs[i];
+			if (!arg.startsWith("--")) {
+				continue;
+			}
+			const flagName = arg.slice(2);
+			const extFlag = extFlags.get(flagName);
+			if (!extFlag) {
+				continue;
+			}
+			if (extFlag.type === "boolean") {
+				extensionRunner.setFlagValue(flagName, true);
+				continue;
+			}
+			if (i + 1 < rawArgs.length) {
+				extensionRunner.setFlagValue(flagName, rawArgs[++i]);
+			}
+		}
+	}
+
+	return extensionRunner.getFlagValues();
+}
+
+type AcpSessionFactory = (cwd: string) => Promise<AgentSession>;
+
+interface AcpSessionFactoryOptions {
+	baseOptions: CreateAgentSessionOptions;
+	settings: Settings;
+	sessionDir?: string;
+	authStorage: Awaited<ReturnType<typeof discoverAuthStorage>>;
+	modelRegistry: ModelRegistry;
+	parsedArgs: Pick<Args, "apiKey">;
+	rawArgs: string[];
+	createSession: (options: CreateAgentSessionOptions) => Promise<CreateAgentSessionResult>;
+}
+
+function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSessionFactory {
+	return async cwd => {
+		const nextSettings = await args.settings.cloneForCwd(cwd);
+		const nextSessionManager = SessionManager.create(cwd, args.sessionDir);
+		const { session: nextSession } = await args.createSession({
+			...args.baseOptions,
+			cwd,
+			sessionManager: nextSessionManager,
+			settings: nextSettings,
+			authStorage: args.authStorage,
+			modelRegistry: args.modelRegistry,
+			hasUI: false,
+		});
+		if (args.parsedArgs.apiKey && !args.baseOptions.model && nextSession.model) {
+			args.authStorage.setRuntimeApiKey(nextSession.model.provider, args.parsedArgs.apiKey);
+		}
+		applyExtensionFlagValues(nextSession, args.rawArgs);
+		return nextSession;
+	};
 }
 
 async function runInteractiveMode(
@@ -290,7 +360,11 @@ async function flushChangelogVersion(): Promise<void> {
 	}
 }
 
-async function createSessionManager(parsed: Args, cwd: string): Promise<SessionManager | undefined> {
+async function createSessionManager(
+	parsed: Args,
+	cwd: string,
+	activeSettings: Settings = settings,
+): Promise<SessionManager | undefined> {
 	if (parsed.fork) {
 		if (parsed.noSession) {
 			throw new Error("--fork requires session persistence");
@@ -343,7 +417,7 @@ async function createSessionManager(parsed: Args, cwd: string): Promise<SessionM
 	// session exists. When a prior session is resumed, mark parsed.continue so
 	// buildSessionOptions restores the session's model/thinking instead of
 	// overriding them with CLI defaults.
-	if (settings.get("autoResume")) {
+	if (activeSettings.get("autoResume")) {
 		const manager = await SessionManager.continueRecent(cwd, parsed.sessionDir);
 		if (manager.getEntries().length > 0) {
 			parsed.continue = true;
@@ -437,6 +511,7 @@ async function buildSessionOptions(
 	scopedModels: ScopedModel[],
 	sessionManager: SessionManager | undefined,
 	modelRegistry: ModelRegistry,
+	activeSettings: Settings,
 ): Promise<{ options: CreateAgentSessionOptions }> {
 	const options: CreateAgentSessionOptions = {
 		cwd: parsed.cwd ?? getProjectDir(),
@@ -459,7 +534,7 @@ async function buildSessionOptions(
 	// - supports --provider <name> --model <pattern>
 	// - supports --model <provider>/<pattern>
 	const modelMatchPreferences = {
-		usageOrder: settings.getStorage()?.getModelUsageOrder(),
+		usageOrder: activeSettings.getStorage()?.getModelUsageOrder(),
 	};
 	if (parsed.model) {
 		const resolved = resolveCliModel({
@@ -482,7 +557,7 @@ async function buildSessionOptions(
 			}
 		} else if (resolved.model) {
 			options.model = resolved.model;
-			settings.overrideModelRoles({
+			activeSettings.overrideModelRoles({
 				default: resolved.selector ?? `${resolved.model.provider}/${resolved.model.id}`,
 			});
 			if (!parsed.thinking && resolved.thinkingLevel) {
@@ -490,13 +565,13 @@ async function buildSessionOptions(
 			}
 		}
 	} else if (scopedModels.length > 0 && !parsed.continue && !parsed.resume) {
-		const remembered = settings.getModelRole("default");
+		const remembered = activeSettings.getModelRole("default");
 		if (remembered) {
 			const rememberedSpec = resolveModelRoleValue(
 				remembered,
 				scopedModels.map(scopedModel => scopedModel.model),
 				{
-					settings,
+					settings: activeSettings,
 					matchPreferences: modelMatchPreferences,
 					modelRegistry,
 				},
@@ -534,7 +609,7 @@ async function buildSessionOptions(
 
 	// Scoped models for Ctrl+P cycling - fill in default thinking levels when not explicit
 	if (scopedModels.length > 0) {
-		const defaultThinkingLevel = settings.get("defaultThinkingLevel");
+		const defaultThinkingLevel = activeSettings.get("defaultThinkingLevel");
 		options.scopedModels = scopedModels.map(scopedModel => ({
 			model: scopedModel.model,
 			thinkingLevel: scopedModel.explicitThinkingLevel
@@ -571,7 +646,7 @@ async function buildSessionOptions(
 		options.skills = [];
 	} else if (parsed.skills && parsed.skills.length > 0) {
 		// Override includeSkills for this session
-		settings.override("skills.includeSkills", parsed.skills as string[]);
+		activeSettings.override("skills.includeSkills", parsed.skills as string[]);
 	}
 
 	// Rules
@@ -593,7 +668,18 @@ async function buildSessionOptions(
 	return { options };
 }
 
-export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<void> {
+interface RunRootCommandDependencies {
+	createAgentSession?: typeof createAgentSession;
+	discoverAuthStorage?: typeof discoverAuthStorage;
+	runAcpMode?: typeof runAcpMode;
+	settings?: Settings;
+}
+
+export async function runRootCommand(
+	parsed: Args,
+	rawArgs: string[],
+	deps: RunRootCommandDependencies = {},
+): Promise<void> {
 	logger.startTiming();
 
 	// Initialize theme early with defaults (CLI commands need symbols)
@@ -606,7 +692,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	const notifs: (InteractiveModeNotify | null)[] = [];
 
 	// Create AuthStorage and ModelRegistry upfront
-	const authStorage = await logger.time("discoverModels", discoverAuthStorage);
+	const authStorage = await logger.time("discoverModels", deps.discoverAuthStorage ?? discoverAuthStorage);
 	const modelRegistry = new ModelRegistry(authStorage);
 
 	if (parsedArgs.version) {
@@ -668,9 +754,9 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	pluginPreloadPromise.catch(() => {});
 
 	const cwd = getProjectDir();
-	const settingsInstance = await logger.time("settings:init", Settings.init, { cwd });
+	const settingsInstance = deps.settings ?? (await logger.time("settings:init", Settings.init, { cwd }));
 	if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") {
-		applyRpcDefaultSettingOverrides();
+		applyRpcDefaultSettingOverrides(settingsInstance);
 	}
 	if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
 		Bun.env.PI_NO_PTY = "1";
@@ -684,7 +770,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			return { pipedInput, fileText: undefined, fileImages: undefined };
 		}
 		const processed = await processFileArguments(parsedArgs.fileArgs, {
-			autoResizeImages: settings.get("images.autoResize"),
+			autoResizeImages: settingsInstance.get("images.autoResize"),
 		});
 		return { pipedInput, fileText: processed.text, fileImages: processed.images };
 	});
@@ -699,14 +785,14 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	const mode = parsedArgs.mode || "text";
 
 	// Initialize discovery system with settings for provider persistence
-	logger.time("initializeWithSettings", initializeWithSettings, settings);
+	logger.time("initializeWithSettings", initializeWithSettings, settingsInstance);
 
 	// Apply model role overrides from CLI args or env vars (ephemeral, not persisted)
 	const smolModel = parsedArgs.smol ?? $env.PI_SMOL_MODEL;
 	const slowModel = parsedArgs.slow ?? $env.PI_SLOW_MODEL;
 	const planModel = parsedArgs.plan ?? $env.PI_PLAN_MODEL;
 	if (smolModel || slowModel || planModel) {
-		settings.overrideModelRoles({
+		settingsInstance.overrideModelRoles({
 			smol: smolModel,
 			slow: slowModel,
 			plan: planModel,
@@ -717,16 +803,16 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		"initTheme:final",
 		initTheme,
 		isInteractive,
-		settings.get("symbolPreset"),
-		settings.get("colorBlindMode"),
-		settings.get("theme.dark"),
-		settings.get("theme.light"),
+		settingsInstance.get("symbolPreset"),
+		settingsInstance.get("colorBlindMode"),
+		settingsInstance.get("theme.dark"),
+		settingsInstance.get("theme.light"),
 	);
 
 	let scopedModels: ScopedModel[] = [];
-	const modelPatterns = parsedArgs.models ?? settings.get("enabledModels");
+	const modelPatterns = parsedArgs.models ?? settingsInstance.get("enabledModels");
 	const modelMatchPreferences = {
-		usageOrder: settings.getStorage()?.getModelUsageOrder(),
+		usageOrder: settingsInstance.getStorage()?.getModelUsageOrder(),
 	};
 	if (modelPatterns && modelPatterns.length > 0) {
 		scopedModels = await logger.time(
@@ -739,7 +825,13 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	}
 
 	// Create session manager based on CLI flags
-	let sessionManager = await logger.time("createSessionManager", createSessionManager, parsedArgs, cwd);
+	let sessionManager = await logger.time(
+		"createSessionManager",
+		createSessionManager,
+		parsedArgs,
+		cwd,
+		settingsInstance,
+	);
 
 	// Handle --resume (no value): show session picker
 	if (parsedArgs.resume === true && !parsedArgs.fork) {
@@ -759,7 +851,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	await pluginPreloadPromise;
 
 	// Background marketplace auto-update — never blocks startup.
-	const autoUpdate = settings.get("marketplace.autoUpdate");
+	const autoUpdate = settingsInstance.get("marketplace.autoUpdate");
 	if (autoUpdate !== "off") {
 		void (async () => {
 			try {
@@ -793,6 +885,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		scopedModels,
 		sessionManager,
 		modelRegistry,
+		settingsInstance,
 	);
 	sessionOptions.authStorage = authStorage;
 	sessionOptions.modelRegistry = modelRegistry;
@@ -812,140 +905,111 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		}
 	}
 
-	const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager, eventBus } = await logger.time(
-		"createAgentSession",
-		createAgentSession,
-		sessionOptions,
-	);
-	// Kick off background model discovery only after createAgentSession finishes its parallel
-	// discovery arms; running these concurrently contends for the event loop and stretches
-	// every parallel arm by ~30ms.
-	modelRegistry.refreshInBackground();
-	if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
-		authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
-	}
-
-	if (modelFallbackMessage) {
-		notifs.push({ kind: "warn", message: modelFallbackMessage });
-	}
-
-	const modelRegistryError = modelRegistry.getError();
-	if (modelRegistryError) {
-		notifs.push({ kind: "error", message: modelRegistryError.message });
-	}
-
-	// Re-parse CLI args with extension flags and apply values
-	if (session.extensionRunner) {
-		const extFlags = session.extensionRunner.getFlags();
-		if (extFlags.size > 0) {
-			for (let i = 0; i < rawArgs.length; i++) {
-				const arg = rawArgs[i];
-				if (!arg.startsWith("--")) {
-					continue;
-				}
-				const flagName = arg.slice(2);
-				const extFlag = extFlags.get(flagName);
-				if (!extFlag) {
-					continue;
-				}
-				if (extFlag.type === "boolean") {
-					session.extensionRunner.setFlagValue(flagName, true);
-					continue;
-				}
-				if (i + 1 < rawArgs.length) {
-					session.extensionRunner.setFlagValue(flagName, rawArgs[++i]);
-				}
-			}
-		}
-	}
-
-	if (!isInteractive && parsedArgs.mode !== "acp" && !session.model) {
-		if (modelFallbackMessage) {
-			process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
-		} else {
-			process.stderr.write(`${chalk.red("No models available.")}\n`);
-		}
-		process.stderr.write(`${chalk.yellow("\nSet an API key environment variable:")}\n`);
-		process.stderr.write("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n");
-		process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
-		process.exit(1);
-	}
-
-	const extensionFlagValues = session.extensionRunner?.getFlagValues() ?? new Map<string, boolean | string>();
-	const createAcpSession = async (cwd: string) => {
-		const nextSettings = await session.settings.cloneForCwd(cwd);
-		const nextSessionManager = SessionManager.create(cwd, parsedArgs.sessionDir);
-		const { session: nextSession } = await createAgentSession({
-			...sessionOptions,
-			cwd,
-			sessionManager: nextSessionManager,
-			settings: nextSettings,
-			authStorage,
-			modelRegistry,
-			hasUI: false,
-		});
-		if (nextSession.extensionRunner) {
-			for (const [flagName, value] of extensionFlagValues) {
-				nextSession.extensionRunner.setFlagValue(flagName, value);
-			}
-		}
-		return nextSession;
+	const createAgentSessionImpl = deps.createAgentSession ?? createAgentSession;
+	const createSession = async (options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> => {
+		const result = await logger.time("createAgentSession", createAgentSessionImpl, options);
+		// Kick off background model discovery only after createAgentSession finishes its parallel
+		// discovery arms; running these concurrently contends for the event loop and stretches
+		// every parallel arm by ~30ms.
+		modelRegistry.refreshInBackground();
+		return result;
 	};
 
-	if (mode === "rpc" || mode === "rpc-ui") {
-		await runRpcMode(session, mode === "rpc-ui" ? setToolUIContext : undefined);
-	} else if (mode === "acp") {
-		await runAcpMode(session, createAcpSession);
-	} else if (isInteractive) {
-		const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
-		const changelogMarkdown = await logger.time("main:getChangelogForDisplay", getChangelogForDisplay, parsedArgs);
-
-		const scopedModelsForDisplay = sessionOptions.scopedModels ?? scopedModels;
-		if (scopedModelsForDisplay.length > 0) {
-			const modelList = scopedModelsForDisplay
-				.map(scopedModel => {
-					const thinkingStr = !scopedModel.thinkingLevel ? `:${scopedModel.thinkingLevel}` : "";
-					return `${scopedModel.model.id}${thinkingStr}`;
-				})
-				.join(", ");
-			process.stdout.write(`${chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`)}\n`);
-		}
-
-		if ($env.PI_TIMING) {
-			logger.printTimings();
-			if ($env.PI_TIMING === "x") {
-				process.exit(0);
-			}
-		}
-
-		logger.endTiming();
-		await runInteractiveMode(
-			session,
-			VERSION,
-			changelogMarkdown,
-			notifs,
-			versionCheckPromise,
-			parsedArgs.messages,
-			setToolUIContext,
-			lspServers,
-			mcpManager,
-			eventBus,
-			initialMessage,
-			initialImages,
-		);
-	} else {
-		await runPrintMode(session, {
-			mode,
-			messages: parsedArgs.messages,
-			initialMessage,
-			initialImages,
+	if (mode === "acp") {
+		const createAcpSession = createAcpSessionFactory({
+			baseOptions: sessionOptions,
+			settings: settingsInstance,
+			sessionDir: parsedArgs.sessionDir,
+			authStorage,
+			modelRegistry,
+			parsedArgs,
+			rawArgs,
+			createSession,
 		});
-		if ($env.PI_TIMING) {
-			logger.printTimings();
+		await (deps.runAcpMode ?? runAcpMode)(createAcpSession);
+	} else {
+		const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager, eventBus } =
+			await createSession(sessionOptions);
+		if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
+			authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
 		}
-		await session.dispose();
-		stopThemeWatcher();
-		await postmortem.quit(0);
+
+		if (modelFallbackMessage) {
+			notifs.push({ kind: "warn", message: modelFallbackMessage });
+		}
+
+		const modelRegistryError = modelRegistry.getError();
+		if (modelRegistryError) {
+			notifs.push({ kind: "error", message: modelRegistryError.message });
+		}
+
+		applyExtensionFlagValues(session, rawArgs);
+
+		if (!isInteractive && !session.model) {
+			if (modelFallbackMessage) {
+				process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
+			} else {
+				process.stderr.write(`${chalk.red("No models available.")}\n`);
+			}
+			process.stderr.write(`${chalk.yellow("\nSet an API key environment variable:")}\n`);
+			process.stderr.write("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n");
+			process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
+			process.exit(1);
+		}
+
+		if (mode === "rpc" || mode === "rpc-ui") {
+			await runRpcMode(session, mode === "rpc-ui" ? setToolUIContext : undefined);
+		} else if (isInteractive) {
+			const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
+			const changelogMarkdown = await logger.time("main:getChangelogForDisplay", getChangelogForDisplay, parsedArgs);
+
+			const scopedModelsForDisplay = sessionOptions.scopedModels ?? scopedModels;
+			if (scopedModelsForDisplay.length > 0) {
+				const modelList = scopedModelsForDisplay
+					.map(scopedModel => {
+						const thinkingStr = !scopedModel.thinkingLevel ? `:${scopedModel.thinkingLevel}` : "";
+						return `${scopedModel.model.id}${thinkingStr}`;
+					})
+					.join(", ");
+				process.stdout.write(`${chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`)}\n`);
+			}
+
+			if ($env.PI_TIMING) {
+				logger.printTimings();
+				if ($env.PI_TIMING === "x") {
+					process.exit(0);
+				}
+			}
+
+			logger.endTiming();
+			await runInteractiveMode(
+				session,
+				VERSION,
+				changelogMarkdown,
+				notifs,
+				versionCheckPromise,
+				parsedArgs.messages,
+				setToolUIContext,
+				lspServers,
+				mcpManager,
+				eventBus,
+				initialMessage,
+				initialImages,
+			);
+		} else {
+			await runPrintMode(session, {
+				mode,
+				messages: parsedArgs.messages,
+				initialMessage,
+				initialImages,
+			});
+			if ($env.PI_TIMING) {
+				logger.printTimings();
+			}
+			await session.dispose();
+			stopThemeWatcher();
+			await postmortem.quit(0);
+		}
 	}
 }
 

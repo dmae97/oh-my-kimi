@@ -235,11 +235,7 @@ async function printVerification(expectedVersion: string): Promise<void> {
 			chalk.yellow(`\nWarning: could not verify updated version${result.path ? ` at ${result.path}` : ""}`),
 		);
 	}
-	console.log(
-		chalk.yellow(
-			`You may need to reinstall: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash`,
-		),
-	);
+	console.log(chalk.yellow(`You may need to reinstall: curl -fsSL https://omp.sh/install | sh`));
 }
 
 /**

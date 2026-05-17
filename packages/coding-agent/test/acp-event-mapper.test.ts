@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test";
+import path from "node:path";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { zSessionNotification } from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
-import { mapAgentSessionEventToAcpSessionUpdates } from "../src/modes/acp/acp-event-mapper";
+import {
+	buildToolCallStartUpdate,
+	mapAgentSessionEventToAcpSessionUpdates,
+	normalizeReplayToolArguments,
+} from "../src/modes/acp/acp-event-mapper";
 import type { AgentSessionEvent } from "../src/session/agent-session";
 import { expectAcpStructure, expectAcpStructureRejects } from "./helpers/acp-schema";
 
@@ -220,14 +225,14 @@ describe("ACP event mapper", () => {
 		expect(update.locations).toEqual([{ path: "src/foo.ts" }]);
 	});
 
-	it("emits a terminal ToolCallContent when tool details carry a terminalId", () => {
+	it("preserves command text when a command tool update replaces content", () => {
 		const updates = mapAgentSessionEventToAcpSessionUpdates(
 			{
 				type: "tool_execution_update",
 				toolCallId: "tc-3",
 				toolName: "bash",
-				args: { command: "echo hi" },
-				partialResult: { content: [], details: { terminalId: "term-42" } },
+				args: { command: "npm run check" },
+				partialResult: { details: { terminalId: "term-1" } },
 			} as AgentSessionEvent,
 			"session-1",
 		);
@@ -236,10 +241,389 @@ describe("ACP event mapper", () => {
 		expectAcpNotifications(updates);
 		const update = updates[0]!.update as {
 			sessionUpdate: string;
-			content?: Array<{ type: string; terminalId?: string }>;
+			content?: Array<{ type: string; terminalId?: string; content?: { type: string; text?: string } }>;
 		};
 		expect(update.sessionUpdate).toBe("tool_call_update");
-		expect(update.content).toEqual([{ type: "terminal", terminalId: "term-42" }]);
+		expect(update.content).toContainEqual({ type: "content", content: { type: "text", text: "$ npm run check" } });
+		expect(update.content).toContainEqual({ type: "terminal", terminalId: "term-1" });
+		expect(update.content).not.toContainEqual({
+			type: "content",
+			content: { type: "text", text: '{"details":{"terminalId":"term-1"}}' },
+		});
+	});
+
+	it("preserves command text when tool update details accompany empty content", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_update",
+				toolCallId: "tc-terminal-empty-content",
+				toolName: "bash",
+				args: { command: "echo hi" },
+				partialResult: { content: [], details: { terminalId: "term-1" } },
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			sessionUpdate: string;
+			content?: Array<{ type: string; terminalId?: string; content?: { type: string; text?: string } }>;
+		};
+		expect(update.sessionUpdate).toBe("tool_call_update");
+		expect(update.content).toContainEqual({ type: "content", content: { type: "text", text: "$ echo hi" } });
+		expect(update.content).toContainEqual({ type: "terminal", terminalId: "term-1" });
+		expect(update.content).not.toContainEqual({
+			type: "content",
+			content: { type: "text", text: '{"content":[],"details":{"terminalId":"term-1"}}' },
+		});
+	});
+
+	it("keeps terminal content alongside readable text", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_update",
+				toolCallId: "tc-terminal-update-text",
+				toolName: "bash",
+				args: { command: "echo hi" },
+				partialResult: {
+					content: [{ type: "text", text: "running" }],
+					details: { terminalId: "term-1" },
+				},
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			sessionUpdate: string;
+			content?: Array<{ type: string; terminalId?: string; content?: { type: string; text?: string } }>;
+		};
+		expect(update.sessionUpdate).toBe("tool_call_update");
+		expect(update.content).toContainEqual({ type: "content", content: { type: "text", text: "running" } });
+		expect(update.content).toContainEqual({ type: "terminal", terminalId: "term-1" });
+	});
+
+	it("keeps terminal content alongside readable end text", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "tc-terminal-end",
+				toolName: "bash",
+				isError: false,
+				result: {
+					content: [{ type: "text", text: "done" }],
+					details: { terminalId: "term-1" },
+				},
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			sessionUpdate: string;
+			content?: Array<{ type: string; terminalId?: string; content?: { type: string; text?: string } }>;
+		};
+		expect(update.sessionUpdate).toBe("tool_call_update");
+		expect(update.content).toContainEqual({ type: "content", content: { type: "text", text: "done" } });
+		expect(update.content).toContainEqual({ type: "terminal", terminalId: "term-1" });
+	});
+
+	it("keeps terminal content alongside readable error and message fields", () => {
+		const errorUpdates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "tc-terminal-error",
+				toolName: "bash",
+				isError: true,
+				result: { errorMessage: "command failed", details: { terminalId: "term-1" } },
+			} as AgentSessionEvent,
+			"session-1",
+		);
+		const messageUpdates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "tc-terminal-message",
+				toolName: "bash",
+				isError: false,
+				result: { message: "command completed", details: { terminalId: "term-1" } },
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(errorUpdates).toHaveLength(1);
+		expect(messageUpdates).toHaveLength(1);
+		expectAcpNotifications([...errorUpdates, ...messageUpdates]);
+		const errorUpdate = errorUpdates[0]!.update as {
+			content?: Array<{ type: string; terminalId?: string; content?: { type: string; text?: string } }>;
+		};
+		const messageUpdate = messageUpdates[0]!.update as {
+			content?: Array<{ type: string; terminalId?: string; content?: { type: string; text?: string } }>;
+		};
+
+		expect(errorUpdate.content).toContainEqual({ type: "terminal", terminalId: "term-1" });
+		expect(errorUpdate.content).toContainEqual({
+			type: "content",
+			content: { type: "text", text: "command failed" },
+		});
+		expect(messageUpdate.content).toContainEqual({ type: "terminal", terminalId: "term-1" });
+		expect(messageUpdate.content).toContainEqual({
+			type: "content",
+			content: { type: "text", text: "command completed" },
+		});
+	});
+
+	it("keeps plain command output visible without terminal details", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "tc-plain-output",
+				toolName: "bash",
+				isError: false,
+				result: "hello from stdout",
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			content?: Array<{ type: string; content?: { type: string; text?: string } }>;
+		};
+
+		expect(update.content).toEqual([{ type: "content", content: { type: "text", text: "hello from stdout" } }]);
+	});
+
+	it("embeds only terminal content from direct terminalId", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "tc-direct-terminal",
+				toolName: "bash",
+				isError: false,
+				result: { terminalId: "term-1" },
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			content?: Array<{ type: string; terminalId?: string }>;
+		};
+		expect(update.content).toEqual([{ type: "terminal", terminalId: "term-1" }]);
+	});
+
+	it("does not duplicate existing terminal content", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "tc-terminal-dedup",
+				toolName: "bash",
+				isError: false,
+				result: {
+					content: [{ type: "terminal", terminalId: "term-1" }],
+					details: { terminalId: "term-1" },
+				},
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			content?: Array<{ type: string; terminalId?: string }>;
+		};
+		expect(update.content?.filter(item => item.type === "terminal" && item.terminalId === "term-1")).toHaveLength(1);
+	});
+	it("shows bash commands in visible tool call content", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "toolu_bash_1",
+				toolName: "bash",
+				args: { command: "npm run check", cwd: "/repo" },
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			sessionUpdate: string;
+			toolCallId?: string;
+			title?: string;
+			kind?: string;
+			status?: string;
+			rawInput?: unknown;
+			content?: unknown;
+		};
+		expect(update.sessionUpdate).toBe("tool_call");
+		expect(update.toolCallId).toBe("toolu_bash_1");
+		expect(update.title).toBe("bash: npm run check");
+		expect(update.kind).toBe("execute");
+		expect(update.status).toBe("pending");
+		expect(update.rawInput).toEqual({ command: "npm run check", cwd: "/repo" });
+		expect(update.content).toEqual([{ type: "content", content: { type: "text", text: "$ npm run check" } }]);
+	});
+
+	it("maps shell and exec tool starts as execute", () => {
+		for (const toolName of ["shell", "exec"] as const) {
+			const updates = mapAgentSessionEventToAcpSessionUpdates(
+				{
+					type: "tool_execution_start",
+					toolCallId: `toolu_${toolName}_1`,
+					toolName,
+					args: { command: "echo hi" },
+				} as AgentSessionEvent,
+				"session-1",
+			);
+
+			expect(updates).toHaveLength(1);
+			expectAcpNotifications(updates);
+			const update = updates[0]!.update as {
+				sessionUpdate: string;
+				kind?: string;
+				content?: unknown;
+			};
+			expect(update.sessionUpdate).toBe("tool_call");
+			expect(update.kind).toBe("execute");
+			expect(update.content).toEqual([{ type: "content", content: { type: "text", text: "$ echo hi" } }]);
+		}
+	});
+
+	it("builds replayed bash tool calls from JSON string arguments", () => {
+		const replayArgs = normalizeReplayToolArguments(JSON.stringify({ command: "npm test", cwd: "/repo" }));
+		const update = buildToolCallStartUpdate({
+			toolCallId: "toolu_replay_1",
+			toolName: "bash",
+			args: replayArgs.args,
+			status: "completed",
+		});
+
+		expectAcpStructure(zSessionNotification, { sessionId: "session-1", update });
+		expect(update).toMatchObject({
+			sessionUpdate: "tool_call",
+			toolCallId: "toolu_replay_1",
+			title: "bash: npm test",
+			kind: "execute",
+			status: "completed",
+			rawInput: { command: "npm test", cwd: "/repo" },
+			content: [{ type: "content", content: { type: "text", text: "$ npm test" } }],
+		});
+	});
+
+	it("builds replayed read tool-call locations against the replay cwd", () => {
+		const replayArgs = normalizeReplayToolArguments(JSON.stringify({ path: "src/foo.ts" }));
+		const update = buildToolCallStartUpdate({
+			toolCallId: "toolu_replay_read",
+			toolName: "read",
+			args: replayArgs.args,
+			cwd: path.resolve("/repo"),
+			status: "completed",
+		});
+
+		expectAcpStructure(zSessionNotification, { sessionId: "session-1", update });
+		expect(update).toMatchObject({
+			sessionUpdate: "tool_call",
+			toolCallId: "toolu_replay_read",
+			title: "read: src/foo.ts",
+			kind: "read",
+			status: "completed",
+			rawInput: { path: "src/foo.ts" },
+			locations: [{ path: path.resolve("/repo", "src/foo.ts") }],
+		});
+		expect("content" in update).toBe(false);
+	});
+
+	it("keeps malformed replay arguments as raw input without command content", () => {
+		const replayArgs = normalizeReplayToolArguments("{not json");
+		const update = buildToolCallStartUpdate({
+			toolCallId: "toolu_replay_bad",
+			toolName: "bash",
+			args: replayArgs.args,
+			status: "completed",
+		});
+
+		expectAcpStructure(zSessionNotification, { sessionId: "session-1", update });
+		expect(update).toMatchObject({
+			sessionUpdate: "tool_call",
+			toolCallId: "toolu_replay_bad",
+			title: "bash",
+			kind: "execute",
+			status: "completed",
+			rawInput: "{not json",
+		});
+		expect("content" in update).toBe(false);
+	});
+
+	it("keeps object replay arguments unchanged and builds command content", () => {
+		const rawArgs = { command: "bun test", cwd: "/repo" };
+		const replayArgs = normalizeReplayToolArguments(rawArgs);
+		const update = buildToolCallStartUpdate({
+			toolCallId: "toolu_replay_object",
+			toolName: "bash",
+			args: replayArgs.args,
+			status: "completed",
+		});
+
+		expect(replayArgs.args).toBe(rawArgs);
+		expectAcpStructure(zSessionNotification, { sessionId: "session-1", update });
+		expect(update).toMatchObject({
+			title: "bash: bun test",
+			status: "completed",
+			rawInput: rawArgs,
+			content: [{ type: "content", content: { type: "text", text: "$ bun test" } }],
+		});
+	});
+	it("does not add command text content to non-command tool starts", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "toolu_read_1",
+				toolName: "read",
+				args: { path: "README.md" },
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			sessionUpdate: string;
+			title?: string;
+			kind?: string;
+			rawInput?: unknown;
+			locations?: { path: string }[];
+			content?: unknown;
+		};
+		expect(update.sessionUpdate).toBe("tool_call");
+		expect(update.title).toBe("read: README.md");
+		expect(update.kind).toBe("read");
+		expect(update.rawInput).toEqual({ path: "README.md" });
+		expect(update.locations).toEqual([{ path: "README.md" }]);
+		expect("content" in update).toBe(false);
+	});
+	it("resolves tool_execution_start locations against mapper cwd", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "toolu_read_cwd",
+				toolName: "read",
+				args: { path: "src/file.ts" },
+			} as AgentSessionEvent,
+			"session-1",
+			{ cwd: "/repo" },
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as { sessionUpdate: string; locations?: { path: string }[]; content?: unknown };
+		expect(update.sessionUpdate).toBe("tool_call");
+		expect(update.locations).toEqual([{ path: path.resolve("/repo", "src/file.ts") }]);
+		expect("content" in update).toBe(false);
 	});
 	it("emits distinct locations for move-style path arguments", () => {
 		const updates = mapAgentSessionEventToAcpSessionUpdates(

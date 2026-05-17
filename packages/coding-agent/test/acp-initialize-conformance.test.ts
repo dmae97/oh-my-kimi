@@ -44,6 +44,7 @@ class FakeAgentSession {
 	queuedMessageCount = 0;
 	systemPrompt = "system";
 	disposed = false;
+	settings = { get: (_path: string) => false };
 
 	constructor(cwd: string) {
 		this.sessionManager = SessionManager.create(cwd);
@@ -149,7 +150,7 @@ async function createAgent(): Promise<AcpAgent> {
 
 	const initialSession = new FakeAgentSession(cwd);
 	const factory = async (next: string): Promise<AgentSession> => new FakeAgentSession(next) as unknown as AgentSession;
-	return new AcpAgent(connection, initialSession as unknown as AgentSession, factory);
+	return new AcpAgent(connection, factory, initialSession as unknown as AgentSession);
 }
 
 function buildInitializeRequest(overrides: Partial<InitializeRequest> = {}): InitializeRequest {
