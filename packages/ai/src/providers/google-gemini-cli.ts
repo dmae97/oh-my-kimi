@@ -5,7 +5,6 @@
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { scheduler } from "node:timers/promises";
-import type { Content, FunctionCallingConfigMode, ThinkingConfig } from "@google/genai";
 import { fetchWithRetry, readSseJson } from "@oh-my-pi/pi-utils";
 import { calculateCost } from "../models";
 import type {
@@ -26,6 +25,7 @@ import { refreshAntigravityToken } from "../utils/oauth/google-antigravity";
 import { refreshGoogleCloudToken } from "../utils/oauth/google-gemini-cli";
 import { normalizeSchemaForCCA } from "../utils/schema";
 import { ANTIGRAVITY_SYSTEM_INSTRUCTION, getAntigravityUserAgent, getGeminiCliHeaders } from "./google-gemini-headers";
+import type { Content, FunctionCallingConfigMode, ThinkingConfig } from "./google-shared";
 import {
 	convertMessages,
 	convertTools,

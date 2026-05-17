@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed public schema utilities in `@oh-my-pi/pi-ai/utils/schema` by replacing `sanitizeSchemaForGoogle`, `sanitizeSchemaForCCA`, `prepareSchemaForCCA`, and `sanitizeSchemaForMCP` with `normalizeSchemaForGoogle`, `normalizeSchemaForCCA`, and `normalizeSchemaForMCP`
@@ -10,6 +11,7 @@
 
 ### Added
 
+- Added Vertex AI authentication via Google Application Default Credentials from `GOOGLE_APPLICATION_CREDENTIALS`, `~/.config/gcloud/application_default_credentials.json`, or metadata server tokens, with token caching and refresh skew control via `GOOGLE_VERTEX_REFRESH_SKEW_MS`
 - Added support for Anthropic image message parts with `type: "url"` and `type: "file"` sources
 - Added `stopSequences` and `frequencyPenalty` to shared stream options and wired them through to OpenAI request translation
 - Added optional request cancellation support to auth-broker interactions by propagating `AbortSignal` into health, snapshot, usage, and refresh calls
@@ -38,6 +40,7 @@
 
 ### Changed
 
+- Changed Bedrock credential resolution for streaming calls to prefer environment keys, AWS profile/SSO credentials, and IMDSv2 fallback when available
 - Changed auth-gateway parsing for OpenAI chat-completions and Responses to ignore unsupported SDK-only fields instead of rejecting requests
 - Changed auth-gateway protocol handling to include CORS headers on responses and support browser-origin requests
 - Changed prompt-cache handling to resolve cache keys from request metadata and headers and preserve them through protocol translation
@@ -52,6 +55,9 @@
 
 ### Fixed
 
+- Fixed Google Generative AI startup behavior to throw a clear API-key-required error when no key is configured
+- Fixed AWS Bedrock image message serialization to preserve base64 `source.bytes` payloads instead of decoding and rebuilding them
+- Fixed Google provider error handling to extract the API-reported `error.message` from JSON response bodies when available
 - Fixed `RemoteAuthCredentialStore.getUsageReport` to return the matching credential-specific usage report and coalesce parallel callers into one broker `/v1/usage` fetch
 - Fixed auth-broker credential upload validation to reject the remote refresh-token sentinel and prevent storing a non-refresh value
 - Fixed OpenAI Responses streaming output to emit `reasoning_summary_text` events and parse/send `summary_text` reasoning payloads

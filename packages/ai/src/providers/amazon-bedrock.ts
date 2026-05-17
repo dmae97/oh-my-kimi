@@ -1,28 +1,13 @@
-import {
-	BedrockRuntimeClient,
-	type BedrockRuntimeClientConfig,
-	StopReason as BedrockStopReason,
-	type Tool as BedrockTool,
-	CachePointType,
-	CacheTTL,
-	type ContentBlock,
-	type ContentBlockDeltaEvent,
-	type ContentBlockStartEvent,
-	type ContentBlockStopEvent,
-	ConversationRole,
-	ConverseStreamCommand,
-	type ConverseStreamMetadataEvent,
-	ImageFormat,
-	type Message,
-	type SystemContentBlock,
-	type ToolChoice,
-	type ToolConfiguration,
-	ToolResultStatus,
-} from "@aws-sdk/client-bedrock-runtime";
-import { type DefaultProviderInit, defaultProvider } from "@aws-sdk/credential-provider-node";
-import { $env, $flag } from "@oh-my-pi/pi-utils";
-import { NodeHttpHandler } from "@smithy/node-http-handler";
-import { ProxyAgent } from "proxy-agent";
+/**
+ * Amazon Bedrock Converse Stream provider.
+ *
+ * Talks directly to `bedrock-runtime.{region}.amazonaws.com` over HTTPS with
+ * SigV4 signing and decodes the `application/vnd.amazon.eventstream` response.
+ * No `@aws-sdk/*`, no `@smithy/*`, no `proxy-agent`. Proxies are honored via
+ * Bun's native `HTTPS_PROXY` support.
+ */
+
+import { $env, $flag, fetchWithRetry } from "@oh-my-pi/pi-utils";
 import type { Effort } from "../model-thinking";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "../model-thinking";
 import { calculateCost } from "../models";
@@ -47,6 +32,9 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
 import { toolWireSchema } from "../utils/schema/wire";
+import { resolveAwsCredentials } from "./aws-credentials";
+import { decodeEventStream } from "./aws-eventstream";
+import { signRequest } from "./aws-sigv4";
 import { transformMessages } from "./transform-messages";
 
 export interface BedrockOptions extends StreamOptions {
@@ -63,49 +51,93 @@ export interface BedrockOptions extends StreamOptions {
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
 
-const BEDROCK_PROXY_ENV_KEYS = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"];
+// ---------- Bedrock wire-format types ----------
+// Mirrors only what we actually consume from `ConverseStreamRequest` /
+// `ConverseStreamOutput`. Keeps us decoupled from `@aws-sdk/client-bedrock-runtime`.
 
-function hasBedrockProxyEnvironment(): boolean {
-	return BEDROCK_PROXY_ENV_KEYS.some(key => Boolean($env[key]?.trim()));
+interface CachePoint {
+	cachePoint: { type: "default"; ttl?: "5m" | "1h" };
+}
+interface TextBlockWire {
+	text: string;
+}
+interface ImageBlockWire {
+	image: { format: "jpeg" | "png" | "gif" | "webp"; source: { bytes: string } };
+}
+interface ToolUseBlockWire {
+	toolUse: { toolUseId: string; name: string; input: unknown };
+}
+interface ToolResultBlockWire {
+	toolResult: {
+		toolUseId: string;
+		content: Array<TextBlockWire | ImageBlockWire>;
+		status: "success" | "error";
+	};
+}
+interface ReasoningBlockWire {
+	reasoningContent: { reasoningText: { text: string; signature?: string } };
 }
 
-function installBedrockHttp1Transport(config: BedrockRuntimeClientConfig): void {
-	const requestHandler = createBedrockHttp1RequestHandler();
-	config.requestHandler = requestHandler;
+type UserContent = TextBlockWire | ImageBlockWire | ToolResultBlockWire | CachePoint;
+type AssistantContent = TextBlockWire | ToolUseBlockWire | ReasoningBlockWire;
+type SystemContent = TextBlockWire | CachePoint;
 
-	if (hasBedrockProxyEnvironment()) {
-		config.credentialDefaultProvider = createBedrockCredentialDefaultProvider(requestHandler);
-	}
+interface WireMessage {
+	role: "user" | "assistant";
+	content: Array<UserContent | AssistantContent>;
 }
 
-function createBedrockHttp1RequestHandler(): NodeHttpHandler {
-	if (!hasBedrockProxyEnvironment()) {
-		return new NodeHttpHandler();
-	}
-
-	const agent = new ProxyAgent();
-	return new NodeHttpHandler({
-		httpAgent: agent,
-		httpsAgent: agent,
-	});
+interface WireToolSpec {
+	toolSpec: { name: string; description: string; inputSchema: { json: unknown } };
+}
+interface WireToolChoice {
+	auto?: Record<string, never>;
+	any?: Record<string, never>;
+	tool?: { name: string };
+}
+interface WireToolConfig {
+	tools: WireToolSpec[];
+	toolChoice?: WireToolChoice;
 }
 
-function createBedrockCredentialDefaultProvider(
-	requestHandler: NodeHttpHandler,
-): NonNullable<BedrockRuntimeClientConfig["credentialDefaultProvider"]> {
-	return (init?: DefaultProviderInit) =>
-		defaultProvider({
-			...init,
-			clientConfig: {
-				...init?.clientConfig,
-				requestHandler,
-			},
-		});
+interface ConverseStreamRequest {
+	messages: WireMessage[];
+	system?: SystemContent[];
+	inferenceConfig?: { maxTokens?: number; temperature?: number; topP?: number };
+	toolConfig?: WireToolConfig;
+	additionalModelRequestFields?: Record<string, unknown>;
 }
 
-function isHttp2ResponseError(error: unknown): boolean {
-	const message = error instanceof Error ? error.message : String(error);
-	return /\bhttp2\b|http\/2/i.test(message);
+// Streaming events (snake_case matches the JSON envelope key, but Bedrock uses camelCase).
+interface MessageStartEvent {
+	role: "user" | "assistant";
+}
+interface ContentBlockStartEvent {
+	contentBlockIndex: number;
+	start?: { toolUse?: { toolUseId?: string; name?: string } };
+}
+interface ContentBlockDeltaEvent {
+	contentBlockIndex: number;
+	delta?: {
+		text?: string;
+		toolUse?: { input?: string };
+		reasoningContent?: { text?: string; signature?: string };
+	};
+}
+interface ContentBlockStopEvent {
+	contentBlockIndex: number;
+}
+interface MessageStopEvent {
+	stopReason?: string;
+}
+interface MetadataEvent {
+	usage?: {
+		inputTokens?: number;
+		outputTokens?: number;
+		cacheReadInputTokens?: number;
+		cacheWriteInputTokens?: number;
+		totalTokens?: number;
+	};
 }
 
 export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
@@ -139,37 +171,10 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 
 		const blocks = output.content as Block[];
 		let rawRequestDump: RawHttpRequestDump | undefined;
-
-		const config: BedrockRuntimeClientConfig = {
-			region: options.region,
-			profile: options.profile,
-		};
-		let usesHttp1RequestHandler = false;
-		let messageStarted = false;
-
-		// in Node.js/Bun environment only
-		if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-			config.region = config.region || $env.AWS_REGION || $env.AWS_DEFAULT_REGION;
-
-			// Support proxies that don't need authentication
-			if ($flag("AWS_BEDROCK_SKIP_AUTH")) {
-				config.credentials = {
-					accessKeyId: "dummy-access-key",
-					secretAccessKey: "dummy-secret-key",
-				};
-			}
-
-			if ($flag("AWS_BEDROCK_FORCE_HTTP1") || hasBedrockProxyEnvironment()) {
-				usesHttp1RequestHandler = true;
-				installBedrockHttp1Transport(config);
-			}
-		}
-
-		config.region = config.region || "us-east-1";
+		const region = options.region || $env.AWS_REGION || $env.AWS_DEFAULT_REGION || "us-east-1";
 
 		try {
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
-
 			const toolConfig = convertToolConfig(context.tools, options.toolChoice);
 			let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
 
@@ -177,87 +182,142 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			// When tool_choice forces tool use, disable thinking to avoid API errors.
 			if (toolConfig?.toolChoice && additionalModelRequestFields) {
 				const tc = toolConfig.toolChoice;
-				if ("any" in tc || "tool" in tc) {
-					additionalModelRequestFields = undefined;
-				}
+				if (tc.any || tc.tool) additionalModelRequestFields = undefined;
 			}
 
-			const commandInput = {
-				modelId: model.id,
+			const commandInput: ConverseStreamRequest = {
 				messages: convertMessages(context, model, cacheRetention),
 				system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
-				inferenceConfig: { maxTokens: options.maxTokens, temperature: options.temperature, topP: options.topP },
+				inferenceConfig: {
+					maxTokens: options.maxTokens,
+					temperature: options.temperature,
+					topP: options.topP,
+				},
 				toolConfig,
 				additionalModelRequestFields,
 			};
 			options?.onPayload?.(commandInput);
+
+			const host = `bedrock-runtime.${region}.amazonaws.com`;
+			const url = `https://${host}/model/${encodeURIComponent(model.id)}/converse-stream`;
+			const urlPath = `/model/${encodeURIComponent(model.id)}/converse-stream`;
 			rawRequestDump = {
 				provider: model.provider,
 				api: output.api,
 				model: model.id,
 				method: "POST",
-				url: `https://bedrock-runtime.${config.region}.amazonaws.com/model/${model.id}/converse-stream`,
+				url,
 				body: commandInput,
 			};
 
-			while (true) {
-				const client = new BedrockRuntimeClient(config);
-				try {
-					const command = new ConverseStreamCommand(commandInput);
-					const response = await client.send(command, { abortSignal: options.signal });
+			let credentials: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
+			if ($flag("AWS_BEDROCK_SKIP_AUTH")) {
+				credentials = { accessKeyId: "dummy-access-key", secretAccessKey: "dummy-secret-key" };
+			} else {
+				credentials = await resolveAwsCredentials({
+					profile: options.profile,
+					region,
+					signal: options.signal,
+				});
+			}
 
-					for await (const item of response.stream!) {
-						if (item.messageStart) {
-							messageStarted = true;
-							if (item.messageStart.role !== ConversationRole.ASSISTANT) {
-								throw new Error("Unexpected assistant message start but got user message start instead");
-							}
-							stream.push({ type: "start", partial: output });
-						} else if (item.contentBlockStart) {
-							if (!firstTokenTime) firstTokenTime = Date.now();
-							handleContentBlockStart(item.contentBlockStart, blocks, output, stream);
-						} else if (item.contentBlockDelta) {
-							if (!firstTokenTime) firstTokenTime = Date.now();
-							handleContentBlockDelta(item.contentBlockDelta, blocks, output, stream);
-						} else if (item.contentBlockStop) {
-							handleContentBlockStop(item.contentBlockStop, blocks, output, stream);
-						} else if (item.messageStop) {
-							output.stopReason = mapStopReason(item.messageStop.stopReason);
-						} else if (item.metadata) {
-							handleMetadata(item.metadata, model, output);
-						} else if (item.internalServerException) {
-							throw new Error(`Internal server error: ${item.internalServerException.message}`);
-						} else if (item.modelStreamErrorException) {
-							throw new Error(`Model stream error: ${item.modelStreamErrorException.message}`);
-						} else if (item.validationException) {
-							throw withHttpStatus(new Error(`Validation error: ${item.validationException.message}`), 400);
-						} else if (item.throttlingException) {
-							throw new Error(`Throttling error: ${item.throttlingException.message}`);
-						} else if (item.serviceUnavailableException) {
-							throw new Error(`Service unavailable: ${item.serviceUnavailableException.message}`);
+			const bodyText = JSON.stringify(commandInput);
+			const body = new TextEncoder().encode(bodyText);
+			const baseHeaders: Record<string, string> = {
+				"content-type": "application/json",
+				accept: "application/vnd.amazon.eventstream",
+			};
+			const signed = await signRequest({
+				method: "POST",
+				host,
+				path: urlPath,
+				body,
+				region,
+				service: "bedrock",
+				credentials,
+				headers: baseHeaders,
+			});
+			const requestHeaders: Record<string, string> = { ...baseHeaders, ...signed };
+
+			const response = await fetchWithRetry(url, {
+				method: "POST",
+				headers: requestHeaders,
+				body,
+				signal: options.signal,
+			});
+
+			if (!response.ok) {
+				const errBody = await response.text().catch(() => "");
+				throw withHttpStatus(
+					new Error(`Bedrock HTTP ${response.status}: ${errBody.slice(0, 1000)}`),
+					response.status,
+				);
+			}
+			if (!response.body) throw new Error("Bedrock response has no body");
+
+			// Track first event for the abort/diagnostic path (currently informational).
+			for await (const message of decodeEventStream(response.body)) {
+				const messageType = message.headers[":message-type"];
+				const eventType = message.headers[":event-type"];
+
+				if (messageType === "exception") {
+					const exceptionType = message.headers[":exception-type"] || "Exception";
+					const payload = safeParsePayload(message.payload) as { message?: string } | undefined;
+					const errorMessage = payload?.message || new TextDecoder().decode(message.payload);
+					const status = exceptionType === "validationException" ? 400 : 0;
+					const err = new Error(`${exceptionType}: ${errorMessage}`);
+					throw status ? withHttpStatus(err, status) : err;
+				}
+				if (messageType === "error") {
+					const code = message.headers[":error-code"] || "UnknownError";
+					const errorMessage = message.headers[":error-message"] || new TextDecoder().decode(message.payload);
+					throw new Error(`${code}: ${errorMessage}`);
+				}
+				if (messageType !== "event") continue;
+
+				const payload = safeParsePayload(message.payload);
+				if (!payload) continue;
+
+				switch (eventType) {
+					case "messageStart": {
+						// no-op: first event marker is implicit by stream entry.
+						const ev = payload as MessageStartEvent;
+						if (ev.role !== "assistant") {
+							throw new Error("Unexpected assistant message start but got user message start instead");
 						}
+						stream.push({ type: "start", partial: output });
+						break;
 					}
-					break;
-				} catch (error) {
-					if (
-						!usesHttp1RequestHandler &&
-						!messageStarted &&
-						output.content.length === 0 &&
-						isHttp2ResponseError(error)
-					) {
-						usesHttp1RequestHandler = true;
-						installBedrockHttp1Transport(config);
-						continue;
+					case "contentBlockStart": {
+						if (!firstTokenTime) firstTokenTime = Date.now();
+						handleContentBlockStart(payload as ContentBlockStartEvent, blocks, output, stream);
+						break;
 					}
-					throw error;
-				} finally {
-					client.destroy();
+					case "contentBlockDelta": {
+						if (!firstTokenTime) firstTokenTime = Date.now();
+						handleContentBlockDelta(payload as ContentBlockDeltaEvent, blocks, output, stream);
+						break;
+					}
+					case "contentBlockStop": {
+						handleContentBlockStop(payload as ContentBlockStopEvent, blocks, output, stream);
+						break;
+					}
+					case "messageStop": {
+						const ev = payload as MessageStopEvent;
+						output.stopReason = mapStopReason(ev.stopReason);
+						break;
+					}
+					case "metadata": {
+						handleMetadata(payload as MetadataEvent, model, output);
+						break;
+					}
+					default:
+						// Unknown event types (Bedrock may add new ones) — ignore.
+						break;
 				}
 			}
 
-			if (options.signal?.aborted) {
-				throw new Error("Request was aborted");
-			}
+			if (options.signal?.aborted) throw new Error("Request was aborted");
 
 			if (output.stopReason === "error" || output.stopReason === "aborted") {
 				throw new Error(output.errorMessage ?? "An unknown error occurred");
@@ -305,13 +365,22 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 	return stream;
 };
 
+function safeParsePayload(payload: Uint8Array): unknown {
+	if (payload.length === 0) return {};
+	try {
+		return JSON.parse(new TextDecoder().decode(payload));
+	} catch {
+		return undefined;
+	}
+}
+
 function handleContentBlockStart(
 	event: ContentBlockStartEvent,
 	blocks: Block[],
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
 ): void {
-	const index = event.contentBlockIndex!;
+	const index = event.contentBlockIndex;
 	const start = event.start;
 
 	if (start?.toolUse) {
@@ -334,13 +403,13 @@ function handleContentBlockDelta(
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
 ): void {
-	const contentBlockIndex = event.contentBlockIndex!;
+	const contentBlockIndex = event.contentBlockIndex;
 	const delta = event.delta;
 	let index = blocks.findIndex(b => b.index === contentBlockIndex);
 	let block = blocks[index];
 
 	if (delta?.text !== undefined) {
-		// If no text block exists yet, create one, as `handleContentBlockStart` is not sent for text blocks
+		// If no text block exists yet, create one — `handleContentBlockStart` is not sent for text blocks
 		if (!block) {
 			const newBlock: Block = { type: "text", text: "", index: contentBlockIndex };
 			output.content.push(newBlock);
@@ -386,11 +455,7 @@ function handleContentBlockDelta(
 	}
 }
 
-function handleMetadata(
-	event: ConverseStreamMetadataEvent,
-	model: Model<"bedrock-converse-stream">,
-	output: AssistantMessage,
-): void {
+function handleMetadata(event: MetadataEvent, model: Model<"bedrock-converse-stream">, output: AssistantMessage): void {
 	if (event.usage) {
 		output.usage.input = event.usage.inputTokens || 0;
 		output.usage.output = event.usage.outputTokens || 0;
@@ -468,16 +533,16 @@ function buildSystemPrompt(
 	systemPrompt: readonly string[] | undefined,
 	model: Model<"bedrock-converse-stream">,
 	cacheRetention: CacheRetention,
-): SystemContentBlock[] | undefined {
+): SystemContent[] | undefined {
 	const prompts = systemPrompt?.map(prompt => prompt.toWellFormed()).filter(prompt => prompt.length > 0) ?? [];
 	if (prompts.length === 0) return undefined;
 
-	const blocks: SystemContentBlock[] = prompts.map(prompt => ({ text: prompt }));
+	const blocks: SystemContent[] = prompts.map(prompt => ({ text: prompt }));
 
 	// Add cache point for supported Claude models
 	if (cacheRetention !== "none" && supportsPromptCaching(model)) {
 		blocks.push({
-			cachePoint: { type: CachePointType.DEFAULT, ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}) },
+			cachePoint: { type: "default", ...(cacheRetention === "long" ? { ttl: "1h" } : {}) },
 		});
 	}
 
@@ -488,8 +553,8 @@ function convertMessages(
 	context: Context,
 	model: Model<"bedrock-converse-stream">,
 	cacheRetention: CacheRetention,
-): Message[] {
-	const result: Message[] = [];
+): WireMessage[] {
+	const result: WireMessage[] = [];
 	const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
 
 	for (let i = 0; i < transformedMessages.length; i++) {
@@ -501,44 +566,34 @@ function convertMessages(
 				if (typeof m.content === "string") {
 					// Skip empty user messages
 					if (!m.content || m.content.trim() === "") continue;
-					result.push({
-						role: ConversationRole.USER,
-						content: [{ text: m.content.toWellFormed() }],
-					});
+					result.push({ role: "user", content: [{ text: m.content.toWellFormed() }] });
 				} else {
-					const contentBlocks = m.content
-						.map(c => {
-							switch (c.type) {
-								case "text":
-									return { text: c.text.toWellFormed() };
-								case "image":
-									return { image: createImageBlock(c.mimeType, c.data) };
-								default:
-									throw new Error("Unknown user content type");
+					const contentBlocks: UserContent[] = [];
+					for (const c of m.content) {
+						switch (c.type) {
+							case "text": {
+								const text = c.text.toWellFormed();
+								if (text.trim().length === 0) continue;
+								contentBlocks.push({ text });
+								break;
 							}
-						})
-						.filter(block => {
-							// Filter out empty text blocks
-							if ("text" in block && block.text) {
-								return block.text.trim().length > 0;
-							}
-							return true; // Keep non-text blocks (images)
-						});
+							case "image":
+								contentBlocks.push({ image: createImageBlock(c.mimeType, c.data) });
+								break;
+							default:
+								throw new Error("Unknown user content type");
+						}
+					}
 					// Skip message if all blocks filtered out
 					if (contentBlocks.length === 0) continue;
-					result.push({
-						role: ConversationRole.USER,
-						content: contentBlocks,
-					});
+					result.push({ role: "user", content: contentBlocks });
 				}
 				break;
 			case "assistant": {
 				// Skip assistant messages with empty content (e.g., from aborted requests)
 				// Bedrock rejects messages with empty content arrays
-				if (m.content.length === 0) {
-					continue;
-				}
-				const contentBlocks: ContentBlock[] = [];
+				if (m.content.length === 0) continue;
+				const contentBlocks: AssistantContent[] = [];
 				for (const c of m.content) {
 					switch (c.type) {
 						case "text":
@@ -570,9 +625,7 @@ function convertMessages(
 							} else if (!supportsThinkingSignature(model)) {
 								// Model doesn't support signatures at all — send as unsigned reasoning
 								contentBlocks.push({
-									reasoningContent: {
-										reasoningText: { text: c.thinking.toWellFormed() },
-									},
+									reasoningContent: { reasoningText: { text: c.thinking.toWellFormed() } },
 								});
 							} else {
 								// Model requires signature but we don't have one — demote to text
@@ -584,21 +637,14 @@ function convertMessages(
 					}
 				}
 				// Skip if all content blocks were filtered out
-				if (contentBlocks.length === 0) {
-					continue;
-				}
-				result.push({
-					role: ConversationRole.ASSISTANT,
-					content: contentBlocks,
-				});
+				if (contentBlocks.length === 0) continue;
+				result.push({ role: "assistant", content: contentBlocks });
 				break;
 			}
 			case "toolResult": {
-				// Collect all consecutive toolResult messages into a single user message
-				// Bedrock requires all tool results to be in one message
-				const toolResults: ContentBlock.ToolResultMember[] = [];
-
-				// Add current tool result with all content blocks combined
+				// Collect all consecutive toolResult messages into a single user message —
+				// Bedrock requires all tool results to be in one message.
+				const toolResults: ToolResultBlockWire[] = [];
 				toolResults.push({
 					toolResult: {
 						toolUseId: normalizeToolCallId(m.toolCallId),
@@ -607,11 +653,10 @@ function convertMessages(
 								? { image: createImageBlock(c.mimeType, c.data) }
 								: { text: c.text.toWellFormed() },
 						),
-						status: m.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
+						status: m.isError ? "error" : "success",
 					},
 				});
 
-				// Look ahead for consecutive toolResult messages
 				let j = i + 1;
 				while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
 					const nextMsg = transformedMessages[j] as ToolResultMessage;
@@ -623,19 +668,14 @@ function convertMessages(
 									? { image: createImageBlock(c.mimeType, c.data) }
 									: { text: c.text.toWellFormed() },
 							),
-							status: nextMsg.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
+							status: nextMsg.isError ? "error" : "success",
 						},
 					});
 					j++;
 				}
-
-				// Skip the messages we've already processed
 				i = j - 1;
 
-				result.push({
-					role: ConversationRole.USER,
-					content: toolResults,
-				});
+				result.push({ role: "user", content: toolResults });
 				break;
 			}
 			default:
@@ -646,12 +686,9 @@ function convertMessages(
 	// Add cache point to the last user message for supported Claude models
 	if (cacheRetention !== "none" && supportsPromptCaching(model) && result.length > 0) {
 		const lastMessage = result[result.length - 1];
-		if (lastMessage.role === ConversationRole.USER && lastMessage.content) {
-			(lastMessage.content as ContentBlock[]).push({
-				cachePoint: {
-					type: CachePointType.DEFAULT,
-					...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
-				},
+		if (lastMessage.role === "user" && lastMessage.content) {
+			(lastMessage.content as UserContent[]).push({
+				cachePoint: { type: "default", ...(cacheRetention === "long" ? { ttl: "1h" } : {}) },
 			});
 		}
 	}
@@ -662,23 +699,18 @@ function convertMessages(
 function convertToolConfig(
 	tools: Tool[] | undefined,
 	toolChoice: BedrockOptions["toolChoice"],
-): ToolConfiguration | undefined {
+): WireToolConfig | undefined {
 	if (!tools?.length || toolChoice === "none") return undefined;
 
-	const bedrockTools: BedrockTool[] = tools.map(tool => ({
+	const bedrockTools: WireToolSpec[] = tools.map(tool => ({
 		toolSpec: {
 			name: tool.name,
 			description: tool.description || "",
-			// Wire schema is structurally a JSON Schema document; the Bedrock SDK
-			// types it as the recursive `DocumentType` from `@smithy/types`, which
-			// `Record<string, unknown>` does not directly satisfy at the type
-			// level. Cast through `unknown` so the actual JSON value passes the
-			// type checker without changing runtime behavior.
-			inputSchema: { json: toolWireSchema(tool) as unknown as Record<string, never> },
+			inputSchema: { json: toolWireSchema(tool) },
 		},
 	}));
 
-	let bedrockToolChoice: ToolChoice | undefined;
+	let bedrockToolChoice: WireToolChoice | undefined;
 	switch (toolChoice) {
 		case "auto":
 			bedrockToolChoice = { auto: {} };
@@ -697,13 +729,13 @@ function convertToolConfig(
 
 function mapStopReason(reason: string | undefined): StopReason {
 	switch (reason) {
-		case BedrockStopReason.END_TURN:
-		case BedrockStopReason.STOP_SEQUENCE:
+		case "end_turn":
+		case "stop_sequence":
 			return "stop";
-		case BedrockStopReason.MAX_TOKENS:
-		case BedrockStopReason.MODEL_CONTEXT_WINDOW_EXCEEDED:
+		case "max_tokens":
+		case "model_context_window_exceeded":
 			return "length";
-		case BedrockStopReason.TOOL_USE:
+		case "tool_use":
 			return "toolUse";
 		default:
 			return "error";
@@ -713,11 +745,9 @@ function mapStopReason(reason: string | undefined): StopReason {
 function buildAdditionalModelRequestFields(
 	model: Model<"bedrock-converse-stream">,
 	options: BedrockOptions,
-): Record<string, any> | undefined {
+): Record<string, unknown> | undefined {
 	const reasoning = options.reasoning;
-	if (!reasoning || !model.reasoning) {
-		return undefined;
-	}
+	if (!reasoning || !model.reasoning) return undefined;
 
 	const mode = model.thinking?.mode;
 	if (mode === "anthropic-adaptive") {
@@ -738,11 +768,8 @@ function buildAdditionalModelRequestFields(
 	};
 	const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[level];
 
-	const result: Record<string, any> = {
-		thinking: {
-			type: "enabled",
-			budget_tokens: budget,
-		},
+	const result: Record<string, unknown> = {
+		thinking: { type: "enabled", budget_tokens: budget },
 	};
 
 	if (options.interleavedThinking) {
@@ -752,31 +779,28 @@ function buildAdditionalModelRequestFields(
 	return result;
 }
 
-function createImageBlock(mimeType: string, data: string) {
-	let format: ImageFormat;
+/**
+ * Bedrock's wire format expects the image as `{ source: { bytes: <base64-string> }, format }`.
+ * The caller already passes base64-encoded data, so no decode/re-encode round-trip is needed.
+ */
+function createImageBlock(mimeType: string, data: string): ImageBlockWire["image"] {
+	let format: "jpeg" | "png" | "gif" | "webp";
 	switch (mimeType) {
 		case "image/jpeg":
 		case "image/jpg":
-			format = ImageFormat.JPEG;
+			format = "jpeg";
 			break;
 		case "image/png":
-			format = ImageFormat.PNG;
+			format = "png";
 			break;
 		case "image/gif":
-			format = ImageFormat.GIF;
+			format = "gif";
 			break;
 		case "image/webp":
-			format = ImageFormat.WEBP;
+			format = "webp";
 			break;
 		default:
 			throw new Error(`Unknown image type: ${mimeType}`);
 	}
-
-	const binaryString = atob(data);
-	const bytes = new Uint8Array(binaryString.length);
-	for (let i = 0; i < binaryString.length; i++) {
-		bytes[i] = binaryString.charCodeAt(i);
-	}
-
-	return { source: { bytes }, format };
+	return { source: { bytes: data }, format };
 }
