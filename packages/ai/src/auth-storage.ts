@@ -163,7 +163,7 @@ export interface AuthCredentialStore {
 	 * Remote broker stores use this to wait out imminent rotations and refresh
 	 * their local snapshot before the caller sees a stale access token.
 	 */
-	prepareForRequest?(credentialId: number, opts?: { signal?: AbortSignal }): Promise<void>;
+	prepareForRequest?(credentialId: number, opts?: { signal?: AbortSignal }): Promise<boolean | undefined>;
 	/**
 	 * Optional store-supplied aggregate usage fetch. When present, `AuthStorage`
 	 * routes `fetchUsageReports()` here instead of fanning out per-credential.
@@ -2426,8 +2426,8 @@ export class AuthStorage {
 		const selected = stored[selection.index];
 		if (!selected || selected.credential.type !== "oauth") return false;
 
-		await prepare(selected.id, { signal: options?.signal });
-
+		const prepared = await prepare(selected.id, { signal: options?.signal });
+		if (!prepared) return true;
 		const latestRows = this.#store.listAuthCredentials(provider);
 		this.#setStoredCredentials(
 			provider,

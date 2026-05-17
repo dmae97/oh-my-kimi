@@ -7,7 +7,13 @@ import {
 	INTENT_FIELD,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
-import type { CredentialDisabledEvent, Message, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
+import {
+	type CredentialDisabledEvent,
+	type Message,
+	type Model,
+	type SimpleStreamOptions,
+	streamSimple,
+} from "@oh-my-pi/pi-ai";
 import {
 	getOpenAICodexTransportDetails,
 	prewarmOpenAICodexResponses,
@@ -1795,6 +1801,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 				return key;
 			},
+			streamFn: (streamModel, context, streamOptions) =>
+				streamSimple(streamModel, context, {
+					...streamOptions,
+					onAuthError: async (provider, oldKey, error) => {
+						await modelRegistry.authStorage.invalidateCredentialMatching(provider, oldKey, streamOptions?.signal);
+						logger.debug("Retrying provider request after credential invalidation", {
+							provider,
+							error: error instanceof Error ? error.message : String(error),
+						});
+						return modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
+					},
+				}),
 			cursorExecHandlers,
 			transformToolCallArguments: (args, _toolName) => {
 				let result = args;

@@ -90,6 +90,45 @@ describe("auth-broker wire surface", () => {
 		}
 	});
 
+	test("GET /v1/snapshot returns generation headers and 304 for unchanged long-poll", async () => {
+		const res = await fetch(`${handle!.url}/v1/snapshot`, {
+			headers: { Authorization: `Bearer ${token}` },
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { generation: number; serverNowMs: number; refresher: { enabled: boolean } };
+		expect(res.headers.get("etag")).toBe(`"${body.generation}"`);
+		expect(res.headers.get("cache-control")).toBe("no-store");
+		expect(body.generation).toBeGreaterThan(0);
+		expect(body.serverNowMs).toBeGreaterThan(0);
+		expect(body.refresher.enabled).toBe(false);
+
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const unchanged = await client.fetchSnapshot({ ifGenerationGt: body.generation, waitMs: 10 });
+		expect(unchanged.status).toBe(304);
+		expect(unchanged.generation).toBe(body.generation);
+	});
+
+	test("GET /v1/snapshot long-poll wakes when generation changes", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected snapshot");
+
+		const pending = client.fetchSnapshot({ ifGenerationGt: initial.generation, waitMs: 1000 });
+		setTimeout(() => {
+			storage!.upsertCredential("anthropic", mintOAuthCredential("b", Date.now() + 120_000));
+		}, 10);
+
+		const changed = await pending;
+		expect(changed.status).toBe(200);
+		if (changed.status !== 200) throw new Error("expected changed snapshot");
+		expect(changed.generation).toBeGreaterThan(initial.generation);
+		expect(
+			changed.snapshot.credentials.some(
+				entry => entry.credential.type === "oauth" && entry.credential.access === "access-b",
+			),
+		).toBe(true);
+	});
+
 	test("POST /v1/credential/:id/refresh forces a refresh and persists the new credential", async () => {
 		const refreshed = {
 			access: "access-rotated",

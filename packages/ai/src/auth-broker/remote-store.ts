@@ -170,21 +170,23 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		return true;
 	}
 
-	async waitForFreshSnapshot(maxWaitMs: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
+	async waitForFreshSnapshot(maxWaitMs: number, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
+		const previousGeneration = this.#generation;
 		const result = await this.#client.fetchSnapshot({
 			ifGenerationGt: this.#generation,
 			waitMs: maxWaitMs,
 			signal: opts.signal,
 		});
 		if (result.status === 200) this.#applySnapshot(result.snapshot, result.generation);
+		return this.#generation !== previousGeneration;
 	}
 
-	async prepareForRequest(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
+	async prepareForRequest(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
 		const entry = this.#snapshot.credentials.find(candidate => candidate.id === credentialId);
-		if (!entry || entry.credential.type !== "oauth" || entry.rotatesInMs === null) return;
+		if (!entry || entry.credential.type !== "oauth" || entry.rotatesInMs === null) return false;
 		const remainingMs = this.#snapshotReceivedAt + entry.rotatesInMs - Date.now();
-		if (remainingMs > WAIT_THRESHOLD_MS) return;
-		await this.waitForFreshSnapshot(MAX_WAIT_MS, opts);
+		if (remainingMs > WAIT_THRESHOLD_MS) return false;
+		return this.waitForFreshSnapshot(MAX_WAIT_MS, opts);
 	}
 
 	async markCredentialSuspect(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
