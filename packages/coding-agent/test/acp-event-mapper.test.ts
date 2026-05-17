@@ -273,6 +273,31 @@ describe("ACP event mapper", () => {
 		expect(update.content).toEqual([{ type: "content", content: { type: "text", text: "$ npm run check" } }]);
 	});
 
+	it("maps shell and exec tool starts as execute", () => {
+		for (const toolName of ["shell", "exec"] as const) {
+			const updates = mapAgentSessionEventToAcpSessionUpdates(
+				{
+					type: "tool_execution_start",
+					toolCallId: `toolu_${toolName}_1`,
+					toolName,
+					args: { command: "echo hi" },
+				} as AgentSessionEvent,
+				"session-1",
+			);
+
+			expect(updates).toHaveLength(1);
+			expectAcpNotifications(updates);
+			const update = updates[0]!.update as {
+				sessionUpdate: string;
+				kind?: string;
+				content?: unknown;
+			};
+			expect(update.sessionUpdate).toBe("tool_call");
+			expect(update.kind).toBe("execute");
+			expect(update.content).toEqual([{ type: "content", content: { type: "text", text: "$ echo hi" } }]);
+		}
+	});
+
 	it("does not add command text content to non-command tool starts", () => {
 		const updates = mapAgentSessionEventToAcpSessionUpdates(
 			{
