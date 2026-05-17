@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import http2 from "node:http2";
 import { create, fromBinary, fromJson, type JsonValue, toBinary, toJson } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
-import { $env, sanitizeText } from "@oh-my-pi/pi-utils";
+import { $env, extractHttpStatusFromError, sanitizeText } from "@oh-my-pi/pi-utils";
 import { calculateCost } from "../models";
 import type {
 	Api,
@@ -547,6 +547,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			stream.end();
 		} catch (error) {
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+			output.errorStatus = extractHttpStatusFromError(error);
 			output.errorMessage = formatErrorMessageWithRetryAfter(error);
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

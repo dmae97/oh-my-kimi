@@ -1,6 +1,15 @@
 import * as os from "node:os";
 import { scheduler } from "node:timers/promises";
-import { $env, $flag, asRecord, fetchWithRetry, logger, readSseJson, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	$flag,
+	asRecord,
+	extractHttpStatusFromError,
+	fetchWithRetry,
+	logger,
+	readSseJson,
+	structuredCloneJSON,
+} from "@oh-my-pi/pi-utils";
 import type OpenAI from "openai";
 import type {
 	ResponseCustomToolCall,
@@ -1505,6 +1514,7 @@ async function handleCodexStreamFailure(
 		resetCodexSessionMetadata(context.requestContext.websocketState);
 	}
 	output.stopReason = context.options?.signal?.aborted ? "aborted" : "error";
+	output.errorStatus = extractHttpStatusFromError(error);
 	output.errorMessage = await finalizeErrorMessage(error, context.requestContext.rawRequestDump);
 	output.duration = Date.now() - context.startTime;
 	if (context.firstTokenTime) {

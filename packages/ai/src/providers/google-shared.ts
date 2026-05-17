@@ -2,7 +2,7 @@
  * Shared utilities for Google Generative AI and Google Cloud Code Assist providers.
  */
 
-import { readSseJson } from "@oh-my-pi/pi-utils";
+import { extractHttpStatusFromError, readSseJson } from "@oh-my-pi/pi-utils";
 import { calculateCost } from "../models";
 import type {
 	Api,
@@ -836,6 +836,7 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 				}
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+			output.errorStatus = extractHttpStatusFromError(error);
 			output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

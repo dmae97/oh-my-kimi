@@ -236,8 +236,9 @@ export interface StreamOptions {
 	signal?: AbortSignal;
 	apiKey?: string;
 	/**
-	 * Called when a provider returns 401 before any assistant event has been
-	 * emitted. Returning a different key retries the provider request once.
+	 * Called when a provider returns 401 before any replay-unsafe assistant
+	 * event has been emitted. Returning a different key retries the provider
+	 * request once.
 	 */
 	onAuthError?: (provider: string, apiKey: string, error: unknown) => Promise<string | undefined>;
 	cacheRetention?: CacheRetention;
@@ -499,6 +500,8 @@ export interface AssistantMessage {
 	usage: Usage;
 	stopReason: StopReason;
 	errorMessage?: string;
+	/** HTTP status surfaced by the provider when the request failed. Populated by every provider's catch block alongside `errorMessage` so consumers (auth retry, telemetry, UI) can branch without regex-scraping the message. */
+	errorStatus?: number;
 	/** Provider-specific opaque payload used to reconstruct transport-native history. */
 	providerPayload?: ProviderPayload;
 	timestamp: number; // Unix timestamp in milliseconds

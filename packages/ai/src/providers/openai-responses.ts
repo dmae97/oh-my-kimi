@@ -1,4 +1,4 @@
-import { $env, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { $env, extractHttpStatusFromError, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import OpenAI from "openai";
 import type {
 	Tool as OpenAITool,
@@ -290,6 +290,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			for (const block of output.content) delete (block as { index?: number }).index;
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			output.stopReason = abortTracker.wasCallerAbort() ? "aborted" : "error";
+			output.errorStatus = extractHttpStatusFromError(error);
 			output.errorMessage = firstEventTimeoutError?.message ?? (await finalizeErrorMessage(error, rawRequestDump));
 			output.errorMessage = rewriteCopilotError(output.errorMessage, error, model.provider);
 			output.duration = Date.now() - startTime;

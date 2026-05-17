@@ -45,6 +45,7 @@ import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
 import type {
 	Api,
 	AssistantMessage,
+	AssistantMessageEvent,
 	Context,
 	Model,
 	OptionsForApi,
@@ -274,6 +275,31 @@ export async function complete<TApi extends Api>(
 	return s.result();
 }
 
+type AuthRetryFailure = {
+	error: unknown;
+	bufferedEvents: AssistantMessageEvent[];
+	terminalEvent?: Extract<AssistantMessageEvent, { type: "error" }>;
+};
+
+function extractStatusFromAssistantError(message: AssistantMessage): number | undefined {
+	if (message.errorStatus !== undefined) return message.errorStatus;
+	if (!message.errorMessage) return undefined;
+	return extractHttpStatusFromError({ message: message.errorMessage });
+}
+
+function createAssistantAuthError(message: AssistantMessage): Error & { status?: number } {
+	const error: Error & { status?: number } = new Error(message.errorMessage ?? "Provider authentication failed");
+	const status = extractStatusFromAssistantError(message);
+	if (status !== undefined) error.status = status;
+	return error;
+}
+
+function emitBufferedEvents(stream: AssistantMessageEventStream, events: AssistantMessageEvent[]): void {
+	for (const event of events) {
+		stream.push(event);
+	}
+}
+
 export function streamSimple<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
@@ -283,42 +309,68 @@ export function streamSimple<TApi extends Api>(
 	if (retryApiKey) {
 		const outer = new AssistantMessageEventStream();
 		const onAuthError = options!.onAuthError!;
-		let emitted = false;
-		void (async () => {
+		const runAttempt = async (apiKey: string, captureAuthFailure: boolean): Promise<AuthRetryFailure | undefined> => {
+			const bufferedEvents: AssistantMessageEvent[] = [];
+			let emittedReplayUnsafeEvent = false;
+			const flushBuffered = (): void => {
+				emitBufferedEvents(outer, bufferedEvents);
+				bufferedEvents.length = 0;
+			};
+
 			try {
-				const inner = streamSimple(model, context, { ...options, apiKey: retryApiKey, onAuthError: undefined });
+				const inner = streamSimple(model, context, { ...options, apiKey, onAuthError: undefined });
 				for await (const event of inner) {
-					emitted = true;
+					if (!emittedReplayUnsafeEvent && event.type === "start") {
+						bufferedEvents.push(event);
+						continue;
+					}
+					if (
+						!emittedReplayUnsafeEvent &&
+						captureAuthFailure &&
+						event.type === "error" &&
+						extractStatusFromAssistantError(event.error) === 401
+					) {
+						return { error: createAssistantAuthError(event.error), bufferedEvents, terminalEvent: event };
+					}
+					flushBuffered();
+					emittedReplayUnsafeEvent = true;
 					outer.push(event);
-					if (outer.done) return;
+					if (outer.done) return undefined;
 				}
+				flushBuffered();
 				if (!outer.done) outer.end(await inner.result());
 			} catch (error) {
-				if (emitted || extractHttpStatusFromError(error) !== 401) {
-					outer.fail(error);
-					return;
+				if (!emittedReplayUnsafeEvent && captureAuthFailure && extractHttpStatusFromError(error) === 401) {
+					return { error, bufferedEvents };
 				}
-				let nextKey: string | undefined;
-				try {
-					nextKey = await onAuthError(model.provider, retryApiKey, error);
-				} catch {
-					nextKey = undefined;
-				}
-				if (!nextKey || nextKey === retryApiKey) {
-					outer.fail(error);
-					return;
-				}
-				try {
-					const retried = streamSimple(model, context, { ...options, apiKey: nextKey, onAuthError: undefined });
-					for await (const event of retried) {
-						outer.push(event);
-						if (outer.done) return;
-					}
-					if (!outer.done) outer.end(await retried.result());
-				} catch (retryError) {
-					outer.fail(retryError);
-				}
+				flushBuffered();
+				outer.fail(error);
 			}
+			return undefined;
+		};
+		const emitFailure = (failure: AuthRetryFailure): void => {
+			emitBufferedEvents(outer, failure.bufferedEvents);
+			if (failure.terminalEvent) {
+				outer.push(failure.terminalEvent);
+			} else {
+				outer.fail(failure.error);
+			}
+		};
+
+		void (async () => {
+			const failure = await runAttempt(retryApiKey, true);
+			if (!failure) return;
+			let nextKey: string | undefined;
+			try {
+				nextKey = await onAuthError(model.provider, retryApiKey, failure.error);
+			} catch {
+				nextKey = undefined;
+			}
+			if (!nextKey || nextKey === retryApiKey) {
+				emitFailure(failure);
+				return;
+			}
+			await runAttempt(nextKey, false);
 		})();
 		return outer;
 	}

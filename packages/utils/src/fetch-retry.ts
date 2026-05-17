@@ -198,7 +198,7 @@ function resolveDefaultDelay(
  * Inspect an arbitrary error value (or its `cause` chain, up to depth 2) for an
  * HTTP status code. Reads `status`, `statusCode`, and `response.status` fields,
  * coerces string values, and falls back to scanning the error message for
- * common patterns like `error (429)` or `HTTP 503`.
+ * common patterns like `Error: 401`, `error (429)`, or `HTTP 503`.
  */
 export function extractHttpStatusFromError(error: unknown): number | undefined {
 	return extractHttpStatusFromErrorInternal(error, 0);
@@ -236,6 +236,7 @@ function extractHttpStatusFromErrorInternal(error: unknown, depth: number): numb
 }
 
 const STATUS_MESSAGE_PATTERNS = [
+	/\berror\s*[:=]\s*(\d{3})\b/i,
 	/error\s*\((\d{3})\)/i,
 	/status\s*[:=]?\s*(\d{3})/i,
 	/\bhttp\s*(\d{3})\b/i,

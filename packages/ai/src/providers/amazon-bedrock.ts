@@ -7,7 +7,7 @@
  * Bun's native `HTTPS_PROXY` support.
  */
 
-import { $env, $flag, fetchWithRetry } from "@oh-my-pi/pi-utils";
+import { $env, $flag, extractHttpStatusFromError, fetchWithRetry } from "@oh-my-pi/pi-utils";
 import type { Effort } from "../model-thinking";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "../model-thinking";
 import { calculateCost } from "../models";
@@ -333,6 +333,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				delete (block as Block).partialJson;
 			}
 			output.stopReason = options.signal?.aborted ? "aborted" : "error";
+			output.errorStatus = extractHttpStatusFromError(error);
 			const baseMessage = error instanceof Error ? error.message : JSON.stringify(error);
 			// Enrich error with thinking block diagnostics for signature-related failures
 			let diagnostics = "";

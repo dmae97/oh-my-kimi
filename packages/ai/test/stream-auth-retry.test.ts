@@ -31,6 +31,10 @@ function assistant(content: string[] = []): AssistantMessage {
 	};
 }
 
+function assistantError(errorMessage: string, errorStatus?: number): AssistantMessage {
+	return { ...assistant(), stopReason: "error", errorMessage, errorStatus };
+}
+
 function authError(): Error & { status: number } {
 	return Object.assign(new Error("401 authentication_error"), { status: 401 });
 }
@@ -102,7 +106,58 @@ describe("streamSimple auth retry", () => {
 		expect(authCalls).toBe(1);
 	});
 
-	it("does not retry after the first event has been emitted", async () => {
+	it("retries when a provider emits start then a 401 error event before content", async () => {
+		const keys: Array<string | undefined> = [];
+		const eventTypes: string[] = [];
+		let authCalls = 0;
+		registerCustomApi(
+			API,
+			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+				keys.push(options?.apiKey);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					if (keys.length === 1) {
+						stream.push({ type: "start", partial: assistant() });
+						stream.push({
+							type: "error",
+							reason: "error",
+							error: assistantError(
+								'Error: 401\n{"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"}}',
+							),
+						});
+						return;
+					}
+					const message = assistant(["ok"]);
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
+			},
+			SOURCE_ID,
+		);
+
+		const stream = streamSimple(model(), context, {
+			apiKey: "old-key",
+			onAuthError: async (provider, oldKey, error) => {
+				authCalls += 1;
+				expect(provider).toBe("test-provider");
+				expect(oldKey).toBe("old-key");
+				expect((error as { status?: number }).status).toBe(401);
+				return "new-key";
+			},
+		});
+
+		for await (const event of stream) {
+			eventTypes.push(event.type);
+		}
+
+		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
+		expect(keys).toEqual(["old-key", "new-key"]);
+		expect(eventTypes).toEqual(["start", "done"]);
+		expect(authCalls).toBe(1);
+	});
+
+	it("does not retry after replay-unsafe content has been emitted", async () => {
 		let authCalls = 0;
 		const failure = authError();
 		registerCustomApi(
@@ -111,6 +166,7 @@ describe("streamSimple auth retry", () => {
 				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
 					stream.push({ type: "start", partial: assistant() });
+					stream.push({ type: "text_start", contentIndex: 0, partial: assistant([""]) });
 					stream.fail(failure);
 				});
 				return stream;
@@ -137,5 +193,55 @@ describe("streamSimple auth retry", () => {
 
 		expect(caught).toBe(failure);
 		expect(authCalls).toBe(0);
+	});
+
+	it("retries on 401 carried via errorStatus when the message has no parseable status", async () => {
+		const keys: Array<string | undefined> = [];
+		let authCalls = 0;
+		registerCustomApi(
+			API,
+			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+				keys.push(options?.apiKey);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					if (keys.length === 1) {
+						stream.push({ type: "start", partial: assistant() });
+						stream.push({
+							type: "error",
+							reason: "error",
+							// Realistic Anthropic SDK shape: message begins with `<status> <body>`
+							// and the regex fallback in extractHttpStatusFromError cannot find 401
+							// inside the JSON body. Only `errorStatus` carries the signal.
+							error: assistantError(
+								'{"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"}}',
+								401,
+							),
+						});
+						return;
+					}
+					const message = assistant(["ok"]);
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
+			},
+			SOURCE_ID,
+		);
+
+		const stream = streamSimple(model(), context, {
+			apiKey: "old-key",
+			onAuthError: async () => {
+				authCalls += 1;
+				return "new-key";
+			},
+		});
+
+		for await (const _event of stream) {
+			// drain
+		}
+
+		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
+		expect(keys).toEqual(["old-key", "new-key"]);
+		expect(authCalls).toBe(1);
 	});
 });

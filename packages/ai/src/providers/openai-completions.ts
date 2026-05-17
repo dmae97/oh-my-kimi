@@ -860,6 +860,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			for (const block of output.content) delete (block as any).index;
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			output.stopReason = abortTracker.wasCallerAbort() ? "aborted" : "error";
+			output.errorStatus = extractHttpStatusFromError(error) ?? getCapturedErrorResponse?.()?.status;
 			output.errorMessage =
 				firstEventTimeoutError?.message ??
 				(await finalizeErrorMessage(error, rawRequestDump, getCapturedErrorResponse?.()));

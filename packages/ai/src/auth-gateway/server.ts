@@ -231,6 +231,26 @@ function classifyGatewayError(err: unknown): { status: number; type: string; mes
 	return { status: 502, type: "upstream_error", message };
 }
 
+async function refreshGatewayApiKeyAfterAuthError(
+	storage: AuthStorage,
+	model: Model<Api>,
+	provider: string,
+	oldKey: string,
+	error: unknown,
+	signal: AbortSignal,
+	format: string,
+	peer: string,
+): Promise<string | undefined> {
+	await storage.invalidateCredentialMatching(provider, oldKey, signal);
+	logger.debug("auth-gateway retrying provider request after credential invalidation", {
+		format,
+		provider,
+		peer,
+		error: error instanceof Error ? error.message : String(error),
+	});
+	return storage.getApiKey(provider, undefined, { modelId: model.id, signal });
+}
+
 function clientClosedResponse(route: { module: FormatModule }): Response {
 	return route.module.formatError(499, "request_aborted", "client closed request");
 }
@@ -332,6 +352,17 @@ async function handleFormatEndpoint(
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
 	streamOpts.apiKey = apiKey;
+	streamOpts.onAuthError = (provider, oldKey, error) =>
+		refreshGatewayApiKeyAfterAuthError(
+			bootOpts.storage,
+			model,
+			provider,
+			oldKey,
+			error,
+			controller.signal,
+			route.label,
+			peer,
+		);
 
 	logger.info("auth-gateway request", {
 		format: route.label,
@@ -469,6 +500,17 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	// only inject server-controlled fields. The codex temperature/topP strip
 	// matches `buildStreamOptions` — Codex rejects them with a 400.
 	const streamOpts: SimpleStreamOptions = { ...parsed.options, apiKey, signal: controller.signal };
+	streamOpts.onAuthError = (provider, oldKey, error) =>
+		refreshGatewayApiKeyAfterAuthError(
+			bootOpts.storage,
+			model,
+			provider,
+			oldKey,
+			error,
+			controller.signal,
+			"pi-native",
+			peer,
+		);
 	if (model.api === "openai-codex-responses") {
 		delete streamOpts.temperature;
 		delete streamOpts.topP;

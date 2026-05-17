@@ -1,4 +1,4 @@
-import { fetchWithRetry } from "@oh-my-pi/pi-utils";
+import { extractHttpStatusFromError, fetchWithRetry } from "@oh-my-pi/pi-utils";
 import { getEnvApiKey } from "../stream";
 import type {
 	Api,
@@ -505,6 +505,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 				}
 			}
 			output.stopReason = options.signal?.aborted ? "aborted" : "error";
+			output.errorStatus = extractHttpStatusFromError(error);
 			output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) {
