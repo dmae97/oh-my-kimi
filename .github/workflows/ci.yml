@@ -19,9 +19,11 @@ concurrency:
 
 jobs:
    # Compute a stable hash of every input that affects the native cdylib output,
-   # then look for a prior successful main build that already produced artifacts
-   # with this hash. If found, downstream consumers reuse those artifacts and
-   # the native job is skipped entirely.
+   # then look for any prior successful main run that already uploaded the linux-x64
+   # artifacts for this hash. If found, test jobs reuse those artifacts instead of
+   # rebuilding them on non-release commits. The non-tag native_linux job is skipped
+   # in that case, so the canary's retention window (see build-native action) is the
+   # effective TTL of a cache hit before main rebuilds anyway.
    rust-hash:
       runs-on: ubuntu-22.04
       outputs:
@@ -50,8 +52,9 @@ jobs:
            shell: bash
            run: |
               hash="${{ steps.compute.outputs.hash }}"
-              # Canary artifact: main always builds linux-x64-modern, so its presence
-              # implies the run has the full multi-platform set we need.
+              # Canary artifact: native_linux builds baseline + modern together,
+              # so the modern artifact's presence on any prior main run implies
+              # both linux x64 test artifacts are cached and downloadable.
               canary="pi-natives-linux-x64-modern-h${hash}"
               run_id=""
               for candidate in $(gh run list \
@@ -88,98 +91,57 @@ jobs:
          - name: Type check workspace
            run: bun run ci:check:full
 
-   native:
+   # Linux x64 baseline + modern: required by `test`, so it runs on every PR
+   # unless rust-hash found a cached run. Tags always rebuild for fresh artifacts.
+   native_linux:
       needs: [rust-hash]
-      if: ${{ needs.rust-hash.outputs.run-id == '' }}
+      if: ${{ startsWith(github.ref, 'refs/tags/v') || needs.rust-hash.outputs.run-id == '' }}
+      runs-on: ubuntu-22.04
       strategy:
          fail-fast: false
          matrix:
-            # Tag and main pushes build the full multi-platform set (so the cache
-            # has every artifact a future tag could need). PRs only build linux-x64.
-            include: ${{ (startsWith(github.ref, 'refs/tags/v') || github.ref ==
-               'refs/heads/main') && fromJSON('[
-               {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"baseline","rust_checks":true},
-               {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"modern"},
-               {"os":"ubuntu-22.04","platform":"linux","arch":"arm64","target":"aarch64-unknown-linux-gnu"},
-               {"os":"macos-15-intel","platform":"darwin","arch":"x64","variant":"baseline"},
-               {"os":"macos-14","platform":"darwin","arch":"arm64"},
-               {"os":"windows-latest","platform":"win32","arch":"x64","variant":"baseline"}
-               ]') || fromJSON('[
-               {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"baseline","rust_checks":true},
-               {"os":"ubuntu-22.04","platform":"linux","arch":"x64","variant":"modern"}
-               ]') }}
+            include:
+               - { variant: baseline, rust_checks: true }
+               - { variant: modern }
+      steps:
+         - uses: actions/checkout@v4
+         - uses: ./.github/actions/build-native
+           with:
+              hash: ${{ needs.rust-hash.outputs.hash }}
+              platform: linux
+              arch: x64
+              variant: ${{ matrix.variant }}
+              rust_checks: ${{ matrix.rust_checks && 'true' || 'false' }}
+              save_cache: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+
+   # Remaining platforms only ship in release tags; PRs and main never build them.
+   native_release:
+      needs: [rust-hash]
+      if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      strategy:
+         fail-fast: false
+         matrix:
+            include:
+               - { os: ubuntu-22.04, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu }
+               - { os: macos-15-intel, platform: darwin, arch: x64, variant: baseline }
+               - { os: macos-14, platform: darwin, arch: arm64 }
+               - { os: windows-latest, platform: win32, arch: x64, variant: baseline }
       runs-on: ${{ matrix.os }}
       steps:
          - uses: actions/checkout@v4
-         - uses: dtolnay/rust-toolchain@nightly
+         - uses: ./.github/actions/build-native
            with:
-              toolchain: nightly-2026-04-29
-              components: ${{ matrix.rust_checks && 'clippy, rustfmt' || '' }}
-              targets: ${{ matrix.target }}
-         - name: Ensure cross-compilation target is installed
-           if: matrix.target
-           run: rustup target add ${{ matrix.target }}
-         - name: Prepend rustup toolchain bin to PATH
-           shell: bash
-           run: |
-              # Homebrew on macOS runners ships rustup-init with shadow proxies
-              # for `cargo`/`rustc`/etc. that error out as the installer
-              # ("unexpected argument 'metadata' found"). Force the real
-              # toolchain binaries to win on PATH.
-              toolchain_bin="$(dirname "$(rustup which cargo)")"
-              echo "$toolchain_bin" >> "$GITHUB_PATH"
-              echo "Prepended $toolchain_bin to PATH"
-         - uses: Swatinem/rust-cache@v2
-           with:
-              shared-key: native-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.variant
-                 || 'default' }}
-              cache-on-failure: true
-              save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' ||
-                 startsWith(github.ref, 'refs/tags/v')) }}
-              cache-workspace-crates: true
-         - uses: taiki-e/install-action@v2
-           if: ${{ !matrix.target }}
-           with:
-              tool: nextest
-         - uses: oven-sh/setup-bun@v2
-           with:
-              bun-version: "1.3"
-         - run: bun install --frozen-lockfile
-         - name: Install cross-compilation toolchain
-           if: matrix.target == 'aarch64-unknown-linux-gnu'
-           run: |
-              sudo apt-get update
-              sudo apt-get install -y gcc-aarch64-linux-gnu
-         - name: Rust checks
-           if: matrix.rust_checks
-           run: bun run check:rs
-         - name: Test workspace (Rust)
-           if: ${{ !matrix.target }}
-           run: bun run test:rs
-         - name: Build native addon(s)
-           env:
-              CROSS_TARGET: ${{ matrix.target }}
-              TARGET_PLATFORM: ${{ matrix.platform }}
-              TARGET_ARCH: ${{ matrix.arch }}
-              TARGET_VARIANTS: ${{ matrix.variant }}
-              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-           shell: bash
-           run: |
-              bun run ci:build:native
-         - name: Upload native addon(s)
-           uses: actions/upload-artifact@v4
-           with:
-              name: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.variant &&
-                 format('-{0}', matrix.variant) || '' }}-h${{
-                 needs.rust-hash.outputs.hash }}
-              path: packages/natives/native/pi_natives.${{ matrix.platform }}-${{ matrix.arch
-                 }}*.node
-              if-no-files-found: error
+              hash: ${{ needs.rust-hash.outputs.hash }}
+              platform: ${{ matrix.platform }}
+              arch: ${{ matrix.arch }}
+              variant: ${{ matrix.variant }}
+              target: ${{ matrix.target }}
+              save_cache: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
 
    test:
       runs-on: ubuntu-22.04
-      needs: [native, rust-hash]
-      if: ${{ !cancelled() && needs.native.result != 'failure' }}
+      needs: [native_linux, rust-hash]
+      if: ${{ !cancelled() && needs.native_linux.result != 'failure' }}
       timeout-minutes: 30
       steps:
          - uses: actions/checkout@v4
@@ -202,7 +164,7 @@ jobs:
            id: source
            shell: bash
            run: |
-              if [ "${{ needs.native.result }}" = "success" ]; then
+              if [ "${{ needs.native_linux.result }}" = "success" ]; then
                 echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
               else
                 echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
@@ -254,10 +216,10 @@ jobs:
 
    release_binary:
       if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
-         needs.native.result != 'failure' && needs.test.result == 'success' &&
-         needs.check.result == 'success' && needs.install_methods.result ==
-         'success' }}
-      needs: [check, native, test, install_methods, rust-hash]
+         needs.native_linux.result == 'success' && needs.native_release.result ==
+         'success' && needs.test.result == 'success' && needs.check.result ==
+         'success' && needs.install_methods.result == 'success' }}
+      needs: [check, native_linux, native_release, test, install_methods, rust-hash]
       strategy:
          fail-fast: false
          matrix:
@@ -311,24 +273,12 @@ jobs:
               path: ~/.bun/install/cache
               key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
          - run: bun install --frozen-lockfile
-         - name: Resolve native source run
-           id: source
-           shell: bash
-           run: |
-              if [ "${{ needs.native.result }}" = "success" ]; then
-                echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
-              else
-                echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
-              fi
          - name: Download native addon(s)
            uses: actions/download-artifact@v4
            with:
-              pattern: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}*-h${{
-                 needs.rust-hash.outputs.hash }}
+              pattern: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}*-h${{ needs.rust-hash.outputs.hash }}
               path: packages/natives/native
               merge-multiple: true
-              run-id: ${{ steps.source.outputs.run-id }}
-              github-token: ${{ secrets.GITHUB_TOKEN }}
          - name: Build release binary
            env:
               RELEASE_TARGETS: ${{ matrix.target_id }}
@@ -378,7 +328,7 @@ jobs:
    release-npm:
       if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
          needs.release_binary.result == 'success' && !inputs.skip_npm }}
-      needs: [release_binary, native, rust-hash]
+      needs: [release_binary, rust-hash]
       runs-on: ubuntu-22.04
       steps:
          - uses: actions/checkout@v4
@@ -395,23 +345,12 @@ jobs:
               path: ~/.bun/install/cache
               key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
          - run: bun install --frozen-lockfile
-         - name: Resolve native source run
-           id: source
-           shell: bash
-           run: |
-              if [ "${{ needs.native.result }}" = "success" ]; then
-                echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
-              else
-                echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
-              fi
          - name: Download native addons
            uses: actions/download-artifact@v4
            with:
               pattern: pi-natives-*-h${{ needs.rust-hash.outputs.hash }}
               path: packages/natives/native
               merge-multiple: true
-              run-id: ${{ steps.source.outputs.run-id }}
-              github-token: ${{ secrets.GITHUB_TOKEN }}
          - name: Publish to npm
            env:
               NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}

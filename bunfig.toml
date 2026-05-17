@@ -12,5 +12,15 @@ saveTextLockfile = true
 ".py" = "text"
 ".lark" = "text"
 
+[test]
+# bun test does NOT honor .gitignore; prune robomp's repo clones and
+# scratch dirs so a root-level `bun test` doesn't walk into them.
+pathIgnorePatterns = [
+  "**/node_modules/**",
+  "python/robomp/data/**",
+  ".wt/**",
+  ".worktrees/**",
+]
+
 [run]
 bun = true

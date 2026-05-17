@@ -1,25 +1,22 @@
-Run code in a persistent kernel using codeblock cells.
+Run code in a persistent kernel using a list of cells.
 
 <instruction>
-Each cell starts with a single header line and runs until the next header (or end of input):
+Each call submits one or more cells. Cells run in array order. State persists within each language across cells **and across tool calls**.
 
-```
-*** Cell py:"optional title" t:10s rst
-print("hi")
-```
+Cell fields:
 
-- **Language + title**: `<lang>:"<title>"` — {{#if py}}`py` for Python{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`js` for JavaScript{{/if}}. Title may be empty (`py:""`).
-- **Attributes** (optional, in this order, after the language+title):
-  - `t:<duration>` — per-cell timeout. Digits with optional `ms` / `s` / `m` units (e.g. `500ms`, `15s`, `2m`). Default 30s.
-  - `rst` — wipe this cell's own language kernel before running.{{#ifAll py js}} Other languages are untouched.{{/ifAll}}
-- Anything after the header line, up to the next `*** Cell` header, is the cell's code, verbatim.
-- Stack multiple cells back-to-back; blank lines between cells are ignored.
+- `language` — {{#if py}}`"py"` for the IPython kernel{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`"js"` for the persistent JavaScript VM{{/if}}.
+- `code` — cell body, verbatim. Newlines, quotes, and indentation are JSON-encoded; no fences, no headers.
+- `title` (optional) — short label shown in the transcript (e.g. `"imports"`, `"load config"`).
+- `timeout` (optional) — per-cell timeout in seconds (1-600). Default 30.
+- `reset` (optional) — wipe this cell's language kernel before running.{{#ifAll py js}} Reset is per-language: a `py` cell's reset does not touch the JavaScript VM and vice versa.{{/ifAll}}
 
 **Work incrementally:**
+
 - One logical step per cell (imports, define, test, use).
 - Pass multiple small cells in one call.
 - Define small reusable functions for individual debugging.
-- Put workflow explanations in the assistant message or cell title — never inside cell code.
+- Put workflow explanations in the assistant message or `title` — never inside cell code.
 {{#if py}}- Python cells run inside an IPython kernel with a live event loop. Use top-level `await` directly (e.g. `await main()`); `asyncio.run(…)` raises "cannot be called from a running event loop".{{/if}}
 **On failure:** errors identify the failing cell (e.g., "Cell 3 failed"). Resubmit only the fixed cell (or fixed cell + remaining cells).
 </instruction>
@@ -55,22 +52,24 @@ Cells render like a Jupyter notebook. `display(value)` renders non-presentable d
 </output>
 
 <caution>
-- In session mode, use `rst` on a cell to wipe its language's kernel before running.{{#ifAll py js}} Reset is per-language: a python cell's `rst` does not touch the JavaScript kernel and vice versa.{{/ifAll}}
 {{#if js}}- **js**: the VM exposes a selective `process` subset, Web APIs, `Buffer`, `fs/promises`, and the `Bun` global.
 {{/if}}</caution>
 
 <example>
-{{#if py}}*** Cell py:"imports" t:10s
-import json
-from pathlib import Path
+{{#if py}}```json
+{
+  "cells": [
+    { "language": "py", "title": "imports", "timeout": 10, "code": "import json\nfrom pathlib import Path" },
+    { "language": "py", "title": "load config", "code": "data = json.loads(read('package.json'))\ndisplay(data)" }
+  ]
+}
+```{{/if}}{{#ifAll py js}}
 
-*** Cell py:"load config"
-data = json.loads(read('package.json'))
-display(data)
-{{/if}}{{#ifAll py js}}
-{{/ifAll}}{{#if js}}*** Cell js:"summary" rst
-const data = JSON.parse(await read('package.json'));
-display(data);
-return data.name;
-{{/if}}
+{{/ifAll}}{{#if js}}```json
+{
+  "cells": [
+    { "language": "js", "title": "summary", "reset": true, "code": "const data = JSON.parse(await read('package.json'));\ndisplay(data);\nreturn data.name;" }
+  ]
+}
+```{{/if}}
 </example>

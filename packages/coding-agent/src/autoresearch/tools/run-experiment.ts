@@ -27,7 +27,7 @@ import type { AutoresearchToolFactoryOptions, RunDetails, RunExperimentProgressD
 import { DEFAULT_HARNESS_COMMAND } from "./init-experiment";
 
 const runExperimentSchema = z.object({
-	timeout_seconds: z.number().describe("Timeout in seconds. Defaults to 600.").optional(),
+	timeout_seconds: z.number().describe("timeout in seconds (default 600)").optional(),
 });
 
 interface ProcessExecutionResult {

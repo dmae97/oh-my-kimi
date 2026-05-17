@@ -14,7 +14,7 @@ import {
 	validateToolArguments,
 	zodToWireSchema,
 } from "@oh-my-pi/pi-ai";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import {
 	createHarmonyAuditEvent,
 	type HarmonyDetection,

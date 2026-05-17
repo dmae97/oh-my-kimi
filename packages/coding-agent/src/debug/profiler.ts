@@ -121,6 +121,10 @@ export async function startCpuProfile(): Promise<ProfilerSession> {
 	session.connect();
 
 	await session.post("Profiler.enable");
+	// Default CDP interval is 1ms, which mis-attributes await-resumption samples
+	// to the line after `await` (one sparse sample inherits the entire wait). 100µs
+	// scatters samples enough to keep CPU vs. async-wait attribution honest.
+	await session.post("Profiler.setSamplingInterval", { interval: 100 });
 	await session.post("Profiler.start");
 
 	return {

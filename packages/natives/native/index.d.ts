@@ -1155,12 +1155,6 @@ export interface PtyStartOptions {
 export declare function readImageFromClipboard(): Promise<ClipboardImage | undefined | null>
 
 /**
- * Strip ANSI escape sequences, remove control characters / lone surrogates,
- * and normalize line endings.
- */
-export declare function sanitizeText(text: string): string
-
-/**
  * Search content for a pattern (one-shot, compiles pattern each time).
  * For repeated searches with the same pattern, use [`grep`] with file filters.
  *

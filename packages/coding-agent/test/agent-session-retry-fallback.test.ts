@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type AssistantMessage, Effort, getBundledModel, type Model, writeModelCache } from "@oh-my-pi/pi-ai";
@@ -83,6 +83,7 @@ describe("AgentSession retry fallback", () => {
 		}
 		authStorage.close();
 		tempDir.removeSync();
+		vi.restoreAllMocks();
 	});
 
 	it("advances through a role-keyed fallback chain across retries", async () => {
@@ -569,6 +570,8 @@ describe("AgentSession retry fallback", () => {
 			settings,
 			modelRegistry,
 		});
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
 
 		await session.prompt("First prompt triggers fallback");
 		await session.waitForIdle();
@@ -589,7 +592,7 @@ describe("AgentSession retry fallback", () => {
 		expect(session.model?.provider).toBe(fallbackModel.provider);
 		expect(session.model?.id).toBe(fallbackModel.id);
 
-		await Bun.sleep(240);
+		now += 240;
 		await session.prompt("Third prompt should lazily revert to primary");
 		await session.waitForIdle();
 		expect(requestedModels).toEqual([
@@ -629,6 +632,8 @@ describe("AgentSession retry fallback", () => {
 			modelRegistry,
 			thinkingLevel: Effort.High,
 		});
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
 
 		await session.prompt("First prompt triggers bare-selector fallback");
 		await session.waitForIdle();
@@ -641,7 +646,7 @@ describe("AgentSession retry fallback", () => {
 		expect(session.thinkingLevel).toBeUndefined();
 
 		session.setThinkingLevel(Effort.Low);
-		await Bun.sleep(240);
+		now += 240;
 		await session.prompt("Second prompt should restore model but preserve user thinking change");
 		await session.waitForIdle();
 		expect(requestedModels).toEqual([
@@ -671,7 +676,7 @@ describe("AgentSession retry fallback", () => {
 			contextWindow: 1_000_000,
 			maxTokens: 384_000,
 		};
-		writeModelCache("ollama-cloud", Date.now(), [cachedModel], true, path.join(tempDir.path(), "models.db"));
+		writeModelCache("ollama-cloud", Date.now(), [cachedModel], true, "", path.join(tempDir.path(), "models.db"));
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.json"));
 
 		const settings = Settings.isolated({

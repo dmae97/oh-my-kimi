@@ -220,9 +220,26 @@ export interface StreamOptions {
 	minP?: number;
 	presencePenalty?: number;
 	repetitionPenalty?: number;
+	/**
+	 * Stop sequences. Anthropic encodes as `stop_sequences` (array, max 4);
+	 * OpenAI chat-completions encodes as `stop` (string or array of up to 4);
+	 * OpenAI Responses API has no `stop` field today (silently dropped by the
+	 * provider when present).
+	 */
+	stopSequences?: string[];
+	/**
+	 * Frequency penalty (OpenAI). Penalizes new tokens based on existing frequency
+	 * in the text so far. Range -2.0 to 2.0. Parallel to {@link presencePenalty}.
+	 */
+	frequencyPenalty?: number;
 	maxTokens?: number;
 	signal?: AbortSignal;
 	apiKey?: string;
+	/**
+	 * Called when a provider returns 401 before any assistant event has been
+	 * emitted. Returning a different key retries the provider request once.
+	 */
+	onAuthError?: (provider: string, apiKey: string, error: unknown) => Promise<string | undefined>;
 	cacheRetention?: CacheRetention;
 	/**
 	 * Additional headers to include in provider requests.
@@ -284,6 +301,10 @@ export interface StreamOptions {
 	 * Set to 0 to disable the inter-event idle watchdog for this request.
 	 */
 	streamIdleTimeoutMs?: number;
+	/**
+	 * Optional retry delay hook for tests and transports that need custom scheduling.
+	 */
+	providerRetryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 	/**
 	 * Optional `fetch` implementation override. Providers route every HTTP
 	 * request — direct calls, SDK clients, and retry helpers — through this
@@ -755,6 +776,21 @@ export interface Model<TApi extends Api = any> {
 	contextWindow: number;
 	maxTokens: number;
 	headers?: Record<string, string>;
+	/**
+	 * Streaming transport override. When `"pi-native"`, `streamSimple` routes
+	 * the request to the model's `baseUrl` via the auth-gateway's
+	 * `POST /v1/pi/stream` endpoint instead of dispatching the per-API
+	 * provider client. The `baseUrl` must point at an `omp auth-gateway`
+	 * (or compatible) host; `headers.Authorization` (or `apiKey` resolved by
+	 * the registry) carries the gateway bearer.
+	 *
+	 * Used by containerized omp installs (e.g. robomp slots) to route every
+	 * LLM call through a sidecar gateway that holds the real provider
+	 * credentials. The model's other metadata (pricing, context window,
+	 * thinking config, …) still resolves locally; only the streaming
+	 * dispatch is redirected.
+	 */
+	transport?: "pi-native";
 	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
 	preferWebsockets?: boolean;
 	/** Preferred model to switch to when context promotion is triggered (model id or provider/id). */

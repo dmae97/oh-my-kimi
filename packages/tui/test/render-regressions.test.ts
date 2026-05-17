@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type Component, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -25,7 +25,9 @@ function rows(prefix: string, count: number): string[] {
 }
 
 async function settle(term: VirtualTerminal): Promise<void> {
-	await term.waitForRender();
+	await new Promise<void>(resolve => process.nextTick(resolve));
+	await Bun.sleep(1);
+	await term.flush();
 }
 
 function visible(term: VirtualTerminal): string[] {
@@ -41,6 +43,21 @@ function countMatches(lines: string[], pattern: RegExp): number {
 }
 
 describe("TUI terminal-state regressions", () => {
+	let monotonicNow = 0;
+	// Keep TUI's 16ms render throttle deterministic without sleeping a real frame per render.
+
+	beforeEach(() => {
+		monotonicNow = 0;
+		vi.spyOn(performance, "now").mockImplementation(() => {
+			monotonicNow += 20;
+			return monotonicNow;
+		});
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	describe("cursor + differential stability", () => {
 		it("keeps stable output across repeated no-op renders", async () => {
 			const term = new VirtualTerminal(40, 10);

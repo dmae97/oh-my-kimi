@@ -266,7 +266,9 @@ interface TimeRangeConfig {
 	timeSeriesHours: number;
 	timeSeriesBucketMs: number;
 	modelSeriesDays: number;
+	modelSeriesBucketMs: number;
 	modelPerformanceDays: number;
+	modelPerformanceBucketMs: number;
 	costSeriesDays: number;
 	cutoff: number | null;
 }
@@ -278,42 +280,54 @@ const TIME_RANGE_TO_CONFIG: Record<TimeRange, Omit<TimeRangeConfig, "cutoff">> =
 		timeSeriesHours: 1,
 		timeSeriesBucketMs: HOUR_MS,
 		modelSeriesDays: 1,
+		modelSeriesBucketMs: HOUR_MS,
 		modelPerformanceDays: 1,
+		modelPerformanceBucketMs: HOUR_MS,
 		costSeriesDays: 1,
 	},
 	"24h": {
 		timeSeriesHours: 24,
 		timeSeriesBucketMs: HOUR_MS,
 		modelSeriesDays: 1,
+		modelSeriesBucketMs: HOUR_MS,
 		modelPerformanceDays: 1,
+		modelPerformanceBucketMs: HOUR_MS,
 		costSeriesDays: 1,
 	},
 	"7d": {
 		timeSeriesHours: 24 * 7,
 		timeSeriesBucketMs: DAY_MS,
 		modelSeriesDays: 7,
+		modelSeriesBucketMs: DAY_MS,
 		modelPerformanceDays: 7,
+		modelPerformanceBucketMs: DAY_MS,
 		costSeriesDays: 7,
 	},
 	"30d": {
 		timeSeriesHours: 24 * 30,
 		timeSeriesBucketMs: DAY_MS,
 		modelSeriesDays: 30,
+		modelSeriesBucketMs: DAY_MS,
 		modelPerformanceDays: 30,
+		modelPerformanceBucketMs: DAY_MS,
 		costSeriesDays: 30,
 	},
 	"90d": {
 		timeSeriesHours: 24 * 90,
 		timeSeriesBucketMs: DAY_MS,
 		modelSeriesDays: 90,
+		modelSeriesBucketMs: DAY_MS,
 		modelPerformanceDays: 90,
+		modelPerformanceBucketMs: DAY_MS,
 		costSeriesDays: 90,
 	},
 	all: {
 		timeSeriesHours: 24 * 3650,
 		timeSeriesBucketMs: DAY_MS,
 		modelSeriesDays: 3650,
+		modelSeriesBucketMs: DAY_MS,
 		modelPerformanceDays: 3650,
+		modelPerformanceBucketMs: DAY_MS,
 		costSeriesDays: 3650,
 	},
 };
@@ -338,16 +352,24 @@ function getTimeRangeConfig(range?: string | null): TimeRangeConfig {
  */
 export async function getDashboardStats(range?: string | null): Promise<DashboardStats> {
 	await initDb();
-	const { timeSeriesHours, timeSeriesBucketMs, modelSeriesDays, modelPerformanceDays, costSeriesDays, cutoff } =
-		getTimeRangeConfig(range);
+	const {
+		timeSeriesHours,
+		timeSeriesBucketMs,
+		modelSeriesDays,
+		modelSeriesBucketMs,
+		modelPerformanceDays,
+		modelPerformanceBucketMs,
+		costSeriesDays,
+		cutoff,
+	} = getTimeRangeConfig(range);
 
 	return {
 		overall: getOverallStats(cutoff ?? undefined),
 		byModel: getStatsByModel(cutoff ?? undefined),
 		byFolder: getStatsByFolder(cutoff ?? undefined),
 		timeSeries: getTimeSeries(timeSeriesHours, cutoff, timeSeriesBucketMs),
-		modelSeries: getModelTimeSeries(modelSeriesDays, cutoff),
-		modelPerformanceSeries: getModelPerformanceSeries(modelPerformanceDays, cutoff),
+		modelSeries: getModelTimeSeries(modelSeriesDays, cutoff, modelSeriesBucketMs),
+		modelPerformanceSeries: getModelPerformanceSeries(modelPerformanceDays, cutoff, modelPerformanceBucketMs),
 		costSeries: getCostTimeSeries(costSeriesDays, cutoff),
 	};
 }
@@ -366,12 +388,13 @@ export async function getModelDashboardStats(
 	range?: string | null,
 ): Promise<Pick<DashboardStats, "byModel" | "modelSeries" | "modelPerformanceSeries">> {
 	await initDb();
-	const { modelSeriesDays, modelPerformanceDays, cutoff } = getTimeRangeConfig(range);
+	const { modelSeriesDays, modelSeriesBucketMs, modelPerformanceDays, modelPerformanceBucketMs, cutoff } =
+		getTimeRangeConfig(range);
 
 	return {
 		byModel: getStatsByModel(cutoff ?? undefined),
-		modelSeries: getModelTimeSeries(modelSeriesDays, cutoff),
-		modelPerformanceSeries: getModelPerformanceSeries(modelPerformanceDays, cutoff),
+		modelSeries: getModelTimeSeries(modelSeriesDays, cutoff, modelSeriesBucketMs),
+		modelPerformanceSeries: getModelPerformanceSeries(modelPerformanceDays, cutoff, modelPerformanceBucketMs),
 	};
 }
 

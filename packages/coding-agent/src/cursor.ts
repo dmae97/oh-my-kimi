@@ -13,7 +13,7 @@ import type {
 	CursorExecHandlers as ICursorExecHandlers,
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { resolveToCwd } from "./tools/path-utils";
 
 interface CursorExecBridgeOptions {

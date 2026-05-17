@@ -199,6 +199,15 @@ export interface AutocompleteProvider {
 	/** Synchronously try to complete a slash command at the start of a line (no async I/O). */
 	/** Returns matched items and the full prefix, or null if not applicable. */
 	trySyncSlashCompletion?(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null;
+	/**
+	 * Synchronously try to expand text immediately before the cursor (no async I/O).
+	 * Called after every single-character insert. Implementations MUST cheaply
+	 * early-return when the trailing context cannot trigger them.
+	 * Returns the number of characters to delete immediately before the cursor
+	 * and the literal string to insert in their place, or null to leave the
+	 * buffer untouched.
+	 */
+	trySyncInlineReplace?(textBeforeCursor: string): { replaceLen: number; insert: string } | null;
 }
 
 // Combined provider that handles both slash commands and file paths.

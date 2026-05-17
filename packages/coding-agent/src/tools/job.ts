@@ -23,17 +23,9 @@ import {
 import { ToolError } from "./tool-errors";
 
 const jobSchema = z.object({
-	poll: z
-		.array(z.string())
-		.optional()
-		.describe("background job ids to wait for; omit (with no `cancel`) to wait on all running jobs"),
-	cancel: z.array(z.string()).optional().describe("background job ids to cancel"),
-	list: z
-		.boolean()
-		.optional()
-		.describe(
-			"Return an immediate snapshot of every job spawned by this agent (running + completed within retention). Read-only \u2014 cannot be combined with `poll` or `cancel`.",
-		),
+	poll: z.array(z.string()).optional().describe("job ids to wait for"),
+	cancel: z.array(z.string()).optional().describe("job ids to cancel"),
+	list: z.boolean().optional().describe("snapshot all jobs"),
 });
 
 type JobParams = z.infer<typeof jobSchema>;

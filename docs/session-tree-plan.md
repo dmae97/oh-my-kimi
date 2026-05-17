@@ -181,6 +181,33 @@ Adjacent but related lifecycle hooks:
 - In-memory sessions never return a branch file path from `createBranchedSession`.
 - Tree context reconstruction includes service-tier and MCP tool-selection state, but those entries do not become LLM messages.
 
+## Plan approval session naming
+
+When a user approves a plan from plan mode (`InteractiveMode.#approvePlan`), the approval handler seeds the session name from the plan's title so the resulting (fresh or compacted) session does not stay unnamed.
+
+Trigger:
+
+- Plan approval reaches `#approvePlan(...)` with `options.title` populated from the plan-approval details.
+- This runs for every approval choice (`Approve and execute`, `Approve and compact context`, plain `Approve`); the synthetic `plan-approved` prompt is what otherwise bypasses the input-controller's title-generation path.
+
+Naming source:
+
+- The normalized plan title is humanized via `humanizePlanTitle(title)` (`packages/coding-agent/src/plan-mode/approved-plan.ts`):
+  - replaces runs of `-`/`_` with a single space
+  - trims whitespace
+  - capitalizes the first character
+  - returns `""` for whitespace-only / separator-only input
+- The humanized name is applied with `sessionManager.setSessionName(name, "auto")`. Because `setSessionName` is a no-op when `titleSource === "user"`, the seeded name never overrides a name the user already chose (e.g. on the `preserveContext` path where the session continues with prior naming).
+- On successful apply, the terminal title (`setSessionTerminalTitle`) and the editor border color are refreshed to reflect the new name.
+
+Examples (from `humanizePlanTitle`):
+
+- `migrate-mcp-loader` → `Migrate mcp loader`
+- `fix_session_naming` → `Fix session naming`
+- `foo--bar__baz` → `Foo bar baz`
+- `RefactorRouter` → `RefactorRouter` (no separators to expand)
+- `""` / `"---"` → `""` (no name applied)
+
 ## Legacy compatibility still present
 
 Session migrations still run on load:

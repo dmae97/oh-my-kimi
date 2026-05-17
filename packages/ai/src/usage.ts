@@ -4,8 +4,8 @@
  * Provides a normalized schema to represent multiple limit windows, model tiers,
  * and shared quotas across providers.
  */
+import * as z from "zod/v4";
 import type { Provider } from "./types";
-
 export type UsageUnit = "percent" | "tokens" | "requests" | "usd" | "minutes" | "bytes" | "unknown";
 
 export type UsageStatus = "ok" | "warning" | "exhausted" | "unknown";
@@ -72,6 +72,58 @@ export interface UsageReport {
 	raw?: unknown;
 }
 
+// ─── Zod schemas (wire-shape validation for the broker `/v1/usage` endpoint) ─
+
+export const usageUnitSchema = z.enum(["percent", "tokens", "requests", "usd", "minutes", "bytes", "unknown"]);
+export const usageStatusSchema = z.enum(["ok", "warning", "exhausted", "unknown"]);
+
+export const usageWindowSchema = z.object({
+	id: z.string(),
+	label: z.string(),
+	durationMs: z.number().optional(),
+	resetsAt: z.number().optional(),
+});
+
+export const usageAmountSchema = z.object({
+	used: z.number().optional(),
+	limit: z.number().optional(),
+	remaining: z.number().optional(),
+	usedFraction: z.number().optional(),
+	remainingFraction: z.number().optional(),
+	unit: usageUnitSchema,
+});
+
+export const usageScopeSchema = z.object({
+	provider: z.string(),
+	accountId: z.string().optional(),
+	projectId: z.string().optional(),
+	orgId: z.string().optional(),
+	modelId: z.string().optional(),
+	tier: z.string().optional(),
+	windowId: z.string().optional(),
+	shared: z.boolean().optional(),
+});
+
+export const usageLimitSchema = z.object({
+	id: z.string(),
+	label: z.string(),
+	scope: usageScopeSchema,
+	window: usageWindowSchema.optional(),
+	amount: usageAmountSchema,
+	status: usageStatusSchema.optional(),
+	notes: z.array(z.string()).optional(),
+});
+
+export const usageReportSchema = z.object({
+	provider: z.string(),
+	fetchedAt: z.number(),
+	limits: z.array(usageLimitSchema),
+	metadata: z.record(z.string(), z.unknown()).optional(),
+	// `raw` is provider-specific and may be anything; the broker strips it before
+	// sending the report over the wire, so accept-but-ignore here.
+	raw: z.unknown().optional(),
+});
+
 /** Optional logger for usage fetchers. */
 export interface UsageLogger {
 	debug(message: string, meta?: Record<string, unknown>): void;
@@ -104,6 +156,7 @@ export interface UsageFetchParams {
 export interface UsageFetchContext {
 	fetch: typeof fetch;
 	logger?: UsageLogger;
+	retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 }
 
 /** Provider implementation for fetching usage information. */

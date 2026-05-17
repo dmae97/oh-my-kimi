@@ -539,7 +539,6 @@
 			"types": "./src/web/search/providers/*.ts",
 			"import": "./src/web/search/providers/*.ts"
 		},
-
 		"./*.js": "./src/*.ts"
 	}
 }

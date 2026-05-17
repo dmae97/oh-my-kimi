@@ -148,6 +148,17 @@ ModelRegistry pipeline (on refresh):
    - otherwise append
 6. Load cached/runtime-discovered models (Ollama, llama.cpp, LM Studio, plus built-in provider managers), then re-apply model overrides.
 
+### Provider-model cache and static fingerprint
+
+Cached per-provider model lists are persisted in the model-cache SQLite
+database (schema v3) with a `static_fingerprint` column that hashes the
+static catalog slice merged into the row. When `resolveProviderModels`
+skips the network fetch and the fingerprint of the in-memory static
+catalog matches the cached one, the cached rows are returned verbatim —
+the static + dynamic merge is bypassed entirely. The fingerprint is
+memoized per process via a WeakMap keyed by the static-models array
+reference, so repeated cold-start calls do not re-hash.
+
 ## Canonical model equivalence and coalescing
 
 The registry keeps every concrete provider model and then builds a canonical layer above them.
@@ -308,6 +319,12 @@ Keyless providers:
 
 - Providers marked `auth: none` are treated as available without credentials.
 - `getApiKey*` returns `kNoAuth` for them.
+
+### Broker mode
+
+When `OMP_AUTH_BROKER_URL` (or `auth.broker.url`) is set, the local SQLite credential store is replaced by `RemoteAuthCredentialStore`. Layers 2 and 3 above (stored API key / OAuth in `agent.db`) are served from a broker-supplied snapshot whose `refresh` tokens are redacted; expiry triggers `POST /v1/credential/:id/refresh` on the broker rather than a local refresh.
+
+`AuthStorage.setConfigApiKey` lets a `models.yml` `apiKey` win over a broker-resolved OAuth token without overriding a runtime `--api-key`. See [`auth-broker-gateway.md`](./auth-broker-gateway.md) for the full broker / gateway design and env surface (`OMP_AUTH_BROKER_URL`, `OMP_AUTH_BROKER_TOKEN`, `auth.broker.url`, `auth.broker.token`).
 
 ## Model availability vs all models
 
@@ -530,6 +547,14 @@ providers:
 ```
 
 `disableStrictTools` is a provider-level flag that applies to all models in the provider.
+
+Tool schemas going on the wire are normalized by the unified flow in
+`packages/ai/src/utils/schema/normalize.ts` (Google/CCA/MCP dispatchers
+plus the OpenAI strict-mode sanitize+enforce pipeline). See
+[`ai-schema-normalize.md`](./ai-schema-normalize.md) for the strict-mode
+edge cases (local `$ref` inlining, single-item `allOf` collapse,
+`anyOf`-wrapper description hoist, enum/const primitive-type inference)
+and the per-provider dispatcher mapping.
 ## Practical examples
 
 ### Local OpenAI-compatible endpoint (no auth)

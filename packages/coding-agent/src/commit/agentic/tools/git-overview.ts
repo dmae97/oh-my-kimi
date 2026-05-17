@@ -43,8 +43,8 @@ function filterExcludedFiles(files: string[]): { filtered: string[]; excluded: s
 }
 
 const gitOverviewSchema = z.object({
-	staged: z.boolean().describe("Use staged changes (default: true)").optional(),
-	include_untracked: z.boolean().describe("Include untracked files when staged=false").optional(),
+	staged: z.boolean().describe("use staged changes (default true)").optional(),
+	include_untracked: z.boolean().describe("include untracked when unstaged").optional(),
 });
 
 export function createGitOverviewTool(cwd: string, state: CommitAgentState): CustomTool<typeof gitOverviewSchema> {

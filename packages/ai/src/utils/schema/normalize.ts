@@ -1,0 +1,1494 @@
+/**
+ * Provider-specific JSON Schema normalization used in the request path.
+ *
+ * Google's Schema proto, Cloud Code Assist's Claude bridge, and MCP/AJV
+ * validation all reject different subsets of standard JSON Schema. This module
+ * exposes one option-driven core plus thin dispatchers that pin the option set
+ * for each target.
+ */
+import { logger } from "@oh-my-pi/pi-utils";
+import { dereferenceJsonSchema } from "./dereference";
+import { upgradeJsonSchemaTo202012 } from "./draft";
+import { areJsonValuesEqual, mergePropertySchemas } from "./equality";
+import {
+	CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS,
+	CLOUD_CODE_ASSIST_TYPE_SPECIFIC_KEYS,
+	COMBINATOR_KEYS,
+	LIFTABLE_TO_DESCRIPTION_FIELDS,
+	NON_STRUCTURAL_SCHEMA_KEYS,
+	UNSUPPORTED_SCHEMA_FIELDS,
+} from "./fields";
+import { isValidJsonSchema } from "./meta-validator";
+import { type DescriptionSpillFormat, spillToDescription } from "./spill";
+import { enter, epochNext, exit, once, stamp } from "./stamps";
+import type { JsonObject } from "./types";
+import { isJsonObject } from "./types";
+
+export type ResidualSchemaIncompatibility = "type-array" | "type-null" | "nullable" | "combiners";
+
+export interface NormalizeSchemaOptions {
+	unsupportedFields: (key: string) => boolean;
+	normalizeFieldNames: boolean;
+	collapseNullFields: boolean;
+	normalizeTypeArrayToNullable: boolean;
+	stripNullableKeyword: boolean;
+	autoPropertyOrdering: boolean;
+	ensureObjectProperties: boolean;
+	liftStrippedToDescription:
+		| false
+		| {
+				keys?: (key: string) => boolean;
+				format?: DescriptionSpillFormat;
+		  };
+	mergeObjectCombiners: boolean;
+	collapseSameTypeCombiners: boolean;
+	collapseMixedTypeCombiners: boolean;
+	stripResidualCombinersFixpoint: boolean;
+	extractNullableFromUnions: boolean;
+	rejectResidualIncompatibilities?: ReadonlyArray<ResidualSchemaIncompatibility>;
+	validateAndFallback?: { fallback: unknown };
+}
+
+interface NormalizeSchemaWalkOptions extends NormalizeSchemaOptions {
+	insideProperties: boolean;
+	epoch: number;
+}
+
+interface ResidualIncompatibilityChecks {
+	typeArray: boolean;
+	typeNull: boolean;
+	nullable: boolean;
+	combiners: boolean;
+}
+
+const SNAKE_TO_CAMEL_RENAMES = new Map<string, string>([
+	["additional_properties", "additionalProperties"],
+	["any_of", "anyOf"],
+	["prefix_items", "prefixItems"],
+	["property_ordering", "propertyOrdering"],
+]);
+
+const JSON_SCHEMA_COMBINERS = ["anyOf", "oneOf"] as const;
+const CCA_FORBIDDEN_COMBINERS = new Set(["anyOf", "oneOf", "allOf"]);
+
+const CLOUD_CODE_ASSIST_CLAUDE_FALLBACK_SCHEMA = {
+	type: "object",
+	properties: {},
+} as const;
+
+function isGoogleUnsupportedSchemaField(key: string): boolean {
+	return Object.hasOwn(UNSUPPORTED_SCHEMA_FIELDS, key);
+}
+
+function isMcpUnsupportedSchemaField(key: string): boolean {
+	return key === "$schema";
+}
+
+function isDefaultLiftableToDescriptionField(key: string): boolean {
+	return Object.hasOwn(LIFTABLE_TO_DESCRIPTION_FIELDS, key);
+}
+
+/**
+ * Returns `obj` unchanged when no renamable key is present; otherwise returns
+ * a fresh shallow-copy with snake_case keys rewritten. The collision rule
+ * matches upstream (`pop(from)` → `set(to)`): snake_case wins over an
+ * existing camelCase entry, matching python-genai/_transformers.py:751.
+ */
+function applySnakeCaseRenames(obj: JsonObject): JsonObject {
+	let needsRename = false;
+	for (const k in obj) {
+		if (!Object.hasOwn(obj, k)) continue;
+		if (SNAKE_TO_CAMEL_RENAMES.has(k)) {
+			needsRename = true;
+			break;
+		}
+	}
+	if (!needsRename) return obj;
+	const out: JsonObject = {};
+	for (const k in obj) {
+		if (!Object.hasOwn(obj, k)) continue;
+		const renamed = SNAKE_TO_CAMEL_RENAMES.get(k);
+		if (renamed !== undefined) {
+			out[renamed] = obj[k];
+		} else if (!outHasOwn(out, k)) {
+			out[k] = obj[k];
+		}
+	}
+	return out;
+}
+
+/**
+ * `handle_null_fields` (python-genai/_transformers.py:584-640) applied at the
+ * parent level BEFORE child recursion — matches upstream's call order at
+ * `process_schema` line 768. Returns a new object when changes apply, the
+ * original reference otherwise (zero-allocation fast path).
+ */
+function preHandleNullFields(obj: JsonObject): JsonObject {
+	if (obj.type === "null") {
+		const out: JsonObject = {};
+		for (const k in obj) {
+			if (!Object.hasOwn(obj, k) || k === "type") continue;
+			out[k] = obj[k];
+		}
+		out.nullable = true;
+		return out;
+	}
+	if (!Array.isArray(obj.anyOf)) return obj;
+	const variants = obj.anyOf as unknown[];
+	let sawNull = false;
+	const kept: unknown[] = [];
+	for (const v of variants) {
+		if (isJsonObject(v) && v.type === "null") {
+			sawNull = true;
+			continue;
+		}
+		kept.push(v);
+	}
+	if (!sawNull) return obj;
+	const out: JsonObject = {};
+	for (const k in obj) {
+		if (Object.hasOwn(obj, k)) out[k] = obj[k];
+	}
+	out.nullable = true;
+	if (kept.length === 0) {
+		delete out.anyOf;
+	} else if (kept.length === 1 && isJsonObject(kept[0])) {
+		delete out.anyOf;
+		const only = kept[0];
+		for (const k in only) {
+			if (Object.hasOwn(only, k) && !outHasOwn(out, k)) out[k] = only[k];
+		}
+	} else {
+		out.anyOf = kept;
+	}
+	return out;
+}
+
+function outHasOwn(obj: JsonObject, key: string): boolean {
+	return Object.hasOwn(obj, key);
+}
+
+function inferJsonSchemaTypeFromValue(value: unknown): string | undefined {
+	if (value === null) return "null";
+	if (Array.isArray(value)) return "array";
+	switch (typeof value) {
+		case "string":
+			return "string";
+		case "number":
+			return "number";
+		case "boolean":
+			return "boolean";
+		case "object":
+			return "object";
+		default:
+			return undefined;
+	}
+}
+
+function pushEnumValue(values: unknown[], value: unknown): void {
+	if (!values.some(existing => areJsonValuesEqual(existing, value))) {
+		values.push(value);
+	}
+}
+
+function pushStrippedDescriptionEntry(
+	spill: Array<[string, unknown]> | undefined,
+	key: string,
+	value: unknown,
+	options: NormalizeSchemaWalkOptions,
+): Array<[string, unknown]> | undefined {
+	const lift = options.liftStrippedToDescription;
+	if (!lift) return spill;
+	const isLiftable = lift.keys ?? isDefaultLiftableToDescriptionField;
+	if (!isLiftable(key)) return spill;
+	const next = spill ?? [];
+	next.push([key, value]);
+	return next;
+}
+
+function applyDescriptionSpill(
+	result: JsonObject,
+	spill: Array<[string, unknown]> | undefined,
+	options: NormalizeSchemaWalkOptions,
+): void {
+	const lift = options.liftStrippedToDescription;
+	if (!lift || spill === undefined) return;
+	spillToDescription(result, spill, lift.format ?? "spill");
+}
+
+function normalizeSchemaNode(value: unknown, options: NormalizeSchemaWalkOptions): unknown {
+	if (Array.isArray(value)) {
+		if (!once(value, options.epoch)) return [];
+		return value.map(entry => normalizeSchemaNode(entry, options));
+	}
+	if (!isJsonObject(value)) {
+		return value;
+	}
+	if (!once(value, options.epoch)) return {};
+	let obj = options.normalizeFieldNames && !options.insideProperties ? applySnakeCaseRenames(value) : value;
+	if (options.collapseNullFields && !options.insideProperties) {
+		obj = preHandleNullFields(obj);
+	}
+	const result: JsonObject = {};
+	let spill: Array<[string, unknown]> | undefined;
+	for (const combiner of JSON_SCHEMA_COMBINERS) {
+		if (!Array.isArray(obj[combiner])) continue;
+		const variants = obj[combiner] as JsonObject[];
+		const allHaveConst = variants.every(v => isJsonObject(v) && "const" in v);
+		if (!allHaveConst || variants.length === 0) continue;
+
+		const dedupedEnum: unknown[] = [];
+		for (const variant of variants) {
+			pushEnumValue(dedupedEnum, variant.const);
+		}
+		result.enum = dedupedEnum;
+
+		const explicitTypes = variants
+			.map(variant => variant.type)
+			.filter((variantType): variantType is string => typeof variantType === "string");
+		const allHaveSameExplicitType =
+			explicitTypes.length === variants.length &&
+			explicitTypes.every(variantType => variantType === explicitTypes[0]);
+		if (allHaveSameExplicitType && explicitTypes[0]) {
+			result.type = explicitTypes[0];
+		} else {
+			const inferredTypes = dedupedEnum
+				.map(enumValue => inferJsonSchemaTypeFromValue(enumValue))
+				.filter((inferredType): inferredType is string => inferredType !== undefined);
+			const inferredTypeSet = new Set(inferredTypes);
+			if (inferredTypeSet.size === 1) {
+				result.type = inferredTypes[0];
+			} else {
+				const nonNullInferredTypes = inferredTypes.filter(inferredType => inferredType !== "null");
+				const nonNullTypeSet = new Set(nonNullInferredTypes);
+				if (inferredTypes.includes("null") && nonNullTypeSet.size === 1) {
+					result.type = nonNullInferredTypes[0];
+					if (!options.stripNullableKeyword) {
+						result.nullable = true;
+					}
+				}
+			}
+		}
+
+		for (const key in obj) {
+			if (!Object.hasOwn(obj, key) || key === combiner || outHasOwn(result, key)) continue;
+			const entry = obj[key];
+			if (!options.insideProperties && options.unsupportedFields(key)) {
+				spill = pushStrippedDescriptionEntry(spill, key, entry, options);
+				continue;
+			}
+			if (options.stripNullableKeyword && key === "nullable") continue;
+			result[key] = normalizeSchemaNode(entry, {
+				...options,
+				insideProperties: key === "properties",
+			});
+		}
+		applyDescriptionSpill(result, spill, options);
+		return applyNodePostProcessing(result, options);
+	}
+
+	let constValue: unknown;
+	for (const key in obj) {
+		if (!Object.hasOwn(obj, key)) continue;
+		const entry = obj[key];
+		if (!options.insideProperties && options.unsupportedFields(key)) {
+			spill = pushStrippedDescriptionEntry(spill, key, entry, options);
+			continue;
+		}
+		if (options.stripNullableKeyword && key === "nullable") continue;
+		if (key === "const") {
+			constValue = entry;
+			continue;
+		}
+		result[key] = normalizeSchemaNode(entry, {
+			...options,
+			insideProperties: key === "properties",
+		});
+	}
+
+	if (options.normalizeTypeArrayToNullable && Array.isArray(result.type)) {
+		const types = (result.type as unknown[]).filter((t): t is string => typeof t === "string");
+		const nonNull = types.filter(t => t !== "null");
+		if (types.includes("null") && !options.stripNullableKeyword) {
+			result.nullable = true;
+		}
+		result.type = nonNull[0] ?? types[0];
+	}
+	if (constValue !== undefined) {
+		const existingEnum = Array.isArray(result.enum) ? result.enum : [];
+		pushEnumValue(existingEnum, constValue);
+		result.enum = existingEnum;
+		if (!result.type) {
+			result.type = inferJsonSchemaTypeFromValue(constValue);
+		}
+	}
+
+	if (options.collapseNullFields && result.type === "null") {
+		delete result.type;
+		if (!options.stripNullableKeyword) result.nullable = true;
+	}
+
+	if (
+		options.autoPropertyOrdering &&
+		result.type === "object" &&
+		!outHasOwn(result, "propertyOrdering") &&
+		isJsonObject(result.properties)
+	) {
+		const props = result.properties;
+		const keys: string[] = [];
+		for (const k in props) {
+			if (Object.hasOwn(props, k)) keys.push(k);
+		}
+		if (keys.length > 1) result.propertyOrdering = keys;
+	}
+
+	if (options.ensureObjectProperties && result.type === "object" && !outHasOwn(result, "properties")) {
+		result.properties = {};
+	}
+
+	applyDescriptionSpill(result, spill, options);
+	return applyNodePostProcessing(result, options);
+}
+
+function applyNodePostProcessing(schema: JsonObject, options: NormalizeSchemaWalkOptions): JsonObject {
+	let current = schema;
+	for (const combiner of JSON_SCHEMA_COMBINERS) {
+		if (options.mergeObjectCombiners) current = mergeObjectCombinerVariants(current, combiner);
+		if (options.collapseMixedTypeCombiners) current = collapseMixedTypeCombinerVariants(current, combiner);
+		if (options.collapseSameTypeCombiners) current = collapseSameTypeCombinerVariants(current, combiner);
+	}
+	return current;
+}
+
+/** Copy all keys from a schema except the specified combiner key. */
+export function copySchemaWithout(schema: JsonObject, combiner: string): JsonObject {
+	const { [combiner]: _, ...rest } = schema;
+	return rest;
+}
+
+function mergeObjectCombinerVariants(schema: JsonObject, combiner: "anyOf" | "oneOf"): JsonObject {
+	const variantsRaw = schema[combiner];
+	if (!Array.isArray(variantsRaw) || variantsRaw.length === 0) {
+		return schema;
+	}
+
+	const variants: JsonObject[] = [];
+	for (const entry of variantsRaw) {
+		if (!isJsonObject(entry)) {
+			return schema;
+		}
+		const variantType = entry.type;
+		const hasObjectShape =
+			isJsonObject(entry.properties) ||
+			Array.isArray(entry.required) ||
+			Object.hasOwn(entry, "additionalProperties");
+		if (variantType === undefined && !hasObjectShape) {
+			return schema;
+		}
+		if (variantType !== undefined && variantType !== "object") {
+			return schema;
+		}
+		if (entry.properties !== undefined && !isJsonObject(entry.properties)) {
+			return schema;
+		}
+		if (entry.required !== undefined && !Array.isArray(entry.required)) {
+			return schema;
+		}
+		variants.push(entry);
+	}
+
+	const mergedProperties: JsonObject = {};
+	const ownProperties = isJsonObject(schema.properties) ? schema.properties : {};
+	for (const name in ownProperties) {
+		if (Object.hasOwn(ownProperties, name)) mergedProperties[name] = ownProperties[name];
+	}
+
+	for (const variant of variants) {
+		const properties = isJsonObject(variant.properties) ? variant.properties : {};
+		for (const name in properties) {
+			if (!Object.hasOwn(properties, name)) continue;
+			const propertySchema = properties[name];
+			const existingSchema = mergedProperties[name];
+			mergedProperties[name] =
+				existingSchema === undefined ? propertySchema : mergePropertySchemas(existingSchema, propertySchema);
+		}
+	}
+
+	const nextSchema = copySchemaWithout(schema, combiner);
+	nextSchema.type = "object";
+	nextSchema.properties = mergedProperties;
+
+	let requiredIntersection: string[] | undefined;
+	for (const variant of variants) {
+		const variantRequired = Array.isArray(variant.required)
+			? variant.required.filter((r): r is string => typeof r === "string")
+			: [];
+		if (requiredIntersection === undefined) {
+			requiredIntersection = [...variantRequired];
+		} else {
+			const reqSet = new Set(variantRequired);
+			requiredIntersection = requiredIntersection.filter(r => reqSet.has(r));
+		}
+	}
+	const parentRequired = Array.isArray(schema.required)
+		? schema.required.filter((r): r is string => typeof r === "string")
+		: [];
+	const safeRequired = new Set<string>();
+	for (const name of requiredIntersection ?? []) {
+		if (Object.hasOwn(mergedProperties, name)) safeRequired.add(name);
+	}
+	for (const name of parentRequired) {
+		if (Object.hasOwn(ownProperties, name) && Object.hasOwn(mergedProperties, name)) {
+			safeRequired.add(name);
+		}
+	}
+	const requiredInPropertyOrder: string[] = [];
+	for (const name in mergedProperties) {
+		if (Object.hasOwn(mergedProperties, name) && safeRequired.has(name)) requiredInPropertyOrder.push(name);
+	}
+	if (requiredInPropertyOrder.length > 0) {
+		nextSchema.required = requiredInPropertyOrder;
+	} else {
+		delete nextSchema.required;
+	}
+
+	return nextSchema;
+}
+
+function collapseMixedTypeCombinerVariants(schema: JsonObject, combiner: "anyOf" | "oneOf"): JsonObject {
+	const variantsRaw = schema[combiner];
+	if (!Array.isArray(variantsRaw) || variantsRaw.length === 0) {
+		return schema;
+	}
+
+	const seenTypes = new Set<string>();
+	const variantTypes: string[] = [];
+	const mergedVariantFields: JsonObject = {};
+	for (const entry of variantsRaw) {
+		if (!isJsonObject(entry) || typeof entry.type !== "string") {
+			return schema;
+		}
+
+		const variantType = entry.type;
+		if (seenTypes.has(variantType)) {
+			return schema;
+		}
+
+		const allowedKeys = CLOUD_CODE_ASSIST_TYPE_SPECIFIC_KEYS[variantType];
+		if (!allowedKeys) {
+			return schema;
+		}
+
+		for (const key in entry) {
+			if (!Object.hasOwn(entry, key)) continue;
+			const variantValue = entry[key];
+			if (key === "type") continue;
+			if (!Object.hasOwn(allowedKeys, key) && !Object.hasOwn(CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS, key)) {
+				return schema;
+			}
+
+			const existingValue = mergedVariantFields[key];
+			if (existingValue !== undefined && !areJsonValuesEqual(existingValue, variantValue)) {
+				return schema;
+			}
+			mergedVariantFields[key] = variantValue;
+		}
+
+		seenTypes.add(variantType);
+		variantTypes.push(variantType);
+	}
+
+	if (variantTypes.length < 2 || variantTypes.every(type => type === "object")) {
+		return schema;
+	}
+
+	const nextSchema = copySchemaWithout(schema, combiner);
+	const nonNullTypes = variantTypes.filter(t => t !== "null");
+	nextSchema.type = nonNullTypes[0] ?? variantTypes[0];
+	for (const key in mergedVariantFields) {
+		if (!Object.hasOwn(mergedVariantFields, key)) continue;
+		const value = mergedVariantFields[key];
+		const existingValue = nextSchema[key];
+		if (existingValue !== undefined && !areJsonValuesEqual(existingValue, value)) {
+			return schema;
+		}
+		if (existingValue === undefined) {
+			nextSchema[key] = value;
+		}
+	}
+	return nextSchema;
+}
+
+function collapseSameTypeCombinerVariants(schema: JsonObject, combiner: "anyOf" | "oneOf"): JsonObject {
+	const variantsRaw = schema[combiner];
+	if (!Array.isArray(variantsRaw) || variantsRaw.length === 0) return schema;
+	let commonType: string | undefined;
+	let firstEntry: JsonObject | undefined;
+	for (const entry of variantsRaw) {
+		if (!isJsonObject(entry) || typeof entry.type !== "string") return schema;
+		if (commonType === undefined) {
+			commonType = entry.type;
+			firstEntry = entry;
+		} else if (entry.type !== commonType) return schema;
+	}
+	if (!firstEntry) return schema;
+	const nextSchema = copySchemaWithout(schema, combiner);
+	for (const key in firstEntry) {
+		if (Object.hasOwn(firstEntry, key) && !outHasOwn(nextSchema, key)) nextSchema[key] = firstEntry[key];
+	}
+	return nextSchema;
+}
+
+/**
+ * Recursively strip any remaining anyOf/oneOf that same-type or mixed-type
+ * collapse can handle. This is needed because object-combiner merging can
+ * create new anyOf in merged subtrees after child normalization already ran.
+ */
+export function stripResidualCombiners(value: unknown, epoch: number = epochNext()): unknown {
+	if (Array.isArray(value)) {
+		if (!once(value, epoch)) return [];
+		return value.map(entry => stripResidualCombiners(entry, epoch));
+	}
+	if (!isJsonObject(value)) return value;
+	if (!once(value, epoch)) return {};
+	const result: JsonObject = {};
+	for (const key in value) {
+		if (Object.hasOwn(value, key)) result[key] = stripResidualCombiners(value[key], epoch);
+	}
+	let current: JsonObject = result;
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const combiner of JSON_SCHEMA_COMBINERS) {
+			const sameType = collapseSameTypeCombinerVariants(current, combiner);
+			if (sameType !== current) {
+				current = sameType;
+				changed = true;
+			}
+			const mixed = collapseMixedTypeCombinerVariants(current, combiner);
+			if (mixed !== current) {
+				current = mixed;
+				changed = true;
+			}
+		}
+	}
+	return current;
+}
+
+interface NullableExtractionResult {
+	schema: unknown;
+	nullable: boolean;
+}
+
+function extractNullableUnionSchema(schema: unknown): NullableExtractionResult {
+	if (!isJsonObject(schema)) {
+		return { schema, nullable: false };
+	}
+
+	if (schema.nullable === true) {
+		const nextSchema = { ...schema };
+		delete nextSchema.nullable;
+		return { schema: nextSchema, nullable: true };
+	}
+
+	if (Array.isArray(schema.type)) {
+		const typeVariants = schema.type.filter((entry): entry is string => typeof entry === "string");
+		const nonNullTypes = typeVariants.filter(entry => entry !== "null");
+		if (typeVariants.includes("null") && nonNullTypes.length === 1) {
+			const nextSchema = { ...schema, type: nonNullTypes[0] };
+			return { schema: nextSchema, nullable: true };
+		}
+	}
+
+	for (const combiner of JSON_SCHEMA_COMBINERS) {
+		const variantsRaw = schema[combiner];
+		if (!Array.isArray(variantsRaw)) continue;
+
+		let hasNullVariant = false;
+		const nonNullVariants: unknown[] = [];
+		for (const variant of variantsRaw) {
+			if (isJsonObject(variant) && variant.type === "null") {
+				let keyCount = 0;
+				for (const k in variant) {
+					if (!Object.hasOwn(variant, k)) continue;
+					if (++keyCount > 1) break;
+				}
+				if (keyCount === 1) {
+					hasNullVariant = true;
+					continue;
+				}
+			}
+			nonNullVariants.push(variant);
+		}
+
+		if (!hasNullVariant || nonNullVariants.length !== 1 || !isJsonObject(nonNullVariants[0])) {
+			continue;
+		}
+
+		const nextSchema = copySchemaWithout(schema, combiner);
+		const nonNullVariant = nonNullVariants[0];
+		for (const key in nonNullVariant) {
+			if (!Object.hasOwn(nonNullVariant, key)) continue;
+			const value = nonNullVariant[key];
+			const existingValue = nextSchema[key];
+			if (existingValue !== undefined && !areJsonValuesEqual(existingValue, value)) {
+				return { schema, nullable: false };
+			}
+			if (existingValue === undefined) {
+				nextSchema[key] = value;
+			}
+		}
+		return { schema: nextSchema, nullable: true };
+	}
+
+	return { schema, nullable: false };
+}
+
+interface NullableNormalizationResult {
+	schema: unknown;
+	nullable: boolean;
+}
+
+function normalizeNullablePropertiesForCloudCodeAssist(
+	value: unknown,
+	isPropertySchema = false,
+	epoch: number = epochNext(),
+): NullableNormalizationResult {
+	if (Array.isArray(value)) {
+		if (!once(value, epoch)) {
+			return { schema: [], nullable: false };
+		}
+		return {
+			schema: value.map(entry => normalizeNullablePropertiesForCloudCodeAssist(entry, false, epoch).schema),
+			nullable: false,
+		};
+	}
+	if (!isJsonObject(value)) {
+		return { schema: value, nullable: false };
+	}
+	if (!once(value, epoch)) {
+		return { schema: {}, nullable: false };
+	}
+
+	const normalized: JsonObject = {};
+	for (const key in value) {
+		if (Object.hasOwn(value, key))
+			normalized[key] = normalizeNullablePropertiesForCloudCodeAssist(value[key], false, epoch).schema;
+	}
+
+	if (isJsonObject(normalized.properties)) {
+		const properties = normalized.properties;
+		const required = new Set(
+			Array.isArray(normalized.required)
+				? normalized.required.filter((entry): entry is string => typeof entry === "string")
+				: [],
+		);
+		const nextProperties: JsonObject = {};
+		for (const name in properties) {
+			if (!Object.hasOwn(properties, name)) continue;
+			const normalizedProperty = normalizeNullablePropertiesForCloudCodeAssist(properties[name], true, epoch);
+			nextProperties[name] = normalizedProperty.schema;
+			if (normalizedProperty.nullable) {
+				required.delete(name);
+			}
+		}
+		normalized.properties = nextProperties;
+		if (Array.isArray(normalized.required)) {
+			normalized.required = Array.from(required);
+		}
+	}
+
+	if (!isPropertySchema) {
+		return { schema: normalized, nullable: false };
+	}
+
+	return extractNullableUnionSchema(normalized);
+}
+
+function createResidualIncompatibilityChecks(
+	checks: ReadonlyArray<ResidualSchemaIncompatibility> | undefined,
+): ResidualIncompatibilityChecks | undefined {
+	if (!checks || checks.length === 0) return undefined;
+	const result: ResidualIncompatibilityChecks = {
+		typeArray: false,
+		typeNull: false,
+		nullable: false,
+		combiners: false,
+	};
+	for (const check of checks) {
+		switch (check) {
+			case "type-array":
+				result.typeArray = true;
+				break;
+			case "type-null":
+				result.typeNull = true;
+				break;
+			case "nullable":
+				result.nullable = true;
+				break;
+			case "combiners":
+				result.combiners = true;
+				break;
+		}
+	}
+	return result;
+}
+
+function hasResidualSchemaIncompatibilities(
+	value: unknown,
+	checks: ResidualIncompatibilityChecks,
+	epoch: number = epochNext(),
+): boolean {
+	if (Array.isArray(value)) {
+		if (!once(value, epoch)) return false;
+		return value.some(entry => hasResidualSchemaIncompatibilities(entry, checks, epoch));
+	}
+	if (!isJsonObject(value)) {
+		return false;
+	}
+	if (!once(value, epoch)) {
+		return false;
+	}
+
+	if (checks.typeArray && Array.isArray(value.type)) return true;
+	if (checks.typeNull && value.type === "null") return true;
+	if (checks.nullable && Object.hasOwn(value, "nullable")) return true;
+	if (checks.combiners) {
+		for (const combiner of CCA_FORBIDDEN_COMBINERS) {
+			if (Array.isArray(value[combiner])) return true;
+		}
+	}
+	for (const k in value) {
+		if (!Object.hasOwn(value, k)) continue;
+		if (hasResidualSchemaIncompatibilities(value[k], checks, epoch)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+export function normalizeSchema(value: unknown, options: NormalizeSchemaOptions): unknown {
+	const upgraded = upgradeJsonSchemaTo202012(value);
+	const dereferenced = dereferenceJsonSchema(upgraded);
+	let normalized = normalizeSchemaNode(dereferenced, {
+		...options,
+		insideProperties: false,
+		epoch: epochNext(),
+	});
+	if (options.stripResidualCombinersFixpoint) {
+		normalized = stripResidualCombiners(normalized);
+	}
+	if (options.extractNullableFromUnions) {
+		normalized = normalizeNullablePropertiesForCloudCodeAssist(normalized).schema;
+	}
+	const residualChecks = createResidualIncompatibilityChecks(options.rejectResidualIncompatibilities);
+	if (residualChecks && hasResidualSchemaIncompatibilities(normalized, residualChecks)) {
+		logger.debug("Schema has residual provider incompatibilities, using fallback");
+		return options.validateAndFallback?.fallback ?? normalized;
+	}
+	if (options.validateAndFallback && !isValidJsonSchema(normalized)) {
+		logger.debug("Schema failed validation, using fallback");
+		return options.validateAndFallback.fallback;
+	}
+	return normalized;
+}
+
+export function normalizeSchemaForGoogle(value: unknown): unknown {
+	return normalizeSchema(value, {
+		unsupportedFields: isGoogleUnsupportedSchemaField,
+		normalizeFieldNames: true,
+		collapseNullFields: true,
+		normalizeTypeArrayToNullable: true,
+		stripNullableKeyword: false,
+		autoPropertyOrdering: true,
+		ensureObjectProperties: true,
+		liftStrippedToDescription: { format: "spill" },
+		mergeObjectCombiners: false,
+		collapseSameTypeCombiners: false,
+		collapseMixedTypeCombiners: false,
+		stripResidualCombinersFixpoint: false,
+		extractNullableFromUnions: false,
+	});
+}
+
+export function normalizeSchemaForCCA(value: unknown): unknown {
+	return normalizeSchema(value, {
+		unsupportedFields: isGoogleUnsupportedSchemaField,
+		normalizeFieldNames: true,
+		collapseNullFields: false,
+		normalizeTypeArrayToNullable: true,
+		stripNullableKeyword: true,
+		autoPropertyOrdering: false,
+		ensureObjectProperties: true,
+		liftStrippedToDescription: { format: "spill" },
+		mergeObjectCombiners: true,
+		collapseSameTypeCombiners: true,
+		collapseMixedTypeCombiners: true,
+		stripResidualCombinersFixpoint: true,
+		extractNullableFromUnions: true,
+		rejectResidualIncompatibilities: ["type-array", "type-null", "nullable", "combiners"],
+		validateAndFallback: { fallback: CLOUD_CODE_ASSIST_CLAUDE_FALLBACK_SCHEMA },
+	});
+}
+
+export function normalizeSchemaForMCP(value: unknown): unknown {
+	return normalizeSchema(value, {
+		unsupportedFields: isMcpUnsupportedSchemaField,
+		normalizeFieldNames: false,
+		collapseNullFields: false,
+		normalizeTypeArrayToNullable: false,
+		stripNullableKeyword: true,
+		autoPropertyOrdering: false,
+		ensureObjectProperties: false,
+		liftStrippedToDescription: false,
+		mergeObjectCombiners: false,
+		collapseSameTypeCombiners: false,
+		collapseMixedTypeCombiners: false,
+		stripResidualCombinersFixpoint: false,
+		extractNullableFromUnions: false,
+	});
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI Responses — `oneOf` → `anyOf` rewrite
+// ---------------------------------------------------------------------------
+
+/**
+ * OpenAI Responses rejects `oneOf` in tool schemas even when strict mode is
+ * disabled. Non-strict schemas can still use `anyOf`, so preserve the union
+ * shape by recursively rewriting `oneOf` branches to `anyOf`.
+ *
+ * Identity-preserving: returns the input reference unchanged when no rewrite
+ * occurred so callers can dedupe via reference equality (and the strict-mode
+ * cache stays warm). If a node has both `oneOf` and `anyOf`, the two are
+ * concatenated (the wire payload accepts a single union; preserving both
+ * would not survive).
+ */
+export function sanitizeSchemaForOpenAIResponses(schema: JsonObject): JsonObject {
+	return rewriteOneOfToAnyOf(schema) as JsonObject;
+}
+
+/**
+ * Alias for {@link sanitizeSchemaForOpenAIResponses} matching the
+ * `normalizeSchemaFor*` dispatcher naming used elsewhere in this module.
+ */
+export const normalizeSchemaForOpenAIResponses: (schema: JsonObject) => JsonObject = sanitizeSchemaForOpenAIResponses;
+
+function rewriteOneOfToAnyOf(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		let changed = false;
+		const rewritten = value.map(item => {
+			const next = rewriteOneOfToAnyOf(item);
+			if (next !== item) changed = true;
+			return next;
+		});
+		return changed ? rewritten : value;
+	}
+
+	if (!value || typeof value !== "object") {
+		return value;
+	}
+
+	const input = value as Record<string, unknown>;
+	let changed = false;
+	const output: Record<string, unknown> = {};
+	for (const key in input) {
+		const child = input[key];
+		// Skip `oneOf` here; it is re-emitted as `anyOf` after the loop so
+		// neighboring `anyOf` entries can be folded in.
+		if (key === "oneOf") {
+			changed = true;
+			continue;
+		}
+		const next = rewriteOneOfToAnyOf(child);
+		if (next !== child) changed = true;
+		output[key] = next;
+	}
+
+	// Re-emit `oneOf` content under `anyOf`, concatenating with any existing
+	// `anyOf` branches in the original node.
+	if (Array.isArray(input.oneOf)) {
+		const rewrittenOneOf = rewriteOneOfToAnyOf(input.oneOf);
+		const existingAnyOf = output.anyOf;
+		output.anyOf = Array.isArray(existingAnyOf)
+			? [...existingAnyOf, ...(rewrittenOneOf as unknown[])]
+			: rewrittenOneOf;
+	}
+
+	return changed ? output : value;
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI strict mode — sanitize + enforce
+// ---------------------------------------------------------------------------
+
+/**
+ * Single primitive JSON Schema `type` keyword. Strict mode treats these
+ * scalar types as concrete-enough; aggregate shapes (object, array) are not
+ * included because they're not derivable from a single `enum`/`const` value.
+ */
+type StrictPrimitiveType = "null" | "string" | "number" | "boolean";
+
+function primitiveJsonTypeOf(value: unknown): StrictPrimitiveType | undefined {
+	if (value === null) return "null";
+	switch (typeof value) {
+		case "string":
+			return "string";
+		case "number":
+			return "number";
+		case "boolean":
+			return "boolean";
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Returns the primitive `type` keyword that fully describes the constraint
+ * expressed by this node's `enum` (or `const`), or `undefined` when the
+ * constraint cannot be reduced to a single primitive type.
+ *
+ * Strict mode requires every schema node to declare a concrete `type`. When
+ * the author wrote `{enum:[...]}` or `{const:X}` without a `type`, we can
+ * infer one — but only when every value reduces to the same primitive type.
+ * Mixed-primitive enums (`[1, "two", null]`), enums containing non-primitives
+ * (`[{a:1}]`), and non-primitive consts (`{a:1}`, `[1,2,3]`) all return
+ * undefined: those shapes cannot be described by a single `type` keyword, so
+ * strict mode cannot represent them and the caller must fall back.
+ */
+function inferStrictPrimitiveTypeFromEnumOrConst(node: Record<string, unknown>): StrictPrimitiveType | undefined {
+	const values: unknown[] = Array.isArray(node.enum) ? node.enum : Object.hasOwn(node, "const") ? [node.const] : [];
+	if (values.length === 0) return undefined;
+	let inferred: StrictPrimitiveType | undefined;
+	for (const value of values) {
+		const t = primitiveJsonTypeOf(value);
+		if (t === undefined) return undefined; // non-primitive (object/array) — strict can't represent
+		if (inferred === undefined) inferred = t;
+		else if (inferred !== t) return undefined; // mixed primitives
+	}
+	return inferred;
+}
+
+/**
+ * Per-schema-object memoization slot. The result of `tryEnforceStrictSchema`
+ * is stamped directly onto the input via `stamp(target, kStrictSchema, …)`
+ * so repeated calls (different providers, retries, batching) reuse the same
+ * computed pair without re-walking the tree.
+ */
+const kStrictSchema = Symbol("pi.schema.strict");
+
+/**
+ * Detect schemas that strict mode *cannot* represent.
+ *
+ * Strict mode requires closed object shapes — every property is declared in
+ * `properties` and listed in `required`. That is incompatible with:
+ *  - `patternProperties` (open keyset matched by regex),
+ *  - `additionalProperties: true` or `additionalProperties: <schema>` (open
+ *    keyset with optional further constraint).
+ *
+ * This check recurses into every place a child schema may live (properties,
+ * items/prefixItems, combinator branches, $defs) so a single offender deep
+ * in the tree disqualifies the whole schema. Used to fail-open early in
+ * `tryEnforceStrictSchema` rather than throwing during enforcement.
+ */
+function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, epoch: number = epochNext()): boolean {
+	if (!once(schema, epoch)) return false;
+
+	let hasPatternProperties = false;
+	if (isJsonObject(schema.patternProperties)) {
+		for (const _ in schema.patternProperties) {
+			hasPatternProperties = true;
+			break;
+		}
+	}
+	const additionalPropertiesValue = schema.additionalProperties;
+	const hasSchemaAdditionalProperties = additionalPropertiesValue === true || isJsonObject(additionalPropertiesValue);
+	if (hasPatternProperties || hasSchemaAdditionalProperties) {
+		return true;
+	}
+
+	if (isJsonObject(schema.properties)) {
+		const properties = schema.properties;
+		for (const k in properties) {
+			const propertySchema = properties[k];
+			if (isJsonObject(propertySchema) && hasUnrepresentableStrictObjectMap(propertySchema, epoch)) {
+				return true;
+			}
+		}
+	}
+
+	if (isJsonObject(schema.items)) {
+		if (hasUnrepresentableStrictObjectMap(schema.items, epoch)) {
+			return true;
+		}
+	} else if (Array.isArray(schema.items)) {
+		for (const itemSchema of schema.items) {
+			if (isJsonObject(itemSchema) && hasUnrepresentableStrictObjectMap(itemSchema, epoch)) {
+				return true;
+			}
+		}
+	}
+	if (Array.isArray(schema.prefixItems)) {
+		for (const itemSchema of schema.prefixItems) {
+			if (isJsonObject(itemSchema) && hasUnrepresentableStrictObjectMap(itemSchema, epoch)) {
+				return true;
+			}
+		}
+	}
+
+	for (const key of COMBINATOR_KEYS) {
+		const variants = schema[key];
+		if (!Array.isArray(variants)) continue;
+		for (const variant of variants) {
+			if (isJsonObject(variant) && hasUnrepresentableStrictObjectMap(variant, epoch)) {
+				return true;
+			}
+		}
+	}
+
+	for (const defsKey of ["$defs", "definitions"] as const) {
+		const defs = schema[defsKey];
+		if (!isJsonObject(defs)) continue;
+		for (const k in defs) {
+			const defSchema = defs[k];
+			if (isJsonObject(defSchema) && hasUnrepresentableStrictObjectMap(defSchema, epoch)) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+/**
+ * First pass of strict-mode preparation.
+ *
+ * Rewrites everything strict mode forbids into something it accepts:
+ *  - Drops non-structural keywords (`format`, `pattern`, `examples`, …),
+ *    `const`, `nullable`, and `additionalProperties` (re-added by
+ *    `enforceStrictSchema` as `false`).
+ *  - `type: [a, b]` → `anyOf: [{type: a, …}, {type: b, …}]`, copying only the
+ *    keywords each variant can use (e.g. `properties` stays only on the
+ *    object variant).
+ *  - `const` → single-entry `enum`.
+ *  - Description carries a `(default: X)` suffix so the model still sees the
+ *    documented default after the keyword is stripped.
+ *  - `nullable: true` wraps the whole node in `anyOf:[T,{type:"null"}]`.
+ *
+ * Recurses into properties, items, prefixItems, combinators, and $defs. The
+ * `cache` WeakMap dedupes shared subgraphs; the `epoch` is the cycle guard.
+ */
+export function sanitizeSchemaForStrictMode(
+	schema: Record<string, unknown>,
+	epoch: number = epochNext(),
+	cache: WeakMap<Record<string, unknown>, Record<string, unknown>> = new WeakMap(),
+	root: Record<string, unknown> = schema,
+): Record<string, unknown> {
+	const cached = cache.get(schema);
+	if (cached) return cached;
+	if (!once(schema, epoch)) return {};
+
+	// Pre-pass: unravel `$ref` with sibling keys by inlining the resolved def.
+	// OpenAI strict mode forbids `{$ref, description, ...}`; the SDK resolves
+	// and merges, with sibling keys taking precedence over the ref'd def.
+	// Cite: openai-python/src/openai/lib/_pydantic.py:96-110 (`_ensure_strict_json_schema`)
+	if (typeof schema.$ref === "string") {
+		let hasSibling = false;
+		for (const k in schema) {
+			if (k !== "$ref" && Object.hasOwn(schema, k)) {
+				hasSibling = true;
+				break;
+			}
+		}
+		if (hasSibling) {
+			const resolved = resolveStrictRef(root, schema.$ref);
+			if (resolved !== undefined) {
+				// Sibling keys on the schema override keys from the resolved def.
+				const merged: Record<string, unknown> = { ...resolved };
+				for (const k in schema) {
+					if (k === "$ref" || !Object.hasOwn(schema, k)) continue;
+					merged[k] = schema[k];
+				}
+				const result = sanitizeSchemaForStrictMode(merged, epoch, cache, root);
+				cache.set(schema, result);
+				return result;
+			}
+		}
+	}
+
+	// Pre-pass: collapse single-element `allOf` by inlining its sole entry.
+	// SDK semantics: `json_schema.update(ensured(all_of[0]))` — the inlined
+	// entry's keys WIN over original sibling keys, then `allOf` is dropped.
+	// Cite: openai-python/src/openai/lib/_pydantic.py:79-83
+	{
+		const allOf = schema.allOf;
+		if (Array.isArray(allOf) && allOf.length === 1 && isJsonObject(allOf[0])) {
+			const merged: Record<string, unknown> = { ...schema };
+			delete merged.allOf;
+			const sole = allOf[0] as Record<string, unknown>;
+			for (const k in sole) {
+				if (Object.hasOwn(sole, k)) merged[k] = sole[k];
+			}
+			const result = sanitizeSchemaForStrictMode(merged, epoch, cache, root);
+			cache.set(schema, result);
+			return result;
+		}
+	}
+
+	const typeValue = schema.type;
+	if (Array.isArray(typeValue)) {
+		const typeVariants = typeValue.filter((entry): entry is string => typeof entry === "string");
+		const schemaWithoutType = { ...schema };
+		delete schemaWithoutType.type;
+
+		const sanitizedWithoutType = sanitizeSchemaForStrictMode(schemaWithoutType, epoch, cache, root);
+		if (typeVariants.length === 0) {
+			cache.set(schema, sanitizedWithoutType);
+			return sanitizedWithoutType;
+		}
+		// Build one variant schema per type. Each variant keeps only the keywords
+		// relevant to that type — object-only keywords stay on the object variant,
+		// array-only keywords on the array variant, etc.
+		//
+		// `description` is metadata that applies to the whole union, not to any
+		// single type variant, so hoist it to the wrapper so both branches share
+		// it without duplication. Matches the optional-property wrap in
+		// `enforceStrictSchema` and the typical OpenAI strict-mode "description
+		// on the union" shape.
+		const { description, ...variantBase } = sanitizedWithoutType;
+		const variants = typeVariants.map(variantType => {
+			const variantSchema: Record<string, unknown> = { ...variantBase, type: variantType };
+			if (variantType !== "object") {
+				delete variantSchema.properties;
+				delete variantSchema.required;
+				delete variantSchema.additionalProperties;
+			}
+			if (variantType !== "array") {
+				delete variantSchema.items;
+			}
+			return sanitizeSchemaForStrictMode(variantSchema, epoch, cache, root);
+		});
+
+		if (variants.length === 1) {
+			const sole = variants[0] as Record<string, unknown>;
+			if (description !== undefined && !Object.hasOwn(sole, "description")) {
+				sole.description = description;
+			}
+			cache.set(schema, sole);
+			return sole;
+		}
+
+		const result: JsonObject = { anyOf: variants };
+		if (description !== undefined) result.description = description;
+		cache.set(schema, result);
+		return result;
+	}
+	// Scalar `type`: walk the keys, rewriting or stripping per strict-mode rules.
+
+	const sanitized: Record<string, unknown> = {};
+	cache.set(schema, sanitized);
+	for (const key in schema) {
+		const value = schema[key];
+		if (key in NON_STRUCTURAL_SCHEMA_KEYS || key === "type" || key === "const" || key === "nullable") {
+			continue;
+		}
+		// `properties` map — recurse into each property schema.
+
+		if (key === "properties" && isJsonObject(value)) {
+			const properties: Record<string, unknown> = {};
+			for (const propertyName in value) {
+				const propertySchema = value[propertyName];
+				properties[propertyName] = isJsonObject(propertySchema)
+					? sanitizeSchemaForStrictMode(propertySchema, epoch, cache, root)
+					: propertySchema;
+			}
+			sanitized.properties = properties;
+			continue;
+		}
+		// `items` can be schema, tuple-array, or scalar boolean — recurse where applicable.
+
+		if (key === "items") {
+			if (isJsonObject(value)) {
+				sanitized.items = sanitizeSchemaForStrictMode(value, epoch, cache, root);
+			} else if (Array.isArray(value)) {
+				sanitized.items = value.map(entry =>
+					isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache, root) : entry,
+				);
+			} else {
+				sanitized.items = value;
+			}
+			continue;
+		}
+		// `prefixItems` is always an array of schemas (draft 2020-12).
+
+		if (key === "prefixItems" && Array.isArray(value)) {
+			sanitized.prefixItems = value.map(entry =>
+				isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache, root) : entry,
+			);
+			continue;
+		}
+		// `anyOf`/`oneOf`/`allOf` arrays — recurse into each branch.
+
+		if (COMBINATOR_KEYS.includes(key as (typeof COMBINATOR_KEYS)[number]) && Array.isArray(value)) {
+			sanitized[key] = value.map(entry =>
+				isJsonObject(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache, root) : entry,
+			);
+			continue;
+		}
+		// Definition maps — recurse into each named schema.
+
+		if ((key === "$defs" || key === "definitions") && isJsonObject(value)) {
+			const defs: Record<string, unknown> = {};
+			for (const definitionName in value) {
+				const definitionSchema = value[definitionName];
+				defs[definitionName] = isJsonObject(definitionSchema)
+					? sanitizeSchemaForStrictMode(definitionSchema, epoch, cache, root)
+					: definitionSchema;
+			}
+			sanitized[key] = defs;
+			continue;
+		}
+		// `additionalProperties` is owned by `enforceStrictSchema`, which sets it to false.
+
+		if (key === "additionalProperties") {
+			continue;
+		}
+
+		if (key === "description" && typeof value === "string" && schema.default !== undefined) {
+			// Preserve `default:` info for strict-mode providers that strip the keyword.
+			// Inline as `(default: X)` text in the description, matching the convention for
+			// runtime-placeholder defaults (e.g. `cwd`) that cannot live in the keyword form.
+			const defaultVal = schema.default;
+			const formatted = typeof defaultVal === "string" ? defaultVal : JSON.stringify(defaultVal);
+			sanitized.description = value.includes("(default:") ? value : `${value} (default: ${formatted})`;
+			continue;
+		}
+
+		sanitized[key] = value;
+	}
+	// Post-pass: re-derive `type` and turn dropped keywords into a representable shape.
+
+	if (Object.hasOwn(schema, "const")) {
+		const constVal = schema.const;
+		const existingEnum = Array.isArray(sanitized.enum) ? sanitized.enum : [];
+		if (!existingEnum.some(v => areJsonValuesEqual(v, constVal))) {
+			existingEnum.push(constVal);
+		}
+		sanitized.enum = existingEnum;
+	}
+
+	// Preserve the original scalar type after the strip-and-rebuild loop.
+	if (typeof typeValue === "string") {
+		sanitized.type = typeValue;
+	}
+
+	if (sanitized.type === undefined && isJsonObject(sanitized.properties)) {
+		sanitized.type = "object";
+	}
+
+	if (sanitized.type === undefined && (sanitized.items !== undefined || sanitized.prefixItems !== undefined)) {
+		sanitized.type = "array";
+	}
+
+	// Last-resort inference: a bare `enum`/`const` with homogeneous primitives gets a `type`.
+	if (sanitized.type === undefined) {
+		const inferred = inferStrictPrimitiveTypeFromEnumOrConst(sanitized);
+		if (inferred !== undefined) sanitized.type = inferred;
+	}
+
+	// `nullable: true` was stripped above — re-introduce it as an `anyOf` wrapper.
+	// `description` hoists to the wrapper so both branches share it without
+	// duplication — matches the optional-property wrap in `enforceStrictSchema`
+	// and the typical OpenAI strict-mode "description on the union" shape.
+	if (schema.nullable === true) {
+		const { nullable: _, description, ...withoutNullable } = sanitized;
+		const wrapper: JsonObject = { anyOf: [withoutNullable, { type: "null" }] };
+		if (description !== undefined) wrapper.description = description;
+		return wrapper;
+	}
+
+	return sanitized;
+}
+
+/**
+ * Recursively enforces JSON Schema constraints required by OpenAI/Codex strict mode:
+ *   - `additionalProperties: false` on every object node
+ *   - every key in `properties` present in `required`
+ *
+ * Properties absent from the original `required` array were TypeBox-optional.
+ * They are made nullable (`anyOf: [T, { type: "null" }]`) so the model can
+ * signal omission by outputting null rather than omitting the key entirely.
+ *
+ * @throws {Error} When a schema node has no `type`, array-based combinator
+ *   (`anyOf`/`allOf`/`oneOf`), object-based combinator (`not`), or `$ref` —
+ *   i.e. the node is not representable in strict mode. Prefer
+ *   {@link tryEnforceStrictSchema} which catches this and degrades gracefully.
+ */
+export function enforceStrictSchema(
+	schema: Record<string, unknown>,
+	cache: WeakMap<Record<string, unknown>, Record<string, unknown>> = new WeakMap(),
+): Record<string, unknown> {
+	if (!enter(schema)) {
+		throw new Error("Schema contains a circular object graph — cannot enforce strict mode");
+	}
+	try {
+		const cached = cache.get(schema);
+		if (cached) return cached;
+		const result = { ...schema };
+		cache.set(schema, result);
+		return enforceStrictSchemaBody(schema, result, cache);
+	} finally {
+		exit(schema);
+	}
+}
+
+function enforceStrictSchemaBody(
+	_schema: Record<string, unknown>,
+	result: Record<string, unknown>,
+	cache: WeakMap<Record<string, unknown>, Record<string, unknown>>,
+): Record<string, unknown> {
+	const isObjectType = result.type === "object";
+	if (isObjectType) {
+		result.additionalProperties = false;
+		const propertiesValue = result.properties;
+		const props =
+			propertiesValue != null && typeof propertiesValue === "object" && !Array.isArray(propertiesValue)
+				? (propertiesValue as Record<string, unknown>)
+				: {};
+		const originalRequired = new Set<string>(
+			Array.isArray(result.required)
+				? result.required.filter((value): value is string => typeof value === "string")
+				: [],
+		);
+		const strictProperties: Record<string, unknown> = {};
+		for (const key in props) {
+			const value = props[key];
+			const processed =
+				value != null && typeof value === "object" && !Array.isArray(value)
+					? enforceStrictSchema(value as Record<string, unknown>, cache)
+					: value;
+			// Optional property — wrap as nullable so strict mode accepts it
+			if (!originalRequired.has(key)) {
+				// Don't double-wrap if already nullable
+				if (
+					isJsonObject(processed) &&
+					Array.isArray(processed.anyOf) &&
+					processed.anyOf.some(v => isJsonObject(v) && v.type === "null")
+				) {
+					strictProperties[key] = processed;
+					continue;
+				}
+				if (isJsonObject(processed) && typeof processed.description === "string") {
+					const { description, ...withoutDescription } = processed;
+					strictProperties[key] = { anyOf: [withoutDescription, { type: "null" }], description };
+					continue;
+				}
+				strictProperties[key] = { anyOf: [processed, { type: "null" }] };
+				continue;
+			}
+			strictProperties[key] = processed;
+		}
+		result.properties = strictProperties;
+		result.required = Object.keys(strictProperties);
+	}
+	if (result.items != null && typeof result.items === "object") {
+		if (Array.isArray(result.items)) {
+			result.items = result.items.map(entry =>
+				entry != null && typeof entry === "object" && !Array.isArray(entry)
+					? enforceStrictSchema(entry as Record<string, unknown>, cache)
+					: entry,
+			);
+		} else {
+			result.items = enforceStrictSchema(result.items as Record<string, unknown>, cache);
+		}
+	}
+	if (Array.isArray(result.prefixItems)) {
+		result.prefixItems = result.prefixItems.map(entry =>
+			entry != null && typeof entry === "object" && !Array.isArray(entry)
+				? enforceStrictSchema(entry as Record<string, unknown>, cache)
+				: entry,
+		);
+	}
+	for (const key of COMBINATOR_KEYS) {
+		if (Array.isArray(result[key])) {
+			result[key] = (result[key] as unknown[]).map(entry =>
+				entry != null && typeof entry === "object" && !Array.isArray(entry)
+					? enforceStrictSchema(entry as Record<string, unknown>, cache)
+					: entry,
+			);
+		}
+	}
+	for (const defsKey of ["$defs", "definitions"] as const) {
+		if (result[defsKey] != null && typeof result[defsKey] === "object" && !Array.isArray(result[defsKey])) {
+			const defs = result[defsKey] as Record<string, unknown>;
+			const nextDefs: Record<string, unknown> = {};
+			for (const name in defs) {
+				const def = defs[name];
+				nextDefs[name] =
+					def != null && typeof def === "object" && !Array.isArray(def)
+						? enforceStrictSchema(def as Record<string, unknown>, cache)
+						: def;
+			}
+			result[defsKey] = nextDefs;
+		}
+	}
+	// Strict mode requires every schema node to declare a concrete type (or
+	// combinator / `$ref` / `not`). When `type` is missing, try to infer it
+	// from a homogeneous-primitive `enum` / `const` so direct calls to
+	// `enforceStrictSchema` (which bypass `sanitizeSchemaForStrictMode`'s own
+	// inference pass) still produce wire-valid output.
+	if (result.type === undefined) {
+		const inferred = inferStrictPrimitiveTypeFromEnumOrConst(result);
+		if (inferred !== undefined) result.type = inferred;
+	}
+	// Schemas like `{}`, `{items: {}}`, mixed-primitive enums, and non-primitive
+	// consts are not representable in strict mode — `enum`/`const` are not
+	// accepted as type substitutes here because they did not yield a single
+	// inferable type above.
+	if (
+		result.type === undefined &&
+		result.$ref === undefined &&
+		!COMBINATOR_KEYS.some(key => Array.isArray(result[key])) &&
+		!isJsonObject(result.not)
+	) {
+		throw new Error("Schema node has no type, combinator, or $ref — cannot enforce strict mode");
+	}
+	return result;
+}
+
+export function tryEnforceStrictSchema(schema: Record<string, unknown>): {
+	schema: Record<string, unknown>;
+	strict: boolean;
+} {
+	return stamp(schema, kStrictSchema, s => {
+		const upgraded = upgradeJsonSchemaTo202012(s) as Record<string, unknown>;
+		if (hasUnrepresentableStrictObjectMap(upgraded)) {
+			return { schema: upgraded, strict: false };
+		}
+		try {
+			const sanitized = sanitizeSchemaForStrictMode(upgraded);
+			return { schema: enforceStrictSchema(sanitized), strict: true };
+		} catch {
+			return { schema: upgraded, strict: false };
+		}
+	});
+}
+
+/**
+ * Resolve a JSON-pointer-style `$ref` against the root schema. Mirrors the
+ * OpenAI SDK's `resolve_ref` helper: only local refs starting with `#/` are
+ * supported, and each segment must dereference to a dictionary.
+ * Cite: openai-python/src/openai/lib/_pydantic.py:118-129
+ */
+function resolveStrictRef(root: Record<string, unknown>, ref: string): Record<string, unknown> | undefined {
+	if (!ref.startsWith("#/")) return undefined;
+	const segments = ref.slice(2).split("/");
+	let cursor: unknown = root;
+	for (const raw of segments) {
+		if (!isJsonObject(cursor)) return undefined;
+		// JSON Pointer unescape: ~1 → "/", ~0 → "~" (must run in that order).
+		const segment = raw.replace(/~1/g, "/").replace(/~0/g, "~");
+		cursor = cursor[segment];
+	}
+	return isJsonObject(cursor) ? cursor : undefined;
+}

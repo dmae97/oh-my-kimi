@@ -17,7 +17,7 @@ const SEPARATORS = ["~", "%", "÷", ">", ":"] as const;
 const MODELS = [
 	"openrouter/z-ai/glm-4.7:nitro",
 	"openai/gpt-5.4-nano",
-	"p-anthropic/claude-sonnet-4-6",
+	"anthropic/claude-sonnet-4-6",
 ] as const;
 
 const CONCURRENCY = 3;

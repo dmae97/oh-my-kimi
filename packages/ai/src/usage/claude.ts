@@ -1,3 +1,4 @@
+import { scheduler } from "node:timers/promises";
 import type {
 	CredentialRankingStrategy,
 	UsageAmount,
@@ -14,7 +15,7 @@ import { isRecord, toNumber } from "../utils";
 const DEFAULT_ENDPOINT = "https://api.anthropic.com/api/oauth";
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-const MAX_RETRIES = 3;
+const MAX_ATTEMPTS = 3;
 const BASE_RETRY_DELAY_MS = 500;
 
 const CLAUDE_HEADERS = {
@@ -90,6 +91,11 @@ function getPayloadString(payload: Record<string, unknown>, key: string): string
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function getNestedPayloadString(payload: Record<string, unknown>, key: string, nestedKey: string): string | undefined {
+	const nested = payload[key];
+	return isRecord(nested) ? getPayloadString(nested, nestedKey) : undefined;
+}
+
 function extractUsageIdentity(payload: ClaudeUsageResponse, orgId?: string): { accountId?: string; email?: string } {
 	if (!isRecord(payload)) return { accountId: orgId };
 	const accountId =
@@ -99,16 +105,70 @@ function extractUsageIdentity(payload: ClaudeUsageResponse, orgId?: string): { a
 		getPayloadString(payload, "userId") ??
 		getPayloadString(payload, "org_id") ??
 		getPayloadString(payload, "orgId") ??
+		getNestedPayloadString(payload, "account", "uuid") ??
+		getNestedPayloadString(payload, "account", "id") ??
+		getNestedPayloadString(payload, "organization", "uuid") ??
+		getNestedPayloadString(payload, "organization", "id") ??
+		getNestedPayloadString(payload, "user", "uuid") ??
+		getNestedPayloadString(payload, "user", "id") ??
 		orgId;
 	const email =
 		getPayloadString(payload, "email") ??
 		getPayloadString(payload, "user_email") ??
-		getPayloadString(payload, "userEmail");
+		getPayloadString(payload, "userEmail") ??
+		getNestedPayloadString(payload, "account", "email") ??
+		getNestedPayloadString(payload, "user", "email");
 	return { accountId, email };
 }
 
 function hasUsageData(payload: ClaudeUsageResponse): boolean {
-	return Boolean(payload.five_hour || payload.seven_day || payload.seven_day_opus || payload.seven_day_sonnet);
+	return (
+		parseBucket(payload.five_hour)?.utilization !== undefined ||
+		parseBucket(payload.seven_day)?.utilization !== undefined ||
+		parseBucket(payload.seven_day_opus)?.utilization !== undefined ||
+		parseBucket(payload.seven_day_sonnet)?.utilization !== undefined
+	);
+}
+
+function isRetryableStatus(status: number): boolean {
+	return status === 429 || (status >= 500 && status < 600);
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal): boolean {
+	if (signal?.aborted) return true;
+	if (!isRecord(error)) return false;
+	return error.name === "AbortError" || error.name === "TimeoutError";
+}
+
+function retryDelayMs(attempt: number, retryAfter: string | null): number {
+	const baseline = BASE_RETRY_DELAY_MS * 2 ** attempt;
+	if (!retryAfter?.trim()) return baseline;
+	const seconds = Number.parseFloat(retryAfter);
+	if (Number.isFinite(seconds)) return Math.max(baseline, Math.max(0, seconds * 1000));
+	const dateDelay = Date.parse(retryAfter) - Date.now();
+	return Number.isFinite(dateDelay) ? Math.max(baseline, Math.max(0, dateDelay)) : baseline;
+}
+
+async function waitBeforeRetry(
+	attempt: number,
+	retryAfter: string | null,
+	signal?: AbortSignal,
+	retryWait?: UsageFetchContext["retryWait"],
+): Promise<boolean> {
+	if (signal?.aborted) return false;
+	if (attempt >= MAX_ATTEMPTS - 1) return false;
+	try {
+		const delayMs = retryDelayMs(attempt, retryAfter);
+		if (retryWait) {
+			await retryWait(delayMs, signal);
+		} else {
+			await scheduler.wait(delayMs, { signal });
+		}
+		return !signal?.aborted;
+	} catch (error) {
+		if (isAbortError(error, signal)) return false;
+		throw error;
+	}
 }
 
 async function fetchUsagePayload(
@@ -117,29 +177,50 @@ async function fetchUsagePayload(
 	ctx: UsageFetchContext,
 	signal?: AbortSignal,
 ): Promise<ClaudeUsagePayload | null> {
+	if (signal?.aborted) return null;
+
 	let lastPayload: ClaudeUsageResponse | null = null;
 	let lastOrgId: string | undefined;
-	for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+	for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
 		try {
 			const response = await ctx.fetch(url, { headers, signal });
-			if (!response.ok) {
-				ctx.logger?.warn("Claude usage fetch failed", { status: response.status, statusText: response.statusText });
-				return null;
-			}
-			const payload = (await response.json()) as ClaudeUsageResponse;
-			lastPayload = payload;
 			const orgId = response.headers.get("anthropic-organization-id")?.trim() || undefined;
 			lastOrgId = orgId ?? lastOrgId;
-			if (payload && isRecord(payload) && hasUsageData(payload)) {
-				return { payload, orgId };
-			}
-		} catch (error) {
-			ctx.logger?.warn("Claude usage fetch error", { error: String(error) });
-			return null;
-		}
 
-		if (attempt < MAX_RETRIES - 1) {
-			await Bun.sleep(BASE_RETRY_DELAY_MS * 2 ** attempt);
+			if (!response.ok) {
+				const retryable = isRetryableStatus(response.status);
+				ctx.logger?.warn("Claude usage fetch failed", {
+					status: response.status,
+					statusText: response.statusText,
+					attempt,
+					willRetry: retryable && attempt < MAX_ATTEMPTS - 1,
+				});
+				if (!retryable) return null;
+				const retryAfter = response.headers.get("retry-after");
+				if (!(await waitBeforeRetry(attempt, retryAfter, signal, ctx.retryWait))) break;
+				continue;
+			}
+
+			const parsed = (await response.json()) as unknown;
+			if (isRecord(parsed)) {
+				const payload = parsed as ClaudeUsageResponse;
+				lastPayload = payload;
+				if (hasUsageData(payload)) return { payload, orgId };
+			}
+
+			ctx.logger?.warn("Claude usage response missing usage data", {
+				attempt,
+				willRetry: attempt < MAX_ATTEMPTS - 1,
+			});
+			if (!(await waitBeforeRetry(attempt, null, signal, ctx.retryWait))) break;
+		} catch (error) {
+			if (isAbortError(error, signal)) return null;
+			ctx.logger?.warn("Claude usage fetch error", {
+				error: String(error),
+				attempt,
+				willRetry: attempt < MAX_ATTEMPTS - 1,
+			});
+			if (!(await waitBeforeRetry(attempt, null, signal, ctx.retryWait))) break;
 		}
 	}
 
@@ -147,9 +228,24 @@ async function fetchUsagePayload(
 }
 
 interface ClaudeProfile {
+	uuid?: string;
+	email?: string;
 	account?: {
 		uuid?: string;
 		email?: string;
+	};
+}
+
+function extractProfileIdentity(profile: ClaudeProfile | null): { accountId?: string; email?: string } {
+	if (!profile || !isRecord(profile)) return {};
+	const account = isRecord(profile.account) ? profile.account : undefined;
+	return {
+		accountId:
+			(typeof profile.uuid === "string" && profile.uuid.trim() ? profile.uuid.trim() : undefined) ??
+			(typeof account?.uuid === "string" && account.uuid.trim() ? account.uuid.trim() : undefined),
+		email:
+			(typeof profile.email === "string" && profile.email.trim() ? profile.email.trim() : undefined) ??
+			(typeof account?.email === "string" && account.email.trim() ? account.email.trim() : undefined),
 	};
 }
 
@@ -159,26 +255,18 @@ async function fetchProfile(
 	ctx: UsageFetchContext,
 	signal?: AbortSignal,
 ): Promise<ClaudeProfile | null> {
+	if (signal?.aborted) return null;
 	const url = `${baseUrl}/profile`;
 	try {
 		const response = await ctx.fetch(url, { headers, signal });
 		if (!response.ok) return null;
-		return (await response.json()) as ClaudeProfile;
-	} catch {
+		const payload = (await response.json()) as unknown;
+		return isRecord(payload) ? (payload as ClaudeProfile) : null;
+	} catch (error) {
+		if (isAbortError(error, signal)) return null;
+		ctx.logger?.debug("Claude profile fetch error", { error: String(error) });
 		return null;
 	}
-}
-
-async function resolveEmail(
-	params: UsageFetchParams,
-	ctx: UsageFetchContext,
-	baseUrl: string,
-	headers: Record<string, string>,
-): Promise<string | undefined> {
-	if (params.credential.email) return params.credential.email;
-
-	const profile = await fetchProfile(baseUrl, headers, ctx, params.signal);
-	return profile?.account?.email;
 }
 
 function buildUsageAmount(utilization: number | undefined): UsageAmount | undefined {
@@ -303,17 +391,23 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 
 	if (limits.length === 0) return null;
 	const identity = extractUsageIdentity(payload, orgId);
-	const accountId = identity.accountId ?? credential.accountId;
-	const email = identity.email ?? (await resolveEmail(params, ctx, baseUrl, headers));
+	let accountId = identity.accountId ?? credential.accountId;
+	let email = identity.email ?? credential.email;
+	if ((!accountId || !email) && !params.signal?.aborted) {
+		const profileIdentity = extractProfileIdentity(await fetchProfile(baseUrl, headers, ctx, params.signal));
+		accountId = accountId ?? profileIdentity.accountId;
+		email = email ?? profileIdentity.email;
+	}
 
 	const report: UsageReport = {
 		provider: params.provider,
 		fetchedAt: Date.now(),
 		limits,
 		metadata: {
-			accountId,
-			email,
 			endpoint: url,
+			...(accountId ? { accountId } : {}),
+			...(email ? { email } : {}),
+			...(orgId ? { orgId } : {}),
 		},
 		raw: payload,
 	};

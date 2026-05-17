@@ -341,6 +341,6 @@ Use this workflow:
 
 - All `colors` tokens are required for custom themes.
 - `export` and `symbols` are optional.
-- `$schema` in theme JSON is informational; runtime validation is enforced by compiled TypeBox schema in code.
+- `$schema` in theme JSON is informational; runtime validation is enforced by a Zod schema in code.
 - `setTheme` failure falls back to `dark`; `previewTheme` failure does not replace current theme.
 - File watcher reload errors or temporary missing files keep the current loaded theme until a successful reload or explicit theme switch.

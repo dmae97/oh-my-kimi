@@ -279,7 +279,7 @@ const agent = new Agent({
 
 ## Tools
 
-Define tools using `AgentTool` with a Zod parameter schema (via `z` from `@oh-my-pi/pi-ai`). Legacy TypeBox-authored schemas are still accepted at runtime and are lifted to Zod internally.
+Define tools using `AgentTool` with a Zod parameter schema (via `z` from `@oh-my-pi/pi-ai`).
 
 ```typescript
 import { z } from "@oh-my-pi/pi-ai";
