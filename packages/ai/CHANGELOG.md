@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.1.3] - 2026-05-17
 ### Breaking Changes
 
 - Changed `AuthBrokerClient.fetchSnapshot()` to return status-based results (`200` or `304`) instead of always returning a raw snapshot body, so callers now need to branch on `status`

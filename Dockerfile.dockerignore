@@ -1,17 +1,11 @@
-# Pi-artifacts build context (this file shadows `.dockerignore` only for the
-# pi-root `Dockerfile`). Robomp builds with `dockerfile: python/robomp/Dockerfile`
-# still fall back to the shared `.dockerignore` next door because they don't
-# have their own ignore file.
-#
-# Keep this file in sync with `.dockerignore` for the shared rules; everything
-# below the divider is the artifacts-only addendum.
-
-# ─── Shared with .dockerignore ────────────────────────────────────────────────
+# Build context for the pi-root `Dockerfile` (oh-my-pi/pi:dev). Shadows
+# .dockerignore for this file only. Robomp uses Dockerfile.robomp +
+# Dockerfile.robomp.dockerignore alongside.
 
 # Heavy build outputs — must never reach the build context. `target/` alone is
 # >100 GB on a dev machine.
 target/
-node_modules/
+**/node_modules
 dist/
 runs/
 
@@ -59,6 +53,10 @@ packages/natives/native/pi_natives.darwin-*.node
 packages/natives/native/pi_natives.dev.node
 packages/ai/test/.temp-images/
 python/omp-rpc/src/omp_rpc.egg-info/
+python/robomp/data/
+python/robomp/.cache/
+python/robomp/src/robomp/static/
+python/robomp/web/dist/
 
 # Scratch files the repo creates ad-hoc.
 syntax.jsonl
@@ -68,12 +66,3 @@ pi-*.html
 
 # Secrets. Should never be in the image regardless.
 .env
-
-# ─── Pi-artifacts only ────────────────────────────────────────────────────────
-# Robomp's source tree is unused by the artifacts image — pi-natives + omp-rpc
-# are the only outputs, and `python/omp-rpc/` is reached explicitly by the
-# python-builder stage (`COPY python/omp-rpc /src`). Everything under
-# `python/robomp/` (orchestrator source, web bundle, tests, container scripts)
-# would otherwise be transferred as part of the `COPY . /pi/` layer and bake
-# uselessly into the natives-builder cache.
-python/robomp/

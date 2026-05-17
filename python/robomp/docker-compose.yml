@@ -13,13 +13,14 @@ services:
     build:
       # pi root: gives the web-builder stage access to the workspace
       # bun.lock + catalog (web/package.json refs `catalog:` versions).
-      # python/robomp/data is excluded via pi's .dockerignore.
+      # python/robomp/data and pi-root excludes are filtered via
+      # Dockerfile.robomp.dockerignore at the context root.
       context: ../..
-      dockerfile: python/robomp/Dockerfile
+      dockerfile: Dockerfile.robomp
       args:
-        # Tag of the pre-built artifacts image produced by `bun run robomp:pi-artifacts`
+        # Tag of the pre-built pi-base image produced by `bun run pi:image`
         # (sources: pi root /Dockerfile). Override per-environment as needed.
-        PI_ARTIFACTS_IMAGE: oh-my-pi/artifacts:dev
+        PI_BASE: oh-my-pi/pi:dev
     image: robomp:dev
     container_name: robomp
     # Phase B (graceful shutdown): gives the orchestrator at least
