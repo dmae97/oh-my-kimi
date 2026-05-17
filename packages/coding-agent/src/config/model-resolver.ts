@@ -13,7 +13,7 @@ import {
 	modelsAreEqual,
 } from "@oh-my-pi/pi-ai";
 import { fuzzyMatch } from "@oh-my-pi/pi-tui";
-import chalk from "chalk";
+import { logger } from "@oh-my-pi/pi-utils";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { parseThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
 import { isAuthenticated, kNoAuth, MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "./model-registry";
