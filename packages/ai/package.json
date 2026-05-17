@@ -42,16 +42,10 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "catalog:",
-		"@aws-sdk/client-bedrock-runtime": "catalog:",
-		"@aws-sdk/credential-provider-node": "catalog:",
 		"@bufbuild/protobuf": "catalog:",
-		"@google/genai": "catalog:",
-		"@oh-my-pi/pi-natives": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
-		"@smithy/node-http-handler": "catalog:",
 		"openai": "catalog:",
 		"partial-json": "catalog:",
-		"proxy-agent": "catalog:",
 		"zod": "catalog:"
 	},
 	"devDependencies": {
@@ -73,6 +67,22 @@
 		"./*": {
 			"types": "./src/*.ts",
 			"import": "./src/*.ts"
+		},
+		"./auth-broker": {
+			"types": "./src/auth-broker/index.ts",
+			"import": "./src/auth-broker/index.ts"
+		},
+		"./auth-broker/*": {
+			"types": "./src/auth-broker/*.ts",
+			"import": "./src/auth-broker/*.ts"
+		},
+		"./auth-gateway": {
+			"types": "./src/auth-gateway/index.ts",
+			"import": "./src/auth-gateway/index.ts"
+		},
+		"./auth-gateway/*": {
+			"types": "./src/auth-gateway/*.ts",
+			"import": "./src/auth-gateway/*.ts"
 		},
 		"./models.json": {
 			"types": "./src/models.json.d.ts",

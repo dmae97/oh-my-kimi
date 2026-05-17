@@ -978,16 +978,16 @@ export function findContextLine(
 
 export const replaceEditEntrySchema = z
 	.object({
-		old_text: z.string().describe("Text to find (fuzzy whitespace matching enabled)"),
-		new_text: z.string().describe("Replacement text"),
-		all: z.boolean().describe("Replace all occurrences (default: unique match required)").optional(),
+		old_text: z.string().describe("text to find"),
+		new_text: z.string().describe("replacement text"),
+		all: z.boolean().describe("replace all occurrences").optional(),
 	})
 	.strict();
 
 export const replaceEditSchema = z
 	.object({
-		path: z.string().describe("file path for edits"),
-		edits: z.array(replaceEditEntrySchema).min(1).describe("Replacements"),
+		path: z.string().describe("file path"),
+		edits: z.array(replaceEditEntrySchema).min(1).describe("replacements"),
 	})
 	.strict();
 

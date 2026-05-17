@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import type Anthropic from "@anthropic-ai/sdk";
 import { streamAnthropic } from "../src/providers/anthropic";
 import type { Context, Model } from "../src/types";
@@ -147,13 +147,16 @@ describe("anthropic first-event timeout retries", () => {
 			}) as never;
 		}) as unknown as Anthropic["messages"]["create"];
 		const client = { messages: { create } } as Anthropic;
+		const providerRetryWait = vi.fn(async () => {});
 
 		const result = await streamAnthropic(model, context, {
 			client,
-			streamFirstEventTimeoutMs: 20,
+			streamFirstEventTimeoutMs: 1,
+			providerRetryWait,
 		}).result();
 
 		expect(attempt).toBe(2);
+		expect(providerRetryWait).toHaveBeenCalledWith(2000, undefined);
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toEqual([{ type: "text", text: "retry recovered" }]);
 		expect(result.responseId).toBe("msg_retry_success");
@@ -163,7 +166,7 @@ describe("anthropic first-event timeout retries", () => {
 		const create = ((_body: unknown, requestOptions?: { signal?: AbortSignal }) => {
 			return createAnthropicMockStream({
 				signal: requestOptions?.signal,
-				connectDelayMs: 30,
+				connectDelayMs: 2,
 				events: createSuccessfulAnthropicEvents("delayed connect"),
 			}) as never;
 		}) as unknown as Anthropic["messages"]["create"];
@@ -171,7 +174,7 @@ describe("anthropic first-event timeout retries", () => {
 
 		const result = await streamAnthropic(model, context, {
 			client,
-			streamFirstEventTimeoutMs: 20,
+			streamFirstEventTimeoutMs: 1,
 		}).result();
 
 		expect(result.stopReason).toBe("stop");
@@ -187,12 +190,12 @@ describe("anthropic first-event timeout retries", () => {
 		const client = { messages: { create } } as Anthropic;
 
 		const controller = new AbortController();
-		setTimeout(() => controller.abort(), 5);
+		setTimeout(() => controller.abort(), 1);
 
 		const result = await streamAnthropic(model, context, {
 			client,
 			signal: controller.signal,
-			streamFirstEventTimeoutMs: 50,
+			streamFirstEventTimeoutMs: 10,
 		}).result();
 
 		expect(attempt).toBe(1);
@@ -237,8 +240,8 @@ describe("anthropic first-event timeout retries", () => {
 
 		const result = await streamAnthropic(model, context, {
 			client,
-			streamFirstEventTimeoutMs: 1_000,
-			streamIdleTimeoutMs: 20,
+			streamFirstEventTimeoutMs: 10,
+			streamIdleTimeoutMs: 1,
 		}).result();
 
 		expect(attempt).toBe(1);

@@ -7,16 +7,12 @@ const hindsightRetainSchema = z.object({
 	items: z
 		.array(
 			z.object({
-				content: z
-					.string()
-					.describe("The information to remember. Be specific and self-contained — include who, what, when, why."),
-				context: z.string().describe("Optional context describing where this information came from.").optional(),
+				content: z.string().describe("information to remember"),
+				context: z.string().describe("source context").optional(),
 			}),
 		)
 		.min(1)
-		.describe(
-			"One or more memories to retain. Batch related facts in a single call rather than calling retain repeatedly — they are deduplicated and consolidated together.",
-		),
+		.describe("memories to retain"),
 });
 
 export type HindsightRetainParams = z.infer<typeof hindsightRetainSchema>;

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthCredentialStore } from "../src/auth-storage";
+import { SqliteAuthCredentialStore } from "../src/auth-storage";
 import { buildAnthropicUrl, findAnthropicAuth } from "../src/utils/anthropic-auth";
 import { AnthropicOAuthFlow, refreshAnthropicToken } from "../src/utils/oauth/anthropic";
 import { withEnv } from "./helpers";
@@ -199,7 +199,7 @@ describe("anthropic auth resolution", () => {
 		const tmpDir = path.join(os.tmpdir(), `pi-ai-auth-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 		fs.mkdirSync(tmpDir, { recursive: true });
 		const dbPath = path.join(tmpDir, "agent.db");
-		const store = await AuthCredentialStore.open(dbPath);
+		const store = await SqliteAuthCredentialStore.open(dbPath);
 		try {
 			store.replaceAuthCredentialsForProvider("anthropic", [
 				{ type: "oauth", access: "sk-ant-oat-db", refresh: "refresh", expires: Date.now() + 20 * 60 * 1000 },
@@ -231,7 +231,7 @@ describe("anthropic auth resolution", () => {
 		const tmpDir = path.join(os.tmpdir(), `pi-ai-auth-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 		fs.mkdirSync(tmpDir, { recursive: true });
 		const dbPath = path.join(tmpDir, "agent.db");
-		const store = await AuthCredentialStore.open(dbPath);
+		const store = await SqliteAuthCredentialStore.open(dbPath);
 		try {
 			store.replaceAuthCredentialsForProvider("anthropic", [
 				{ type: "oauth", access: "sk-ant-oat-db", refresh: "refresh", expires: Date.now() + 20 * 60 * 1000 },
@@ -261,7 +261,7 @@ describe("anthropic auth resolution", () => {
 		const tmpDir = path.join(os.tmpdir(), `pi-ai-auth-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 		fs.mkdirSync(tmpDir, { recursive: true });
 		const dbPath = path.join(tmpDir, "agent.db");
-		const store = await AuthCredentialStore.open(dbPath);
+		const store = await SqliteAuthCredentialStore.open(dbPath);
 		try {
 			store.replaceAuthCredentialsForProvider("anthropic", [{ type: "api_key", key: "sk-ant-api-db" }]);
 			await withEnv(

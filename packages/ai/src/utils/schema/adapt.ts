@@ -1,6 +1,18 @@
+import { $flag } from "@oh-my-pi/pi-utils";
 import { upgradeJsonSchemaTo202012 } from "./draft";
-import { tryEnforceStrictSchema } from "./strict-mode";
-import type { JsonObject } from "./types";
+import { tryEnforceStrictSchema } from "./normalize";
+
+/**
+ * Set when callers want to globally bypass OpenAI strict-mode enforcement
+ * (e.g. for debugging a provider that misreports strict support, or when
+ * comparing strict vs non-strict outputs).
+ *
+ * Honored by every provider that emits `strict: true` on its function tools —
+ * see `openai-completions`, `openai-responses`, `openai-codex-responses`, and
+ * the strict candidate selection in `anthropic`.
+ */
+export const NO_STRICT = $flag("PI_NO_STRICT");
+
 /**
  * Consolidated helper for OpenAI-style strict schema enforcement.
  *
@@ -21,64 +33,4 @@ export function adaptSchemaForStrict(
 	}
 
 	return tryEnforceStrictSchema(upgraded);
-}
-
-/**
- * OpenAI Responses rejects `oneOf` in tool schemas even when strict mode is
- * disabled. Non-strict schemas can still use `anyOf`, so preserve the union
- * shape by recursively rewriting `oneOf` branches to `anyOf`.
- */
-export function sanitizeSchemaForOpenAIResponses(schema: JsonObject): JsonObject {
-	return rewriteOneOfToAnyOf(schema) as JsonObject;
-}
-
-/**
- * Recursively replace every `oneOf` keyword with `anyOf`. Identity-preserving:
- * returns the input reference unchanged when no rewrite occurred so callers
- * can dedupe via reference equality (and the strict-mode cache stays warm).
- * If a node has both `oneOf` and `anyOf`, the two are concatenated (the wire
- * payload accepts a single union; preserving both would not survive).
- */
-function rewriteOneOfToAnyOf(value: unknown): unknown {
-	if (Array.isArray(value)) {
-		let changed = false;
-		const rewritten = value.map(item => {
-			const next = rewriteOneOfToAnyOf(item);
-			if (next !== item) changed = true;
-			return next;
-		});
-		return changed ? rewritten : value;
-	}
-
-	if (!value || typeof value !== "object") {
-		return value;
-	}
-
-	const input = value as Record<string, unknown>;
-	let changed = false;
-	const output: Record<string, unknown> = {};
-	for (const key in input) {
-		const child = input[key];
-		// Skip `oneOf` here; it is re-emitted as `anyOf` after the loop so
-		// neighboring `anyOf` entries can be folded in.
-		if (key === "oneOf") {
-			changed = true;
-			continue;
-		}
-		const next = rewriteOneOfToAnyOf(child);
-		if (next !== child) changed = true;
-		output[key] = next;
-	}
-
-	// Re-emit `oneOf` content under `anyOf`, concatenating with any existing
-	// `anyOf` branches in the original node.
-	if (Array.isArray(input.oneOf)) {
-		const rewrittenOneOf = rewriteOneOfToAnyOf(input.oneOf);
-		const existingAnyOf = output.anyOf;
-		output.anyOf = Array.isArray(existingAnyOf)
-			? [...existingAnyOf, ...(rewrittenOneOf as unknown[])]
-			: rewrittenOneOf;
-	}
-
-	return changed ? output : value;
 }

@@ -34,11 +34,12 @@ const COPILOT_MODEL_RETRY_BASE_DELAY_MS = 400;
  */
 export async function callWithCopilotModelRetry<T>(
 	fn: () => Promise<T>,
-	options: { provider: string; signal?: AbortSignal },
+	options: { provider: string; signal?: AbortSignal; retryBaseDelayMs?: number },
 ): Promise<T> {
 	if (options.provider !== "github-copilot") return fn();
 
 	let lastError: unknown;
+	const retryBaseDelayMs = options.retryBaseDelayMs ?? COPILOT_MODEL_RETRY_BASE_DELAY_MS;
 	for (let attempt = 0; attempt < COPILOT_MODEL_RETRY_MAX_ATTEMPTS; attempt++) {
 		try {
 			return await fn();
@@ -46,7 +47,7 @@ export async function callWithCopilotModelRetry<T>(
 			lastError = error;
 			if (!isCopilotTransientModelError(error) && !isRetryableError(error)) throw error;
 			if (attempt === COPILOT_MODEL_RETRY_MAX_ATTEMPTS - 1) break;
-			await scheduler.wait(COPILOT_MODEL_RETRY_BASE_DELAY_MS * (attempt + 1), { signal: options.signal });
+			await scheduler.wait(retryBaseDelayMs * (attempt + 1), { signal: options.signal });
 		}
 	}
 	throw lastError;

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { scheduler } from "node:timers/promises";
 import { Messages } from "@anthropic-ai/sdk/resources/messages/messages";
-import * as z from "zod/v4";
 import { streamAnthropic } from "../src/providers/anthropic";
 import type { AssistantMessageEvent, Context, Model, ProviderSessionState } from "../src/types";
 
@@ -19,6 +19,17 @@ const model: Model<"anthropic-messages"> = {
 
 const context: Context = {
 	messages: [{ role: "user", content: "Say hi", timestamp: Date.now() }],
+};
+const queryObjectSchema = {
+	type: "object",
+	properties: { query: { type: "string" } },
+	required: ["query"],
+};
+
+const cityObjectSchema = {
+	type: "object",
+	properties: { city: { type: "string" } },
+	required: ["city"],
 };
 
 type MockAnthropicEvent = Record<string, unknown>;
@@ -111,8 +122,11 @@ function getStrictFlags(params: unknown): boolean[] {
 	return tools.map(tool => tool.strict === true);
 }
 
-function createTextSuccessEvents(text: string): MockAnthropicEvent[] {
-	return [
+function createTextSuccessEvents(
+	text: string,
+	options: { duplicateMessageStart?: boolean } = {},
+): MockAnthropicEvent[] {
+	const events: MockAnthropicEvent[] = [
 		{
 			type: "message_start",
 			message: {
@@ -126,7 +140,6 @@ function createTextSuccessEvents(text: string): MockAnthropicEvent[] {
 			},
 		},
 		{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-		{ type: "message_start", message: { id: "msg_duplicate", usage: { input_tokens: 99, output_tokens: 99 } } },
 		{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
 		{ type: "content_block_stop", index: 0 },
 		{
@@ -141,6 +154,13 @@ function createTextSuccessEvents(text: string): MockAnthropicEvent[] {
 		},
 		{ type: "message_stop" },
 	];
+	if (options.duplicateMessageStart) {
+		events.splice(2, 0, {
+			type: "message_start",
+			message: { id: "msg_duplicate", usage: { input_tokens: 99, output_tokens: 99 } },
+		});
+	}
+	return events;
 }
 
 function createTextSuccessEventsWithPreamble(text: string, preambleEvents: MockAnthropicEvent[]): MockAnthropicEvent[] {
@@ -190,7 +210,7 @@ afterEach(() => {
 describe("anthropic stream envelope handling", () => {
 	it("ignores duplicate message_start envelopes without resetting streamed text", async () => {
 		vi.spyOn(Messages.prototype, "create").mockImplementation(
-			() => createMockRequest(createTextSuccessEvents("hello")) as never,
+			() => createMockRequest(createTextSuccessEvents("hello", { duplicateMessageStart: true })) as never,
 		);
 
 		const stream = streamAnthropic(model, context, { apiKey: "sk-ant-test" });
@@ -269,6 +289,7 @@ describe("anthropic stream envelope handling", () => {
 				attempt === 1 ? createMalformedPreMessageStartEvents() : createTextSuccessEvents("recovered"),
 			) as never;
 		});
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
 
 		const stream = streamAnthropic(model, context, { apiKey: "sk-ant-test" });
 		const events: AssistantMessageEvent[] = [];
@@ -294,7 +315,7 @@ describe("anthropic stream envelope handling", () => {
 					name: "edit",
 					description: "Edit a value",
 					strict: true,
-					parameters: z.object({ query: z.string() }),
+					parameters: queryObjectSchema,
 				},
 			],
 		};
@@ -350,7 +371,7 @@ describe("anthropic stream envelope handling", () => {
 					name: "edit",
 					description: "Edit a value",
 					strict: true,
-					parameters: z.object({ query: z.string() }),
+					parameters: queryObjectSchema,
 				},
 			],
 		};
@@ -464,7 +485,7 @@ describe("anthropic stream envelope handling", () => {
 			sseFrame("content_block_start", successEvents[1]),
 			sseRawFrame("content_block_delta", malformedTextDelta),
 			sseFrame("content_block_stop", { type: "content_block_stop", index: 0 }),
-			sseFrame("message_delta", successEvents[5]),
+			sseFrame("message_delta", successEvents[4]),
 			sseFrame("message_stop", { type: "message_stop" }),
 		];
 		vi.spyOn(Messages.prototype, "create").mockImplementation(() => createRawSseRequest(frames) as never);
@@ -486,7 +507,7 @@ describe("anthropic stream envelope handling", () => {
 				{
 					name: "lookup_weather",
 					description: "Lookup weather",
-					parameters: z.object({ city: z.string() }),
+					parameters: cityObjectSchema,
 				},
 			],
 		};

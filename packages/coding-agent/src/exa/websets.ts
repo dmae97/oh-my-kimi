@@ -53,8 +53,8 @@ const websetCreateTool = createWebsetTool(
 	"Create Webset",
 	"Create a new webset collection for organizing web content.",
 	z.object({
-		name: z.string().describe("Name of the webset"),
-		description: z.string().describe("Optional description").optional(),
+		name: z.string().describe("webset name"),
+		description: z.string().describe("description").optional(),
 	}),
 	"create_webset",
 );
@@ -72,7 +72,7 @@ const websetGetTool = createWebsetTool(
 	"Get Webset",
 	"Get details of a specific webset by ID.",
 	z.object({
-		id: z.string().describe("Webset ID"),
+		id: z.string().describe("webset id"),
 	}),
 	"get_webset",
 );
@@ -82,9 +82,9 @@ const websetUpdateTool = createWebsetTool(
 	"Update Webset",
 	"Update a webset's name or description.",
 	z.object({
-		id: z.string().describe("Webset ID"),
-		name: z.string().describe("New name").optional(),
-		description: z.string().describe("New description").optional(),
+		id: z.string().describe("webset id"),
+		name: z.string().describe("new name").optional(),
+		description: z.string().describe("new description").optional(),
 	}),
 	"update_webset",
 );
@@ -94,7 +94,7 @@ const websetDeleteTool = createWebsetTool(
 	"Delete Webset",
 	"Delete a webset and all its contents.",
 	z.object({
-		id: z.string().describe("Webset ID"),
+		id: z.string().describe("webset id"),
 	}),
 	"delete_webset",
 );
@@ -105,9 +105,9 @@ const websetItemsListTool = createWebsetTool(
 	"List Webset Items",
 	"List items in a webset with optional pagination.",
 	z.object({
-		webset_id: z.string().describe("Webset ID"),
-		limit: z.number().describe("Number of items to return").optional(),
-		offset: z.number().describe("Pagination offset").optional(),
+		webset_id: z.string().describe("webset id"),
+		limit: z.number().describe("max items").optional(),
+		offset: z.number().describe("offset").optional(),
 	}),
 	"list_webset_items",
 );
@@ -117,8 +117,8 @@ const websetItemGetTool = createWebsetTool(
 	"Get Webset Item",
 	"Get a specific item from a webset.",
 	z.object({
-		webset_id: z.string().describe("Webset ID"),
-		item_id: z.string().describe("Item ID"),
+		webset_id: z.string().describe("webset id"),
+		item_id: z.string().describe("item id"),
 	}),
 	"get_item",
 );
@@ -129,8 +129,8 @@ const websetSearchCreateTool = createWebsetTool(
 	"Create Webset Search",
 	"Create a new search within a webset.",
 	z.object({
-		webset_id: z.string().describe("Webset ID"),
-		query: z.string().describe("Search query"),
+		webset_id: z.string().describe("webset id"),
+		query: z.string().describe("search query"),
 	}),
 	"create_search",
 );
@@ -140,8 +140,8 @@ const websetSearchGetTool = createWebsetTool(
 	"Get Webset Search",
 	"Get the status and results of a webset search.",
 	z.object({
-		webset_id: z.string().describe("Webset ID"),
-		search_id: z.string().describe("Search ID"),
+		webset_id: z.string().describe("webset id"),
+		search_id: z.string().describe("search id"),
 	}),
 	"get_search",
 );
@@ -151,8 +151,8 @@ const websetSearchCancelTool = createWebsetTool(
 	"Cancel Webset Search",
 	"Cancel a running webset search.",
 	z.object({
-		webset_id: z.string().describe("Webset ID"),
-		search_id: z.string().describe("Search ID"),
+		webset_id: z.string().describe("webset id"),
+		search_id: z.string().describe("search id"),
 	}),
 	"cancel_search",
 );
@@ -163,9 +163,9 @@ const websetEnrichmentCreateTool = createWebsetTool(
 	"Create Enrichment",
 	"Create a new enrichment task for a webset.",
 	z.object({
-		webset_id: z.string().describe("Webset ID"),
-		name: z.string().describe("Enrichment name"),
-		prompt: z.string().describe("Enrichment prompt"),
+		webset_id: z.string().describe("webset id"),
+		name: z.string().describe("enrichment name"),
+		prompt: z.string().describe("enrichment prompt"),
 	}),
 	"create_enrichment",
 );
@@ -175,8 +175,8 @@ const websetEnrichmentGetTool = createWebsetTool(
 	"Get Enrichment",
 	"Get the status and results of an enrichment task.",
 	z.object({
-		webset_id: z.string().describe("Webset ID"),
-		enrichment_id: z.string().describe("Enrichment ID"),
+		webset_id: z.string().describe("webset id"),
+		enrichment_id: z.string().describe("enrichment id"),
 	}),
 	"get_enrichment",
 );
@@ -186,10 +186,10 @@ const websetEnrichmentUpdateTool = createWebsetTool(
 	"Update Enrichment",
 	"Update an enrichment's name or prompt.",
 	z.object({
-		webset_id: z.string().describe("Webset ID"),
-		enrichment_id: z.string().describe("Enrichment ID"),
-		name: z.string().describe("New name").optional(),
-		prompt: z.string().describe("New prompt").optional(),
+		webset_id: z.string().describe("webset id"),
+		enrichment_id: z.string().describe("enrichment id"),
+		name: z.string().describe("new name").optional(),
+		prompt: z.string().describe("new prompt").optional(),
 	}),
 	"update_enrichment",
 );
@@ -199,8 +199,8 @@ const websetEnrichmentDeleteTool = createWebsetTool(
 	"Delete Enrichment",
 	"Delete an enrichment task.",
 	z.object({
-		webset_id: z.string().describe("Webset ID"),
-		enrichment_id: z.string().describe("Enrichment ID"),
+		webset_id: z.string().describe("webset id"),
+		enrichment_id: z.string().describe("enrichment id"),
 	}),
 	"delete_enrichment",
 );
@@ -210,8 +210,8 @@ const websetEnrichmentCancelTool = createWebsetTool(
 	"Cancel Enrichment",
 	"Cancel a running enrichment task.",
 	z.object({
-		webset_id: z.string().describe("Webset ID"),
-		enrichment_id: z.string().describe("Enrichment ID"),
+		webset_id: z.string().describe("webset id"),
+		enrichment_id: z.string().describe("enrichment id"),
 	}),
 	"cancel_enrichment",
 );
@@ -222,8 +222,8 @@ const websetMonitorCreateTool = createWebsetTool(
 	"Create Monitor",
 	"Create a monitoring task for a webset with optional webhook notifications.",
 	z.object({
-		webset_id: z.string().describe("Webset ID"),
-		webhook_url: z.string().describe("Webhook URL for notifications").optional(),
+		webset_id: z.string().describe("webset id"),
+		webhook_url: z.string().describe("webhook url").optional(),
 	}),
 	"create_monitor",
 );

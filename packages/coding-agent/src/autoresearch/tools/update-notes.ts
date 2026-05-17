@@ -9,15 +9,8 @@ import { openAutoresearchStorageIfExists } from "../storage";
 import type { AutoresearchToolFactoryOptions } from "../types";
 
 const updateNotesSchema = z.object({
-	body: z
-		.string()
-		.describe("Replacement markdown body for the active autoresearch session's notes (your durable playbook)."),
-	append_idea: z
-		.string()
-		.describe(
-			"When set, append this string as a new bullet under an Ideas section instead of replacing the body. `body` is ignored.",
-		)
-		.optional(),
+	body: z.string().describe("replacement notes body"),
+	append_idea: z.string().describe("append as bullet under Ideas instead of replacing body").optional(),
 });
 
 interface UpdateNotesDetails {

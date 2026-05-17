@@ -37,7 +37,6 @@ Terminology follows `docs/natives-architecture.md`:
 | `truncateToWidth(text, maxWidth, ellipsis, pad, tabWidth)`                      | `truncateToWidth`                                | `text.rs`      |
 | `sliceWithWidth(line, startCol, length, strict, tabWidth)`                      | `sliceWithWidth`                                 | `text.rs`      |
 | `extractSegments(line, beforeEnd, afterStart, afterLen, strictAfter, tabWidth)` | `extractSegments`                                | `text.rs`      |
-| `sanitizeText(text)`                                                            | `sanitizeText`                                   | `text.rs`      |
 | `visibleWidth(text, tabWidth)`                                                  | `visibleWidth`                                   | `text.rs`      |
 | `highlightCode(code, lang, colors)`                                             | `highlightCode`                                  | `highlight.rs` |
 | `supportsLanguage(lang)`                                                        | `supportsLanguage`                               | `highlight.rs` |
@@ -206,7 +205,7 @@ These are pure, in-memory utilities.
 - `truncateToWidth`: visible-cell truncation with ellipsis policy (`Unicode`, `Ascii`, `Omit`), optional right padding.
 - `sliceWithWidth`: column slicing with optional strict width enforcement.
 - `extractSegments`: extracts before/after segments around an overlay while restoring ANSI state for the `after` segment.
-- `sanitizeText`: strips ANSI escapes + control chars, drops lone surrogates, normalizes line endings.
+- `sanitizeText` (ANSI/control/surrogate stripping with line-ending normalization) no longer lives in `text.rs`; it moved to `@oh-my-pi/pi-utils` as a pure-JS implementation in `packages/utils/src/sanitize-text.ts`. The native binding was removed in the same change because the JS version was competitive on the benchmarked workloads, and keeping a Rust copy forced every caller (including `pi-utils`) to pull in `@oh-my-pi/pi-natives`.
 - `visibleWidth`: counts visible terminal cells using caller-supplied tab width.
 
 ### Failure behavior

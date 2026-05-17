@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $env, $pickenv } from "@oh-my-pi/pi-utils";
+import { $env, $pickenv, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
 import type { Effort } from "./model-thinking";
 import {
@@ -19,6 +19,7 @@ import type { GoogleVertexOptions } from "./providers/google-vertex";
 import { isKimiModel, streamKimi } from "./providers/kimi";
 import type { OllamaChatOptions } from "./providers/ollama";
 import type { OpenAICompletionsOptions } from "./providers/openai-completions";
+import { streamPiNative } from "./providers/pi-native-client";
 // Heavy provider stream functions are imported lazily via register-builtins,
 // which wraps each provider module in a dynamic import. This keeps the
 // AWS SDK, google-auth-library, @google/genai, @bufbuild/protobuf, and
@@ -44,7 +45,6 @@ import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
 import type {
 	Api,
 	AssistantMessage,
-	AssistantMessageEventStream,
 	Context,
 	Model,
 	OptionsForApi,
@@ -53,6 +53,7 @@ import type {
 	ThinkingBudgets,
 	ToolChoice,
 } from "./types";
+import { AssistantMessageEventStream } from "./utils/event-stream";
 import { isFoundryEnabled } from "./utils/foundry";
 
 let cachedVertexAdcCredentialsExists: boolean | null = null;
@@ -176,6 +177,15 @@ export function getEnvApiKey(provider: string): string | undefined {
 	return resolver?.();
 }
 
+/**
+ * Enumerate every provider that has an env-var fallback for `getEnvApiKey`.
+ * Used by `omp auth-broker migrate --include-env` to discover env-sourced keys
+ * that should be uploaded to the broker.
+ */
+export function listProvidersWithEnvKey(): string[] {
+	return Object.keys(serviceProviderMap);
+}
+
 export function stream<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
@@ -269,7 +279,61 @@ export function streamSimple<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-	// Check custom API registry first (extension-provided APIs)
+	const retryApiKey = options?.onAuthError ? (options.apiKey ?? getEnvApiKey(model.provider)) : undefined;
+	if (retryApiKey) {
+		const outer = new AssistantMessageEventStream();
+		const onAuthError = options!.onAuthError!;
+		let emitted = false;
+		void (async () => {
+			try {
+				const inner = streamSimple(model, context, { ...options, apiKey: retryApiKey, onAuthError: undefined });
+				for await (const event of inner) {
+					emitted = true;
+					outer.push(event);
+					if (outer.done) return;
+				}
+				if (!outer.done) outer.end(await inner.result());
+			} catch (error) {
+				if (emitted || extractHttpStatusFromError(error) !== 401) {
+					outer.fail(error);
+					return;
+				}
+				let nextKey: string | undefined;
+				try {
+					nextKey = await onAuthError(model.provider, retryApiKey, error);
+				} catch {
+					nextKey = undefined;
+				}
+				if (!nextKey || nextKey === retryApiKey) {
+					outer.fail(error);
+					return;
+				}
+				try {
+					const retried = streamSimple(model, context, { ...options, apiKey: nextKey, onAuthError: undefined });
+					for await (const event of retried) {
+						outer.push(event);
+						if (outer.done) return;
+					}
+					if (!outer.done) outer.end(await retried.result());
+				} catch (retryError) {
+					outer.fail(retryError);
+				}
+			}
+		})();
+		return outer;
+	}
+
+	// Pi-native transport short-circuits the per-provider dispatch entirely:
+	// the gateway resolves provider + credential server-side, so we don't
+	// need an `apiKey` from `getEnvApiKey` here — `options.apiKey` carries
+	// the gateway bearer instead. Comes BEFORE the custom-API check so
+	// extension-registered APIs can't accidentally override a configured
+	// pi-native transport.
+	if (model.transport === "pi-native") {
+		return streamPiNative(model, context, options);
+	}
+
+	// Check custom API registry (extension-provided APIs)
 	const customApiProvider = getCustomApi(model.api);
 	if (customApiProvider) {
 		return customApiProvider.streamSimple(model, context, options);

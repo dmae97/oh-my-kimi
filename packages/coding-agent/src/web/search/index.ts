@@ -21,12 +21,12 @@ import { SearchProviderError } from "./types";
 
 /** Web search tool parameters schema */
 export const webSearchSchema = z.object({
-	query: z.string().describe("Search query"),
-	recency: z.enum(["day", "week", "month", "year"]).describe("Recency filter (Brave, Perplexity)").optional(),
-	limit: z.number().describe("Max results to return").optional(),
-	max_tokens: z.number().describe("Maximum output tokens").optional(),
-	temperature: z.number().describe("Sampling temperature").optional(),
-	num_search_results: z.number().describe("Number of search results to retrieve").optional(),
+	query: z.string().describe("search query"),
+	recency: z.enum(["day", "week", "month", "year"]).describe("recency filter").optional(),
+	limit: z.number().describe("max results").optional(),
+	max_tokens: z.number().describe("max output tokens").optional(),
+	temperature: z.number().describe("sampling temperature").optional(),
+	num_search_results: z.number().describe("number of search results").optional(),
 });
 
 export type SearchToolParams = z.infer<typeof webSearchSchema>;

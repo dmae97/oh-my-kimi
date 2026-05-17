@@ -1,0 +1,96 @@
+name: Build native addon
+description: Build the pi_natives cdylib for one platform/arch/variant and upload it as a hash-tagged artifact.
+
+inputs:
+   hash:
+      description: Rust source hash used in the artifact name
+      required: true
+   platform:
+      description: Target platform (linux, darwin, win32)
+      required: true
+   arch:
+      description: Target arch (x64, arm64)
+      required: true
+   variant:
+      description: Optional build variant (baseline, modern)
+      required: false
+      default: ""
+   target:
+      description: Optional rustc target triple for cross-compilation
+      required: false
+      default: ""
+   rust_checks:
+      description: Run clippy/rustfmt checks (only one matrix entry should set this)
+      required: false
+      default: "false"
+   save_cache:
+      description: Whether Swatinem/rust-cache should write a cache entry
+      required: false
+      default: "false"
+
+runs:
+   using: composite
+   steps:
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+           toolchain: nightly-2026-04-29
+           components: ${{ inputs.rust_checks == 'true' && 'clippy, rustfmt' || '' }}
+           targets: ${{ inputs.target }}
+      - name: Prepend rustup toolchain bin to PATH
+        shell: bash
+        run: |
+           # Homebrew on macOS runners ships rustup-init with shadow proxies
+           # for `cargo`/`rustc`/etc. that error out as the installer
+           # ("unexpected argument 'metadata' found"). Force the real
+           # toolchain binaries to win on PATH.
+           toolchain_bin="$(dirname "$(rustup which cargo)")"
+           echo "$toolchain_bin" >> "$GITHUB_PATH"
+           echo "Prepended $toolchain_bin to PATH"
+      - uses: Swatinem/rust-cache@v2
+        with:
+           shared-key: native-${{ inputs.platform }}-${{ inputs.arch }}-${{ inputs.variant || 'default' }}
+           cache-on-failure: true
+           save-if: ${{ inputs.save_cache == 'true' }}
+           cache-workspace-crates: true
+      - uses: taiki-e/install-action@v2
+        if: inputs.target == ''
+        with:
+           tool: nextest
+      - uses: oven-sh/setup-bun@v2
+        with:
+           bun-version: "1.3"
+      - shell: bash
+        run: bun install --frozen-lockfile
+      - name: Install cross-compilation toolchain
+        if: inputs.target == 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+           sudo apt-get update
+           sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Rust checks
+        if: inputs.rust_checks == 'true'
+        shell: bash
+        run: bun run check:rs
+      - name: Test workspace (Rust)
+        if: inputs.target == ''
+        shell: bash
+        run: bun run test:rs
+      - name: Build native addon(s)
+        shell: bash
+        env:
+           CROSS_TARGET: ${{ inputs.target }}
+           TARGET_PLATFORM: ${{ inputs.platform }}
+           TARGET_ARCH: ${{ inputs.arch }}
+           TARGET_VARIANTS: ${{ inputs.variant }}
+           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: bun run ci:build:native
+      - name: Upload native addon(s)
+        uses: actions/upload-artifact@v4
+        with:
+           name: pi-natives-${{ inputs.platform }}-${{ inputs.arch }}${{ inputs.variant && format('-{0}', inputs.variant) || '' }}-h${{ inputs.hash }}
+           path: packages/natives/native/pi_natives.${{ inputs.platform }}-${{ inputs.arch }}*.node
+           if-no-files-found: error
+           # Explicit so the rust-hash canary lookup keeps working even if org
+           # defaults shift; bump if Rust source ever stays stable for >90 days
+           # of main pushes and you want to avoid rebuilds.
+           retention-days: 90

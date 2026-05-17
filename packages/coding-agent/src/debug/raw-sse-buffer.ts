@@ -37,43 +37,50 @@ export interface RawSseDebugSnapshot {
 	lastUpdatedAt?: number;
 }
 
-function modelProvider(model: Model | undefined): string | undefined {
-	return model?.provider;
-}
+// Per-record char counts are stored in a parallel array (`#recordChars`) on
+// the buffer rather than stamped onto each record via a symbol property.
+// Stamping triggered hidden-class transitions in V8/JSC — the previous
+// revision saw `trimRawLines` regress 4× (0.5s → 2.0s in a 50s profile)
+// because every event-record allocation went through the slow dictionary
+// path. The parallel array keeps records as plain monomorphic objects.
+type TrimResult = { raw: string[]; truncated: boolean; originalChars: number; chars: number };
 
-function modelId(model: Model | undefined): string | undefined {
-	return model?.id;
-}
+// Single-pass trim. Returns the final `chars` count using the historical
+// formula `reduce(line.length + 1, init = 1)` so the new accounting matches
+// the previous `countRecordChars` byte-for-byte (the trailing +1 covers the
+// record-level newline that `rawRecordText` appends in `toRawText`).
+//
+// When the event fits within budget the input `raw` array is returned
+// **by reference** — see the ownership contract documented at
+// `RawSseDebugBuffer.recordEvent` below.
+function trimRawLines(raw: string[]): TrimResult {
+	let originalChars = 0;
+	for (let i = 0; i < raw.length; i++) originalChars += raw[i].length + 1;
 
-function modelApi(model: Model | undefined): string | undefined {
-	return model?.api;
-}
-
-function countRecordChars(record: RawSseDebugRecord): number {
-	if (record.kind === "response") return formatRawSseResponseComment(record).length + 1;
-	return record.raw.reduce((sum, line) => sum + line.length + 1, 1);
-}
-
-function trimRawLines(raw: string[]): { raw: string[]; truncated: boolean; originalChars: number } {
-	const originalChars = raw.reduce((sum, line) => sum + line.length + 1, 0);
 	if (originalChars <= MAX_RAW_SSE_EVENT_CHARS) {
-		return { raw: [...raw], truncated: false, originalChars };
+		return { raw, truncated: false, originalChars, chars: originalChars + 1 };
 	}
 
 	const trimmed: string[] = [];
 	let remaining = MAX_RAW_SSE_EVENT_CHARS;
+	let chars = 1; // matches reduce(.., init = 1)
 	for (const line of raw) {
 		if (remaining <= 0) break;
 		if (line.length + 1 <= remaining) {
 			trimmed.push(line);
+			chars += line.length + 1;
 			remaining -= line.length + 1;
 			continue;
 		}
-		trimmed.push(line.slice(0, Math.max(0, remaining)));
+		const slice = line.slice(0, Math.max(0, remaining));
+		trimmed.push(slice);
+		chars += slice.length + 1;
 		remaining = 0;
 	}
-	trimmed.push(`: omp-debug-truncated originalChars=${originalChars}`);
-	return { raw: trimmed, truncated: true, originalChars };
+	const tail = `: omp-debug-truncated originalChars=${originalChars}`;
+	trimmed.push(tail);
+	chars += tail.length + 1;
+	return { raw: trimmed, truncated: true, originalChars, chars };
 }
 
 export function formatRawSseIsoTime(timestamp: number): string {
@@ -110,6 +117,11 @@ function metadataTransport(response: ProviderResponseMetadata): string | undefin
 
 export class RawSseDebugBuffer {
 	#records: RawSseDebugRecord[] = [];
+	// Parallel to `#records`: `#recordChars[i]` is the precomputed char count
+	// for `#records[i]`. Kept in lockstep by `#append` (push both) and
+	// `#enforceLimits` (shift both). See the comment above the class for why
+	// this is a sidecar array instead of a per-record property.
+	#recordChars: number[] = [];
 	#totalChars = 0;
 	#droppedRecords = 0;
 	#droppedChars = 0;
@@ -117,6 +129,7 @@ export class RawSseDebugBuffer {
 	#lastUpdatedAt: number | undefined;
 	#nextSequence = 1;
 	#listeners = new Set<() => void>();
+	#emitScheduled = false;
 
 	subscribe(listener: () => void): () => void {
 		this.#listeners.add(listener);
@@ -124,34 +137,46 @@ export class RawSseDebugBuffer {
 	}
 
 	recordResponse(response: ProviderResponseMetadata, model?: Model): void {
-		this.#append({
+		const record: RawSseDebugRecord = {
 			kind: "response",
 			sequence: this.#nextSequence++,
 			timestamp: Date.now(),
-			provider: modelProvider(model),
-			model: modelId(model),
-			api: modelApi(model),
+			provider: model?.provider,
+			model: model?.id,
+			api: model?.api,
 			status: response.status,
 			requestId: response.requestId,
 			transport: metadataTransport(response),
-		});
+		};
+		this.#append(record, formatRawSseResponseComment(record).length + 1);
 	}
 
+	// Ownership contract for `event.raw`:
+	//   The caller (either `notifyRawSseEvent` in `packages/ai/src/utils/sse-debug.ts`
+	//   or `SseTeeParser.#dispatch` directly) hands us a freshly-allocated
+	//   `string[]` per event and never retains, mutates, or re-dispatches it.
+	//   That lets `trimRawLines` keep the array by reference instead of
+	//   cloning on every chunk — a measurable savings on the streaming hot
+	//   path. If a future observer-chain mutates the array, restore the
+	//   `raw.slice()` defensive copy inside `trimRawLines`.
 	recordEvent(event: RawSseEvent, model?: Model): void {
 		const trimmed = trimRawLines(event.raw);
 		this.#totalEvents += 1;
-		this.#append({
-			kind: "event",
-			sequence: this.#nextSequence++,
-			timestamp: Date.now(),
-			provider: modelProvider(model),
-			model: modelId(model),
-			api: modelApi(model),
-			event: event.event,
-			raw: trimmed.raw,
-			truncated: trimmed.truncated,
-			originalChars: trimmed.originalChars,
-		});
+		this.#append(
+			{
+				kind: "event",
+				sequence: this.#nextSequence++,
+				timestamp: Date.now(),
+				provider: model?.provider,
+				model: model?.id,
+				api: model?.api,
+				event: event.event,
+				raw: trimmed.raw,
+				truncated: trimmed.truncated,
+				originalChars: trimmed.originalChars,
+			},
+			trimmed.chars,
+		);
 	}
 
 	snapshot(): RawSseDebugSnapshot {
@@ -165,12 +190,14 @@ export class RawSseDebugBuffer {
 	}
 
 	toRawText(): string {
+		// Reads the live array directly: `rawRecordText` only computes a string
+		// from each record, so no caller-visible mutation is possible.
 		return this.#records.map(rawRecordText).join("\n");
 	}
 
-	#append(record: RawSseDebugRecord): void {
-		const chars = countRecordChars(record);
+	#append(record: RawSseDebugRecord, chars: number): void {
 		this.#records.push(record);
+		this.#recordChars.push(chars);
 		this.#totalChars += chars;
 		this.#lastUpdatedAt = record.timestamp;
 		this.#enforceLimits();
@@ -179,9 +206,9 @@ export class RawSseDebugBuffer {
 
 	#enforceLimits(): void {
 		while (this.#records.length > MAX_RAW_SSE_EVENTS || this.#totalChars > MAX_RAW_SSE_CHARS) {
-			const dropped = this.#records.shift();
-			if (!dropped) return;
-			const chars = countRecordChars(dropped);
+			if (this.#records.length === 0) return;
+			this.#records.shift();
+			const chars = this.#recordChars.shift() ?? 0;
 			this.#totalChars = Math.max(0, this.#totalChars - chars);
 			this.#droppedRecords += 1;
 			this.#droppedChars += chars;
@@ -189,6 +216,26 @@ export class RawSseDebugBuffer {
 	}
 
 	#emit(): void {
+		const count = this.#listeners.size;
+		if (count === 0) return;
+		// With a single listener (the common case — RawSse debug viewer is the
+		// only subscriber), keep eager emit so per-event semantics are
+		// preserved. With multiple listeners, coalesce bursts of events into
+		// one microtask-deferred fan-out to avoid N×M listener invocations
+		// during a streaming response.
+		if (count === 1) {
+			this.#fanOut();
+			return;
+		}
+		if (this.#emitScheduled) return;
+		this.#emitScheduled = true;
+		queueMicrotask(() => {
+			this.#emitScheduled = false;
+			this.#fanOut();
+		});
+	}
+
+	#fanOut(): void {
 		for (const listener of this.#listeners) {
 			try {
 				listener();
@@ -199,31 +246,25 @@ export class RawSseDebugBuffer {
 	}
 }
 
-const fallbackBuffers = new WeakMap<object, RawSseDebugBuffer>();
 const globalFallbackBuffer = new RawSseDebugBuffer();
+const kRawSseDebugBuffer = Symbol("debug.rawSseBuffer");
+type OwnerWithBuffer = object & { rawSseDebugBuffer?: unknown; [kRawSseDebugBuffer]?: RawSseDebugBuffer };
 
 export function resolveRawSseDebugBuffer(owner?: object): RawSseDebugBuffer {
 	if (!owner) return globalFallbackBuffer;
 
-	const candidate = (owner as { rawSseDebugBuffer?: unknown }).rawSseDebugBuffer;
-	if (candidate instanceof RawSseDebugBuffer) return candidate;
+	const tagged = owner as OwnerWithBuffer;
+	const declared = tagged.rawSseDebugBuffer;
+	if (declared instanceof RawSseDebugBuffer) return declared;
 
-	const existing = fallbackBuffers.get(owner);
+	const existing = tagged[kRawSseDebugBuffer];
 	if (existing) return existing;
 
 	const buffer = new RawSseDebugBuffer();
-	fallbackBuffers.set(owner, buffer);
-	if (Object.isExtensible(owner)) {
-		try {
-			Object.defineProperty(owner, "rawSseDebugBuffer", {
-				value: buffer,
-				configurable: true,
-				enumerable: false,
-				writable: true,
-			});
-		} catch {
-			// The WeakMap fallback remains usable if the session object rejects extension.
-		}
+	try {
+		tagged[kRawSseDebugBuffer] = buffer;
+	} catch {
+		// Non-extensible owner: caller gets a fresh buffer on each call.
 	}
 	return buffer;
 }

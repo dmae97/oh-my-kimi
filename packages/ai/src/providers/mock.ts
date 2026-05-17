@@ -145,35 +145,6 @@ export interface MockModelOptions {
 	reasoning?: boolean;
 }
 
-/** Returned by `createMockModel`. */
-export interface MockModelHandle {
-	/** The `Model<"mock">` object to pass to `stream()` or agent config. */
-	readonly model: Model<MockApi>;
-	/** Recorded calls in invocation order. */
-	readonly calls: ReadonlyArray<MockCall>;
-	/** A streamFn-compatible callable. Forward to `agentLoop` or pi `stream()`. */
-	readonly stream: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
-	/**
-	 * Append a handler to the internal queue consumed AFTER the constructor
-	 * `responses` source is exhausted (but before the fallback). Use this for
-	 * interactive tests that decide responses after the model is created.
-	 */
-	push(response: MockHandler): void;
-	/** Reset recorded calls AND the extras queue. The constructor `responses` are NOT reset. */
-	reset(): void;
-}
-
-interface MockState {
-	iterator?: Iterator<MockHandler> | AsyncIterator<MockHandler>;
-	exhausted: boolean;
-	readonly extras: MockHandler[];
-	fallback?: MockHandler;
-	readonly calls: MockCall[];
-	toolCallCounter: number;
-}
-
-const STATE_BY_MODEL = new WeakMap<Model<Api>, MockState>();
-
 const ZERO_COST: Model["cost"] = {
 	input: 0,
 	output: 0,
@@ -181,49 +152,82 @@ const ZERO_COST: Model["cost"] = {
 	cacheWrite: 0,
 };
 
-/** Check whether `model` was produced by `createMockModel`. */
-export function isMockModel(model: Model<Api>): model is Model<MockApi> {
-	return STATE_BY_MODEL.has(model);
+/**
+ * A `Model<"mock">` that carries its own scripted state. Pass instances to
+ * `stream()` or agent configs, and use the same instance to inspect calls
+ * and feed additional handlers.
+ */
+export class MockModel implements Model<MockApi> {
+	readonly id: string;
+	readonly name: string;
+	readonly api: MockApi = MOCK_API;
+	readonly provider: string;
+	readonly baseUrl = "mock://";
+	readonly reasoning: boolean;
+	readonly input: ("text" | "image")[] = ["text"];
+	readonly cost: Model["cost"];
+	readonly contextWindow: number;
+	readonly maxTokens: number;
+
+	/** Recorded calls in invocation order. */
+	readonly calls: MockCall[] = [];
+
+	iterator?: Iterator<MockHandler> | AsyncIterator<MockHandler>;
+	exhausted: boolean;
+	readonly extras: MockHandler[] = [];
+	fallback?: MockHandler;
+	toolCallCounter = 0;
+
+	constructor(options: MockModelOptions = {}) {
+		this.id = options.id ?? "mock-model";
+		this.name = options.id ?? "mock-model";
+		this.provider = options.provider ?? "mock";
+		this.reasoning = options.reasoning ?? false;
+		this.cost = options.cost ?? ZERO_COST;
+		this.contextWindow = options.contextWindow ?? 200_000;
+		this.maxTokens = options.maxTokens ?? 32_768;
+		this.iterator = options.responses === undefined ? undefined : iteratorOf(options.responses);
+		this.exhausted = options.responses === undefined;
+		this.fallback = options.handler;
+	}
+
+	/** Back-compat alias: the model is its own handle. */
+	get model(): this {
+		return this;
+	}
+
+	/** A streamFn-compatible callable. Forward to `agentLoop` or pi `stream()`. */
+	stream = (_model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream =>
+		streamMock(this, context, options);
+
+	/**
+	 * Append a handler to the internal queue consumed AFTER the constructor
+	 * `responses` source is exhausted (but before the fallback). Use this for
+	 * interactive tests that decide responses after the model is created.
+	 */
+	push(response: MockHandler): void {
+		this.extras.push(response);
+	}
+
+	/** Reset recorded calls AND the extras queue. The constructor `responses` are NOT reset. */
+	reset(): void {
+		this.extras.length = 0;
+		this.calls.length = 0;
+		this.toolCallCounter = 0;
+	}
 }
 
-/** Construct a mock model + handle. */
-export function createMockModel(options: MockModelOptions = {}): MockModelHandle {
-	const model: Model<MockApi> = {
-		id: options.id ?? "mock-model",
-		name: options.id ?? "mock-model",
-		api: MOCK_API,
-		provider: options.provider ?? "mock",
-		baseUrl: "mock://",
-		reasoning: options.reasoning ?? false,
-		input: ["text"],
-		cost: options.cost ?? ZERO_COST,
-		contextWindow: options.contextWindow ?? 200_000,
-		maxTokens: options.maxTokens ?? 32_768,
-	};
+/** @deprecated Use {@link MockModel}; the class IS the handle. */
+export type MockModelHandle = MockModel;
 
-	const state: MockState = {
-		iterator: options.responses === undefined ? undefined : iteratorOf(options.responses),
-		exhausted: options.responses === undefined,
-		extras: [],
-		fallback: options.handler,
-		calls: [],
-		toolCallCounter: 0,
-	};
-	STATE_BY_MODEL.set(model, state);
+/** Check whether `model` was produced by `createMockModel`. */
+export function isMockModel(model: Model<Api>): model is MockModel {
+	return model instanceof MockModel;
+}
 
-	return {
-		model,
-		calls: state.calls,
-		stream: (_model, context, opts) => streamMock(model, context, opts),
-		push(response) {
-			state.extras.push(response);
-		},
-		reset() {
-			state.extras.length = 0;
-			state.calls.length = 0;
-			state.toolCallCounter = 0;
-		},
-	};
+/** Construct a mock model. */
+export function createMockModel(options: MockModelOptions = {}): MockModel {
+	return new MockModel(options);
 }
 
 /** Stream function for `Model<"mock">`. Matches the pi-ai per-provider stream signature. */
@@ -233,21 +237,19 @@ export function streamMock(
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
 	const stream = new AssistantMessageEventStream();
-	const state = STATE_BY_MODEL.get(model);
-	if (!state) {
+	if (!isMockModel(model)) {
 		queueMicrotask(() => {
 			stream.fail(
 				new Error(
-					"streamMock called with a model not produced by createMockModel(). " +
-						"Pass the `model` field of a MockModelHandle.",
+					"streamMock called with a model not produced by createMockModel(). " + "Pass a MockModel instance.",
 				),
 			);
 		});
 		return stream;
 	}
 
-	state.calls.push({ context, options });
-	void runMock(stream, model, context, options, state);
+	model.calls.push({ context, options });
+	void runMock(stream, model, context, options);
 	return stream;
 }
 
@@ -267,7 +269,7 @@ function iteratorOf(source: MockResponseSource): Iterator<MockHandler> | AsyncIt
 	return (source as Iterable<MockHandler>)[Symbol.iterator]();
 }
 
-async function pullHandler(state: MockState): Promise<MockHandler | undefined> {
+async function pullHandler(state: MockModel): Promise<MockHandler | undefined> {
 	if (state.iterator && !state.exhausted) {
 		const result = await Promise.resolve(state.iterator.next());
 		if (!result.done) return result.value;
@@ -279,16 +281,15 @@ async function pullHandler(state: MockState): Promise<MockHandler | undefined> {
 
 async function runMock(
 	stream: AssistantMessageEventStream,
-	model: Model<Api>,
+	model: MockModel,
 	context: Context,
 	options: SimpleStreamOptions | undefined,
-	state: MockState,
 ): Promise<void> {
 	const startedAt = Date.now();
 
 	let handler: MockHandler | undefined;
 	try {
-		handler = await pullHandler(state);
+		handler = await pullHandler(model);
 	} catch (err) {
 		stream.fail(err);
 		return;
@@ -297,7 +298,7 @@ async function runMock(
 	if (handler === undefined) {
 		stream.fail(
 			new Error(
-				`Mock model "${model.id}" received call ${state.calls.length} but no response or handler is configured.`,
+				`Mock model "${model.id}" received call ${model.calls.length} but no response or handler is configured.`,
 			),
 		);
 		return;
@@ -367,7 +368,7 @@ async function runMock(
 	stream.push({ type: "start", partial });
 
 	for (const input of response.content ?? []) {
-		const block = normalizeContent(input, state);
+		const block = normalizeContent(input, model);
 		blocks.push(block);
 		const contentIndex = blocks.length - 1;
 
@@ -405,7 +406,7 @@ async function runMock(
 	stream.push({ type: "done", reason: reason as "stop" | "length" | "toolUse", message: partial });
 }
 
-function normalizeContent(input: MockContent, state: MockState): TextContent | ThinkingContent | ToolCall {
+function normalizeContent(input: MockContent, state: MockModel): TextContent | ThinkingContent | ToolCall {
 	if (typeof input === "string") {
 		return { type: "text", text: input };
 	}
@@ -493,7 +494,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	return promise;
 }
 
-function generateToolCallId(state: MockState): string {
+function generateToolCallId(state: MockModel): string {
 	state.toolCallCounter += 1;
 	return `mock-tc-${state.toolCallCounter}`;
 }

@@ -554,7 +554,11 @@ export function getTimeSeries(hours = 24, cutoff?: number | null, bucketMs = 60 
 /**
  * Get daily model usage time series data for the last N days.
  */
-export function getModelTimeSeries(days = 14, cutoff?: number | null): ModelTimeSeriesPoint[] {
+export function getModelTimeSeries(
+	days = 14,
+	cutoff?: number | null,
+	bucketMs = 24 * 60 * 60 * 1000,
+): ModelTimeSeriesPoint[] {
 	if (!db) return [];
 
 	const hasCutoff = cutoff !== null;
@@ -562,7 +566,7 @@ export function getModelTimeSeries(days = 14, cutoff?: number | null): ModelTime
 
 	const stmt = db.prepare(`
 		SELECT
-			(timestamp / 86400000) * 86400000 as bucket,
+			(timestamp / ?) * ? as bucket,
 			model,
 			provider,
 			COUNT(*) as requests
@@ -572,7 +576,8 @@ export function getModelTimeSeries(days = 14, cutoff?: number | null): ModelTime
 		ORDER BY bucket ASC
 	`);
 
-	const rows = hasCutoff ? (stmt.all(seriesCutoff) as any[]) : (stmt.all() as any[]);
+	const rowsRaw = hasCutoff ? stmt.all(bucketMs, bucketMs, seriesCutoff) : stmt.all(bucketMs, bucketMs);
+	const rows = rowsRaw as Array<{ bucket: number; model: string; provider: string; requests: number }>;
 	return rows.map(row => ({
 		timestamp: row.bucket,
 		model: row.model,
@@ -584,7 +589,11 @@ export function getModelTimeSeries(days = 14, cutoff?: number | null): ModelTime
 /**
  * Get daily model performance time series data for the last N days.
  */
-export function getModelPerformanceSeries(days = 14, cutoff?: number | null): ModelPerformancePoint[] {
+export function getModelPerformanceSeries(
+	days = 14,
+	cutoff?: number | null,
+	bucketMs = 24 * 60 * 60 * 1000,
+): ModelPerformancePoint[] {
 	if (!db) return [];
 
 	const hasCutoff = cutoff !== null;
@@ -592,7 +601,7 @@ export function getModelPerformanceSeries(days = 14, cutoff?: number | null): Mo
 
 	const stmt = db.prepare(`
 		SELECT
-			(timestamp / 86400000) * 86400000 as bucket,
+			(timestamp / ?) * ? as bucket,
 			model,
 			provider,
 			COUNT(*) as requests,
@@ -604,7 +613,15 @@ export function getModelPerformanceSeries(days = 14, cutoff?: number | null): Mo
 		ORDER BY bucket ASC
 	`);
 
-	const rows = hasCutoff ? (stmt.all(seriesCutoff) as any[]) : (stmt.all() as any[]);
+	const rowsRaw = hasCutoff ? stmt.all(bucketMs, bucketMs, seriesCutoff) : stmt.all(bucketMs, bucketMs);
+	const rows = rowsRaw as Array<{
+		bucket: number;
+		model: string;
+		provider: string;
+		requests: number;
+		avg_ttft: number | null;
+		avg_tokens_per_second: number | null;
+	}>;
 	return rows.map(row => ({
 		timestamp: row.bucket,
 		model: row.model,

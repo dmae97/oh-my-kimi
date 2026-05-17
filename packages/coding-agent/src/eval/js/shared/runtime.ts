@@ -137,6 +137,13 @@ export class JsRuntime {
 			},
 			__omp_import__: async (source: string, options?: ImportCallOptions) => {
 				const target = resolveImportSpecifier(this.#cwd, source);
+				// Always invalidate cached module records for user-owned source files so edits
+				// between cells are picked up. Bun ignores query-string busting on `file:` URLs
+				// but honors `delete require.cache[absPath]`; bare specifiers and URL schemes are
+				// left alone to keep package identity stable across cells.
+				if (isLocalPathSpecifier(source) && path.isAbsolute(target)) {
+					delete require.cache[target];
+				}
 				return options !== undefined ? await import(target, options) : await import(target);
 			},
 			__omp_emit_status__: (op: string, data: Record<string, unknown> = {}) => {
@@ -192,4 +199,22 @@ function resolveImportSpecifier(cwd: string, source: string): string {
 	} catch {
 		return source;
 	}
+}
+
+/**
+ * Returns true when the original specifier is a relative or absolute filesystem path
+ * (i.e. user-owned source the agent is iterating on). Bare specifiers and URL schemes
+ * are excluded — `node:` built-ins cannot be reloaded, and busting bare packages would
+ * defeat module identity for every cell while bringing no editing benefit.
+ */
+function isLocalPathSpecifier(source: string): boolean {
+	return (
+		source.startsWith("./") ||
+		source.startsWith("../") ||
+		source === "." ||
+		source === ".." ||
+		source.startsWith("/") ||
+		source.startsWith("~/") ||
+		/^[a-zA-Z]:[\\/]/.test(source)
+	);
 }

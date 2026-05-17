@@ -83,7 +83,7 @@ describe("callWithCopilotModelRetry", () => {
 					calls += 1;
 					throw err;
 				},
-				{ provider: "github-copilot" },
+				{ provider: "github-copilot", retryBaseDelayMs: 0 },
 			),
 		).rejects.toBe(err);
 		expect(calls).toBe(3);
@@ -99,7 +99,7 @@ describe("callWithCopilotModelRetry", () => {
 				}
 				return "ok" as const;
 			},
-			{ provider: "github-copilot" },
+			{ provider: "github-copilot", retryBaseDelayMs: 0 },
 		);
 		expect(result).toBe("ok");
 		expect(calls).toBe(2);
@@ -130,7 +130,7 @@ describe("callWithCopilotModelRetry", () => {
 					calls += 1;
 					throw copilotError({ status: 400, code: "model_not_supported", message: "transient" });
 				},
-				{ provider: "github-copilot", signal: controller.signal },
+				{ provider: "github-copilot", signal: controller.signal, retryBaseDelayMs: 0 },
 			),
 		).rejects.toBeDefined();
 		// fn runs once; scheduler.wait rejects before a second attempt.

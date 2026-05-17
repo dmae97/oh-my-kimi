@@ -10,21 +10,73 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+type AcpProc = Bun.Subprocess<"pipe", "pipe", "pipe">;
+
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 const cliEntry = path.join(repoRoot, "packages", "coding-agent", "src", "cli.ts");
 
 const cleanupRoots: string[] = [];
-let activeProc: ReturnType<typeof Bun.spawn> | undefined;
+let activeProc: AcpProc | undefined;
+
+/**
+ * Tear the child down hard. SIGTERM first so the process gets a chance to
+ * unwind, but force-kill quickly if it hasn't reaped — `omp acp` blocks on
+ * stdin reads and won't notice SIGTERM until we close the pipes. We bound
+ * the entire shutdown to ~2s so a stuck child never trips Bun's 5s hook
+ * timeout (which is what produced the "afterEach hook timed out" flakes).
+ */
+async function teardown(proc: AcpProc): Promise<void> {
+	// Close stdin so any blocking read in the child wakes up.
+	try {
+		proc.stdin.end();
+	} catch {
+		// already closed
+	}
+	// Best-effort detach from stdout/stderr so the child's pipe writes don't
+	// block on a full buffer once we stop draining.
+	for (const stream of [proc.stdout, proc.stderr] as Array<ReadableStream<Uint8Array> | undefined>) {
+		if (!stream) continue;
+		try {
+			await stream.cancel();
+		} catch {
+			// reader may already be detached
+		}
+	}
+
+	try {
+		proc.kill("SIGTERM");
+	} catch {
+		// already exited
+	}
+
+	// Race the natural exit against a short grace, then escalate to SIGKILL
+	// and race again against a hard cap. `await proc.exited` after SIGKILL
+	// always returns promptly on Darwin/Linux.
+	const graceMs = 200;
+	const hardCapMs = 1500;
+	const exited = proc.exited;
+	const raced = await Promise.race([
+		exited.then(() => "exited" as const),
+		Bun.sleep(graceMs).then(() => "grace" as const),
+	]);
+	if (raced === "exited") return;
+	try {
+		proc.kill("SIGKILL");
+	} catch {
+		// already exited between the SIGTERM and SIGKILL
+	}
+	await Promise.race([exited, Bun.sleep(hardCapMs)]);
+}
 
 afterEach(async () => {
 	if (activeProc) {
-		try {
-			activeProc.kill();
-			await activeProc.exited;
-		} catch {
-			// ignore
-		}
+		const proc = activeProc;
 		activeProc = undefined;
+		try {
+			await teardown(proc);
+		} catch {
+			// teardown is already best-effort; never let cleanup fail a test
+		}
 	}
 	for (const root of cleanupRoots.splice(0)) {
 		await fs.promises.rm(root, { recursive: true, force: true });
@@ -53,13 +105,16 @@ describe("ACP stdout hygiene", () => {
 	it("emits a JSON-RPC initialize response as the first bytes on stdout", async () => {
 		const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-acp-stdout-"));
 		cleanupRoots.push(root);
-		const home = path.join(root, "home");
 		const xdg = path.join(root, "xdg");
 		const agentDir = path.join(root, "agent");
-		await fs.promises.mkdir(home, { recursive: true });
 		await fs.promises.mkdir(xdg, { recursive: true });
 		await fs.promises.mkdir(agentDir, { recursive: true });
 
+		// NOTE: we intentionally do NOT override HOME. Bun keys its transpile
+		// cache at `$HOME/.bun/install/cache`; pointing HOME at a fresh tmp
+		// dir forces a full re-transpile of the CLI's module graph on every
+		// run (~12s cold vs ~0.4s warm). XDG_* and PI_CODING_AGENT_DIR
+		// already isolate PI's on-disk state for this smoke test.
 		const proc = Bun.spawn(["bun", cliEntry, "acp"], {
 			cwd: repoRoot,
 			stdin: "pipe",
@@ -67,14 +122,37 @@ describe("ACP stdout hygiene", () => {
 			stderr: "pipe",
 			env: {
 				...process.env,
-				HOME: home,
 				XDG_DATA_HOME: xdg,
 				XDG_CONFIG_HOME: xdg,
 				PI_CODING_AGENT_DIR: agentDir,
 				PI_NO_TITLE: "1",
+				NO_COLOR: "1",
 			},
 		});
 		activeProc = proc;
+
+		// Buffer stderr in the background so we can assert no JSON-RPC frame
+		// leaks onto it. The pump exits the moment stderr closes, which
+		// happens during teardown — we never wait on it from the test body.
+		const stderrChunks: Uint8Array[] = [];
+		const stderrPump = (async () => {
+			const reader = proc.stderr.getReader();
+			try {
+				while (true) {
+					const { value, done } = await reader.read();
+					if (done) break;
+					if (value) stderrChunks.push(value);
+				}
+			} catch {
+				// reader cancelled by teardown — expected
+			} finally {
+				try {
+					reader.releaseLock();
+				} catch {
+					// already released
+				}
+			}
+		})();
 
 		const initRequest = {
 			jsonrpc: "2.0",
@@ -85,27 +163,7 @@ describe("ACP stdout hygiene", () => {
 		proc.stdin.write(new TextEncoder().encode(`${JSON.stringify(initRequest)}\n`));
 		proc.stdin.flush();
 
-		// Capture stderr in parallel so we can verify it does not carry any
-		// JSON-RPC frame. ACP owns stdout; banners, progress text, or stray
-		// protocol bytes on stderr indicate a misroute.
-		const stderrChunks: Uint8Array[] = [];
-		const stderrPump = (async () => {
-			const reader = (proc.stderr as ReadableStream<Uint8Array>).getReader();
-			try {
-				while (true) {
-					const { value, done } = await reader.read();
-					if (done) break;
-					if (value) stderrChunks.push(value);
-					// Stop once the first stdout frame arrives so the pump terminates
-					// alongside the test rather than waiting for process exit.
-					if (stderrChunks.length > 32) break;
-				}
-			} finally {
-				reader.releaseLock();
-			}
-		})();
-
-		const firstLine = await readFirstFrame(proc.stdout as ReadableStream<Uint8Array>);
+		const firstLine = await readFirstFrame(proc.stdout);
 		expect(firstLine.length).toBeGreaterThan(0);
 		expect(firstLine[0]).toBe("{");
 
@@ -126,18 +184,19 @@ describe("ACP stdout hygiene", () => {
 			]),
 		);
 
-		// Terminate the process so the stderr pump promise resolves. Race with a
-		// short timeout in case stderr is empty (common path).
-		try {
-			proc.kill();
-		} catch {
-			// process may already be exiting
-		}
-		await Promise.race([stderrPump, new Promise(resolve => setTimeout(resolve, 500))]);
-		const stderrText = new TextDecoder().decode(new Uint8Array(stderrChunks.flatMap(chunk => Array.from(chunk))));
-		// Guard against JSON-RPC frames sneaking onto stderr. We allow normal
-		// stderr output (warnings, telemetry, etc.) but reject anything that
-		// parses as a JSON-RPC envelope on the wrong channel.
+		// First frame is good. Tear the child down now so the test body's
+		// wall time is bounded by "boot + first frame", not by waiting for
+		// stderr or a delayed shutdown. teardown() closes stdin/stdout/stderr
+		// and escalates SIGTERM→SIGKILL, which both stops the child and
+		// resolves stderrPump.
+		await teardown(proc);
+		activeProc = undefined;
+		await stderrPump;
+
+		const stderrText = Buffer.concat(stderrChunks).toString("utf8");
+		// Guard against JSON-RPC frames sneaking onto stderr. Normal stderr
+		// output (warnings, telemetry, etc.) is allowed, but anything that
+		// parses as a JSON-RPC envelope on the wrong channel is a misroute.
 		for (const line of stderrText.split("\n")) {
 			const trimmed = line.trim();
 			if (!trimmed.startsWith("{")) continue;

@@ -6,7 +6,7 @@ import recallDescription from "../prompts/tools/recall.md" with { type: "text" }
 import type { ToolSession } from ".";
 
 const hindsightRecallSchema = z.object({
-	query: z.string().describe("Natural language search query. Be specific about what you need to know."),
+	query: z.string().describe("natural language search query"),
 });
 
 export type HindsightRecallParams = z.infer<typeof hindsightRecallSchema>;
