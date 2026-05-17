@@ -9,6 +9,9 @@
  *      - SSO profile referencing a cached token in `~/.aws/sso/cache/*.json`,
  *        which we exchange for short-lived role credentials via
  *        `https://portal.sso.{region}.amazonaws.com/federation/credentials`.
+ *      - `credential_process` — an external command emitting the AWS SDK
+ *        `Version: 1` JSON envelope on stdout. Used by `aws-vault`, `granted`,
+ *        in-house brokers, etc.
  *  3. EC2 IMDSv2 (only when `AWS_EC2_METADATA_DISABLED` is unset / falsey and
  *     `169.254.169.254` is reachable within a 1 s timeout).
  *
@@ -162,6 +165,10 @@ async function readProfileCredentials(
 		return readSsoCredentials(merged, configIni, region, signal);
 	}
 
+	if (merged.credential_process) {
+		return readCredentialProcess(profile, merged.credential_process, signal);
+	}
+
 	return undefined;
 }
 
@@ -274,6 +281,166 @@ async function sha1Hex(input: string): Promise<string> {
 	let out = "";
 	for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, "0");
 	return out;
+}
+
+// ---------- credential_process ----------
+
+/** JSON envelope emitted by an external credential process. Matches the
+ * AWS CLI / SDK contract documented at
+ * https://docs.aws.amazon.com/sdkref/latest/guide/feature-process-credentials.html */
+interface CredentialProcessEnvelope {
+	Version?: number;
+	AccessKeyId?: string;
+	SecretAccessKey?: string;
+	SessionToken?: string;
+	Expiration?: string;
+}
+
+async function readCredentialProcess(
+	profile: string,
+	command: string,
+	signal: AbortSignal | undefined,
+): Promise<ResolvedCredentials> {
+	const argv = buildCredentialProcessArgv(profile, command);
+
+	const child = Bun.spawn(argv, {
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+		windowsHide: true,
+		signal,
+	});
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	if (exitCode !== 0) {
+		const tail = stderr.trim().slice(-512) || stdout.trim().slice(-512) || "(no output)";
+		throw new Error(`AWS credential_process for profile '${profile}' exited ${exitCode}: ${tail}`);
+	}
+
+	let parsed: CredentialProcessEnvelope;
+	try {
+		parsed = JSON.parse(stdout) as CredentialProcessEnvelope;
+	} catch (err) {
+		throw new Error(`AWS credential_process for profile '${profile}' did not emit valid JSON: ${String(err)}`);
+	}
+	if (parsed.Version !== 1) {
+		throw new Error(
+			`AWS credential_process for profile '${profile}' returned unsupported Version ${parsed.Version ?? "<missing>"}; expected 1.`,
+		);
+	}
+	if (!parsed.AccessKeyId || !parsed.SecretAccessKey) {
+		throw new Error(
+			`AWS credential_process for profile '${profile}' returned envelope without AccessKeyId/SecretAccessKey.`,
+		);
+	}
+
+	const out: ResolvedCredentials = {
+		accessKeyId: parsed.AccessKeyId,
+		secretAccessKey: parsed.SecretAccessKey,
+	};
+	if (parsed.SessionToken) out.sessionToken = parsed.SessionToken;
+	if (parsed.Expiration) {
+		const exp = Date.parse(parsed.Expiration);
+		if (!Number.isNaN(exp)) out.expiresAt = exp;
+	}
+	return out;
+}
+
+/** Resolve the argv for `Bun.spawn`. On Windows we route `.cmd`/`.bat` helpers
+ * through `cmd.exe /c` because direct execution refuses batch files (mirrors
+ * Node's `execFile` policy and avoids surprise no-ops). */
+function buildCredentialProcessArgv(profile: string, command: string): string[] {
+	const tokens = tokenizeCredentialProcessCommand(command);
+	if (tokens.length === 0) {
+		throw new Error(`AWS credential_process for profile '${profile}' is empty.`);
+	}
+	if (process.platform === "win32" && isBatchScript(tokens[0])) {
+		return ["cmd.exe", "/d", "/s", "/c", command];
+	}
+	return tokens;
+}
+
+function isBatchScript(executable: string): boolean {
+	const lower = executable.toLowerCase();
+	return lower.endsWith(".cmd") || lower.endsWith(".bat");
+}
+
+/** POSIX-shell-style tokenizer used by the AWS CLI for `credential_process`.
+ *
+ * Outside quotes a backslash escapes the next character. Inside single quotes
+ * everything is literal (no escapes, cannot contain `'`). Inside double quotes
+ * a backslash only escapes `$`, `` ` ``, `"`, and `\` — every other backslash
+ * is preserved verbatim, which is what makes Windows paths like
+ * `"C:\Program Files\tool\auth.exe"` survive tokenization. */
+export function tokenizeCredentialProcessCommand(cmd: string): string[] {
+	const tokens: string[] = [];
+	let current = "";
+	let hasToken = false;
+	let mode: "normal" | "single" | "double" = "normal";
+	for (let i = 0; i < cmd.length; i++) {
+		const ch = cmd[i];
+		if (mode === "normal") {
+			if (ch === "'") {
+				mode = "single";
+				hasToken = true;
+				continue;
+			}
+			if (ch === '"') {
+				mode = "double";
+				hasToken = true;
+				continue;
+			}
+			if (ch === "\\" && i + 1 < cmd.length) {
+				current += cmd[++i];
+				hasToken = true;
+				continue;
+			}
+			if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
+				if (hasToken) {
+					tokens.push(current);
+					current = "";
+					hasToken = false;
+				}
+				continue;
+			}
+			current += ch;
+			hasToken = true;
+			continue;
+		}
+		if (mode === "single") {
+			if (ch === "'") {
+				mode = "normal";
+				continue;
+			}
+			current += ch;
+			continue;
+		}
+		// double-quote
+		if (ch === '"') {
+			mode = "normal";
+			continue;
+		}
+		if (ch === "\\" && i + 1 < cmd.length) {
+			const next = cmd[i + 1];
+			if (next === "$" || next === "`" || next === '"' || next === "\\") {
+				current += next;
+				i++;
+				continue;
+			}
+			// Preserve literal backslash for Windows paths.
+			current += ch;
+			continue;
+		}
+		current += ch;
+	}
+	if (mode !== "normal") {
+		throw new Error("AWS credential_process command has an unterminated quote.");
+	}
+	if (hasToken) tokens.push(current);
+	return tokens;
 }
 
 // ---------- IMDSv2 ----------
