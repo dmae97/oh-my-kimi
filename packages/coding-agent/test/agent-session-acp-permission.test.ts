@@ -1,19 +1,18 @@
 /**
  * Tests for the ACP permission gate in AgentSession.
  *
- * Verifies that sensitive tools (bash, edit, write, ast_edit, delete, move) are gated behind
- * `ClientBridge.requestPermission` when a bridge is set, and that allow/reject
- * decisions are cached appropriately for allow_always / reject_always.
+ * Verifies that tools with a real ACP approval policy (bash/delete/move) are gated behind
+ * `ClientBridge.requestPermission`, while regular file-editing tools keep the same no-approval
+ * behavior they have in the TUI.
  */
 import { afterEach, beforeEach, expect, it, spyOn } from "bun:test";
-import * as path from "node:path";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-ai";
+import { createMockModel, type MockModelOptions } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { EditTool } from "@oh-my-pi/pi-coding-agent/edit";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type {
 	ClientBridge,
 	ClientBridgePermissionOutcome,
@@ -21,6 +20,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/session/client-bridge";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 
@@ -29,10 +29,9 @@ import * as z from "zod/v4";
 // ---------------------------------------------------------------------------
 
 let tempDir: TempDir;
-let authStorage: AuthStorage | undefined;
-let session: AgentSession;
+let session: AgentSession | undefined;
 
-/** Fake bash tool that records execute calls. */
+/** Fake tool that records execute calls. */
 function makeFakeTool(name: string): AgentTool & { executeCalls: number } {
 	const tool = {
 		name,
@@ -46,6 +45,21 @@ function makeFakeTool(name: string): AgentTool & { executeCalls: number } {
 		},
 	};
 	return tool;
+}
+
+function makeToolSession(bridge: ClientBridge): ToolSession {
+	return {
+		cwd: tempDir.path(),
+		hasUI: false,
+		getSessionFile: () => null,
+		getSessionSpawns: () => "*",
+		enableLsp: false,
+		settings: Settings.isolated({ "edit.mode": "apply_patch" }),
+		getArtifactsDir: () => null,
+		getSessionId: () => null,
+		getPlanModeState: () => undefined,
+		getClientBridge: () => bridge,
+	} as unknown as ToolSession;
 }
 
 /** Build a minimal ClientBridge whose requestPermission resolves to the given outcome. */
@@ -64,7 +78,6 @@ async function createSession(tools: AgentTool[], bridge?: ClientBridge): Promise
 
 	const settings = Settings.isolated({ "compaction.enabled": false });
 	const sessionManager = SessionManager.inMemory(tempDir.path());
-	const registry = new ModelRegistry(authStorage!, path.join(tempDir.path(), "models.yml"));
 
 	const agent = new Agent({
 		getApiKey: () => "test-key",
@@ -82,7 +95,7 @@ async function createSession(tools: AgentTool[], bridge?: ClientBridge): Promise
 		agent,
 		sessionManager,
 		settings,
-		modelRegistry: registry,
+		modelRegistry: {} as never,
 		toolRegistry: new Map(tools.map(t => [t.name, t])),
 	});
 
@@ -90,17 +103,45 @@ async function createSession(tools: AgentTool[], bridge?: ClientBridge): Promise
 	return sess;
 }
 
-beforeEach(async () => {
+async function createSessionWithMockModel(
+	tools: AgentTool[],
+	bridge: ClientBridge,
+	responses: NonNullable<MockModelOptions["responses"]>,
+): Promise<AgentSession> {
+	const mock = createMockModel({ responses });
+	const settings = Settings.isolated({ "compaction.enabled": false });
+	const sessionManager = SessionManager.inMemory(tempDir.path());
+	const agent = new Agent({
+		getApiKey: () => "test-key",
+		initialState: {
+			model: mock.model,
+			systemPrompt: ["Test"],
+			tools,
+			messages: [],
+		},
+		convertToLlm,
+		streamFn: mock.stream,
+	});
+
+	const sess = new AgentSession({
+		agent,
+		sessionManager,
+		settings,
+		modelRegistry: { getApiKey: () => "test-key" } as never,
+		toolRegistry: new Map(tools.map(t => [t.name, t])),
+	});
+	sess.setClientBridge(bridge);
+	return sess;
+}
+
+beforeEach(() => {
 	tempDir = TempDir.createSync("@pi-acp-permission-test-");
-	authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-	authStorage.setRuntimeApiKey("anthropic", "test-key");
 });
 
 afterEach(async () => {
 	await session?.dispose();
-	authStorage?.close();
-	authStorage = undefined;
-	tempDir.removeSync();
+	session = undefined;
+	await tempDir.remove();
 });
 
 // ---------------------------------------------------------------------------
@@ -172,6 +213,382 @@ it("delete and move tools request ACP permission before executing", async () => 
 	expect(moveTool.executeCalls).toBe(1);
 });
 
+it("edit, write, and ast_edit do not request ACP permission", async () => {
+	const editTool = makeFakeTool("edit");
+	const writeTool = makeFakeTool("write");
+	const astEditTool = makeFakeTool("ast_edit");
+	const bridge = makeBridge({ outcome: "cancelled" });
+	const permissionSpy = spyOn(bridge, "requestPermission");
+	session = await createSession([editTool, writeTool, astEditTool], bridge);
+
+	await session.setActiveToolsByName(["edit", "write", "ast_edit"]);
+	const wrappedEdit = session.agent.state.tools.find(t => t.name === "edit");
+	const wrappedWrite = session.agent.state.tools.find(t => t.name === "write");
+	const wrappedAstEdit = session.agent.state.tools.find(t => t.name === "ast_edit");
+	expect(wrappedEdit).toBeDefined();
+	expect(wrappedWrite).toBeDefined();
+	expect(wrappedAstEdit).toBeDefined();
+
+	await wrappedEdit!.execute("call-edit", { path: "/tmp/foo.ts" }, undefined, undefined as never, undefined as never);
+	await wrappedWrite!.execute(
+		"call-write",
+		{ path: "/tmp/foo.ts" },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+	await wrappedAstEdit!.execute(
+		"call-ast",
+		{ paths: ["/tmp/foo.ts"] },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(permissionSpy).toHaveBeenCalledTimes(0);
+	expect(editTool.executeCalls).toBe(1);
+	expect(writeTool.executeCalls).toBe(1);
+	expect(astEditTool.executeCalls).toBe(1);
+});
+
+it("edit delete and move operations request ACP permission before executing", async () => {
+	const editTool = makeFakeTool("edit");
+	const requests: ClientBridgePermissionToolCall[] = [];
+	const bridge: ClientBridge = {
+		capabilities: { requestPermission: true },
+		async requestPermission(toolCall, _options, _signal) {
+			requests.push(toolCall);
+			return { outcome: "selected", optionId: "allow_once", kind: "allow_once" };
+		},
+	};
+	const permissionSpy = spyOn(bridge, "requestPermission");
+	session = await createSession([editTool], bridge);
+
+	await session.setActiveToolsByName(["edit"]);
+	const wrappedEdit = session.agent.state.tools.find(t => t.name === "edit");
+	expect(wrappedEdit).toBeDefined();
+
+	await wrappedEdit!.execute(
+		"call-edit-delete",
+		{ path: "/tmp/gone.ts", edits: [{ op: "delete" }] },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+	await wrappedEdit!.execute(
+		"call-edit-move",
+		{ path: "/tmp/old.ts", edits: [{ op: "update", rename: "/tmp/new.ts" }] },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(permissionSpy).toHaveBeenCalledTimes(2);
+	expect(requests.map(({ title, locations }) => ({ title, locations }))).toEqual([
+		{ title: "Delete /tmp/gone.ts", locations: [{ path: "/tmp/gone.ts" }] },
+		{ title: "Move /tmp/old.ts to /tmp/new.ts", locations: [{ path: "/tmp/old.ts" }, { path: "/tmp/new.ts" }] },
+	]);
+	expect(editTool.executeCalls).toBe(2);
+});
+
+it("edit delete operations take precedence over stale rename metadata", async () => {
+	const editTool = makeFakeTool("edit");
+	const requests: ClientBridgePermissionToolCall[] = [];
+	const bridge: ClientBridge = {
+		capabilities: { requestPermission: true },
+		async requestPermission(toolCall, _options, _signal) {
+			requests.push(toolCall);
+			return { outcome: "selected", optionId: "allow_once", kind: "allow_once" };
+		},
+	};
+	session = await createSession([editTool], bridge);
+
+	await session.setActiveToolsByName(["edit"]);
+	const wrappedEdit = session.agent.state.tools.find(t => t.name === "edit");
+	expect(wrappedEdit).toBeDefined();
+
+	await wrappedEdit!.execute(
+		"call-edit-delete-with-rename",
+		{ path: "/tmp/gone.ts", edits: [{ op: "delete", rename: "/tmp/stale.ts" }] },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(requests.map(({ title, locations }) => ({ title, locations }))).toEqual([
+		{ title: "Delete /tmp/gone.ts", locations: [{ path: "/tmp/gone.ts" }] },
+	]);
+	expect(editTool.executeCalls).toBe(1);
+});
+
+it("apply_patch delete operations take precedence over earlier moves", async () => {
+	const editTool = makeFakeTool("edit");
+	const requests: ClientBridgePermissionToolCall[] = [];
+	const bridge: ClientBridge = {
+		capabilities: { requestPermission: true },
+		async requestPermission(toolCall, _options, _signal) {
+			requests.push(toolCall);
+			return { outcome: "selected", optionId: "allow_once", kind: "allow_once" };
+		},
+	};
+	session = await createSession([editTool], bridge);
+
+	await session.setActiveToolsByName(["edit"]);
+	const wrappedEdit = session.agent.state.tools.find(t => t.name === "edit");
+	expect(wrappedEdit).toBeDefined();
+
+	await wrappedEdit!.execute(
+		"call-apply-patch-delete-after-move",
+		{
+			input: [
+				"*** Begin Patch",
+				"*** Update File: /tmp/old.ts",
+				"*** Move to: /tmp/new.ts",
+				"@@",
+				"-old",
+				"+new",
+				"*** Delete File: /tmp/gone.ts",
+				"*** End Patch",
+			].join("\n"),
+		},
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(requests.map(({ title, locations }) => ({ title, locations }))).toEqual([
+		{ title: "Delete /tmp/gone.ts", locations: [{ path: "/tmp/gone.ts" }] },
+	]);
+	expect(editTool.executeCalls).toBe(1);
+});
+
+it("apply_patch custom-wire delete requests ACP permission through agent dispatch", async () => {
+	const requests: ClientBridgePermissionToolCall[] = [];
+	const bridge: ClientBridge = {
+		capabilities: { requestPermission: true },
+		async requestPermission(toolCall, _options, _signal) {
+			requests.push(toolCall);
+			return { outcome: "selected", optionId: "allow_once", kind: "allow_once" };
+		},
+	};
+	const editTool = new EditTool(makeToolSession(bridge));
+	session = await createSessionWithMockModel([editTool as AgentTool], bridge, [
+		{
+			content: [
+				{
+					type: "toolCall",
+					id: "call-custom-apply-patch",
+					name: "apply_patch",
+					arguments: {
+						input: ["*** Begin Patch", "*** Delete File: /tmp/gone.ts", "*** End Patch"].join("\n"),
+					},
+				},
+			],
+		},
+		{ content: ["done"] },
+	]);
+
+	await session.prompt("delete with custom apply_patch");
+
+	expect(requests.map(({ toolCallId, title, locations }) => ({ toolCallId, title, locations }))).toEqual([
+		{
+			toolCallId: "call-custom-apply-patch",
+			title: "Delete /tmp/gone.ts",
+			locations: [{ path: "/tmp/gone.ts" }],
+		},
+	]);
+	expect(requests).toHaveLength(1);
+});
+
+it("patch-mode delete operations take precedence over earlier moves", async () => {
+	const editTool = makeFakeTool("edit");
+	const requests: ClientBridgePermissionToolCall[] = [];
+	const bridge: ClientBridge = {
+		capabilities: { requestPermission: true },
+		async requestPermission(toolCall, _options, _signal) {
+			requests.push(toolCall);
+			return { outcome: "selected", optionId: "allow_once", kind: "allow_once" };
+		},
+	};
+	session = await createSession([editTool], bridge);
+
+	await session.setActiveToolsByName(["edit"]);
+	const wrappedEdit = session.agent.state.tools.find(t => t.name === "edit");
+	expect(wrappedEdit).toBeDefined();
+
+	await wrappedEdit!.execute(
+		"call-patch-delete-after-move",
+		{
+			path: "/tmp/old.ts",
+			edits: [{ op: "update", rename: "/tmp/new.ts" }, { op: "delete" }],
+		},
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(requests.map(({ title, locations }) => ({ title, locations }))).toEqual([
+		{ title: "Delete /tmp/old.ts", locations: [{ path: "/tmp/old.ts" }] },
+	]);
+	expect(editTool.executeCalls).toBe(1);
+});
+
+it("always-allowing edit moves does not bypass patch-mode calls that also delete", async () => {
+	const editTool = makeFakeTool("edit");
+	const requests: ClientBridgePermissionToolCall[] = [];
+	const bridge: ClientBridge = {
+		capabilities: { requestPermission: true },
+		async requestPermission(toolCall, _options, _signal) {
+			requests.push(toolCall);
+			return { outcome: "selected", optionId: "allow_always", kind: "allow_always" };
+		},
+	};
+	session = await createSession([editTool], bridge);
+
+	await session.setActiveToolsByName(["edit"]);
+	const wrappedEdit = session.agent.state.tools.find(t => t.name === "edit");
+	expect(wrappedEdit).toBeDefined();
+
+	await wrappedEdit!.execute(
+		"call-edit-move",
+		{ path: "/tmp/old.ts", edits: [{ op: "update", rename: "/tmp/new.ts" }] },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+	await wrappedEdit!.execute(
+		"call-patch-delete-after-move",
+		{
+			path: "/tmp/another-old.ts",
+			edits: [{ op: "update", rename: "/tmp/another-new.ts" }, { op: "delete" }],
+		},
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(requests.map(({ title }) => title)).toEqual([
+		"Move /tmp/old.ts to /tmp/new.ts",
+		"Delete /tmp/another-old.ts",
+	]);
+	expect(editTool.executeCalls).toBe(2);
+});
+
+it("permission requests report the gated tool call as pending", async () => {
+	const bashTool = makeFakeTool("bash");
+	const requests: ClientBridgePermissionToolCall[] = [];
+	const bridge: ClientBridge = {
+		capabilities: { requestPermission: true },
+		async requestPermission(toolCall, _options, _signal) {
+			requests.push(toolCall);
+			return { outcome: "selected", optionId: "allow_once", kind: "allow_once" };
+		},
+	};
+	session = await createSession([bashTool], bridge);
+
+	await session.setActiveToolsByName(["bash"]);
+	const wrappedBash = session.agent.state.tools.find(t => t.name === "bash");
+	expect(wrappedBash).toBeDefined();
+
+	await wrappedBash!.execute("call-bash", { command: "echo hi" }, undefined, undefined as never, undefined as never);
+
+	expect(requests).toHaveLength(1);
+	expect(requests[0]).toMatchObject({
+		toolCallId: "call-bash",
+		toolName: "bash",
+		status: "pending",
+	});
+	expect(bashTool.executeCalls).toBe(1);
+});
+
+it("ordinary edit calls still bypass ACP permission after rejecting edit moves forever", async () => {
+	const editTool = makeFakeTool("edit");
+	const bridge = makeBridge({ outcome: "selected", optionId: "reject_always", kind: "reject_always" });
+	const permissionSpy = spyOn(bridge, "requestPermission");
+	session = await createSession([editTool], bridge);
+
+	await session.setActiveToolsByName(["edit"]);
+	const wrappedEdit = session.agent.state.tools.find(t => t.name === "edit");
+	expect(wrappedEdit).toBeDefined();
+
+	await expect(
+		wrappedEdit!.execute(
+			"call-edit-move",
+			{ path: "/tmp/old.ts", edits: [{ op: "update", rename: "/tmp/new.ts" }] },
+			undefined,
+			undefined as never,
+			undefined as never,
+		),
+	).rejects.toThrow(/rejected by user/);
+	await wrappedEdit!.execute(
+		"call-edit-update",
+		{ path: "/tmp/foo.ts" },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(permissionSpy).toHaveBeenCalledTimes(1);
+	expect(editTool.executeCalls).toBe(1);
+});
+
+it("edit create operations with rename metadata do not request ACP move permission", async () => {
+	const editTool = makeFakeTool("edit");
+	const bridge = makeBridge({ outcome: "cancelled" });
+	const permissionSpy = spyOn(bridge, "requestPermission");
+	session = await createSession([editTool], bridge);
+
+	await session.setActiveToolsByName(["edit"]);
+	const wrappedEdit = session.agent.state.tools.find(t => t.name === "edit");
+	expect(wrappedEdit).toBeDefined();
+
+	await wrappedEdit!.execute(
+		"call-edit-create",
+		{ path: "/tmp/new.ts", edits: [{ op: "create", rename: "/tmp/ignored.ts", diff: "export {};" }] },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(permissionSpy).toHaveBeenCalledTimes(0);
+	expect(editTool.executeCalls).toBe(1);
+});
+
+it("always-allowing edit moves does not bypass later edit delete permission", async () => {
+	const editTool = makeFakeTool("edit");
+	const requests: ClientBridgePermissionToolCall[] = [];
+	const bridge: ClientBridge = {
+		capabilities: { requestPermission: true },
+		async requestPermission(toolCall, _options, _signal) {
+			requests.push(toolCall);
+			return { outcome: "selected", optionId: "allow_always", kind: "allow_always" };
+		},
+	};
+	session = await createSession([editTool], bridge);
+
+	await session.setActiveToolsByName(["edit"]);
+	const wrappedEdit = session.agent.state.tools.find(t => t.name === "edit");
+	expect(wrappedEdit).toBeDefined();
+
+	await wrappedEdit!.execute(
+		"call-edit-move",
+		{ path: "/tmp/old.ts", edits: [{ op: "update", rename: "/tmp/new.ts" }] },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+	await wrappedEdit!.execute(
+		"call-edit-delete",
+		{ path: "/tmp/gone.ts", edits: [{ op: "delete" }] },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(requests.map(({ title }) => title)).toEqual(["Move /tmp/old.ts to /tmp/new.ts", "Delete /tmp/gone.ts"]);
+	expect(editTool.executeCalls).toBe(2);
+});
+
 it("setClientBridge wraps tools that were already active", async () => {
 	const bashTool = makeFakeTool("bash");
 	const bridge = makeBridge({ outcome: "selected", optionId: "allow_once", kind: "allow_once" });
@@ -220,34 +637,34 @@ it("aborting an open permission request rejects without executing the tool", asy
 // ---------------------------------------------------------------------------
 
 it("reject_once: throws ToolError and never calls underlying execute", async () => {
-	const editTool = makeFakeTool("edit");
+	const bashTool = makeFakeTool("bash");
 	const bridge = makeBridge({ outcome: "selected", optionId: "reject_once", kind: "reject_once" });
-	session = await createSession([editTool], bridge);
+	session = await createSession([bashTool], bridge);
 
-	await session.setActiveToolsByName(["edit"]);
-	const wrappedEdit = session.agent.state.tools.find(t => t.name === "edit");
-	expect(wrappedEdit).toBeDefined();
+	await session.setActiveToolsByName(["bash"]);
+	const wrappedBash = session.agent.state.tools.find(t => t.name === "bash");
+	expect(wrappedBash).toBeDefined();
 
 	await expect(
-		wrappedEdit!.execute("call-1", { path: "/tmp/foo.ts" }, undefined, undefined as never, undefined as never),
+		wrappedBash!.execute("call-1", { command: "echo hi" }, undefined, undefined as never, undefined as never),
 	).rejects.toThrow(/rejected by user/);
 
-	expect(editTool.executeCalls).toBe(0);
+	expect(bashTool.executeCalls).toBe(0);
 });
 
 it("unknown selected permission option ID fails closed without executing", async () => {
-	const editTool = makeFakeTool("edit");
+	const bashTool = makeFakeTool("bash");
 	const bridge = makeBridge({ outcome: "selected", optionId: "allow_typo" });
-	session = await createSession([editTool], bridge);
+	session = await createSession([bashTool], bridge);
 
-	await session.setActiveToolsByName(["edit"]);
-	const wrappedEdit = session.agent.state.tools.find(t => t.name === "edit");
-	expect(wrappedEdit).toBeDefined();
+	await session.setActiveToolsByName(["bash"]);
+	const wrappedBash = session.agent.state.tools.find(t => t.name === "bash");
+	expect(wrappedBash).toBeDefined();
 
 	await expect(
-		wrappedEdit!.execute("call-unknown", { path: "/tmp/foo.ts" }, undefined, undefined as never, undefined as never),
+		wrappedBash!.execute("call-unknown", { command: "echo hi" }, undefined, undefined as never, undefined as never),
 	).rejects.toThrow(/unknown option ID/);
-	expect(editTool.executeCalls).toBe(0);
+	expect(bashTool.executeCalls).toBe(0);
 });
 
 // ---------------------------------------------------------------------------
@@ -255,22 +672,22 @@ it("unknown selected permission option ID fails closed without executing", async
 // ---------------------------------------------------------------------------
 
 it("allow_always: caches decision and calls bridge only once for subsequent executes", async () => {
-	const writeTool = makeFakeTool("write");
+	const bashTool = makeFakeTool("bash");
 	const bridge = makeBridge({ outcome: "selected", optionId: "allow_always", kind: "allow_always" });
 	const permissionSpy = spyOn(bridge, "requestPermission");
-	session = await createSession([writeTool], bridge);
+	session = await createSession([bashTool], bridge);
 
-	await session.setActiveToolsByName(["write"]);
-	const wrappedWrite = session.agent.state.tools.find(t => t.name === "write");
-	expect(wrappedWrite).toBeDefined();
+	await session.setActiveToolsByName(["bash"]);
+	const wrappedBash = session.agent.state.tools.find(t => t.name === "bash");
+	expect(wrappedBash).toBeDefined();
 
 	// First call — bridge is consulted, decision cached.
-	await wrappedWrite!.execute("call-1", { path: "/tmp/a.ts" }, undefined, undefined as never, undefined as never);
+	await wrappedBash!.execute("call-1", { command: "echo a" }, undefined, undefined as never, undefined as never);
 	// Second call — must skip the bridge entirely.
-	await wrappedWrite!.execute("call-2", { path: "/tmp/b.ts" }, undefined, undefined as never, undefined as never);
+	await wrappedBash!.execute("call-2", { command: "echo b" }, undefined, undefined as never, undefined as never);
 
 	expect(permissionSpy).toHaveBeenCalledTimes(1);
-	expect(writeTool.executeCalls).toBe(2);
+	expect(bashTool.executeCalls).toBe(2);
 });
 
 // ---------------------------------------------------------------------------

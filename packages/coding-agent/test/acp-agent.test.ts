@@ -94,6 +94,9 @@ class FakeAgentSession {
 	disposed = false;
 	fastMode = false;
 	forcedToolChoice: string | undefined;
+	get settings(): Settings {
+		return Settings.instance;
+	}
 	promptCalls: string[] = [];
 	customMessages: Array<{ customType: string; content: string; details?: unknown }> = [];
 	skillsSettings = { enableSkillCommands: true };
@@ -101,6 +104,7 @@ class FakeAgentSession {
 	planModeState: PlanModeState | undefined;
 	waitForIdleCalls = 0;
 	waitForIdleBlocker: (() => Promise<void>) | undefined;
+	asyncJobDrain: ((options?: { timeoutMs?: number }) => Promise<boolean>) | undefined;
 	#listeners = new Set<(event: AgentSessionEvent) => void>();
 
 	constructor(
@@ -195,6 +199,10 @@ class FakeAgentSession {
 	async waitForIdle(): Promise<void> {
 		this.waitForIdleCalls++;
 		await this.waitForIdleBlocker?.();
+	}
+
+	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {
+		return (await this.asyncJobDrain?.(options)) ?? false;
 	}
 
 	async abort(): Promise<void> {
@@ -415,7 +423,7 @@ async function createHarness(): Promise<AgentHarness> {
 	};
 
 	return {
-		agent: new AcpAgent(connection, initialSession as unknown as AgentSession, factory),
+		agent: new AcpAgent(connection, factory, initialSession as unknown as AgentSession),
 		updates,
 		abortController,
 		sessions,
@@ -753,6 +761,141 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("replays assistant tool calls and matching results without duplicating the start", async () => {
+		const harness = await createHarness();
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "run tests", timestamp: Date.now() });
+		stored.sessionManager.appendMessage({
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "toolu_bash_replay",
+					name: "bash",
+					arguments: { command: "npm test" },
+				},
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: TEST_MODELS[0].id,
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		});
+		stored.sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "toolu_bash_replay",
+			toolName: "bash",
+			content: [{ type: "text", text: "tests passed" }],
+			isError: false,
+			timestamp: Date.now(),
+		});
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+
+		const toolUpdates = harness.updates
+			.filter(update => update.sessionId === stored.sessionId)
+			.map(notification => notification.update)
+			.filter(update => "toolCallId" in update && update.toolCallId === "toolu_bash_replay");
+		const starts = toolUpdates.filter(update => update.sessionUpdate === "tool_call");
+		const completions = toolUpdates.filter(
+			update => update.sessionUpdate === "tool_call_update" && update.status === "completed",
+		);
+
+		expect(starts).toHaveLength(1);
+		expect(starts[0]).toEqual(
+			expect.objectContaining({
+				sessionUpdate: "tool_call",
+				toolCallId: "toolu_bash_replay",
+				rawInput: { command: "npm test" },
+			}),
+		);
+		expect(starts[0]).toEqual(
+			expect.objectContaining({
+				content: expect.arrayContaining([{ type: "content", content: { type: "text", text: "$ npm test" } }]),
+			}),
+		);
+		expect(starts.some(update => "rawInput" in update && JSON.stringify(update.rawInput) === "{}")).toBe(false);
+		expect(completions).toHaveLength(1);
+		expect(completions[0]).toEqual(
+			expect.objectContaining({
+				content: expect.arrayContaining([{ type: "content", content: { type: "text", text: "tests passed" } }]),
+			}),
+		);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("preserves tool_use input payloads when replaying assistant tool calls", async () => {
+		const harness = await createHarness();
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "use custom tool", timestamp: Date.now() });
+		stored.sessionManager.appendMessage({
+			role: "assistant",
+			content: [
+				{
+					type: "tool_use",
+					id: "toolu_custom",
+					name: "custom_tool",
+					input: "raw custom payload",
+				},
+			] as unknown as Array<{ type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }>,
+			api: "openai-responses",
+			provider: "openai",
+			model: TEST_MODELS[1].id,
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		});
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+
+		const start = harness.updates
+			.filter(update => update.sessionId === stored.sessionId)
+			.map(notification => notification.update)
+			.find(update => "toolCallId" in update && update.toolCallId === "toolu_custom");
+
+		expect(start).toEqual(
+			expect.objectContaining({
+				sessionUpdate: "tool_call",
+				toolCallId: "toolu_custom",
+				rawInput: { input: "raw custom payload" },
+			}),
+		);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("does not replay silent-abort marker as agent_message_chunk to ACP clients", async () => {
 		const harness = await createHarness();
 		const stored = new FakeAgentSession(harness.cwdA);
@@ -796,6 +939,104 @@ describe("ACP agent", () => {
 				update.update.content.text === SILENT_ABORT_MARKER,
 		);
 		expect(markerChunks).toHaveLength(0);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("emits ACP plan updates from live todo_write results", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+
+		session.prompt = async (text: string): Promise<void> => {
+			session.promptCalls.push(text);
+			session.isStreaming = true;
+			for (const listener of session.listeners()) {
+				listener({
+					type: "tool_execution_end",
+					toolCallId: "todo_1",
+					toolName: "todo_write",
+					isError: false,
+					result: {
+						content: [{ type: "text", text: "updated" }],
+						details: {
+							phases: [
+								{
+									name: "Work",
+									tasks: [
+										{ content: "Fix bug", status: "in_progress" },
+										{ content: "Run tests", status: "completed" },
+									],
+								},
+							],
+						},
+					},
+				} as AgentSessionEvent);
+				listener({
+					type: "tool_execution_end",
+					toolCallId: "todo_empty",
+					toolName: "todo_write",
+					isError: false,
+					result: {
+						content: [{ type: "text", text: "cleared" }],
+						details: { phases: [] },
+					},
+				} as AgentSessionEvent);
+				listener({ type: "agent_end", messages: [] } as AgentSessionEvent);
+			}
+			session.isStreaming = false;
+		};
+
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000047",
+			prompt: [{ type: "text", text: "write todos" }],
+		} as PromptRequest);
+
+		expect(harness.updates.map(update => update.update)).toContainEqual({
+			sessionUpdate: "plan",
+			entries: [
+				{ content: "Fix bug", priority: "medium", status: "in_progress" },
+				{ content: "Run tests", priority: "medium", status: "completed" },
+			],
+		});
+		expect(harness.updates.map(update => update.update)).toContainEqual({ sessionUpdate: "plan", entries: [] });
+		expectAcpNotifications(harness.updates);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("replays todo_write tool results as ACP plan updates", async () => {
+		const harness = await createHarness();
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "todo_replay",
+			toolName: "todo_write",
+			content: [{ type: "text", text: "updated" }],
+			details: {
+				phases: [{ name: "Replay", tasks: [{ content: "Restore plan", status: "pending" }] }],
+			},
+			isError: false,
+			timestamp: Date.now(),
+		});
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+
+		expect(harness.updates.map(update => update.update)).toContainEqual({
+			sessionUpdate: "plan",
+			entries: [{ content: "Restore plan", priority: "medium", status: "pending" }],
+		});
+		expectAcpNotifications(harness.updates);
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
@@ -951,6 +1192,84 @@ describe("ACP agent", () => {
 			harness.abortController.abort();
 			await Bun.sleep(0);
 		}
+	});
+
+	it("drains async job deliveries before completing the ACP prompt", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		let releaseDelivery!: () => void;
+		let drainCalls = 0;
+		const deliveryBlocked = Promise.withResolvers<void>();
+		const deliveryRelease = new Promise<void>(resolve => {
+			releaseDelivery = resolve;
+		});
+		session.asyncJobDrain = async () => {
+			drainCalls++;
+			if (drainCalls > 1) return false;
+			deliveryBlocked.resolve();
+			await deliveryRelease;
+			return true;
+		};
+
+		const prompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000047",
+			prompt: [{ type: "text", text: "wait for async delivery" }],
+		} as PromptRequest);
+		await deliveryBlocked.promise;
+
+		try {
+			const returnedBeforeDelivery = await Promise.race([prompt.then(() => true), Bun.sleep(0).then(() => false)]);
+			expect(returnedBeforeDelivery).toBe(false);
+			expect(session.waitForIdleCalls).toBe(1);
+
+			releaseDelivery();
+			const response = await prompt;
+			expect(response.userMessageId).toBe("00000000-0000-4000-8000-000000000047");
+			expect(session.waitForIdleCalls).toBe(2);
+			expect(drainCalls).toBe(2);
+		} finally {
+			releaseDelivery();
+			harness.abortController.abort();
+			await Bun.sleep(0);
+		}
+	});
+
+	it("keeps async delivery follow-up updates inside the owning ACP prompt", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		let delivered = false;
+		let drainCalls = 0;
+		session.asyncJobDrain = async () => {
+			drainCalls++;
+			if (delivered) return false;
+			delivered = true;
+			const assistantMessage = makeAssistantMessage("async continuation");
+			for (const listener of session.listeners()) {
+				listener({
+					type: "message_update",
+					message: assistantMessage,
+					assistantMessageEvent: { type: "text_delta", delta: "async continuation" },
+				} as AgentSessionEvent);
+			}
+			return true;
+		};
+
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000048",
+			prompt: [{ type: "text", text: "deliver async follow-up" }],
+		} as PromptRequest);
+
+		expect(harness.updates.some(notification => JSON.stringify(notification).includes("async continuation"))).toBe(
+			true,
+		);
+		expect(session.waitForIdleCalls).toBe(2);
+		expect(drainCalls).toBe(2);
+		harness.abortController.abort();
+		await Bun.sleep(0);
 	});
 
 	it("queues next prompt until AgentSession idle cleanup completes", async () => {

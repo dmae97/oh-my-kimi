@@ -81,7 +81,7 @@ import {
 	prompt,
 	Snowflake,
 } from "@oh-my-pi/pi-utils";
-import { type AsyncJob, AsyncJobManager } from "../async";
+import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry } from "../config/model-registry";
@@ -97,7 +97,7 @@ import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-temp
 import type { Settings, SkillsSettings } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
-import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
+import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
 import {
 	disposeKernelSessionsByOwner,
 	executePython as executePythonCommand,
@@ -236,6 +236,7 @@ export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "la
 export interface AsyncJobSnapshot {
 	running: AsyncJobSnapshotItem[];
 	recent: AsyncJobSnapshotItem[];
+	delivery: AsyncJobDeliveryState;
 }
 
 // ============================================================================
@@ -534,7 +535,7 @@ function createHandoffFileName(date = new Date()): string {
 // ============================================================================
 
 /** Tools that require user permission before execution when an ACP client is connected. */
-const PERMISSION_REQUIRED_TOOLS = new Set(["bash", "edit", "write", "ast_edit", "delete", "move"]);
+const PERMISSION_REQUIRED_TOOLS = new Set(["bash", "edit", "delete", "move"]);
 
 /** Permission options presented to the client on each gated tool call. */
 const PERMISSION_OPTIONS: ClientBridgePermissionOption[] = [
@@ -546,46 +547,106 @@ const PERMISSION_OPTIONS: ClientBridgePermissionOption[] = [
 
 const PERMISSION_OPTIONS_BY_ID = new Map(PERMISSION_OPTIONS.map(option => [option.optionId, option]));
 
-function derivePermissionTitle(toolName: string, args: unknown): string {
-	const a = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-	if (toolName === "bash") {
-		const cmd = typeof a.command === "string" ? a.command.slice(0, 80) : undefined;
-		if (cmd) return cmd;
-	} else if (toolName === "edit" || toolName === "write" || toolName === "delete") {
-		const p = typeof a.path === "string" ? a.path : undefined;
-		if (p) {
-			const verb = toolName === "edit" ? "Edit" : toolName === "write" ? "Write" : "Delete";
-			return `${verb} ${p}`;
-		}
-	} else if (toolName === "move") {
-		const from =
-			typeof a.oldPath === "string"
-				? a.oldPath
-				: typeof a.path === "string"
-					? a.path
-					: typeof a.from === "string"
-						? a.from
-						: undefined;
-		const to =
-			typeof a.newPath === "string"
-				? a.newPath
-				: typeof a.to === "string"
-					? a.to
-					: typeof a.destination === "string"
-						? a.destination
-						: undefined;
-		if (from && to) return `Move ${from} to ${to}`;
-		if (from) return `Move ${from}`;
-	} else if (toolName === "ast_edit") {
-		const paths = Array.isArray(a.paths)
-			? (a.paths as unknown[]).filter(x => typeof x === "string").join(", ")
-			: undefined;
-		if (paths) return `AST edit ${paths}`;
-	}
-	return toolName;
+function getStringProperty(value: Record<string, unknown>, key: string): string | undefined {
+	const candidate = value[key];
+	return typeof candidate === "string" ? candidate : undefined;
 }
 
-function extractPermissionLocations(args: unknown, cwd: string): { path: string; line?: number }[] {
+function collectStringPaths(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function getEditDestructiveIntent(args: unknown): { kind: "delete" | "move"; paths: string[] } | undefined {
+	if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
+	const a = args as Record<string, unknown>;
+
+	const edits = Array.isArray(a.edits) ? a.edits : undefined;
+	if (edits) {
+		const path = getStringProperty(a, "path");
+		if (path) {
+			for (const edit of edits) {
+				if (!edit || typeof edit !== "object" || Array.isArray(edit)) continue;
+				const op = getStringProperty(edit as Record<string, unknown>, "op");
+				if (op === "delete") return { kind: "delete", paths: [path] };
+			}
+		}
+		for (const edit of edits) {
+			if (!edit || typeof edit !== "object" || Array.isArray(edit)) continue;
+			const entry = edit as Record<string, unknown>;
+			const op = getStringProperty(entry, "op");
+			const rename = getStringProperty(entry, "rename");
+			if (op !== "create" && rename) return { kind: "move", paths: path ? [path, rename] : [rename] };
+		}
+	}
+
+	const input = getStringProperty(a, "input");
+	if (input) {
+		try {
+			const entries = expandApplyPatchToEntries({ input });
+			const deleteEntry = entries.find(entry => entry.op === "delete");
+			if (deleteEntry) return { kind: "delete", paths: [deleteEntry.path] };
+			const moveEntry = entries.find(entry => entry.rename);
+			if (moveEntry?.rename) return { kind: "move", paths: [moveEntry.path, moveEntry.rename] };
+		} catch {
+			// If the edit input is not an apply_patch envelope, it is not a delete/move operation.
+		}
+	}
+
+	return undefined;
+}
+
+function getPermissionIntent(
+	toolName: string,
+	args: unknown,
+): { toolName: string; title: string; paths?: string[]; cacheKey: string } | undefined {
+	const a = args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
+	if (toolName === "bash") {
+		const cmd = getStringProperty(a, "command")?.slice(0, 80);
+		return { toolName, title: cmd || toolName, cacheKey: toolName };
+	}
+	if (toolName === "delete") {
+		const p = getStringProperty(a, "path");
+		return { toolName, title: p ? `Delete ${p}` : toolName, paths: p ? [p] : undefined, cacheKey: toolName };
+	}
+	if (toolName === "move") {
+		const from = getStringProperty(a, "oldPath") ?? getStringProperty(a, "path") ?? getStringProperty(a, "from");
+		const to = getStringProperty(a, "newPath") ?? getStringProperty(a, "to") ?? getStringProperty(a, "destination");
+		if (from && to) return { toolName, title: `Move ${from} to ${to}`, paths: [from, to], cacheKey: toolName };
+		return {
+			toolName,
+			title: from ? `Move ${from}` : toolName,
+			paths: from ? [from] : undefined,
+			cacheKey: toolName,
+		};
+	}
+	if (toolName === "edit") {
+		const intent = getEditDestructiveIntent(args);
+		if (!intent) return undefined;
+		if (intent.kind === "delete") {
+			return {
+				toolName,
+				title: `Delete ${intent.paths[0] ?? "edit target"}`,
+				paths: intent.paths,
+				cacheKey: "edit:delete",
+			};
+		}
+		const from = intent.paths[0];
+		const to = intent.paths[1];
+		return {
+			toolName,
+			title: from && to ? `Move ${from} to ${to}` : `Move ${from ?? to ?? "edit target"}`,
+			paths: intent.paths,
+			cacheKey: "edit:move",
+		};
+	}
+	return undefined;
+}
+
+function extractPermissionLocations(
+	args: unknown,
+	cwd: string,
+	explicitPaths?: string[],
+): { path: string; line?: number }[] {
 	if (!args || typeof args !== "object") return [];
 	const a = args as Record<string, unknown>;
 	const out: { path: string; line?: number }[] = [];
@@ -603,12 +664,16 @@ function extractPermissionLocations(args: unknown, cwd: string): { path: string;
 		if (out.some(location => location.path === resolved)) return;
 		out.push({ path: resolved });
 	};
-	pushPath(a.path);
-	pushPath(a.file);
-	if (Array.isArray(a.paths)) {
-		for (const p of a.paths) {
+	if (explicitPaths) {
+		for (const p of explicitPaths) {
 			pushPath(p);
 		}
+		return out;
+	}
+	pushPath(a.path);
+	pushPath(a.file);
+	for (const p of collectStringPaths(a.paths)) {
+		pushPath(p);
 	}
 	pushPath(a.oldPath);
 	pushPath(a.newPath);
@@ -1144,21 +1209,23 @@ export class AgentSession {
 	getAsyncJobSnapshot(options?: { recentLimit?: number }): AsyncJobSnapshot | null {
 		const manager = AsyncJobManager.instance();
 		if (!manager) return null;
-		const running = manager.getRunningJobs().map(job => ({
+		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+		const running = manager.getRunningJobs(ownerFilter).map(job => ({
 			id: job.id,
 			type: job.type,
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
 		}));
-		const recent = manager.getRecentJobs(options?.recentLimit ?? 5).map(job => ({
+		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(job => ({
 			id: job.id,
 			type: job.type,
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
 		}));
-		return { running, recent };
+		const delivery = manager.getDeliveryState(ownerFilter);
+		return { running, recent, delivery };
 	}
 
 	/**
@@ -2704,6 +2771,17 @@ export class AgentSession {
 		await this.#waitForPostPromptRecovery();
 	}
 
+	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {
+		const manager = AsyncJobManager.instance();
+		if (!manager) return false;
+		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+		const before = manager.getDeliveryState(ownerFilter);
+		if (before.queued === 0 && !before.delivering) return false;
+		const drained = await manager.drainDeliveries({ timeoutMs: options?.timeoutMs, filter: ownerFilter });
+		const after = manager.getDeliveryState(ownerFilter);
+		return drained && (before.queued !== after.queued || before.delivering !== after.delivering);
+	}
+
 	/** Most recent assistant message in agent state. */
 	getLastAssistantMessage(): AssistantMessage | undefined {
 		return this.#findLastAssistantMessage();
@@ -3003,8 +3081,8 @@ export class AgentSession {
 		if (!bridge?.capabilities.requestPermission || !bridge.requestPermission) return tool;
 		if (!PERMISSION_REQUIRED_TOOLS.has(tool.name)) return tool;
 		return new Proxy(tool, {
-			get: (target, prop, receiver) => {
-				if (prop !== "execute") return Reflect.get(target, prop, receiver);
+			get: (target, prop) => {
+				if (prop !== "execute") return Reflect.get(target, prop, target);
 				return async (
 					toolCallId: string,
 					args: unknown,
@@ -3012,8 +3090,12 @@ export class AgentSession {
 					onUpdate: never,
 					ctx: never,
 				) => {
+					const permissionIntent = getPermissionIntent(target.name, args);
+					if (!permissionIntent) {
+						return await target.execute(toolCallId, args as never, signal, onUpdate, ctx);
+					}
 					// Short-circuit on persisted decisions.
-					const persisted = this.#acpPermissionDecisions.get(target.name);
+					const persisted = this.#acpPermissionDecisions.get(permissionIntent.cacheKey);
 					if (persisted === "allow_always") {
 						return await target.execute(toolCallId, args as never, signal, onUpdate, ctx);
 					}
@@ -3035,9 +3117,14 @@ export class AgentSession {
 							{
 								toolCallId,
 								toolName: target.name,
-								title: derivePermissionTitle(target.name, args),
+								title: permissionIntent.title,
+								status: "pending",
 								rawInput: args,
-								locations: extractPermissionLocations(args, this.sessionManager.getCwd()),
+								locations: extractPermissionLocations(
+									args,
+									this.sessionManager.getCwd(),
+									permissionIntent.paths,
+								),
 							},
 							PERMISSION_OPTIONS,
 							signal,
@@ -3058,9 +3145,9 @@ export class AgentSession {
 						throw new ToolError(`Tool permission response used unknown option ID: ${outcome.optionId}`);
 					}
 					if (selectedOption.kind === "allow_always") {
-						this.#acpPermissionDecisions.set(target.name, "allow_always");
+						this.#acpPermissionDecisions.set(permissionIntent.cacheKey, "allow_always");
 					} else if (selectedOption.kind === "reject_always") {
-						this.#acpPermissionDecisions.set(target.name, "reject_always");
+						this.#acpPermissionDecisions.set(permissionIntent.cacheKey, "reject_always");
 					}
 					if (selectedOption.kind === "reject_once" || selectedOption.kind === "reject_always") {
 						throw new ToolError(`Tool call rejected by user (${target.name})`);
@@ -4300,7 +4387,7 @@ export class AgentSession {
 	 *
 	 * Handles three cases:
 	 * - Streaming: queue as steer/follow-up or store for next turn
-	 * - Not streaming + triggerTurn: appends to state/session, starts new turn
+	 * - Not streaming + triggerTurn: appends to state/session, starts new turn unless the client cannot own it
 	 * - Not streaming + no trigger: appends to state/session, no turn
 	 */
 	async sendCustomMessage<T = unknown>(
@@ -4332,6 +4419,10 @@ export class AgentSession {
 
 		if (options?.deliverAs === "nextTurn") {
 			if (options?.triggerTurn) {
+				if (this.#clientBridge?.deferAgentInitiatedTurns) {
+					this.#queueHiddenNextTurnMessage(appMessage, false);
+					return;
+				}
 				await this.agent.prompt(appMessage);
 				return;
 			}
@@ -4347,6 +4438,10 @@ export class AgentSession {
 		}
 
 		if (options?.triggerTurn) {
+			if (this.#clientBridge?.deferAgentInitiatedTurns) {
+				this.#queueHiddenNextTurnMessage(appMessage, false);
+				return;
+			}
 			await this.agent.prompt(appMessage);
 			return;
 		}

@@ -25,6 +25,7 @@ export interface ClientBridgePermissionToolCall {
 	toolName: string;
 	title: string;
 	kind?: string;
+	status?: "pending" | "in_progress" | "completed" | "failed";
 	rawInput?: unknown;
 	locations?: { path: string; line?: number }[];
 }
@@ -70,6 +71,8 @@ export interface ClientBridgeCreateTerminalParams {
 
 export interface ClientBridge {
 	readonly capabilities: ClientBridgeCapabilities;
+	/** ACP v1 clients cannot show server-initiated turns as busy after prompt response. */
+	readonly deferAgentInitiatedTurns?: boolean;
 	readTextFile?(params: { path: string; line?: number; limit?: number }): Promise<string>;
 	writeTextFile?(params: { path: string; content: string }): Promise<void>;
 	createTerminal?(params: ClientBridgeCreateTerminalParams): Promise<ClientBridgeTerminalHandle>;
