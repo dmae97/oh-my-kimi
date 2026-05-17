@@ -76,6 +76,24 @@ export function createModelManager<TApi extends Api = Api, TModelsDevPayload = u
 }
 
 /**
+ * Cheap fast path for trusted model sources (bundled literals, our own cache rows).
+ * Skips per-field validation; only guards against catastrophically corrupt rows.
+ */
+function passModelList<TApi extends Api>(value: unknown): Model<TApi>[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const out: Model<TApi>[] = [];
+	for (const item of value) {
+		if (item === null || typeof item !== "object" || typeof (item as { id: unknown }).id !== "string") {
+			continue;
+		}
+		out.push(enrichModelThinking(item as Model<TApi>));
+	}
+	return out;
+}
+
+/**
  * Resolves provider models with source precedence:
  * static -> models.dev -> cache -> dynamic.
  *
@@ -88,7 +106,7 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const now = options.now ?? Date.now;
 	const ttlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
 	const dbPath = options.cacheDbPath;
-	const staticModels = normalizeModelList<TApi>(
+	const staticModels = passModelList<TApi>(
 		options.staticModels ?? getBundledModels(options.providerId as GeneratedProvider),
 	);
 	const cache = readModelCache<TApi>(options.providerId, ttlMs, now, dbPath);
@@ -116,7 +134,7 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		cache.staticFingerprint === staticFingerprint &&
 		cache.staticFingerprint.length > 0
 	) {
-		return { models: normalizeModelList<TApi>(cache.models), stale: false };
+		return { models: passModelList<TApi>(cache.models), stale: false };
 	}
 
 	const [fetchedModelsDevModels, fetchedDynamicModels] = shouldFetchFromNetwork
@@ -258,15 +276,17 @@ function mergeDynamicModels<TApi extends Api>(
  * arms calling `resolveProviderModels` with the same `staticModels` array)
  * skip the JSON+hash work after the first call.
  */
-const STATIC_FINGERPRINT_CACHE = new WeakMap<readonly Model<Api>[], string>();
+const kStaticFingerprint = Symbol("model-manager.staticFingerprint");
+type ModelArrayWithFingerprint = readonly Model<Api>[] & { [kStaticFingerprint]?: string };
 function fingerprintStatic<TApi extends Api>(models: readonly Model<TApi>[]): string {
 	if (models.length === 0) return "empty";
-	const cached = STATIC_FINGERPRINT_CACHE.get(models as readonly Model<Api>[]);
+	const tagged = models as ModelArrayWithFingerprint;
+	const cached = tagged[kStaticFingerprint];
 	if (cached !== undefined) return cached;
 	// `Bun.hash` returns a `bigint`; base36 keeps the string short for the
 	// SQLite column without sacrificing distinguishability.
 	const fingerprint = Bun.hash(JSON.stringify(models)).toString(36);
-	STATIC_FINGERPRINT_CACHE.set(models as readonly Model<Api>[], fingerprint);
+	tagged[kStaticFingerprint] = fingerprint;
 	return fingerprint;
 }
 
@@ -337,34 +357,49 @@ function isModelLike(value: unknown): value is Model<Api> {
 	if (!isRecord(value)) {
 		return false;
 	}
-	if (typeof value.id !== "string" || value.id.length === 0) {
+	const v = value as {
+		id?: unknown;
+		name?: unknown;
+		api?: unknown;
+		provider?: unknown;
+		baseUrl?: unknown;
+		reasoning?: unknown;
+		input?: unknown;
+		cost?: unknown;
+		contextWindow?: unknown;
+		maxTokens?: unknown;
+	};
+	if (typeof v.id !== "string" || v.id.length === 0) {
 		return false;
 	}
-	if (typeof value.name !== "string" || value.name.length === 0) {
+	if (typeof v.name !== "string" || v.name.length === 0) {
 		return false;
 	}
-	if (typeof value.api !== "string" || value.api.length === 0) {
+	if (typeof v.api !== "string" || v.api.length === 0) {
 		return false;
 	}
-	if (typeof value.provider !== "string" || value.provider.length === 0) {
+	if (typeof v.provider !== "string" || v.provider.length === 0) {
 		return false;
 	}
-	if (typeof value.baseUrl !== "string" || value.baseUrl.length === 0) {
+	if (typeof v.baseUrl !== "string" || v.baseUrl.length === 0) {
 		return false;
 	}
-	if (typeof value.reasoning !== "boolean") {
+	if (typeof v.reasoning !== "boolean") {
 		return false;
 	}
-	if (!isModelInputArray(value.input)) {
+	if (!isModelInputArray(v.input)) {
 		return false;
 	}
-	if (!isModelCost(value.cost)) {
+	if (!isModelCost(v.cost)) {
 		return false;
 	}
-	if (typeof value.contextWindow !== "number" || !Number.isFinite(value.contextWindow) || value.contextWindow <= 0) {
+	// Finite positive: NaN > 0 is false, +Infinity < Infinity is false.
+	const cw = v.contextWindow;
+	if (typeof cw !== "number" || !(cw > 0 && cw < Infinity)) {
 		return false;
 	}
-	if (typeof value.maxTokens !== "number" || !Number.isFinite(value.maxTokens) || value.maxTokens <= 0) {
+	const mt = v.maxTokens;
+	if (typeof mt !== "number" || !(mt > 0 && mt < Infinity)) {
 		return false;
 	}
 	return true;
@@ -374,21 +409,42 @@ function isModelInputArray(value: unknown): value is ("text" | "image")[] {
 	if (!Array.isArray(value) || value.length === 0) {
 		return false;
 	}
-	return value.every(item => item === "text" || item === "image");
+	for (let i = 0; i < value.length; i++) {
+		const item = value[i];
+		if (item !== "text" && item !== "image") {
+			return false;
+		}
+	}
+	return true;
 }
 
 function isModelCost(value: unknown): value is Model<Api>["cost"] {
 	if (!isRecord(value)) {
 		return false;
 	}
-	return (
-		typeof value.input === "number" &&
-		Number.isFinite(value.input) &&
-		typeof value.output === "number" &&
-		Number.isFinite(value.output) &&
-		typeof value.cacheRead === "number" &&
-		Number.isFinite(value.cacheRead) &&
-		typeof value.cacheWrite === "number" &&
-		Number.isFinite(value.cacheWrite)
-	);
+	const c = value as {
+		input?: unknown;
+		output?: unknown;
+		cacheRead?: unknown;
+		cacheWrite?: unknown;
+	};
+	// Finite (NaN-safe): -Infinity < x < Infinity rejects NaN and both infinities.
+	// Preserves original behavior: 0 and negatives remain valid.
+	const ci = c.input;
+	if (typeof ci !== "number" || !(ci > -Infinity && ci < Infinity)) {
+		return false;
+	}
+	const co = c.output;
+	if (typeof co !== "number" || !(co > -Infinity && co < Infinity)) {
+		return false;
+	}
+	const cr = c.cacheRead;
+	if (typeof cr !== "number" || !(cr > -Infinity && cr < Infinity)) {
+		return false;
+	}
+	const cw = c.cacheWrite;
+	if (typeof cw !== "number" || !(cw > -Infinity && cw < Infinity)) {
+		return false;
+	}
+	return true;
 }

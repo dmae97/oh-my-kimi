@@ -79,9 +79,7 @@ const baseContext: Context = {
 	messages: [{ role: "user", content: "hi", timestamp: 0 }],
 };
 
-async function collectEvents(
-	stream: AsyncIterable<AssistantMessageEvent>,
-): Promise<AssistantMessageEvent[]> {
+async function collectEvents(stream: AsyncIterable<AssistantMessageEvent>): Promise<AssistantMessageEvent[]> {
 	const out: AssistantMessageEvent[] = [];
 	for await (const event of stream) out.push(event);
 	return out;
@@ -164,11 +162,10 @@ describe("streamPiNative request shape", () => {
 			return fakeResponse([{ type: "done", reason: "stop", message: baseAssistant() }]);
 		}) as FetchImpl;
 
-		await streamPiNative(
-			fakeModel({ baseUrl: "http://llm-gateway.internal:4000///" }),
-			baseContext,
-			{ apiKey: "k", fetch: fetchImpl },
-		).result();
+		await streamPiNative(fakeModel({ baseUrl: "http://llm-gateway.internal:4000///" }), baseContext, {
+			apiKey: "k",
+			fetch: fetchImpl,
+		}).result();
 		expect(captured.url).toBe("http://llm-gateway.internal:4000/v1/pi/stream");
 	});
 
@@ -239,8 +236,7 @@ describe("streamPiNative event flow", () => {
 	});
 
 	it("falls back to plain text on a non-JSON error body", async () => {
-		const fetchImpl: FetchImpl = (async () =>
-			new Response("bad gateway", { status: 502 })) as FetchImpl;
+		const fetchImpl: FetchImpl = (async () => new Response("bad gateway", { status: 502 })) as FetchImpl;
 		const stream = streamPiNative(fakeModel(), baseContext, { apiKey: "k", fetch: fetchImpl });
 		await expect(stream.result()).rejects.toThrow(/502/);
 	});

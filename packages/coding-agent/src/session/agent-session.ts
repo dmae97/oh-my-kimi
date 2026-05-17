@@ -888,16 +888,28 @@ export class AgentSession {
 		this.#transformContext = config.transformContext ?? (messages => messages);
 		this.#onPayload = config.onPayload;
 		this.rawSseDebugBuffer = config.rawSseDebugBuffer ?? new RawSseDebugBuffer();
+		// Avoid wrapping in an `async` closure when no user callback is configured: the
+		// outer await on `#onResponse` (provider-response.ts) tolerates a sync void return,
+		// and skipping the wrapper drops a per-event `newPromiseCapability` allocation that
+		// shows up as ~3.5% self time in streaming profiles.
 		const configuredOnResponse = config.onResponse;
-		this.#onResponse = async (response, model) => {
-			this.rawSseDebugBuffer.recordResponse(response, model);
-			await configuredOnResponse?.(response, model);
-		};
+		this.#onResponse = configuredOnResponse
+			? async (response, model) => {
+					this.rawSseDebugBuffer.recordResponse(response, model);
+					await configuredOnResponse(response, model);
+				}
+			: (response, model) => {
+					this.rawSseDebugBuffer.recordResponse(response, model);
+				};
 		const configuredOnSseEvent = config.onSseEvent;
-		this.#onSseEvent = (event, model) => {
-			this.rawSseDebugBuffer.recordEvent(event, model);
-			configuredOnSseEvent?.(event, model);
-		};
+		this.#onSseEvent = configuredOnSseEvent
+			? (event, model) => {
+					this.rawSseDebugBuffer.recordEvent(event, model);
+					configuredOnSseEvent(event, model);
+				}
+			: (event, model) => {
+					this.rawSseDebugBuffer.recordEvent(event, model);
+				};
 		this.agent.setProviderResponseInterceptor(this.#onResponse);
 		this.agent.setRawSseEventInterceptor(this.#onSseEvent);
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;

@@ -126,7 +126,14 @@ describe("AuthStorage usage cache: last-good failure fallback", () => {
 
 	beforeEach(async () => {
 		store = makeStore([oauthRow(1, "a@example.com")]);
-		storage = new AuthStorage(store);
+		// Restrict the resolver to anthropic. Without this, AuthStorage enumerates
+		// every default provider and — for any provider whose `supports()` accepts
+		// the matching `*_API_KEY` env var present on the test host — fans out a
+		// real network fetch per poll. 3 polls × N real fetches blows past the 5s
+		// test budget intermittently.
+		storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
 		await storage.reload();
 	});
 

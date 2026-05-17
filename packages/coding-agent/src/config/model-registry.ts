@@ -1195,9 +1195,7 @@ export class ModelRegistry {
 							headers: providerOverride.headers
 								? { ...model.headers, ...providerOverride.headers }
 								: model.headers,
-							...(providerOverride.transport !== undefined
-								? { transport: providerOverride.transport }
-								: {}),
+							...(providerOverride.transport !== undefined ? { transport: providerOverride.transport } : {}),
 						}
 					: model;
 			}),

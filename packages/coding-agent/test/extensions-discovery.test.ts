@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { discoverAndLoadExtensions, loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
-import { filterUserExtensionErrors, filterUserExtensions } from "./utils/filter-user-extensions";
+import { filterUserScoped } from "./utils/filter-user-extensions";
 
 describe("extensions discovery", () => {
 	let tempDir: TempDir;
@@ -22,8 +22,8 @@ describe("extensions discovery", () => {
 		const result = await discoverAndLoadExtensions(configuredPaths, tempDir.path());
 		return {
 			...result,
-			extensions: filterUserExtensions(result.extensions),
-			errors: filterUserExtensionErrors(result.errors),
+			extensions: filterUserScoped(result.extensions),
+			errors: filterUserScoped(result.errors),
 		};
 	};
 

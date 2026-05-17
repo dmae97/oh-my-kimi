@@ -15,7 +15,7 @@ import {
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, logger, TempDir } from "@oh-my-pi/pi-utils";
-import { filterUserExtensionErrors, filterUserExtensions } from "./utils/filter-user-extensions";
+import { filterUserScoped } from "./utils/filter-user-extensions";
 
 describe("ExtensionRunner", () => {
 	let tempDir: TempDir;
@@ -43,8 +43,8 @@ describe("ExtensionRunner", () => {
 		const result = await discoverAndLoadExtensions(configuredPaths, tempDir.path());
 		return {
 			...result,
-			extensions: filterUserExtensions(result.extensions),
-			errors: filterUserExtensionErrors(result.errors),
+			extensions: filterUserScoped(result.extensions),
+			errors: filterUserScoped(result.errors),
 		};
 	};
 
