@@ -101,6 +101,7 @@ class FakeAgentSession {
 	planModeState: PlanModeState | undefined;
 	waitForIdleCalls = 0;
 	waitForIdleBlocker: (() => Promise<void>) | undefined;
+	asyncJobDrain: ((options?: { timeoutMs?: number }) => Promise<boolean>) | undefined;
 	#listeners = new Set<(event: AgentSessionEvent) => void>();
 
 	constructor(
@@ -195,6 +196,10 @@ class FakeAgentSession {
 	async waitForIdle(): Promise<void> {
 		this.waitForIdleCalls++;
 		await this.waitForIdleBlocker?.();
+	}
+
+	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {
+		return (await this.asyncJobDrain?.(options)) ?? false;
 	}
 
 	async abort(): Promise<void> {
@@ -951,6 +956,84 @@ describe("ACP agent", () => {
 			harness.abortController.abort();
 			await Bun.sleep(0);
 		}
+	});
+
+	it("drains async job deliveries before completing the ACP prompt", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		let releaseDelivery!: () => void;
+		let drainCalls = 0;
+		const deliveryBlocked = Promise.withResolvers<void>();
+		const deliveryRelease = new Promise<void>(resolve => {
+			releaseDelivery = resolve;
+		});
+		session.asyncJobDrain = async () => {
+			drainCalls++;
+			if (drainCalls > 1) return false;
+			deliveryBlocked.resolve();
+			await deliveryRelease;
+			return true;
+		};
+
+		const prompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000047",
+			prompt: [{ type: "text", text: "wait for async delivery" }],
+		} as PromptRequest);
+		await deliveryBlocked.promise;
+
+		try {
+			const returnedBeforeDelivery = await Promise.race([prompt.then(() => true), Bun.sleep(0).then(() => false)]);
+			expect(returnedBeforeDelivery).toBe(false);
+			expect(session.waitForIdleCalls).toBe(1);
+
+			releaseDelivery();
+			const response = await prompt;
+			expect(response.userMessageId).toBe("00000000-0000-4000-8000-000000000047");
+			expect(session.waitForIdleCalls).toBe(2);
+			expect(drainCalls).toBe(2);
+		} finally {
+			releaseDelivery();
+			harness.abortController.abort();
+			await Bun.sleep(0);
+		}
+	});
+
+	it("keeps async delivery follow-up updates inside the owning ACP prompt", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		let delivered = false;
+		let drainCalls = 0;
+		session.asyncJobDrain = async () => {
+			drainCalls++;
+			if (delivered) return false;
+			delivered = true;
+			const assistantMessage = makeAssistantMessage("async continuation");
+			for (const listener of session.listeners()) {
+				listener({
+					type: "message_update",
+					message: assistantMessage,
+					assistantMessageEvent: { type: "text_delta", delta: "async continuation" },
+				} as AgentSessionEvent);
+			}
+			return true;
+		};
+
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000048",
+			prompt: [{ type: "text", text: "deliver async follow-up" }],
+		} as PromptRequest);
+
+		expect(harness.updates.some(notification => JSON.stringify(notification).includes("async continuation"))).toBe(
+			true,
+		);
+		expect(session.waitForIdleCalls).toBe(2);
+		expect(drainCalls).toBe(2);
+		harness.abortController.abort();
+		await Bun.sleep(0);
 	});
 
 	it("queues next prompt until AgentSession idle cleanup completes", async () => {

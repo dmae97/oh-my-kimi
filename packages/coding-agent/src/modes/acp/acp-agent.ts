@@ -87,6 +87,8 @@ const SESSION_PAGE_SIZE = 50;
  */
 export const ACP_BOOTSTRAP_RACE_GUARD_MS = 50;
 const ACP_CANCEL_CLEANUP_TIMEOUT_MS = 5_000;
+const ACP_ASYNC_DELIVERY_DRAIN_TIMEOUT_MS = 250;
+const ACP_ASYNC_DELIVERY_DRAIN_MAX_PASSES = 3;
 
 type AgentImageContent = {
 	type: "image";
@@ -1032,13 +1034,27 @@ export class AcpAgent implements Agent {
 
 		if (event.type === "agent_end") {
 			await this.#emitEndOfTurnUpdates(record);
-			await record.session.waitForIdle();
+			await this.#waitForAcpPromptIdle(record);
 			this.#finishPrompt(record, {
 				stopReason: this.#resolveStopReason(event, promptTurn.cancelRequested),
 				usage: this.#buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
 				userMessageId: promptTurn.userMessageId,
 			});
 		}
+	}
+
+	async #waitForAcpPromptIdle(record: ManagedSessionRecord): Promise<void> {
+		for (let pass = 0; pass < ACP_ASYNC_DELIVERY_DRAIN_MAX_PASSES; pass++) {
+			await record.session.waitForIdle();
+			const delivered = await record.session.drainAsyncJobDeliveriesForAcp({
+				timeoutMs: ACP_ASYNC_DELIVERY_DRAIN_TIMEOUT_MS,
+			});
+			if (!delivered) {
+				return;
+			}
+		}
+
+		await record.session.waitForIdle();
 	}
 
 	#prepareLiveAssistantMessage(record: ManagedSessionRecord, event: AgentSessionEvent): void {

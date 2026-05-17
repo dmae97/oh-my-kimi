@@ -219,22 +219,25 @@ export class AsyncJobManager {
 		return this.#filterJobs(this.#jobs.values(), filter);
 	}
 
-	getDeliveryState(): AsyncJobDeliveryState {
-		const nextRetryAt = this.#deliveries.reduce<number | undefined>((next, delivery) => {
+	getDeliveryState(filter?: AsyncJobFilter): AsyncJobDeliveryState {
+		const deliveries = filter?.ownerId
+			? this.#deliveries.filter(delivery => this.#jobs.get(delivery.jobId)?.ownerId === filter.ownerId)
+			: this.#deliveries;
+		const nextRetryAt = deliveries.reduce<number | undefined>((next, delivery) => {
 			if (next === undefined) return delivery.nextAttemptAt;
 			return Math.min(next, delivery.nextAttemptAt);
 		}, undefined);
 
 		return {
-			queued: this.#deliveries.length,
-			delivering: this.#deliveryLoop !== undefined,
+			queued: deliveries.length,
+			delivering: this.#deliveryLoop !== undefined && deliveries.length > 0,
 			nextRetryAt,
-			pendingJobIds: this.#deliveries.map(delivery => delivery.jobId),
+			pendingJobIds: deliveries.map(delivery => delivery.jobId),
 		};
 	}
 
-	hasPendingDeliveries(): boolean {
-		return this.#deliveries.length > 0;
+	hasPendingDeliveries(filter?: AsyncJobFilter): boolean {
+		return this.getDeliveryState(filter).queued > 0;
 	}
 
 	watchJobs(jobIds: string[]): number {
@@ -290,12 +293,13 @@ export class AsyncJobManager {
 		await Promise.all(Array.from(this.#jobs.values()).map(job => job.promise));
 	}
 
-	async drainDeliveries(options?: { timeoutMs?: number }): Promise<boolean> {
+	async drainDeliveries(options?: { timeoutMs?: number; filter?: AsyncJobFilter }): Promise<boolean> {
 		const timeoutMs = options?.timeoutMs;
+		const filter = options?.filter;
 		const hasDeadline = timeoutMs !== undefined;
 		const deadline = hasDeadline ? Date.now() + Math.max(timeoutMs, 0) : Number.POSITIVE_INFINITY;
 
-		while (this.hasPendingDeliveries()) {
+		while (this.hasPendingDeliveries(filter)) {
 			this.#ensureDeliveryLoop();
 			const loop = this.#deliveryLoop;
 			if (!loop) {
@@ -313,7 +317,7 @@ export class AsyncJobManager {
 			}
 
 			await Promise.race([loop, Bun.sleep(remainingMs)]);
-			if (Date.now() >= deadline && this.hasPendingDeliveries()) {
+			if (Date.now() >= deadline && this.hasPendingDeliveries(filter)) {
 				return false;
 			}
 		}

@@ -81,7 +81,7 @@ import {
 	prompt,
 	Snowflake,
 } from "@oh-my-pi/pi-utils";
-import { type AsyncJob, AsyncJobManager } from "../async";
+import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry } from "../config/model-registry";
@@ -236,6 +236,7 @@ export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "la
 export interface AsyncJobSnapshot {
 	running: AsyncJobSnapshotItem[];
 	recent: AsyncJobSnapshotItem[];
+	delivery: AsyncJobDeliveryState;
 }
 
 // ============================================================================
@@ -1144,21 +1145,23 @@ export class AgentSession {
 	getAsyncJobSnapshot(options?: { recentLimit?: number }): AsyncJobSnapshot | null {
 		const manager = AsyncJobManager.instance();
 		if (!manager) return null;
-		const running = manager.getRunningJobs().map(job => ({
+		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+		const running = manager.getRunningJobs(ownerFilter).map(job => ({
 			id: job.id,
 			type: job.type,
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
 		}));
-		const recent = manager.getRecentJobs(options?.recentLimit ?? 5).map(job => ({
+		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(job => ({
 			id: job.id,
 			type: job.type,
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
 		}));
-		return { running, recent };
+		const delivery = manager.getDeliveryState(ownerFilter);
+		return { running, recent, delivery };
 	}
 
 	/**
@@ -2702,6 +2705,17 @@ export class AgentSession {
 	async waitForIdle(): Promise<void> {
 		await this.agent.waitForIdle();
 		await this.#waitForPostPromptRecovery();
+	}
+
+	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {
+		const manager = AsyncJobManager.instance();
+		if (!manager) return false;
+		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+		const before = manager.getDeliveryState(ownerFilter);
+		if (before.queued === 0 && !before.delivering) return false;
+		const drained = await manager.drainDeliveries({ timeoutMs: options?.timeoutMs, filter: ownerFilter });
+		const after = manager.getDeliveryState(ownerFilter);
+		return drained && (before.queued !== after.queued || before.delivering !== after.delivering);
 	}
 
 	/** Most recent assistant message in agent state. */
@@ -4300,7 +4314,7 @@ export class AgentSession {
 	 *
 	 * Handles three cases:
 	 * - Streaming: queue as steer/follow-up or store for next turn
-	 * - Not streaming + triggerTurn: appends to state/session, starts new turn
+	 * - Not streaming + triggerTurn: appends to state/session, starts new turn unless the client cannot own it
 	 * - Not streaming + no trigger: appends to state/session, no turn
 	 */
 	async sendCustomMessage<T = unknown>(
@@ -4332,6 +4346,10 @@ export class AgentSession {
 
 		if (options?.deliverAs === "nextTurn") {
 			if (options?.triggerTurn) {
+				if (this.#clientBridge?.deferAgentInitiatedTurns) {
+					this.#queueHiddenNextTurnMessage(appMessage, false);
+					return;
+				}
 				await this.agent.prompt(appMessage);
 				return;
 			}
@@ -4347,6 +4365,10 @@ export class AgentSession {
 		}
 
 		if (options?.triggerTurn) {
+			if (this.#clientBridge?.deferAgentInitiatedTurns) {
+				this.#queueHiddenNextTurnMessage(appMessage, false);
+				return;
+			}
 			await this.agent.prompt(appMessage);
 			return;
 		}
