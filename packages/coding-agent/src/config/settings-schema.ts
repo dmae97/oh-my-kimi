@@ -916,6 +916,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	emojiAutocomplete: {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			label: "Emoji Autocomplete",
+			description: "Suggest emojis from `:name:` shortcodes and expand text emoticons like `:D` or `:-)`",
+		},
+	},
+
 	"startup.quiet": {
 		type: "boolean",
 		default: false,
