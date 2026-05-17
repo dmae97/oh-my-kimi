@@ -3,13 +3,50 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, getConfigRootDir } from "./dirs";
 
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Strict shell-identifier shape. Used for dotenv keys we accept into
+ * `Bun.env` — those should be referenceable as `$NAME` from POSIX shells,
+ * so we reject anything outside `[A-Za-z_][A-Za-z0-9_]*`.
+ */
+export function isValidEnvName(name: string): boolean {
+	return ENV_NAME_RE.test(name);
+}
+
+/**
+ * The only names that are genuinely unsafe to forward to a native `execve`
+ * spawn: empty, containing `=` (would corrupt the `KEY=VALUE` framing) or
+ * NUL (terminates the C string mid-entry). Windows ships standard variables
+ * whose names contain parentheses (e.g. `ProgramFiles(x86)`, `CommonProgramFiles(x86)`)
+ * — those MUST survive the scrub so downstream resolvers (Git Bash discovery
+ * in `procmgr.ts`, etc.) can still read them.
+ */
+export function isSafeEnvName(name: string): boolean {
+	return name.length > 0 && !name.includes("=") && !name.includes("\0");
+}
+
+export function isSafeEnvValue(value: string): boolean {
+	return !value.includes("\0");
+}
+
+export function filterProcessEnv(env: Record<string, string | undefined>): Record<string, string> {
+	const result: Record<string, string> = {};
+	for (const key in env) {
+		const value = env[key];
+		if (!isSafeEnvName(key) || value === undefined || !isSafeEnvValue(value)) continue;
+		result[key] = value;
+	}
+	return result;
+}
+
 /**
  * Parses a .env file synchronously and extracts key-value string pairs.
  * Ignores lines that are empty or start with '#'. Trims whitespace.
  * Allows values to be quoted with single or double quotes.
  * Returns an object of key-value pairs.
  */
-function parseEnvFile(filePath: string): Record<string, string> {
+export function parseEnvFile(filePath: string): Record<string, string> {
 	const result: Record<string, string> = {};
 	try {
 		const content = fs.readFileSync(filePath, "utf-8");
@@ -22,12 +59,15 @@ function parseEnvFile(filePath: string): Record<string, string> {
 			if (eqIndex === -1) continue;
 
 			const key = trimmed.slice(0, eqIndex).trim();
+			if (!isValidEnvName(key)) continue;
+
 			let value = trimmed.slice(eqIndex + 1).trim();
 
 			// Remove surrounding quotes (" or ')
 			if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
 				value = value.slice(1, -1);
 			}
+			if (!isSafeEnvValue(value)) continue;
 
 			result[key] = value;
 		}
@@ -51,10 +91,17 @@ const piEnv = parseEnvFile(path.join(getConfigRootDir(), ".env"));
 const agentEnv = parseEnvFile(path.join(getAgentDir(), ".env"));
 const projectEnv = parseEnvFile(path.join(process.cwd(), ".env"));
 
+for (const key of Object.keys(Bun.env)) {
+	const value = Bun.env[key];
+	if (!isSafeEnvName(key) || value === undefined || !isSafeEnvValue(value)) {
+		delete Bun.env[key];
+	}
+}
+
 for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
-	for (const [key, value] of Object.entries(file)) {
+	for (const key in file) {
 		if (!Bun.env[key]) {
-			Bun.env[key] = value;
+			Bun.env[key] = file[key];
 		}
 	}
 }

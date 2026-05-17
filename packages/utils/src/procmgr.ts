@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
 import type { Subprocess } from "bun";
-import { $env } from "./env";
+import { $env, filterProcessEnv } from "./env";
 import { $which } from "./which";
 
 export interface ShellConfig {
@@ -45,7 +45,7 @@ function isExecutable(path: string): boolean {
 function buildSpawnEnv(shell: string): Record<string, string> {
 	const noCI = $env.PI_BASH_NO_CI || $env.CLAUDE_BASH_NO_CI;
 	return {
-		...Bun.env,
+		...filterProcessEnv(Bun.env),
 		SHELL: shell,
 		GIT_EDITOR: "true",
 		GPG_TTY: "not a tty",
