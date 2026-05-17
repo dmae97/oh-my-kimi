@@ -5,6 +5,8 @@ import { theme } from "../../modes/theme/theme";
 import { matchesSelectCancel } from "../../modes/utils/keybinding-matchers";
 import type { AuthStorage } from "../../session/auth-storage";
 import { DynamicBorder } from "./dynamic-border";
+
+const OAUTH_SELECTOR_MAX_VISIBLE = 10;
 /**
  * Component that renders an OAuth provider selector.
  */
@@ -144,7 +146,16 @@ export class OAuthSelectorComponent extends Container {
 	}
 	#updateList(): void {
 		this.#listContainer.clear();
-		for (let i = 0; i < this.#allProviders.length; i++) {
+
+		const total = this.#allProviders.length;
+		const maxVisible = OAUTH_SELECTOR_MAX_VISIBLE;
+		const startIndex =
+			total <= maxVisible
+				? 0
+				: Math.max(0, Math.min(this.#selectedIndex - Math.floor(maxVisible / 2), total - maxVisible));
+		const endIndex = Math.min(startIndex + maxVisible, total);
+
+		for (let i = startIndex; i < endIndex; i++) {
 			const provider = this.#allProviders[i];
 			if (!provider) continue;
 			const isSelected = i === this.#selectedIndex;
@@ -163,8 +174,14 @@ export class OAuthSelectorComponent extends Container {
 			this.#listContainer.addChild(new TruncatedText(line, 0, 0));
 		}
 
+		// Scroll indicator when list is windowed
+		if (startIndex > 0 || endIndex < total) {
+			const scrollInfo = theme.fg("muted", `  (${this.#selectedIndex + 1}/${total})`);
+			this.#listContainer.addChild(new TruncatedText(scrollInfo, 0, 0));
+		}
+
 		// Show "no providers" if empty
-		if (this.#allProviders.length === 0) {
+		if (total === 0) {
 			const message =
 				this.#mode === "login" ? "No OAuth providers available" : "No OAuth providers logged in. Use /login first.";
 			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", `  ${message}`), 0, 0));
@@ -187,6 +204,25 @@ export class OAuthSelectorComponent extends Container {
 		else if (matchesKey(keyData, "down")) {
 			if (this.#allProviders.length > 0) {
 				this.#selectedIndex = this.#selectedIndex === this.#allProviders.length - 1 ? 0 : this.#selectedIndex + 1;
+			}
+			this.#statusMessage = undefined;
+			this.#updateList();
+		}
+		// Page up - jump up by one visible page
+		else if (matchesKey(keyData, "pageUp")) {
+			if (this.#allProviders.length > 0) {
+				this.#selectedIndex = Math.max(0, this.#selectedIndex - OAUTH_SELECTOR_MAX_VISIBLE);
+			}
+			this.#statusMessage = undefined;
+			this.#updateList();
+		}
+		// Page down - jump down by one visible page
+		else if (matchesKey(keyData, "pageDown")) {
+			if (this.#allProviders.length > 0) {
+				this.#selectedIndex = Math.min(
+					this.#allProviders.length - 1,
+					this.#selectedIndex + OAUTH_SELECTOR_MAX_VISIBLE,
+				);
 			}
 			this.#statusMessage = undefined;
 			this.#updateList();

@@ -42,6 +42,8 @@ let provider: BasicTracerProvider;
 let contextManager: AsyncLocalStorageContextManager;
 
 beforeAll(() => {
+	trace.disable();
+	context.disable();
 	contextManager = new AsyncLocalStorageContextManager().enable();
 	context.setGlobalContextManager(contextManager);
 	provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
@@ -55,6 +57,7 @@ afterEach(() => {
 afterAll(async () => {
 	await provider.shutdown();
 	context.disable();
+	trace.disable();
 });
 
 function identityConverter(messages: AgentMessage[]): Message[] {

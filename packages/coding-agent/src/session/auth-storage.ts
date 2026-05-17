@@ -14,4 +14,10 @@ export type {
 	SerializedAuthStorage,
 	StoredAuthCredential,
 } from "@oh-my-pi/pi-ai";
-export { AuthStorage } from "@oh-my-pi/pi-ai";
+export {
+	AuthBrokerClient,
+	AuthStorage,
+	REMOTE_REFRESH_SENTINEL,
+	RemoteAuthCredentialStore,
+	SqliteAuthCredentialStore,
+} from "@oh-my-pi/pi-ai";

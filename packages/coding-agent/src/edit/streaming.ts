@@ -13,7 +13,7 @@
  * the injected `editMode` rather than probing argument shape.
  */
 
-import { sanitizeText } from "@oh-my-pi/pi-natives";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import {
 	ABORT_MARKER,
 	BEGIN_PATCH_MARKER,

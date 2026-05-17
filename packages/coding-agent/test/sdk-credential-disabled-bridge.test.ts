@@ -118,11 +118,15 @@ describe("createAgentSession credential_disabled subscription", () => {
 			if (events.length > waiters.length) {
 				return Promise.resolve(events[waiters.length] as CredentialDisabledEvent);
 			}
-			return new Promise<CredentialDisabledEvent>(resolve => {
-				waiters.push({ resolve });
-			});
+			const { promise, resolve } = Promise.withResolvers<CredentialDisabledEvent>();
+			waiters.push({ resolve });
+			return promise;
 		};
 		return { factory, events, next };
+	};
+
+	const drainCredentialDisabledDispatch = async (): Promise<void> => {
+		for (let i = 0; i < 5; i++) await Promise.resolve();
 	};
 
 	afterEach(() => {
@@ -190,8 +194,8 @@ describe("createAgentSession credential_disabled subscription", () => {
 		// Post-dispose: only the embedder fires; the extension's listener was unsubscribed.
 		await authStorage.set("openai", [expiredOAuth()]);
 		await authStorage.getApiKey("openai", "post-dispose");
-		// Allow any (non-existent) async listener microtasks a chance to run before asserting absence.
-		await Bun.sleep(20);
+		// Drain async dispatch turns before asserting absence.
+		await drainCredentialDisabledDispatch();
 
 		expect(embedderEvents).toEqual([
 			{ provider: "anthropic", disabledCause: expect.stringContaining("invalid_grant") },
@@ -242,7 +246,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 		const wait2 = Promise.all([ext2.next(), ext3.next()]);
 		await authStorage.getApiKey("openai", "concurrent-2");
 		await wait2;
-		await Bun.sleep(20);
+		await drainCredentialDisabledDispatch();
 		expect(embedderEvents.map(e => e.provider)).toEqual(["anthropic", "openai"]);
 		expect(ext1.events.map(e => e.provider)).toEqual(["anthropic"]);
 		expect(ext2.events.map(e => e.provider)).toEqual(["anthropic", "openai"]);
@@ -255,7 +259,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 		const wait3 = ext3.next();
 		await authStorage.getApiKey("google", "concurrent-3");
 		await wait3;
-		await Bun.sleep(20);
+		await drainCredentialDisabledDispatch();
 		expect(embedderEvents.map(e => e.provider)).toEqual(["anthropic", "openai", "google"]);
 		expect(ext1.events.map(e => e.provider)).toEqual(["anthropic"]);
 		expect(ext2.events.map(e => e.provider)).toEqual(["anthropic", "openai"]);
@@ -266,7 +270,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 
 		await authStorage.set("anthropic", [expiredOAuth()]);
 		await authStorage.getApiKey("anthropic", "concurrent-final");
-		await Bun.sleep(20);
+		await drainCredentialDisabledDispatch();
 		expect(embedderEvents.map(e => e.provider)).toEqual(["anthropic", "openai", "google", "anthropic"]);
 		expect(ext1.events).toHaveLength(1);
 		expect(ext2.events).toHaveLength(2);
@@ -291,7 +295,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 			await authStorage.set("anthropic", [expiredOAuth()]);
 			failOAuthRefresh();
 			await authStorage.getApiKey("anthropic", "pre-init");
-			await Bun.sleep(20);
+			await drainCredentialDisabledDispatch();
 			expect(ext.events).toHaveLength(0);
 
 			// Initializing flushes the buffer through `emit()` with the now-populated
@@ -330,7 +334,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 			await authStorage.set("anthropic", [expiredOAuth()]);
 			failOAuthRefresh();
 			await authStorage.getApiKey("anthropic", "startup-with-embedder");
-			await Bun.sleep(20);
+			await drainCredentialDisabledDispatch();
 
 			// Embedder fires immediately (sync push from AuthStorage's fan-out loop). The
 			// extension still hasn't received it because the runner is uninitialized.
@@ -380,7 +384,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 		failOAuthRefresh();
 		await authStorage.set("anthropic", [expiredOAuth()]);
 		await authStorage.getApiKey("anthropic", "post-failure");
-		await Bun.sleep(20);
+		await drainCredentialDisabledDispatch();
 
 		expect(embedderEvents).toEqual([
 			{ provider: "anthropic", disabledCause: expect.stringContaining("invalid_grant") },

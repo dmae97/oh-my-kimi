@@ -47,14 +47,16 @@ export function clearRenderCache(): void {
 }
 
 // Stable numeric IDs for structural theme/style objects (no ID field on type).
-// WeakMap so GC can collect orphaned themes/styles without a leak.
-const objectIds = new WeakMap<object, number>();
+// Symbol-keyed so the id travels with the object and is invisible to consumers.
+const kObjectId = Symbol("markdown.objectId");
+type WithObjectId = object & { [kObjectId]?: number };
 let nextObjectId = 0;
 function objectId(o: object): number {
-	let id = objectIds.get(o);
+	const tagged = o as WithObjectId;
+	let id = tagged[kObjectId];
 	if (id === undefined) {
 		id = nextObjectId++;
-		objectIds.set(o, id);
+		tagged[kObjectId] = id;
 	}
 	return id;
 }

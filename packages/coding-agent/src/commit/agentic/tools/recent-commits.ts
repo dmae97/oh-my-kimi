@@ -3,7 +3,7 @@ import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
 
 const recentCommitsSchema = z.object({
-	count: z.number().min(1).max(50).describe("Number of commits to fetch").optional(),
+	count: z.number().min(1).max(50).describe("commit count").optional(),
 });
 
 interface RecentCommitStats {

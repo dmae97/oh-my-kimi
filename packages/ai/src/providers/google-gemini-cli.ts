@@ -5,7 +5,6 @@
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { scheduler } from "node:timers/promises";
-import type { Content, FunctionCallingConfigMode, ThinkingConfig } from "@google/genai";
 import { fetchWithRetry, readSseJson } from "@oh-my-pi/pi-utils";
 import { calculateCost } from "../models";
 import type {
@@ -24,8 +23,9 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
 import { refreshAntigravityToken } from "../utils/oauth/google-antigravity";
 import { refreshGoogleCloudToken } from "../utils/oauth/google-gemini-cli";
-import { sanitizeSchemaForCCA } from "../utils/schema";
+import { normalizeSchemaForCCA } from "../utils/schema";
 import { ANTIGRAVITY_SYSTEM_INSTRUCTION, getAntigravityUserAgent, getGeminiCliHeaders } from "./google-gemini-headers";
+import type { Content, FunctionCallingConfigMode, ThinkingConfig } from "./google-shared";
 import {
 	convertMessages,
 	convertTools,
@@ -688,7 +688,7 @@ function normalizeAntigravityTools(
 			const { parametersJsonSchema, ...rest } = declaration;
 			return {
 				...rest,
-				parameters: sanitizeSchemaForCCA(parametersJsonSchema),
+				parameters: normalizeSchemaForCCA(parametersJsonSchema),
 			};
 		}),
 	}));

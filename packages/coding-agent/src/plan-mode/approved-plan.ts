@@ -37,6 +37,15 @@ export function normalizePlanTitle(title: string): { title: string; fileName: st
 	return { title: normalizedTitle, fileName: withExtension };
 }
 
+/** Humanize a normalized plan title for use as a session display name.
+ *  Replaces `-`/`_` separators with spaces and capitalizes the first letter.
+ *  Returns an empty string when the input collapses to whitespace. */
+export function humanizePlanTitle(title: string): string {
+	const spaced = title.replace(/[-_]+/g, " ").trim();
+	if (!spaced) return "";
+	return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 interface RenameApprovedPlanFileOptions {
 	planFilePath: string;
 	finalPlanFilePath: string;

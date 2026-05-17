@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { convertTools } from "@oh-my-pi/pi-ai/providers/google-shared";
 import type { Model, TJsonSchema, Tool } from "@oh-my-pi/pi-ai/types";
-import { prepareSchemaForCCA, sanitizeSchemaForCCA, sanitizeSchemaForGoogle } from "@oh-my-pi/pi-ai/utils/schema";
+import { normalizeSchemaForCCA, normalizeSchemaForGoogle } from "@oh-my-pi/pi-ai/utils/schema";
 
 function createModel(id: string): Model<"google-gemini-cli"> {
 	return {
@@ -37,7 +37,7 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 
 		// normalizeTypeArrayToNullable converts type array to scalar + nullable,
 		// then stripNullableKeyword removes the nullable marker.
-		expect(sanitizeSchemaForCCA(schema)).toEqual({
+		expect(normalizeSchemaForCCA(schema)).toEqual({
 			type: "object",
 			properties: {
 				value: {
@@ -59,7 +59,7 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 			},
 		} as unknown;
 
-		expect(sanitizeSchemaForCCA(schema)).toEqual({
+		expect(normalizeSchemaForCCA(schema)).toEqual({
 			type: "object",
 			properties: {
 				env: {
@@ -290,7 +290,7 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 			required: ["mode"],
 		} as unknown;
 
-		expect(prepareSchemaForCCA(parameters)).toEqual({
+		expect(normalizeSchemaForCCA(parameters)).toEqual({
 			type: "object",
 			properties: {},
 		});
@@ -305,7 +305,7 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 			},
 		} as unknown;
 
-		expect(sanitizeSchemaForGoogle(schema)).toEqual({
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
 			type: "object",
 			properties: {
 				value: {
@@ -314,5 +314,362 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 				},
 			},
 		});
+	});
+});
+
+/**
+ * Tests ported from python-genai's `process_schema`/`handle_null_fields`
+ * coverage in google/genai/tests/transformers/test_schema.py. The Python
+ * suite is the canonical regression set for the rules our `normalizeSchemaForGoogle`
+ * mirrors (snake_case field renames, null-field collapsing, const→enum,
+ * propertyOrdering propagation, $ref cycle handling).
+ */
+describe("normalizeSchemaForGoogle parity with python-genai process_schema", () => {
+	// Mirrors python-genai test_schema.py::test_schema_with_no_null_fields_is_unchanged
+	it("leaves anyOf alone when no variant has type null", () => {
+		const schema = {
+			anyOf: [{ type: "integer" }, { type: "number" }],
+			default: "null",
+			title: "Total Area Sq Mi",
+		} as const;
+
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
+			anyOf: [{ type: "integer" }, { type: "number" }],
+			default: "null",
+			title: "Total Area Sq Mi",
+		});
+	});
+
+	// Mirrors python-genai test_schema.py::test_t_schema_for_null_fields
+	it("collapses {type:'null'} variant in anyOf into nullable + sole remaining variant", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				name: { type: "string" },
+				population: {
+					anyOf: [{ type: "integer" }, { type: "null" }],
+					default: null,
+					title: "Population",
+				},
+			},
+			required: ["name"],
+		} as const;
+
+		const sanitized = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
+		const props = sanitized.properties as Record<string, Record<string, unknown>>;
+		expect(props.population?.nullable).toBe(true);
+		expect(props.population?.type).toBe("integer");
+		expect(props.population?.anyOf).toBeUndefined();
+	});
+
+	// Mirrors python-genai test_schema.py::test_schema_with_any_of
+	it("preserves multi-variant anyOf without any null variant", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				name: { type: "string", title: "Name" },
+				restaurants_per_capita: {
+					any_of: [{ type: "integer" }, { type: "number" }],
+					title: "Restaurants Per Capita",
+				},
+			},
+			required: ["name", "restaurants_per_capita"],
+		} as const;
+
+		const sanitized = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
+		const props = sanitized.properties as Record<string, Record<string, unknown>>;
+		// snake_case any_of must be rewritten to camelCase anyOf.
+		expect(props.restaurants_per_capita?.anyOf).toEqual([{ type: "integer" }, { type: "number" }]);
+		expect(props.restaurants_per_capita?.any_of).toBeUndefined();
+	});
+
+	// Mirrors python-genai test_schema.py::test_complex_dict_schema_with_anyof_is_unchanged
+	it("leaves already-camelCased complex schemas unchanged apart from auto propertyOrdering", () => {
+		const dictSchema = {
+			type: "object",
+			title: "Fruit Basket",
+			description: "A structured representation of a fruit basket",
+			required: ["fruit"],
+			properties: {
+				fruit: {
+					type: "array",
+					description: "An ordered list of the fruit in the basket",
+					items: {
+						description: "A piece of fruit",
+						anyOf: [
+							{
+								title: "Apple",
+								description: "Describes an apple",
+								type: "object",
+								properties: {
+									type: { type: "string", description: "Always 'apple'" },
+									color: { type: "string", description: "The color of the apple" },
+								},
+								propertyOrdering: ["type", "color"],
+								required: ["type", "color"],
+							},
+							{
+								title: "Orange",
+								description: "Describes an orange",
+								type: "object",
+								properties: {
+									type: { type: "string", description: "Always 'orange'" },
+									size: { type: "string", description: "The size of the orange" },
+								},
+								propertyOrdering: ["type", "size"],
+								required: ["type", "size"],
+							},
+						],
+					},
+				},
+			},
+		} as const;
+
+		// fruit alone is the only top-level property; auto-ordering does not fire.
+		expect(normalizeSchemaForGoogle(dictSchema)).toEqual(dictSchema);
+	});
+
+	// Mirrors python-genai test_schema.py::test_process_schema_converts_const_to_enum
+	it("converts const to a singleton enum", () => {
+		const sanitized = normalizeSchemaForGoogle({ type: "string", const: "FOO" });
+		expect(sanitized).toEqual({ type: "string", enum: ["FOO"] });
+	});
+
+	// Mirrors python-genai test_schema.py::test_process_schema_forbids_non_string_const
+	// We deviate intentionally: rather than raise on non-string const we accept
+	// the value as a singleton enum. Google's Schema proto accepts numeric enums
+	// and we prefer permissive normalization over surfacing a transformer-level error.
+	it("accepts non-string const as a singleton enum (intentional deviation from upstream raise)", () => {
+		const sanitized = normalizeSchemaForGoogle({ type: "integer", const: 123 }) as Record<string, unknown>;
+		expect(sanitized.enum).toEqual([123]);
+		expect(sanitized.type).toBe("integer");
+	});
+
+	// Mirrors python-genai test_schema.py::test_process_schema_order_properties_propagates_into_defs
+	it("propagates auto propertyOrdering into inlined $defs targets", () => {
+		const schema = {
+			$ref: "#/$defs/Foo",
+			$defs: {
+				Foo: {
+					type: "object",
+					properties: {
+						foo: { type: "string" },
+						bar: { type: "string" },
+					},
+				},
+			},
+		} as const;
+
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
+			type: "object",
+			properties: {
+				foo: { type: "string" },
+				bar: { type: "string" },
+			},
+			propertyOrdering: ["foo", "bar"],
+		});
+	});
+
+	// Mirrors python-genai test_schema.py::test_process_schema_order_properties_propagates_into_items
+	it("propagates auto propertyOrdering into array items", () => {
+		const schema = {
+			type: "array",
+			items: {
+				type: "object",
+				properties: {
+					foo: { type: "string" },
+					bar: { type: "string" },
+				},
+			},
+		} as const;
+
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
+			type: "array",
+			items: {
+				type: "object",
+				properties: {
+					foo: { type: "string" },
+					bar: { type: "string" },
+				},
+				propertyOrdering: ["foo", "bar"],
+			},
+		});
+	});
+
+	// Mirrors python-genai test_schema.py::test_process_schema_order_properties_propagates_into_properties
+	it("propagates auto propertyOrdering into nested properties", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				xyz: {
+					type: "object",
+					properties: {
+						foo: { type: "string" },
+						bar: { type: "string" },
+					},
+				},
+				abc: { type: "string" },
+			},
+		} as const;
+
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
+			type: "object",
+			properties: {
+				xyz: {
+					type: "object",
+					properties: {
+						foo: { type: "string" },
+						bar: { type: "string" },
+					},
+					propertyOrdering: ["foo", "bar"],
+				},
+				abc: { type: "string" },
+			},
+			propertyOrdering: ["xyz", "abc"],
+		});
+	});
+
+	// Mirrors python-genai test_schema.py::test_process_schema_order_properties_propagates_into_any_of
+	it("propagates auto propertyOrdering into anyOf variants", () => {
+		const schema = {
+			anyOf: [
+				{
+					type: "object",
+					properties: {
+						foo: { type: "string" },
+						bar: { type: "string" },
+					},
+				},
+				{ type: "string" },
+			],
+		} as const;
+
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
+			anyOf: [
+				{
+					type: "object",
+					properties: {
+						foo: { type: "string" },
+						bar: { type: "string" },
+					},
+					propertyOrdering: ["foo", "bar"],
+				},
+				{ type: "string" },
+			],
+		});
+	});
+
+	// Mirrors python-genai test_schema.py::test_process_schema_with_cycle
+	it("breaks $ref cycles by emitting an empty schema at the recursion point", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				recursive: { $ref: "#/$defs/RecursiveObject" },
+			},
+			$defs: {
+				RecursiveObject: {
+					type: "object",
+					properties: {
+						self: { $ref: "#/$defs/RecursiveObject" },
+					},
+				},
+			},
+		} as const;
+
+		expect(normalizeSchemaForGoogle(schema)).toEqual({
+			type: "object",
+			properties: {
+				recursive: {
+					type: "object",
+					properties: { self: {} },
+				},
+			},
+		});
+	});
+
+	// Mirrors python-genai test_schema.py::test_t_schema_does_not_change_property_ordering_if_set
+	it("does not overwrite an existing propertyOrdering", () => {
+		const custom = ["code", "symbol", "name"];
+		const schema = {
+			type: "object",
+			properties: {
+				name: { type: "string" },
+				code: { type: "string" },
+				symbol: { type: "string" },
+			},
+			propertyOrdering: [...custom],
+		} as const;
+
+		const sanitized = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
+		expect(sanitized.propertyOrdering).toEqual(custom);
+	});
+
+	// Mirrors python-genai test_schema.py::test_t_schema_sets_property_ordering_for_json_schema
+	it("populates propertyOrdering from properties insertion order when missing", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				name: { type: "string" },
+				population: { type: "integer" },
+				capital: { type: "string" },
+				continent: { type: "string" },
+				gdp: { type: "integer" },
+				official_language: { type: "string" },
+				total_area_sq_mi: { type: "integer" },
+			},
+		} as const;
+
+		const sanitized = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
+		expect(sanitized.propertyOrdering).toEqual([
+			"name",
+			"population",
+			"capital",
+			"continent",
+			"gdp",
+			"official_language",
+			"total_area_sq_mi",
+		]);
+	});
+
+	// Covers python-genai _transformers.py:745-752 snake_case → camelCase renames.
+	it("normalizes snake_case schema field names to camelCase", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				foo: { type: "string" },
+				bar: { type: "string" },
+			},
+			property_ordering: ["bar", "foo"],
+		} as const;
+
+		const sanitized = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
+		expect(sanitized.propertyOrdering).toEqual(["bar", "foo"]);
+		expect(sanitized.property_ordering).toBeUndefined();
+	});
+
+	// Covers python-genai _transformers.py:751 snake-wins-over-camel collision behavior.
+	it("lets snake_case overwrite an existing camelCase entry on collision", () => {
+		const schema = {
+			anyOf: [{ type: "string" }],
+			any_of: [{ type: "integer" }, { type: "number" }],
+		} as const;
+
+		const sanitized = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
+		expect(sanitized.anyOf).toEqual([{ type: "integer" }, { type: "number" }]);
+		expect(sanitized.any_of).toBeUndefined();
+	});
+
+	// Covers python-genai _transformers.py:628-630 bare {type:'null'} flatten.
+	it("rewrites a bare {type:'null'} schema as {nullable:true}", () => {
+		expect(normalizeSchemaForGoogle({ type: "null" })).toEqual({ nullable: true });
+	});
+
+	// Covers python-genai _transformers.py:631-640 single-non-null anyOf flatten.
+	it("flattens anyOf:[X, {type:'null'}] into X + nullable", () => {
+		expect(
+			normalizeSchemaForGoogle({
+				anyOf: [{ type: "string", title: "Name" }, { type: "null" }],
+			}),
+		).toEqual({ type: "string", title: "Name", nullable: true });
 	});
 });

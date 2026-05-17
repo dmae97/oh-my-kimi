@@ -5,13 +5,10 @@ This document is the operational contract for schema normalization/strictness in
 ## Scope
 
 - Applies to provider-facing tool schemas produced by:
-  - `sanitize-google.ts`
-  - `normalize-cca.ts`
-  - `strict-mode.ts`
-  - `adapt.ts`
-  - `fields.ts`
-- Covers OpenAI-style strict mode, Google schema constraints, and Cloud Code Assist Claude constraints.
-
+  - `normalize.ts` — Google, CCA, MCP, OpenAI Responses, and OpenAI strict-mode (sanitize + enforce) sanitization. All schema walkers live here.
+  - `adapt.ts` — thin composer wrapping `tryEnforceStrictSchema` for provider call sites, plus the `PI_NO_STRICT` env flag callers consult to opt out of strict mode.
+  - `fields.ts` — keyword classification sets used by the walkers.
+- Covers OpenAI-style strict mode, OpenAI Responses `oneOf` rejection, Google schema constraints, and Cloud Code Assist Claude constraints.
 ---
 
 ## 1) OpenAI-style strict mode (`adaptSchemaForStrict` / `tryEnforceStrictSchema`)
@@ -57,9 +54,9 @@ When strict mode is requested (`strict=true` at call site), the schema MUST sati
 
 ---
 
-## 2) Google Gemini / Vertex / Gemini CLI (`sanitizeSchemaForGoogle`)
+## 2) Google Gemini / Vertex / Gemini CLI (`normalizeSchemaForGoogle`)
 
-Schemas sent on Google JSON Schema path MUST follow:
+Schemas sent on the Google JSON Schema path MUST follow:
 
 1. **Unsupported JSON Schema keywords are stripped (except property names under `properties`)**
    - Unsupported keys (`UNSUPPORTED_SCHEMA_FIELDS`):
@@ -70,6 +67,7 @@ Schemas sent on Google JSON Schema path MUST follow:
      - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
      - `pattern`, `format`
    - Important: keys inside a `properties` object are treated as property names and MUST NOT be stripped by keyword match.
+   - Human-meaningful stripped keys (`pattern`, `format`, min/max constraints, `default`, `examples`, etc.) are appended to the sibling `description` as an Anthropic-style spill block: `{pattern: "^foo$", minimum: 0}`. Structural/meta keys such as `$ref`, `$defs`, and `additionalProperties` are not spilled.
 
 2. **`type` arrays are normalized to scalar type + nullable marker**
    - `type: ["T", "null"]` becomes `type: "T"` and `nullable: true`.
@@ -78,25 +76,25 @@ Schemas sent on Google JSON Schema path MUST follow:
 3. **`const` is converted to `enum`**
    - If `const` exists, schema uses/merges `enum` with the const value.
 
-4. **`additionalProperties: false` is removed**
-   - This value is stripped during sanitization for Google compatibility.
-
+4. **Object schemas get an explicit properties map**
+   - `{ "type": "object" }` becomes `{ "type": "object", "properties": {} }`.
 ---
 
-## 3) Claude via Cloud Code Assist (`prepareSchemaForCCA`)
+## 3) Claude via Cloud Code Assist (`normalizeSchemaForCCA`)
 
 For Cloud Code Assist Claude tool declarations, schema MUST satisfy stricter constraints than generic Google path.
 
 ### 3.1 Transport contract
 
 1. **Use legacy `parameters` field** (not `parametersJsonSchema`) for CCA Claude.
-2. CCA path uses `sanitizeSchemaForCCA` + normalization pipeline.
+2. CCA path uses the full `normalizeSchemaForCCA` pipeline.
 
 ### 3.2 Sanitization contract
 
-1. Start with Google sanitizer behavior.
+1. Start with Google unsupported-key stripping behavior.
 2. **`nullable` keyword MUST be stripped** in CCA Claude path.
 3. `type: ["T", "null"]` becomes `type: "T"` with no `nullable` marker.
+4. Human-meaningful stripped keys are appended to `description` with the same spill format used by the Google dispatcher.
 
 ### 3.3 Combiner/union normalization contract
 
@@ -145,10 +143,10 @@ If any remain, schema is incompatible.
   - Emit `strict: true` only when effective strict enforcement succeeded.
 
 - **Google Gemini/Vertex/Gemini CLI (non-CCA Claude)**:
-  - Use Google sanitizer and send schema on `parametersJsonSchema` path.
+  - Use `normalizeSchemaForGoogle` and send schema on `parametersJsonSchema` path.
 
 - **Cloud Code Assist Claude models (`model.id` starts with `claude-`)**:
-  - Use CCA preparation pipeline and send sanitized normalized schema in `parameters`.
+  - Use `normalizeSchemaForCCA` and send sanitized normalized schema in `parameters`.
 
 ---
 
@@ -158,5 +156,9 @@ When adding/changing provider adapters:
 
 1. Any new unsupported keyword MUST be added to the appropriate set in `fields.ts`.
 2. Any new normalization rule MUST include regression tests under `packages/ai/test`.
-3. Never bypass adapter helpers (`adaptSchemaForStrict`, `sanitizeSchemaForGoogle`, `prepareSchemaForCCA`) in provider code.
+3. Never bypass adapter helpers (`adaptSchemaForStrict`, `normalizeSchemaForGoogle`, `normalizeSchemaForCCA`, `normalizeSchemaForMCP`) in provider code.
 4. If a provider rejects schema with partial support, prefer deterministic per-tool fallback over request-wide failure.
+
+## 6) Gemini CLI / Antigravity CCA parity
+
+The Gemini CLI / Antigravity Claude path MUST run the same full `normalizeSchemaForCCA` pipeline as the shared Google Claude path. It MUST NOT call only the first keyword-stripping pass, because that leaves object combiners, nullable unions, residual combiners, and fallback gating inconsistent between transports.

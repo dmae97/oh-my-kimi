@@ -1,7 +1,12 @@
 import { Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { type AuthCredential, AuthCredentialStore, type StoredAuthCredential } from "@oh-my-pi/pi-ai";
+import {
+	type AuthCredential,
+	type AuthCredentialStore,
+	SqliteAuthCredentialStore,
+	type StoredAuthCredential,
+} from "@oh-my-pi/pi-ai";
 import { getAgentDbPath, isRecord, logger } from "@oh-my-pi/pi-utils";
 import type { RawSettings as Settings } from "../config/settings";
 
@@ -57,7 +62,7 @@ export class AgentStorage {
 		this.#hardenPermissions(dbPath);
 
 		// Create AuthCredentialStore with our open database
-		this.#authStore = new AuthCredentialStore(this.#db);
+		this.#authStore = new SqliteAuthCredentialStore(this.#db);
 
 		this.#listSettingsStmt = this.#db.prepare("SELECT key, value FROM settings");
 		this.#upsertModelUsageStmt = this.#db.prepare(

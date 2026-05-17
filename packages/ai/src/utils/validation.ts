@@ -872,17 +872,16 @@ type ValidationContext =
  * Keyed by the parameters object identity, which is stable across tool
  * registrations.
  */
-const validationContextCache = new WeakMap<object, ValidationContext>();
+const kValidationContext = Symbol("ai.validationContext");
+type ParamsWithValidationContext = object & { [kValidationContext]?: ValidationContext };
 function getValidationContext(tool: Tool): ValidationContext {
-	const params = tool.parameters as object;
-	let ctx = validationContextCache.get(params);
-	if (ctx) return ctx;
-	if (isZodSchema(params)) {
-		ctx = { kind: "zod", zod: params, json: zodToWireSchema(params) };
-	} else {
-		ctx = { kind: "json", json: upgradeJsonSchemaTo202012(params) as Record<string, unknown> };
-	}
-	validationContextCache.set(params, ctx);
+	const params = tool.parameters as ParamsWithValidationContext;
+	const existing = params[kValidationContext];
+	if (existing) return existing;
+	const ctx: ValidationContext = isZodSchema(params)
+		? { kind: "zod", zod: params, json: zodToWireSchema(params) }
+		: { kind: "json", json: upgradeJsonSchemaTo202012(params) as Record<string, unknown> };
+	params[kValidationContext] = ctx;
 	return ctx;
 }
 

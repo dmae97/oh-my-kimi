@@ -9,11 +9,11 @@ import {
 	Title,
 	Tooltip,
 } from "chart.js";
-import { format } from "date-fns";
 import { useMemo } from "react";
 import { Line } from "react-chartjs-2";
-import type { ModelTimeSeriesPoint } from "../types";
+import type { ModelTimeSeriesPoint, TimeRange } from "../types";
 import { useSystemTheme } from "../useSystemTheme";
+import { formatRangeTick, rangeMeta } from "./range-meta";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -49,14 +49,16 @@ const CHART_THEMES = {
 } as const;
 interface ChartsContainerProps {
 	modelSeries: ModelTimeSeriesPoint[];
+	timeRange: TimeRange;
 }
 
-export function ChartsContainer({ modelSeries }: ChartsContainerProps) {
+export function ChartsContainer({ modelSeries, timeRange }: ChartsContainerProps) {
 	const chartData = useMemo(() => buildModelPreferenceSeries(modelSeries), [modelSeries]);
 	const theme = useSystemTheme();
 	const chartTheme = CHART_THEMES[theme];
+	const meta = rangeMeta(timeRange);
 	const data = {
-		labels: chartData.data.map(d => format(new Date(d.timestamp), "MMM d")),
+		labels: chartData.data.map(d => formatRangeTick(d.timestamp, timeRange)),
 		datasets: chartData.series.map((seriesName, index) => ({
 			label: seriesName,
 			data: chartData.data.map(d => d[seriesName] ?? 0),
@@ -137,7 +139,7 @@ export function ChartsContainer({ modelSeries }: ChartsContainerProps) {
 		<div className="surface overflow-hidden">
 			<div className="px-5 py-4 border-b border-[var(--border-subtle)]">
 				<h3 className="text-sm font-semibold text-[var(--text-primary)]">Model Preference</h3>
-				<p className="text-xs text-[var(--text-muted)] mt-1">Share of requests over the last 14 days</p>
+				<p className="text-xs text-[var(--text-muted)] mt-1">Share of requests over {meta.windowLabel}</p>
 			</div>
 			<div className="p-5 min-h-[320px]">
 				{chartData.data.length === 0 ? (

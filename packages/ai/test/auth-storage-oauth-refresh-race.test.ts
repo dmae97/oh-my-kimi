@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthCredentialStore, AuthStorage, type CredentialDisabledEvent } from "../src/auth-storage";
+import {
+	type AuthCredentialStore,
+	AuthStorage,
+	type CredentialDisabledEvent,
+	SqliteAuthCredentialStore,
+} from "../src/auth-storage";
 import * as oauthUtils from "../src/utils/oauth";
 import { withEnv } from "./helpers";
 
@@ -19,7 +24,7 @@ describe("AuthStorage OAuth refresh race", () => {
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-auth-oauth-race-"));
-		store = await AuthCredentialStore.open(path.join(tempDir, "agent.db"));
+		store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		events = [];
 		authStorage = new AuthStorage(store, {
 			onCredentialDisabled: event => {

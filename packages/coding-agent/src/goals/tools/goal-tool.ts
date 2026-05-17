@@ -15,9 +15,9 @@ import { completionBudgetReport, remainingTokens } from "../runtime";
 import type { Goal, GoalStatus, GoalToolDetails } from "../state";
 
 const goalSchema = z.object({
-	op: z.union([z.literal("create"), z.literal("get"), z.literal("complete")]).describe("Goal operation."),
-	objective: z.string().describe("Goal objective. Required when op=create.").optional(),
-	token_budget: z.number().int().describe("Optional positive token budget. Only honored when op=create.").optional(),
+	op: z.enum(["create", "get", "complete"]).describe("goal operation"),
+	objective: z.string().describe("goal objective").optional(),
+	token_budget: z.number().int().describe("token budget").optional(),
 });
 
 export type GoalToolInput = z.infer<typeof goalSchema>;

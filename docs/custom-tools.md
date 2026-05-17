@@ -6,7 +6,7 @@ A custom tool is a TypeScript/JavaScript module that exports a factory. The fact
 
 ## What this is (and is not)
 
-- **Custom tool**: callable by the model during a turn (`execute` + Zod parameter schema; legacy TypeBox is still accepted and lifted to Zod at registration).
+- **Custom tool**: callable by the model during a turn (`execute` + Zod parameter schema).
 - **Extension**: lifecycle/event framework that can register tools and intercept/modify events.
 - **Hook**: external pre/post command scripts.
 - **Skill**: static guidance/context package, not executable tool code.
@@ -105,7 +105,7 @@ const factory: CustomToolFactory = (pi) => ({
 export default factory;
 ```
 
-Legacy TypeBox-authored factories can still call `pi.typebox` — it's now a small Zod-backed shim (`Type.Object`, `Type.String`, etc.) baked into the host, not the real `@sinclair/typebox` package. Schemas flow through the same Zod pipeline as `pi.zod` and need no separate normalization.
+Schemas are authored with Zod (`pi.zod`) and flow through the shared validation/wire pipeline.
 
 Factory return type:
 
@@ -122,8 +122,7 @@ From `types.ts` and `loader.ts`:
 - `ui`: UI context (can be no-op in headless modes)
 - `hasUI`: `false` in non-interactive flows
 - `logger`: shared file logger
-- `zod`: injected `zod` module (**preferred** for new tool schemas; use `pi.zod.object`, `pi.zod.string`, …)
-- `typebox`: injected zod-backed `Type.*` shim (legacy extension compatibility)
+- `zod`: injected `zod` module (use `pi.zod.object`, `pi.zod.string`, …)
 - `pi`: injected `@oh-my-pi/pi-coding-agent` exports
 - `pushPendingAction(action)`: register a preview action for hidden `resolve` tool (`docs/resolve-tool-runtime.md`)
 
@@ -137,7 +136,7 @@ Loader starts with a no-op UI context and requires host code to call `setUIConte
 execute(toolCallId, params, onUpdate, ctx, signal);
 ```
 
-- `params` is statically typed from your Zod schema via `z.infer<typeof schema>` (`Static<TParams>` in API types). Legacy TypeBox schemas are lifted to Zod internally.
+- `params` is statically typed from your Zod schema via `z.infer<typeof schema>` (`Static<TParams>` in API types).
 - Runtime argument validation happens before execution in the agent loop.
 - `onUpdate` emits partial results for UI streaming.
 - `ctx` includes session/model state and an `abort()` helper.

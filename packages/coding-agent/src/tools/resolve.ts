@@ -12,14 +12,9 @@ import { replaceTabs } from "./render-utils";
 import { ToolError } from "./tool-errors";
 
 const resolveSchema = z.object({
-	action: z.union([z.literal("apply"), z.literal("discard")]),
+	action: z.enum(["apply", "discard"]),
 	reason: z.string().describe("reason for action"),
-	extra: z
-		.record(z.string(), z.unknown())
-		.optional()
-		.describe(
-			'Free-form metadata interpreted by the resolving tool (e.g. plan-mode approval requires `{ title: "<PLAN_TITLE>" }`).',
-		),
+	extra: z.record(z.string(), z.unknown()).optional().describe("free-form metadata"),
 });
 
 type ResolveParams = z.infer<typeof resolveSchema>;

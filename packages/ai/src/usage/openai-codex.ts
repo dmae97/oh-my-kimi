@@ -31,9 +31,16 @@ interface CodexUsageRateLimitPayload {
 	secondary_window?: CodexUsageWindowPayload | null;
 }
 
+interface CodexUsageAdditionalRateLimitPayload {
+	limit_name?: string;
+	metered_feature?: string;
+	rate_limit?: CodexUsageRateLimitPayload | null;
+}
+
 interface CodexUsagePayload {
 	plan_type?: string;
 	rate_limit?: CodexUsageRateLimitPayload | null;
+	additional_rate_limits?: CodexUsageAdditionalRateLimitPayload[] | null;
 }
 
 interface ParsedUsageWindow {
@@ -43,12 +50,22 @@ interface ParsedUsageWindow {
 	resetAt?: number;
 }
 
+interface ParsedAdditionalUsage {
+	limitName?: string;
+	meteredFeature?: string;
+	allowed?: boolean;
+	limitReached?: boolean;
+	primary?: ParsedUsageWindow;
+	secondary?: ParsedUsageWindow;
+}
+
 interface ParsedUsage {
 	planType?: string;
 	allowed?: boolean;
 	limitReached?: boolean;
 	primary?: ParsedUsageWindow;
 	secondary?: ParsedUsageWindow;
+	additional: ParsedAdditionalUsage[];
 	raw: CodexUsagePayload;
 }
 
@@ -124,20 +141,45 @@ function parseUsageWindow(payload: unknown): ParsedUsageWindow | undefined {
 	};
 }
 
+function parseAdditionalRateLimit(payload: unknown): ParsedAdditionalUsage | null {
+	if (!isRecord(payload)) return null;
+	const limitName = typeof payload.limit_name === "string" ? payload.limit_name : undefined;
+	const meteredFeature = typeof payload.metered_feature === "string" ? payload.metered_feature : undefined;
+	const rateLimit = isRecord(payload.rate_limit) ? payload.rate_limit : undefined;
+	if (!rateLimit) return null;
+	const primary = parseUsageWindow(rateLimit.primary_window);
+	const secondary = parseUsageWindow(rateLimit.secondary_window);
+	const allowed = toBoolean(rateLimit.allowed);
+	const limitReached = toBoolean(rateLimit.limit_reached);
+	if (!primary && !secondary && allowed === undefined && limitReached === undefined) return null;
+	return { limitName, meteredFeature, allowed, limitReached, primary, secondary };
+}
+
 function parseUsagePayload(payload: unknown): ParsedUsage | null {
 	if (!isRecord(payload)) return null;
 	const planType = typeof payload.plan_type === "string" ? payload.plan_type : undefined;
 	const rateLimit = isRecord(payload.rate_limit) ? payload.rate_limit : undefined;
-	if (!rateLimit) return null;
+	const additionalRaw = Array.isArray(payload.additional_rate_limits) ? payload.additional_rate_limits : [];
+	const additional = additionalRaw
+		.map(parseAdditionalRateLimit)
+		.filter((value): value is ParsedAdditionalUsage => value !== null);
+	if (!rateLimit && additional.length === 0) return null;
 	const parsed: ParsedUsage = {
 		planType,
-		allowed: toBoolean(rateLimit.allowed),
-		limitReached: toBoolean(rateLimit.limit_reached),
-		primary: parseUsageWindow(rateLimit.primary_window),
-		secondary: parseUsageWindow(rateLimit.secondary_window),
+		allowed: rateLimit ? toBoolean(rateLimit.allowed) : undefined,
+		limitReached: rateLimit ? toBoolean(rateLimit.limit_reached) : undefined,
+		primary: rateLimit ? parseUsageWindow(rateLimit.primary_window) : undefined,
+		secondary: rateLimit ? parseUsageWindow(rateLimit.secondary_window) : undefined,
+		additional,
 		raw: payload as CodexUsagePayload,
 	};
-	if (!parsed.primary && !parsed.secondary && parsed.allowed === undefined && parsed.limitReached === undefined) {
+	if (
+		!parsed.primary &&
+		!parsed.secondary &&
+		parsed.allowed === undefined &&
+		parsed.limitReached === undefined &&
+		parsed.additional.length === 0
+	) {
 		return null;
 	}
 	return parsed;
@@ -251,6 +293,56 @@ function buildUsageLimit(args: {
 		status: buildUsageStatus(amount.usedFraction, args.limitReached),
 	};
 }
+function additionalLimitSlug(args: { limitName?: string; meteredFeature?: string }): string {
+	const probe = `${args.limitName ?? ""} ${args.meteredFeature ?? ""}`.toLowerCase();
+	if (probe.includes("spark") || probe.includes("bengalfox")) return "spark";
+	const source = (args.meteredFeature ?? args.limitName ?? "extra").toLowerCase();
+	return (
+		source
+			.replace(/^codex[-_]/, "")
+			.replace(/[^a-z0-9]+/g, "-")
+			.replace(/^-+|-+$/g, "") || "extra"
+	);
+}
+
+function additionalDisplayName(slug: string, limitName?: string): string {
+	if (slug === "spark") return "Spark";
+	if (limitName) return limitName;
+	return slug.replace(
+		/(^|-)([a-z])/g,
+		(_match, sep: string, ch: string) => `${sep === "-" ? " " : ""}${ch.toUpperCase()}`,
+	);
+}
+
+function buildAdditionalUsageLimit(args: {
+	key: "primary" | "secondary";
+	slug: string;
+	displayName: string;
+	window: ParsedUsageWindow;
+	accountId?: string;
+	limitReached?: boolean;
+	limitName?: string;
+	meteredFeature?: string;
+	nowMs: number;
+}): UsageLimit {
+	const usageWindow = buildUsageWindow(args.window, args.key, args.nowMs);
+	const amount = buildUsageAmount(args.window);
+	return {
+		id: `openai-codex:${args.slug}:${args.key}`,
+		label: `${usageWindow.label} (${args.displayName})`,
+		scope: {
+			provider: "openai-codex",
+			accountId: args.accountId,
+			tier: args.slug,
+			modelId: args.limitName,
+			windowId: usageWindow.id,
+			shared: true,
+		},
+		window: usageWindow,
+		amount,
+		status: buildUsageStatus(amount.usedFraction, args.limitReached),
+	};
+}
 
 export const openaiCodexUsageProvider: UsageProvider = {
 	id: "openai-codex",
@@ -326,6 +418,40 @@ export const openaiCodexUsageProvider: UsageProvider = {
 					nowMs,
 				}),
 			);
+		}
+		for (const extra of parsed?.additional ?? []) {
+			const slug = additionalLimitSlug({ limitName: extra.limitName, meteredFeature: extra.meteredFeature });
+			const displayName = additionalDisplayName(slug, extra.limitName);
+			if (extra.primary) {
+				limits.push(
+					buildAdditionalUsageLimit({
+						key: "primary",
+						slug,
+						displayName,
+						window: extra.primary,
+						accountId,
+						limitReached: extra.limitReached,
+						limitName: extra.limitName,
+						meteredFeature: extra.meteredFeature,
+						nowMs,
+					}),
+				);
+			}
+			if (extra.secondary) {
+				limits.push(
+					buildAdditionalUsageLimit({
+						key: "secondary",
+						slug,
+						displayName,
+						window: extra.secondary,
+						accountId,
+						limitReached: extra.limitReached,
+						limitName: extra.limitName,
+						meteredFeature: extra.meteredFeature,
+						nowMs,
+					}),
+				);
+			}
 		}
 
 		const report: UsageReport = {

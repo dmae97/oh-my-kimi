@@ -14,9 +14,9 @@ const researcherStartTool = createExaTool(
 	"Start Deep Research",
 	"Start an asynchronous deep research task using Exa's researcher. Returns a task_id for polling completion.",
 	z.object({
-		query: z.string().describe("Research query to investigate"),
-		depth: z.number().int().min(1).max(5).describe("Research depth (1-5, default: 3)").optional(),
-		breadth: z.number().int().min(1).max(5).describe("Research breadth (1-5, default: 3)").optional(),
+		query: z.string().describe("research query"),
+		depth: z.number().int().min(1).max(5).describe("research depth (1-5)").optional(),
+		breadth: z.number().int().min(1).max(5).describe("research breadth (1-5)").optional(),
 	}),
 	"deep_researcher_start",
 	{ formatResponse: false },
@@ -27,7 +27,7 @@ const researcherPollTool = createExaTool(
 	"Poll Research Status",
 	"Poll the status of an asynchronous research task. Returns status (pending|running|completed|failed) and result if completed.",
 	z.object({
-		task_id: z.string().describe("Task ID returned from exa_researcher_start"),
+		task_id: z.string().describe("task id"),
 	}),
 	"deep_researcher_check",
 	{ formatResponse: false },

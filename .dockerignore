@@ -53,6 +53,13 @@ packages/natives/native/pi_natives.dev.node
 packages/ai/test/.temp-images/
 python/omp-rpc/src/omp_rpc.egg-info/
 
+# robomp runtime state — robomp has its own Dockerfile/build context;
+# keep these out of the monorepo image too.
+python/robomp/data/
+python/robomp/.cache/
+python/robomp/src/robomp/static/
+python/robomp/web/dist/
+
 # Scratch files the repo creates ad-hoc.
 syntax.jsonl
 out.jsonl

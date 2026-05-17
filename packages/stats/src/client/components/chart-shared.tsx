@@ -253,7 +253,7 @@ export function buildTopNByModelSeries<T extends ModelKeyedPoint, B>(
 }
 
 /** All Models / By Model segmented toggle — identical UI in every time chart. */
-export function ByModelToggle({ byModel, onChange }: { byModel: boolean; onChange: (v: boolean) => void }) {
+function ByModelToggle({ byModel, onChange }: { byModel: boolean; onChange: (v: boolean) => void }) {
 	return (
 		<div className="flex bg-[var(--bg-surface)] rounded-[var(--radius-sm)] p-0.5 border border-[var(--border-subtle)]">
 			<button

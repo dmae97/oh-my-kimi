@@ -1084,6 +1084,13 @@ function buildParams(
 	if (options?.repetitionPenalty !== undefined) {
 		params.repetition_penalty = options.repetitionPenalty;
 	}
+	if (options?.stopSequences?.length) {
+		const seqs = options.stopSequences;
+		params.stop = seqs.length === 1 ? seqs[0] : seqs.slice(0, 4);
+	}
+	if (options?.frequencyPenalty !== undefined) {
+		params.frequency_penalty = options.frequencyPenalty;
+	}
 	if (shouldSendServiceTier(options?.serviceTier, model.provider)) {
 		params.service_tier = options.serviceTier;
 	}
