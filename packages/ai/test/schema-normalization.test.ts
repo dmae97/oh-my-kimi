@@ -8,6 +8,7 @@ import {
 	normalizeSchemaForCCA,
 	normalizeSchemaForGoogle,
 	normalizeSchemaForMCP,
+	sanitizeSchemaForOpenAIResponses,
 	sanitizeSchemaForStrictMode,
 	schemaNeedsDraft202012Upgrade,
 	stripResidualCombiners,
@@ -346,6 +347,102 @@ describe("normalizeSchemaForMCP", () => {
 			minLength: 1,
 			description: "ID",
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// sanitizeSchemaForOpenAIResponses
+// ---------------------------------------------------------------------------
+
+describe("sanitizeSchemaForOpenAIResponses", () => {
+	it("adds empty properties to object schemas without rewriting literal payloads", () => {
+		const literal = { type: "object", oneOf: [{ const: "literal" }] };
+		const schema = {
+			type: "object",
+			properties: {
+				nested: { type: "object" },
+				union: {
+					oneOf: [{ type: "object" }],
+				},
+			},
+			oneOf: [{ type: "object" }],
+			enum: [literal],
+			const: literal,
+			default: literal,
+			examples: [literal],
+		};
+
+		expect(sanitizeSchemaForOpenAIResponses(schema)).toEqual({
+			type: "object",
+			properties: {
+				nested: { type: "object", properties: {} },
+				union: {
+					anyOf: [{ type: "object", properties: {} }],
+				},
+			},
+			enum: [literal],
+			const: literal,
+			default: literal,
+			examples: [literal],
+			anyOf: [{ type: "object", properties: {} }],
+		});
+	});
+
+	it("adds empty properties under draft-07 dependencies and draft 2019-09 contentSchema", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				body: {
+					type: "string",
+					contentSchema: { type: "object" },
+				},
+			},
+			dependencies: {
+				body: { type: "object" },
+				other: ["body"],
+			},
+		};
+
+		expect(sanitizeSchemaForOpenAIResponses(schema)).toEqual({
+			type: "object",
+			properties: {
+				body: {
+					type: "string",
+					contentSchema: { type: "object", properties: {} },
+				},
+			},
+			dependencies: {
+				body: { type: "object", properties: {} },
+				other: ["body"],
+			},
+		});
+	});
+
+	it("adds empty properties when `type` is a draft 2020-12 array including object", () => {
+		expect(sanitizeSchemaForOpenAIResponses({ type: ["object", "null"] })).toEqual({
+			type: ["object", "null"],
+			properties: {},
+		});
+	});
+
+	it("preserves non-array oneOf payloads verbatim instead of dropping them", () => {
+		const malformed = { type: "object", oneOf: { type: "object" } } as unknown as Record<string, unknown>;
+
+		expect(sanitizeSchemaForOpenAIResponses(malformed)).toEqual({
+			type: "object",
+			oneOf: { type: "object" },
+			properties: {},
+		});
+	});
+
+	it("does not recurse infinitely on self-referential object schemas", () => {
+		const circular: Record<string, unknown> = { type: "object", properties: {} };
+		(circular.properties as Record<string, unknown>).self = circular;
+
+		const sanitized = sanitizeSchemaForOpenAIResponses(circular);
+		const properties = (sanitized as { properties: Record<string, unknown> }).properties;
+		expect(properties.self).toBe(sanitized as unknown as object);
+		expect((sanitized as { type: unknown }).type).toBe("object");
 	});
 });
 

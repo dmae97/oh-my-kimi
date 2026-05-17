@@ -1,10 +1,33 @@
 import { describe, expect, it } from "bun:test";
 import { type RequestBody, transformRequestBody } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import { parseCodexError } from "@oh-my-pi/pi-ai/providers/openai-codex/response-handler";
+import { convertOpenAICodexResponsesTools } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import type { Tool } from "@oh-my-pi/pi-ai/types";
 import { createCodexModel } from "./helpers";
 
 const DEFAULT_PROMPT_PREFIX =
 	"You are an expert coding assistant. You help users with coding tasks by reading files, executing commands";
+
+describe("openai-codex tool schemas", () => {
+	it("adds empty properties to no-argument object parameter schemas", () => {
+		const tools: Tool[] = [
+			{
+				name: "list_outgoing_messages",
+				description: "List outgoing messages",
+				parameters: { type: "object" },
+			},
+		];
+
+		const converted = convertOpenAICodexResponsesTools(tools, createCodexModel("gpt-5.1-codex"));
+
+		expect(converted[0]).toEqual({
+			type: "function",
+			name: "list_outgoing_messages",
+			description: "List outgoing messages",
+			parameters: { type: "object", properties: {} },
+		});
+	});
+});
 
 describe("openai-codex request transformer", () => {
 	it("filters item_reference and strips ids", async () => {
