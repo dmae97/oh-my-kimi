@@ -78,7 +78,11 @@ describe("XAIOAuthFlow.exchangeToken", () => {
 					{ status: 200, headers: { "Content-Type": "application/json" } },
 				);
 			}
-			return new Response(JSON.stringify({ refresh_token: "r" }), {
+			// Token-exchange response deliberately omits `access_token` to exercise
+			// the missing-token rejection path. The value of `refresh_token` here is
+			// a literal test marker, not a real secret — the test verifies
+			// exchangeToken throws before any token would be persisted.
+			return new Response(JSON.stringify({ refresh_token: "stub-refresh-token-for-test-only" }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
