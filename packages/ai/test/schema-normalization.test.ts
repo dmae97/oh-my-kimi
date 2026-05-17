@@ -8,6 +8,7 @@ import {
 	normalizeSchemaForCCA,
 	normalizeSchemaForGoogle,
 	normalizeSchemaForMCP,
+	sanitizeSchemaForOpenAIResponses,
 	sanitizeSchemaForStrictMode,
 	schemaNeedsDraft202012Upgrade,
 	stripResidualCombiners,
@@ -345,6 +346,45 @@ describe("normalizeSchemaForMCP", () => {
 			pattern: "^\\d+$",
 			minLength: 1,
 			description: "ID",
+		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// sanitizeSchemaForOpenAIResponses
+// ---------------------------------------------------------------------------
+
+describe("sanitizeSchemaForOpenAIResponses", () => {
+	it("adds empty properties to object schemas without rewriting literal payloads", () => {
+		const literal = { type: "object", oneOf: [{ const: "literal" }] };
+		const schema = {
+			type: "object",
+			properties: {
+				nested: { type: "object" },
+				union: {
+					oneOf: [{ type: "object" }],
+				},
+			},
+			oneOf: [{ type: "object" }],
+			enum: [literal],
+			const: literal,
+			default: literal,
+			examples: [literal],
+		};
+
+		expect(sanitizeSchemaForOpenAIResponses(schema)).toEqual({
+			type: "object",
+			properties: {
+				nested: { type: "object", properties: {} },
+				union: {
+					anyOf: [{ type: "object", properties: {} }],
+				},
+			},
+			enum: [literal],
+			const: literal,
+			default: literal,
+			examples: [literal],
+			anyOf: [{ type: "object", properties: {} }],
 		});
 	});
 });

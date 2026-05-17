@@ -850,13 +850,36 @@ export function normalizeSchemaForMCP(value: unknown): unknown {
 }
 
 // ---------------------------------------------------------------------------
-// OpenAI Responses — `oneOf` → `anyOf` rewrite
+// OpenAI Responses — schema-valued normalization
 // ---------------------------------------------------------------------------
+
+const OPENAI_RESPONSES_SCHEMA_ARRAY_KEYS = new Set(["anyOf", "oneOf", "allOf", "prefixItems"]);
+const OPENAI_RESPONSES_SCHEMA_MAP_KEYS = new Set([
+	"properties",
+	"patternProperties",
+	"dependentSchemas",
+	"$defs",
+	"definitions",
+]);
+const OPENAI_RESPONSES_SCHEMA_VALUE_KEYS = new Set([
+	"items",
+	"additionalItems",
+	"contains",
+	"propertyNames",
+	"if",
+	"then",
+	"else",
+	"not",
+	"additionalProperties",
+	"unevaluatedItems",
+	"unevaluatedProperties",
+]);
 
 /**
  * OpenAI Responses rejects `oneOf` in tool schemas even when strict mode is
- * disabled. Non-strict schemas can still use `anyOf`, so preserve the union
- * shape by recursively rewriting `oneOf` branches to `anyOf`.
+ * disabled, and rejects every schema node with `type: "object"` unless it has
+ * a `properties` member. Normalize only schema-valued positions so literal
+ * payloads under `enum`, `const`, `default`, and `examples` remain unchanged.
  *
  * Identity-preserving: returns the input reference unchanged when no rewrite
  * occurred so callers can dedupe via reference equality (and the strict-mode
@@ -865,7 +888,7 @@ export function normalizeSchemaForMCP(value: unknown): unknown {
  * would not survive).
  */
 export function sanitizeSchemaForOpenAIResponses(schema: JsonObject): JsonObject {
-	return rewriteOneOfToAnyOf(schema) as JsonObject;
+	return normalizeOpenAIResponsesSchemaNode(schema, new WeakMap()) as JsonObject;
 }
 
 /**
@@ -874,48 +897,76 @@ export function sanitizeSchemaForOpenAIResponses(schema: JsonObject): JsonObject
  */
 export const normalizeSchemaForOpenAIResponses: (schema: JsonObject) => JsonObject = sanitizeSchemaForOpenAIResponses;
 
-function rewriteOneOfToAnyOf(value: unknown): unknown {
-	if (Array.isArray(value)) {
-		let changed = false;
-		const rewritten = value.map(item => {
-			const next = rewriteOneOfToAnyOf(item);
-			if (next !== item) changed = true;
-			return next;
-		});
-		return changed ? rewritten : value;
-	}
+function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonObject, JsonObject>): unknown {
+	if (!isJsonObject(value)) return value;
 
-	if (!value || typeof value !== "object") {
-		return value;
-	}
+	const cached = cache.get(value);
+	if (cached) return cached;
 
-	const input = value as Record<string, unknown>;
+	const output: JsonObject = {};
+	cache.set(value, output);
+
 	let changed = false;
-	const output: Record<string, unknown> = {};
-	for (const key in input) {
-		const child = input[key];
-		// Skip `oneOf` here; it is re-emitted as `anyOf` after the loop so
-		// neighboring `anyOf` entries can be folded in.
+	for (const key in value) {
+		if (!Object.hasOwn(value, key)) continue;
 		if (key === "oneOf") {
 			changed = true;
 			continue;
 		}
-		const next = rewriteOneOfToAnyOf(child);
+
+		const child = value[key];
+		let next: unknown = child;
+		if (OPENAI_RESPONSES_SCHEMA_MAP_KEYS.has(key) && isJsonObject(child)) {
+			next = normalizeOpenAIResponsesSchemaMap(child, cache);
+		} else if (OPENAI_RESPONSES_SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(child)) {
+			next = normalizeOpenAIResponsesSchemaArray(child, cache);
+		} else if (OPENAI_RESPONSES_SCHEMA_VALUE_KEYS.has(key) && isJsonObject(child)) {
+			next = normalizeOpenAIResponsesSchemaNode(child, cache);
+		}
+
 		if (next !== child) changed = true;
 		output[key] = next;
 	}
 
-	// Re-emit `oneOf` content under `anyOf`, concatenating with any existing
-	// `anyOf` branches in the original node.
-	if (Array.isArray(input.oneOf)) {
-		const rewrittenOneOf = rewriteOneOfToAnyOf(input.oneOf);
+	if (Array.isArray(value.oneOf)) {
+		const rewrittenOneOf = normalizeOpenAIResponsesSchemaArray(value.oneOf, cache);
 		const existingAnyOf = output.anyOf;
 		output.anyOf = Array.isArray(existingAnyOf)
 			? [...existingAnyOf, ...(rewrittenOneOf as unknown[])]
 			: rewrittenOneOf;
 	}
 
+	if (value.type === "object" && !Object.hasOwn(value, "properties")) {
+		output.properties = {};
+		changed = true;
+	}
+
+	const result = changed ? output : value;
+	cache.set(value, result);
+	return result;
+}
+
+function normalizeOpenAIResponsesSchemaArray(value: unknown[], cache: WeakMap<JsonObject, JsonObject>): unknown[] {
+	let changed = false;
+	const output = value.map(item => {
+		const next = normalizeOpenAIResponsesSchemaNode(item, cache);
+		if (next !== item) changed = true;
+		return next;
+	});
 	return changed ? output : value;
+}
+
+function normalizeOpenAIResponsesSchemaMap(schemaMap: JsonObject, cache: WeakMap<JsonObject, JsonObject>): JsonObject {
+	let changed = false;
+	const output: JsonObject = {};
+	for (const key in schemaMap) {
+		if (!Object.hasOwn(schemaMap, key)) continue;
+		const child = schemaMap[key];
+		const next = normalizeOpenAIResponsesSchemaNode(child, cache);
+		if (next !== child) changed = true;
+		output[key] = next;
+	}
+	return changed ? output : schemaMap;
 }
 
 // ---------------------------------------------------------------------------
