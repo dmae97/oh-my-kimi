@@ -74,7 +74,7 @@ afterAll(async () => {
 });
 
 function makeTelemetryConfig(): AgentTelemetryConfig {
-	return { conversationId: "conv-compaction" };
+	return { conversationId: "conv-compaction", tracer: provider.getTracer("compaction-telemetry-test") };
 }
 
 function makeUsage(input = 120, output = 80, cacheRead = 0, cacheWrite = 0): Usage {
