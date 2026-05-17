@@ -109,7 +109,7 @@ RUN printf '%s\n' \
 # as package-data in pyproject.toml).
 COPY python/robomp/pyproject.toml ./
 COPY python/robomp/src/ ./src/
-COPY --from=web-builder /work/python/robomp/web/dist/ ./src/robomp/static/
+COPY --from=web-builder /work/python/robomp/web/dist/ ./src/static/
 RUN pip install --upgrade pip \
     && pip install \
         "fastapi>=0.112" "uvicorn[standard]>=0.30" "httpx>=0.27" \

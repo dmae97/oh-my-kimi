@@ -11,5 +11,5 @@ __pycache__/
 *.sqlite-shm
 web/node_modules/
 web/dist/
-src/robomp/static/
+src/static/
 node_modules/

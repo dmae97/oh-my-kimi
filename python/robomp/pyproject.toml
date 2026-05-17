@@ -32,10 +32,8 @@ dev = [
 robomp = "robomp.cli:main"
 
 [tool.setuptools]
-package-dir = { "" = "src" }
-
-[tool.setuptools.packages.find]
-where = ["src"]
+package-dir = { "robomp" = "src" }
+packages = ["robomp", "robomp.proxy"]
 
 [tool.setuptools.package-data]
 robomp = ["prompts/*", "py.typed", "static/*", "static/assets/*"]

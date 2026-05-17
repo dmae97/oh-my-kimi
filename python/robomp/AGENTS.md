@@ -19,8 +19,8 @@ Webhook → durable queue → async dispatcher → per-issue git worktree → om
 
 ## Key Directories
 
-- `src/robomp/` — package (see "Important Files").
-- `src/robomp/prompts/` — Mustache-style `{{var}}` templates loaded by `persona.py` via `@cache` and `importlib.resources`. Shipped as package data (`pyproject.toml` `package-data`).
+- `src/` — package (see "Important Files").
+- `src/prompts/` — Mustache-style `{{var}}` templates loaded by `persona.py` via `@cache` and `importlib.resources`. Shipped as package data (`pyproject.toml` `package-data`).
 - `tests/` — pytest suite. `test_worker_smoke.py` is gated on `ROBOMP_INTEGRATION=1`.
 - `data/` — runtime state (sqlite + WAL, `workspaces/`, `logs/`). Never committed.
 - `/work/pi/Dockerfile` — produces `oh-my-pi/artifacts:dev` (pi-natives `.node` + omp-rpc wheel). Built once per pi-source change via `bun run robomp:pi-artifacts`; roboomp's runtime image consumes it via `COPY --from=`.
@@ -49,7 +49,7 @@ Frontend (Vite + SolidJS, in `web/` — still a bun workspace):
 
 ```
 bun run robomp:web:dev            # vite dev server with proxy to :8080
-bun run robomp:web:build          # produce src/robomp/static/ bundle
+bun run robomp:web:build          # produce src/static/ bundle
 bun --cwd=python/robomp/web run typecheck   # tsc --noEmit
 ```
 
@@ -78,22 +78,22 @@ Lint + format: TypeScript via Biome (config in `biome.json`), Python via Ruff (c
 - **Logging**: structured JSON via `logging_config.JsonFormatter`. Use `logger.info("event", extra={...})`; do not collide with `_RESERVED` keys. Configure once via `configure_logging()`.
 - **Host tools** (`host_tools.py`): every tool is built from a per-task `ToolBindings` closure and audits through `_audit()` into `tool_calls`. Audit only ever sees agent-supplied args, never internal credentials. New tools follow the same pattern: validate args → call `GitHubClient` / `SandboxManager` → return structured dict → audit.
 - **Naming**: snake_case for everything Python; module names singular nouns; test files `test_<module>.py`; test functions `test_<action>_<condition>`.
-- **Prompts**: edit `src/robomp/prompts/*.md`. Variables use `{{path.to.field}}`; resolution is `persona._lookup`. The package install includes them as data files — adding a new prompt requires no other registration.
+- **Prompts**: edit `src/prompts/*.md`. Variables use `{{path.to.field}}`; resolution is `persona._lookup`. The package install includes them as data files — adding a new prompt requires no other registration.
 
 ## Important Files
 
-- `src/robomp/server.py` — FastAPI app, `/webhook/github`, `/healthz`, `/readyz`, `/events`, `/issues`, manual triage/replay endpoints, dashboard at `/`.
-- `src/robomp/queue.py` — `WorkerPool` dispatcher and `_inflight` serialization.
-- `src/robomp/tasks.py` — the five task entry points the dispatcher calls.
-- `src/robomp/worker.py` — synchronous omp RPC driver, prompt assembly via `persona`.
-- `src/robomp/host_tools.py` — agent's GitHub surface; tool list: `classify_issue`, `set_issue_labels`, `gh_post_comment`, `repro_record`, `gh_push_branch`, `gh_open_pr`, `gh_request_review`, `mark_unable_to_reproduce`, `abort_task`, `fetch_issue_thread`.
-- `src/robomp/sandbox.py` — clone pool + worktree lifecycle, `GitCommandError`, credential redaction.
-- `src/robomp/github_client.py` — typed httpx client; parses webhook payloads into `IssueInfo` / `CommentInfo` / `PullRequestInfo`.
-- `src/robomp/github_events.py` — routing and HMAC verification.
-- `src/robomp/db.py` — sqlite schema and DAOs (`record_event`, `claim_next_event`, `upsert_issue`, `log_tool_call`).
-- `src/robomp/config.py` — `Settings` model and `get_settings()`.
-- `src/robomp/cli.py` — Click CLI (`serve`, `triage`, `replay`, `status`, `cleanup`).
-- `src/robomp/dashboard.py` — single-page HTML dashboard served from `/`.
+- `src/server.py` — FastAPI app, `/webhook/github`, `/healthz`, `/readyz`, `/events`, `/issues`, manual triage/replay endpoints, dashboard at `/`.
+- `src/queue.py` — `WorkerPool` dispatcher and `_inflight` serialization.
+- `src/tasks.py` — the five task entry points the dispatcher calls.
+- `src/worker.py` — synchronous omp RPC driver, prompt assembly via `persona`.
+- `src/host_tools.py` — agent's GitHub surface; tool list: `classify_issue`, `set_issue_labels`, `gh_post_comment`, `repro_record`, `gh_push_branch`, `gh_open_pr`, `gh_request_review`, `mark_unable_to_reproduce`, `abort_task`, `fetch_issue_thread`.
+- `src/sandbox.py` — clone pool + worktree lifecycle, `GitCommandError`, credential redaction.
+- `src/github_client.py` — typed httpx client; parses webhook payloads into `IssueInfo` / `CommentInfo` / `PullRequestInfo`.
+- `src/github_events.py` — routing and HMAC verification.
+- `src/db.py` — sqlite schema and DAOs (`record_event`, `claim_next_event`, `upsert_issue`, `log_tool_call`).
+- `src/config.py` — `Settings` model and `get_settings()`.
+- `src/cli.py` — Click CLI (`serve`, `triage`, `replay`, `status`, `cleanup`).
+- `src/dashboard.py` — single-page HTML dashboard served from `/`.
 - `pyproject.toml` — packaging + pytest config (`asyncio_mode = "auto"`, `testpaths = ["tests"]`).
 - `Dockerfile` — slim runtime; consumes `oh-my-pi/artifacts:dev` (built from `/work/pi/Dockerfile`) for `pi_natives.linux-*.node` + `omp_rpc-*.whl`. Tini entrypoint, exposes `8080`, `VOLUME /data`.
 - `docker-compose.yml` — `build.args.PI_ARTIFACTS_IMAGE`, mounts `$PI_ROOT:/work/pi:ro`, `./data:/data`, `~/.omp/agent/models.container.yml:ro` (mapped to `models.yml` inside the container — kept separate from the host's `~/.omp/agent/models.yml` so the host omp doesn't pick up gateway routing intended only for the container), `extra_hosts: llm-gateway.internal:host-gateway`.

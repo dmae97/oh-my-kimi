@@ -1,6 +1,6 @@
 """Status dashboard helpers: log tail + the static SPA served at `/`.
 
-The HTML/JS/CSS live under `src/robomp/static/`, produced by the Vite build in
+The HTML/JS/CSS live under `src/static/`, produced by the Vite build in
 `web/`. This module just locates the bundle, substitutes the per-instance
 config sentinel, and exposes a small API to the FastAPI app.
 """

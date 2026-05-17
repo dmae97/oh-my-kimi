@@ -1,4 +1,4 @@
-// Mirrors the JSON shapes emitted by `src/robomp/server.py`. Kept narrow on
+// Mirrors the JSON shapes emitted by `src/server.py`. Kept narrow on
 // purpose: anything `unknown` here is something the backend explicitly does
 // not promise to keep stable.
 

@@ -40,7 +40,7 @@ Flow: webhook → HMAC verify → `github_events.route` → sqlite `events`
 persistent `session_dir`, model randomly drawn from `ROBOMP_MODEL` (CSV).
 
 The agent uses omp's built-in tools (`read`/`edit`/`bash`/`lsp`, scoped to
-the worktree) plus the host tools in `src/robomp/host_tools.py` — the
+the worktree) plus the host tools in `src/host_tools.py` — the
 exclusive surface for GitHub writes. Every host-tool invocation is audited
 into the `tool_calls` table with credential-redacted args and results.
 
@@ -192,7 +192,7 @@ The integration test spawns a real `omp --mode rpc` against an
 ## Layout
 
 ```
-src/robomp/
+src/
   server.py          FastAPI app, /webhook/github, /events, /issues, /replay, dashboard at /
   github_events.py   verify_signature + route()
   queue.py           WorkerPool, dispatch loop, per-issue _inflight serialization
@@ -209,7 +209,7 @@ src/robomp/
   cli.py             serve / triage / replay / status / cleanup
   prompts/           system_append.md + per-task kickoff templates
 tests/               pytest unit suite + one ROBOMP_INTEGRATION=1 smoke test
-web/                 vite + solid dashboard, built into src/robomp/static/
+web/                 vite + solid dashboard, built into src/static/
 ```
 
 ## License

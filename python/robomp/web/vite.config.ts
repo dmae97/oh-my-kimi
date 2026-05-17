@@ -8,12 +8,12 @@ import solid from "vite-plugin-solid";
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Vite writes the bundle into `web/dist/`. After the rollup stage finishes we
-// fan the output out into the Python package directory (`src/robomp/static/`)
+// fan the output out into the Python package directory (`src/static/`)
 // so FastAPI can mount it directly. Done in a Vite plugin so both `bun run
 // web:build` and the Docker `web-builder` stage produce an installable layout
 // without any extra shell glue.
 const outDir = path.resolve(dirname, "dist");
-const staticDir = path.resolve(dirname, "..", "src", "robomp", "static");
+const staticDir = path.resolve(dirname, "..", "src", "static");
 
 const PRESERVED_FILES: ReadonlySet<string> = new Set([".gitkeep"]);
 
