@@ -94,7 +94,7 @@ services:
       - ${HOME}/.agent/AGENT.md:/srv/agent-home-stage/.agent/AGENTS.md:ro
       - ${HOME}/.agent/rules:/srv/agent-home-stage/.agent/rules:ro
     ports:
-      - "127.0.0.1:6543:8080"
+      - "0.0.0.0:6543:8080"
 
   # ───────────────────────────────────────────────────────────────────────────
   # gh-proxy
