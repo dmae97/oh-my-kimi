@@ -237,7 +237,7 @@ async function printVerification(expectedVersion: string): Promise<void> {
 	}
 	console.log(
 		chalk.yellow(
-			`You may need to reinstall: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | bash`,
+			`You may need to reinstall: curl -fsSL https://omp.sh/install | sh`,
 		),
 	);
 }
