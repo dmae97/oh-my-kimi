@@ -6,17 +6,10 @@ type FetchWithPreconnect = FetchFunction & { preconnect?: typeof fetch.preconnec
 
 type RawSseObserver = (event: RawSseEvent) => void;
 
-function toRawSseEvent(event: ServerSentEvent): RawSseEvent {
-	return {
-		event: event.event,
-		data: event.data,
-		raw: [...event.raw],
-	};
-}
-
 export function notifyRawSseEvent(observer: RawSseObserver | undefined, event: ServerSentEvent | RawSseEvent): void {
 	if (!observer) return;
 	try {
+		// Defensive clone: observers may retain `raw` (e.g. session debug buffer).
 		observer({ event: event.event, data: event.data, raw: [...event.raw] });
 	} catch {
 		// Raw stream observers are diagnostic only and must not affect generation.
@@ -25,13 +18,20 @@ export function notifyRawSseEvent(observer: RawSseObserver | undefined, event: S
 
 function isSseResponse(response: Response): boolean {
 	if (!response.ok || !response.body) return false;
-	return response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") ?? false;
+	const contentType = response.headers.get("content-type");
+	if (!contentType) return false;
+	// Fast path: most servers emit lowercase `text/event-stream`. Only pay
+	// for `toLowerCase` when the header is not already canonical.
+	if (contentType.includes("text/event-stream")) return true;
+	return contentType.toLowerCase().includes("text/event-stream");
 }
 
 async function consumeRawSseStream(stream: ReadableStream<Uint8Array>, observer: RawSseObserver): Promise<void> {
 	try {
 		for await (const event of readSseEvents(stream)) {
-			notifyRawSseEvent(observer, toRawSseEvent(event));
+			// Pass the parsed event directly; `notifyRawSseEvent` performs the single
+			// defensive clone. Previously this path cloned `raw` twice per event.
+			notifyRawSseEvent(observer, event);
 		}
 	} catch {
 		// The consumer branch may cancel/abort the original response. Debug capture is best-effort.

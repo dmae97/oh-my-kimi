@@ -405,39 +405,72 @@ function parseClaudeFamilyVersionSegments(candidate: string, prefix: string): nu
 	return versionSegments;
 }
 
+const CLAUDE_FAMILY_ALIAS_PATTERN = /^(?:anthropic\/)?(claude(?:-\d(?:[.-]\d+)?)?-(?:haiku|opus|sonnet))(?:-latest)?$/i;
+const CLAUDE_DATE_SUFFIX_PATTERN = /-\d{8}(?:$|-)/i;
+
 function getClaudeFamilyAliasOfficial(candidate: string, officialIds: Set<string>): string | undefined {
-	const match = /^(?:anthropic\/)?(claude(?:-\d(?:[.-]\d+)?)?-(?:haiku|opus|sonnet))(?:-latest)?$/i.exec(candidate);
+	const match = CLAUDE_FAMILY_ALIAS_PATTERN.exec(candidate);
 	if (!match?.[1]) {
 		return undefined;
 	}
 	const familyPrefix = match[1].toLowerCase();
-	const familyMatches = [...officialIds].filter(officialId => {
-		const normalizedOfficialId = officialId.toLowerCase();
-		return normalizedOfficialId.startsWith(`${familyPrefix}-`) || normalizedOfficialId === familyPrefix;
-	});
-	if (familyMatches.length === 0) {
-		return undefined;
-	}
-	return [...familyMatches].sort((left, right) => {
-		const versionDiff = compareVersionSegments(
-			parseClaudeFamilyVersionSegments(right, familyPrefix),
-			parseClaudeFamilyVersionSegments(left, familyPrefix),
-		);
+	const familyPrefixWithDash = `${familyPrefix}-`;
+
+	let best: string | undefined;
+	let bestVersion: number[] = [];
+	let bestHasDate = false;
+	let bestHasMarker = false;
+
+	for (const officialId of officialIds) {
+		const normalized = officialId.toLowerCase();
+		if (normalized !== familyPrefix && !normalized.startsWith(familyPrefixWithDash)) {
+			continue;
+		}
+		const version = parseClaudeFamilyVersionSegments(officialId, familyPrefix);
+		const hasDate = CLAUDE_DATE_SUFFIX_PATTERN.test(officialId);
+		const hasMarker = stripTrailingMarker(officialId) !== undefined;
+
+		if (best === undefined) {
+			best = officialId;
+			bestVersion = version;
+			bestHasDate = hasDate;
+			bestHasMarker = hasMarker;
+			continue;
+		}
+
+		const versionDiff = compareVersionSegments(version, bestVersion);
 		if (versionDiff !== 0) {
-			return versionDiff;
+			if (versionDiff > 0) {
+				best = officialId;
+				bestVersion = version;
+				bestHasDate = hasDate;
+				bestHasMarker = hasMarker;
+			}
+			continue;
 		}
-		const leftHasDate = /-\d{8}(?:$|-)/i.test(left);
-		const rightHasDate = /-\d{8}(?:$|-)/i.test(right);
-		if (leftHasDate !== rightHasDate) {
-			return leftHasDate ? 1 : -1;
+		if (hasDate !== bestHasDate) {
+			if (!hasDate) {
+				best = officialId;
+				bestVersion = version;
+				bestHasDate = hasDate;
+				bestHasMarker = hasMarker;
+			}
+			continue;
 		}
-		const leftHasMarker = stripTrailingMarker(left) !== undefined;
-		const rightHasMarker = stripTrailingMarker(right) !== undefined;
-		if (leftHasMarker !== rightHasMarker) {
-			return leftHasMarker ? 1 : -1;
+		if (hasMarker !== bestHasMarker) {
+			if (!hasMarker) {
+				best = officialId;
+				bestVersion = version;
+				bestHasMarker = hasMarker;
+			}
+			continue;
 		}
-		return compareCandidatePreference(left, right);
-	})[0];
+		if (compareCandidatePreference(officialId, best) < 0) {
+			best = officialId;
+			bestVersion = version;
+		}
+	}
+	return best;
 }
 
 function toggleShortVersionSeparators(candidate: string): string[] {
