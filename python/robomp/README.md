@@ -63,7 +63,7 @@ $EDITOR .env
 openssl rand -hex 32              # ROBOMP_GH_PROXY_HMAC_KEY
 openssl rand -hex 32              # GITHUB_WEBHOOK_SECRET
 
-bun run robomp:pi-artifacts       # build oh-my-pi/artifacts:dev (one-time / on pi change)
+bun run pi:image                  # build oh-my-pi/pi:dev (one-time / on pi change)
 bun run robomp:build && bun run robomp:up
 curl -fsS http://localhost:8080/healthz
 ```
@@ -75,8 +75,8 @@ comment out `ROBOMP_GH_PROXY_URL` / `ROBOMP_GH_PROXY_HMAC_KEY` and set
 rejects a `.env` setting both).
 
 Build invalidation is bounded: editing roboomp Python touches only the
-runtime layer; editing pi source rebuilds `oh-my-pi/artifacts:dev`, which
-roboomp's Dockerfile consumes via `COPY --from=`.
+runtime layer; editing pi source rebuilds `oh-my-pi/pi:dev`, which
+roboomp's `Dockerfile.robomp` extends via `FROM ${PI_BASE}`.
 
 ### Public URL
 
@@ -186,7 +186,7 @@ The integration test spawns a real `omp --mode rpc` against an
 | `refusing to push: commit author identity mismatch` | Some commit not authored as `ROBOMP_GIT_AUTHOR_*`. The error lists the offending shas; `git commit --amend --reset-author --no-edit`. |
 | `refusing to push: working tree is dirty` | Uncommitted agent edits. Or just call `gh_open_pr`, which auto-commits `bun run fix` output. |
 | `bun check failed before PR creation` | Fix the reported failure and retry `gh_open_pr`. |
-| `Failed to load pi_natives` | Wrong arch / missing native. `bun run robomp:pi-artifacts` then `bun run robomp:build`. |
+| `Failed to load pi_natives` | Wrong arch / missing native. `bun run pi:image` then `bun run robomp:build`. |
 | `No API key found for <provider>` | `~/.omp/agent/models.container.yml` mount missing or provider id mismatch with `ROBOMP_MODEL`. |
 
 ## Layout
