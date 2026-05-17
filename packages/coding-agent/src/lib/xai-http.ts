@@ -5,7 +5,7 @@ import type { ModelRegistry } from "../config/model-registry";
 
 const DEFAULT_BASE_URL = "https://api.x.ai/v1";
 
-export interface XAICredentials {
+interface XAICredentials {
 	provider: "xai-oauth" | "xai";
 	apiKey: string;
 	baseURL: string;

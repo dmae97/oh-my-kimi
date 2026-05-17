@@ -22,8 +22,6 @@ const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api
 const XAI_OAUTH_REDIRECT_HOST = "127.0.0.1";
 const XAI_OAUTH_REDIRECT_PORT = 56121;
 const XAI_OAUTH_REDIRECT_PATH = "/callback";
-// 2-minute proactive refresh margin — used by AuthStorage to refresh ahead of expiry.
-export const XAI_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120;
 const XAI_OAUTH_DOCS_URL = "https://hermes-agent.nousresearch.com/docs/guides/xai-grok-oauth";
 
 // Mirrors the 5-min skew used by anthropic.ts:160 — keeps every provider on the
@@ -33,7 +31,7 @@ const ACCESS_TOKEN_CLIENT_SKEW_MS = 5 * 60 * 1000;
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 20_000;
 
-export interface XAIOAuthDiscovery {
+interface XAIOAuthDiscovery {
 	authorization_endpoint: string;
 	token_endpoint: string;
 }
@@ -72,7 +70,7 @@ export function validateXAIEndpoint(url: string, field: string): string {
  *
  * Hermes `_xai_oauth_discovery` L3038-3084.
  */
-export async function xaiOAuthDiscovery(timeoutMs: number = DISCOVERY_TIMEOUT_MS): Promise<XAIOAuthDiscovery> {
+async function xaiOAuthDiscovery(timeoutMs: number = DISCOVERY_TIMEOUT_MS): Promise<XAIOAuthDiscovery> {
 	let response: Response;
 	try {
 		response = await fetch(XAI_OAUTH_DISCOVERY_URL, {
@@ -139,7 +137,7 @@ export function isXAIAccessTokenExpiring(jwt: string, skewSeconds: number = 0): 
 	}
 }
 
-export interface BuildXAIAuthorizeUrlOptions {
+interface BuildXAIAuthorizeUrlOptions {
 	authorizationEndpoint: string;
 	redirectUri: string;
 	codeChallenge: string;
@@ -157,7 +155,7 @@ export interface BuildXAIAuthorizeUrlOptions {
  * OAuth server logs (Hermes uses `referrer=hermes-agent`; oh-my-pi mirrors the
  * pattern with its own attribution string).
  */
-export function buildXAIAuthorizeUrl(opts: BuildXAIAuthorizeUrlOptions): string {
+function buildXAIAuthorizeUrl(opts: BuildXAIAuthorizeUrlOptions): string {
 	const params = new URLSearchParams({
 		response_type: "code",
 		client_id: XAI_OAUTH_CLIENT_ID,
