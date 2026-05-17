@@ -13,9 +13,7 @@
  * with the gateway live (`omp auth-gateway serve` or pm2).
  */
 import { describe, expect, it } from "bun:test";
-import * as os from "node:os";
-import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { AUTH_GATEWAY_E2E_URL, checkAuthGatewayE2EAvailable } from "./helpers";
 
 interface AnthropicUsage {
 	input_tokens: number;
@@ -32,30 +30,9 @@ interface AnthropicResponse {
 	error?: { type: string; message: string };
 }
 
-const GATEWAY_URL = Bun.env.OMP_E2E_GATEWAY_URL ?? "http://127.0.0.1:4000";
-const TOKEN_PATH = path.join(os.homedir(), ".omp", "auth-gateway.token");
 const MODEL = Bun.env.OMP_E2E_ANTHROPIC_MODEL ?? "claude-sonnet-4-5";
 
-async function checkGatewayAvailable(): Promise<{ ok: boolean; token?: string; reason?: string }> {
-	let token: string;
-	try {
-		token = (await Bun.file(TOKEN_PATH).text()).trim();
-	} catch (err) {
-		if (isEnoent(err)) return { ok: false, reason: `no token at ${TOKEN_PATH}` };
-		throw err;
-	}
-	if (!token) return { ok: false, reason: `empty token at ${TOKEN_PATH}` };
-	try {
-		const res = await fetch(`${GATEWAY_URL}/healthz`, { signal: AbortSignal.timeout(2_000) });
-		if (!res.ok) return { ok: false, reason: `healthz returned ${res.status}` };
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err);
-		return { ok: false, reason: `healthz unreachable: ${msg}` };
-	}
-	return { ok: true, token };
-}
-
-const gateway = await checkGatewayAvailable();
+const gateway = await checkAuthGatewayE2EAvailable();
 
 // Build a system prompt that comfortably exceeds Anthropic's 1024-token cache
 // floor for Sonnet. Using a deterministic repeated paragraph so cache keys are
@@ -84,7 +61,7 @@ interface MessageBlock {
 }
 
 async function callGateway(body: unknown, token: string): Promise<AnthropicResponse> {
-	const res = await fetch(`${GATEWAY_URL}/v1/messages`, {
+	const res = await fetch(`${AUTH_GATEWAY_E2E_URL}/v1/messages`, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -134,7 +111,7 @@ describe.skipIf(!gateway.ok)("auth-gateway: anthropic prompt caching e2e", () =>
 		const turn1 = await callGateway(
 			{
 				model: MODEL,
-				max_tokens: 32,
+				max_tokens: 4,
 				system,
 				messages: turn1Messages,
 			},
@@ -162,7 +139,7 @@ describe.skipIf(!gateway.ok)("auth-gateway: anthropic prompt caching e2e", () =>
 		const turn2 = await callGateway(
 			{
 				model: MODEL,
-				max_tokens: 32,
+				max_tokens: 4,
 				system,
 				messages: turn2Messages,
 			},

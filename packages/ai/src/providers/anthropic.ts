@@ -1298,7 +1298,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					}
 					providerRetryAttempt++;
 					const delayMs = PROVIDER_BASE_DELAY_MS * 2 ** (providerRetryAttempt - 1);
-					await scheduler.wait(delayMs, { signal: options?.signal });
+					if (options?.providerRetryWait) {
+						await options.providerRetryWait(delayMs, options.signal);
+					} else {
+						await scheduler.wait(delayMs, { signal: options?.signal });
+					}
 					output.content.length = 0;
 					output.responseId = undefined;
 					output.errorMessage = strictFallbackErrorMessage;

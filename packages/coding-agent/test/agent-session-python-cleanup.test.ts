@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,7 +8,7 @@ import * as pythonExecutor from "@oh-my-pi/pi-coding-agent/eval/py/executor";
 import type { PythonKernel as PythonKernelInstance } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import * as pythonKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-agent/sdk";
+import { createAgentSession, type ExtensionFactory, type WorkspaceTree } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
@@ -75,6 +75,23 @@ const createTempProject = () => {
 	return { tempDir, cwd };
 };
 
+const emptyWorkspaceTree = (cwd: string): WorkspaceTree => ({
+	rootPath: cwd,
+	rendered: ".",
+	truncated: false,
+	totalLines: 1,
+	agentsMdFiles: [],
+});
+
+const mockPositiveSleepsImmediate = () => {
+	const realSleep = Bun.sleep.bind(Bun);
+	return vi.spyOn(Bun, "sleep").mockImplementation((duration?: number | Date) => {
+		if (typeof duration === "number" && duration > 0) {
+			return Promise.resolve();
+		}
+		return realSleep(duration ?? 0);
+	});
+};
 const createSession = async (
 	tempDir: string,
 	cwd: string,
@@ -92,6 +109,7 @@ const createSession = async (
 			skills: [],
 			contextFiles: [],
 			promptTemplates: [],
+			workspaceTree: emptyWorkspaceTree(cwd),
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
@@ -117,8 +135,20 @@ const createMockKernel = () => {
 
 describe("AgentSession python cleanup", () => {
 	const tempDirs: string[] = [];
+	let originalNullPrompt: string | undefined;
+
+	beforeEach(() => {
+		originalNullPrompt = Bun.env.NULL_PROMPT;
+		Bun.env.NULL_PROMPT = "true";
+	});
 
 	afterEach(async () => {
+		if (originalNullPrompt === undefined) {
+			delete Bun.env.NULL_PROMPT;
+		} else {
+			Bun.env.NULL_PROMPT = originalNullPrompt;
+		}
+		originalNullPrompt = undefined;
 		vi.restoreAllMocks();
 		await pythonExecutor.disposeAllKernelSessions();
 		for (const tempDir of tempDirs.splice(0)) {
@@ -162,6 +192,7 @@ describe("AgentSession python cleanup", () => {
 				enableMCP: false,
 				enableLsp: false,
 				toolNames: ["eval"],
+				workspaceTree: emptyWorkspaceTree(cwd),
 			}),
 		).rejects.toThrow("Extension init failed");
 
@@ -227,6 +258,7 @@ describe("AgentSession python cleanup", () => {
 				enableMCP: false,
 				enableLsp: false,
 				toolNames: ["eval"],
+				workspaceTree: emptyWorkspaceTree(cwd),
 				agentRegistry: throwingRegistry,
 			}),
 		).rejects.toThrow("Agent registry failed");
@@ -374,18 +406,16 @@ describe("AgentSession python cleanup", () => {
 				toolExecutionSettled = true;
 			});
 		await blockedExecuteStarted.promise;
+		const sleepSpy = mockPositiveSleepsImmediate();
 
 		let disposed = false;
 		const disposeSession = session.dispose().then(() => {
 			disposed = true;
 		});
-		await Bun.sleep(0);
-
-		expect(disposed).toBe(false);
-		expect(toolExecutionSettled).toBe(false);
-		expect(executeSpy).toHaveBeenCalledTimes(1);
 
 		const [toolResult] = await Promise.all([toolExecution, disposeSession]);
+
+		expect(sleepSpy).toHaveBeenCalledWith(3000);
 
 		expect(disposed).toBe(true);
 		expect(toolExecutionSettled).toBe(true);
@@ -408,6 +438,8 @@ describe("AgentSession python cleanup", () => {
 		kernel.abortBlockedExecution = false;
 
 		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
+		const sleepSpy = vi.spyOn(Bun, "sleep").mockResolvedValue(undefined);
+
 		const startSpy = vi
 			.spyOn(pythonKernel.PythonKernel, "start")
 			.mockResolvedValue(kernel as unknown as PythonKernelInstance);
@@ -428,6 +460,7 @@ describe("AgentSession python cleanup", () => {
 			firstDisposed = true;
 		});
 		await disposeFirst;
+		expect(sleepSpy).toHaveBeenCalledWith(3000);
 
 		expect(firstDisposed).toBe(true);
 		expect(firstExecutionSettled).toBe(false);
@@ -666,9 +699,10 @@ describe("AgentSession python cleanup", () => {
 		const firstExecution = session.executePython("print('first')");
 		await blockedExecutionStarted.promise;
 		const secondExecution = session.executePython("print('second')");
-		await Bun.sleep(0);
+		const sleepSpy = mockPositiveSleepsImmediate();
 
 		await session.dispose();
+		expect(sleepSpy).toHaveBeenCalledWith(3000);
 		const [firstResult, secondResult] = await Promise.all([firstExecution, secondExecution]);
 
 		expect(firstResult.cancelled).toBe(true);

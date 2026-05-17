@@ -297,6 +297,10 @@ export interface StreamOptions {
 	 */
 	streamIdleTimeoutMs?: number;
 	/**
+	 * Optional retry delay hook for tests and transports that need custom scheduling.
+	 */
+	providerRetryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+	/**
 	 * Optional `fetch` implementation override. Providers route every HTTP
 	 * request — direct calls, SDK clients, and retry helpers — through this
 	 * implementation when set. Defaults to `globalThis.fetch`. Providers that

@@ -149,11 +149,21 @@ function retryDelayMs(attempt: number, retryAfter: string | null): number {
 	return Number.isFinite(dateDelay) ? Math.max(baseline, Math.max(0, dateDelay)) : baseline;
 }
 
-async function waitBeforeRetry(attempt: number, retryAfter: string | null, signal?: AbortSignal): Promise<boolean> {
+async function waitBeforeRetry(
+	attempt: number,
+	retryAfter: string | null,
+	signal?: AbortSignal,
+	retryWait?: UsageFetchContext["retryWait"],
+): Promise<boolean> {
 	if (signal?.aborted) return false;
 	if (attempt >= MAX_ATTEMPTS - 1) return false;
 	try {
-		await scheduler.wait(retryDelayMs(attempt, retryAfter), { signal });
+		const delayMs = retryDelayMs(attempt, retryAfter);
+		if (retryWait) {
+			await retryWait(delayMs, signal);
+		} else {
+			await scheduler.wait(delayMs, { signal });
+		}
 		return !signal?.aborted;
 	} catch (error) {
 		if (isAbortError(error, signal)) return false;
@@ -186,7 +196,8 @@ async function fetchUsagePayload(
 					willRetry: retryable && attempt < MAX_ATTEMPTS - 1,
 				});
 				if (!retryable) return null;
-				if (!(await waitBeforeRetry(attempt, response.headers.get("retry-after"), signal))) break;
+				const retryAfter = response.headers.get("retry-after");
+				if (!(await waitBeforeRetry(attempt, retryAfter, signal, ctx.retryWait))) break;
 				continue;
 			}
 
@@ -201,7 +212,7 @@ async function fetchUsagePayload(
 				attempt,
 				willRetry: attempt < MAX_ATTEMPTS - 1,
 			});
-			if (!(await waitBeforeRetry(attempt, null, signal))) break;
+			if (!(await waitBeforeRetry(attempt, null, signal, ctx.retryWait))) break;
 		} catch (error) {
 			if (isAbortError(error, signal)) return null;
 			ctx.logger?.warn("Claude usage fetch error", {
@@ -209,7 +220,7 @@ async function fetchUsagePayload(
 				attempt,
 				willRetry: attempt < MAX_ATTEMPTS - 1,
 			});
-			if (!(await waitBeforeRetry(attempt, null, signal))) break;
+			if (!(await waitBeforeRetry(attempt, null, signal, ctx.retryWait))) break;
 		}
 	}
 

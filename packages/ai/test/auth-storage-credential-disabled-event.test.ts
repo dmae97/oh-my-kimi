@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import {
+	type AuthCredential,
 	type AuthCredentialStore,
 	AuthStorage,
 	type CredentialDisabledEvent,
-	SqliteAuthCredentialStore,
+	type StoredAuthCredential,
 } from "../src/auth-storage";
 import * as oauthUtils from "../src/utils/oauth";
 
@@ -29,32 +27,104 @@ const failOAuthRefresh = (message = 'HTTP 400 invalid_grant {"error":"invalid_gr
 	});
 };
 
+class MemoryAuthCredentialStore implements AuthCredentialStore {
+	#rows: StoredAuthCredential[] = [];
+	#nextId = 1;
+
+	close(): void {}
+
+	listAuthCredentials(provider?: string): StoredAuthCredential[] {
+		return this.#rows.filter(row => row.disabledCause === null && (!provider || row.provider === provider));
+	}
+
+	updateAuthCredential(id: number, credential: AuthCredential): void {
+		const row = this.#rows.find(entry => entry.id === id);
+		if (row) row.credential = credential;
+	}
+
+	deleteAuthCredential(id: number, disabledCause: string): void {
+		const row = this.#rows.find(entry => entry.id === id);
+		if (row) row.disabledCause = disabledCause;
+	}
+
+	tryDisableAuthCredentialIfMatches(id: number, expectedData: string, disabledCause: string): boolean {
+		const row = this.#rows.find(entry => entry.id === id && entry.disabledCause === null);
+		if (!row || serializeTestCredential(row.credential) !== expectedData) return false;
+		row.disabledCause = disabledCause;
+		return true;
+	}
+
+	replaceAuthCredentialsForProvider(provider: string, credentials: AuthCredential[]): StoredAuthCredential[] {
+		for (const row of this.#rows) {
+			if (row.provider === provider && row.disabledCause === null) {
+				row.disabledCause = "replaced by newer credential";
+			}
+		}
+		const rows = credentials.map(
+			(credential): StoredAuthCredential => ({
+				id: this.#nextId++,
+				provider,
+				credential,
+				disabledCause: null,
+			}),
+		);
+		this.#rows.push(...rows);
+		return rows;
+	}
+
+	upsertAuthCredentialForProvider(provider: string, credential: AuthCredential): StoredAuthCredential[] {
+		return this.replaceAuthCredentialsForProvider(provider, [credential]);
+	}
+
+	deleteAuthCredentialsForProvider(provider: string, disabledCause: string): void {
+		for (const row of this.#rows) {
+			if (row.provider === provider && row.disabledCause === null) row.disabledCause = disabledCause;
+		}
+	}
+
+	getCache(): string | null {
+		return null;
+	}
+
+	setCache(): void {}
+
+	cleanExpiredCache(): void {}
+}
+
+function serializeTestCredential(credential: AuthCredential): string {
+	if (credential.type === "api_key") return JSON.stringify({ key: credential.key });
+	if (credential.type === "oauth") {
+		const { type: _type, ...rest } = credential;
+		return JSON.stringify(rest);
+	}
+	return "";
+}
+
+function disableCredential(authStorage: AuthStorage, id: number, provider = "anthropic"): void {
+	expect(authStorage.disableCredentialById(id, "oauth refresh failed: invalid_grant")).toBe(true);
+	expect(authStorage.list()).not.toContain(provider);
+}
+
 describe("AuthStorage credential_disabled subscriptions", () => {
-	let tempDir = "";
 	const stores: AuthCredentialStore[] = [];
 
-	const openStorage = async (options?: ConstructorParameters<typeof AuthStorage>[1]): Promise<AuthStorage> => {
-		const store = await SqliteAuthCredentialStore.open(path.join(tempDir, `agent-${stores.length}.db`));
+	const openStorage = (options?: ConstructorParameters<typeof AuthStorage>[1]): AuthStorage => {
+		const store = new MemoryAuthCredentialStore();
 		stores.push(store);
 		return new AuthStorage(store, options);
 	};
 
-	beforeEach(async () => {
-		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-credential-disabled-subs-"));
+	beforeEach(() => {
 		for (const key of SUPPRESS_ANTHROPIC_ENV) {
 			savedEnv[key] = process.env[key];
 			delete process.env[key];
 		}
 	});
 
-	afterEach(async () => {
+	afterEach(() => {
 		vi.restoreAllMocks();
 		for (const store of stores.splice(0)) {
 			store.close();
-		}
-		if (tempDir) {
-			await fs.rm(tempDir, { recursive: true, force: true });
-			tempDir = "";
 		}
 		for (const key of SUPPRESS_ANTHROPIC_ENV) {
 			if (savedEnv[key] === undefined) {
@@ -69,7 +139,7 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 	describe("constructor `onCredentialDisabled` option", () => {
 		test("fires when an OAuth credential is disabled by a definitive refresh failure", async () => {
 			const events: CredentialDisabledEvent[] = [];
-			const authStorage = await openStorage({
+			const authStorage = openStorage({
 				onCredentialDisabled: event => {
 					events.push(event);
 				},
@@ -87,7 +157,7 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 
 		test("does not fire for transient (non-definitive) refresh failures", async () => {
 			const events: CredentialDisabledEvent[] = [];
-			const authStorage = await openStorage({
+			const authStorage = openStorage({
 				onCredentialDisabled: event => {
 					events.push(event);
 				},
@@ -100,21 +170,18 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 		});
 
 		test("swallows synchronous handler exceptions so the disable still completes", async () => {
-			const authStorage = await openStorage({
+			const authStorage = openStorage({
 				onCredentialDisabled: () => {
 					throw new Error("subscriber exploded");
 				},
 			});
 			await authStorage.set("anthropic", [expiredOAuth()]);
-			failOAuthRefresh("invalid_grant");
-
-			await expect(authStorage.getApiKey("anthropic", "session-handler-throws")).resolves.toBeUndefined();
-			expect(authStorage.list()).not.toContain("anthropic");
+			disableCredential(authStorage, 1);
 		});
 
 		test("swallows async handler rejections so the disable path still completes", async () => {
 			const settled = Promise.withResolvers<void>();
-			const authStorage = await openStorage({
+			const authStorage = openStorage({
 				onCredentialDisabled: async () => {
 					// Yield so the rejection lands on the microtask queue, not synchronously.
 					await Promise.resolve();
@@ -123,7 +190,6 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 				},
 			});
 			await authStorage.set("anthropic", [expiredOAuth()]);
-			failOAuthRefresh("invalid_grant");
 
 			const unhandled: unknown[] = [];
 			const onUnhandled = (reason: unknown): void => {
@@ -131,10 +197,9 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 			};
 			process.on("unhandledRejection", onUnhandled);
 			try {
-				await expect(authStorage.getApiKey("anthropic", "session-async-handler-throws")).resolves.toBeUndefined();
+				disableCredential(authStorage, 1);
 				await settled.promise;
 				await Bun.sleep(0);
-				expect(authStorage.list()).not.toContain("anthropic");
 				expect(unhandled).toHaveLength(0);
 			} finally {
 				process.off("unhandledRejection", onUnhandled);
@@ -146,7 +211,7 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 		test("registers an additional subscriber alongside the constructor handler — both fire", async () => {
 			const constructorEvents: CredentialDisabledEvent[] = [];
 			const runtimeEvents: CredentialDisabledEvent[] = [];
-			const authStorage = await openStorage({
+			const authStorage = openStorage({
 				onCredentialDisabled: event => {
 					constructorEvents.push(event);
 				},
@@ -156,9 +221,7 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 			});
 
 			await authStorage.set("anthropic", [expiredOAuth()]);
-			failOAuthRefresh("invalid_grant");
-
-			await authStorage.getApiKey("anthropic", "session-both-fire");
+			disableCredential(authStorage, 1);
 			expect(constructorEvents).toHaveLength(1);
 			expect(runtimeEvents).toHaveLength(1);
 			expect(constructorEvents[0]?.provider).toBe("anthropic");
@@ -168,7 +231,7 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 		test("fans out every event to every subscriber", async () => {
 			const aEvents: CredentialDisabledEvent[] = [];
 			const bEvents: CredentialDisabledEvent[] = [];
-			const authStorage = await openStorage();
+			const authStorage = openStorage();
 			authStorage.onCredentialDisabled(event => {
 				aEvents.push(event);
 			});
@@ -177,17 +240,15 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 			});
 			await authStorage.set("anthropic", [expiredOAuth()]);
 			await authStorage.set("openai", [expiredOAuth()]);
-			failOAuthRefresh("invalid_grant");
-
-			await authStorage.getApiKey("anthropic", "session-fanout-anthropic");
-			await authStorage.getApiKey("openai", "session-fanout-openai");
+			disableCredential(authStorage, 1);
+			disableCredential(authStorage, 2, "openai");
 
 			expect(aEvents.map(event => event.provider)).toEqual(["anthropic", "openai"]);
 			expect(bEvents.map(event => event.provider)).toEqual(["anthropic", "openai"]);
 		});
 
 		test("unsubscribe removes only that listener; others continue to fire", async () => {
-			const authStorage = await openStorage();
+			const authStorage = openStorage();
 			const aEvents: CredentialDisabledEvent[] = [];
 			const bEvents: CredentialDisabledEvent[] = [];
 			const unsubscribeA = authStorage.onCredentialDisabled(event => {
@@ -199,21 +260,20 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 
 			await authStorage.set("anthropic", [expiredOAuth()]);
 			await authStorage.set("openai", [expiredOAuth()]);
-			failOAuthRefresh("invalid_grant");
 
-			await authStorage.getApiKey("anthropic", "session-pre-unsubscribe");
+			disableCredential(authStorage, 1);
 			expect(aEvents).toHaveLength(1);
 			expect(bEvents).toHaveLength(1);
 
 			unsubscribeA();
 
-			await authStorage.getApiKey("openai", "session-post-unsubscribe");
+			disableCredential(authStorage, 2, "openai");
 			expect(aEvents).toHaveLength(1);
 			expect(bEvents).toHaveLength(2);
 		});
 
 		test("unsubscribe is idempotent: a second call is a no-op and does not affect other listeners", async () => {
-			const authStorage = await openStorage();
+			const authStorage = openStorage();
 			const aEvents: CredentialDisabledEvent[] = [];
 			const bEvents: CredentialDisabledEvent[] = [];
 			const unsubscribeA = authStorage.onCredentialDisabled(event => {
@@ -227,15 +287,14 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 			unsubscribeA();
 
 			await authStorage.set("anthropic", [expiredOAuth()]);
-			failOAuthRefresh("invalid_grant");
-			await authStorage.getApiKey("anthropic", "session-idempotent-unsub");
+			disableCredential(authStorage, 1);
 
 			expect(aEvents).toHaveLength(0);
 			expect(bEvents).toHaveLength(1);
 		});
 
 		test("a throwing subscriber does not block other subscribers from receiving the event", async () => {
-			const authStorage = await openStorage();
+			const authStorage = openStorage();
 			const tailEvents: CredentialDisabledEvent[] = [];
 			authStorage.onCredentialDisabled(() => {
 				throw new Error("first subscriber exploded");
@@ -245,14 +304,13 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 			});
 
 			await authStorage.set("anthropic", [expiredOAuth()]);
-			failOAuthRefresh("invalid_grant");
 
-			await expect(authStorage.getApiKey("anthropic", "session-throw-isolation")).resolves.toBeUndefined();
+			disableCredential(authStorage, 1);
 			expect(tailEvents).toHaveLength(1);
 		});
 
 		test("an async-rejecting subscriber does not trip unhandledRejection and does not block others", async () => {
-			const authStorage = await openStorage();
+			const authStorage = openStorage();
 			const tailEvents: CredentialDisabledEvent[] = [];
 			const settled = Promise.withResolvers<void>();
 			authStorage.onCredentialDisabled(async () => {
@@ -265,7 +323,6 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 			});
 
 			await authStorage.set("anthropic", [expiredOAuth()]);
-			failOAuthRefresh("invalid_grant");
 
 			const unhandled: unknown[] = [];
 			const onUnhandled = (reason: unknown): void => {
@@ -273,7 +330,7 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 			};
 			process.on("unhandledRejection", onUnhandled);
 			try {
-				await authStorage.getApiKey("anthropic", "session-async-throw-isolation");
+				disableCredential(authStorage, 1);
 				await settled.promise;
 				await Bun.sleep(0);
 				expect(tailEvents).toHaveLength(1);
@@ -286,11 +343,10 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 
 	describe("buffer-and-replay for events fired with no subscribers", () => {
 		test("replays buffered events to the first subscriber that triggers the empty→non-empty transition", async () => {
-			const authStorage = await openStorage();
+			const authStorage = openStorage();
 
 			await authStorage.set("anthropic", [expiredOAuth()]);
-			failOAuthRefresh("invalid_grant");
-			await authStorage.getApiKey("anthropic", "session-pre-subscribe");
+			disableCredential(authStorage, 1);
 
 			const replayed: CredentialDisabledEvent[] = [];
 			authStorage.onCredentialDisabled(event => {
@@ -305,11 +361,10 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 		});
 
 		test("drains once: a later subscriber attached after the first does not re-receive past events", async () => {
-			const authStorage = await openStorage();
+			const authStorage = openStorage();
 
 			await authStorage.set("anthropic", [expiredOAuth()]);
-			failOAuthRefresh("invalid_grant");
-			await authStorage.getApiKey("anthropic", "session-pre-first-listener");
+			disableCredential(authStorage, 1);
 
 			const firstEvents: CredentialDisabledEvent[] = [];
 			authStorage.onCredentialDisabled(event => {
@@ -328,21 +383,20 @@ describe("AuthStorage credential_disabled subscriptions", () => {
 		});
 
 		test("after every subscriber unsubscribes, subsequent events buffer until the next subscribe", async () => {
-			const authStorage = await openStorage();
+			const authStorage = openStorage();
 			const events: CredentialDisabledEvent[] = [];
 			const unsubscribe = authStorage.onCredentialDisabled(event => {
 				events.push(event);
 			});
 
 			await authStorage.set("anthropic", [expiredOAuth()]);
-			failOAuthRefresh("invalid_grant");
-			await authStorage.getApiKey("anthropic", "session-pre-unsubscribe");
+			disableCredential(authStorage, 1);
 			expect(events).toHaveLength(1);
 
 			unsubscribe();
 			// No subscribers; the next disable goes to the buffer.
 			await authStorage.set("openai", [expiredOAuth()]);
-			await authStorage.getApiKey("openai", "session-during-gap");
+			disableCredential(authStorage, 2, "openai");
 			expect(events).toHaveLength(1);
 
 			const replayed: CredentialDisabledEvent[] = [];

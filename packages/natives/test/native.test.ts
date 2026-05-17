@@ -522,14 +522,14 @@ describe("pi-natives", () => {
 			await fs.rm(markerPath, { force: true });
 
 			const result = await executeShell({
-				command: `{ sleep 2; echo done > '${markerEscaped}'; } & sleep 10`,
+				command: `{ sleep 0.15; echo done > '${markerEscaped}'; } & sleep 10`,
 				cwd: testDir,
-				timeoutMs: 100,
+				timeoutMs: 50,
 			});
 
 			expect(result.timedOut).toBe(true);
 
-			await Bun.sleep(3000);
+			await Bun.sleep(500);
 			expect(await Bun.file(markerPath).exists()).toBe(false);
 		});
 	});

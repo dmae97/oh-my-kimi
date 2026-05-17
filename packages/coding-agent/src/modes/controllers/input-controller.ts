@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, sanitizeText } from "@oh-my-pi/pi-utils";
-import { settings } from "../../config/settings";
+import { isSettingsInitialized, settings } from "../../config/settings";
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import { theme } from "../../modes/theme/theme";
@@ -187,7 +187,7 @@ export class InputController {
 	setupEditorSubmitHandler(): void {
 		this.ctx.editor.onSubmit = async (text: string) => {
 			text = text.trim();
-			if (settings.get("emojiAutocomplete")) text = expandEmoticons(text);
+			if ((!isSettingsInitialized() || settings.get("emojiAutocomplete")) && text) text = expandEmoticons(text);
 
 			// Empty submit while streaming with queued messages: flush queues immediately
 			if (!text && this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount > 0) {

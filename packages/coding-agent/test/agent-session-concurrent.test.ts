@@ -64,14 +64,15 @@ describe("AgentSession concurrent prompt guard", () => {
 				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
 					stream.push({ type: "start", partial: createAssistantMessage("") });
-					const checkAbort = () => {
-						if (abortSignal?.aborted) {
-							stream.push({ type: "error", reason: "aborted", error: createAssistantMessage("Aborted") });
-						} else {
-							setTimeout(checkAbort, 5);
-						}
-					};
-					checkAbort();
+					if (abortSignal) {
+						abortSignal.addEventListener(
+							"abort",
+							() => {
+								stream.push({ type: "error", reason: "aborted", error: createAssistantMessage("Aborted") });
+							},
+							{ once: true },
+						);
+					}
 				});
 				return stream;
 			},
@@ -110,11 +111,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		// Start first prompt (don't await, it will block until abort)
 		const firstPrompt = session.prompt("First message");
 
-		// Wait a tick for isStreaming to be set
-		await Bun.sleep(10);
-
-		// Verify we're streaming
-		expect(session.isStreaming).toBe(true);
+		await waitFor(() => session.isStreaming);
 
 		// Second prompt should reject
 		await expect(session.prompt("Second message")).rejects.toBeInstanceOf(AgentBusyError);
@@ -129,7 +126,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		// Start first prompt
 		const firstPrompt = session.prompt("First message");
-		await Bun.sleep(10);
+		await waitFor(() => session.isStreaming);
 
 		// steer should work while streaming
 		expect(() => session.steer("Steering message")).not.toThrow();
@@ -145,7 +142,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		// Start first prompt
 		const firstPrompt = session.prompt("First message");
-		await Bun.sleep(10);
+		await waitFor(() => session.isStreaming);
 
 		// followUp should work while streaming
 		expect(() => session.followUp("Follow-up message")).not.toThrow();
@@ -293,6 +290,15 @@ describe("AgentSession TTSR resume gate", () => {
 		}
 	});
 
+	async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+		const deadline = Date.now() + timeoutMs;
+		while (Date.now() < deadline) {
+			if (predicate()) return;
+			await Bun.sleep(10);
+		}
+
+		throw new Error("Timed out waiting for condition");
+	}
 	const testRule: Rule = {
 		name: "no-unwrap",
 		path: "/tmp/no-unwrap.md",
@@ -322,18 +328,16 @@ describe("AgentSession TTSR resume gate", () => {
 	}
 
 	function pushContinuationStream(stream: AssistantMessageEventStream, onComplete: () => void): void {
-		setTimeout(() => {
+		queueMicrotask(() => {
 			const partial = makeMsg("");
 			stream.push({ type: "start", partial });
-			setTimeout(() => {
-				onComplete();
-				stream.push({
-					type: "done",
-					reason: "stop",
-					message: makeMsg('Fixed: let val = result.expect("msg")'),
-				});
-			}, 80);
-		}, 10);
+			onComplete();
+			stream.push({
+				type: "done",
+				reason: "stop",
+				message: makeMsg('Fixed: let val = result.expect("msg")'),
+			});
+		});
 	}
 
 	function pushAbortableTtsrStream(stream: AssistantMessageEventStream, signal: AbortSignal | undefined): void {
@@ -346,19 +350,19 @@ describe("AgentSession TTSR resume gate", () => {
 				delta: "let val = result.unwrap(",
 				partial: makeMsg("let val = result.unwrap("),
 			});
-			// TTSR abort should fire synchronously; poll for it
-			const checkAbort = () => {
-				if (signal?.aborted) {
-					stream.push({
-						type: "error",
-						reason: "aborted",
-						error: makeMsg("let val = result.unwrap(", "aborted"),
-					});
-				} else {
-					setTimeout(checkAbort, 2);
-				}
-			};
-			checkAbort();
+			if (signal) {
+				signal.addEventListener(
+					"abort",
+					() => {
+						stream.push({
+							type: "error",
+							reason: "aborted",
+							error: makeMsg("let val = result.unwrap(", "aborted"),
+						});
+					},
+					{ once: true },
+				);
+			}
 		});
 	}
 
@@ -525,18 +529,19 @@ describe("AgentSession TTSR resume gate", () => {
 						delta: "result.unwrap(",
 						partial: makeMsg("result.unwrap("),
 					});
-					const checkAbort = () => {
-						if (signal?.aborted) {
-							stream.push({
-								type: "error",
-								reason: "aborted",
-								error: makeMsg("result.unwrap(", "aborted"),
-							});
-						} else {
-							setTimeout(checkAbort, 2);
-						}
-					};
-					checkAbort();
+					if (signal) {
+						signal.addEventListener(
+							"abort",
+							() => {
+								stream.push({
+									type: "error",
+									reason: "aborted",
+									error: makeMsg("result.unwrap(", "aborted"),
+								});
+							},
+							{ once: true },
+						);
+					}
 				});
 
 				return stream;
@@ -560,9 +565,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		// Start prompt (will trigger TTSR and create resume gate)
 		const promptPromise = session.prompt("Write some Rust code");
-
-		// Wait for TTSR abort to be pending
-		await Bun.sleep(20);
+		await waitFor(() => session.isStreaming);
 
 		// Abort session — prompt() should unblock
 		await session.abort();
@@ -592,7 +595,6 @@ describe("AgentSession TTSR resume gate", () => {
 			description: "A mock edit tool",
 			parameters: z.object({}),
 			execute: async () => {
-				await Bun.sleep(100);
 				toolExecutionFinished = true;
 				return { content: [{ type: "text" as const, text: "edit applied" }] };
 			},
@@ -638,19 +640,19 @@ describe("AgentSession TTSR resume gate", () => {
 					pushAbortableTtsrStream(stream, signal);
 				} else if (streamCallCount === 2) {
 					// Continuation: return assistant message with a tool call
-					setTimeout(() => {
+					queueMicrotask(() => {
 						const msg = makeToolCallMsg();
 						stream.push({ type: "start", partial: msg });
 						stream.push({ type: "done", reason: "toolUse", message: msg });
-					}, 10);
+					});
 				} else {
 					// After tool execution: return final response
-					setTimeout(() => {
+					queueMicrotask(() => {
 						allTurnsCompleted = true;
 						const msg = makeMsg('Fixed: let val = result.expect("msg")');
 						stream.push({ type: "start", partial: msg });
 						stream.push({ type: "done", reason: "stop", message: msg });
-					}, 10);
+					});
 				}
 
 				return stream;
@@ -756,11 +758,11 @@ describe("AgentSession TTSR resume gate", () => {
 					});
 				} else {
 					// Continuation after tool result; finish cleanly.
-					setTimeout(() => {
+					queueMicrotask(() => {
 						const done = makeMsg("ok");
 						stream.push({ type: "start", partial: done });
 						stream.push({ type: "done", reason: "stop", message: done });
-					}, 10);
+					});
 				}
 				return stream;
 			},
@@ -892,11 +894,11 @@ describe("AgentSession TTSR resume gate", () => {
 						stream.push({ type: "done", reason: "toolUse", message: partial });
 					});
 				} else {
-					setTimeout(() => {
+					queueMicrotask(() => {
 						const done = makeMsg("ok");
 						stream.push({ type: "start", partial: done });
 						stream.push({ type: "done", reason: "stop", message: done });
-					}, 10);
+					});
 				}
 				return stream;
 			},
@@ -997,12 +999,12 @@ describe("AgentSession TTSR resume gate", () => {
 						stream.push({ type: "error", reason: "error", error: message });
 					});
 				} else {
-					setTimeout(() => {
+					queueMicrotask(() => {
 						continuationCompleted = true;
 						const message = makeSuccessMessage();
 						stream.push({ type: "start", partial: message });
 						stream.push({ type: "done", reason: "stop", message });
-					}, 80);
+					});
 				}
 				return stream;
 			},

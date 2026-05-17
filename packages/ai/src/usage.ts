@@ -156,6 +156,7 @@ export interface UsageFetchParams {
 export interface UsageFetchContext {
 	fetch: typeof fetch;
 	logger?: UsageLogger;
+	retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 }
 
 /** Provider implementation for fetching usage information. */

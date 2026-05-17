@@ -237,7 +237,9 @@ describe("AuthStorage usage cache: last-good failure fallback", () => {
 describe("AuthStorage usage cache: jitter", () => {
 	it("writes per-credential cache TTLs with ±25% jitter so refreshes decorrelate", async () => {
 		const store = makeStore([oauthRow(1, "a@example.com"), oauthRow(2, "b@example.com")]);
-		const storage = new AuthStorage(store);
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
 		await storage.reload();
 		try {
 			const goldA = makeReport("a@example.com");

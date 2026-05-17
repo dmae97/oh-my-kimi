@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { setTimeout as setTimeoutCb } from "node:timers";
 import type { UsageFetchContext } from "../src/usage";
 import { claudeUsageProvider } from "../src/usage/claude";
 
@@ -14,8 +13,8 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
 	});
 }
 
-function makeContext(fetchImpl: typeof fetch): UsageFetchContext {
-	return { fetch: fetchImpl };
+function makeContext(fetchImpl: typeof fetch, retryWait?: UsageFetchContext["retryWait"]): UsageFetchContext {
+	return { fetch: fetchImpl, retryWait };
 }
 
 function baseParams() {
@@ -36,6 +35,8 @@ describe("claudeUsageProvider retry contract", () => {
 		vi.restoreAllMocks();
 	});
 
+	const instantRetryWait: UsageFetchContext["retryWait"] = async () => {};
+
 	it("retries on 429 and succeeds on a later attempt", async () => {
 		let attempt = 0;
 		const fetchMock = (async () => {
@@ -44,7 +45,7 @@ describe("claudeUsageProvider retry contract", () => {
 			return jsonResponse(200, VALID_PAYLOAD);
 		}) as unknown as typeof fetch;
 
-		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock));
+		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock, instantRetryWait));
 		expect(report).not.toBeNull();
 		expect(attempt).toBe(3);
 		expect(report?.limits[0]?.amount.used).toBe(42);
@@ -58,7 +59,7 @@ describe("claudeUsageProvider retry contract", () => {
 			return jsonResponse(200, VALID_PAYLOAD);
 		}) as unknown as typeof fetch;
 
-		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock));
+		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock, instantRetryWait));
 		expect(report).not.toBeNull();
 		expect(attempt).toBe(2);
 	});
@@ -94,35 +95,28 @@ describe("claudeUsageProvider retry contract", () => {
 			return jsonResponse(429, { error: "rate_limited" });
 		}) as unknown as typeof fetch;
 
-		// Provider's MAX_RETRIES is 3; provider sleeps BASE_RETRY_DELAY_MS * 2^attempt
-		// between attempts — total worst-case ~1.5s, well within our test budget.
-		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock));
+		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock, instantRetryWait));
 		expect(report).toBeNull();
 		expect(attempt).toBe(3);
 	});
 
 	it("honours Retry-After when retrying a 429", async () => {
 		let attempt = 0;
-		const callTimes: number[] = [];
+		const retryWait = vi.fn(async () => {});
 		const fetchMock = (async () => {
 			attempt += 1;
-			callTimes.push(Date.now());
 			if (attempt === 1) {
-				// Retry-After: 1 second. Provider must wait ~1s before re-attempting.
+				// Retry-After: 1 second. Provider must compute a 1s backoff before re-attempting.
 				return jsonResponse(429, { error: "rate_limited" }, { "retry-after": "1" });
 			}
 			return jsonResponse(200, VALID_PAYLOAD);
 		}) as unknown as typeof fetch;
 
-		const t0 = Date.now();
-		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock));
-		const elapsed = Date.now() - t0;
+		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock, retryWait));
 		expect(report).not.toBeNull();
 		expect(attempt).toBe(2);
-		// Allow generous slop (Bun scheduling jitter) but ensure we actually waited
-		// closer to the Retry-After than to the default 500ms backoff.
-		expect(elapsed).toBeGreaterThanOrEqual(800);
-		expect(callTimes[1] - callTimes[0]).toBeGreaterThanOrEqual(800);
+		expect(retryWait).toHaveBeenCalledTimes(1);
+		expect(retryWait.mock.calls[0]?.[0]).toBe(1000);
 	});
 
 	it("aborts the retry sleep when the signal fires mid-backoff", async () => {
@@ -140,16 +134,26 @@ describe("claudeUsageProvider retry contract", () => {
 		}) as unknown as typeof fetch;
 
 		const controller = new AbortController();
-		setTimeoutCb(() => controller.abort(), 150);
+		const retryWait = vi.fn(async (delayMs: number, signal?: AbortSignal) => {
+			expect(delayMs).toBe(60_000);
+			if (signal?.aborted) throw new Error("AbortError");
+			const { promise, reject } = Promise.withResolvers<void>();
+			const onAbort = () => reject(new Error("AbortError"));
+			signal?.addEventListener("abort", onAbort, { once: true });
+			queueMicrotask(() => controller.abort());
+			try {
+				await promise;
+			} finally {
+				signal?.removeEventListener("abort", onAbort);
+			}
+		});
 
-		const t0 = Date.now();
 		const report = await claudeUsageProvider.fetchUsage(
 			{ ...baseParams(), signal: controller.signal },
-			makeContext(fetchMock),
+			makeContext(fetchMock, retryWait),
 		);
-		const elapsed = Date.now() - t0;
 		expect(report).toBeNull();
-		expect(elapsed).toBeLessThan(3_000);
+		expect(retryWait).toHaveBeenCalledTimes(1);
 		expect(attempt).toBe(1);
 	});
 
@@ -168,7 +172,7 @@ describe("claudeUsageProvider retry contract", () => {
 			return jsonResponse(429, { error: "rate_limited" });
 		}) as unknown as typeof fetch;
 
-		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock));
+		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock, instantRetryWait));
 		// The 200 set lastPayload but had no usage data; 429s mean no further
 		// successes. lastPayload survives but has no usage data → no limits.
 		// Specifically: report is null (since lastPayload has nothing to expose).

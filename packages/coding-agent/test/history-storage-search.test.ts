@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -13,17 +13,19 @@ async function freshStorage(): Promise<HistoryStorage> {
 }
 
 async function seed(storage: HistoryStorage, prompts: string[]): Promise<void> {
-	for (const prompt of prompts) {
-		await storage.add(prompt, "/tmp/test");
-	}
+	const writes = prompts.map(prompt => storage.add(prompt, "/tmp/test"));
+	vi.advanceTimersByTime(100);
+	await Promise.all(writes);
 }
 
 beforeEach(() => {
 	HistoryStorage.resetInstance();
+	vi.useFakeTimers();
 });
 
 afterEach(async () => {
 	HistoryStorage.resetInstance();
+	vi.useRealTimers();
 	if (tempDir) {
 		await fs.rm(tempDir, { recursive: true, force: true });
 		tempDir = "";
