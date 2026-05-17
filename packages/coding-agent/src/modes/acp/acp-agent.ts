@@ -357,7 +357,7 @@ export class AcpAgent implements Agent {
 	#clientCapabilities: ClientCapabilities | undefined;
 	#cancelCleanupTimeoutMs = ACP_CANCEL_CLEANUP_TIMEOUT_MS;
 
-	constructor(connection: AgentSideConnection, initialSession: AgentSession, createSession: CreateAcpSession) {
+	constructor(connection: AgentSideConnection, createSession: CreateAcpSession, initialSession?: AgentSession) {
 		this.#connection = connection;
 		this.#initialSession = initialSession;
 		this.#createSession = createSession;
@@ -634,7 +634,7 @@ export class AcpAgent implements Agent {
 		const builtinResult = await executeAcpBuiltinSlashCommand(text, {
 			session: record.session,
 			sessionManager: record.session.sessionManager,
-			settings: Settings.instance,
+			settings: record.session.settings,
 			cwd: record.session.sessionManager.getCwd(),
 			output: output => this.#emitCommandOutput(record, output),
 			refreshCommands: () => this.#emitAvailableCommandsUpdate(record),
@@ -806,6 +806,9 @@ export class AcpAgent implements Agent {
 			case "_omp/usage": {
 				const [firstRecord] = this.#sessions.values();
 				const target = firstRecord?.session ?? this.#initialSession;
+				if (!target) {
+					return { reports: [] };
+				}
 				const reports = await target.fetchUsageReports();
 				return { reports: reports ?? [] };
 			}
@@ -1297,7 +1300,7 @@ export class AcpAgent implements Agent {
 
 	#getAvailableModes(session: AgentSession): Array<{ id: string; name: string; description: string }> {
 		const modes = [{ id: ACP_DEFAULT_MODE_ID, name: "Default", description: "Standard ACP headless mode" }];
-		if (Settings.instance.get("plan.enabled")) {
+		if (session.settings.get("plan.enabled")) {
 			modes.push({
 				id: ACP_PLAN_MODE_ID,
 				name: "Plan",

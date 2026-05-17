@@ -94,6 +94,9 @@ class FakeAgentSession {
 	disposed = false;
 	fastMode = false;
 	forcedToolChoice: string | undefined;
+	get settings(): Settings {
+		return Settings.instance;
+	}
 	promptCalls: string[] = [];
 	customMessages: Array<{ customType: string; content: string; details?: unknown }> = [];
 	skillsSettings = { enableSkillCommands: true };
@@ -415,7 +418,7 @@ async function createHarness(): Promise<AgentHarness> {
 	};
 
 	return {
-		agent: new AcpAgent(connection, initialSession as unknown as AgentSession, factory),
+		agent: new AcpAgent(connection, factory, initialSession as unknown as AgentSession),
 		updates,
 		abortController,
 		sessions,
