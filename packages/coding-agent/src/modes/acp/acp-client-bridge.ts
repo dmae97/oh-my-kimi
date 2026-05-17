@@ -122,6 +122,7 @@ async function requestPermission(
 		toolCallId: toolCall.toolCallId,
 		title: toolCall.title,
 		...(toolCall.kind ? { kind: toolCall.kind as ToolCallUpdate["kind"] } : {}),
+		...(toolCall.status ? { status: toolCall.status as ToolCallUpdate["status"] } : {}),
 		...(toolCall.rawInput !== undefined ? { rawInput: toolCall.rawInput } : {}),
 		...(toolCall.locations ? { locations: toolCall.locations } : {}),
 	};
