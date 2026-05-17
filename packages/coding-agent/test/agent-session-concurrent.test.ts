@@ -266,6 +266,57 @@ describe("AgentSession concurrent prompt guard", () => {
 		// Second prompt should work
 		await expect(session.prompt("Second message")).resolves.toBeUndefined();
 	});
+
+	// Regression: a subscriber that fires the next prompt synchronously from the
+	// agent_end listener (the shape every wire transport ends up in — rpc-mode
+	// stdout subscriber, ACP bridge, Cursor exec) must not collide with the
+	// outgoing turn's still-unwinding in-flight bookkeeping. Before the wire-level
+	// agent_end was deferred until #promptInFlightCount drops to 0, the
+	// subscriber observed agent_end while Session.isStreaming was still true (the
+	// agent's own `isStreaming` had flipped, but #promptWithMessage's finally had
+	// not yet decremented the prompt-in-flight counter), and the next prompt
+	// threw AgentBusyError. Surfaced as `RpcCommandError: prompt: Agent is
+	// already processing` from omp-rpc clients (robomp triage reminder path).
+	it("subscriber may prompt() synchronously from agent_end without AgentBusyError", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+
+		const observedIsStreamingAtAgentEnd: boolean[] = [];
+		const reentrantPromptResults: Array<"resolved" | { error: string }> = [];
+		let reentrantPrompted = false;
+
+		session.subscribe(event => {
+			if (event.type !== "agent_end") return;
+			observedIsStreamingAtAgentEnd.push(session.isStreaming);
+			if (reentrantPrompted) return;
+			reentrantPrompted = true;
+			void session
+				.prompt("Second message")
+				.then(() => reentrantPromptResults.push("resolved"))
+				.catch((err: Error) => reentrantPromptResults.push({ error: err.message }));
+		});
+
+		await session.prompt("First message");
+		await waitFor(() => reentrantPromptResults.length > 0, 2000);
+		await session.waitForIdle();
+
+		expect(observedIsStreamingAtAgentEnd).not.toContain(true);
+		expect(reentrantPromptResults).toEqual(["resolved"]);
+	});
 });
 
 describe("AgentSession TTSR resume gate", () => {

@@ -804,6 +804,15 @@ export class AgentSession {
 
 	#streamingEditFileCache = new Map<string, string>();
 	#promptInFlightCount = 0;
+	// Wire-level agent_end emission deferred until #promptInFlightCount drops to 0.
+	// Internal extension hooks and post-emit work (auto-retry, auto-compaction, todo
+	// checks in #handleAgentEvent) still fire on the original schedule — only the
+	// `#emit(event)` that reaches external subscribers (rpc-mode stdout, ACP bridge,
+	// Cursor exec, TUI listeners) is held back. Without this, a client that resumes
+	// on `agent_end` can fire its next `prompt` before #promptWithMessage's finally
+	// has decremented #promptInFlightCount, hitting AgentBusyError. Flushed from
+	// both #endInFlight (normal) and #resetInFlight (abort).
+	#pendingAgentEndEmit: AgentSessionEvent | undefined;
 	#obfuscator: SecretObfuscator | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
@@ -857,12 +866,21 @@ export class AgentSession {
 		this.#promptInFlightCount = Math.max(0, this.#promptInFlightCount - 1);
 		if (this.#promptInFlightCount === 0) {
 			this.#releasePowerAssertion();
+			this.#flushPendingAgentEnd();
 		}
 	}
 
 	#resetInFlight(): void {
 		this.#promptInFlightCount = 0;
 		this.#releasePowerAssertion();
+		this.#flushPendingAgentEnd();
+	}
+
+	#flushPendingAgentEnd(): void {
+		const pending = this.#pendingAgentEndEmit;
+		if (!pending) return;
+		this.#pendingAgentEndEmit = undefined;
+		this.#emit(pending);
 	}
 
 	constructor(config: AgentSessionConfig) {
@@ -1198,6 +1216,18 @@ export class AgentSession {
 			return;
 		}
 		await this.#emitExtensionEvent(event);
+		// Hold the wire-level agent_end until in-flight prompts unwind. Subscribers
+		// (rpc-mode, ACP, Cursor) treat agent_end as the "session is idle" signal;
+		// emitting while #promptInFlightCount > 0 lets a client fire its next
+		// `prompt` into a session that still reports isStreaming === true. Flush
+		// happens in #endInFlight / #resetInFlight. A later agent_end (e.g. from
+		// an auto-compaction turn that starts before the original prompt unwinds)
+		// supersedes the pending one, which is what subscribers want — they only
+		// care about the final settle.
+		if (event.type === "agent_end" && this.#promptInFlightCount > 0) {
+			this.#pendingAgentEndEmit = event;
+			return;
+		}
 		this.#emit(event);
 	}
 
