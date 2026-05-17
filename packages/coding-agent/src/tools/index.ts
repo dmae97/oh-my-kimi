@@ -92,6 +92,8 @@ export * from "./search";
 export * from "./search-tool-bm25";
 export * from "./ssh";
 export * from "./todo-write";
+export * from "./tts";
+export * from "./vim";
 export * from "./write";
 export * from "./yield";
 
