@@ -333,8 +333,45 @@ function selectBestOfficialCandidate(candidates: readonly string[]): string | un
 	if (candidates.length === 0) {
 		return undefined;
 	}
-	const ranked = [...new Set(candidates)].sort(compareCandidatePreference);
-	return ranked[0];
+	const seen = new Set<string>();
+	let bestCandidate: string | undefined;
+	let bestPenalty = 0;
+	let bestLength = 0;
+	for (const candidate of candidates) {
+		if (seen.has(candidate)) {
+			continue;
+		}
+		seen.add(candidate);
+		const penalty = getCandidatePenalty(candidate);
+		const length = candidate.length;
+		if (bestCandidate === undefined) {
+			bestCandidate = candidate;
+			bestPenalty = penalty;
+			bestLength = length;
+			continue;
+		}
+		if (penalty < bestPenalty) {
+			bestCandidate = candidate;
+			bestPenalty = penalty;
+			bestLength = length;
+			continue;
+		}
+		if (penalty > bestPenalty) {
+			continue;
+		}
+		if (length < bestLength) {
+			bestCandidate = candidate;
+			bestLength = length;
+			continue;
+		}
+		if (length > bestLength) {
+			continue;
+		}
+		if (candidate.localeCompare(bestCandidate) < 0) {
+			bestCandidate = candidate;
+		}
+	}
+	return bestCandidate;
 }
 
 function getWrapperCanonicalCandidates(candidate: string): string[] {

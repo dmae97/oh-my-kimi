@@ -242,13 +242,14 @@ export const ModelsConfigFile = new ConfigFile<ModelsConfig>("models", ModelsCon
 	},
 );
 
-/** Provider override config (baseUrl, headers, apiKey, compat) without custom models */
+/** Provider override config (baseUrl, headers, apiKey, compat, transport) without custom models */
 interface ProviderOverride {
 	baseUrl?: string;
 	headers?: Record<string, string>;
 	apiKey?: string;
 	authHeader?: boolean;
 	compat?: Model<Api>["compat"];
+	transport?: Model<Api>["transport"];
 }
 
 interface DiscoveryProviderConfig {
@@ -1085,14 +1086,15 @@ export class ModelRegistry {
 		const configuredProviders = new Set(Object.keys(value.providers ?? {}));
 
 		for (const [providerName, providerConfig] of providerEntries) {
-			// Always set overrides when baseUrl/headers/apiKey/authHeader/compat/disableStrictTools are present
+			// Always set overrides when baseUrl/headers/apiKey/authHeader/compat/disableStrictTools/transport are present
 			if (
 				providerConfig.baseUrl ||
 				providerConfig.headers ||
 				providerConfig.apiKey ||
 				providerConfig.authHeader !== undefined ||
 				providerConfig.compat ||
-				providerConfig.disableStrictTools
+				providerConfig.disableStrictTools ||
+				providerConfig.transport
 			) {
 				const disableStrictCompat = providerConfig.disableStrictTools ? { disableStrictTools: true } : undefined;
 				overrides.set(providerName, {
@@ -1101,6 +1103,7 @@ export class ModelRegistry {
 					apiKey: providerConfig.apiKey,
 					authHeader: providerConfig.authHeader,
 					compat: mergeCompat(providerConfig.compat, disableStrictCompat),
+					transport: providerConfig.transport,
 				});
 			}
 
@@ -1192,6 +1195,9 @@ export class ModelRegistry {
 							headers: providerOverride.headers
 								? { ...model.headers, ...providerOverride.headers }
 								: model.headers,
+							...(providerOverride.transport !== undefined
+								? { transport: providerOverride.transport }
+								: {}),
 						}
 					: model;
 			}),
@@ -1693,11 +1699,12 @@ export class ModelRegistry {
 			authHeader: override.authHeader ?? baseOverride?.authHeader,
 			headers: override.headers ? { ...(baseOverride?.headers ?? {}), ...override.headers } : baseOverride?.headers,
 			compat: override.compat ? mergeCompat(baseOverride?.compat, override.compat) : baseOverride?.compat,
+			transport: override.transport ?? baseOverride?.transport,
 		};
 	}
 	#applyProviderTransportOverride<T extends { baseUrl?: string; headers?: Record<string, string> }>(
 		entry: T,
-		override: Pick<ProviderOverride, "baseUrl" | "headers" | "authHeader" | "apiKey">,
+		override: Pick<ProviderOverride, "baseUrl" | "headers" | "authHeader" | "apiKey" | "transport">,
 	): T {
 		const headers = mergeAuthHeader(
 			override.headers ? { ...entry.headers, ...override.headers } : entry.headers,
@@ -1708,6 +1715,9 @@ export class ModelRegistry {
 			...entry,
 			baseUrl: override.baseUrl ?? entry.baseUrl,
 			headers,
+			// Preserve the model's existing transport when the override omits one;
+			// providers without a `transport` field keep the default per-API dispatch.
+			...(override.transport !== undefined ? { transport: override.transport } : {}),
 		};
 	}
 	#applyRuntimeProviderOverrides(models: Model<Api>[]): Model<Api>[] {
@@ -2182,12 +2192,19 @@ export class ModelRegistry {
 			return;
 		}
 
-		if (config.baseUrl || config.headers || config.apiKey || config.authHeader !== undefined) {
+		if (
+			config.baseUrl ||
+			config.headers ||
+			config.apiKey ||
+			config.authHeader !== undefined ||
+			config.transport !== undefined
+		) {
 			const transportOverride = {
 				baseUrl: config.baseUrl,
 				headers: config.headers,
 				apiKey: config.apiKey,
 				authHeader: config.authHeader,
+				transport: config.transport,
 			};
 			const nextRuntimeOverride = this.#mergeProviderOverride(
 				this.#runtimeProviderOverrides.get(providerName),
@@ -2235,6 +2252,8 @@ export interface ProviderConfigInput {
 	headers?: Record<string, string>;
 	compat?: Model<Api>["compat"];
 	authHeader?: boolean;
+	/** Streaming transport override — see {@link Model.transport}. */
+	transport?: Model<Api>["transport"];
 	oauth?: {
 		name: string;
 		login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;

@@ -22,8 +22,9 @@ import { Effort } from "../model-thinking";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
+import * as piNative from "../providers/pi-native-server";
 import { streamSimple } from "../stream";
-import type { Api, AssistantMessageEventStream, Model, SimpleStreamOptions } from "../types";
+import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
 import { parseBind } from "../utils/parse-bind";
 import { captureRequestHeaders, corsHeaders, isAuthorized, json, resolvePeer, withCors } from "./http";
 import type {
@@ -89,8 +90,7 @@ const FORMAT_ROUTES: Record<string, { module: FormatModule; label: string }> = {
  *
  * Anthropic-backed requests ignore `sessionId`; the key is harmless there.
  */
-function deriveSessionId(parsed: ParsedFormatRequest): string {
-	const { modelId, context } = parsed;
+function deriveSessionId(modelId: string, context: Context): string {
 	const parts: string[] = [modelId];
 	if (context.systemPrompt && context.systemPrompt.length > 0) {
 		parts.push(context.systemPrompt.join("\n\n"));
@@ -144,7 +144,7 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 	// Client-supplied `prompt_cache_key` wins; otherwise derive a stable
 	// key from the model + system + tools so prefix caching engages on
 	// Codex-class backends across turns of the same logical conversation.
-	opts.sessionId = options.promptCacheKey ?? deriveSessionId(parsed);
+	opts.sessionId = options.promptCacheKey ?? deriveSessionId(parsed.modelId, parsed.context);
 	if (options.thinkingBudgets) {
 		opts.thinkingBudgets = { ...(opts.thinkingBudgets ?? {}), ...options.thinkingBudgets };
 	}
@@ -402,6 +402,148 @@ async function handleFormatEndpoint(
 }
 
 /**
+ * Pi-native fast path: `POST /v1/pi/stream`. Accepts the canonical pi-ai
+ * `Context` directly (no wire-format round-trip) and emits a bandwidth-shrunk
+ * event stream matching `pi-agent`'s `streamProxy`. Skips the OpenAI /
+ * Anthropic / Responses translation layers — those exist to bridge foreign
+ * SDKs (llm-git, anthropic-sdk, openai-sdk), and bridging back to pi-native
+ * just to bridge forward again is wasted work.
+ *
+ * Every other gateway concern (bearer auth, model resolve, credential fetch,
+ * abort mirroring, codex temperature/topP strip, prefix-cache key derivation,
+ * Claude-Code OAuth shaping inside `streamSimple`) still applies — only
+ * `parseRequest`/`encodeResponse`/`encodeStream` differ from the format-endpoint
+ * path.
+ */
+async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, peer: string): Promise<Response> {
+	const controller = mirrorRequestAbort(req);
+	const aborted = (): Response => piNative.formatError(499, "request_aborted", "client closed request");
+	if (controller.signal.aborted) return aborted();
+
+	let body: unknown;
+	try {
+		body = await req.json();
+	} catch (error) {
+		if (controller.signal.aborted) return aborted();
+		return piNative.formatError(400, "invalid_request_error", `Invalid JSON body: ${String(error)}`);
+	}
+	if (controller.signal.aborted) return aborted();
+
+	let parsed: piNative.PiNativeParsedRequest;
+	try {
+		parsed = piNative.parseRequest(body, req.headers);
+	} catch (error) {
+		if (controller.signal.aborted) return aborted();
+		const message = error instanceof Error ? error.message : String(error);
+		return piNative.formatError(400, "invalid_request_error", message);
+	}
+
+	const model = bootOpts.resolveModel(parsed.modelId);
+	if (!model) {
+		return piNative.formatError(404, "invalid_request_error", `Unknown model: ${parsed.modelId}`);
+	}
+
+	let apiKey: string | undefined;
+	try {
+		apiKey = await bootOpts.storage.getApiKey(model.provider, undefined, {
+			modelId: model.id,
+			signal: controller.signal,
+		});
+	} catch (error) {
+		if (controller.signal.aborted) return aborted();
+		const classified = classifyGatewayError(error);
+		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
+		return piNative.formatError(classified.status, classified.type, classified.message);
+	}
+	if (controller.signal.aborted) return aborted();
+	if (!apiKey) {
+		return piNative.formatError(
+			401,
+			"authentication_error",
+			`No credential available for provider ${model.provider}`,
+		);
+	}
+
+	// Build the SimpleStreamOptions actually handed to `streamSimple`. We
+	// trust the client's options (already allow-listed by `parseRequest`) and
+	// only inject server-controlled fields. The codex temperature/topP strip
+	// matches `buildStreamOptions` — Codex rejects them with a 400.
+	const streamOpts: SimpleStreamOptions = { ...parsed.options, apiKey, signal: controller.signal };
+	if (model.api === "openai-codex-responses") {
+		delete streamOpts.temperature;
+		delete streamOpts.topP;
+	}
+	// Merge gateway-captured passthrough headers under the client's own
+	// headers — the client's values win when they collide.
+	const captured = captureRequestHeaders(req.headers);
+	streamOpts.headers = { ...captured, ...(streamOpts.headers ?? {}) };
+	// Cache identity: explicit `sessionId` wins, then derive a stable key
+	// from model + system + tools + first message so Codex prefix caching
+	// engages on the same logical conversation across turns.
+	streamOpts.sessionId ??= deriveSessionId(parsed.modelId, parsed.context);
+
+	logger.info("auth-gateway request", {
+		format: "pi-native",
+		model: parsed.modelId,
+		resolvedProvider: model.provider,
+		resolvedModel: model.id,
+		stream: parsed.stream,
+		peer,
+	});
+
+	let events: AssistantMessageEventStream;
+	try {
+		if (controller.signal.aborted) return aborted();
+		events = streamSimple(model, parsed.context, streamOpts);
+	} catch (error) {
+		const classified = classifyGatewayError(error);
+		logger.warn("auth-gateway streamSimple threw", { format: "pi-native", error: classified.message, peer });
+		return piNative.formatError(classified.status, classified.type, classified.message);
+	}
+
+	if (!parsed.stream) {
+		try {
+			if (controller.signal.aborted) return aborted();
+			const message = await events.result();
+			if (message.stopReason === "aborted" || message.stopReason === "error") {
+				const errorMessage =
+					message.errorMessage ??
+					(message.stopReason === "aborted" ? "Request was aborted" : "Upstream request failed");
+				logger.warn("auth-gateway non-streaming failed", {
+					format: "pi-native",
+					reason: message.stopReason,
+					error: errorMessage,
+					peer,
+				});
+				if (message.stopReason === "aborted") {
+					return piNative.formatError(499, "request_aborted", errorMessage);
+				}
+				const classified = classifyGatewayError(new Error(errorMessage));
+				return piNative.formatError(classified.status, classified.type, errorMessage);
+			}
+			return json(200, { message });
+		} catch (error) {
+			if (controller.signal.aborted) return aborted();
+			const classified = classifyGatewayError(error);
+			logger.warn("auth-gateway non-streaming aborted", { format: "pi-native", error: classified.message, peer });
+			return piNative.formatError(classified.status, classified.type, classified.message);
+		}
+	}
+	if (controller.signal.aborted) return aborted();
+
+	const sseStream = piNative.encodeStream(events);
+	return new Response(sseStream, {
+		status: 200,
+		headers: {
+			"Content-Type": "text/event-stream; charset=utf-8",
+			"Cache-Control": "no-cache",
+			Connection: "keep-alive",
+			"X-Accel-Buffering": "no",
+		},
+	});
+}
+
+/**
  * Snapshot of `GET /v1/usage` — `fetchUsageReports` already caches reports at
  * a 5-minute per-credential TTL (with jitter, plus last-good fallback on
  * failure) inside `AuthStorage`, so this handler is a thin wrapper that
@@ -465,6 +607,12 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 				const formatRoute = FORMAT_ROUTES[pathname];
 				if (formatRoute && req.method === "POST") {
 					return withCors(await handleFormatEndpoint(formatRoute, opts, req, peer), req);
+				}
+
+				// Pi-native fast path. Same auth + provider plumbing as the
+				// foreign-wire routes, just without the wire-format translation.
+				if (req.method === "POST" && pathname === "/v1/pi/stream") {
+					return withCors(await handlePiNative(opts, req, peer), req);
 				}
 
 				// Model catalog.

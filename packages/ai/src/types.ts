@@ -767,6 +767,21 @@ export interface Model<TApi extends Api = any> {
 	contextWindow: number;
 	maxTokens: number;
 	headers?: Record<string, string>;
+	/**
+	 * Streaming transport override. When `"pi-native"`, `streamSimple` routes
+	 * the request to the model's `baseUrl` via the auth-gateway's
+	 * `POST /v1/pi/stream` endpoint instead of dispatching the per-API
+	 * provider client. The `baseUrl` must point at an `omp auth-gateway`
+	 * (or compatible) host; `headers.Authorization` (or `apiKey` resolved by
+	 * the registry) carries the gateway bearer.
+	 *
+	 * Used by containerized omp installs (e.g. robomp slots) to route every
+	 * LLM call through a sidecar gateway that holds the real provider
+	 * credentials. The model's other metadata (pricing, context window,
+	 * thinking config, …) still resolves locally; only the streaming
+	 * dispatch is redirected.
+	 */
+	transport?: "pi-native";
 	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
 	preferWebsockets?: boolean;
 	/** Preferred model to switch to when context promotion is triggered (model id or provider/id). */

@@ -40,6 +40,7 @@ import {
 	streamOpenAICompletions,
 	streamOpenAIResponses,
 } from "./providers/register-builtins";
+import { streamPiNative } from "./providers/pi-native-client";
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
 import type {
 	Api,
@@ -278,7 +279,17 @@ export function streamSimple<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-	// Check custom API registry first (extension-provided APIs)
+	// Pi-native transport short-circuits the per-provider dispatch entirely:
+	// the gateway resolves provider + credential server-side, so we don't
+	// need an `apiKey` from `getEnvApiKey` here — `options.apiKey` carries
+	// the gateway bearer instead. Comes BEFORE the custom-API check so
+	// extension-registered APIs can't accidentally override a configured
+	// pi-native transport.
+	if (model.transport === "pi-native") {
+		return streamPiNative(model, context, options);
+	}
+
+	// Check custom API registry (extension-provided APIs)
 	const customApiProvider = getCustomApi(model.api);
 	if (customApiProvider) {
 		return customApiProvider.streamSimple(model, context, options);
