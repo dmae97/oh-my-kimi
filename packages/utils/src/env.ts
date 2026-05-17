@@ -5,8 +5,25 @@ import { getAgentDir, getConfigRootDir } from "./dirs";
 
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/**
+ * Strict shell-identifier shape. Used for dotenv keys we accept into
+ * `Bun.env` — those should be referenceable as `$NAME` from POSIX shells,
+ * so we reject anything outside `[A-Za-z_][A-Za-z0-9_]*`.
+ */
 export function isValidEnvName(name: string): boolean {
 	return ENV_NAME_RE.test(name);
+}
+
+/**
+ * The only names that are genuinely unsafe to forward to a native `execve`
+ * spawn: empty, containing `=` (would corrupt the `KEY=VALUE` framing) or
+ * NUL (terminates the C string mid-entry). Windows ships standard variables
+ * whose names contain parentheses (e.g. `ProgramFiles(x86)`, `CommonProgramFiles(x86)`)
+ * — those MUST survive the scrub so downstream resolvers (Git Bash discovery
+ * in `procmgr.ts`, etc.) can still read them.
+ */
+export function isSafeEnvName(name: string): boolean {
+	return name.length > 0 && !name.includes("=") && !name.includes("\0");
 }
 
 export function isSafeEnvValue(value: string): boolean {
@@ -15,8 +32,9 @@ export function isSafeEnvValue(value: string): boolean {
 
 export function filterProcessEnv(env: Record<string, string | undefined>): Record<string, string> {
 	const result: Record<string, string> = {};
-	for (const [key, value] of Object.entries(env)) {
-		if (!isValidEnvName(key) || value === undefined || !isSafeEnvValue(value)) continue;
+	for (const key in env) {
+		const value = env[key];
+		if (!isSafeEnvName(key) || value === undefined || !isSafeEnvValue(value)) continue;
 		result[key] = value;
 	}
 	return result;
@@ -75,15 +93,15 @@ const projectEnv = parseEnvFile(path.join(process.cwd(), ".env"));
 
 for (const key of Object.keys(Bun.env)) {
 	const value = Bun.env[key];
-	if (!isValidEnvName(key) || value === undefined || !isSafeEnvValue(value)) {
+	if (!isSafeEnvName(key) || value === undefined || !isSafeEnvValue(value)) {
 		delete Bun.env[key];
 	}
 }
 
 for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
-	for (const [key, value] of Object.entries(file)) {
+	for (const key in file) {
 		if (!Bun.env[key]) {
-			Bun.env[key] = value;
+			Bun.env[key] = file[key];
 		}
 	}
 }
