@@ -134,7 +134,9 @@ describe("flushGrievances", () => {
 		const body = JSON.parse(String(capturedInit?.body));
 		expect(body.agent?.name).toBe("omp");
 		expect(typeof body.agent?.version).toBe("string");
-		expect(typeof body.host).toBe("string");
+		expect(body.host).toBeUndefined();
+		expect(typeof body.platform).toBe("string");
+		expect(typeof body.arch).toBe("string");
 		expect(body.installId).toBe("11111111-2222-3333-4444-555555555555");
 		expect(body.entries).toEqual([
 			{ id: 1, model: "test-model", version: "test-version", tool: "find", report: "weird ordering" },

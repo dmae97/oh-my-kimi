@@ -20,7 +20,6 @@
  * never blocked on the network and never throws.
  */
 import { Database } from "bun:sqlite";
-import * as os from "node:os";
 import path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { $env, $flag, getAgentDir, getInstallId, logger, VERSION } from "@oh-my-pi/pi-utils";
@@ -348,7 +347,12 @@ async function performFlush(db: Database, config: PushConfig, options: FlushOpti
 		const body = JSON.stringify({
 			agent: { name: "omp", version: VERSION },
 			installId: getInstallId(),
-			host: os.hostname(),
+			// Coarse host fingerprint for triage — `darwin`/`linux`/`win32` +
+			// `arm64`/`x64`. Useful for "is this bug arch-specific?" without
+			// leaking the user's machine name (the old payload sent
+			// `os.hostname()` verbatim, which trivially deanonymises users).
+			platform: process.platform,
+			arch: process.arch,
 			entries: rows,
 		});
 		const headers: Record<string, string> = { "content-type": "application/json" };
