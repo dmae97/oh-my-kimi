@@ -1,4 +1,5 @@
-import { getAgentDir, getConfigRootDir, getPluginsDir, pathIsWithin } from "@oh-my-pi/pi-utils";
+import * as path from "node:path";
+import { getAgentDir, getConfigRootDir, getPluginsDir } from "@oh-my-pi/pi-utils";
 
 // Drop every extension discovered from the user's machine so each test only
 // sees what it wrote into the per-test temp project dir. Production composes
@@ -16,7 +17,21 @@ import { getAgentDir, getConfigRootDir, getPluginsDir, pathIsWithin } from "@oh-
 // 3. `getPluginsDir()` (XDG-aware: `$XDG_DATA_HOME/omp/plugins` or legacy)
 //    Handles installed plugin extensions that live outside `~/.omp` when
 //    XDG_DATA_HOME resolves the plugins dir somewhere else.
+//
+// We deliberately do NOT use `pathIsWithin` from pi-utils here: that helper
+// resolves symlinks via `fs.realpathSync` on both sides, so a contributor who
+// symlinks `~/.omp/agent/extensions/foo.ts` to a dotfiles repo would see the
+// candidate's realpath escape the root and slip past the filter. The loader
+// reports lexical paths, so a lexical containment check is both correct and
+// sufficient for isolating tests from host state.
+function lexicalIsWithin(root: string, candidate: string): boolean {
+	const normalizedRoot = path.resolve(root);
+	const normalizedCandidate = path.resolve(candidate);
+	const relative = path.relative(normalizedRoot, normalizedCandidate);
+	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 export function filterUserScoped<T extends { path: string }>(items: T[]): T[] {
 	const prefixes = [getConfigRootDir(), getAgentDir(), getPluginsDir()];
-	return items.filter(it => !prefixes.some(prefix => pathIsWithin(prefix, it.path)));
+	return items.filter(it => !prefixes.some(prefix => lexicalIsWithin(prefix, it.path)));
 }
