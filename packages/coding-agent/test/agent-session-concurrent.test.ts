@@ -317,6 +317,72 @@ describe("AgentSession concurrent prompt guard", () => {
 		expect(observedIsStreamingAtAgentEnd).not.toContain(true);
 		expect(reentrantPromptResults).toEqual(["resolved"]);
 	});
+
+	it("queues idle ACP client-triggered custom messages instead of starting an ownerless turn", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+			},
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+		});
+		session.setClientBridge({
+			capabilities: {},
+			deferAgentInitiatedTurns: true,
+		});
+
+		await session.prompt("First message");
+		expect(session.isStreaming).toBe(false);
+		const callsAfterFirstPrompt = mock.calls.length;
+
+		await session.sendCustomMessage(
+			{
+				customType: "async-result",
+				content: "Background result",
+				display: true,
+				attribution: "agent",
+			},
+			{ deliverAs: "followUp", triggerTurn: true },
+		);
+
+		expect(mock.calls).toHaveLength(callsAfterFirstPrompt);
+		expect(session.isStreaming).toBe(false);
+
+		await session.prompt("Next user prompt");
+		await session.dispose();
+		session = undefined as unknown as AgentSession;
+		expect(mock.calls).toHaveLength(callsAfterFirstPrompt + 1);
+		expect(
+			mock.calls.at(-1)?.context.messages.some(message => {
+				if (typeof message.content === "string") {
+					return message.content.includes("Background result");
+				}
+
+				return message.content.some(
+					content => content.type === "text" && content.text.includes("Background result"),
+				);
+			}),
+		).toBe(true);
+	});
 });
 
 describe("AgentSession TTSR resume gate", () => {
