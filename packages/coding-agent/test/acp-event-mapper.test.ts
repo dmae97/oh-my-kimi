@@ -578,7 +578,6 @@ describe("ACP event mapper", () => {
 			content: [{ type: "content", content: { type: "text", text: "$ bun test" } }],
 		});
 	});
-
 	it("does not add command text content to non-command tool starts", () => {
 		const updates = mapAgentSessionEventToAcpSessionUpdates(
 			{
