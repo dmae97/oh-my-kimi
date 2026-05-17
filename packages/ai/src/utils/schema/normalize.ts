@@ -857,6 +857,11 @@ const OPENAI_RESPONSES_SCHEMA_ARRAY_KEYS = new Set(["anyOf", "oneOf", "allOf", "
 const OPENAI_RESPONSES_SCHEMA_MAP_KEYS = new Set([
 	"properties",
 	"patternProperties",
+	// `dependencies` is the Draft-04..07 schema-valued form; older MCP servers
+	// still emit `{ dependencies: { foo: { type: "object" } } }`. String-array
+	// branches per key pass through `normalizeOpenAIResponsesSchemaNode`
+	// untouched because non-objects return as-is.
+	"dependencies",
 	"dependentSchemas",
 	"$defs",
 	"definitions",
@@ -865,6 +870,7 @@ const OPENAI_RESPONSES_SCHEMA_VALUE_KEYS = new Set([
 	"items",
 	"additionalItems",
 	"contains",
+	"contentSchema",
 	"propertyNames",
 	"if",
 	"then",
@@ -903,13 +909,24 @@ function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonO
 	const cached = cache.get(value);
 	if (cached) return cached;
 
+	// Seed the cache with the in-flight `output` BEFORE recursing so that a
+	// child re-entering this node mid-walk gets the partial back instead of
+	// triggering an infinite recursion. A cycle hitting this seeded entry
+	// forces `changed = true` below (the cached partial is referentially
+	// distinct from `value`), which is why the final `cache.set(value, result)`
+	// never silently overwrites the seed with `value` on a cyclic input.
 	const output: JsonObject = {};
 	cache.set(value, output);
 
 	let changed = false;
 	for (const key in value) {
 		if (!Object.hasOwn(value, key)) continue;
-		if (key === "oneOf") {
+		// Drop only well-formed `oneOf` arrays here; they are re-emitted as
+		// `anyOf` after the loop so any neighboring `anyOf` entries can be
+		// concatenated. A non-array `oneOf` is malformed for the wire but
+		// still preserved verbatim so callers can see the original payload
+		// instead of having it silently disappear.
+		if (key === "oneOf" && Array.isArray(value.oneOf)) {
 			changed = true;
 			continue;
 		}
@@ -936,14 +953,30 @@ function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonO
 			: rewrittenOneOf;
 	}
 
-	if (value.type === "object" && !Object.hasOwn(value, "properties")) {
+	// Draft 2020-12 lets `type` be an array (e.g. `["object", "null"]`); treat
+	// any variant that includes "object" as an object position for the
+	// properties requirement.
+	if (declaresObjectType(value.type) && !Object.hasOwn(value, "properties")) {
 		output.properties = {};
 		changed = true;
 	}
 
+	// Safe to overwrite the seed: any cyclic re-entry above already observed
+	// the seeded partial and set `changed = true` for that node, so a node
+	// that finishes with `changed === false` is provably non-cyclic and
+	// referentially equal to its input.
 	const result = changed ? output : value;
 	cache.set(value, result);
 	return result;
+}
+
+function declaresObjectType(type: unknown): boolean {
+	if (type === "object") return true;
+	if (!Array.isArray(type)) return false;
+	for (const variant of type) {
+		if (variant === "object") return true;
+	}
+	return false;
 }
 
 function normalizeOpenAIResponsesSchemaArray(value: unknown[], cache: WeakMap<JsonObject, JsonObject>): unknown[] {
