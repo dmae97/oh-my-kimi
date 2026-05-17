@@ -756,6 +756,141 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("replays assistant tool calls and matching results without duplicating the start", async () => {
+		const harness = await createHarness();
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "run tests", timestamp: Date.now() });
+		stored.sessionManager.appendMessage({
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "toolu_bash_replay",
+					name: "bash",
+					arguments: { command: "npm test" },
+				},
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: TEST_MODELS[0].id,
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		});
+		stored.sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "toolu_bash_replay",
+			toolName: "bash",
+			content: [{ type: "text", text: "tests passed" }],
+			isError: false,
+			timestamp: Date.now(),
+		});
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+
+		const toolUpdates = harness.updates
+			.filter(update => update.sessionId === stored.sessionId)
+			.map(notification => notification.update)
+			.filter(update => "toolCallId" in update && update.toolCallId === "toolu_bash_replay");
+		const starts = toolUpdates.filter(update => update.sessionUpdate === "tool_call");
+		const completions = toolUpdates.filter(
+			update => update.sessionUpdate === "tool_call_update" && update.status === "completed",
+		);
+
+		expect(starts).toHaveLength(1);
+		expect(starts[0]).toEqual(
+			expect.objectContaining({
+				sessionUpdate: "tool_call",
+				toolCallId: "toolu_bash_replay",
+				rawInput: { command: "npm test" },
+			}),
+		);
+		expect(starts[0]).toEqual(
+			expect.objectContaining({
+				content: expect.arrayContaining([{ type: "content", content: { type: "text", text: "$ npm test" } }]),
+			}),
+		);
+		expect(starts.some(update => "rawInput" in update && JSON.stringify(update.rawInput) === "{}")).toBe(false);
+		expect(completions).toHaveLength(1);
+		expect(completions[0]).toEqual(
+			expect.objectContaining({
+				content: expect.arrayContaining([{ type: "content", content: { type: "text", text: "tests passed" } }]),
+			}),
+		);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("preserves tool_use input payloads when replaying assistant tool calls", async () => {
+		const harness = await createHarness();
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "use custom tool", timestamp: Date.now() });
+		stored.sessionManager.appendMessage({
+			role: "assistant",
+			content: [
+				{
+					type: "tool_use",
+					id: "toolu_custom",
+					name: "custom_tool",
+					input: "raw custom payload",
+				},
+			] as unknown as Array<{ type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }>,
+			api: "openai-responses",
+			provider: "openai",
+			model: TEST_MODELS[1].id,
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		});
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+
+		const start = harness.updates
+			.filter(update => update.sessionId === stored.sessionId)
+			.map(notification => notification.update)
+			.find(update => "toolCallId" in update && update.toolCallId === "toolu_custom");
+
+		expect(start).toEqual(
+			expect.objectContaining({
+				sessionUpdate: "tool_call",
+				toolCallId: "toolu_custom",
+				rawInput: { input: "raw custom payload" },
+			}),
+		);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("does not replay silent-abort marker as agent_message_chunk to ACP clients", async () => {
 		const harness = await createHarness();
 		const stored = new FakeAgentSession(harness.cwdA);

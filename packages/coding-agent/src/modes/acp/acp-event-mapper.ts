@@ -1,6 +1,7 @@
 import type {
 	SessionNotification,
 	SessionUpdate,
+	ToolCall,
 	ToolCallContent,
 	ToolCallLocation,
 	ToolKind,
@@ -30,12 +31,20 @@ interface ContentArrayContainer {
 	content?: unknown;
 }
 
+interface DetailsContainer {
+	details?: unknown;
+}
+
 interface TypedValue {
 	type?: unknown;
 }
 
 interface TextLikeContent extends TypedValue {
 	text?: unknown;
+}
+
+interface TerminalIdContainer {
+	terminalId?: unknown;
 }
 
 interface BinaryLikeContent extends TypedValue {
@@ -118,6 +127,8 @@ export function mapToolKind(toolName: string): ToolKind {
 		case "move":
 			return "move";
 		case "bash":
+		case "shell":
+		case "exec":
 		case "eval":
 			return "execute";
 		case "search":
@@ -144,24 +155,20 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 		case "message_end":
 			return mapAssistantMessageEnd(event, sessionId, options);
 		case "tool_execution_start": {
-			const update: SessionUpdate = {
-				sessionUpdate: "tool_call",
+			const update = buildToolCallStartUpdate({
 				toolCallId: event.toolCallId,
-				title: buildToolTitle(event.toolName, event.args, event.intent),
-				kind: mapToolKind(event.toolName),
-				status: "pending",
-				rawInput: event.args,
-			};
-			const locations = extractToolLocations(event.args, options.cwd);
-			if (locations.length > 0) {
-				update.locations = locations;
-			}
+				toolName: event.toolName,
+				args: event.args,
+				intent: event.intent,
+				cwd: options.cwd,
+			});
 			return [toSessionNotification(sessionId, update)];
 		}
 		case "tool_execution_update": {
-			const terminalContent = extractTerminalToolCallContent(event.partialResult);
-			const otherContent = terminalContent.length > 0 ? [] : extractToolCallContent(event.partialResult);
-			const content = [...terminalContent, ...otherContent];
+			const content = mergeToolUpdateContent(
+				buildToolStartContent(event.toolName, event.args),
+				extractToolCallContent(event.partialResult),
+			);
 			const update: SessionUpdate = {
 				sessionUpdate: "tool_call_update",
 				toolCallId: event.toolCallId,
@@ -179,9 +186,7 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 		}
 		case "tool_execution_end": {
 			const diffContent = extractDiffToolCallContent(event.result);
-			const terminalContent = extractTerminalToolCallContent(event.result);
-			const otherContent = extractToolCallContent(event.result);
-			const content = [...diffContent, ...terminalContent, ...otherContent];
+			const content = [...diffContent, ...extractToolCallContent(event.result)];
 			const update: SessionUpdate = {
 				sessionUpdate: "tool_call_update",
 				toolCallId: event.toolCallId,
@@ -312,6 +317,75 @@ function mapTodoStatus(status: TodoStatus): "pending" | "in_progress" | "complet
 	return todoStatusMap[status];
 }
 
+export function buildToolCallStartUpdate(input: {
+	toolCallId: string;
+	toolName: string;
+	args: unknown;
+	intent?: string;
+	cwd?: string;
+	status?: "pending" | "completed";
+}): SessionUpdate {
+	const update: ToolCall & { sessionUpdate: "tool_call" } = {
+		sessionUpdate: "tool_call",
+		toolCallId: input.toolCallId,
+		title: buildToolTitle(input.toolName, input.args, input.intent),
+		kind: mapToolKind(input.toolName),
+		status: input.status ?? "pending",
+		rawInput: input.args,
+	};
+	const content = buildToolStartContent(input.toolName, input.args);
+	if (content.length > 0) {
+		update.content = content;
+	}
+	const locations = extractToolLocations(input.args, input.cwd);
+	if (locations.length > 0) {
+		update.locations = locations;
+	}
+	return update;
+}
+
+export function normalizeReplayToolArguments(value: unknown): { args: unknown } {
+	if (typeof value !== "string") {
+		return { args: value ?? {} };
+	}
+	try {
+		const parsed: unknown = JSON.parse(value);
+		return { args: parsed };
+	} catch {
+		return { args: value };
+	}
+}
+
+function buildToolStartContent(toolName: string, args: unknown): ToolCallContent[] {
+	if (!isCommandToolName(toolName)) {
+		return [];
+	}
+	const command = extractStringProperty<CommandContainer>(args, "command");
+	return command ? [textToolCallContent(`$ ${command}`)] : [];
+}
+
+function mergeToolUpdateContent(startContent: ToolCallContent[], resultContent: ToolCallContent[]): ToolCallContent[] {
+	if (startContent.length === 0) {
+		return resultContent;
+	}
+	const merged = [...startContent];
+	for (const item of resultContent) {
+		if (
+			item.type === "content" &&
+			item.content.type === "text" &&
+			hasEquivalentTextContent(merged, item.content.text)
+		) {
+			continue;
+		}
+		merged.push(item);
+	}
+	return merged;
+}
+
+function isCommandToolName(toolName: string): boolean {
+	return toolName === "bash" || toolName === "shell" || toolName === "exec";
+}
+
 function buildToolTitle(toolName: string, args: unknown, intent: string | undefined): string {
 	const trimmedIntent = intent?.trim();
 	if (trimmedIntent) {
@@ -418,26 +492,33 @@ function buildDiffContent(entry: unknown): ToolCallContent | undefined {
 	};
 }
 
-/** Emit a `terminal` ToolCallContent when a tool result carries a `details.terminalId` (e.g. bash routed through ACP terminal/*). */
-function extractTerminalToolCallContent(result: unknown): ToolCallContent[] {
-	if (typeof result !== "object" || result === null) return [];
-	const details = (result as { details?: unknown }).details;
-	if (typeof details !== "object" || details === null) return [];
-	const terminalId = (details as { terminalId?: unknown }).terminalId;
-	if (typeof terminalId !== "string" || terminalId.length === 0) return [];
-	return [{ type: "terminal", terminalId }];
+function extractTerminalId(value: unknown): string | undefined {
+	const direct = extractStringProperty<TerminalIdContainer>(value, "terminalId");
+	if (direct) return direct;
+	if (typeof value !== "object" || value === null) return undefined;
+	const details = (value as DetailsContainer).details;
+	return extractStringProperty<TerminalIdContainer>(details, "terminalId");
+}
+
+function terminalToolCallContent(terminalId: string): ToolCallContent {
+	return { type: "terminal", terminalId };
 }
 
 function extractToolCallContent(value: unknown): ToolCallContent[] {
 	const richContent = extractStructuredToolCallContent(value);
+	const terminalId = extractTerminalId(value);
+	const content =
+		terminalId && !hasTerminalContent(richContent, terminalId)
+			? [...richContent, terminalToolCallContent(terminalId)]
+			: richContent;
 	const fallbackText = extractReadableText(value);
 	if (!fallbackText) {
-		return richContent;
+		return content;
 	}
-	if (hasEquivalentTextContent(richContent, fallbackText)) {
-		return richContent;
+	if (hasEquivalentTextContent(content, fallbackText)) {
+		return content;
 	}
-	return [...richContent, textToolCallContent(fallbackText)];
+	return [...content, textToolCallContent(fallbackText)];
 }
 
 function extractStructuredToolCallContent(value: unknown): ToolCallContent[] {
@@ -596,6 +677,10 @@ function hasEquivalentTextContent(content: ToolCallContent[], text: string): boo
 	return content.some(item => item.type === "content" && item.content.type === "text" && item.content.text === text);
 }
 
+function hasTerminalContent(content: ToolCallContent[], terminalId: string): boolean {
+	return content.some(item => item.type === "terminal" && item.terminalId === terminalId);
+}
+
 function extractReadableText(value: unknown): string | undefined {
 	if (typeof value === "string") {
 		return normalizeText(value);
@@ -625,9 +710,22 @@ function extractReadableText(value: unknown): string | undefined {
 			return normalizeText(text);
 		}
 	}
-
+	if (isTerminalOnlyDetails(value)) {
+		return undefined;
+	}
 	const serialized = safeJsonStringify(value);
 	return normalizeText(serialized);
+}
+
+function isTerminalOnlyDetails(value: unknown): boolean {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	if (extractTerminalId(value) === undefined) {
+		return false;
+	}
+	const content = (value as ContentArrayContainer).content;
+	return content === undefined || (Array.isArray(content) && content.length === 0);
 }
 
 function extractAssistantMessageText(value: unknown): string {
