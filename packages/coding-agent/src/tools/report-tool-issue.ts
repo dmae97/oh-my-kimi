@@ -27,12 +27,18 @@ import * as z from "zod/v4";
 import type { Settings } from "..";
 import type { ToolSession } from "./index";
 
-const ReportToolIssueParams = z.object({
-	tool: z.string().describe("tool name"),
-	report: z
-		.string()
-		.describe("unexpected behavior; generic, NEVER PII (paths, file contents, identifiers, prompt text)"),
-});
+function buildReportToolIssueParams(activeBuiltinNames: readonly string[]) {
+	// Enum gives the model a tight schema; the runtime check in `execute` is the
+	// source of truth (handles models that ignore the enum and the empty-list
+	// fallback used by call sites that don't know the active set yet).
+	const toolSchema = activeBuiltinNames.length > 0 ? z.enum(activeBuiltinNames as [string, ...string[]]) : z.string();
+	return z.object({
+		tool: toolSchema.describe("tool name"),
+		report: z
+			.string()
+			.describe("unexpected behavior; generic, NEVER PII (paths, file contents, identifiers, prompt text)"),
+	});
+}
 
 export function isAutoQaEnabled(settings?: Settings): boolean {
 	return $flag("PI_AUTO_QA") || !!settings?.get("dev.autoqa");
@@ -449,15 +455,19 @@ export async function flushGrievances(
 	}
 }
 
-export function createReportToolIssueTool(session: ToolSession): AgentTool {
+export function createReportToolIssueTool(session: ToolSession, activeBuiltinNames: readonly string[] = []): AgentTool {
 	const getModel = () => session.getActiveModelString?.() ?? "unknown";
+	// Snapshotted at construction time. The model's enum is built from the same
+	// snapshot; mid-session drift (extensions registering later, etc.) is caught
+	// by the silent-drop guard below.
+	const allowedToolNames = new Set(activeBuiltinNames);
 
 	return {
 		name: "report_tool_issue",
 		label: "Report Tool Issue",
 		strict: false,
 		description: "Report unexpected tool behavior for automated QA tracking.",
-		parameters: ReportToolIssueParams,
+		parameters: buildReportToolIssueParams(activeBuiltinNames),
 		intent: "omit",
 		async execute(_toolCallId, rawParams) {
 			// Save is unconditional: the row lives in the user's own SQLite
@@ -468,12 +478,24 @@ export function createReportToolIssueTool(session: ToolSession): AgentTool {
 			// enforced inside `flushGrievances` via `resolvePushConfig`.
 			try {
 				const params = rawParams as { tool: string; report: string };
+				// Some models emit `proxy_<name>` for tools routed through a
+				// passthrough wrapper. Strip the prefix before allowlist check so
+				// `proxy_read` lands as a report against `read`, not a silent drop.
+				const canonicalTool = params.tool.startsWith("proxy_") ? params.tool.slice("proxy_".length) : params.tool;
+				// Silently drop reports targeting tools that aren't shipped built-ins
+				// (MCP servers, extensions that overrode a built-in name, typos).
+				// Not the model's fault — no error, no DB row, just acknowledge.
+				// Empty allowlist means the factory was called without a known active
+				// set, so behave as before and record everything.
+				if (allowedToolNames.size > 0 && !allowedToolNames.has(canonicalTool)) {
+					return { content: [{ type: "text", text: "Noted, thanks!" }] };
+				}
 				const db = openAutoQaDb();
 				if (db) {
 					db.prepare("INSERT INTO grievances (model, version, tool, report) VALUES (?, ?, ?, ?)").run(
 						getModel(),
 						VERSION,
-						params.tool,
+						canonicalTool,
 						params.report,
 					);
 					// Fire-and-forget background pipeline:
