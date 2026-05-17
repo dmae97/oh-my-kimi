@@ -6,8 +6,8 @@ import reflectDescription from "../prompts/tools/reflect.md" with { type: "text"
 import type { ToolSession } from ".";
 
 const hindsightReflectSchema = z.object({
-	query: z.string().describe("The question to answer using long-term memory."),
-	context: z.string().describe("Optional additional context to guide the reflection.").optional(),
+	query: z.string().describe("question to answer"),
+	context: z.string().describe("optional context").optional(),
 });
 
 export type HindsightReflectParams = z.infer<typeof hindsightReflectSchema>;

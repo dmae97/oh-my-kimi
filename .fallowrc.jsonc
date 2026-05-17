@@ -12,6 +12,10 @@
 		"packages/*/bench/**/*.{ts,tsx}",
 		"packages/*/scripts/**/*.ts"
 	],
+	"ignoreDependencies": [
+		// Used via `node_modules/.bin/napi` from packages/natives/scripts/build-native.ts.
+		"@napi-rs/cli"
+	],
 	"duplicates": {
 		"ignore": [
 			// Generated from `packages/natives/scripts/native-index.template.js` via gen-enums.ts.

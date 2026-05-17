@@ -1085,7 +1085,7 @@ function b() {
 			const updates: string[] = [];
 			const result = await bashTool.execute(
 				"test-call-8-stream",
-				{ command: "for i in 1 2 3; do echo $i; sleep 0.2; done" },
+				{ command: "for i in 1 2 3; do echo $i; sleep 0.05; done" },
 				undefined,
 				update => {
 					const text = update.content?.find(c => c.type === "text")?.text ?? "";
@@ -1155,7 +1155,7 @@ function b() {
 			expect(getTextOutput(result)).toContain("short");
 			expect(result.details?.timeoutSeconds).toBe(300);
 			expect(result.details?.async).toBeUndefined();
-			await Bun.sleep(150);
+			await asyncJobManager.drainDeliveries({ timeoutMs: 1 });
 			expect(deliveries).toEqual([]);
 			await asyncJobManager.dispose();
 		});
@@ -1174,7 +1174,7 @@ function b() {
 						testDir,
 						Settings.isolated({
 							"bash.autoBackground.enabled": true,
-							"bash.autoBackground.thresholdMs": 50,
+							"bash.autoBackground.thresholdMs": 10,
 						}),
 						{
 							getSessionId: () => "test-session",
@@ -1184,7 +1184,7 @@ function b() {
 			);
 
 			const result = await autoBackgroundBashTool.execute("test-call-9-auto-running", {
-				command: "printf 'start\\n'; sleep 0.2; printf 'done\\n'",
+				command: "printf 'start\\n'; sleep 0.05; printf 'done\\n'",
 			});
 
 			expect(result.details?.async?.state).toBe("running");
@@ -1199,7 +1199,7 @@ function b() {
 			const runningJob = asyncJobManager.getJob(jobId);
 			expect(runningJob?.status).toBe("running");
 			await runningJob?.promise;
-			await Bun.sleep(50);
+			await asyncJobManager.drainDeliveries({ timeoutMs: 1 });
 			expect(deliveries).toHaveLength(1);
 			expect(deliveries[0]?.jobId).toBe(jobId);
 			expect(deliveries[0]?.text).toContain("done");
@@ -1244,7 +1244,7 @@ function b() {
 			const runningJob = asyncJobManager.getJob(jobId);
 			expect(runningJob?.status).toBe("running");
 			await runningJob?.promise;
-			await Bun.sleep(50);
+			await asyncJobManager.drainDeliveries({ timeoutMs: 1 });
 			expect(deliveries).toHaveLength(1);
 			expect(deliveries[0]?.jobId).toBe(jobId);
 			expect(deliveries[0]?.text).toContain("Command timed out after 1 seconds");
@@ -1269,9 +1269,16 @@ function b() {
 
 		it("should abort and recover for subsequent commands", async () => {
 			const controller = new AbortController();
-			const promise = bashTool.execute("test-call-10-abort", { command: "sleep 5" }, controller.signal);
-			await Bun.sleep(200);
-			controller.abort("test abort");
+			const promise = bashTool.execute(
+				"test-call-10-abort",
+				{ command: "printf 'started\\n'; sleep 5" },
+				controller.signal,
+				update => {
+					if (update.content?.some(content => content.type === "text" && content.text.includes("started"))) {
+						controller.abort("test abort");
+					}
+				},
+			);
 			await expect(promise).rejects.toThrow(/abort|cancel|timed out/i);
 
 			const result = await bashTool.execute("test-call-10-after-abort", { command: "echo ok" });

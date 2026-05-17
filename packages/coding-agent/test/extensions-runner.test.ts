@@ -15,7 +15,7 @@ import {
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, logger, TempDir } from "@oh-my-pi/pi-utils";
-import { filterUserExtensionErrors, filterUserExtensions } from "./utils/filter-user-extensions";
+import { filterUserScoped } from "./utils/filter-user-extensions";
 
 describe("ExtensionRunner", () => {
 	let tempDir: TempDir;
@@ -43,8 +43,8 @@ describe("ExtensionRunner", () => {
 		const result = await discoverAndLoadExtensions(configuredPaths, tempDir.path());
 		return {
 			...result,
-			extensions: filterUserExtensions(result.extensions),
-			errors: filterUserExtensionErrors(result.errors),
+			extensions: filterUserScoped(result.extensions),
+			errors: filterUserScoped(result.errors),
 		};
 	};
 
@@ -644,25 +644,25 @@ describe("ExtensionRunner", () => {
 			runner.onError(err => {
 				errors.push(err);
 			});
-			testSetExtensionHandlerTimeoutMs(50);
+			testSetExtensionHandlerTimeoutMs(10);
 
 			const startedAt = performance.now();
 			await runner.emit({ type: "session_start" });
 			const elapsedMs = performance.now() - startedAt;
 
-			expect(elapsedMs).toBeGreaterThanOrEqual(40);
-			expect(elapsedMs).toBeLessThan(250);
+			expect(elapsedMs).toBeGreaterThanOrEqual(8);
+			expect(elapsedMs).toBeLessThan(150);
 			expect(fs.readFileSync(markerPath, "utf8")).toBe("fast\n");
 			expect(warnSpy).toHaveBeenCalledWith("Extension handler timed out", {
 				extensionPath: hangExtensionPath,
 				event: "session_start",
-				timeoutMs: 50,
+				timeoutMs: 10,
 			});
 			expect(errors).toEqual([
 				{
 					extensionPath: hangExtensionPath,
 					event: "session_start",
-					error: "handler timed out after 50ms",
+					error: "handler timed out after 10ms",
 				},
 			]);
 
@@ -936,7 +936,7 @@ describe("ExtensionRunner", () => {
 			);
 
 			// Drain microtasks so the fire-and-forget emit() calls inside initialize() complete.
-			await new Promise(resolve => setTimeout(resolve, 50));
+			for (let i = 0; i < 5; i++) await Promise.resolve();
 
 			const events = fs
 				.readFileSync(eventsPath, "utf8")

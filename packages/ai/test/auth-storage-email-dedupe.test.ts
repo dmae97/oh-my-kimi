@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthCredentialStore, AuthStorage, type OAuthCredential } from "../src/auth-storage";
+import { AuthStorage, type OAuthCredential, SqliteAuthCredentialStore } from "../src/auth-storage";
 
 const LEGACY_TIMESTAMP = 1_700_000_000;
 
@@ -105,13 +105,13 @@ function readTableSql(dbPath: string, tableName: string): string | null {
 describe("AuthStorage openai-codex email dedupe", () => {
 	let tempDir = "";
 	let dbPath = "";
-	let store: AuthCredentialStore | null = null;
+	let store: SqliteAuthCredentialStore | null = null;
 	let authStorage: AuthStorage | null = null;
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-auth-email-dedupe-"));
 		dbPath = path.join(tempDir, "agent.db");
-		store = await AuthCredentialStore.open(dbPath);
+		store = await SqliteAuthCredentialStore.open(dbPath);
 		authStorage = new AuthStorage(store);
 	});
 
@@ -255,8 +255,8 @@ describe("AuthStorage openai-codex email dedupe", () => {
 	it("saveOAuth does not delete accounts missing from stale AuthStorage cache", async () => {
 		if (!store || !dbPath) throw new Error("test setup failed");
 
-		const staleStore = await AuthCredentialStore.open(dbPath);
-		const freshStore = await AuthCredentialStore.open(dbPath);
+		const staleStore = await SqliteAuthCredentialStore.open(dbPath);
+		const freshStore = await SqliteAuthCredentialStore.open(dbPath);
 		const staleAuthStorage = new AuthStorage(staleStore);
 		try {
 			staleStore.saveOAuth(
@@ -396,7 +396,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 				);
 			legacyDb.close();
 
-			const migratedStore = await AuthCredentialStore.open(legacyDbPath);
+			const migratedStore = await SqliteAuthCredentialStore.open(legacyDbPath);
 			try {
 				expect(readStoredIdentityRows(legacyDbPath, "anthropic")).toEqual([
 					{ identity_key: "email:legacy-anthropic@example.com", disabled_cause: null },
@@ -427,7 +427,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 		if (!tempDir) throw new Error("test setup failed");
 
 		const freshDbPath = path.join(tempDir, "fresh-schema-agent.db");
-		const freshStore = await AuthCredentialStore.open(freshDbPath);
+		const freshStore = await SqliteAuthCredentialStore.open(freshDbPath);
 		try {
 			expect(readAuthSchemaVersion(freshDbPath)).toBe(4);
 			expect(readTableSql(freshDbPath, "auth_credentials")).not.toContain("unixepoch(");
@@ -461,7 +461,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 		`);
 		futureDb.close();
 
-		const reopenedStore = await AuthCredentialStore.open(futureDbPath);
+		const reopenedStore = await SqliteAuthCredentialStore.open(futureDbPath);
 		try {
 			expect(readAuthSchemaVersion(futureDbPath)).toBe(5);
 		} finally {
@@ -512,7 +512,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 			);
 		legacyDb.close();
 
-		const migratedStore = await AuthCredentialStore.open(legacyDbPath);
+		const migratedStore = await SqliteAuthCredentialStore.open(legacyDbPath);
 		try {
 			expect(readAuthSchemaVersion(legacyDbPath)).toBe(4);
 			expect(readTableSql(legacyDbPath, "auth_credentials")).not.toContain("unixepoch(");
@@ -566,7 +566,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 			);
 		legacyDb.close();
 
-		const migratedStore = await AuthCredentialStore.open(legacyDbPath);
+		const migratedStore = await SqliteAuthCredentialStore.open(legacyDbPath);
 		try {
 			expect(readStoredIdentityRows(legacyDbPath, "openai-codex")).toEqual([
 				{ identity_key: "email:legacy-v1@example.com", disabled_cause: null },
@@ -608,7 +608,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 			);
 		legacyDb.close();
 
-		const migratedStore = await AuthCredentialStore.open(legacyDbPath);
+		const migratedStore = await SqliteAuthCredentialStore.open(legacyDbPath);
 		try {
 			expect(migratedStore.listAuthCredentials("openai-codex")).toHaveLength(0);
 			expect(readStoredIdentityRows(legacyDbPath, "openai-codex")).toEqual([

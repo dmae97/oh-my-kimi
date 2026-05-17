@@ -116,12 +116,16 @@ function cloneModelWithRequestedId(model: Model<Api>, requestedId: string): Mode
 	};
 }
 
-const providerModelIndexCache = new WeakMap<readonly Model<Api>[], Map<string, Model<Api> | null>>();
+const kProviderModelIndex = Symbol("model-resolver.providerIndex");
+type ModelsWithProviderIndex = readonly Model<Api>[] & {
+	[kProviderModelIndex]?: Map<string, Model<Api> | null>;
+};
 
 function getProviderModelIndex(availableModels: readonly Model<Api>[]): Map<string, Model<Api> | null> {
-	let index = providerModelIndexCache.get(availableModels);
-	if (index) return index;
-	index = new Map<string, Model<Api> | null>();
+	const tagged = availableModels as ModelsWithProviderIndex;
+	const cached = tagged[kProviderModelIndex];
+	if (cached) return cached;
+	const index = new Map<string, Model<Api> | null>();
 	for (const m of availableModels) {
 		const key = `${m.provider.toLowerCase()}\u0000${m.id.toLowerCase()}`;
 		if (index.has(key)) {
@@ -130,7 +134,7 @@ function getProviderModelIndex(availableModels: readonly Model<Api>[]): Map<stri
 			index.set(key, m);
 		}
 	}
-	providerModelIndexCache.set(availableModels, index);
+	tagged[kProviderModelIndex] = index;
 	return index;
 }
 

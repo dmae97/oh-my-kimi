@@ -57,18 +57,13 @@ export interface SubagentLifecyclePayload {
 	index: number;
 }
 
-const assignmentDescriptionForContextEnabled =
-	"Complete per-task instructions the subagent executes. Must follow the Target/Change/Edge Cases/Acceptance structure. Only include per-task deltas — shared background belongs in `context`.";
-const assignmentDescriptionForContextDisabled =
-	"Complete per-task instructions the subagent executes. Must follow the Target/Change/Edge Cases/Acceptance structure, and include any background that would otherwise live in `context` since shared context is disabled in this mode.";
+const assignmentDescription = "per-task instructions; self-contained";
 
-const createTaskItemSchema = (contextEnabled: boolean) =>
+const createTaskItemSchema = (_contextEnabled: boolean) =>
 	z.object({
-		id: z.string().max(48).describe("CamelCase identifier, max 48 chars"),
-		description: z.string().describe("Short one-liner for UI display only — not seen by the subagent"),
-		assignment: z
-			.string()
-			.describe(contextEnabled ? assignmentDescriptionForContextEnabled : assignmentDescriptionForContextDisabled),
+		id: z.string().max(48).describe("camelcase identifier"),
+		description: z.string().describe("ui label, not seen by subagent"),
+		assignment: z.string().describe(assignmentDescription),
 	});
 
 /** Single task item for parallel execution (default shape with context enabled). */
@@ -80,44 +75,24 @@ const createTaskSchema = (options: { isolationEnabled: boolean; simpleMode: Task
 	const itemSchema = createTaskItemSchema(contextEnabled);
 
 	let schema = z.object({
-		agent: z.string().describe("Agent type for all tasks in this batch"),
-		tasks: z
-			.array(itemSchema)
-			.describe(
-				contextEnabled
-					? "Tasks to execute in parallel. Each must be small-scoped (3-5 files max) and self-contained given context + assignment."
-					: "Tasks to execute in parallel. Each must be small-scoped (3-5 files max) and fully self-contained inside assignment because shared context is disabled.",
-			),
+		agent: z.string().describe("agent type"),
+		tasks: z.array(itemSchema).describe("tasks to execute in parallel"),
 	});
-
 	if (contextEnabled) {
 		schema = schema.extend({
-			context: z
-				.string()
-				.optional()
-				.describe(
-					"Shared background prepended to every task's assignment. Put goal, non-goals, constraints, conventions, reference paths, API contracts, and global acceptance commands here once — instead of duplicating across assignments.",
-				),
+			context: z.string().optional().describe("shared background prepended to each assignment"),
 		});
 	}
 
 	if (customSchemaEnabled) {
 		schema = schema.extend({
-			schema: z
-				.string()
-				.optional()
-				.describe(
-					"JSON-encoded JTD schema defining expected response structure. Output format belongs here — never in context or assignment.",
-				),
+			schema: z.string().optional().describe("jtd schema for expected response shape"),
 		});
 	}
 
 	if (options.isolationEnabled) {
 		schema = schema.extend({
-			isolated: z
-				.boolean()
-				.optional()
-				.describe("Run in isolated environment; returns patches. Use when tasks edit overlapping files."),
+			isolated: z.boolean().optional().describe("run in isolated env; returns patches"),
 		});
 	}
 

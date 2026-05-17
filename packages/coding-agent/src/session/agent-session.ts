@@ -18,6 +18,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import {
+	type AfterToolCallContext,
+	type AfterToolCallResult,
 	type Agent,
 	AgentBusyError,
 	type AgentEvent,
@@ -154,6 +156,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 	type: "text",
 };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
+import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
 import { invalidateHostMetadata } from "../ssh/connection-manager";
@@ -768,6 +771,10 @@ export class AgentSession {
 	// TTSR manager for time-traveling stream rules
 	#ttsrManager: TtsrManager | undefined = undefined;
 	#pendingTtsrInjections: Rule[] = [];
+	/** Per-tool TTSR rules whose `interruptMode` opted out of aborting the stream.
+	 *  These are folded into the matched tool call's `toolResult` content as an
+	 *  in-band system reminder, instead of spawning a separate follow-up turn. */
+	#perToolTtsrInjections = new Map<string, Rule[]>();
 	#ttsrAbortPending = false;
 	#ttsrRetryToken = 0;
 	#ttsrResumePromise: Promise<void> | undefined = undefined;
@@ -881,16 +888,28 @@ export class AgentSession {
 		this.#transformContext = config.transformContext ?? (messages => messages);
 		this.#onPayload = config.onPayload;
 		this.rawSseDebugBuffer = config.rawSseDebugBuffer ?? new RawSseDebugBuffer();
+		// Avoid wrapping in an `async` closure when no user callback is configured: the
+		// outer await on `#onResponse` (provider-response.ts) tolerates a sync void return,
+		// and skipping the wrapper drops a per-event `newPromiseCapability` allocation that
+		// shows up as ~3.5% self time in streaming profiles.
 		const configuredOnResponse = config.onResponse;
-		this.#onResponse = async (response, model) => {
-			this.rawSseDebugBuffer.recordResponse(response, model);
-			await configuredOnResponse?.(response, model);
-		};
+		this.#onResponse = configuredOnResponse
+			? async (response, model) => {
+					this.rawSseDebugBuffer.recordResponse(response, model);
+					await configuredOnResponse(response, model);
+				}
+			: (response, model) => {
+					this.rawSseDebugBuffer.recordResponse(response, model);
+				};
 		const configuredOnSseEvent = config.onSseEvent;
-		this.#onSseEvent = (event, model) => {
-			this.rawSseDebugBuffer.recordEvent(event, model);
-			configuredOnSseEvent?.(event, model);
-		};
+		this.#onSseEvent = configuredOnSseEvent
+			? (event, model) => {
+					this.rawSseDebugBuffer.recordEvent(event, model);
+					configuredOnSseEvent(event, model);
+				}
+			: (event, model) => {
+					this.rawSseDebugBuffer.recordEvent(event, model);
+				};
 		this.agent.setProviderResponseInterceptor(this.#onResponse);
 		this.agent.setRawSseEventInterceptor(this.#onSseEvent);
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
@@ -933,6 +952,8 @@ export class AgentSession {
 			this.#preCacheStreamingEditFile(event);
 			this.#maybeAbortStreamingEdit(event);
 		});
+		// Per-tool TTSR reminders are folded into the matched tool's result via this hook.
+		this.agent.afterToolCall = ctx => this.#ttsrAfterToolCall(ctx);
 		this.agent.providerSessionState = this.#providerSessionState;
 		this.#syncAgentSessionId();
 		this.#syncTodoPhasesFromBranch();
@@ -1326,77 +1347,87 @@ export class AgentSession {
 			if (matchContext && "delta" in assistantEvent) {
 				const matches = this.#ttsrManager.checkDelta(assistantEvent.delta, matchContext);
 				if (matches.length > 0) {
-					// Queue rules for injection; mark as injected only after successful enqueue.
-
-					this.#addPendingTtsrInjections(matches);
-
-					if (this.#shouldInterruptForTtsrMatch(matches, matchContext)) {
-						// Abort the stream immediately — do not gate on extension callbacks
-						this.#ttsrAbortPending = true;
-						this.#ensureTtsrResumePromise();
-						this.agent.abort();
-						// Notify extensions (fire-and-forget, does not block abort)
+					// Decide first: a non-interrupting tool-source match attaches to the
+					// specific tool call's result instead of driving a loop-wide follow-up.
+					const shouldInterrupt = this.#shouldInterruptForTtsrMatch(matches, matchContext);
+					const perToolId = shouldInterrupt ? undefined : this.#extractTtsrToolCallId(matchContext);
+					if (perToolId) {
+						this.#addPerToolTtsrInjections(perToolId, matches);
 						this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
-						// Schedule retry after a short delay
-						const retryToken = ++this.#ttsrRetryToken;
-						const generation = this.#promptGeneration;
-						const targetMessageTimestamp =
-							event.message.role === "assistant" ? event.message.timestamp : undefined;
-						this.#schedulePostPromptTask(
-							async () => {
-								if (this.#ttsrRetryToken !== retryToken) {
-									this.#resolveTtsrResume();
-									return;
-								}
+					} else {
+						// Queue rules for injection; mark as injected only after successful enqueue.
+						this.#addPendingTtsrInjections(matches);
 
-								const targetAssistantIndex = this.#findTtsrAssistantIndex(targetMessageTimestamp);
-								if (
-									!this.#ttsrAbortPending ||
-									this.#promptGeneration !== generation ||
-									targetAssistantIndex === -1
-								) {
+						if (shouldInterrupt) {
+							// Abort the stream immediately — do not gate on extension callbacks
+							this.#ttsrAbortPending = true;
+							this.#ensureTtsrResumePromise();
+							this.agent.abort();
+							// Notify extensions (fire-and-forget, does not block abort)
+							this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
+							// Schedule retry after a short delay
+							const retryToken = ++this.#ttsrRetryToken;
+							const generation = this.#promptGeneration;
+							const targetMessageTimestamp =
+								event.message.role === "assistant" ? event.message.timestamp : undefined;
+							this.#schedulePostPromptTask(
+								async () => {
+									if (this.#ttsrRetryToken !== retryToken) {
+										this.#resolveTtsrResume();
+										return;
+									}
+
+									const targetAssistantIndex = this.#findTtsrAssistantIndex(targetMessageTimestamp);
+									if (
+										!this.#ttsrAbortPending ||
+										this.#promptGeneration !== generation ||
+										targetAssistantIndex === -1
+									) {
+										this.#ttsrAbortPending = false;
+										this.#pendingTtsrInjections = [];
+										this.#perToolTtsrInjections.clear();
+										this.#resolveTtsrResume();
+										return;
+									}
 									this.#ttsrAbortPending = false;
-									this.#pendingTtsrInjections = [];
-									this.#resolveTtsrResume();
-									return;
-								}
-								this.#ttsrAbortPending = false;
-								const ttsrSettings = this.#ttsrManager?.getSettings();
-								if (ttsrSettings?.contextMode === "discard") {
-									// Remove the partial/aborted assistant turn from agent state
-									this.agent.replaceMessages(this.agent.state.messages.slice(0, targetAssistantIndex));
-								}
-								// Inject TTSR rules as system reminder before retry
-								const injection = this.#getTtsrInjectionContent();
-								if (injection) {
-									const details = { rules: injection.rules.map(rule => rule.name) };
-									this.agent.appendMessage({
-										role: "custom",
-										customType: "ttsr-injection",
-										content: injection.content,
-										display: false,
-										details,
-										attribution: "agent",
-										timestamp: Date.now(),
-									});
-									this.sessionManager.appendCustomMessageEntry(
-										"ttsr-injection",
-										injection.content,
-										false,
-										details,
-										"agent",
-									);
-									this.#markTtsrInjected(details.rules);
-								}
-								try {
-									await this.agent.continue();
-								} catch {
-									this.#resolveTtsrResume();
-								}
-							},
-							{ delayMs: 50 },
-						);
-						return;
+									this.#perToolTtsrInjections.clear();
+									const ttsrSettings = this.#ttsrManager?.getSettings();
+									if (ttsrSettings?.contextMode === "discard") {
+										// Remove the partial/aborted assistant turn from agent state
+										this.agent.replaceMessages(this.agent.state.messages.slice(0, targetAssistantIndex));
+									}
+									// Inject TTSR rules as system reminder before retry
+									const injection = this.#getTtsrInjectionContent();
+									if (injection) {
+										const details = { rules: injection.rules.map(rule => rule.name) };
+										this.agent.appendMessage({
+											role: "custom",
+											customType: "ttsr-injection",
+											content: injection.content,
+											display: false,
+											details,
+											attribution: "agent",
+											timestamp: Date.now(),
+										});
+										this.sessionManager.appendCustomMessageEntry(
+											"ttsr-injection",
+											injection.content,
+											false,
+											details,
+											"agent",
+										);
+										this.#markTtsrInjected(details.rules);
+									}
+									try {
+										await this.agent.continue();
+									} catch {
+										this.#resolveTtsrResume();
+									}
+								},
+								{ delayMs: 50 },
+							);
+							return;
+						}
 					}
 				}
 			}
@@ -1805,6 +1836,61 @@ export class AgentSession {
 		}
 	}
 
+	/** Tool-call id whose argument deltas triggered a TTSR match, when known. */
+	#extractTtsrToolCallId(matchContext: TtsrMatchContext): string | undefined {
+		if (matchContext.source !== "tool") return undefined;
+		const key = matchContext.streamKey;
+		if (typeof key !== "string" || !key.startsWith("toolcall:")) return undefined;
+		const id = key.slice("toolcall:".length);
+		return id.length > 0 ? id : undefined;
+	}
+
+	#addPerToolTtsrInjections(toolCallId: string, rules: Rule[]): void {
+		const bucket = this.#perToolTtsrInjections.get(toolCallId) ?? [];
+		const seen = new Set(bucket.map(rule => rule.name));
+		// Dedupe against rules already bucketed for other tool calls in this
+		// same assistant message so one rule attaches to exactly one tool call.
+		const claimedElsewhere = new Set<string>();
+		for (const [otherId, otherBucket] of this.#perToolTtsrInjections) {
+			if (otherId === toolCallId) continue;
+			for (const rule of otherBucket) claimedElsewhere.add(rule.name);
+		}
+		const newlyAdded: string[] = [];
+		for (const rule of rules) {
+			if (seen.has(rule.name) || claimedElsewhere.has(rule.name)) continue;
+			bucket.push(rule);
+			seen.add(rule.name);
+			newlyAdded.push(rule.name);
+		}
+		if (bucket.length === 0) return;
+		this.#perToolTtsrInjections.set(toolCallId, bucket);
+		// Claim the rules in the TTSR manager so subsequent deltas in this same
+		// turn (e.g. a sibling tool call's argument stream) don't re-match them.
+		// Persistence still happens in #ttsrAfterToolCall when the tool actually
+		// produces a result we can fold the reminder into.
+		if (newlyAdded.length > 0) {
+			this.#ttsrManager?.markInjectedByNames(newlyAdded);
+		}
+	}
+
+	/** `afterToolCall` hook: fold any per-tool TTSR reminders into the result. */
+	#ttsrAfterToolCall(ctx: AfterToolCallContext): AfterToolCallResult | undefined {
+		const rules = this.#perToolTtsrInjections.get(ctx.toolCall.id);
+		if (!rules || rules.length === 0) return undefined;
+		this.#perToolTtsrInjections.delete(ctx.toolCall.id);
+		const reminder = rules
+			.map(r => prompt.render(ttsrToolReminderTemplate, { name: r.name, path: r.path, content: r.content }))
+			.join("\n\n");
+		// The TTSR manager was already claimed at bucket time; only persistence remains.
+		const ruleNames = rules.map(r => r.name.trim()).filter(n => n.length > 0);
+		if (ruleNames.length > 0) {
+			this.sessionManager.appendTtsrInjection(ruleNames);
+		}
+		return {
+			content: [{ type: "text", text: reminder }, ...ctx.result.content],
+		};
+	}
+
 	#extractTtsrRuleNames(details: unknown): string[] {
 		if (!details || typeof details !== "object" || Array.isArray(details)) {
 			return [];
@@ -1855,6 +1941,11 @@ export class AgentSession {
 	}
 
 	#queueDeferredTtsrInjectionIfNeeded(assistantMsg: AssistantMessage): void {
+		if (assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error") {
+			// Tools that hadn't started by abort/error will never produce results to
+			// fold injections into — drop their stale per-tool entries.
+			this.#perToolTtsrInjections.clear();
+		}
 		if (this.#ttsrAbortPending || this.#pendingTtsrInjections.length === 0) {
 			return;
 		}
@@ -8070,11 +8161,12 @@ export class AgentSession {
 		};
 	}
 
-	async fetchUsageReports(): Promise<UsageReport[] | null> {
+	async fetchUsageReports(signal?: AbortSignal): Promise<UsageReport[] | null> {
 		const authStorage = this.#modelRegistry.authStorage;
 		if (!authStorage.fetchUsageReports) return null;
 		return authStorage.fetchUsageReports({
 			baseUrlResolver: provider => this.#modelRegistry.getProviderBaseUrl?.(provider),
+			signal,
 		});
 	}
 

@@ -1,6 +1,6 @@
+import { once } from "@oh-my-pi/pi-utils";
 import type { ModelManagerOptions } from "../model-manager";
 import { fetchCodexModels } from "../utils/discovery/codex";
-import { fetchCursorUsableModels } from "../utils/discovery/cursor";
 
 // ---------------------------------------------------------------------------
 // OpenAI Codex
@@ -45,55 +45,16 @@ export function cursorModelManagerOptions(config: CursorModelManagerConfig = {})
 		providerId: "cursor",
 		...(apiKey
 			? {
-					fetchDynamicModels: () => fetchCursorUsableModels({ apiKey, baseUrl, clientVersion }),
+					fetchDynamicModels: async () => {
+						const { fetchCursorUsableModels } = await cursorDiscovery();
+						return fetchCursorUsableModels({ apiKey, baseUrl, clientVersion });
+					},
 				}
 			: undefined),
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Amazon Bedrock
-// ---------------------------------------------------------------------------
-
-// Dynamic discovery requires AWS SDK auth (ListFoundationModels). Not yet implemented.
-
-export interface AmazonBedrockModelManagerConfig {}
-
-export function amazonBedrockModelManagerOptions(
-	_config: AmazonBedrockModelManagerConfig = {},
-): ModelManagerOptions<"bedrock-converse-stream"> {
-	return { providerId: "amazon-bedrock" };
-}
-
-// ---------------------------------------------------------------------------
-// MiniMax variants (subscription-based, no model listing endpoint)
-// ---------------------------------------------------------------------------
-
-export interface MinimaxModelManagerConfig {}
-
-export function minimaxModelManagerOptions(
-	_config: MinimaxModelManagerConfig = {},
-): ModelManagerOptions<"anthropic-messages"> {
-	return { providerId: "minimax" };
-}
-
-export function minimaxCnModelManagerOptions(
-	_config: MinimaxModelManagerConfig = {},
-): ModelManagerOptions<"anthropic-messages"> {
-	return { providerId: "minimax-cn" };
-}
-
-export function minimaxCodeModelManagerOptions(
-	_config: MinimaxModelManagerConfig = {},
-): ModelManagerOptions<"openai-completions"> {
-	return { providerId: "minimax-code" };
-}
-
-export function minimaxCodeCnModelManagerOptions(
-	_config: MinimaxModelManagerConfig = {},
-): ModelManagerOptions<"openai-completions"> {
-	return { providerId: "minimax-code-cn" };
-}
+const cursorDiscovery = once(() => import("../utils/discovery/cursor"));
 
 // ---------------------------------------------------------------------------
 // Zai

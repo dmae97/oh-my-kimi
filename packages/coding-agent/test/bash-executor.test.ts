@@ -10,6 +10,9 @@ import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
 // Matches the schema default for `tools.artifactHeadBytes` (20 KB) used by
 // OutputSink when bash-executor pulls settings via resolveOutputSinkHeadBytes.
 const ARTIFACT_HEAD_BYTES_DEFAULT = 20 * 1024;
+const BACKGROUND_COMPLETION_RACE_MS = 750;
+const KILL_MARKER_DELAY_SECONDS = "0.4";
+const KILL_MARKER_ASSERTION_WAIT_MS = 900;
 
 function makeTempDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "omp-bash-exec-"));
@@ -95,13 +98,18 @@ describe("executeBash", () => {
 		if (process.platform === "win32") {
 			return;
 		}
-		const start = Date.now();
-		const result = await executeBash("{ sleep 5; } & echo fg", {
+		const runPromise = executeBash("{ sleep 2; } & echo fg", {
 			cwd: tempDir,
 			timeout: 5000,
 		});
-		expect(result.output).toContain("fg");
-		expect(Date.now() - start).toBeLessThan(3000);
+		const timed = await Promise.race([
+			runPromise.then(result => ({ type: "result" as const, result })),
+			Bun.sleep(BACKGROUND_COMPLETION_RACE_MS).then(() => ({ type: "timeout" as const })),
+		]);
+		expect(timed.type).toBe("result");
+		if (timed.type === "result") {
+			expect(timed.result.output).toContain("fg");
+		}
 	});
 
 	it("returns a real PID for background external commands", async () => {
@@ -369,13 +377,13 @@ describe("executeBash", () => {
 	it("completes even when background job keeps stdout pipe open", async () => {
 		if (process.platform === "win32") return;
 
-		const runPromise = executeBash("{ sleep 3; echo late; } & echo immediate", {
+		const runPromise = executeBash("{ sleep 2; echo late; } & echo immediate", {
 			cwd: tempDir,
 			timeout: 5000,
 		});
 		const timed = await Promise.race([
 			runPromise.then(result => ({ type: "result" as const, result })),
-			Bun.sleep(1500).then(() => ({ type: "timeout" as const })),
+			Bun.sleep(BACKGROUND_COMPLETION_RACE_MS).then(() => ({ type: "timeout" as const })),
 		]);
 
 		expect(timed.type).toBe("result");
@@ -389,17 +397,18 @@ describe("executeBash", () => {
 		if (process.platform === "win32") return;
 
 		const marker = path.join(tempDir, "marker.txt");
+		const markerEscaped = marker.replace(/'/g, "'\\''");
 
-		// Command creates marker after 2s, but we timeout after 100ms
-		const result = await executeBash(`sleep 2 && echo done > ${marker}`, {
+		// Command creates marker after a short delay, but we timeout before then.
+		const result = await executeBash(`sleep ${KILL_MARKER_DELAY_SECONDS} && echo done > '${markerEscaped}'`, {
 			cwd: tempDir,
 			timeout: 100,
 		});
 
 		expect(result.cancelled).toBe(true);
 
-		// Wait longer than the command would have taken
-		await Bun.sleep(3000);
+		// Wait longer than the command would have needed to create the marker.
+		await Bun.sleep(KILL_MARKER_ASSERTION_WAIT_MS);
 
 		// If process was killed (not orphaned), marker should NOT exist
 		expect(fs.existsSync(marker)).toBe(false);
@@ -411,14 +420,17 @@ describe("executeBash", () => {
 		const marker = path.join(tempDir, "marker-bg.txt");
 		const markerEscaped = marker.replace(/'/g, "'\\''");
 
-		const result = await executeBash(`{ sleep 2; echo done > '${markerEscaped}'; } & sleep 10`, {
-			cwd: tempDir,
-			timeout: 100,
-		});
+		const result = await executeBash(
+			`{ sleep ${KILL_MARKER_DELAY_SECONDS}; echo done > '${markerEscaped}'; } & sleep 10`,
+			{
+				cwd: tempDir,
+				timeout: 100,
+			},
+		);
 
 		expect(result.cancelled).toBe(true);
 
-		await Bun.sleep(3000);
+		await Bun.sleep(KILL_MARKER_ASSERTION_WAIT_MS);
 		expect(fs.existsSync(marker)).toBe(false);
 	});
 
@@ -429,19 +441,23 @@ describe("executeBash", () => {
 		const markerEscaped = marker.replace(/'/g, "'\\''");
 		const controller = new AbortController();
 
-		const promise = executeBash(`{ sleep 2; echo done > '${markerEscaped}'; } & sleep 10`, {
-			cwd: tempDir,
-			timeout: 10000,
-			signal: controller.signal,
-		});
+		const promise = executeBash(
+			`{ sleep ${KILL_MARKER_DELAY_SECONDS}; echo done > '${markerEscaped}'; } & sleep 10`,
+			{
+				cwd: tempDir,
+				timeout: 10000,
+				signal: controller.signal,
+			},
+		);
 
 		await Bun.sleep(100);
 		controller.abort();
 		const result = await promise;
 
 		expect(result.cancelled).toBe(true);
+		expect(result.output).toContain("Command cancelled");
 
-		await Bun.sleep(3000);
+		await Bun.sleep(KILL_MARKER_ASSERTION_WAIT_MS);
 		expect(fs.existsSync(marker)).toBe(false);
 	});
 
@@ -449,24 +465,26 @@ describe("executeBash", () => {
 		if (process.platform === "win32") return;
 
 		const marker = path.join(tempDir, "marker.txt");
+		const markerEscaped = marker.replace(/'/g, "'\\''");
 		const controller = new AbortController();
 
-		// Command creates marker after 2s
-		const promise = executeBash(`sleep 2 && echo done > ${marker}`, {
+		// Command creates marker after a short delay.
+		const promise = executeBash(`sleep ${KILL_MARKER_DELAY_SECONDS} && echo done > '${markerEscaped}'`, {
 			cwd: tempDir,
 			timeout: 10000,
 			signal: controller.signal,
 		});
 
-		// Abort after 100ms
+		// Abort before the command can create the marker.
 		await Bun.sleep(100);
 		controller.abort();
 		const result = await promise;
 
 		expect(result.cancelled).toBe(true);
+		expect(result.output).toContain("Command cancelled");
 
-		// Wait longer than the command would have taken
-		await Bun.sleep(3000);
+		// Wait longer than the command would have needed to create the marker.
+		await Bun.sleep(KILL_MARKER_ASSERTION_WAIT_MS);
 
 		// If process was killed (not orphaned), marker should NOT exist
 		expect(fs.existsSync(marker)).toBe(false);

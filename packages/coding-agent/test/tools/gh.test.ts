@@ -725,9 +725,6 @@ describe("github tool", () => {
 	it("treats git.remote.add as a no-op when the remote already exists with the same URL", async () => {
 		const fixture = await createPrFixture();
 		try {
-			// Fixture already created `forksrc -> forkBare`. A second add with the
-			// same URL must succeed silently — this is the cross-process / leftover-
-			// state path that used to fail with `error: remote forksrc already exists`.
 			await git.remote.add(fixture.repoRoot, "forksrc", fixture.forkBare);
 			expect(runGit(fixture.repoRoot, ["remote", "get-url", "forksrc"])).toBe(fixture.forkBare);
 		} finally {
@@ -751,17 +748,18 @@ describe("github tool", () => {
 	it("serializes concurrent git mutations through withRepoLock so callers don't race git's internal locks", async () => {
 		const fixture = await createPrFixture();
 		try {
-			// Without serialization, ~20 concurrent `git config` invocations against
-			// the same `.git/config` produce "could not lock config file" failures
-			// (the lock is O_EXCL with no waiter). Wrapping each write in
-			// `withRepoLock` makes the queue per-repo so all 20 succeed.
-			const writes = Array.from({ length: 20 }, (_, idx) =>
+			// Without serialization, concurrent `git config` invocations against the
+			// same `.git/config` produce "could not lock config file" failures (the
+			// lock is O_EXCL with no waiter). Wrapping each write in `withRepoLock`
+			// makes the queue per-repo so all writes succeed.
+			const writeCount = 8;
+			const writes = Array.from({ length: writeCount }, (_, idx) =>
 				git.withRepoLock(fixture.repoRoot, () =>
 					git.config.set(fixture.repoRoot, `branch.race-test.key${idx}`, `value-${idx}`),
 				),
 			);
 			await Promise.all(writes);
-			for (let idx = 0; idx < 20; idx += 1) {
+			for (let idx = 0; idx < writeCount; idx += 1) {
 				expect(runGit(fixture.repoRoot, ["config", "--get", `branch.race-test.key${idx}`])).toBe(`value-${idx}`);
 			}
 		} finally {

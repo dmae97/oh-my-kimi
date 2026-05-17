@@ -234,6 +234,13 @@ export const SETTINGS_SCHEMA = {
 	// ────────────────────────────────────────────────────────────────────────
 	lastChangelogVersion: { type: "string", default: undefined },
 
+	// Auth broker — credentials proxied through a remote `omp auth-broker serve`
+	// host. Hidden from the UI; populate via env vars or hand-edited config.yml.
+	// Env (`OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN`) takes precedence so
+	// per-machine overrides remain trivial.
+	"auth.broker.url": { type: "string", default: undefined },
+	"auth.broker.token": { type: "string", default: undefined },
+
 	autoResume: {
 		type: "boolean",
 		default: false,
@@ -906,6 +913,16 @@ export const SETTINGS_SCHEMA = {
 				{ value: "15", label: "15 items" },
 				{ value: "20", label: "20 items" },
 			],
+		},
+	},
+
+	emojiAutocomplete: {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			label: "Emoji Autocomplete",
+			description: "Suggest emojis from `:name:` shortcodes and expand text emoticons like `:D` or `:-)`",
 		},
 	},
 
@@ -2634,6 +2651,41 @@ export const SETTINGS_SCHEMA = {
 			label: "Auto QA",
 			description: "Enable automated tool issue reporting (report_tool_issue) for all agents",
 		},
+	},
+
+	"dev.autoqaPush.endpoint": {
+		type: "string",
+		// Bundled QA collector — runs `/work/pi-www/autoqa` behind qa.omp.sh.
+		// Override via `PI_AUTO_QA_PUSH_URL` or `dev.autoqaPush.endpoint`
+		// in `config.yml` to point at a self-hosted instance.
+		default: "https://qa.omp.sh/v1/grievances" as const,
+		ui: {
+			tab: "tools",
+			label: "Auto QA Push Endpoint",
+			description: "Full URL that receives the JSON payload (default ships to https://qa.omp.sh/v1/grievances)",
+		},
+	},
+
+	"dev.autoqaPush.token": {
+		type: "string",
+		default: undefined,
+	},
+
+	/**
+	 * User decision on sharing automatic `report_tool_issue` grievances.
+	 *
+	 *   - `"unset"`  — never asked; the first `report_tool_issue` invocation
+	 *                  pops a consent dialog and persists the answer here.
+	 *   - `"granted"` — record and (when push is configured) ship grievances.
+	 *   - `"denied"`  — silently no-op every `report_tool_issue` call.
+	 *
+	 * Owned by `packages/coding-agent/src/tools/report-tool-issue.ts` via the
+	 * process-global consent handler registered by `InteractiveMode`.
+	 */
+	"dev.autoqa.consent": {
+		type: "enum",
+		values: ["unset", "granted", "denied"] as const,
+		default: "unset" as const,
 	},
 
 	"thinkingBudgets.minimal": { type: "number", default: 1024 },

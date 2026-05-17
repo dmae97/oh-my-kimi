@@ -18,7 +18,7 @@ procmgr.scrubProcessEnv();
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
  */
-import { type CommandEntry, run } from "@oh-my-pi/pi-utils/cli";
+import { type CliConfig, type CommandEntry, run } from "@oh-my-pi/pi-utils/cli";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -32,6 +32,8 @@ process.title = APP_NAME;
 const commands: CommandEntry[] = [
 	{ name: "launch", load: () => import("./commands/launch").then(m => m.default) },
 	{ name: "acp", load: () => import("./commands/acp").then(m => m.default) },
+	{ name: "auth-broker", load: () => import("./commands/auth-broker").then(m => m.default) },
+	{ name: "auth-gateway", load: () => import("./commands/auth-gateway").then(m => m.default) },
 	{ name: "agents", load: () => import("./commands/agents").then(m => m.default) },
 	{ name: "commit", load: () => import("./commands/commit").then(m => m.default) },
 	{ name: "config", load: () => import("./commands/config").then(m => m.default) },
@@ -47,7 +49,7 @@ const commands: CommandEntry[] = [
 	{ name: "search", load: () => import("./commands/web-search").then(m => m.default), aliases: ["q"] },
 ];
 
-async function showHelp(config: import("@oh-my-pi/pi-utils/cli").CliConfig): Promise<void> {
+async function showHelp(config: CliConfig): Promise<void> {
 	const { renderRootHelp } = await import("@oh-my-pi/pi-utils/cli");
 	const { getExtraHelpText } = await import("./cli/args");
 	renderRootHelp(config);

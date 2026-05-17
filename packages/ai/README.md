@@ -89,7 +89,7 @@ npm install @oh-my-pi/pi-ai
 ## Quick Start
 
 ```typescript
-import { z, getModel, stream, complete, Context, Tool, StringEnum } from "@oh-my-pi/pi-ai";
+import { z, getModel, stream, complete, Context, Tool } from "@oh-my-pi/pi-ai";
 
 // Fully typed with auto-complete support for both providers and models
 const model = getModel("openai", "gpt-4o-mini");
@@ -221,7 +221,7 @@ Tools enable LLMs to interact with external systems. This library uses **Zod** s
 ### Defining Tools
 
 ```typescript
-import { z, Tool, StringEnum } from "@oh-my-pi/pi-ai";
+import { z, Tool } from "@oh-my-pi/pi-ai";
 
 // Define tool parameters with Zod
 const weatherTool: Tool = {
@@ -229,12 +229,9 @@ const weatherTool: Tool = {
 	description: "Get current weather for a location",
 	parameters: z.object({
 		location: z.string().describe("City name or coordinates"),
-		units: StringEnum(["celsius", "fahrenheit"], { default: "celsius" }),
+		units: z.enum(["celsius", "fahrenheit"]).default("celsius"),
 	}),
 };
-
-// Note: For Google API compatibility, use the StringEnum helper instead of z.enum alone
-// when you need wire-compatible { type: "string", enum: [...] } shapes.
 
 const bookMeetingTool: Tool = {
 	name: "book_meeting",

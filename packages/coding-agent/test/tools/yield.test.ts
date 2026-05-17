@@ -475,7 +475,13 @@ describe("YieldTool", () => {
 			}),
 		);
 
-		expect(tool.strict).toBe(true);
+		// Object-valued enums cannot be reduced to a single `type` keyword, so
+		// strict mode falls back to non-strict — that's the strict-mode
+		// contract, separately exercised in `schema-strict-mode.test.ts`. What
+		// this test guards is that the literal `$ref: "literal"` inside the
+		// enum value is treated as opaque data (not mistaken for an unresolved
+		// schema reference that would discard the enum entirely).
+		expect(tool.strict).toBe(false);
 		const result = await tool.execute("call-literal-ref-enum", {
 			result: { data: { $ref: "literal" } },
 		} as never);

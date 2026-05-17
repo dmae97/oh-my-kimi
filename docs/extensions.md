@@ -125,8 +125,7 @@ In interactive mode, `input` handlers run before the built-in first-message auto
 Also exposed:
 
 - `pi.logger`
-- `pi.zod` (injected `zod` module — **preferred** for new tool schemas)
-- `pi.typebox` (zod-backed `Type.*` shim — retained for legacy extension compat)
+- `pi.zod` (injected `zod` module — use for tool parameter schemas)
 - `pi.pi` (package exports)
 
 ### Message delivery semantics

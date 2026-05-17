@@ -5,7 +5,7 @@
  */
 import type { AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { TSchema } from "@oh-my-pi/pi-ai";
-import { sanitizeSchemaForMCP } from "@oh-my-pi/pi-ai/utils/schema";
+import { normalizeSchemaForMCP } from "@oh-my-pi/pi-ai/utils/schema";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import type { SourceMeta } from "../capability/types";
 import type {
@@ -231,7 +231,7 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		this.name = createMCPToolName(connection.name, tool.name);
 		this.label = `${connection.name}/${tool.name}`;
 		this.description = tool.description ?? `MCP tool from ${connection.name}`;
-		this.parameters = sanitizeSchemaForMCP(tool.inputSchema) as TSchema;
+		this.parameters = normalizeSchemaForMCP(tool.inputSchema) as TSchema;
 		this.mcpToolName = tool.name;
 		this.mcpServerName = connection.name;
 	}
@@ -324,7 +324,7 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		this.name = createMCPToolName(serverName, tool.name);
 		this.label = `${serverName}/${tool.name}`;
 		this.description = tool.description ?? `MCP tool from ${serverName}`;
-		this.parameters = sanitizeSchemaForMCP(tool.inputSchema) as TSchema;
+		this.parameters = normalizeSchemaForMCP(tool.inputSchema) as TSchema;
 		this.mcpToolName = tool.name;
 		this.mcpServerName = serverName;
 		this.#fallbackProvider = source?.provider;

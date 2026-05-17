@@ -139,9 +139,12 @@ interface ToolStart {
  * begin (provider crash, tracer swap mid-run), the corresponding record is
  * still emitted with `latencyMs: 0` rather than throwing.
  */
+const kChatStart = Symbol("agent.run-collector.chatStart");
+const kToolStart = Symbol("agent.run-collector.toolStart");
+type SpanWithChatStart = Span & { [kChatStart]?: ChatStart };
+type SpanWithToolStart = Span & { [kToolStart]?: ToolStart };
+
 export class AgentRunCollector {
-	readonly #chatStarts = new WeakMap<Span, ChatStart>();
-	readonly #toolStarts = new WeakMap<Span, ToolStart>();
 	readonly #chats: ChatRecord[] = [];
 	readonly #tools: ToolRecord[] = [];
 	readonly #availableTools = new Set<string>();
@@ -179,12 +182,12 @@ export class AgentRunCollector {
 		init: { readonly stepNumber: number; readonly model: Model; readonly provider?: string },
 	): void {
 		const provider = init.provider ?? init.model.provider;
-		this.#chatStarts.set(span, {
+		(span as SpanWithChatStart)[kChatStart] = {
 			stepNumber: init.stepNumber,
 			startedAtMs: performance.now(),
 			model: init.model.id,
 			provider,
-		});
+		};
 		this.#modelsUsed.add(init.model.id);
 		if (provider) this.#providersUsed.add(provider);
 	}
@@ -197,8 +200,8 @@ export class AgentRunCollector {
 			readonly costUnavailableReason: string | undefined;
 		},
 	): void {
-		const start = this.#chatStarts.get(span);
-		this.#chatStarts.delete(span);
+		const start = (span as SpanWithChatStart)[kChatStart];
+		(span as SpanWithChatStart)[kChatStart] = undefined;
 		const usage = message.usage;
 		// Public surface: `inputTokens` is the total cost-bearing input the
 		// provider charged for, so it must include cache_read + cache_write.
@@ -237,8 +240,8 @@ export class AgentRunCollector {
 	 * appear in the run summary.
 	 */
 	failChat(span: Span, fields: { readonly errorType: string }): void {
-		const start = this.#chatStarts.get(span);
-		this.#chatStarts.delete(span);
+		const start = (span as SpanWithChatStart)[kChatStart];
+		(span as SpanWithChatStart)[kChatStart] = undefined;
 		this.#chats.push({
 			stepNumber: start?.stepNumber ?? -1,
 			model: start?.model ?? "",
@@ -258,17 +261,17 @@ export class AgentRunCollector {
 	}
 
 	beginTool(span: Span, init: { readonly toolCallId: string; readonly toolName: string }): void {
-		this.#toolStarts.set(span, {
+		(span as SpanWithToolStart)[kToolStart] = {
 			toolCallId: init.toolCallId,
 			toolName: init.toolName,
 			startedAtMs: performance.now(),
-		});
+		};
 		this.#invokedTools.add(init.toolName);
 	}
 
 	endTool(span: Span, fields: { readonly status: ToolStatus; readonly errorType: string | undefined }): void {
-		const start = this.#toolStarts.get(span);
-		this.#toolStarts.delete(span);
+		const start = (span as SpanWithToolStart)[kToolStart];
+		(span as SpanWithToolStart)[kToolStart] = undefined;
 		this.#tools.push({
 			toolCallId: start?.toolCallId ?? "",
 			toolName: start?.toolName ?? "",

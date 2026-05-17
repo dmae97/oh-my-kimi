@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import * as readline from "node:readline";
-import { AuthCredentialStore } from "./auth-storage";
+import { SqliteAuthCredentialStore } from "./auth-storage";
 import { getOAuthProviders } from "./utils/oauth";
 import type { OAuthCredentials, OAuthProvider } from "./utils/oauth/types";
 
@@ -60,7 +60,7 @@ async function login(provider: OAuthProvider): Promise<void> {
 	const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
 	const promptFn = (msg: string) => prompt(rl, `${msg} `);
-	const storage = await AuthCredentialStore.open();
+	const storage = await SqliteAuthCredentialStore.open();
 
 	try {
 		let credentials: OAuthCredentials;
@@ -387,7 +387,7 @@ Examples:
 	}
 
 	if (command === "status") {
-		const storage = await AuthCredentialStore.open();
+		const storage = await SqliteAuthCredentialStore.open();
 		try {
 			const providers = storage.listProviders();
 			if (providers.length === 0) {
@@ -426,7 +426,7 @@ Examples:
 
 	if (command === "logout") {
 		let provider = args[1] as OAuthProvider | undefined;
-		const storage = await AuthCredentialStore.open();
+		const storage = await SqliteAuthCredentialStore.open();
 
 		try {
 			if (!provider) {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { Models } from "@google/genai";
 import { streamGoogle } from "@oh-my-pi/pi-ai/providers/google";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import { hookFetch } from "@oh-my-pi/pi-utils";
 
 const model: Model<"google-generative-ai"> = {
 	id: "gemini-3-pro-preview",
@@ -20,9 +20,11 @@ async function captureGooglePayload(
 	context: Context,
 ): Promise<{ config: { systemInstruction?: unknown }; contents: unknown[] }> {
 	let captured: { config: { systemInstruction?: unknown }; contents: unknown[] } | undefined;
-	vi.spyOn(Models.prototype, "generateContentStream").mockImplementation(async function* () {
-		// No chunks needed; the test only validates the generated request payload.
-	} as never);
+	// Intercept the outgoing REST call so the streamGoogle promise resolves cleanly without
+	// hitting the network. The test only validates `onPayload` (which fires before fetch).
+	using _hook = hookFetch(
+		async () => new Response("", { status: 200, headers: { "content-type": "text/event-stream" } }),
+	);
 
 	await streamGoogle(model, context, {
 		apiKey: "test-key",

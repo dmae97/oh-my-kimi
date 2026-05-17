@@ -41,35 +41,8 @@ interface ResolvedCanonicalModel {
 	source: CanonicalModelSource;
 }
 
-const TRAILING_CANONICAL_MARKERS = [
-	"thinking",
-	"customtools",
-	"high",
-	"low",
-	"medium",
-	"minimal",
-	"xhigh",
-	"free",
-	"cloud",
-	"exacto",
-	"nitro",
-	"original",
-	"optimized",
-	"nvfp4",
-	"fp8",
-	"fp4",
-	"bf16",
-	"int8",
-	"int4",
-] as const;
-const TRAILING_MARKER_SUFFIXES: readonly string[] = (() => {
-	const suffixes: string[] = [];
-	for (const marker of TRAILING_CANONICAL_MARKERS) {
-		const lower = marker.toLowerCase();
-		suffixes.push(`-${lower}`, `:${lower}`);
-	}
-	return suffixes;
-})();
+const TRAILING_MARKER_PATTERN =
+	/[-:](?:thinking|customtools|high|low|medium|minimal|xhigh|free|cloud|exacto|nitro|original|optimized|nvfp4|fp8|fp4|bf16|int8|int4)$/i;
 const WRAPPER_PREFIXES = ["duo-chat-"] as const;
 
 let referenceDataCache: CanonicalReferenceData | undefined;
@@ -77,7 +50,10 @@ const EMPTY_COMPILED_EQUIVALENCE: CompiledEquivalenceConfig = {
 	overrides: new Map<string, string>(),
 	exclude: new Set<string>(),
 };
-const resolutionCache: WeakMap<CompiledEquivalenceConfig, WeakMap<Model<Api>, ResolvedCanonicalModel>> = new WeakMap();
+const kModelResolutionCache = Symbol("model-equivalence.resolutionCache");
+interface CompiledEquivalenceConfigWithCache extends CompiledEquivalenceConfig {
+	[kModelResolutionCache]?: WeakMap<Model<Api>, ResolvedCanonicalModel>;
+}
 const FAMILY_EXTRACTION_PATTERNS = [
 	/(?:^|[/:._-])((?:claude|gemini|gpt|grok|glm|qwen|minimax|kimi|deepseek|llama|gemma|nova|mistral|ministral|pixtral|codestral|devstral|magistral|ernie|doubao|seed|aion|olmo|molmo|nemotron|palmyra|command|codex|coder|o[1345])[-a-z0-9.]+)(?::|$)/i,
 	/(?:^|[/:._-])((?:claude|gemini|gpt|grok|glm|qwen|minimax|kimi|deepseek|llama|gemma|nova|mistral|ministral|pixtral|codestral|devstral|magistral|ernie|doubao|seed|aion|olmo|molmo|nemotron|palmyra|command|codex|coder|o[1345])[-a-z0-9.]+(?:[-_/][a-z0-9.]+)*)(?::|$)/i,
@@ -172,13 +148,12 @@ function addCanonicalCandidate(candidates: Set<string>, candidate: string): void
 }
 
 function stripTrailingMarker(candidate: string): string | undefined {
-	const lower = candidate.toLowerCase();
-	for (const suffix of TRAILING_MARKER_SUFFIXES) {
-		if (lower.endsWith(suffix)) {
-			return candidate.slice(0, -suffix.length);
-		}
-	}
-	return undefined;
+	const match = TRAILING_MARKER_PATTERN.exec(candidate);
+	return match ? candidate.slice(0, match.index) : undefined;
+}
+
+function hasTrailingMarker(candidate: string): boolean {
+	return TRAILING_MARKER_PATTERN.test(candidate);
 }
 
 function lowercaseCandidate(candidate: string): string | undefined {
@@ -186,23 +161,41 @@ function lowercaseCandidate(candidate: string): string | undefined {
 	return lowercased !== candidate ? lowercased : undefined;
 }
 
+const STRIP_SYNTHETIC_PREFIX_PATTERN = /^hf:/i;
+const STRIP_LATEST_SUFFIX_PATTERN = /-latest$/i;
+const STRIP_LEGACY_GLM_TURBO_PATTERN = /^(glm-4(?:\.\d+)?v?)-turbo$/i;
+const REORDER_ANTHROPIC_FAMILY_PATTERN = /^claude-(\d+(?:[.-]\d+)+)-(opus|sonnet|haiku)$/i;
+const STRIP_PROVIDER_VERSION_SUFFIX_PATTERN = /-v\d+(?::\d+)?$/i;
+const STRIP_DATE_SUFFIX_PATTERN = /-\d{8}$/i;
+const INSERT_ATTACHED_FAMILY_VERSION_SEPARATOR_PATTERN =
+	/(^|[/:._-])((?:claude|gemini|gpt|grok|glm|qwen|minimax|kimi|deepseek|llama|gemma|nova|mistral|ministral|pixtral|codestral|devstral|magistral|ernie|doubao|seed|aion|olmo|molmo|nemotron|palmyra|command|codex|coder))(\d+(?:[.-]\d+)*)(?=$|[-_/.:a-z])/gi;
+const SERIES_MINOR_DOT_TO_DASH_PATTERN = /(^|[/:._-])([a-z])(\d)\.(\d)(?=$|[-_/.:a-z])/gi;
+const SERIES_MINOR_DASH_TO_DOT_PATTERN = /(^|[/:._-])([a-z])(\d)-(\d)(?=$|[-_/.:a-z])/gi;
+const EXPAND_COMPACT_SERIES_MINOR_PATTERN = /(^|[/:._-])([a-z])(\d)(\d)(?=$|[-_/.:a-z])/gi;
+const NAMESPACE_SUFFIX_BOUNDARY_PATTERN = /[/:.]/;
+const NAMESPACE_SUFFIX_ALPHA_PATTERN = /[a-z]/i;
+const NAMESPACE_SUFFIX_DIGIT_PATTERN = /\d/;
+const SHORT_VERSION_DOT_TO_DASH_PATTERN = /(^|[-_/])(\d{1,2})\.(\d{1,2})(?=$|[-_a-z])/gi;
+const SHORT_VERSION_DASH_TO_DOT_PATTERN = /(^|[-_/])(\d{1,2})-(\d{1,2})(?=$|[-_a-z])/gi;
+const EXPAND_COMPACT_MINOR_PATTERN = /(^|[-_/])(\d)(\d)(?=$|[-_a-z])/g;
+
 function stripSyntheticPrefix(candidate: string): string | undefined {
-	const stripped = candidate.replace(/^hf:/i, "");
+	const stripped = candidate.replace(STRIP_SYNTHETIC_PREFIX_PATTERN, "");
 	return stripped !== candidate ? stripped : undefined;
 }
 
 function stripLatestSuffix(candidate: string): string | undefined {
-	const stripped = candidate.replace(/-latest$/i, "");
+	const stripped = candidate.replace(STRIP_LATEST_SUFFIX_PATTERN, "");
 	return stripped !== candidate ? stripped : undefined;
 }
 
 function stripLegacyGlmTurboSuffix(candidate: string): string | undefined {
-	const stripped = candidate.replace(/^(glm-4(?:\.\d+)?v?)-turbo$/i, "$1");
+	const stripped = candidate.replace(STRIP_LEGACY_GLM_TURBO_PATTERN, "$1");
 	return stripped !== candidate ? stripped : undefined;
 }
 
 function reorderAnthropicFamily(candidate: string): string | undefined {
-	const match = /^claude-(\d+(?:[.-]\d+)+)-(opus|sonnet|haiku)$/i.exec(candidate);
+	const match = REORDER_ANTHROPIC_FAMILY_PATTERN.exec(candidate);
 	if (!match) {
 		return undefined;
 	}
@@ -211,30 +204,27 @@ function reorderAnthropicFamily(candidate: string): string | undefined {
 }
 
 function stripProviderVersionSuffix(candidate: string): string | undefined {
-	const stripped = candidate.replace(/-v\d+(?::\d+)?$/i, "");
+	const stripped = candidate.replace(STRIP_PROVIDER_VERSION_SUFFIX_PATTERN, "");
 	return stripped !== candidate ? stripped : undefined;
 }
 
 function stripDateSuffix(candidate: string): string | undefined {
-	const stripped = candidate.replace(/-\d{8}$/i, "");
+	const stripped = candidate.replace(STRIP_DATE_SUFFIX_PATTERN, "");
 	return stripped !== candidate ? stripped : undefined;
 }
 
 function insertAttachedFamilyVersionSeparator(candidate: string): string | undefined {
-	const inserted = candidate.replace(
-		/(^|[/:._-])((?:claude|gemini|gpt|grok|glm|qwen|minimax|kimi|deepseek|llama|gemma|nova|mistral|ministral|pixtral|codestral|devstral|magistral|ernie|doubao|seed|aion|olmo|molmo|nemotron|palmyra|command|codex|coder))(\d+(?:[.-]\d+)*)(?=$|[-_/.:a-z])/gi,
-		"$1$2-$3",
-	);
+	const inserted = candidate.replace(INSERT_ATTACHED_FAMILY_VERSION_SEPARATOR_PATTERN, "$1$2-$3");
 	return inserted !== candidate ? inserted : undefined;
 }
 
 function toggleSeriesMinorVersionSeparators(candidate: string): string[] {
 	const toggled = new Set<string>();
-	const dotToDash = candidate.replace(/(^|[/:._-])([a-z])(\d)\.(\d)(?=$|[-_/.:a-z])/gi, "$1$2$3-$4");
+	const dotToDash = candidate.replace(SERIES_MINOR_DOT_TO_DASH_PATTERN, "$1$2$3-$4");
 	if (dotToDash !== candidate) {
 		toggled.add(dotToDash);
 	}
-	const dashToDot = candidate.replace(/(^|[/:._-])([a-z])(\d)-(\d)(?=$|[-_/.:a-z])/gi, "$1$2$3.$4");
+	const dashToDot = candidate.replace(SERIES_MINOR_DASH_TO_DOT_PATTERN, "$1$2$3.$4");
 	if (dashToDot !== candidate) {
 		toggled.add(dashToDot);
 	}
@@ -243,33 +233,51 @@ function toggleSeriesMinorVersionSeparators(candidate: string): string[] {
 
 function expandCompactSeriesMinorVersions(candidate: string): string[] {
 	const expanded = new Set<string>();
-	const compactToDash = candidate.replace(/(^|[/:._-])([a-z])(\d)(\d)(?=$|[-_/.:a-z])/gi, "$1$2$3-$4");
+	const compactToDash = candidate.replace(EXPAND_COMPACT_SERIES_MINOR_PATTERN, "$1$2$3-$4");
 	if (compactToDash !== candidate) {
 		expanded.add(compactToDash);
 	}
-	const compactToDot = candidate.replace(/(^|[/:._-])([a-z])(\d)(\d)(?=$|[-_/.:a-z])/gi, "$1$2$3.$4");
+	const compactToDot = candidate.replace(EXPAND_COMPACT_SERIES_MINOR_PATTERN, "$1$2$3.$4");
 	if (compactToDot !== candidate) {
 		expanded.add(compactToDot);
 	}
 	return [...expanded];
 }
 
+// Bounded FIFO memo: pure function of `candidate`. Cached arrays are read-only at
+// every callsite (they are iterated to push into a queue — never mutated), so we
+// safely return the same instance. Cap keeps memory bounded under adversarial
+// model-id churn.
+const QUALIFIED_NAMESPACE_SUFFIX_CACHE = new Map<string, string[]>();
+const QUALIFIED_NAMESPACE_SUFFIX_CACHE_CAP = 256;
 function getQualifiedNamespaceSuffixes(candidate: string): string[] {
+	const cached = QUALIFIED_NAMESPACE_SUFFIX_CACHE.get(candidate);
+	if (cached !== undefined) {
+		return cached;
+	}
 	const results = new Set<string>();
 	for (let index = 1; index < candidate.length; index += 1) {
-		if (!/[/:.]/.test(candidate[index - 1]!)) {
+		if (!NAMESPACE_SUFFIX_BOUNDARY_PATTERN.test(candidate[index - 1]!)) {
 			continue;
 		}
 		const suffix = candidate.slice(index);
 		if (suffix.length < 4) {
 			continue;
 		}
-		if (!/[a-z]/i.test(suffix) || !/\d/.test(suffix)) {
+		if (!NAMESPACE_SUFFIX_ALPHA_PATTERN.test(suffix) || !NAMESPACE_SUFFIX_DIGIT_PATTERN.test(suffix)) {
 			continue;
 		}
 		addCanonicalCandidate(results, suffix);
 	}
-	return [...results];
+	const output = [...results];
+	if (QUALIFIED_NAMESPACE_SUFFIX_CACHE.size >= QUALIFIED_NAMESPACE_SUFFIX_CACHE_CAP) {
+		const oldest = QUALIFIED_NAMESPACE_SUFFIX_CACHE.keys().next().value;
+		if (oldest !== undefined) {
+			QUALIFIED_NAMESPACE_SUFFIX_CACHE.delete(oldest);
+		}
+	}
+	QUALIFIED_NAMESPACE_SUFFIX_CACHE.set(candidate, output);
+	return output;
 }
 
 function extractUpstreamFamilyCandidate(candidate: string): string | undefined {
@@ -282,6 +290,15 @@ function extractUpstreamFamilyCandidate(candidate: string): string | undefined {
 	return undefined;
 }
 
+const PENALTY_DATE_SUFFIX = /-\d{8}$/i;
+const PENALTY_PROVIDER_VERSION_SUFFIX = /-v\d+(?::\d+)?$/i;
+const PENALTY_HAS_UPPERCASE = /[A-Z]/;
+const PENALTY_CLAUDE_LEADING_VERSION = /^claude-\d/i;
+const PENALTY_CLAUDE_LEGACY_DATE = /^claude-(?:opus|sonnet|haiku)-\d{2}(?=$|[-_a-z])/i;
+const PENALTY_LETTER_DIGIT_DIGIT = /(?:^|[/:._-])[a-z]\d-\d(?=$|[-_/.:a-z])/i;
+const PENALTY_DIGIT_DIGIT = /(?:^|[-_/])\d-\d(?=$|[-_a-z])/;
+const PENALTY_CLAUDE_FAMILY_DIGIT_DIGIT = /^claude-(?:opus|sonnet|haiku)-\d-\d/i;
+
 function getCandidatePenalty(candidate: string): number {
 	let penalty = 0;
 	if (candidate.includes("/")) {
@@ -290,28 +307,28 @@ function getCandidatePenalty(candidate: string): number {
 	if (candidate.includes(":")) {
 		penalty += 40;
 	}
-	if (/-\d{8}$/i.test(candidate)) {
+	if (PENALTY_DATE_SUFFIX.test(candidate)) {
 		penalty += 25;
 	}
-	if (/-v\d+(?::\d+)?$/i.test(candidate)) {
+	if (PENALTY_PROVIDER_VERSION_SUFFIX.test(candidate)) {
 		penalty += 25;
 	}
-	if (stripTrailingMarker(candidate)) {
+	if (hasTrailingMarker(candidate)) {
 		penalty += 20;
 	}
-	if (/[A-Z]/.test(candidate)) {
+	if (PENALTY_HAS_UPPERCASE.test(candidate)) {
 		penalty += 10;
 	}
-	if (/^claude-\d/i.test(candidate)) {
+	if (PENALTY_CLAUDE_LEADING_VERSION.test(candidate)) {
 		penalty += 20;
 	}
-	if (/^claude-(?:opus|sonnet|haiku)-\d{2}(?=$|[-_a-z])/i.test(candidate)) {
+	if (PENALTY_CLAUDE_LEGACY_DATE.test(candidate)) {
 		penalty += 10;
 	}
-	if (/(?:^|[/:._-])[a-z]\d-\d(?=$|[-_/.:a-z])/i.test(candidate)) {
+	if (PENALTY_LETTER_DIGIT_DIGIT.test(candidate)) {
 		penalty += 6;
 	}
-	if (/(?:^|[-_/])\d-\d(?=$|[-_a-z])/.test(candidate) && !/^claude-(?:opus|sonnet|haiku)-\d-\d/i.test(candidate)) {
+	if (PENALTY_DIGIT_DIGIT.test(candidate) && !PENALTY_CLAUDE_FAMILY_DIGIT_DIGIT.test(candidate)) {
 		penalty += 4;
 	}
 	penalty += candidate.length * 0.01;
@@ -333,8 +350,40 @@ function selectBestOfficialCandidate(candidates: readonly string[]): string | un
 	if (candidates.length === 0) {
 		return undefined;
 	}
-	const ranked = [...new Set(candidates)].sort(compareCandidatePreference);
-	return ranked[0];
+	let bestCandidate: string | undefined;
+	let bestPenalty = 0;
+	let bestLength = 0;
+	for (const candidate of candidates) {
+		const penalty = getCandidatePenalty(candidate);
+		const length = candidate.length;
+		if (bestCandidate === undefined) {
+			bestCandidate = candidate;
+			bestPenalty = penalty;
+			bestLength = length;
+			continue;
+		}
+		if (penalty < bestPenalty) {
+			bestCandidate = candidate;
+			bestPenalty = penalty;
+			bestLength = length;
+			continue;
+		}
+		if (penalty > bestPenalty) {
+			continue;
+		}
+		if (length < bestLength) {
+			bestCandidate = candidate;
+			bestLength = length;
+			continue;
+		}
+		if (length > bestLength) {
+			continue;
+		}
+		if (candidate.localeCompare(bestCandidate) < 0) {
+			bestCandidate = candidate;
+		}
+	}
+	return bestCandidate;
 }
 
 function getWrapperCanonicalCandidates(candidate: string): string[] {
@@ -405,48 +454,81 @@ function parseClaudeFamilyVersionSegments(candidate: string, prefix: string): nu
 	return versionSegments;
 }
 
+const CLAUDE_FAMILY_ALIAS_PATTERN = /^(?:anthropic\/)?(claude(?:-\d(?:[.-]\d+)?)?-(?:haiku|opus|sonnet))(?:-latest)?$/i;
+const CLAUDE_DATE_SUFFIX_PATTERN = /-\d{8}(?:$|-)/i;
+
 function getClaudeFamilyAliasOfficial(candidate: string, officialIds: Set<string>): string | undefined {
-	const match = /^(?:anthropic\/)?(claude(?:-\d(?:[.-]\d+)?)?-(?:haiku|opus|sonnet))(?:-latest)?$/i.exec(candidate);
+	const match = CLAUDE_FAMILY_ALIAS_PATTERN.exec(candidate);
 	if (!match?.[1]) {
 		return undefined;
 	}
 	const familyPrefix = match[1].toLowerCase();
-	const familyMatches = [...officialIds].filter(officialId => {
-		const normalizedOfficialId = officialId.toLowerCase();
-		return normalizedOfficialId.startsWith(`${familyPrefix}-`) || normalizedOfficialId === familyPrefix;
-	});
-	if (familyMatches.length === 0) {
-		return undefined;
-	}
-	return [...familyMatches].sort((left, right) => {
-		const versionDiff = compareVersionSegments(
-			parseClaudeFamilyVersionSegments(right, familyPrefix),
-			parseClaudeFamilyVersionSegments(left, familyPrefix),
-		);
+	const familyPrefixWithDash = `${familyPrefix}-`;
+
+	let best: string | undefined;
+	let bestVersion: number[] = [];
+	let bestHasDate = false;
+	let bestHasMarker = false;
+
+	for (const officialId of officialIds) {
+		const normalized = officialId.toLowerCase();
+		if (normalized !== familyPrefix && !normalized.startsWith(familyPrefixWithDash)) {
+			continue;
+		}
+		const version = parseClaudeFamilyVersionSegments(officialId, familyPrefix);
+		const hasDate = CLAUDE_DATE_SUFFIX_PATTERN.test(officialId);
+		const hasMarker = hasTrailingMarker(officialId);
+
+		if (best === undefined) {
+			best = officialId;
+			bestVersion = version;
+			bestHasDate = hasDate;
+			bestHasMarker = hasMarker;
+			continue;
+		}
+
+		const versionDiff = compareVersionSegments(version, bestVersion);
 		if (versionDiff !== 0) {
-			return versionDiff;
+			if (versionDiff > 0) {
+				best = officialId;
+				bestVersion = version;
+				bestHasDate = hasDate;
+				bestHasMarker = hasMarker;
+			}
+			continue;
 		}
-		const leftHasDate = /-\d{8}(?:$|-)/i.test(left);
-		const rightHasDate = /-\d{8}(?:$|-)/i.test(right);
-		if (leftHasDate !== rightHasDate) {
-			return leftHasDate ? 1 : -1;
+		if (hasDate !== bestHasDate) {
+			if (!hasDate) {
+				best = officialId;
+				bestVersion = version;
+				bestHasDate = hasDate;
+				bestHasMarker = hasMarker;
+			}
+			continue;
 		}
-		const leftHasMarker = stripTrailingMarker(left) !== undefined;
-		const rightHasMarker = stripTrailingMarker(right) !== undefined;
-		if (leftHasMarker !== rightHasMarker) {
-			return leftHasMarker ? 1 : -1;
+		if (hasMarker !== bestHasMarker) {
+			if (!hasMarker) {
+				best = officialId;
+				bestVersion = version;
+				bestHasMarker = hasMarker;
+			}
+			continue;
 		}
-		return compareCandidatePreference(left, right);
-	})[0];
+		if (compareCandidatePreference(officialId, best) < 0) {
+			best = officialId;
+			bestVersion = version;
+		}
+	}
+	return best;
 }
 
 function toggleShortVersionSeparators(candidate: string): string[] {
 	const toggled = new Set<string>();
-	const dotToDash = candidate.replace(/(^|[-_/])(\d{1,2})\.(\d{1,2})(?=$|[-_a-z])/gi, "$1$2-$3");
+	const dotToDash = candidate.replace(SHORT_VERSION_DOT_TO_DASH_PATTERN, "$1$2-$3");
 	if (dotToDash !== candidate) {
 		toggled.add(dotToDash);
 	}
-	const dashToDot = candidate.replace(/(^|[-_/])(\d{1,2})-(\d{1,2})(?=$|[-_a-z])/gi, "$1$2.$3");
+	const dashToDot = candidate.replace(SHORT_VERSION_DASH_TO_DOT_PATTERN, "$1$2.$3");
 	if (dashToDot !== candidate) {
 		toggled.add(dashToDot);
 	}
@@ -455,20 +537,112 @@ function toggleShortVersionSeparators(candidate: string): string[] {
 
 function expandCompactMinorVersions(candidate: string): string[] {
 	const expanded = new Set<string>();
-	const compactToDash = candidate.replace(/(^|[-_/])(\d)(\d)(?=$|[-_a-z])/g, "$1$2-$3");
+	const compactToDash = candidate.replace(EXPAND_COMPACT_MINOR_PATTERN, "$1$2-$3");
 	if (compactToDash !== candidate) {
 		expanded.add(compactToDash);
 	}
-	const compactToDot = candidate.replace(/(^|[-_/])(\d)(\d)(?=$|[-_a-z])/g, "$1$2.$3");
+	const compactToDot = candidate.replace(EXPAND_COMPACT_MINOR_PATTERN, "$1$2.$3");
 	if (compactToDot !== candidate) {
 		expanded.add(compactToDot);
 	}
 	return [...expanded];
 }
 
-function getHeuristicCanonicalCandidates(modelId: string): string[] {
+function expandCheapCanonicalCandidates(normalized: string, queue: string[]): void {
+	const lowercased = lowercaseCandidate(normalized);
+	if (lowercased) {
+		queue.push(lowercased);
+	}
+
+	const pathSegments = normalized.split("/");
+	for (let index = 1; index < pathSegments.length; index += 1) {
+		queue.push(pathSegments.slice(index).join("/"));
+	}
+
+	for (const suffix of getQualifiedNamespaceSuffixes(normalized)) {
+		queue.push(suffix);
+	}
+}
+
+function expandHeavyCanonicalCandidates(normalized: string, queue: string[]): void {
+	for (const toggled of toggleShortVersionSeparators(normalized)) {
+		queue.push(toggled);
+	}
+
+	const attachedFamilyVersion = insertAttachedFamilyVersionSeparator(normalized);
+	if (attachedFamilyVersion) {
+		queue.push(attachedFamilyVersion);
+	}
+
+	for (const toggledSeriesVersion of toggleSeriesMinorVersionSeparators(normalized)) {
+		queue.push(toggledSeriesVersion);
+	}
+
+	for (const expandedVersion of expandCompactMinorVersions(normalized)) {
+		queue.push(expandedVersion);
+	}
+
+	for (const expandedSeriesVersion of expandCompactSeriesMinorVersions(normalized)) {
+		queue.push(expandedSeriesVersion);
+	}
+
+	for (const wrapperCandidate of getWrapperCanonicalCandidates(normalized)) {
+		queue.push(wrapperCandidate);
+	}
+
+	const strippedSyntheticPrefix = stripSyntheticPrefix(normalized);
+	if (strippedSyntheticPrefix) {
+		queue.push(strippedSyntheticPrefix);
+	}
+
+	const strippedLatest = stripLatestSuffix(normalized);
+	if (strippedLatest) {
+		queue.push(strippedLatest);
+	}
+
+	const strippedLegacyGlmTurbo = stripLegacyGlmTurboSuffix(normalized);
+	if (strippedLegacyGlmTurbo) {
+		queue.push(strippedLegacyGlmTurbo);
+	}
+
+	const extractedFamily = extractUpstreamFamilyCandidate(normalized);
+	if (extractedFamily) {
+		queue.push(extractedFamily);
+	}
+
+	const strippedProviderVersion = stripProviderVersionSuffix(normalized);
+	if (strippedProviderVersion) {
+		queue.push(strippedProviderVersion);
+	}
+
+	const strippedDate = stripDateSuffix(normalized);
+	if (strippedDate) {
+		queue.push(strippedDate);
+	}
+
+	const strippedMarker = stripTrailingMarker(normalized);
+	if (strippedMarker) {
+		queue.push(strippedMarker);
+	}
+
+	const reorderedAnthropic = reorderAnthropicFamily(normalized);
+	if (reorderedAnthropic) {
+		queue.push(reorderedAnthropic);
+	}
+}
+
+// Bounded FIFO memo: result depends only on `modelId` (the `_officialIds` param
+// is unused — kept for signature stability). The returned array is consumed via
+// `.filter` at every callsite, so sharing the cached instance is safe.
+const HEURISTIC_CANDIDATES_CACHE = new Map<string, string[]>();
+const HEURISTIC_CANDIDATES_CACHE_CAP = 256;
+function getHeuristicCanonicalCandidates(modelId: string, _officialIds?: ReadonlySet<string>): string[] {
+	const cached = HEURISTIC_CANDIDATES_CACHE.get(modelId);
+	if (cached !== undefined) {
+		return cached;
+	}
 	const candidates = new Set<string>();
-	const queue = [modelId];
+	const queue: string[] = [modelId];
 	const visited = new Set<string>();
 
 	for (let qi = 0; qi < queue.length; qi += 1) {
@@ -482,88 +656,19 @@ function getHeuristicCanonicalCandidates(modelId: string): string[] {
 		}
 		visited.add(normalized);
 		addCanonicalCandidate(candidates, normalized);
-
-		const lowercased = lowercaseCandidate(normalized);
-		if (lowercased) {
-			queue.push(lowercased);
-		}
-
-		const pathSegments = normalized.split("/");
-		for (let index = 1; index < pathSegments.length; index += 1) {
-			queue.push(pathSegments.slice(index).join("/"));
-		}
-
-		for (const suffix of getQualifiedNamespaceSuffixes(normalized)) {
-			queue.push(suffix);
-		}
-
-		for (const toggled of toggleShortVersionSeparators(normalized)) {
-			queue.push(toggled);
-		}
-
-		const attachedFamilyVersion = insertAttachedFamilyVersionSeparator(normalized);
-		if (attachedFamilyVersion) {
-			queue.push(attachedFamilyVersion);
-		}
-
-		for (const toggledSeriesVersion of toggleSeriesMinorVersionSeparators(normalized)) {
-			queue.push(toggledSeriesVersion);
-		}
-
-		for (const expandedVersion of expandCompactMinorVersions(normalized)) {
-			queue.push(expandedVersion);
-		}
-
-		for (const expandedSeriesVersion of expandCompactSeriesMinorVersions(normalized)) {
-			queue.push(expandedSeriesVersion);
-		}
-
-		for (const wrapperCandidate of getWrapperCanonicalCandidates(normalized)) {
-			queue.push(wrapperCandidate);
-		}
-
-		const strippedSyntheticPrefix = stripSyntheticPrefix(normalized);
-		if (strippedSyntheticPrefix) {
-			queue.push(strippedSyntheticPrefix);
-		}
-
-		const strippedLatest = stripLatestSuffix(normalized);
-		if (strippedLatest) {
-			queue.push(strippedLatest);
-		}
-
-		const strippedLegacyGlmTurbo = stripLegacyGlmTurboSuffix(normalized);
-		if (strippedLegacyGlmTurbo) {
-			queue.push(strippedLegacyGlmTurbo);
-		}
-
-		const extractedFamily = extractUpstreamFamilyCandidate(normalized);
-		if (extractedFamily) {
-			queue.push(extractedFamily);
-		}
-
-		const strippedProviderVersion = stripProviderVersionSuffix(normalized);
-		if (strippedProviderVersion) {
-			queue.push(strippedProviderVersion);
-		}
-
-		const strippedDate = stripDateSuffix(normalized);
-		if (strippedDate) {
-			queue.push(strippedDate);
-		}
-
-		const strippedMarker = stripTrailingMarker(normalized);
-		if (strippedMarker) {
-			queue.push(strippedMarker);
-		}
-
-		const reorderedAnthropic = reorderAnthropicFamily(normalized);
-		if (reorderedAnthropic) {
-			queue.push(reorderedAnthropic);
-		}
+		expandCheapCanonicalCandidates(normalized, queue);
+		expandHeavyCanonicalCandidates(normalized, queue);
 	}
 
-	return [...candidates];
+	const output = [...candidates];
+	if (HEURISTIC_CANDIDATES_CACHE.size >= HEURISTIC_CANDIDATES_CACHE_CAP) {
+		const oldest = HEURISTIC_CANDIDATES_CACHE.keys().next().value;
+		if (oldest !== undefined) {
+			HEURISTIC_CANDIDATES_CACHE.delete(oldest);
+		}
+	}
+	HEURISTIC_CANDIDATES_CACHE.set(modelId, output);
+	return output;
 }
 
 function getPreferredFallbackCanonicalCandidate(modelId: string, candidates: readonly string[]): string | undefined {
@@ -612,7 +717,7 @@ function resolveCanonicalIdForModel(
 		return { id: claudeFamilyAlias, source: claudeFamilyAlias === model.id ? "bundled" : "heuristic" };
 	}
 
-	const heuristicCandidates = getHeuristicCanonicalCandidates(model.id);
+	const heuristicCandidates = getHeuristicCanonicalCandidates(model.id, referenceData.officialIds);
 	const officialMatches = heuristicCandidates.filter(candidate => referenceData.officialIds.has(candidate));
 	const preferredFallback = getPreferredFallbackCanonicalCandidate(model.id, heuristicCandidates);
 	const match = selectBestOfficialCandidate(officialMatches);
@@ -665,10 +770,11 @@ export function buildCanonicalModelIndex(
 	const byId = new Map<string, CanonicalModelRecord>();
 	const bySelector = new Map<string, string>();
 
-	let modelCache = resolutionCache.get(compiledEquivalence);
+	const compiledWithCache = compiledEquivalence as CompiledEquivalenceConfigWithCache;
+	let modelCache = compiledWithCache[kModelResolutionCache];
 	if (!modelCache) {
 		modelCache = new WeakMap<Model<Api>, ResolvedCanonicalModel>();
-		resolutionCache.set(compiledEquivalence, modelCache);
+		compiledWithCache[kModelResolutionCache] = modelCache;
 	}
 
 	for (const model of models) {
@@ -688,10 +794,9 @@ export function buildCanonicalModelIndex(
 		const existing = byId.get(canonicalKey);
 		const nextRecord: CanonicalModelRecord = existing ?? {
 			id: canonical.id,
-			name: getCanonicalRecordName(existing, canonical.id, variant, referenceData),
+			name: getCanonicalRecordName(undefined, canonical.id, variant, referenceData),
 			variants: [],
 		};
-		nextRecord.name = getCanonicalRecordName(existing, canonical.id, variant, referenceData);
 		nextRecord.variants.push(variant);
 		byId.set(canonicalKey, nextRecord);
 		bySelector.set(normalizeSelectorKey(selector), canonical.id);

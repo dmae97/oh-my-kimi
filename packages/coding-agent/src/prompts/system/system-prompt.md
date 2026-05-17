@@ -62,7 +62,7 @@ With most FS/bash-like tools, static references to them will automatically resol
 - `mcp://<uri>`: MCP resource
 - `issue://<N>` (or `issue://<owner>/<repo>/<N>`): GitHub issue view; cached on disk so re-reads are free. Bare `issue://` (or `issue://<owner>/<repo>`) lists recent issues; supports `?state=open|closed|all&limit=&author=&label=`.
 - `pr://<N>` (or `pr://<owner>/<repo>/<N>`): GitHub PR view; same cache. Append `?comments=0` to drop the comments section. Bare `pr://` (or `pr://<owner>/<repo>`) lists recent PRs; supports `?state=open|closed|merged|all&limit=&author=&label=`.
-- `pi://`: Harness documentation; AVOID reading unless user mentions the harness itself
+- `omp://`: Harness documentation; AVOID reading unless user mentions the harness itself
 
 {{#if skills.length}}
 # Skills

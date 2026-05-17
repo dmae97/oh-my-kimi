@@ -22,17 +22,14 @@ export const lspSchema = z.object({
 		"capabilities",
 		"request",
 	]),
-	file: z.string().describe("File path or source path for rename_file").optional(),
-	line: z.number().describe("Line number (1-indexed)").optional(),
-	symbol: z.string().describe("Symbol/substring to locate on the line").optional(),
-	query: z.string().describe("Search query, code-action selector, or LSP method name for action=request").optional(),
-	new_name: z.string().describe("New name for rename, or destination path for rename_file").optional(),
-	apply: z.boolean().describe("Apply edits (default: true for rename/rename_file)").optional(),
-	timeout: z.number().describe("Request timeout in seconds").optional(),
-	payload: z
-		.string()
-		.describe("JSON-encoded params for action=request. When omitted, params are auto-built from file/line/symbol.")
-		.optional(),
+	file: z.string().describe("file path or source path for rename_file").optional(),
+	line: z.number().describe("line number (1-indexed)").optional(),
+	symbol: z.string().describe("symbol substring on the line").optional(),
+	query: z.string().describe("search query or code-action selector").optional(),
+	new_name: z.string().describe("new symbol name or destination path").optional(),
+	apply: z.boolean().describe("apply edits").optional(),
+	timeout: z.number().describe("request timeout in seconds").optional(),
+	payload: z.string().describe("json-encoded request params").optional(),
 });
 
 export type LspParams = z.infer<typeof lspSchema>;

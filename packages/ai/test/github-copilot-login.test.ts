@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { loginGitHubCopilot } from "../src/utils/oauth/github-copilot";
 
 const originalFetch = global.fetch;
+const FAST_POLL_OPTIONS = { pollIntervalFloorMs: 0, pollIntervalScaleMs: 1 } as const;
 
 afterEach(() => {
 	global.fetch = originalFetch;
@@ -59,6 +60,7 @@ describe("loginGitHubCopilot", () => {
 
 		const onAuth = vi.fn();
 		const credentials = await loginGitHubCopilot({
+			...FAST_POLL_OPTIONS,
 			onAuth,
 			onPrompt: mockOnPrompt(""),
 		});
@@ -94,6 +96,7 @@ describe("loginGitHubCopilot", () => {
 		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const credentials = await loginGitHubCopilot({
+			...FAST_POLL_OPTIONS,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt("ghe.example.com"),
 		});
@@ -125,6 +128,7 @@ describe("loginGitHubCopilot", () => {
 		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const credentials = await loginGitHubCopilot({
+			...FAST_POLL_OPTIONS,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt("   "),
 		});
@@ -191,6 +195,7 @@ describe("loginGitHubCopilot", () => {
 		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const credentials = await loginGitHubCopilot({
+			...FAST_POLL_OPTIONS,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt(""),
 		});
@@ -247,6 +252,7 @@ describe("loginGitHubCopilot", () => {
 
 		await expect(
 			loginGitHubCopilot({
+				...FAST_POLL_OPTIONS,
 				onAuth: vi.fn(),
 				onPrompt: mockOnPrompt(""),
 			}),
@@ -276,6 +282,7 @@ describe("loginGitHubCopilot", () => {
 		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const credentials = await loginGitHubCopilot({
+			...FAST_POLL_OPTIONS,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt(""),
 		});

@@ -1,23 +1,14 @@
 /**
  * Shared utilities for Google Generative AI and Google Cloud Code Assist providers.
  */
-import {
-	type Content,
-	FinishReason,
-	FunctionCallingConfigMode,
-	type GenerateContentConfig,
-	type GenerateContentParameters,
-	type GenerateContentResponse,
-	type GoogleGenAI,
-	type Part,
-	type ThinkingConfig,
-	type ThinkingLevel,
-} from "@google/genai";
+
+import { readSseJson } from "@oh-my-pi/pi-utils";
 import { calculateCost } from "../models";
 import type {
 	Api,
 	AssistantMessage,
 	Context,
+	FetchImpl,
 	ImageContent,
 	Model,
 	StopReason,
@@ -29,12 +20,30 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
-import { prepareSchemaForCCA, sanitizeSchemaForGoogle, toolWireSchema } from "../utils/schema";
+import { finalizeErrorMessage, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
+import { normalizeSchemaForCCA, normalizeSchemaForGoogle, toolWireSchema } from "../utils/schema";
+import type {
+	Content,
+	FinishReason,
+	FunctionCallingConfigMode,
+	GenerateContentConfig,
+	GenerateContentParameters,
+	GenerateContentResponse,
+	Part,
+	ThinkingConfig,
+	ThinkingLevel,
+} from "./google-types";
 import { transformMessages } from "./transform-messages";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 
-export { sanitizeSchemaForGoogle };
+export type {
+	Content,
+	FunctionCallingConfigMode,
+	GenerateContentParameters,
+	GenerateContentResponse,
+	ThinkingConfig,
+} from "./google-types";
+export { normalizeSchemaForGoogle };
 
 type GoogleApiType = "google-generative-ai" | "google-gemini-cli" | "google-vertex";
 
@@ -340,7 +349,7 @@ export function convertTools(
 				name: tool.name,
 				description: tool.description || "",
 				...(useParameters
-					? { parameters: prepareSchemaForCCA(toolWireSchema(tool)) }
+					? { parameters: normalizeSchemaForCCA(toolWireSchema(tool)) }
 					: { parametersJsonSchema: toolWireSchema(tool) }),
 			})),
 		},
@@ -353,13 +362,13 @@ export function convertTools(
 export function mapToolChoice(choice: string): FunctionCallingConfigMode {
 	switch (choice) {
 		case "auto":
-			return FunctionCallingConfigMode.AUTO;
+			return "AUTO";
 		case "none":
-			return FunctionCallingConfigMode.NONE;
+			return "NONE";
 		case "any":
-			return FunctionCallingConfigMode.ANY;
+			return "ANY";
 		default:
-			return FunctionCallingConfigMode.AUTO;
+			return "AUTO";
 	}
 }
 
@@ -368,25 +377,25 @@ export function mapToolChoice(choice: string): FunctionCallingConfigMode {
  */
 export function mapStopReason(reason: FinishReason): StopReason {
 	switch (reason) {
-		case FinishReason.STOP:
+		case "STOP":
 			return "stop";
-		case FinishReason.MAX_TOKENS:
+		case "MAX_TOKENS":
 			return "length";
-		case FinishReason.BLOCKLIST:
-		case FinishReason.PROHIBITED_CONTENT:
-		case FinishReason.SPII:
-		case FinishReason.SAFETY:
-		case FinishReason.IMAGE_SAFETY:
-		case FinishReason.IMAGE_PROHIBITED_CONTENT:
-		case FinishReason.IMAGE_RECITATION:
-		case FinishReason.IMAGE_OTHER:
-		case FinishReason.RECITATION:
-		case FinishReason.FINISH_REASON_UNSPECIFIED:
-		case FinishReason.OTHER:
-		case FinishReason.LANGUAGE:
-		case FinishReason.MALFORMED_FUNCTION_CALL:
-		case FinishReason.UNEXPECTED_TOOL_CALL:
-		case FinishReason.NO_IMAGE:
+		case "BLOCKLIST":
+		case "PROHIBITED_CONTENT":
+		case "SPII":
+		case "SAFETY":
+		case "IMAGE_SAFETY":
+		case "IMAGE_PROHIBITED_CONTENT":
+		case "IMAGE_RECITATION":
+		case "IMAGE_OTHER":
+		case "RECITATION":
+		case "FINISH_REASON_UNSPECIFIED":
+		case "OTHER":
+		case "LANGUAGE":
+		case "MALFORMED_FUNCTION_CALL":
+		case "UNEXPECTED_TOOL_CALL":
+		case "NO_IMAGE":
 			return "error";
 		default: {
 			throw new Error(`Unhandled stop reason: ${reason satisfies never}`);
@@ -723,12 +732,19 @@ export function buildGoogleGenerateContentParams<T extends "google-generative-ai
  * Caller-supplied `prepare()` runs inside the try-block so any failure (missing project,
  * bad auth, etc.) is funneled through the same error path as a streaming failure.
  */
+export interface GoogleGenAIRequestPlan {
+	params: GenerateContentParameters;
+	url: string;
+	headers: Record<string, string>;
+	fetch?: FetchImpl;
+}
+
 export function streamGoogleGenAI<T extends "google-generative-ai" | "google-vertex">(args: {
 	model: Model<T>;
 	options: GoogleSharedStreamOptions | undefined;
 	api: T;
 	retainTextSignature?: boolean;
-	prepare: () => { client: GoogleGenAI; params: GenerateContentParameters; url: string | undefined };
+	prepare: () => GoogleGenAIRequestPlan | Promise<GoogleGenAIRequestPlan>;
 }): AssistantMessageEventStream {
 	const { model, options, api, retainTextSignature, prepare } = args;
 	const stream = new AssistantMessageEventStream();
@@ -757,17 +773,44 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 		let rawRequestDump: RawHttpRequestDump | undefined;
 
 		try {
-			const { client, params, url } = prepare();
-			options?.onPayload?.(params);
+			const plan = await prepare();
+			let params = plan.params;
+			const replacement = await options?.onPayload?.(params, model);
+			if (replacement !== undefined) {
+				params = replacement as GenerateContentParameters;
+			}
 			rawRequestDump = {
 				provider: model.provider,
 				api: output.api,
 				model: model.id,
 				method: "POST",
-				url,
+				url: plan.url,
 				body: params,
+				headers: plan.headers,
 			};
-			const googleStream = await client.models.generateContentStream(params);
+
+			const wireBody = paramsToWireBody(params);
+			const fetchImpl = plan.fetch ?? options?.fetch ?? (globalThis.fetch.bind(globalThis) as FetchImpl);
+			const response = await fetchImpl(plan.url, {
+				method: "POST",
+				headers: { ...plan.headers, "Content-Type": "application/json", Accept: "text/event-stream" },
+				body: JSON.stringify(wireBody),
+				signal: options?.signal,
+			});
+			if (!response.ok) {
+				const errorText = await response.text().catch(() => "");
+				throw withHttpStatus(
+					new Error(`Google API error (${response.status}): ${extractGoogleErrorMessage(errorText)}`),
+					response.status,
+				);
+			}
+			if (!response.body) {
+				throw new Error("Google API returned an empty response body");
+			}
+
+			const googleStream = readSseJson<GenerateContentResponse>(response.body, options?.signal, event =>
+				options?.onSseEvent?.({ event: event.event, data: event.data, raw: [...event.raw] }, model),
+			);
 
 			stream.push({ type: "start", partial: output });
 			await consumeGoogleStream({
@@ -802,4 +845,57 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 	})();
 
 	return stream;
+}
+
+/**
+ * Lift the SDK's `params.config` fields out of `config` and place them where the
+ * Gemini / Vertex AI REST API expects them on the request body. Mirrors the
+ * generateContentParametersTo{Mldev,Vertex} transformation in @google/genai
+ * for the subset of fields this codebase actually sets.
+ *
+ * `abortSignal` is intentionally dropped — the SDK propagates it via `fetch.signal`,
+ * which our caller already wires up through `options.signal`.
+ */
+function paramsToWireBody(params: GenerateContentParameters): Record<string, unknown> {
+	const body: Record<string, unknown> = { contents: params.contents };
+	const config = params.config;
+	if (!config) return body;
+
+	if (config.systemInstruction !== undefined) body.systemInstruction = config.systemInstruction;
+	if (config.tools !== undefined) body.tools = config.tools;
+	if (config.toolConfig !== undefined) body.toolConfig = config.toolConfig;
+	if (config.safetySettings !== undefined) body.safetySettings = config.safetySettings;
+	if (config.cachedContent !== undefined) body.cachedContent = config.cachedContent;
+
+	const gen: Record<string, unknown> = {};
+	if (config.temperature !== undefined) gen.temperature = config.temperature;
+	if (config.maxOutputTokens !== undefined) gen.maxOutputTokens = config.maxOutputTokens;
+	if (config.topP !== undefined) gen.topP = config.topP;
+	if (config.topK !== undefined) gen.topK = config.topK;
+	if (config.candidateCount !== undefined) gen.candidateCount = config.candidateCount;
+	if (config.stopSequences !== undefined) gen.stopSequences = config.stopSequences;
+	if (config.presencePenalty !== undefined) gen.presencePenalty = config.presencePenalty;
+	if (config.frequencyPenalty !== undefined) gen.frequencyPenalty = config.frequencyPenalty;
+	if (config.seed !== undefined) gen.seed = config.seed;
+	if (config.responseMimeType !== undefined) gen.responseMimeType = config.responseMimeType;
+	if (config.responseSchema !== undefined) gen.responseSchema = config.responseSchema;
+	if (config.responseJsonSchema !== undefined) gen.responseJsonSchema = config.responseJsonSchema;
+	if (config.responseModalities !== undefined) gen.responseModalities = config.responseModalities;
+	if (config.thinkingConfig !== undefined) gen.thinkingConfig = config.thinkingConfig;
+	const generationConfig = config as unknown as { minP?: number; repetitionPenalty?: number };
+	if (generationConfig.minP !== undefined) gen.minP = generationConfig.minP;
+	if (generationConfig.repetitionPenalty !== undefined) gen.repetitionPenalty = generationConfig.repetitionPenalty;
+	if (Object.keys(gen).length > 0) body.generationConfig = gen;
+	return body;
+}
+
+function extractGoogleErrorMessage(errorText: string): string {
+	if (!errorText) return "Unknown error";
+	try {
+		const parsed = JSON.parse(errorText) as { error?: { message?: string } };
+		if (parsed.error?.message) return parsed.error.message;
+	} catch {
+		// fall through to raw text
+	}
+	return errorText;
 }

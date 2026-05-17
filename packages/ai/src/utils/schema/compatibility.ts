@@ -11,8 +11,8 @@ import { isJsonObject, type JsonObject } from "./types";
  * Schema compatibility audits.
  *
  * Each provider has a different idea of what JSON Schema features it accepts
- * for tool definitions. The sanitizers in `normalize-cca`, `sanitize-google`,
- * and `strict-mode` rewrite incoming schemas to fit. This module is the
+ * for tool definitions. The normalizers in `normalize.ts`, `strict-mode`,
+ * and `adapt.ts` rewrite incoming schemas to fit. This module is the
  * *audit* counterpart: it walks a (presumably already-sanitized) schema and
  * reports any feature the target provider would reject. Tests use it to lock
  * down the contract; the runtime uses it to fail-open with diagnostic logs

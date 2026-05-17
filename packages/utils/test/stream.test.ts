@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
+import { sanitizeText } from "../src/sanitize-text";
 import {
 	parseJsonlLenient,
 	readJsonl,

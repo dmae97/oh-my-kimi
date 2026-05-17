@@ -11,7 +11,7 @@ import {
 import { format } from "date-fns";
 import { useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
-import type { ModelPerformancePoint, ModelStats } from "../types";
+import type { ModelPerformancePoint, ModelStats, TimeRange } from "../types";
 import { useSystemTheme } from "../useSystemTheme";
 import {
 	DetailChartEmpty,
@@ -29,6 +29,7 @@ import {
 	type TableChartTheme,
 	TrendEmpty,
 } from "./models-table-shared";
+import { rangeMeta } from "./range-meta";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
 
@@ -37,6 +38,7 @@ const GRID_TEMPLATE = "2fr 0.9fr 0.9fr 1fr 0.8fr 0.8fr 140px 40px";
 interface ModelsTableProps {
 	models: ModelStats[];
 	performanceSeries: ModelPerformancePoint[];
+	timeRange: TimeRange;
 }
 
 type ModelPerformanceSeries = {
@@ -49,10 +51,14 @@ type ModelPerformanceSeries = {
 	}>;
 };
 
-export function ModelsTable({ models, performanceSeries }: ModelsTableProps) {
+export function ModelsTable({ models, performanceSeries, timeRange }: ModelsTableProps) {
 	const [expandedKey, setExpandedKey] = useState<string | null>(null);
+	const meta = rangeMeta(timeRange);
 
-	const performanceSeriesByKey = useMemo(() => buildModelPerformanceLookup(performanceSeries), [performanceSeries]);
+	const performanceSeriesByKey = useMemo(
+		() => buildModelPerformanceLookup(performanceSeries, meta.bucketCount, meta.bucketMs),
+		[performanceSeries, meta.bucketCount, meta.bucketMs],
+	);
 	const theme = useSystemTheme();
 	const chartTheme = TABLE_CHART_THEMES[theme];
 	const sortedModels = [...models].sort(
@@ -70,7 +76,7 @@ export function ModelsTable({ models, performanceSeries }: ModelsTableProps) {
 					{ label: "Tokens", align: "right" },
 					{ label: "Tokens/s", align: "right" },
 					{ label: "TTFT", align: "right" },
-					{ label: "14d Trend", align: "center" },
+					{ label: meta.trendLabel, align: "center" },
 				]}
 			/>
 
@@ -214,12 +220,17 @@ function PerformanceChart({
 	return <Line data={chartData} options={options} />;
 }
 
-function buildModelPerformanceLookup(points: ModelPerformancePoint[], days = 14): Map<string, ModelPerformanceSeries> {
-	const dayMs = 24 * 60 * 60 * 1000;
+function buildModelPerformanceLookup(
+	points: ModelPerformancePoint[],
+	bucketCount: number,
+	bucketMs: number,
+): Map<string, ModelPerformanceSeries> {
 	const maxTimestamp = points.reduce((max, point) => Math.max(max, point.timestamp), 0);
-	const anchor = maxTimestamp > 0 ? maxTimestamp : Math.floor(Date.now() / dayMs) * dayMs;
-	const start = anchor - (days - 1) * dayMs;
-	const buckets = Array.from({ length: days }, (_, index) => start + index * dayMs);
+	const anchor = maxTimestamp > 0 ? maxTimestamp : Math.floor(Date.now() / bucketMs) * bucketMs;
+	const uniqueTimestamps = new Set(points.map(p => p.timestamp));
+	const effectiveCount = bucketCount > 0 ? bucketCount : Math.max(1, uniqueTimestamps.size);
+	const start = anchor - (effectiveCount - 1) * bucketMs;
+	const buckets = Array.from({ length: effectiveCount }, (_, index) => start + index * bucketMs);
 	const bucketIndex = new Map(buckets.map((timestamp, index) => [timestamp, index]));
 	const seriesByKey = new Map<string, ModelPerformanceSeries>();
 

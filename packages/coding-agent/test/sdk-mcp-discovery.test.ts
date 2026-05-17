@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { Effort, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
+import { AuthStorage, Effort, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
@@ -41,15 +42,22 @@ function createReasoningModel(): Model<"openai-responses"> {
 	};
 }
 
+const oldSessionMtime = new Date("2000-01-01T00:00:00.000Z");
+
 describe("createAgentSession MCP discovery prompt gating", () => {
 	let tempDir: string;
+	let authStorage: AuthStorage;
+	let modelRegistry: ModelRegistry;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		tempDir = path.join(os.tmpdir(), `pi-sdk-mcp-discovery-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
+		authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		modelRegistry = new ModelRegistry(authStorage);
 	});
 
 	afterEach(() => {
+		authStorage.close();
 		if (tempDir && fs.existsSync(tempDir)) {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}
@@ -59,6 +67,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		const { session } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
+			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "mcp.discoveryMode": true }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
@@ -83,6 +92,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		const { session } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
+			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "tools.discoveryMode": "all" }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
@@ -106,6 +116,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		const { session } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
+			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "mcp.discoveryMode": true }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
@@ -139,6 +150,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		const { session } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
+			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({
 				"mcp.discoveryMode": true,
@@ -173,6 +185,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		const { session } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
+			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "mcp.discoveryMode": true }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
@@ -196,6 +209,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		const { session } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
+			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "tools.discoveryMode": "all" }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
@@ -223,6 +237,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		const { session: firstSession } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
+			modelRegistry,
 			sessionManager: firstManager,
 			settings: Settings.isolated({
 				"mcp.discoveryMode": true,
@@ -251,14 +266,15 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		const sessionFile = firstSession.sessionFile;
 		expect(sessionFile).toBeDefined();
 		await firstSession.sessionManager.rewriteEntries();
+		fs.utimesSync(sessionFile!, oldSessionMtime, oldSessionMtime);
 		const persistedBeforeResume = fs.readFileSync(sessionFile!, "utf8");
 		const persistedMtimeBeforeResume = fs.statSync(sessionFile!).mtimeMs;
-		await Bun.sleep(20);
 		await firstSession.dispose();
 		const resumedManager = await SessionManager.open(sessionFile!, tempDir);
 		const { session: resumedSession } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
+			modelRegistry,
 			sessionManager: resumedManager,
 			settings: Settings.isolated({
 				"mcp.discoveryMode": true,
@@ -304,13 +320,14 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		const sessionFile = sessionManager.getSessionFile();
 		expect(sessionFile).toBeDefined();
 		await sessionManager.rewriteEntries();
+		fs.utimesSync(sessionFile!, oldSessionMtime, oldSessionMtime);
 		const persistedBeforeResume = fs.readFileSync(sessionFile!, "utf8");
 		const persistedMtimeBeforeResume = fs.statSync(sessionFile!).mtimeMs;
-		await Bun.sleep(20);
 		const resumedManager = await SessionManager.open(sessionFile!, tempDir);
 		const { session } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
+			modelRegistry,
 			sessionManager: resumedManager,
 			settings: Settings.isolated({
 				"mcp.discoveryMode": true,
@@ -352,6 +369,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		const { session: firstSession } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
+			modelRegistry,
 			sessionManager: firstManager,
 			settings: Settings.isolated({ "mcp.discoveryMode": true }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
@@ -379,6 +397,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		const { session: resumedSession } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
+			modelRegistry,
 			sessionManager: resumedManager,
 			settings: Settings.isolated({ "mcp.discoveryMode": true }),
 			model: getBundledModel("openai", "gpt-4o-mini"),

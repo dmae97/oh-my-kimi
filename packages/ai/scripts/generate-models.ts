@@ -11,7 +11,7 @@ const COPILOT_PREMIUM_MULTIPLIERS: Record<string, number> = {
 
 import * as path from "node:path";
 import { $env } from "@oh-my-pi/pi-utils";
-import { AuthCredentialStore } from "../src/auth-storage";
+import { SqliteAuthCredentialStore } from "../src/auth-storage";
 import { createModelManager } from "../src/model-manager";
 import {
 	applyGeneratedModelPolicies,
@@ -51,7 +51,7 @@ async function resolveProviderApiKey(providerId: string, catalog: CatalogDiscove
 	}
 
 	try {
-		const storage = await AuthCredentialStore.open();
+		const storage = await SqliteAuthCredentialStore.open();
 		try {
 			const storedApiKey = storage.getApiKey(providerId);
 			if (storedApiKey) {
@@ -214,7 +214,7 @@ const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 
 async function getOAuthCredentialsFromStorage(provider: OAuthProvider): Promise<OAuthCredentials | null> {
 	try {
-		const storage = await AuthCredentialStore.open();
+		const storage = await SqliteAuthCredentialStore.open();
 		try {
 			const creds = storage.getOAuth(provider);
 			if (!creds) {

@@ -15,7 +15,7 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `goal` | `string` | Yes | Investigation goal. Required by the TypeBox schema and echoed in the tool result. |
+| `goal` | `string` | Yes | Investigation goal. Required by the schema and echoed in the tool result. |
 
 ## Outputs
 The tool returns a single text result plus structured details:

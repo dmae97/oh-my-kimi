@@ -16,6 +16,12 @@ export interface ProviderDetailsContext {
 	model: Model<Api>;
 	sessionId?: string;
 	authMode?: string;
+	/**
+	 * Human-readable description of the active credential, e.g.
+	 * `"broker http://can.internal:8765 · oauth #5 (foo@bar.com)"`.
+	 * Rendered as a `Source` field; omitted when undefined.
+	 */
+	credentialSource?: string;
 	preferWebsockets?: boolean;
 	providerSessionState?: Map<string, ProviderSessionState>;
 }
@@ -28,6 +34,9 @@ export function getProviderDetails(context: ProviderDetailsContext): ProviderDet
 		{ label: "Auth", value: context.authMode ?? "auto" },
 		{ label: "Endpoint", value: endpoint },
 	];
+	if (context.credentialSource) {
+		fields.push({ label: "Source", value: context.credentialSource });
+	}
 
 	if (context.model.api === "openai-codex-responses") {
 		const codexDetails = getOpenAICodexTransportDetails(context.model as Model<"openai-codex-responses">, {

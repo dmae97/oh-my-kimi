@@ -54,6 +54,8 @@ let provider: BasicTracerProvider;
 let contextManager: AsyncLocalStorageContextManager;
 
 beforeAll(() => {
+	trace.disable();
+	context.disable();
 	contextManager = new AsyncLocalStorageContextManager().enable();
 	context.setGlobalContextManager(contextManager);
 	provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });

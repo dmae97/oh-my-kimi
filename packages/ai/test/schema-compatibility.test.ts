@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import {
 	adaptSchemaForStrict,
-	prepareSchemaForCCA,
+	normalizeSchemaForCCA,
+	normalizeSchemaForGoogle,
 	type SchemaCompatibilityResult,
-	sanitizeSchemaForGoogle,
 	validateSchemaCompatibility,
 	validateStrictSchemaEnforcement,
 } from "@oh-my-pi/pi-ai/utils/schema";
@@ -70,7 +70,7 @@ describe("schema compatibility validation", () => {
 	});
 
 	it("validates Google-compatible schemas after sanitization", () => {
-		const sanitized = sanitizeSchemaForGoogle({
+		const sanitized = normalizeSchemaForGoogle({
 			type: "object",
 			additionalProperties: false,
 			properties: {
@@ -100,7 +100,7 @@ describe("schema compatibility validation", () => {
 	});
 
 	it("validates Cloud Code Assist Claude schemas after normalization", () => {
-		const prepared = prepareSchemaForCCA({
+		const prepared = normalizeSchemaForCCA({
 			type: "object",
 			properties: {
 				mode: { anyOf: [{ const: "fast" }, { const: "safe" }, { type: "null" }] },

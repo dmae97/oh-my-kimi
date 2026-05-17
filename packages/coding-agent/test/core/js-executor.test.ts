@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -42,7 +42,7 @@ describe("executeJs", () => {
 	let sessionFile: string;
 	let sessionId: string;
 
-	beforeEach(async () => {
+	beforeAll(async () => {
 		tempDir = TempDir.createSync("@js-executor-");
 		sessionFile = path.join(tempDir.path(), "session.jsonl");
 		sessionId = `session:${sessionFile}:cwd:${tempDir.path()}`;
@@ -61,10 +61,13 @@ describe("executeJs", () => {
 		await Bun.write(path.join(tempDir.path(), "config.yaml"), "name: demo\nenabled: true\n");
 	});
 
-	afterEach(async () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	afterAll(async () => {
 		await disposeAllVmContexts();
 		tempDir.removeSync();
-		vi.restoreAllMocks();
 	});
 
 	it("persists bindings across calls and reset clears them", async () => {
@@ -417,19 +420,6 @@ describe("executeJs", () => {
 		expect(result.displayOutputs).toEqual([{ type: "json", data: { answer: 42, nested: { ok: true } } }]);
 	});
 
-	it("cancels execution when the timeout expires", async () => {
-		const result = await executeJs("await new Promise(() => {})", {
-			sessionId,
-			session,
-			sessionFile,
-			timeoutMs: 20,
-		});
-
-		expect(result.cancelled).toBe(true);
-		expect(result.exitCode).toBeUndefined();
-		expect(result.output).toContain("Command timed out");
-	});
-
 	it('rewrites static `import { x } from "pkg"` to dynamic import', async () => {
 		const result = await executeJs('import { join } from "node:path";\nreturn join("a", "b");', {
 			sessionId,
@@ -459,5 +449,18 @@ describe("executeJs", () => {
 		expect(result.output).toContain("[object Object]");
 		// No JSON display because structuredClone fails on the embedded function.
 		expect(result.displayOutputs.filter(o => o.type === "json")).toHaveLength(0);
+	});
+
+	it("cancels execution when the timeout expires", async () => {
+		const result = await executeJs("await new Promise(() => {})", {
+			sessionId,
+			session,
+			sessionFile,
+			timeoutMs: 20,
+		});
+
+		expect(result.cancelled).toBe(true);
+		expect(result.exitCode).toBeUndefined();
+		expect(result.output).toContain("Command timed out");
 	});
 });

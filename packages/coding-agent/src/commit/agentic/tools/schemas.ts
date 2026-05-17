@@ -17,15 +17,7 @@ export const commitTypeSchema = z.enum([
 export const detailSchema = z.object({
 	text: z.string(),
 	changelog_category: z
-		.union([
-			z.literal("Added"),
-			z.literal("Changed"),
-			z.literal("Fixed"),
-			z.literal("Deprecated"),
-			z.literal("Removed"),
-			z.literal("Security"),
-			z.literal("Breaking Changes"),
-		])
+		.enum(["Added", "Changed", "Fixed", "Deprecated", "Removed", "Security", "Breaking Changes"])
 		.optional(),
 	user_visible: z.boolean().optional(),
 });
