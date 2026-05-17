@@ -1453,14 +1453,19 @@ function resolveStatusColor(status: UsageLimit["status"]): "success" | "warning"
 function renderUsageBar(limit: UsageLimit, uiTheme: typeof theme, barWidth: number): string {
 	const fraction = resolveFraction(limit);
 	if (fraction === undefined) {
-		return uiTheme.fg("dim", `[${"·".repeat(barWidth)}]`);
+		return uiTheme.fg("dim", "·".repeat(barWidth));
 	}
 	const clamped = Math.min(Math.max(fraction, 0), 1);
-	const filled = Math.round(clamped * barWidth);
-	const filledBar = "█".repeat(filled);
-	const emptyBar = "░".repeat(Math.max(0, barWidth - filled));
+	const exact = clamped * barWidth;
+	const fullCells = Math.floor(exact);
+	const remainder = exact - fullCells;
+	let partial = "";
+	if (remainder >= 2 / 3) partial = "▓";
+	else if (remainder >= 1 / 3) partial = "▒";
+	const leading = "█".repeat(fullCells) + partial;
+	const empty = "░".repeat(Math.max(0, barWidth - fullCells - (partial ? 1 : 0)));
 	const color = resolveStatusColor(limit.status);
-	return `${uiTheme.fg("dim", "[")}${uiTheme.fg(color, filledBar)}${uiTheme.fg("dim", emptyBar)}${uiTheme.fg("dim", "]")}`;
+	return `${uiTheme.fg(color, leading)}${uiTheme.fg("dim", empty)}`;
 }
 
 /**
@@ -1468,13 +1473,13 @@ function renderUsageBar(limit: UsageLimit, uiTheme: typeof theme, barWidth: numb
  * Falls back to the minimum when the terminal is too narrow rather than wrapping.
  */
 function resolveColumnWidth(count: number, available: number, trailing: number): number {
-	if (count <= 0) return BAR_WIDTH_MAX + 2;
+	if (count <= 0) return BAR_WIDTH_MAX;
 	const indent = 2;
 	const gaps = count - 1;
 	const spaceForBars = available - indent - gaps - (trailing > 0 ? trailing + 1 : 0);
 	const ideal = Math.floor(spaceForBars / count);
-	const min = BAR_WIDTH_MIN + 2;
-	const max = BAR_WIDTH_MAX + 2;
+	const min = BAR_WIDTH_MIN;
+	const max = BAR_WIDTH_MAX;
 	if (ideal < min) return min;
 	if (ideal > max) return max;
 	return ideal;
@@ -1557,7 +1562,7 @@ function renderUsageReports(
 			lines.push(`${statusIcon} ${uiTheme.bold(group.label)} ${windowSuffix}`.trim());
 			const amountText = formatAggregateAmount(sortedLimits);
 			const columnWidth = resolveColumnWidth(sortedLimits.length, availableWidth, visibleWidth(amountText));
-			const barWidth = columnWidth - 2;
+			const barWidth = columnWidth;
 			const accountLabels = sortedLimits.map((limit, index) =>
 				padColumn(
 					truncateJobLabel(formatAccountHeader(limit, sortedReports[index], index, nowMs), columnWidth),
