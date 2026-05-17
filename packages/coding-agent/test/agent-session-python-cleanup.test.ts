@@ -369,7 +369,7 @@ describe("AgentSession python cleanup", () => {
 		expect(EvalTool).toBeDefined();
 		let toolExecutionSettled = false;
 		const toolExecution = EvalTool!
-			.execute("call-id", { input: "```py\nprint('tool')\n```" }, undefined, undefined, undefined)
+			.execute("call-id", { cells: [{ language: "py", code: "print('tool')" }] }, undefined, undefined, undefined)
 			.finally(() => {
 				toolExecutionSettled = true;
 			});
@@ -594,7 +594,13 @@ describe("AgentSession python cleanup", () => {
 		expect(EvalTool).toBeDefined();
 		const disposeSession = session.dispose();
 		await expect(
-			EvalTool!.execute("call-id", { input: "```py\nprint('late')\n```" }, undefined, undefined, undefined),
+			EvalTool!.execute(
+				"call-id",
+				{ cells: [{ language: "py", code: "print('late')" }] },
+				undefined,
+				undefined,
+				undefined,
+			),
 		).rejects.toThrow("Python execution is unavailable while session disposal is in progress");
 		await disposeSession;
 		expect(executeSpy).not.toHaveBeenCalled();
@@ -629,7 +635,7 @@ describe("AgentSession python cleanup", () => {
 		expect(EvalTool).toBeDefined();
 		const execution = EvalTool!.execute(
 			"call-id",
-			{ input: "```py\nprint('late after artifact')\n```" },
+			{ cells: [{ language: "py", code: "print('late after artifact')" }] },
 			undefined,
 			undefined,
 			undefined,
