@@ -90,7 +90,7 @@ afterEach(() => {
 });
 
 describe("streamPiNative request shape", () => {
-	it("POSTs `{modelId, context, options, stream:true}` to `${baseUrl}/v1/pi/stream`", async () => {
+	it("POSTs `{modelId, context, options, stream:true}` to `<baseUrl>/v1/pi/stream`", async () => {
 		const final = baseAssistant();
 		const captured: { url?: string; init?: RequestInit } = {};
 		const fetchImpl: FetchImpl = (async (input, init) => {

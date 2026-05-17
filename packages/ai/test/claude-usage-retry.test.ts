@@ -102,7 +102,7 @@ describe("claudeUsageProvider retry contract", () => {
 
 	it("honours Retry-After when retrying a 429", async () => {
 		let attempt = 0;
-		const retryWait = vi.fn(async () => {});
+		const retryWait = vi.fn(async (_delayMs: number, _signal?: AbortSignal) => {});
 		const fetchMock = (async () => {
 			attempt += 1;
 			if (attempt === 1) {
