@@ -30,15 +30,6 @@ const DEFAULT_MODEL = "gemini-3-pro-image-preview";
 const DEFAULT_OPENROUTER_MODEL = "google/gemini-3-pro-image-preview";
 const DEFAULT_ANTIGRAVITY_MODEL = "gemini-3-pro-image";
 const DEFAULT_XAI_IMAGE_MODEL = "grok-imagine-image";
-const XAI_ASPECT = {
-	"1:1": "1:1",
-	"16:9": "16:9",
-	"9:16": "9:16",
-	"4:3": "4:3",
-	"3:4": "3:4",
-	"3:2": "3:2",
-	"2:3": "2:3",
-} as const;
 const IMAGE_TIMEOUT = 3 * 60 * 1000; // 3 minutes
 const MAX_IMAGE_SIZE = 35 * 1024 * 1024;
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -1102,7 +1093,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				}
 
 				const prompt = assemblePrompt(params);
-				const aspectRatio = XAI_ASPECT[params.aspect_ratio ?? "1:1"];
+				const aspectRatio = params.aspect_ratio ?? "1:1";
 
 				const xaiResponse = await fetch(`${xaiCreds.baseURL}/images/generations`, {
 					method: "POST",
