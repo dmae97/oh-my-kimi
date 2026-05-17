@@ -110,6 +110,11 @@ async function ensureToken(): Promise<string> {
 }
 
 async function runServe(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
+	// The broker is a long-running headless service: route structured logs to
+	// stdout so a process supervisor (pm2, journald, k8s) captures them, and
+	// skip the rotating ~/.omp/logs/ file the TUI default would have used.
+	logger.setTransports({ console: true, file: false });
+
 	const bind = flags.bind ?? DEFAULT_AUTH_BROKER_BIND;
 	const token = await ensureToken();
 	const dbPath = getAgentDbPath();
@@ -122,15 +127,15 @@ async function runServe(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 		bearerTokens: [token],
 		version: VERSION,
 	});
-	process.stdout.write(`auth-broker listening on ${handle.url}\n`);
-	process.stdout.write(`bearer token: ${getTokenFilePath()} (chmod 0600)\n`);
+	logger.info("auth-broker listening", { url: handle.url });
+	logger.info("auth-broker bearer token loaded", { path: getTokenFilePath(), mode: "0600" });
 
 	const credentialDisabledUnsub = storage.onCredentialDisabled((event: CredentialDisabledEvent) => {
 		logger.warn("auth-broker credential disabled", { ...event });
 	});
 
 	const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
-		process.stdout.write(`\nReceived ${signal}, shutting down...\n`);
+		logger.info("auth-broker shutting down", { signal });
 		credentialDisabledUnsub();
 		await handle.close();
 		storage.close();
