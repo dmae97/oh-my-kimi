@@ -79,12 +79,14 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 	let thinkingLineActive = false;
 	const toolArgsById = new Map<string, { name: string; args?: Record<string, unknown> }>();
 	const writeThinkingLine = (text: string) => {
+		if (!process.stdout.isTTY) return;
 		const line = chalk.dim(`… ${text}`);
 		process.stdout.write(`\r\x1b[2K${line}`);
 		thinkingLineActive = true;
 	};
 	const clearThinkingLine = () => {
 		if (!thinkingLineActive) return;
+		if (!process.stdout.isTTY) return;
 		process.stdout.write("\r\x1b[2K");
 		thinkingLineActive = false;
 	};
