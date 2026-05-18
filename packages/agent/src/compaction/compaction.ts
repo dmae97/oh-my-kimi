@@ -969,6 +969,12 @@ export async function compact(
 		metadata: options?.metadata,
 		convertToLlm: options?.convertToLlm,
 		telemetry: options?.telemetry,
+		// Honor /model thinking selection on every fan-out summarizer.
+		// Without this propagation, generateSummary / generateTurnPrefixSummary
+		// see options?.thinkingLevel === undefined and resolveCompactionEffort
+		// silently falls back to Effort.High — the same defect e07b47ee4 fixed
+		// at the call sites, leaked back in here. See resolveCompactionEffort.
+		thinkingLevel: options?.thinkingLevel,
 	};
 
 	let preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, undefined);
@@ -1059,6 +1065,9 @@ export async function compact(
 			initiatorOverride: summaryOptions.initiatorOverride,
 			metadata: summaryOptions.metadata,
 			telemetry: summaryOptions.telemetry,
+			// Same propagation as summaryOptions above — generateShortSummary
+			// resolves its own reasoning via resolveCompactionEffort.
+			thinkingLevel: options?.thinkingLevel,
 		},
 	);
 

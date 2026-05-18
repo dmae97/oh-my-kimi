@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { generateHandoff } from "@oh-my-pi/pi-agent-core/compaction";
+import {
+	type CompactionPreparation,
+	compact,
+	createFileOps,
+	DEFAULT_COMPACTION_SETTINGS,
+	generateHandoff,
+} from "@oh-my-pi/pi-agent-core/compaction";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
@@ -141,5 +147,108 @@ describe("compaction thinking-level resolution (regression)", () => {
 		const call = spy.mock.calls[0];
 		if (!call) throw new Error("expected completeSimple call");
 		expect(call[2]?.reasoning).toBe(ai.Effort.High);
+	});
+});
+
+// ============================================================================
+// compact() end-to-end regression coverage.
+//
+// The handoff tests above were the test vehicle e07b47ee4 used because handoff
+// issues exactly one LLM call. They prove `resolveCompactionEffort` works at
+// each call site in isolation. They do NOT prove `compact()` forwards
+// `options.thinkingLevel` into the fan-out struct (`summaryOptions`) that
+// reaches generateSummary / generateTurnPrefixSummary / generateShortSummary.
+// That gap is what dropped the field at compaction.ts:963 and 1056 — every
+// downstream summarizer saw `undefined` and fell back to Effort.High.
+//
+// These tests drive compact() with `isSplitTurn: true` so all three
+// summarizers fire, then assert the captured `reasoning` on each
+// `completeSimple` call. The contract is: every fan-out call receives the
+// SAME resolved effort as a single handoff call would.
+// ============================================================================
+
+function makeUserMessage(text: string, timestamp = Date.now()): AgentMessage {
+	return { role: "user", content: text, timestamp };
+}
+
+function makePreparation(overrides: Partial<CompactionPreparation> = {}): CompactionPreparation {
+	return {
+		firstKeptEntryId: "kept-1",
+		messagesToSummarize: [
+			makeUserMessage("history msg"),
+			createAssistantMessage([{ type: "text", text: "history reply" }]),
+		],
+		turnPrefixMessages: [makeUserMessage("turn prefix msg")],
+		recentMessages: [makeUserMessage("recent msg")],
+		isSplitTurn: true,
+		tokensBefore: 12_345,
+		fileOps: createFileOps(),
+		settings: { ...DEFAULT_COMPACTION_SETTINGS, remoteEnabled: false },
+		...overrides,
+	};
+}
+
+describe("compact() propagates thinkingLevel to all three summarizers (regression)", () => {
+	test("ThinkingLevel.Off → every fan-out call gets reasoning=undefined", async () => {
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "summary" }]));
+
+		await compact(makePreparation(), getAnthropicModel(), "test-key", undefined, undefined, {
+			thinkingLevel: ThinkingLevel.Off,
+		});
+
+		// Split-turn preparation fans out into history + turn-prefix + short.
+		expect(spy).toHaveBeenCalledTimes(3);
+		for (const [, , opts] of spy.mock.calls) {
+			expect(opts?.reasoning).toBeUndefined();
+		}
+	});
+
+	test("ThinkingLevel.Low → every fan-out call gets reasoning=low", async () => {
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "summary" }]));
+
+		await compact(makePreparation(), getAnthropicModel(), "test-key", undefined, undefined, {
+			thinkingLevel: ThinkingLevel.Low,
+		});
+
+		expect(spy).toHaveBeenCalledTimes(3);
+		for (const [, , opts] of spy.mock.calls) {
+			expect(opts?.reasoning).toBe(ai.Effort.Low);
+		}
+	});
+
+	test("undefined thinkingLevel → every fan-out call still gets reasoning=high (historical default)", async () => {
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "summary" }]));
+
+		await compact(makePreparation(), getAnthropicModel(), "test-key", undefined, undefined);
+
+		expect(spy).toHaveBeenCalledTimes(3);
+		for (const [, , opts] of spy.mock.calls) {
+			expect(opts?.reasoning).toBe(ai.Effort.High);
+		}
+	});
+
+	test("xai-oauth/grok-build + ThinkingLevel.High → every fan-out call gets reasoning=undefined (clamp)", async () => {
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "summary" }]));
+
+		await compact(makePreparation(), getGrokBuildModel(), "test-key", undefined, undefined, {
+			thinkingLevel: ThinkingLevel.High,
+		});
+
+		expect(spy).toHaveBeenCalledTimes(3);
+		for (const [, , opts] of spy.mock.calls) {
+			// Without the propagation fix at compaction.ts:971 / 1061, the
+			// three summarizers would see undefined → fall back to High and
+			// trip requireSupportedEffort. The fix + the wire-side strip in
+			// fix #2 keep this clean.
+			expect(opts?.reasoning).toBeUndefined();
+		}
 	});
 });
