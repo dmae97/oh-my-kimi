@@ -439,7 +439,11 @@
 - Fixed `RULES.md` not being injected. The documented sticky-rules file at `~/.omp/agent/RULES.md` and `<repo>/.omp/RULES.md` was never read by any discovery provider; only `.omp/rules/*.md` was scanned. The native provider now loads both as always-apply rules so they re-attach every turn as documented ([#1266](https://github.com/can1357/oh-my-pi/issues/1266)).
 
 ## [15.2.1] - 2026-05-21
+### Added
 
+- Added `.omp-plugin/marketplace.json` as a preferred marketplace catalog path. `fetchMarketplace` now searches `.omp-plugin/marketplace.json` before `.claude-plugin/marketplace.json` for every local and cloned source. Lets a single marketplace repository publish a tool-specific catalog (e.g. an omp-only superset of a shared Claude Code marketplace) without forcing the omp/Claude distinction into per-plugin tagging. Mirrors the `package.json#omp.extensions` precedence pattern; the `.claude-plugin/marketplace.json` fallback keeps every existing marketplace loading unchanged.
+
+## [15.2.1] - 2026-05-21
 ### Fixed
 
 - Fixed compaction routing to the wrong provider when `modelRoles.default` is set to a different model than the active chat. Auto- and manual compaction now prefer the active session's model and only fall back to role-based candidates when the current model has no usable credentials. Previously, an Anthropic chat with `modelRoles.default = openai/gpt-5` would compact through OpenAI (including the remote-compaction endpoint), even though the live conversation never used OpenAI.
