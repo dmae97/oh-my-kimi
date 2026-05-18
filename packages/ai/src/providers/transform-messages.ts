@@ -126,6 +126,19 @@ export function transformMessages<TApi extends Api>(
 		transformed.filter((msg): msg is ToolResultMessage => msg.role === "toolResult").map(msg => msg.toolCallId),
 	);
 
+	// Anthropic rejects `tool_result` blocks whose `tool_use_id` does not appear in a prior
+	// `tool_use` block. After handoff/compaction folds an assistant turn into a summary
+	// string, the user-side `toolResult` for that turn can survive while the originating
+	// `tool_use` disappears — leaving an orphan that triggers HTTP 400. Track the set of
+	// `tool_use` ids that survive transformation so the second pass can drop orphans cleanly.
+	const validToolUseIds = new Set<string>();
+	for (const msg of transformed) {
+		if (msg.role !== "assistant") continue;
+		for (const block of msg.content) {
+			if (block.type === "toolCall") validToolUseIds.add(block.id);
+		}
+	}
+
 	// Second pass: insert synthetic empty tool results for orphaned tool calls
 	// and preserve aborted/errored tool results when they were already persisted.
 	const result: Message[] = [];
@@ -211,6 +224,32 @@ export function transformMessages<TApi extends Api>(
 			}
 
 			if (toolCallStatus.get(msg.toolCallId) === ToolCallStatus.Aborted) continue;
+
+			if (!validToolUseIds.has(msg.toolCallId)) {
+				// Orphan `tool_result`: the originating `tool_use` is not present in the
+				// transformed history (typically because handoff/compaction folded the
+				// assistant message into a summary string while the user-side result
+				// survived). Sending the block as-is would 400 the request. Drop it but
+				// preserve any text payload as a developer note so the model still sees
+				// what the tool returned. Flush pending tool-call bookkeeping first
+				// because the synthesized developer message acts as a turn boundary.
+				flushPendingToolCalls(messageTimestamp);
+				flushPendingAbortedToolCalls();
+				const textParts: string[] = [];
+				for (const part of msg.content) {
+					if (part.type === "text" && part.text.trim() !== "") textParts.push(part.text);
+				}
+				if (textParts.length > 0) {
+					const errorAttr = msg.isError ? ' is-error="true"' : "";
+					result.push({
+						role: "developer",
+						content: `<stale-tool-result tool="${msg.toolName}" id="${msg.toolCallId}"${errorAttr}>\n${textParts.join("\n")}\n</stale-tool-result>`,
+						timestamp: messageTimestamp,
+					} as DeveloperMessage);
+				}
+				continue;
+			}
+
 			toolCallStatus.set(msg.toolCallId, ToolCallStatus.Resolved);
 			result.push(msg);
 		} else if (msg.role === "user" || msg.role === "developer") {
