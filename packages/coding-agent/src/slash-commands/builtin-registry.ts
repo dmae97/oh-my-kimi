@@ -147,7 +147,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "fast",
-		description: "Toggle fast mode (OpenAI service tier priority)",
+		description: "Toggle fast mode (Anthropic speed=fast on supported Opus models, OpenAI service_tier=priority)",
 		acpDescription: "Toggle fast mode",
 		acpInputHint: "[on|off|status]",
 		subcommands: [

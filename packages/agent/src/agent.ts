@@ -167,6 +167,8 @@ export interface AgentOptions {
 	presencePenalty?: number;
 	repetitionPenalty?: number;
 	serviceTier?: ServiceTier;
+	/** Anthropic fast mode (`speed: "fast"`). Ignored by non-Anthropic providers. */
+	speed?: "fast" | "standard";
 	/**
 	 * If true, request that the underlying provider omit reasoning/thinking summaries
 	 * from the response. The model still reasons internally; only the human-readable
@@ -273,6 +275,7 @@ export class Agent {
 	#presencePenalty?: number;
 	#repetitionPenalty?: number;
 	#serviceTier?: ServiceTier;
+	#speed?: "fast" | "standard";
 	#hideThinkingSummary?: boolean;
 	#maxRetryDelayMs?: number;
 	#getToolContext?: (toolCall?: ToolCallContext) => AgentToolContext | undefined;
@@ -326,6 +329,7 @@ export class Agent {
 		this.#presencePenalty = opts.presencePenalty;
 		this.#repetitionPenalty = opts.repetitionPenalty;
 		this.#serviceTier = opts.serviceTier;
+		this.#speed = opts.speed;
 		this.#hideThinkingSummary = opts.hideThinkingSummary;
 		this.#maxRetryDelayMs = opts.maxRetryDelayMs;
 		this.getApiKey = opts.getApiKey;
@@ -511,6 +515,14 @@ export class Agent {
 
 	set serviceTier(value: ServiceTier | undefined) {
 		this.#serviceTier = value;
+	}
+
+	get speed(): "fast" | "standard" | undefined {
+		return this.#speed;
+	}
+
+	set speed(value: "fast" | "standard" | undefined) {
+		this.#speed = value;
 	}
 
 	get hideThinkingSummary(): boolean | undefined {
@@ -892,6 +904,7 @@ export class Agent {
 			presencePenalty: this.#presencePenalty,
 			repetitionPenalty: this.#repetitionPenalty,
 			serviceTier: this.#serviceTier,
+			speed: this.#speed,
 			hideThinkingSummary: this.#hideThinkingSummary,
 			interruptMode: this.#interruptMode,
 			sessionId: this.#sessionId,

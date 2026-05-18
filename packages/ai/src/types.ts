@@ -348,6 +348,8 @@ export interface SimpleStreamOptions extends StreamOptions {
 	toolChoice?: ToolChoice;
 	/** OpenAI service tier for processing priority/cost control. Ignored by non-OpenAI providers. */
 	serviceTier?: ServiceTier;
+	/** Anthropic fast mode (`speed: "fast"`, beta `fast-mode-2026-02-01`). Ignored by non-Anthropic providers. */
+	speed?: "fast" | "standard";
 	/** API format for Kimi Code provider: "openai" or "anthropic" (default: "anthropic") */
 	kimiApiFormat?: "openai" | "anthropic";
 	/** API format for Synthetic provider: "openai" or "anthropic" (default: "openai") */
@@ -502,6 +504,14 @@ export interface AssistantMessage {
 	errorMessage?: string;
 	/** HTTP status surfaced by the provider when the request failed. Populated by every provider's catch block alongside `errorMessage` so consumers (auth retry, telemetry, UI) can branch without regex-scraping the message. */
 	errorStatus?: number;
+	/**
+	 * Stable identifiers for request features the provider silently dropped
+	 * during this turn (e.g. `"anthropic.fast_mode"`). Set when a server-side
+	 * rejection triggered an in-provider fallback retry that succeeded
+	 * without the feature. Callers can use this to sync user-facing toggles
+	 * back to the server's actual state.
+	 */
+	disabledFeatures?: string[];
 	/** Provider-specific opaque payload used to reconstruct transport-native history. */
 	providerPayload?: ProviderPayload;
 	timestamp: number; // Unix timestamp in milliseconds

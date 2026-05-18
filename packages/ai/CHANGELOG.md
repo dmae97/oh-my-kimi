@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added Anthropic fast mode support via `speed: "fast" | "standard"` on `SimpleStreamOptions` and `AnthropicOptions`. The provider sets the top-level `speed` field on the Messages request and appends the `fast-mode-2026-02-01` beta to the client's `Anthropic-Beta` header. When the server rejects an unsupported model with `invalid_request_error`, the provider transparently retries the same turn without `speed` (mirroring the strict-tools fallback pattern), persists the disable via a new `providerSessionState.fastModeDisabled` flag so subsequent requests in the session skip the field, and surfaces the action via the new `AssistantMessage.disabledFeatures` array so callers can sync user-facing toggles.
+
 ### Changed
 
 - Updated auth-gateway format and pi-native request handling to invalidate the failed API key and retry the provider request with a replacement key when authentication fails

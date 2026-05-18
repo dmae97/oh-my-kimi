@@ -1578,6 +1578,14 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
+				if (assistantMsg.disabledFeatures?.includes("anthropic.fast_mode") && this.speed === "fast") {
+					this.setSpeed(undefined);
+					this.emitNotice(
+						"warning",
+						"Fast mode rejected for this model; retried without it. Fast mode is now off.",
+						"anthropic.fast_mode",
+					);
+				}
 				// Resolve TTSR resume gate before checking for new deferred injections.
 				// Gate on #ttsrAbortPending, not stopReason: a non-TTSR abort (e.g. streaming
 				// edit) also produces stopReason === "aborted" but has no continuation coming.
@@ -2759,6 +2767,10 @@ export class AgentSession {
 
 	get serviceTier(): ServiceTier | undefined {
 		return this.agent.serviceTier;
+	}
+
+	get speed(): "fast" | "standard" | undefined {
+		return this.agent.speed;
 	}
 
 	/** Whether agent is currently streaming a response */
@@ -5111,6 +5123,9 @@ export class AgentSession {
 	}
 
 	isFastModeEnabled(): boolean {
+		if (this.model?.api === "anthropic-messages") {
+			return this.speed === "fast";
+		}
 		return this.serviceTier === "priority";
 	}
 
@@ -5120,7 +5135,17 @@ export class AgentSession {
 		this.sessionManager.appendServiceTierChange(serviceTier ?? null);
 	}
 
+	setSpeed(speed: "fast" | "standard" | undefined): void {
+		if (this.speed === speed) return;
+		this.agent.speed = speed;
+		this.sessionManager.appendSpeedChange(speed ?? null);
+	}
+
 	setFastMode(enabled: boolean): void {
+		if (this.model?.api === "anthropic-messages") {
+			this.setSpeed(enabled ? "fast" : undefined);
+			return;
+		}
 		this.setServiceTier(enabled ? "priority" : undefined);
 	}
 
@@ -7582,6 +7607,7 @@ export class AgentSession {
 				reasoning: toReasoningEffort(this.thinkingLevel),
 				hideThinkingSummary: this.agent.hideThinkingSummary,
 				serviceTier: this.serviceTier,
+				speed: this.speed,
 				signal: args.signal,
 				toolChoice: "none",
 			},
@@ -7821,6 +7847,7 @@ export class AgentSession {
 			const hasServiceTierEntry = this.sessionManager
 				.getBranch()
 				.some(entry => entry.type === "service_tier_change");
+			const hasSpeedEntry = this.sessionManager.getBranch().some(entry => entry.type === "speed_change");
 			const defaultThinkingLevel = this.settings.get("defaultThinkingLevel");
 			const configuredServiceTier = this.settings.get("serviceTier");
 			const nextThinkingLevel = resolveThinkingLevelForModel(
@@ -7834,6 +7861,7 @@ export class AgentSession {
 				: configuredServiceTier === "none"
 					? undefined
 					: configuredServiceTier;
+			this.agent.speed = hasSpeedEntry ? sessionContext.speed : undefined;
 
 			if (switchingToDifferentSession) {
 				this.#resetHindsightConversationTrackingIfHindsight();
