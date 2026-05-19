@@ -22,11 +22,11 @@ import {
 	type Model,
 	type OpenAICompat,
 	type ProviderSessionState,
+	resolveServiceTier,
 	type ServiceTier,
 	type StopReason,
 	type StreamFunction,
 	type StreamOptions,
-	shouldSendServiceTier,
 	type TextContent,
 	type ThinkingContent,
 	type Tool,
@@ -1092,8 +1092,9 @@ function buildParams(
 	if (options?.frequencyPenalty !== undefined) {
 		params.frequency_penalty = options.frequencyPenalty;
 	}
-	if (shouldSendServiceTier(options?.serviceTier, model.provider)) {
-		params.service_tier = options.serviceTier;
+	const resolvedServiceTier = resolveServiceTier(options?.serviceTier, model.provider);
+	if (resolvedServiceTier === "flex" || resolvedServiceTier === "scale" || resolvedServiceTier === "priority") {
+		params.service_tier = resolvedServiceTier;
 	}
 
 	if (context.tools) {

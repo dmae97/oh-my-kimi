@@ -44,6 +44,7 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types";
+import { resolveServiceTier } from "../types";
 import {
 	isAnthropicOAuthToken,
 	isRecord,
@@ -1013,7 +1014,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
 
 				const extraBetas = normalizeExtraBetas(options?.betas);
-				if (options?.serviceTier === "priority" && !extraBetas.includes(fastModeBeta)) {
+				const wantsAnthropicPriority = resolveServiceTier(options?.serviceTier, model.provider) === "priority";
+				if (wantsAnthropicPriority && !extraBetas.includes(fastModeBeta)) {
 					extraBetas.push(fastModeBeta);
 				}
 
@@ -1346,7 +1348,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					}
 					if (
 						!dropFastMode &&
-						options?.serviceTier === "priority" &&
+						resolveServiceTier(options?.serviceTier, model.provider) === "priority" &&
 						firstTokenTime === undefined &&
 						isAnthropicFastModeUnsupportedError(streamFailure)
 					) {
@@ -1399,7 +1401,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			if (dropFastMode && options?.serviceTier === "priority") {
+			if (dropFastMode && resolveServiceTier(options?.serviceTier, model.provider) === "priority") {
 				output.disabledFeatures = [...(output.disabledFeatures ?? []), "priority"];
 			}
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -1949,7 +1951,7 @@ function buildParams(
 		params.metadata = { user_id: metadataUserId };
 	}
 
-	if (options?.serviceTier === "priority") {
+	if (resolveServiceTier(options?.serviceTier, model.provider) === "priority") {
 		(params as ParamsWithSpeed).speed = "fast";
 	}
 

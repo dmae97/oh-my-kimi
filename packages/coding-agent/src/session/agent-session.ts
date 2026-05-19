@@ -1579,7 +1579,9 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
-				if (assistantMsg.disabledFeatures?.includes("priority") && this.serviceTier === "priority") {
+				const currentGrantsAnthropicPriority =
+					this.serviceTier === "priority" || this.serviceTier === "claude-only";
+				if (assistantMsg.disabledFeatures?.includes("priority") && currentGrantsAnthropicPriority) {
 					this.setServiceTier(undefined);
 					this.emitNotice(
 						"warning",
@@ -5120,19 +5122,19 @@ export class AgentSession {
 	}
 
 	isFastModeEnabled(): boolean {
-		return this.serviceTier === "priority";
+		return (
+			this.serviceTier === "priority" || this.serviceTier === "claude-only" || this.serviceTier === "openai-only"
+		);
 	}
 
 	setServiceTier(serviceTier: ServiceTier | undefined): void {
 		if (this.serviceTier === serviceTier) return;
-		if (serviceTier === "priority") {
-			// Re-arming priority after the provider's per-session auto-fallback
-			// cleared the field (e.g. user toggled `/fast on` after Anthropic
-			// rejected `speed: "fast"`). Clear the sticky disable so the next
-			// request actually carries the priority signal; without this the
-			// re-enable is a silent no-op and the warning notice fires every
-			// turn. The clear is anthropic-specific because no other provider
-			// has a priority fallback today.
+		// Re-arming priority on Anthropic? Clear the per-session auto-fallback
+		// sticky disable so the next request actually carries `speed: "fast"`
+		// again. Without this, `/fast on` (or user switching to a tier that
+		// grants anthropic priority) after an auto-disable is a silent no-op
+		// and the warning notice fires every turn.
+		if (serviceTier === "priority" || serviceTier === "claude-only") {
 			clearAnthropicFastModeFallback(this.#providerSessionState);
 		}
 		this.agent.serviceTier = serviceTier;
@@ -5140,6 +5142,10 @@ export class AgentSession {
 	}
 
 	setFastMode(enabled: boolean): void {
+		if (enabled && this.isFastModeEnabled()) {
+			// Already on under any scope — keep the user's scoped value.
+			return;
+		}
 		this.setServiceTier(enabled ? "priority" : undefined);
 	}
 

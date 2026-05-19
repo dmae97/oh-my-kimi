@@ -86,6 +86,22 @@ describe("Anthropic priority service tier → speed='fast'", () => {
 			expect(payload.speed).toBeUndefined();
 		}
 	});
+
+	it("sets speed='fast' on direct anthropic when serviceTier='claude-only'", async () => {
+		const payload = (await capturePayload(makeAnthropicModel("claude-opus-4-7"), {
+			serviceTier: "claude-only",
+		})) as { speed?: string };
+		expect(payload.speed).toBe("fast");
+	});
+
+	it("omits speed when serviceTier='openai-only' on an anthropic model", async () => {
+		// Scoped to OpenAI — on this anthropic request, the scope doesn't match,
+		// so `speed` must not be set on the wire.
+		const payload = (await capturePayload(makeAnthropicModel("claude-opus-4-7"), {
+			serviceTier: "openai-only",
+		})) as Record<string, unknown>;
+		expect(payload.speed).toBeUndefined();
+	});
 });
 
 describe("clearAnthropicFastModeFallback", () => {
