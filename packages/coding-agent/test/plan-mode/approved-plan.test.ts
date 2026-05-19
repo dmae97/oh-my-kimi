@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { humanizePlanTitle, normalizePlanTitle, renameApprovedPlanFile } from "@oh-my-pi/pi-coding-agent/plan-mode/approved-plan";
+import {
+	humanizePlanTitle,
+	normalizePlanTitle,
+	renameApprovedPlanFile,
+} from "@oh-my-pi/pi-coding-agent/plan-mode/approved-plan";
 
 describe("renameApprovedPlanFile", () => {
 	let tmpDir: string;
@@ -85,7 +89,10 @@ describe("normalizePlanTitle", () => {
 	});
 
 	it("drops characters outside the allowed set after space replacement", () => {
-		expect(normalizePlanTitle("plan: v1.0 (draft)")).toEqual({ title: "plan-v10-draft", fileName: "plan-v10-draft.md" });
+		expect(normalizePlanTitle("plan: v1.0 (draft)")).toEqual({
+			title: "plan-v10-draft",
+			fileName: "plan-v10-draft.md",
+		});
 	});
 
 	it("trims leading/trailing hyphens that result from sanitization", () => {

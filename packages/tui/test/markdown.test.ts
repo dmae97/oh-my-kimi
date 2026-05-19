@@ -36,11 +36,7 @@ describe("renderInlineMarkdown", () => {
 	});
 
 	it("applies baseColor to fallback for non-string input", () => {
-		const rendered = renderInlineMarkdown(
-			null as unknown as string,
-			defaultMarkdownTheme,
-			t => `[${t}]`,
-		);
+		const rendered = renderInlineMarkdown(null as unknown as string, defaultMarkdownTheme, t => `[${t}]`);
 		expect(rendered).toBe("[]");
 	});
 });
