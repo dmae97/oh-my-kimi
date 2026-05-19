@@ -150,9 +150,15 @@ function resolveTaskOrError(
 	}
 	const hit = findTaskByContent(phases, content);
 	if (!hit) {
-		const totalTasks = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
-		const hint = totalTasks === 0 ? " (todo list is empty — was it replaced or not yet created?)" : "";
-		errors.push(`Task "${content}" not found${hint}`);
+		if (/^task-\d+$/.test(content)) {
+			errors.push(
+				`Task "${content}" not found. Tasks are referenced by content, not by IDs — pass the task's full text from the previous result.`,
+			);
+		} else {
+			const totalTasks = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
+			const hint = totalTasks === 0 ? " (todo list is empty — was it replaced or not yet created?)" : "";
+			errors.push(`Task "${content}" not found${hint}`);
+		}
 	}
 	return hit;
 }
@@ -209,7 +215,7 @@ function appendItems(phases: TodoPhase[], entry: TodoOpEntryValue, errors: strin
 	for (const content of entry.items) {
 		if (findTaskByContent(phases, content)) {
 			errors.push(`Task "${content}" already exists`);
-			continue;
+			return phases;
 		}
 		phase.tasks.push({ content, status: "pending" });
 	}
@@ -513,6 +519,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 		return {
 			content: [{ type: "text", text: formatSummary(updated, errors) }],
 			details: { phases: updated, storage },
+			isError: errors.length > 0 ? true : undefined,
 		};
 	}
 }
