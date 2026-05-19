@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import type {
 	AgentTool,
 	AgentToolContext,
@@ -6,7 +7,7 @@ import type {
 	RenderResultOptions,
 } from "@oh-my-pi/pi-agent-core";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import {
 	type DapBreakpointRecord,
@@ -37,7 +38,7 @@ import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import type { ToolSession } from ".";
 import type { OutputMeta } from "./output-meta";
-import { resolveToCwd } from "./path-utils";
+import { formatPathRelativeToCwd, resolveToCwd } from "./path-utils";
 import {
 	formatExpandHint,
 	formatStatusIcon,
@@ -469,6 +470,21 @@ function getConfiguredAdapters(cwd: string): string {
 	const adapters = getAvailableAdapters(cwd).map(adapter => adapter.name);
 	return adapters.length > 0 ? adapters.join(", ") : "none";
 }
+async function validateLaunchProgram(program: string, cwd: string): Promise<void> {
+	let isDirectory: boolean;
+	try {
+		isDirectory = (await fs.stat(program)).isDirectory();
+	} catch (error) {
+		if (isEnoent(error)) return;
+		throw error;
+	}
+	if (!isDirectory) return;
+
+	const displayPath = formatPathRelativeToCwd(program, cwd, { trailingSlash: true });
+	throw new ToolError(
+		`launch program resolves to a directory: ${displayPath}. Pass an executable file path, or for Python use adapter "debugpy" with program set to the .py file.`,
+	);
+}
 
 interface DebugRenderArgs extends Partial<DebugParams> {}
 
@@ -628,6 +644,7 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails
 				}
 				const commandCwd = params.cwd ? resolveToCwd(params.cwd, this.session.cwd) : this.session.cwd;
 				const program = resolveToCwd(params.program, commandCwd);
+				await validateLaunchProgram(program, commandCwd);
 				const adapter = selectLaunchAdapter(program, commandCwd, params.adapter);
 				if (!adapter) {
 					throw new ToolError(
