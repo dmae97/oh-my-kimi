@@ -120,14 +120,34 @@ export async function acquireTab(
 	}
 
 	const initPayload = await buildInitPayload(browser, opts);
-	const worker = await spawnTabWorker();
+	let worker = await spawnTabWorker();
 	let info: ReadyInfo;
 	try {
 		info = await initializeTabWorker(worker, initPayload, opts.timeoutMs + GRACE_MS);
 	} catch (error) {
+		// `BuildMessage`-class failures arrive asynchronously via the worker's `error` event,
+		// after `spawnTabWorker`'s synchronous try/catch has already returned. Fall back to
+		// the inline worker here so module-resolution failures don't poison every tab open.
 		await worker.terminate().catch(() => undefined);
-		if (browser.refCount === 0) await releaseBrowser(browser, { kill: false });
-		throw error;
+		if (worker.mode === "inline") {
+			if (browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+			throw error;
+		}
+		logger.warn("Tab worker init failed; retrying with inline tab worker (no sync-loop guard)", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		worker = await spawnInlineWorker();
+		try {
+			info = await initializeTabWorker(worker, initPayload, opts.timeoutMs + GRACE_MS);
+		} catch (inlineError) {
+			await worker.terminate().catch(() => undefined);
+			if (browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+			const finalError = new ToolError(
+				`Failed to start browser tab worker (inline fallback also failed): ${inlineError instanceof Error ? inlineError.message : String(inlineError)}`,
+			);
+			(finalError as { cause?: unknown }).cause = error;
+			throw finalError;
+		}
 	}
 
 	holdBrowser(browser);
