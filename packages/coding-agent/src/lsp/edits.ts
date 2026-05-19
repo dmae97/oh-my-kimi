@@ -1,7 +1,17 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { formatPathRelativeToCwd } from "../tools/path-utils";
-import type { CreateFile, DeleteFile, RenameFile, TextDocumentEdit, TextEdit, WorkspaceEdit } from "./types";
+import { ToolError } from "../tools/tool-errors";
+import type {
+	CreateFile,
+	DeleteFile,
+	Position,
+	Range,
+	RenameFile,
+	TextDocumentEdit,
+	TextEdit,
+	WorkspaceEdit,
+} from "./types";
 import { uriToFile } from "./utils";
 
 // =============================================================================
@@ -23,6 +33,19 @@ export function applyTextEditsToString(content: string, edits: TextEdit[]): stri
 		return b.range.start.character - a.range.start.character;
 	});
 
+	// Detect overlapping ranges: in reverse-sorted order, each edit's start
+	// must be >= the next edit's end. If not, the edits would clobber each other
+	// once applied bottom-up (typically a multi-server rename with stale positions).
+	for (let i = 0; i < sortedEdits.length - 1; i++) {
+		const later = sortedEdits[i].range;
+		const earlier = sortedEdits[i + 1].range;
+		if (comparePosition(earlier.end, later.start) > 0) {
+			throw new ToolError(
+				`overlapping LSP edits: ${formatRange(earlier)} conflicts with ${formatRange(later)}; multi-server rename produced inconsistent edits`,
+			);
+		}
+	}
+
 	for (const edit of sortedEdits) {
 		const { start, end } = edit.range;
 
@@ -40,6 +63,47 @@ export function applyTextEditsToString(content: string, edits: TextEdit[]): stri
 	}
 
 	return lines.join("\n");
+}
+
+function comparePosition(a: Position, b: Position): number {
+	return a.line === b.line ? a.character - b.character : a.line - b.line;
+}
+
+function formatRange(range: Range): string {
+	return `${range.start.line + 1}:${range.start.character + 1}-${range.end.line + 1}:${range.end.character + 1}`;
+}
+
+/** True when two ranges overlap (share any position other than a touching boundary). */
+export function rangesOverlap(a: Range, b: Range): boolean {
+	return comparePosition(a.start, b.end) < 0 && comparePosition(b.start, a.end) < 0;
+}
+
+/**
+ * Flatten a WorkspaceEdit's text edits into a Map<uri, TextEdit[]>.
+ * Resource operations (create/rename/delete) are ignored — callers handle them separately.
+ */
+export function flattenWorkspaceTextEdits(edit: WorkspaceEdit): Map<string, TextEdit[]> {
+	const out = new Map<string, TextEdit[]>();
+	const push = (uri: string, edits: TextEdit[]) => {
+		if (edits.length === 0) return;
+		const prev = out.get(uri);
+		if (prev) prev.push(...edits);
+		else out.set(uri, [...edits]);
+	};
+	if (edit.changes) {
+		const changes = edit.changes;
+		for (const uri in changes) push(uri, changes[uri]);
+	}
+	if (edit.documentChanges) {
+		for (const change of edit.documentChanges) {
+			if ("textDocument" in change && change.textDocument && "edits" in change && change.edits) {
+				const tdc = change as TextDocumentEdit;
+				const textEdits = tdc.edits.filter((e): e is TextEdit => "range" in e && "newText" in e);
+				push(tdc.textDocument.uri, textEdits);
+			}
+		}
+	}
+	return out;
 }
 
 /**
@@ -63,47 +127,37 @@ export async function applyTextEdits(filePath: string, edits: TextEdit[]): Promi
 export async function applyWorkspaceEdit(edit: WorkspaceEdit, cwd: string): Promise<string[]> {
 	const applied: string[] = [];
 
-	// Handle changes map (legacy format)
-	if (edit.changes) {
-		for (const [uri, textEdits] of Object.entries(edit.changes)) {
-			const filePath = uriToFile(uri);
-			await applyTextEdits(filePath, textEdits);
-			applied.push(`Applied ${textEdits.length} edit(s) to ${formatPathRelativeToCwd(filePath, cwd)}`);
-		}
+	// Coalesce all text edits per URI before applying so a single file's edits
+	// are applied in one pass against a single snapshot — multiple TextDocumentEdits
+	// for the same URI would otherwise read stale positions on subsequent writes.
+	const textEditsByUri = flattenWorkspaceTextEdits(edit);
+	for (const [uri, textEdits] of textEditsByUri) {
+		const filePath = uriToFile(uri);
+		await applyTextEdits(filePath, textEdits);
+		applied.push(`Applied ${textEdits.length} edit(s) to ${formatPathRelativeToCwd(filePath, cwd)}`);
 	}
 
-	// Handle documentChanges array (modern format)
+	// Resource operations (create/rename/delete) preserve their original order.
 	if (edit.documentChanges) {
 		for (const change of edit.documentChanges) {
-			if ("textDocument" in change && change.textDocument && "edits" in change && change.edits) {
-				// TextDocumentEdit
-				const docChange = change as TextDocumentEdit;
-				const filePath = uriToFile(docChange.textDocument.uri);
-				const textEdits = docChange.edits.filter((e): e is TextEdit => "range" in e && "newText" in e);
-				await applyTextEdits(filePath, textEdits);
-				applied.push(`Applied ${textEdits.length} edit(s) to ${formatPathRelativeToCwd(filePath, cwd)}`);
-			} else if ("kind" in change && change.kind) {
-				// Resource operations
-				if (change.kind === "create") {
-					const createOp = change as CreateFile;
-					const filePath = uriToFile(createOp.uri);
-					await Bun.write(filePath, "");
-					applied.push(`Created ${formatPathRelativeToCwd(filePath, cwd)}`);
-				} else if (change.kind === "rename") {
-					const renameOp = change as RenameFile;
-					const oldPath = uriToFile(renameOp.oldUri);
-					const newPath = uriToFile(renameOp.newUri);
-					await fs.mkdir(path.dirname(newPath), { recursive: true });
-					await fs.rename(oldPath, newPath);
-					applied.push(
-						`Renamed ${formatPathRelativeToCwd(oldPath, cwd)} → ${formatPathRelativeToCwd(newPath, cwd)}`,
-					);
-				} else if (change.kind === "delete") {
-					const deleteOp = change as DeleteFile;
-					const filePath = uriToFile(deleteOp.uri);
-					await fs.rm(filePath, { recursive: true });
-					applied.push(`Deleted ${formatPathRelativeToCwd(filePath, cwd)}`);
-				}
+			if (!("kind" in change) || !change.kind) continue;
+			if (change.kind === "create") {
+				const createOp = change as CreateFile;
+				const filePath = uriToFile(createOp.uri);
+				await Bun.write(filePath, "");
+				applied.push(`Created ${formatPathRelativeToCwd(filePath, cwd)}`);
+			} else if (change.kind === "rename") {
+				const renameOp = change as RenameFile;
+				const oldPath = uriToFile(renameOp.oldUri);
+				const newPath = uriToFile(renameOp.newUri);
+				await fs.mkdir(path.dirname(newPath), { recursive: true });
+				await fs.rename(oldPath, newPath);
+				applied.push(`Renamed ${formatPathRelativeToCwd(oldPath, cwd)} → ${formatPathRelativeToCwd(newPath, cwd)}`);
+			} else if (change.kind === "delete") {
+				const deleteOp = change as DeleteFile;
+				const filePath = uriToFile(deleteOp.uri);
+				await fs.rm(filePath, { recursive: true });
+				applied.push(`Deleted ${formatPathRelativeToCwd(filePath, cwd)}`);
 			}
 		}
 	}

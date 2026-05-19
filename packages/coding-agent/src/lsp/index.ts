@@ -7,7 +7,7 @@ import { type Theme, theme } from "../modes/theme/theme";
 import lspDescription from "../prompts/tools/lsp.md" with { type: "text" };
 import type { ToolSession } from "../tools";
 import { formatPathRelativeToCwd, resolveToCwd } from "../tools/path-utils";
-import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
+import { ToolAbortError, ToolError, throwIfAborted } from "../tools/tool-errors";
 import { clampTimeout } from "../tools/tool-timeouts";
 import {
 	ensureFileOpen,
@@ -25,7 +25,13 @@ import {
 } from "./client";
 import { getLinterClient } from "./clients";
 import { getServersForFile, type LspConfig, loadConfig } from "./config";
-import { applyTextEditsToString, applyWorkspaceEdit } from "./edits";
+import {
+	applyTextEdits,
+	applyTextEditsToString,
+	applyWorkspaceEdit,
+	flattenWorkspaceTextEdits,
+	rangesOverlap,
+} from "./edits";
 import { detectLspmux } from "./lspmux";
 import { renderCall, renderResult } from "./render";
 import {
@@ -1197,7 +1203,8 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		const { action, file, line, symbol, query, new_name, apply, timeout } = params;
 		const timeoutSec = clampTimeout("lsp", timeout);
 		const timeoutSignal = AbortSignal.timeout(timeoutSec * 1000);
-		signal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+		const callerSignal = signal;
+		signal = callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
 		throwIfAborted(signal);
 
 		const config = getConfig(this.session.cwd);
@@ -1519,11 +1526,81 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			}
 
 			const summary: string[] = [];
+
+			// Coalesce per-URI edits across servers before applying. Each server
+			// computed positions against the pre-edit file content, so applying
+			// server A then re-reading for server B yields stale positions and
+			// produces malformed imports. Group all text edits by URI, prefer the
+			// project-primary (project-aware) server on overlap, and apply once
+			// per URI from a single snapshot.
+			const serverConfigByName = new Map(servers);
+			interface AcceptedBucket {
+				primaryServer: string;
+				edits: TextEdit[];
+				discarded: number;
+				conflictServers: Set<string>;
+			}
+			const acceptedByUri = new Map<string, AcceptedBucket>();
 			for (const { serverName, edit } of perServerEdits) {
-				const applied = await applyWorkspaceEdit(edit, this.session.cwd);
-				if (applied.length > 0) {
-					summary.push(`  ${serverName}:`);
-					summary.push(...applied.map(line => `    ${line}`));
+				const cfg = serverConfigByName.get(serverName);
+				const incomingPrimary = cfg ? isProjectAwareLspServer(cfg) : false;
+				const flat = flattenWorkspaceTextEdits(edit);
+				for (const [uri, edits] of flat) {
+					const existing = acceptedByUri.get(uri);
+					if (!existing) {
+						acceptedByUri.set(uri, {
+							primaryServer: serverName,
+							edits: [...edits],
+							discarded: 0,
+							conflictServers: new Set(),
+						});
+						continue;
+					}
+					const existingCfg = serverConfigByName.get(existing.primaryServer);
+					const existingIsPrimary = existingCfg ? isProjectAwareLspServer(existingCfg) : false;
+					if (incomingPrimary && !existingIsPrimary) {
+						// Promote incoming to primary; keep existing edits that don't overlap.
+						const keptOld: TextEdit[] = [];
+						let discardedOld = 0;
+						for (const oe of existing.edits) {
+							if (edits.some(ne => rangesOverlap(ne.range, oe.range))) discardedOld++;
+							else keptOld.push(oe);
+						}
+						if (discardedOld > 0) existing.conflictServers.add(existing.primaryServer);
+						existing.discarded += discardedOld;
+						existing.primaryServer = serverName;
+						existing.edits = [...edits, ...keptOld];
+					} else {
+						// Existing wins; discard incoming edits that overlap any accepted edit.
+						let discardedNew = 0;
+						for (const ne of edits) {
+							if (existing.edits.some(ae => rangesOverlap(ae.range, ne.range))) {
+								discardedNew++;
+							} else {
+								existing.edits.push(ne);
+							}
+						}
+						if (discardedNew > 0) {
+							existing.conflictServers.add(serverName);
+							existing.discarded += discardedNew;
+						}
+					}
+				}
+			}
+
+			for (const [uri, bucket] of acceptedByUri) {
+				const filePath = uriToFile(uri);
+				await applyTextEdits(filePath, bucket.edits);
+				const rel = formatPathRelativeToCwd(filePath, this.session.cwd);
+				summary.push(`  ${bucket.primaryServer}: applied ${bucket.edits.length} edit(s) to ${rel}`);
+				if (bucket.discarded > 0) {
+					const others = Array.from(bucket.conflictServers).join(", ");
+					summary.push(
+						`    note: discarded ${bucket.discarded} overlapping edit(s) from ${others} (kept ${bucket.primaryServer})`,
+					);
+					logger.warn(
+						`lsp rename_file: discarded ${bucket.discarded} overlapping edit(s) from ${others} on ${rel}; kept ${bucket.primaryServer}`,
+					);
 				}
 			}
 
@@ -1844,6 +1921,22 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 				await ensureFileOpen(client, targetFile, signal);
 			}
 
+			// For project-aware servers, references/rename/definition without a `symbol`
+			// silently falls back to the first non-whitespace column on the line, which
+			// frequently points at the wrong identifier (decorator, keyword, parameter)
+			// and the server returns plausible-looking but unrelated results. Require
+			// `symbol` explicitly so callers cannot accidentally trigger that fallback.
+			if (
+				targetFile &&
+				line !== undefined &&
+				!symbol &&
+				(action === "references" || action === "rename" || action === "definition") &&
+				isProjectAwareLspServer(serverConfig)
+			) {
+				throw new ToolError(
+					`symbol is required for project-aware ${action}; pass symbol=<name>, optionally symbol#N for repeated occurrences`,
+				);
+			}
 			const uri = targetFile ? fileToUri(targetFile) : "";
 			const resolvedLine = line ?? 1;
 			const resolvedCharacter = targetFile ? await resolveSymbolColumn(targetFile, resolvedLine, symbol) : 0;
@@ -2166,7 +2259,17 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 				details: { serverName, action, success: true, request: params },
 			};
 		} catch (err) {
+			if (err instanceof ToolError) throw err;
 			if (err instanceof ToolAbortError || signal?.aborted) {
+				// Distinguish a wall-clock timeout from a caller cancel:
+				// callerSignal aborting → real cancel (re-throw ToolAbortError);
+				// timeoutSignal aborting without callerSignal → emit a ToolError naming the
+				// elapsed budget and server, instead of opaque "Operation aborted".
+				if (timeoutSignal.aborted && !callerSignal?.aborted) {
+					throw new ToolError(
+						`LSP ${action} timed out after ${timeoutSec}s on ${serverName}. The server may still be indexing; try again or pass timeout=<larger>.`,
+					);
+				}
 				throw new ToolAbortError();
 			}
 			const errorMessage = err instanceof Error ? err.message : String(err);

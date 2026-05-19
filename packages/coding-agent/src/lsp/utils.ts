@@ -581,15 +581,28 @@ function firstNonWhitespaceColumn(lineText: string): number {
 	return match ? (match.index ?? 0) : 0;
 }
 
+const BARE_IDENTIFIER_RE = /^[A-Za-z_][\w]*$/;
+const IDENTIFIER_CHAR_RE = /[A-Za-z0-9_$]/;
+
 function findSymbolMatchIndexes(lineText: string, symbol: string, caseInsensitive = false): number[] {
 	if (symbol.length === 0) return [];
 	const haystack = caseInsensitive ? lineText.toLowerCase() : lineText;
 	const needle = caseInsensitive ? symbol.toLowerCase() : symbol;
+	const requireWordBoundary = BARE_IDENTIFIER_RE.test(symbol);
 	const indexes: number[] = [];
 	let fromIndex = 0;
 	while (fromIndex <= haystack.length - needle.length) {
 		const matchIndex = haystack.indexOf(needle, fromIndex);
 		if (matchIndex === -1) break;
+		if (requireWordBoundary) {
+			const before = matchIndex > 0 ? haystack[matchIndex - 1] : "";
+			const afterIdx = matchIndex + needle.length;
+			const after = afterIdx < haystack.length ? haystack[afterIdx] : "";
+			if (IDENTIFIER_CHAR_RE.test(before) || IDENTIFIER_CHAR_RE.test(after)) {
+				fromIndex = matchIndex + 1;
+				continue;
+			}
+		}
 		indexes.push(matchIndex);
 		fromIndex = matchIndex + needle.length;
 	}
