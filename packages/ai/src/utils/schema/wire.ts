@@ -18,7 +18,19 @@ import type { Tool, TSchema } from "../../types";
 import { upgradeJsonSchemaTo202012 } from "./draft";
 import { stamp } from "./stamps";
 
-/** True when `value` is a Zod schema instance. */
+/**
+ * True when `value` is a live Zod schema instance.
+ *
+ * The check is stricter than "has a `_zod` property" because a JSON
+ * round-trip preserves the `_zod` key as a plain object and would otherwise
+ * fool the predicate — see issue #1101, where MCP servers ship
+ * `JSON.stringify(zodSchemaInstance)` as a tool's `inputSchema` and the
+ * resulting plain object then explodes `z.toJSONSchema` because the prototype
+ * (and every Zod parsing method) is gone.
+ *
+ * Live Zod instances always carry a `.parse` function on the prototype;
+ * impostors do not.
+ */
 export function isZodSchema(value: unknown): value is ZodType {
 	return (
 		typeof value === "object" &&
@@ -30,7 +42,10 @@ export function isZodSchema(value: unknown): value is ZodType {
 		// (`ZodObject`, `ZodOptional`, etc.) and a tagged-union style check would
 		// have to enumerate them all.
 		"_zod" in value &&
-		typeof (value as { _zod?: { def?: unknown } })._zod === "object"
+		typeof (value as { _zod?: { def?: unknown } })._zod === "object" &&
+		// Reject JSON-roundtripped objects that kept the `_zod` key but lost the
+		// prototype. Real instances have `.parse` on the prototype chain.
+		typeof (value as { parse?: unknown }).parse === "function"
 	);
 }
 

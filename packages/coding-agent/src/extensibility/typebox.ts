@@ -21,7 +21,7 @@
  * `@sinclair/typebox` directly in their own package.
  */
 
-import { areJsonValuesEqual } from "@oh-my-pi/pi-ai/utils/schema";
+import { areJsonValuesEqual, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import {
 	type ZodArray,
 	type ZodEnum,
@@ -104,19 +104,46 @@ interface ObjectOpts extends Meta {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function withMeta<T extends ZodType>(schema: T, opts: Meta | undefined): T {
-	if (!opts) return schema;
-	let out: ZodType = schema;
-	if (typeof opts.description === "string") out = out.describe(opts.description);
-	if ("default" in opts) out = out.default(opts.default as never) as unknown as ZodType;
-
-	const metadata: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(opts)) {
-		if (key === "description" || key === "default" || key === "additionalProperties") continue;
-		metadata[key] = value;
+/**
+ * Stamp a non-enumerable `toJSON()` on a schema so `JSON.stringify(schema)`
+ * yields a clean draft 2020-12 JSON Schema — matching real TypeBox semantics
+ * where the schema object IS already a JSON Schema. Without this, an extension
+ * author who serialises the schema across any JSON boundary (worker
+ * postMessage, MCP transport, config persistence, network hop, structuredClone
+ * fallback) ships the raw Zod internals (`def`, `_zod`, object-shaped `enum`,
+ * `"type":"enum"`) — neither valid JSON Schema nor parseable Zod. See
+ * issue #1101 for the symptoms when this leaks into a tool's `input_schema`.
+ *
+ * Idempotent: re-stamping the same instance is a no-op.
+ */
+function wire<T extends ZodType>(schema: T): T {
+	if (!Object.hasOwn(schema as object, "toJSON")) {
+		Object.defineProperty(schema as object, "toJSON", {
+			value: function toJSON(this: ZodType) {
+				return zodToWireSchema(this);
+			},
+			enumerable: false,
+			writable: true,
+			configurable: true,
+		});
 	}
-	if (Object.keys(metadata).length > 0) out = out.meta(metadata);
-	return out as T;
+	return schema;
+}
+
+function withMeta<T extends ZodType>(schema: T, opts: Meta | undefined): T {
+	let out: ZodType = schema;
+	if (opts) {
+		if (typeof opts.description === "string") out = out.describe(opts.description);
+		if ("default" in opts) out = out.default(opts.default as never) as unknown as ZodType;
+
+		const metadata: Record<string, unknown> = {};
+		for (const key in opts) {
+			if (key === "description" || key === "default" || key === "additionalProperties") continue;
+			metadata[key] = opts[key];
+		}
+		if (Object.keys(metadata).length > 0) out = out.meta(metadata);
+	}
+	return wire(out as T);
 }
 
 // ---------------------------------------------------------------------------
@@ -313,7 +340,8 @@ function tRecord<V extends ZodType>(key: ZodType, value: V, opts?: Meta): ZodTyp
 }
 
 function tOptional<E extends ZodType>(schema: E, _opts?: Meta): ZodOptional<E> {
-	return isOptional(schema) ? (schema as unknown as ZodOptional<E>) : (schema.optional() as ZodOptional<E>);
+	if (isOptional(schema)) return wire(schema as unknown as ZodOptional<E>);
+	return wire(schema.optional() as ZodOptional<E>);
 }
 
 function tNullable<E extends ZodType>(schema: E, opts?: Meta): ZodType {
@@ -322,27 +350,26 @@ function tNullable<E extends ZodType>(schema: E, opts?: Meta): ZodType {
 
 function tReadonly<E extends ZodType>(schema: E): E {
 	// TypeBox's `Type.Readonly` is purely a marker; runtime parsing is identical.
-	return schema;
+	return wire(schema);
 }
 
 function tPartial<P extends ZodRawShape>(obj: ZodObject<P>): ZodObject<P> {
-	return obj.partial() as unknown as ZodObject<P>;
+	return wire(obj.partial() as unknown as ZodObject<P>);
 }
 
 function tRequired<P extends ZodRawShape>(obj: ZodObject<P>): ZodObject<P> {
-	return obj.required() as unknown as ZodObject<P>;
+	return wire(obj.required() as unknown as ZodObject<P>);
 }
 
 function tPick<P extends ZodRawShape, K extends keyof P>(obj: ZodObject<P>, keys: readonly K[]): ZodObject<Pick<P, K>> {
 	const mask = Object.fromEntries(keys.map(k => [k as string, true]));
-	return obj.pick(mask as never) as unknown as ZodObject<Pick<P, K>>;
+	return wire(obj.pick(mask as never) as unknown as ZodObject<Pick<P, K>>);
 }
 
 function tOmit<P extends ZodRawShape, K extends keyof P>(obj: ZodObject<P>, keys: readonly K[]): ZodObject<Omit<P, K>> {
 	const mask = Object.fromEntries(keys.map(k => [k as string, true]));
-	return obj.omit(mask as never) as unknown as ZodObject<Omit<P, K>>;
+	return wire(obj.omit(mask as never) as unknown as ZodObject<Omit<P, K>>);
 }
-
 function tComposite(objects: readonly ZodObject<ZodRawShape>[], opts?: Meta): ZodObject<ZodRawShape> {
 	// `Type.Composite([...])` flattens every object schema into one object schema
 	// rather than producing an intersection. Mirror that via repeated `extend`.

@@ -21,8 +21,8 @@ import {
 import { isValidJsonSchema } from "./meta-validator";
 import { type DescriptionSpillFormat, spillToDescription } from "./spill";
 import { enter, epochNext, exit, once, stamp } from "./stamps";
-import type { JsonObject } from "./types";
-import { isJsonObject } from "./types";
+import { isJsonObject, type JsonObject } from "./types";
+import { decontaminateZodInstance } from "./zod-decontaminate";
 
 export type ResidualSchemaIncompatibility = "type-array" | "type-null" | "nullable" | "combiners";
 
@@ -768,7 +768,8 @@ function hasResidualSchemaIncompatibilities(
 }
 
 export function normalizeSchema(value: unknown, options: NormalizeSchemaOptions): unknown {
-	const upgraded = upgradeJsonSchemaTo202012(value);
+	const detoxified = decontaminateZodInstance(value);
+	const upgraded = upgradeJsonSchemaTo202012(detoxified);
 	const dereferenced = dereferenceJsonSchema(upgraded);
 	let normalized = normalizeSchemaNode(dereferenced, {
 		...options,
