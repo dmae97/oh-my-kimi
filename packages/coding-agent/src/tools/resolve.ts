@@ -14,18 +14,7 @@ import { ToolError } from "./tool-errors";
 const resolveSchema = z.object({
 	action: z.enum(["apply", "discard"]),
 	reason: z.string().describe("reason for action"),
-	extra: z
-		.object({
-			title: z
-				.string()
-				.optional()
-				.describe(
-					"Plan title slug; required when resolving a plan-approval gate. Used as the approved-plan filename stem.",
-				),
-		})
-		.passthrough()
-		.optional()
-		.describe("free-form metadata; schema depends on context (see prompt)"),
+	extra: z.record(z.string(), z.unknown()).optional().describe("free-form metadata"),
 });
 
 type ResolveParams = z.infer<typeof resolveSchema>;
