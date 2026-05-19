@@ -65,6 +65,7 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import {
 	calculateRateLimitBackoffMs,
+	clearAnthropicFastModeFallback,
 	getSupportedEfforts,
 	isContextOverflow,
 	isUsageLimitError,
@@ -1578,6 +1579,16 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
+				const currentGrantsAnthropicPriority =
+					this.serviceTier === "priority" || this.serviceTier === "claude-only";
+				if (assistantMsg.disabledFeatures?.includes("priority") && currentGrantsAnthropicPriority) {
+					this.setServiceTier(undefined);
+					this.emitNotice(
+						"warning",
+						"Priority/fast mode rejected for this model; retried without it. Fast mode is now off.",
+						"priority",
+					);
+				}
 				// Resolve TTSR resume gate before checking for new deferred injections.
 				// Gate on #ttsrAbortPending, not stopReason: a non-TTSR abort (e.g. streaming
 				// edit) also produces stopReason === "aborted" but has no continuation coming.
@@ -5111,16 +5122,30 @@ export class AgentSession {
 	}
 
 	isFastModeEnabled(): boolean {
-		return this.serviceTier === "priority";
+		return (
+			this.serviceTier === "priority" || this.serviceTier === "claude-only" || this.serviceTier === "openai-only"
+		);
 	}
 
 	setServiceTier(serviceTier: ServiceTier | undefined): void {
 		if (this.serviceTier === serviceTier) return;
+		// Re-arming priority on Anthropic? Clear the per-session auto-fallback
+		// sticky disable so the next request actually carries `speed: "fast"`
+		// again. Without this, `/fast on` (or user switching to a tier that
+		// grants anthropic priority) after an auto-disable is a silent no-op
+		// and the warning notice fires every turn.
+		if (serviceTier === "priority" || serviceTier === "claude-only") {
+			clearAnthropicFastModeFallback(this.#providerSessionState);
+		}
 		this.agent.serviceTier = serviceTier;
 		this.sessionManager.appendServiceTierChange(serviceTier ?? null);
 	}
 
 	setFastMode(enabled: boolean): void {
+		if (enabled && this.isFastModeEnabled()) {
+			// Already on under any scope — keep the user's scoped value.
+			return;
+		}
 		this.setServiceTier(enabled ? "priority" : undefined);
 	}
 

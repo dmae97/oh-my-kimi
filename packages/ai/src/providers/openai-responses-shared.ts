@@ -17,10 +17,10 @@ import {
 	type AssistantMessage,
 	type ImageContent,
 	type Model,
+	resolveServiceTier,
 	type ServiceTier,
 	type StopReason,
 	type StreamOptions,
-	shouldSendServiceTier,
 	type TextContent,
 	type TextSignatureV1,
 	type ThinkingContent,
@@ -650,8 +650,9 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 	if (options?.minP !== undefined) params.min_p = options.minP;
 	if (options?.presencePenalty !== undefined) params.presence_penalty = options.presencePenalty;
 	if (options?.repetitionPenalty !== undefined) params.repetition_penalty = options.repetitionPenalty;
-	if (shouldSendServiceTier(options?.serviceTier, provider)) {
-		params.service_tier = options.serviceTier;
+	const resolvedServiceTier = resolveServiceTier(options?.serviceTier, provider);
+	if (resolvedServiceTier === "flex" || resolvedServiceTier === "scale" || resolvedServiceTier === "priority") {
+		params.service_tier = resolvedServiceTier;
 	}
 }
 
