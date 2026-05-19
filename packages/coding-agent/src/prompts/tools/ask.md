@@ -22,7 +22,8 @@ Asks user when you need clarification or input during task execution.
 
 <examples>
 # Single question
-question: "Which authentication method should this API use?"
-options: [{"label": "JWT"}, {"label": "OAuth2"}, {"label": "Session cookies"}]
-recommended: 0
+questions: [{"id": "auth_method", "question": "Which authentication method should this API use?", "options": [{"label": "JWT"}, {"label": "OAuth2"}, {"label": "Session cookies"}], "recommended": 0}]
+
+# Multiple questions
+questions: [{"id": "storage_type", "question": "Which storage backend?", "options": [{"label": "SQLite"}, {"label": "PostgreSQL"}]}, {"id": "auth_method", "question": "Which auth method?", "options": [{"label": "JWT"}, {"label": "Session cookies"}]}]
 </examples>

@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Fixed `normalizePlanTitle` rejecting plan titles that contain spaces or common punctuation (e.g. "My Feature Plan") — spaces are now converted to hyphens and other invalid characters are dropped, so models that produce natural-language plan titles no longer loop forever trying to call `resolve`. ([#1176](https://github.com/can1357/oh-my-pi/issues/1176))
+- Fixed `ask` tool prompt example showing the legacy `question`/`options` top-level format instead of the current `questions: [{id, question, options}]` array format; models that closely followed the example generated calls that always failed schema validation. ([#1176](https://github.com/can1357/oh-my-pi/issues/1176))
+
 - Fixed ACP command and custom tool-call notifications to carry the original tool arguments in replayed and final updates, so command text is preserved and raw input is no longer wrapped
 - Fixed ACP async-job draining to be scoped by session owner so `getAsyncJobSnapshot` and `drainAsyncJobDeliveriesForAcp` no longer consume or expose jobs from other sessions
 - Fixed async job status reporting to include in-flight completions so queued/delivering indicators remain accurate while callbacks are still running
