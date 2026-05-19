@@ -26,8 +26,6 @@ Use for launching or attaching debuggers, setting breakpoints, stepping through 
 3. `debug(action: "continue")`
 4. If the program appears hung: `debug(action: "pause")`
 5. Inspect state with `threads`, `stack_trace`, `scopes`, and `variables`
-
-
 # Launch a Python script with debugpy
 `debug(action: "launch", adapter: "debugpy", program: "scripts/job.py", args: ["--flag"])`
 # Raw debugger command through repl
