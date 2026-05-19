@@ -46,6 +46,36 @@ describe("ast_grep parse errors", () => {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
 	});
+	it("caps parseErrors at PARSE_ERRORS_LIMIT and records the original total", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-parse-cap-"));
+		try {
+			const fileCount = 35;
+			for (let i = 0; i < fileCount; i++) {
+				await Bun.write(path.join(tempDir, `broken-${i}.ts`), "export function broken( { return 1; }");
+			}
+
+			const tools = await createTools(createTestSession(tempDir));
+			const tool = tools.find(entry => entry.name === "ast_grep");
+			expect(tool).toBeDefined();
+
+			const result = await tool!.execute("ast-grep-parse-cap", {
+				pat: "someUnlikelyCall($A)",
+				paths: [tempDir],
+			});
+
+			const text = result.content.find(content => content.type === "text")?.text ?? "";
+			const details = result.details as
+				| { parseErrors?: string[]; parseErrorsTotal?: number; matchCount?: number }
+				| undefined;
+
+			expect(details?.matchCount).toBe(0);
+			expect(details?.parseErrors?.length).toBe(20);
+			expect(details?.parseErrorsTotal).toBe(fileCount);
+			expect(text).toContain(`Parse issues (20 / ${fileCount}):`);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
 	it("combines globbing from path and glob parameters", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-glob-"));
 		try {

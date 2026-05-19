@@ -633,15 +633,27 @@ export function dedupeParseErrors(errors: string[] | undefined): string[] {
 	return deduped;
 }
 
-export function formatParseErrors(errors: string[]): string[] {
+export function formatParseErrors(errors: string[], total?: number): string[] {
 	const deduped = dedupeParseErrors(errors);
 	if (deduped.length === 0) return [];
+	const fullCount = total ?? deduped.length;
 	const capped = deduped.slice(0, PARSE_ERRORS_LIMIT);
-	const header =
-		deduped.length > PARSE_ERRORS_LIMIT
-			? `Parse issues (${PARSE_ERRORS_LIMIT} / ${deduped.length}):`
-			: "Parse issues:";
+	const header = fullCount > capped.length ? `Parse issues (${capped.length} / ${fullCount}):` : "Parse issues:";
 	return [header, ...capped.map(err => `- ${err}`)];
+}
+
+/**
+ * Cap an upstream parse-error list to {@link PARSE_ERRORS_LIMIT} unique entries,
+ * preserving the original deduplicated total. Use this at the source so tool
+ * details never carry thousands of per-file parse errors into traces or
+ * renderers.
+ */
+export function capParseErrors(
+	errors: string[] | undefined,
+	limit: number = PARSE_ERRORS_LIMIT,
+): { errors: string[]; total: number } {
+	const deduped = dedupeParseErrors(errors);
+	return { errors: deduped.slice(0, limit), total: deduped.length };
 }
 
 // =============================================================================
@@ -712,14 +724,16 @@ export function appendParseErrorsBulletList(
 	lines: string[],
 	parseErrors: readonly string[] | undefined,
 	theme: Theme,
+	total?: number,
 ): void {
 	if (!parseErrors || parseErrors.length === 0) return;
+	const fullCount = total ?? parseErrors.length;
 	const capped = parseErrors.slice(0, PARSE_ERRORS_LIMIT);
 	for (const err of capped) {
 		lines.push(theme.fg("warning", `  - ${err}`));
 	}
-	if (parseErrors.length > PARSE_ERRORS_LIMIT) {
-		lines.push(theme.fg("dim", `  … ${parseErrors.length - PARSE_ERRORS_LIMIT} more`));
+	if (fullCount > capped.length) {
+		lines.push(theme.fg("dim", `  … ${fullCount - capped.length} more`));
 	}
 }
 
@@ -727,11 +741,11 @@ export function appendParseErrorsBulletList(
  * Human-readable summary string for the parse-issues count, capped by
  * {@link PARSE_ERRORS_LIMIT}.
  */
-export function formatParseErrorsCountLabel(parseErrors: readonly string[]): string {
-	const total = parseErrors.length;
-	return total > PARSE_ERRORS_LIMIT
-		? `${PARSE_ERRORS_LIMIT} / ${total} parse issues`
-		: `${total} parse issue${total !== 1 ? "s" : ""}`;
+export function formatParseErrorsCountLabel(parseErrors: readonly string[], total?: number): string {
+	const fullCount = total ?? parseErrors.length;
+	return fullCount > PARSE_ERRORS_LIMIT
+		? `${PARSE_ERRORS_LIMIT} / ${fullCount} parse issues`
+		: `${fullCount} parse issue${fullCount !== 1 ? "s" : ""}`;
 }
 
 // =============================================================================

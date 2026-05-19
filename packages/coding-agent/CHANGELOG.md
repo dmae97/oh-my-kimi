@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `ast_grep` and `ast_edit` tool details retaining every per-file parse error — a scan over hundreds of files with syntax-error nodes inflated `details.parseErrors` to one entry per file, leaking into traces and the renderer's "X more" overflow. Errors are now capped at `PARSE_ERRORS_LIMIT` (20) at the source, with the original total preserved in a new `parseErrorsTotal` field for accurate count labels.
+
 ## [15.1.4] - 2026-05-19
 
 ### Fixed
