@@ -162,29 +162,78 @@ export type ToolChoice =
 // Base options all providers share
 export type CacheRetention = "none" | "short" | "long";
 
-/** OpenAI service tier for processing priority. Only applies to OpenAI-compatible APIs. */
-export type ServiceTier = "auto" | "default" | "flex" | "scale" | "priority";
+/**
+ * Service tier hint for processing priority / cost control.
+ *
+ * The unscoped values (`"auto"`, `"default"`, `"flex"`, `"scale"`,
+ * `"priority"`) are passed through to providers that understand them
+ * (OpenAI's `service_tier` field directly; Anthropic translates
+ * `"priority"` into `speed: "fast"` on supported Opus models).
+ *
+ * The scoped values target a specific provider family and behave as the
+ * unscoped value on the matching provider, or `undefined` everywhere else.
+ * They let users opt into priority on one family without paying premium
+ * costs on the other when switching models mid-session.
+ *
+ * - `"openai-only"` → `"priority"` on `openai` and `openai-codex`; ignored elsewhere.
+ * - `"claude-only"` → `"priority"` on direct `anthropic` (not Bedrock/Vertex Claude).
+ */
+export type ServiceTier = "auto" | "default" | "flex" | "scale" | "priority" | "openai-only" | "claude-only";
 
-export function shouldSendServiceTier(
-	serviceTier?: ServiceTier | null,
-	provider?: Provider,
-): serviceTier is "flex" | "scale" | "priority" {
-	if (provider !== "openai" && provider !== "openai-codex") {
-		return false;
+/** Resolved tier — one of the values that providers actually consume on the wire. */
+export type ResolvedServiceTier = Exclude<ServiceTier, "openai-only" | "claude-only">;
+
+/**
+ * Resolves a possibly scoped `ServiceTier` to the effective tier for the
+ * given provider. Scoped values match their target family and otherwise
+ * collapse to `undefined`; unscoped values pass through unchanged.
+ */
+export function resolveServiceTier(
+	serviceTier: ServiceTier | null | undefined,
+	provider: Provider | undefined,
+): ResolvedServiceTier | undefined {
+	if (!serviceTier) return undefined;
+	switch (serviceTier) {
+		case "openai-only":
+			return provider === "openai" || provider === "openai-codex" ? "priority" : undefined;
+		case "claude-only":
+			return provider === "anthropic" ? "priority" : undefined;
+		default:
+			return serviceTier;
 	}
-	return serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority";
 }
 
 /**
- * Premium-request weight contributed by sending a `priority` service tier to
- * a provider that supports it. Mirrors GitHub Copilot's `premiumRequests`
- * accounting so the "premium requests" stat aggregates priority traffic too.
- *
- * Returns 1 per priority request, 0 otherwise. Non-priority tiers (`flex`,
- * `scale`) and providers that ignore `service_tier` always return 0.
+ * True when the (possibly scoped) tier should be sent as OpenAI's
+ * `service_tier` request field for the given provider. Non-OpenAI
+ * providers, unsupported tiers (`"auto"`, `"default"`), and scope
+ * mismatches all return false.
  */
-export function getPriorityPremiumRequests(serviceTier?: ServiceTier | null, provider?: Provider): number {
-	return shouldSendServiceTier(serviceTier, provider) && serviceTier === "priority" ? 1 : 0;
+export function shouldSendServiceTier(
+	serviceTier: ServiceTier | null | undefined,
+	provider: Provider | undefined,
+): boolean {
+	if (provider !== "openai" && provider !== "openai-codex") return false;
+	const resolved = resolveServiceTier(serviceTier, provider);
+	return resolved === "flex" || resolved === "scale" || resolved === "priority";
+}
+
+/**
+ * Premium-request weight contributed by sending priority to a provider
+ * that supports it. Mirrors GitHub Copilot's `premiumRequests` accounting
+ * so the "premium requests" stat aggregates priority traffic across the
+ * OpenAI family and Anthropic fast-mode realizations.
+ *
+ * Returns 1 per resolved priority request, 0 otherwise.
+ */
+export function getPriorityPremiumRequests(
+	serviceTier: ServiceTier | null | undefined,
+	provider: Provider | undefined,
+): number {
+	if (resolveServiceTier(serviceTier, provider) !== "priority") return 0;
+	// Only providers that realize `priority` on the wire bill the user.
+	// Everywhere else, the field is silently dropped and nothing is charged.
+	return provider === "openai" || provider === "openai-codex" || provider === "anthropic" ? 1 : 0;
 }
 
 export interface ProviderSessionState {
@@ -502,6 +551,14 @@ export interface AssistantMessage {
 	errorMessage?: string;
 	/** HTTP status surfaced by the provider when the request failed. Populated by every provider's catch block alongside `errorMessage` so consumers (auth retry, telemetry, UI) can branch without regex-scraping the message. */
 	errorStatus?: number;
+	/**
+	 * Stable identifiers for request features the provider silently dropped
+	 * during this turn (e.g. `"priority"`). Set when a server-side rejection
+	 * triggered an in-provider fallback retry that succeeded without the
+	 * feature. Callers can use this to sync user-facing toggles back to the
+	 * server's actual state.
+	 */
+	disabledFeatures?: string[];
 	/** Provider-specific opaque payload used to reconstruct transport-native history. */
 	providerPayload?: ProviderPayload;
 	timestamp: number; // Unix timestamp in milliseconds

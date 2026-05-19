@@ -178,6 +178,13 @@ jobs:
               run-id: ${{ steps.source.outputs.run-id }}
               github-token: ${{ secrets.GITHUB_TOKEN }}
          - name: Test workspace (TS)
+           env:
+              # Bun's `bun test` emits `::group::`/`::endgroup::` per file under
+              # GHA. `--workspaces` prefixes each output line with `<pkg> test: `,
+              # which breaks GHA's column-0 parsing and leaks the markers as
+              # literal text. Unset for this step only — the annotations would be
+              # equally broken by the prefix, so we lose nothing.
+              GITHUB_ACTIONS: ""
            run: bun run test:ts
          - name: CLI smoke test
            run: bun run ci:test:smoke

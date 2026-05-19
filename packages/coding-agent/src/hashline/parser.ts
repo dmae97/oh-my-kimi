@@ -74,19 +74,29 @@ export function cloneCursor(cursor: HashlineCursor): HashlineCursor {
 	if (cursor.kind === "after_anchor") return { kind: "after_anchor", anchor: { ...cursor.anchor } };
 	return cursor;
 }
+/** Returns true when every non-empty payload line starts with `${sep} ` (sep + one space). */
+function hasUniformSeparatorPadding(payload: string[]): boolean {
+	let any = false;
+	for (const text of payload) {
+		if (text.length === 0) continue;
+		if (!text.startsWith(" ")) return false;
+		any = true;
+	}
+	return any;
+}
 
 function collectPayload(
 	lines: string[],
 	startIndex: number,
 	opLineNum: number,
 	requirePayload: boolean,
-): { payload: string[]; nextIndex: number } {
+): { payload: string[]; nextIndex: number; paddingWarning?: string } {
 	const payload: string[] = [];
 	let index = startIndex;
 	while (index < lines.length) {
 		const line = lines[index];
 		if (line.startsWith(HL_EDIT_SEP)) {
-			payload.push(line.slice(1).trimEnd());
+			payload.push(line.slice(HL_EDIT_SEP.length).trimEnd());
 			index++;
 			continue;
 		}
@@ -115,7 +125,11 @@ function collectPayload(
 	if (payload.length === 0 && requirePayload) {
 		throw new Error(`line ${opLineNum}: + and < operations require at least one ${HL_EDIT_SEP}TEXT payload line.`);
 	}
-	return { payload, nextIndex: index };
+	const paddingWarning = hasUniformSeparatorPadding(payload)
+		? `line ${opLineNum}: all payload lines start with "${HL_EDIT_SEP} " (separator + space). ` +
+			`The space becomes file content. Remove it unless the target file requires leading spaces.`
+		: undefined;
+	return { payload, nextIndex: index, paddingWarning };
 }
 
 export function parseHashline(diff: string): HashlineEdit[] {
@@ -158,7 +172,8 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const insertBeforeMatch = INSERT_BEFORE_OP_RE.exec(line);
 		if (insertBeforeMatch) {
 			const cursor = parseInsertTarget(insertBeforeMatch[1], lineNum, "before");
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, true);
+			const { payload, nextIndex, paddingWarning } = collectPayload(lines, i + 1, lineNum, true);
+			if (paddingWarning) warnings.push(paddingWarning);
 			for (const text of payload) pushInsert(cursor, text, lineNum);
 			i = nextIndex;
 			continue;
@@ -167,7 +182,8 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const insertAfterMatch = INSERT_AFTER_OP_RE.exec(line);
 		if (insertAfterMatch) {
 			const cursor = parseInsertTarget(insertAfterMatch[1], lineNum, "after");
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, true);
+			const { payload, nextIndex, paddingWarning } = collectPayload(lines, i + 1, lineNum, true);
+			if (paddingWarning) warnings.push(paddingWarning);
 			for (const text of payload) pushInsert(cursor, text, lineNum);
 			i = nextIndex;
 			continue;
@@ -185,7 +201,8 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const replaceMatch = REPLACE_OP_RE.exec(line);
 		if (replaceMatch) {
 			const range = parseRange(replaceMatch[1], lineNum);
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, false);
+			const { payload, nextIndex, paddingWarning } = collectPayload(lines, i + 1, lineNum, false);
+			if (paddingWarning) warnings.push(paddingWarning);
 			// `= A..B` with no payload blanks the range to a single empty line.
 			const replacement = payload.length === 0 ? [""] : payload;
 			for (const text of replacement) {

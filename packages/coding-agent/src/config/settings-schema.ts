@@ -755,19 +755,34 @@ export const SETTINGS_SCHEMA = {
 
 	serviceTier: {
 		type: "enum",
-		values: ["none", "auto", "default", "flex", "scale", "priority"] as const,
+		values: ["none", "auto", "default", "flex", "scale", "priority", "openai-only", "claude-only"] as const,
 		default: "none",
 		ui: {
 			tab: "model",
 			label: "Service Tier",
-			description: "OpenAI processing priority (none = omit parameter)",
+			description:
+				'Processing priority hint (none = omit). OpenAI accepts the tier values directly; Anthropic realizes `priority` as `speed: "fast"` on supported Opus models. Scoped values target one family.',
 			options: [
 				{ value: "none", label: "None", description: "Omit service_tier parameter" },
-				{ value: "auto", label: "Auto", description: "Use provider default tier selection" },
-				{ value: "default", label: "Default", description: "Standard priority processing" },
-				{ value: "flex", label: "Flex", description: "Use flexible capacity tier when available" },
-				{ value: "scale", label: "Scale", description: "Use Scale Tier credits when available" },
-				{ value: "priority", label: "Priority", description: "Use Priority processing" },
+				{ value: "auto", label: "Auto", description: "Use provider default tier selection (OpenAI)" },
+				{ value: "default", label: "Default", description: "Standard priority processing (OpenAI)" },
+				{ value: "flex", label: "Flex", description: "Flexible capacity tier when available (OpenAI)" },
+				{ value: "scale", label: "Scale", description: "Scale Tier credits when available (OpenAI)" },
+				{
+					value: "priority",
+					label: "Priority",
+					description: "Priority on every supported provider (OpenAI `service_tier`, Anthropic fast mode)",
+				},
+				{
+					value: "openai-only",
+					label: "Priority (OpenAI only)",
+					description: "Priority on OpenAI/OpenAI-Codex requests; ignored elsewhere",
+				},
+				{
+					value: "claude-only",
+					label: "Priority (Claude only)",
+					description: "Anthropic fast mode on direct Claude requests; ignored elsewhere (incl. Bedrock/Vertex)",
+				},
 			],
 		},
 	},
