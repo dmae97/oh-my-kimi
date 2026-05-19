@@ -508,10 +508,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			taskIdByItemId.set(taskItems[i].id, uniqueIds[i]);
 		}
 		const startedListing = startedJobs
-			.map(({ taskId }) => {
+			.map(({ taskId, jobId }) => {
 				const id = taskIdByItemId.get(taskId) ?? taskId;
 				const desc = progressByTaskId.get(taskId)?.description;
-				return desc ? `- \`${id}\` — ${desc}` : `- \`${id}\``;
+				const prefix = `- \`${id}\` (job \`${jobId}\`)`;
+				return desc ? `${prefix} — ${desc}` : prefix;
 			})
 			.join("\n");
 		const coordinationHint = ircEnabled
