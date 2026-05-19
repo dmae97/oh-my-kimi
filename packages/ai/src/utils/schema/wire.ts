@@ -62,6 +62,12 @@ const kJsonWireSchema = Symbol("pi.schema.json.wire");
  *     treat defaulted fields as optional; Zod inverts this and keeps them
  *     required at the input boundary, then materializes the default).
  *   - Strip the noisy safe-integer bounds Zod injects for `z.number().int()`.
+ *   - Normalize `{}` (empty JSON Schema = `z.unknown()`) to `true` in every
+ *     schema-valued position. JSON Schema draft 2020-12 §4.3.1: `{} ≡ true`.
+ *     Grammar-constrained samplers (llama.cpp, etc.) treat the object form as
+ *     "generate an empty object" rather than "any JSON value", causing
+ *     open-typed fields like `extra.title` to always emit `{}` instead of
+ *     the intended string/number/etc. (issue #1179).
  */
 function postProcess(schema: Record<string, unknown>): Record<string, unknown> {
 	delete schema.$schema;
@@ -71,6 +77,33 @@ function postProcess(schema: Record<string, unknown>): Record<string, unknown> {
 
 const SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
 const SAFE_INTEGER_MIN = Number.MIN_SAFE_INTEGER;
+
+/** Keys whose values are a single JSON Schema (not an array or map). */
+const SCHEMA_VALUE_KEYS = [
+	"additionalProperties",
+	"unevaluatedProperties",
+	"unevaluatedItems",
+	"items",
+	"contains",
+	"propertyNames",
+	"if",
+	"then",
+	"else",
+	"not",
+] as const;
+
+/** Keys whose values are a map of `{ key: Schema }` entries. */
+const SCHEMA_MAP_KEYS = ["properties", "patternProperties", "$defs", "definitions"] as const;
+
+/** Keys whose values are an array of schemas. */
+const SCHEMA_ARRAY_KEYS = ["anyOf", "oneOf", "allOf", "prefixItems"] as const;
+
+/** True when `val` is a plain empty object `{}`. */
+function isEmptyObject(val: unknown): val is Record<string, never> {
+	if (val === null || typeof val !== "object" || Array.isArray(val)) return false;
+	for (const _ in val as object) return false;
+	return true;
+}
 
 function walk(node: unknown): void {
 	if (Array.isArray(node)) {
@@ -100,6 +133,28 @@ function walk(node: unknown): void {
 				delete obj.required;
 			} else {
 				obj.required = filtered;
+			}
+		}
+	}
+
+	// Normalize {} (empty JSON Schema = z.unknown()) to boolean `true` so
+	// grammar-constrained samplers emit any JSON value, not just empty objects.
+	for (const key of SCHEMA_VALUE_KEYS) {
+		if (Object.hasOwn(obj, key) && isEmptyObject(obj[key])) obj[key] = true;
+	}
+	for (const mapKey of SCHEMA_MAP_KEYS) {
+		const map = obj[mapKey];
+		if (map !== null && typeof map === "object" && !Array.isArray(map)) {
+			for (const k in map as Record<string, unknown>) {
+				if (isEmptyObject((map as Record<string, unknown>)[k])) (map as Record<string, unknown>)[k] = true;
+			}
+		}
+	}
+	for (const arrKey of SCHEMA_ARRAY_KEYS) {
+		const arr = obj[arrKey];
+		if (Array.isArray(arr)) {
+			for (let i = 0; i < arr.length; i++) {
+				if (isEmptyObject(arr[i])) arr[i] = true;
 			}
 		}
 	}

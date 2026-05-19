@@ -21,7 +21,7 @@ import {
 import { isValidJsonSchema } from "./meta-validator";
 import { type DescriptionSpillFormat, spillToDescription } from "./spill";
 import { enter, epochNext, exit, once, stamp } from "./stamps";
-import { isJsonObject, type JsonObject } from "./types";
+import { isJsonObject, isJsonObjectEmpty, type JsonObject } from "./types";
 import { decontaminateZodInstance } from "./zod-decontaminate";
 
 export type ResidualSchemaIncompatibility = "type-array" | "type-null" | "nullable" | "combiners";
@@ -906,6 +906,15 @@ export const normalizeSchemaForOpenAIResponses: (schema: JsonObject) => JsonObje
 
 function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonObject, JsonObject>): unknown {
 	if (!isJsonObject(value)) return value;
+
+	// `{}` (empty JSON Schema) ≡ `true` (JSON Schema draft 2020-12 §4.3.1).
+	// Grammar-constrained samplers (llama.cpp, etc.) treat the object form as
+	// "generate an empty object" rather than "any JSON value", causing
+	// open-typed fields (e.g. `extra.title` from `z.record(z.string(), z.unknown())`)
+	// to always emit `{}` instead of the intended string/number/etc. (issue #1179).
+	// This also covers TypeBox / MCP tool schemas that arrive without going through
+	// the Zod wire-schema post-processor.
+	if (isJsonObjectEmpty(value)) return true;
 
 	const cached = cache.get(value);
 	if (cached) return cached;

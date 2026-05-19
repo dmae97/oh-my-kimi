@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `{}` (empty JSON Schema, the wire representation of `z.unknown()`) being passed verbatim to grammar-constrained samplers (llama.cpp, etc.) in `additionalProperties`, `items`, and other schema-valued positions. Grammar builders treat `{}` as "generate an empty object" rather than "any JSON value", causing open-typed fields (e.g. `extra.title` from `z.record(z.string(), z.unknown())`) to always emit `{}` instead of the intended string/number/etc. The Zod wire-schema post-processor (`zodToWireSchema`) now normalizes `{}` to boolean `true` (semantically identical per JSON Schema draft 2020-12 §4.3.1) in all schema-valued key positions. `normalizeOpenAIResponsesSchemaNode` applies the same normalization for TypeBox/MCP tools that don't pass through the Zod post-processor. ([#1179](https://github.com/can1357/oh-my-pi/issues/1179))
+
 ## [15.1.4] - 2026-05-19
 ### Changed
 
