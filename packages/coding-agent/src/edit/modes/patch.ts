@@ -1715,18 +1715,19 @@ export async function executePatchSingle(
 
 	await assertEditableFile(resolvedPath, path);
 
-	// Capture pre-edit stat so we can verify the write actually hit disk.
+	// Capture pre-edit content so we can verify the write actually hit disk.
 	// `LspFileSystem.writeFile` delegates to a writethrough callback that, in
 	// some host integrations, has been observed to report success without
 	// persisting bytes — leaving the tool to claim "Updated <path>" while the
-	// file on disk is byte-identical to before. Re-stat after the write and
-	// compare; if neither size nor mtime budged for a content-changing update,
-	// fail loudly instead of silently lying to the model.
-	let preEditStat: { size: number; mtimeMs: number } | undefined;
+	// file on disk is byte-identical to before. After the write we re-read
+	// the file and assert the bytes match the expected newContent; relying
+	// on stat (mtime/size) is unreliable because filesystems with coarse
+	// timestamp resolution can record an unchanged mtime even when the
+	// content was rewritten, and same-length rewrites leave size unchanged.
+	let preEditContent: Uint8Array | undefined;
 	if (op === "update") {
 		try {
-			const st = await fs.promises.stat(resolvedPath);
-			preEditStat = { size: st.size, mtimeMs: st.mtimeMs };
+			preEditContent = await fs.promises.readFile(resolvedPath);
 		} catch (err) {
 			if (!isEnoent(err)) throw err;
 		}
@@ -1746,22 +1747,21 @@ export async function executePatchSingle(
 	if (
 		result.change.type === "update" &&
 		!result.change.newPath &&
-		preEditStat &&
+		preEditContent !== undefined &&
 		result.change.oldContent !== undefined &&
 		result.change.newContent !== undefined &&
 		result.change.oldContent !== result.change.newContent
 	) {
-		let postEditStat: { size: number; mtimeMs: number } | undefined;
+		let postEditContent: Uint8Array | undefined;
 		try {
-			const st = await fs.promises.stat(resolvedPath);
-			postEditStat = { size: st.size, mtimeMs: st.mtimeMs };
+			postEditContent = await fs.promises.readFile(resolvedPath);
 		} catch (err) {
 			if (!isEnoent(err)) throw err;
 		}
 		const unchanged =
-			postEditStat !== undefined &&
-			postEditStat.size === preEditStat.size &&
-			postEditStat.mtimeMs === preEditStat.mtimeMs;
+			postEditContent !== undefined &&
+			postEditContent.length === preEditContent.length &&
+			postEditContent.every((b, i) => b === preEditContent[i]);
 		if (unchanged) {
 			throw new ToolError(`edit appeared successful but file content did not change on disk: ${resolvedPath}`, {
 				path: resolvedPath,
