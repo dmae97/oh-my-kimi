@@ -452,8 +452,9 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(inputSchema?.additionalProperties).toBe(false);
 		// The unsupported `propertyNames` keyword is still stripped …
 		expect(extra).not.toHaveProperty("propertyNames");
-		// … but the explicit open-map schema survives.
-		expect(extra.additionalProperties).toEqual({});
+		// … but the explicit open-map schema survives (normalized to `true` per
+		// JSON Schema 2020-12 §4.3.1 — `{}` and `true` are equivalent).
+		expect(extra.additionalProperties).toBe(true);
 		// A typed value schema is preserved verbatim (and would be recursed into
 		// if it were an object — covered separately).
 		expect(extraTyped.additionalProperties).toEqual({ type: "string" });
