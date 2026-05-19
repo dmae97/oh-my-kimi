@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed plan-mode `resolve` looping when grammar-constrained models (e.g. Qwen3.6-35B-MTP via llama.cpp) emit `extra: { title: {} }` instead of a string — the open `Record<string, unknown>` schema for `extra` lets such models drop in an empty object, and the apply guard then hard-threw on every retry. Plan approval now derives the title from `extra.title` when usable, falling back to the plan's first `# Heading`, then the plan filename stem (`local://PLAN.md` → `PLAN`), then the literal `"plan"`. Prompt language relaxed from "MUST" to "SHOULD" for `extra.title`. ([#1179](https://github.com/can1357/oh-my-pi/issues/1179))
+
 ## [15.1.5] - 2026-05-19
 
 ### Fixed

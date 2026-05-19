@@ -49,6 +49,58 @@ export function normalizePlanTitle(title: string): { title: string; fileName: st
 	return { title: sanitized, fileName };
 }
 
+/** Best-effort derivation of a plan title from inputs the agent already produced.
+ *  Returns the first non-empty candidate that survives `normalizePlanTitle`:
+ *    1. an explicit `suppliedTitle` (e.g. `extra.title` from the resolve call),
+ *    2. the first level-1 markdown heading inside `planContent`,
+ *    3. the filename stem of `planFilePath` (e.g. `PLAN` from `local://PLAN.md`),
+ *    4. the literal `"plan"` so callers never have to handle `null`.
+ *  The fallback exists because some grammar-constrained models cannot emit a
+ *  string into the open `extra` schema and instead drop in `{}` (issue #1179);
+ *  plan-mode would otherwise loop forever on an unreachable validation. */
+export function resolvePlanTitle(input: { suppliedTitle?: unknown; planContent: string; planFilePath: string }): {
+	title: string;
+	fileName: string;
+	source: "supplied" | "heading" | "filename" | "default";
+} {
+	const candidates: Array<{ value: string; source: "supplied" | "heading" | "filename" | "default" }> = [];
+	if (typeof input.suppliedTitle === "string") {
+		const trimmed = input.suppliedTitle.trim();
+		if (trimmed) candidates.push({ value: trimmed, source: "supplied" });
+	}
+	const heading = firstLevelOneHeading(input.planContent);
+	if (heading) candidates.push({ value: heading, source: "heading" });
+	const stem = planFilenameStem(input.planFilePath);
+	if (stem) candidates.push({ value: stem, source: "filename" });
+	candidates.push({ value: "plan", source: "default" });
+
+	for (const candidate of candidates) {
+		try {
+			const normalized = normalizePlanTitle(candidate.value);
+			return { ...normalized, source: candidate.source };
+		} catch {
+			// Fall through to the next candidate.
+		}
+	}
+	// Last-ditch literal so the type-system contract holds even if `normalizePlanTitle("plan")` ever throws.
+	return { title: "plan", fileName: "plan.md", source: "default" };
+}
+
+/** First `# Heading` text on its own line, trimmed. Returns the empty string if
+ *  none is found so callers can chain it through truthiness checks. */
+function firstLevelOneHeading(planContent: string): string {
+	const match = planContent.match(/^[ \t]*#[ \t]+(.+?)[ \t]*$/m);
+	return match?.[1]?.trim() ?? "";
+}
+
+/** Stem of a `local://name.md` (or bare `name.md`) URL — the filename without
+ *  scheme or extension. Returns the empty string for inputs that have no stem. */
+function planFilenameStem(planFilePath: string): string {
+	const withoutScheme = planFilePath.replace(/^local:\/+/, "");
+	const lastSegment = withoutScheme.split(/[\\/]/).pop() ?? "";
+	return lastSegment.replace(/\.md$/i, "");
+}
+
 /** Humanize a normalized plan title for use as a session display name.
  *  Replaces `-`/`_` separators with spaces and capitalizes the first letter.
  *  Returns an empty string when the input collapses to whitespace. */
