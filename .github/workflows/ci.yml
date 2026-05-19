@@ -288,6 +288,7 @@ jobs:
            run: |
               runtime_dir="$(mktemp -d)"
               HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --version
+              HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --smoke-test
          - name: Smoke release binary (Windows)
            if: runner.os == 'Windows'
            shell: pwsh
@@ -297,6 +298,7 @@ jobs:
               $env:HOME = Join-Path $runtimeDir "home"
               $env:XDG_DATA_HOME = Join-Path $runtimeDir "xdg"
               & "${{ matrix.binary_path }}" --version
+              & "${{ matrix.binary_path }}" --smoke-test
          - name: Upload release binary artifact
            uses: actions/upload-artifact@v4
            with:
