@@ -136,21 +136,24 @@ export const HL_BODY_SEP = "|";
 /** Regex-escaped form of {@link HL_BODY_SEP}, safe for embedding inside a regex. */
 export const HL_BODY_SEP_RE_RAW = regexEscape(HL_BODY_SEP);
 
-const RE_SIGNIFICANT = /[\p{L}\p{N}]/u;
-
 /**
  * Compute a 2-character hash of a single line via xxHash32 mod 647 over
- * {@link HL_BIGRAMS}. Lines with no letter or digit mix the line number
- * into the seed so adjacent identical punctuation-only lines (e.g. brace-only
- * lines) get distinct hashes; lines with significant content stay
- * line-number-independent so a line is identifiable across small shifts.
+ * {@link HL_BIGRAMS}. The hash depends only on the line's content (after
+ * stripping CR and trailing whitespace); the `idx` parameter is accepted
+ * for call-site symmetry with line numbers but is intentionally unused so
+ * that anchors remain stable across line shifts caused by sibling edits.
  *
  * The line input should not include a trailing newline.
  */
 export function computeLineHash(idx: number, line: string): string {
+	void idx;
 	line = line.replace(/\r/g, "").trimEnd();
-	const seed = RE_SIGNIFICANT.test(line) ? 0 : idx;
-	return HL_BIGRAMS[Bun.hash.xxHash32(line, seed) % HL_BIGRAMS_COUNT];
+	// Seed is fixed so the hash depends only on line content. Earlier we mixed
+	// in `idx` for blank/punctuation-only lines, but that meant any line shift
+	// (e.g. from a sibling edit in the same batch) invalidated anchors whose
+	// content had not changed. Identical blank lines are intentionally allowed
+	// to collide — the edit op's line number disambiguates them.
+	return HL_BIGRAMS[Bun.hash.xxHash32(line, 0) % HL_BIGRAMS_COUNT];
 }
 
 /**
