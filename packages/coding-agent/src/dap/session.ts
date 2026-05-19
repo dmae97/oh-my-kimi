@@ -105,6 +105,41 @@ function toErrorMessage(value: unknown): string {
 	return String(value);
 }
 
+interface DapStartRequestFailure {
+	rejected: boolean;
+	error?: unknown;
+}
+
+function trackDapStartRequest<T>(promise: Promise<T>, failure: DapStartRequestFailure): Promise<T> {
+	return promise.catch(error => {
+		failure.rejected = true;
+		failure.error = error;
+		throw error;
+	});
+}
+
+function combineDapStartErrors(command: "launch" | "attach", startError: unknown, configurationError: unknown): Error {
+	const startMessage = toErrorMessage(startError);
+	const configurationMessage = toErrorMessage(configurationError);
+	if (startMessage === configurationMessage) {
+		return startError instanceof Error ? startError : new Error(startMessage);
+	}
+	return new Error(
+		`DAP ${command} failed: ${startMessage}\nDAP configurationDone also failed: ${configurationMessage}`,
+	);
+}
+
+async function throwPreferredDapStartError(
+	command: "launch" | "attach",
+	startFailure: DapStartRequestFailure,
+	configurationError: unknown,
+): Promise<never> {
+	await Promise.resolve();
+	if (startFailure.rejected) {
+		throw combineDapStartErrors(command, startFailure.error, configurationError);
+	}
+	throw configurationError;
+}
 function normalizePath(filePath: string): string {
 	return path.resolve(filePath);
 }
@@ -209,12 +244,20 @@ export class DapSessionManager {
 			// DAP spec: many adapters do not respond to launch until after
 			// configurationDone. Fire launch, complete the config handshake,
 			// then await the launch response.
-			const launchPromise = client.sendRequest("launch", launchArguments, signal, timeoutMs);
+			const launchFailure: DapStartRequestFailure = { rejected: false };
+			const launchPromise = trackDapStartRequest(
+				client.sendRequest("launch", launchArguments, signal, timeoutMs),
+				launchFailure,
+			);
 			// Mark handled so a fast error response doesn't become an unhandled
 			// rejection while we await the config handshake. The actual error
 			// still propagates when we await launchPromise below.
 			launchPromise.catch(() => {});
-			await this.#completeConfigurationHandshake(session, signal, timeoutMs);
+			try {
+				await this.#completeConfigurationHandshake(session, signal, timeoutMs);
+			} catch (error) {
+				await throwPreferredDapStartError("launch", launchFailure, error);
+			}
 			await launchPromise;
 			// Try to capture initial stopped state (e.g. stopOnEntry).
 			// Timeout is acceptable — the program may simply be running.
@@ -262,9 +305,17 @@ export class DapSessionManager {
 				signal,
 				Math.min(timeoutMs, STOP_CAPTURE_TIMEOUT_MS),
 			);
-			const attachPromise = client.sendRequest("attach", attachArguments, signal, timeoutMs);
+			const attachFailure: DapStartRequestFailure = { rejected: false };
+			const attachPromise = trackDapStartRequest(
+				client.sendRequest("attach", attachArguments, signal, timeoutMs),
+				attachFailure,
+			);
 			attachPromise.catch(() => {});
-			await this.#completeConfigurationHandshake(session, signal, timeoutMs);
+			try {
+				await this.#completeConfigurationHandshake(session, signal, timeoutMs);
+			} catch (error) {
+				await throwPreferredDapStartError("attach", attachFailure, error);
+			}
 			await attachPromise;
 			try {
 				await untilAborted(signal, initialStopPromise);
@@ -1085,7 +1136,9 @@ export class DapSessionManager {
 		for (const p of promises) {
 			p.catch(() => {});
 		}
-		return Promise.race(promises);
+		const outcome = Promise.race(promises);
+		outcome.catch(() => {});
+		return outcome;
 	}
 
 	/**
