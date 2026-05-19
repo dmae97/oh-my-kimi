@@ -1,5 +1,14 @@
 import turnAbortedGuidance from "../prompts/turn-aborted-guidance.md" with { type: "text" };
-import type { Api, AssistantMessage, DeveloperMessage, Message, Model, ToolCall, ToolResultMessage } from "../types";
+import type {
+	Api,
+	AssistantMessage,
+	DeveloperMessage,
+	Message,
+	Model,
+	ToolCall,
+	ToolResultMessage,
+	UserMessage,
+} from "../types";
 
 const enum ToolCallStatus {
 	/** Tool call has received a result (real or synthetic for orphan) */
@@ -250,8 +259,21 @@ export function transformMessages<TApi extends Api>(
 				if (pendingToolCalls.length > 0 || pendingAbortedToolCalls.size > 0) {
 					continue;
 				}
-				// No pending tool-call window: safe to preserve the text payload as a
-				// developer note so the model still sees what the tool returned.
+				// No pending tool-call window: safe to preserve the text payload so the
+				// model still sees what the tool returned.
+				//
+				// The note is emitted with `role: "user"` rather than `role: "developer"`
+				// because the developer role is elevated by some providers:
+				//
+				// * Ollama maps `developer` -> `system` (highest instruction priority).
+				// * OpenAI chat-completions reasoning models forward `developer` as
+				//   `developer` (above-user instruction priority).
+				//
+				// Stale, model-untrusted tool output must not gain instruction priority
+				// above user/developer messages it lived alongside before compaction.
+				// `user` role is mapped to plain user content by every provider, so the
+				// content survives without ever being treated as an instruction the
+				// model should obey.
 				const textParts: string[] = [];
 				for (const part of msg.content) {
 					if (part.type === "text" && part.text.trim() !== "") textParts.push(part.text);
@@ -259,10 +281,10 @@ export function transformMessages<TApi extends Api>(
 				if (textParts.length > 0) {
 					const errorAttr = msg.isError ? ' is-error="true"' : "";
 					result.push({
-						role: "developer",
+						role: "user",
 						content: `<stale-tool-result tool="${msg.toolName}" id="${msg.toolCallId}"${errorAttr}>\n${textParts.join("\n")}\n</stale-tool-result>`,
 						timestamp: messageTimestamp,
-					} as DeveloperMessage);
+					} as UserMessage);
 				}
 				continue;
 			}
