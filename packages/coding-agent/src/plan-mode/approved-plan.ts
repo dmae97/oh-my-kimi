@@ -14,10 +14,12 @@ export interface PlanApprovalDetails {
 	planExists: boolean;
 }
 
-/** Validate the agent-supplied plan title and derive the destination filename.
- *  Filename uses the title with a `.md` suffix; characters are restricted to
- *  letters, numbers, underscores, and hyphens so the value is safe to splice
- *  into a `local://` URL without escaping. */
+/** Validate and normalize the agent-supplied plan title into a safe filename stem.
+ *  Spaces and other URL-safe punctuation are replaced with hyphens so models that
+ *  produce natural-language titles (e.g. "My feature plan") still succeed.
+ *  Characters that cannot be safely represented after replacement are dropped.
+ *  The result is restricted to letters, numbers, underscores, and hyphens so it
+ *  is safe to splice into a `local://` URL without escaping. */
 export function normalizePlanTitle(title: string): { title: string; fileName: string } {
 	const trimmed = title.trim();
 	if (!trimmed) {
@@ -28,13 +30,23 @@ export function normalizePlanTitle(title: string): { title: string; fileName: st
 		throw new ToolError("Plan title must not contain path separators or '..'.");
 	}
 
-	const withExtension = trimmed.toLowerCase().endsWith(".md") ? trimmed : `${trimmed}.md`;
-	if (!/^[A-Za-z0-9_-]+\.md$/.test(withExtension)) {
-		throw new ToolError("Plan title may only contain letters, numbers, underscores, or hyphens.");
+	// Strip a trailing `.md` if the model included it, then sanitize:
+	// spaces → hyphens, any remaining invalid char → dropped.
+	const withoutExt = trimmed.replace(/\.md$/i, "");
+	const sanitized = withoutExt
+		.replace(/\s+/g, "-")
+		.replace(/[^A-Za-z0-9_-]/g, "")
+		.replace(/-{2,}/g, "-")
+		.replace(/^-+|-+$/g, "");
+
+	if (!sanitized) {
+		throw new ToolError(
+			"Plan title must contain at least one letter, number, underscore, or hyphen after sanitization.",
+		);
 	}
 
-	const normalizedTitle = withExtension.slice(0, -3);
-	return { title: normalizedTitle, fileName: withExtension };
+	const fileName = `${sanitized}.md`;
+	return { title: sanitized, fileName };
 }
 
 /** Humanize a normalized plan title for use as a session display name.

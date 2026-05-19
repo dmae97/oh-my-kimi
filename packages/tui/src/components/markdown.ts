@@ -946,6 +946,8 @@ export class Markdown implements Component {
  * Unlike the full Markdown component, this produces a single line with no block-level elements.
  */
 export function renderInlineMarkdown(text: string, mdTheme: MarkdownTheme, baseColor?: (t: string) => string): string {
+	// Guard against undefined/null during streaming — partial JSON can leave fields unpopulated.
+	if (typeof text !== "string") return (baseColor ?? (t => t))(text != null ? String(text) : "");
 	const tokens = marked.lexer(text);
 	const applyText = baseColor ?? ((t: string) => t);
 	let result = "";
