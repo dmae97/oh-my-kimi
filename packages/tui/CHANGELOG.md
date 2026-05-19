@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.1.4] - 2026-05-19
+
 ### Fixed
 
 - Fixed `renderInlineMarkdown` crashing with `TypeError: undefined is not an object (evaluating 'e.replace')` when called with a non-string value during streaming — partial JSON parsing leaves option label fields temporarily unpopulated, causing the ask tool renderer to fail. ([#1176](https://github.com/can1357/oh-my-pi/issues/1176))

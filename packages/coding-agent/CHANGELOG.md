@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.1.4] - 2026-05-19
+
 ### Fixed
 
 - Fixed `normalizePlanTitle` rejecting plan titles that contain spaces or common punctuation (e.g. "My Feature Plan") — spaces are now converted to hyphens and other invalid characters are dropped, so models that produce natural-language plan titles no longer loop forever trying to call `resolve`. ([#1176](https://github.com/can1357/oh-my-pi/issues/1176))

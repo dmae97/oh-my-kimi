@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.1.4] - 2026-05-19
 ### Changed
 
 - Updated auth-gateway format and pi-native request handling to invalidate the failed API key and retry the provider request with a replacement key when authentication fails
