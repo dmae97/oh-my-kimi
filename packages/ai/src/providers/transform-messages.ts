@@ -229,12 +229,29 @@ export function transformMessages<TApi extends Api>(
 				// Orphan `tool_result`: the originating `tool_use` is not present in the
 				// transformed history (typically because handoff/compaction folded the
 				// assistant message into a summary string while the user-side result
-				// survived). Sending the block as-is would 400 the request. Drop it but
-				// preserve any text payload as a developer note so the model still sees
-				// what the tool returned. Flush pending tool-call bookkeeping first
-				// because the synthesized developer message acts as a turn boundary.
-				flushPendingToolCalls(messageTimestamp);
-				flushPendingAbortedToolCalls();
+				// survived). Sending the block as-is would 400 the request, so it must
+				// be dropped.
+				//
+				// If a pending tool-call window is still open (either normal or
+				// aborted), the orphan cannot be replaced with a developer note here:
+				//
+				// * Anthropic requires the next message after an assistant `tool_use`
+				//   to be the matching `tool_result`. Inserting a developer message
+				//   would break that contiguity.
+				// * `flushPendingAbortedToolCalls` synthesizes "aborted" results
+				//   without checking whether a real result lands later in history
+				//   (unlike `flushPendingToolCalls`, which is gated by
+				//   `realToolResultIds`). Calling it here would convert a legitimate
+				//   later `tool_result` into a synthetic "aborted" one via the
+				//   `ToolCallStatus.Aborted` skip-guard.
+				//
+				// Drop the orphan silently in that case; the upcoming real
+				// `tool_result` will land normally on the next iteration.
+				if (pendingToolCalls.length > 0 || pendingAbortedToolCalls.size > 0) {
+					continue;
+				}
+				// No pending tool-call window: safe to preserve the text payload as a
+				// developer note so the model still sees what the tool returned.
 				const textParts: string[] = [];
 				for (const part of msg.content) {
 					if (part.type === "text" && part.text.trim() !== "") textParts.push(part.text);

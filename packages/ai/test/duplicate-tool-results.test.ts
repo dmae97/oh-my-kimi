@@ -527,6 +527,99 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
 		expect(results[0].toolCallId).toBe(id);
 		expect(results[0].content).toEqual([{ type: "text", text: "result" }]);
 	});
+
+	it("drops orphan tool_result inside an aborted-tool-call window without corrupting the real later result", () => {
+		// Codex P1 review on PR #1165: if message order is
+		//   assistant(stopReason=aborted, toolCall A) -> orphan toolResult X -> real toolResult A
+		// the previous version of the orphan branch called
+		// `flushPendingAbortedToolCalls()` inside the orphan-`toolResult` handler.
+		// That synthesized an "aborted" result for A and set
+		// `toolCallStatus[A] = Aborted`, which then caused the real `toolResult A`
+		// to be skipped by the `ToolCallStatus.Aborted` guard — silently turning a
+		// legitimate (or partial-success) tool result into a synthetic "aborted"
+		// one. Guard the orphan branch by dropping silently when any pending
+		// tool-call window (normal or aborted) is open; the real result must land
+		// on the next iteration intact.
+		const abortedId = "toolu_aborted_A";
+		const orphanId = "toolu_compacted_X";
+
+		const abortedAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "toolCall", id: abortedId, name: "bash", arguments: { cmd: "long-running" } }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-3-5-sonnet-20241022",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "aborted",
+			timestamp: 1,
+		};
+
+		const messages: Message[] = [
+			{ role: "user", content: "do it", timestamp: 0 },
+			abortedAssistant,
+			{
+				role: "toolResult",
+				toolCallId: orphanId,
+				toolName: "bash",
+				content: [{ type: "text", text: "orphan payload from compacted turn" }],
+				isError: false,
+				timestamp: 2,
+			} as ToolResultMessage,
+			{
+				role: "toolResult",
+				toolCallId: abortedId,
+				toolName: "bash",
+				content: [{ type: "text", text: "real partial output before abort" }],
+				isError: false,
+				timestamp: 3,
+			} as ToolResultMessage,
+			{ role: "user", content: "ack", timestamp: 4 },
+		];
+
+		const transformed = transformMessages(messages, model);
+
+		// 1. Orphan id never appears as a toolResult in the output.
+		expect(
+			transformed.filter(m => m.role === "toolResult" && (m as ToolResultMessage).toolCallId === orphanId).length,
+		).toBe(0);
+
+		// 2. No premature developer note for the orphan: a developer message would
+		//    break assistant→toolResult contiguity. The only developer message
+		//    allowed is the `turnAbortedGuidance` injected by
+		//    `flushPendingAbortedToolCalls` at its natural turn boundary.
+		const orphanNotes = transformed.filter(
+			(m): m is DeveloperMessage =>
+				m.role === "developer" &&
+				typeof (m as DeveloperMessage).content === "string" &&
+				((m as DeveloperMessage).content as string).includes(orphanId),
+		);
+		expect(orphanNotes.length).toBe(0);
+
+		// 3. The REAL toolResult for the aborted id must survive intact —
+		//    NOT be replaced by a synthetic "aborted" one (this is the Codex bug).
+		const abortedResults = transformed.filter(
+			(m): m is ToolResultMessage => m.role === "toolResult" && (m as ToolResultMessage).toolCallId === abortedId,
+		);
+		expect(abortedResults.length).toBe(1);
+		expect(abortedResults[0].content).toEqual([{ type: "text", text: "real partial output before abort" }]);
+		expect(abortedResults[0].isError).toBe(false);
+
+		// 4. Structural Anthropic invariant: the assistant with the aborted
+		//    tool_use is immediately followed by its tool_result (no developer
+		//    note wedged in between).
+		const assistantIdx = transformed.findIndex(m => m.role === "assistant");
+		expect(assistantIdx).toBeGreaterThanOrEqual(0);
+		const next = transformed[assistantIdx + 1];
+		expect(next?.role).toBe("toolResult");
+		expect((next as ToolResultMessage).toolCallId).toBe(abortedId);
+	});
 });
 
 /**
