@@ -62,16 +62,14 @@ const kJsonWireSchema = Symbol("pi.schema.json.wire");
  *     treat defaulted fields as optional; Zod inverts this and keeps them
  *     required at the input boundary, then materializes the default).
  *   - Strip the noisy safe-integer bounds Zod injects for `z.number().int()`.
- *   - Normalize `{}` (empty JSON Schema = `z.unknown()`) to `true` in every
- *     schema-valued position. JSON Schema draft 2020-12 §4.3.1: `{} ≡ true`.
- *     Grammar-constrained samplers (llama.cpp, etc.) treat the object form as
- *     "generate an empty object" rather than "any JSON value", causing
- *     open-typed fields like `extra.title` to always emit `{}` instead of
- *     the intended string/number/etc. (issue #1179).
+ *
+ * The empty-schema normalization (`{}` → `true`, see `normalizeEmptySchemas`)
+ * runs separately from `toolWireSchema` so both Zod and TypeBox tools get it.
  */
 function postProcess(schema: Record<string, unknown>): Record<string, unknown> {
 	delete schema.$schema;
 	walk(schema);
+	normalizeEmptySchemas(schema);
 	return schema;
 }
 
@@ -137,8 +135,30 @@ function walk(node: unknown): void {
 		}
 	}
 
-	// Normalize {} (empty JSON Schema = z.unknown()) to boolean `true` so
-	// grammar-constrained samplers emit any JSON value, not just empty objects.
+	for (const k in obj) walk(obj[k]);
+}
+
+/**
+ * Normalize `{}` (empty JSON Schema = `z.unknown()` / unconstrained value) to
+ * boolean `true` in every schema-valued position. JSON Schema draft 2020-12
+ * §4.3.1: `{}` and `true` are semantically equivalent ("any JSON value").
+ * Grammar-constrained samplers (llama.cpp, etc.) treat the object form as
+ * "generate an empty object" rather than "any JSON value", causing open-typed
+ * fields like `extra.title` (from `z.record(z.string(), z.unknown())`) to
+ * always emit `{}` instead of the intended string/number/etc. (issue #1179).
+ *
+ * Mutates in place. Provider-agnostic — applied to every tool wire schema so
+ * Anthropic, Google, OpenAI, Ollama, Bedrock, and Cursor all see the
+ * normalized form, regardless of whether the source was Zod or TypeBox.
+ */
+export function normalizeEmptySchemas(node: unknown): void {
+	if (Array.isArray(node)) {
+		for (const child of node) normalizeEmptySchemas(child);
+		return;
+	}
+	if (!node || typeof node !== "object") return;
+	const obj = node as Record<string, unknown>;
+
 	for (const key of SCHEMA_VALUE_KEYS) {
 		if (Object.hasOwn(obj, key) && isEmptyObject(obj[key])) obj[key] = true;
 	}
@@ -159,7 +179,7 @@ function walk(node: unknown): void {
 		}
 	}
 
-	for (const k in obj) walk(obj[k]);
+	for (const k in obj) normalizeEmptySchemas(obj[k]);
 }
 
 /** Convert a Zod schema into the JSON Schema shape providers consume. */
@@ -177,13 +197,17 @@ export function zodToWireSchema(schema: ZodType): Record<string, unknown> {
  * Resolve a tool's parameters to a JSON Schema object suitable for sending
  * over the wire. Zod schemas are converted (and cached); legacy TypeBox / raw
  * JSON Schema parameters are upgraded to draft 2020-12 (and cached).
+ *
+ * Both branches finish with `normalizeEmptySchemas` so every provider —
+ * OpenAI, Anthropic, Google, Ollama, Bedrock, Cursor — sees `{}` normalized
+ * to `true` in schema-valued positions (issue #1179).
  */
 export function toolWireSchema(tool: Tool): Record<string, unknown> {
 	const params: TSchema = tool.parameters;
 	if (isZodSchema(params)) return zodToWireSchema(params);
-	return stamp(
-		params as Record<string, unknown>,
-		kJsonWireSchema,
-		p => upgradeJsonSchemaTo202012(p) as Record<string, unknown>,
-	);
+	return stamp(params as Record<string, unknown>, kJsonWireSchema, p => {
+		const upgraded = upgradeJsonSchemaTo202012(p) as Record<string, unknown>;
+		normalizeEmptySchemas(upgraded);
+		return upgraded;
+	});
 }

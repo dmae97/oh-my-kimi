@@ -909,11 +909,11 @@ function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonO
 
 	// `{}` (empty JSON Schema) ≡ `true` (JSON Schema draft 2020-12 §4.3.1).
 	// Grammar-constrained samplers (llama.cpp, etc.) treat the object form as
-	// "generate an empty object" rather than "any JSON value", causing
-	// open-typed fields (e.g. `extra.title` from `z.record(z.string(), z.unknown())`)
-	// to always emit `{}` instead of the intended string/number/etc. (issue #1179).
-	// This also covers TypeBox / MCP tool schemas that arrive without going through
-	// the Zod wire-schema post-processor.
+	// "generate an empty object" rather than "any JSON value" (issue #1179).
+	// `toolWireSchema` already runs `normalizeEmptySchemas` upstream, but this
+	// guard remains as a safety net for callers that invoke
+	// `sanitizeSchemaForOpenAIResponses` directly on a schema that bypassed
+	// the wire-schema pipeline (e.g. provider-specific fixtures, debug paths).
 	if (isJsonObjectEmpty(value)) return true;
 
 	const cached = cache.get(value);

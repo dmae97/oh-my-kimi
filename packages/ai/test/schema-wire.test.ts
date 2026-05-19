@@ -1,5 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { normalizeAnthropicToolSchema } from "@oh-my-pi/pi-ai/providers/anthropic";
+import type { Tool } from "@oh-my-pi/pi-ai/types";
+import {
+	isZodSchema,
+	normalizeEmptySchemas,
+	normalizeSchemaForCCA,
+	normalizeSchemaForGoogle,
+	toolWireSchema,
+	zodToWireSchema,
+} from "@oh-my-pi/pi-ai/utils/schema";
 import { z } from "zod/v4";
 
 describe("isZodSchema", () => {
@@ -77,5 +86,108 @@ describe("zodToWireSchema — empty-schema normalization", () => {
 		const name = (wire.properties as Record<string, unknown>).name as Record<string, unknown>;
 		expect(name.type).toBe("string");
 		expect(name.additionalProperties).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// normalizeEmptySchemas — provider-agnostic post-pipeline normalization
+// ---------------------------------------------------------------------------
+
+describe("normalizeEmptySchemas", () => {
+	it("normalizes {} in additionalProperties / items / property values / combiner branches", () => {
+		const schema: Record<string, unknown> = {
+			type: "object",
+			properties: { meta: {}, items: { type: "array", items: {} } },
+			additionalProperties: {},
+			anyOf: [{}, { type: "string" }],
+		};
+		normalizeEmptySchemas(schema);
+		expect(schema).toEqual({
+			type: "object",
+			properties: { meta: true, items: { type: "array", items: true } },
+			additionalProperties: true,
+			anyOf: [true, { type: "string" }],
+		});
+	});
+
+	it("leaves non-empty schemas and boolean values alone", () => {
+		const schema: Record<string, unknown> = {
+			type: "object",
+			additionalProperties: { type: "string" },
+			unevaluatedProperties: false,
+		};
+		normalizeEmptySchemas(schema);
+		expect(schema).toEqual({
+			type: "object",
+			additionalProperties: { type: "string" },
+			unevaluatedProperties: false,
+		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// toolWireSchema — covers both Zod and TypeBox paths (issue #1179)
+// ---------------------------------------------------------------------------
+
+describe("toolWireSchema — empty-schema normalization across both paths", () => {
+	function zodTool(parameters: z.ZodType): Tool {
+		return { name: "t", description: "", parameters, async execute() {} } as unknown as Tool;
+	}
+	function jsonTool(parameters: Record<string, unknown>): Tool {
+		return { name: "t", description: "", parameters, async execute() {} } as unknown as Tool;
+	}
+
+	it("normalizes {} → true for Zod tools (z.record(z.string(), z.unknown()))", () => {
+		const wire = toolWireSchema(zodTool(z.object({ extra: z.record(z.string(), z.unknown()) })));
+		const extra = (wire.properties as Record<string, unknown>).extra as Record<string, unknown>;
+		expect(extra.additionalProperties).toBe(true);
+	});
+
+	it("normalizes {} → true for TypeBox / raw JSON Schema tools", () => {
+		const wire = toolWireSchema(
+			jsonTool({
+				type: "object",
+				properties: { extra: { type: "object", additionalProperties: {} } },
+				required: [],
+			}),
+		);
+		const extra = (wire.properties as Record<string, unknown>).extra as Record<string, unknown>;
+		expect(extra.additionalProperties).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Provider downstream behavior with normalized `additionalProperties: true`
+// (issue #1179 — verify Google and Anthropic don't break)
+// ---------------------------------------------------------------------------
+
+describe("provider normalizers on normalized open-record schemas", () => {
+	const wire = zodToWireSchema(
+		z.object({
+			action: z.enum(["apply", "discard"]),
+			extra: z.record(z.string(), z.unknown()).optional(),
+		}),
+	);
+
+	it("Anthropic preserves additionalProperties: true so strict-mode opt-out still fires", () => {
+		// `normalizeAnthropicStrictSchemaNode` rejects nodes where additionalProperties !== false.
+		// With normalization, the value is `true` (was `{}`); still !== false, so strict opts out.
+		const out = normalizeAnthropicToolSchema(wire) as Record<string, unknown>;
+		const extra = (out.properties as Record<string, unknown>).extra as Record<string, unknown>;
+		expect(extra.additionalProperties).toBe(true);
+	});
+
+	it("Google strips additionalProperties entirely (UNSUPPORTED_SCHEMA_FIELDS)", () => {
+		// Pre-existing behavior — Google never sees the open-record marker either way.
+		// `additionalProperties: true` is removed just like `additionalProperties: {}` was.
+		const out = normalizeSchemaForGoogle(wire) as Record<string, unknown>;
+		const extra = (out.properties as Record<string, unknown>).extra as Record<string, unknown>;
+		expect(extra).not.toHaveProperty("additionalProperties");
+	});
+
+	it("CCA (Claude on Cloud Code Assist) strips additionalProperties entirely", () => {
+		const out = normalizeSchemaForCCA(wire) as Record<string, unknown>;
+		const extra = (out.properties as Record<string, unknown>).extra as Record<string, unknown>;
+		expect(extra).not.toHaveProperty("additionalProperties");
 	});
 });
