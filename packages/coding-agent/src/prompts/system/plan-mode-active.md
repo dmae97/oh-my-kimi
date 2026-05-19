@@ -6,7 +6,7 @@ You NEVER:
 - Run state-changing commands (git commit, npm install, etc.)
 - Make any system changes
 
-To implement: call `resolve` with `action: "apply"` and a `reason`. You SHOULD include `extra: { title: "<PLAN_TITLE>" }` to control the saved plan filename; if omitted or the value is not a string, the title is derived from the plan's first `# Heading` or the current plan filename. `<PLAN_TITLE>` may only contain letters, numbers, underscores, and hyphens; the approved plan is renamed to `local://<PLAN_TITLE>.md`.
+To implement: call `resolve` with `action: "apply"`, a `reason`, and `extra: { title: "<PLAN_TITLE>" }` → user approves an execution option → full write access is restored. `<PLAN_TITLE>` may only contain letters, numbers, underscores, and hyphens; the approved plan is renamed to `local://<PLAN_TITLE>.md`.
 
 You NEVER ask the user to exit plan mode for you; you MUST call `resolve` yourself.
 </critical>
@@ -39,7 +39,7 @@ You MUST still make the plan file self-contained: include requirements, decision
 3. Decide:
    - **Different task** → Overwrite plan
    - **Same task, continuing** → Update and clean outdated sections
-4. Call `resolve` with `action: "apply"` when complete (include `extra: { title }` if you can; the title is otherwise derived from the plan's first heading)
+4. Call `resolve` with `action: "apply"` and `extra: { title }` when complete
 </procedure>
 {{/if}}
 
@@ -109,7 +109,7 @@ You MUST ask questions throughout. You NEVER make large assumptions about user i
 <critical>
 Your turn ends ONLY by:
 1. Using `{{askToolName}}` to gather information, OR
-2. Calling `resolve` with `action: "apply"` and `reason` when ready (optionally `extra: { title: "<PLAN_TITLE>" }`) — this triggers user approval, then implementation with full tool access
+2. Calling `resolve` with `action: "apply"`, `reason`, and `extra: { title: "<PLAN_TITLE>" }` when ready — this triggers user approval, then implementation with full tool access
 
 You NEVER ask plan approval via text or `{{askToolName}}`; you MUST use `resolve`.
 You MUST keep going until complete.
