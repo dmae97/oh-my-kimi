@@ -62,7 +62,13 @@ import {
 	resolveOutputMaxColumns,
 	stripOutputNotice,
 } from "./output-meta";
-import { expandPath, formatPathRelativeToCwd, resolveReadPath, splitPathAndSel } from "./path-utils";
+import {
+	expandPath,
+	formatPathRelativeToCwd,
+	resolveReadPath,
+	splitInternalUrlSel,
+	splitPathAndSel,
+} from "./path-utils";
 import { formatBytes, replaceTabs, shortenPath, wrapBrackets } from "./render-utils";
 import {
 	executeReadQuery,
@@ -1474,10 +1480,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			return executeReadUrl(this.session, { path: parsedUrlTarget.path, raw: parsedUrlTarget.raw }, signal);
 		}
 
-		// Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://)
-		const internalTarget = splitPathAndSel(readPath);
+		// Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://, omp://, issue://, pr://).
+		// Use the internal-URL-aware splitter so malformed selectors are peeled
+		// off the URL and surfaced via parseSel rather than confusing handlers.
 		const internalRouter = InternalUrlRouter.instance();
-		if (internalRouter.canHandle(internalTarget.path)) {
+		if (internalRouter.canHandle(readPath)) {
+			const internalTarget = splitInternalUrlSel(readPath);
 			const parsed = parseSel(internalTarget.sel);
 			return this.#handleInternalUrl(internalTarget.path, parsed, signal);
 		}

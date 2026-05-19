@@ -1,5 +1,14 @@
 import turnAbortedGuidance from "../prompts/turn-aborted-guidance.md" with { type: "text" };
-import type { Api, AssistantMessage, DeveloperMessage, Message, Model, ToolCall, ToolResultMessage } from "../types";
+import type {
+	Api,
+	AssistantMessage,
+	DeveloperMessage,
+	Message,
+	Model,
+	ToolCall,
+	ToolResultMessage,
+	UserMessage,
+} from "../types";
 
 const enum ToolCallStatus {
 	/** Tool call has received a result (real or synthetic for orphan) */
@@ -126,6 +135,19 @@ export function transformMessages<TApi extends Api>(
 		transformed.filter((msg): msg is ToolResultMessage => msg.role === "toolResult").map(msg => msg.toolCallId),
 	);
 
+	// Anthropic rejects `tool_result` blocks whose `tool_use_id` does not appear in a prior
+	// `tool_use` block. After handoff/compaction folds an assistant turn into a summary
+	// string, the user-side `toolResult` for that turn can survive while the originating
+	// `tool_use` disappears — leaving an orphan that triggers HTTP 400. Track the set of
+	// `tool_use` ids that survive transformation so the second pass can drop orphans cleanly.
+	const validToolUseIds = new Set<string>();
+	for (const msg of transformed) {
+		if (msg.role !== "assistant") continue;
+		for (const block of msg.content) {
+			if (block.type === "toolCall") validToolUseIds.add(block.id);
+		}
+	}
+
 	// Second pass: insert synthetic empty tool results for orphaned tool calls
 	// and preserve aborted/errored tool results when they were already persisted.
 	const result: Message[] = [];
@@ -211,6 +233,62 @@ export function transformMessages<TApi extends Api>(
 			}
 
 			if (toolCallStatus.get(msg.toolCallId) === ToolCallStatus.Aborted) continue;
+
+			if (!validToolUseIds.has(msg.toolCallId)) {
+				// Orphan `tool_result`: the originating `tool_use` is not present in the
+				// transformed history (typically because handoff/compaction folded the
+				// assistant message into a summary string while the user-side result
+				// survived). Sending the block as-is would 400 the request, so it must
+				// be dropped.
+				//
+				// If a pending tool-call window is still open (either normal or
+				// aborted), the orphan cannot be replaced with a developer note here:
+				//
+				// * Anthropic requires the next message after an assistant `tool_use`
+				//   to be the matching `tool_result`. Inserting a developer message
+				//   would break that contiguity.
+				// * `flushPendingAbortedToolCalls` synthesizes "aborted" results
+				//   without checking whether a real result lands later in history
+				//   (unlike `flushPendingToolCalls`, which is gated by
+				//   `realToolResultIds`). Calling it here would convert a legitimate
+				//   later `tool_result` into a synthetic "aborted" one via the
+				//   `ToolCallStatus.Aborted` skip-guard.
+				//
+				// Drop the orphan silently in that case; the upcoming real
+				// `tool_result` will land normally on the next iteration.
+				if (pendingToolCalls.length > 0 || pendingAbortedToolCalls.size > 0) {
+					continue;
+				}
+				// No pending tool-call window: safe to preserve the text payload so the
+				// model still sees what the tool returned.
+				//
+				// The note is emitted with `role: "user"` rather than `role: "developer"`
+				// because the developer role is elevated by some providers:
+				//
+				// * Ollama maps `developer` -> `system` (highest instruction priority).
+				// * OpenAI chat-completions reasoning models forward `developer` as
+				//   `developer` (above-user instruction priority).
+				//
+				// Stale, model-untrusted tool output must not gain instruction priority
+				// above user/developer messages it lived alongside before compaction.
+				// `user` role is mapped to plain user content by every provider, so the
+				// content survives without ever being treated as an instruction the
+				// model should obey.
+				const textParts: string[] = [];
+				for (const part of msg.content) {
+					if (part.type === "text" && part.text.trim() !== "") textParts.push(part.text);
+				}
+				if (textParts.length > 0) {
+					const errorAttr = msg.isError ? ' is-error="true"' : "";
+					result.push({
+						role: "user",
+						content: `<stale-tool-result tool="${msg.toolName}" id="${msg.toolCallId}"${errorAttr}>\n${textParts.join("\n")}\n</stale-tool-result>`,
+						timestamp: messageTimestamp,
+					} as UserMessage);
+				}
+				continue;
+			}
+
 			toolCallStatus.set(msg.toolCallId, ToolCallStatus.Resolved);
 			result.push(msg);
 		} else if (msg.role === "user" || msg.role === "developer") {

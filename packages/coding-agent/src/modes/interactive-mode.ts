@@ -43,9 +43,9 @@ import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import {
 	humanizePlanTitle,
-	normalizePlanTitle,
 	type PlanApprovalDetails,
 	renameApprovedPlanFile,
+	resolvePlanTitle,
 } from "../plan-mode/approved-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
@@ -1197,13 +1197,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (!state?.enabled) {
 					throw new ToolError("Plan mode is not active.");
 				}
-				const title = extra?.title;
-				if (typeof title !== "string" || title.trim() === "") {
-					throw new ToolError(
-						'Plan approval requires `extra: { title: "<PLAN_TITLE>" }`. Provide a title with letters, numbers, underscores, or hyphens only.',
-					);
-				}
-				const normalized = normalizePlanTitle(title);
 				const planFilePath = state.planFilePath;
 				const planContent = await this.#readPlanFile(planFilePath);
 				if (planContent === null) {
@@ -1211,6 +1204,11 @@ export class InteractiveMode implements InteractiveModeContext {
 						`Plan file not found at ${planFilePath}. Write the finalized plan to ${planFilePath} before requesting approval.`,
 					);
 				}
+				const normalized = resolvePlanTitle({
+					suppliedTitle: extra?.title,
+					planContent,
+					planFilePath,
+				});
 				const details: PlanApprovalDetails = {
 					planFilePath,
 					finalPlanFilePath: `local://${normalized.fileName}`,

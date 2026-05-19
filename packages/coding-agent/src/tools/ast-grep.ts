@@ -18,8 +18,8 @@ import type { OutputMeta } from "./output-meta";
 import { resolveToolSearchScope } from "./path-utils";
 import {
 	appendParseErrorsBulletList,
+	capParseErrors,
 	createCachedComponent,
-	dedupeParseErrors,
 	formatCodeFrameLine,
 	formatCount,
 	formatEmptyMessage,
@@ -104,6 +104,8 @@ export interface AstGrepToolDetails {
 	filesSearched: number;
 	limitReached: boolean;
 	parseErrors?: string[];
+	/** Total parse error count before {@link PARSE_ERRORS_LIMIT} capping. Omitted when no errors. */
+	parseErrorsTotal?: number;
 	scopePath?: string;
 	files?: string[];
 	fileMatches?: Array<{ path: string; count: number }>;
@@ -172,7 +174,7 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				const parseError = error.match(/^.+: (.+: parse error \(syntax tree contains error nodes\))$/);
 				return parseError?.[1] ?? error;
 			});
-			const dedupedParseErrors = dedupeParseErrors(normalizedParseErrors);
+			const { errors: cappedParseErrors, total: parseErrorsTotal } = capParseErrors(normalizedParseErrors);
 			const formatPath = (filePath: string): string =>
 				formatResultPath(filePath, isDirectory, resolvedSearchPath, this.session.cwd);
 
@@ -193,18 +195,18 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				fileCount: result.filesWithMatches,
 				filesSearched: result.filesSearched,
 				limitReached: result.limitReached,
-				...(dedupedParseErrors.length > 0 ? { parseErrors: dedupedParseErrors } : {}),
+				...(cappedParseErrors.length > 0 ? { parseErrors: cappedParseErrors, parseErrorsTotal } : {}),
 				scopePath,
 				files: fileList,
 				fileMatches: [],
 			};
 
 			if (result.matches.length === 0) {
-				const noMatchMessage = dedupedParseErrors.length
+				const noMatchMessage = cappedParseErrors.length
 					? "No matches found. Parse issues mean the query may be mis-scoped; narrow `paths` before concluding absence."
 					: "No matches found";
-				const parseMessage = dedupedParseErrors.length
-					? `\n${formatParseErrors(dedupedParseErrors).join("\n")}`
+				const parseMessage = cappedParseErrors.length
+					? `\n${formatParseErrors(cappedParseErrors, parseErrorsTotal).join("\n")}`
 					: "";
 				return toolResult(baseDetails).text(`${noMatchMessage}${parseMessage}`).done();
 			}
@@ -269,8 +271,8 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 			if (result.limitReached) {
 				outputLines.push("", "Result limit reached; narrow paths or increase limit.");
 			}
-			if (dedupedParseErrors.length) {
-				outputLines.push("", ...formatParseErrors(dedupedParseErrors));
+			if (cappedParseErrors.length) {
+				outputLines.push("", ...formatParseErrors(cappedParseErrors, parseErrorsTotal));
 			}
 
 			return toolResult(details).text(outputLines.join("\n")).done();
@@ -329,7 +331,7 @@ export const astGrepToolRenderer = {
 			const lines = [header, formatEmptyMessage("No matches found", uiTheme)];
 			if (details?.parseErrors?.length) {
 				lines.push(uiTheme.fg("warning", "Query may be mis-scoped; narrow `paths` before concluding absence"));
-				appendParseErrorsBulletList(lines, details.parseErrors, uiTheme);
+				appendParseErrorsBulletList(lines, details.parseErrors, uiTheme, details.parseErrorsTotal);
 			}
 			return new Text(lines.join("\n"), 0, 0);
 		}
@@ -356,7 +358,9 @@ export const astGrepToolRenderer = {
 			extraLines.push(uiTheme.fg("warning", "limit reached; narrow paths or increase limit"));
 		}
 		if (details?.parseErrors?.length) {
-			extraLines.push(uiTheme.fg("warning", formatParseErrorsCountLabel(details.parseErrors)));
+			extraLines.push(
+				uiTheme.fg("warning", formatParseErrorsCountLabel(details.parseErrors, details.parseErrorsTotal)),
+			);
 		}
 
 		return createCachedComponent(
