@@ -45,7 +45,7 @@ const browserSchema = z.object({
 		.describe("auto-handle dialogs")
 		.optional(),
 	code: z.string().describe("js body to run in tab").optional(),
-	timeout: z.number().default(30).describe("timeout in seconds").optional(),
+	timeout: z.number().default(30).describe("timeout in seconds (default 30, max 300)").optional(),
 	all: z.boolean().describe("close every tab").optional(),
 	kill: z.boolean().describe("also kill spawned-app browsers").optional(),
 });
