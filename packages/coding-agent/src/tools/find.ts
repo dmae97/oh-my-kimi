@@ -38,14 +38,41 @@ const findSchema = z
 	.object({
 		paths: z.array(z.string().describe("glob including search path")).min(1).describe("globs including search paths"),
 		hidden: z.boolean().default(true).describe("include hidden files").optional(),
+		gitignore: z.boolean().default(true).describe("respect gitignore").optional(),
 		limit: z.number().default(1000).describe("max results").optional(),
+		timeout: z.number().min(0.5).max(60).default(5).describe("timeout in seconds (0.5–60)").optional(),
 	})
 	.strict();
 
 export type FindToolInput = z.infer<typeof findSchema>;
 
 const DEFAULT_LIMIT = 1000;
-const GLOB_TIMEOUT_MS = 5000;
+const DEFAULT_GLOB_TIMEOUT_MS = 5000;
+const MIN_GLOB_TIMEOUT_MS = 500;
+const MAX_GLOB_TIMEOUT_MS = 60_000;
+
+/**
+ * Reject comma-separated path lists packed into a single array element
+ * (`["a.py,b.py"]`). The schema is array-of-string; agents that pass a
+ * single comma-joined element get silent no-matches otherwise.
+ *
+ * Commas inside brace expansion (`{a,b}`) are legitimate glob syntax and
+ * must pass through.
+ */
+function validateFindPathInputs(paths: readonly string[]): void {
+	for (const entry of paths) {
+		let braceDepth = 0;
+		for (let i = 0; i < entry.length; i++) {
+			const ch = entry.charCodeAt(i);
+			if (ch === 0x7b /* { */) braceDepth++;
+			else if (ch === 0x7d /* } */) {
+				if (braceDepth > 0) braceDepth--;
+			} else if (ch === 0x2c /* , */ && braceDepth === 0) {
+				throw new ToolError(`paths is an array — pass ["a", "b"] not ["a,b"] (got ${JSON.stringify(entry)})`);
+			}
+		}
+	}
+}
 
 export interface FindToolDetails {
 	truncation?: TruncationResult;
@@ -109,10 +136,11 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 		onUpdate?: AgentToolUpdateCallback<FindToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<FindToolDetails>> {
-		const { paths, limit, hidden } = params;
+		const { paths, limit, hidden, gitignore, timeout } = params;
 
 		return untilAborted(signal, async () => {
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
+			validateFindPathInputs(paths);
 			const rawPatterns = paths.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
 			const internalRouter = InternalUrlRouter.instance();
 			const normalizedPatterns: string[] = [];
@@ -165,7 +193,10 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				throw new ToolError("Limit must be a positive number");
 			}
 			const includeHidden = hidden ?? true;
-			const timeoutSignal = AbortSignal.timeout(GLOB_TIMEOUT_MS);
+			const useGitignore = gitignore ?? true;
+			const requestedTimeoutMs = timeout != null ? Math.round(timeout * 1000) : DEFAULT_GLOB_TIMEOUT_MS;
+			const timeoutMs = Math.min(MAX_GLOB_TIMEOUT_MS, Math.max(MIN_GLOB_TIMEOUT_MS, requestedTimeoutMs));
+			const timeoutSignal = AbortSignal.timeout(timeoutMs);
 			const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 			const formatMatchPath = (matchPath: string, fileType?: natives.FileType): string => {
 				const hadTrailingSlash = matchPath.endsWith("/") || matchPath.endsWith("\\");
@@ -178,33 +209,41 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			const missingPathsNote =
 				missingPaths.length > 0 ? `Skipped missing paths: ${missingPaths.join(", ")}` : undefined;
 
-			const buildResult = (files: string[]): AgentToolResult<FindToolDetails> => {
+			const buildResult = (
+				files: string[],
+				opts?: { notice?: string; forceTruncated?: boolean },
+			): AgentToolResult<FindToolDetails> => {
+				const notice = opts?.notice;
+				const forceTruncated = opts?.forceTruncated ?? false;
 				if (files.length === 0) {
 					const details: FindToolDetails = {
 						scopePath,
 						fileCount: 0,
 						files: [],
-						truncated: false,
+						truncated: forceTruncated,
 						missingPaths: missingPaths.length > 0 ? missingPaths : undefined,
 					};
-					const text = missingPathsNote
-						? `No files found matching pattern\n${missingPathsNote}`
-						: "No files found matching pattern";
-					return toolResult(details).text(text).done();
+					const parts = ["No files found matching pattern"];
+					if (notice) parts.push(notice);
+					if (missingPathsNote) parts.push(missingPathsNote);
+					return toolResult(details).text(parts.join("\n")).done();
 				}
 
 				const listLimit = applyListLimit(files, { limit: effectiveLimit });
 				const limited = listLimit.items;
 				const limitMeta = listLimit.meta;
 				const baseOutput = limited.join("\n");
-				const rawOutput = missingPathsNote ? `${baseOutput}\n\n${missingPathsNote}` : baseOutput;
+				const trailingNotes: string[] = [];
+				if (notice) trailingNotes.push(notice);
+				if (missingPathsNote) trailingNotes.push(missingPathsNote);
+				const rawOutput = trailingNotes.length > 0 ? `${baseOutput}\n\n${trailingNotes.join("\n")}` : baseOutput;
 				const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 
 				const details: FindToolDetails = {
 					scopePath,
 					fileCount: limited.length,
 					files: limited,
-					truncated: Boolean(limitMeta.resultLimit || truncation.truncated),
+					truncated: Boolean(forceTruncated || limitMeta.resultLimit || truncation.truncated),
 					resultLimitReached: limitMeta.resultLimit?.reached,
 					truncation: truncation.truncated ? truncation : undefined,
 					missingPaths: missingPaths.length > 0 ? missingPaths : undefined,
@@ -278,14 +317,12 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 					details,
 				});
 			};
-			const onMatch = onUpdate
-				? (err: Error | null, match: natives.GlobMatch | null) => {
-						if (err || signal?.aborted || !match?.path) return;
-						const relativePath = formatMatchPath(match.path, match.fileType);
-						onUpdateMatches.push(relativePath);
-						emitUpdate();
-					}
-				: undefined;
+			const onMatch = (err: Error | null, match: natives.GlobMatch | null) => {
+				if (err || signal?.aborted || !match?.path) return;
+				const relativePath = formatMatchPath(match.path, match.fileType);
+				onUpdateMatches.push(relativePath);
+				emitUpdate();
+			};
 
 			const doGlob = async (useGitignore: boolean) =>
 				untilAborted(combinedSignal, () =>
@@ -304,8 +341,9 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 					),
 				);
 
+			let timedOut = false;
 			try {
-				const result = await doGlob(true);
+				const result = await doGlob(useGitignore);
 				// Sort by mtime descending (most recent first) in JS instead of native.
 				// This allows native glob to early-terminate at maxResults.
 				result.matches.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
@@ -313,12 +351,30 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			} catch (error) {
 				if (error instanceof Error && error.name === "AbortError") {
 					if (timeoutSignal.aborted && !signal?.aborted) {
-						const timeoutSeconds = Math.max(1, Math.round(GLOB_TIMEOUT_MS / 1000));
-						throw new ToolError(`find timed out after ${timeoutSeconds}s`);
+						timedOut = true;
+						matches = [];
+					} else {
+						throw new ToolAbortError();
 					}
-					throw new ToolAbortError();
+				} else {
+					throw error;
 				}
-				throw error;
+			}
+
+			if (timedOut) {
+				// Drain the partial matches accumulated during streaming and return them
+				// instead of throwing — empty results after a multi-second wait force the
+				// caller to retry blind, which is the worst possible outcome.
+				const seen = new Set<string>();
+				const partial: string[] = [];
+				for (const entry of onUpdateMatches) {
+					if (seen.has(entry)) continue;
+					seen.add(entry);
+					partial.push(entry);
+				}
+				const seconds = timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}` : (timeoutMs / 1000).toFixed(1);
+				const notice = `find timed out after ${seconds}s; returning ${partial.length} partial matches — increase timeout or narrow pattern`;
+				return buildResult(partial, { notice, forceTruncated: true });
 			}
 
 			const relativized: string[] = [];
