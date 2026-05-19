@@ -7667,6 +7667,11 @@ export class AgentSession {
 		const context: Context = {
 			systemPrompt: this.systemPrompt,
 			messages: llmMessages,
+			// Empty tools array: with toolChoice="none" some encoders still serialize the
+			// recipient's tool catalog and the model leaks raw call markup
+			// (<function_calls>, DSML envelopes) into IRC replies. Stripping tools here
+			// removes the surface entirely.
+			tools: [],
 		};
 		const options = this.prepareSimpleStreamOptions(
 			{
@@ -7702,7 +7707,7 @@ export class AgentSession {
 		if (!assistantMessage) {
 			throw new Error("Ephemeral turn ended without a final message");
 		}
-		return { replyText: replyText.trim(), assistantMessage };
+		return { replyText: dedupeIrcReply(replyText.trim()), assistantMessage };
 	}
 
 	/**
@@ -7715,14 +7720,24 @@ export class AgentSession {
 		const messages = [...this.messages];
 		const streaming = this.agent.state.streamMessage;
 		if (streaming && streaming.role === "assistant") {
+			const preservedBlocks: AssistantMessage["content"] = [];
+			// Preserve thinking blocks: DeepSeek-class encoders replay them as
+			// `reasoning_content` and reject the request (HTTP 400) when the field
+			// goes missing on a turn that previously emitted thinking.
+			for (const c of streaming.content) {
+				if (c.type === "thinking") preservedBlocks.push(c);
+			}
 			const streamingText = streaming.content
 				.filter((c): c is TextContent => c.type === "text")
 				.map(c => c.text)
 				.join("");
 			if (streamingText) {
+				preservedBlocks.push({ type: "text", text: streamingText });
+			}
+			if (preservedBlocks.length > 0) {
 				const normalized: AssistantMessage = {
 					...streaming,
-					content: [{ type: "text", text: streamingText }],
+					content: preservedBlocks,
 				};
 				const lastMessage = messages.at(-1);
 				if (lastMessage?.role === "assistant") {
