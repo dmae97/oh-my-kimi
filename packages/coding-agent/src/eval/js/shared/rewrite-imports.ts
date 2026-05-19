@@ -303,15 +303,27 @@ function returnFinalExpression(code: string): { source: string; returned: boolea
 	let lastIndex = body.length - 1;
 	while (lastIndex >= 0 && body[lastIndex]?.type === "EmptyStatement") lastIndex--;
 	const last = lastIndex >= 0 ? body[lastIndex] : undefined;
-	if (last?.type !== "ExpressionStatement") return { source: code, returned: false };
-
-	const expression = last as BabelExpressionStatement;
-	const prefix = code.slice(0, expression.start);
-	const statement = code.slice(expression.start, expression.end);
-	const suffix = code.slice(expression.end);
-	const semicolonMatch = statement.match(/;\s*$/);
-	const trimmedStatement = semicolonMatch ? statement.slice(0, semicolonMatch.index) : statement;
-	return { source: `${prefix}__omp_set_final_expr__((${trimmedStatement}));${suffix}`, returned: true };
+	if (last?.type === "ExpressionStatement") {
+		const expression = last as BabelExpressionStatement;
+		const prefix = code.slice(0, expression.start);
+		const statement = code.slice(expression.start, expression.end);
+		const suffix = code.slice(expression.end);
+		const semicolonMatch = statement.match(/;\s*$/);
+		const trimmedStatement = semicolonMatch ? statement.slice(0, semicolonMatch.index) : statement;
+		return { source: `${prefix}__omp_set_final_expr__((${trimmedStatement}));${suffix}`, returned: true };
+	}
+	if (last?.type === "ReturnStatement") {
+		// Top-level `return value;` is otherwise swallowed: it forces the cell into an async IIFE
+		// wrapper that discards the returned value. Rewrite into `__omp_set_final_expr__((expr))`
+		// so the runtime can surface the value to the caller just like a trailing expression.
+		const ret = last as unknown as { start: number; end: number; argument?: { start: number; end: number } | null };
+		if (!ret.argument) return { source: code, returned: false };
+		const prefix = code.slice(0, ret.start);
+		const suffix = code.slice(ret.end);
+		const expr = code.slice(ret.argument.start, ret.argument.end);
+		return { source: `${prefix}__omp_set_final_expr__((${expr}));${suffix}`, returned: true };
+	}
+	return { source: code, returned: false };
 }
 
 function isExecutionBoundary(type: string): boolean {

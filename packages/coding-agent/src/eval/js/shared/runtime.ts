@@ -165,7 +165,8 @@ export class JsRuntime {
 				const finalValue = this.#finalExpressionValue;
 				this.#finalExpressionSet = false;
 				this.#finalExpressionValue = undefined;
-				return await awaitMaybePromise(finalValue);
+				const resolved = await awaitMaybePromise(finalValue);
+				return resolved;
 			}
 			return awaited;
 		}
