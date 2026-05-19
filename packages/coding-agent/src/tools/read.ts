@@ -800,10 +800,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		// context (added below if offset is explicit).
 		const requestedStart = offset ? Math.max(0, offset - 1) : 0;
 		const ignoreResultLimits = options.ignoreResultLimits ?? false;
-		const requestedEnd =
-			limit !== undefined && !ignoreResultLimits
-				? Math.min(requestedStart + limit, allLines.length)
-				: allLines.length;
+		const requestedEnd = limit !== undefined ? Math.min(requestedStart + limit, allLines.length) : allLines.length;
 		// Expand only on sides the user actually constrained: leading context
 		// when offset>1, trailing context when a finite limit was set.
 		const expanded = expandRangeWithContext(
@@ -811,7 +808,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			requestedEnd,
 			allLines.length,
 			offset !== undefined && offset > 1,
-			limit !== undefined && !ignoreResultLimits,
+			limit !== undefined,
 		);
 		const startLine = expanded.startLine;
 		const endLineExpanded = expanded.endLine;
@@ -842,7 +839,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const endLine = endLineExpanded;
 		const selectedContent = allLines.slice(startLine, endLine).join("\n");
-		const userLimitedLines = limit !== undefined && !ignoreResultLimits ? endLine - startLine : undefined;
+		const userLimitedLines = limit !== undefined ? endLine - startLine : undefined;
 		const truncation = ignoreResultLimits ? noTruncResult(selectedContent) : truncateHead(selectedContent);
 
 		const shouldAddHashLines = displayMode.hashLines;
