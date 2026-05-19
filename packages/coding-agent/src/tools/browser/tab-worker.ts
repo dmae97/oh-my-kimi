@@ -459,7 +459,8 @@ export class WorkerCore {
 				if (payload.dialogs) this.#applyDialogPolicy(payload.dialogs);
 				if (payload.url) {
 					await this.#page.goto(payload.url, {
-						waitUntil: payload.waitUntil ?? "networkidle2",
+						// Default to "load" because dev servers with HMR/WS never reach networkidle.
+						waitUntil: payload.waitUntil ?? "load",
 						timeout: payload.timeoutMs,
 					});
 				}
@@ -667,7 +668,8 @@ export class WorkerCore {
 			goto: async (url, opts) => {
 				this.#clearElementCache();
 				await untilAborted(signal, () =>
-					page.goto(url, { waitUntil: opts?.waitUntil ?? "networkidle2", timeout: timeoutMs }),
+					// Default to "load" because dev servers with HMR/WS never reach networkidle.
+					page.goto(url, { waitUntil: opts?.waitUntil ?? "load", timeout: timeoutMs }),
 				);
 			},
 			observe: opts => this.#collectObservation({ ...opts, signal }),
