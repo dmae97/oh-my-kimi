@@ -70,8 +70,12 @@ Parallel when tasks touch disjoint files or are independent refactors/tests.
 </assignment-fmt>
 
 <agents>
+{{#if spawningDisabled}}
+Agent spawning is disabled for this context.
+{{else}}
 {{#list agents join="\n"}}
 # {{name}}
 {{description}}
 {{/list}}
+{{/if}}
 </agents>
