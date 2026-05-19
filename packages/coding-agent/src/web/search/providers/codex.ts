@@ -425,6 +425,9 @@ async function callCodexSearch(
 
 	const finalAnswer = answerParts.join("\n\n").trim();
 	const streamedAnswer = streamedAnswerParts.join("").trim();
+	if (isImagePlaceholderAnswer(finalAnswer) && streamedAnswer.length === 0) {
+		throw new SearchProviderError("codex", "Codex returned image-only response", 502);
+	}
 	const answer =
 		finalAnswer.length > 0 && !isImagePlaceholderAnswer(finalAnswer)
 			? finalAnswer
