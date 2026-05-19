@@ -52,7 +52,7 @@ interface JsSession {
 }
 
 const sessions = new Map<string, JsSession>();
-const READY_TIMEOUT_MS = 5_000;
+const READY_TIMEOUT_MS_DEFAULT = 5_000;
 
 export async function executeInVmContext(options: {
 	sessionKey: string;
@@ -68,10 +68,11 @@ export async function executeInVmContext(options: {
 	if (options.reset) {
 		await resetVmContext(options.sessionKey);
 	}
-	const session = await acquireSession(options.sessionKey, {
-		cwd: options.cwd,
-		sessionId: options.sessionId,
-	});
+	const session = await acquireSession(
+		options.sessionKey,
+		{ cwd: options.cwd, sessionId: options.sessionId },
+		options.timeoutMs,
+	);
 	return await runQueued(session, () => runOnce(session, options));
 }
 
@@ -158,7 +159,7 @@ async function runOnce(
 	}
 }
 
-async function acquireSession(sessionKey: string, snapshot: SessionSnapshot): Promise<JsSession> {
+async function acquireSession(sessionKey: string, snapshot: SessionSnapshot, timeoutMs?: number): Promise<JsSession> {
 	const existing = sessions.get(sessionKey);
 	if (existing && existing.state === "alive") return existing;
 
@@ -186,7 +187,10 @@ async function acquireSession(sessionKey: string, snapshot: SessionSnapshot): Pr
 		handleSessionMessage(session, msg);
 	});
 	try {
-		await raceWithTimeout(readyPromise, READY_TIMEOUT_MS, "Timed out initializing JS eval worker");
+		// Cold-start can exceed 5s on slow hosts. Let the caller's per-cell timeout dominate so
+		// users can grant more headroom when they raise `timeout` on a cell.
+		const readyTimeoutMs = Math.max(READY_TIMEOUT_MS_DEFAULT, timeoutMs ?? 0);
+		await raceWithTimeout(readyPromise, readyTimeoutMs, "Timed out initializing JS eval worker");
 	} catch (error) {
 		unsubscribe();
 		await worker.terminate().catch(() => undefined);
