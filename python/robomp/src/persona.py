@@ -15,6 +15,7 @@ from functools import cache
 from importlib import resources
 from typing import Any
 
+from robomp.git_ops import DirtyState
 from robomp.github_client import CommentInfo, IssueInfo, RepoInfo
 from robomp.sandbox import Workspace
 
@@ -143,6 +144,35 @@ def resume_triage(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> 
 def completion_reminder(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> str:
     """Reminder injected when a triage turn ends before a terminal tool fired."""
     return render(_load("completion_reminder.md"), {"repo": repo, "issue": issue, "workspace": workspace})
+
+
+def dirty_state_reminder(
+    *,
+    repo: RepoInfo,
+    issue: IssueInfo,
+    workspace: Workspace,
+    dirty: DirtyState,
+) -> str:
+    """Reminder injected when the worktree has uncommitted or unpushed work.
+
+    Fired by `worker._drive_turn` after the model emits a terminal turn but
+    leaves changes behind that roboomp would otherwise discard. The summary
+    embedded in the template comes from `git_ops.inspect_dirty_state` so the
+    agent sees the exact paths / commits it forgot about.
+    """
+    return render(
+        _load("dirty_state_reminder.md"),
+        {
+            "repo": repo,
+            "issue": issue,
+            "workspace": workspace,
+            "dirty": {
+                "uncommitted": dirty.uncommitted,
+                "unpushed": dirty.unpushed,
+                "summary": dirty.summary,
+            },
+        },
+    )
 
 
 def _render_thread(messages: tuple) -> str:
@@ -346,6 +376,7 @@ __all__ = [
     "kickoff_directive",
     "render",
     "completion_reminder",
+    "dirty_state_reminder",
     "resume_triage",
     "seed_phases",
     "system_append",

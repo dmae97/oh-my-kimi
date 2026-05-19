@@ -16,6 +16,7 @@ import pytest
 
 from robomp import worker
 from robomp.config import Settings
+from robomp.git_ops import DirtyState
 
 
 class _FakeRpcClient:
@@ -656,6 +657,95 @@ async def test_run_rpc_skips_reminder_when_unclassified(tmp_path: Path, settings
         loop.close()
     fake = _FakeRpcClient.instances[0]
     assert len(fake.prompts) == 1
+
+
+# ---------------------------------------------------------------------------
+# Dirty-state watchdog
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_rpc_sends_dirty_state_reminder_when_worktree_has_unpushed_work(
+    tmp_path: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Agent ended its turn with unpushed commits → reminder fires; clean → loop exits."""
+    inputs, bindings = _make_inputs(tmp_path, settings, session_has_jsonl=False)
+    dirty = DirtyState(uncommitted=2, unpushed=1, summary="Unpushed commits (1):\nabc1234 wip")
+    clean = DirtyState(uncommitted=0, unpushed=0, summary="")
+    states = iter([dirty, clean])
+    monkeypatch.setattr(worker, "_probe_workspace_dirty", lambda _ws, _slot: next(states, clean))
+
+    loop = asyncio.new_event_loop()
+    try:
+        worker._run_rpc_blocking(
+            inputs,
+            task_kind="handle_comment",
+            prompt="kickoff",
+            loop=loop,
+            bindings=bindings,  # type: ignore[arg-type]
+        )
+    finally:
+        loop.close()
+
+    fake = _FakeRpcClient.instances[0]
+    assert len(fake.prompts) == 2, fake.prompts
+    reminder = fake.prompts[1]
+    assert "Unpushed commits" in reminder
+    assert "abc1234" in reminder
+    assert "{{" not in reminder, "template placeholder leaked"
+
+
+@pytest.mark.asyncio
+async def test_run_rpc_skips_dirty_state_reminder_when_worktree_is_clean(
+    tmp_path: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clean worktree at end of turn → no extra prompts."""
+    inputs, bindings = _make_inputs(tmp_path, settings, session_has_jsonl=False)
+    monkeypatch.setattr(
+        worker,
+        "_probe_workspace_dirty",
+        lambda _ws, _slot: DirtyState(uncommitted=0, unpushed=0, summary=""),
+    )
+
+    loop = asyncio.new_event_loop()
+    try:
+        worker._run_rpc_blocking(
+            inputs,
+            task_kind="handle_comment",
+            prompt="kickoff",
+            loop=loop,
+            bindings=bindings,  # type: ignore[arg-type]
+        )
+    finally:
+        loop.close()
+
+    fake = _FakeRpcClient.instances[0]
+    assert len(fake.prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_rpc_caps_dirty_state_reminders_at_budget(
+    tmp_path: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Persistently dirty workspace must not loop past the reminder budget."""
+    inputs, bindings = _make_inputs(tmp_path, settings, session_has_jsonl=False)
+    dirty = DirtyState(uncommitted=1, unpushed=0, summary="Uncommitted changes (1):\n?? oops.txt")
+    monkeypatch.setattr(worker, "_probe_workspace_dirty", lambda _ws, _slot: dirty)
+
+    loop = asyncio.new_event_loop()
+    try:
+        worker._run_rpc_blocking(
+            inputs,
+            task_kind="handle_comment",
+            prompt="kickoff",
+            loop=loop,
+            bindings=bindings,  # type: ignore[arg-type]
+        )
+    finally:
+        loop.close()
+
+    fake = _FakeRpcClient.instances[0]
+    # kickoff + N reminders, capped at the configured budget (default 2).
+    assert len(fake.prompts) == 1 + settings.task_completion_max_reminders
 
 
 # ---------------------------------------------------------------------------

@@ -445,6 +445,26 @@ class PushResult:
     branch: str
 
 
+@dataclass(slots=True, frozen=True)
+class DirtyState:
+    """Summary of the workspace's uncommitted + unpushed state.
+
+    `uncommitted` counts entries from `git status --porcelain`. `unpushed`
+    counts commits in `HEAD` not reachable from any `origin/*` ref — i.e.
+    commits that would be lost if the workspace were thrown away. `summary`
+    is a human-friendly multi-line description for embedding in a reminder
+    prompt; empty when both counts are zero.
+    """
+
+    uncommitted: int
+    unpushed: int
+    summary: str
+
+    @property
+    def is_dirty(self) -> bool:
+        return self.uncommitted > 0 or self.unpushed > 0
+
+
 class HeadDriftError(GitCommandError):
     """Raised when `expected_head` no longer matches the current HEAD.
 
@@ -477,6 +497,71 @@ def rev_parse_head(
     if proc.returncode != 0:
         raise GitCommandError(["git", *args], proc.returncode, proc.stdout, proc.stderr)
     return proc.stdout.strip()
+
+
+def inspect_dirty_state(
+    repo_dir: Path,
+    *,
+    slot_uid: int | None = None,
+    safe_directory: Path | None = None,
+) -> DirtyState:
+    """Probe the worktree at `repo_dir` for uncommitted/unpushed work.
+
+    Returns a {@link DirtyState}. Errors from the underlying git invocations
+    are swallowed — the caller treats "we couldn't tell" as clean so a broken
+    git binary can't pin the agent in a reminder loop forever.
+    """
+    slot_kwargs = _slot_subprocess_kwargs(slot_uid)
+    uncommitted = 0
+    uncommitted_sample: list[str] = []
+    status = _run_git(
+        ["status", "--porcelain=v1", "--untracked-files=normal"],
+        cwd=repo_dir,
+        token=None,
+        safe_directory=safe_directory,
+        **slot_kwargs,
+    )
+    if status.returncode == 0 and status.stdout.strip():
+        lines = status.stdout.splitlines()
+        uncommitted = len(lines)
+        uncommitted_sample = lines[:10]
+
+    unpushed = 0
+    unpushed_sample: list[str] = []
+    count = _run_git(
+        ["rev-list", "--count", "HEAD", "--not", "--remotes=origin"],
+        cwd=repo_dir,
+        token=None,
+        safe_directory=safe_directory,
+        **slot_kwargs,
+    )
+    if count.returncode == 0:
+        try:
+            unpushed = int(count.stdout.strip() or "0")
+        except ValueError:
+            unpushed = 0
+    if unpushed > 0:
+        log_proc = _run_git(
+            ["log", f"--max-count={min(unpushed, 5)}", "--oneline", "HEAD", "--not", "--remotes=origin"],
+            cwd=repo_dir,
+            token=None,
+            safe_directory=safe_directory,
+            **slot_kwargs,
+        )
+        if log_proc.returncode == 0:
+            unpushed_sample = [line for line in log_proc.stdout.splitlines() if line.strip()]
+
+    if uncommitted == 0 and unpushed == 0:
+        return DirtyState(uncommitted=0, unpushed=0, summary="")
+
+    parts: list[str] = []
+    if uncommitted:
+        more = f"\n… and {uncommitted - len(uncommitted_sample)} more" if uncommitted > len(uncommitted_sample) else ""
+        parts.append(f"Uncommitted changes ({uncommitted}):\n" + "\n".join(uncommitted_sample) + more)
+    if unpushed:
+        log_text = "\n".join(unpushed_sample) if unpushed_sample else "(no log available)"
+        parts.append(f"Unpushed commits ({unpushed}):\n{log_text}")
+    return DirtyState(uncommitted=uncommitted, unpushed=unpushed, summary="\n\n".join(parts))
 
 
 def push(
@@ -556,12 +641,14 @@ def push(
 
 __all__ = [
     "AUTH_ENV_VAR",
+    "DirtyState",
     "GitCommandError",
     "HeadDriftError",
     "PushResult",
     "clone",
     "fetch_prune",
     "fetch_ref",
+    "inspect_dirty_state",
     "push",
     "redact_credentials",
     "rev_parse_head",

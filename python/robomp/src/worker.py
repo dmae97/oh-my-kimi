@@ -33,6 +33,7 @@ from robomp import host_tools, persona, pragmas
 from robomp.cancellation import register_cancel_hook, unregister_cancel_hook
 from robomp.config import Settings
 from robomp.db import Database, issue_key
+from robomp.git_ops import DirtyState, inspect_dirty_state
 from robomp.github_backend import GitHubBackend
 from robomp.github_client import CommentInfo, IssueInfo, RepoInfo
 from robomp.host_tools import AbortController, ToolBindings, _git_identity_env
@@ -215,6 +216,26 @@ def _needs_completion_reminder(
     return not (tools_called & _TERMINAL_TRIAGE_TOOLS)
 
 
+def _probe_workspace_dirty(workspace: Workspace, slot_uid: int | None) -> DirtyState:
+    """Return the workspace's dirty state, swallowing inspection errors.
+
+    `inspect_dirty_state` already swallows individual git failures, but the
+    function itself can still raise if e.g. the workspace was wiped between
+    `_drive_turn` and the post-turn check. The reminder loop treats any
+    exception as "clean enough" so a corrupted workspace doesn't pin the
+    agent in a reminder loop.
+    """
+    try:
+        return inspect_dirty_state(
+            workspace.repo_dir,
+            slot_uid=slot_uid,
+            safe_directory=workspace.repo_dir,
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort post-turn probe
+        log.debug("workspace dirty probe failed", extra={"error": str(exc)})
+        return DirtyState(uncommitted=0, unpushed=0, summary="")
+
+
 def _drive_turn(
     client: RpcClient,
     initial_prompt: str,
@@ -253,20 +274,46 @@ def _drive_turn(
         return None
 
     reminders_used = 0
-    while reminders_used < max_reminders and _needs_completion_reminder(
-        task_kind=task_kind, inputs=inputs, bindings=bindings, tools_called=tools_called
-    ):
-        reminders_used += 1
-        log.warning(
-            "rpc_completion_reminder",
-            extra={
-                "issue": bindings.issue_key,
-                "task": task_kind,
-                "attempt": reminders_used,
-                "max": max_reminders,
-            },
+    while reminders_used < max_reminders:
+        needs_completion = _needs_completion_reminder(
+            task_kind=task_kind, inputs=inputs, bindings=bindings, tools_called=tools_called
         )
-        reminder = persona.completion_reminder(repo=inputs.repo, issue=inputs.issue, workspace=inputs.workspace)
+        dirty: DirtyState | None = None
+        if not needs_completion:
+            dirty = _probe_workspace_dirty(inputs.workspace, inputs.slot_uid)
+            if not dirty.is_dirty:
+                break
+        reminders_used += 1
+        if needs_completion:
+            log.warning(
+                "rpc_completion_reminder",
+                extra={
+                    "issue": bindings.issue_key,
+                    "task": task_kind,
+                    "attempt": reminders_used,
+                    "max": max_reminders,
+                },
+            )
+            reminder = persona.completion_reminder(repo=inputs.repo, issue=inputs.issue, workspace=inputs.workspace)
+        else:
+            assert dirty is not None
+            log.warning(
+                "rpc_dirty_state_reminder",
+                extra={
+                    "issue": bindings.issue_key,
+                    "task": task_kind,
+                    "attempt": reminders_used,
+                    "max": max_reminders,
+                    "uncommitted": dirty.uncommitted,
+                    "unpushed": dirty.unpushed,
+                },
+            )
+            reminder = persona.dirty_state_reminder(
+                repo=inputs.repo,
+                issue=inputs.issue,
+                workspace=inputs.workspace,
+                dirty=dirty,
+            )
         next_turn = _run(reminder)
         if next_turn is None:
             return None
@@ -284,6 +331,19 @@ def _drive_turn(
                 "tools_called": sorted(tools_called),
             },
         )
+    if reminders_used:
+        final_dirty = _probe_workspace_dirty(inputs.workspace, inputs.slot_uid)
+        if final_dirty.is_dirty:
+            log.warning(
+                "rpc_dirty_state_unfinished",
+                extra={
+                    "issue": bindings.issue_key,
+                    "task": task_kind,
+                    "reminders": reminders_used,
+                    "uncommitted": final_dirty.uncommitted,
+                    "unpushed": final_dirty.unpushed,
+                },
+            )
     return turn
 
 
