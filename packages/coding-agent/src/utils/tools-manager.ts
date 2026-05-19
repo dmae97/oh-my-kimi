@@ -248,31 +248,38 @@ async function downloadTool(tool: ToolName, signal?: AbortSignal): Promise<strin
 
 // Install a Python package via uv (preferred) or pip
 async function installPythonPackage(pkg: string, signal?: AbortSignal): Promise<boolean> {
-	// Try uv first (faster, better isolation)
-	const uv = $which("uv");
-	if (uv) {
-		const result = await ptree.exec(["uv", "tool", "install", pkg], {
-			signal,
-			allowNonZero: true,
-			allowAbort: true,
-			stderr: "full",
-		});
-		if (result.exitCode === 0) return true;
-	}
+	try {
+		// Try uv first (faster, better isolation)
+		const uv = $which("uv");
+		if (uv) {
+			const result = await ptree.exec([uv, "tool", "install", pkg], {
+				signal,
+				allowNonZero: true,
+				allowAbort: true,
+				stderr: "full",
+			});
+			if (result.exitCode === 0) return true;
+		}
 
-	// Fall back to pip
-	const pip = $which("pip3") || $which("pip");
-	if (pip) {
-		const result = await ptree.exec(["pip", "install", "--user", pkg], {
-			signal,
-			allowNonZero: true,
-			allowAbort: true,
-			stderr: "full",
-		});
-		return result.exitCode === 0;
-	}
+		// Fall back to pip
+		const pip = $which("pip3") || $which("pip");
+		if (pip) {
+			const result = await ptree.exec([pip, "install", "--user", pkg], {
+				signal,
+				allowNonZero: true,
+				allowAbort: true,
+				stderr: "full",
+			});
+			return result.exitCode === 0;
+		}
 
-	return false;
+		return false;
+	} catch (error) {
+		logger.warn(`Failed to install Python package ${pkg}`, {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return false;
+	}
 }
 
 // Termux package names for tools
