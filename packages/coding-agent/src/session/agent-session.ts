@@ -71,6 +71,7 @@ import {
 	isUsageLimitError,
 	modelsAreEqual,
 	parseRateLimitReason,
+	resolveServiceTier,
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
@@ -5121,10 +5122,29 @@ export class AgentSession {
 		return nextLevel;
 	}
 
+	/**
+	 * True when *any* fast-mode-granting service tier is configured, regardless
+	 * of whether the active model's provider actually realizes it. Used by the
+	 * toggle (`/fast on|off`) so re-toggling a scoped tier (`openai-only`,
+	 * `claude-only`) doesn't silently broaden it to unscoped `priority`.
+	 *
+	 * For "is fast mode actually applied to the next request?" use
+	 * {@link isFastModeActive} instead — that one respects the model's provider.
+	 */
 	isFastModeEnabled(): boolean {
 		return (
 			this.serviceTier === "priority" || this.serviceTier === "claude-only" || this.serviceTier === "openai-only"
 		);
+	}
+
+	/**
+	 * True when the configured `serviceTier` resolves to `"priority"` for the
+	 * *currently selected model's provider*. Returns false for scoped tiers
+	 * that don't match (e.g. `"openai-only"` on an anthropic model) and when
+	 * no model is selected.
+	 */
+	isFastModeActive(): boolean {
+		return resolveServiceTier(this.serviceTier, this.model?.provider) === "priority";
 	}
 
 	setServiceTier(serviceTier: ServiceTier | undefined): void {

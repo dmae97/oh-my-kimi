@@ -84,7 +84,7 @@ const modelSegment: StatusLineSegment = {
 
 		let content = withIcon(theme.icon.model, modelName);
 
-		if (ctx.session.isFastModeEnabled() && theme.icon.fast) {
+		if (ctx.session.isFastModeActive() && theme.icon.fast) {
 			content += ` ${theme.icon.fast}`;
 		}
 

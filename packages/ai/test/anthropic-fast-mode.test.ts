@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { clearAnthropicFastModeFallback, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import {
+	clearAnthropicFastModeFallback,
+	isAnthropicFastModeUnsupportedError,
+	streamAnthropic,
+} from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { Context, Model, ProviderSessionState, ServiceTier } from "@oh-my-pi/pi-ai/types";
 
 function makeAnthropicModel(id: string): Model<"anthropic-messages"> {
@@ -129,5 +133,47 @@ describe("clearAnthropicFastModeFallback", () => {
 		expect(state.fastModeDisabled).toBe(false);
 		// Strict-tools learning survives — only the fast-mode flag is reset.
 		expect(state.strictToolsDisabled).toBe(true);
+	});
+});
+
+describe("isAnthropicFastModeUnsupportedError", () => {
+	function makeStatusError(status: number, message: string): Error {
+		const err = new Error(message) as Error & { status: number };
+		err.status = status;
+		return err;
+	}
+
+	it("detects 400 invalid_request_error when the model rejects `speed`", () => {
+		const err = makeStatusError(
+			400,
+			'400 {"type":"error","error":{"type":"invalid_request_error","message":"\'claude-opus-4-5-20251101\' does not support the `speed` parameter."}}',
+		);
+		expect(isAnthropicFastModeUnsupportedError(err)).toBe(true);
+	});
+
+	it("detects 429 rate_limit_error when fast mode requires extra usage", () => {
+		// Regression: prior to this fix, 429 with rate_limit_error fell through to
+		// the generic retry path and looped forever instead of dropping `speed: fast`.
+		const err = makeStatusError(
+			429,
+			'429 {"type":"error","error":{"type":"rate_limit_error","message":"Extra usage is required for fast mode."}}',
+		);
+		expect(isAnthropicFastModeUnsupportedError(err)).toBe(true);
+	});
+
+	it("ignores unrelated 429 rate limits", () => {
+		const err = makeStatusError(
+			429,
+			'429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of requests has exceeded your account\'s rate limit."}}',
+		);
+		expect(isAnthropicFastModeUnsupportedError(err)).toBe(false);
+	});
+
+	it("ignores unrelated 400 invalid_request errors", () => {
+		const err = makeStatusError(
+			400,
+			'400 {"type":"error","error":{"type":"invalid_request_error","message":"messages: at least one message is required"}}',
+		);
+		expect(isAnthropicFastModeUnsupportedError(err)).toBe(false);
 	});
 });

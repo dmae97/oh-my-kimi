@@ -281,12 +281,27 @@ function isAnthropicStrictGrammarTooLargeError(error: unknown): boolean {
 	return /invalid_request_error/i.test(message) && (isStrictGrammarTooLarge || isSchemaCompilationTooComplex);
 }
 
-function isAnthropicFastModeUnsupportedError(error: unknown): boolean {
-	if (extractHttpStatusFromError(error) !== 400) return false;
+export function isAnthropicFastModeUnsupportedError(error: unknown): boolean {
+	const status = extractHttpStatusFromError(error);
+	if (status !== 400 && status !== 429) return false;
 	const message = error instanceof Error ? error.message : String(error);
+	// 400 invalid_request_error — model doesn't accept `speed` at all.
 	// Observed: "'claude-opus-4-5-20251101' does not support the `speed` parameter."
 	// Stay tolerant of phrasing drift ("is not supported", quoted vs backticked field).
-	return /invalid_request_error/i.test(message) && /\bspeed\b/i.test(message) && /not support/i.test(message);
+	if (
+		status === 400 &&
+		/invalid_request_error/i.test(message) &&
+		/\bspeed\b/i.test(message) &&
+		/not support/i.test(message)
+	) {
+		return true;
+	}
+	// 429 rate_limit_error — account lacks the extra-usage entitlement fast mode requires.
+	// Observed: "Extra usage is required for fast mode."
+	if (status === 429 && /rate_limit_error/i.test(message) && /fast mode/i.test(message)) {
+		return true;
+	}
+	return false;
 }
 
 function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean {
