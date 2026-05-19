@@ -1091,6 +1091,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 
 			let mergeSummary = "";
 			let changesApplied: boolean | null = null;
+			let hadAnyChanges = false;
 			let mergedBranchesForNestedPatches: Set<string> | null = null;
 			if (isIsolated && repoRoot) {
 				try {
@@ -1102,13 +1103,18 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 
 						if (branchEntries.length === 0) {
 							changesApplied = true;
+							hadAnyChanges = false;
+							mergeSummary = "\n\nNo changes to apply.";
 						} else {
 							const mergeResult = await mergeTaskBranches(repoRoot, branchEntries);
 							mergedBranchesForNestedPatches = new Set(mergeResult.merged);
 							changesApplied = mergeResult.failed.length === 0;
+							hadAnyChanges = changesApplied && mergeResult.merged.length > 0;
 
 							if (changesApplied) {
-								mergeSummary = `\n\nMerged ${mergeResult.merged.length} branch${mergeResult.merged.length === 1 ? "" : "es"}: ${mergeResult.merged.join(", ")}`;
+								mergeSummary = hadAnyChanges
+									? `\n\nMerged ${mergeResult.merged.length} branch${mergeResult.merged.length === 1 ? "" : "es"}: ${mergeResult.merged.join(", ")}`
+									: "\n\nNo changes to apply.";
 							} else {
 								const mergedPart =
 									mergeResult.merged.length > 0 ? `Merged: ${mergeResult.merged.join(", ")}.\n` : "";
@@ -1129,6 +1135,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						const missingPatch = results.some(result => !result.patchPath);
 						if (missingPatch) {
 							changesApplied = false;
+							hadAnyChanges = false;
 						} else {
 							const patchStats = await Promise.all(
 								patchesInOrder.map(async patchPath => ({
@@ -1139,6 +1146,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 							const nonEmptyPatches = patchStats.filter(patch => patch.size > 0).map(patch => patch.patchPath);
 							if (nonEmptyPatches.length === 0) {
 								changesApplied = true;
+								hadAnyChanges = false;
 							} else {
 								const patchTexts = await Promise.all(
 									nonEmptyPatches.map(async patchPath => Bun.file(patchPath).text()),
@@ -1148,13 +1156,16 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 									.join("");
 								if (!combinedPatch.trim()) {
 									changesApplied = true;
+									hadAnyChanges = false;
 								} else {
 									changesApplied = await git.patch.canApplyText(repoRoot, combinedPatch);
 									if (changesApplied) {
 										try {
 											await git.patch.applyText(repoRoot, combinedPatch);
+											hadAnyChanges = true;
 										} catch {
 											changesApplied = false;
+											hadAnyChanges = false;
 										}
 									}
 								}
@@ -1162,7 +1173,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						}
 
 						if (changesApplied) {
-							mergeSummary = "\n\nApplied patches: yes";
+							mergeSummary = hadAnyChanges ? "\n\nApplied patches: yes" : "\n\nNo changes to apply.";
 						} else {
 							const notification =
 								"<system-notification>Patches were not applied and must be handled manually.</system-notification>";
@@ -1176,6 +1187,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				} catch (mergeErr) {
 					const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
 					changesApplied = false;
+					hadAnyChanges = false;
 					mergeSummary = `\n\n<system-notification>Merge phase failed: ${msg}\nTask outputs are preserved but changes were not applied.</system-notification>`;
 				}
 			}

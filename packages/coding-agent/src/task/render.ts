@@ -996,7 +996,10 @@ export function renderResult(
 			if (fallbackText.trim()) {
 				const summaryLines = fallbackText.split("\n");
 				const markerIndex = summaryLines.findIndex(
-					line => line.includes("<system-notification>") || line.startsWith("Applied patches:"),
+					line =>
+						line.includes("<system-notification>") ||
+						line.startsWith("Applied patches:") ||
+						line.startsWith("No changes to apply."),
 				);
 				if (markerIndex >= 0) {
 					const extra = summaryLines.slice(markerIndex);
