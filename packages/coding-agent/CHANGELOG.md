@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.1.7] - 2026-05-19
+
 ### Fixed
 
 - Fixed `debug` launch/attach failures so `configurationDone` no longer masks the underlying DAP launch error, early stop-outcome watchers cannot emit unhandled rejections, and directory-valued launch programs are rejected before adapter selection. ([#1187](https://github.com/can1357/oh-my-pi/issues/1187))
