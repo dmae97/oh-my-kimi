@@ -140,11 +140,25 @@ function renderDescription(
 	disabledAgents: string[],
 	simpleMode: TaskSimpleMode,
 	ircEnabled: boolean,
+	parentSpawns: string,
 ): string {
-	const filteredAgents = disabledAgents.length > 0 ? agents.filter(a => !disabledAgents.includes(a.name)) : agents;
+	const spawningDisabled = parentSpawns === "";
+	let filteredAgents = disabledAgents.length > 0 ? agents.filter(a => !disabledAgents.includes(a.name)) : agents;
+	if (spawningDisabled) {
+		filteredAgents = [];
+	} else if (parentSpawns !== "*") {
+		const allowed = new Set(
+			parentSpawns
+				.split(",")
+				.map(s => s.trim())
+				.filter(Boolean),
+		);
+		filteredAgents = filteredAgents.filter(a => allowed.has(a.name));
+	}
 	const { contextEnabled, customSchemaEnabled } = getTaskSimpleModeCapabilities(simpleMode);
 	return prompt.render(taskDescriptionTemplate, {
 		agents: filteredAgents,
+		spawningDisabled,
 		MAX_CONCURRENCY: maxConcurrency,
 		isolationEnabled,
 		asyncEnabled,
@@ -230,6 +244,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			disabledAgents,
 			this.#getTaskSimpleMode(),
 			this.session.settings.get("irc.enabled") === true,
+			this.session.getSessionSpawns() ?? "*",
 		);
 	}
 	private constructor(
