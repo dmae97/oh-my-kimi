@@ -65,6 +65,7 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import {
 	calculateRateLimitBackoffMs,
+	clearAnthropicFastModeFallback,
 	getSupportedEfforts,
 	isContextOverflow,
 	isUsageLimitError,
@@ -1578,12 +1579,12 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
-				if (assistantMsg.disabledFeatures?.includes("anthropic.fast_mode") && this.speed === "fast") {
-					this.setSpeed(undefined);
+				if (assistantMsg.disabledFeatures?.includes("priority") && this.serviceTier === "priority") {
+					this.setServiceTier(undefined);
 					this.emitNotice(
 						"warning",
-						"Fast mode rejected for this model; retried without it. Fast mode is now off.",
-						"anthropic.fast_mode",
+						"Priority/fast mode rejected for this model; retried without it. Fast mode is now off.",
+						"priority",
 					);
 				}
 				// Resolve TTSR resume gate before checking for new deferred injections.
@@ -2767,10 +2768,6 @@ export class AgentSession {
 
 	get serviceTier(): ServiceTier | undefined {
 		return this.agent.serviceTier;
-	}
-
-	get speed(): "fast" | "standard" | undefined {
-		return this.agent.speed;
 	}
 
 	/** Whether agent is currently streaming a response */
@@ -5123,29 +5120,26 @@ export class AgentSession {
 	}
 
 	isFastModeEnabled(): boolean {
-		if (this.model?.api === "anthropic-messages") {
-			return this.speed === "fast";
-		}
 		return this.serviceTier === "priority";
 	}
 
 	setServiceTier(serviceTier: ServiceTier | undefined): void {
 		if (this.serviceTier === serviceTier) return;
+		if (serviceTier === "priority") {
+			// Re-arming priority after the provider's per-session auto-fallback
+			// cleared the field (e.g. user toggled `/fast on` after Anthropic
+			// rejected `speed: "fast"`). Clear the sticky disable so the next
+			// request actually carries the priority signal; without this the
+			// re-enable is a silent no-op and the warning notice fires every
+			// turn. The clear is anthropic-specific because no other provider
+			// has a priority fallback today.
+			clearAnthropicFastModeFallback(this.#providerSessionState);
+		}
 		this.agent.serviceTier = serviceTier;
 		this.sessionManager.appendServiceTierChange(serviceTier ?? null);
 	}
 
-	setSpeed(speed: "fast" | "standard" | undefined): void {
-		if (this.speed === speed) return;
-		this.agent.speed = speed;
-		this.sessionManager.appendSpeedChange(speed ?? null);
-	}
-
 	setFastMode(enabled: boolean): void {
-		if (this.model?.api === "anthropic-messages") {
-			this.setSpeed(enabled ? "fast" : undefined);
-			return;
-		}
 		this.setServiceTier(enabled ? "priority" : undefined);
 	}
 
@@ -7607,7 +7601,6 @@ export class AgentSession {
 				reasoning: toReasoningEffort(this.thinkingLevel),
 				hideThinkingSummary: this.agent.hideThinkingSummary,
 				serviceTier: this.serviceTier,
-				speed: this.speed,
 				signal: args.signal,
 				toolChoice: "none",
 			},
@@ -7847,7 +7840,6 @@ export class AgentSession {
 			const hasServiceTierEntry = this.sessionManager
 				.getBranch()
 				.some(entry => entry.type === "service_tier_change");
-			const hasSpeedEntry = this.sessionManager.getBranch().some(entry => entry.type === "speed_change");
 			const defaultThinkingLevel = this.settings.get("defaultThinkingLevel");
 			const configuredServiceTier = this.settings.get("serviceTier");
 			const nextThinkingLevel = resolveThinkingLevelForModel(
@@ -7861,7 +7853,6 @@ export class AgentSession {
 				: configuredServiceTier === "none"
 					? undefined
 					: configuredServiceTier;
-			this.agent.speed = hasSpeedEntry ? sessionContext.speed : undefined;
 
 			if (switchingToDifferentSession) {
 				this.#resetHindsightConversationTrackingIfHindsight();

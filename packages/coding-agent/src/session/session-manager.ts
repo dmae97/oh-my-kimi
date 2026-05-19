@@ -103,11 +103,6 @@ export interface ServiceTierChangeEntry extends SessionEntryBase {
 	serviceTier: ServiceTier | null;
 }
 
-export interface SpeedChangeEntry extends SessionEntryBase {
-	type: "speed_change";
-	speed: "fast" | "standard" | null;
-}
-
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	type: "compaction";
 	summary: string;
@@ -219,7 +214,6 @@ export type SessionEntry =
 	| ThinkingLevelChangeEntry
 	| ModelChangeEntry
 	| ServiceTierChangeEntry
-	| SpeedChangeEntry
 	| CompactionEntry
 	| BranchSummaryEntry
 	| CustomEntry
@@ -245,7 +239,6 @@ export interface SessionContext {
 	messages: AgentMessage[];
 	thinkingLevel?: string;
 	serviceTier?: ServiceTier;
-	speed?: "fast" | "standard";
 	/** Model roles: { default: "provider/modelId", small: "provider/modelId", ... } */
 	models: Record<string, string>;
 	/** Names of TTSR rules that have been injected this session */
@@ -531,7 +524,6 @@ export function buildSessionContext(
 			messages: [],
 			thinkingLevel: "off",
 			serviceTier: undefined,
-			speed: undefined,
 			models: {},
 			injectedTtsrRules: [],
 			selectedMCPToolNames: [],
@@ -552,7 +544,6 @@ export function buildSessionContext(
 			messages: [],
 			thinkingLevel: "off",
 			serviceTier: undefined,
-			speed: undefined,
 			models: {},
 			injectedTtsrRules: [],
 			selectedMCPToolNames: [],
@@ -572,7 +563,6 @@ export function buildSessionContext(
 	// Extract settings and find compaction
 	let thinkingLevel: string | undefined = "off";
 	let serviceTier: ServiceTier | undefined;
-	let speed: "fast" | "standard" | undefined;
 	const models: Record<string, string> = {};
 	let compaction: CompactionEntry | null = null;
 	const injectedTtsrRulesSet = new Set<string>();
@@ -603,8 +593,6 @@ export function buildSessionContext(
 			}
 		} else if (entry.type === "service_tier_change") {
 			serviceTier = entry.serviceTier ?? undefined;
-		} else if (entry.type === "speed_change") {
-			speed = entry.speed ?? undefined;
 		} else if (entry.type === "message" && entry.message.role === "assistant") {
 			// Legacy fallback: infer default model from assistant messages only
 			// when no explicit `model_change` (role=default) entry has been
@@ -717,7 +705,6 @@ export function buildSessionContext(
 		messages,
 		thinkingLevel,
 		serviceTier,
-		speed,
 		models,
 		injectedTtsrRules,
 		selectedMCPToolNames,
@@ -2572,18 +2559,6 @@ export class SessionManager {
 			parentId: this.#leafId,
 			timestamp: new Date().toISOString(),
 			serviceTier,
-		};
-		this.#appendEntry(entry);
-		return entry.id;
-	}
-
-	appendSpeedChange(speed: "fast" | "standard" | null): string {
-		const entry: SpeedChangeEntry = {
-			type: "speed_change",
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
-			speed,
 		};
 		this.#appendEntry(entry);
 		return entry.id;

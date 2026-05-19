@@ -31,11 +31,6 @@ export interface ServiceTierChangeEntry extends SessionEntryBase {
 	serviceTier: ServiceTier | null;
 }
 
-export interface SpeedChangeEntry extends SessionEntryBase {
-	type: "speed_change";
-	speed: "fast" | "standard" | null;
-}
-
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	type: "compaction";
 	summary: string;
@@ -121,7 +116,6 @@ export type SessionEntry =
 	| ThinkingLevelChangeEntry
 	| ModelChangeEntry
 	| ServiceTierChangeEntry
-	| SpeedChangeEntry
 	| CompactionEntry
 	| BranchSummaryEntry
 	| CustomEntry

@@ -580,7 +580,7 @@ function mapOptionsForApi<TApi extends Api>(
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
-					speed: options?.speed,
+					serviceTier: options?.serviceTier,
 				});
 			}
 
@@ -591,7 +591,7 @@ function mapOptionsForApi<TApi extends Api>(
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
-					speed: options?.speed,
+					serviceTier: options?.serviceTier,
 				});
 			}
 
@@ -605,7 +605,7 @@ function mapOptionsForApi<TApi extends Api>(
 					effort,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
-					speed: options?.speed,
+					serviceTier: options?.serviceTier,
 				});
 			}
 
@@ -616,7 +616,7 @@ function mapOptionsForApi<TApi extends Api>(
 					thinkingBudgetTokens: thinkingBudget,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
-					speed: options?.speed,
+					serviceTier: options?.serviceTier,
 				});
 			}
 
@@ -635,7 +635,7 @@ function mapOptionsForApi<TApi extends Api>(
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
-					speed: options?.speed,
+					serviceTier: options?.serviceTier,
 				});
 			} else {
 				return castApi<"anthropic-messages">({
@@ -645,7 +645,7 @@ function mapOptionsForApi<TApi extends Api>(
 					thinkingBudgetTokens: thinkingBudget,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
-					speed: options?.speed,
+					serviceTier: options?.serviceTier,
 				});
 			}
 		}

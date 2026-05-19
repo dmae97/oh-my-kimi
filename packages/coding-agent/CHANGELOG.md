@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Changed `/fast` to dispatch on the active model's API: Anthropic models toggle `speed: "fast"` (the `fast-mode-2026-02-01` beta supported on Claude Opus 4.6 and 4.7 today), other providers continue to set `serviceTier: "priority"`. A new `speed_change` session-history entry persists the Anthropic toggle across reloads. When the provider auto-drops fast mode because the server rejected the request, the session syncs the toggle off and emits a warning notice based on the new `AssistantMessage.disabledFeatures` marker; subsequent requests in the same session skip `speed` entirely via `providerSessionState.fastModeDisabled`.
+- Changed `/fast` to be a single provider-agnostic toggle: enabling the command sets `serviceTier: "priority"` for every provider, and the anthropic-messages provider translates `priority` into `speed: "fast"` plus the `fast-mode-2026-02-01` beta. Anthropic fast mode is currently supported on Claude Opus 4.6 and 4.7; the server rejects other models, which triggers the provider's auto-fallback (request retried without the priority signal, `providerSessionState.fastModeDisabled` persisted for the rest of the session). The session listens for the `"priority"` marker in `AssistantMessage.disabledFeatures`, syncs `/fast` off, and emits a warning notice. Re-running `/fast on` clears the per-session disable so the next request actually re-tries priority.
 
 ### Fixed
 

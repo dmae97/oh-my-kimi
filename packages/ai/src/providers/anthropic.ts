@@ -32,6 +32,7 @@ import type {
 	Model,
 	ProviderSessionState,
 	RedactedThinkingContent,
+	ServiceTier,
 	SimpleStreamOptions,
 	StopReason,
 	StreamFunction,
@@ -253,6 +254,23 @@ function getAnthropicProviderSessionState(
 	return created;
 }
 
+/**
+ * Clears the in-session "server rejected fast mode" sticky flag. Call when the
+ * caller is explicitly re-arming `serviceTier: "priority"` (e.g. user toggled
+ * `/fast on` after a previous turn auto-disabled it) so the next request
+ * actually carries `speed: "fast"` again. No-op when the map or state entry
+ * hasn't been materialized yet.
+ */
+export function clearAnthropicFastModeFallback(
+	providerSessionState: Map<string, ProviderSessionState> | undefined,
+): void {
+	if (!providerSessionState) return;
+	const state = providerSessionState.get(ANTHROPIC_PROVIDER_SESSION_STATE_KEY) as
+		| AnthropicProviderSessionState
+		| undefined;
+	if (state) state.fastModeDisabled = false;
+}
+
 function isAnthropicStrictGrammarTooLargeError(error: unknown): boolean {
 	if (extractHttpStatusFromError(error) !== 400) return false;
 	const message = error instanceof Error ? error.message : String(error);
@@ -265,8 +283,9 @@ function isAnthropicStrictGrammarTooLargeError(error: unknown): boolean {
 function isAnthropicFastModeUnsupportedError(error: unknown): boolean {
 	if (extractHttpStatusFromError(error) !== 400) return false;
 	const message = error instanceof Error ? error.message : String(error);
-	// Server message: "'claude-opus-4-5-20251101' does not support the `speed` parameter."
-	return /invalid_request_error/i.test(message) && /`speed`/i.test(message) && /does not support/i.test(message);
+	// Observed: "'claude-opus-4-5-20251101' does not support the `speed` parameter."
+	// Stay tolerant of phrasing drift ("is not supported", quoted vs backticked field).
+	return /invalid_request_error/i.test(message) && /\bspeed\b/i.test(message) && /not support/i.test(message);
 }
 
 function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean {
@@ -274,8 +293,15 @@ function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean 
 	return tools?.some(tool => tool.strict === true) ?? false;
 }
 
+/**
+ * `speed` lives on `BetaMessageCreateParams` (client.beta.messages) but this
+ * provider posts via `client.messages.create`, whose param type doesn't
+ * include it. This alias narrows the cast to one place.
+ */
+type ParamsWithSpeed = MessageCreateParamsStreaming & { speed?: "fast" };
+
 function dropAnthropicFastMode(params: MessageCreateParamsStreaming): void {
-	delete (params as unknown as Record<string, unknown>).speed;
+	delete (params as ParamsWithSpeed).speed;
 }
 
 function dropAnthropicStrictTools(params: MessageCreateParamsStreaming): void {
@@ -542,11 +568,15 @@ export interface AnthropicOptions extends StreamOptions {
 	toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
 	betas?: string[] | string;
 	/**
-	 * Anthropic fast mode. When `"fast"`, sets the `speed` request field and
-	 * sends the `fast-mode-2026-02-01` beta header. Server rejects unsupported
-	 * models with `invalid_request_error`.
+	 * Realization of `serviceTier: "priority"` on Anthropic models. When
+	 * `"priority"`, sets `speed: "fast"` on the request and appends the
+	 * `fast-mode-2026-02-01` beta header. Anthropic rejects unsupported models
+	 * with `invalid_request_error`, which triggers an in-provider one-shot
+	 * fallback (see `fastModeDisabled` provider state).
+	 *
+	 * Other `ServiceTier` values are currently ignored on this provider.
 	 */
-	speed?: "fast" | "standard";
+	serviceTier?: ServiceTier;
 	/** Force OAuth bearer auth mode for proxy tokens that don't match Anthropic token prefixes. */
 	isOAuth?: boolean;
 	/**
@@ -983,7 +1013,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
 
 				const extraBetas = normalizeExtraBetas(options?.betas);
-				if (options?.speed === "fast" && !extraBetas.includes(fastModeBeta)) {
+				if (options?.serviceTier === "priority" && !extraBetas.includes(fastModeBeta)) {
 					extraBetas.push(fastModeBeta);
 				}
 
@@ -1316,7 +1346,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					}
 					if (
 						!dropFastMode &&
-						options?.speed === "fast" &&
+						options?.serviceTier === "priority" &&
 						firstTokenTime === undefined &&
 						isAnthropicFastModeUnsupportedError(streamFailure)
 					) {
@@ -1369,8 +1399,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			if (dropFastMode && options?.speed === "fast") {
-				output.disabledFeatures = [...(output.disabledFeatures ?? []), "anthropic.fast_mode"];
+			if (dropFastMode && options?.serviceTier === "priority") {
+				output.disabledFeatures = [...(output.disabledFeatures ?? []), "priority"];
 			}
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
@@ -1919,11 +1949,8 @@ function buildParams(
 		params.metadata = { user_id: metadataUserId };
 	}
 
-	if (options?.speed === "fast") {
-		// `speed` is typed on `BetaMessageCreateParams` (client.beta.messages),
-		// but this provider posts via `client.messages.create` whose param
-		// type doesn't include it. Cast to inject the field.
-		(params as unknown as Record<string, unknown>).speed = "fast";
+	if (options?.serviceTier === "priority") {
+		(params as ParamsWithSpeed).speed = "fast";
 	}
 
 	if (options?.toolChoice) {
