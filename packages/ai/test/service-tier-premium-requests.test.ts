@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { getPriorityPremiumRequests } from "../src/types";
+import { getPriorityPremiumRequests, resolveServiceTier } from "../src/types";
 
 describe("getPriorityPremiumRequests", () => {
 	it("counts priority tier as one premium request on OpenAI", () => {
@@ -21,16 +21,73 @@ describe("getPriorityPremiumRequests", () => {
 	});
 
 	it("ignores priority tier on providers that drop service_tier", () => {
-		// Only `openai` and `openai-codex` send `service_tier`; anything else
-		// silently discards the option, so we must not bill the request as
-		// premium.
+		// `priority` is realized on `openai`, `openai-codex`, and direct `anthropic`
+		// (as fast mode). Everywhere else it's silently dropped, so it must not
+		// be billed as premium.
 		expect(getPriorityPremiumRequests("priority", "github-copilot")).toBe(0);
 		expect(getPriorityPremiumRequests("priority", "azure")).toBe(0);
-		expect(getPriorityPremiumRequests("priority", "anthropic")).toBe(0);
+		expect(getPriorityPremiumRequests("priority", "bedrock")).toBe(0);
+	});
+
+	it("counts priority on direct Anthropic as one premium request (fast mode)", () => {
+		expect(getPriorityPremiumRequests("priority", "anthropic")).toBe(1);
 	});
 
 	it("returns zero when service tier is unset", () => {
 		expect(getPriorityPremiumRequests(undefined, "openai")).toBe(0);
 		expect(getPriorityPremiumRequests(null, "openai")).toBe(0);
+	});
+
+	describe("scoped tiers", () => {
+		it("treats `openai-only` as priority on OpenAI and OpenAI-Codex", () => {
+			expect(getPriorityPremiumRequests("openai-only", "openai")).toBe(1);
+			expect(getPriorityPremiumRequests("openai-only", "openai-codex")).toBe(1);
+		});
+
+		it("treats `openai-only` as inactive on Anthropic and everywhere else", () => {
+			expect(getPriorityPremiumRequests("openai-only", "anthropic")).toBe(0);
+			expect(getPriorityPremiumRequests("openai-only", "github-copilot")).toBe(0);
+			expect(getPriorityPremiumRequests("openai-only", "bedrock")).toBe(0);
+		});
+
+		it("treats `claude-only` as priority on direct Anthropic", () => {
+			expect(getPriorityPremiumRequests("claude-only", "anthropic")).toBe(1);
+		});
+
+		it("treats `claude-only` as inactive on OpenAI, Bedrock/Vertex, and elsewhere", () => {
+			expect(getPriorityPremiumRequests("claude-only", "openai")).toBe(0);
+			expect(getPriorityPremiumRequests("claude-only", "openai-codex")).toBe(0);
+			expect(getPriorityPremiumRequests("claude-only", "bedrock")).toBe(0);
+			expect(getPriorityPremiumRequests("claude-only", "vertex")).toBe(0);
+		});
+	});
+});
+
+describe("resolveServiceTier", () => {
+	it("passes unscoped tiers through unchanged for any provider", () => {
+		expect(resolveServiceTier("flex", "openai")).toBe("flex");
+		expect(resolveServiceTier("priority", "anthropic")).toBe("priority");
+		expect(resolveServiceTier("auto", "openai-codex")).toBe("auto");
+		expect(resolveServiceTier("default", "github-copilot")).toBe("default");
+	});
+
+	it("scopes `openai-only` to OpenAI providers", () => {
+		expect(resolveServiceTier("openai-only", "openai")).toBe("priority");
+		expect(resolveServiceTier("openai-only", "openai-codex")).toBe("priority");
+		expect(resolveServiceTier("openai-only", "anthropic")).toBeUndefined();
+		expect(resolveServiceTier("openai-only", "bedrock")).toBeUndefined();
+		expect(resolveServiceTier("openai-only", undefined)).toBeUndefined();
+	});
+
+	it("scopes `claude-only` to direct Anthropic", () => {
+		expect(resolveServiceTier("claude-only", "anthropic")).toBe("priority");
+		expect(resolveServiceTier("claude-only", "openai")).toBeUndefined();
+		expect(resolveServiceTier("claude-only", "bedrock")).toBeUndefined();
+		expect(resolveServiceTier("claude-only", "vertex")).toBeUndefined();
+	});
+
+	it("returns undefined for null/undefined input", () => {
+		expect(resolveServiceTier(undefined, "openai")).toBeUndefined();
+		expect(resolveServiceTier(null, "openai")).toBeUndefined();
 	});
 });

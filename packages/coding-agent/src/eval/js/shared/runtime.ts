@@ -38,6 +38,75 @@ export interface RuntimeOptions {
 	extraGlobals?: Record<string, unknown>;
 }
 
+// Strict base64: characters from the standard alphabet plus optional `=` padding, and a
+// length that is a multiple of four. URL-safe base64 and embedded whitespace are not
+// accepted — the Anthropic API only honors strict base64 in image sources.
+const BASE64_STRICT_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+const DECIMAL_CSV_RE = /^\d{1,3}(?:,\d{1,3})*$/;
+
+function isStrictBase64(s: string): boolean {
+	if (s.length === 0 || s.length % 4 !== 0) return false;
+	return BASE64_STRICT_RE.test(s);
+}
+
+/**
+ * Normalize the `data` field of an `{ type: "image", data, mimeType }` display payload
+ * into strict base64. Accepts:
+ *   - already-valid base64 strings (passed through verbatim)
+ *   - `Uint8Array` / `Buffer` / `ArrayBuffer` / typed array views
+ *   - `{ type: "Buffer", data: number[] }` (the shape Node serializes Buffers to via
+ *     `JSON.stringify`)
+ *   - decimal-CSV byte strings (the output of `uint8array.toString("base64")`, which
+ *     silently ignores the encoding argument and returns `Array.prototype.toString` —
+ *     a footgun for callers expecting `Buffer.toString` semantics)
+ * Returns `null` if no recovery is possible.
+ */
+function coerceImageBase64(data: unknown): string | null {
+	if (typeof data === "string") {
+		if (isStrictBase64(data)) return data;
+		if (DECIMAL_CSV_RE.test(data)) {
+			const parts = data.split(",");
+			const bytes = new Uint8Array(parts.length);
+			for (let i = 0; i < parts.length; i++) {
+				const n = Number(parts[i]);
+				if (!Number.isInteger(n) || n < 0 || n > 255) return null;
+				bytes[i] = n;
+			}
+			return Buffer.from(bytes).toString("base64");
+		}
+		return null;
+	}
+	if (data instanceof Uint8Array) return Buffer.from(data).toString("base64");
+	if (data instanceof ArrayBuffer) return Buffer.from(data).toString("base64");
+	if (ArrayBuffer.isView(data)) {
+		const view = data as ArrayBufferView;
+		return Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString("base64");
+	}
+	if (data && typeof data === "object") {
+		const obj = data as { type?: unknown; data?: unknown };
+		if (obj.type === "Buffer" && Array.isArray(obj.data)) {
+			const arr = obj.data as unknown[];
+			const bytes = new Uint8Array(arr.length);
+			for (let i = 0; i < arr.length; i++) {
+				const n = arr[i];
+				if (typeof n !== "number" || !Number.isInteger(n) || n < 0 || n > 255) return null;
+				bytes[i] = n;
+			}
+			return Buffer.from(bytes).toString("base64");
+		}
+	}
+	return null;
+}
+
+function describeDataType(data: unknown): string {
+	if (data === null) return "null";
+	if (data instanceof Uint8Array) return "Uint8Array";
+	if (data instanceof ArrayBuffer) return "ArrayBuffer";
+	if (ArrayBuffer.isView(data)) return data.constructor.name;
+	if (typeof data === "string") return `string(${data.length})`;
+	return typeof data;
+}
+
 /**
  * Shared JS runtime for the eval worker and the browser tab worker. Owns the prelude,
  * helper bag, console bridge, and indirect-eval execution. Emits text/display/tool-call
@@ -109,8 +178,19 @@ export class JsRuntime {
 		if (!hooks) return;
 		if (value && typeof value === "object") {
 			const record = value as Record<string, unknown>;
-			if (record.type === "image" && typeof record.data === "string" && typeof record.mimeType === "string") {
-				hooks.onDisplay({ type: "image", data: record.data, mimeType: record.mimeType });
+			if (record.type === "image" && typeof record.mimeType === "string") {
+				const data = coerceImageBase64(record.data);
+				if (data !== null) {
+					hooks.onDisplay({ type: "image", data, mimeType: record.mimeType });
+					return;
+				}
+				logger.warn("js displayValue: dropping image with unrecognized data shape", {
+					mimeType: record.mimeType,
+					dataType: describeDataType(record.data),
+				});
+				hooks.onText(
+					`[display: image dropped — \`data\` must be a base64 string, Uint8Array/Buffer, or ArrayBuffer; got ${describeDataType(record.data)}]\n`,
+				);
 				return;
 			}
 			try {

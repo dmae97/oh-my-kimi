@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { isValidJsonSchema, toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { Type } from "../../src/extensibility/typebox";
 
 describe("pi.typebox compatibility shim", () => {
@@ -67,5 +67,41 @@ describe("pi.typebox compatibility shim", () => {
 		if (parsed.success) {
 			expect((parsed.data as { extra?: unknown }).extra).toBe(1);
 		}
+	});
+
+	// Regression: issue #1101. Real TypeBox lets extension authors do
+	// `JSON.stringify(schema)` and get a clean JSON Schema — that's the
+	// contract the shim is impersonating. Without a `toJSON` stamp, the shim
+	// leaks raw Zod internals (`def`, `_zod`, object-shaped `enum`,
+	// `"type":"enum"`) and breaks any pipeline that crosses a JSON boundary.
+	describe("JSON.stringify produces valid JSON Schema (TypeBox contract)", () => {
+		it("emits clean JSON Schema for a complex object", () => {
+			const schema = Type.Object({
+				direction: Type.Enum({ upstream: "upstream", downstream: "downstream" }),
+				depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 10, default: 3 })),
+				tags: Type.Array(Type.String()),
+			});
+			const round = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
+			expect(isValidJsonSchema(round)).toBe(true);
+			// No raw Zod internals leak through.
+			expect(round).not.toHaveProperty("_zod");
+			expect(round).not.toHaveProperty("def");
+			expect(round.type).toBe("object");
+		});
+
+		it("emits valid JSON Schema for composition operators", () => {
+			const base = Type.Object({ a: Type.String(), b: Type.Number() });
+			for (const schema of [
+				Type.Partial(base),
+				Type.Required(base),
+				Type.Pick(base, ["a"]),
+				Type.Omit(base, ["a"]),
+				Type.Composite([base, Type.Object({ c: Type.Boolean() })]),
+			]) {
+				const round = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
+				expect(isValidJsonSchema(round)).toBe(true);
+				expect(round).not.toHaveProperty("_zod");
+			}
+		});
 	});
 });

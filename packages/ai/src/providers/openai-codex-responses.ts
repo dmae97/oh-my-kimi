@@ -29,10 +29,10 @@ import {
 	type FetchImpl,
 	type Model,
 	type ProviderSessionState,
+	resolveServiceTier,
 	type ServiceTier,
 	type StreamFunction,
 	type StreamOptions,
-	shouldSendServiceTier,
 	type TextContent,
 	type ThinkingContent,
 	type Tool,
@@ -590,8 +590,9 @@ async function buildTransformedCodexRequestBody(
 	if (options?.repetitionPenalty !== undefined) {
 		params.repetition_penalty = options.repetitionPenalty;
 	}
-	if (shouldSendServiceTier(options?.serviceTier, model.provider)) {
-		params.service_tier = options.serviceTier;
+	const resolvedServiceTier = resolveServiceTier(options?.serviceTier, model.provider);
+	if (resolvedServiceTier === "flex" || resolvedServiceTier === "scale" || resolvedServiceTier === "priority") {
+		params.service_tier = resolvedServiceTier;
 	}
 	if (context.tools && context.tools.length > 0) {
 		params.tools = convertOpenAICodexResponsesTools(context.tools, model);

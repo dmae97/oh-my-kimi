@@ -18,8 +18,8 @@ import type { OutputMeta } from "./output-meta";
 import { resolveToolSearchScope } from "./path-utils";
 import {
 	appendParseErrorsBulletList,
+	capParseErrors,
 	createCachedComponent,
-	dedupeParseErrors,
 	formatCodeFrameLine,
 	formatCount,
 	formatEmptyMessage,
@@ -146,6 +146,8 @@ export interface AstEditToolDetails {
 	applied: boolean;
 	limitReached: boolean;
 	parseErrors?: string[];
+	/** Total parse error count before {@link PARSE_ERRORS_LIMIT} capping. Omitted when no errors. */
+	parseErrorsTotal?: number;
 	scopePath?: string;
 	files?: string[];
 	fileReplacements?: Array<{ path: string; count: number }>;
@@ -210,7 +212,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				signal,
 			});
 
-			const dedupedParseErrors = dedupeParseErrors(result.parseErrors);
+			const { errors: cappedParseErrors, total: parseErrorsTotal } = capParseErrors(result.parseErrors);
 			const formatPath = (filePath: string): string =>
 				formatResultPath(filePath, isDirectory, resolvedSearchPath, this.session.cwd);
 
@@ -237,15 +239,15 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				filesSearched: result.filesSearched,
 				applied: result.applied,
 				limitReached: result.limitReached,
-				...(dedupedParseErrors.length > 0 ? { parseErrors: dedupedParseErrors } : {}),
+				...(cappedParseErrors.length > 0 ? { parseErrors: cappedParseErrors, parseErrorsTotal } : {}),
 				scopePath,
 				files: fileList,
 				fileReplacements: [],
 			};
 
 			if (result.totalReplacements === 0) {
-				const parseMessage = dedupedParseErrors.length
-					? `\n${formatParseErrors(dedupedParseErrors).join("\n")}`
+				const parseMessage = cappedParseErrors.length
+					? `\n${formatParseErrors(cappedParseErrors, parseErrorsTotal).join("\n")}`
 					: "";
 				return toolResult(baseDetails).text(`No replacements made${parseMessage}`).done();
 			}
@@ -308,8 +310,8 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			if (result.limitReached) {
 				outputLines.push("", "Limit reached; narrow paths.");
 			}
-			if (dedupedParseErrors.length) {
-				outputLines.push("", ...formatParseErrors(dedupedParseErrors));
+			if (cappedParseErrors.length) {
+				outputLines.push("", ...formatParseErrors(cappedParseErrors, parseErrorsTotal));
 			}
 
 			// Register pending action so `resolve` can apply or discard these previewed changes
@@ -326,7 +328,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 							maxFiles,
 							failOnParseError: false,
 						});
-						const dedupedApplyParseErrors = dedupeParseErrors(applyResult.parseErrors);
+						const { errors: cappedApplyParseErrors, total: applyParseErrorsTotal } = capParseErrors(
+							applyResult.parseErrors,
+						);
 						const { record: recordAppliedFile, list: appliedFileList } = createFileRecorder();
 						const appliedFileReplacementCounts = new Map<string, number>();
 						for (const fileChange of applyResult.fileChanges) {
@@ -350,7 +354,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 							filesSearched: applyResult.filesSearched,
 							applied: applyResult.applied,
 							limitReached: applyResult.limitReached,
-							...(dedupedApplyParseErrors.length > 0 ? { parseErrors: dedupedApplyParseErrors } : {}),
+							...(cappedApplyParseErrors.length > 0
+								? { parseErrors: cappedApplyParseErrors, parseErrorsTotal: applyParseErrorsTotal }
+								: {}),
 							scopePath,
 							files: appliedFileList,
 							fileReplacements: appliedFileReplacements,
@@ -441,7 +447,7 @@ export const astEditToolRenderer = {
 			if (filesSearched > 0) meta.push(`searched ${filesSearched}`);
 			const header = renderStatusLine({ icon: "warning", title: "AST Edit", description, meta }, uiTheme);
 			const lines = [header, formatEmptyMessage("No replacements made", uiTheme)];
-			appendParseErrorsBulletList(lines, details?.parseErrors, uiTheme);
+			appendParseErrorsBulletList(lines, details?.parseErrors, uiTheme, details?.parseErrorsTotal);
 			return new Text(lines.join("\n"), 0, 0);
 		}
 
@@ -470,7 +476,9 @@ export const astEditToolRenderer = {
 			extraLines.push(uiTheme.fg("warning", "limit reached; narrow path"));
 		}
 		if (details?.parseErrors?.length) {
-			extraLines.push(uiTheme.fg("warning", formatParseErrorsCountLabel(details.parseErrors)));
+			extraLines.push(
+				uiTheme.fg("warning", formatParseErrorsCountLabel(details.parseErrors, details.parseErrorsTotal)),
+			);
 		}
 		return createCachedComponent(
 			() => options.expanded,

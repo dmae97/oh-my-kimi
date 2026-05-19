@@ -124,6 +124,7 @@ async function requestPermission(
 		...(toolCall.kind ? { kind: toolCall.kind as ToolCallUpdate["kind"] } : {}),
 		...(toolCall.status ? { status: toolCall.status as ToolCallUpdate["status"] } : {}),
 		...(toolCall.rawInput !== undefined ? { rawInput: toolCall.rawInput } : {}),
+		...(toolCall.content ? { content: toolCall.content as ToolCallUpdate["content"] } : {}),
 		...(toolCall.locations ? { locations: toolCall.locations } : {}),
 	};
 	const acpOptions: AcpPermissionOption[] = options.map(option => ({

@@ -501,6 +501,43 @@ it("permission requests report the gated tool call as pending", async () => {
 	expect(bashTool.executeCalls).toBe(1);
 });
 
+it("bash permission requests include execute metadata and command content", async () => {
+	const bashTool = makeFakeTool("bash");
+	const requests: ClientBridgePermissionToolCall[] = [];
+	const bridge: ClientBridge = {
+		capabilities: { requestPermission: true },
+		async requestPermission(toolCall, _options, _signal) {
+			requests.push(toolCall);
+			return { outcome: "selected", optionId: "allow_once", kind: "allow_once" };
+		},
+	};
+	session = await createSession([bashTool], bridge);
+
+	await session.setActiveToolsByName(["bash"]);
+	const wrappedBash = session.agent.state.tools.find(t => t.name === "bash");
+	expect(wrappedBash).toBeDefined();
+
+	await wrappedBash!.execute(
+		"call-bash-rich",
+		{ command: "git status --short" },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(requests).toHaveLength(1);
+	expect(requests[0]).toMatchObject({
+		toolCallId: "call-bash-rich",
+		toolName: "bash",
+		title: "git status --short",
+		kind: "execute",
+		status: "pending",
+		rawInput: { command: "git status --short" },
+		content: [{ type: "content", content: { type: "text", text: "$ git status --short" } }],
+	});
+	expect(bashTool.executeCalls).toBe(1);
+});
+
 it("ordinary edit calls still bypass ACP permission after rejecting edit moves forever", async () => {
 	const editTool = makeFakeTool("edit");
 	const bridge = makeBridge({ outcome: "selected", optionId: "reject_always", kind: "reject_always" });

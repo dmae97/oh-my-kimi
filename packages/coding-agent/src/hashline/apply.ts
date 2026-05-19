@@ -382,10 +382,9 @@ interface PureInsertAbsorbResult {
  * Mirror of replacement-absorb's prefix/suffix block check, but for pure
  * inserts: drop payload lines that exactly duplicate the file lines
  * immediately above (leading) or immediately below (trailing) the insertion
- * point. Generic context echo absorption requires a minimum run of 2, but a
- * single structural closing delimiter is absorbed because duplicated `}` /
- * `});`-style boundaries almost always mean the insert included adjacent
- * context.
+ * point. Generic context echo absorption requires the caller's opt-in setting;
+ * without it, only single structural closing delimiters use the
+ * balance-validated structural rule below.
  */
 function tryAbsorbPureInsertGroup(
 	group: HashlinePureInsertGroup,
@@ -414,6 +413,17 @@ function tryAbsorbPureInsertGroup(
 				break;
 			}
 		}
+	}
+	if (
+		absorbedLeading === 0 &&
+		allowGenericBoundaryAbsorb &&
+		group.cursor.kind === "after_anchor" &&
+		group.payload.length > 0 &&
+		aboveEndIdx >= 0 &&
+		!isStructuralClosingBoundaryLine(group.payload[0]) &&
+		group.payload[0] === fileLines[aboveEndIdx]
+	) {
+		absorbedLeading = 1;
 	}
 	if (
 		absorbedLeading === 0 &&
@@ -446,6 +456,17 @@ function tryAbsorbPureInsertGroup(
 				break;
 			}
 		}
+	}
+	if (
+		absorbedTrailing === 0 &&
+		group.cursor.kind === "before_anchor" &&
+		allowGenericBoundaryAbsorb &&
+		remaining > 0 &&
+		belowStartIdx < fileLines.length &&
+		!isStructuralClosingBoundaryLine(remainingPayload[remainingPayload.length - 1]) &&
+		remainingPayload[remainingPayload.length - 1] === fileLines[belowStartIdx]
+	) {
+		absorbedTrailing = 1;
 	}
 	if (
 		absorbedTrailing === 0 &&

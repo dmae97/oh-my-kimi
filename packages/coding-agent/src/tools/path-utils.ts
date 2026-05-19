@@ -10,6 +10,26 @@ const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const FILE_LINE_RANGE_RE = /^(?:L?\d+(?:[-+]L?\d+|-)?(?:,L?\d+(?:[-+]L?\d+|-)?)*|raw|conflicts)$/i;
 const FILE_LINE_RANGE_ONLY_RE = /^L?\d+(?:[-+]L?\d+|-)?(?:,L?\d+(?:[-+]L?\d+|-)?)*$/i;
 const FILE_RAW_ONLY_RE = /^raw$/i;
+// Permissive selector chunk for internal URLs — accepts well-formed selectors
+// plus common malformed shapes (e.g. `:-N`) so the read tool peels the entire
+// selector chain off before dispatching to a protocol handler.
+const INTERNAL_URL_SELECTOR_PART_RE =
+	/^(?:raw|conflicts|L?\d+(?:[-+]L?\d+|-)?(?:,L?\d+(?:[-+]L?\d+|-)?)*|-\d+(?:[-+]\d+)?)$/i;
+// Schemes whose host grammar is identifier-shaped, so any trailing
+// `:<selector-chunk>` is unambiguously a read-tool selector. `mcp://` is
+// excluded because mcp resource URIs may legitimately contain colons.
+const INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
+	agent: true,
+	artifact: true,
+	issue: true,
+	local: true,
+	memory: true,
+	omp: true,
+	pr: true,
+	rule: true,
+	skill: true,
+};
+const INTERNAL_URL_SCHEME_RE = /^([a-z][a-z0-9+.-]*):\/\//i;
 const NARROW_NO_BREAK_SPACE = "\u202F";
 const TOP_LEVEL_INTERNAL_URL_PREFIXES = [
 	"agent://",
@@ -133,6 +153,45 @@ export function splitPathAndSel(rawPath: string): { path: string; sel?: string }
 	}
 
 	return { path: basePath, sel };
+}
+
+/**
+ * Variant of {@link splitPathAndSel} for internal URLs (`scheme://...`).
+ *
+ * The filesystem-path splitter is intentionally conservative: it refuses to
+ * peel a trailing `:<chunk>` unless that chunk matches the strict selector
+ * grammar. That rule is right for filesystem paths (a file named `a:1-50` is
+ * legal) but wrong for internal URLs, where any trailing `:<chunk>` after the
+ * scheme is unambiguously a read-tool selector — even if malformed (e.g.
+ * `artifact://3:raw:-100`).
+ *
+ * This function iteratively peels selector-shaped chunks (well-formed plus
+ * common malformed shapes like `:-N`) so the rest of the read tool can pass a
+ * clean URL to the protocol handler and surface selector errors via parseSel
+ * instead of as misleading "host invalid" errors from the handler. Schemes
+ * whose resource URIs may legitimately contain colons (`mcp://`) are skipped.
+ *
+ * Falls back to the input unchanged when nothing matches.
+ */
+export function splitInternalUrlSel(rawPath: string): { path: string; sel?: string } {
+	const schemeMatch = rawPath.match(INTERNAL_URL_SCHEME_RE);
+	if (!schemeMatch) return { path: rawPath };
+	if (!INTERNAL_SCHEMES_WITH_SELECTORS[schemeMatch[1].toLowerCase()]) return { path: rawPath };
+
+	const schemeEnd = schemeMatch[0].length;
+	let path = rawPath;
+	const chunks: string[] = [];
+	while (true) {
+		const colon = path.lastIndexOf(":");
+		// Stop before crossing into the scheme separator `://`.
+		if (colon < schemeEnd) break;
+		const tail = path.slice(colon + 1);
+		if (!INTERNAL_URL_SELECTOR_PART_RE.test(tail)) break;
+		chunks.unshift(tail);
+		path = path.slice(0, colon);
+	}
+	if (chunks.length === 0) return { path: rawPath };
+	return { path, sel: chunks.join(":") };
 }
 
 function assertNotInternalUrl(expanded: string, original: string): void {

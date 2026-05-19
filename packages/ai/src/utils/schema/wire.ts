@@ -18,7 +18,19 @@ import type { Tool, TSchema } from "../../types";
 import { upgradeJsonSchemaTo202012 } from "./draft";
 import { stamp } from "./stamps";
 
-/** True when `value` is a Zod schema instance. */
+/**
+ * True when `value` is a live Zod schema instance.
+ *
+ * The check is stricter than "has a `_zod` property" because a JSON
+ * round-trip preserves the `_zod` key as a plain object and would otherwise
+ * fool the predicate — see issue #1101, where MCP servers ship
+ * `JSON.stringify(zodSchemaInstance)` as a tool's `inputSchema` and the
+ * resulting plain object then explodes `z.toJSONSchema` because the prototype
+ * (and every Zod parsing method) is gone.
+ *
+ * Live Zod instances always carry a `.parse` function on the prototype;
+ * impostors do not.
+ */
 export function isZodSchema(value: unknown): value is ZodType {
 	return (
 		typeof value === "object" &&
@@ -30,7 +42,10 @@ export function isZodSchema(value: unknown): value is ZodType {
 		// (`ZodObject`, `ZodOptional`, etc.) and a tagged-union style check would
 		// have to enumerate them all.
 		"_zod" in value &&
-		typeof (value as { _zod?: { def?: unknown } })._zod === "object"
+		typeof (value as { _zod?: { def?: unknown } })._zod === "object" &&
+		// Reject JSON-roundtripped objects that kept the `_zod` key but lost the
+		// prototype. Real instances have `.parse` on the prototype chain.
+		typeof (value as { parse?: unknown }).parse === "function"
 	);
 }
 
@@ -47,15 +62,46 @@ const kJsonWireSchema = Symbol("pi.schema.json.wire");
  *     treat defaulted fields as optional; Zod inverts this and keeps them
  *     required at the input boundary, then materializes the default).
  *   - Strip the noisy safe-integer bounds Zod injects for `z.number().int()`.
+ *
+ * The empty-schema normalization (`{}` → `true`, see `normalizeEmptySchemas`)
+ * runs separately from `toolWireSchema` so both Zod and TypeBox tools get it.
  */
 function postProcess(schema: Record<string, unknown>): Record<string, unknown> {
 	delete schema.$schema;
 	walk(schema);
+	normalizeEmptySchemas(schema);
 	return schema;
 }
 
 const SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
 const SAFE_INTEGER_MIN = Number.MIN_SAFE_INTEGER;
+
+/** Keys whose values are a single JSON Schema (not an array or map). */
+const SCHEMA_VALUE_KEYS = [
+	"additionalProperties",
+	"unevaluatedProperties",
+	"unevaluatedItems",
+	"items",
+	"contains",
+	"propertyNames",
+	"if",
+	"then",
+	"else",
+	"not",
+] as const;
+
+/** Keys whose values are a map of `{ key: Schema }` entries. */
+const SCHEMA_MAP_KEYS = ["properties", "patternProperties", "$defs", "definitions"] as const;
+
+/** Keys whose values are an array of schemas. */
+const SCHEMA_ARRAY_KEYS = ["anyOf", "oneOf", "allOf", "prefixItems"] as const;
+
+/** True when `val` is a plain empty object `{}`. */
+function isEmptyObject(val: unknown): val is Record<string, never> {
+	if (val === null || typeof val !== "object" || Array.isArray(val)) return false;
+	for (const _ in val as object) return false;
+	return true;
+}
 
 function walk(node: unknown): void {
 	if (Array.isArray(node)) {
@@ -92,6 +138,50 @@ function walk(node: unknown): void {
 	for (const k in obj) walk(obj[k]);
 }
 
+/**
+ * Normalize `{}` (empty JSON Schema = `z.unknown()` / unconstrained value) to
+ * boolean `true` in every schema-valued position. JSON Schema draft 2020-12
+ * §4.3.1: `{}` and `true` are semantically equivalent ("any JSON value").
+ * Grammar-constrained samplers (llama.cpp, etc.) treat the object form as
+ * "generate an empty object" rather than "any JSON value", causing open-typed
+ * fields like `extra.title` (from `z.record(z.string(), z.unknown())`) to
+ * always emit `{}` instead of the intended string/number/etc. (issue #1179).
+ *
+ * Mutates in place. Provider-agnostic — applied to every tool wire schema so
+ * Anthropic, Google, OpenAI, Ollama, Bedrock, and Cursor all see the
+ * normalized form, regardless of whether the source was Zod or TypeBox.
+ */
+export function normalizeEmptySchemas(node: unknown): void {
+	if (Array.isArray(node)) {
+		for (const child of node) normalizeEmptySchemas(child);
+		return;
+	}
+	if (!node || typeof node !== "object") return;
+	const obj = node as Record<string, unknown>;
+
+	for (const key of SCHEMA_VALUE_KEYS) {
+		if (Object.hasOwn(obj, key) && isEmptyObject(obj[key])) obj[key] = true;
+	}
+	for (const mapKey of SCHEMA_MAP_KEYS) {
+		const map = obj[mapKey];
+		if (map !== null && typeof map === "object" && !Array.isArray(map)) {
+			for (const k in map as Record<string, unknown>) {
+				if (isEmptyObject((map as Record<string, unknown>)[k])) (map as Record<string, unknown>)[k] = true;
+			}
+		}
+	}
+	for (const arrKey of SCHEMA_ARRAY_KEYS) {
+		const arr = obj[arrKey];
+		if (Array.isArray(arr)) {
+			for (let i = 0; i < arr.length; i++) {
+				if (isEmptyObject(arr[i])) arr[i] = true;
+			}
+		}
+	}
+
+	for (const k in obj) normalizeEmptySchemas(obj[k]);
+}
+
 /** Convert a Zod schema into the JSON Schema shape providers consume. */
 export function zodToWireSchema(schema: ZodType): Record<string, unknown> {
 	return stamp(schema, kZodWireSchema, s => {
@@ -107,13 +197,17 @@ export function zodToWireSchema(schema: ZodType): Record<string, unknown> {
  * Resolve a tool's parameters to a JSON Schema object suitable for sending
  * over the wire. Zod schemas are converted (and cached); legacy TypeBox / raw
  * JSON Schema parameters are upgraded to draft 2020-12 (and cached).
+ *
+ * Both branches finish with `normalizeEmptySchemas` so every provider —
+ * OpenAI, Anthropic, Google, Ollama, Bedrock, Cursor — sees `{}` normalized
+ * to `true` in schema-valued positions (issue #1179).
  */
 export function toolWireSchema(tool: Tool): Record<string, unknown> {
 	const params: TSchema = tool.parameters;
 	if (isZodSchema(params)) return zodToWireSchema(params);
-	return stamp(
-		params as Record<string, unknown>,
-		kJsonWireSchema,
-		p => upgradeJsonSchemaTo202012(p) as Record<string, unknown>,
-	);
+	return stamp(params as Record<string, unknown>, kJsonWireSchema, p => {
+		const upgraded = upgradeJsonSchemaTo202012(p) as Record<string, unknown>;
+		normalizeEmptySchemas(upgraded);
+		return upgraded;
+	});
 }

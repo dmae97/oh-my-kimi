@@ -27,6 +27,18 @@ describe("renderInlineMarkdown", () => {
 
 		expect(plain).toBe("1. Review against a base branch (PR Style)");
 	});
+
+	it("returns empty string for undefined input (streaming guard)", () => {
+		// During streaming, partial JSON can leave option label fields as undefined.
+		// renderInlineMarkdown must not throw in that case.
+		const rendered = renderInlineMarkdown(undefined as unknown as string, defaultMarkdownTheme);
+		expect(rendered).toBe("");
+	});
+
+	it("applies baseColor to fallback for non-string input", () => {
+		const rendered = renderInlineMarkdown(null as unknown as string, defaultMarkdownTheme, t => `[${t}]`);
+		expect(rendered).toBe("[]");
+	});
 });
 
 describe("Markdown component", () => {

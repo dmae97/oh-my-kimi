@@ -65,11 +65,13 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import {
 	calculateRateLimitBackoffMs,
+	clearAnthropicFastModeFallback,
 	getSupportedEfforts,
 	isContextOverflow,
 	isUsageLimitError,
 	modelsAreEqual,
 	parseRateLimitReason,
+	resolveServiceTier,
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
@@ -1578,6 +1580,16 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
+				const currentGrantsAnthropicPriority =
+					this.serviceTier === "priority" || this.serviceTier === "claude-only";
+				if (assistantMsg.disabledFeatures?.includes("priority") && currentGrantsAnthropicPriority) {
+					this.setServiceTier(undefined);
+					this.emitNotice(
+						"warning",
+						"Priority/fast mode rejected for this model; retried without it. Fast mode is now off.",
+						"priority",
+					);
+				}
 				// Resolve TTSR resume gate before checking for new deferred injections.
 				// Gate on #ttsrAbortPending, not stopReason: a non-TTSR abort (e.g. streaming
 				// edit) also produces stopReason === "aborted" but has no continuation coming.
@@ -3101,6 +3113,13 @@ export class AgentSession {
 					if (!permissionIntent) {
 						return await target.execute(toolCallId, args as never, signal, onUpdate, ctx);
 					}
+					const command =
+						target.name === "bash" && args && typeof args === "object" && !Array.isArray(args)
+							? getStringProperty(args as Record<string, unknown>, "command")
+							: undefined;
+					const commandContent = command
+						? [{ type: "content" as const, content: { type: "text" as const, text: `$ ${command}` } }]
+						: undefined;
 					// Short-circuit on persisted decisions.
 					const persisted = this.#acpPermissionDecisions.get(permissionIntent.cacheKey);
 					if (persisted === "allow_always") {
@@ -3125,8 +3144,10 @@ export class AgentSession {
 								toolCallId,
 								toolName: target.name,
 								title: permissionIntent.title,
+								...(target.name === "bash" ? { kind: "execute" } : {}),
 								status: "pending",
 								rawInput: args,
+								...(commandContent ? { content: commandContent } : {}),
 								locations: extractPermissionLocations(
 									args,
 									this.sessionManager.getCwd(),
@@ -5110,17 +5131,50 @@ export class AgentSession {
 		return nextLevel;
 	}
 
+	/**
+	 * True when *any* fast-mode-granting service tier is configured, regardless
+	 * of whether the active model's provider actually realizes it. Used by the
+	 * toggle (`/fast on|off`) so re-toggling a scoped tier (`openai-only`,
+	 * `claude-only`) doesn't silently broaden it to unscoped `priority`.
+	 *
+	 * For "is fast mode actually applied to the next request?" use
+	 * {@link isFastModeActive} instead — that one respects the model's provider.
+	 */
 	isFastModeEnabled(): boolean {
-		return this.serviceTier === "priority";
+		return (
+			this.serviceTier === "priority" || this.serviceTier === "claude-only" || this.serviceTier === "openai-only"
+		);
+	}
+
+	/**
+	 * True when the configured `serviceTier` resolves to `"priority"` for the
+	 * *currently selected model's provider*. Returns false for scoped tiers
+	 * that don't match (e.g. `"openai-only"` on an anthropic model) and when
+	 * no model is selected.
+	 */
+	isFastModeActive(): boolean {
+		return resolveServiceTier(this.serviceTier, this.model?.provider) === "priority";
 	}
 
 	setServiceTier(serviceTier: ServiceTier | undefined): void {
 		if (this.serviceTier === serviceTier) return;
+		// Re-arming priority on Anthropic? Clear the per-session auto-fallback
+		// sticky disable so the next request actually carries `speed: "fast"`
+		// again. Without this, `/fast on` (or user switching to a tier that
+		// grants anthropic priority) after an auto-disable is a silent no-op
+		// and the warning notice fires every turn.
+		if (serviceTier === "priority" || serviceTier === "claude-only") {
+			clearAnthropicFastModeFallback(this.#providerSessionState);
+		}
 		this.agent.serviceTier = serviceTier;
 		this.sessionManager.appendServiceTierChange(serviceTier ?? null);
 	}
 
 	setFastMode(enabled: boolean): void {
+		if (enabled && this.isFastModeEnabled()) {
+			// Already on under any scope — keep the user's scoped value.
+			return;
+		}
 		this.setServiceTier(enabled ? "priority" : undefined);
 	}
 

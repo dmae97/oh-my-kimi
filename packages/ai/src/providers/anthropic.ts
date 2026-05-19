@@ -32,6 +32,7 @@ import type {
 	Model,
 	ProviderSessionState,
 	RedactedThinkingContent,
+	ServiceTier,
 	SimpleStreamOptions,
 	StopReason,
 	StreamFunction,
@@ -43,6 +44,7 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types";
+import { resolveServiceTier } from "../types";
 import {
 	isAnthropicOAuthToken,
 	isRecord,
@@ -111,6 +113,7 @@ const claudeCodeBetaDefaults = [
 ];
 const fineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14";
 const interleavedThinkingBeta = "interleaved-thinking-2025-05-14";
+const fastModeBeta = "fast-mode-2026-02-01";
 
 function getHeaderCaseInsensitive(headers: Record<string, string> | undefined, headerName: string): string | undefined {
 	if (!headers) return undefined;
@@ -224,13 +227,16 @@ const ANTHROPIC_PROVIDER_SESSION_STATE_KEY = "anthropic-messages";
 
 type AnthropicProviderSessionState = ProviderSessionState & {
 	strictToolsDisabled: boolean;
+	fastModeDisabled: boolean;
 };
 
 function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
 	const state: AnthropicProviderSessionState = {
 		strictToolsDisabled: false,
+		fastModeDisabled: false,
 		close: () => {
 			state.strictToolsDisabled = false;
+			state.fastModeDisabled = false;
 		},
 	};
 	return state;
@@ -249,6 +255,23 @@ function getAnthropicProviderSessionState(
 	return created;
 }
 
+/**
+ * Clears the in-session "server rejected fast mode" sticky flag. Call when the
+ * caller is explicitly re-arming `serviceTier: "priority"` (e.g. user toggled
+ * `/fast on` after a previous turn auto-disabled it) so the next request
+ * actually carries `speed: "fast"` again. No-op when the map or state entry
+ * hasn't been materialized yet.
+ */
+export function clearAnthropicFastModeFallback(
+	providerSessionState: Map<string, ProviderSessionState> | undefined,
+): void {
+	if (!providerSessionState) return;
+	const state = providerSessionState.get(ANTHROPIC_PROVIDER_SESSION_STATE_KEY) as
+		| AnthropicProviderSessionState
+		| undefined;
+	if (state) state.fastModeDisabled = false;
+}
+
 function isAnthropicStrictGrammarTooLargeError(error: unknown): boolean {
 	if (extractHttpStatusFromError(error) !== 400) return false;
 	const message = error instanceof Error ? error.message : String(error);
@@ -258,9 +281,43 @@ function isAnthropicStrictGrammarTooLargeError(error: unknown): boolean {
 	return /invalid_request_error/i.test(message) && (isStrictGrammarTooLarge || isSchemaCompilationTooComplex);
 }
 
+export function isAnthropicFastModeUnsupportedError(error: unknown): boolean {
+	const status = extractHttpStatusFromError(error);
+	if (status !== 400 && status !== 429) return false;
+	const message = error instanceof Error ? error.message : String(error);
+	// 400 invalid_request_error — model doesn't accept `speed` at all.
+	// Observed: "'claude-opus-4-5-20251101' does not support the `speed` parameter."
+	// Stay tolerant of phrasing drift ("is not supported", quoted vs backticked field).
+	if (
+		status === 400 &&
+		/invalid_request_error/i.test(message) &&
+		/\bspeed\b/i.test(message) &&
+		/not support/i.test(message)
+	) {
+		return true;
+	}
+	// 429 rate_limit_error — account lacks the extra-usage entitlement fast mode requires.
+	// Observed: "Extra usage is required for fast mode."
+	if (status === 429 && /rate_limit_error/i.test(message) && /fast mode/i.test(message)) {
+		return true;
+	}
+	return false;
+}
+
 function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean {
 	const tools = params.tools as Array<{ strict?: unknown }> | undefined;
 	return tools?.some(tool => tool.strict === true) ?? false;
+}
+
+/**
+ * `speed` lives on `BetaMessageCreateParams` (client.beta.messages) but this
+ * provider posts via `client.messages.create`, whose param type doesn't
+ * include it. This alias narrows the cast to one place.
+ */
+type ParamsWithSpeed = MessageCreateParamsStreaming & { speed?: "fast" };
+
+function dropAnthropicFastMode(params: MessageCreateParamsStreaming): void {
+	delete (params as ParamsWithSpeed).speed;
 }
 
 function dropAnthropicStrictTools(params: MessageCreateParamsStreaming): void {
@@ -526,6 +583,16 @@ export interface AnthropicOptions extends StreamOptions {
 	interleavedThinking?: boolean;
 	toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
 	betas?: string[] | string;
+	/**
+	 * Realization of `serviceTier: "priority"` on Anthropic models. When
+	 * `"priority"`, sets `speed: "fast"` on the request and appends the
+	 * `fast-mode-2026-02-01` beta header. Anthropic rejects unsupported models
+	 * with `invalid_request_error`, which triggers an in-provider one-shot
+	 * fallback (see `fastModeDisabled` provider state).
+	 *
+	 * Other `ServiceTier` values are currently ignored on this provider.
+	 */
+	serviceTier?: ServiceTier;
 	/** Force OAuth bearer auth mode for proxy tokens that don't match Anthropic token prefixes. */
 	isOAuth?: boolean;
 	/**
@@ -961,10 +1028,16 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			} else {
 				const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
 
+				const extraBetas = normalizeExtraBetas(options?.betas);
+				const wantsAnthropicPriority = resolveServiceTier(options?.serviceTier, model.provider) === "priority";
+				if (wantsAnthropicPriority && !extraBetas.includes(fastModeBeta)) {
+					extraBetas.push(fastModeBeta);
+				}
+
 				const created = createClient(model, {
 					model,
 					apiKey,
-					extraBetas: normalizeExtraBetas(options?.betas),
+					extraBetas,
 					stream: true,
 					interleavedThinking: options?.interleavedThinking ?? true,
 					headers: options?.headers,
@@ -984,6 +1057,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			let disableStrictTools =
 				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
 			let strictFallbackErrorMessage: string | undefined;
+			let dropFastMode = providerSessionState?.fastModeDisabled ?? false;
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
 				let nextParams = buildParams(model, baseUrl, context, isOAuthToken, options, disableStrictTools);
 				const replacementPayload = await options?.onPayload?.(nextParams, model);
@@ -992,6 +1066,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				}
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
+				}
+				if (dropFastMode) {
+					dropAnthropicFastMode(nextParams);
 				}
 				rawRequestDump = {
 					provider: model.provider,
@@ -1284,6 +1361,30 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						firstTokenTime = undefined;
 						continue;
 					}
+					if (
+						!dropFastMode &&
+						resolveServiceTier(options?.serviceTier, model.provider) === "priority" &&
+						firstTokenTime === undefined &&
+						isAnthropicFastModeUnsupportedError(streamFailure)
+					) {
+						logger.debug("anthropic: fast mode unsupported, retrying without speed", {
+							model: model.id,
+							error: streamFailure instanceof Error ? streamFailure.message : String(streamFailure),
+						});
+						if (providerSessionState) {
+							providerSessionState.fastModeDisabled = true;
+						}
+						dropFastMode = true;
+						params = await prepareParams();
+						providerRetryAttempt = 0;
+						output.content.length = 0;
+						output.responseId = undefined;
+						output.providerPayload = undefined;
+						output.usage = createEmptyUsage(copilotDynamicHeaders?.premiumRequests);
+						output.stopReason = "stop";
+						firstTokenTime = undefined;
+						continue;
+					}
 					const isTransientEnvelopeFailure =
 						isTransientStreamParseError(streamFailure) || isTransientStreamEnvelopeError(streamFailure);
 					const canRetryTransientEnvelopeFailure = isTransientEnvelopeFailure && !streamedReplayUnsafeContent;
@@ -1315,6 +1416,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
+			if (dropFastMode && resolveServiceTier(options?.serviceTier, model.provider) === "priority") {
+				output.disabledFeatures = [...(output.disabledFeatures ?? []), "priority"];
+			}
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -1860,6 +1964,10 @@ function buildParams(
 	const metadataUserId = resolveAnthropicMetadataUserId(options?.metadata?.user_id, isOAuthToken);
 	if (metadataUserId) {
 		params.metadata = { user_id: metadataUserId };
+	}
+
+	if (resolveServiceTier(options?.serviceTier, model.provider) === "priority") {
+		(params as ParamsWithSpeed).speed = "fast";
 	}
 
 	if (options?.toolChoice) {

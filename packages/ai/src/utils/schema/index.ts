@@ -10,3 +10,4 @@ export * from "./normalize";
 export * from "./spill";
 export * from "./types";
 export * from "./wire";
+export * from "./zod-decontaminate";
