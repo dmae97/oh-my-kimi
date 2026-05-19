@@ -56,6 +56,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "firepass",
+		name: "Fire Pass (Fireworks Kimi K2.6 Turbo subscription)",
+		available: true,
+	},
+	{
 		id: "github-copilot",
 		name: "GitHub Copilot",
 		available: true,
@@ -301,6 +306,7 @@ export async function refreshOAuthToken(
 		case "opencode-go":
 		case "cerebras":
 		case "fireworks":
+		case "firepass":
 		case "nvidia":
 		case "nanogpt":
 		case "synthetic":

@@ -83,6 +83,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	cerebras: "CEREBRAS_API_KEY",
 	xai: "XAI_API_KEY",
 	fireworks: "FIREWORKS_API_KEY",
+	firepass: "FIREPASS_API_KEY",
 	openrouter: "OPENROUTER_API_KEY",
 	kilo: "KILO_API_KEY",
 	"vercel-ai-gateway": "AI_GATEWAY_API_KEY",

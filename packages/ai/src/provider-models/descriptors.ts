@@ -14,6 +14,7 @@ import {
 	cerebrasModelManagerOptions,
 	cloudflareAiGatewayModelManagerOptions,
 	deepseekModelManagerOptions,
+	firepassModelManagerOptions,
 	fireworksModelManagerOptions,
 	githubCopilotModelManagerOptions,
 	groqModelManagerOptions,
@@ -152,6 +153,7 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		config => fireworksModelManagerOptions(config),
 		catalog("Fireworks", ["FIREWORKS_API_KEY"]),
 	),
+	descriptor("firepass", "kimi-k2.6-turbo", config => firepassModelManagerOptions(config)),
 	descriptor("xai", "grok-4-fast-non-reasoning", config => xaiModelManagerOptions(config)),
 	catalogDescriptor(
 		"deepseek",

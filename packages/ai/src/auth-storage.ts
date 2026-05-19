@@ -1344,6 +1344,12 @@ export class AuthStorage {
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
+			case "firepass": {
+				const { loginFirepass } = await import("./utils/oauth/firepass");
+				const apiKey = await loginFirepass(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
 			case "zai": {
 				const { loginZai } = await import("./utils/oauth/zai");
 				const apiKey = await loginZai(ctrl);

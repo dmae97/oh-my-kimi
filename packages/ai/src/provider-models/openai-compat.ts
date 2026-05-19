@@ -693,6 +693,30 @@ export function fireworksModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 7.6 Fire Pass (Fireworks Kimi K2.6 Turbo subscription)
+// ---------------------------------------------------------------------------
+
+export interface FirepassModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+/**
+ * Fire Pass is a Fireworks subscription product that exposes a single router
+ * model (Kimi K2.6 Turbo) under `accounts/fireworks/routers/kimi-k2p6-turbo`.
+ * The dedicated `fpk_…` keys do not authorize `/v1/models`, so this manager
+ * never performs dynamic discovery — the bundled catalog entry is canonical.
+ * See https://docs.fireworks.ai/firepass.
+ */
+export function firepassModelManagerOptions(
+	_config?: FirepassModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return {
+		providerId: "firepass",
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 7. Mistral
 // ---------------------------------------------------------------------------
 
