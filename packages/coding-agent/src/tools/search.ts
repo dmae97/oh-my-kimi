@@ -63,6 +63,29 @@ export const SINGLE_FILE_MATCHES = 200;
  * pagination headroom so the caller can see total file count. */
 const INTERNAL_TOTAL_CAP = 2000;
 
+/**
+ * Detect a `,` that is not inside a `{…}` brace expansion. Used to catch
+ * `paths: ["a,b"]` mistakes where the caller flattened multiple entries
+ * into a single string instead of passing a JSON array of strings.
+ */
+function containsTopLevelComma(entry: string): boolean {
+	let depth = 0;
+	for (let i = 0; i < entry.length; i++) {
+		const ch = entry[i];
+		if (ch === "\\" && i + 1 < entry.length) {
+			i++;
+			continue;
+		}
+		if (ch === "{") depth++;
+		else if (ch === "}") {
+			if (depth > 0) depth--;
+		} else if (ch === "," && depth === 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
 export interface SearchToolDetails {
 	truncation?: TruncationResult;
 	fileLimitReached?: number;
@@ -124,6 +147,11 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			if (normalizedSkip < 0 || !Number.isFinite(normalizedSkip)) {
 				throw new ToolError("Skip must be a non-negative number");
 			}
+			for (const entry of paths) {
+				if (containsTopLevelComma(entry)) {
+					throw new ToolError('paths is an array — pass ["a", "b"] not ["a,b"]');
+				}
+			}
 			const normalizedContextBefore = this.session.settings.get("search.contextBefore");
 			const normalizedContextAfter = this.session.settings.get("search.contextAfter");
 			const ignoreCase = i ?? false;
@@ -148,6 +176,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				missingPaths,
 				immutableSourcePaths,
 			} = scope;
+			if (missingPaths.length > 0 && missingPaths.length === paths.length) {
+				throw new ToolError(`Path not found: ${missingPaths.join(", ")}; pass each path as its own array element`);
+			}
 			const { globFilter } = scope;
 			const baseDisplayMode = resolveFileDisplayMode(this.session);
 			const immutableDisplayMode = resolveFileDisplayMode(this.session, { immutable: true });
