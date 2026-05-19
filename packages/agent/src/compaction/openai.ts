@@ -412,10 +412,11 @@ export function buildOpenAiNativeHistory(
 				.map(block => block.text)
 				.join("\n");
 			const hasImages = message.content.some(block => block.type === "image");
+			const outputText = textOutput.length > 0 ? textOutput : hasImages ? "(see attached image)" : "";
 			input.push({
 				type: customCallIds.has(normalized.callId) ? "custom_tool_call_output" : "function_call_output",
 				call_id: normalized.callId,
-				output: (textOutput.length > 0 ? textOutput : "(see attached image)").toWellFormed(),
+				output: outputText.toWellFormed(),
 			});
 
 			if (hasImages && model.input.includes("image")) {
