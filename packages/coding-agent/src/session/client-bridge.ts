@@ -27,6 +27,7 @@ export interface ClientBridgePermissionToolCall {
 	kind?: string;
 	status?: "pending" | "in_progress" | "completed" | "failed";
 	rawInput?: unknown;
+	content?: unknown[];
 	locations?: { path: string; line?: number }[];
 }
 

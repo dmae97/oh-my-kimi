@@ -22,6 +22,7 @@ describe("ACP client bridge permission requests", () => {
 				kind: "execute",
 				status: "pending",
 				rawInput: { command: "echo hi" },
+				content: [{ type: "content", content: { type: "text", text: "$ echo hi" } }],
 			},
 			[{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }],
 		);
@@ -32,6 +33,7 @@ describe("ACP client bridge permission requests", () => {
 			kind: "execute",
 			status: "pending",
 			rawInput: { command: "echo hi" },
+			content: [{ type: "content", content: { type: "text", text: "$ echo hi" } }],
 		});
 	});
 });

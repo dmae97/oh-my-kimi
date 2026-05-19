@@ -3101,6 +3101,13 @@ export class AgentSession {
 					if (!permissionIntent) {
 						return await target.execute(toolCallId, args as never, signal, onUpdate, ctx);
 					}
+					const command =
+						target.name === "bash" && args && typeof args === "object" && !Array.isArray(args)
+							? getStringProperty(args as Record<string, unknown>, "command")
+							: undefined;
+					const commandContent = command
+						? [{ type: "content" as const, content: { type: "text" as const, text: `$ ${command}` } }]
+						: undefined;
 					// Short-circuit on persisted decisions.
 					const persisted = this.#acpPermissionDecisions.get(permissionIntent.cacheKey);
 					if (persisted === "allow_always") {
@@ -3125,8 +3132,10 @@ export class AgentSession {
 								toolCallId,
 								toolName: target.name,
 								title: permissionIntent.title,
+								...(target.name === "bash" ? { kind: "execute" } : {}),
 								status: "pending",
 								rawInput: args,
+								...(commandContent ? { content: commandContent } : {}),
 								locations: extractPermissionLocations(
 									args,
 									this.sessionManager.getCwd(),
