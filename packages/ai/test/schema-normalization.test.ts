@@ -540,6 +540,58 @@ describe("sanitizeSchemaForOpenAIResponses", () => {
 });
 
 // ---------------------------------------------------------------------------
+// sanitizeSchemaForOpenAIResponses — empty-schema normalization (issue #1179)
+// ---------------------------------------------------------------------------
+
+describe("sanitizeSchemaForOpenAIResponses — empty-schema normalization", () => {
+	it("normalizes {} (empty schema = z.unknown()) to `true` in additionalProperties (issue #1179)", () => {
+		// z.record(z.string(), z.unknown()) produces additionalProperties: {}
+		const schema = { type: "object", additionalProperties: {} };
+		expect(sanitizeSchemaForOpenAIResponses(schema)).toEqual({
+			type: "object",
+			additionalProperties: true,
+			properties: {},
+		});
+	});
+
+	it("normalizes {} in items to `true` (z.array(z.unknown()))", () => {
+		const schema = { type: "array", items: {} };
+		expect(sanitizeSchemaForOpenAIResponses(schema)).toEqual({ type: "array", items: true });
+	});
+
+	it("normalizes {} in nested property schemas (z.unknown() as a property value)", () => {
+		const schema = {
+			type: "object",
+			properties: { meta: {} },
+			required: ["meta"],
+		};
+		expect(sanitizeSchemaForOpenAIResponses(schema)).toEqual({
+			type: "object",
+			properties: { meta: true },
+			required: ["meta"],
+		});
+	});
+
+	it("normalizes {} in anyOf branches", () => {
+		const schema = { anyOf: [{}, { type: "string" }] };
+		expect(sanitizeSchemaForOpenAIResponses(schema)).toEqual({ anyOf: [true, { type: "string" }] });
+	});
+
+	it("does not normalize non-empty schemas or boolean schemas", () => {
+		const schema = {
+			type: "object",
+			additionalProperties: { type: "string" },
+			unevaluatedProperties: false,
+		};
+		expect(sanitizeSchemaForOpenAIResponses(schema)).toEqual({
+			type: "object",
+			properties: {},
+			additionalProperties: { type: "string" },
+			unevaluatedProperties: false,
+		});
+	});
+});
+// ---------------------------------------------------------------------------
 // enforceStrictSchema and tryEnforceStrictSchema
 // ---------------------------------------------------------------------------
 

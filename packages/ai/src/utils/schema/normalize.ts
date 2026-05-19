@@ -21,7 +21,7 @@ import {
 import { isValidJsonSchema } from "./meta-validator";
 import { type DescriptionSpillFormat, spillToDescription } from "./spill";
 import { enter, epochNext, exit, once, stamp } from "./stamps";
-import { isJsonObject, type JsonObject } from "./types";
+import { isJsonObject, isJsonObjectEmpty, type JsonObject } from "./types";
 import { decontaminateZodInstance } from "./zod-decontaminate";
 
 export type ResidualSchemaIncompatibility = "type-array" | "type-null" | "nullable" | "combiners";
@@ -906,6 +906,15 @@ export const normalizeSchemaForOpenAIResponses: (schema: JsonObject) => JsonObje
 
 function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonObject, JsonObject>): unknown {
 	if (!isJsonObject(value)) return value;
+
+	// `{}` (empty JSON Schema) ≡ `true` (JSON Schema draft 2020-12 §4.3.1).
+	// Grammar-constrained samplers (llama.cpp, etc.) treat the object form as
+	// "generate an empty object" rather than "any JSON value" (issue #1179).
+	// `toolWireSchema` already runs `normalizeEmptySchemas` upstream, but this
+	// guard remains as a safety net for callers that invoke
+	// `sanitizeSchemaForOpenAIResponses` directly on a schema that bypassed
+	// the wire-schema pipeline (e.g. provider-specific fixtures, debug paths).
+	if (isJsonObjectEmpty(value)) return true;
 
 	const cached = cache.get(value);
 	if (cached) return cached;

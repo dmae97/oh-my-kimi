@@ -6,6 +6,7 @@ import {
 	humanizePlanTitle,
 	normalizePlanTitle,
 	renameApprovedPlanFile,
+	resolvePlanTitle,
 } from "@oh-my-pi/pi-coding-agent/plan-mode/approved-plan";
 
 describe("renameApprovedPlanFile", () => {
@@ -111,5 +112,64 @@ describe("normalizePlanTitle", () => {
 
 	it("throws when sanitization produces empty result", () => {
 		expect(() => normalizePlanTitle("!!!")).toThrow("at least one letter");
+	});
+});
+
+describe("resolvePlanTitle", () => {
+	const planContent = "# Code Review: nettools — Updated Issues\n\nbody...\n";
+	const planFilePath = "local://PLAN.md";
+
+	it("uses a string `suppliedTitle` when present", () => {
+		const result = resolvePlanTitle({ suppliedTitle: "my-plan", planContent, planFilePath });
+		expect(result).toEqual({ title: "my-plan", fileName: "my-plan.md", source: "supplied" });
+	});
+
+	it("falls back to the plan's first H1 when the model emits a non-string title (issue #1179)", () => {
+		const result = resolvePlanTitle({ suppliedTitle: {}, planContent, planFilePath });
+		// "Code Review: nettools — Updated Issues" → sanitized
+		expect(result.source).toBe("heading");
+		expect(result.title).toBe("Code-Review-nettools-Updated-Issues");
+		expect(result.fileName).toBe("Code-Review-nettools-Updated-Issues.md");
+	});
+
+	it("falls back to the H1 when `suppliedTitle` is missing entirely", () => {
+		const result = resolvePlanTitle({ planContent, planFilePath });
+		expect(result.source).toBe("heading");
+	});
+
+	it("falls back to the H1 when `suppliedTitle` is an empty / whitespace string", () => {
+		expect(resolvePlanTitle({ suppliedTitle: "", planContent, planFilePath }).source).toBe("heading");
+		expect(resolvePlanTitle({ suppliedTitle: "   ", planContent, planFilePath }).source).toBe("heading");
+	});
+
+	it("falls back to the plan filename stem when no usable H1 exists", () => {
+		const result = resolvePlanTitle({ planContent: "body only, no heading\n", planFilePath });
+		expect(result).toEqual({ title: "PLAN", fileName: "PLAN.md", source: "filename" });
+	});
+
+	it("falls back through to the literal `plan` when every candidate sanitizes to empty", () => {
+		const result = resolvePlanTitle({
+			suppliedTitle: "!!!",
+			planContent: "# !!!\n",
+			planFilePath: "local://!!!.md",
+		});
+		expect(result).toEqual({ title: "plan", fileName: "plan.md", source: "default" });
+	});
+
+	it("skips a `suppliedTitle` that contains path separators and uses the next candidate", () => {
+		const result = resolvePlanTitle({
+			suppliedTitle: "../etc/passwd",
+			planContent,
+			planFilePath,
+		});
+		expect(result.source).toBe("heading");
+	});
+
+	it("picks the first H1 line, not the first heading of any level", () => {
+		const result = resolvePlanTitle({
+			planContent: "## Subheading first\n\n# Real Title\n",
+			planFilePath,
+		});
+		expect(result.title).toBe("Real-Title");
 	});
 });
