@@ -116,6 +116,29 @@ function mapToolChoice(toolChoice: ToolChoice | undefined): "auto" | "none" | "r
 	return undefined;
 }
 
+function getNamedToolChoiceName(toolChoice: ToolChoice | undefined): string | undefined {
+	if (!toolChoice || typeof toolChoice === "string") {
+		return undefined;
+	}
+	if ("function" in toolChoice) {
+		return toolChoice.function.name;
+	}
+	return toolChoice.name;
+}
+
+function selectToolsForToolChoice(tools: Tool[] | undefined, toolChoice: ToolChoice | undefined): Tool[] | undefined {
+	const toolName = getNamedToolChoiceName(toolChoice);
+	if (!toolName || !tools) {
+		return tools;
+	}
+	for (const tool of tools) {
+		if (tool.name === toolName) {
+			return [tool];
+		}
+	}
+	return [];
+}
+
 function toPlainContent(content: string | Array<{ type: "text" | "image"; text?: string; data?: string }>): {
 	content: string;
 	images?: string[];
@@ -231,10 +254,12 @@ function convertTools(tools: Tool[] | undefined): OllamaFunctionTool[] | undefin
 function createChatBody(model: Model<"ollama-chat">, context: Context, options: OllamaChatOptions | undefined) {
 	const think = mapReasoning(options?.reasoning);
 	const toolChoice = mapToolChoice(options?.toolChoice);
+	const selectedTools = selectToolsForToolChoice(context.tools, options?.toolChoice);
+	const tools = convertTools(selectedTools);
 	return {
 		model: model.id,
 		messages: convertMessages(model, context),
-		...(convertTools(context.tools) ? { tools: convertTools(context.tools) } : {}),
+		...(tools ? { tools } : {}),
 		...(think !== undefined ? { think } : {}),
 		...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
 		...(options?.maxTokens !== undefined ? { options: { num_predict: options.maxTokens } } : {}),
