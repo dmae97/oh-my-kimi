@@ -174,6 +174,25 @@ export function findApiKey(): string | null {
 	return getEnvApiKey("perplexity") ?? null;
 }
 
+/**
+ * Decode a Perplexity JWT's `exp` claim, in ms. Returns `undefined` when the
+ * token has no `exp` (which is the common case — Perplexity sessions are
+ * server-side and effectively non-expiring from the client's POV).
+ */
+function jwtExpiryMs(token: string): number | undefined {
+	const parts = token.split(".");
+	if (parts.length !== 3) return undefined;
+	const payload = parts[1];
+	if (!payload) return undefined;
+	try {
+		const decoded = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { exp?: unknown };
+		if (typeof decoded.exp !== "number" || !Number.isFinite(decoded.exp)) return undefined;
+		return decoded.exp * 1000;
+	} catch {
+		return undefined;
+	}
+}
+
 async function findOAuthToken(): Promise<string | null> {
 	const now = Date.now();
 	try {
@@ -183,7 +202,11 @@ async function findOAuthToken(): Promise<string | null> {
 			if (record.credential.type !== "oauth") continue;
 			const credential = record.credential as PerplexityOAuthCredential;
 			if (!credential.access) continue;
-			if (credential.expires <= now + OAUTH_EXPIRY_BUFFER_MS) continue;
+			// Trust the JWT's own `exp` claim if it has one; otherwise treat as
+			// non-expiring. The stored `expires` field is unreliable: older logins
+			// wrote `loginTime + 1h` even though Perplexity JWTs typically lack `exp`.
+			const jwtExpiry = jwtExpiryMs(credential.access);
+			if (jwtExpiry !== undefined && jwtExpiry <= now + OAUTH_EXPIRY_BUFFER_MS) continue;
 			return credential.access;
 		}
 	} catch {

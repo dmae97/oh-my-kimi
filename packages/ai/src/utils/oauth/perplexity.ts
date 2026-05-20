@@ -24,20 +24,26 @@ const APP_USER_AGENT = "Perplexity/641 CFNetwork/1568 Darwin/25.2.0";
 // JWT helpers
 // ---------------------------------------------------------------------------
 
-/** Extract expiry from a JWT. Falls back to 1 hour from now. Subtracts 5 min safety margin. */
+/**
+ * Extract expiry from a JWT. Perplexity tokens generally lack an `exp` claim
+ * (their sessions are server-side and effectively non-expiring from the client's
+ * point of view), so we return a far-future sentinel when no `exp` is present.
+ * When `exp` IS present, subtract a 5-minute safety margin.
+ */
+const NEVER_EXPIRES = 8.64e15; // max safe Date value
 function getJwtExpiry(token: string): number {
 	try {
 		const parts = token.split(".");
-		if (parts.length !== 3) return Date.now() + 3600_000;
+		if (parts.length !== 3) return NEVER_EXPIRES;
 		const payload = parts[1] ?? "";
 		const decoded = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
-		if (decoded?.exp && typeof decoded.exp === "number") {
+		if (typeof decoded?.exp === "number" && Number.isFinite(decoded.exp)) {
 			return decoded.exp * 1000 - 5 * 60_000;
 		}
 	} catch {
 		// Ignore decode errors
 	}
-	return Date.now() + 3600_000;
+	return NEVER_EXPIRES;
 }
 
 /** Build OAuthCredentials from a Perplexity JWT string. */
