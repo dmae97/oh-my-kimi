@@ -275,4 +275,58 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 
 		terminal.stop();
 	});
+
+	it("reassembles a DA1 response split across stdin reads without leaking to input (#1238)", () => {
+		vi.useFakeTimers();
+		const { terminal, received } = setupTerminal();
+
+		// OSC 11 completes normally.
+		process.stdin.emit("data", "\x1b]11;rgb:1c1c/1c1c/1c1c\x07");
+
+		// DA1 reply arrives split: the prefix appears as one event and then the StdinBuffer
+		// flush timeout (10ms) elapses before the rest of the response is delivered.
+		// xterm-style "VT420 with extensions" response: \x1b[?62;6;7;14;...;52c
+		process.stdin.emit("data", "\x1b[?62");
+		vi.advanceTimersByTime(50);
+		process.stdin.emit("data", ";6;7;14;21;22;23;24;28;32;42;52c");
+
+		expect(received).toEqual([]);
+		expect(terminal.appearance).toBe("dark");
+
+		terminal.stop();
+	});
+
+	it("reassembles a DA1 response delivered byte-by-byte", () => {
+		vi.useFakeTimers();
+		const { terminal, received } = setupTerminal();
+
+		process.stdin.emit("data", "\x1b]11;rgb:1c1c/1c1c/1c1c\x07");
+		process.stdin.emit("data", "\x1b[?62");
+		vi.advanceTimersByTime(50);
+		for (const ch of ";6;7;14;21;22;23;24;28;32;42;52c") {
+			process.stdin.emit("data", ch);
+		}
+
+		expect(received).toEqual([]);
+		expect(terminal.appearance).toBe("dark");
+
+		terminal.stop();
+	});
+
+	it("abandons private CSI reassembly when a new escape arrives mid-stream", () => {
+		vi.useFakeTimers();
+		const { terminal, received } = setupTerminal();
+
+		// Start a partial DA1, then a fresh CSI (up arrow) interrupts before the terminator.
+		process.stdin.emit("data", "\x1b[?62");
+		vi.advanceTimersByTime(50);
+		process.stdin.emit("data", "\x1b[A");
+		vi.advanceTimersByTime(50);
+
+		// Up arrow must reach the input handler; probe noise must not.
+		expect(received).toContain("\x1b[A");
+		expect(received.some(seq => seq.includes("?62"))).toBe(false);
+
+		terminal.stop();
+	});
 });
