@@ -243,8 +243,17 @@ function rewriteZodNode(node: JsonObject, seen: WeakSet<object>): unknown {
 		case "pipe":
 		case "transform": {
 			const inner = walk(unwrapInnerSchema(def), seen);
-			if (kind === "nullable" && isJsonObject(inner) && typeof inner.type === "string") {
-				return { ...inner, type: [inner.type, "null"] };
+			if (kind === "nullable" && isJsonObject(inner)) {
+				if (typeof inner.type === "string") {
+					return { ...inner, type: [inner.type, "null"] };
+				}
+				if (Array.isArray(inner.type)) {
+					return (inner.type as string[]).includes("null")
+						? inner
+						: { ...inner, type: [...(inner.type as string[]), "null"] };
+				}
+				// anyOf / allOf / $ref shapes — no scalar `type` field
+				return { anyOf: [inner, { type: "null" }] };
 			}
 			return inner;
 		}
