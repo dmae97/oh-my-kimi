@@ -10,7 +10,7 @@ import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { findCredential, isApiKeyAvailable } from "./utils";
+import { findCredential, isApiKeyAvailable, withHardTimeout } from "./utils";
 
 const SYNTHETIC_SEARCH_URL = "https://api.synthetic.new/v2/search";
 
@@ -43,7 +43,7 @@ async function callSyntheticSearch(
 			Authorization: `Bearer ${apiKey}`,
 		},
 		body: JSON.stringify({ query }),
-		signal,
+		signal: withHardTimeout(signal),
 	});
 
 	if (!response.ok) {

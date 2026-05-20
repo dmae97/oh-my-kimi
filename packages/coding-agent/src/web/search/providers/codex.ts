@@ -15,6 +15,7 @@ import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
+import { withHardTimeout } from "./utils";
 
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const CODEX_RESPONSES_PATH = "/codex/responses";
@@ -338,7 +339,7 @@ async function callCodexSearch(
 		method: "POST",
 		headers,
 		body: JSON.stringify(body),
-		signal: options.signal,
+		signal: withHardTimeout(options.signal),
 	});
 
 	if (!response.ok) {

@@ -1,5 +1,5 @@
 import { getEnvApiKey } from "@oh-my-pi/pi-ai";
-import { findCredential } from "./search/providers/utils";
+import { findCredential, withHardTimeout } from "./search/providers/utils";
 
 const PARALLEL_API_URL = "https://api.parallel.ai";
 const PARALLEL_SEARCH_URL = `${PARALLEL_API_URL}/v1beta/search`;
@@ -304,7 +304,7 @@ export async function searchWithParallel(
 				max_chars_per_result: options.maxCharsPerResult ?? 10_000,
 			},
 		}),
-		signal: options.signal,
+		signal: withHardTimeout(options.signal),
 	});
 	if (!response.ok) {
 		throw parseParallelErrorResponse(response.status, await response.text());
@@ -335,7 +335,7 @@ export async function extractWithParallel(
 			excerpts: options.excerpts ?? true,
 			full_content: options.fullContent ?? false,
 		}),
-		signal: options.signal,
+		signal: withHardTimeout(options.signal),
 	});
 	if (!response.ok) {
 		throw parseParallelErrorResponse(response.status, await response.text());

@@ -22,6 +22,7 @@ import { SearchProviderError } from "../../../web/search/types";
 import { dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
+import { withHardTimeout } from "./utils";
 
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions";
 const PERPLEXITY_OAUTH_ASK_URL = "https://www.perplexity.ai/rest/sse/perplexity_ask";
@@ -247,7 +248,7 @@ async function callPerplexityApi(
 			"Content-Type": "application/json",
 		},
 		body: JSON.stringify(request),
-		signal,
+		signal: withHardTimeout(signal),
 	});
 
 	if (!response.ok) {
@@ -364,7 +365,7 @@ async function callPerplexityOAuth(
 				skip_search_enabled: true,
 			},
 		}),
-		signal: params.signal,
+		signal: withHardTimeout(params.signal),
 	});
 
 	if (!response.ok) {
