@@ -33,15 +33,25 @@ describe("deepseek built-in provider (issue #830)", () => {
 		expect(descriptor?.modelsDevKey).toBe("deepseek");
 		expect(descriptor?.api).toBe("openai-completions");
 		expect(descriptor?.baseUrl).toBe("https://api.deepseek.com");
-		// Per-model compat: deepseek-v4 reasoning models leak chat-template tool-call markers
-		// (#798) and 400 on tool_choice when xhigh effort is used (#830 thread). Reasoning content
-		// must round-trip on tool calls (interleaved.field=reasoning_content from models.dev).
+		// Per-model compat: DeepSeek V4 supports thinking-mode tool calls, but only
+		// with `high`/`max` effort, no explicit `tool_choice`, max_tokens, and
+		// reasoning_content replay.
 		const compat =
 			descriptor?.api === "openai-completions" ? (descriptor.compat as OpenAICompat | undefined) : undefined;
+		expect(compat?.supportsDeveloperRole).toBe(false);
 		expect(compat?.supportsReasoningEffort).toBe(true);
 		expect(compat?.supportsToolChoice).toBe(false);
+		expect(compat?.maxTokensField).toBe("max_tokens");
 		expect(compat?.requiresReasoningContentForToolCalls).toBe(true);
+		expect(compat?.requiresAssistantContentForToolCalls).toBe(true);
 		expect(compat?.reasoningContentField).toBe("reasoning_content");
-		expect(compat?.reasoningEffortMap?.xhigh).toBe("max");
+		expect(compat?.extraBody).toEqual({ thinking: { type: "enabled" } });
+		expect(compat?.reasoningEffortMap).toMatchObject({
+			minimal: "high",
+			low: "high",
+			medium: "high",
+			high: "high",
+			xhigh: "max",
+		});
 	});
 });

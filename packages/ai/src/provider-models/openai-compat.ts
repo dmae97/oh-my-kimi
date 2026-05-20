@@ -2083,18 +2083,26 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 		// ids are kept off the catalog until the issue thread asks for them.
 		filterModel: (id, m) => m.tool_call === true && id.startsWith("deepseek-v4"),
 		compat: {
-			// xhigh maps to DeepSeek's `max` reasoning_effort (#830 thread).
+			// DeepSeek V4 only accepts `high`/`max`; map lower OMP levels upward so
+			// subagent "minimal" turns stay in documented thinking mode instead of
+			// sending unsupported effort strings.
+			supportsDeveloperRole: false,
 			supportsReasoningEffort: true,
-			reasoningEffortMap: { xhigh: "max" },
-			// `tool_choice` returns 400 against DeepSeek when reasoning_effort is set
-			// (per the issue thread). Tool calls still work without the parameter.
+			reasoningEffortMap: { minimal: "high", low: "high", medium: "high", high: "high", xhigh: "max" },
+			maxTokensField: "max_tokens",
+			// DeepSeek V4 thinking mode rejects the `tool_choice` control parameter.
+			// Tool calls still work without it; the API defaults to auto when tools exist.
 			supportsToolChoice: false,
+			// DeepSeek V4's OpenAI format docs enable thinking with both the toggle and
+			// reasoning_effort. Keep the toggle explicit for built-in models.
+			extraBody: { thinking: { type: "enabled" } },
 			// DeepSeek emits chain-of-thought via `reasoning_content` and requires it
 			// to round-trip on assistant tool-call messages so the model can resume
 			// from prior thinking (interleaved.field=reasoning_content on models.dev,
 			// matches the kimi/openrouter handling already in detectCompat).
 			reasoningContentField: "reasoning_content",
 			requiresReasoningContentForToolCalls: true,
+			requiresAssistantContentForToolCalls: true,
 		},
 	}),
 ];

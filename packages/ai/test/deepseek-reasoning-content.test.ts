@@ -47,7 +47,7 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 	// Fix 1: reasoningEffortMap for DeepSeek-family on any provider
 	// ----------------------------------------------------------------
 	describe("reasoningEffortMap (Fix 1)", () => {
-		it("maps xhigh → max for DeepSeek-family on opencode-go", () => {
+		it("maps unsupported lower DeepSeek efforts to high on opencode-go", () => {
 			const compat = detectCompat(
 				deepseekModel({
 					provider: "opencode-go",
@@ -55,10 +55,16 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 					id: "deepseek-v4-flash",
 				}),
 			);
-			expect(compat.reasoningEffortMap.xhigh).toBe("max");
+			expect(compat.reasoningEffortMap).toMatchObject({
+				minimal: "high",
+				low: "high",
+				medium: "high",
+				high: "high",
+				xhigh: "max",
+			});
 		});
 
-		it("maps xhigh → max for DeepSeek-family on NVIDIA", () => {
+		it("maps unsupported lower DeepSeek efforts to high on NVIDIA", () => {
 			const compat = detectCompat(
 				deepseekModel({
 					provider: "nvidia",
@@ -66,10 +72,16 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 					id: "deepseek-ai/deepseek-v4-flash",
 				}),
 			);
-			expect(compat.reasoningEffortMap.xhigh).toBe("max");
+			expect(compat.reasoningEffortMap).toMatchObject({
+				minimal: "high",
+				low: "high",
+				medium: "high",
+				high: "high",
+				xhigh: "max",
+			});
 		});
 
-		it("maps xhigh → max for DeepSeek on the official endpoint", () => {
+		it("maps unsupported lower DeepSeek efforts to high on the official endpoint", () => {
 			const compat = detectCompat(
 				deepseekModel({
 					provider: "deepseek",
@@ -77,7 +89,13 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 					id: "deepseek-v4-pro",
 				}),
 			);
-			expect(compat.reasoningEffortMap.xhigh).toBe("max");
+			expect(compat.reasoningEffortMap).toMatchObject({
+				minimal: "high",
+				low: "high",
+				medium: "high",
+				high: "high",
+				xhigh: "max",
+			});
 		});
 
 		it("does NOT map xhigh for non-DeepSeek models", () => {
