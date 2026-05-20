@@ -1482,6 +1482,28 @@ describe("ModelRegistry", () => {
 			expect(registry.getAvailable().some(model => model.provider === "github-copilot")).toBe(false);
 			expect(registry.getDiscoverableProviders()).not.toContain("ollama");
 		});
+
+		test("refresh skips discovery probes for disabled local providers", async () => {
+			await Settings.init({
+				inMemory: true,
+				overrides: {
+					disabledProviders: ["llama.cpp", "lm-studio", "ollama"],
+				},
+			});
+			const requestedUrls: string[] = [];
+			using _hook = hookFetch(input => {
+				requestedUrls.push(String(input));
+				throw new Error(`Unexpected URL: ${String(input)}`);
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("online");
+
+			const disabledProbeUrls = requestedUrls.filter(
+				url => url.includes("127.0.0.1:11434") || url.includes("127.0.0.1:8080") || url.includes("127.0.0.1:1234"),
+			);
+			expect(disabledProbeUrls).toEqual([]);
+		});
 	});
 	describe("runtime discovery", () => {
 		test("auto-discovers ollama models without provider config", async () => {

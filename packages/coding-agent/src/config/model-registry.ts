@@ -1017,7 +1017,8 @@ export class ModelRegistry {
 	}
 
 	#addImplicitDiscoverableProviders(configuredProviders: Set<string>): void {
-		if (!configuredProviders.has("ollama")) {
+		const disabledProviders = getDisabledProviderIdsFromSettings();
+		if (!configuredProviders.has("ollama") && !disabledProviders.has("ollama")) {
 			this.#discoverableProviders.push({
 				provider: "ollama",
 				api: "openai-responses",
@@ -1027,7 +1028,7 @@ export class ModelRegistry {
 			});
 			this.#keylessProviders.add("ollama");
 		}
-		if (!configuredProviders.has("llama.cpp")) {
+		if (!configuredProviders.has("llama.cpp") && !disabledProviders.has("llama.cpp")) {
 			this.#discoverableProviders.push({
 				provider: "llama.cpp",
 				api: "openai-responses",
@@ -1040,7 +1041,7 @@ export class ModelRegistry {
 				this.#keylessProviders.add("llama.cpp");
 			}
 		}
-		if (!configuredProviders.has("lm-studio")) {
+		if (!configuredProviders.has("lm-studio") && !disabledProviders.has("lm-studio")) {
 			this.#discoverableProviders.push({
 				provider: "lm-studio",
 				api: "openai-completions",
@@ -1160,9 +1161,12 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
 	): Promise<void> {
-		const selectedDiscoverableProviders = providerFilter
-			? this.#discoverableProviders.filter(provider => providerFilter.has(provider.provider))
-			: this.#discoverableProviders;
+		const disabledProviders = getDisabledProviderIdsFromSettings();
+		const selectedDiscoverableProviders = (
+			providerFilter
+				? this.#discoverableProviders.filter(provider => providerFilter.has(provider.provider))
+				: this.#discoverableProviders
+		).filter(provider => !disabledProviders.has(provider.provider));
 		const configuredDiscoveriesPromise =
 			selectedDiscoverableProviders.length === 0
 				? Promise.resolve<Model<Api>[]>([])
@@ -1366,17 +1370,24 @@ export class ModelRegistry {
 				},
 			},
 		];
+		const disabledProviders = getDisabledProviderIdsFromSettings();
+		const standardProviderDescriptors = PROVIDER_DESCRIPTORS.filter(
+			descriptor => !disabledProviders.has(descriptor.providerId),
+		);
+		const enabledSpecialProviderDescriptors = specialProviderDescriptors.filter(
+			descriptor => !disabledProviders.has(descriptor.providerId),
+		);
 		// Use peekApiKey to avoid OAuth token refresh during discovery.
 		// The token is only needed if the dynamic fetch fires (cache miss),
 		// and failures there are handled gracefully.
 		const peekKey = (descriptor: { providerId: string }) => this.#peekApiKeyForProvider(descriptor.providerId);
 		const [standardProviderKeys, specialKeys] = await Promise.all([
-			Promise.all(PROVIDER_DESCRIPTORS.map(peekKey)),
-			Promise.all(specialProviderDescriptors.map(peekKey)),
+			Promise.all(standardProviderDescriptors.map(peekKey)),
+			Promise.all(enabledSpecialProviderDescriptors.map(peekKey)),
 		]);
 		const options: ModelManagerOptions<Api>[] = [];
-		for (let i = 0; i < PROVIDER_DESCRIPTORS.length; i++) {
-			const descriptor = PROVIDER_DESCRIPTORS[i];
+		for (let i = 0; i < standardProviderDescriptors.length; i++) {
+			const descriptor = standardProviderDescriptors[i];
 			const apiKey = standardProviderKeys[i];
 			if (isAuthenticated(apiKey) || descriptor.allowUnauthenticated) {
 				options.push(
@@ -1388,8 +1399,8 @@ export class ModelRegistry {
 			}
 		}
 
-		for (let i = 0; i < specialProviderDescriptors.length; i++) {
-			const descriptor = specialProviderDescriptors[i];
+		for (let i = 0; i < enabledSpecialProviderDescriptors.length; i++) {
+			const descriptor = enabledSpecialProviderDescriptors[i];
 			const key = descriptor.resolveKey(specialKeys[i]);
 			if (!isAuthenticated(key)) {
 				continue;
