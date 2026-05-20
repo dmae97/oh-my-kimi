@@ -199,7 +199,7 @@ function applyExtensionFlagValues(session: AgentSession, rawArgs: string[]): Map
 
 type AcpSessionFactory = (cwd: string) => Promise<AgentSession>;
 
-interface AcpSessionFactoryOptions {
+export interface AcpSessionFactoryOptions {
 	baseOptions: CreateAgentSessionOptions;
 	settings: Settings;
 	sessionDir?: string;
@@ -210,7 +210,17 @@ interface AcpSessionFactoryOptions {
 	createSession: (options: CreateAgentSessionOptions) => Promise<CreateAgentSessionResult>;
 }
 
-function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSessionFactory {
+/**
+ * Build the per-`session/new` factory used by ACP mode.
+ *
+ * MCP servers in ACP sessions are owned exclusively by the ACP client, which
+ * supplies them through `session/new.mcpServers` and re-applies them via
+ * {@link AcpAgent#configureMcpServers}. We therefore force `enableMCP: false`
+ * on every session created here so {@link createAgentSession} skips the on-disk
+ * `.mcp.json` discovery path — otherwise host MCP tools land in the session's
+ * tool registry and shadow the client-supplied servers (issue #1234).
+ */
+export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSessionFactory {
 	return async cwd => {
 		const nextSettings = await args.settings.cloneForCwd(cwd);
 		const nextSessionManager = SessionManager.create(cwd, args.sessionDir);
@@ -224,6 +234,7 @@ function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSessionFact
 			modelRegistry: args.modelRegistry,
 			agentId,
 			hasUI: false,
+			enableMCP: false,
 		});
 		if (args.parsedArgs.apiKey && !args.baseOptions.model && nextSession.model) {
 			args.authStorage.setRuntimeApiKey(nextSession.model.provider, args.parsedArgs.apiKey);
