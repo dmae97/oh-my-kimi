@@ -62,4 +62,77 @@ describe("Fire Pass provider", () => {
 		const parsed = JSON.parse(captured.body ?? "{}") as { model?: unknown };
 		expect(parsed.model).toBe("accounts/fireworks/routers/kimi-k2p6-turbo");
 	});
+
+	it("forwards the catalog-exposed xhigh effort verbatim to the Fire Pass router", async () => {
+		// The Fire Pass router's own validation message enumerates the accepted
+		// reasoning_effort set as `low | medium | high | xhigh | max | none`, and
+		// `xhigh` is a distinct tier from `max` (different reasoning-token budgets
+		// for the same prompt). The bundled entry must therefore advertise xhigh
+		// without a compat.reasoningEffortMap that would silently downgrade it to
+		// max — see PR #1199 discussion r3265122224 for the live API capture.
+		const model = getBundledModel<"openai-completions">("firepass", "kimi-k2.6-turbo");
+		expect(model.compat?.reasoningEffortMap?.xhigh).toBeUndefined();
+
+		const captured: { body: string | null } = { body: null };
+		global.fetch = (async (_input: unknown, init?: RequestInit) => {
+			captured.body = typeof init?.body === "string" ? init.body : null;
+			return sseResponse([
+				{ choices: [{ delta: { content: "ok" }, index: 0 }] },
+				{ choices: [{ delta: {}, finish_reason: "stop", index: 0 }] },
+				"[DONE]",
+			]);
+		}) as typeof global.fetch;
+
+		const context: Context = {
+			systemPrompt: [],
+			messages: [{ role: "user", content: "ping", timestamp: Date.now() }],
+		};
+		const stream = streamOpenAICompletions(model as Model<"openai-completions">, context, {
+			apiKey: "fpk_test",
+			reasoning: "xhigh",
+		});
+		for await (const _event of stream) {
+			/* drain */
+		}
+
+		expect(captured.body).not.toBeNull();
+		const parsed = JSON.parse(captured.body ?? "{}") as { reasoning_effort?: unknown };
+		expect(parsed.reasoning_effort).toBe("xhigh");
+	});
+
+	it("falls back to the catalog max_tokens when the caller omits it (Kimi K2 docs guidance)", async () => {
+		// https://docs.fireworks.ai/models/kimi-k2 — "always set max_tokens explicitly" because
+		// the Kimi K2 family otherwise emits very long reasoning traces. The openai-completions
+		// provider injects the catalog default via its Kimi-family safety net; the firepass
+		// catalog id (`kimi-k2.6-turbo`) and wire id (`accounts/fireworks/routers/kimi-k2p6-turbo`)
+		// must both fall under that net so users never hit the runaway path.
+		const model = getBundledModel<"openai-completions">("firepass", "kimi-k2.6-turbo");
+		expect(model.maxTokens).toBeGreaterThan(0);
+
+		const captured: { body: string | null } = { body: null };
+		global.fetch = (async (_input: unknown, init?: RequestInit) => {
+			captured.body = typeof init?.body === "string" ? init.body : null;
+			return sseResponse([
+				{ choices: [{ delta: { content: "ok" }, index: 0 }] },
+				{ choices: [{ delta: {}, finish_reason: "stop", index: 0 }] },
+				"[DONE]",
+			]);
+		}) as typeof global.fetch;
+
+		const context: Context = {
+			systemPrompt: [],
+			messages: [{ role: "user", content: "ping", timestamp: Date.now() }],
+		};
+		const stream = streamOpenAICompletions(model as Model<"openai-completions">, context, {
+			apiKey: "fpk_test",
+			// Intentionally omit maxTokens — the provider must inject the catalog default.
+		});
+		for await (const _event of stream) {
+			/* drain */
+		}
+
+		expect(captured.body).not.toBeNull();
+		const parsed = JSON.parse(captured.body ?? "{}") as { max_tokens?: unknown };
+		expect(parsed.max_tokens).toBe(model.maxTokens);
+	});
 });
