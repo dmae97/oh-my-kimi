@@ -28,7 +28,17 @@ export function truncateToWidth(
 	// and `maxWidth` is a required `u32` that throws on `null`/`undefined`
 	// everywhere. Pass concrete defaults that mirror the Rust `unwrap_or`s.
 	const safeWidth = Number.isFinite(maxWidth) ? Math.max(0, Math.trunc(maxWidth)) : 0;
-	return nativeTruncateToWidth(text, safeWidth, ellipsisKind ?? Ellipsis.Unicode, pad ?? false, getDefaultTabWidth());
+	let resolvedEllipsis: Ellipsis | null | undefined | string = ellipsisKind;
+	if (typeof resolvedEllipsis === "string") {
+		resolvedEllipsis = resolvedEllipsis === "" ? Ellipsis.Omit : Ellipsis.Unicode;
+	}
+	return nativeTruncateToWidth(
+		text,
+		safeWidth,
+		resolvedEllipsis ?? Ellipsis.Unicode,
+		pad ?? false,
+		getDefaultTabWidth(),
+	);
 }
 
 export function wrapTextWithAnsi(text: string, width: number): string[] {

@@ -26,6 +26,10 @@ describe("issue #848: truncateToWidth wrapper rejects nullish napi inputs", () =
 		expect(result).toBe("hello world");
 	});
 
+	it("maps a legacy empty-string ellipsis argument to omit ellipsis", () => {
+		const result = truncateToWidth("hello world", 5, "" as unknown as Parameters<typeof truncateToWidth>[2]);
+		expect(result).toBe("hello");
+	});
 	it("returns a string when ellipsisKind / pad are undefined", () => {
 		const result = truncateToWidth("hello world", 80, undefined, undefined);
 		expect(typeof result).toBe("string");
