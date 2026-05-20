@@ -27,6 +27,7 @@ import {
 	type StopReason,
 	type StreamFunction,
 	type StreamOptions,
+	shouldSendServiceTier,
 	type TextContent,
 	type ThinkingContent,
 	type Tool,
@@ -1100,9 +1101,11 @@ function buildParams(
 	if (options?.frequencyPenalty !== undefined) {
 		params.frequency_penalty = options.frequencyPenalty;
 	}
-	const resolvedServiceTier = resolveServiceTier(options?.serviceTier, model.provider);
-	if (resolvedServiceTier === "flex" || resolvedServiceTier === "scale" || resolvedServiceTier === "priority") {
-		params.service_tier = resolvedServiceTier;
+	if (shouldSendServiceTier(options?.serviceTier, model.provider)) {
+		const resolved = resolveServiceTier(options?.serviceTier, model.provider);
+		if (resolved === "flex" || resolved === "scale" || resolved === "priority") {
+			params.service_tier = resolved;
+		}
 	}
 
 	if (context.tools) {

@@ -1060,15 +1060,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			let dropFastMode = providerSessionState?.fastModeDisabled ?? false;
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
 				let nextParams = buildParams(model, baseUrl, context, isOAuthToken, options, disableStrictTools);
-				const replacementPayload = await options?.onPayload?.(nextParams, model);
-				if (replacementPayload !== undefined) {
-					nextParams = replacementPayload as typeof nextParams;
-				}
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
 				}
 				if (dropFastMode) {
 					dropAnthropicFastMode(nextParams);
+				}
+				const replacementPayload = await options?.onPayload?.(nextParams, model);
+				if (replacementPayload !== undefined) {
+					nextParams = replacementPayload as typeof nextParams;
 				}
 				rawRequestDump = {
 					provider: model.provider,
@@ -2388,7 +2388,12 @@ export function normalizeAnthropicToolSchema(schema: unknown): unknown {
 		result.properties = normalizedProperties;
 	}
 	if (isRecord(result.additionalProperties)) {
-		result.additionalProperties = normalizeAnthropicToolSchema(result.additionalProperties);
+		const normalized = normalizeAnthropicToolSchema(result.additionalProperties);
+		if (isRecord(normalized) && Object.keys(normalized).length === 0) {
+			result.additionalProperties = true;
+		} else {
+			result.additionalProperties = normalized;
+		}
 	}
 	if (Array.isArray(result.items)) {
 		result.items = result.items.map(item => normalizeAnthropicToolSchema(item));

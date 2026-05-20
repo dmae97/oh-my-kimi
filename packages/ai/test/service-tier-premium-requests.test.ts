@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { getPriorityPremiumRequests, resolveServiceTier } from "../src/types";
+import { getPriorityPremiumRequests, resolveServiceTier, shouldSendServiceTier } from "../src/types";
 
 describe("getPriorityPremiumRequests", () => {
 	it("counts priority tier as one premium request on OpenAI", () => {
@@ -89,5 +89,40 @@ describe("resolveServiceTier", () => {
 	it("returns undefined for null/undefined input", () => {
 		expect(resolveServiceTier(undefined, "openai")).toBeUndefined();
 		expect(resolveServiceTier(null, "openai")).toBeUndefined();
+	});
+});
+
+describe("shouldSendServiceTier", () => {
+	it("returns false for non-OpenAI providers", () => {
+		expect(shouldSendServiceTier("priority", "fireworks")).toBe(false);
+		expect(shouldSendServiceTier("flex", "azure-openai-responses")).toBe(false);
+		expect(shouldSendServiceTier("scale", "firepass")).toBe(false);
+	});
+
+	it("returns true for openai with priority/flex/scale tiers", () => {
+		expect(shouldSendServiceTier("priority", "openai")).toBe(true);
+		expect(shouldSendServiceTier("flex", "openai")).toBe(true);
+		expect(shouldSendServiceTier("scale", "openai")).toBe(true);
+	});
+
+	it("returns true for openai-codex with priority/flex/scale tiers", () => {
+		expect(shouldSendServiceTier("priority", "openai-codex")).toBe(true);
+		expect(shouldSendServiceTier("flex", "openai-codex")).toBe(true);
+		expect(shouldSendServiceTier("scale", "openai-codex")).toBe(true);
+	});
+
+	it("returns false for default tier on OpenAI providers", () => {
+		expect(shouldSendServiceTier("default", "openai")).toBe(false);
+		expect(shouldSendServiceTier("default", "openai-codex")).toBe(false);
+	});
+
+	it("returns false for auto tier on OpenAI providers", () => {
+		expect(shouldSendServiceTier("auto", "openai")).toBe(false);
+		expect(shouldSendServiceTier("auto", "openai-codex")).toBe(false);
+	});
+
+	it("returns false for undefined/null tier", () => {
+		expect(shouldSendServiceTier(undefined, "openai")).toBe(false);
+		expect(shouldSendServiceTier(null, "openai")).toBe(false);
 	});
 });

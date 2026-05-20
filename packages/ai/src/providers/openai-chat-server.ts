@@ -11,7 +11,7 @@ import type {
 	Context,
 	ImageContent,
 	Message,
-	ServiceTier,
+	ResolvedServiceTier,
 	StopReason,
 	TextContent,
 	Tool,
@@ -36,7 +36,7 @@ function isReasoningEffort(value: unknown): value is ReasoningEffort {
 	return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh";
 }
 
-function isServiceTier(value: unknown): value is ServiceTier {
+function isServiceTier(value: unknown): value is ResolvedServiceTier {
 	return value === "auto" || value === "default" || value === "flex" || value === "scale" || value === "priority";
 }
 
