@@ -101,6 +101,37 @@ describe("issue #1227 — /btw fails on LiteLLM→Bedrock with tool history", ()
 		expect(body.tool_choice).toBeUndefined();
 	});
 
+	it("omits both tools and tool_choice when /btw passes empty tools + has tool history", async () => {
+		// The critical /btw scenario: session already has tool history (prior agentic
+		// turn) AND context.tools = []. After the .length guard skips the first branch,
+		// the caller-opted-out case must NOT fall through to the hasToolHistory sentinel
+		// — that would still emit `"tools": []` and cause the same Bedrock rejection.
+		// The `context.tools === undefined` guard on the second branch ensures we only
+		// inject the Anthropic-proxy sentinel when tools were omitted entirely.
+		const body = await capturePayload(
+			{
+				messages: [
+					{ role: "user", content: "search now", timestamp: Date.now() },
+					assistantWithToolCall(),
+					{
+						role: "toolResult",
+						toolCallId: "call_1",
+						toolName: "search",
+						content: [{ type: "text", text: "result" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+					{ role: "user", content: "btw what is X", timestamp: Date.now() },
+				],
+				tools: [], // explicit opt-out, as AgentSession.runEphemeralTurn does
+			},
+			{ toolChoice: "none" },
+		);
+
+		expect(body.tools).toBeUndefined();
+		expect(body.tool_choice).toBeUndefined();
+	});
+
 	it("drops tool_choice when tool history is present without explicit tools", async () => {
 		// hasToolHistory() branch: no context.tools, but messages contain a prior
 		// assistant toolCall — buildParams injects `tools: []` for Anthropic-proxy

@@ -1114,13 +1114,14 @@ function buildParams(
 		const builtTools = convertTools(context.tools, compat, toolStrictModeOverride);
 		params.tools = builtTools.tools;
 		toolStrictMode = builtTools.toolStrictMode;
-	} else if (hasToolHistory(context.messages)) {
-		// Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results.
-		// `[]` is truthy, so an explicit `context.tools = []` (set by side-channel turns like `/btw` and
-		// IRC background replies in AgentSession.runEphemeralTurn) used to land in the branch above and
-		// emit `"tools": []` on the wire — LiteLLM → Bedrock then serialized that as an empty `toolConfig`
-		// and Bedrock rejected it. Guarding with `.length` lets empty arrays fall through, so the sentinel
-		// only ships when the conversation actually has tool history (the Anthropic-proxy case it exists for).
+	} else if (context.tools === undefined && hasToolHistory(context.messages)) {
+		// Anthropic (via LiteLLM/proxy) requires the `tools` param when the conversation
+		// contains tool_calls/tool_results, even when no tools are offered this turn.
+		// Only inject the sentinel when the caller passed `context.tools = undefined`
+		// (i.e. tools were not specified at all). An explicit `context.tools = []` means
+		// the caller opted out of tools for this turn (as /btw and IRC background replies
+		// do via AgentSession.runEphemeralTurn) — honour that intent and emit nothing,
+		// so LiteLLM → Bedrock never sees an empty `toolConfig` block.
 		params.tools = [];
 	}
 
