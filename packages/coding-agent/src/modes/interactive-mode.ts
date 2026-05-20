@@ -584,11 +584,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!this.loopModeEnabled || !this.loopPrompt) return;
 		const prompt = this.loopPrompt;
 		const loopAction = settings.get("loop.mode");
+		this.#deferLoopAutoSubmit(() => {
+			void this.#runLoopIteration(loopAction, prompt);
+		});
+	}
+
+	#deferLoopAutoSubmit(callback: () => void): void {
 		// Brief delay so the user has a chance to press Esc between iterations.
 		this.#loopAutoSubmitTimer = setTimeout(() => {
 			this.#loopAutoSubmitTimer = undefined;
 			if (!this.loopModeEnabled || !this.onInputCallback) return;
-			void this.#runLoopIteration(loopAction, prompt);
+			callback();
 		}, 800);
 	}
 
@@ -641,7 +647,32 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	#isLoopAutoSubmitBlocked(): boolean {
+		return this.session.isStreaming || this.session.isCompacting;
+	}
+
+	#submitLoopPromptWhenReady(prompt: string): void {
+		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
+		if (isLoopDurationExpired(this.loopLimit)) {
+			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
+			return;
+		}
+		if (this.#isLoopAutoSubmitBlocked()) {
+			this.#deferLoopAutoSubmit(() => this.#submitLoopPromptWhenReady(prompt));
+			return;
+		}
+		this.onInputCallback(this.startPendingSubmission({ text: prompt }));
+	}
+
 	async #runLoopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
+		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
+		if (this.#isLoopAutoSubmitBlocked()) {
+			this.#deferLoopAutoSubmit(() => {
+				void this.#runLoopIteration(action, prompt);
+			});
+			return;
+		}
+
 		if (!consumeLoopLimitIteration(this.loopLimit)) {
 			this.disableLoopMode("Loop limit reached. Loop mode disabled.");
 			return;
@@ -652,12 +683,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		} else if (action === "reset") {
 			await this.handleClearCommand();
 		}
-		if (!this.loopModeEnabled || !this.onInputCallback) return;
-		if (isLoopDurationExpired(this.loopLimit)) {
-			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
-			return;
-		}
-		this.onInputCallback(this.startPendingSubmission({ text: prompt }));
+		this.#submitLoopPromptWhenReady(prompt);
 	}
 
 	disableLoopMode(message = "Loop mode disabled."): void {
