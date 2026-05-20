@@ -17,6 +17,10 @@ interface CacheRow {
 	models: string;
 }
 
+interface TableInfoRow {
+	name: string;
+}
+
 interface CacheEntry<TApi extends Api = Api> {
 	models: Model<TApi>[];
 	fresh: boolean;
@@ -55,9 +59,19 @@ function getDb(dbPath?: string): Database {
 			models TEXT NOT NULL
 		)
 	`);
+	migrateCacheSchema(db);
+
 	sharedDb = db;
 	sharedDbPath = resolvedPath;
 	return db;
+}
+
+function migrateCacheSchema(db: Database): void {
+	const columns = db.prepare("PRAGMA table_info(model_cache)").all() as TableInfoRow[];
+	if (!columns.some(column => column.name === "static_fingerprint")) {
+		db.run("ALTER TABLE model_cache ADD COLUMN static_fingerprint TEXT NOT NULL DEFAULT ''");
+	}
+	db.run("UPDATE model_cache SET version = ? WHERE version = 2", [CACHE_SCHEMA_VERSION]);
 }
 
 export function readModelCache<TApi extends Api>(
