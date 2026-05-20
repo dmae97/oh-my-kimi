@@ -1123,11 +1123,7 @@ function buildParams(
 		params.tool_choice = mapToOpenAICompletionsToolChoice(options.toolChoice);
 	}
 
-	if (
-		params.tool_choice === "none" &&
-		Array.isArray(params.tools) &&
-		params.tools.length === 0
-	) {
+	if (params.tool_choice === "none" && Array.isArray(params.tools) && params.tools.length === 0) {
 		// LiteLLM → Bedrock rejects `tool_choice: "none"` paired with an empty
 		// `tools` array: it serializes both into a `toolConfig` block, which Bedrock
 		// requires to be non-empty whenever the conversation already contains
