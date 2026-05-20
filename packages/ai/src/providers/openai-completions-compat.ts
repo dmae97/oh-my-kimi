@@ -52,7 +52,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 	const isCerebras = provider === "cerebras" || baseUrl.includes("cerebras.ai");
 	const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
 	const isKilo = provider === "kilo" || baseUrl.includes("api.kilo.ai");
-	const isKimiModel = model.id.includes("moonshotai/kimi") || /^kimi[-.]/i.test(model.id);
+	const isKimiModel = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
 	const isMoonshotKimi =
 		isKimiModel &&
 		(provider === "moonshot" ||

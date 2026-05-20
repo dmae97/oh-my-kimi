@@ -135,4 +135,37 @@ describe("Fire Pass provider", () => {
 		const parsed = JSON.parse(captured.body ?? "{}") as { max_tokens?: unknown };
 		expect(parsed.max_tokens).toBe(model.maxTokens);
 	});
+
+	it("applies the Kimi max_tokens default to canonical Fire Pass router ids", async () => {
+		const bundled = getBundledModel<"openai-completions">("firepass", "kimi-k2.6-turbo");
+		const model: Model<"openai-completions"> = {
+			...bundled,
+			id: "accounts/fireworks/routers/kimi-k2p6-turbo",
+		};
+		const captured: { body: string | null } = { body: null };
+		global.fetch = (async (_input: unknown, init?: RequestInit) => {
+			captured.body = typeof init?.body === "string" ? init.body : null;
+			return sseResponse([
+				{ choices: [{ delta: { content: "ok" }, index: 0 }] },
+				{ choices: [{ delta: {}, finish_reason: "stop", index: 0 }] },
+				"[DONE]",
+			]);
+		}) as typeof global.fetch;
+
+		const context: Context = {
+			systemPrompt: [],
+			messages: [{ role: "user", content: "ping", timestamp: Date.now() }],
+		};
+		const stream = streamOpenAICompletions(model, context, {
+			apiKey: "fpk_test",
+		});
+		for await (const _event of stream) {
+			/* drain */
+		}
+
+		expect(captured.body).not.toBeNull();
+		const parsed = JSON.parse(captured.body ?? "{}") as { max_tokens?: unknown; model?: unknown };
+		expect(parsed.model).toBe("accounts/fireworks/routers/kimi-k2p6-turbo");
+		expect(parsed.max_tokens).toBe(model.maxTokens);
+	});
 });
