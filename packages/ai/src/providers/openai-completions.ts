@@ -1123,6 +1123,22 @@ function buildParams(
 		params.tool_choice = mapToOpenAICompletionsToolChoice(options.toolChoice);
 	}
 
+	if (
+		params.tool_choice === "none" &&
+		Array.isArray(params.tools) &&
+		params.tools.length === 0
+	) {
+		// LiteLLM → Bedrock rejects `tool_choice: "none"` paired with an empty
+		// `tools` array: it serializes both into a `toolConfig` block, which Bedrock
+		// requires to be non-empty whenever the conversation already contains
+		// `toolUse`/`toolResult` content. The directive is also redundant — there
+		// are no tools to gate. Side-channel turns hit this: `/btw` and IRC
+		// background replies route through `AgentSession.runEphemeralTurn`, which
+		// sets `context.tools = []` and `toolChoice: "none"` (see
+		// packages/coding-agent/src/session/agent-session.ts).
+		delete params.tool_choice;
+	}
+
 	if (supportsReasoningParams && compat.thinkingFormat === "zai" && model.reasoning) {
 		// Z.ai uses binary thinking: { type: "enabled" | "disabled" }
 		// Must explicitly disable since z.ai defaults to thinking enabled.
