@@ -11,6 +11,7 @@
 ### Fixed
 
 - Fixed Anthropic fast mode (`serviceTier: "priority"`) looping on 429 `rate_limit_error: "Extra usage is required for fast mode."` for accounts without the extra-usage entitlement. `isAnthropicFastModeUnsupportedError` now matches the 429 phrasing in addition to the 400 `invalid_request_error` "does not support the `speed` parameter" case, so the provider drops `speed: "fast"` on the in-turn retry, sets `providerSessionState.fastModeDisabled` for the remainder of the session, and surfaces `disabledFeatures: ["priority"]` to the caller instead of retrying with the same payload until `PROVIDER_MAX_RETRIES` is exhausted.
+- Fixed MiniMax Coding Plan CN streaming `<think>...</think>` reasoning as visible assistant text. The OpenAI-compatible stream parser now enables the existing MiniMax tag parser for both `minimax-code` and `minimax-code-cn`, so CN responses become structured `thinking` blocks instead of raw text. ([#1203](https://github.com/can1357/oh-my-pi/issues/1203))
 
 ## [15.1.6] - 2026-05-19
 
