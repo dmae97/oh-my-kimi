@@ -1110,17 +1110,35 @@ function buildParams(
 		}
 	}
 
-	if (context.tools) {
+	if (context.tools?.length) {
 		const builtTools = convertTools(context.tools, compat, toolStrictModeOverride);
 		params.tools = builtTools.tools;
 		toolStrictMode = builtTools.toolStrictMode;
-	} else if (hasToolHistory(context.messages)) {
-		// Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results
+	} else if (context.tools === undefined && hasToolHistory(context.messages)) {
+		// Anthropic (via LiteLLM/proxy) requires the `tools` param when the conversation
+		// contains tool_calls/tool_results, even when no tools are offered this turn.
+		// Only inject the sentinel when the caller passed `context.tools = undefined`
+		// (i.e. tools were not specified at all). An explicit `context.tools = []` means
+		// the caller opted out of tools for this turn (as /btw and IRC background replies
+		// do via AgentSession.runEphemeralTurn) — honour that intent and emit nothing,
+		// so LiteLLM → Bedrock never sees an empty `toolConfig` block.
 		params.tools = [];
 	}
 
 	if (options?.toolChoice && compat.supportsToolChoice) {
 		params.tool_choice = mapToOpenAICompletionsToolChoice(options.toolChoice);
+	}
+
+	if (params.tool_choice === "none" && (!Array.isArray(params.tools) || params.tools.length === 0)) {
+		// `tool_choice: "none"` with no tools to gate is redundant and also
+		// trips LiteLLM → Bedrock: the proxy serializes the directive into a
+		// `toolConfig` block, and Bedrock requires `toolConfig.tools` to be
+		// non-empty whenever the conversation already holds `toolUse`/`toolResult`
+		// content. Drop it whenever the resolved tools list is missing or empty.
+		// Side-channel turns hit this: `/btw` and IRC background replies route
+		// through `AgentSession.runEphemeralTurn`, which sets `context.tools = []`
+		// and `toolChoice: "none"` (see packages/coding-agent/src/session/agent-session.ts).
+		delete params.tool_choice;
 	}
 
 	if (supportsReasoningParams && compat.thinkingFormat === "zai" && model.reasoning) {
