@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed `/btw` (and IRC background replies) returning a `BedrockException` 400 (`The toolConfig field must be defined when using toolUse and toolResult content blocks.`) on LiteLLM → Bedrock once the session has tool-call history. `AgentSession.runEphemeralTurn` sets `context.tools = []` + `toolChoice: "none"`; the openai-completions provider serialized both, which LiteLLM converted into a malformed Bedrock `toolConfig` (present but empty). `buildParams` now drops `tool_choice: "none"` whenever the resolved `tools` array is empty — the directive is redundant (no tools to gate) and the `tools: []` field still satisfies the Anthropic-via-proxy requirement. ([#1227](https://github.com/can1357/oh-my-pi/issues/1227))
+- Fixed `/btw` (and IRC background replies) returning a `BedrockException` 400 (`The toolConfig field must be defined when using toolUse and toolResult content blocks.`) on LiteLLM → Bedrock once the session has tool-call history. `AgentSession.runEphemeralTurn` sets `context.tools = []` + `toolChoice: "none"`; `[]` is truthy, so the openai-completions provider's `if (context.tools)` branch fired and emitted `"tools": []` on the wire — LiteLLM translated that into an empty Bedrock `toolConfig` block which the model rejected. `buildParams` now guards on `context.tools?.length` so explicit empty arrays fall through (no `tools` field is shipped), and `tool_choice: "none"` is dropped whenever the resolved tools list is missing or empty since the directive is redundant with nothing to gate. ([#1227](https://github.com/can1357/oh-my-pi/issues/1227))
 
 ## [15.1.8] - 2026-05-20
 ### Added

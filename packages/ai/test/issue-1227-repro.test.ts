@@ -79,9 +79,16 @@ const echoTool: Tool = {
 };
 
 describe("issue #1227 — /btw fails on LiteLLM→Bedrock with tool history", () => {
-	it("drops tool_choice when /btw passes empty tools + toolChoice none", async () => {
+	it("omits both tools and tool_choice when /btw passes empty tools + toolChoice none", async () => {
 		// Mirrors AgentSession.runEphemeralTurn: context.tools = [] is explicit
 		// (prevents tool-catalog leakage in IRC replies) and toolChoice = "none".
+		// `[]` is truthy, so buildParams used to land in the `if (context.tools)`
+		// branch and emit `"tools": []` on the wire — LiteLLM → Bedrock then
+		// translated that into an empty `toolConfig` block and Bedrock rejected
+		// the request whenever the conversation already held toolUse/toolResult
+		// content. The `.length` guard now skips the branch on empty arrays so
+		// the wire body carries no `tools` field at all, which is the only shape
+		// every downstream proxy accepts.
 		const body = await capturePayload(
 			{
 				messages: [{ role: "user", content: "what is X", timestamp: Date.now() }],
@@ -90,7 +97,7 @@ describe("issue #1227 — /btw fails on LiteLLM→Bedrock with tool history", ()
 			{ toolChoice: "none" },
 		);
 
-		expect(body.tools).toEqual([]);
+		expect(body.tools).toBeUndefined();
 		expect(body.tool_choice).toBeUndefined();
 	});
 

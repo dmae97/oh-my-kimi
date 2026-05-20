@@ -1110,12 +1110,17 @@ function buildParams(
 		}
 	}
 
-	if (context.tools) {
+	if (context.tools?.length) {
 		const builtTools = convertTools(context.tools, compat, toolStrictModeOverride);
 		params.tools = builtTools.tools;
 		toolStrictMode = builtTools.toolStrictMode;
 	} else if (hasToolHistory(context.messages)) {
-		// Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results
+		// Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results.
+		// `[]` is truthy, so an explicit `context.tools = []` (set by side-channel turns like `/btw` and
+		// IRC background replies in AgentSession.runEphemeralTurn) used to land in the branch above and
+		// emit `"tools": []` on the wire — LiteLLM → Bedrock then serialized that as an empty `toolConfig`
+		// and Bedrock rejected it. Guarding with `.length` lets empty arrays fall through, so the sentinel
+		// only ships when the conversation actually has tool history (the Anthropic-proxy case it exists for).
 		params.tools = [];
 	}
 
@@ -1123,15 +1128,15 @@ function buildParams(
 		params.tool_choice = mapToOpenAICompletionsToolChoice(options.toolChoice);
 	}
 
-	if (params.tool_choice === "none" && Array.isArray(params.tools) && params.tools.length === 0) {
-		// LiteLLM → Bedrock rejects `tool_choice: "none"` paired with an empty
-		// `tools` array: it serializes both into a `toolConfig` block, which Bedrock
-		// requires to be non-empty whenever the conversation already contains
-		// `toolUse`/`toolResult` content. The directive is also redundant — there
-		// are no tools to gate. Side-channel turns hit this: `/btw` and IRC
-		// background replies route through `AgentSession.runEphemeralTurn`, which
-		// sets `context.tools = []` and `toolChoice: "none"` (see
-		// packages/coding-agent/src/session/agent-session.ts).
+	if (params.tool_choice === "none" && (!Array.isArray(params.tools) || params.tools.length === 0)) {
+		// `tool_choice: "none"` with no tools to gate is redundant and also
+		// trips LiteLLM → Bedrock: the proxy serializes the directive into a
+		// `toolConfig` block, and Bedrock requires `toolConfig.tools` to be
+		// non-empty whenever the conversation already holds `toolUse`/`toolResult`
+		// content. Drop it whenever the resolved tools list is missing or empty.
+		// Side-channel turns hit this: `/btw` and IRC background replies route
+		// through `AgentSession.runEphemeralTurn`, which sets `context.tools = []`
+		// and `toolChoice: "none"` (see packages/coding-agent/src/session/agent-session.ts).
 		delete params.tool_choice;
 	}
 
