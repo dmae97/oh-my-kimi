@@ -51,6 +51,49 @@ function cloneToolArgs<T>(args: T): T {
 	}
 }
 
+/**
+ * Drop trailing removal/hunk-header lines that appear in a streaming diff
+ * before the matching `+added` lines have arrived. Without this, a partial
+ * apply_patch / hashline preview shows `-old` first and then visibly grows
+ * the `+new` block beneath it — the "removals first, additions catching up"
+ * jitter. Once the next streaming tick brings the additions in, the trailing
+ * block reappears alongside them.
+ */
+function stripTrailingUnbalancedRemoval(diff: string | undefined): string | undefined {
+	if (!diff) return diff;
+	const lines = diff.split("\n");
+	let lastAddIdx = -1;
+	for (let i = lines.length - 1; i >= 0; i--) {
+		if (lines[i].startsWith("+")) {
+			lastAddIdx = i;
+			break;
+		}
+	}
+	let hasTrailingUnbalanced = false;
+	for (let i = lastAddIdx + 1; i < lines.length; i++) {
+		const line = lines[i];
+		if (line.startsWith("-") || line.startsWith("@@")) {
+			hasTrailingUnbalanced = true;
+			break;
+		}
+	}
+	if (!hasTrailingUnbalanced) return diff;
+	if (lastAddIdx === -1) return "";
+	return lines.slice(0, lastAddIdx + 1).join("\n");
+}
+
+function stabilizeStreamingPreviews(previews: PerFileDiffPreview[]): PerFileDiffPreview[] {
+	let changed = false;
+	const next = previews.map(preview => {
+		if (!preview.diff) return preview;
+		const trimmed = stripTrailingUnbalancedRemoval(preview.diff);
+		if (trimmed === preview.diff) return preview;
+		changed = true;
+		return { ...preview, diff: trimmed ?? "" };
+	});
+	return changed ? next : previews;
+}
+
 function isEditLikeToolName(toolName: string): boolean {
 	return toolName === "edit" || toolName === "apply_patch";
 }
@@ -222,16 +265,18 @@ export class ToolExecutionComponent extends Container {
 		this.#editDiffAbort = controller;
 
 		try {
+			const isStreaming = !this.#argsComplete;
 			const previews = await strategy.computeDiffPreview(effectiveArgs, {
 				cwd: this.#cwd,
 				signal: controller.signal,
 				fuzzyThreshold: this.#editFuzzyThreshold,
 				allowFuzzy: this.#editAllowFuzzy,
 				hashlineAutoDropPureInsertDuplicates: this.#hashlineAutoDropPureInsertDuplicates,
+				isStreaming,
 			});
 			if (controller.signal.aborted) return;
 			if (previews) {
-				this.#editDiffPreview = previews;
+				this.#editDiffPreview = isStreaming ? stabilizeStreamingPreviews(previews) : previews;
 				this.#updateDisplay();
 				this.#ui.requestRender();
 			}
