@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { Browser, CDPSession, Target } from "puppeteer-core";
 import {
+	buildStealthInjectionScriptForTest,
 	configureUserAgentTargetsForTest,
 	targetSupportsUserAgentOverrideForTest,
 } from "../../src/tools/browser/launch";
@@ -88,6 +89,67 @@ const override = {
 	},
 };
 
+describe("browser stealth bootstrap", () => {
+	it("uses documentElement as the iframe container when document.head is unavailable", () => {
+		type NativeWindow = Pick<
+			typeof globalThis,
+			"Function" | "Object" | "setTimeout" | "Math" | "Event" | "Promise" | "Blob" | "Proxy" | "Intl" | "Date"
+		>;
+		type FakeContainer = {
+			appendChild(node: FakeIframe): void;
+			removeChild(node: FakeIframe): void;
+		};
+		type FakeIframe = {
+			contentWindow: NativeWindow;
+			parentNode: FakeContainer | null;
+			style: { display?: string };
+		};
+
+		const appended: FakeIframe[] = [];
+		const removed: FakeIframe[] = [];
+		const documentElement: FakeContainer = {
+			appendChild(node) {
+				appended.push(node);
+				node.parentNode = documentElement;
+			},
+			removeChild(node) {
+				removed.push(node);
+				node.parentNode = null;
+			},
+		};
+		const nativeWindow: NativeWindow = {
+			Function,
+			Object,
+			setTimeout,
+			Math,
+			Event,
+			Promise,
+			Blob,
+			Proxy,
+			Intl,
+			Date,
+		};
+		const iframe: FakeIframe = { contentWindow: nativeWindow, parentNode: null, style: {} };
+		const createdTags: string[] = [];
+		const document = {
+			head: null,
+			documentElement,
+			createElement(tagName: string) {
+				createdTags.push(tagName);
+				return iframe;
+			},
+		};
+
+		const run = new Function("document", buildStealthInjectionScriptForTest([]));
+		run(document);
+
+		expect(createdTags).toEqual(["iframe"]);
+		expect(iframe.style.display).toBe("none");
+		expect(appended).toEqual([iframe]);
+		expect(removed).toEqual([iframe]);
+		expect(iframe.parentNode).toBeNull();
+	});
+});
 describe("browser stealth target setup", () => {
 	it("attempts user-agent override for page-like existing targets and skips non-page worker/browser targets", async () => {
 		const page = new FakeTarget("page");
