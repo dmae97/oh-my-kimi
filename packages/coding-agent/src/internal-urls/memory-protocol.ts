@@ -14,7 +14,7 @@ const MEMORY_NAMESPACE = "root";
  * Each session has its own cwd (possibly a worktree), so subagents and main
  * may see different roots.
  */
-function memoryRootsFromRegistry(): string[] {
+export function memoryRootsFromRegistry(): string[] {
 	const agentDir = getAgentDir();
 	const roots: string[] = [];
 	for (const ref of AgentRegistry.global().list()) {

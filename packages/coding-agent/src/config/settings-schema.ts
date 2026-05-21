@@ -583,6 +583,18 @@ export const SETTINGS_SCHEMA = {
 		description:
 			"Maximum height in terminal rows for inline images (default 20). Set to 0 to use only the viewport-based limit (60% of terminal height).",
 	},
+
+	"tui.hyperlinks": {
+		type: "enum",
+		values: ["off", "auto", "always"] as const,
+		default: "auto",
+		ui: {
+			tab: "appearance",
+			label: "Terminal Hyperlinks",
+			description:
+				"Wrap file paths in OSC 8 hyperlinks for terminal-native click-to-open (auto: detect support; off: never; always: unconditional)",
+		},
+	},
 	// Display rendering
 	"display.tabWidth": {
 		type: "number",
