@@ -379,7 +379,7 @@ export class GoalRuntime {
 		validateTokenBudget(input.tokenBudget);
 		return await this.#withAccounting(async () => {
 			const existing = this.#host.getState();
-			if (existing?.goal && existing.goal.status !== "dropped") {
+			if (existing?.goal && existing.goal.status !== "dropped" && existing.goal.status !== "complete") {
 				throw new Error("cannot create a new goal because this session already has a goal");
 			}
 			const now = this.#now();
@@ -459,8 +459,14 @@ export class GoalRuntime {
 		return await this.#withAccounting(async () => {
 			await this.#flushUsageLocked("suppressed");
 			const state = this.#getStateClone();
-			if (!state?.enabled || !state.goal) {
-				throw new Error("cannot complete goal because goal mode is not active");
+			if (!state?.goal) {
+				throw new Error("cannot complete goal because no goal is active");
+			}
+			if (state.goal.status === "complete") {
+				throw new Error("goal is already complete");
+			}
+			if (state.goal.status === "dropped") {
+				throw new Error("cannot complete a dropped goal");
 			}
 			state.enabled = false;
 			state.goal.status = "complete";

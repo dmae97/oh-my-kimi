@@ -21,7 +21,7 @@ export interface GoalModeState {
 }
 
 export interface GoalToolDetails {
-	op: "create" | "get" | "complete";
+	op: "create" | "get" | "complete" | "resume" | "drop";
 	goal?: Goal | null;
 	remainingTokens?: number | null;
 	completionBudgetReport?: string | null;

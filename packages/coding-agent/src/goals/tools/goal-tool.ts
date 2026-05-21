@@ -15,7 +15,7 @@ import { completionBudgetReport, remainingTokens } from "../runtime";
 import type { Goal, GoalStatus, GoalToolDetails } from "../state";
 
 const goalSchema = z.object({
-	op: z.enum(["create", "get", "complete"]).describe("goal operation"),
+	op: z.enum(["create", "get", "complete", "resume", "drop"]).describe("goal operation"),
 	objective: z.string().describe("goal objective").optional(),
 	token_budget: z.number().int().describe("token budget").optional(),
 });
@@ -86,7 +86,13 @@ export class GoalTool implements AgentTool<typeof goalSchema, GoalToolDetails> {
 			response = buildGoalToolResponse(created.goal);
 		} else if (params.op === "get") {
 			const state = this.#session.getGoalModeState?.();
-			response = buildGoalToolResponse(state?.enabled ? state.goal : null);
+			response = buildGoalToolResponse(state?.goal ?? null);
+		} else if (params.op === "resume") {
+			const resumed = await runtime.resumeGoal();
+			response = buildGoalToolResponse(resumed.goal);
+		} else if (params.op === "drop") {
+			const dropped = await runtime.dropGoal();
+			response = buildGoalToolResponse(dropped ?? null);
 		} else {
 			const completed = await runtime.completeGoalFromTool();
 			response = buildGoalToolResponse(completed, { includeCompletionReport: true });
@@ -126,6 +132,10 @@ function describeOp(op: string | undefined): string {
 			return "complete";
 		case "get":
 			return "check";
+		case "resume":
+			return "resume";
+		case "drop":
+			return "drop";
 		default:
 			return op ?? "?";
 	}
