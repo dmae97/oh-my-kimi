@@ -7,7 +7,7 @@
 import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentTelemetryConfig, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
-import { isJsonSchemaValueValid } from "@oh-my-pi/pi-ai/utils/schema";
+import { type JsonSchemaValidationIssue, validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema";
 import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelOverrideWithAuthFallback } from "../config/model-resolver";
@@ -204,12 +204,59 @@ function parseStringifiedJson(value: unknown): unknown {
 	}
 }
 
-function buildOutputValidator(schema: unknown): { validate?: (value: unknown) => boolean; error?: string } {
+interface OutputValidator {
+	validate: (value: unknown) => { ok: true } | { ok: false; message: string; missingRequired: string[] };
+	requiredFields: string[];
+}
+
+function buildOutputValidator(schema: unknown): { validator?: OutputValidator; error?: string } {
 	const { normalized, error } = normalizeSchema(schema);
 	if (error) return { error };
 	if (normalized === undefined) return {};
 	const jsonSchema = jtdToJsonSchema(normalized);
-	return { validate: value => isJsonSchemaValueValid(jsonSchema, value) };
+	const required = extractRequiredFields(jsonSchema);
+	return {
+		validator: {
+			requiredFields: required,
+			validate: value => {
+				const result = validateJsonSchemaValue(jsonSchema, value);
+				if (result.success) return { ok: true };
+				const missing = computeMissingRequired(required, value);
+				const message = formatValidationIssue(result.issues[0]) ?? "schema validation failed";
+				return { ok: false, message, missingRequired: missing };
+			},
+		},
+	};
+}
+
+function extractRequiredFields(jsonSchema: unknown): string[] {
+	if (!jsonSchema || typeof jsonSchema !== "object") return [];
+	const required = (jsonSchema as { required?: unknown }).required;
+	return Array.isArray(required) ? required.filter((k): k is string => typeof k === "string") : [];
+}
+
+function computeMissingRequired(required: readonly string[], value: unknown): string[] {
+	if (required.length === 0) return [];
+	if (value === null || value === undefined) return [...required];
+	if (typeof value !== "object" || Array.isArray(value)) return [];
+	const record = value as Record<string, unknown>;
+	return required.filter(key => !(key in record) || record[key] === undefined);
+}
+
+function formatValidationIssue(issue: JsonSchemaValidationIssue | undefined): string | undefined {
+	if (!issue) return undefined;
+	const path = issue.path.length > 0 ? issue.path.map(String).join(".") : "(root)";
+	return `${path}: ${issue.message}`;
+}
+
+function previewOffendingData(value: unknown, maxLength = 500): string {
+	let serialized: string;
+	try {
+		serialized = JSON.stringify(value) ?? "null";
+	} catch {
+		serialized = String(value);
+	}
+	return serialized.length > maxLength ? `${serialized.slice(0, maxLength)}…` : serialized;
 }
 
 function tryParseJsonOutput(text: string): unknown | undefined {
@@ -253,9 +300,9 @@ function resolveFallbackCompletion(rawOutput: string, outputSchema: unknown): { 
 	if (parsed === undefined) return null;
 	const candidate = parseStringifiedJson(extractCompletionData(parsed));
 	if (candidate === undefined) return null;
-	const { validate, error } = buildOutputValidator(outputSchema);
+	const { validator, error } = buildOutputValidator(outputSchema);
 	if (error) return null;
-	if (validate && !validate(candidate)) return null;
+	if (validator && !validator.validate(candidate).ok) return null;
 	return { data: candidate };
 }
 
@@ -288,6 +335,31 @@ export const SUBAGENT_WARNING_NULL_YIELD = "SYSTEM WARNING: Subagent called yiel
 export const SUBAGENT_WARNING_MISSING_YIELD =
 	"SYSTEM WARNING: Subagent exited without calling yield tool after 3 reminders.";
 
+/** Build a schema_violation outcome — surfaced as a non-zero exit so callers treat it as a failure. */
+function buildSchemaViolationOutcome(
+	failure: { message: string; missingRequired: string[] },
+	data: unknown,
+): { rawOutput: string; stderr: string; exitCode: number } {
+	const missing = failure.missingRequired;
+	const headline =
+		missing.length > 0
+			? `schema_violation: missing required fields: ${missing.join(", ")}`
+			: `schema_violation: ${failure.message}`;
+	const payload = {
+		error: "schema_violation",
+		message: failure.message,
+		missingRequired: missing,
+		data: previewOffendingData(data),
+	};
+	let rawOutput: string;
+	try {
+		rawOutput = JSON.stringify(payload, null, 2);
+	} catch {
+		rawOutput = `{"error":"schema_violation","message":${JSON.stringify(headline)}}`;
+	}
+	return { rawOutput, stderr: headline, exitCode: 1 };
+}
+
 export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): FinalizeSubprocessOutputResult {
 	let { rawOutput, exitCode, stderr } = args;
 	const { yieldItems, reportFindings, doneAborted, signalAborted, outputSchema } = args;
@@ -311,14 +383,29 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 				rawOutput = rawOutput ? `${SUBAGENT_WARNING_NULL_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_NULL_YIELD;
 			} else {
 				const completeData = normalizeCompleteData(submitData, reportFindings);
-				try {
-					rawOutput = JSON.stringify(completeData, null, 2) ?? "null";
-				} catch (err) {
-					const errorMessage = err instanceof Error ? err.message : String(err);
-					rawOutput = `{"error":"Failed to serialize yield data: ${errorMessage}"}`;
+				const { validator, error: schemaError } = buildOutputValidator(outputSchema);
+				if (schemaError) {
+					rawOutput = `{"error":"schema_violation","message":"invalid output schema: ${schemaError.replace(/"/g, '\\"')}"}`;
+					stderr = `schema_violation: invalid output schema: ${schemaError}`;
+					exitCode = 1;
+				} else {
+					const verdict = validator ? validator.validate(completeData) : { ok: true as const };
+					if (!verdict.ok) {
+						const outcome = buildSchemaViolationOutcome(verdict, completeData);
+						rawOutput = outcome.rawOutput;
+						stderr = outcome.stderr;
+						exitCode = outcome.exitCode;
+					} else {
+						try {
+							rawOutput = JSON.stringify(completeData, null, 2) ?? "null";
+						} catch (err) {
+							const errorMessage = err instanceof Error ? err.message : String(err);
+							rawOutput = `{"error":"Failed to serialize yield data: ${errorMessage}"}`;
+						}
+						exitCode = 0;
+						stderr = "";
+					}
 				}
-				exitCode = 0;
-				stderr = "";
 			}
 		}
 	} else {
@@ -328,14 +415,23 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		const fallback = allowFallback ? resolveFallbackCompletion(rawOutput, outputSchema) : null;
 		if (fallback) {
 			const completeData = normalizeCompleteData(fallback.data, reportFindings);
-			try {
-				rawOutput = JSON.stringify(completeData, null, 2) ?? "null";
-			} catch (err) {
-				const errorMessage = err instanceof Error ? err.message : String(err);
-				rawOutput = `{"error":"Failed to serialize fallback completion: ${errorMessage}"}`;
+			const { validator } = buildOutputValidator(outputSchema);
+			const verdict = validator ? validator.validate(completeData) : { ok: true as const };
+			if (!verdict.ok) {
+				const outcome = buildSchemaViolationOutcome(verdict, completeData);
+				rawOutput = outcome.rawOutput;
+				stderr = outcome.stderr;
+				exitCode = outcome.exitCode;
+			} else {
+				try {
+					rawOutput = JSON.stringify(completeData, null, 2) ?? "null";
+				} catch (err) {
+					const errorMessage = err instanceof Error ? err.message : String(err);
+					rawOutput = `{"error":"Failed to serialize fallback completion: ${errorMessage}"}`;
+				}
+				exitCode = 0;
+				stderr = "";
 			}
-			exitCode = 0;
-			stderr = "";
 		} else if (!hasOutputSchema && allowFallback && rawOutput.trim().length > 0) {
 			exitCode = 0;
 			stderr = "";
