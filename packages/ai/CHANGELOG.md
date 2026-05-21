@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.1.9] - 2026-05-21
+
 ### Fixed
 
 - Fixed Ollama named tool forcing to send only the requested tool when the caller passes a named `toolChoice`, preserving `tool_choice: "required"` while preventing local models from selecting a different tool. ([#1236](https://github.com/can1357/oh-my-pi/issues/1236))

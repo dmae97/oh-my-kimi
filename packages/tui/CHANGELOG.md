@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.1.9] - 2026-05-21
+
 ### Fixed
 
 - Fixed terminal probe responses (DA1, kitty keyboard, Mode 2031) leaking into the prompt as keystrokes when the response is split across stdin reads. `ProcessTerminal` now reassembles `\x1b[?<digits>...` private CSI fragments and dispatches the complete response through the existing pattern handlers. ([#1238](https://github.com/can1357/oh-my-pi/issues/1238))
