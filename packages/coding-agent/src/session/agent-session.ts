@@ -6171,6 +6171,12 @@ export class AgentSession {
 		};
 
 		const currentModel = this.model;
+		// Prefer the active session's model: it's what the user is actively using,
+		// and routing compaction to a different provider (e.g. an OpenAI default
+		// model while the chat is on Anthropic) changes provider-specific behavior
+		// like remote compaction endpoints. Role-based candidates only kick in
+		// as auth fallbacks when the current model has no usable credentials.
+		addCandidate(currentModel);
 		for (const role of MODEL_ROLE_IDS) {
 			addCandidate(this.#resolveRoleModelFull(role, availableModels, currentModel).model);
 		}
