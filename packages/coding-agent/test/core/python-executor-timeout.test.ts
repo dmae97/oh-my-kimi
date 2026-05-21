@@ -30,6 +30,6 @@ describe("executePythonWithKernel cancellation", () => {
 
 		expect(result.cancelled).toBe(true);
 		expect(result.exitCode).toBeUndefined();
-		expect(result.output).toContain("Command timed out after 5 seconds");
+		expect(result.output).toContain("eval cell timed out after 5s");
 	});
 });

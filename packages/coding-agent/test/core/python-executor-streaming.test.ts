@@ -25,7 +25,7 @@ describe("executePythonWithKernel streaming", () => {
 
 		expect(result.cancelled).toBe(true);
 		expect(result.exitCode).toBeUndefined();
-		expect(result.output).toContain("Command timed out after 2 seconds");
+		expect(result.output).toContain("eval cell timed out after 2s");
 	});
 
 	it("sanitizes ANSI and carriage returns", async () => {

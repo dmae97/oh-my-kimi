@@ -75,7 +75,7 @@ describe("executePythonWithKernel", () => {
 
 		expect(result.exitCode).toBeUndefined();
 		expect(result.cancelled).toBe(true);
-		expect(result.output).toContain("Command timed out after 4 seconds");
+		expect(result.output).toContain("eval cell timed out after 4s");
 	});
 
 	it("returns cancelled result without timeout annotation", async () => {

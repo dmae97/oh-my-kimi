@@ -46,8 +46,10 @@ const STARTUP_TIMEOUT_MS = 10_000;
 // How long to wait after SIGINT for the runner to emit `done`. If the cell is
 // stuck in code that ignores Python signals (e.g. a C extension holding the
 // GIL), we escalate to a full subprocess shutdown so the host queue unblocks
-// instead of hanging the session forever.
-const INTERRUPT_ESCALATION_MS = 2_000;
+// instead of hanging the session forever. The grace window is intentionally
+// generous: a clean interrupt is far preferable to losing the persistent
+// kernel's state, so we only kill as a last-resort recovery path.
+const INTERRUPT_ESCALATION_MS = 5_000;
 
 export interface KernelExecuteOptions {
 	signal?: AbortSignal;
@@ -66,6 +68,12 @@ export interface KernelExecuteResult {
 	cancelled: boolean;
 	timedOut: boolean;
 	stdinRequested: boolean;
+	/**
+	 * True when the kernel subprocess was killed as part of settling this
+	 * execution (e.g. SIGINT was ignored and we escalated to shutdown, or the
+	 * kernel died unexpectedly). When false, the kernel remains reusable.
+	 */
+	kernelKilled?: boolean;
 }
 
 export interface KernelShutdownResult {
@@ -162,6 +170,7 @@ interface PendingExecution {
 	cancelled: boolean;
 	timedOut: boolean;
 	stdinRequested: boolean;
+	kernelKilled: boolean;
 	settled: boolean;
 	escalationTimer?: NodeJS.Timeout;
 }
@@ -222,7 +231,7 @@ export class PythonKernel {
 		kernel.#exitedPromise = proc.exited;
 		void kernel.#exitedPromise.then(code => {
 			kernel.#alive = false;
-			kernel.#abortPendingExecutions(`Python kernel exited with code ${code}`);
+			kernel.#abortPendingExecutions(`Python kernel exited with code ${code}`, { kernelKilled: true });
 		});
 
 		kernel.#startReader(proc.stdout as ReadableStream<Uint8Array>);
@@ -261,6 +270,7 @@ export class PythonKernel {
 			timedOut: false,
 			stdinRequested: false,
 			settled: false,
+			kernelKilled: false,
 		};
 		this.#pending.set(msgId, pending);
 
@@ -276,6 +286,7 @@ export class PythonKernel {
 				cancelled: pending.cancelled,
 				timedOut: pending.timedOut,
 				stdinRequested: pending.stdinRequested,
+				kernelKilled: pending.kernelKilled,
 			});
 		};
 
@@ -287,9 +298,12 @@ export class PythonKernel {
 				logger.warn("Python runner did not respond to SIGINT; terminating subprocess", {
 					kernelId: this.id,
 				});
-				// `shutdown()` aborts pending executions immediately and escalates to
-				// SIGTERM/SIGKILL, so the host queue unblocks even if the runner is
-				// stuck in a non-interruptible state.
+				// SIGINT was ignored; mark the cell as kernel-killed so callers can
+				// surface the harsher recovery message. `shutdown()` aborts pending
+				// executions immediately and escalates to SIGTERM/SIGKILL, so the
+				// host queue unblocks even if the runner is stuck in a
+				// non-interruptible state.
+				pending.kernelKilled = true;
 				void this.shutdown();
 			}, INTERRUPT_ESCALATION_MS);
 			escalation.unref?.();
@@ -363,7 +377,7 @@ export class PythonKernel {
 		if (this.#shutdownConfirmed) return { confirmed: true };
 
 		this.#alive = false;
-		this.#abortPendingExecutions("Python kernel shutdown");
+		this.#abortPendingExecutions("Python kernel shutdown", { kernelKilled: true });
 
 		const timeoutMs = options?.timeoutMs ?? SHUTDOWN_GRACE_MS;
 		const proc = this.#proc;
@@ -410,10 +424,11 @@ export class PythonKernel {
 		return { confirmed };
 	}
 
-	#abortPendingExecutions(reason: string): void {
+	#abortPendingExecutions(reason: string, options?: { kernelKilled?: boolean }): void {
 		if (this.#pending.size === 0) return;
 		const pending = Array.from(this.#pending.values());
 		this.#pending.clear();
+		const kernelKilledDefault = options?.kernelKilled ?? false;
 		for (const entry of pending) {
 			if (entry.settled) continue;
 			entry.settled = true;
@@ -425,6 +440,7 @@ export class PythonKernel {
 				stdinRequested: entry.stdinRequested,
 				executionCount: entry.executionCount,
 				error: entry.error,
+				kernelKilled: entry.kernelKilled || kernelKilledDefault,
 			});
 		}
 	}

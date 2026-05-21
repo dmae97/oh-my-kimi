@@ -209,6 +209,15 @@ function formatTimeoutAnnotation(timeoutMs?: number): string | undefined {
 	return `Command timed out after ${secs} seconds`;
 }
 
+function formatKernelTimeoutAnnotation(timeoutMs: number | undefined, kernelKilled: boolean): string {
+	const secs = timeoutMs === undefined ? undefined : Math.max(1, Math.round(timeoutMs / 1000));
+	if (kernelKilled) {
+		return "eval cell timed out and the kernel was unresponsive to interrupt; the kernel has been killed and will be recreated on the next call.";
+	}
+	const duration = secs === undefined ? "the configured timeout" : `${secs}s`;
+	return `eval cell timed out after ${duration}; kernel interrupted but remains running. Reset the kernel via { reset: true } if state appears corrupted.`;
+}
+
 function createCancelledPythonResult(timedOut: boolean, timeoutMs?: number): PythonResult {
 	const output = timedOut ? (formatTimeoutAnnotation(timeoutMs) ?? "Command timed out") : "";
 	const outputBytes = Buffer.byteLength(output, "utf-8");
@@ -434,7 +443,9 @@ async function executeWithKernel(
 		});
 
 		if (result.cancelled) {
-			const annotation = result.timedOut ? formatTimeoutAnnotation(executionTimeoutMs) : undefined;
+			const annotation = result.timedOut
+				? formatKernelTimeoutAnnotation(executionTimeoutMs, result.kernelKilled ?? false)
+				: undefined;
 			return {
 				exitCode: undefined,
 				cancelled: true,
