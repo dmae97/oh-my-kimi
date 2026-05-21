@@ -198,6 +198,29 @@ export interface AuthCredentialStore {
 	 * {@link AuthStorage.invalidateCredentialMatching} fall back to `reload()`.
 	 */
 	markCredentialSuspect?(credentialId: number, opts?: { signal?: AbortSignal }): Promise<void>;
+	/**
+	 * Optional async write hook for upserting a single credential. When present,
+	 * `AuthStorage.#upsertOAuthCredential` routes through this instead of the
+	 * sync `upsertAuthCredentialForProvider`. `RemoteAuthCredentialStore` uses
+	 * it to send the upsert to the broker via `POST /v1/credential`.
+	 *
+	 * Implementations MUST update the in-memory snapshot before returning so the
+	 * post-write read path is consistent.
+	 */
+	upsertAuthCredentialRemote?(provider: string, credential: AuthCredential): Promise<StoredAuthCredential[]>;
+	/**
+	 * Optional async write hook for replace-all semantics (e.g. API-key login
+	 * overwriting any previous keys for the same provider). When present,
+	 * `AuthStorage.set` routes through this instead of the sync
+	 * `replaceAuthCredentialsForProvider`.
+	 */
+	replaceAuthCredentialsRemote?(provider: string, credentials: AuthCredential[]): Promise<StoredAuthCredential[]>;
+	/**
+	 * Optional async write hook for clearing every credential for a provider
+	 * (logout). When present, `AuthStorage.remove` routes through this instead
+	 * of the sync `deleteAuthCredentialsForProvider`.
+	 */
+	deleteAuthCredentialsRemote?(provider: string, disabledCause: string): Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1076,7 +1099,9 @@ export class AuthStorage {
 	async set(provider: string, credential: AuthCredentialEntry): Promise<void> {
 		const normalized = Array.isArray(credential) ? credential : [credential];
 		const deduped = this.#dedupeOAuthCredentials(provider, normalized);
-		const stored = this.#store.replaceAuthCredentialsForProvider(provider, deduped);
+		const stored = this.#store.replaceAuthCredentialsRemote
+			? await this.#store.replaceAuthCredentialsRemote(provider, deduped)
+			: this.#store.replaceAuthCredentialsForProvider(provider, deduped);
 		this.#setStoredCredentials(
 			provider,
 			stored.map(record => ({ id: record.id, credential: record.credential })),
@@ -1085,7 +1110,9 @@ export class AuthStorage {
 	}
 
 	async #upsertOAuthCredential(provider: string, credential: OAuthCredential): Promise<void> {
-		const stored = this.#store.upsertAuthCredentialForProvider(provider, credential);
+		const stored = this.#store.upsertAuthCredentialRemote
+			? await this.#store.upsertAuthCredentialRemote(provider, credential)
+			: this.#store.upsertAuthCredentialForProvider(provider, credential);
 		this.#setStoredCredentials(
 			provider,
 			stored.map(record => ({ id: record.id, credential: record.credential })),
@@ -1097,7 +1124,11 @@ export class AuthStorage {
 	 * Remove credential for a provider.
 	 */
 	async remove(provider: string): Promise<void> {
-		this.#store.deleteAuthCredentialsForProvider(provider, "deleted by user");
+		if (this.#store.deleteAuthCredentialsRemote) {
+			await this.#store.deleteAuthCredentialsRemote(provider, "deleted by user");
+		} else {
+			this.#store.deleteAuthCredentialsForProvider(provider, "deleted by user");
+		}
 		this.#setStoredCredentials(provider, []);
 		this.#resetProviderAssignments(provider);
 	}

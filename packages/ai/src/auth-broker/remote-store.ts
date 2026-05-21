@@ -11,6 +11,7 @@ import { scheduler } from "node:timers/promises";
 import { logger } from "@oh-my-pi/pi-utils";
 import {
 	type AuthCredential,
+	type AuthCredentialSnapshotEntry,
 	type AuthCredentialStore,
 	type OAuthCredential,
 	REMOTE_REFRESH_SENTINEL,
@@ -210,6 +211,94 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		throw new Error(
 			"RemoteAuthCredentialStore is read-only on the client. Use `omp auth-broker logout <provider>` to mutate credentials.",
 		);
+	}
+
+	/**
+	 * Upsert a single credential through the broker. The broker server is the
+	 * canonical writer — see `POST /v1/credential`. The redacted snapshot
+	 * entries returned by the server replace the provider's rows in our local
+	 * snapshot, and the global snapshot is then refreshed in the background so
+	 * any concurrent peer (refresh, generation bump) stays in sync.
+	 */
+	async upsertAuthCredentialRemote(provider: string, credential: AuthCredential): Promise<StoredAuthCredential[]> {
+		const { entries } = await this.#client.uploadCredential(provider, credential);
+		this.#applyProviderEntries(provider, entries);
+		void this.refreshSnapshot().catch(error => {
+			logger.debug("auth-broker snapshot refresh after upload failed", { error: String(error) });
+		});
+		return this.listAuthCredentials(provider);
+	}
+
+	/**
+	 * Replace-all semantics: disable every active credential for the provider,
+	 * then upload each of the new credentials. Used by API-key login so a new
+	 * key clobbers any previously stored key for the same provider.
+	 */
+	async replaceAuthCredentialsRemote(
+		provider: string,
+		credentials: AuthCredential[],
+	): Promise<StoredAuthCredential[]> {
+		const existing = this.listAuthCredentials(provider);
+		for (const entry of existing) {
+			try {
+				await this.#client.disableCredential(entry.id, "replaced by newer credential");
+			} catch (error) {
+				logger.warn("auth-broker disable during replace failed", {
+					provider,
+					id: entry.id,
+					error: String(error),
+				});
+			}
+		}
+		// Snapshot reflects the disables before we add the new rows so a concurrent
+		// reader cannot momentarily see old + new together for the same provider.
+		this.#removeProviderEntries(provider);
+		for (const credential of credentials) {
+			const { entries } = await this.#client.uploadCredential(provider, credential);
+			this.#applyProviderEntries(provider, entries);
+		}
+		void this.refreshSnapshot().catch(error => {
+			logger.debug("auth-broker snapshot refresh after replace failed", { error: String(error) });
+		});
+		return this.listAuthCredentials(provider);
+	}
+
+	/**
+	 * Logout: disable every active credential for the provider on the broker,
+	 * then drop them from the local snapshot. Refresh fetches the authoritative
+	 * post-state in the background.
+	 */
+	async deleteAuthCredentialsRemote(provider: string, disabledCause: string): Promise<void> {
+		const existing = this.listAuthCredentials(provider);
+		for (const entry of existing) {
+			try {
+				await this.#client.disableCredential(entry.id, disabledCause);
+			} catch (error) {
+				logger.warn("auth-broker disable during delete failed", {
+					provider,
+					id: entry.id,
+					error: String(error),
+				});
+			}
+		}
+		this.#removeProviderEntries(provider);
+		void this.refreshSnapshot().catch(error => {
+			logger.debug("auth-broker snapshot refresh after delete failed", { error: String(error) });
+		});
+	}
+
+	#applyProviderEntries(provider: string, entries: AuthCredentialSnapshotEntry[]): void {
+		// `entries` is the broker's authoritative post-upsert list of rows for
+		// `provider`. Drop our existing rows for the same provider and splice in
+		// the fresh set — preserving every other provider's rows in place.
+		const others = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
+		const incoming = entries.map(entry => ({ ...entry, rotatesInMs: null }));
+		this.#snapshot = { ...this.#snapshot, credentials: [...others, ...incoming] };
+	}
+
+	#removeProviderEntries(provider: string): void {
+		const next = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
+		this.#snapshot = { ...this.#snapshot, credentials: next };
 	}
 
 	getCache(key: string): string | null {

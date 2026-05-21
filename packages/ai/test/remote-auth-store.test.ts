@@ -177,4 +177,61 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 
 		remoteStore.close();
 	});
+
+	test("client AuthStorage.set forwards api_key login to the broker (replace semantics)", async () => {
+		// Pre-existing api_key for the same provider on the server side — a fresh
+		// login should disable it and replace it with the new key.
+		serverStore!.saveApiKey("kagi", "old-key");
+		await serverStorage!.reload();
+
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await brokerClient.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			initialSnapshot: initialResult.snapshot,
+		});
+		const clientStorage = new AuthStorage(remoteStore);
+		await clientStorage.reload();
+
+		await clientStorage.set("kagi", { type: "api_key", key: "new-key" });
+
+		// Server is the source of truth — only the new key should be active.
+		const activeOnServer = serverStore!.listAuthCredentials("kagi");
+		expect(activeOnServer).toHaveLength(1);
+		expect(activeOnServer[0].credential).toEqual({ type: "api_key", key: "new-key" });
+
+		// Client reflects the new key through the broker's `POST /v1/credential`
+		// response without waiting for the long-poll snapshot tick.
+		expect(clientStorage.get("kagi")).toEqual({ type: "api_key", key: "new-key" });
+		clientStorage.close();
+	});
+
+	test("client AuthStorage.remove disables every broker-side credential for the provider (logout)", async () => {
+		serverStore!.saveApiKey("kagi", "k1");
+		serverStore!.saveOAuth("kagi", {
+			access: "oauth-access",
+			refresh: "oauth-refresh",
+			expires: Date.now() + 120_000,
+			accountId: "acct-kagi",
+			email: "user@example.com",
+		});
+		await serverStorage!.reload();
+
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await brokerClient.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			initialSnapshot: initialResult.snapshot,
+		});
+		const clientStorage = new AuthStorage(remoteStore);
+		await clientStorage.reload();
+
+		await clientStorage.remove("kagi");
+
+		expect(serverStore!.listAuthCredentials("kagi")).toEqual([]);
+		expect(clientStorage.get("kagi")).toBeUndefined();
+		clientStorage.close();
+	});
 });
