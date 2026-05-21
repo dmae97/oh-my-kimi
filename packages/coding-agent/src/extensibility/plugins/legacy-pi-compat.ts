@@ -154,7 +154,7 @@ interface LegacyPiMirrorState {
 function getMirrorPath(sourcePath: string, state: LegacyPiMirrorState): string {
 	const extension = path.extname(sourcePath) || ".js";
 	const digest = Bun.hash(sourcePath).toString(36);
-	return path.join(state.root, `${digest}${extension}`);
+	return path.join(state.root, `module-${digest}${extension}`);
 }
 
 async function rewriteRelativeImportsForLegacyExtension(
@@ -212,7 +212,7 @@ async function mirrorLegacyPiFile(sourcePath: string, state: LegacyPiMirrorState
 }
 
 export async function loadLegacyPiModule(resolvedPath: string): Promise<unknown> {
-	const root = path.join(os.tmpdir(), "omp-legacy-pi-file", Bun.hash(resolvedPath).toString(36));
+	const root = path.join(os.tmpdir(), "omp-legacy-pi-file", `entry-${Bun.hash(resolvedPath).toString(36)}`);
 	await fs.rm(root, { recursive: true, force: true });
 	const state: LegacyPiMirrorState = { root, seen: new Map() };
 	const mirroredEntry = await mirrorLegacyPiFile(resolvedPath, state);

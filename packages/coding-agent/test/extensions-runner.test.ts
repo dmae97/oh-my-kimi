@@ -15,7 +15,6 @@ import {
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, logger, TempDir } from "@oh-my-pi/pi-utils";
-import { filterUserScoped } from "./utils/filter-user-extensions";
 
 describe("ExtensionRunner", () => {
 	let tempDir: TempDir;
@@ -40,11 +39,20 @@ describe("ExtensionRunner", () => {
 	});
 
 	const loadTestExtensions = async (configuredPaths: string[] = []) => {
-		const result = await discoverAndLoadExtensions(configuredPaths, tempDir.path());
+		const result = await discoverAndLoadExtensions([extensionsDir, ...configuredPaths], tempDir.path());
+		const testRoots = [
+			extensionsDir,
+			...configuredPaths.map(configuredPath => path.resolve(tempDir.path(), configuredPath)),
+		];
+		const isTestScoped = (candidate: string): boolean =>
+			testRoots.some(root => {
+				const relative = path.relative(path.resolve(root), path.resolve(candidate));
+				return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+			});
 		return {
 			...result,
-			extensions: filterUserScoped(result.extensions),
-			errors: filterUserScoped(result.errors),
+			extensions: result.extensions.filter(extension => isTestScoped(extension.path)),
+			errors: result.errors.filter(error => isTestScoped(error.path)),
 		};
 	};
 
