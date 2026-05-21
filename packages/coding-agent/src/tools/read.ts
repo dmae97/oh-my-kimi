@@ -118,8 +118,22 @@ function formatTextWithMode(
 	startNum: number,
 	shouldAddHashLines: boolean,
 	shouldAddLineNumbers: boolean,
+	truncatedLines?: ReadonlySet<number>,
 ): string {
-	if (shouldAddHashLines) return formatHashLines(text, startNum);
+	if (shouldAddHashLines) {
+		if (!truncatedLines || truncatedLines.size === 0) return formatHashLines(text, startNum);
+		// Column-truncated lines hash differently from the on-disk line that the
+		// edit verifier reads back. Drop the anchor (`LINE|TEXT` instead of
+		// `LINE+HASH|TEXT`) so the model treats the line as un-anchorable rather
+		// than copying a hash that will be rejected as stale.
+		const lines = text.split("\n");
+		return lines
+			.map((line, i) => {
+				const ln = startNum + i;
+				return truncatedLines.has(ln) ? `${ln}${HL_BODY_SEP}${line}` : formatHashLine(ln, line);
+			})
+			.join("\n");
+	}
 	if (shouldAddLineNumbers) return prependLineNumbers(text, startNum);
 	return text;
 }
@@ -1031,12 +1045,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 
 			const collectedLines = streamResult.lines;
+			const truncatedLineNumbers = new Set<number>();
 			if (!rawSelector && maxColumns > 0) {
 				for (let i = 0; i < collectedLines.length; i++) {
 					const { text, wasTruncated } = truncateLine(collectedLines[i], maxColumns);
 					if (wasTruncated) {
 						collectedLines[i] = text;
 						columnTruncated = maxColumns;
+						truncatedLineNumbers.add(range.startLine + i);
 					}
 				}
 			}
@@ -1046,7 +1062,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 
 			const blockText = collectedLines.join("\n");
-			blocks.push(formatTextWithMode(blockText, range.startLine, shouldAddHashLines, shouldAddLineNumbers));
+			blocks.push(
+				formatTextWithMode(
+					blockText,
+					range.startLine,
+					shouldAddHashLines,
+					shouldAddLineNumbers,
+					truncatedLineNumbers,
+				),
+			);
 		}
 
 		let outputText = blocks.join("\n\n…\n\n");
@@ -1790,12 +1814,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// view — column truncation surfaces separately via `.limits()`.
 					const rawSelector = isRawSelector(parsed);
 					const maxColumns = resolveOutputMaxColumns(this.session.settings);
+					const truncatedLineNumbers = new Set<number>();
 					if (!rawSelector && maxColumns > 0) {
 						for (let i = 0; i < collectedLines.length; i++) {
 							const { text, wasTruncated } = truncateLine(collectedLines[i], maxColumns);
 							if (wasTruncated) {
 								collectedLines[i] = text;
 								columnTruncated = maxColumns;
+								truncatedLineNumbers.add(startLineDisplay + i);
 							}
 						}
 					}
@@ -1829,7 +1855,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					let capturedDisplayContent: { text: string; startLine: number } | undefined;
 					const formatText = (text: string, startNum: number): string => {
 						capturedDisplayContent = { text, startLine: startNum };
-						return formatTextWithMode(text, startNum, shouldAddHashLines, shouldAddLineNumbers);
+						return formatTextWithMode(
+							text,
+							startNum,
+							shouldAddHashLines,
+							shouldAddLineNumbers,
+							truncatedLineNumbers,
+						);
 					};
 
 					let outputText: string;
