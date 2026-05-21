@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `RULES.md` not being injected. The documented sticky-rules file at `~/.omp/agent/RULES.md` and `<repo>/.omp/RULES.md` was never read by any discovery provider; only `.omp/rules/*.md` was scanned. The native provider now loads both as always-apply rules so they re-attach every turn as documented ([#1266](https://github.com/can1357/oh-my-pi/issues/1266)).
+
 ## [15.2.1] - 2026-05-21
 
 ### Fixed
