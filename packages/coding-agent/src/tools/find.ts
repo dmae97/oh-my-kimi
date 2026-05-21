@@ -219,7 +219,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				const notice = opts?.notice;
 				const forceTruncated = opts?.forceTruncated ?? false;
 				if (files.length === 0) {
-				const details: FindToolDetails = {
+					const details: FindToolDetails = {
 						scopePath,
 						fileCount: 0,
 						files: [],
@@ -515,26 +515,26 @@ export const findToolRenderer = {
 		}
 		if (missingNote) extraLines.push(missingNote);
 
-	return createCachedComponent(
-		() => options.expanded,
-		width => {
-			const cwd = details?.cwd;
-			const fileLines = renderFileList(
-				{
-					files: files.map(entry => ({
-						path: entry,
-						isDirectory: entry.endsWith("/"),
-						absPath: cwd && !entry.endsWith("/") ? path.resolve(cwd, entry) : undefined,
-					})),
-					expanded: options.expanded,
-					maxCollapsed: COLLAPSED_LIST_LIMIT,
-					hyperlinkFn: fileHyperlink,
-				},
-				uiTheme,
-			);
-			return [header, ...fileLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
-		},
-	);
+		return createCachedComponent(
+			() => options.expanded,
+			width => {
+				const cwd = details?.cwd;
+				const fileLines = renderFileList(
+					{
+						files: files.map(entry => ({
+							path: entry,
+							isDirectory: entry.endsWith("/"),
+							absPath: cwd && !entry.endsWith("/") ? path.resolve(cwd, entry) : undefined,
+						})),
+						expanded: options.expanded,
+						maxCollapsed: COLLAPSED_LIST_LIMIT,
+						hyperlinkFn: fileHyperlink,
+					},
+					uiTheme,
+				);
+				return [header, ...fileLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
+			},
+		);
 	},
 	mergeCallAndResult: true,
 };

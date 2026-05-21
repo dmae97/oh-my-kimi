@@ -77,11 +77,7 @@ export function isHyperlinkEnabled(): boolean {
  * @param displayText - Text to render as the hyperlink anchor (may contain ANSI codes)
  * @param opts - Optional line/col position appended as `?line=N&col=M` query params
  */
-export function fileHyperlink(
-	absPath: string,
-	displayText: string,
-	opts?: { line?: number; col?: number },
-): string {
+export function fileHyperlink(absPath: string, displayText: string, opts?: { line?: number; col?: number }): string {
 	if (!isHyperlinkEnabled()) return displayText;
 	// Do not double-wrap if the text already embeds an OSC 8 sequence.
 	if (displayText.includes("\x1b]8;")) return displayText;

@@ -46,8 +46,7 @@ export function renderFileList(options: FileListOptions, theme: Theme): string[]
 				const meta = entry.meta ? ` ${theme.fg("dim", entry.meta)}` : "";
 				const iconPrefix = icon ? `${icon} ` : "";
 				const pathStr = theme.fg(labelColor, displayPath);
-				const linkedPath =
-					entry.absPath && hyperlinkFn ? hyperlinkFn(entry.absPath, pathStr) : pathStr;
+				const linkedPath = entry.absPath && hyperlinkFn ? hyperlinkFn(entry.absPath, pathStr) : pathStr;
 				return `${iconPrefix}${linkedPath}${meta}`;
 			},
 		},

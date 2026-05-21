@@ -1,12 +1,11 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as settingsModule from "@oh-my-pi/pi-coding-agent/config/settings";
-import * as terminalCaps from "@oh-my-pi/pi-tui";
 import { fileHyperlink, isHyperlinkEnabled, tryResolveInternalUrlSync } from "@oh-my-pi/pi-coding-agent/tui/hyperlink";
+import * as terminalCaps from "@oh-my-pi/pi-tui";
 
 // OSC 8 sequence markers
 const OSC = "\x1b]";
 const ST = "\x1b\\";
-const LINK_START = (id: string, uri: string) => `${OSC}8;id=${id};${uri}${ST}`;
 const LINK_END = `${OSC}8;;${ST}`;
 
 /** Extract the hyperlink URI from a wrapped string. Returns undefined if not wrapped. */
@@ -41,7 +40,7 @@ describe("isHyperlinkEnabled", () => {
 		spy.mockRestore();
 	});
 
-	it('returns false in auto mode when NO_COLOR is set', () => {
+	it("returns false in auto mode when NO_COLOR is set", () => {
 		const spy = spyOn(settingsModule.settings, "get").mockImplementation(
 			(key: string) => (key === "tui.hyperlinks" ? "auto" : undefined) as never,
 		);
@@ -50,7 +49,7 @@ describe("isHyperlinkEnabled", () => {
 		spy.mockRestore();
 	});
 
-	it('returns false in auto mode when stdout is not a TTY', () => {
+	it("returns false in auto mode when stdout is not a TTY", () => {
 		const spy = spyOn(settingsModule.settings, "get").mockImplementation(
 			(key: string) => (key === "tui.hyperlinks" ? "auto" : undefined) as never,
 		);

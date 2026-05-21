@@ -193,17 +193,17 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				matchesByFile.get(relativePath)!.push(match);
 			}
 
-		const baseDetails: AstGrepToolDetails = {
-			matchCount: result.totalMatches,
-			fileCount: result.filesWithMatches,
-			filesSearched: result.filesSearched,
-			limitReached: result.limitReached,
-			...(cappedParseErrors.length > 0 ? { parseErrors: cappedParseErrors, parseErrorsTotal } : {}),
-			scopePath,
-			searchPath: resolvedSearchPath,
-			files: fileList,
-			fileMatches: [],
-		};
+			const baseDetails: AstGrepToolDetails = {
+				matchCount: result.totalMatches,
+				fileCount: result.filesWithMatches,
+				filesSearched: result.filesSearched,
+				limitReached: result.limitReached,
+				...(cappedParseErrors.length > 0 ? { parseErrors: cappedParseErrors, parseErrorsTotal } : {}),
+				scopePath,
+				searchPath: resolvedSearchPath,
+				files: fileList,
+				fileMatches: [],
+			};
 
 			if (result.matches.length === 0) {
 				const noMatchMessage = cappedParseErrors.length
@@ -367,51 +367,57 @@ export const astGrepToolRenderer = {
 			);
 		}
 
-	return createCachedComponent(
-		() => options.expanded,
-		width => {
-			const searchBase = details?.searchPath;
-			const matchLines = renderTreeList(
-				{
-					items: matchGroups,
-					expanded: options.expanded,
-					maxCollapsed: matchGroups.length,
-					maxCollapsedLines: COLLAPSED_MATCH_LIMIT,
-					itemType: "match",
-				renderItem: group => {
-					let contextDir = searchBase ?? "";
-					return group.map(line => {
-						if (line.startsWith("## ")) {
-							const fileName = line.slice(3).trimEnd().replace(/\s+\([^)]*\)\s*$/, "");
-							const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
-							const styled = uiTheme.fg("dim", line);
-							return absPath ? fileHyperlink(absPath, styled) : styled;
-						}
-						if (line.startsWith("# ")) {
-							const raw = line.slice(2).trimEnd().replace(/\s+\([^)]*\)\s*$/, "");
-							const isDirectory = raw.endsWith("/");
-							const name = raw.replace(/\/$/, "");
-							if (isDirectory) {
-								if (searchBase) {
-									contextDir = name === "." ? searchBase : path.join(searchBase, name);
+		return createCachedComponent(
+			() => options.expanded,
+			width => {
+				const searchBase = details?.searchPath;
+				const matchLines = renderTreeList(
+					{
+						items: matchGroups,
+						expanded: options.expanded,
+						maxCollapsed: matchGroups.length,
+						maxCollapsedLines: COLLAPSED_MATCH_LIMIT,
+						itemType: "match",
+						renderItem: group => {
+							let contextDir = searchBase ?? "";
+							return group.map(line => {
+								if (line.startsWith("## ")) {
+									const fileName = line
+										.slice(3)
+										.trimEnd()
+										.replace(/\s+\([^)]*\)\s*$/, "");
+									const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
+									const styled = uiTheme.fg("dim", line);
+									return absPath ? fileHyperlink(absPath, styled) : styled;
 								}
-								return uiTheme.fg("accent", line);
-							}
-							// Root-level file (single # without trailing slash) from formatGroupedFiles.
-							const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
-							const styled = uiTheme.fg("accent", line);
-							return absPath ? fileHyperlink(absPath, styled) : styled;
-						}
-						if (line.startsWith("  meta:")) return uiTheme.fg("dim", line);
-						return uiTheme.fg("toolOutput", line);
-					});
-				},
-				},
-				uiTheme,
-			);
-			return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
-		},
-	);
+								if (line.startsWith("# ")) {
+									const raw = line
+										.slice(2)
+										.trimEnd()
+										.replace(/\s+\([^)]*\)\s*$/, "");
+									const isDirectory = raw.endsWith("/");
+									const name = raw.replace(/\/$/, "");
+									if (isDirectory) {
+										if (searchBase) {
+											contextDir = name === "." ? searchBase : path.join(searchBase, name);
+										}
+										return uiTheme.fg("accent", line);
+									}
+									// Root-level file (single # without trailing slash) from formatGroupedFiles.
+									const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
+									const styled = uiTheme.fg("accent", line);
+									return absPath ? fileHyperlink(absPath, styled) : styled;
+								}
+								if (line.startsWith("  meta:")) return uiTheme.fg("dim", line);
+								return uiTheme.fg("toolOutput", line);
+							});
+						},
+					},
+					uiTheme,
+				);
+				return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
+			},
+		);
 	},
 	mergeCallAndResult: true,
 };

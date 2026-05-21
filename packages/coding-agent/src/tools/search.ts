@@ -597,7 +597,6 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			} finally {
 				await cleanupArchiveScratch();
 			}
-
 		});
 	}
 }
@@ -727,55 +726,61 @@ export const searchToolRenderer = {
 		}
 		if (missingNote) extraLines.push(missingNote);
 
-	return createCachedComponent(
-		() => options.expanded,
-		width => {
-			const collapsedMatchLineBudget = Math.max(COLLAPSED_TEXT_LIMIT - extraLines.length, 0);
-			const searchBase = details?.searchPath;
-			const matchLines = renderTreeList(
-				{
-					items: matchGroups,
-					expanded: options.expanded,
-					maxCollapsed: matchGroups.length,
-					maxCollapsedLines: collapsedMatchLineBudget,
-					itemType: "match",
-					renderItem: group => {
-						// Track directory context within a group for ## file headers.
-						// `# foo/` is a directory header; `# foo.ts` is a root-level file
-						// from formatGroupedFiles (single-# when directory is `.`).
-						let contextDir = searchBase ?? "";
-						return group.map(line => {
-							if (line.startsWith("## ")) {
-								// Strip optional ` (suffix)` like ` (3 replacements)` before resolving.
-								const fileName = line.slice(3).trimEnd().replace(/\s+\([^)]*\)\s*$/, "");
-								const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
-								const styled = uiTheme.fg("dim", line);
-								return absPath ? fileHyperlink(absPath, styled) : styled;
-							}
-							if (line.startsWith("# ")) {
-								const raw = line.slice(2).trimEnd().replace(/\s+\([^)]*\)\s*$/, "");
-								const isDirectory = raw.endsWith("/");
-								const name = raw.replace(/\/$/, "");
-								if (isDirectory) {
-									if (searchBase) {
-										contextDir = name === "." ? searchBase : path.join(searchBase, name);
-									}
-									return uiTheme.fg("accent", line);
+		return createCachedComponent(
+			() => options.expanded,
+			width => {
+				const collapsedMatchLineBudget = Math.max(COLLAPSED_TEXT_LIMIT - extraLines.length, 0);
+				const searchBase = details?.searchPath;
+				const matchLines = renderTreeList(
+					{
+						items: matchGroups,
+						expanded: options.expanded,
+						maxCollapsed: matchGroups.length,
+						maxCollapsedLines: collapsedMatchLineBudget,
+						itemType: "match",
+						renderItem: group => {
+							// Track directory context within a group for ## file headers.
+							// `# foo/` is a directory header; `# foo.ts` is a root-level file
+							// from formatGroupedFiles (single-# when directory is `.`).
+							let contextDir = searchBase ?? "";
+							return group.map(line => {
+								if (line.startsWith("## ")) {
+									// Strip optional ` (suffix)` like ` (3 replacements)` before resolving.
+									const fileName = line
+										.slice(3)
+										.trimEnd()
+										.replace(/\s+\([^)]*\)\s*$/, "");
+									const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
+									const styled = uiTheme.fg("dim", line);
+									return absPath ? fileHyperlink(absPath, styled) : styled;
 								}
-								// Root-level file emitted by formatGroupedFiles when the directory is `.`.
-								const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
-								const styled = uiTheme.fg("accent", line);
-								return absPath ? fileHyperlink(absPath, styled) : styled;
-							}
-							return uiTheme.fg("toolOutput", line);
-						});
+								if (line.startsWith("# ")) {
+									const raw = line
+										.slice(2)
+										.trimEnd()
+										.replace(/\s+\([^)]*\)\s*$/, "");
+									const isDirectory = raw.endsWith("/");
+									const name = raw.replace(/\/$/, "");
+									if (isDirectory) {
+										if (searchBase) {
+											contextDir = name === "." ? searchBase : path.join(searchBase, name);
+										}
+										return uiTheme.fg("accent", line);
+									}
+									// Root-level file emitted by formatGroupedFiles when the directory is `.`.
+									const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
+									const styled = uiTheme.fg("accent", line);
+									return absPath ? fileHyperlink(absPath, styled) : styled;
+								}
+								return uiTheme.fg("toolOutput", line);
+							});
+						},
 					},
-				},
-				uiTheme,
-			);
-			return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
-		},
-	);
+					uiTheme,
+				);
+				return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
+			},
+		);
 	},
 	mergeCallAndResult: true,
 };

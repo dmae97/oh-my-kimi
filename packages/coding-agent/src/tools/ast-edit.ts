@@ -236,18 +236,18 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				changesByFile.get(relativePath)!.push(change);
 			}
 
-		const baseDetails: AstEditToolDetails = {
-			totalReplacements: result.totalReplacements,
-			filesTouched: result.filesTouched,
-			filesSearched: result.filesSearched,
-			applied: result.applied,
-			limitReached: result.limitReached,
-			...(cappedParseErrors.length > 0 ? { parseErrors: cappedParseErrors, parseErrorsTotal } : {}),
-			scopePath,
-			searchPath: resolvedSearchPath,
-			files: fileList,
-			fileReplacements: [],
-		};
+			const baseDetails: AstEditToolDetails = {
+				totalReplacements: result.totalReplacements,
+				filesTouched: result.filesTouched,
+				filesSearched: result.filesSearched,
+				applied: result.applied,
+				limitReached: result.limitReached,
+				...(cappedParseErrors.length > 0 ? { parseErrors: cappedParseErrors, parseErrorsTotal } : {}),
+				scopePath,
+				searchPath: resolvedSearchPath,
+				files: fileList,
+				fileReplacements: [],
+			};
 
 			if (result.totalReplacements === 0) {
 				const parseMessage = cappedParseErrors.length
@@ -484,53 +484,59 @@ export const astEditToolRenderer = {
 				uiTheme.fg("warning", formatParseErrorsCountLabel(details.parseErrors, details.parseErrorsTotal)),
 			);
 		}
-	return createCachedComponent(
-		() => options.expanded,
-		width => {
-			const searchBase = details?.searchPath;
-			const changeLines = renderTreeList(
-				{
-					items: changeGroups,
-					expanded: options.expanded,
-					maxCollapsed: changeGroups.length,
-					maxCollapsedLines: COLLAPSED_CHANGE_LIMIT,
-					itemType: "change",
-				renderItem: group => {
-					let contextDir = searchBase ?? "";
-					return group.map(line => {
-						if (line.startsWith("## ")) {
-							// Strip ` (3 replacements)` suffix attached by formatGroupedFiles.
-							const fileName = line.slice(3).trimEnd().replace(/\s+\([^)]*\)\s*$/, "");
-							const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
-							const styled = uiTheme.fg("dim", line);
-							return absPath ? fileHyperlink(absPath, styled) : styled;
-						}
-						if (line.startsWith("# ")) {
-							const raw = line.slice(2).trimEnd().replace(/\s+\([^)]*\)\s*$/, "");
-							const isDirectory = raw.endsWith("/");
-							const name = raw.replace(/\/$/, "");
-							if (isDirectory) {
-								if (searchBase) {
-									contextDir = name === "." ? searchBase : path.join(searchBase, name);
+		return createCachedComponent(
+			() => options.expanded,
+			width => {
+				const searchBase = details?.searchPath;
+				const changeLines = renderTreeList(
+					{
+						items: changeGroups,
+						expanded: options.expanded,
+						maxCollapsed: changeGroups.length,
+						maxCollapsedLines: COLLAPSED_CHANGE_LIMIT,
+						itemType: "change",
+						renderItem: group => {
+							let contextDir = searchBase ?? "";
+							return group.map(line => {
+								if (line.startsWith("## ")) {
+									// Strip ` (3 replacements)` suffix attached by formatGroupedFiles.
+									const fileName = line
+										.slice(3)
+										.trimEnd()
+										.replace(/\s+\([^)]*\)\s*$/, "");
+									const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
+									const styled = uiTheme.fg("dim", line);
+									return absPath ? fileHyperlink(absPath, styled) : styled;
 								}
-								return uiTheme.fg("accent", line);
-							}
-							// Root-level file with optional suffix, e.g. `# foo.ts (3 replacements)`.
-							const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
-							const styled = uiTheme.fg("accent", line);
-							return absPath ? fileHyperlink(absPath, styled) : styled;
-						}
-						if (line.startsWith("+")) return uiTheme.fg("toolDiffAdded", line);
-						if (line.startsWith("-")) return uiTheme.fg("toolDiffRemoved", line);
-						return uiTheme.fg("toolOutput", line);
-					});
-				},
-				},
-				uiTheme,
-			);
-			return [header, ...changeLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
-		},
-	);
+								if (line.startsWith("# ")) {
+									const raw = line
+										.slice(2)
+										.trimEnd()
+										.replace(/\s+\([^)]*\)\s*$/, "");
+									const isDirectory = raw.endsWith("/");
+									const name = raw.replace(/\/$/, "");
+									if (isDirectory) {
+										if (searchBase) {
+											contextDir = name === "." ? searchBase : path.join(searchBase, name);
+										}
+										return uiTheme.fg("accent", line);
+									}
+									// Root-level file with optional suffix, e.g. `# foo.ts (3 replacements)`.
+									const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
+									const styled = uiTheme.fg("accent", line);
+									return absPath ? fileHyperlink(absPath, styled) : styled;
+								}
+								if (line.startsWith("+")) return uiTheme.fg("toolDiffAdded", line);
+								if (line.startsWith("-")) return uiTheme.fg("toolDiffRemoved", line);
+								return uiTheme.fg("toolOutput", line);
+							});
+						},
+					},
+					uiTheme,
+				);
+				return [header, ...changeLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
+			},
+		);
 	},
 	mergeCallAndResult: true,
 };
