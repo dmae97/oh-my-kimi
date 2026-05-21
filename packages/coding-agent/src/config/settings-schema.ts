@@ -2025,17 +2025,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"tools.redactSecrets": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			label: "Redact Secrets in Tool Output",
-			description:
-				"Scrub apparent API keys, tokens, and other secret-like values from read/search/ssh output before showing it to the model.",
-		},
-	},
-
 	"tools.maxTimeout": {
 		type: "number",
 		default: 0,

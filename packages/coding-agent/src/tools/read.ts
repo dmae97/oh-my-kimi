@@ -69,7 +69,6 @@ import {
 	splitInternalUrlSel,
 	splitPathAndSel,
 } from "./path-utils";
-import { redactionFooter, redactSecrets } from "./redaction";
 import { formatBytes, replaceTabs, shortenPath, wrapBrackets } from "./render-utils";
 import {
 	executeReadQuery,
@@ -910,11 +909,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			outputText = formatText(truncation.content, startLineDisplay);
 		}
 
-		if (this.session.settings.get("tools.redactSecrets")) {
-			const { text: redactedText, redactedCount } = redactSecrets(outputText);
-			const footer = redactionFooter(redactedCount);
-			outputText = footer ? `${redactedText}\n${footer}` : redactedText;
-		}
 		resultBuilder.text(outputText);
 		if (truncationInfo) {
 			resultBuilder.truncation(truncationInfo.result, truncationInfo.options);
@@ -974,11 +968,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		}
 		const finalText =
 			notices.length > 0 ? (outputText ? `${outputText}\n${notices.join("\n")}` : notices.join("\n")) : outputText;
-		const finalRedacted = this.session.settings.get("tools.redactSecrets")
-			? redactSecrets(finalText)
-			: { text: finalText, redactedCount: 0 };
-		const finalFooter = redactionFooter(finalRedacted.redactedCount);
-		resultBuilder.text(finalFooter ? `${finalRedacted.text}\n${finalFooter}` : finalRedacted.text);
+		resultBuilder.text(finalText);
 		return resultBuilder.done();
 	}
 
