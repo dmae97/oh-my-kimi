@@ -129,6 +129,18 @@ function stringArrayFromUnknown(value: unknown): string[] {
 	return [];
 }
 
+function shallowStringRecord(value: unknown): Record<string, string> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+
+	const result: Record<string, string> = {};
+	for (const [key, item] of Object.entries(value)) {
+		if (typeof item === "string") {
+			result[key] = item;
+		}
+	}
+	return result;
+}
+
 function resolvePathScopedStringArray(settingPath: SettingPath, value: unknown, cwd: string): string[] | undefined {
 	if (!PATH_SCOPED_ARRAY_SETTINGS.has(settingPath) || !Array.isArray(value)) return undefined;
 
@@ -424,8 +436,19 @@ export class Settings {
 	 * Set a model role (helper for modelRoles record).
 	 */
 	setModelRole(role: ModelRole | string, modelId: string): void {
-		const current = this.get("modelRoles");
+		const current = shallowStringRecord(getByPath(this.#global, ["modelRoles"]));
+		const runtimeOverrides = getByPath(this.#overrides, ["modelRoles"]);
+		const updateRuntimeOverride =
+			!!runtimeOverrides &&
+			typeof runtimeOverrides === "object" &&
+			!Array.isArray(runtimeOverrides) &&
+			Object.hasOwn(runtimeOverrides, role);
+
 		this.set("modelRoles", { ...current, [role]: modelId });
+
+		if (updateRuntimeOverride) {
+			this.override("modelRoles", { ...shallowStringRecord(runtimeOverrides), [role]: modelId });
+		}
 	}
 
 	/**
@@ -440,20 +463,20 @@ export class Settings {
 	 * Get all model roles (helper for modelRoles record).
 	 */
 	getModelRoles(): ReadOnlyDict<string> {
-		return this.get("modelRoles");
+		return { ...this.get("modelRoles") };
 	}
 
 	/*
 	 * Override model roles (helper for modelRoles record).
 	 */
 	overrideModelRoles(roles: ReadOnlyDict<string>): void {
-		const prev = this.get("modelRoles");
+		const next = shallowStringRecord(getByPath(this.#overrides, ["modelRoles"]));
 		for (const [role, modelId] of Object.entries(roles)) {
 			if (modelId) {
-				prev[role] = modelId;
+				next[role] = modelId;
 			}
 		}
-		this.override("modelRoles", prev);
+		this.override("modelRoles", next);
 	}
 
 	/**

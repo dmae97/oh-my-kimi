@@ -151,6 +151,60 @@ describe("Settings", () => {
 		});
 	});
 
+	describe("model role overrides", () => {
+		it("does not persist temporary default model overrides when another role is saved", async () => {
+			await writeSettings({
+				modelRoles: { default: "anthropic/claude-sonnet-4-5" },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			settings.overrideModelRoles({ default: "openai/gpt-5.2-codex" });
+			expect(settings.getModelRole("default")).toBe("openai/gpt-5.2-codex");
+
+			settings.setModelRole("smol", "anthropic/claude-haiku-4-5");
+			await settings.flush();
+
+			const savedSettings = await readSettings();
+			expect(savedSettings.modelRoles).toEqual({
+				default: "anthropic/claude-sonnet-4-5",
+				smol: "anthropic/claude-haiku-4-5",
+			});
+			expect(settings.getModelRole("default")).toBe("openai/gpt-5.2-codex");
+			expect(settings.getModelRole("smol")).toBe("anthropic/claude-haiku-4-5");
+		});
+
+		it("restores persisted model roles after clearing runtime overrides", async () => {
+			await writeSettings({
+				modelRoles: { default: "anthropic/claude-sonnet-4-5" },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			settings.overrideModelRoles({ default: "openai/gpt-5.2-codex" });
+			expect(settings.getModelRole("default")).toBe("openai/gpt-5.2-codex");
+
+			settings.clearOverride("modelRoles");
+
+			expect(settings.getModelRole("default")).toBe("anthropic/claude-sonnet-4-5");
+		});
+
+		it("keeps the live role value aligned when saving over a runtime override", () => {
+			const settings = Settings.isolated({
+				modelRoles: { default: "anthropic/claude-sonnet-4-5" },
+			});
+
+			settings.overrideModelRoles({ default: "openai/gpt-5.2-codex" });
+			settings.setModelRole("default", "anthropic/claude-opus-4-5");
+
+			expect(settings.getModelRole("default")).toBe("anthropic/claude-opus-4-5");
+
+			settings.clearOverride("modelRoles");
+
+			expect(settings.getModelRole("default")).toBe("anthropic/claude-opus-4-5");
+		});
+	});
+
 	describe("migrations", () => {
 		it("maps removed atom edit mode settings to hashline", async () => {
 			await writeSettings({
