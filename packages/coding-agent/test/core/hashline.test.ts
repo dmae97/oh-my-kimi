@@ -826,3 +826,69 @@ describe("hashline *** Abort recovery sentinel (harmony-leak mitigation)", () =>
 		expect(warnings).toEqual([]);
 	});
 });
+
+describe("hashline separator-padding warning", () => {
+	// Single-line typo of `~ beta` (sep + readability space + content).
+	it("warns on uniform single-space-before-content payload (~ TEXT typo)", () => {
+		const diff = `= ${sameLineRange(tag(1, "alpha"))}\n${pl(" beta")}\n`;
+		const { warnings } = parseHashlineWithWarnings(diff);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toMatch(/exactly one space before non-space content/);
+	});
+
+	it("warns when every payload line uses the same single-space readability gap", () => {
+		const diff = [`+ ${tag(1, "alpha")}`, pl(" first"), pl(" second"), pl(" third")].join("\n");
+		const { warnings } = parseHashlineWithWarnings(diff);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toMatch(/exactly one space before non-space content/);
+	});
+
+	// Real YAML / JSON / Markdown edits indent in multiples of two spaces.
+	it("does not warn on uniform 2-space indentation (YAML/JSON/Markdown)", () => {
+		const diff = [`+ ${tag(1, "root:")}`, pl("  key: value"), pl("  list:"), pl("    - item")].join("\n");
+		const { warnings } = parseHashlineWithWarnings(diff);
+		expect(warnings).toEqual([]);
+	});
+
+	// Python uses 4-space indentation; every payload line starts with whitespace.
+	it("does not warn on uniform 4-space indentation (Python)", () => {
+		const diff = [`+ ${tag(1, "def foo():")}`, pl("    x = 1"), pl("    y = 2"), pl("    return x + y")].join("\n");
+		const { warnings } = parseHashlineWithWarnings(diff);
+		expect(warnings).toEqual([]);
+	});
+
+	// Mixed indentation: leading space on some lines but not all -> no warning.
+	it("does not warn when leading-space pattern is not uniform", () => {
+		const diff = [`+ ${tag(1, "alpha")}`, pl(" leading"), pl("flush")].join("\n");
+		const { warnings } = parseHashlineWithWarnings(diff);
+		expect(warnings).toEqual([]);
+	});
+	// Indent-sensitive file types: skip the padding check entirely so a one-space
+	// indent (e.g. YAML/Python at depth 1) does not surface a misleading warning.
+	it("skips padding check for indent-sensitive extensions (yaml/py/md/etc.)", () => {
+		const diff = `= ${sameLineRange(tag(1, "alpha"))}\n${pl(" beta")}\n`;
+		for (const path of [
+			"config.yml",
+			"config.yaml",
+			"deep/nested/script.py",
+			"notes.md",
+			"data.json",
+			"infra.tf",
+			"/abs/path/file.toml",
+			"docs/guide.rst",
+			"C:\\proj\\file.yaml",
+		]) {
+			const { warnings } = parseHashlineWithWarnings(diff, { path });
+			expect(warnings).toEqual([]);
+		}
+	});
+
+	it("keeps padding check for non-indent-sensitive extensions (ts/rs/go/etc.)", () => {
+		const diff = `= ${sameLineRange(tag(1, "alpha"))}\n${pl(" beta")}\n`;
+		for (const path of ["app.ts", "main.rs", "server.go", "lib.c", "no-extension"]) {
+			const { warnings } = parseHashlineWithWarnings(diff, { path });
+			expect(warnings).toHaveLength(1);
+			expect(warnings[0]).toMatch(/exactly one space before non-space content/);
+		}
+	});
+});

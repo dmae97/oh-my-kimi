@@ -106,7 +106,7 @@ async function preflightHashlineSection(options: ExecuteHashlineSingleOptions & 
 	const { session, path: sectionPath, diff } = options;
 
 	const absolutePath = resolvePlanPath(session, sectionPath);
-	const { edits } = parseHashlineWithWarnings(diff);
+	const { edits } = parseHashlineWithWarnings(diff, { path: sectionPath });
 	enforcePlanModeWrite(session, sectionPath, { op: "update" });
 
 	const source = await readHashlineFile(absolutePath, sectionPath);
@@ -139,7 +139,7 @@ async function executeHashlineSection(
 	} = options;
 
 	const absolutePath = resolvePlanPath(session, sourcePath);
-	const { edits, warnings: parseWarnings } = parseHashlineWithWarnings(diff);
+	const { edits, warnings: parseWarnings } = parseHashlineWithWarnings(diff, { path: sourcePath });
 	enforcePlanModeWrite(session, sourcePath, { op: "update" });
 
 	const source = await readHashlineFile(absolutePath, sourcePath);

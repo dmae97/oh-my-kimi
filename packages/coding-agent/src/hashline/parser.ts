@@ -74,15 +74,78 @@ export function cloneCursor(cursor: HashlineCursor): HashlineCursor {
 	if (cursor.kind === "after_anchor") return { kind: "after_anchor", anchor: { ...cursor.anchor } };
 	return cursor;
 }
-/** Returns true when every non-empty payload line starts with `${sep} ` (sep + one space). */
+/**
+ * Returns true when every non-empty payload line looks like the `~ TEXT` readability-padding
+ * typo: exactly one leading space followed by a non-space character (or a bare single space).
+ *
+ * Indented file content (Python 4-space, YAML/JSON/Markdown 2-space, etc.) starts with two or
+ * more leading spaces, so this heuristic ignores legitimate indentation while still flagging
+ * the common `~ beta` mistake that silently corrupts file content with a stray space.
+ */
 function hasUniformSeparatorPadding(payload: string[]): boolean {
 	let any = false;
 	for (const text of payload) {
 		if (text.length === 0) continue;
-		if (!text.startsWith(" ")) return false;
+		if (text.charCodeAt(0) !== 0x20) return false;
+		// Two or more leading spaces is real indentation, not separator padding.
+		if (text.length > 1 && text.charCodeAt(1) === 0x20) return false;
 		any = true;
 	}
 	return any;
+}
+
+/**
+ * File extensions where leading single-space indentation is plausible legitimate file content
+ * (off-side-rule languages, structured-indent data formats, prose with continuation indent).
+ * For these we suppress the separator-padding warning entirely — the heuristic's false-positive
+ * cost on a real edit outweighs the rare chance it catches a `~ TEXT` typo.
+ */
+const INDENT_SENSITIVE_EXTS: Record<string, true> = {
+	".py": true,
+	".pyi": true,
+	".pyx": true,
+	".pyw": true,
+	".yml": true,
+	".yaml": true,
+	".md": true,
+	".mdx": true,
+	".markdown": true,
+	".rst": true,
+	".adoc": true,
+	".asciidoc": true,
+	".toml": true,
+	".json": true,
+	".jsonc": true,
+	".json5": true,
+	".ndjson": true,
+	".jsonl": true,
+	".tf": true,
+	".tfvars": true,
+	".hcl": true,
+	".nix": true,
+	".coffee": true,
+	".litcoffee": true,
+	".haml": true,
+	".slim": true,
+	".pug": true,
+	".jade": true,
+	".sass": true,
+	".styl": true,
+	".nim": true,
+	".cr": true,
+	".elm": true,
+	".fs": true,
+	".fsi": true,
+	".fsx": true,
+};
+
+function isIndentationSensitivePath(path: string | undefined): boolean {
+	if (!path) return false;
+	const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+	const dot = path.lastIndexOf(".");
+	if (dot <= slash) return false;
+	const ext = path.slice(dot).toLowerCase();
+	return INDENT_SENSITIVE_EXTS[ext] === true;
 }
 
 function collectPayload(
@@ -90,6 +153,7 @@ function collectPayload(
 	startIndex: number,
 	opLineNum: number,
 	requirePayload: boolean,
+	checkPadding: boolean,
 ): { payload: string[]; nextIndex: number; paddingWarning?: string } {
 	const payload: string[] = [];
 	let index = startIndex;
@@ -125,21 +189,32 @@ function collectPayload(
 	if (payload.length === 0 && requirePayload) {
 		throw new Error(`line ${opLineNum}: + and < operations require at least one ${HL_EDIT_SEP}TEXT payload line.`);
 	}
-	const paddingWarning = hasUniformSeparatorPadding(payload)
-		? `line ${opLineNum}: all payload lines start with "${HL_EDIT_SEP} " (separator + space). ` +
-			`The space becomes file content. Remove it unless the target file requires leading spaces.`
-		: undefined;
+	const paddingWarning =
+		checkPadding && hasUniformSeparatorPadding(payload)
+			? `line ${opLineNum}: every payload line begins with exactly one space before non-space content, ` +
+				`which looks like a readability gap after "${HL_EDIT_SEP}". The space becomes file content. ` +
+				`Drop it unless the file genuinely uses a one-space indent.`
+			: undefined;
 	return { payload, nextIndex: index, paddingWarning };
 }
 
-export function parseHashline(diff: string): HashlineEdit[] {
-	return parseHashlineWithWarnings(diff).edits;
+export function parseHashline(diff: string, opts: ParseHashlineOptions = {}): HashlineEdit[] {
+	return parseHashlineWithWarnings(diff, opts).edits;
 }
 
-export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]; warnings: string[] } {
+export interface ParseHashlineOptions {
+	/** File path the diff targets. Used to suppress indent-sensitive false-positive warnings. */
+	path?: string;
+}
+
+export function parseHashlineWithWarnings(
+	diff: string,
+	opts: ParseHashlineOptions = {},
+): { edits: HashlineEdit[]; warnings: string[] } {
 	const edits: HashlineEdit[] = [];
 	const warnings: string[] = [];
 	const lines = diff.split(/\r?\n/);
+	const checkPadding = !isIndentationSensitivePath(opts.path);
 	let editIndex = 0;
 
 	const pushInsert = (cursor: HashlineCursor, text: string, lineNum: number) => {
@@ -172,7 +247,7 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const insertBeforeMatch = INSERT_BEFORE_OP_RE.exec(line);
 		if (insertBeforeMatch) {
 			const cursor = parseInsertTarget(insertBeforeMatch[1], lineNum, "before");
-			const { payload, nextIndex, paddingWarning } = collectPayload(lines, i + 1, lineNum, true);
+			const { payload, nextIndex, paddingWarning } = collectPayload(lines, i + 1, lineNum, true, checkPadding);
 			if (paddingWarning) warnings.push(paddingWarning);
 			for (const text of payload) pushInsert(cursor, text, lineNum);
 			i = nextIndex;
@@ -182,7 +257,7 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const insertAfterMatch = INSERT_AFTER_OP_RE.exec(line);
 		if (insertAfterMatch) {
 			const cursor = parseInsertTarget(insertAfterMatch[1], lineNum, "after");
-			const { payload, nextIndex, paddingWarning } = collectPayload(lines, i + 1, lineNum, true);
+			const { payload, nextIndex, paddingWarning } = collectPayload(lines, i + 1, lineNum, true, checkPadding);
 			if (paddingWarning) warnings.push(paddingWarning);
 			for (const text of payload) pushInsert(cursor, text, lineNum);
 			i = nextIndex;
@@ -201,7 +276,7 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const replaceMatch = REPLACE_OP_RE.exec(line);
 		if (replaceMatch) {
 			const range = parseRange(replaceMatch[1], lineNum);
-			const { payload, nextIndex, paddingWarning } = collectPayload(lines, i + 1, lineNum, false);
+			const { payload, nextIndex, paddingWarning } = collectPayload(lines, i + 1, lineNum, false, checkPadding);
 			if (paddingWarning) warnings.push(paddingWarning);
 			// `= A..B` with no payload blanks the range to a single empty line.
 			const replacement = payload.length === 0 ? [""] : payload;
