@@ -595,19 +595,30 @@ export const searchToolRenderer = {
 					itemType: "match",
 					renderItem: group => {
 						// Track directory context within a group for ## file headers.
+						// `# foo/` is a directory header; `# foo.ts` is a root-level file
+						// from formatGroupedFiles (single-# when directory is `.`).
 						let contextDir = searchBase ?? "";
 						return group.map(line => {
-							if (line.startsWith("# ")) {
-								const dirPart = line.slice(2).trimEnd().replace(/\/$/, "");
-								if (searchBase) {
-									contextDir = dirPart === "." ? searchBase : path.join(searchBase, dirPart);
-								}
-								return uiTheme.fg("accent", line);
-							}
 							if (line.startsWith("## ")) {
-								const fileName = line.slice(3).trimEnd();
+								// Strip optional ` (suffix)` like ` (3 replacements)` before resolving.
+								const fileName = line.slice(3).trimEnd().replace(/\s+\([^)]*\)\s*$/, "");
 								const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
 								const styled = uiTheme.fg("dim", line);
+								return absPath ? fileHyperlink(absPath, styled) : styled;
+							}
+							if (line.startsWith("# ")) {
+								const raw = line.slice(2).trimEnd().replace(/\s+\([^)]*\)\s*$/, "");
+								const isDirectory = raw.endsWith("/");
+								const name = raw.replace(/\/$/, "");
+								if (isDirectory) {
+									if (searchBase) {
+										contextDir = name === "." ? searchBase : path.join(searchBase, name);
+									}
+									return uiTheme.fg("accent", line);
+								}
+								// Root-level file emitted by formatGroupedFiles when the directory is `.`.
+								const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
+								const styled = uiTheme.fg("accent", line);
 								return absPath ? fileHyperlink(absPath, styled) : styled;
 							}
 							return uiTheme.fg("toolOutput", line);

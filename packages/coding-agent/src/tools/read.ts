@@ -27,7 +27,7 @@ import {
 	truncateHeadBytes,
 	truncateLine,
 } from "../session/streaming-output";
-import { fileHyperlink, renderCodeCell, renderMarkdownCell, renderStatusLine } from "../tui";
+import { fileHyperlink, renderCodeCell, renderMarkdownCell, renderStatusLine, tryResolveInternalUrlSync } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { ImageInputTooLargeError, loadImageInput, MAX_IMAGE_INPUT_BYTES } from "../utils/image-loading";
@@ -2144,7 +2144,9 @@ export const readToolRenderer = {
 		}
 
 		const rawPath = args.file_path || args.path || "";
-		const filePath = shortenPath(rawPath);
+		const shortPath = shortenPath(rawPath);
+		const linkTarget = tryResolveInternalUrlSync(rawPath);
+		const filePath = linkTarget ? fileHyperlink(linkTarget, shortPath) : shortPath;
 		const offset = args.offset;
 		const limit = args.limit;
 
@@ -2262,10 +2264,12 @@ export const readToolRenderer = {
 
 		const suffix = details?.suffixResolution;
 		const plainDisplayPath = suffix ? shortenPath(suffix.to) : filePath;
-		// resolvedPath is the absolute fs path for regular files and fs-backed internal URLs (local://, skill://, etc.)
-		const displayPath = details?.resolvedPath
-			? fileHyperlink(details.resolvedPath, plainDisplayPath)
-			: plainDisplayPath;
+		// resolvedPath is the absolute fs path for fs-backed reads (regular files plus
+		// local:// / memory:// / skill:// / artifact:// resources). Fall back to a sync
+		// resolver for fs-backed internal URLs so the title is clickable even before the
+		// result lands or if the handler didn't populate resolvedPath.
+		const absForLink = details?.resolvedPath ?? tryResolveInternalUrlSync(rawPath);
+		const displayPath = absForLink ? fileHyperlink(absForLink, plainDisplayPath) : plainDisplayPath;
 		const correction = suffix ? ` ${uiTheme.fg("dim", `(corrected from ${shortenPath(suffix.from)})`)}` : "";
 		let title = displayPath ? `Read ${displayPath}${correction}` : "Read";
 		if (args?.offset !== undefined || args?.limit !== undefined) {

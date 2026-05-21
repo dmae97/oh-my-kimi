@@ -495,27 +495,36 @@ export const astEditToolRenderer = {
 					maxCollapsed: changeGroups.length,
 					maxCollapsedLines: COLLAPSED_CHANGE_LIMIT,
 					itemType: "change",
-					renderItem: group => {
-						let contextDir = searchBase ?? "";
-						return group.map(line => {
-							if (line.startsWith("# ")) {
-								const dirPart = line.slice(2).trimEnd().replace(/\/$/, "");
+				renderItem: group => {
+					let contextDir = searchBase ?? "";
+					return group.map(line => {
+						if (line.startsWith("## ")) {
+							// Strip ` (3 replacements)` suffix attached by formatGroupedFiles.
+							const fileName = line.slice(3).trimEnd().replace(/\s+\([^)]*\)\s*$/, "");
+							const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
+							const styled = uiTheme.fg("dim", line);
+							return absPath ? fileHyperlink(absPath, styled) : styled;
+						}
+						if (line.startsWith("# ")) {
+							const raw = line.slice(2).trimEnd().replace(/\s+\([^)]*\)\s*$/, "");
+							const isDirectory = raw.endsWith("/");
+							const name = raw.replace(/\/$/, "");
+							if (isDirectory) {
 								if (searchBase) {
-									contextDir = dirPart === "." ? searchBase : path.join(searchBase, dirPart);
+									contextDir = name === "." ? searchBase : path.join(searchBase, name);
 								}
 								return uiTheme.fg("accent", line);
 							}
-							if (line.startsWith("## ")) {
-								const fileName = line.slice(3).trimEnd();
-								const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
-								const styled = uiTheme.fg("dim", line);
-								return absPath ? fileHyperlink(absPath, styled) : styled;
-							}
-							if (line.startsWith("+")) return uiTheme.fg("toolDiffAdded", line);
-							if (line.startsWith("-")) return uiTheme.fg("toolDiffRemoved", line);
-							return uiTheme.fg("toolOutput", line);
-						});
-					},
+							// Root-level file with optional suffix, e.g. `# foo.ts (3 replacements)`.
+							const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
+							const styled = uiTheme.fg("accent", line);
+							return absPath ? fileHyperlink(absPath, styled) : styled;
+						}
+						if (line.startsWith("+")) return uiTheme.fg("toolDiffAdded", line);
+						if (line.startsWith("-")) return uiTheme.fg("toolDiffRemoved", line);
+						return uiTheme.fg("toolOutput", line);
+					});
+				},
 				},
 				uiTheme,
 			);

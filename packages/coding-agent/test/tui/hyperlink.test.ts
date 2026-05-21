@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as settingsModule from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as terminalCaps from "@oh-my-pi/pi-tui";
-import { fileHyperlink, isHyperlinkEnabled } from "@oh-my-pi/pi-coding-agent/tui/hyperlink";
+import { fileHyperlink, isHyperlinkEnabled, tryResolveInternalUrlSync } from "@oh-my-pi/pi-coding-agent/tui/hyperlink";
 
 // OSC 8 sequence markers
 const OSC = "\x1b]";
@@ -177,5 +177,31 @@ describe("fileHyperlink", () => {
 		expect(result).toContain(colored);
 		expect(isHyperlinked(result)).toBe(true);
 		spy.mockRestore();
+	});
+});
+
+describe("tryResolveInternalUrlSync", () => {
+	it("returns undefined for non-internal URLs", () => {
+		expect(tryResolveInternalUrlSync("/abs/path/file.ts")).toBeUndefined();
+		expect(tryResolveInternalUrlSync("relative/path.ts")).toBeUndefined();
+		expect(tryResolveInternalUrlSync("https://example.com/foo")).toBeUndefined();
+	});
+
+	it("returns undefined for unsupported internal URL schemes", () => {
+		// Async-resolved schemes are intentionally not handled here.
+		expect(tryResolveInternalUrlSync("artifact://123")).toBeUndefined();
+		expect(tryResolveInternalUrlSync("agent://abc")).toBeUndefined();
+		expect(tryResolveInternalUrlSync("skill://foo")).toBeUndefined();
+		expect(tryResolveInternalUrlSync("omp://docs.md")).toBeUndefined();
+	});
+
+	it("returns undefined when local:// resolution has no session options", () => {
+		// No AgentRegistry main session in this unit test, no override installed.
+		expect(tryResolveInternalUrlSync("local://foo.md")).toBeUndefined();
+	});
+
+	it("swallows errors from malformed URLs", () => {
+		// Malformed input should not throw, just return undefined.
+		expect(tryResolveInternalUrlSync("local://%ZZ")).toBeUndefined();
 	});
 });
