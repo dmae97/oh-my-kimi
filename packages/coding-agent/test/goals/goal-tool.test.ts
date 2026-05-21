@@ -151,7 +151,7 @@ describe("GoalTool", () => {
 		);
 
 		await expect(tool.execute("call-complete", { op: "complete" })).rejects.toThrow(
-			"cannot complete goal because goal mode is not active",
+			"cannot complete goal because no goal is active",
 		);
 	});
 
@@ -206,5 +206,101 @@ describe("GoalTool", () => {
 		expect(after?.mode).toBe("exiting");
 		expect(after?.reason).toBe("completed");
 		expect(after?.goal.status).toBe("complete");
+	});
+
+	it("completes a paused goal (enabled=false) — was broken before fix", async () => {
+		const harness = createRuntimeHarness({
+			enabled: false,
+			mode: "active",
+			goal: createGoal({ objective: "Paused work", status: "paused" }),
+		});
+		const tool = new GoalTool(
+			createToolSession({
+				getGoalRuntime: () => harness.runtime,
+				getGoalModeState: () => harness.getState(),
+			}),
+		);
+
+		const result = await tool.execute("call-complete", { op: "complete" });
+		expect(result.details?.goal?.status).toBe("complete");
+		expect(harness.getState()?.goal.status).toBe("complete");
+	});
+
+	it("allows create after previous goal is complete", async () => {
+		const harness = createRuntimeHarness({
+			enabled: false,
+			mode: "exiting",
+			reason: "completed",
+			goal: createGoal({ status: "complete" }),
+		});
+		const tool = new GoalTool(
+			createToolSession({
+				getGoalRuntime: () => harness.runtime,
+				getGoalModeState: () => harness.getState(),
+			}),
+		);
+
+		const result = await tool.execute("call-create", {
+			op: "create",
+			objective: "Next goal",
+		});
+		expect(result.details?.goal?.objective).toBe("Next goal");
+		expect(result.details?.goal?.status).toBe("active");
+	});
+
+	it("op=get returns a paused goal even when enabled=false", async () => {
+		const harness = createRuntimeHarness({
+			enabled: false,
+			mode: "active",
+			goal: createGoal({ status: "paused" }),
+		});
+		const tool = new GoalTool(
+			createToolSession({
+				getGoalRuntime: () => harness.runtime,
+				getGoalModeState: () => harness.getState(),
+			}),
+		);
+
+		const result = await tool.execute("call-get", { op: "get" });
+		expect(result.details?.goal?.status).toBe("paused");
+		expect(result.details?.goal?.objective).toBe("Ship it");
+	});
+
+	it("op=resume re-activates a paused goal", async () => {
+		const harness = createRuntimeHarness({
+			enabled: false,
+			mode: "active",
+			goal: createGoal({ status: "paused" }),
+		});
+		const tool = new GoalTool(
+			createToolSession({
+				getGoalRuntime: () => harness.runtime,
+				getGoalModeState: () => harness.getState(),
+			}),
+		);
+
+		const result = await tool.execute("call-resume", { op: "resume" });
+		expect(result.details?.op).toBe("resume");
+		expect(result.details?.goal?.status).toBe("active");
+		expect(harness.getState()?.enabled).toBe(true);
+	});
+
+	it("op=drop clears goal state", async () => {
+		const harness = createRuntimeHarness({
+			enabled: true,
+			mode: "active",
+			goal: createGoal({ objective: "Drop me" }),
+		});
+		const tool = new GoalTool(
+			createToolSession({
+				getGoalRuntime: () => harness.runtime,
+				getGoalModeState: () => harness.getState(),
+			}),
+		);
+
+		const result = await tool.execute("call-drop", { op: "drop" });
+		expect(result.details?.op).toBe("drop");
+		expect(result.details?.goal?.status).toBe("dropped");
+		expect(harness.getState()).toBeUndefined();
 	});
 });

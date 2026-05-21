@@ -1063,6 +1063,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (event.type === "goal_updated") {
+			// Handle drop before clearing goalModeEnabled so #exitGoalMode can
+			// still restore the previous tool set while the flag is true.
+			if (event.state?.goal?.status === "dropped") {
+				await this.#exitGoalMode({ reason: "dropped", silent: true });
+				return;
+			}
 			this.goalModeEnabled = event.state?.enabled === true;
 			this.goalModePaused = event.state?.enabled !== true && event.state?.goal?.status === "paused";
 			if (!event.state?.enabled) {
@@ -1150,6 +1156,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			const restored = await this.session.goalRuntime.onThreadResumed();
 			this.goalModeEnabled = restored?.enabled === true;
 			this.goalModePaused = restored?.enabled !== true && restored?.goal.status === "paused";
+			// sdk.ts excludes "goal" from the initial active tool set unconditionally.
+			// Re-add it now so the agent can call resume, complete, or drop on this goal.
+			if (restored?.goal) {
+				const previousTools = this.session.getActiveToolNames().filter(name => name !== "goal");
+				this.#goalModePreviousTools = previousTools;
+				await this.session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
+			}
 			this.#updateGoalModeStatus();
 			return;
 		}

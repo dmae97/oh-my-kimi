@@ -296,4 +296,37 @@ describe("goal runtime", () => {
 			"cannot create a new goal because this session already has a goal",
 		);
 	});
+
+	it("allows creating a new goal after the previous one is complete", async () => {
+		const harness = createHarness({
+			state: {
+				enabled: false,
+				mode: "exiting",
+				reason: "completed",
+				goal: createGoal({ status: "complete" }),
+			},
+		});
+
+		const next = await harness.runtime.createGoal({ objective: "Phase 4" });
+		expect(next.goal.objective).toBe("Phase 4");
+		expect(next.goal.status).toBe("active");
+		expect(next.enabled).toBe(true);
+	});
+
+	it("completeGoalFromTool succeeds for a paused goal (enabled=false)", async () => {
+		const harness = createHarness({
+			state: {
+				enabled: false,
+				mode: "active",
+				goal: createGoal({ status: "paused", tokensUsed: 30, timeUsedSeconds: 5 }),
+			},
+		});
+
+		const completed = await harness.runtime.completeGoalFromTool();
+		expect(completed.status).toBe("complete");
+		const state = harness.getState();
+		expect(state?.enabled).toBe(false);
+		expect(state?.mode).toBe("exiting");
+		expect(state?.goal.status).toBe("complete");
+	});
 });
