@@ -8,7 +8,7 @@ import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import astGrepDescription from "../prompts/tools/ast-grep.md" with { type: "text" };
-import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
+import { Ellipsis, fileHyperlink, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
@@ -113,6 +113,9 @@ export interface AstGrepToolDetails {
 	/** Pre-formatted text for the user-visible TUI render. Mirrors `result.text` lines but uses
 	 * a `│` gutter and `*` to mark match lines. The TUI uses this directly so it never parses model-facing text. */
 	displayContent?: string;
+	/** Absolute base directory used during search. Used by the renderer to resolve
+	 * display-relative paths to absolute paths for OSC 8 hyperlinks. */
+	searchPath?: string;
 }
 
 export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolDetails> {
@@ -190,16 +193,17 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				matchesByFile.get(relativePath)!.push(match);
 			}
 
-			const baseDetails: AstGrepToolDetails = {
-				matchCount: result.totalMatches,
-				fileCount: result.filesWithMatches,
-				filesSearched: result.filesSearched,
-				limitReached: result.limitReached,
-				...(cappedParseErrors.length > 0 ? { parseErrors: cappedParseErrors, parseErrorsTotal } : {}),
-				scopePath,
-				files: fileList,
-				fileMatches: [],
-			};
+		const baseDetails: AstGrepToolDetails = {
+			matchCount: result.totalMatches,
+			fileCount: result.filesWithMatches,
+			filesSearched: result.filesSearched,
+			limitReached: result.limitReached,
+			...(cappedParseErrors.length > 0 ? { parseErrors: cappedParseErrors, parseErrorsTotal } : {}),
+			scopePath,
+			searchPath: resolvedSearchPath,
+			files: fileList,
+			fileMatches: [],
+		};
 
 			if (result.matches.length === 0) {
 				const noMatchMessage = cappedParseErrors.length
@@ -363,29 +367,43 @@ export const astGrepToolRenderer = {
 			);
 		}
 
-		return createCachedComponent(
-			() => options.expanded,
-			width => {
-				const matchLines = renderTreeList(
-					{
-						items: matchGroups,
-						expanded: options.expanded,
-						maxCollapsed: matchGroups.length,
-						maxCollapsedLines: COLLAPSED_MATCH_LIMIT,
-						itemType: "match",
-						renderItem: group =>
-							group.map(line => {
-								if (line.startsWith("## ")) return uiTheme.fg("dim", line);
-								if (line.startsWith("# ")) return uiTheme.fg("accent", line);
-								if (line.startsWith("  meta:")) return uiTheme.fg("dim", line);
-								return uiTheme.fg("toolOutput", line);
-							}),
+	return createCachedComponent(
+		() => options.expanded,
+		width => {
+			const searchBase = details?.searchPath;
+			const matchLines = renderTreeList(
+				{
+					items: matchGroups,
+					expanded: options.expanded,
+					maxCollapsed: matchGroups.length,
+					maxCollapsedLines: COLLAPSED_MATCH_LIMIT,
+					itemType: "match",
+					renderItem: group => {
+						let contextDir = searchBase ?? "";
+						return group.map(line => {
+							if (line.startsWith("# ")) {
+								const dirPart = line.slice(2).trimEnd().replace(/\/$/, "");
+								if (searchBase) {
+									contextDir = dirPart === "." ? searchBase : path.join(searchBase, dirPart);
+								}
+								return uiTheme.fg("accent", line);
+							}
+							if (line.startsWith("## ")) {
+								const fileName = line.slice(3).trimEnd();
+								const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
+								const styled = uiTheme.fg("dim", line);
+								return absPath ? fileHyperlink(absPath, styled) : styled;
+							}
+							if (line.startsWith("  meta:")) return uiTheme.fg("dim", line);
+							return uiTheme.fg("toolOutput", line);
+						});
 					},
-					uiTheme,
-				);
-				return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
-			},
-		);
+				},
+				uiTheme,
+			);
+			return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
+		},
+	);
 	},
 	mergeCallAndResult: true,
 };

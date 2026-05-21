@@ -25,7 +25,7 @@ import {
 	truncateDiffByHunk,
 } from "../tools/render-utils";
 import { type VimRenderArgs, vimToolRenderer } from "../tools/vim";
-import { Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
+import { fileHyperlink, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
 import type { EditMode } from "../utils/edit-mode";
 import type { VimToolDetails } from "../vim/types";
 import type { DiffError, DiffResult } from "./diff";
@@ -219,14 +219,16 @@ function formatEditPathDisplay(
 	uiTheme: Theme,
 	options?: { rename?: string; firstChangedLine?: number },
 ): string {
-	let pathDisplay = rawPath ? uiTheme.fg("accent", shortenPath(rawPath)) : uiTheme.fg("toolOutput", "…");
+	let pathDisplay = rawPath
+		? fileHyperlink(rawPath, uiTheme.fg("accent", shortenPath(rawPath)))
+		: uiTheme.fg("toolOutput", "…");
 
 	if (options?.firstChangedLine) {
 		pathDisplay += uiTheme.fg("warning", `:${options.firstChangedLine}`);
 	}
 
 	if (options?.rename) {
-		pathDisplay += ` ${uiTheme.fg("dim", "→")} ${uiTheme.fg("accent", shortenPath(options.rename))}`;
+		pathDisplay += ` ${uiTheme.fg("dim", "→")} ${fileHyperlink(options.rename, uiTheme.fg("accent", shortenPath(options.rename)))}`;
 	}
 
 	return pathDisplay;

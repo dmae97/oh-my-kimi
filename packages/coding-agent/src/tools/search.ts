@@ -10,7 +10,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
 import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../session/streaming-output";
-import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
+import { Ellipsis, fileHyperlink, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
@@ -103,6 +103,9 @@ export interface SearchToolDetails {
 	 * `result.text` lines but uses a `│` gutter and `*` to mark match lines (vs space for
 	 * context). The TUI uses this directly so it never parses model-facing hashline anchors. */
 	displayContent?: string;
+	/** Absolute base directory used during search. Used by the renderer to resolve
+	 * display-relative paths to absolute paths for OSC 8 hyperlinks. */
+	searchPath?: string;
 	/** User-supplied paths whose base directory was missing on disk. The tool
 	 * skipped these and continued with the surviving entries; surfaced as a
 	 * non-fatal warning in the renderer and in the model-facing text. */
@@ -317,8 +320,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			const missingPathsNote =
 				missingPaths.length > 0 ? `Skipped missing paths: ${missingPaths.join(", ")}` : undefined;
 			if (selectedMatches.length === 0) {
-				const details: SearchToolDetails = {
+			const details: SearchToolDetails = {
 					scopePath,
+					searchPath,
 					matchCount: 0,
 					fileCount: 0,
 					files: [],
@@ -423,8 +427,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			const truncated = Boolean(
 				fileLimitReached || perFileLimitReached || result.limitReached || truncation.truncated || linesTruncated,
 			);
-			const details: SearchToolDetails = {
+		const details: SearchToolDetails = {
 				scopePath,
+				searchPath,
 				matchCount: selectedMatches.length,
 				fileCount: fileList.length,
 				files: fileList,
@@ -576,29 +581,44 @@ export const searchToolRenderer = {
 		}
 		if (missingNote) extraLines.push(missingNote);
 
-		return createCachedComponent(
-			() => options.expanded,
-			width => {
-				const collapsedMatchLineBudget = Math.max(COLLAPSED_TEXT_LIMIT - extraLines.length, 0);
-				const matchLines = renderTreeList(
-					{
-						items: matchGroups,
-						expanded: options.expanded,
-						maxCollapsed: matchGroups.length,
-						maxCollapsedLines: collapsedMatchLineBudget,
-						itemType: "match",
-						renderItem: group =>
-							group.map(line => {
-								if (line.startsWith("## ")) return uiTheme.fg("dim", line);
-								if (line.startsWith("# ")) return uiTheme.fg("accent", line);
-								return uiTheme.fg("toolOutput", line);
-							}),
+	return createCachedComponent(
+		() => options.expanded,
+		width => {
+			const collapsedMatchLineBudget = Math.max(COLLAPSED_TEXT_LIMIT - extraLines.length, 0);
+			const searchBase = details?.searchPath;
+			const matchLines = renderTreeList(
+				{
+					items: matchGroups,
+					expanded: options.expanded,
+					maxCollapsed: matchGroups.length,
+					maxCollapsedLines: collapsedMatchLineBudget,
+					itemType: "match",
+					renderItem: group => {
+						// Track directory context within a group for ## file headers.
+						let contextDir = searchBase ?? "";
+						return group.map(line => {
+							if (line.startsWith("# ")) {
+								const dirPart = line.slice(2).trimEnd().replace(/\/$/, "");
+								if (searchBase) {
+									contextDir = dirPart === "." ? searchBase : path.join(searchBase, dirPart);
+								}
+								return uiTheme.fg("accent", line);
+							}
+							if (line.startsWith("## ")) {
+								const fileName = line.slice(3).trimEnd();
+								const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
+								const styled = uiTheme.fg("dim", line);
+								return absPath ? fileHyperlink(absPath, styled) : styled;
+							}
+							return uiTheme.fg("toolOutput", line);
+						});
 					},
-					uiTheme,
-				);
-				return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
-			},
-		);
+				},
+				uiTheme,
+			);
+			return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
+		},
+	);
 	},
 	mergeCallAndResult: true,
 };

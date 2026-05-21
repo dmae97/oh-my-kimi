@@ -7,6 +7,9 @@ import { renderTreeList } from "./tree-list";
 
 export interface FileEntry {
 	path: string;
+	/** Absolute filesystem path. When provided together with {@link FileListOptions.hyperlinkFn}, the
+	 * rendered path text is wrapped in an OSC 8 hyperlink. */
+	absPath?: string;
 	isDirectory?: boolean;
 	meta?: string;
 }
@@ -16,10 +19,13 @@ export interface FileListOptions {
 	expanded?: boolean;
 	maxCollapsed?: number;
 	showIcons?: boolean;
+	/** When provided, called with the entry's absolute path and the ANSI-styled display string to
+	 * optionally wrap the path in an OSC 8 hyperlink. Only invoked when {@link FileEntry.absPath} is set. */
+	hyperlinkFn?: (absPath: string, displayText: string) => string;
 }
 
 export function renderFileList(options: FileListOptions, theme: Theme): string[] {
-	const { files, expanded = false, maxCollapsed = 8, showIcons = true } = options;
+	const { files, expanded = false, maxCollapsed = 8, showIcons = true, hyperlinkFn } = options;
 
 	return renderTreeList(
 		{
@@ -39,7 +45,10 @@ export function renderFileList(options: FileListOptions, theme: Theme): string[]
 				const labelColor = isDirectory ? "accent" : "toolOutput";
 				const meta = entry.meta ? ` ${theme.fg("dim", entry.meta)}` : "";
 				const iconPrefix = icon ? `${icon} ` : "";
-				return `${iconPrefix}${theme.fg(labelColor, displayPath)}${meta}`;
+				const pathStr = theme.fg(labelColor, displayPath);
+				const linkedPath =
+					entry.absPath && hyperlinkFn ? hyperlinkFn(entry.absPath, pathStr) : pathStr;
+				return `${iconPrefix}${linkedPath}${meta}`;
 			},
 		},
 		theme,

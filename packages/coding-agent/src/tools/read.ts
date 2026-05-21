@@ -27,7 +27,7 @@ import {
 	truncateHeadBytes,
 	truncateLine,
 } from "../session/streaming-output";
-import { renderCodeCell, renderMarkdownCell, renderStatusLine } from "../tui";
+import { fileHyperlink, renderCodeCell, renderMarkdownCell, renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { ImageInputTooLargeError, loadImageInput, MAX_IMAGE_INPUT_BYTES } from "../utils/image-loading";
@@ -2261,7 +2261,11 @@ export const readToolRenderer = {
 		}
 
 		const suffix = details?.suffixResolution;
-		const displayPath = suffix ? shortenPath(suffix.to) : filePath;
+		const plainDisplayPath = suffix ? shortenPath(suffix.to) : filePath;
+		// resolvedPath is the absolute fs path for regular files and fs-backed internal URLs (local://, skill://, etc.)
+		const displayPath = details?.resolvedPath
+			? fileHyperlink(details.resolvedPath, plainDisplayPath)
+			: plainDisplayPath;
 		const correction = suffix ? ` ${uiTheme.fg("dim", `(corrected from ${shortenPath(suffix.from)})`)}` : "";
 		let title = displayPath ? `Read ${displayPath}${correction}` : "Read";
 		if (args?.offset !== undefined || args?.limit !== undefined) {
