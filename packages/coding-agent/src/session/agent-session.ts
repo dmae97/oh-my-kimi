@@ -76,6 +76,7 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
+	extractRetryHint,
 	getAgentDbPath,
 	isEnoent,
 	isUnexpectedSocketCloseMessage,
@@ -6947,6 +6948,11 @@ export class AgentSession {
 			if (!Number.isNaN(dateMs)) {
 				return Math.max(0, dateMs - now);
 			}
+		}
+
+		const retryHintMs = extractRetryHint(undefined, errorMessage);
+		if (retryHintMs !== undefined) {
+			return retryHintMs;
 		}
 
 		const resetMsMatch = /x-ratelimit-reset-ms\s*[:=]\s*(\d+)/i.exec(errorMessage);
