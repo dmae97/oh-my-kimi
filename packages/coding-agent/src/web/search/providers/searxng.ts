@@ -31,6 +31,7 @@ import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
+import { withHardTimeout } from "./utils";
 
 const DEFAULT_NUM_RESULTS = 10;
 const MAX_NUM_RESULTS = 20;
@@ -211,7 +212,7 @@ async function callSearXNGSearch(
 
 	const response = await fetch(url, {
 		headers,
-		signal: params.signal,
+		signal: withHardTimeout(params.signal),
 	});
 
 	if (!response.ok) {

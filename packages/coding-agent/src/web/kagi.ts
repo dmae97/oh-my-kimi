@@ -1,5 +1,5 @@
 import { getEnvApiKey } from "@oh-my-pi/pi-ai";
-import { findCredential } from "./search/providers/utils";
+import { findCredential, withHardTimeout } from "./search/providers/utils";
 
 const KAGI_SEARCH_URL = "https://kagi.com/api/v0/search";
 
@@ -138,7 +138,7 @@ export async function searchWithKagi(query: string, options: KagiSearchOptions =
 
 	const response = await fetch(requestUrl, {
 		headers: getAuthHeaders(apiKey),
-		signal: options.signal,
+		signal: withHardTimeout(options.signal),
 	});
 	if (!response.ok) {
 		throw parseKagiErrorResponse(response.status, await response.text());

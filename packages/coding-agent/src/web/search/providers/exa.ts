@@ -14,6 +14,7 @@ import { SearchProviderError } from "../../../web/search/types";
 import { dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
+import { withHardTimeout } from "./utils";
 
 const EXA_API_URL = "https://api.exa.ai/search";
 
@@ -180,7 +181,7 @@ async function callExaSearch(apiKey: string, params: ExaSearchParams): Promise<E
 			"x-api-key": apiKey,
 		},
 		body: JSON.stringify(body),
-		signal: params.signal,
+		signal: withHardTimeout(params.signal),
 	});
 
 	if (!response.ok) {

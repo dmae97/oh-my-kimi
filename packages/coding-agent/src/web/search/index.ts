@@ -14,6 +14,7 @@ import webSearchSystemPrompt from "../../prompts/system/web-search.md" with { ty
 import webSearchDescription from "../../prompts/tools/web-search.md" with { type: "text" };
 import type { ToolSession } from "../../tools";
 import { formatAge } from "../../tools/render-utils";
+import { throwIfAborted } from "../../tools/tool-errors";
 import { getSearchProvider, getSearchProviderLabel, resolveProviderChain, type SearchProvider } from "./provider";
 import { renderSearchCall, renderSearchResult, type SearchRenderDetails } from "./render";
 import type { SearchProviderId, SearchResponse } from "./types";
@@ -161,6 +162,12 @@ async function executeSearch(
 				details: { response },
 			};
 		} catch (error) {
+			// Surface user-initiated cancellation immediately so the session sees
+			// a clean abort instead of a generic "all providers failed" message.
+			// Without this, an AbortError from `fetch()` is treated as a provider
+			// failure and the loop falls through to the next provider (or to the
+			// summary error), masking the cancellation.
+			throwIfAborted(signal);
 			lastError = error;
 		}
 	}

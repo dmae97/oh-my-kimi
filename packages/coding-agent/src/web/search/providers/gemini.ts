@@ -15,6 +15,7 @@ import type { SearchCitation, SearchResponse, SearchSource } from "../../../web/
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
+import { withHardTimeout } from "./utils";
 
 const DEFAULT_ENDPOINT = "https://cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_DAILY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com";
@@ -310,7 +311,7 @@ async function callGeminiSearch(
 			...headers,
 		},
 		body: JSON.stringify(requestBody),
-		signal,
+		signal: withHardTimeout(signal),
 	});
 	const urlFor = (attempt: number) =>
 		`${endpoints[Math.min(attempt, endpoints.length - 1)]}/v1internal:streamGenerateContent?alt=sse`;

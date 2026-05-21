@@ -50,6 +50,36 @@ export async function isApiKeyAvailable(findApiKey: () => string | null | Promis
 }
 
 /**
+ * Default hard ceiling for a single web-search round-trip. 60s tolerates
+ * legitimate slow LLM-mediated responses (anthropic web_search_20250305,
+ * perplexity, gemini, codex) while still guaranteeing the session unfreezes
+ * within a minute if Bun's `AbortSignal` fails to propagate on Windows.
+ *
+ * Pure search APIs (brave, exa, jina, tavily, searxng, synthetic, zai)
+ * settle far faster in practice; reusing the same ceiling keeps the wiring
+ * uniform without compromising correctness.
+ */
+export const SEARCH_HARD_TIMEOUT_MS = 60_000;
+
+/**
+ * Compose a caller-supplied {@link AbortSignal} with a hard timeout so an
+ * outbound `fetch()` is guaranteed to settle within `ms` even when the
+ * runtime fails to propagate cancellation to the underlying transport.
+ *
+ * Bun's WinHTTP backend on Windows is known to ignore `AbortSignal` once a
+ * TCP/TLS connection stalls (oven-sh/bun#15275, oven-sh/bun#18536); without
+ * this safety net a stalled web-search request freezes the entire session
+ * because the user's Esc is never delivered to the native layer.
+ *
+ * @param signal - Caller cancellation signal, if any.
+ * @param ms - Hard timeout in milliseconds. Defaults to {@link SEARCH_HARD_TIMEOUT_MS}.
+ */
+export function withHardTimeout(signal: AbortSignal | undefined, ms: number = SEARCH_HARD_TIMEOUT_MS): AbortSignal {
+	const timeout = AbortSignal.timeout(ms);
+	return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+/**
  * Map a provider's raw source list to the unified SearchSource shape,
  * clamped to the requested result count and annotated with ageSeconds.
  */
