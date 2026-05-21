@@ -1,3 +1,6 @@
+import { shimmerText } from "../../modes/theme/shimmer";
+import { theme as currentTheme, type Theme } from "../../modes/theme/theme";
+
 /** Format a millisecond duration as a coarse-grained human label. */
 export function formatDuration(ms: number): string {
 	const seconds = Math.max(0, Math.round(ms / 1000));
@@ -10,14 +13,31 @@ export function formatDuration(ms: number): string {
 	return `${days}d`;
 }
 
+type ProgressBarTheme = Pick<Theme, "bold" | "fg">;
+
+const unstyledProgressBarTheme: ProgressBarTheme = {
+	fg(_color, text) {
+		return text;
+	},
+	bold(text) {
+		return text;
+	},
+};
+
+function resolveProgressBarTheme(uiTheme: ProgressBarTheme | undefined): ProgressBarTheme {
+	return uiTheme ?? currentTheme ?? unstyledProgressBarTheme;
+}
+
 /**
  * Render an ASCII progress bar with a trailing percent label.
  * `fraction` is clamped to `[0, 1]`. `undefined` renders a dotted placeholder.
  */
-export function renderAsciiBar(fraction: number | undefined, width = 24): string {
-	if (fraction === undefined) return `[${"·".repeat(width)}]`;
+export function renderAsciiBar(fraction: number | undefined, width = 24, uiTheme?: ProgressBarTheme): string {
+	const progressBarTheme = resolveProgressBarTheme(uiTheme);
+	if (fraction === undefined) return `[${shimmerText("·".repeat(width), progressBarTheme)}]`;
 	const clamped = Math.min(Math.max(fraction, 0), 1);
 	const filled = Math.round(clamped * width);
 	const pct = Math.round(clamped * 100);
-	return `[${"█".repeat(filled)}${"░".repeat(Math.max(0, width - filled))}] ${pct}%`;
+	const bar = `${"█".repeat(filled)}${"░".repeat(Math.max(0, width - filled))}`;
+	return `[${shimmerText(bar, progressBarTheme)}] ${pct}%`;
 }

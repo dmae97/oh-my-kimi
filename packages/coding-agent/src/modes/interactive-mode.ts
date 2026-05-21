@@ -98,6 +98,7 @@ import {
 } from "./loop-limit";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { SessionObserverRegistry } from "./session-observer-registry";
+import { shimmerText } from "./theme/shimmer";
 import type { Theme } from "./theme/theme";
 import {
 	getEditorTheme,
@@ -109,6 +110,14 @@ import {
 } from "./theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoItem, TodoPhase } from "./types";
 import { UiHelpers } from "./utils/ui-helpers";
+
+const WORKING_INTERRUPT_HINT = " (esc to interrupt)";
+
+function renderWorkingMessage(message: string): string {
+	if (!message.endsWith(WORKING_INTERRUPT_HINT)) return shimmerText(message, theme);
+	const header = message.slice(0, -WORKING_INTERRUPT_HINT.length);
+	return `${shimmerText(header, theme)}${theme.fg("dim", WORKING_INTERRUPT_HINT)}`;
+}
 
 const EDITOR_MAX_HEIGHT_MIN = 6;
 const EDITOR_MAX_HEIGHT_MAX = 18;
@@ -2180,7 +2189,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.loadingAnimation = new Loader(
 				this.ui,
 				spinner => theme.fg("accent", spinner),
-				text => theme.fg("muted", text),
+				renderWorkingMessage,
 				this.#defaultWorkingMessage,
 				getSymbolTheme().spinnerFrames,
 			);

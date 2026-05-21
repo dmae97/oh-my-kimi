@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed the interactive working loader and slash-command progress bars to use the active theme's accent shimmer instead of static muted text.
+
 ### Fixed
 
 - Fixed false-positive hashline `~ TEXT` separator-padding warning firing on YAML, JSON, Python, Markdown, TOML, and other indent-sensitive file edits. The padding check is now skipped entirely for indentation-sensitive extensions (`.py`, `.yml`/`.yaml`, `.md`/`.mdx`, `.json`/`.jsonc`/`.json5`, `.toml`, `.rst`, `.tf`, `.nix`, `.coffee`, `.haml`/`.slim`/`.pug`, `.sass`/`.styl`, `.nim`, `.cr`, `.elm`, `.fs`, …), and tightened on every other extension to flag only the `~ beta` typo shape (exactly one leading space before non-space content) rather than any leading-space payload.
