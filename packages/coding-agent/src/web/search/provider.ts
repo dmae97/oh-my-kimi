@@ -82,6 +82,11 @@ const PROVIDER_META: Record<SearchProviderId, ProviderMeta> = {
 		label: "Kagi",
 		load: async () => new (await import("./providers/kagi")).KagiProvider(),
 	},
+	"kagi-v1": {
+		id: "kagi-v1",
+		label: "Kagi V1",
+		load: async () => new (await import("./providers/kagi-v1")).KagiV1Provider(),
+	},
 	synthetic: {
 		id: "synthetic",
 		label: "Synthetic",
@@ -130,6 +135,7 @@ export const SEARCH_PROVIDER_ORDER: SearchProviderId[] = [
 	"exa",
 	"parallel",
 	"kagi",
+	"kagi-v1",
 	"synthetic",
 	"searxng",
 ];

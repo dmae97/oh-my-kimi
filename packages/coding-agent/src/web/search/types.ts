@@ -18,6 +18,7 @@ export type SearchProviderId =
 	| "tavily"
 	| "parallel"
 	| "kagi"
+	| "kagi-v1"
 	| "synthetic"
 	| "searxng";
 
@@ -35,6 +36,7 @@ export function isSearchProviderId(value: string): value is SearchProviderId {
 		"tavily",
 		"parallel",
 		"kagi",
+		"kagi-v1",
 		"synthetic",
 		"searxng",
 	].includes(value);
