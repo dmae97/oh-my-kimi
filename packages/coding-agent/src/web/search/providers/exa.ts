@@ -14,7 +14,7 @@ import { SearchProviderError } from "../../../web/search/types";
 import { dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { withHardTimeout } from "./utils";
+import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 const EXA_API_URL = "https://api.exa.ai/search";
 
@@ -186,6 +186,8 @@ async function callExaSearch(apiKey: string, params: ExaSearchParams): Promise<E
 
 	if (!response.ok) {
 		const errorText = await response.text();
+		const classified = classifyProviderHttpError("exa", response.status, errorText);
+		if (classified) throw classified;
 		throw new SearchProviderError("exa", `Exa API error (${response.status}): ${errorText}`, response.status);
 	}
 

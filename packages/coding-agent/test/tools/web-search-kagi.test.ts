@@ -32,7 +32,7 @@ describe("Kagi web search error handling", () => {
 		} catch (error) {
 			expect(error).toBeInstanceOf(SearchProviderError);
 			expect(error).toMatchObject({ provider: "kagi", status: 401 });
-			expect((error as Error).message).toContain(providerMessage);
+			expect((error as Error).message).toBe("kagi: 401 unauthorized");
 		}
 	});
 

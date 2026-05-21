@@ -10,7 +10,7 @@ import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { isApiKeyAvailable, withHardTimeout } from "./utils";
+import { classifyProviderHttpError, isApiKeyAvailable, withHardTimeout } from "./utils";
 
 const BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search";
 const DEFAULT_NUM_RESULTS = 10;
@@ -90,6 +90,8 @@ async function callBraveSearch(
 
 	if (!response.ok) {
 		const errorText = await response.text();
+		const classified = classifyProviderHttpError("brave", response.status, errorText);
+		if (classified) throw classified;
 		throw new SearchProviderError("brave", `Brave API error (${response.status}): ${errorText}`, response.status);
 	}
 

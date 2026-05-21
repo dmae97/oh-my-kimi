@@ -11,7 +11,7 @@ import { SearchProviderError } from "../../../web/search/types";
 import { dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { findCredential, isApiKeyAvailable, withHardTimeout } from "./utils";
+import { classifyProviderHttpError, findCredential, isApiKeyAvailable, withHardTimeout } from "./utils";
 
 const ZAI_MCP_URL = "https://api.z.ai/api/mcp/web_search_prime/mcp";
 const ZAI_TOOL_NAME = "web_search_prime";
@@ -78,6 +78,8 @@ async function callZaiTool(apiKey: string, args: Record<string, unknown>, signal
 
 	if (!response.ok) {
 		const errorText = await response.text();
+		const classified = classifyProviderHttpError("zai", response.status, errorText);
+		if (classified) throw classified;
 		throw new SearchProviderError("zai", `Z.AI MCP error (${response.status}): ${errorText}`, response.status);
 	}
 

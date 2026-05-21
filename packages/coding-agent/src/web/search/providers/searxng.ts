@@ -31,7 +31,7 @@ import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { withHardTimeout } from "./utils";
+import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 const DEFAULT_NUM_RESULTS = 10;
 const MAX_NUM_RESULTS = 20;
@@ -217,6 +217,8 @@ async function callSearXNGSearch(
 
 	if (!response.ok) {
 		const errorText = await response.text();
+		const classified = classifyProviderHttpError("searxng", response.status, errorText);
+		if (classified) throw classified;
 		throw new SearchProviderError("searxng", `SearXNG API error (${response.status}): ${errorText}`, response.status);
 	}
 

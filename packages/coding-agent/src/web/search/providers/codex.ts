@@ -15,7 +15,7 @@ import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { withHardTimeout } from "./utils";
+import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const CODEX_RESPONSES_PATH = "/codex/responses";
@@ -344,6 +344,8 @@ async function callCodexSearch(
 
 	if (!response.ok) {
 		const errorText = await response.text();
+		const classified = classifyProviderHttpError("codex", response.status, errorText);
+		if (classified) throw classified;
 		throw new SearchProviderError("codex", `Codex API error (${response.status}): ${errorText}`, response.status);
 	}
 

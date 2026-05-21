@@ -1,6 +1,6 @@
 import { getAgentDbPath } from "@oh-my-pi/pi-utils";
 import { AgentStorage } from "../../../session/agent-storage";
-import type { SearchSource } from "../../../web/search/types";
+import { SearchProviderError, type SearchProviderId, type SearchSource } from "../../../web/search/types";
 import { dateToAgeSeconds } from "../utils";
 
 /**
@@ -99,4 +99,36 @@ export function toSearchSources(
 		publishedDate: source.publishedDate,
 		ageSeconds: dateToAgeSeconds(source.publishedDate),
 	}));
+}
+
+/**
+ * Quota/auth signals across providers. Telemetry on 15.1.7/15.1.8 showed users
+ * hitting credit-exhaustion and 401/402/403 responses that were surfaced as
+ * raw HTTP error text. Map those into compact, provider-tagged messages so
+ * the orchestrator can chain-advance cleanly and the final summary stays
+ * legible when every provider rejects the request.
+ *
+ * Returns `null` when the response does not match a known quota/auth signal,
+ * leaving the caller to throw its provider-specific fallback error.
+ */
+const CREDIT_BODY_PATTERN = /credits?\s*(?:exhausted|exceeded)|quota|insufficient/i;
+
+export function classifyProviderHttpError(
+	provider: SearchProviderId,
+	status: number,
+	body: string,
+): SearchProviderError | null {
+	if (CREDIT_BODY_PATTERN.test(body)) {
+		return new SearchProviderError(provider, `${provider}: credits exhausted`, status);
+	}
+	if (status === 402) {
+		return new SearchProviderError(provider, `${provider}: 402 credits exhausted`, status);
+	}
+	if (status === 401) {
+		return new SearchProviderError(provider, `${provider}: 401 unauthorized`, status);
+	}
+	if (status === 403) {
+		return new SearchProviderError(provider, `${provider}: 403 forbidden`, status);
+	}
+	return null;
 }

@@ -10,7 +10,7 @@ import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { findCredential, isApiKeyAvailable, withHardTimeout } from "./utils";
+import { classifyProviderHttpError, findCredential, isApiKeyAvailable, withHardTimeout } from "./utils";
 
 const SYNTHETIC_SEARCH_URL = "https://api.synthetic.new/v2/search";
 
@@ -48,6 +48,8 @@ async function callSyntheticSearch(
 
 	if (!response.ok) {
 		const errorText = await response.text();
+		const classified = classifyProviderHttpError("synthetic", response.status, errorText);
+		if (classified) throw classified;
 		throw new SearchProviderError(
 			"synthetic",
 			`Synthetic API error (${response.status}): ${errorText}`,

@@ -10,7 +10,7 @@ import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { isApiKeyAvailable, withHardTimeout } from "./utils";
+import { classifyProviderHttpError, isApiKeyAvailable, withHardTimeout } from "./utils";
 
 const JINA_SEARCH_URL = "https://s.jina.ai";
 
@@ -46,6 +46,8 @@ async function callJinaSearch(apiKey: string, query: string, signal?: AbortSigna
 
 	if (!response.ok) {
 		const errorText = await response.text();
+		const classified = classifyProviderHttpError("jina", response.status, errorText);
+		if (classified) throw classified;
 		throw new SearchProviderError("jina", `Jina API error (${response.status}): ${errorText}`, response.status);
 	}
 

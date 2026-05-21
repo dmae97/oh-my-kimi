@@ -9,7 +9,7 @@ import { findKagiApiKey, KagiApiError, searchWithKagi } from "../../kagi";
 import { clampNumResults } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { toSearchSources } from "./utils";
+import { classifyProviderHttpError, toSearchSources } from "./utils";
 
 const DEFAULT_NUM_RESULTS = 10;
 const MAX_NUM_RESULTS = 40;
@@ -36,6 +36,10 @@ export async function searchKagi(params: {
 		};
 	} catch (err) {
 		if (err instanceof KagiApiError) {
+			if (typeof err.statusCode === "number") {
+				const classified = classifyProviderHttpError("kagi", err.statusCode, err.message);
+				if (classified) throw classified;
+			}
 			throw new SearchProviderError("kagi", err.message, err.statusCode);
 		}
 		throw err;

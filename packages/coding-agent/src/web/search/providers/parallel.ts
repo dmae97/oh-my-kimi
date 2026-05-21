@@ -4,7 +4,7 @@ import { findParallelApiKey, ParallelApiError, searchWithParallel } from "../../
 import { clampNumResults } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { toSearchSources } from "./utils";
+import { classifyProviderHttpError, toSearchSources } from "./utils";
 
 const DEFAULT_NUM_RESULTS = 10;
 const MAX_NUM_RESULTS = 40;
@@ -30,6 +30,10 @@ export async function searchParallel(params: {
 		};
 	} catch (err) {
 		if (err instanceof ParallelApiError) {
+			if (typeof err.statusCode === "number") {
+				const classified = classifyProviderHttpError("parallel", err.statusCode, err.message);
+				if (classified) throw classified;
+			}
 			throw new SearchProviderError("parallel", err.message, err.statusCode);
 		}
 		throw err;

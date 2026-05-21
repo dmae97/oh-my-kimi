@@ -85,7 +85,7 @@ describe("Tavily web search provider", () => {
 			expect.objectContaining({
 				provider: "tavily",
 				status: 401,
-				message: "Tavily API error (401): invalid api key",
+				message: "tavily: 401 unauthorized",
 			}) satisfies Partial<SearchProviderError>,
 		);
 	});

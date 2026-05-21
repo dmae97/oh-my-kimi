@@ -36,10 +36,6 @@ export interface SearchQueryParams extends SearchToolParams {
 	provider?: SearchProviderId | "auto";
 }
 
-function formatProviderList(providers: SearchProvider[]): string {
-	return providers.map(provider => provider.label).join(", ");
-}
-
 function formatProviderError(error: unknown, provider: SearchProvider): string {
 	if (error instanceof SearchProviderError) {
 		if (error.provider === "anthropic" && error.status === 404) {
@@ -138,9 +134,8 @@ async function executeSearch(
 		};
 	}
 
-	let lastError: unknown;
+	const failures: Array<{ provider: SearchProvider; error: unknown }> = [];
 	let lastProvider = providers[0];
-
 	for (const provider of providers) {
 		lastProvider = provider;
 		try {
@@ -168,14 +163,23 @@ async function executeSearch(
 			// failure and the loop falls through to the next provider (or to the
 			// summary error), masking the cancellation.
 			throwIfAborted(signal);
-			lastError = error;
+			failures.push({ provider, error });
 		}
 	}
 
-	const baseMessage = formatProviderError(lastError, lastProvider);
+	const lastFailure = failures[failures.length - 1];
+	const baseMessage = lastFailure
+		? formatProviderError(lastFailure.error, lastFailure.provider)
+		: `Unknown error from ${lastProvider.label}`;
 	const message =
 		providers.length > 1
-			? `All web search providers failed (${formatProviderList(providers)}). Last error: ${baseMessage}`
+			? `All web search providers failed: ${failures
+					.map(f =>
+						f.error instanceof SearchProviderError
+							? f.error.message
+							: `${f.provider.id}: ${formatProviderError(f.error, f.provider)}`,
+					)
+					.join("; ")}`
 			: baseMessage;
 
 	return {

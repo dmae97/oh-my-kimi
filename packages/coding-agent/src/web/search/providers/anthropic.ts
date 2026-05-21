@@ -24,7 +24,7 @@ import type {
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { withHardTimeout } from "./utils";
+import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 const DEFAULT_MODEL = "claude-haiku-4-5";
 const DEFAULT_MAX_TOKENS = 4096;
@@ -123,6 +123,8 @@ async function callSearch(
 
 	if (!response.ok) {
 		const errorText = await response.text();
+		const classified = classifyProviderHttpError("anthropic", response.status, errorText);
+		if (classified) throw classified;
 		throw new SearchProviderError(
 			"anthropic",
 			`Anthropic API error (${response.status}): ${errorText}`,

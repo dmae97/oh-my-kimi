@@ -591,6 +591,6 @@ describe("searchExa", () => {
 
 	it("throws SearchProviderError on non-ok HTTP response", async () => {
 		using _hook = mockFetch("Forbidden", 403);
-		await expect(searchExa({ query: "forbidden" })).rejects.toThrow("Exa API error (403)");
+		await expect(searchExa({ query: "forbidden" })).rejects.toThrow("exa: 403 forbidden");
 	});
 });
