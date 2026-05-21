@@ -334,10 +334,31 @@ jobs:
                  packages/coding-agent/binaries/omp-*
               generate_release_notes: true
 
+
+   release_github_verify:
+      if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
+         needs['release-github'].result == 'success' }}
+      needs: [release-github]
+      runs-on: macos-14
+      permissions:
+         contents: read
+      steps:
+         - name: Download published macOS arm64 binary
+           run: |
+              curl -fsSL -o omp-darwin-arm64 "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/omp-darwin-arm64"
+              chmod +x omp-darwin-arm64
+         - name: Verify published macOS arm64 binary
+           run: |
+              codesign -dv ./omp-darwin-arm64
+              runtime_dir="$(mktemp -d)"
+              HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" ./omp-darwin-arm64 --version
+
    release-npm:
       if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
-         needs.release_binary.result == 'success' && !inputs.skip_npm }}
-      needs: [release_binary, rust-hash]
+         needs.release_binary.result == 'success' &&
+         needs.release_github_verify.result == 'success' &&
+         !inputs.skip_npm }}
+      needs: [release_binary, release_github_verify, rust-hash]
       runs-on: ubuntu-22.04
       steps:
          - uses: actions/checkout@v4

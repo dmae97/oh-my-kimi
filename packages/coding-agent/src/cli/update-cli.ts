@@ -20,6 +20,22 @@ interface ReleaseInfo {
 	version: string;
 }
 
+/** Result from running the installed binary and parsing its reported version. */
+export interface InstalledVersionVerification {
+	ok: boolean;
+	actual?: string;
+	path?: string;
+}
+
+/** Paths and verifier used while replacing a downloaded binary update. */
+export interface BinaryReplacementOptions {
+	targetPath: string;
+	tempPath: string;
+	backupPath: string;
+	expectedVersion: string;
+	verifyInstalledVersion: (expectedVersion: string) => Promise<InstalledVersionVerification>;
+}
+
 /**
  * Parse update subcommand arguments.
  * Returns undefined if not an update command.
@@ -197,9 +213,7 @@ function resolveOmpPath(): string | undefined {
 /**
  * Run the resolved omp binary and check if it reports the expected version.
  */
-async function verifyInstalledVersion(
-	expectedVersion: string,
-): Promise<{ ok: boolean; actual?: string; path?: string }> {
+async function verifyInstalledVersion(expectedVersion: string): Promise<InstalledVersionVerification> {
 	const ompPath = resolveOmpPath();
 	if (!ompPath) return { ok: false };
 	try {
@@ -215,27 +229,67 @@ async function verifyInstalledVersion(
 	}
 }
 
+function printVerifiedVersion(expectedVersion: string): void {
+	console.log(chalk.green(`\n${theme.status.success} Updated to ${expectedVersion}`));
+}
+
+function formatVerificationFailure(result: InstalledVersionVerification, expectedVersion: string): string {
+	if (result.actual) {
+		return `${APP_NAME} at ${result.path} still reports ${result.actual} (expected ${expectedVersion})`;
+	}
+	return `could not verify updated version${result.path ? ` at ${result.path}` : ""}`;
+}
+
 /**
  * Print post-update verification result.
  */
 async function printVerification(expectedVersion: string): Promise<void> {
 	const result = await verifyInstalledVersion(expectedVersion);
 	if (result.ok) {
-		console.log(chalk.green(`\n${theme.status.success} Updated to ${expectedVersion}`));
+		printVerifiedVersion(expectedVersion);
 		return;
 	}
-	if (result.actual) {
-		console.log(
-			chalk.yellow(
-				`\nWarning: ${APP_NAME} at ${result.path} still reports ${result.actual} (expected ${expectedVersion})`,
-			),
-		);
-	} else {
-		console.log(
-			chalk.yellow(`\nWarning: could not verify updated version${result.path ? ` at ${result.path}` : ""}`),
-		);
-	}
+	console.log(chalk.yellow(`\nWarning: ${formatVerificationFailure(result, expectedVersion)}`));
 	console.log(chalk.yellow(`You may need to reinstall: curl -fsSL https://omp.sh/install | sh`));
+}
+
+async function unlinkIfExists(filePath: string): Promise<void> {
+	try {
+		await fs.promises.unlink(filePath);
+	} catch (err) {
+		if (!isEnoent(err)) throw err;
+	}
+}
+
+/**
+ * Atomically replace the installed binary and roll back if version verification fails.
+ */
+export async function replaceBinaryForUpdate(options: BinaryReplacementOptions): Promise<InstalledVersionVerification> {
+	let backupReady = false;
+	try {
+		await unlinkIfExists(options.backupPath);
+		await fs.promises.rename(options.targetPath, options.backupPath);
+		backupReady = true;
+		await fs.promises.rename(options.tempPath, options.targetPath);
+
+		const verification = await options.verifyInstalledVersion(options.expectedVersion);
+		if (!verification.ok) {
+			throw new Error(
+				`${formatVerificationFailure(verification, options.expectedVersion)}; restored previous ${APP_NAME} binary`,
+			);
+		}
+
+		backupReady = false;
+		await unlinkIfExists(options.backupPath);
+		return verification;
+	} catch (err) {
+		if (backupReady) {
+			await unlinkIfExists(options.targetPath);
+			await fs.promises.rename(options.backupPath, options.targetPath);
+		}
+		await unlinkIfExists(options.tempPath);
+		throw err;
+	}
 }
 
 /**
@@ -271,27 +325,15 @@ async function updateViaBinaryAt(targetPath: string, expectedVersion: string): P
 	await pipeline(response.body, fileStream);
 
 	console.log(chalk.dim("Installing update..."));
-	try {
-		try {
-			await fs.promises.unlink(backupPath);
-		} catch (err) {
-			if (!isEnoent(err)) throw err;
-		}
-		await fs.promises.rename(targetPath, backupPath);
-		await fs.promises.rename(tempPath, targetPath);
-		await fs.promises.unlink(backupPath);
-
-		await printVerification(expectedVersion);
-		console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
-	} catch (err) {
-		if (fs.existsSync(backupPath) && !fs.existsSync(targetPath)) {
-			await fs.promises.rename(backupPath, targetPath);
-		}
-		if (fs.existsSync(tempPath)) {
-			await fs.promises.unlink(tempPath);
-		}
-		throw err;
-	}
+	await replaceBinaryForUpdate({
+		targetPath,
+		tempPath,
+		backupPath,
+		expectedVersion,
+		verifyInstalledVersion,
+	});
+	printVerifiedVersion(expectedVersion);
+	console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
 }
 
 /**
