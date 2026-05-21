@@ -98,7 +98,7 @@ import {
 } from "./loop-limit";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { SessionObserverRegistry } from "./session-observer-registry";
-import { shimmerText } from "./theme/shimmer";
+import { type ShimmerPalette, shimmerSegments, shimmerText } from "./theme/shimmer";
 import type { Theme } from "./theme/theme";
 import {
 	getEditorTheme,
@@ -113,10 +113,16 @@ import { UiHelpers } from "./utils/ui-helpers";
 
 const WORKING_INTERRUPT_HINT = " (esc to interrupt)";
 
+const HINT_SHIMMER_PALETTE: ShimmerPalette = {
+	low: "dim",
+	mid: "muted",
+	high: "borderAccent",
+};
+
 function renderWorkingMessage(message: string): string {
 	if (!message.endsWith(WORKING_INTERRUPT_HINT)) return shimmerText(message, theme);
 	const header = message.slice(0, -WORKING_INTERRUPT_HINT.length);
-	return `${shimmerText(header, theme)}${theme.fg("dim", WORKING_INTERRUPT_HINT)}`;
+	return shimmerSegments([{ text: header }, { text: WORKING_INTERRUPT_HINT, palette: HINT_SHIMMER_PALETTE }], theme);
 }
 
 const EDITOR_MAX_HEIGHT_MIN = 6;
