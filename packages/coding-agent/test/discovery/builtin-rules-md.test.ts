@@ -90,10 +90,7 @@ test("project RULES.md is found walking up from a sub-package cwd", async () => 
 });
 
 test("alwaysApply is forced even when frontmatter says false", async () => {
-	writeFile(
-		path.join(home, ".omp", "agent", "RULES.md"),
-		"---\nalwaysApply: false\n---\nStick around anyway.\n",
-	);
+	writeFile(path.join(home, ".omp", "agent", "RULES.md"), "---\nalwaysApply: false\n---\nStick around anyway.\n");
 
 	const rules = await loadNativeRules({ cwd: project, home, repoRoot: project });
 
