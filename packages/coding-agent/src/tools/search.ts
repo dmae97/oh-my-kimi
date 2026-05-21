@@ -26,7 +26,6 @@ import { formatGroupedFiles } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import { resolveReadPath, resolveToolSearchScope } from "./path-utils";
-import { redactionFooter, redactSecrets } from "./redaction";
 import {
 	createCachedComponent,
 	formatCodeFrameLine,
@@ -559,15 +558,10 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				if (warningNote) {
 					outputLines.push("", warningNote);
 				}
-				const redactEnabled = this.session.settings.get("tools.redactSecrets");
-				const modelRedaction = redactEnabled
-					? redactSecrets(outputLines.join("\n"))
-					: { text: outputLines.join("\n"), redactedCount: 0 };
-				const modelFooter = redactionFooter(modelRedaction.redactedCount);
-				const rawOutput = modelFooter ? `${modelRedaction.text}\n${modelFooter}` : modelRedaction.text;
+				const rawOutput = outputLines.join("\n");
 				const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 				const output = truncation.content;
-				const displayText = redactEnabled ? redactSecrets(displayLines.join("\n")).text : displayLines.join("\n");
+				const displayText = displayLines.join("\n");
 				const truncated = Boolean(
 					fileLimitReached || perFileLimitReached || result.limitReached || truncation.truncated || linesTruncated,
 				);
