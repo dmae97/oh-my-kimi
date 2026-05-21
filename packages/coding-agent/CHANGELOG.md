@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.2.0] - 2026-05-21
+
 ### Changed
 
 - Changed the interactive working loader and slash-command progress bars to use the active theme's accent shimmer instead of static muted text.
