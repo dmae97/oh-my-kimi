@@ -129,7 +129,11 @@ function formatCapturedHttpError(captured: CapturedHttpErrorResponse | undefined
 	if (!payload) return bodyText;
 
 	const errorPayload = getObjectProperty(payload, "error") ?? payload;
-	const message = getStringProperty(errorPayload, "message") ?? getStringProperty(payload, "message") ?? bodyText;
+	// {"error": "string"} — the error value is a plain string, not a nested object.
+	// Fall back to it when the structured fields ("message", etc.) are absent.
+	const stringError = errorPayload === payload ? getStringProperty(payload, "error") : undefined;
+	const message =
+		getStringProperty(errorPayload, "message") ?? getStringProperty(payload, "message") ?? stringError ?? bodyText;
 	const extras = [
 		getStringProperty(errorPayload, "type") ?? getStringProperty(payload, "type"),
 		getStringProperty(errorPayload, "param") ?? getStringProperty(payload, "param"),

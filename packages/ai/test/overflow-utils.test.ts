@@ -51,3 +51,39 @@ describe("isContextOverflow - HTTP 413 variants", () => {
 		expect(isContextOverflow(message)).toBe(false);
 	});
 });
+
+describe("isContextOverflow - 400/413 no-body (Cerebras, Mistral, proxy wrappers)", () => {
+	it("detects bare '400 status code (no body)'", () => {
+		expect(isContextOverflow(createErrorMessage("400 status code (no body)"))).toBe(true);
+	});
+
+	it("detects bare '413 status code (no body)'", () => {
+		expect(isContextOverflow(createErrorMessage("413 status code (no body)"))).toBe(true);
+	});
+
+	it("detects '400 (no body)' without 'status code' word", () => {
+		expect(isContextOverflow(createErrorMessage("400 (no body)"))).toBe(true);
+	});
+
+	// Regression: api.synthetic.new wraps upstream HF 400-no-body in a JSON envelope.
+	// finalizeErrorMessage transforms the response to "400 status code: {JSON}" where
+	// the JSON value contains the inner "400 status code (no body)" text.
+	it("detects wrapped proxy envelope: '400 status code: {\"error\":\"... 400 status code (no body)\"}'", () => {
+		const errorMessage =
+			'400 status code: {"error":"Error from inference backend: 400 status code (no body)"}';
+		expect(isContextOverflow(createErrorMessage(errorMessage))).toBe(true);
+	});
+
+	it("detects when status code phrase is embedded deeper in the message", () => {
+		const errorMessage = "Upstream rejected request: 400 status code (no body)";
+		expect(isContextOverflow(createErrorMessage(errorMessage))).toBe(true);
+	});
+
+	it("does not classify unrelated 400 errors as overflow", () => {
+		expect(isContextOverflow(createErrorMessage("400 Bad Request: invalid API key"))).toBe(false);
+	});
+
+	it("does not classify 429 (rate limit) as overflow", () => {
+		expect(isContextOverflow(createErrorMessage("429 status code (no body)"))).toBe(false);
+	});
+});

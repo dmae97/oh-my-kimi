@@ -108,9 +108,12 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 			return true;
 		}
 
-		// Cerebras and Mistral return 400/413 with no body for context overflow
+		// Cerebras and Mistral return 400/413 with no body for context overflow.
+		// Proxy providers (e.g. api.synthetic.new) wrap upstream 400/413 no-body
+		// responses in a JSON envelope, so the status code phrase may appear
+		// anywhere in the message rather than at its start.
 		// Note: 429 is rate limiting (requests/tokens per time), NOT context overflow
-		if (/^4(00|13)\s*(status code)?\s*\(no body\)/i.test(message.errorMessage)) {
+		if (/\b4(00|13)\s*(status code)?\s*\(no body\)/i.test(message.errorMessage)) {
 			return true;
 		}
 	}
