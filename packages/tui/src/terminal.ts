@@ -127,6 +127,7 @@ export class ProcessTerminal implements Terminal {
 	#osc11Pending = false;
 	#osc11QueryQueued = false;
 	#osc11ResponseBuffer = "";
+	#privateCsiResponseBuffer = "";
 	#pendingDa1Sentinels = 0;
 	#osc11PollTimer?: Timer;
 	#mode2031DebounceTimer?: Timer;
@@ -278,8 +279,51 @@ export class ProcessTerminal implements Terminal {
 		// DA1 (Primary Device Attributes) response: \x1b[?...c
 		const da1ResponsePattern = /^\x1b\[\?[\d;]*c$/;
 
+		// Private CSI partial: \x1b[?<digits/semicolons>... — incomplete probe response
+		// that the StdinBuffer flushed before the terminator arrived (split across
+		// stdin reads). Used to reassemble DA1, kitty, and Mode 2031 replies.
+		const privateCsiPartialPattern = /^\x1b\[\?[\d;]*$/;
+
 		// Forward individual sequences to the input handler
 		this.#stdinBuffer.on("data", (sequence: string) => {
+			// Reassemble split private CSI responses (DA1, kitty keyboard, Mode 2031).
+			// When the terminal writes the response slowly enough that the StdinBuffer's
+			// flush timeout elapses mid-sequence, the prefix `\x1b[?<digits>` arrives as
+			// one event and the tail `;...<terminator>` arrives as individual character
+			// events that would otherwise leak into the prompt as keystrokes. See #1238.
+			if (
+				this.#privateCsiResponseBuffer ||
+				(privateCsiPartialPattern.test(sequence) && this.#pendingDa1Sentinels > 0)
+			) {
+				if (this.#privateCsiResponseBuffer && sequence.startsWith("\x1b")) {
+					// New escape arrived mid-reassembly — abandon partial and re-process the new sequence.
+					this.#privateCsiResponseBuffer = "";
+				} else {
+					this.#privateCsiResponseBuffer += sequence;
+					// Cap accumulator to defend against runaway partials if the terminator never arrives.
+					if (this.#privateCsiResponseBuffer.length > 256) {
+						this.#privateCsiResponseBuffer = "";
+						return;
+					}
+					const lastChar = this.#privateCsiResponseBuffer.at(-1)!;
+					const lastCode = lastChar.charCodeAt(0);
+					if (lastCode >= 0x40 && lastCode <= 0x7e) {
+						// Terminator byte arrived. Fall through to the pattern checks with the
+						// reassembled sequence so the existing DA1/kitty/Mode 2031 handlers run.
+						sequence = this.#privateCsiResponseBuffer;
+						this.#privateCsiResponseBuffer = "";
+					} else if (!privateCsiPartialPattern.test(this.#privateCsiResponseBuffer)) {
+						// Diverged from a valid private CSI prefix (unexpected byte). Drop the
+						// probe noise we ate; do not forward to the input handler.
+						this.#privateCsiResponseBuffer = "";
+						return;
+					} else {
+						// Still accumulating.
+						return;
+					}
+				}
+			}
+
 			// Check for Kitty protocol response (only if not already enabled)
 			if (!this.#kittyProtocolActive) {
 				const match = sequence.match(kittyResponsePattern);
@@ -531,6 +575,7 @@ export class ProcessTerminal implements Terminal {
 		this.#osc11Pending = false;
 		this.#osc11QueryQueued = false;
 		this.#osc11ResponseBuffer = "";
+		this.#privateCsiResponseBuffer = "";
 		this.#pendingDa1Sentinels = 0;
 
 		// Disable Kitty keyboard protocol if not already done by drainInput()
