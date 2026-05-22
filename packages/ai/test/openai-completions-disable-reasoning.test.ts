@@ -23,11 +23,11 @@ function createSseResponse(events: unknown[]): Response {
 
 function createReasoningEffortModel(): Model<"openai-completions"> {
 	return {
-		id: "accounts/fireworks/models/glm-5.1",
-		name: "GLM 5.1",
+		id: "minimal-reasoner",
+		name: "Minimal Reasoner",
 		api: "openai-completions",
-		provider: "fireworks",
-		baseUrl: "https://api.fireworks.ai/inference/v1",
+		provider: "custom",
+		baseUrl: "https://proxy.example.com/v1",
 		reasoning: true,
 		thinking: {
 			mode: "effort",
@@ -41,41 +41,64 @@ function createReasoningEffortModel(): Model<"openai-completions"> {
 	};
 }
 
+function createFireworksReasoningEffortModel(): Model<"openai-completions"> {
+	return {
+		...createReasoningEffortModel(),
+		id: "glm-5.1",
+		name: "GLM 5.1",
+		provider: "fireworks",
+		baseUrl: "https://api.fireworks.ai/inference/v1",
+	};
+}
+
+async function captureDisableReasoningPayload(model: Model<"openai-completions">): Promise<Record<string, unknown>> {
+	let payload: Record<string, unknown> | undefined;
+	global.fetch = Object.assign(
+		async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			payload = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
+			return createSseResponse([
+				{
+					id: "chatcmpl-disable-reasoning",
+					object: "chat.completion.chunk",
+					created: 0,
+					model: model.id,
+					choices: [{ index: 0, delta: { content: "ok" } }],
+				},
+				{
+					id: "chatcmpl-disable-reasoning",
+					object: "chat.completion.chunk",
+					created: 0,
+					model: model.id,
+					choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+				},
+				"[DONE]",
+			]);
+		},
+		{ preconnect: originalFetch.preconnect },
+	);
+
+	const result = await streamOpenAICompletions(model, testContext, {
+		apiKey: "test-key",
+		disableReasoning: true,
+	}).result();
+
+	expect(result.stopReason).toBe("stop");
+	if (!payload) throw new Error("Expected OpenAI completions request payload");
+	return payload;
+}
+
 describe("OpenAI completions disableReasoning", () => {
 	it("sends the lowest supported reasoning effort for generic effort-mode models", async () => {
-		const model = createReasoningEffortModel();
-		let payload: Record<string, unknown> | undefined;
-		global.fetch = Object.assign(
-			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-				payload = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
-				return createSseResponse([
-					{
-						id: "chatcmpl-disable-reasoning",
-						object: "chat.completion.chunk",
-						created: 0,
-						model: model.id,
-						choices: [{ index: 0, delta: { content: "ok" } }],
-					},
-					{
-						id: "chatcmpl-disable-reasoning",
-						object: "chat.completion.chunk",
-						created: 0,
-						model: model.id,
-						choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-					},
-					"[DONE]",
-				]);
-			},
-			{ preconnect: originalFetch.preconnect },
-		);
+		const payload = await captureDisableReasoningPayload(createReasoningEffortModel());
 
-		const result = await streamOpenAICompletions(model, testContext, {
-			apiKey: "test-key",
-			disableReasoning: true,
-		}).result();
+		expect(payload.reasoning_effort).toBe("minimal");
+		expect(payload.reasoning).toBeUndefined();
+	});
 
-		expect(result.stopReason).toBe("stop");
-		expect(payload?.reasoning_effort).toBe("minimal");
-		expect(payload?.reasoning).toBeUndefined();
+	it("maps Fireworks' lowest effort to the provider-supported none literal", async () => {
+		const payload = await captureDisableReasoningPayload(createFireworksReasoningEffortModel());
+
+		expect(payload.reasoning_effort).toBe("none");
+		expect(payload.reasoning).toBeUndefined();
 	});
 });

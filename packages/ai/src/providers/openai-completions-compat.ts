@@ -171,7 +171,13 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 						high: "high",
 						xhigh: "max",
 					} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
-				: {};
+				: isFireworks
+					? ({
+							// Fireworks' OpenAI-compatible endpoint rejects OpenAI's
+							// `minimal` literal but accepts `none` for the lowest setting.
+							minimal: "none",
+						} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
+					: {};
 
 	return {
 		supportsStore: !isNonStandard,
