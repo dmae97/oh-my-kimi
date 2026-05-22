@@ -3573,6 +3573,18 @@ export class AgentSession {
 		return this.#autoCompactionAbortController !== undefined || this.#compactionAbortController !== undefined;
 	}
 
+	/**
+	 * Whether idle-flush tasks, auto-continuations, or other short-lived
+	 * post-prompt work are pending.  True in the brief window after
+	 * `session.prompt()` returns but before a scheduled background delivery
+	 * (e.g. an async-job result) has finished its own streaming turn.
+	 * Loop-mode and similar auto-submit paths should treat this as a block
+	 * to avoid racing against the delivery turn.
+	 */
+	get hasPostPromptWork(): boolean {
+		return this.#postPromptTasks.size > 0;
+	}
+
 	/** All messages including custom types like BashExecutionMessage */
 	get messages(): AgentMessage[] {
 		return this.agent.state.messages;

@@ -691,7 +691,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#isLoopAutoSubmitBlocked(): boolean {
-		return this.session.isStreaming || this.session.isCompacting;
+		return this.session.isStreaming || this.session.isCompacting || this.session.hasPostPromptWork;
 	}
 
 	#submitLoopPromptWhenReady(prompt: string): void {
