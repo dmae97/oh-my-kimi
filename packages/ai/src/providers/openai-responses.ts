@@ -391,10 +391,22 @@ function buildParams(
 	const messages: ResponseInput = [...conversationMessages];
 
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
+	let systemInstructions: string | undefined;
 	if (systemPrompts.length > 0) {
-		const role: "developer" | "system" =
-			model.reasoning && supportsDeveloperRole(resolvedBaseUrl ?? model) ? "developer" : "system";
-		messages.unshift(...systemPrompts.map(systemPrompt => ({ role, content: systemPrompt })));
+		const needsDeveloperRole = model.reasoning && supportsDeveloperRole(resolvedBaseUrl ?? model);
+		if (needsDeveloperRole) {
+			// Reasoning models on known OpenAI-compatible endpoints require the
+			// `developer` role. Send all system prompts inline in `input`.
+			messages.unshift(...systemPrompts.map(systemPrompt => ({ role: "developer" as const, content: systemPrompt })));
+		} else {
+			// All other endpoints (including third-party /v1/responses proxies) use
+			// the canonical top-level `instructions` field so that proxies that
+			// reject `input[{role:"system"}]` work out of the box.
+			systemInstructions = systemPrompts[0];
+			if (systemPrompts.length > 1) {
+				messages.unshift(...systemPrompts.slice(1).map(p => ({ role: "system" as const, content: p })));
+			}
+		}
 	}
 
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention);
@@ -402,6 +414,7 @@ function buildParams(
 	const params: OpenAIResponsesSamplingParams = {
 		model: model.id,
 		input: messages,
+		instructions: systemInstructions,
 		stream: true,
 		prompt_cache_key: promptCacheKey,
 		prompt_cache_retention: promptCacheKey ? getPromptCacheRetention(model.baseUrl, cacheRetention) : undefined,
