@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.2.3] - 2026-05-22
 ### Breaking Changes
 
 - Changed PR and task-isolation worktree directory layout to hash-based `~/.omp/wt/<identifier>-<path-hash>` style paths, replacing the previous nested encoded-repo layout

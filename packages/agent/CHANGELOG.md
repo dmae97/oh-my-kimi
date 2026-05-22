@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.2.3] - 2026-05-22
 ### Added
 
 - Added `onBeforeYield` hook support so user code can run right before the agent loop checks for follow-up messages

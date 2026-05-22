@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.2.3] - 2026-05-22
 ### Added
 
 - Added `SettingsList#setItems` to replace the entire settings list with a new items array while automatically clamping selection to a valid index
