@@ -1883,7 +1883,12 @@ function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?:
 		// When the 3-block CC layout is present (billing / instruction / merged),
 		// cache the instruction (index 1) independently so it gets its own
 		// always-hit breakpoint before the potentially-changing merged block.
-		if (params.system.length >= 3) {
+		// Guard on the billing header prefix so we don't misfire on non-CC
+		// flows that happen to have ≥3 system blocks.
+		const isCCLayout =
+			params.system.length >= 3 &&
+			(params.system[0] as { text?: string }).text?.startsWith(CLAUDE_BILLING_HEADER_PREFIX);
+		if (isCCLayout) {
 			(params.system[1] as CacheControlBlock).cache_control = cacheControl;
 			cacheBreakpointsUsed++;
 		}
