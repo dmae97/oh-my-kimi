@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated `Loader` to drive renders at ~60fps (16ms tick) while keeping spinner-frame advancement at 80ms so shimmer/animated message colorizers update smoothly without altering spinner cadence
+
 ## [15.1.9] - 2026-05-21
 
 ### Fixed

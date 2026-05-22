@@ -13,7 +13,7 @@ export function formatDuration(ms: number): string {
 	return `${days}d`;
 }
 
-type ProgressBarTheme = Pick<Theme, "bold" | "fg">;
+type ProgressBarTheme = Pick<Theme, "bold" | "fg" | "getFgAnsi">;
 
 const unstyledProgressBarTheme: ProgressBarTheme = {
 	fg(_color, text) {
@@ -21,6 +21,9 @@ const unstyledProgressBarTheme: ProgressBarTheme = {
 	},
 	bold(text) {
 		return text;
+	},
+	getFgAnsi() {
+		return "";
 	},
 };
 
