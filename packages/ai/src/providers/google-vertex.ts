@@ -47,7 +47,8 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 			const project = resolveProject(options);
 			const location = resolveLocation(options);
 			const accessToken = await getVertexAccessToken({ signal: options?.signal, fetch: options?.fetch });
-			const url = `https://${location}-aiplatform.googleapis.com/${API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${model.id}:streamGenerateContent?alt=sse`;
+			const host = resolveEndpointHost(location);
+			const url = `https://${host}/${API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${model.id}:streamGenerateContent?alt=sse`;
 			return {
 				params,
 				url,
@@ -75,6 +76,9 @@ function resolveProject(options?: GoogleVertexOptions): string {
 	return project;
 }
 
+function resolveEndpointHost(location: string): string {
+	return location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
+}
 function resolveLocation(options?: GoogleVertexOptions): string {
 	const location = options?.location || $env.GOOGLE_CLOUD_LOCATION;
 	if (!location) {

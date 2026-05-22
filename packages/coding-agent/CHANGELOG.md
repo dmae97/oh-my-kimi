@@ -4,6 +4,12 @@
 
 - Added Kagi V1 web search provider support for the new API, intentionally left V0 in for now to not break any existing users.
 
+## [15.2.2] - 2026-05-22
+
+### Fixed
+
+- Fixed `RULES.md` not being injected. The documented sticky-rules file at `~/.omp/agent/RULES.md` and `<repo>/.omp/RULES.md` was never read by any discovery provider; only `.omp/rules/*.md` was scanned. The native provider now loads both as always-apply rules so they re-attach every turn as documented ([#1266](https://github.com/can1357/oh-my-pi/issues/1266)).
+
 ## [15.2.1] - 2026-05-21
 
 ### Fixed

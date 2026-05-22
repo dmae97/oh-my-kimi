@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type AssistantMessage, Effort, getBundledModel, type Model, writeModelCache } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -73,6 +74,7 @@ describe("AgentSession retry fallback", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
 		authStorage.setRuntimeApiKey("openai", "openai-test-key");
+		authStorage.setRuntimeApiKey("google", "google-test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 
@@ -192,6 +194,67 @@ describe("AgentSession retry fallback", () => {
 				role: "default",
 			},
 		]);
+	});
+
+	it("uses Google retry hints in quota errors before quota backoff", async () => {
+		const model = getBundledModel("google", "gemini-1.5-flash");
+		if (!model) {
+			throw new Error("Expected bundled Google test model to exist");
+		}
+
+		const errorMessage =
+			"Google API error (429): Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000. Please retry in 0.05s.";
+		const requestedModels: string[] = [];
+		const mock = createMockModel({
+			responses: [{ throw: errorMessage }, { content: ["Recovered after Google quota retry"] }],
+		});
+		const agent = new Agent({
+			getApiKey: provider => `${provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		const waitSpy = vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+
+		await session.prompt("Retry Google token quota");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([`${model.provider}/${model.id}`, `${model.provider}/${model.id}`]);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryStartEvents[0]).toMatchObject({
+			attempt: 1,
+			maxAttempts: 1,
+			delayMs: 50,
+			errorMessage,
+		});
+		expect(waitSpy).toHaveBeenCalledWith(50, { signal: expect.any(AbortSignal) });
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ success: true, attempt: 1 });
+		const lastAssistant = getLastAssistantMessage(session);
+		expect(lastAssistant.stopReason).toBe("stop");
+		expect(lastAssistant.content).toContainEqual({ type: "text", text: "Recovered after Google quota retry" });
 	});
 
 	it("auto-retries preserved OpenAI first-event timeout errors", async () => {

@@ -540,24 +540,24 @@ async function withSoftTimeout<T>(promise: Promise<T>, timeoutMs: number, label:
 	}
 }
 
-async function injectStealthScripts(page: Page): Promise<void> {
-	const scripts = [
-		stealthTamperingScript,
-		stealthActivityScript,
-		stealthHairlineScript,
-		stealthBotdScript,
-		stealthIframeScript,
-		stealthWebglScript,
-		stealthScreenScript,
-		stealthFontsScript,
-		stealthAudioScript,
-		stealthLocaleScript,
-		stealthPluginsScript,
-		stealthHardwareScript,
-		stealthCodecsScript,
-		stealthWorkerScript,
-	];
+const STEALTH_PATCH_SCRIPTS = [
+	stealthTamperingScript,
+	stealthActivityScript,
+	stealthHairlineScript,
+	stealthBotdScript,
+	stealthIframeScript,
+	stealthWebglScript,
+	stealthScreenScript,
+	stealthFontsScript,
+	stealthAudioScript,
+	stealthLocaleScript,
+	stealthPluginsScript,
+	stealthHardwareScript,
+	stealthCodecsScript,
+	stealthWorkerScript,
+];
 
+function buildStealthInjectionScript(scripts: readonly string[] = STEALTH_PATCH_SCRIPTS): string {
 	const joint = scripts
 		.map(
 			script => `
@@ -568,43 +568,55 @@ async function injectStealthScripts(page: Page): Promise<void> {
 		)
 		.join(";\n");
 
-	await page.evaluateOnNewDocument(`(() => {
+	return `(() => {
 				// Native function cache - captured before any tampering
 				const iframe = document.createElement("iframe");
 				iframe.style.display = "none";
-				document.head.appendChild(iframe);
-				const nativeWindow = iframe.contentWindow;
-				if (!nativeWindow) return;
+				const container = document.head ?? document.documentElement;
+				if (!container) return;
+				container.appendChild(iframe);
+				try {
+					const nativeWindow = iframe.contentWindow;
+					if (!nativeWindow) return;
 
-				// Cache pristine native functions
-				const Function_toString = nativeWindow.Function.prototype.toString;
-				const Object_getOwnPropertyDescriptor = nativeWindow.Object.getOwnPropertyDescriptor;
-				const Object_getOwnPropertyDescriptors = nativeWindow.Object.getOwnPropertyDescriptors;
-				const Object_getPrototypeOf = nativeWindow.Object.getPrototypeOf;
-				const Object_defineProperty = nativeWindow.Object.defineProperty;
-				const Object_getOwnPropertyDescriptorOriginal = nativeWindow.Object.getOwnPropertyDescriptor;
-				const Object_create = nativeWindow.Object.create;
-				const Object_keys = nativeWindow.Object.keys;
-				const Object_getOwnPropertyNames = nativeWindow.Object.getOwnPropertyNames;
-				const Object_entries = nativeWindow.Object.entries;
-				const Object_setPrototypeOf = nativeWindow.Object.setPrototypeOf;
-				const Object_assign = nativeWindow.Object.assign;
-				const Window_setTimeout = nativeWindow.setTimeout;
-				const Math_random = nativeWindow.Math.random;
-				const Math_floor = nativeWindow.Math.floor;
-				const Math_max = nativeWindow.Math.max;
-				const Math_min = nativeWindow.Math.min;
-				const Window_Event = nativeWindow.Event;
-				const Promise_resolve = nativeWindow.Promise.resolve.bind(nativeWindow.Promise);
-				const Window_Blob = nativeWindow.Blob;
-				const Window_Proxy = nativeWindow.Proxy;
-				const Intl_DateTimeFormat = nativeWindow.Intl.DateTimeFormat;
-				const Date_constructor = nativeWindow.Date;
+					// Cache pristine native functions
+					const Function_toString = nativeWindow.Function.prototype.toString;
+					const Object_getOwnPropertyDescriptor = nativeWindow.Object.getOwnPropertyDescriptor;
+					const Object_getOwnPropertyDescriptors = nativeWindow.Object.getOwnPropertyDescriptors;
+					const Object_getPrototypeOf = nativeWindow.Object.getPrototypeOf;
+					const Object_defineProperty = nativeWindow.Object.defineProperty;
+					const Object_getOwnPropertyDescriptorOriginal = nativeWindow.Object.getOwnPropertyDescriptor;
+					const Object_create = nativeWindow.Object.create;
+					const Object_keys = nativeWindow.Object.keys;
+					const Object_getOwnPropertyNames = nativeWindow.Object.getOwnPropertyNames;
+					const Object_entries = nativeWindow.Object.entries;
+					const Object_setPrototypeOf = nativeWindow.Object.setPrototypeOf;
+					const Object_assign = nativeWindow.Object.assign;
+					const Window_setTimeout = nativeWindow.setTimeout;
+					const Math_random = nativeWindow.Math.random;
+					const Math_floor = nativeWindow.Math.floor;
+					const Math_max = nativeWindow.Math.max;
+					const Math_min = nativeWindow.Math.min;
+					const Window_Event = nativeWindow.Event;
+					const Promise_resolve = nativeWindow.Promise.resolve.bind(nativeWindow.Promise);
+					const Window_Blob = nativeWindow.Blob;
+					const Window_Proxy = nativeWindow.Proxy;
+					const Intl_DateTimeFormat = nativeWindow.Intl.DateTimeFormat;
+					const Date_constructor = nativeWindow.Date;
 
-				
-				${joint}
+					${joint}
+				} finally {
+					if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+				}})();`;
+}
 
-				document.head.removeChild(iframe);})();`);
+async function injectStealthScripts(page: Page): Promise<void> {
+	await page.evaluateOnNewDocument(buildStealthInjectionScript());
+}
+
+/** Builds the browser-page stealth bootstrap source for regression tests. */
+export function buildStealthInjectionScriptForTest(scripts: readonly string[] = STEALTH_PATCH_SCRIPTS): string {
+	return buildStealthInjectionScript(scripts);
 }
 
 /** Apply stealth patches + UA override to a headless page. Idempotent within a tab. */

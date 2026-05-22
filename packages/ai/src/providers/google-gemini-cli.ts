@@ -97,7 +97,7 @@ function needsClaudeThinkingBetaHeader(model: Model<"google-gemini-cli">): boole
 
 function shouldInjectAntigravitySystemInstruction(modelId: string): boolean {
 	const normalized = modelId.toLowerCase();
-	return normalized.includes("claude") || normalized.includes("gemini-3-pro-high");
+	return normalized.includes("claude") || normalized.includes("gemini-3");
 }
 
 /**

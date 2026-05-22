@@ -346,7 +346,37 @@ async function loadRules(ctx: LoadContext): Promise<LoadResult<Rule>> {
 		if (result.warnings) warnings.push(...result.warnings);
 	}
 
+	// Top-level RULES.md is a sticky always-apply rule. Documented in
+	// https://omp.sh/docs/context-files as the file that gets "re-injected near
+	// the current turn so they keep hold across long conversations".
+	// User scope:    ~/.omp/agent/RULES.md
+	// Project scope: nearest .omp/RULES.md walking up from cwd to repoRoot
+	const userRulesFile = path.join(ctx.home, PATHS.userAgent, "RULES.md");
+	const userRule = await loadStickyRulesFile(userRulesFile, "user");
+	if (userRule) items.push(userRule);
+
+	const nearestProjectConfigDir = await findNearestProjectConfigDir(ctx.cwd, ctx.repoRoot);
+	if (nearestProjectConfigDir) {
+		const projectRulesFile = path.join(nearestProjectConfigDir.dir, "RULES.md");
+		const projectRule = await loadStickyRulesFile(projectRulesFile, "project");
+		if (projectRule) items.push(projectRule);
+	}
+
 	return { items, warnings };
+}
+
+/**
+ * Read a top-level `RULES.md` and synthesize an always-apply rule.
+ * Returns null when the file is absent or empty so callers can short-circuit.
+ */
+async function loadStickyRulesFile(filePath: string, level: "user" | "project"): Promise<Rule | null> {
+	const content = await readFile(filePath);
+	if (!content) return null;
+	const source = createSourceMeta(PROVIDER_ID, filePath, level);
+	const rule = buildRuleFromMarkdown("RULES.md", content, filePath, source, { ruleName: "RULES" });
+	// Force alwaysApply regardless of frontmatter — the whole point of RULES.md
+	// is to be reattached every turn.
+	return { ...rule, alwaysApply: true };
 }
 
 registerProvider<Rule>(ruleCapability.id, {
