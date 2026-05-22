@@ -409,7 +409,7 @@ export function mapStainlessArch(arch: string): "x64" | "arm64" | "x86" | `other
 
 export const claudeCodeHeaders = {
 	"X-Stainless-Retry-Count": "0",
-	"X-Stainless-Runtime-Version": process.version,
+	"X-Stainless-Runtime-Version": "v24.3.0",
 	"X-Stainless-Package-Version": "0.94.0",
 	"X-Stainless-Runtime": "node",
 	"X-Stainless-Lang": "js",
