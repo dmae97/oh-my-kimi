@@ -98,6 +98,7 @@ import {
 } from "./loop-limit";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { SessionObserverRegistry } from "./session-observer-registry";
+import { interruptHint } from "./shared";
 import { type ShimmerPalette, shimmerSegments, shimmerText } from "./theme/shimmer";
 import type { Theme } from "./theme/theme";
 import {
@@ -110,8 +111,6 @@ import {
 } from "./theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoItem, TodoPhase } from "./types";
 import { UiHelpers } from "./utils/ui-helpers";
-
-const WORKING_INTERRUPT_HINT = " (esc to interrupt)";
 
 const HINT_SHIMMER_PALETTE: ShimmerPalette = {
 	low: "dim",
@@ -133,8 +132,9 @@ function renderWorkingMessage(message: string, accent?: WorkingMessageAccent): s
 				bold: true,
 			} satisfies ShimmerPalette)
 		: undefined;
-	if (!message.endsWith(WORKING_INTERRUPT_HINT)) return shimmerText(message, theme, palette);
-	const header = message.slice(0, -WORKING_INTERRUPT_HINT.length);
+	const hint = interruptHint();
+	if (!message.endsWith(hint)) return shimmerText(message, theme, palette);
+	const header = message.slice(0, -hint.length);
 	const hintPalette = accent
 		? ({
 				low: "dim",
@@ -145,7 +145,7 @@ function renderWorkingMessage(message: string, accent?: WorkingMessageAccent): s
 	return shimmerSegments(
 		[
 			{ text: header, palette },
-			{ text: WORKING_INTERRUPT_HINT, palette: hintPalette },
+			{ text: hint, palette: hintPalette },
 		],
 		theme,
 	);
@@ -258,7 +258,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	autoCompactionLoader: Loader | undefined = undefined;
 	retryLoader: Loader | undefined = undefined;
 	#pendingWorkingMessage: string | undefined;
-	readonly #defaultWorkingMessage = `Working… (esc to interrupt)`;
+	get #defaultWorkingMessage(): string {
+		return `Working…${interruptHint()}`;
+	}
 	autoCompactionEscapeHandler?: () => void;
 	retryEscapeHandler?: () => void;
 	unsubscribe?: () => void;

@@ -18,6 +18,7 @@ import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, readPendingDisplayTag } from "../../session/messages";
 import type { ResolveToolDetails } from "../../tools/resolve";
+import { interruptHint } from "../shared";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
 
@@ -133,7 +134,7 @@ export class EventController {
 		const trimmed = intent.trim();
 		if (!trimmed || trimmed === this.#lastIntent) return;
 		this.#lastIntent = trimmed;
-		this.ctx.setWorkingMessage(`${trimmed} (esc to interrupt)`);
+		this.ctx.setWorkingMessage(`${trimmed}${interruptHint()}`);
 	}
 
 	subscribeToAgent(): void {
