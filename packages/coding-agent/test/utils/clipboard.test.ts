@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { Subprocess } from "bun";
 import * as native from "@oh-my-pi/pi-natives";
+import type { Subprocess } from "bun";
 import { readImageFromClipboard } from "../../src/utils/clipboard";
 
 type SpawnOptions = Bun.SpawnOptions.SpawnOptions<

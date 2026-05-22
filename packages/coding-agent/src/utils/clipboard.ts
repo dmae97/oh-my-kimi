@@ -94,10 +94,11 @@ const POWERSHELL_TIMEOUT_MS = 5000;
  */
 async function readImageViaPowerShell(): Promise<ClipboardImage | null> {
 	try {
-		const proc = Bun.spawn(
-			["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_IMAGE_SCRIPT],
-			{ stdout: "pipe", stderr: "ignore", stdin: "ignore" },
-		);
+		const proc = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_IMAGE_SCRIPT], {
+			stdout: "pipe",
+			stderr: "ignore",
+			stdin: "ignore",
+		});
 		const timer = setTimeout(() => proc.kill(), POWERSHELL_TIMEOUT_MS);
 		let stdout = "";
 		try {
