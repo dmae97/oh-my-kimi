@@ -373,6 +373,21 @@ export class GoalRuntime {
 		await this.#withAccounting(() => this.#flushUsageLocked(steering, currentUsage));
 	}
 
+	#createGoalState(objective: string, tokenBudget: number | undefined): GoalModeState {
+		const now = this.#now();
+		const goal: Goal = {
+			id: String(Snowflake.next()),
+			objective,
+			status: "active",
+			tokenBudget,
+			tokensUsed: 0,
+			timeUsedSeconds: 0,
+			createdAt: now,
+			updatedAt: now,
+		};
+		return { enabled: true, mode: "active", goal };
+	}
+
 	async createGoal(input: { objective: string; tokenBudget?: number }): Promise<GoalModeState> {
 		const objective = input.objective.trim();
 		if (!objective) throw new Error("objective is required when op=create");
@@ -382,20 +397,27 @@ export class GoalRuntime {
 			if (existing?.goal && existing.goal.status !== "dropped" && existing.goal.status !== "complete") {
 				throw new Error("cannot create a new goal because this session already has a goal");
 			}
-			const now = this.#now();
-			const goal: Goal = {
-				id: String(Snowflake.next()),
-				objective,
-				status: "active",
-				tokenBudget: input.tokenBudget,
-				tokensUsed: 0,
-				timeUsedSeconds: 0,
-				createdAt: now,
-				updatedAt: now,
-			};
-			const state: GoalModeState = { enabled: true, mode: "active", goal };
+			const state = this.#createGoalState(objective, input.tokenBudget);
 			this.#budgetReportedFor = undefined;
-			this.#markActiveAccounting(goal);
+			this.#markActiveAccounting(state.goal);
+			await this.#commitState(state, { persist: "goal" });
+			return state;
+		});
+	}
+
+	async replaceGoal(input: { objective: string; tokenBudget?: number }): Promise<GoalModeState> {
+		const objective = input.objective.trim();
+		if (!objective) throw new Error("objective is required when op=replace");
+		validateTokenBudget(input.tokenBudget);
+		return await this.#withAccounting(async () => {
+			const existing = this.#host.getState();
+			if (!existing?.enabled || !isAccountingStatus(existing.goal)) {
+				throw new Error("cannot replace goal because no goal is active");
+			}
+			await this.#flushUsageLocked("suppressed");
+			const state = this.#createGoalState(objective, input.tokenBudget);
+			this.#budgetReportedFor = undefined;
+			this.#markActiveAccounting(state.goal);
 			await this.#commitState(state, { persist: "goal" });
 			return state;
 		});
