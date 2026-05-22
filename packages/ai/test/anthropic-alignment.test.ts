@@ -1152,7 +1152,7 @@ describe("cch attestation", () => {
 		const { promise: bodyPromise, resolve: bodyResolve } = Promise.withResolvers<string>();
 		const controller = new AbortController();
 
-		const fakeFetch: typeof fetch = async (_input, init) => {
+		const fakeFetch = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			const raw = init?.body;
 			const body = typeof raw === "string" ? raw : new TextDecoder().decode(raw as Uint8Array);
 			bodyResolve(body);

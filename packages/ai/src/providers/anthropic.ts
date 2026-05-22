@@ -126,6 +126,7 @@ const fineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14";
 const interleavedThinkingBeta = "interleaved-thinking-2025-05-14";
 const fastModeBeta = "fast-mode-2026-02-01";
 const taskBudgetBeta = "task-budgets-2026-03-13";
+const effortBeta = "effort-2025-11-24";
 
 function getHeaderCaseInsensitive(headers: Record<string, string> | undefined, headerName: string): string | undefined {
 	if (!headers) return undefined;
@@ -1207,6 +1208,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				}
 				if (options?.taskBudget && !extraBetas.includes(taskBudgetBeta)) {
 					extraBetas.push(taskBudgetBeta);
+				}
+				if (model.reasoning && !extraBetas.includes(effortBeta)) {
+					extraBetas.push(effortBeta);
 				}
 
 				const created = createClient(model, {
