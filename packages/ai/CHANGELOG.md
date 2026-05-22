@@ -283,7 +283,7 @@
 ### Changed
 
 - `claudeCodeVersion` bumped to `2.1.148` to match current Claude Code release.
-- `X-Stainless-Package-Version` updated to `0.94.0` (matches the bundled `@anthropic-ai/sdk` version); `X-Stainless-Runtime-Version` is now dynamic (`process.version`) instead of a stale hardcoded string; `X-Stainless-Os` header key corrected to `X-Stainless-OS`.
+- `X-Stainless-Package-Version` updated to `0.94.0` (matches the bundled `@anthropic-ai/sdk` version); `X-Stainless-Runtime-Version` pinned to `v24.3.0` (Bun version bundled with CC 2.1.148); `X-Stainless-Os` header key corrected to `X-Stainless-OS`.
 - `createClaudeBillingHeader` now uses `cch=00000` (fixed placeholder for first-party Anthropic endpoints) instead of a computed SHA-256 hash, and a deterministic 3-char version suffix derived from the payload seed + a fixed salt and version string, instead of random bytes.
 - `user-agent` in Claude usage-API requests updated to `claude-cli/2.1.148 (external, cli)`.
 - `buildAnthropicSystemBlocks` (CC-instruction mode) now emits the same 3-block layout as Claude Code: billing header (never cached), system instruction (cached), all user content merged into one block with `\n\n` (cached). Previously emitted one block per item with cache only on the last, which fingerprinted the caller by block count.
