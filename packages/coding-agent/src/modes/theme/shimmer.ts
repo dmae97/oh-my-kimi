@@ -24,14 +24,20 @@ const BOLD_CLOSE = "\x1b[22m";
 type ShimmerTheme = Pick<Theme, "bold" | "fg" | "getFgAnsi">;
 type ShimmerMode = "classic" | "kitt" | "disabled";
 
+type ShimmerPaletteTier = ThemeColor | { ansi: string };
+
+function resolveTierAnsi(theme: ShimmerTheme, tier: ShimmerPaletteTier): string {
+	return typeof tier === "string" ? theme.getFgAnsi(tier) : tier.ansi;
+}
+
 /** Three-tier color stack a shimmer character cycles through as the band sweeps. */
 export interface ShimmerPalette {
 	/** Color for chars outside / at the edge of the band (intensity < ~0.22). */
-	low: ThemeColor;
+	low: ShimmerPaletteTier;
 	/** Color for chars approaching the crest (~0.22 ≤ intensity < ~0.65). */
-	mid: ThemeColor;
+	mid: ShimmerPaletteTier;
 	/** Color at the band's crest (intensity ≥ ~0.65). */
-	high: ThemeColor;
+	high: ShimmerPaletteTier;
 	/** Whether to bold the crest tier. Default `false`. */
 	bold?: boolean;
 }
@@ -78,11 +84,14 @@ function compile(theme: ShimmerTheme, palette: ShimmerPalette): CompiledPalette 
 	const p = palette as ShimmerPalette & PaletteCache;
 	const cached = p[kCompiled];
 	if (cached && p[kCompiledFor] === theme) return cached;
-	const highOpen = palette.bold ? `${BOLD_OPEN}${theme.getFgAnsi(palette.high)}` : theme.getFgAnsi(palette.high);
+	const lowOpen = resolveTierAnsi(theme, palette.low);
+	const midOpen = resolveTierAnsi(theme, palette.mid);
+	const highColorOpen = resolveTierAnsi(theme, palette.high);
+	const highOpen = palette.bold ? `${BOLD_OPEN}${highColorOpen}` : highColorOpen;
 	const highClose = palette.bold ? `${BOLD_CLOSE}${FG_RESET}` : FG_RESET;
 	const out: CompiledPalette = {
-		low: { open: theme.getFgAnsi(palette.low), close: FG_RESET },
-		mid: { open: theme.getFgAnsi(palette.mid), close: FG_RESET },
+		low: { open: lowOpen, close: FG_RESET },
+		mid: { open: midOpen, close: FG_RESET },
 		high: { open: highOpen, close: highClose },
 	};
 	p[kCompiledFor] = theme;
