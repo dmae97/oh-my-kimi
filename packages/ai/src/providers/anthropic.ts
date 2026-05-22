@@ -501,7 +501,12 @@ type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Re
 
 function wrapFetchForCch(base: FetchFn): FetchFn {
 	return (input, init) => {
-		if (init?.body && typeof init.body === "string" && init.body.includes("cch=00000")) {
+		if (
+			init?.body &&
+			typeof init.body === "string" &&
+			init.body.includes(CLAUDE_BILLING_HEADER_PREFIX) &&
+			init.body.includes("cch=00000")
+		) {
 			const encoded = new TextEncoder().encode(init.body);
 			const patched = patchCch(encoded);
 			return base(input, { ...init, body: patched });
