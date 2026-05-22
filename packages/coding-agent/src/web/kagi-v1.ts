@@ -6,7 +6,7 @@
  * and response structure.
  */
 import { getEnvApiKey } from "@oh-my-pi/pi-ai";
-import { findCredential } from "./search/providers/utils";
+import { findCredential, withHardTimeout } from "./search/providers/utils";
 
 const KAGI_V1_SEARCH_URL = "https://kagi.com/api/v1/search";
 
@@ -224,7 +224,7 @@ export async function searchWithKagiV1(query: string, options: KagiV1SearchOptio
 			Accept: "application/json",
 		},
 		body: JSON.stringify(requestBody),
-		signal: options.signal,
+		signal: withHardTimeout(options.signal),
 	});
 
 	if (!response.ok) {
