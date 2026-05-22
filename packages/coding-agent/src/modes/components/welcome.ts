@@ -45,7 +45,7 @@ export class WelcomeComponent implements Component {
 				this.#stopAnimation();
 			}
 			requestRender();
-		}, INTRO_MS / INTRO_PHASES);
+		}, INTRO_TICK_MS);
 	}
 
 	#stopAnimation(): void {
@@ -253,55 +253,97 @@ export class WelcomeComponent implements Component {
 
 	/** Pick the logo frame for the current intro phase, or the resting frame. */
 	#currentLogoFrame(): readonly string[] {
-		if (this.#animStart == null) return LOGO_FRAMES[0];
+		if (this.#animStart == null) return REST_FRAME;
 		const elapsed = performance.now() - this.#animStart;
-		if (elapsed >= INTRO_MS) return LOGO_FRAMES[0];
-		// Ease-out cubic so the sweep settles into the resting frame instead of
-		// stopping abruptly. Sweeps backward through the phase ring → lands on 0.
+		if (elapsed >= INTRO_MS) return REST_FRAME;
+		// Ease-out cubic so the spin decelerates into the resting state.
 		const progress = elapsed / INTRO_MS;
 		const eased = 1 - (1 - progress) ** 3;
-		const stepsDone = Math.min(INTRO_PHASES - 1, Math.floor(eased * INTRO_PHASES));
-		const idx = (INTRO_PHASES - stepsDone) % INTRO_PHASES;
-		return LOGO_FRAMES[idx];
+		// Sweep backward through INTRO_SWEEPS full rotations so the gradient
+		// visibly spins multiple times. `eased == 1` → phase = 0 = resting frame.
+		const phase = ((((1 - eased) * INTRO_SWEEPS) % 1) + 1) % 1;
+		// Shine traverses the diagonal at a steady pace, decoupled from the
+		// gradient phase so the two layers parallax. Strength fades out with
+		// the same ease-out curve so the highlight is gone by the resting frame.
+		const shinePos = (((progress * INTRO_SHINE_TRAVERSALS) % 1) + 1) % 1;
+		const shineStrength = (1 - eased) ** 1.5;
+		return gradientLogo(PI_LOGO, phase, { strength: shineStrength, pos: shinePos });
 	}
 }
 
 // biome-ignore format: preserve ASCII art layout
 const PI_LOGO = ["▀██████████▀", " ╘██    ██  ", "  ██    ██  ", "  ██    ██  ", " ▄██▄  ▄██▄ "];
 
+/** Multi-stop palette for the diagonal gradient. */
+const GRADIENT_STOPS: ReadonlyArray<readonly [number, number, number]> = [
+	[255, 92, 200], // hot pink
+	[200, 110, 255], // violet
+	[120, 130, 255], // periwinkle
+	[60, 200, 255], // bright cyan
+	[120, 255, 220], // mint
+];
+
+/** 256-color ramp fallback when truecolor isn't available. */
+const GRADIENT_RAMP_256 = [199, 171, 135, 99, 75, 51, 87];
+
+/** Half-width of the shine highlight band, expressed in gradient-t units. */
+const SHINE_HALF_WIDTH = 0.18;
+
+interface ShineConfig {
+	/** Overall opacity of the shine overlay, in [0, 1]. */
+	strength: number;
+	/** Center of the shine band along the diagonal, in [0, 1]. */
+	pos: number;
+}
+
 /**
- * Apply magenta→cyan diagonal gradient (bottom-left → top-right) across multi-line art.
- * `phase` (0..1) shifts the gradient along the diagonal, wrapping at 1.
+ * Apply a multi-stop diagonal gradient (bottom-left → top-right) plus an
+ * optional sliding shine band across multi-line art. `phase` (0..1) shifts the
+ * gradient along the diagonal, wrapping at 1. When `shine` is provided, a soft
+ * white highlight is composited on top, centered at `shine.pos`.
  */
-function gradientLogo(lines: readonly string[], phase = 0): string[] {
+function gradientLogo(lines: readonly string[], phase = 0, shine?: ShineConfig): string[] {
 	const reset = "\x1b[0m";
 	const rows = lines.length;
 	const cols = Math.max(...lines.map(l => l.length));
 	// span+1 so `base` stays strictly < 1: avoids the wrap-around at the
-	// far corner mapping back to t=0 (magenta) on the resting frame.
+	// far corner mapping back to t=0 (hot pink) on the resting frame.
 	const span = Math.max(1, cols + rows - 1);
+	const shineStrength = shine && shine.strength > 0 ? shine.strength : 0;
+	const shinePos = shine ? shine.pos : 0;
 	const colorAt = TERMINAL.trueColor
 		? (t: number): string => {
-				// Multi-stop gradient: hot magenta → light violet → bright cyan.
-				// Picked stops avoid the deep-blue valley a naive HSL lerp falls into.
-				const stops: [number, number, number][] = [
-					[255, 62, 201], // hot magenta-pink
-					[180, 120, 255], // light violet
-					[62, 230, 255], // bright cyan
-				];
+				// 5-stop palette widens the visible color range and avoids the
+				// deep-blue valley a naive HSL lerp falls into.
+				const stops = GRADIENT_STOPS;
 				const seg = t * (stops.length - 1);
 				const i = Math.min(stops.length - 2, Math.floor(seg));
 				const f = seg - i;
 				const a = stops[i];
 				const b = stops[i + 1];
-				const r = Math.round(a[0] + (b[0] - a[0]) * f);
-				const g = Math.round(a[1] + (b[1] - a[1]) * f);
-				const bl = Math.round(a[2] + (b[2] - a[2]) * f);
-				return `\x1b[38;2;${r};${g};${bl}m`;
+				let r = a[0] + (b[0] - a[0]) * f;
+				let g = a[1] + (b[1] - a[1]) * f;
+				let bl = a[2] + (b[2] - a[2]) * f;
+				if (shineStrength > 0) {
+					const dist = Math.abs(t - shinePos);
+					const intensity = Math.max(0, 1 - dist / SHINE_HALF_WIDTH) * shineStrength;
+					if (intensity > 0) {
+						r += (255 - r) * intensity;
+						g += (255 - g) * intensity;
+						bl += (255 - bl) * intensity;
+					}
+				}
+				return `\x1b[38;2;${Math.round(r)};${Math.round(g)};${Math.round(bl)}m`;
 			}
 		: (t: number): string => {
-				const ramp = [199, 171, 135, 99, 75, 51];
-				const idx = Math.min(ramp.length - 1, Math.max(0, Math.floor(t * (ramp.length - 1) + 0.5)));
+				const ramp = GRADIENT_RAMP_256;
+				let idx = Math.min(ramp.length - 1, Math.max(0, Math.floor(t * (ramp.length - 1) + 0.5)));
+				if (shineStrength > 0) {
+					const dist = Math.abs(t - shinePos);
+					const intensity = Math.max(0, 1 - dist / SHINE_HALF_WIDTH) * shineStrength;
+					// Promote to the brightest ramp slot when the shine band peaks here.
+					if (intensity > 0.5) idx = ramp.length - 1;
+				}
 				return `\x1b[38;5;${ramp[idx]}m`;
 			};
 	return lines.map((line, y) => {
@@ -321,14 +363,14 @@ function gradientLogo(lines: readonly string[], phase = 0): string[] {
 	});
 }
 
-/** Intro animation: how many discrete gradient phases and total duration. */
-const INTRO_PHASES = 60;
-const INTRO_MS = 2000;
+/** Total length of the intro animation. */
+const INTRO_MS = 3000;
+/** Render cadence during the intro (~30fps). */
+const INTRO_TICK_MS = 33;
+/** Number of full gradient rotations the sweep performs before settling. */
+const INTRO_SWEEPS = 2.5;
+/** Number of times the shine highlight crosses the diagonal across the intro. */
+const INTRO_SHINE_TRAVERSALS = 3;
 
-/**
- * Pre-rendered logo frames, one per phase. Frame 0 is the resting state;
- * the intro sweeps frames in reverse so it lands on frame 0.
- */
-const LOGO_FRAMES: readonly (readonly string[])[] = Array.from({ length: INTRO_PHASES }, (_, i) =>
-	gradientLogo(PI_LOGO, i / INTRO_PHASES),
-);
+/** Resting gradient frame, cached for re-renders outside of the intro. */
+const REST_FRAME = gradientLogo(PI_LOGO, 0);
