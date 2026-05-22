@@ -53,13 +53,12 @@ SCRIPT_RUN_RE = re.compile(
     "]{2,}"
 )
 
-HEADER_RE = re.compile(r"^(?:@(?P<at>\S.*)|\*\*\* Update File:\s+(?P<upd>\S.*))\s*$")
+HEADER_RE = re.compile(r"^(?:§+(?P<hl>.*)|\*\*\* Update File:\s+(?P<upd>\S.*))\s*$")
 BEGIN_PATCH_RE = re.compile(r"^\*\*\* Begin Patch\s*$")
 END_PATCH_RE = re.compile(r"^\*\*\* End Patch\s*$")
-INSERT_RE = re.compile(r"^[+<]\s*(?P<anchor>BOF|EOF|[1-9][0-9]*[A-Za-z]{2})(?:\s*~(?P<inline>.*))?\s*$")
+INSERT_RE = re.compile(r"^(?P<op>[«»])\s*(?P<anchor>BOF|EOF|[1-9][0-9]*[A-Za-z]{2})\s*$")
 RANGE_RE = re.compile(r"(?P<a>[1-9][0-9]*[A-Za-z]{2})(?:\.\.(?P<b>[1-9][0-9]*[A-Za-z]{2}))?")
-DELETE_RE = re.compile(r"^-\s*(?P<range>[1-9][0-9]*[A-Za-z]{2}(?:\.\.[1-9][0-9]*[A-Za-z]{2})?)\s*$")
-REPLACE_RE = re.compile(r"^=\s*(?P<range>[1-9][0-9]*[A-Za-z]{2}(?:\.\.[1-9][0-9]*[A-Za-z]{2})?)\s*$")
+REPLACE_RE = re.compile(r"^≔\s*(?P<range>[1-9][0-9]*[A-Za-z]{2}(?:\.\.[1-9][0-9]*[A-Za-z]{2})?)\s*$")
 
 JSON_DECODER = json.JSONDecoder()
 
@@ -457,7 +456,7 @@ def parse_edit_boundary(text: str, *, legacy_loose_tail: bool = False) -> EditBo
         if header:
             if needs_payload and not saw_required_payload:
                 break
-            target = (header.group("at") or header.group("upd") or "").strip()
+            target = (header.group("hl") or header.group("upd") or "").strip()
             cur = EditSection(target_file=target)
             sections.append(cur)
             parsed_end = end
@@ -469,9 +468,7 @@ def parse_edit_boundary(text: str, *, legacy_loose_tail: bool = False) -> EditBo
         if cur is None:
             break
 
-        if line.startswith("~"):
-            if not payload_allowed:
-                break
+        if payload_allowed and line[:1] not in {"«", "»", "≔", "§"}:
             cur.payload_lines += 1
             parsed_end = end
             saw_required_payload = True
@@ -490,35 +487,17 @@ def parse_edit_boundary(text: str, *, legacy_loose_tail: bool = False) -> EditBo
         if needs_payload and not saw_required_payload:
             break
 
-        trimmed = line.lstrip()
-        ins = INSERT_RE.match(trimmed)
+        ins = INSERT_RE.match(line)
         if ins:
             cur.op_count += 1
-            inline = ins.group("inline")
-            if inline is None:
-                needs_payload = True
-                payload_allowed = True
-                saw_required_payload = False
-                # Not complete until at least one payload line appears.
-            else:
-                cur.payload_lines += 1
-                parsed_end = end
-                needs_payload = False
-                payload_allowed = False
-                saw_required_payload = False
-            continue
-
-        dele = DELETE_RE.match(trimmed)
-        if dele:
-            cur.op_count += 1
-            cur.deleted_lines += range_deleted_lines(dele.group("range"))
-            parsed_end = end
-            needs_payload = False
-            payload_allowed = False
+            needs_payload = True
+            payload_allowed = True
             saw_required_payload = False
+            # Not complete until at least one payload line appears.
             continue
 
-        repl = REPLACE_RE.match(trimmed)
+
+        repl = REPLACE_RE.match(line)
         if repl:
             cur.op_count += 1
             cur.deleted_lines += range_deleted_lines(repl.group("range"))

@@ -30,7 +30,7 @@ export async function computeHashlineSectionDiff(
 		const rawContent = await readHashlineFileText(Bun.file(absolutePath), absolutePath, section.path);
 		const { text: content } = stripBom(rawContent);
 		const normalized = normalizeToLF(content);
-		const result = applyHashlineEdits(normalized, parseHashline(section.diff, { path: section.path }), options);
+		const result = applyHashlineEdits(normalized, parseHashline(section.diff), options);
 		if (normalized === result.lines) return { error: `No changes would be made to ${section.path}.` };
 		return generateDiffString(normalized, result.lines);
 	} catch (err) {

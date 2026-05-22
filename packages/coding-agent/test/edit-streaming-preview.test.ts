@@ -54,7 +54,7 @@ describe("hashline streaming preview (multi-section)", () => {
 	const ctx = (cwd: string) => ({ cwd, signal: new AbortController().signal });
 
 	test("keeps section A's preview when section B's header just arrived", async () => {
-		const input = ["@a.ts", "+ BOF", "~// new", "@b.ts"].join("\n");
+		const input = ["§a.ts", "»BOF", "// new", "§b.ts"].join("\n");
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).not.toBeNull();
 		expect(previews).toHaveLength(1);
@@ -64,8 +64,8 @@ describe("hashline streaming preview (multi-section)", () => {
 	});
 
 	test("ignores parse errors from the trailing in-progress section", async () => {
-		// `+ 7` is a malformed anchor — the trailing section is still being typed.
-		const input = ["@a.ts", "+ BOF", "~// new", "@b.ts", "+ 7"].join("\n");
+		// `»7` is a malformed anchor — the trailing section is still being typed.
+		const input = ["§a.ts", "»BOF", "// new", "§b.ts", "»7"].join("\n");
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).not.toBeNull();
 		expect(previews).toHaveLength(1);
@@ -74,7 +74,7 @@ describe("hashline streaming preview (multi-section)", () => {
 	});
 
 	test("renders both sections once each has at least one valid op", async () => {
-		const input = ["@a.ts", "+ BOF", "~// new a", "@b.ts", "+ BOF", "~// new b"].join("\n");
+		const input = ["§a.ts", "»BOF", "// new a", "§b.ts", "»BOF", "// new b"].join("\n");
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).toHaveLength(2);
 		expect(previews?.map(p => p.path).sort()).toEqual(["a.ts", "b.ts"]);

@@ -35,7 +35,7 @@ export * from "./apply-patch";
 export * from "./diff";
 export * from "./file-read-cache";
 
-// Resolve the `$HFMT$` and `$HSEP$` placeholders in the hashline Lark grammar.
+// Resolve the `$HFMT$`, `$HOP_*$`, `$HOP_CHARS$`, and `$HFILE$` placeholders in the hashline Lark grammar.
 const hashlineGrammar = resolveHashlineGrammarPlaceholders(hashlineGrammarTemplate);
 
 export * from "../hashline";

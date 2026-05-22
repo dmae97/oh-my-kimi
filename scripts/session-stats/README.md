@@ -47,7 +47,7 @@ All tables are prefixed `ss_` to avoid collision with `packages/stats`.
 |`ss_assistant_msgs`|per assistant message text + thinking blobs and token counts|
 |`ss_user_msgs`|per user message text and token count|
 |`ss_edit_calls`|per `edit` call: `success`, `warnings`, `raw_input_len`|
-|`ss_edit_sections`|per `@PATH` section in an edit; precomputed `longest_repeat_*`, `dup_anchors`|
+|`ss_edit_sections`|per `§PATH` section in an edit; precomputed `longest_repeat_*`, `dup_anchors`|
 
 Indexes on `(tool_name, timestamp)` and `(session_file, seq)` make per-tool
 aggregations and ordered session walks cheap.
