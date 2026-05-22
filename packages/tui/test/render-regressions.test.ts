@@ -766,6 +766,52 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+		it("viewportRefresh does not push above-viewport mutations into scrollback", async () => {
+			// Regression guard for the May 2026 BSU-de-flicker viewportRefresh
+			// landing: the helper claimed to repaint "just the visible viewport"
+			// but actually wrote the entire `newLines` array, so on a 24-row
+			// terminal with a 52-line transcript every refresh pushed ~28 rows
+			// into scrollback. Streaming markdown fences hit this path every
+			// ~30 ms, stacking stale prompt frames in the user's terminal.
+			const term = new VirtualTerminal(40, 6);
+			const tui = new TUI(term);
+			const lines = rows("line-", 30);
+			const component = new MutableLinesComponent(lines);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				const before = term.getScrollBuffer().length;
+
+				// Mutate a line that sits well above the visible viewport
+				// (viewport rows are 24..29 here, so row 2 is far above).
+				// This is the exact entry condition for `viewportRefresh()`:
+				// `firstChanged (2) < prevViewportTop (24)`.
+				for (let tick = 0; tick < 30; tick++) {
+					lines[2] = `marker-${tick}`;
+					component.setLines(lines);
+					tui.requestRender();
+					await settle(term);
+				}
+
+				const after = term.getScrollBuffer().length;
+				// Pre-fix growth: ~30 ticks * ~24 scrolled rows = ~720.
+				// Post-fix growth: ~0; allow a small slack for unrelated
+				// xterm bookkeeping rows.
+				expect(after - before).toBeLessThan(50);
+
+				// And the mutated marker values, which only existed above the
+				// visible viewport, must never have been emitted — so they
+				// must not appear anywhere in scrollback.
+				const scrollback = term.getScrollBuffer();
+				for (let tick = 0; tick < 30; tick++) {
+					expect(countMatches(scrollback, new RegExp(`marker-${tick}\\b`))).toBe(0);
+				}
+			} finally {
+				tui.stop();
+			}
+		});
 	});
 
 	describe("overlay compositing", () => {
