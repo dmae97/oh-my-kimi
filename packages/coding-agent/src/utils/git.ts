@@ -1157,6 +1157,10 @@ export const worktree = {
 	async list(cwd: string, signal?: AbortSignal): Promise<GitWorktreeEntry[]> {
 		return parseWorktreeList(await runText(cwd, ["worktree", "list", "--porcelain"], { readOnly: true, signal }));
 	},
+
+	async prune(cwd: string, signal?: AbortSignal): Promise<void> {
+		await runEffect(cwd, ["worktree", "prune"], { signal });
+	},
 };
 
 // ════════════════════════════════════════════════════════════════════════════

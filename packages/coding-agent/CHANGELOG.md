@@ -1,6 +1,24 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed PR and task-isolation worktree directory layout to hash-based `~/.omp/wt/<identifier>-<path-hash>` style paths, replacing the previous nested encoded-repo layout
+
+### Added
+
+- Added `omp worktree` command (alias `wt`) to list and manage agent-managed worktrees under `~/.omp/wt`
+- Added `omp worktree clear` to remove orphaned worktree directories, with `--all` to include live PR-checkouts, `--dry-run` for preview, and `--json` reporting
+- Added machine-readable JSON output to `omp worktree list` for scripted inspection
+
+### Changed
+
+- Updated PR checkout to reuse `hashPath`-based worktree roots when creating and scanning worktrees for cleanup
+- Updated `worktree` cleanup logic to gracefully prune parent git metadata after removing worktree directories
+
+### Fixed
+
+- Fixed PR checkout failures when the default worktree path was already registered or occupied by stale leftovers by automatically selecting suffixed alternatives (`-2`, `-3`, etc.)
 
 ## [15.2.2] - 2026-05-22
 

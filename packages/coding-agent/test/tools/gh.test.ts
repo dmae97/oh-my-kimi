@@ -11,7 +11,7 @@ import {
 	parseSearchDateBound,
 } from "@oh-my-pi/pi-coding-agent/tools/gh";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
-import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir, hashPath, setAgentDir } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 
 // Isolate every `git` invocation in this file from the developer's host
@@ -157,11 +157,9 @@ async function setupTempHome(): Promise<{ home: string; cleanup: () => Promise<v
  * the value rendered into the tool result.
  */
 async function expectedWorktreePath(home: string, primaryRoot: string, localBranch: string): Promise<string> {
-	const encoded = path
-		.resolve(primaryRoot)
-		.replace(/^[/\\]/, "")
-		.replace(/[/\\:]/g, "-");
-	return fs.realpath(path.join(home, ".omp", "wt", encoded, localBranch));
+	const prNumber = localBranch.replace(/^pr-/, "");
+	const segment = `${prNumber}-${hashPath(primaryRoot)}`;
+	return fs.realpath(path.join(home, ".omp", "wt", segment));
 }
 
 describe("parsePrUnifiedDiff", () => {
