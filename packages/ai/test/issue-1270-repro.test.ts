@@ -3,6 +3,9 @@ import { __resetVertexTokenCache } from "../src/providers/google-auth";
 import { streamGoogleVertex } from "../src/providers/google-vertex";
 import type { Model } from "../src/types";
 
+const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const METADATA_TOKEN_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
+
 const context = {
 	messages: [{ role: "user" as const, content: "hello", timestamp: 0 }],
 };
@@ -43,7 +46,9 @@ describe("issue #1270: Vertex AI global endpoint", () => {
 			fetch: async input => {
 				const url = input instanceof Request ? input.url : input.toString();
 				urls.push(url);
-				if (url === "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token") {
+				// The assertion below is about the Vertex model URL; local user ADC may
+				// hit OAuth before the model request, while CI without ADC uses metadata.
+				if (url === METADATA_TOKEN_URL || url === OAUTH_TOKEN_URL) {
 					return new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }));
 				}
 				return new Response('{"error":{"message":"stop after capture"}}', { status: 400 });
