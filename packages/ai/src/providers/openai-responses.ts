@@ -397,7 +397,9 @@ function buildParams(
 		if (needsDeveloperRole) {
 			// Reasoning models on known OpenAI-compatible endpoints require the
 			// `developer` role. Send all system prompts inline in `input`.
-			messages.unshift(...systemPrompts.map(systemPrompt => ({ role: "developer" as const, content: systemPrompt })));
+			messages.unshift(
+				...systemPrompts.map(systemPrompt => ({ role: "developer" as const, content: systemPrompt })),
+			);
 		} else {
 			// All other endpoints (including third-party /v1/responses proxies) use
 			// the canonical top-level `instructions` field so that proxies that
