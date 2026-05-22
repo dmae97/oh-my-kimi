@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Changed PR and task-isolation worktree directory layout to hash-based `~/.omp/wt/<identifier>-<path-hash>` style paths, replacing the previous nested encoded-repo layout
@@ -10,11 +11,15 @@
 - Added `omp worktree` command (alias `wt`) to list and manage agent-managed worktrees under `~/.omp/wt`
 - Added `omp worktree clear` to remove orphaned worktree directories, with `--all` to include live PR-checkouts, `--dry-run` for preview, and `--json` reporting
 - Added machine-readable JSON output to `omp worktree list` for scripted inspection
+- Added `display.shimmer` appearance setting with `classic`, `kitt` (Knight Rider K.I.T.T. scanner), and `disabled` modes
 
 ### Changed
 
+- Changed background job completion follow-ups to batch multiple finished jobs into a single `async-result` message, showing each completed job and its result in one place
+- Changed MCP notification follow-ups to combine multiple resource updates into a single consolidated message and suppress duplicate server/uri entries
 - Updated PR checkout to reuse `hashPath`-based worktree roots when creating and scanning worktrees for cleanup
 - Updated `worktree` cleanup logic to gracefully prune parent git metadata after removing worktree directories
+- Reworked working-message shimmer animation for 60fps rendering: ANSI sequences are coalesced per same-tier run instead of emitted per code point, palettes compile once and cache per active theme, and the band position is now fractional so motion is smooth at any frame rate
 
 ### Fixed
 

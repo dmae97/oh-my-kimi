@@ -290,6 +290,7 @@ export class Agent {
 	#onSseEvent?: SimpleStreamOptions["onSseEvent"];
 	#onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
 	#onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
+	#onBeforeYield?: () => Promise<void> | void;
 	#telemetry?: AgentLoopConfig["telemetry"];
 
 	/** Buffered Cursor tool results with text length at time of call (for correct ordering) */
@@ -557,6 +558,10 @@ export class Agent {
 		fn: ((message: AssistantMessage, event: AssistantMessageEvent) => void) | undefined,
 	): void {
 		this.#onAssistantMessageEvent = fn;
+	}
+
+	setOnBeforeYield(fn: (() => Promise<void> | void) | undefined): void {
+		this.#onBeforeYield = fn;
 	}
 
 	emitExternalEvent(event: AgentEvent) {
@@ -934,6 +939,7 @@ export class Agent {
 				return this.#dequeueSteeringMessages();
 			},
 			getFollowUpMessages: async () => this.#dequeueFollowUpMessages(),
+			onBeforeYield: () => this.#onBeforeYield?.(),
 			telemetry: this.#telemetry,
 		};
 
