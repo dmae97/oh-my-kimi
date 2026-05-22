@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.2.4] - 2026-05-22
 ### Breaking Changes
 
 - Replaced the legacy `@@` header and `+`/`<`/`=`/`-` hashline syntax with the new `§PATH` header and `«`/`»`/`≔` operation format, so existing hashline scripts and prompts using old symbols must be updated

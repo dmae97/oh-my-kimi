@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.2.4] - 2026-05-22
+
 ### Fixed
 
 - Fixed ChatGPT Plus/Pro (Codex) OAuth login returning `Token exchange failed: 403` on Windows. When port 1455 was in use, the callback server silently fell back to a random port; OpenAI's authorization endpoint accepts any localhost redirect URI (loose validation), so the browser callback succeeds and shows "Authentication Successful", but the token endpoint rejects the non-registered port with 403. The `OpenAICodexOAuthFlow` now enforces a fixed `redirectUri` option so a busy port immediately surfaces as "port unavailable" instead of producing a confusing 403 ([#1277](https://github.com/can1357/oh-my-pi/issues/1277)).
