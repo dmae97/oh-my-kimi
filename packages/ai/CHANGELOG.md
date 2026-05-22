@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.2.2] - 2026-05-22
+
 ### Fixed
 
 - Fixed `gemini-3.1-pro-high` and `gemini-3.1-pro-low` on the `google-antigravity` provider always returning HTTP 400 from Cloud Code Assist. The `ANTIGRAVITY_SYSTEM_INSTRUCTION` identity header was not injected for these models because the internal check matched the string `"gemini-3-pro-high"` (hyphen) instead of the versioned `"gemini-3.1-pro-..."` form. The guard now matches all `gemini-3` model variants ([#1274](https://github.com/can1357/oh-my-pi/issues/1274)).
