@@ -437,15 +437,18 @@ const enforcedHeaderKeys = new Set(
 
 const CLAUDE_BILLING_HEADER_PREFIX = "x-anthropic-billing-header:";
 
-function createClaudeBillingHeader(payload: unknown): string {
-	const seedText = JSON.stringify(payload) ?? "";
-	const k = [4, 7, 20].map(i => seedText[i] ?? "0").join("");
+function createClaudeBillingHeader(firstUserMessageText: string): string {
+	// Fingerprint: SHA256(salt + msg[4] + msg[7] + msg[20] + version)[:3]
+	// Matches CC's computeFingerprint in utils/fingerprint.ts.
+	// Uses chars from the first user message (not the system prompt).
+	const k = [4, 7, 20].map(i => firstUserMessageText[i] ?? "0").join("");
 	const versionSuffix = nodeCrypto
 		.createHash("sha256")
 		.update(`59cf53e54c78${k}${claudeCodeVersion}`)
 		.digest("hex")
 		.slice(0, 3);
-	// cch field is a fixed placeholder for first-party Anthropic endpoints.
+	// cch=00000: placeholder overwritten by Bun's native attestation layer in CC;
+	// we ship the placeholder as-is (Anthropic does not enforce it yet).
 	return `${CLAUDE_BILLING_HEADER_PREFIX} cc_version=${claudeCodeVersion}.${versionSuffix}; cc_entrypoint=cli; cch=00000;`;
 }
 
@@ -1626,7 +1629,8 @@ export type AnthropicSystemBlock = {
 type SystemBlockOptions = {
 	includeClaudeCodeInstruction?: boolean;
 	extraInstructions?: string[];
-	billingPayload?: unknown;
+	/** Text of the first user message — used as fingerprint seed for the billing header. */
+	firstUserMessageText?: string;
 	cacheControl?: AnthropicCacheControl;
 };
 
@@ -1634,7 +1638,7 @@ export function buildAnthropicSystemBlocks(
 	systemPrompt: readonly string[] | undefined,
 	options: SystemBlockOptions = {},
 ): AnthropicSystemBlock[] | undefined {
-	const { includeClaudeCodeInstruction = false, extraInstructions = [], billingPayload, cacheControl } = options;
+	const { includeClaudeCodeInstruction = false, extraInstructions = [], firstUserMessageText, cacheControl } = options;
 	const sanitizedPrompts = normalizeSystemPrompts(systemPrompt);
 	const trimmedInstructions = extraInstructions.map(instruction => instruction.trim()).filter(Boolean);
 	const hasBillingHeader = sanitizedPrompts.some(prompt => prompt.includes(CLAUDE_BILLING_HEADER_PREFIX));
@@ -1646,13 +1650,8 @@ export function buildAnthropicSystemBlocks(
 		//   [2] all user content    — extra instructions + system prompts joined with \n\n, cached
 		// Collapsing into one merged user block prevents block count from
 		// fingerprinting the caller.
-		const payloadSeed = billingPayload ?? {
-			system: sanitizedPrompts,
-			extraInstructions: trimmedInstructions,
-		};
-
 		const blocks: AnthropicSystemBlock[] = [
-			{ type: "text", text: createClaudeBillingHeader(payloadSeed) },
+			{ type: "text", text: createClaudeBillingHeader(firstUserMessageText ?? "") },
 			{ type: "text", text: claudeCodeSystemInstruction, ...(cacheControl && { cache_control: cacheControl }) },
 		];
 
@@ -2184,16 +2183,25 @@ function buildParams(
 	}
 
 	const shouldInjectClaudeCodeInstruction = isOAuthToken && !model.id.startsWith("claude-3-5-haiku");
-	const billingSystemPrompts = normalizeSystemPrompts(context.systemPrompt);
-	const billingPayload = shouldInjectClaudeCodeInstruction
-		? {
-				...params,
-				...(billingSystemPrompts.length > 0 ? { system: billingSystemPrompts } : {}),
+	// Extract the first user message text for the billing-header fingerprint.
+	// Must use pre-conversion messages so synthetic injections (system-reminders,
+	// etc.) don't pollute the seed — mirrors CC's computeFingerprintFromMessages.
+	let firstUserMessageText = "";
+	if (shouldInjectClaudeCodeInstruction) {
+		const first = context.messages.find(m => m.role === "user" || m.role === "developer");
+		if (first) {
+			const { content } = first;
+			if (typeof content === "string") {
+				firstUserMessageText = content;
+			} else if (Array.isArray(content)) {
+			const tb = content.find((b): b is TextContent => b.type === "text");
+				firstUserMessageText = tb?.text ?? "";
 			}
-		: undefined;
+		}
+	}
 	const systemBlocks = buildAnthropicSystemBlocks(context.systemPrompt, {
 		includeClaudeCodeInstruction: shouldInjectClaudeCodeInstruction,
-		billingPayload,
+		firstUserMessageText,
 	});
 	if (systemBlocks) {
 		params.system = systemBlocks;
