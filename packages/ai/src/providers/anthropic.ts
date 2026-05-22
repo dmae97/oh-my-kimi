@@ -451,16 +451,18 @@ function createClaudeBillingHeader(firstUserMessageText: string): string {
 		.slice(0, 3);
 	// cch=00000: placeholder replaced with the real attestation hash by wrapFetchForCch
 	// before the request hits the wire (see below).
-	return `${CLAUDE_BILLING_HEADER_PREFIX} cc_version=${claudeCodeVersion}.${versionSuffix}; cc_entrypoint=cli; cch=00000;`;
+	return `${CLAUDE_BILLING_HEADER_PREFIX} cc_version=${claudeCodeVersion}.${versionSuffix}; cc_entrypoint=cli; ${CCH_PLACEHOLDER_STR};`;
 }
 
 // cch attestation: XXHash64(body_with_placeholder, seed) low-20-bits, 5 hex chars.
 const CCH_SEED = 0x4d659218e32a3268n;
-const CCH_PLACEHOLDER = new TextEncoder().encode("cch=00000");
+const CCH_PLACEHOLDER_STR = "cch=00000";
+const cchEncoder = new TextEncoder();
+const CCH_PLACEHOLDER = cchEncoder.encode(CCH_PLACEHOLDER_STR);
 // Scope replacement to the system block: find '"system":[' then scan at most
 // 300 bytes for the placeholder. This avoids mutating user/tool content that
 // happens to contain the literal "cch=00000" — messages precede system in JSON.
-const SYSTEM_MARKER = new TextEncoder().encode('"system":[');
+const SYSTEM_MARKER = cchEncoder.encode('"system":[');
 const CCH_SEARCH_WINDOW = 300;
 
 function patchCch(body: Uint8Array): Uint8Array {
@@ -492,9 +494,8 @@ function patchCch(body: Uint8Array): Uint8Array {
 	const h = xxhash64(body, CCH_SEED);
 	const cch = (h & 0xfffffn).toString(16).padStart(5, "0");
 
-	const patched = body.slice();
-	for (let i = 0; i < 5; i++) patched[idx + 4 + i] = cch.charCodeAt(i);
-	return patched;
+	for (let i = 0; i < 5; i++) body[idx + 4 + i] = cch.charCodeAt(i);
+	return body;
 }
 
 type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -505,9 +506,9 @@ function wrapFetchForCch(base: FetchFn): FetchFn {
 			init?.body &&
 			typeof init.body === "string" &&
 			init.body.includes(CLAUDE_BILLING_HEADER_PREFIX) &&
-			init.body.includes("cch=00000")
+			init.body.includes(CCH_PLACEHOLDER_STR)
 		) {
-			const encoded = new TextEncoder().encode(init.body);
+			const encoded = cchEncoder.encode(init.body);
 			const patched = patchCch(encoded);
 			return base(input, { ...init, body: patched });
 		}
