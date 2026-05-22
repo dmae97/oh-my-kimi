@@ -74,6 +74,7 @@ import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { spillToDescription } from "../utils/schema/spill";
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
+import { xxhash64 } from "../utils/xxhash64";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -447,9 +448,47 @@ function createClaudeBillingHeader(firstUserMessageText: string): string {
 		.update(`59cf53e54c78${k}${claudeCodeVersion}`)
 		.digest("hex")
 		.slice(0, 3);
-	// cch=00000: placeholder overwritten by Bun's native attestation layer in CC;
-	// we ship the placeholder as-is (Anthropic does not enforce it yet).
+	// cch=00000: placeholder replaced with the real attestation hash by wrapFetchForCch
+	// before the request hits the wire (see below).
 	return `${CLAUDE_BILLING_HEADER_PREFIX} cc_version=${claudeCodeVersion}.${versionSuffix}; cc_entrypoint=cli; cch=00000;`;
+}
+
+// cch attestation: XXHash64(body_with_placeholder, seed) low-20-bits, 5 hex chars.
+const CCH_SEED = 0x4d659218e32a3268n;
+const CCH_PLACEHOLDER = new TextEncoder().encode("cch=00000");
+
+function patchCch(body: Uint8Array): Uint8Array {
+	// Locate the placeholder written by createClaudeBillingHeader.
+	let idx = -1;
+	outer: for (let i = 0; i <= body.length - CCH_PLACEHOLDER.length; i++) {
+		for (let j = 0; j < CCH_PLACEHOLDER.length; j++) {
+			if (body[i + j] !== CCH_PLACEHOLDER[j]) continue outer;
+		}
+		idx = i;
+		break;
+	}
+	if (idx === -1) return body; // not a CC request — pass through unchanged
+
+	// Hash the body with the placeholder in place (matches Bun's in-place behaviour).
+	const h = xxhash64(body, CCH_SEED);
+	const cch = (h & 0xfffffn).toString(16).padStart(5, "0");
+
+	const patched = body.slice();
+	for (let i = 0; i < 5; i++) patched[idx + 4 + i] = cch.charCodeAt(i);
+	return patched;
+}
+
+type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+function wrapFetchForCch(base: FetchFn): FetchFn {
+	return (input, init) => {
+		if (init?.body && typeof init.body === "string" && init.body.includes("cch=00000")) {
+			const encoded = new TextEncoder().encode(init.body);
+			const patched = patchCch(encoded);
+			return base(input, { ...init, body: patched });
+		}
+		return base(input, init);
+	};
 }
 
 const CLAUDE_CLOAKING_USER_ID_REGEX =
@@ -1704,11 +1743,8 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
 	const tlsFetchOptions = buildClaudeCodeTlsFetchOptions(model, baseUrl);
 	const baseFetch = args.fetch ?? fetch;
-	const debugFetch = onSseEvent
-		? wrapFetchForSseDebug(baseFetch, event => onSseEvent(event, model))
-		: args.fetch
-			? baseFetch
-			: undefined;
+	const cchFetch = wrapFetchForCch(baseFetch);
+	const debugFetch = onSseEvent ? wrapFetchForSseDebug(cchFetch, event => onSseEvent(event, model)) : cchFetch;
 	if (model.provider === "github-copilot") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
 		const betaFeatures = [...extraBetas];
@@ -1736,7 +1772,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			dangerouslyAllowBrowser: true,
 			defaultHeaders,
 			logLevel: ANTHROPIC_SDK_LOG_LEVEL,
-			...(debugFetch ? { fetch: debugFetch } : {}),
+			fetch: debugFetch,
 			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 		};
 	}
@@ -1769,7 +1805,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			dangerouslyAllowBrowser: true,
 			defaultHeaders,
 			logLevel: ANTHROPIC_SDK_LOG_LEVEL,
-			...(debugFetch ? { fetch: debugFetch } : {}),
+			fetch: debugFetch,
 		};
 	}
 
@@ -1782,7 +1818,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		dangerouslyAllowBrowser: true,
 		defaultHeaders,
 		logLevel: ANTHROPIC_SDK_LOG_LEVEL,
-		...(debugFetch ? { fetch: debugFetch } : {}),
+		fetch: debugFetch,
 		...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 	};
 }
@@ -2194,7 +2230,7 @@ function buildParams(
 			if (typeof content === "string") {
 				firstUserMessageText = content;
 			} else if (Array.isArray(content)) {
-			const tb = content.find((b): b is TextContent => b.type === "text");
+				const tb = content.find((b): b is TextContent => b.type === "text");
 				firstUserMessageText = tb?.text ?? "";
 			}
 		}

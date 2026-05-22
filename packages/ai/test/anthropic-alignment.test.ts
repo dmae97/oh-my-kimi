@@ -1146,3 +1146,45 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(stripClaudeToolPrefix("proxy_Read", "proxy_")).toBe("Read");
 	});
 });
+
+describe("cch attestation", () => {
+	it("wrapFetchForCch: replaces cch=00000 with correct XXHash64 in outgoing request body", async () => {
+		const { promise: bodyPromise, resolve: bodyResolve } = Promise.withResolvers<string>();
+		const controller = new AbortController();
+
+		const fakeFetch: typeof fetch = async (_input, init) => {
+			const raw = init?.body;
+			const body = typeof raw === "string" ? raw : new TextDecoder().decode(raw as Uint8Array);
+			bodyResolve(body);
+			controller.abort();
+			return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n', {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+
+		streamAnthropic(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Be helpful."],
+				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+			},
+			{ apiKey: "sk-ant-oat-test", isOAuth: true, signal: controller.signal, fetch: fakeFetch },
+		);
+
+		const capturedBody = await bodyPromise;
+
+		// The placeholder must have been replaced before the request was sent.
+		expect(capturedBody).toContain("cch=");
+		expect(capturedBody).not.toContain("cch=00000");
+		const m = capturedBody.match(/cch=([0-9a-f]{5})/);
+		expect(m).not.toBeNull();
+
+		// Self-consistency: hashing the body with the placeholder restored must reproduce the embedded cch.
+		const { xxhash64 } = await import("@oh-my-pi/pi-ai/utils/xxhash64");
+		const CCH_SEED = 0x4d659218e32a3268n;
+		const withPlaceholder = capturedBody.replace(/cch=[0-9a-f]{5}/, "cch=00000");
+		const h = xxhash64(new TextEncoder().encode(withPlaceholder), CCH_SEED);
+		expect(m![1]).toBe((h & 0xfffffn).toString(16).padStart(5, "0"));
+	});
+});
