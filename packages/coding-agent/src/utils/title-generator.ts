@@ -3,7 +3,7 @@
  */
 import * as path from "node:path";
 
-import { type Api, completeSimple, type Model } from "@oh-my-pi/pi-ai";
+import { type Api, type AssistantMessage, completeSimple, type Model, type Tool } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
@@ -16,6 +16,25 @@ const DEFAULT_TERMINAL_TITLE = "π";
 const TERMINAL_TITLE_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 
 const MAX_INPUT_CHARS = 2000;
+const TITLE_MAX_TOKENS = 30;
+const REASONING_SAFE_MAX_TOKENS = 1024;
+const SET_TITLE_TOOL_NAME = "set_title";
+
+const setTitleTool: Tool = {
+	name: SET_TITLE_TOOL_NAME,
+	description: "Set the generated session title.",
+	parameters: {
+		type: "object",
+		properties: {
+			title: {
+				type: "string",
+				description: "A concise 3-6 word title for the session.",
+			},
+		},
+		required: ["title"],
+		additionalProperties: false,
+	},
+};
 
 function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel?: Model<Api>): Model<Api> | undefined {
 	const availableModels = registry.getAvailable();
@@ -76,14 +95,16 @@ ${truncatedMessage}
 	// account_uuid rather than the snapshot-at-call-site value.
 	const metadata = metadataResolver?.(model.provider);
 
-	// Title generation is a 3-6 word task; force reasoning off so reasoning models
-	// don't burn the entire output budget on internal thinking and return an empty
-	// string. With reasoning disabled, 30 tokens of output is plenty.
+	// Title generation is a 3-6 word task, but some reasoning backends ignore
+	// disableReasoning. Keep the normal cheap budget for non-reasoning models
+	// while reserving enough output room for reasoning models to still emit
+	// the forced tool call after any unavoidable thinking tokens.
+	const maxTokens = model.reasoning ? Math.max(TITLE_MAX_TOKENS, REASONING_SAFE_MAX_TOKENS) : TITLE_MAX_TOKENS;
 	const request = {
 		model: `${model.provider}/${model.id}`,
 		systemPrompt: TITLE_SYSTEM_PROMPT,
 		userMessage,
-		maxTokens: 30,
+		maxTokens,
 	};
 	logger.debug("title-generator: request", request);
 
@@ -93,11 +114,13 @@ ${truncatedMessage}
 			{
 				systemPrompt: [request.systemPrompt],
 				messages: [{ role: "user", content: request.userMessage, timestamp: Date.now() }],
+				tools: [setTitleTool],
 			},
 			{
 				apiKey,
-				maxTokens: 30,
+				maxTokens: request.maxTokens,
 				disableReasoning: true,
+				toolChoice: { type: "tool", name: SET_TITLE_TOOL_NAME },
 				metadata,
 			},
 		);
@@ -111,13 +134,7 @@ ${truncatedMessage}
 			return null;
 		}
 
-		let title = "";
-		for (const content of response.content) {
-			if (content.type === "text") {
-				title += content.text;
-			}
-		}
-		title = title.trim();
+		const title = extractGeneratedTitle(response.content);
 
 		logger.debug("title-generator: response", {
 			model: request.model,
@@ -138,6 +155,21 @@ ${truncatedMessage}
 		});
 		return null;
 	}
+}
+
+function extractGeneratedTitle(contentBlocks: AssistantMessage["content"]): string {
+	let textTitle = "";
+	for (const content of contentBlocks) {
+		if (content.type === "toolCall" && content.name === SET_TITLE_TOOL_NAME) {
+			const args = content.arguments as Record<string, unknown>;
+			const title = args.title;
+			return typeof title === "string" ? title.trim() : "";
+		}
+		if (content.type === "text") {
+			textTitle += content.text;
+		}
+	}
+	return textTitle.trim();
 }
 
 /**

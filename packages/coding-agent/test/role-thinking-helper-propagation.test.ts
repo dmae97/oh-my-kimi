@@ -47,7 +47,10 @@ describe("role thinking helper propagation", () => {
 
 		const message = await generateCommitMessage(`diff --git a/x b/x\n+change\n`, registry as never, settings);
 		expect(message).toBe("fix scope handling");
-		expect(completeSimpleMock.mock.calls[0]?.[2]).toMatchObject({ reasoning: Effort.Minimal });
+		expect(completeSimpleMock.mock.calls[0]?.[2]).toMatchObject({
+			reasoning: Effort.Minimal,
+			maxTokens: 1024,
+		});
 	});
 
 	it("disables reasoning for title generation even when smol role has thinking", async () => {
@@ -62,7 +65,14 @@ describe("role thinking helper propagation", () => {
 		};
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "end_turn",
-			content: [{ type: "text", text: "Investigate resolver" }],
+			content: [
+				{
+					type: "toolCall",
+					id: "call-title",
+					name: "set_title",
+					arguments: { title: "Investigate resolver" },
+				},
+			],
 		} as never);
 
 		const title = await generateSessionTitle("Investigate resolver", registry as never, settings);

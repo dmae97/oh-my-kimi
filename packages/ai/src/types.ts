@@ -375,9 +375,9 @@ export interface SimpleStreamOptions extends StreamOptions {
 	 * Force-disable reasoning for the request even when the model supports it.
 	 * Takes precedence over `reasoning`. Useful for fast utility calls
 	 * (e.g. title generation) where the model would otherwise burn the entire
-	 * output budget on internal thinking. Currently honored by OpenRouter
-	 * (sends `reasoning: { enabled: false }`); other providers already behave
-	 * this way when `reasoning` is undefined.
+	 * output budget on internal thinking. Provider support is format-specific:
+	 * some transports can disable reasoning directly, while generic
+	 * effort-based OpenAI-compatible endpoints use the lowest supported effort.
 	 */
 	disableReasoning?: boolean;
 	/**
