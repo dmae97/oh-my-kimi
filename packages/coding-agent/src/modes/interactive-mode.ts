@@ -2230,7 +2230,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.statusContainer.clear();
 			this.loadingAnimation = new Loader(
 				this.ui,
-				spinner => theme.fg("accent", spinner),
+				spinner => {
+					const accent = this.#getWorkingMessageAccent();
+					return accent ? `${accent.main}${spinner}\x1b[39m` : theme.fg("accent", spinner);
+				},
 				message => renderWorkingMessage(message, this.#getWorkingMessageAccent()),
 				this.#defaultWorkingMessage,
 				getSymbolTheme().spinnerFrames,
