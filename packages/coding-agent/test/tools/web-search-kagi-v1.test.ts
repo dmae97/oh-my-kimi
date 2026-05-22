@@ -91,7 +91,18 @@ describe("Kagi V1 search result parsing", () => {
 									time: "2025-06-03T00:00:00Z",
 								},
 							],
-							related_search: ["related query one", "related query two"],
+							related_search: [
+								{
+									title: "Related Search One",
+									url: "https://example.com/rs1",
+									props: { question: "related query one" },
+								},
+								{
+									title: "Related Search Two",
+									url: "https://example.com/rs2",
+									props: { question: "related query two" },
+								},
+							],
 						},
 					}),
 					{ status: 200, headers: { "Content-Type": "application/json" } },
@@ -128,7 +139,13 @@ describe("Kagi V1 search result parsing", () => {
 						meta: { id: "req-v1-answer" },
 						data: {
 							search: [{ url: "https://example.com", title: "Result", snippet: "Snippet" }],
-							direct_answer: [{ text: "This is a direct answer." }],
+							direct_answer: [
+								{
+									url: "https://example.com/answer",
+									title: "Direct Answer",
+									snippet: "This is a direct answer.",
+								},
+							],
 						},
 					}),
 					{ status: 200, headers: { "Content-Type": "application/json" } },
@@ -181,11 +198,11 @@ describe("Kagi V1 search result parsing", () => {
 		expect(capturedBody).toMatchObject({
 			query: "recency test",
 			workflow: "search",
-			filters: { time_after: "1mo ago" },
+			filters: { after: "1mo ago" },
 		});
 	});
 
-	it("maps recency 'year' to time_after filter with 1y ago", async () => {
+	it("maps recency 'year' to filters.after with 1y ago", async () => {
 		let capturedBody: Record<string, unknown> | undefined;
 		using _hook = hookFetch((input: string | URL | Request, init) => {
 			const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -205,7 +222,7 @@ describe("Kagi V1 search result parsing", () => {
 		await searchWithKagiV1("year recency", { recency: "year" });
 
 		expect(capturedBody).toMatchObject({
-			filters: { time_after: "1y ago" },
+			filters: { after: "1y ago" },
 		});
 	});
 

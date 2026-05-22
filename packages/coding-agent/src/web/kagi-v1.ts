@@ -25,8 +25,8 @@ export interface KagiV1SearchRequest {
 	lens?: string;
 	/** Time-based filter: ISO date string or relative (day|week|month) */
 	filters?: {
-		time_after?: string;
-		time_before?: string;
+		after?: string;
+		before?: string;
 	};
 }
 
@@ -37,20 +37,31 @@ export interface KagiV1SearchResultItem {
 	snippet?: string;
 	/** ISO timestamp or relative ("2h ago") */
 	time?: string;
-	/** Thumbnail URL */
-	image?: string;
+	/** Thumbnail image */
+	image?: { url: string; height?: number; width?: number };
 	/** Extra metadata key-value pairs */
-	props?: Record<string, string>;
+	props?: Record<string, unknown>;
 }
 
-/** V1 response data (categorized) */
 export interface KagiV1SearchData {
 	search?: KagiV1SearchResultItem[];
+	image?: KagiV1SearchResultItem[];
 	video?: KagiV1SearchResultItem[];
+	podcast?: KagiV1SearchResultItem[];
+	podcast_creator?: KagiV1SearchResultItem[];
 	news?: KagiV1SearchResultItem[];
+	adjacent_question?: KagiV1SearchResultItem[];
+	direct_answer?: KagiV1SearchResultItem[];
+	interesting_news?: KagiV1SearchResultItem[];
+	interesting_finds?: KagiV1SearchResultItem[];
 	infobox?: KagiV1SearchResultItem[];
-	related_search?: string[];
-	direct_answer?: Array<{ text: string }>;
+	code?: KagiV1SearchResultItem[];
+	package_tracking?: KagiV1SearchResultItem[];
+	public_records?: KagiV1SearchResultItem[];
+	weather?: KagiV1SearchResultItem[];
+	related_search?: KagiV1SearchResultItem[];
+	listicle?: KagiV1SearchResultItem[];
+	web_archive?: KagiV1SearchResultItem[];
 }
 
 /** V1 success response */
@@ -187,19 +198,19 @@ function buildRequestBody(query: string, options: KagiV1SearchOptions): KagiV1Se
 	if (options.recency) {
 		switch (options.recency) {
 			case "day": {
-				req.filters = { ...req.filters, time_after: "1d ago" };
+				req.filters = { ...req.filters, after: "1d ago" };
 				break;
 			}
 			case "week": {
-				req.filters = { ...req.filters, time_after: "1w ago" };
+				req.filters = { ...req.filters, after: "1w ago" };
 				break;
 			}
 			case "month": {
-				req.filters = { ...req.filters, time_after: "1mo ago" };
+				req.filters = { ...req.filters, after: "1mo ago" };
 				break;
 			}
 			case "year": {
-				req.filters = { ...req.filters, time_after: "1y ago" };
+				req.filters = { ...req.filters, after: "1y ago" };
 				break;
 			}
 		}
@@ -286,14 +297,24 @@ export async function searchWithKagiV1(query: string, options: KagiV1SearchOptio
 		}
 	}
 
-	// Related searches
-	if (data?.related_search) {
-		relatedQuestions.push(...data.related_search);
+	// Adjacent questions (stored under adjacent_question with question in props.question)
+	if (data?.adjacent_question) {
+		for (const item of data.adjacent_question) {
+			const q = item.props?.question ?? item.props?.query ?? item.title;
+			if (q) relatedQuestions.push(q as string);
+		}
 	}
 
+	// Related searches
+	if (data?.related_search) {
+		for (const item of data.related_search) {
+			const q = item.props?.question ?? item.props?.query ?? item.title;
+			if (q) relatedQuestions.push(q as string);
+		}
+	}
 	// Direct answer
 	if (data?.direct_answer && data.direct_answer.length > 0) {
-		answer = data.direct_answer[0].text;
+		answer = data.direct_answer[0].snippet ?? data.direct_answer[0].title;
 	}
 
 	return {
