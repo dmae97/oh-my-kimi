@@ -9,6 +9,7 @@ import {
 	buildAnthropicClientOptions,
 	buildAnthropicHeaders,
 	buildAnthropicSystemBlocks,
+	claudeCodeSystemInstruction,
 	claudeCodeVersion,
 	generateClaudeCloakingUserId,
 	isClaudeCloakingUserId,
@@ -107,28 +108,27 @@ describe("Anthropic request fingerprint alignment", () => {
 			stream: true,
 		});
 
-		expect(headers["X-Stainless-Os"]).toBe(mapStainlessOs(process.platform));
+		expect(headers["X-Stainless-OS"]).toBe(mapStainlessOs(process.platform));
 		expect(headers["X-Stainless-Arch"]).toBe(mapStainlessArch(process.arch));
 	});
 
-	it("attaches cache_control only to the last emitted system block when cacheControl is set", () => {
+	it("matches CC system-block layout: billing uncached, instruction+content both cached", () => {
 		const blocks = buildAnthropicSystemBlocks(["Stay concise."], {
 			includeClaudeCodeInstruction: true,
 			extraInstructions: ["Use citations when possible"],
 			cacheControl: { type: "ephemeral" },
 		});
 
-		expect(blocks).toBeDefined();
-		// Earlier blocks must NOT carry cache_control; a single trailing breakpoint covers them all.
-		expect(blocks?.[2]).toEqual({
-			type: "text",
-			text: "Use citations when possible",
-		});
-		expect(blocks?.[3]).toEqual({
-			type: "text",
-			text: "Stay concise.",
-			cache_control: { type: "ephemeral" },
-		});
+		expect(blocks).toHaveLength(3);
+		// [0] billing header — never cached
+		expect(blocks?.[0].text).toStartWith("x-anthropic-billing-header:");
+		expect(blocks?.[0].cache_control).toBeUndefined();
+		// [1] system instruction — cached
+		expect(blocks?.[1].text).toBe(claudeCodeSystemInstruction);
+		expect(blocks?.[1].cache_control).toEqual({ type: "ephemeral" });
+		// [2] all user content merged — extra instructions then system prompt, joined with \n\n, cached
+		expect(blocks?.[2].text).toBe("Use citations when possible\n\nStay concise.");
+		expect(blocks?.[2].cache_control).toEqual({ type: "ephemeral" });
 	});
 
 	it("places the automatic Anthropic cache breakpoint on the last ordered system prompt", async () => {

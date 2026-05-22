@@ -11,7 +11,11 @@ const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";
 const CALLBACK_PORT = 54545;
 const CALLBACK_PATH = "/callback";
-const SCOPES = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+// Scopes required for direct OAuth-token inference (user:inference) plus account/session management.
+// platform.claude.com/oauth/authorize issues console tokens (org:create_api_key only) and does not
+// grant user:inference — the claude.ai endpoint is required for direct inference access.
+const SCOPES =
+	"org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 
 function formatErrorDetails(error: unknown): string {
 	if (error instanceof Error) {
@@ -30,12 +34,17 @@ function formatErrorDetails(error: unknown): string {
 	return String(error);
 }
 
-async function postJson(url: string, body: Record<string, string | number>): Promise<string> {
+async function postJson(
+	url: string,
+	body: Record<string, string | number>,
+	extraHeaders?: Record<string, string>,
+): Promise<string> {
 	const response = await fetch(url, {
 		method: "POST",
 		headers: {
+			// No Accept header: CC omits it on OAuth token requests.
+			...extraHeaders,
 			"Content-Type": "application/json",
-			Accept: "application/json",
 		},
 		body: JSON.stringify(body),
 		signal: AbortSignal.timeout(30_000),
@@ -178,11 +187,19 @@ export async function loginAnthropic(ctrl: OAuthController): Promise<OAuthCreden
 export async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
 	let responseBody: string;
 	try {
-		responseBody = await postJson(TOKEN_URL, {
-			grant_type: "refresh_token",
-			client_id: CLIENT_ID,
-			refresh_token: refreshToken,
-		});
+		responseBody = await postJson(
+			TOKEN_URL,
+			{
+				grant_type: "refresh_token",
+				client_id: CLIENT_ID,
+				refresh_token: refreshToken,
+			},
+			{
+				// CC sends these on refresh but not on the initial code exchange
+				"anthropic-beta": "oauth-2025-04-20",
+				"User-Agent": "anthropic-sdk-typescript/0.94.0 userOAuthProvider",
+			},
+		);
 	} catch (error) {
 		throw new Error(`Anthropic token refresh request failed. url=${TOKEN_URL}; details=${formatErrorDetails(error)}`);
 	}

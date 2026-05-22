@@ -21,7 +21,7 @@ describe("anthropic oauth alignment", () => {
 
 		expect(authUrl.origin + authUrl.pathname).toBe("https://claude.ai/oauth/authorize");
 		expect(authUrl.searchParams.get("scope")).toBe(
-			"user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
+			"org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
 		);
 		expect(authUrl.searchParams.get("state")).toBe(state);
 		expect(authUrl.searchParams.get("redirect_uri")).toBe(redirectUri);
@@ -99,10 +99,13 @@ describe("anthropic oauth alignment", () => {
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
-	it("uses api.anthropic.com token URL for refresh", async () => {
+	it("uses api.anthropic.com token URL and CC headers for refresh", async () => {
 		const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
 			expect(typeof input === "string" ? input : input.toString()).toBe("https://api.anthropic.com/v1/oauth/token");
 			expect(init?.method).toBe("POST");
+			const headers = init?.headers as Record<string, string> | undefined;
+			expect(headers?.["anthropic-beta"]).toBe("oauth-2025-04-20");
+			expect(headers?.["User-Agent"]).toBe("anthropic-sdk-typescript/0.94.0 userOAuthProvider");
 			return new Response(
 				JSON.stringify({
 					access_token: "new-access-token",

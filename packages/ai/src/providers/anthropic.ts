@@ -369,7 +369,7 @@ function getCacheControl(
 }
 
 // Stealth mode: Mimic Claude Code headers and tool prefixing.
-export const claudeCodeVersion = "2.1.63";
+export const claudeCodeVersion = "2.1.148";
 export const claudeToolPrefix: string = "proxy_";
 export const claudeCodeSystemInstruction = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
 
@@ -408,14 +408,14 @@ export function mapStainlessArch(arch: string): "x64" | "arm64" | "x86" | `other
 
 export const claudeCodeHeaders = {
 	"X-Stainless-Retry-Count": "0",
-	"X-Stainless-Runtime-Version": "v24.3.0",
-	"X-Stainless-Package-Version": "0.74.0",
+	"X-Stainless-Runtime-Version": process.version,
+	"X-Stainless-Package-Version": "0.94.0",
 	"X-Stainless-Runtime": "node",
 	"X-Stainless-Lang": "js",
 	"X-Stainless-Arch": mapStainlessArch(process.arch),
-	"X-Stainless-Os": mapStainlessOs(process.platform),
+	"X-Stainless-OS": mapStainlessOs(process.platform),
 	"X-Stainless-Timeout": "600",
-} as const;
+};
 
 const enforcedHeaderKeys = new Set(
 	[
@@ -438,14 +438,15 @@ const enforcedHeaderKeys = new Set(
 const CLAUDE_BILLING_HEADER_PREFIX = "x-anthropic-billing-header:";
 
 function createClaudeBillingHeader(payload: unknown): string {
-	const payloadJson = JSON.stringify(payload) ?? "";
-	const cch = nodeCrypto.createHash("sha256").update(payloadJson).digest("hex").slice(0, 5);
-	const randomBytes = new Uint8Array(2);
-	crypto.getRandomValues(randomBytes);
-	const buildHash = Array.from(randomBytes, byte => byte.toString(16).padStart(2, "0"))
-		.join("")
+	const seedText = JSON.stringify(payload) ?? "";
+	const k = [4, 7, 20].map(i => seedText[i] ?? "0").join("");
+	const versionSuffix = nodeCrypto
+		.createHash("sha256")
+		.update(`59cf53e54c78${k}${claudeCodeVersion}`)
+		.digest("hex")
 		.slice(0, 3);
-	return `${CLAUDE_BILLING_HEADER_PREFIX} cc_version=${claudeCodeVersion}.${buildHash}; cc_entrypoint=cli; cch=${cch};`;
+	// cch field is a fixed placeholder for first-party Anthropic endpoints.
+	return `${CLAUDE_BILLING_HEADER_PREFIX} cc_version=${claudeCodeVersion}.${versionSuffix}; cc_entrypoint=cli; cch=00000;`;
 }
 
 const CLAUDE_CLOAKING_USER_ID_REGEX =
@@ -1634,41 +1635,46 @@ export function buildAnthropicSystemBlocks(
 	options: SystemBlockOptions = {},
 ): AnthropicSystemBlock[] | undefined {
 	const { includeClaudeCodeInstruction = false, extraInstructions = [], billingPayload, cacheControl } = options;
-	const blocks: AnthropicSystemBlock[] = [];
 	const sanitizedPrompts = normalizeSystemPrompts(systemPrompt);
 	const trimmedInstructions = extraInstructions.map(instruction => instruction.trim()).filter(Boolean);
 	const hasBillingHeader = sanitizedPrompts.some(prompt => prompt.includes(CLAUDE_BILLING_HEADER_PREFIX));
 
 	if (includeClaudeCodeInstruction && !hasBillingHeader) {
+		// CC system-block layout (3 blocks max):
+		//   [0] billing header      — never cached
+		//   [1] system instruction  — cached when cacheControl is set
+		//   [2] all user content    — extra instructions + system prompts joined with \n\n, cached
+		// Collapsing into one merged user block prevents block count from
+		// fingerprinting the caller.
 		const payloadSeed = billingPayload ?? {
 			system: sanitizedPrompts,
 			extraInstructions: trimmedInstructions,
 		};
-		blocks.push(
+
+		const blocks: AnthropicSystemBlock[] = [
 			{ type: "text", text: createClaudeBillingHeader(payloadSeed) },
-			{
-				type: "text",
-				text: claudeCodeSystemInstruction,
-			},
-		);
+			{ type: "text", text: claudeCodeSystemInstruction, ...(cacheControl && { cache_control: cacheControl }) },
+		];
+
+		const userContent = [...trimmedInstructions, ...sanitizedPrompts].join("\n\n");
+		if (userContent) {
+			blocks.push({ type: "text", text: userContent, ...(cacheControl && { cache_control: cacheControl }) });
+		}
+
+		return blocks;
 	}
 
+	const blocks: AnthropicSystemBlock[] = [];
 	for (const instruction of trimmedInstructions) {
 		blocks.push({ type: "text", text: instruction });
 	}
-
-	for (const systemPrompt of sanitizedPrompts) {
-		blocks.push({ type: "text", text: systemPrompt });
+	for (const prompt of sanitizedPrompts) {
+		blocks.push({ type: "text", text: prompt });
 	}
-
-	// Attach cache_control to the LAST emitted block only. Anthropic breakpoints are cumulative
-	// prefix cuts, so a single trailing breakpoint covers every preceding block; spreading
-	// cache_control across N blocks wastes slots against the 4-breakpoint cap.
 	const lastIndex = blocks.length - 1;
 	if (cacheControl && lastIndex >= 0) {
 		blocks[lastIndex] = { ...blocks[lastIndex], cache_control: cacheControl };
 	}
-
 	return blocks.length > 0 ? blocks : undefined;
 }
 
@@ -1858,68 +1864,55 @@ function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?:
 		}
 	}
 
+	// CC layout: 2 system + 2 message breakpoints, no tool breakpoint.
+	//
+	// Tools are omitted because they come after system in the token sequence: when
+	// system changes the tool cache prefix also changes, making a dedicated tool
+	// breakpoint redundant.  The instruction block (system[1]) is stable across every
+	// request in a session, so caching it gives a guaranteed hit at negligible cost.
+	//
+	// Breakpoint order (each "covers" all content before it):
+	//   [0] system[1]  — instruction block   (always hits; never changes)
+	//   [1] system[-1] — merged user content
+	//   [2] penultimate user/assistant message
+	//   [3] last user/assistant message
 	const MAX_CACHE_BREAKPOINTS = 4;
 	let cacheBreakpointsUsed = 0;
 
-	if (params.tools && params.tools.length > 0) {
-		applyCacheControlToLastBlock(params.tools as Array<CacheControlBlock>, cacheControl);
-		cacheBreakpointsUsed++;
-	}
-
-	if (cacheBreakpointsUsed >= MAX_CACHE_BREAKPOINTS) return;
-
 	if (params.system && Array.isArray(params.system) && params.system.length > 0) {
-		applyCacheControlToLastBlock(params.system, cacheControl);
-		cacheBreakpointsUsed++;
-	}
-
-	if (cacheBreakpointsUsed >= MAX_CACHE_BREAKPOINTS) return;
-
-	const userIndexes = params.messages
-		.map((message, index) => (message.role === "user" ? index : -1))
-		.filter(index => index >= 0);
-
-	if (userIndexes.length >= 2) {
-		const penultimateUserIndex = userIndexes[userIndexes.length - 2];
-		const penultimateUser = params.messages[penultimateUserIndex];
-		if (penultimateUser) {
-			if (typeof penultimateUser.content === "string") {
-				const contentBlock: ContentBlockParam & CacheControlBlock = {
-					type: "text",
-					text: penultimateUser.content,
-					cache_control: cacheControl,
-				};
-				penultimateUser.content = [contentBlock];
-				cacheBreakpointsUsed++;
-			} else if (Array.isArray(penultimateUser.content) && penultimateUser.content.length > 0) {
-				applyCacheControlToLastTextBlock(
-					penultimateUser.content as Array<ContentBlockParam & CacheControlBlock>,
-					cacheControl,
-				);
-				cacheBreakpointsUsed++;
-			}
+		// When the 3-block CC layout is present (billing / instruction / merged),
+		// cache the instruction (index 1) independently so it gets its own
+		// always-hit breakpoint before the potentially-changing merged block.
+		if (params.system.length >= 3) {
+			(params.system[1] as CacheControlBlock).cache_control = cacheControl;
+			cacheBreakpointsUsed++;
+		}
+		if (cacheBreakpointsUsed < MAX_CACHE_BREAKPOINTS) {
+			applyCacheControlToLastBlock(params.system, cacheControl);
+			cacheBreakpointsUsed++;
 		}
 	}
 
 	if (cacheBreakpointsUsed >= MAX_CACHE_BREAKPOINTS) return;
 
-	if (userIndexes.length >= 1) {
-		const lastUserIndex = userIndexes[userIndexes.length - 1];
-		const lastUser = params.messages[lastUserIndex];
-		if (lastUser) {
-			if (typeof lastUser.content === "string") {
-				const contentBlock: ContentBlockParam & CacheControlBlock = {
-					type: "text",
-					text: lastUser.content,
-					cache_control: cacheControl,
-				};
-				lastUser.content = [contentBlock];
-			} else if (Array.isArray(lastUser.content) && lastUser.content.length > 0) {
-				applyCacheControlToLastTextBlock(
-					lastUser.content as Array<ContentBlockParam & CacheControlBlock>,
-					cacheControl,
-				);
-			}
+	// CC marks the last two messages regardless of role (user or assistant).
+	// Caching the penultimate assistant message is higher value than the
+	// penultimate user message: it contains the previous turn's tool calls and
+	// response — the largest and most recently created message in the array.
+	const start = Math.max(0, params.messages.length - 2);
+	for (let i = start; i < params.messages.length; i++) {
+		if (cacheBreakpointsUsed >= MAX_CACHE_BREAKPOINTS) break;
+		const message = params.messages[i];
+		if (!message) continue;
+		if (typeof message.content === "string") {
+			message.content = [{ type: "text", text: message.content, cache_control: cacheControl }];
+			cacheBreakpointsUsed++;
+		} else if (Array.isArray(message.content) && message.content.length > 0) {
+			applyCacheControlToLastTextBlock(
+				message.content as Array<ContentBlockParam & CacheControlBlock>,
+				cacheControl,
+			);
+			cacheBreakpointsUsed++;
 		}
 	}
 }
