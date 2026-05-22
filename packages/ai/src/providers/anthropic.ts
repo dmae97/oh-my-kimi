@@ -457,18 +457,36 @@ function createClaudeBillingHeader(firstUserMessageText: string): string {
 // cch attestation: XXHash64(body_with_placeholder, seed) low-20-bits, 5 hex chars.
 const CCH_SEED = 0x4d659218e32a3268n;
 const CCH_PLACEHOLDER = new TextEncoder().encode("cch=00000");
+// Scope replacement to the system block: find '"system":[' then scan at most
+// 300 bytes for the placeholder. This avoids mutating user/tool content that
+// happens to contain the literal "cch=00000" — messages precede system in JSON.
+const SYSTEM_MARKER = new TextEncoder().encode('"system":[');
+const CCH_SEARCH_WINDOW = 300;
 
 function patchCch(body: Uint8Array): Uint8Array {
-	// Locate the placeholder written by createClaudeBillingHeader.
+	// Step 1: find '"system":['
+	let sysIdx = -1;
+	outer: for (let i = 0; i <= body.length - SYSTEM_MARKER.length; i++) {
+		for (let j = 0; j < SYSTEM_MARKER.length; j++) {
+			if (body[i + j] !== SYSTEM_MARKER[j]) continue outer;
+		}
+		sysIdx = i;
+		break;
+	}
+	if (sysIdx === -1) return body; // not a CC messages request
+
+	// Step 2: scan at most CCH_SEARCH_WINDOW bytes after '"system":['
+	const searchFrom = sysIdx + SYSTEM_MARKER.length;
+	const searchTo = Math.min(searchFrom + CCH_SEARCH_WINDOW, body.length - CCH_PLACEHOLDER.length);
 	let idx = -1;
-	outer: for (let i = 0; i <= body.length - CCH_PLACEHOLDER.length; i++) {
+	outer2: for (let i = searchFrom; i <= searchTo; i++) {
 		for (let j = 0; j < CCH_PLACEHOLDER.length; j++) {
-			if (body[i + j] !== CCH_PLACEHOLDER[j]) continue outer;
+			if (body[i + j] !== CCH_PLACEHOLDER[j]) continue outer2;
 		}
 		idx = i;
 		break;
 	}
-	if (idx === -1) return body; // not a CC request — pass through unchanged
+	if (idx === -1) return body; // no placeholder in system block
 
 	// Hash the body with the placeholder in place (matches Bun's in-place behaviour).
 	const h = xxhash64(body, CCH_SEED);
