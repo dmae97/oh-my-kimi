@@ -29,6 +29,7 @@ import { kimiUsageProvider } from "./usage/kimi";
 import { codexRankingStrategy, openaiCodexUsageProvider } from "./usage/openai-codex";
 import { zaiUsageProvider } from "./usage/zai";
 import { getOAuthApiKey, getOAuthProvider, refreshOAuthToken } from "./utils/oauth";
+import { loginOpenAICodexDevice } from "./utils/oauth/openai-codex";
 import type { OAuthController, OAuthCredentials, OAuthProvider, OAuthProviderId } from "./utils/oauth/types";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1297,6 +1298,14 @@ export class AuthStorage {
 					onManualCodeInput: ctrl.onManualCodeInput ?? manualCodeInput,
 				});
 				break;
+			}
+			case "openai-codex-device": {
+				// Device/headless flow — stores credentials under "openai-codex" so the
+				// provider can pick them up without a separate provider configuration.
+				const deviceCredentials = await loginOpenAICodexDevice(ctrl);
+				const newCredential: OAuthCredential = { type: "oauth", ...deviceCredentials };
+				await this.#upsertOAuthCredential("openai-codex", newCredential);
+				return;
 			}
 			case "gitlab-duo": {
 				const { loginGitLabDuo } = await import("./utils/oauth/gitlab-duo");
