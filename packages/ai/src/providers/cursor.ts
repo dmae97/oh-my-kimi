@@ -2322,7 +2322,8 @@ function buildGrpcRequest(
 		storeCursorBlob(blobStore, new TextEncoder().encode(json)),
 	);
 
-	const lastMessage = context.messages[context.messages.length - 1];
+	const lastUserIdx = findLastUserMessageIndex(context.messages);
+	const lastMessage = lastUserIdx >= 0 ? context.messages[lastUserIdx] : undefined;
 	const userText =
 		lastMessage?.role === "user" || lastMessage?.role === "developer"
 			? typeof lastMessage.content === "string"

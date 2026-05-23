@@ -1,5 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { buildCursorSystemPromptJsons, resolveExecHandler } from "../src/providers/cursor";
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import http2 from "node:http2";
+import { buildCursorSystemPromptJsons, resolveExecHandler, streamCursor } from "../src/providers/cursor";
+import type { Context, Model } from "../src/types";
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 describe("Cursor resolveExecHandler execHandlers binding", () => {
 	it("invokes handler with correct this when passed as bound method", async () => {
@@ -63,5 +69,72 @@ describe("Cursor system prompt encoding", () => {
 		const jsons = buildCursorSystemPromptJsons(["", ""]);
 		expect(jsons).toHaveLength(1);
 		expect(JSON.parse(jsons[0])).toEqual({ role: "system", content: "You are a helpful assistant." });
+	});
+});
+describe("Cursor stream request assembly", () => {
+	it("uses the latest user message when a tool result is the final context message", async () => {
+		const model: Model<"cursor-agent"> = {
+			id: "cursor-test",
+			name: "Cursor Test",
+			api: "cursor-agent",
+			provider: "cursor",
+			baseUrl: "https://cursor.invalid",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_000,
+		};
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "Use the read tool.", timestamp: 1 },
+				{
+					role: "assistant",
+					api: "cursor-agent",
+					provider: "cursor",
+					model: "cursor-test",
+					content: [
+						{
+							type: "toolCall",
+							id: "call-read",
+							name: "read",
+							arguments: { path: "package.json" },
+						},
+					],
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: 2,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call-read",
+					toolName: "read",
+					content: [{ type: "text", text: "package contents" }],
+					isError: false,
+					timestamp: 3,
+				},
+			],
+		};
+
+		const connect = vi.spyOn(http2, "connect").mockImplementation(() => {
+			throw new Error("request built");
+		});
+
+		const result = await streamCursor(model, context, {
+			apiKey: "cursor-test-token",
+			sessionId: "cursor-last-user-regression",
+		}).result();
+
+		expect(connect).toHaveBeenCalledTimes(1);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("request built");
+		expect(result.errorMessage).not.toContain("Cannot send empty user message");
 	});
 });
