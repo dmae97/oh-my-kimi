@@ -1771,7 +1771,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
 	const tlsFetchOptions = buildClaudeCodeTlsFetchOptions(model, baseUrl);
 	const baseFetch = args.fetch ?? fetch;
-	const cchFetch = wrapFetchForCch(baseFetch);
+	// Only OAuth requests inject the CC billing header; no API-key request can ever
+	// contain it, so there is no need to install the rewriter for those.
+	const cchFetch = oauthToken ? wrapFetchForCch(baseFetch) : baseFetch;
 	const debugFetch = onSseEvent ? wrapFetchForSseDebug(cchFetch, event => onSseEvent(event, model)) : cchFetch;
 	if (model.provider === "github-copilot") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
