@@ -21,6 +21,7 @@ export interface Args {
 	systemPrompt?: string;
 	appendSystemPrompt?: string;
 	thinking?: Effort;
+	hideThinking?: boolean;
 	continue?: boolean;
 	resume?: string | true;
 	help?: boolean;
@@ -151,6 +152,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 					validThinkingLevels: THINKING_EFFORTS,
 				});
 			}
+		} else if (arg === "--hide-thinking") {
+			result.hideThinking = true;
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
 		} else if (arg === "--export" && i + 1 < args.length) {
