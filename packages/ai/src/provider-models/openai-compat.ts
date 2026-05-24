@@ -1410,13 +1410,15 @@ export function xiaomiModelManagerOptions(
 	config?: XiaomiModelManagerConfig,
 ): ModelManagerOptions<"anthropic-messages"> {
 	const apiKey = config?.apiKey;
-	// Xiaomi splits API keys across two backends: standard `sk-` keys hit
-	// api.xiaomimimo.com; "token plan" `tp-` keys hit the EU token-plan host.
-	// Both expose the same Anthropic-compat layout under /anthropic/v1/*.
 	const defaultBaseUrl = apiKey?.startsWith("tp-")
 		? "https://token-plan-ams.xiaomimimo.com/anthropic"
 		: "https://api.xiaomimimo.com/anthropic";
-	const baseUrl = normalizeAnthropicBaseUrl(config?.baseUrl, defaultBaseUrl);
+	// Token-plan keys always use the TP baseUrl; config?.baseUrl (from catalog)
+	// would incorrectly pin to the standard endpoint (api.xiaomimimo.com).
+	const baseUrl = normalizeAnthropicBaseUrl(
+		apiKey?.startsWith("tp-") ? undefined : config?.baseUrl,
+		defaultBaseUrl,
+	);
 	// Xiaomi hosts chat completions under /anthropic/* but exposes model
 	// discovery at the OpenAI-style /v1/models endpoint on the root host.
 	const discoveryRoot = baseUrl.endsWith("/anthropic") ? baseUrl.slice(0, -"/anthropic".length) : baseUrl;
@@ -1439,6 +1441,7 @@ export function xiaomiModelManagerOptions(
 							...model,
 							name: toModelName(entry.display_name, model.name),
 							baseUrl,
+							compat: { ...model.compat, usesApiKeyAuth: true },
 						};
 					},
 				}),

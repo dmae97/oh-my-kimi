@@ -80,6 +80,8 @@ export type AnthropicHeaderOptions = {
 	stream?: boolean;
 	modelHeaders?: Record<string, string>;
 	isCloudflareAiGateway?: boolean;
+	/** Use X-Api-Key header instead of Authorization: Bearer. */
+	usesApiKeyAuth?: boolean;
 };
 
 export function normalizeAnthropicBaseUrl(baseUrl?: string): string | undefined {
@@ -182,7 +184,7 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 			"Anthropic-Beta": betaHeader,
 			"User-Agent": userAgent,
 		};
-	} else if (!isAnthropicApiBaseUrl(options.baseUrl)) {
+	} else if (!options.usesApiKeyAuth && !isAnthropicApiBaseUrl(options.baseUrl)) {
 		return {
 			...modelHeaders,
 			Accept: acceptHeader,
@@ -1576,6 +1578,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		stream,
 		modelHeaders: mergeHeaders(model.headers, foundryCustomHeaders, headers, dynamicHeaders),
 		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
+		usesApiKeyAuth: compat.usesApiKeyAuth,
 	});
 
 	if (model.provider === "cloudflare-ai-gateway") {
