@@ -2152,22 +2152,59 @@ fn setup_process_substitution(
 	Ok((candidate_fd_num, target_file))
 }
 
+// LOCAL DIVERGENCE (vs upstream reubeno/brush@main):
+// Upstream writes the entire heredoc/here-string body into the pipe
+// synchronously on the calling thread. That deadlocks any time the body
+// exceeds the OS pipe buffer because the reader is not handed to the
+// downstream command (and therefore not drained) until after this
+// function returns. Concrete buffer sizes:
+//
+//   * Linux:    64 KiB default, growable via `F_SETPIPE_SZ` up to
+//               `/proc/sys/fs/pipe-max-size` (1 MiB default).
+//   * macOS:    16-64 KiB, no `F_SETPIPE_SZ` equivalent.
+//   * Windows:  ~4 KiB (`CreatePipe(nSize = 0)`), no portable knob to
+//               raise it.
+//
+// We keep the `F_SETPIPE_SZ` fast path for Linux (avoids a thread spawn
+// for the common in-process case) but fall through to a detached writer
+// thread on every other platform, and on Linux when the kernel rejects
+// the requested size (body > `pipe-max-size`). The thread owns the
+// writer; it terminates naturally when the consumer drains the pipe or
+// drops the reader (`BrokenPipe`), so no `JoinHandle` is retained.
 fn setup_open_file_with_contents(contents: &str) -> Result<OpenFile, error::Error> {
 	let (reader, mut writer) = std::io::pipe()?;
-
 	let bytes = contents.as_bytes();
 
+	// Linux fast path: grow the pipe so the entire body fits inline.
+	// Falls through to the generic writer when (a) `bytes.len()`
+	// overflows `i32`, or (b) the kernel rejects the requested size
+	// (body > /proc/sys/fs/pipe-max-size, default 1 MiB).
 	#[cfg(any(target_os = "linux", target_os = "android"))]
 	{
 		use std::os::fd::AsFd as _;
 
-		let len = i32::try_from(bytes.len())
-			.map_err(|_err| error::Error::from(error::ErrorKind::TooMuchData))?;
-		nix::fcntl::fcntl(reader.as_fd(), nix::fcntl::FcntlArg::F_SETPIPE_SZ(len))?;
+		if let Ok(len) = i32::try_from(bytes.len())
+			&& nix::fcntl::fcntl(reader.as_fd(), nix::fcntl::FcntlArg::F_SETPIPE_SZ(len)).is_ok()
+		{
+			writer.write_all(bytes)?;
+			drop(writer);
+			return Ok(reader.into());
+		}
 	}
 
-	writer.write_all(bytes)?;
-	drop(writer);
+	// Generic path: detached writer thread. Writing inline deadlocks
+	// once `bytes.len()` exceeds the OS pipe buffer (Windows ~4 KiB,
+	// macOS 16-64 KiB), neither of which has a `F_SETPIPE_SZ`
+	// equivalent.
+	let payload = bytes.to_vec();
+	std::thread::Builder::new()
+		.name("brush-heredoc-writer".into())
+		.spawn(move || {
+			// `BrokenPipe` is expected when the consumer drops the
+			// reader before the body is fully written; there is
+			// nothing useful to do with that error here.
+			let _ = writer.write_all(&payload);
+		})?;
 
 	Ok(reader.into())
 }
