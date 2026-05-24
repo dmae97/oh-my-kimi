@@ -640,19 +640,26 @@ async function streamAssistantResponse(
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	let messages = context.messages;
 	if (config.transformContext) {
-		messages = await config.transformContext(messages, signal);
+		messages = await config.transformContext(messages, config as any);
 	}
 
 	// Convert to LLM-compatible messages (AgentMessage[] → Message[])
 	const llmMessages = await config.convertToLlm(messages);
 	const normalizedMessages = normalizeMessagesForProvider(llmMessages, config.model);
 
-	// Build LLM context
-	const llmContext: Context = {
-		systemPrompt: context.systemPrompt,
-		messages: normalizedMessages,
-		tools: normalizeTools(context.tools, !!config.intentTracing),
-	};
+	// Build LLM context — append-only mode caches system prompt + tools
+	// AND keeps an append-only message log so prior-turn bytes are stable.
+	let llmContext: Context;
+	if (config.appendOnlyContext) {
+		config.appendOnlyContext.syncMessages(normalizedMessages);
+		llmContext = config.appendOnlyContext.build(context);
+	} else {
+		llmContext = {
+			systemPrompt: context.systemPrompt,
+			messages: normalizedMessages,
+			tools: normalizeTools(context.tools, !!config.intentTracing),
+		};
+	}
 
 	const streamFunction = streamFn || streamSimple;
 
