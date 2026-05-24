@@ -3,11 +3,6 @@ import type { Message, Tool } from "@oh-my-pi/pi-ai";
 import { AppendOnlyContextManager, AppendOnlyLog, StablePrefix } from "../src/append-only-context";
 import type { AgentContext, AgentTool } from "../src/types";
 
-/** Minimal test message — cast to any to avoid strict Message type requirements. */
-function msg(role: string, content: string): any {
-	return { role, content, timestamp: Date.now() };
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -164,7 +159,7 @@ describe("AppendOnlyLog", () => {
 
 	it("toMessages returns a copy of the array", () => {
 		const log = new AppendOnlyLog();
-		const msg = { role: "user" as const, content: "test" };
+		const msg = { role: "user", content: "test" };
 		log.append(msg);
 		const msgs = log.toMessages();
 		// Array is a copy — mutating it doesn't affect the log
@@ -174,37 +169,37 @@ describe("AppendOnlyLog", () => {
 
 	it("replaceTail replaces last entry", () => {
 		const log = new AppendOnlyLog();
-		log.append({ role: "user" as const, content: "old" });
-		log.replaceTail({ role: "user" as const, content: "new" });
+		log.append({ role: "user", content: "old" });
+		log.replaceTail({ role: "user", content: "new" });
 		expect(log.toMessages()).toHaveLength(1);
 		expect(log.toMessages()[0]!.content).toBe("new");
 	});
 
 	it("replaceTail is no-op on empty log", () => {
 		const log = new AppendOnlyLog();
-		log.replaceTail({ role: "user" as const, content: "nope" });
+		log.replaceTail({ role: "user", content: "nope" });
 		expect(log.length).toBe(0);
 	});
 
 	it("extend appends multiple messages", () => {
 		const log = new AppendOnlyLog();
 		log.extend([
-			{ role: "user" as const, content: "a" },
-			{ role: "assistant" as const, content: "b" },
+			{ role: "user", content: "a" },
+			{ role: "assistant", content: "b" },
 		]);
 		expect(log.length).toBe(2);
 	});
 
 	it("clear resets the log", () => {
 		const log = new AppendOnlyLog();
-		log.append({ role: "user" as const, content: "x" });
+		log.append({ role: "user", content: "x" });
 		log.clear();
 		expect(log.length).toBe(0);
 	});
 
 	it("entries readonly access returns internal array", () => {
 		const log = new AppendOnlyLog();
-		log.append({ role: "user" as const, content: "test" });
+		log.append({ role: "user", content: "test" });
 		expect(log.entries()).toHaveLength(1);
 	});
 });
@@ -280,11 +275,11 @@ describe("AppendOnlyContextManager", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext());
 
-		mgr.appendMessage({ role: "user" as const, content: "q1" });
+		mgr.appendMessage({ role: "user", content: "q1" });
 		const r1 = mgr.build(makeContext());
 		expect(r1.messages).toHaveLength(1);
 
-		mgr.appendMessage({ role: "assistant" as const, content: "a1" });
+		mgr.appendMessage({ role: "assistant", content: "a1" });
 		const r2 = mgr.build(makeContext());
 		expect(r2.messages).toHaveLength(2);
 		expect(r2.messages[1]!.content).toBe("a1");
@@ -302,7 +297,7 @@ describe("AppendOnlyContextManager", () => {
 	it("reset clears log and prefix", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext({ systemPrompt: ["Original"] }));
-		mgr.appendMessage({ role: "user" as const, content: "hello" });
+		mgr.appendMessage({ role: "user", content: "hello" });
 
 		const freshCtx = makeContext({ systemPrompt: ["Fresh start"] });
 		mgr.reset(freshCtx);
@@ -315,8 +310,8 @@ describe("AppendOnlyContextManager", () => {
 	it("replaceTailMessage updates last log entry", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext());
-		mgr.appendMessage({ role: "user" as const, content: "old" });
-		mgr.replaceTailMessage({ role: "user" as const, content: "new" });
+		mgr.appendMessage({ role: "user", content: "old" });
+		mgr.replaceTailMessage({ role: "user", content: "new" });
 
 		const result = mgr.build(makeContext());
 		expect(result.messages).toHaveLength(1);
@@ -419,13 +414,13 @@ describe("message sync", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext());
 
-		mgr.syncMessages([{ role: "user" as const, content: "q1" }]);
+		mgr.syncMessages([{ role: "user", content: "q1" }]);
 		const r1 = mgr.build(makeContext());
 		expect(r1.messages).toHaveLength(1);
 
 		mgr.syncMessages([
-			{ role: "user" as const, content: "q1" },
-			{ role: "assistant" as const, content: "a1" },
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "a1" },
 		]);
 		const r2 = mgr.build(makeContext());
 		expect(r2.messages).toHaveLength(2);
@@ -435,12 +430,12 @@ describe("message sync", () => {
 	it("syncMessages with unchanged messages is a no-op (same length, no new entries)", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext());
-		mgr.syncMessages([{ role: "user" as const, content: "q1" }]);
+		mgr.syncMessages([{ role: "user", content: "q1" }]);
 
 		const before = mgr.log.length;
 
 		// Same array length → nothing new to append
-		mgr.syncMessages([{ role: "user" as const, content: "q1" }]);
+		mgr.syncMessages([{ role: "user", content: "q1" }]);
 		expect(mgr.log.length).toBe(before);
 	});
 
@@ -449,14 +444,14 @@ describe("message sync", () => {
 		mgr.build(makeContext());
 
 		mgr.syncMessages([
-			{ role: "user" as const, content: "q1" },
-			{ role: "assistant" as const, content: "a1" },
-			{ role: "user" as const, content: "q2" },
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "a1" },
+			{ role: "user", content: "q2" },
 		]);
 		expect(mgr.log.length).toBe(3);
 
 		// Simulate compaction — array shrinks
-		mgr.syncMessages([{ role: "user" as const, content: "q2" }]);
+		mgr.syncMessages([{ role: "user", content: "q2" }]);
 		expect(mgr.log.length).toBe(1);
 		expect(mgr.log.toMessages()[0]!.content).toBe("q2");
 	});
@@ -466,15 +461,15 @@ describe("message sync", () => {
 
 		// First turn: build with empty context, sync first message
 		mgr.build(makeContext());
-		mgr.syncMessages([{ role: "user" as const, content: "turn1" }]);
+		mgr.syncMessages([{ role: "user", content: "turn1" }]);
 		const r1 = mgr.build(makeContext());
 		expect(r1.messages).toHaveLength(1);
 		expect(r1.messages[0]!.content).toBe("turn1");
 
 		// Second turn: sync second message
 		mgr.syncMessages([
-			{ role: "user" as const, content: "turn1" },
-			{ role: "assistant" as const, content: "resp1" },
+			{ role: "user", content: "turn1" },
+			{ role: "assistant", content: "resp1" },
 		]);
 		const r2 = mgr.build(makeContext());
 		expect(r2.messages).toHaveLength(2);
@@ -484,10 +479,10 @@ describe("message sync", () => {
 	it("resetSyncCursor forces full re-sync on next call", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext());
-		mgr.syncMessages([{ role: "user" as const, content: "old" }]);
+		mgr.syncMessages([{ role: "user", content: "old" }]);
 
 		mgr.resetSyncCursor();
-		mgr.syncMessages([{ role: "user" as const, content: "fresh" }]);
+		mgr.syncMessages([{ role: "user", content: "fresh" }]);
 
 		const result = mgr.build(makeContext());
 		expect(result.messages).toHaveLength(1);

@@ -97,16 +97,16 @@ export class AppendOnlyLog {
 		return this.#entries.length;
 	}
 
-	append(message: Message): void {
+	append(message: any): void {
 		this.#entries.push(message);
 	}
 
-	extend(messages: Message[]): void {
+	extend(messages: any[]): void {
 		for (const m of messages) this.#entries.push(m);
 	}
 
 	/** Replace the last entry — only legal for compaction. */
-	replaceTail(replacement: Message): void {
+	replaceTail(replacement: any): void {
 		const idx = this.#entries.length - 1;
 		if (idx >= 0) this.#entries[idx] = replacement;
 	}
@@ -172,7 +172,7 @@ export class AppendOnlyContextManager {
 	 * When the message array shrinks (compaction), the log is reset and
 	 * re-synced from scratch.
 	 */
-	syncMessages(normalizedMessages: Message[]): void {
+	syncMessages(normalizedMessages: any[]): void {
 		// Compaction or full reset — message root changed
 		if (normalizedMessages.length < this.#lastSyncCount) {
 			this.log.clear();
@@ -193,11 +193,11 @@ export class AppendOnlyContextManager {
 		this.#lastSyncCount = 0;
 	}
 
-	appendMessage(message: Message): void {
+	appendMessage(message: any): void {
 		this.log.append(message);
 	}
 
-	replaceTailMessage(message: Message): void {
+	replaceTailMessage(message: any): void {
 		this.log.replaceTail(message);
 	}
 
