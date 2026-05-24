@@ -91,14 +91,16 @@ async function validateXiaomiApiKey(apiKey: string, signal?: AbortSignal): Promi
 				: `${PROVIDER_NAME} API key validation failed (${response.status})`;
 			throw new Error(message);
 		} catch (e) {
-			if (e instanceof DOMException && e.name === "AbortError") {
+			// Only re-throw AbortError when the caller explicitly cancelled.
+			// Timeout aborts (from AbortSignal.timeout) should fall through to
+			// the next endpoint so SGP→AMS fallback works during regional outages.
+			if (e instanceof DOMException && e.name === "AbortError" && signal?.aborted) {
 				throw e;
 			}
 			lastError = e instanceof Error ? e : new Error(String(e));
 			continue;
 		}
 	}
-
 	throw lastError ?? new Error(`${PROVIDER_NAME} API key validation failed`);
 }
 
