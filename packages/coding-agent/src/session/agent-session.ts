@@ -26,6 +26,7 @@ import {
 	type AgentMessage,
 	type AgentState,
 	type AgentTool,
+	AppendOnlyContextManager,
 	resolveTelemetry,
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
@@ -5947,6 +5948,15 @@ export class AgentSession {
 			this.#closeProviderSessionsForModelSwitch(currentModel, model);
 		}
 		this.agent.setModel(model);
+
+		// Re-evaluate append-only context mode — provider may have changed
+		const appendOnlySetting = this.settings.get("provider.appendOnlyContext") ?? "auto";
+		const enable = appendOnlySetting === "on" || (appendOnlySetting === "auto" && model.provider === "deepseek");
+		if (enable && !this.agent.appendOnlyContext) {
+			this.agent.setAppendOnlyContext(new AppendOnlyContextManager());
+		} else if (!enable && this.agent.appendOnlyContext) {
+			this.agent.setAppendOnlyContext(undefined);
+		}
 	}
 
 	#closeCodexProviderSessionsForHistoryRewrite(): void {

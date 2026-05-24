@@ -549,6 +549,14 @@ export class Agent {
 		return this.#state;
 	}
 
+	get appendOnlyContext(): AppendOnlyContextManager | undefined {
+		return this.#appendOnlyContext;
+	}
+
+	setAppendOnlyContext(manager?: AppendOnlyContextManager): void {
+		this.#appendOnlyContext = manager;
+	}
+
 	subscribe(fn: (e: AgentEvent) => void): () => void {
 		this.#listeners.add(fn);
 		return () => this.#listeners.delete(fn);
