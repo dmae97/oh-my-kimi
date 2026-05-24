@@ -488,4 +488,79 @@ describe("message sync", () => {
 		expect(result.messages).toHaveLength(1);
 		expect(result.messages[0]!.content).toBe("fresh");
 	});
+
+	it("detects in-place rewrite of already-synced messages", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext());
+
+		// Sync two messages
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "original long result" },
+		]);
+		expect(mgr.log.length).toBe(2);
+
+		// Same length, but second message content changed (simulates tool-output pruning)
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "[pruned]" },
+		]);
+		// Log should have been reset and re-synced with the new content
+		expect(mgr.log.length).toBe(2);
+		const msgs = mgr.build(makeContext()).messages;
+		expect(msgs[1]!.content).toBe("[pruned]");
+	});
+
+	it("detects in-place rewrite via digest mismatch", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext());
+
+		mgr.syncMessages([{ role: "user", content: "hello" }]);
+		expect(mgr.log.length).toBe(1);
+
+		// Content changed but length same
+		mgr.syncMessages([{ role: "user", content: "world" }]);
+
+		const msgs = mgr.build(makeContext()).messages;
+		expect(msgs).toHaveLength(1);
+		expect(msgs[0]!.content).toBe("world");
+	});
+
+	it("no-op when content unchanged", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext());
+
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "a1" },
+		]);
+
+		const before = mgr.log.length;
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "a1" },
+		]);
+		// Length unchanged — no new messages appended, no clear
+		expect(mgr.log.length).toBe(before);
+	});
+
+	it("invalidateForModelChange resets prefix and log", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext({ systemPrompt: ["Before"] }));
+		mgr.syncMessages([{ role: "user", content: "hello" }]);
+
+		mgr.invalidateForModelChange();
+
+		// Should need a fresh build — prefix was invalidated
+		const ctx = makeContext({ systemPrompt: ["After"] });
+		const result = mgr.build(ctx);
+		expect(result.systemPrompt).toEqual(["After"]);
+		expect(result.messages).toHaveLength(0);
+
+		// Re-sync should work cleanly
+		mgr.syncMessages([{ role: "user", content: "new turn" }]);
+		const r2 = mgr.build(ctx);
+		expect(r2.messages).toHaveLength(1);
+		expect(r2.messages[0]!.content).toBe("new turn");
+	});
 });

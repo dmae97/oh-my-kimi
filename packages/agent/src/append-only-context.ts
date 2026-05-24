@@ -151,6 +151,8 @@ export class AppendOnlyContextManager {
 	readonly log = new AppendOnlyLog();
 	/** How many normalized messages were synced into the log as of the last sync. */
 	#lastSyncCount = 0;
+	/** Rolling digest of synced message content — detects in-place rewrites. */
+	#syncedDigest = 0;
 
 	build(context: AgentContext): Context {
 		this.prefix.build(context);
@@ -161,19 +163,21 @@ export class AppendOnlyContextManager {
 	/**
 	 * Sync normalized (provider-level) messages into the append-only log.
 	 *
-	 * On the first call, all messages are appended. On subsequent calls,
-	 * only the delta since the last sync is appended (the prior messages
-	 * are already in the log with stable bytes).
-	 *
-	 * Call this **before** `build()` each turn so the log is up to date
-	 * and `build()` returns the correct messages from the log, not from
-	 * a freshly-converted array.
-	 *
-	 * When the message array shrinks (compaction), the log is reset and
-	 * re-synced from scratch.
+	 * Detects both compaction (shorter array) and in-place rewrites
+	 * (same length, changed content via a rolling digest).
 	 */
 	syncMessages(normalizedMessages: any[]): void {
-		// Compaction or full reset — message root changed
+		// Detect in-place rewrites of already-synced messages.
+		if (
+			this.#lastSyncCount > 0 &&
+			this.#lastSyncCount <= normalizedMessages.length &&
+			this.#computeDigest(normalizedMessages.slice(0, this.#lastSyncCount)) !== this.#syncedDigest
+		) {
+			this.log.clear();
+			this.#lastSyncCount = 0;
+		}
+
+		// Compaction — array shrunk.
 		if (normalizedMessages.length < this.#lastSyncCount) {
 			this.log.clear();
 			this.#lastSyncCount = 0;
@@ -185,12 +189,22 @@ export class AppendOnlyContextManager {
 		}
 
 		this.#lastSyncCount = normalizedMessages.length;
+		this.#syncedDigest = this.#computeDigest(normalizedMessages);
 	}
 
-	/** Reset the sync cursor AND clear the log (call after retry or explicit reset). */
+	/** Reset prefix + log for a model/provider switch while mode stays active. */
+	invalidateForModelChange(): void {
+		this.prefix.invalidate();
+		this.log.clear();
+		this.#lastSyncCount = 0;
+		this.#syncedDigest = 0;
+	}
+
+	/** Reset the sync cursor AND clear the log. */
 	resetSyncCursor(): void {
 		this.log.clear();
 		this.#lastSyncCount = 0;
+		this.#syncedDigest = 0;
 	}
 
 	appendMessage(message: any): void {
@@ -209,7 +223,24 @@ export class AppendOnlyContextManager {
 		this.prefix.invalidate();
 		this.log.clear();
 		this.#lastSyncCount = 0;
+		this.#syncedDigest = 0;
 		this.prefix.build(context);
+	}
+
+	/** Fast rolling digest of message content. */
+	#computeDigest(messages: any[]): number {
+		let hash = 0;
+		for (let i = 0; i < messages.length; i++) {
+			const msg = messages[i];
+			if (msg && typeof msg === "object") {
+				const payload =
+					String(msg.role) + (typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? ""));
+				for (let j = 0; j < payload.length; j++) {
+					hash = ((hash << 5) - hash + payload.charCodeAt(j)) | 0;
+				}
+			}
+		}
+		return hash >>> 0;
 	}
 }
 

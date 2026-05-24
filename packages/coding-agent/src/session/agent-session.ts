@@ -5954,6 +5954,10 @@ export class AgentSession {
 		const enable = appendOnlySetting === "on" || (appendOnlySetting === "auto" && model.provider === "deepseek");
 		if (enable && !this.agent.appendOnlyContext) {
 			this.agent.setAppendOnlyContext(new AppendOnlyContextManager());
+		} else if (enable && this.agent.appendOnlyContext) {
+			// Model changed but mode stays enabled — reset cached prefix + log
+			// so the next turn rebuilds for the new model's normalization.
+			this.agent.appendOnlyContext.invalidateForModelChange();
 		} else if (!enable && this.agent.appendOnlyContext) {
 			this.agent.setAppendOnlyContext(undefined);
 		}
