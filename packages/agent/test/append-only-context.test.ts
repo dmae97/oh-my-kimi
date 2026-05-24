@@ -387,6 +387,18 @@ describe("fingerprint determinism", () => {
 
 		expect(p1.fingerprint).not.toBe(p2.fingerprint);
 	});
+
+	it("system prompt array structure changes fingerprint", () => {
+		const p1 = new StablePrefix();
+		const p2 = new StablePrefix();
+
+		// ["A", "B"] and ["A\nB"] have the same joined text but different
+		// array structure — must produce different fingerprints.
+		p1.build(makeContext({ systemPrompt: ["A", "B"] }));
+		p2.build(makeContext({ systemPrompt: ["A\nB"] }));
+
+		expect(p1.fingerprint).not.toBe(p2.fingerprint);
+	});
 });
 
 // ---------------------------------------------------------------------------

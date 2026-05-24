@@ -273,7 +273,7 @@ function takeSnapshot(context: AgentContext): StablePrefixSnapshot {
 
 function computeFingerprint(systemPrompt: string[], tools: Tool[]): string {
 	const payload = JSON.stringify({
-		s: systemPrompt.join("\n"),
+		s: systemPrompt,
 		t: tools.map(t => ({
 			n: t.name,
 			d: t.description,
