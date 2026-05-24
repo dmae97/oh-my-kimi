@@ -278,6 +278,9 @@ function computeFingerprint(systemPrompt: string[], tools: Tool[]): string {
 			n: t.name,
 			d: t.description,
 			p: t.parameters,
+			s: t.strict,
+			cf: t.customFormat,
+			cw: t.customWireName,
 		})),
 	});
 	let hash = 0;
