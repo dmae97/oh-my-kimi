@@ -858,19 +858,23 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 	},
 	"provider.appendOnlyContext": value => {
 		if (typeof value === "string") {
-			appendOnlyModeChangeCallback?.(value);
+			for (const cb of appendOnlyModeCallbacks) cb(value);
 		}
 	},
 };
-/** Callback invoked when `provider.appendOnlyContext` changes at runtime. */
-let appendOnlyModeChangeCallback: ((value: string) => void) | null = null;
+/** Callbacks invoked when `provider.appendOnlyContext` changes at runtime. */
+const appendOnlyModeCallbacks = new Set<(value: string) => void>();
 
 /**
- * Register a callback for append-only mode setting changes.
- * The session calls this on startup to sync runtime state with config.
+ * Subscribe to append-only mode setting changes.
+ * Returns an unsubscribe function. Multiple sessions (main + subagents)
+ * can register independently without overwriting each other.
  */
-export function onAppendOnlyModeChanged(cb: (value: string) => void): void {
-	appendOnlyModeChangeCallback = cb;
+export function onAppendOnlyModeChanged(cb: (value: string) => void): () => void {
+	appendOnlyModeCallbacks.add(cb);
+	return () => {
+		appendOnlyModeCallbacks.delete(cb);
+	};
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
