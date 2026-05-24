@@ -830,6 +830,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			const tasksWithUniqueIds = tasks.map((t, i) => ({ ...t, id: uniqueIds[i] }));
 
 			const availableSkills = [...(this.session.skills ?? [])];
+			// Resolve autoload skills from agent definition against available skills
+			const resolvedAutoloadSkills = agent.autoloadSkills?.length && availableSkills.length > 0
+				? agent.autoloadSkills
+					.map(name => availableSkills.find(s => s.name === name))
+					.filter((s): s is NonNullable<typeof s> => s !== undefined)
+				: [];
 			const contextFiles = this.session.contextFiles?.filter(
 				file => path.basename(file.path).toLowerCase() !== "agents.md",
 			);
@@ -894,6 +900,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						mcpManager: MCPManager.instance(),
 						contextFiles,
 						skills: availableSkills,
+						autoloadSkills: resolvedAutoloadSkills,
 						workspaceTree: this.session.workspaceTree,
 						promptTemplates,
 						localProtocolOptions,
@@ -948,6 +955,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						mcpManager: MCPManager.instance(),
 						contextFiles,
 						skills: availableSkills,
+						autoloadSkills: resolvedAutoloadSkills,
 						workspaceTree: this.session.workspaceTree,
 						promptTemplates,
 						localProtocolOptions,
