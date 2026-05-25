@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.3.0] - 2026-05-25
+
 ### Added
 
 - Added `OMP_NO_WEBP` environment variable to disable WebP encoding in image resize, fixing HTTP 400 errors when attaching browser snapshots to vision models running on local llama.cpp (which uses STB library that lacks WebP support)

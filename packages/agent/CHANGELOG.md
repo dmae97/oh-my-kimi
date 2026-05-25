@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.3.0] - 2026-05-25
 ### Fixed
 
 - Fixed `transformContext` receiving the loop config object as the `signal` argument instead of the actual `AbortSignal`, so hooks that check `signal.aborted` or call `signal.addEventListener` now work correctly under abort/timeout conditions
