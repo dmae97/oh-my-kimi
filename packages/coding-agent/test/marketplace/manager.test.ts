@@ -148,6 +148,51 @@ describe("MarketplaceManager", () => {
 		expect(installed[0].id).toBe("hello-plugin@test-marketplace");
 	});
 
+	it("installPlugin embeds config-only marketplace LSP metadata", async () => {
+		const marketplaceDir = path.join(ctx.tmpDir, "config-only-marketplace");
+		const pluginDir = path.join(marketplaceDir, "plugins", "csharp-lsp");
+		await fs.promises.mkdir(pluginDir, { recursive: true });
+		await Bun.write(path.join(pluginDir, "README.md"), "config-only C# LSP plugin\n");
+		await fs.promises.mkdir(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
+		await Bun.write(
+			path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
+			`${JSON.stringify(
+				{
+					name: "config-only-marketplace",
+					owner: { name: "Test Author" },
+					plugins: [
+						{
+							name: "csharp-lsp",
+							source: "./plugins/csharp-lsp",
+							version: "1.0.0",
+							lspServers: {
+								"csharp-ls": {
+									command: "csharp-ls",
+									extensionToLanguage: { ".cs": "csharp" },
+								},
+							},
+						},
+					],
+				},
+				null,
+				2,
+			)}\n`,
+		);
+
+		await ctx.manager.addMarketplace(marketplaceDir);
+		const instEntry = await ctx.manager.installPlugin("csharp-lsp", "config-only-marketplace");
+
+		const lspConfig = await Bun.file(path.join(instEntry.installPath, ".lsp.json")).json();
+		expect(lspConfig).toEqual({
+			servers: {
+				"csharp-ls": {
+					command: "csharp-ls",
+					extensionToLanguage: { ".cs": "csharp" },
+				},
+			},
+		});
+	});
+
 	it("installPlugin with scope:project → stores project scope", async () => {
 		await ctx.manager.addMarketplace(FIXTURE_DIR);
 		const instEntry = await ctx.manager.installPlugin("hello-plugin", "test-marketplace", {
