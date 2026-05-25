@@ -29,9 +29,6 @@ function isTokenPlanKey(apiKey: string): boolean {
 const VALIDATION_TIMEOUT_MS = 15_000;
 
 async function validateXiaomiApiKey(apiKey: string, signal?: AbortSignal): Promise<void> {
-	const timeoutSignal = AbortSignal.timeout(VALIDATION_TIMEOUT_MS);
-	const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-
 	// For token-plan keys try SGP first, then AMS as fallback.
 	// Standard sk- keys only hit the one endpoint.
 	const endpoints = isTokenPlanKey(apiKey)
@@ -44,6 +41,11 @@ async function validateXiaomiApiKey(apiKey: string, signal?: AbortSignal): Promi
 	let lastError: Error | null = null;
 
 	for (const ep of endpoints) {
+		// Fresh timeout per endpoint so SGP→AMS fallback works after a regional
+		// timeout: a shared AbortSignal.timeout would stay aborted and instantly
+		// abort the AMS fetch.
+		const timeoutSignal = AbortSignal.timeout(VALIDATION_TIMEOUT_MS);
+		const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 		try {
 			const response = await fetch(`${ep.baseUrl}/chat/completions`, {
 				method: "POST",
