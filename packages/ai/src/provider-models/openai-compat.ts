@@ -1415,9 +1415,7 @@ export function xiaomiModelManagerOptions(
 	// token-plan host. Try SGP first; if discovery fails, retry AMS.
 	const TOKEN_PLAN_SGP_BASE_URL = "https://token-plan-sgp.xiaomimimo.com/v1";
 	const TOKEN_PLAN_AMS_BASE_URL = "https://token-plan-ams.xiaomimimo.com/v1";
-	const defaultBaseUrl = apiKey?.startsWith("tp-")
-		? TOKEN_PLAN_SGP_BASE_URL
-		: "https://api.xiaomimimo.com/v1";
+	const defaultBaseUrl = apiKey?.startsWith("tp-") ? TOKEN_PLAN_SGP_BASE_URL : "https://api.xiaomimimo.com/v1";
 	// Token-plan keys always use the TP baseUrl; config?.baseUrl (from catalog)
 	// would incorrectly pin to the standard endpoint (api.xiaomimimo.com).
 	const baseUrl = apiKey?.startsWith("tp-") ? defaultBaseUrl : (config?.baseUrl ?? defaultBaseUrl);

@@ -36,9 +36,9 @@ async function validateXiaomiApiKey(apiKey: string, signal?: AbortSignal): Promi
 	// Standard sk- keys only hit the one endpoint.
 	const endpoints = isTokenPlanKey(apiKey)
 		? [
-			{ baseUrl: TOKEN_PLAN_SGP_API_BASE_URL, model: TOKEN_PLAN_VALIDATION_MODEL },
-			{ baseUrl: TOKEN_PLAN_AMS_API_BASE_URL, model: TOKEN_PLAN_VALIDATION_MODEL },
-		  ]
+				{ baseUrl: TOKEN_PLAN_SGP_API_BASE_URL, model: TOKEN_PLAN_VALIDATION_MODEL },
+				{ baseUrl: TOKEN_PLAN_AMS_API_BASE_URL, model: TOKEN_PLAN_VALIDATION_MODEL },
+			]
 		: [{ baseUrl: STANDARD_API_BASE_URL, model: STANDARD_VALIDATION_MODEL }];
 
 	let lastError: Error | null = null;
@@ -98,7 +98,6 @@ async function validateXiaomiApiKey(apiKey: string, signal?: AbortSignal): Promi
 				throw e;
 			}
 			lastError = e instanceof Error ? e : new Error(String(e));
-			continue;
 		}
 	}
 	throw lastError ?? new Error(`${PROVIDER_NAME} API key validation failed`);
