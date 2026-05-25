@@ -173,6 +173,7 @@ export interface AgentDefinition {
 	thinkingLevel?: ThinkingLevel;
 	output?: unknown;
 	blocking?: boolean;
+	autoloadSkills?: string[];
 	source: AgentSource;
 	filePath?: string;
 }

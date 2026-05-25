@@ -17,7 +17,7 @@ import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
-import type { Skill } from "../extensibility/skills";
+import { type Skill, buildSkillPromptMessage } from "../extensibility/skills";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { callTool } from "../mcp/client";
@@ -29,6 +29,7 @@ import { createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { ArtifactManager } from "../session/artifacts";
 import type { AuthStorage } from "../session/auth-storage";
+import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
 import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
 import type { ContextFileEntry } from "../tools";
@@ -190,6 +191,8 @@ export interface ExecutorOptions {
 	 * transition explicitly.
 	 */
 	parentTelemetry?: AgentTelemetryConfig;
+	/** Skills to autoload via sendCustomMessage before the first prompt */
+	autoloadSkills?: Skill[];
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -1360,6 +1363,21 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			});
 
 			checkAbort();
+			// Autoload skills via sendCustomMessage (same mechanic as /skill:<name>)
+			if (options.autoloadSkills?.length) {
+				for (const skill of options.autoloadSkills) {
+					const { message } = await buildSkillPromptMessage(skill, "");
+					await session.sendCustomMessage(
+						{
+							customType: SKILL_PROMPT_MESSAGE_TYPE,
+							content: message,
+							display: false,
+							details: { name: skill.name, path: skill.filePath },
+						},
+						{ triggerTurn: false },
+					);
+				}
+			}
 			await awaitAbortable(session.prompt(task, { attribution: "agent" }));
 			await awaitAbortable(session.waitForIdle());
 
