@@ -75,10 +75,11 @@ export function estimateToolSchemaTokens(
  * messages walked incrementally as new entries append.
  */
 export function computeNonMessageTokens(session: AgentSession): number {
-	const skillsTokens = estimateSkillsTokens(session.skills);
-	const toolsTokens = estimateToolSchemaTokens(session.agent.state.tools);
-	const systemContextTokens = countTokens(session.systemPrompt.slice(1));
-	const systemPromptTokens = Math.max(0, countTokens(session.systemPrompt[0] ?? "") - skillsTokens);
+	const skillsTokens = estimateSkillsTokens(session.skills ?? []);
+	const toolsTokens = estimateToolSchemaTokens(session.agent?.state?.tools ?? []);
+	const systemPromptParts = session.systemPrompt ?? [];
+	const systemContextTokens = countTokens(systemPromptParts.slice(1));
+	const systemPromptTokens = Math.max(0, countTokens(systemPromptParts[0] ?? "") - skillsTokens);
 	return systemPromptTokens + systemContextTokens + toolsTokens + skillsTokens;
 }
 

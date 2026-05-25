@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "../../src/config/settings";
 import type { Skill } from "../../src/extensibility/skills";
+import * as skillsModule from "../../src/extensibility/skills";
 import type { CreateAgentSessionResult } from "../../src/sdk";
 import * as sdkModule from "../../src/sdk";
-import { SKILL_PROMPT_MESSAGE_TYPE } from "../../src/session/messages";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "../../src/session/agent-session";
+import { SKILL_PROMPT_MESSAGE_TYPE } from "../../src/session/messages";
 import { runSubprocess } from "../../src/task/executor";
 import type { AgentDefinition } from "../../src/task/types";
 import { EventBus } from "../../src/utils/event-bus";
-import * as skillsModule from "../../src/extensibility/skills";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -110,11 +110,23 @@ describe("autoloadSkills in executor", () => {
 		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
 
 		const mockSkills: Skill[] = [
-			{ name: "user-created-skill-a", description: "Skill A", filePath: "/skills/user-created-skill-a/SKILL.md", baseDir: "/skills/user-created-skill-a", source: "user" },
-			{ name: "user-created-skill-b", description: "Skill B", filePath: "/skills/user-created-skill-b/SKILL.md", baseDir: "/skills/user-created-skill-b", source: "user" },
+			{
+				name: "user-created-skill-a",
+				description: "Skill A",
+				filePath: "/skills/user-created-skill-a/SKILL.md",
+				baseDir: "/skills/user-created-skill-a",
+				source: "user",
+			},
+			{
+				name: "user-created-skill-b",
+				description: "Skill B",
+				filePath: "/skills/user-created-skill-b/SKILL.md",
+				baseDir: "/skills/user-created-skill-b",
+				source: "user",
+			},
 		];
 
-		vi.spyOn(skillsModule, "buildSkillPromptMessage").mockImplementation(async (skill) => ({
+		vi.spyOn(skillsModule, "buildSkillPromptMessage").mockImplementation(async skill => ({
 			message: `Content of ${skill.name}\n\n---\n\nSkill: ${skill.filePath}`,
 			details: {
 				name: skill.name,

@@ -402,7 +402,7 @@ export class StatusLineComponent implements Component {
 	 * API.
 	 */
 	getCachedContextBreakdown(): { usedTokens: number; contextWindow: number } {
-		const messages = this.session.messages;
+		const messages = this.session.messages ?? [];
 		const contextWindow = this.session.model?.contextWindow ?? 0;
 
 		// 1) Non-message tokens (system prompt + tools + skills). Refresh only
@@ -446,9 +446,9 @@ export class StatusLineComponent implements Component {
 	 * be cryptographically unique — only stable for the same inputs.
 	 */
 	#computeNonMessageInputsKey(): string {
-		const sp = this.session.systemPrompt;
-		const tools = this.session.agent.state.tools;
-		const skills = this.session.skills;
+		const sp = this.session.systemPrompt ?? [];
+		const tools = this.session.agent?.state?.tools ?? [];
+		const skills = this.session.skills ?? [];
 		const modelId = this.session.model?.id ?? "";
 		return `${modelId}|${sp.length}:${sp[0]?.length ?? 0}|${tools.length}|${skills.length}`;
 	}

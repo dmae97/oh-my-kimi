@@ -831,11 +831,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 
 			const availableSkills = [...(this.session.skills ?? [])];
 			// Resolve autoload skills from agent definition against available skills
-			const resolvedAutoloadSkills = agent.autoloadSkills?.length && availableSkills.length > 0
-				? agent.autoloadSkills
-					.map(name => availableSkills.find(s => s.name === name))
-					.filter((s): s is NonNullable<typeof s> => s !== undefined)
-				: [];
+			const resolvedAutoloadSkills =
+				agent.autoloadSkills?.length && availableSkills.length > 0
+					? agent.autoloadSkills
+							.map(name => availableSkills.find(s => s.name === name))
+							.filter((s): s is NonNullable<typeof s> => s !== undefined)
+					: [];
 			const contextFiles = this.session.contextFiles?.filter(
 				file => path.basename(file.path).toLowerCase() !== "agents.md",
 			);

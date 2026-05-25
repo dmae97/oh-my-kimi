@@ -15,19 +15,19 @@
  * (messages.length shrinks) resets the cache.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { _resetSettingsForTest, Settings } from "../src/config/settings";
+import { resetSettingsForTest, Settings } from "../src/config/settings";
 import { StatusLineComponent } from "../src/modes/components/status-line";
 import { initTheme } from "../src/modes/theme/theme";
 import type { AgentSession } from "../src/session/agent-session";
 
 beforeAll(async () => {
-	_resetSettingsForTest();
+	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
 	await initTheme();
 });
 
 afterAll(() => {
-	_resetSettingsForTest();
+	resetSettingsForTest();
 });
 
 function makeSession(opts: {
