@@ -207,9 +207,6 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			void runPromise.catch(() => undefined);
 			if (shellSession) {
 				resetSession = true;
-				// Fall back to one-shot execution for the rest of the process once
-				// a persistent session has stopped responding to cancellation.
-				brokenShellSessions.add(sessionKey);
 			}
 			return {
 				exitCode: undefined,

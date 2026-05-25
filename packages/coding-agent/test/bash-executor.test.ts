@@ -197,6 +197,20 @@ describe("executeBash", () => {
 			expect(raced.result.output).toContain("Command cancelled");
 		}
 		expect(abortSpy).toHaveBeenCalled();
+
+		vi.restoreAllMocks();
+
+		await executeBash("export PI_AFTER_ABORT=still_persistent", {
+			cwd: tempDir,
+			timeout: 5000,
+			sessionKey: "hung-native-abort",
+		});
+		const next = await executeBash("printf '%s\n' \"$PI_AFTER_ABORT\"", {
+			cwd: tempDir,
+			timeout: 5000,
+			sessionKey: "hung-native-abort",
+		});
+		expect(next.output.trim()).toBe("still_persistent");
 	});
 
 	it("returns at the JavaScript timeout when native timeout cleanup stalls", async () => {
