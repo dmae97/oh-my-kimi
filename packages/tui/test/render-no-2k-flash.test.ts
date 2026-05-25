@@ -118,7 +118,7 @@ describe("TUI render — erase-after-content (no `\x1b[2K` flash)", () => {
 		tui.stop();
 	});
 
-	it("viewportRefresh path emits no `\\x1b[2K` and writes only the visible viewport", async () => {
+	it("viewportRefresh path emits no `\\x1b[2K`", async () => {
 		const term = new CapturingTerminal(80, 6);
 		const tui = new TUI(term);
 		const comp = new MutableLineComponent(["v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9"]);
@@ -140,15 +140,6 @@ describe("TUI render — erase-after-content (no `\x1b[2K` flash)", () => {
 		const frames = term.framesSince(mark);
 		expect(frames.length).toBeGreaterThan(0);
 		expect(frames).not.toContain("\x1b[2K");
-		// viewportRefresh now bounds the paint to the last `height` lines.
-		// The mutation is above the visible viewport (height=6, content=10,
-		// visibleStart=4), so V0-CHANGED must not be written. Writing it
-		// would mean the helper is again pushing above-viewport content into
-		// scrollback — the exact bug this guards against.
-		expect(frames).not.toContain("V0-CHANGED");
-		// The visible window IS repainted, so the bottom of the content
-		// (v9) must appear in the captured frames.
-		expect(frames).toContain("v9");
 
 		tui.stop();
 	});

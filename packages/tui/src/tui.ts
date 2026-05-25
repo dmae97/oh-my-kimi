@@ -1088,105 +1088,46 @@ export class TUI extends Container {
 			this.#previousHeight = height;
 		};
 
-		// Soft full-render of just the visible viewport: optionally scroll the
-		// previous top-of-screen rows into terminal scrollback to preserve
-		// history, then cursor-home + per-line erase-after-content paint of the
-		// last `height` content rows. Used when a change above the previous
-		// viewport top would otherwise force `fullRender(true)`.
+		// Soft full-render that skips the `\x1b[2J` screen clear: cursor home
+		// + per-line `\x1b[2K` + line content. Used when the visible viewport
+		// content is changing but we don't need to wipe the whole pane.
 		//
 		// Motivation: `fullRender(true)` emits `\x1b[2J\x1b[H` which causes a
-		// brief black flash in tmux + ghostty because the BSU envelope can split
-		// across PTY reads. The `firstChanged < prevViewportTop` case is by far
-		// the most frequent full-redraw trigger during streaming (markdown fence
-		// lines like ``` -> ```python change above the viewport top), and only
-		// the visible viewport actually needs repainting.
+		// brief black flash in tmux+ghostty (especially with multiple panes
+		// open) because the BSU envelope can split across PTY reads. The
+		// `firstChanged < prevViewportTop` case below is by far the most
+		// frequent full-redraw trigger during streaming (markdown fence lines
+		// like ``` -> ```python change above the viewport top), and it
+		// doesn't need a hard clear — only the visible viewport needs to be
+		// repainted. Per-line `\x1b[2K` handles stale trailing characters.
 		//
-		// IMPORTANT: this MUST write at most `height` lines into the visible
-		// viewport. The pre-fix implementation wrote every line in `newLines`,
-		// which on terminals without alt-screen (OMP runs on the main screen)
-		// pushed `newLines.length - height` rows into scrollback on every
-		// refresh. With `PI_DEBUG_REDRAW=1` on a 24-row terminal and a 52-line
-		// transcript that fired every 30ms during streaming, the user saw
-		// historical prompt frames stacking up in scrollback — even though the
-		// visible viewport rendered correctly. Anchoring the repaint window to
-		// the bottom of `newLines` (last `height` rows) keeps cursor-home +
-		// line writes strictly inside the visible viewport, so no scroll
-		// occurs from the repaint itself.
-		//
-		// Pre-scroll: when the bottom-anchored visible window slid forward
-		// since the last render (i.e. content grew enough to push old
-		// top-of-screen rows out of view), we MUST scroll those rows into
-		// scrollback first. The differential-append path does the same — losing
-		// "scrolled-off" content silently would break `Ctrl+B [` / mouse-wheel
-		// scrollback for the user. The old on-screen content from the previous
-		// render is exactly what we want preserved, so a simple `\r\n` from the
-		// bottom row scrolls each one in (and the loop only runs when the
-		// viewport actually slid forward — static viewports stay untouched).
-		//
-		// Lines wider than `width` are truncated to prevent terminal auto-wrap
-		// from pushing repaint content past the bottom row and re-introducing
-		// scroll. Image lines are passed through (their geometry is handled by
-		// the image protocol).
+		// Scrollback above the viewport may briefly show stale rendering of
+		// the SAME lines that just changed — but the user isn't scrolled
+		// up during streaming, so it's invisible. The next non-soft frame
+		// (e.g. on resize or stop) will fully reconcile.
 		const viewportRefresh = (): void => {
 			this.#fullRedrawCount += 1;
-			const visibleStart = Math.max(0, newLines.length - height);
-			const visibleCount = newLines.length - visibleStart;
 			let buffer = "\x1b[?2026h";
-
-			// Preserve scrollback for content that slid out of the visible
-			// window since the last render. `scrollOut` is bounded by `height`
-			// because anything beyond that just scrolls blank rows into
-			// scrollback (a no-op for the user, wasteful in bytes).
-			const scrollOut = Math.min(height, Math.max(0, visibleStart - prevViewportTop));
-			if (scrollOut > 0) {
-				const currentScreenRow = Math.max(0, Math.min(height - 1, hardwareCursorRow - prevViewportTop));
-				const moveToBottom = height - 1 - currentScreenRow;
-				if (moveToBottom > 0) buffer += `\x1b[${moveToBottom}B`;
-				else if (moveToBottom < 0) buffer += `\x1b[${-moveToBottom}A`;
-				buffer += "\r";
-				buffer += "\r\n".repeat(scrollOut);
-			}
-
-			// Repaint the visible viewport from screen row 0. `\x1b[H` is safe
-			// post-scroll: it just parks the cursor at the top-left, and the
-			// subsequent `visibleCount` lines fit exactly in the visible area
-			// so the final `\r\n` between them does NOT scroll.
 			buffer += "\x1b[H";
-			for (let i = 0; i < visibleCount; i++) {
+			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
-				// Erase-after-content (`\x1b[m\x1b[K` AFTER the line) keeps the
-				// line non-blank if BSU mode 2026 splits across PTY reads in
-				// tmux + ghostty — the worst-case visible artifact becomes a
-				// frame of stale trailing characters rather than a black bar.
-				const line = newLines[visibleStart + i];
-				let outLine = line;
-				const isImage = TERMINAL.isImageLine(line);
-				if (!isImage && visibleWidth(line) > width) {
-					outLine = truncateToWidth(line, width, Ellipsis.Omit);
-					outLine += outLine.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET;
-				}
-				buffer += outLine;
+				// Write new content FIRST, then `\x1b[m\x1b[K` to reset SGR and
+				// erase any trailing remnants of the previous line. Emitting the
+				// erase AFTER the content (instead of `\x1b[2K` before it) keeps
+				// the line non-blank if BSU mode 2026 splits across PTY reads in
+				// tmux + ghostty — the worst-case visible artifact becomes a frame
+				// of stale trailing characters rather than a black bar.
+				buffer += newLines[i];
 				buffer += "\x1b[m\x1b[K";
 			}
-			// After the loop the hardware cursor sits at screen row
-			// (visibleCount - 1), which corresponds to content row
-			// (visibleStart + visibleCount - 1) === (newLines.length - 1) when
-			// `newLines.length >= 1`. Use that as the `fromRow` baseline for
-			// the cursor-control sequence so its rowDelta math stays in screen
-			// units. When `newLines.length === 0`, fall back to 0.
-			const finalContentRow = Math.max(0, visibleStart + visibleCount - 1);
 			this.#cursorRow = Math.max(0, newLines.length - 1);
-			const { seq, toRow } = this.#cursorControlSequence(cursorPos, newLines.length, finalContentRow);
+			const { seq, toRow } = this.#cursorControlSequence(cursorPos, newLines.length, this.#cursorRow);
 			this.#hardwareCursorRow = toRow;
 			buffer += seq;
 			buffer += "\x1b[?2026l";
 			this.terminal.write(buffer);
-			// Track historical max for consistency with other render paths, but
-			// anchor the new viewport top to what we actually painted. This
-			// keeps `prevViewportTop`/`viewportTop` in sync with the screen so
-			// the next differential frame's `computeLineDiff` is accurate.
-			this.#maxLinesRendered = newLines.length;
-			this.#viewportTopRow = visibleStart;
+			this.#maxLinesRendered = Math.max(this.#maxLinesRendered, newLines.length);
+			this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
 			this.#previousLines = newLines;
 			this.#previousWidth = width;
 			this.#previousHeight = height;
@@ -1321,11 +1262,7 @@ export class TUI extends Container {
 		// actively streaming output. (See 498e9c2cc dropped commit for
 		// original rationale; this call-site swap was missing after slim.)
 		if (firstChanged < prevViewportTop) {
-			const visibleStart = Math.max(0, newLines.length - height);
-			const visibleCount = newLines.length - visibleStart;
-			logRedraw(
-				`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop}) — viewport refresh, painting rows ${visibleStart}..${visibleStart + visibleCount - 1} (${visibleCount}/${newLines.length})`,
-			);
+			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop}) — viewport refresh`);
 			viewportRefresh();
 			return;
 		}
