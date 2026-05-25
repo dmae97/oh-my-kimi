@@ -56,6 +56,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "deepseek",
+		name: "DeepSeek",
+		available: true,
+	},
+	{
 		id: "fireworks",
 		name: "Fireworks",
 		available: true,

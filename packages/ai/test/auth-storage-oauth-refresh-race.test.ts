@@ -35,6 +35,7 @@ describe("AuthStorage OAuth refresh race", () => {
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
+		oauthUtils.unregisterOAuthProviders("auth-storage-oauth-refresh-race-test");
 		store?.close();
 		store = null;
 		authStorage = null;
@@ -195,5 +196,135 @@ describe("AuthStorage OAuth refresh race", () => {
 			expect(events).toHaveLength(1);
 			expect(events[0]?.disabledCause).toContain("invalid_grant");
 		});
+	});
+	test("persists every credential refreshed during candidate preflight", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+
+		const expires = Date.now() - 60_000;
+		const refreshedExpires = Date.now() + 60 * 60_000;
+		oauthUtils.registerOAuthProvider({
+			id: "unit-oauth-preflight",
+			name: "Unit OAuth Preflight",
+			sourceId: "auth-storage-oauth-refresh-race-test",
+			async login() {
+				return { access: "unused", refresh: "unused", expires: refreshedExpires };
+			},
+			async refreshToken(credentials) {
+				return {
+					...credentials,
+					access: `${credentials.access}-rotated`,
+					refresh: `${credentials.refresh}-rotated`,
+					expires: refreshedExpires,
+				};
+			},
+			getApiKey(credentials) {
+				return credentials.access;
+			},
+		});
+
+		await authStorage.set("unit-oauth-preflight", [
+			{ type: "oauth", access: "access-a", refresh: "refresh-a", expires },
+			{ type: "oauth", access: "access-b", refresh: "refresh-b", expires },
+		]);
+
+		const apiKey = await authStorage.getApiKey("unit-oauth-preflight");
+		expect(apiKey).toBe("access-a-rotated");
+
+		const stored = store.listAuthCredentials("unit-oauth-preflight");
+		expect(stored).toHaveLength(2);
+		const oauth = stored.map(entry => entry.credential).filter(credential => credential.type === "oauth");
+		expect(oauth.map(credential => credential.refresh).sort()).toEqual(["refresh-a-rotated", "refresh-b-rotated"]);
+	});
+
+	test("coalesces concurrent refreshes for the same credential", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		const expires = Date.now() - 60_000;
+		const refreshedExpires = Date.now() + 60 * 60_000;
+		const refreshStarted = Promise.withResolvers<void>();
+		const allowRefresh = Promise.withResolvers<void>();
+		let refreshCalls = 0;
+
+		oauthUtils.registerOAuthProvider({
+			id: "unit-oauth-mutex",
+			name: "Unit OAuth Mutex",
+			sourceId: "auth-storage-oauth-refresh-race-test",
+			async login() {
+				return { access: "unused", refresh: "unused", expires: refreshedExpires };
+			},
+			async refreshToken(credentials) {
+				refreshCalls += 1;
+				refreshStarted.resolve();
+				await allowRefresh.promise;
+				return {
+					...credentials,
+					access: "access-rotated",
+					refresh: "refresh-rotated",
+					expires: refreshedExpires,
+				};
+			},
+			getApiKey(credentials) {
+				return credentials.access;
+			},
+		});
+
+		await authStorage.set("unit-oauth-mutex", [
+			{ type: "oauth", access: "access-old", refresh: "refresh-old", expires },
+		]);
+
+		const first = authStorage.getApiKey("unit-oauth-mutex", "same-session");
+		const second = authStorage.getApiKey("unit-oauth-mutex", "same-session");
+
+		await refreshStarted.promise;
+		allowRefresh.resolve();
+
+		await expect(first).resolves.toBe("access-rotated");
+		await expect(second).resolves.toBe("access-rotated");
+		expect(refreshCalls).toBe(1);
+	});
+	test("invalidating a session-sticky OAuth credential rotates the retry to another active credential", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		let sessionId = "";
+		for (let index = 0; index < 32; index++) {
+			const candidate = `session-auth-retry-${index}`;
+			if (Bun.hash.xxHash32(candidate) % 2 === 0) {
+				sessionId = candidate;
+				break;
+			}
+		}
+		if (!sessionId) throw new Error("could not find test session id");
+
+		await authStorage.set("unit-oauth-rotation", [
+			{
+				type: "oauth",
+				access: "access-a",
+				refresh: "refresh-a",
+				expires: Date.now() + 60 * 60_000,
+			},
+			{
+				type: "oauth",
+				access: "access-b",
+				refresh: "refresh-b",
+				expires: Date.now() + 60 * 60_000,
+			},
+		]);
+
+		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
+			const credential = credentials[provider];
+			if (!credential) return null;
+			return { newCredentials: credential, apiKey: credential.access };
+		});
+
+		const firstKey = await authStorage.getApiKey("unit-oauth-rotation", sessionId);
+		expect(firstKey).toBe("access-a");
+
+		const invalidated = await authStorage.invalidateCredentialMatching("unit-oauth-rotation", "access-a", {
+			sessionId,
+		});
+		expect(invalidated).toBe(true);
+
+		const retryKey = await authStorage.getApiKey("unit-oauth-rotation", sessionId);
+		expect(retryKey).toBe("access-b");
 	});
 });

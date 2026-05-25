@@ -1499,7 +1499,7 @@ export function convertMessages(
 					} else {
 						assistantMsg.content = [{ type: "text", text: thinkingText }];
 					}
-				} else {
+				} else if (compat.requiresReasoningContentForToolCalls) {
 					// Use the signature from the first thinking block if available, but only for
 					// recognized OpenAI-compat reasoning field names. Opaque signatures from other
 					// providers (Anthropic encrypted, OpenAI Responses JSON) are not valid property names.
@@ -1511,7 +1511,7 @@ export function convertMessages(
 				}
 			}
 
-			if (compat.thinkingFormat === "openai") {
+			if (compat.thinkingFormat === "openai" && compat.requiresReasoningContentForToolCalls) {
 				const streamedReasoningField = nonEmptyThinkingBlocks[0]?.thinkingSignature;
 				const reasoningField =
 					streamedReasoningField === "reasoning_content" ||

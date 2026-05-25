@@ -856,7 +856,26 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 			setDefaultTabWidth(value);
 		}
 	},
+	"provider.appendOnlyContext": value => {
+		if (typeof value === "string") {
+			for (const cb of appendOnlyModeCallbacks) cb(value);
+		}
+	},
 };
+/** Callbacks invoked when `provider.appendOnlyContext` changes at runtime. */
+const appendOnlyModeCallbacks = new Set<(value: string) => void>();
+
+/**
+ * Subscribe to append-only mode setting changes.
+ * Returns an unsubscribe function. Multiple sessions (main + subagents)
+ * can register independently without overwriting each other.
+ */
+export function onAppendOnlyModeChanged(cb: (value: string) => void): () => void {
+	appendOnlyModeCallbacks.add(cb);
+	return () => {
+		appendOnlyModeCallbacks.delete(cb);
+	};
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Global Singleton

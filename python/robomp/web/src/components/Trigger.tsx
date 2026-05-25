@@ -16,7 +16,7 @@ export function Trigger(): JSX.Element {
 
   const validate = (): string | null => {
     const value = issue().trim();
-    if (!value) return "enter owner/repo#NN";
+    if (!value) return "enter owner/repo#NN or github issue url";
     return null;
   };
 
@@ -33,7 +33,7 @@ export function Trigger(): JSX.Element {
   };
 
   return (
-    <GlassCard heading="trigger" accessory={<span class="text-ink-400">owner/repo#NN</span>}>
+    <GlassCard heading="trigger" accessory={<span class="text-ink-400">owner/repo#NN or issue url</span>}>
       <Show
         when={CONFIG.replayEnabled}
         fallback={
@@ -48,7 +48,7 @@ export function Trigger(): JSX.Element {
             <input
               type="text"
               spellcheck={false}
-              placeholder="octo/widget#42"
+              placeholder="octo/widget#42 or https://github.com/owner/repo/issues/42"
               autocomplete="off"
               value={issue()}
               onInput={(ev) => setIssue(ev.currentTarget.value)}

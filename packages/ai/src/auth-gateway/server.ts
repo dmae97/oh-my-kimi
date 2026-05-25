@@ -11,6 +11,7 @@
  * Endpoints:
  *   GET  /healthz                          → unauth; ok + version
  *   GET  /v1/usage                         → aggregated provider usage (5-min per-credential cache via AuthStorage)
+ *   GET  /v1/credentials/check             → per-credential auth probe (diagnose 401s in a multi-account pool)
  *   GET  /v1/models                        → list known models from the registry
  *   POST /v1/chat/completions              → OpenAI chat-completions in/out
  *   POST /v1/messages                      → Anthropic messages in/out
@@ -600,6 +601,22 @@ async function handleUsage(storage: AuthStorage, signal: AbortSignal): Promise<R
 	return json(200, { generatedAt: Date.now(), reports: trimmed });
 }
 
+/**
+ * Per-credential health probe surfaced on `GET /v1/credentials/check`. Tells
+ * the caller exactly which row in their broker is producing 401s — the
+ * aggregate `/v1/usage` endpoint silently drops failed credentials, which is
+ * the wrong shape when you're diagnosing auth.
+ *
+ * The probe is sequential (one credential at a time) to avoid synchronized
+ * N-account fan-out tripping per-IP rate limits on provider `/usage`
+ * endpoints. For multi-account pools that's the difference between getting
+ * a clean diagnosis and getting a 429 storm.
+ */
+async function handleCredentialsCheck(storage: AuthStorage, signal: AbortSignal): Promise<Response> {
+	const credentials = await storage.checkCredentials({ signal });
+	return json(200, { generatedAt: Date.now(), credentials });
+}
+
 function handleModelsList(opts: AuthGatewayBootOptions): Response {
 	const list = opts.listModels ? Array.from(opts.listModels()) : [];
 	const data = list.map(model => ({
@@ -643,6 +660,13 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 				// same client struct.
 				if (req.method === "GET" && pathname === "/v1/usage") {
 					return withCors(await handleUsage(opts.storage, req.signal), req);
+				}
+
+				// Per-credential auth probe — diagnoses which row in a multi-account
+				// pool is producing 401s. Aggregated `/v1/usage` silently drops failed
+				// credentials, so we need a separate endpoint that captures errors.
+				if (req.method === "GET" && pathname === "/v1/credentials/check") {
+					return withCors(await handleCredentialsCheck(opts.storage, req.signal), req);
 				}
 
 				// Provider-format dispatch.

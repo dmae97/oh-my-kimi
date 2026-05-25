@@ -32,7 +32,7 @@ import { getConfigRootDir, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { type AuthBrokerClientConfig, resolveAuthBrokerConfig } from "../session/auth-broker-config";
 
-export type AuthGatewayAction = "serve" | "token" | "status";
+export type AuthGatewayAction = "serve" | "token" | "status" | "check";
 
 export interface AuthGatewayCommandArgs {
 	action: AuthGatewayAction;
@@ -49,7 +49,7 @@ export interface AuthGatewayCommandArgs {
 	};
 }
 
-const ACTIONS: readonly AuthGatewayAction[] = ["serve", "token", "status"];
+const ACTIONS: readonly AuthGatewayAction[] = ["serve", "token", "status", "check"];
 
 function getTokenFilePath(): string {
 	return path.join(getConfigRootDir(), "auth-gateway.token");
@@ -332,10 +332,79 @@ export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promis
 		case "status":
 			await runStatus(cmd.flags);
 			return;
+		case "check":
+			await runCheck(cmd.flags);
+			return;
 		default: {
 			const _exhaustive: never = cmd.action;
 			throw new Error(`Unknown auth-gateway action: ${String(_exhaustive)}`);
 		}
+	}
+}
+
+/**
+ * `omp auth-gateway check` — probe each broker-supplied credential and print
+ * per-credential auth health. Use this when the gateway is returning 401s and
+ * you need to find which row in a multi-account pool is the bad one. The
+ * aggregate `/v1/usage` endpoint silently drops failed credentials, so a
+ * dedicated diagnostic is the only way to see which credentials failed.
+ */
+async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
+	const brokerConfig = await resolveAuthBrokerConfig();
+	if (!brokerConfig) {
+		throw new Error(
+			"`omp auth-gateway check` requires OMP_AUTH_BROKER_URL (or `auth.broker.url`/`auth.broker.token` in config.yml). It probes the same credentials the gateway would serve.",
+		);
+	}
+
+	const client = createBrokerClient(brokerConfig);
+	const initialSnapshot = await fetchBrokerSnapshot(client);
+	const store = new RemoteAuthCredentialStore({ client, initialSnapshot });
+	const storage = new AuthStorage(store, { sourceLabel: `broker ${brokerConfig.url}` });
+	try {
+		await storage.reload();
+		const results = await storage.checkCredentials();
+
+		if (flags.json) {
+			process.stdout.write(`${JSON.stringify({ broker: brokerConfig.url, credentials: results }, null, 2)}\n`);
+		} else {
+			const grouped = new Map<string, typeof results>();
+			for (const row of results) {
+				const list = grouped.get(row.provider) ?? [];
+				list.push(row);
+				grouped.set(row.provider, list);
+			}
+			const providers = [...grouped.keys()].sort();
+			process.stdout.write(`broker: ${brokerConfig.url}\n`);
+			for (const provider of providers) {
+				const rows = grouped.get(provider) ?? [];
+				process.stdout.write(`\n${chalk.bold(provider)} (${rows.length})\n`);
+				for (const row of rows) {
+					const status =
+						row.ok === true
+							? chalk.green("ok      ")
+							: row.ok === false
+								? chalk.red("FAIL    ")
+								: chalk.yellow("unknown ");
+					const identity =
+						row.email ?? row.accountId ?? (row.type === "api_key" ? "(api key)" : "(no identity on credential)");
+					const remote = row.remoteRefresh ? chalk.dim(" [remote-refresh]") : "";
+					const reason = row.reason ? chalk.dim(` — ${row.reason}`) : "";
+					process.stdout.write(
+						`  ${status} id=${row.id.toString().padStart(3)} ${row.type.padEnd(7)} ${identity}${remote}${reason}\n`,
+					);
+				}
+			}
+			const failed = results.filter(row => row.ok === false).length;
+			const unverifiable = results.filter(row => row.ok === null).length;
+			const passing = results.filter(row => row.ok === true).length;
+			process.stdout.write(
+				`\n${chalk.green(`${passing} ok`)}, ${chalk.red(`${failed} failed`)}, ${chalk.yellow(`${unverifiable} unverifiable`)}, ${results.length} total\n`,
+			);
+			if (failed > 0) process.exitCode = 1;
+		}
+	} finally {
+		storage.close();
 	}
 }
 

@@ -102,6 +102,27 @@ def test_directive_prompt_embeds_thread_and_directive_body() -> None:
     assert "PR #1080 is open" in out
 
 
+def test_followup_comment_prompt_embeds_thread_context() -> None:
+    thread = (
+        ThreadMessage(kind="pr_body", author="roboomp", body="PR body", created_at=""),
+        ThreadMessage(kind="comment", author="can1357", body="prior request", created_at="2026-05-01T10:00:00Z"),
+    )
+    out = persona.followup_comment(
+        repo=_Repo(),
+        issue=_Issue(),
+        comment=_Comment(body="current request"),
+        workspace=_Workspace(),
+        pr_status="PR #1080 is open",
+        pr_number=1080,
+        thread=thread,
+    )
+
+    assert "Prior conversation" in out
+    assert "PR body" in out
+    assert "prior request" in out
+    assert "current request" in out
+
+
 def test_kickoff_directive_prompt_embeds_thread_and_classify_instruction() -> None:
     thread = (ThreadMessage(kind="issue_body", author="alice", body="failing on macos", created_at=""),)
     out = persona.kickoff_directive(

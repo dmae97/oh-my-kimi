@@ -592,7 +592,7 @@ def test_route_reviewer_bot_comment_is_directive_without_mention() -> None:
         {
             "action": "created",
             "comment": {
-                "user": {"login": "chatgpt-codex-connector", "type": "Bot"},
+                "user": {"login": "chatgpt-codex-connector[bot]", "type": "Bot"},
                 "body": "Found two issues in the diff: ...",
             },
             "issue": {"number": 9, "pull_request": {"url": "x"}},
@@ -616,7 +616,7 @@ def test_route_reviewer_bot_review_comment_is_directive() -> None:
         {
             "action": "created",
             "comment": {
-                "user": {"login": "chatgpt-codex-connector", "type": "Bot"},
+                "user": {"login": "chatgpt-codex-connector[bot]", "type": "Bot"},
                 "body": "This branch leaks memory.",
             },
             "pull_request": {"number": 50, "user": {"login": BOT}},

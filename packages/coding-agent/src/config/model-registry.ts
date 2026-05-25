@@ -252,6 +252,45 @@ interface ProviderOverride {
 	transport?: Model<Api>["transport"];
 }
 
+/**
+ * Merge a freshly discovered model with the matching bundled/configured entry
+ * (or a runtime provider override when no bundled entry exists).
+ *
+ * `baseUrl` resolution priority:
+ *   1. User-set `providerOverride.baseUrl` (explicit override in models.json)
+ *   2. Discovered baseUrl (xiaomi `tp-` token-plan keys resolve to
+ *      `token-plan-sgp.xiaomimimo.com` at discovery time)
+ *   3. Existing bundled baseUrl (the host baked into `models.json`)
+ *
+ * Without (1), the user's override would lose to discovery; without (2)
+ * preferred over (3), the bundled `api.xiaomimimo.com` would shadow the
+ * tp- token-plan host and produce 401s on the first stream call.
+ * See `xiaomi-tp-discovery-merge.test.ts` and the `refresh()` baseUrl-override
+ * regression in `model-registry.test.ts`.
+ */
+export function mergeDiscoveredModel<TApi extends Api>(
+	model: Model<TApi>,
+	existing: Model<Api> | undefined,
+	providerOverride?: Pick<ProviderOverride, "baseUrl" | "headers" | "transport">,
+): Model<TApi> {
+	if (existing) {
+		return {
+			...model,
+			baseUrl: providerOverride?.baseUrl ?? model.baseUrl ?? existing.baseUrl,
+			headers: existing.headers ? { ...existing.headers, ...model.headers } : model.headers,
+		};
+	}
+	if (providerOverride) {
+		return {
+			...model,
+			baseUrl: providerOverride.baseUrl ?? model.baseUrl,
+			headers: providerOverride.headers ? { ...model.headers, ...providerOverride.headers } : model.headers,
+			...(providerOverride.transport !== undefined ? { transport: providerOverride.transport } : {}),
+		};
+	}
+	return model;
+}
+
 interface DiscoveryProviderConfig {
 	provider: string;
 	api: Api;
@@ -1182,27 +1221,13 @@ export class ModelRegistry {
 			return;
 		}
 		const discoveredModels = this.#applyHardcodedModelPolicies(
-			discovered.map(model => {
-				const existing = this.find(model.provider, model.id);
-				if (existing) {
-					return {
-						...model,
-						baseUrl: existing.baseUrl,
-						headers: existing.headers ? { ...existing.headers, ...model.headers } : model.headers,
-					};
-				}
-				const providerOverride = this.#providerOverrides.get(model.provider);
-				return providerOverride
-					? {
-							...model,
-							baseUrl: providerOverride.baseUrl ?? model.baseUrl,
-							headers: providerOverride.headers
-								? { ...model.headers, ...providerOverride.headers }
-								: model.headers,
-							...(providerOverride.transport !== undefined ? { transport: providerOverride.transport } : {}),
-						}
-					: model;
-			}),
+			discovered.map(model =>
+				mergeDiscoveredModel(
+					model,
+					this.find(model.provider, model.id),
+					this.#providerOverrides.get(model.provider),
+				),
+			),
 		);
 		const resolved = this.#mergeResolvedModels(this.#models, discoveredModels);
 		const withConfigModels = this.#mergeCustomModels(resolved, this.#customModelOverlays);

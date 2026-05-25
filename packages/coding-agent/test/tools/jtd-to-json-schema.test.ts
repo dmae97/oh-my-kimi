@@ -69,4 +69,40 @@ describe("jtdToJsonSchema", () => {
 			required: ["results"],
 		});
 	});
+	it("does not misinterpret user-named properties that collide with JTD keywords (#1345)", () => {
+		// Mirrors the `files[]` shape declared by the built-in explore agent:
+		// a JTD elements form whose item properties include one literally named `ref`.
+		const converted = jtdToJsonSchema({
+			properties: {
+				files: {
+					elements: {
+						properties: {
+							ref: { type: "string" },
+							description: { type: "string" },
+						},
+					},
+				},
+			},
+		});
+
+		expect(converted).toEqual({
+			type: "object",
+			properties: {
+				files: {
+					type: "array",
+					items: {
+						type: "object",
+						properties: {
+							ref: { type: "string" },
+							description: { type: "string" },
+						},
+						required: ["ref", "description"],
+						additionalProperties: false,
+					},
+				},
+			},
+			required: ["files"],
+			additionalProperties: false,
+		});
+	});
 });

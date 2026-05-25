@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [15.3.2] - 2026-05-25
+### Added
+
+- Added `GET /v1/snapshot/stream` for live auth-broker snapshot updates via SSE with `snapshot`, `entry`, and `removed` event frames
+- Added `AuthBrokerClient.openSnapshotStream()` for consuming SSE snapshot streams from `/v1/snapshot/stream`
+- Added `streamSnapshots` option to `RemoteAuthCredentialStore` (default `true`) to enable or disable SSE-based snapshot synchronization
+- Added `streamKeepaliveMs` to `startAuthBroker()` to tune heartbeat frequency for the SSE stream
+- Added `AuthStorage.checkCredentials({ signal?, timeoutMs?, baseUrlResolver? })` that returns a per-credential `CredentialHealthResult` with tri-state `ok` (`true` / `false` / `null`-unverifiable), the credential's identity (provider, type, email/accountId, broker-refresh flag), and the upstream error string when the probe fails. Iterates sequentially over `listAuthCredentials()`, exercises OAuth refresh on expiry, then calls the per-provider `UsageProvider.fetchUsage` without swallowing errors — so callers can identify which row in a multi-account broker is producing 401s instead of getting a silently-deduplicated `fetchUsageReports` list.
+- Added `GET /v1/credentials/check` to `startAuthGateway()` that forwards to `AuthStorage.checkCredentials` and returns `{ generatedAt, credentials }`. Gated by the same bearer as the rest of the gateway.
+
+### Changed
+
+- Changed `RemoteAuthCredentialStore` to prefer SSE snapshot streaming and automatically fall back to long-polling when a broker returns 404 for `/v1/snapshot/stream`
+- Changed snapshot write-refresh flow so `RemoteAuthCredentialStore` skips immediate `/v1/snapshot` refreshes when SSE streaming is active
+- Changed broker SSE stream behavior to keep connections open with periodic keepalives and an increased server idle timeout
+
+## [15.3.0] - 2026-05-25
+
+### Added
+
+- Added DeepSeek to the built-in API-key login provider catalog so `omp login deepseek` stores a reusable `DEEPSEEK_API_KEY` credential for the bundled DeepSeek models.
+
+### Fixed
+
+- Fixed `openai-responses` requests intermittently 400ing with `No tool call found for function call output with call_id …` after an aborted turn or a locally-rejected tool call (e.g. argument-validation failure). `convertConversationMessages` now folds orphan `function_call_output` / `custom_tool_call_output` items — those whose matching `function_call` was wiped by an earlier `dt: false` snapshot splice or never landed in any persisted provider payload — into assistant text notes, preserving the payload while keeping the request grammatically valid ([#1351](https://github.com/can1357/oh-my-pi/issues/1351)).
+
 ## [15.2.4] - 2026-05-22
 
 ### Fixed
@@ -68,6 +94,7 @@
 
 ### Fixed
 
+- Fixed OpenCode-Go and OpenCode-Zen chat-completions replay to omit stored reasoning fields on Kimi assistant tool-call messages, avoiding provider 400s for rejected `messages[].reasoning` payloads. ([#1157](https://github.com/can1357/oh-my-pi/issues/1157))
 - Fixed OpenAI Responses and Codex tool schema normalization to emit `properties: {}` for no-argument object schemas without rewriting literal payloads. ([#1147](https://github.com/can1357/oh-my-pi/issues/1147))
 - Fixed Anthropic 400 (`unexpected tool_use_id found in tool_result blocks ... Each tool_result block must have a corresponding tool_use block in the previous message`) when handoff/compaction folds an assistant `tool_use` into the handoff summary string but leaves the matching user-side `tool_result` message in the history. `transformMessages` now indexes every `tool_use` id surviving the first pass and drops orphan `tool_result` messages whose originator was compacted away, preserving the text payload as a user-level `<stale-tool-result>` note so the model still sees what the tool returned. The note is emitted with `role: "user"` rather than `role: "developer"` so providers that elevate developer-role messages (Ollama: `developer` → `system`; OpenAI chat-completions reasoning models: `developer` → `developer`) cannot lift stale tool output to an instruction-priority tier above the surrounding user/developer messages.
 - Fixed streaming authentication retry to trigger when a provider emits a 401 `error` event after a `start` event but before any replay-unsafe content is emitted
