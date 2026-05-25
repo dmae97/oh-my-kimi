@@ -751,6 +751,9 @@ export class AgentSession {
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
+	#unsubscribeAppendOnly?: () => void;
+	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
+	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
 
 	/** Tracks pending steering messages for UI display. Removed when delivered.
@@ -1141,7 +1144,7 @@ export class AgentSession {
 		// (session persistence, hooks, auto-compaction, retry logic)
 		this.#unsubscribeAgent = this.agent.subscribe(this.#handleAgentEvent);
 		// Re-evaluate append-only context mode when the setting changes at runtime.
-		onAppendOnlyModeChanged(_value => this.#syncAppendOnlyContext(this.model));
+		this.#unsubscribeAppendOnly = onAppendOnlyModeChanged(_value => this.#syncAppendOnlyContext(this.model));
 	}
 
 	/** Model registry for API key resolution and model discovery */
@@ -2785,6 +2788,10 @@ export class AgentSession {
 		await hindsightState?.flushRetainQueue();
 		hindsightState?.dispose();
 		this.#disconnectFromAgent();
+		if (this.#unsubscribeAppendOnly) {
+			this.#unsubscribeAppendOnly();
+			this.#unsubscribeAppendOnly = undefined;
+		}
 		this.#eventListeners = [];
 	}
 
@@ -5980,7 +5987,12 @@ export class AgentSession {
 	 */
 	#syncAppendOnlyContext(model: Model | null | undefined): void {
 		const setting = this.settings.get("provider.appendOnlyContext") ?? "auto";
-		const enable = setting === "on" || (setting === "auto" && model?.provider === "deepseek");
+		const providerId = model?.provider;
+		const enable = setting === "on" || (setting === "auto" && providerId === "deepseek");
+		const prev = this.#lastAppendOnlyResolution;
+		if (prev && prev.enable === enable && prev.providerId === providerId) return;
+		this.#lastAppendOnlyResolution = { enable, providerId };
+
 		if (enable && !this.agent.appendOnlyContext) {
 			this.agent.setAppendOnlyContext(new AppendOnlyContextManager());
 		} else if (enable && this.agent.appendOnlyContext) {

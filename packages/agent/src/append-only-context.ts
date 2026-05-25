@@ -15,7 +15,8 @@
  */
 
 import type { Context, Message, Tool } from "@oh-my-pi/pi-ai";
-import type { AgentContext, AgentTool } from "./types";
+import { normalizeTools } from "./agent-loop";
+import type { AgentContext } from "./types";
 
 // ---------------------------------------------------------------------------
 // StablePrefix (formerly ImmutablePrefix)
@@ -26,6 +27,12 @@ export interface StablePrefixSnapshot {
 	systemPrompt: string[];
 	tools: Tool[];
 	fingerprint: string;
+}
+
+/** Options threaded through `build()` so the snapshot reflects loop-time settings. */
+export interface BuildOptions {
+	/** Inject the `_i` intent field into tool schemas (must match agent-loop's normalizeTools). */
+	intentTracing: boolean;
 }
 
 /**
@@ -54,8 +61,8 @@ export class StablePrefix {
 	 * Build or rebuild from live context.
 	 * Returns `true` if the prefix actually changed (cache miss imminent).
 	 */
-	build(context: AgentContext): boolean {
-		const snapshot = takeSnapshot(context);
+	build(context: AgentContext, options: BuildOptions): boolean {
+		const snapshot = takeSnapshot(context, options);
 		if (this.#snapshot && this.#snapshot.fingerprint === snapshot.fingerprint) {
 			return false;
 		}
@@ -154,8 +161,8 @@ export class AppendOnlyContextManager {
 	/** Rolling digest of synced message content — detects in-place rewrites. */
 	#syncedDigest = 0;
 
-	build(context: AgentContext): Context {
-		this.prefix.build(context);
+	build(context: AgentContext, options: BuildOptions): Context {
+		this.prefix.build(context, options);
 		const { systemPrompt, tools } = this.prefix.toContext();
 		return { systemPrompt, messages: this.log.toMessages(), tools };
 	}
@@ -219,25 +226,36 @@ export class AppendOnlyContextManager {
 		this.prefix.invalidate();
 	}
 
-	reset(context: AgentContext): void {
+	reset(context: AgentContext, options: BuildOptions): void {
 		this.prefix.invalidate();
 		this.log.clear();
 		this.#lastSyncCount = 0;
 		this.#syncedDigest = 0;
-		this.prefix.build(context);
+		this.prefix.build(context, options);
 	}
 
-	/** Fast rolling digest of message content. */
-	#computeDigest(messages: any[]): number {
+	/**
+	 * Deterministic digest over every field the provider may serialize — role,
+	 * content, tool calls (both `toolCalls` and OpenAI-wire `tool_calls`),
+	 * `tool_call_id`, `name`, `id`. Hashed with the same FNV-style rolling
+	 * accumulator so in-place rewrites of *any* of these fields are visible.
+	 */
+	#computeDigest(messages: readonly unknown[]): number {
 		let hash = 0;
 		for (let i = 0; i < messages.length; i++) {
 			const msg = messages[i];
-			if (msg && typeof msg === "object") {
-				const payload =
-					String(msg.role) + (typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? ""));
-				for (let j = 0; j < payload.length; j++) {
-					hash = ((hash << 5) - hash + payload.charCodeAt(j)) | 0;
-				}
+			if (!msg || typeof msg !== "object") continue;
+			const m = msg as Record<string, unknown>;
+			const payload = JSON.stringify({
+				r: m.role ?? null,
+				c: m.content ?? null,
+				tc: m.toolCalls ?? m.tool_calls ?? null,
+				tcid: m.tool_call_id ?? null,
+				n: m.name ?? null,
+				id: m.id ?? null,
+			});
+			for (let j = 0; j < payload.length; j++) {
+				hash = ((hash << 5) - hash + payload.charCodeAt(j)) | 0;
 			}
 		}
 		return hash >>> 0;
@@ -248,30 +266,17 @@ export class AppendOnlyContextManager {
 // Snapshot helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Produce a stable serialization of tools that matches what
- * `normalizeTools(tools, false)` outputs (no intent injection).
- *
- * The spread `{ ...agentTool }` preserves all own enumerable properties
- * that survive JSON.stringify — functions are dropped, but strings,
- * booleans, objects are included.
- */
-function normalizeTool(t: AgentTool): Tool {
-	const description = t.description ?? "";
-	return { ...t, parameters: t.parameters, description };
-}
-
-function takeSnapshot(context: AgentContext): StablePrefixSnapshot {
+function takeSnapshot(context: AgentContext, options: BuildOptions): StablePrefixSnapshot {
 	const systemPrompt = [...context.systemPrompt];
-	const tools = (context.tools ?? []).map(normalizeTool);
+	const tools = normalizeTools(context.tools, options.intentTracing) ?? [];
 	return {
 		systemPrompt,
 		tools,
-		fingerprint: computeFingerprint(systemPrompt, tools),
+		fingerprint: computeFingerprint(systemPrompt, tools, options),
 	};
 }
 
-function computeFingerprint(systemPrompt: string[], tools: Tool[]): string {
+function computeFingerprint(systemPrompt: string[], tools: Tool[], options: BuildOptions): string {
 	const payload = JSON.stringify({
 		s: systemPrompt,
 		t: tools.map(t => ({
@@ -282,6 +287,7 @@ function computeFingerprint(systemPrompt: string[], tools: Tool[]): string {
 			cf: t.customFormat,
 			cw: t.customWireName,
 		})),
+		i: options.intentTracing,
 	});
 	let hash = 0;
 	for (let i = 0; i < payload.length; i++) {

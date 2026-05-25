@@ -363,7 +363,7 @@ function injectIntentIntoSchema(schema: unknown, mode: "require" | "optional" = 
 	};
 }
 
-function normalizeTools(tools: AgentContext["tools"], injectIntent: boolean): Context["tools"] {
+export function normalizeTools(tools: AgentContext["tools"], injectIntent: boolean): Context["tools"] {
 	injectIntent = injectIntent && Bun.env.PI_NO_INTENT !== "1";
 	return tools?.map(t => {
 		const intentMode = resolveIntentMode(t.intent);
@@ -652,7 +652,7 @@ async function streamAssistantResponse(
 	let llmContext: Context;
 	if (config.appendOnlyContext) {
 		config.appendOnlyContext.syncMessages(normalizedMessages);
-		llmContext = config.appendOnlyContext.build(context);
+		llmContext = config.appendOnlyContext.build(context, { intentTracing: !!config.intentTracing });
 	} else {
 		llmContext = {
 			systemPrompt: context.systemPrompt,

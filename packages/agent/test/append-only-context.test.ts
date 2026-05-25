@@ -26,6 +26,8 @@ function makeTool(name: string, description?: string, parameters?: Record<string
 	} as AgentTool;
 }
 
+const BUILD_OPTS = { intentTracing: false } as const;
+
 // ---------------------------------------------------------------------------
 // StablePrefix
 // ---------------------------------------------------------------------------
@@ -38,7 +40,7 @@ describe("StablePrefix", () => {
 			tools: [makeTool("read")],
 		});
 
-		const changed = p.build(ctx);
+		const changed = p.build(ctx, BUILD_OPTS);
 		expect(changed).toBe(true);
 		expect(p.built).toBe(true);
 
@@ -52,45 +54,45 @@ describe("StablePrefix", () => {
 		const p = new StablePrefix();
 		const ctx = makeContext({ systemPrompt: ["Hello"] });
 
-		p.build(ctx);
-		const changed = p.build(ctx);
+		p.build(ctx, BUILD_OPTS);
+		const changed = p.build(ctx, BUILD_OPTS);
 		expect(changed).toBe(false);
 	});
 
 	it("returns true when system prompt changes", () => {
 		const p = new StablePrefix();
 		const ctx = makeContext({ systemPrompt: ["Old prompt"] });
-		p.build(ctx);
+		p.build(ctx, BUILD_OPTS);
 
-		const changed = p.build(makeContext({ systemPrompt: ["New prompt"] }));
+		const changed = p.build(makeContext({ systemPrompt: ["New prompt"] }), BUILD_OPTS);
 		expect(changed).toBe(true);
 	});
 
 	it("returns true when tools change", () => {
 		const p = new StablePrefix();
-		p.build(makeContext({ tools: [makeTool("read")] }));
+		p.build(makeContext({ tools: [makeTool("read")] }), BUILD_OPTS);
 
-		const changed = p.build(makeContext({ tools: [makeTool("read"), makeTool("write")] }));
+		const changed = p.build(makeContext({ tools: [makeTool("read"), makeTool("write")] }), BUILD_OPTS);
 		expect(changed).toBe(true);
 	});
 
 	it("returns true when tool description changes", () => {
 		const p = new StablePrefix();
-		p.build(makeContext({ tools: [makeTool("read", "Original desc")] }));
+		p.build(makeContext({ tools: [makeTool("read", "Original desc")] }), BUILD_OPTS);
 
-		const changed = p.build(makeContext({ tools: [makeTool("read", "Updated desc")] }));
+		const changed = p.build(makeContext({ tools: [makeTool("read", "Updated desc")] }), BUILD_OPTS);
 		expect(changed).toBe(true);
 	});
 
 	it("invalidate forces rebuild", () => {
 		const p = new StablePrefix();
 		const ctx = makeContext({ systemPrompt: ["Stable"] });
-		p.build(ctx);
+		p.build(ctx, BUILD_OPTS);
 
 		p.invalidate();
 		expect(p.built).toBe(false);
 
-		const changed = p.build(ctx);
+		const changed = p.build(ctx, BUILD_OPTS);
 		expect(changed).toBe(true);
 	});
 
@@ -102,11 +104,11 @@ describe("StablePrefix", () => {
 	it("fingerprint changes across rebuilds", () => {
 		const p = new StablePrefix();
 		const ctx1 = makeContext({ systemPrompt: ["Prompt A"] });
-		p.build(ctx1);
+		p.build(ctx1, BUILD_OPTS);
 		const fp1 = p.fingerprint;
 
 		const ctx2 = makeContext({ systemPrompt: ["Prompt B"] });
-		p.build(ctx2);
+		p.build(ctx2, BUILD_OPTS);
 		const fp2 = p.fingerprint;
 
 		expect(fp1).not.toBe(fp2);
@@ -114,10 +116,10 @@ describe("StablePrefix", () => {
 
 	it("fingerprint stable for identical context", () => {
 		const p = new StablePrefix();
-		p.build(makeContext({ systemPrompt: ["Stable"], tools: [makeTool("foo")] }));
+		p.build(makeContext({ systemPrompt: ["Stable"], tools: [makeTool("foo")] }), BUILD_OPTS);
 		const fp1 = p.fingerprint;
 
-		p.build(makeContext({ systemPrompt: ["Stable"], tools: [makeTool("foo")] }));
+		p.build(makeContext({ systemPrompt: ["Stable"], tools: [makeTool("foo")] }), BUILD_OPTS);
 		const fp2 = p.fingerprint;
 
 		expect(fp1).toBe(fp2);
@@ -127,13 +129,13 @@ describe("StablePrefix", () => {
 		const p = new StablePrefix();
 		expect(p.version).toBe(0);
 
-		p.build(makeContext({ systemPrompt: ["V1"] }));
+		p.build(makeContext({ systemPrompt: ["V1"] }), BUILD_OPTS);
 		expect(p.version).toBe(1);
 
-		p.build(makeContext({ systemPrompt: ["V2"] }));
+		p.build(makeContext({ systemPrompt: ["V2"] }), BUILD_OPTS);
 		expect(p.version).toBe(2);
 
-		p.build(makeContext({ systemPrompt: ["V2"] }));
+		p.build(makeContext({ systemPrompt: ["V2"] }), BUILD_OPTS);
 		expect(p.version).toBe(2); // unchanged = no increment
 	});
 });
@@ -216,7 +218,7 @@ describe("AppendOnlyContextManager", () => {
 			tools: [makeTool("read")],
 		});
 
-		const result = mgr.build(ctx);
+		const result = mgr.build(ctx, BUILD_OPTS);
 
 		expect(result.systemPrompt).toEqual(["You are a bot."]);
 		expect(result.tools).toHaveLength(1);
@@ -230,29 +232,29 @@ describe("AppendOnlyContextManager", () => {
 			tools: [makeTool("read")],
 		});
 
-		mgr.build(ctx);
+		mgr.build(ctx, BUILD_OPTS);
 
 		// Same context — should reuse cached prefix
-		const result = mgr.build(ctx);
+		const result = mgr.build(ctx, BUILD_OPTS);
 		expect(result.systemPrompt).toEqual(["Original prompt"]);
 		expect(result.tools).toHaveLength(1);
 	});
 
 	it("build() detects changed system prompt and rebuilds", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext({ systemPrompt: ["Old"] }));
+		mgr.build(makeContext({ systemPrompt: ["Old"] }), BUILD_OPTS);
 
-		const result = mgr.build(makeContext({ systemPrompt: ["New"] }));
+		const result = mgr.build(makeContext({ systemPrompt: ["New"] }), BUILD_OPTS);
 		expect(result.systemPrompt).toEqual(["New"]);
 	});
 
 	it("prefix.fingerprint changes when tools change", () => {
 		const mgr = new AppendOnlyContextManager();
 
-		mgr.build(makeContext({ tools: [makeTool("read")] }));
+		mgr.build(makeContext({ tools: [makeTool("read")] }), BUILD_OPTS);
 		const fp1 = mgr.prefix.fingerprint;
 
-		mgr.build(makeContext({ tools: [makeTool("read"), makeTool("write")] }));
+		mgr.build(makeContext({ tools: [makeTool("read"), makeTool("write")] }), BUILD_OPTS);
 		const fp2 = mgr.prefix.fingerprint;
 
 		expect(fp1).not.toBe(fp2);
@@ -260,12 +262,12 @@ describe("AppendOnlyContextManager", () => {
 
 	it("appendMessage grows the log", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext());
+		mgr.build(makeContext(), BUILD_OPTS);
 
 		mgr.appendMessage({ role: "user", content: "hello" } as any);
 		mgr.appendMessage({ role: "assistant", content: "world" } as any);
 
-		const result = mgr.build(makeContext());
+		const result = mgr.build(makeContext(), BUILD_OPTS);
 		expect(result.messages).toHaveLength(2);
 		expect(result.messages[0]!.role).toBe("user");
 		expect(result.messages[1]!.role).toBe("assistant");
@@ -273,47 +275,47 @@ describe("AppendOnlyContextManager", () => {
 
 	it("appendMessage messages appear in every subsequent build()", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext());
+		mgr.build(makeContext(), BUILD_OPTS);
 
 		mgr.appendMessage({ role: "user", content: "q1" });
-		const r1 = mgr.build(makeContext());
+		const r1 = mgr.build(makeContext(), BUILD_OPTS);
 		expect(r1.messages).toHaveLength(1);
 
 		mgr.appendMessage({ role: "assistant", content: "a1" });
-		const r2 = mgr.build(makeContext());
+		const r2 = mgr.build(makeContext(), BUILD_OPTS);
 		expect(r2.messages).toHaveLength(2);
 		expect(r2.messages[1]!.content).toBe("a1");
 	});
 
 	it("invalidate forces prefix rebuild", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext({ systemPrompt: ["V1"] }));
+		mgr.build(makeContext({ systemPrompt: ["V1"] }), BUILD_OPTS);
 
 		mgr.invalidate();
-		const result = mgr.build(makeContext({ systemPrompt: ["V2"] }));
+		const result = mgr.build(makeContext({ systemPrompt: ["V2"] }), BUILD_OPTS);
 		expect(result.systemPrompt).toEqual(["V2"]);
 	});
 
 	it("reset clears log and prefix", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext({ systemPrompt: ["Original"] }));
+		mgr.build(makeContext({ systemPrompt: ["Original"] }), BUILD_OPTS);
 		mgr.appendMessage({ role: "user", content: "hello" });
 
 		const freshCtx = makeContext({ systemPrompt: ["Fresh start"] });
-		mgr.reset(freshCtx);
+		mgr.reset(freshCtx, BUILD_OPTS);
 
-		const result = mgr.build(freshCtx);
+		const result = mgr.build(freshCtx, BUILD_OPTS);
 		expect(result.systemPrompt).toEqual(["Fresh start"]);
 		expect(result.messages).toHaveLength(0);
 	});
 
 	it("replaceTailMessage updates last log entry", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext());
+		mgr.build(makeContext(), BUILD_OPTS);
 		mgr.appendMessage({ role: "user", content: "old" });
 		mgr.replaceTailMessage({ role: "user", content: "new" });
 
-		const result = mgr.build(makeContext());
+		const result = mgr.build(makeContext(), BUILD_OPTS);
 		expect(result.messages).toHaveLength(1);
 		expect(result.messages[0]!.content).toBe("new");
 	});
@@ -324,7 +326,7 @@ describe("AppendOnlyContextManager", () => {
 		delete (toolWithNoDesc as any).description;
 
 		const ctx = makeContext({ tools: [toolWithNoDesc] });
-		const result = mgr.build(ctx);
+		const result = mgr.build(ctx, BUILD_OPTS);
 
 		const tool: Tool | undefined = result.tools?.[0];
 		expect(tool).toBeDefined();
@@ -335,8 +337,8 @@ describe("AppendOnlyContextManager", () => {
 		const mgr = new AppendOnlyContextManager();
 		const ctx = makeContext({ tools: [makeTool("read")] });
 
-		const r1 = mgr.build(ctx);
-		const r2 = mgr.build(ctx);
+		const r1 = mgr.build(ctx, BUILD_OPTS);
+		const r2 = mgr.build(ctx, BUILD_OPTS);
 
 		expect(r1.tools).toHaveLength(1);
 		expect(r2.tools).toHaveLength(1);
@@ -348,7 +350,7 @@ describe("AppendOnlyContextManager", () => {
 		const mgr = new AppendOnlyContextManager();
 		const ctx = makeContext({ tools: undefined as any });
 
-		const result = mgr.build(ctx);
+		const result = mgr.build(ctx, BUILD_OPTS);
 		expect(result.tools).toEqual([]);
 	});
 });
@@ -367,8 +369,8 @@ describe("fingerprint determinism", () => {
 			tools: [makeTool("read", "Read files"), makeTool("edit", "Edit files")],
 		});
 
-		p1.build(ctx);
-		p2.build(ctx);
+		p1.build(ctx, BUILD_OPTS);
+		p2.build(ctx, BUILD_OPTS);
 
 		expect(p1.fingerprint).toBe(p2.fingerprint);
 	});
@@ -378,12 +380,12 @@ describe("fingerprint determinism", () => {
 		const p2 = new StablePrefix();
 
 		const tools = [makeTool("a", "Tool A"), makeTool("b", "Tool B")];
-		p1.build(makeContext({ tools }));
+		p1.build(makeContext({ tools }), BUILD_OPTS);
 
 		// Create a context where tool b has "Tool B" too
 		// so the fingerprint changes with name order
 		const otherTools = [makeTool("b", "Tool B"), makeTool("a", "Tool A")];
-		p2.build(makeContext({ tools: otherTools }));
+		p2.build(makeContext({ tools: otherTools }), BUILD_OPTS);
 
 		expect(p1.fingerprint).not.toBe(p2.fingerprint);
 	});
@@ -394,8 +396,8 @@ describe("fingerprint determinism", () => {
 
 		// ["A", "B"] and ["A\nB"] have the same joined text but different
 		// array structure — must produce different fingerprints.
-		p1.build(makeContext({ systemPrompt: ["A", "B"] }));
-		p2.build(makeContext({ systemPrompt: ["A\nB"] }));
+		p1.build(makeContext({ systemPrompt: ["A", "B"] }), BUILD_OPTS);
+		p2.build(makeContext({ systemPrompt: ["A\nB"] }), BUILD_OPTS);
 
 		expect(p1.fingerprint).not.toBe(p2.fingerprint);
 	});
@@ -408,7 +410,7 @@ describe("fingerprint determinism", () => {
 describe("message sync", () => {
 	it("syncMessages on first call appends all messages", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext());
+		mgr.build(makeContext(), BUILD_OPTS);
 
 		const msgs: Message[] = [
 			{ role: "user", content: "Hello" },
@@ -416,7 +418,7 @@ describe("message sync", () => {
 		] as any;
 		mgr.syncMessages(msgs);
 
-		const result = mgr.build(makeContext());
+		const result = mgr.build(makeContext(), BUILD_OPTS);
 		expect(result.messages).toHaveLength(2);
 		expect(result.messages[0]!.content).toBe("Hello");
 		expect(result.messages[1]!.content).toBe("Hi");
@@ -424,24 +426,24 @@ describe("message sync", () => {
 
 	it("syncMessages on subsequent calls only appends delta", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext());
+		mgr.build(makeContext(), BUILD_OPTS);
 
 		mgr.syncMessages([{ role: "user", content: "q1" }]);
-		const r1 = mgr.build(makeContext());
+		const r1 = mgr.build(makeContext(), BUILD_OPTS);
 		expect(r1.messages).toHaveLength(1);
 
 		mgr.syncMessages([
 			{ role: "user", content: "q1" },
 			{ role: "assistant", content: "a1" },
 		]);
-		const r2 = mgr.build(makeContext());
+		const r2 = mgr.build(makeContext(), BUILD_OPTS);
 		expect(r2.messages).toHaveLength(2);
 		expect(r2.messages[1]!.content).toBe("a1");
 	});
 
 	it("syncMessages with unchanged messages is a no-op (same length, no new entries)", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext());
+		mgr.build(makeContext(), BUILD_OPTS);
 		mgr.syncMessages([{ role: "user", content: "q1" }]);
 
 		const before = mgr.log.length;
@@ -453,7 +455,7 @@ describe("message sync", () => {
 
 	it("syncMessages resets log when array shrinks (compaction)", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext());
+		mgr.build(makeContext(), BUILD_OPTS);
 
 		mgr.syncMessages([
 			{ role: "user", content: "q1" },
@@ -472,9 +474,9 @@ describe("message sync", () => {
 		const mgr = new AppendOnlyContextManager();
 
 		// First turn: build with empty context, sync first message
-		mgr.build(makeContext());
+		mgr.build(makeContext(), BUILD_OPTS);
 		mgr.syncMessages([{ role: "user", content: "turn1" }]);
-		const r1 = mgr.build(makeContext());
+		const r1 = mgr.build(makeContext(), BUILD_OPTS);
 		expect(r1.messages).toHaveLength(1);
 		expect(r1.messages[0]!.content).toBe("turn1");
 
@@ -483,27 +485,27 @@ describe("message sync", () => {
 			{ role: "user", content: "turn1" },
 			{ role: "assistant", content: "resp1" },
 		]);
-		const r2 = mgr.build(makeContext());
+		const r2 = mgr.build(makeContext(), BUILD_OPTS);
 		expect(r2.messages).toHaveLength(2);
 		expect(r2.messages[1]!.content).toBe("resp1");
 	});
 
 	it("resetSyncCursor forces full re-sync on next call", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext());
+		mgr.build(makeContext(), BUILD_OPTS);
 		mgr.syncMessages([{ role: "user", content: "old" }]);
 
 		mgr.resetSyncCursor();
 		mgr.syncMessages([{ role: "user", content: "fresh" }]);
 
-		const result = mgr.build(makeContext());
+		const result = mgr.build(makeContext(), BUILD_OPTS);
 		expect(result.messages).toHaveLength(1);
 		expect(result.messages[0]!.content).toBe("fresh");
 	});
 
 	it("detects in-place rewrite of already-synced messages", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext());
+		mgr.build(makeContext(), BUILD_OPTS);
 
 		// Sync two messages
 		mgr.syncMessages([
@@ -519,13 +521,13 @@ describe("message sync", () => {
 		]);
 		// Log should have been reset and re-synced with the new content
 		expect(mgr.log.length).toBe(2);
-		const msgs = mgr.build(makeContext()).messages;
+		const msgs = mgr.build(makeContext(), BUILD_OPTS).messages;
 		expect(msgs[1]!.content).toBe("[pruned]");
 	});
 
 	it("detects in-place rewrite via digest mismatch", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext());
+		mgr.build(makeContext(), BUILD_OPTS);
 
 		mgr.syncMessages([{ role: "user", content: "hello" }]);
 		expect(mgr.log.length).toBe(1);
@@ -533,14 +535,14 @@ describe("message sync", () => {
 		// Content changed but length same
 		mgr.syncMessages([{ role: "user", content: "world" }]);
 
-		const msgs = mgr.build(makeContext()).messages;
+		const msgs = mgr.build(makeContext(), BUILD_OPTS).messages;
 		expect(msgs).toHaveLength(1);
 		expect(msgs[0]!.content).toBe("world");
 	});
 
 	it("no-op when content unchanged", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext());
+		mgr.build(makeContext(), BUILD_OPTS);
 
 		mgr.syncMessages([
 			{ role: "user", content: "q1" },
@@ -558,21 +560,103 @@ describe("message sync", () => {
 
 	it("invalidateForModelChange resets prefix and log", () => {
 		const mgr = new AppendOnlyContextManager();
-		mgr.build(makeContext({ systemPrompt: ["Before"] }));
+		mgr.build(makeContext({ systemPrompt: ["Before"] }), BUILD_OPTS);
 		mgr.syncMessages([{ role: "user", content: "hello" }]);
 
 		mgr.invalidateForModelChange();
 
 		// Should need a fresh build — prefix was invalidated
 		const ctx = makeContext({ systemPrompt: ["After"] });
-		const result = mgr.build(ctx);
+		const result = mgr.build(ctx, BUILD_OPTS);
 		expect(result.systemPrompt).toEqual(["After"]);
 		expect(result.messages).toHaveLength(0);
 
 		// Re-sync should work cleanly
 		mgr.syncMessages([{ role: "user", content: "new turn" }]);
-		const r2 = mgr.build(ctx);
+		const r2 = mgr.build(ctx, BUILD_OPTS);
 		expect(r2.messages).toHaveLength(1);
 		expect(r2.messages[0]!.content).toBe("new turn");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Intent injection
+// ---------------------------------------------------------------------------
+
+describe("intent injection through build()", () => {
+	it("injects required `_i` into tool schemas when intentTracing is true", () => {
+		const mgr = new AppendOnlyContextManager();
+		const tool = makeTool("read", "Read", {
+			type: "object",
+			properties: { path: { type: "string" } },
+			required: ["path"],
+		});
+		const ctx = makeContext({ tools: [tool] });
+
+		const result = mgr.build(ctx, { intentTracing: true });
+		const params = result.tools?.[0]?.parameters as { properties?: Record<string, unknown>; required?: string[] };
+		expect(params?.properties).toBeDefined();
+		expect(params!.properties!._i).toBeDefined();
+		expect(params!.required).toContain("_i");
+	});
+
+	it("omits `_i` when intentTracing is false", () => {
+		const mgr = new AppendOnlyContextManager();
+		const tool = makeTool("read", "Read", {
+			type: "object",
+			properties: { path: { type: "string" } },
+			required: ["path"],
+		});
+		const ctx = makeContext({ tools: [tool] });
+
+		const result = mgr.build(ctx, { intentTracing: false });
+		const params = result.tools?.[0]?.parameters as { properties?: Record<string, unknown>; required?: string[] };
+		expect(params?.properties?._i).toBeUndefined();
+		expect(params?.required ?? []).not.toContain("_i");
+	});
+
+	it("intentTracing flip invalidates the fingerprint cache", () => {
+		const mgr = new AppendOnlyContextManager();
+		const ctx = makeContext({ tools: [makeTool("read")] });
+
+		mgr.build(ctx, { intentTracing: false });
+		const fpNoIntent = mgr.prefix.fingerprint;
+
+		mgr.build(ctx, { intentTracing: true });
+		const fpWithIntent = mgr.prefix.fingerprint;
+
+		expect(fpNoIntent).not.toBe(fpWithIntent);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Tool-call mutation detection
+// ---------------------------------------------------------------------------
+
+describe("syncMessages detects tool_calls mutation", () => {
+	it("rebuilds the log when tool_calls is mutated in place", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext(), BUILD_OPTS);
+
+		const assistant: Record<string, unknown> = {
+			role: "assistant",
+			content: null,
+			tool_calls: [{ id: "c1", type: "function", function: { name: "read", arguments: '{"path":"/a"}' } }],
+		};
+		const msgs = [{ role: "user", content: "q" }, assistant] as unknown as Message[];
+		mgr.syncMessages(msgs);
+		expect(mgr.log.length).toBe(2);
+
+		// Mutate tool_calls in place — role+content unchanged, so the old
+		// (role+content-only) digest would miss this. The full digest must catch it.
+		const tcs = assistant.tool_calls as Array<{ function: { arguments: string } }>;
+		tcs[0].function.arguments = '{"path":"/b"}';
+		mgr.syncMessages(msgs);
+
+		// Log was rebuilt → length resets to the new normalized message list length.
+		expect(mgr.log.length).toBe(2);
+		const rebuilt = mgr.log.toMessages()[1] as unknown as Record<string, unknown>;
+		const rebuiltTc = (rebuilt.tool_calls as Array<{ function: { arguments: string } }>)[0];
+		expect(rebuiltTc.function.arguments).toBe('{"path":"/b"}');
 	});
 });
