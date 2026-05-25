@@ -110,10 +110,18 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
 	) {
-		// 1. Check approval policy (before extension handlers)
-		const autoApprove = context?.autoApprove ?? false;
+		// 1. Check approval policy (before extension handlers).
+		// Resolution order:
+		//   - CLI `--auto-approve` always wins (covers automation/CI).
+		//   - `tools.approvalMode = "auto"` (default) acts the same.
+		//   - `tools.approvalMode = "prompt"` uses built-in per-tool defaults only.
+		//   - `tools.approvalMode = "custom"` layers user `tools.approval.<tool>` config on top.
+		const cliAutoApprove = context?.autoApprove === true;
 		const settings: Settings | undefined = context?.settings;
-		const userPolicies = (settings?.get("tools.approval") ?? {}) as Record<string, unknown>;
+		const approvalMode = (settings?.get("tools.approvalMode") ?? "auto") as "auto" | "prompt" | "custom";
+		const autoApprove = cliAutoApprove || approvalMode === "auto";
+		const userPolicies =
+			approvalMode === "custom" ? ((settings?.get("tools.approval") ?? {}) as Record<string, unknown>) : {};
 
 		if (!autoApprove) {
 			const approvalCheck = requiresApproval(this.tool.name, params, userPolicies);
@@ -125,7 +133,8 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 						`Tool "${this.tool.name}" requires approval but no interactive UI available.\n` +
 							`Options:\n` +
 							`  1. Use --auto-approve flag\n` +
-							`  2. Add to config: tools.approval.${this.tool.name}: allow`,
+							`  2. Set tools.approvalMode: auto in /settings (default)\n` +
+							`  3. Set tools.approvalMode: custom and add tools.approval.${this.tool.name}: allow to config`,
 					);
 				}
 
