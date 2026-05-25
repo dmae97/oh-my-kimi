@@ -974,7 +974,7 @@ async fn read_output_bytes(
 // Rescan-and-signal loop for cancellation. Each pass picks up descendants
 // spawned during the previous wave's grace period, then exits as soon as no
 // targets remain so unrelated later commands are not swept into old cancels.
-async fn terminate_new_descendants<S: std::hash::BuildHasher>(baseline: &HashSet<i32, S>) {
+async fn terminate_new_descendants<S: std::hash::BuildHasher + Sync>(baseline: &HashSet<i32, S>) {
 	const WAVES: u32 = 3;
 	for wave in 0..WAVES {
 		let mut targets = process::TerminationTargets::new();
