@@ -23,15 +23,26 @@ export interface ResizedImage {
 // binding constraint once images are downsized to 1568px (Anthropic's internal threshold).
 const DEFAULT_MAX_BYTES = 500 * 1024;
 
-const DEFAULT_OPTIONS: Required<ImageResizeOptions> = {
+const DEFAULT_OPTIONS: Required<Omit<ImageResizeOptions, "excludeWebP">> = {
 	// Anthropic's "internal recommended size" — Claude internally caps images at
 	// 1568px on the longest edge before vision processing.
 	maxWidth: 1568,
 	maxHeight: 1568,
 	maxBytes: DEFAULT_MAX_BYTES,
 	jpegQuality: 80,
-	excludeWebP: Bun.env.OMP_NO_WEBP !== undefined,
 };
+
+/**
+ * Read `OMP_NO_WEBP` per-call so runtime toggles take effect.
+ * Only `"1"` and `"true"` (case-insensitive) enable exclusion — an empty string
+ * or `"0"` MUST be treated as disabled.
+ */
+function isWebPExcluded(): boolean {
+	const raw = Bun.env.OMP_NO_WEBP;
+	if (raw === undefined) return false;
+	const v = raw.toLowerCase();
+	return v === "1" || v === "true";
+}
 
 /** Pick the smallest of N encoded buffers. */
 function pickSmallest(...candidates: Array<{ buffer: Uint8Array; mimeType: string }>): {
@@ -62,7 +73,8 @@ Buffer.prototype.toBase64 = function (this: Buffer) {
  * off the JS thread when the terminal (`.bytes()`) is awaited.
  */
 export async function resizeImage(img: ImageContent, options?: ImageResizeOptions): Promise<ResizedImage> {
-	const opts = { ...DEFAULT_OPTIONS, ...options };
+	const excludeWebP = options?.excludeWebP ?? isWebPExcluded();
+	const opts = { ...DEFAULT_OPTIONS, ...options, excludeWebP };
 	const inputBuffer = Buffer.from(img.data, "base64");
 
 	try {
@@ -75,7 +87,12 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 		// still get JPEG-compressed.
 		const originalSize = inputBuffer.length;
 		const comfortableSize = opts.maxBytes / 4;
-		if (originalWidth <= opts.maxWidth && originalHeight <= opts.maxHeight && originalSize <= comfortableSize) {
+		if (
+			originalWidth <= opts.maxWidth &&
+			originalHeight <= opts.maxHeight &&
+			originalSize <= comfortableSize &&
+			!(opts.excludeWebP && sourceMime === "image/webp")
+		) {
 			return {
 				buffer: inputBuffer,
 				mimeType: sourceMime,
@@ -251,7 +268,13 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 			},
 		};
 	} catch {
-		// Failed to load image
+		// Bun.Image rejected the input — we cannot decode/re-encode it.
+		// When the caller demanded WebP exclusion AND the original is WebP,
+		// returning the original buffer would silently violate that contract,
+		// so surface an explicit error instead.
+		if (excludeWebP && (img.mimeType === "image/webp" || !img.mimeType)) {
+			throw new Error("resizeImage: failed to decode image and cannot honor excludeWebP for a WebP source");
+		}
 		return {
 			buffer: inputBuffer,
 			mimeType: img.mimeType,
