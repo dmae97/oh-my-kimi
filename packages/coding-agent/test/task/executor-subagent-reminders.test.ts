@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { AgentTelemetryConfig, Tracer } from "@oh-my-pi/pi-agent-core";
+import { AgentBusyError, type AgentTelemetryConfig, type Tracer } from "@oh-my-pi/pi-agent-core";
 import { type AssistantMessage, Effort } from "@oh-my-pi/pi-ai";
 import { Settings } from "../../src/config/settings";
-import type { LoadExtensionsResult } from "../../src/extensibility/extensions/types";
+import type { ExtensionActions, LoadExtensionsResult } from "../../src/extensibility/extensions/types";
 import type { CreateAgentSessionResult } from "../../src/sdk";
 import * as sdkModule from "../../src/sdk";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "../../src/session/agent-session";
@@ -113,6 +113,61 @@ describe("runSubprocess yield reminders", () => {
 		modelRegistry: { refresh: async () => {} } as unknown as import("../../src/config/model-registry").ModelRegistry,
 		enableLsp: false,
 	};
+
+	it("waits for session_start extension user messages before prompting the subagent", async () => {
+		let extensionSendUserMessage: ExtensionActions["sendUserMessage"] | undefined;
+		let messageInFlight = false;
+		let sendStarted = false;
+
+		const session = createMockSession(({ emit }) => {
+			if (messageInFlight) {
+				throw new AgentBusyError();
+			}
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-extension-session-start",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+		const mutableSession = session as unknown as {
+			extensionRunner: NonNullable<AgentSession["extensionRunner"]>;
+			sendUserMessage: AgentSession["sendUserMessage"];
+		};
+		mutableSession.sendUserMessage = async () => {
+			sendStarted = true;
+			messageInFlight = true;
+			await Bun.sleep(20);
+			messageInFlight = false;
+		};
+		mutableSession.extensionRunner = {
+			initialize: (actions: ExtensionActions) => {
+				extensionSendUserMessage = actions.sendUserMessage;
+			},
+			onError: () => {},
+			emit: async (event: { type: string }) => {
+				if (event.type === "session_start") {
+					extensionSendUserMessage?.("hello from session_start", { deliverAs: "followUp" });
+				}
+				return undefined;
+			},
+		} as unknown as NonNullable<AgentSession["extensionRunner"]>;
+
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-session-start-extension",
+		});
+
+		expect(sendStarted).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.error).toBeUndefined();
+	});
 
 	it("skips modelRegistry.refresh when reusing the parent registry", async () => {
 		const session = createMockSession(({ emit }) => {
