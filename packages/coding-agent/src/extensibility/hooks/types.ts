@@ -139,9 +139,16 @@ export interface HookUIContext {
 	 * Supports Ctrl+G to open external editor ($VISUAL or $EDITOR).
 	 * @param title - Title describing what is being edited
 	 * @param prefill - Optional initial text
+	 * @param options - Optional dialog controls such as an abort signal
+	 * @param editorOptions - Optional editor behavior; `promptStyle` makes Enter submit and Shift+Enter insert a newline
 	 * @returns Edited text, or undefined if cancelled (Escape)
 	 */
-	editor(title: string, prefill?: string, options?: { signal?: AbortSignal }): Promise<string | undefined>;
+	editor(
+		title: string,
+		prefill?: string,
+		options?: { signal?: AbortSignal },
+		editorOptions?: { promptStyle?: boolean },
+	): Promise<string | undefined>;
 
 	/**
 	 * Get the current theme for styling text with ANSI codes.

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/review` custom prompt orchestration text to use static prompt templates and consistently instruct reviewer task delegation.
+- Fixed `/review` custom-instructions submission on terminals that cannot distinguish Ctrl+Enter by using prompt-style input where Enter submits and Shift+Enter inserts a newline.
+- Fixed hook editor submissions sending large-paste placeholders such as `[paste #1 +27 lines]` instead of the pasted content.
+
 ## [15.3.2] - 2026-05-25
 ### Added
 
