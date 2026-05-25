@@ -68,7 +68,8 @@ export interface KagiV1SearchData {
 /** V1 success response */
 export interface KagiV1SearchResponse {
 	meta?: {
-		id: string;
+		trace: string;
+    ms: number
 	};
 	data?: KagiV1SearchData;
 	error?: KagiV1ErrorEntry[];
@@ -328,7 +329,7 @@ export async function searchWithKagiV1(query: string, options: KagiV1SearchOptio
 	}
 
 	return {
-		requestId: payload.meta?.id ?? "",
+		requestId: payload.meta?.trace ?? "",
 		sources,
 		relatedQuestions,
 		answer,

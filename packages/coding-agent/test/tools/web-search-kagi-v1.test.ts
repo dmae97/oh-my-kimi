@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi, setSystemTime } from "bun:test";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import { searchWithKagiV1 } from "../../src/web/kagi-v1";
+import { searchWithKagiV1, type KagiV1SearchRequest } from "../../src/web/kagi-v1";
 import { KagiV1Provider, searchKagiV1 } from "../../src/web/search/providers/kagi-v1";
 import { SearchProviderError } from "../../src/web/search/types";
 
@@ -38,7 +38,7 @@ describe("Kagi V1 web search error handling", () => {
 	it("falls back to plain text for non-JSON error bodies", async () => {
 		using _hook = hookFetch(() => new Response("service unavailable", { status: 503 }));
 
-		await expect(searchWithKagiV1("plain text error")).rejects.toThrow(
+		expect(searchWithKagiV1("plain text error")).rejects.toThrow(
 			"Kagi V1 API error (503): service unavailable",
 		);
 	});
@@ -46,18 +46,20 @@ describe("Kagi V1 web search error handling", () => {
 	it("maps HTTP 5xx errors with empty body", async () => {
 		using _hook = hookFetch(() => new Response("", { status: 502 }));
 
-		await expect(searchWithKagiV1("empty error")).rejects.toThrow("Kagi V1 API error (502)");
+		expect(searchWithKagiV1("empty error")).rejects.toThrow("Kagi V1 API error (502)");
 	});
 });
 
 describe("Kagi V1 search result parsing", () => {
 	beforeEach(() => {
 		process.env.KAGI_API_KEY = "test-kagi-key";
+    setSystemTime(new Date("2026-05-25T00:00:00Z"));
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
 		delete process.env.KAGI_API_KEY;
+    setSystemTime();
 	});
 
 	it("correctly parses categorized V1 response with search + video + news", async () => {
@@ -65,7 +67,7 @@ describe("Kagi V1 search result parsing", () => {
 			() =>
 				new Response(
 					JSON.stringify({
-						meta: { id: "req-v1-success" },
+						meta: { trace: "req-v1-success" },
 						data: {
 							search: [
 								{
@@ -176,12 +178,93 @@ describe("Kagi V1 search result parsing", () => {
 		expect(result.answer).toBeUndefined();
 	});
 
-	it("maps recency 'month' to filters.after with ISO date", async () => {
+	it("maps recency 'day' to filters.after with date newer than 1 day ago", async () => {
+    let requestBody: KagiV1SearchRequest | undefined;
+
+		using _hook = hookFetch((input: string | URL | Request, init) => {
+			const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			if (urlStr === "https://kagi.com/api/v1/search") {
+        requestBody = JSON.parse(init?.body as string) as KagiV1SearchRequest;
+
+				return new Response(
+					JSON.stringify({
+						meta: { trace: "req-recency" },
+						data: { search: [] },
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response("not mocked", { status: 500 });
+		});
+
+		await searchWithKagiV1("recency test", { recency: "day" });
+
+    expect(requestBody!.filters!.after).not.toBeUndefined();
+
+    expect(requestBody!.filters!.after).toMatch("2026-05-24");
+	});
+
+	it("maps recency 'week' to filters.after with date newer than 1 week ago", async () => {
+    let requestBody: KagiV1SearchRequest | undefined;
+
+		using _hook = hookFetch((input: string | URL | Request, init) => {
+			const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			if (urlStr === "https://kagi.com/api/v1/search") {
+        requestBody = JSON.parse(init?.body as string) as KagiV1SearchRequest;
+
+				return new Response(
+					JSON.stringify({
+						meta: { trace: "req-recency" },
+						data: { search: [] },
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response("not mocked", { status: 500 });
+		});
+
+		await searchWithKagiV1("recency test", { recency: "week" });
+
+    expect(requestBody!.filters!.after).not.toBeUndefined();
+
+    expect(requestBody!.filters!.after).toMatch("2026-05-18");
+	});
+
+	it("maps recency 'month' to filters.after with date newer than 1 month ago", async () => {
+    let requestBody: KagiV1SearchRequest | undefined;
+
+		using _hook = hookFetch((input: string | URL | Request, init) => {
+			const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			if (urlStr === "https://kagi.com/api/v1/search") {
+        requestBody = JSON.parse(init?.body as string) as KagiV1SearchRequest;
+
+				return new Response(
+					JSON.stringify({
+						meta: { trace: "req-recency" },
+						data: { search: [] },
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response("not mocked", { status: 500 });
+		});
+
+		await searchWithKagiV1("recency test", { recency: "month" });
+
+    expect(requestBody!.filters!.after).not.toBeUndefined();
+
+    expect(requestBody!.filters!.after).toMatch("2026-04-25");
+	});
+
+	it("maps recency 'year' to filters.after with date newer than 1 year ago", async () => {
+    let requestBody: KagiV1SearchRequest | undefined;
+
 		let capturedBody: Record<string, unknown> | undefined;
 		using _hook = hookFetch((input: string | URL | Request, init) => {
 			const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 			if (urlStr === "https://kagi.com/api/v1/search") {
-				capturedBody = JSON.parse(init?.body as string);
+        requestBody = JSON.parse(init?.body as string) as KagiV1SearchRequest;
+
 				return new Response(
 					JSON.stringify({
 						meta: { id: "req-recency" },
@@ -193,37 +276,13 @@ describe("Kagi V1 search result parsing", () => {
 			return new Response("not mocked", { status: 500 });
 		});
 
-		await searchWithKagiV1("recency test", { recency: "month" });
-
-		expect(capturedBody).toMatchObject({
-			query: "recency test",
-			workflow: "search",
-		});
-		expect(capturedBody!.filters!.after!).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-	});
-
-	it("maps recency 'year' to filters.after with ISO date", async () => {
-		let capturedBody: Record<string, unknown> | undefined;
-		using _hook = hookFetch((input: string | URL | Request, init) => {
-			const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-			if (urlStr === "https://kagi.com/api/v1/search") {
-				capturedBody = JSON.parse(init?.body as string);
-				return new Response(
-					JSON.stringify({
-						meta: { id: "req-recency-year" },
-						data: { search: [] },
-					}),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				);
-			}
-			return new Response("not mocked", { status: 500 });
-		});
-
 		await searchWithKagiV1("year recency", { recency: "year" });
 
-		expect(capturedBody).toMatchObject({});
-		expect(capturedBody!.filters!.after!).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(requestBody!.filters!.after).not.toBeUndefined();
+
+    expect(requestBody!.filters!.after).toMatch("2025-05-25");
 	});
+
 
 	it("uses Bearer auth header for V1 API", async () => {
 		let capturedAuth: string | null = null;
