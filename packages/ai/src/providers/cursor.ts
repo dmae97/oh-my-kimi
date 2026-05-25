@@ -104,6 +104,8 @@ import {
 	RequestContextSchema,
 	RequestContextSuccessSchema,
 	ResumeActionSchema,
+	SelectedContextSchema,
+	SelectedImageSchema,
 	SetBlobResultSchema,
 	type ShellArgs,
 	ShellFailureSchema,
@@ -2302,6 +2304,35 @@ function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint
 
 	return turns;
 }
+function createCursorUserMessage(content: string | (TextContent | ImageContent)[], text: string) {
+	const images = typeof content === "string" ? [] : extractImages(content);
+	return create(UserMessageSchema, {
+		text,
+		messageId: crypto.randomUUID(),
+		...(images.length > 0
+			? {
+					selectedContext: create(SelectedContextSchema, {
+						selectedImages: images,
+					}),
+				}
+			: {}),
+	});
+}
+
+function extractImages(content: (TextContent | ImageContent)[]) {
+	return content
+		.filter((item): item is ImageContent => item.type === "image")
+		.map(image =>
+			create(SelectedImageSchema, {
+				uuid: crypto.randomUUID(),
+				mimeType: image.mimeType,
+				dataOrBlobId: {
+					case: "data",
+					value: Uint8Array.from(Buffer.from(image.data, "base64")),
+				},
+			}),
+		);
+}
 
 function buildGrpcRequest(
 	model: Model<"cursor-agent">,
@@ -2324,23 +2355,26 @@ function buildGrpcRequest(
 	);
 
 	const lastMessage = context.messages[context.messages.length - 1];
-	const userText =
-		lastMessage?.role === "user" || lastMessage?.role === "developer"
-			? typeof lastMessage.content === "string"
-				? lastMessage.content.trim()
-				: extractText(lastMessage.content)
-			: "";
+	let userContent: string | (TextContent | ImageContent)[] | undefined;
+	let userText = "";
+	let hasUserImages = false;
+	if (lastMessage?.role === "user" || lastMessage?.role === "developer") {
+		userContent = lastMessage.content;
+		if (typeof userContent === "string") {
+			userText = userContent.trim();
+		} else {
+			userText = extractText(userContent);
+			hasUserImages = hasImages(userContent);
+		}
+	}
 
 	const action = create(ConversationActionSchema, {
 		action:
-			userText.trim().length > 0
+			userContent && (userText.trim().length > 0 || hasUserImages)
 				? {
 						case: "userMessageAction",
 						value: create(UserMessageActionSchema, {
-							userMessage: create(UserMessageSchema, {
-								text: userText,
-								messageId: crypto.randomUUID(),
-							}),
+							userMessage: createCursorUserMessage(userContent, userText),
 						}),
 					}
 				: {
@@ -2434,6 +2468,9 @@ function buildGrpcRequest(
 	return { requestBytes, blobStore, conversationState };
 }
 
+function hasImages(content: (TextContent | ImageContent)[]): boolean {
+	return content.some(item => item.type === "image");
+}
 function extractText(content: (TextContent | ImageContent)[]): string {
 	return content
 		.filter((c): c is TextContent => c.type === "text")

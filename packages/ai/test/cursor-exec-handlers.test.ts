@@ -116,4 +116,30 @@ describe("Cursor request action encoding", () => {
 
 		expect(payload.action?.action.case).toBe("userMessageAction");
 	});
+
+	it("uses a user message action with selected context for image-only user turns", async () => {
+		const imageData = "aW1hZ2U=";
+		const payload = await captureCursorPayload({
+			messages: [
+				{
+					role: "user",
+					content: [{ type: "image", data: imageData, mimeType: "image/png" }],
+					timestamp: 0,
+				},
+			],
+		});
+
+		if (payload.action?.action.case !== "userMessageAction") {
+			throw new Error("Expected Cursor userMessageAction");
+		}
+		const userMessage = payload.action.action.value.userMessage;
+		expect(userMessage?.text).toBe("");
+		expect(userMessage?.selectedContext?.selectedImages).toHaveLength(1);
+		const selectedImage = userMessage?.selectedContext?.selectedImages[0];
+		expect(selectedImage?.mimeType).toBe("image/png");
+		if (!selectedImage || selectedImage.dataOrBlobId.case !== "data") {
+			throw new Error("Expected Cursor selected image data");
+		}
+		expect(Array.from(selectedImage.dataOrBlobId.value)).toEqual(Array.from(Buffer.from(imageData, "base64")));
+	});
 });
