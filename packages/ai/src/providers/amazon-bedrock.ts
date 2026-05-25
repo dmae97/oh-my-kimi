@@ -37,6 +37,8 @@ import { decodeEventStream } from "./aws-eventstream";
 import { signRequest } from "./aws-sigv4";
 import { transformMessages } from "./transform-messages";
 
+export type BedrockThinkingDisplay = "summarized" | "omitted";
+
 export interface BedrockOptions extends StreamOptions {
 	region?: string;
 	profile?: string;
@@ -47,6 +49,19 @@ export interface BedrockOptions extends StreamOptions {
 	thinkingBudgets?: ThinkingBudgets;
 	/* Only supported by Claude 4.x models, see https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html#claude-messages-extended-thinking-tool-use-interleaved */
 	interleavedThinking?: boolean;
+	/**
+	 * Controls how Claude returns thinking content in Bedrock responses.
+	 * - `"summarized"`: thinking blocks include human-readable summaries (default here).
+	 * - `"omitted"`: thinking content is suppressed; the encrypted signature still
+	 *   travels back for multi-turn continuity.
+	 *
+	 * Starting with Claude Opus 4.7 the Anthropic API default is `"omitted"`, which
+	 * leaves callers waiting on a silent stream during long reasoning runs (issue
+	 * #1373). We default to `"summarized"` so adaptive-thinking models that accept
+	 * the field keep producing visible thinking deltas. Older adaptive-thinking
+	 * models (Opus 4.6, Sonnet 4.6+) reject the field, so we omit it for them.
+	 */
+	thinkingDisplay?: BedrockThinkingDisplay;
 }
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
@@ -753,8 +768,16 @@ function buildAdditionalModelRequestFields(
 	const mode = model.thinking?.mode;
 	if (mode === "anthropic-adaptive") {
 		const effort = mapEffortToAnthropicAdaptiveEffort(model, reasoning);
+		// Starting with Claude Opus 4.7, Anthropic switched the adaptive-thinking
+		// default to "omitted", which silently suppresses streamed reasoning and
+		// can read as a stalled stream during long reasoning runs (issue #1373).
+		// Opt back into "summarized" by default on models that accept the field.
+		const adaptive: { type: "adaptive"; display?: BedrockThinkingDisplay } = { type: "adaptive" };
+		if (supportsAdaptiveThinkingDisplay(model.id)) {
+			adaptive.display = options.thinkingDisplay ?? "summarized";
+		}
 		return {
-			thinking: { type: "adaptive" },
+			thinking: adaptive,
 			output_config: { effort },
 		};
 	}
@@ -770,7 +793,11 @@ function buildAdditionalModelRequestFields(
 	const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[level];
 
 	const result: Record<string, unknown> = {
-		thinking: { type: "enabled", budget_tokens: budget },
+		thinking: {
+			type: "enabled",
+			budget_tokens: budget,
+			display: options.thinkingDisplay ?? "summarized",
+		},
 	};
 
 	if (options.interleavedThinking) {
@@ -778,6 +805,21 @@ function buildAdditionalModelRequestFields(
 	}
 
 	return result;
+}
+
+/**
+ * Adaptive thinking `display` is supported starting with Claude Opus 4.7.
+ * Older adaptive-thinking models (Opus 4.6, Sonnet 4.6+) reject the field.
+ * Bedrock model ids are prefixed with region/inference-profile slugs (e.g.
+ * `eu.anthropic.claude-opus-4-7-...`); the regex matches the `claude-opus-X-Y`
+ * fragment regardless of prefix.
+ */
+function supportsAdaptiveThinkingDisplay(modelId: string): boolean {
+	const match = /claude-opus-(\d+)-(\d+)/.exec(modelId);
+	if (!match) return false;
+	const major = Number(match[1]);
+	const minor = Number(match[2]);
+	return major > 4 || (major === 4 && minor >= 7);
 }
 
 /**
