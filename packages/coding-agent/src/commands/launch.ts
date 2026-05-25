@@ -120,6 +120,10 @@ export default class Index extends Command {
 		"no-title": Flags.boolean({
 			description: "Disable title auto-generation",
 		}),
+		"auto-approve": Flags.boolean({
+			aliases: ["yolo"],
+			description: "Auto-approve all tool calls (skip approval prompts)",
+		}),
 	};
 
 	static examples = [

@@ -151,6 +151,12 @@
 - Fixed `/review` custom prompt orchestration text to use static prompt templates and consistently instruct reviewer task delegation.
 - Fixed `/review` custom-instructions submission on terminals that cannot distinguish Ctrl+Enter by using prompt-style input where Enter submits and Shift+Enter inserts a newline.
 - Fixed hook editor submissions sending large-paste placeholders such as `[paste #1 +27 lines]` instead of the pasted content.
+- Added per-tool approval policies with a `--auto-approve` (alias `--yolo`) CLI flag to bypass confirmation prompts for automation. Each tool call resolves a policy of `allow` / `deny` / `prompt` via a six-level lookup: overriding action exceptions, validated user config, non-overriding action exceptions, built-in defaults, validated user `_default`, and a system `prompt` fallback.
+- Added `tools.approval.<toolName>: allow | deny | prompt` user config support via the settings schema. Invalid values (non-strings, unknown literals) are now ignored and fall through to the built-in default instead of being silently honoured — preventing a typo from locking the user out of a tool or bypassing approval for one.
+- Added action-based exception registry covering LSP read-only actions (`diagnostics`/`definition`/`references`/etc. → `allow`), DAP debug inspection actions (`threads`/`stack_trace`/`variables`/`scopes`/`read_memory`/etc. → `allow`), and critical bash patterns (`rm -rf /`, `sudo rm`, fork bombs, `chmod -R 777 /`, `chown -R user /`, `curl ... | bash`, `bash <(curl ...)`, writes to `/etc/passwd|shadow|sudoers`, `shutdown`/`reboot`/`halt`/`init 0`/`kill -9 1`, `nc -e`/`nc -c` reverse shells → always `prompt`, even when bash is user-allowed).
+- Added approval check in `ExtensionToolWrapper.execute()` ahead of extension `tool_call` handlers, with an actionable error in non-interactive sessions (`--auto-approve` / `tools.approval.<tool>: allow` guidance).
+- Added MCP-tool labelling and bash/ssh command truncation in the approval prompt so `mcp__<server>__<tool>` calls are tagged as MCP server tools and a heredoc-sized command body doesn't blow out the confirmation dialog.
+- Added `docs/approval-mode.md` user guide and a 57-case unit suite covering the resolution order, every critical-bash pattern (with benign-keyword negatives to lock false-positives out), user-config validation, and prompt formatting.
 
 ## [15.3.2] - 2026-05-25
 ### Added

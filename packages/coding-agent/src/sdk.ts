@@ -343,6 +343,9 @@ export interface CreateAgentSessionOptions {
 	 * `@opentelemetry/api` package returns a no-op tracer in that case.
 	 */
 	telemetry?: AgentTelemetryConfig;
+
+	/** Whether to auto-approve all tool calls (--auto-approve CLI flag). Default: false */
+	autoApprove?: boolean;
 }
 
 /** Result from createAgentSession */
@@ -1490,6 +1493,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				session.abort();
 			},
 			settings,
+			autoApprove: options.autoApprove ?? false,
 		});
 		const toolContextStore = new ToolContextStore(getSessionContext);
 

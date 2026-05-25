@@ -1789,6 +1789,18 @@ export const SETTINGS_SCHEMA = {
 	// Tools
 	// ────────────────────────────────────────────────────────────────────────
 
+	// Tool approval policies
+	"tools.approval": {
+		type: "record",
+		default: {},
+		ui: {
+			tab: "tools",
+			label: "Tool Approval Policies",
+			description:
+				"Per-tool approval policies. Set to 'allow' to auto-approve, 'prompt' to require confirmation, or 'deny' to block. Use '_default' for fallback policy for unknown tools.",
+		},
+	},
+
 	// Todo tool
 	"todo.enabled": {
 		type: "boolean",
