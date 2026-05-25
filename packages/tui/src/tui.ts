@@ -1204,19 +1204,12 @@ export class TUI extends Container {
 		}
 
 		// Differential rendering can only touch what was actually visible.
-		// Default: full redraw so scrollback matches the new transcript state.
-		// Opt-in (PI_TUI_PRESERVE_SCROLLBACK=1): clamp firstChanged to the viewport
-		// top so the differential renderer stays within reachable rows, preserving
-		// the user's scroll position at the cost of momentarily stale scrollback.
+		// Any change above the previous viewport requires a full redraw so terminal
+		// scrollback ends up consistent with the new transcript state.
 		if (firstChanged < prevViewportTop) {
-			if (process.env.PI_TUI_PRESERVE_SCROLLBACK === "1") {
-				logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop}), clamping`);
-				firstChanged = prevViewportTop;
-			} else {
-				logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
-				fullRender(true);
-				return;
-			}
+			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
+			fullRender(true);
+			return;
 		}
 
 		// Render from first changed line to end
