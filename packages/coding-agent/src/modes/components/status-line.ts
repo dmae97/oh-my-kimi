@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatCount, getProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
@@ -6,7 +7,6 @@ import { settings } from "../../config/settings";
 import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../config/settings-schema";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
-import { estimateTokens } from "../../session/compaction/compaction";
 import * as git from "../../utils/git";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../utils/session-color";
 import { sanitizeStatusText } from "../shared";
@@ -73,10 +73,6 @@ export class StatusLineComponent implements Component {
 	#defaultBranch?: string;
 	#lastTokensPerSecond: number | null = null;
 	#lastTokensPerSecondTimestamp: number | null = null;
-
-	// Context breakdown caching (2s TTL — aligns with /context command output)
-	#cachedBreakdown: { usedTokens: number; contextWindow: number } | null = null;
-	#breakdownFetchedAt = 0;
 
 	// Anthropic usage caching (5-min TTL, OAuth/sub only)
 	#cachedUsage: {
@@ -333,19 +329,6 @@ export class StatusLineComponent implements Component {
 		}
 
 		return null;
-	}
-
-	#getCachedContextBreakdown(): { usedTokens: number; contextWindow: number } {
-		const now = Date.now();
-		if (!this.#cachedBreakdown || now - this.#breakdownFetchedAt > 2_000) {
-			const breakdown = computeContextBreakdown(this.session);
-			this.#cachedBreakdown = {
-				usedTokens: breakdown.usedTokens,
-				contextWindow: breakdown.contextWindow,
-			};
-			this.#breakdownFetchedAt = now;
-		}
-		return this.#cachedBreakdown;
 	}
 
 	#refreshUsageInBackground(): void {
