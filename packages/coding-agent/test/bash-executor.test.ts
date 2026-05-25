@@ -6,6 +6,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { executeBash } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
+import * as piNatives from "@oh-my-pi/pi-natives";
 
 // Matches the schema default for `tools.artifactHeadBytes` (20 KB) used by
 // OutputSink when bash-executor pulls settings via resolveOutputSinkHeadBytes.
@@ -162,6 +163,69 @@ describe("executeBash", () => {
 		const result = await promise;
 		expect(result.cancelled).toBe(true);
 		expect(result.output).toContain("Command cancelled");
+	});
+
+	it("returns promptly when native abort cleanup stalls", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
+			onChunk?.(null, "started\n");
+			return new Promise(() => {});
+		});
+		const abortSpy = vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+
+		const controller = new AbortController();
+		const promise = executeBash("sleep 10", {
+			cwd: tempDir,
+			timeout: 5000,
+			signal: controller.signal,
+			sessionKey: "hung-native-abort",
+		});
+		await Bun.sleep(50);
+		controller.abort();
+
+		const raced = await Promise.race([
+			promise.then(result => ({ type: "result" as const, result })),
+			Bun.sleep(750).then(() => ({ type: "timeout" as const })),
+		]);
+
+		expect(raced.type).toBe("result");
+		if (raced.type === "result") {
+			expect(raced.result.cancelled).toBe(true);
+			expect(raced.result.output).toContain("Command cancelled");
+		}
+		expect(abortSpy).toHaveBeenCalled();
+	});
+
+	it("returns at the JavaScript timeout when native timeout cleanup stalls", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
+			onChunk?.(null, "started\n");
+			return new Promise(() => {});
+		});
+		const abortSpy = vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+
+		const promise = executeBash("sleep 10", {
+			cwd: tempDir,
+			timeout: 1000,
+			sessionKey: "hung-native-timeout",
+		});
+		const raced = await Promise.race([
+			promise.then(result => ({ type: "result" as const, result })),
+			Bun.sleep(1500).then(() => ({ type: "timeout" as const })),
+		]);
+
+		expect(raced.type).toBe("result");
+		if (raced.type === "result") {
+			expect(raced.result.cancelled).toBe(true);
+			expect(raced.result.output).toContain("Command timed out after 1 seconds");
+		}
+		expect(abortSpy).toHaveBeenCalled();
 	});
 
 	it("aborts before follow-up output", async () => {
