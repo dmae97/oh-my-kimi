@@ -179,7 +179,16 @@ export class AuthBrokerClient {
 		if (!response.body) {
 			throw new AuthBrokerError("Auth broker stream response had no body", { status: response.status });
 		}
+		const contentType = response.headers.get("content-type")?.toLowerCase();
+		if (contentType?.split(";", 1)[0].trim() !== "text/event-stream") {
+			await response.body.cancel().catch(() => {});
+			throw new AuthBrokerError("Auth broker stream returned non-SSE response", {
+				status: response.status,
+				body: contentType ?? "",
+			});
+		}
 
+		let sawFirstEvent = false;
 		for await (const sse of readSseEvents(response.body, opts.signal)) {
 			if (sse.event === null && sse.data === "") continue; // keepalive comment frames
 			let parsed: unknown;
@@ -197,7 +206,22 @@ export class AuthBrokerClient {
 					body: validated.error.message,
 				});
 			}
-			yield validated.data;
+			const event = validated.data;
+			if (!sawFirstEvent) {
+				sawFirstEvent = true;
+				if (event.kind !== "snapshot") {
+					throw new AuthBrokerError("Auth broker stream did not start with snapshot", { body: sse.data });
+				}
+			}
+			yield event;
+		}
+		if (!opts.signal?.aborted) {
+			throw new AuthBrokerError(
+				sawFirstEvent
+					? "Auth broker stream ended unexpectedly"
+					: "Auth broker stream ended before initial snapshot",
+				{ status: response.status },
+			);
 		}
 	}
 
