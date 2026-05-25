@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { buildCursorSystemPromptJsons, resolveExecHandler, streamCursor } from "../src/providers/cursor";
+import {
+	buildCursorHistoryForTest,
+	buildCursorSystemPromptJsons,
+	resolveExecHandler,
+	streamCursor,
+} from "../src/providers/cursor";
 import type { AgentRunRequest } from "../src/providers/cursor/gen/agent_pb";
 import type { Context, Model } from "../src/types";
 
@@ -141,5 +146,59 @@ describe("Cursor request action encoding", () => {
 			throw new Error("Expected Cursor selected image data");
 		}
 		expect(Array.from(selectedImage.dataOrBlobId.value)).toEqual(Array.from(Buffer.from(imageData, "base64")));
+	});
+});
+
+describe("Cursor history encoding", () => {
+	it("preserves image-only user turns in root prompt history and conversation turns", () => {
+		const imageData = "aW1hZ2U=";
+		const history = buildCursorHistoryForTest([
+			{
+				role: "user",
+				content: [{ type: "image", data: imageData, mimeType: "image/png" }],
+				timestamp: 0,
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "I can see it." }],
+				api: "cursor-agent",
+				provider: "cursor",
+				model: "cursor-composer-2.5",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: 0,
+			},
+			{ role: "user", content: "what is in the image?", timestamp: 0 },
+		]);
+
+		expect(history.rootPromptMessagesJson).toEqual([
+			{
+				role: "user",
+				content: [{ type: "image", image: imageData, mediaType: "image/png" }],
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "I can see it." }],
+			},
+		]);
+		expect(history.turnUserMessagesJson).toEqual([
+			expect.objectContaining({
+				selectedContext: {
+					selectedImages: [
+						expect.objectContaining({
+							mimeType: "image/png",
+							data: imageData,
+						}),
+					],
+				},
+			}),
+		]);
 	});
 });
