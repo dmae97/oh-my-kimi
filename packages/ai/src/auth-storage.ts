@@ -2563,11 +2563,13 @@ export class AuthStorage {
 						credentialId,
 						options?.signal,
 					);
-					candidate.selection.credential = {
+					const updated: OAuthCredential = {
 						...candidate.selection.credential,
 						...refreshedCredentials,
 						type: "oauth",
 					};
+					candidate.selection.credential = updated;
+					this.#replaceCredentialAt(provider, candidate.selection.index, updated);
 				} catch {}
 			}),
 		);

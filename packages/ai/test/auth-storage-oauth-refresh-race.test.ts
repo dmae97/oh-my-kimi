@@ -35,6 +35,7 @@ describe("AuthStorage OAuth refresh race", () => {
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
+		oauthUtils.unregisterOAuthProviders("auth-storage-oauth-refresh-race-test");
 		store?.close();
 		store = null;
 		authStorage = null;
