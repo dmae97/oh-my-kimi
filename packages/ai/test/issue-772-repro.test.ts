@@ -5,7 +5,6 @@ import { xiaomiModelManagerOptions } from "../src/provider-models/openai-compat"
 import { loginXiaomi } from "../src/utils/oauth/xiaomi";
 
 const TOKEN_PLAN_SGP_HOST = "token-plan-sgp.xiaomimimo.com";
-const TOKEN_PLAN_AMS_HOST = "token-plan-ams.xiaomimimo.com";
 const STANDARD_HOST = "api.xiaomimimo.com";
 
 describe("issue-772: Xiaomi MiMo token-plan (tp-) keys", () => {

@@ -82,13 +82,6 @@ export function computeNonMessageTokens(session: AgentSession): number {
 	return systemPromptTokens + systemContextTokens + toolsTokens + skillsTokens;
 }
 
-function estimateMessagesTokens(session: AgentSession): number {
-	let total = 0;
-	for (const message of session.messages) {
-		total += estimateTokens(message);
-	}
-	return total;
-}
 /**
  * Compute a breakdown of estimated context usage by category for the active
  * session and model.
