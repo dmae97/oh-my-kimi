@@ -609,10 +609,7 @@ function renderAgentProgress(
 	// long until the next attempt. Without this, the parent UI would just
 	// keep spinning while a child sleeps on a 3-hour provider rate-limit.
 	if (progress.retryState && progress.status === "running") {
-		const remainingMs = Math.max(
-			0,
-			progress.retryState.startedAtMs + progress.retryState.delayMs - Date.now(),
-		);
+		const remainingMs = Math.max(0, progress.retryState.startedAtMs + progress.retryState.delayMs - Date.now());
 		const waitLabel = remainingMs > 0 ? `in ${formatDuration(remainingMs)}` : "now";
 		const summary =
 			`retrying ${progress.retryState.attempt}/${progress.retryState.maxAttempts} ${waitLabel}: ` +
