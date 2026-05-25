@@ -1,0 +1,174 @@
+import { beforeAll, describe, expect, it } from "bun:test";
+import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { AgentProgress, SingleResult, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task";
+import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/render";
+
+// Defends the live-rendering contract for the `task` tool: while a Level-1
+// subagent is still mid-flight, any nested `task` activity it has produced
+// (already-completed sub-calls in `extractedToolData.task`, plus the in-flight
+// snapshot in `inflightTaskDetails`) MUST surface in the parent's streaming
+// output — same way it surfaces in the finished result.
+describe("task renderer: nested live rendering", () => {
+	beforeAll(async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		setThemeInstance(theme!);
+	});
+
+	function makeRunningProgress(overrides: Partial<AgentProgress>): AgentProgress {
+		return {
+			index: 0,
+			id: "parent",
+			agent: "task",
+			agentSource: "bundled",
+			status: "running",
+			task: "parent assignment",
+			assignment: "parent assignment",
+			description: "Parent Level 1 work",
+			recentTools: [],
+			recentOutput: [],
+			toolCount: 1,
+			tokens: 1000,
+			cost: 0,
+			durationMs: 1234,
+			...overrides,
+		};
+	}
+
+	function makeCompletedSubResult(id: string, description: string): SingleResult {
+		return {
+			index: 0,
+			id,
+			agent: "task",
+			agentSource: "bundled",
+			task: "sub assignment",
+			assignment: "sub assignment",
+			description,
+			exitCode: 0,
+			output: "sub-final-output",
+			stderr: "",
+			truncated: false,
+			durationMs: 500,
+			tokens: 200,
+		};
+	}
+
+	function makeRunningSubProgress(id: string, description: string): AgentProgress {
+		return {
+			index: 0,
+			id,
+			agent: "task",
+			agentSource: "bundled",
+			status: "running",
+			task: "sub assignment",
+			assignment: "sub assignment",
+			description,
+			recentTools: [],
+			recentOutput: [],
+			toolCount: 0,
+			tokens: 0,
+			cost: 0,
+			durationMs: 0,
+		};
+	}
+
+	async function render(progress: AgentProgress): Promise<string> {
+		const theme = (await getThemeByName("dark"))!;
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 1234,
+			progress: [progress],
+		};
+		const component = taskToolRenderer.renderResult(
+			{ content: [{ type: "text", text: "Running 1 agents..." }], details },
+			{ expanded: false, isPartial: true, spinnerFrame: 0 },
+			theme,
+		);
+		return Bun.stripANSI(component.render(160).join("\n"));
+	}
+
+	it("renders completed nested task results stored in extractedToolData.task while parent is in-progress", async () => {
+		const parent = makeRunningProgress({
+			recentTools: [{ tool: "task", args: "", endMs: Date.now() }],
+			extractedToolData: {
+				task: [
+					{
+						projectAgentsDir: null,
+						results: [
+							makeCompletedSubResult("1.0-AlphaSub", "Alpha child"),
+							makeCompletedSubResult("1.1-BetaSub", "Beta child"),
+						],
+						totalDurationMs: 1000,
+					} satisfies TaskToolDetails,
+				],
+			},
+		});
+
+		const text = await render(parent);
+
+		// Parent label is intact.
+		expect(text).toContain("Parent Level 1 work");
+		// Both nested completed children labels surface.
+		expect(text).toContain("Alpha child");
+		expect(text).toContain("Beta child");
+		expect(text).toContain("1.0 AlphaSub");
+		expect(text).toContain("1.1 BetaSub");
+	});
+
+	it("renders the in-flight nested task snapshot (progress[]) before the call ends", async () => {
+		const inflight: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 0,
+			progress: [
+				makeRunningSubProgress("2.0-GammaSub", "Gamma child running"),
+				makeRunningSubProgress("2.1-DeltaSub", "Delta child running"),
+			],
+		};
+		const parent = makeRunningProgress({
+			currentTool: "task",
+			currentToolStartMs: Date.now(),
+			inflightTaskDetails: inflight,
+		});
+
+		const text = await render(parent);
+
+		expect(text).toContain("Parent Level 1 work");
+		expect(text).toContain("Gamma child running");
+		expect(text).toContain("Delta child running");
+		expect(text).toContain("2.0 GammaSub");
+		expect(text).toContain("2.1 DeltaSub");
+	});
+
+	it("combines completed and in-flight nested snapshots in one tree", async () => {
+		const parent = makeRunningProgress({
+			currentTool: "task",
+			extractedToolData: {
+				task: [
+					{
+						projectAgentsDir: null,
+						results: [makeCompletedSubResult("3.0-EpsilonSub", "Epsilon done")],
+						totalDurationMs: 1000,
+					} satisfies TaskToolDetails,
+				],
+			},
+			inflightTaskDetails: {
+				projectAgentsDir: null,
+				results: [],
+				totalDurationMs: 0,
+				progress: [makeRunningSubProgress("3.1-ZetaSub", "Zeta running")],
+			},
+		});
+
+		const text = await render(parent);
+
+		expect(text).toContain("Epsilon done");
+		expect(text).toContain("Zeta running");
+		// Completed entry shows "done" badge, in-flight does not.
+		const epsilonIdx = text.indexOf("Epsilon done");
+		const zetaIdx = text.indexOf("Zeta running");
+		// Completed entries are emitted before the in-flight snapshot.
+		expect(epsilonIdx).toBeLessThan(zetaIdx);
+	});
+});

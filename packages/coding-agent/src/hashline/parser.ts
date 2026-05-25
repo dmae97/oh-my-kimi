@@ -1,6 +1,8 @@
 import { ABORT_MARKER, ABORT_WARNING, BEGIN_PATCH_MARKER, END_PATCH_MARKER, RANGE_INTERIOR_HASH } from "./constants";
 import {
+	computeLineHash,
 	describeAnchorExamples,
+	HL_BODY_SEP_RE_RAW,
 	HL_FILE_PREFIX,
 	HL_HASH_CAPTURE_RE_RAW,
 	HL_OP_CHARS,
@@ -74,8 +76,36 @@ function parseInsertTarget(raw: string, lineNum: number, kind: "before" | "after
 	return { kind: cursorKind, anchor: parseLid(raw, lineNum) };
 }
 
-const INSERT_BEFORE_OP_RE = new RegExp(`^${regexEscape(HL_OP_INSERT_BEFORE)}\\s*(\\S+)\\s*$`);
-const INSERT_AFTER_OP_RE = new RegExp(`^${regexEscape(HL_OP_INSERT_AFTER)}\\s*(\\S+)\\s*$`);
+/**
+ * Decide how to interpret the optional `|TEXT` body captured on an insert
+ * op line:
+ *   - For BOF/EOF cursors the body is always treated as an inline payload
+ *     line (there's no anchor hash to compare against).
+ *   - For anchored cursors, compute the hash of TEXT at the anchor's line
+ *     number. If it matches the anchor's hash, the body is just a verbatim
+ *     copy of the anchored line — discard it, payload must come from the
+ *     following lines as usual.
+ *   - Otherwise the body is the first (or only) payload line for this op.
+ */
+function resolveInlineInsertBody(cursor: HashlineCursor, body: string | undefined): string | undefined {
+	if (body === undefined) return undefined;
+	if (cursor.kind !== "before_anchor" && cursor.kind !== "after_anchor") return body;
+	const { line, hash } = cursor.anchor;
+	if (computeLineHash(line, body) === hash) return undefined;
+	return body;
+}
+
+// Insert ops leniently accept a trailing `|TEXT` body on the op line itself
+// (e.g. `»502zk|\tconst foo = ...`). The anchor token excludes `|` so the body
+// is captured separately; resolveInlineInsertBody decides whether to treat the
+// captured text as a verbatim anchor decoration (when its hash matches the
+// anchor's) or as an inline payload line.
+const INSERT_BEFORE_OP_RE = new RegExp(
+	`^${regexEscape(HL_OP_INSERT_BEFORE)}\\s*([^|\\s]+)(?:${HL_BODY_SEP_RE_RAW}(.*))?\\s*$`,
+);
+const INSERT_AFTER_OP_RE = new RegExp(
+	`^${regexEscape(HL_OP_INSERT_AFTER)}\\s*([^|\\s]+)(?:${HL_BODY_SEP_RE_RAW}(.*))?\\s*$`,
+);
 const REPLACE_OP_RE = new RegExp(`^${regexEscape(HL_OP_REPLACE)}\\s*([^\\s+<\\-=]\\S*)\\s*$`);
 
 function isEnvelopeOrAbortMarkerLine(line: string): boolean {
@@ -158,7 +188,9 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const insertBeforeMatch = INSERT_BEFORE_OP_RE.exec(line);
 		if (insertBeforeMatch) {
 			const cursor = parseInsertTarget(insertBeforeMatch[1], lineNum, "before");
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, true);
+			const inlineBody = resolveInlineInsertBody(cursor, insertBeforeMatch[2]);
+			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, inlineBody === undefined);
+			if (inlineBody !== undefined) pushInsert(cursor, inlineBody, lineNum);
 			for (const text of payload) pushInsert(cursor, text, lineNum);
 			i = nextIndex;
 			continue;
@@ -167,7 +199,9 @@ export function parseHashlineWithWarnings(diff: string): { edits: HashlineEdit[]
 		const insertAfterMatch = INSERT_AFTER_OP_RE.exec(line);
 		if (insertAfterMatch) {
 			const cursor = parseInsertTarget(insertAfterMatch[1], lineNum, "after");
-			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, true);
+			const inlineBody = resolveInlineInsertBody(cursor, insertAfterMatch[2]);
+			const { payload, nextIndex } = collectPayload(lines, i + 1, lineNum, inlineBody === undefined);
+			if (inlineBody !== undefined) pushInsert(cursor, inlineBody, lineNum);
 			for (const text of payload) pushInsert(cursor, text, lineNum);
 			i = nextIndex;
 			continue;

@@ -1,10 +1,16 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added inline `|TEXT` payload support to `»` and `«` hashline insert operations, allowing single-line inserts on the op line and still supporting additional payload lines
+- Added support for using inline payloads with BOF/EOF inserts so `|TEXT` is treated as inserted content at file boundaries
 - Added `omp auth-gateway check` (and matching `GET /v1/credentials/check` endpoint) — probes each broker-supplied credential against its provider's auth-verifying usage endpoint and prints per-credential health, so when a multi-account pool starts returning 401s you can identify which row in the broker is the bad one. The existing `/v1/usage` endpoint silently drops failed credentials, which is the wrong shape for diagnosing auth — the new endpoint captures errors and surfaces the credential's id, provider, type, email/accountId, and the upstream error string. CLI groups results per-provider, exits non-zero when any credential failed, and supports `--json` for scripting. The probe also exercises OAuth refresh on expired tokens, so a working refresh + working access reports as `ok` and a revoked refresh token reports as `oauth refresh failed: …` instead of being masked by the cached expired access token.
+
+### Fixed
+
+- Fixed parsing of inline `|TEXT` payloads containing whitespace on `»` and `«` inserts, which previously failed with unrecognized-op errors
+- Fixed anchored insert handling so an inline `|TEXT` body matching the anchor line is treated as anchor decoration and no longer inserted as a duplicate
 
 ## [15.3.0] - 2026-05-25
 
