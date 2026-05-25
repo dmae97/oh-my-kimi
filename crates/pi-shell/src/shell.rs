@@ -1,9 +1,7 @@
 //! Runtime-agnostic brush shell execution.
 
-#[cfg(windows)]
-use std::collections::HashSet;
 use std::{
-	collections::HashMap,
+	collections::{HashMap, HashSet},
 	fs,
 	io::{self, Write},
 	str,
@@ -242,6 +240,7 @@ async fn run_shell_session(
 	ct: &mut CancelToken,
 ) -> Result<ShellRunResult> {
 	let tokio_cancel = CancellationToken::new();
+	let baseline_descendants = process::current_descendant_pids();
 
 	let mut run_task = tokio::spawn({
 		let session = session.clone();
@@ -264,6 +263,7 @@ async fn run_shell_session(
 		res = &mut run_task => res,
 		reason = ct.wait() => {
 			tokio_cancel.cancel();
+			terminate_new_descendants(&baseline_descendants).await;
 			let graceful = time::timeout(Duration::from_secs(2), &mut run_task).await;
 			if graceful.is_err() {
 				run_task.abort();
@@ -308,6 +308,7 @@ async fn run_shell_oneshot(
 	ct: CancelToken,
 ) -> Result<ShellExecuteResult> {
 	let tokio_cancel = CancellationToken::new();
+	let baseline_descendants = process::current_descendant_pids();
 
 	let mut task = tokio::spawn({
 		let tokio_cancel = tokio_cancel.clone();
@@ -321,6 +322,7 @@ async fn run_shell_oneshot(
 		result = &mut task => result,
 		reason = ct.wait() => {
 			tokio_cancel.cancel();
+			terminate_new_descendants(&baseline_descendants).await;
 			let graceful = time::timeout(Duration::from_secs(2), &mut task).await;
 			if graceful.is_err() {
 				task.abort();
@@ -353,6 +355,7 @@ async fn run_shell_oneshot_streams(
 	ct: CancelToken,
 ) -> Result<ShellExecuteResult> {
 	let tokio_cancel = CancellationToken::new();
+	let baseline_descendants = process::current_descendant_pids();
 
 	let mut task = tokio::spawn({
 		let tokio_cancel = tokio_cancel.clone();
@@ -366,6 +369,7 @@ async fn run_shell_oneshot_streams(
 		result = &mut task => result,
 		reason = ct.wait() => {
 			tokio_cancel.cancel();
+			terminate_new_descendants(&baseline_descendants).await;
 			let graceful = time::timeout(Duration::from_secs(2), &mut task).await;
 			if graceful.is_err() {
 				task.abort();
@@ -649,34 +653,7 @@ async fn run_shell_command(
 		let baseline_descendants = baseline_descendants.clone();
 		async move {
 			cancel_token.cancelled().await;
-			// Rescan-and-signal loop. Each pass picks up grandchildren spawned
-			// during the previous wave's grace period, then exits early as soon
-			// as no descendants remain. The first wave is SIGTERM so well-behaved
-			// programs get a chance to clean up; subsequent waves escalate to
-			// SIGKILL. Cheaper than the previous 20 Hz tracker loop and avoids
-			// the constant kernel chatter when no cancellation ever happens.
-			const WAVES: u32 = 3;
-			for wave in 0..WAVES {
-				let mut targets = process::TerminationTargets::new();
-				process::add_new_descendants(&mut targets, &baseline_descendants);
-				if targets.is_empty() {
-					return;
-				}
-				let signal = if wave == 0 {
-					process::TERM_SIGNAL
-				} else {
-					process::KILL_SIGNAL
-				};
-				targets.signal(signal);
-				if wave + 1 < WAVES {
-					let pause = if wave == 0 {
-						Duration::from_millis(75)
-					} else {
-						Duration::from_millis(150)
-					};
-					time::sleep(pause).await;
-				}
-			}
+			terminate_new_descendants(&baseline_descendants).await;
 		}
 	});
 	let source_info = SourceInfo::from("pi-natives:command");
@@ -846,28 +823,7 @@ async fn run_shell_command_streams(
 		let baseline_descendants = baseline_descendants.clone();
 		async move {
 			cancel_token.cancelled().await;
-			const WAVES: u32 = 3;
-			for wave in 0..WAVES {
-				let mut targets = process::TerminationTargets::new();
-				process::add_new_descendants(&mut targets, &baseline_descendants);
-				if targets.is_empty() {
-					return;
-				}
-				let signal = if wave == 0 {
-					process::TERM_SIGNAL
-				} else {
-					process::KILL_SIGNAL
-				};
-				targets.signal(signal);
-				if wave + 1 < WAVES {
-					let pause = if wave == 0 {
-						Duration::from_millis(75)
-					} else {
-						Duration::from_millis(150)
-					};
-					time::sleep(pause).await;
-				}
-			}
+			terminate_new_descendants(&baseline_descendants).await;
 		}
 	});
 	let source_info = SourceInfo::from("pi-shell:streams");
@@ -1015,6 +971,32 @@ async fn read_output_bytes(
 	}
 }
 
+// Rescan-and-signal loop for cancellation. Each pass picks up descendants
+// spawned during the previous wave's grace period; empty scans keep going so a
+// cancellation that wins before `run_string` exposes its child still escalates.
+async fn terminate_new_descendants<S: std::hash::BuildHasher>(baseline: &HashSet<i32, S>) {
+	const WAVES: u32 = 3;
+	for wave in 0..WAVES {
+		let mut targets = process::TerminationTargets::new();
+		process::add_new_descendants(&mut targets, baseline);
+		if !targets.is_empty() {
+			let signal = if wave == 0 {
+				process::TERM_SIGNAL
+			} else {
+				process::KILL_SIGNAL
+			};
+			targets.signal(signal);
+		}
+		if wave + 1 < WAVES {
+			let pause = if wave == 0 {
+				Duration::from_millis(75)
+			} else {
+				Duration::from_millis(150)
+			};
+			time::sleep(pause).await;
+		}
+	}
+}
 fn terminate_background_jobs(shell: &BrushShell) {
 	let mut targets = process::TerminationTargets::new();
 	for job in &shell.jobs().jobs {
