@@ -146,4 +146,57 @@ describe("StatusLineComponent incremental context breakdown cache", () => {
 		expect(result.usedTokens).toBeGreaterThanOrEqual(0);
 		expect(result.contextWindow).toBe(200_000);
 	});
+
+	it("in-place mutation of a non-last message recomputes its tokens", () => {
+		const original = userMessage("short") as { content: string };
+		const tail = userMessage("tail");
+		const session = makeSession({ messages: [original, tail] });
+		const comp = new StatusLineComponent(session);
+
+		const before = comp.getCachedContextBreakdown();
+		// Mutate messages[0] in place — same object, larger content.
+		original.content = "a much longer body that should tokenize to more".repeat(20);
+		const after = comp.getCachedContextBreakdown();
+
+		expect(after.usedTokens).toBeGreaterThan(before.usedTokens);
+	});
+
+	it("replaceMessages with same length but different shape recomputes tokens", () => {
+		const session = makeSession({
+			messages: [userMessage("short a"), userMessage("short b")],
+		});
+		const comp = new StatusLineComponent(session);
+
+		const before = comp.getCachedContextBreakdown();
+		// Same-length replace: distinct message objects with larger payloads.
+		(session as { messages: unknown[] }).messages = [
+			userMessage("a much longer payload".repeat(20)),
+			userMessage("another longer payload".repeat(20)),
+		];
+		const after = comp.getCachedContextBreakdown();
+
+		expect(after.usedTokens).toBeGreaterThan(before.usedTokens);
+	});
+
+	it("usage fetch error backs off — a failed fetch does not retrigger within the TTL window", async () => {
+		const session = makeSession({ messages: [userMessage("hi")] });
+		let calls = 0;
+		(session as { fetchUsageReports?: () => Promise<unknown> }).fetchUsageReports = () => {
+			calls++;
+			return Promise.reject(new Error("network"));
+		};
+		const comp = new StatusLineComponent(session);
+
+		// First refresh → kicks off fetch #1.
+		comp.refreshUsageInBackground();
+		// Let the rejected fetch settle so the .catch backoff stamp lands.
+		await Bun.sleep(0);
+		expect(calls).toBe(1);
+
+		// Subsequent refreshes within the TTL window must not refetch.
+		comp.refreshUsageInBackground();
+		comp.refreshUsageInBackground();
+		await Bun.sleep(0);
+		expect(calls).toBe(1);
+	});
 });

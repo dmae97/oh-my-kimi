@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatCount, getProjectDir } from "@oh-my-pi/pi-utils";
@@ -40,8 +41,101 @@ export interface StatusLineSettings {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Rendering Helpers
+// Per-message token cache
 // ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Symbol-keyed sidecar tagged onto each `AgentMessage` to memoize its
+ * `estimateTokens` result. Keyed by message identity (the object itself);
+ * a cheap content fingerprint detects in-place mutations (post-hoc error
+ * attachment, retry-truncated branch rebuild, etc.) and forces recompute.
+ *
+ * Cache lives on the message — multiple `StatusLineComponent` instances
+ * share it for free, and entries collect with the message itself when the
+ * conversation is replaced or compacted.
+ */
+const kTokenCache = Symbol("statusLine.tokenCache");
+interface TaggedMessage {
+	[kTokenCache]?: { fingerprint: string; tokens: number };
+}
+
+/**
+ * Cheap structural fingerprint mirroring `estimateTokens`'s content walk.
+ * O(blocks) — only reads string `.length` and primitives, never copies or
+ * serializes content. Any in-place mutation that alters total tokenized
+ * content also alters one of the byte-length sums or block counts captured
+ * here, forcing the cached `estimateTokens` value to be recomputed.
+ */
+function messageFingerprint(msg: AgentMessage): string {
+	const role = (msg as { role?: string }).role ?? "";
+	const ts = (msg as { timestamp?: number }).timestamp ?? 0;
+	let textLen = 0;
+	let blocks = 0;
+	let images = 0;
+	if (role === "bashExecution") {
+		const b = msg as { command?: unknown; output?: unknown };
+		if (typeof b.command === "string") textLen += b.command.length;
+		if (typeof b.output === "string") textLen += b.output.length;
+	} else if (role === "user") {
+		const content = (msg as { content?: unknown }).content;
+		if (typeof content === "string") {
+			textLen += content.length;
+		} else if (Array.isArray(content)) {
+			blocks = content.length;
+			for (const block of content) {
+				if (block?.type === "text" && typeof block.text === "string") textLen += block.text.length;
+			}
+		}
+	} else if (role === "assistant") {
+		const content = (msg as { content?: unknown }).content;
+		if (Array.isArray(content)) {
+			blocks = content.length;
+			for (const block of content) {
+				if (!block || typeof block !== "object") continue;
+				const b = block as { type?: string; text?: string; thinking?: string; name?: string; arguments?: unknown };
+				if (b.type === "text" && typeof b.text === "string") textLen += b.text.length;
+				else if (b.type === "thinking" && typeof b.thinking === "string") textLen += b.thinking.length;
+				else if (b.type === "toolCall") {
+					if (typeof b.name === "string") textLen += b.name.length;
+					// Argument bytes vary; a length proxy is enough to detect in-place edits.
+					textLen += b.arguments === undefined ? 0 : JSON.stringify(b.arguments).length;
+				}
+			}
+		}
+	} else if (role === "toolResult" || role === "hookMessage") {
+		const content = (msg as { content?: unknown }).content;
+		if (typeof content === "string") {
+			textLen += content.length;
+		} else if (Array.isArray(content)) {
+			blocks = content.length;
+			for (const block of content) {
+				if (!block || typeof block !== "object") continue;
+				const b = block as { type?: string; text?: string };
+				if (b.type === "text" && typeof b.text === "string") textLen += b.text.length;
+				else if (b.type === "image") images++;
+			}
+		}
+	} else if (role === "branchSummary" || role === "compactionSummary") {
+		const s = (msg as { summary?: unknown }).summary;
+		if (typeof s === "string") textLen += s.length;
+	}
+	return `${role}:${ts}:${textLen}:${blocks}:${images}`;
+}
+
+/**
+ * Token count for a single message, using the per-message sidecar cache.
+ * The caller MUST skip caching for the last message during streaming —
+ * it may still be growing and its tokens belong recomputed each refresh.
+ */
+function tokensForMessage(msg: AgentMessage): number {
+	const fp = messageFingerprint(msg);
+	const tagged = msg as TaggedMessage;
+	const cached = tagged[kTokenCache];
+	if (cached && cached.fingerprint === fp) return cached.tokens;
+	const tokens = estimateTokens(msg);
+	tagged[kTokenCache] = { fingerprint: fp, tokens };
+	return tokens;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // StatusLineComponent
@@ -85,14 +179,11 @@ export class StatusLineComponent implements Component {
 	// TTL design (which re-walked every message on each refresh and produced
 	// ~1.1 s sync freezes on 2,000+ message sessions because `updateEditorTopBorder`
 	// is called on every agent event in event-controller). The new scheme
-	// exploits the fact that `session.messages` is append-only during a turn
-	// and only shrinks on compaction.
-	#cachedBreakdown: { usedTokens: number; contextWindow: number } | null = null;
-	// Per-message token counts indexed by `session.messages` position. Entries
-	// here are immutable: a message at index `i` is finalized (its content
-	// no longer mutates) once index `i+1` exists. We therefore cache all but
-	// the LAST message (which may still be growing during streaming).
-	#messageTokenCache: number[] = [];
+	// caches by message-object identity (a Symbol-keyed sidecar on each
+	// message) plus a cheap content fingerprint, so in-place mutations of
+	// an existing message (post-hoc error attachment, retry-truncated
+	// branch rebuild, replaceMessages with the same length) are detected
+	// and recomputed.
 	// Cached non-message total (system prompt + tools + skills). Invalidated
 	// when the inputs-identity fingerprint changes (model swap, skill toggle,
 	// tool registration).
@@ -331,7 +422,12 @@ export class StatusLineComponent implements Component {
 		return null;
 	}
 
-	#refreshUsageInBackground(): void {
+	/**
+	 * Background-refresh the Anthropic OAuth quota report. Guarded by a 5-min
+	 * TTL on both success (cache lifetime) and error (backoff). Exposed
+	 * (non-private) so unit tests can verify the backoff invariant.
+	 */
+	refreshUsageInBackground(): void {
 		const now = Date.now();
 		if (this.#usageInFlight) return;
 		if (this.#usageFetchedAt > 0 && now - this.#usageFetchedAt < 5 * 60_000) return;
@@ -345,7 +441,11 @@ export class StatusLineComponent implements Component {
 				this.#usageFetchedAt = Date.now();
 			})
 			.catch(() => {
-				/* keep last known data on error */
+				// Backoff on error: stamp the fetch time so the 5-min TTL guard
+				// also acts as an error budget. Without this, every render
+				// kicks off another fetch (gated only by #usageInFlight),
+				// which hammers the endpoint during a network outage / 5xx.
+				this.#usageFetchedAt = Date.now();
 			})
 			.finally(() => {
 				this.#usageInFlight = false;
@@ -414,29 +514,22 @@ export class StatusLineComponent implements Component {
 			this.#nonMessageInputsKey = inputsKey;
 		}
 
-		// 2) Message tokens — incremental.
-		//    Compaction handling: if messages.length shrank, the array was
-		//    truncated. Reset cache; the next iteration rebuilds from scratch.
-		if (this.#messageTokenCache.length > Math.max(0, messages.length - 1)) {
-			this.#messageTokenCache.length = 0;
-		}
-		//    Cache all but the last message. The last message may still be
-		//    growing during streaming (assistant delta blocks append to the
-		//    existing message); recomputing it each refresh is one
-		//    `estimateTokens` call (~0.5 ms) and stays correct.
-		while (this.#messageTokenCache.length < Math.max(0, messages.length - 1)) {
-			const idx = this.#messageTokenCache.length;
-			this.#messageTokenCache.push(estimateTokens(messages[idx]));
-		}
+		// 2) Message tokens — incremental. The sidecar cache lives on the
+		//    message object itself (Symbol-keyed), keyed by identity and
+		//    validated by a cheap content fingerprint. Mutations that
+		//    replace messages (replaceMessages, branch rebuild, compaction)
+		//    yield fresh objects → cache miss → recompute. In-place
+		//    mutations on the same object are caught by fingerprint
+		//    mismatch. The LAST message is always recomputed because it
+		//    may still be growing during streaming.
 		let messagesTokens = 0;
-		for (const t of this.#messageTokenCache) messagesTokens += t;
-		if (messages.length > 0) {
-			messagesTokens += estimateTokens(messages[messages.length - 1]);
+		const lastIdx = messages.length - 1;
+		for (let i = 0; i < messages.length; i++) {
+			messagesTokens += i === lastIdx ? estimateTokens(messages[i]) : tokensForMessage(messages[i]);
 		}
 
 		const usedTokens = this.#nonMessageTokensCache + messagesTokens;
-		this.#cachedBreakdown = { usedTokens, contextWindow };
-		return this.#cachedBreakdown;
+		return { usedTokens, contextWindow };
 	}
 
 	/**
@@ -457,7 +550,7 @@ export class StatusLineComponent implements Component {
 		const state = this.session.state;
 
 		// Trigger background fetch (5-min TTL); render uses cached value
-		this.#refreshUsageInBackground();
+		this.refreshUsageInBackground();
 
 		// Get usage statistics
 		const aggregateUsageStats = this.session.sessionManager?.getUsageStatistics() ?? {

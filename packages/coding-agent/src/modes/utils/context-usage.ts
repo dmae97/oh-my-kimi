@@ -75,12 +75,28 @@ export function estimateToolSchemaTokens(
  * messages walked incrementally as new entries append.
  */
 export function computeNonMessageTokens(session: AgentSession): number {
+	const parts = computeNonMessageBreakdown(session);
+	return parts.systemPromptTokens + parts.systemContextTokens + parts.toolsTokens + parts.skillsTokens;
+}
+
+/**
+ * Shared helper for the four non-message token totals. Single source of truth
+ * for both `computeNonMessageTokens` (status-line incremental cache) and
+ * `computeContextBreakdown` (/context panel). The split avoids drift between
+ * the two surfaces — they MUST report the same numbers.
+ */
+function computeNonMessageBreakdown(session: AgentSession): {
+	skillsTokens: number;
+	toolsTokens: number;
+	systemContextTokens: number;
+	systemPromptTokens: number;
+} {
 	const skillsTokens = estimateSkillsTokens(session.skills ?? []);
 	const toolsTokens = estimateToolSchemaTokens(session.agent?.state?.tools ?? []);
 	const systemPromptParts = session.systemPrompt ?? [];
 	const systemContextTokens = countTokens(systemPromptParts.slice(1));
 	const systemPromptTokens = Math.max(0, countTokens(systemPromptParts[0] ?? "") - skillsTokens);
-	return systemPromptTokens + systemContextTokens + toolsTokens + skillsTokens;
+	return { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens };
 }
 
 /**
@@ -90,9 +106,6 @@ export function computeNonMessageTokens(session: AgentSession): number {
 export function computeContextBreakdown(session: AgentSession): ContextBreakdown {
 	const model = session.model;
 	const contextWindow = model?.contextWindow ?? 0;
-
-	const skillsTokens = estimateSkillsTokens(session.skills ?? []);
-	const toolsTokens = estimateToolSchemaTokens(session.agent?.state?.tools ?? []);
 
 	let messagesTokens = 0;
 	const convo = session.messages;
@@ -108,9 +121,7 @@ export function computeContextBreakdown(session: AgentSession): ContextBreakdown
 	//   Tools         = JSON tool schema sent separately on the wire
 	//   Skills        = the skill list embedded in the system prompt
 	//   Messages      = conversation messages
-	const systemPromptParts = session.systemPrompt;
-	const systemPromptTokens = Math.max(0, countTokens(systemPromptParts?.[0] ?? "") - skillsTokens);
-	const systemContextTokens = countTokens(systemPromptParts?.slice(1) ?? []);
+	const { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens } = computeNonMessageBreakdown(session);
 
 	const categories: CategoryInfo[] = [
 		{ id: "systemPrompt", label: "System prompt", tokens: systemPromptTokens, color: "accent", glyph: CELL_FILLED },
