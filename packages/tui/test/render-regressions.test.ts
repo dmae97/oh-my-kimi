@@ -733,7 +733,7 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
-		it("retains append history when offscreen header changes during overflow growth", async () => {
+		it("keeps viewport aligned when offscreen header changes during overflow growth", async () => {
 			const term = new VirtualTerminal(32, 6);
 			const tui = new TUI(term);
 			const logLines = rows("line-", 6);
@@ -752,15 +752,6 @@ describe("TUI terminal-state regressions", () => {
 					tui.requestRender();
 					await settle(term);
 				}
-
-				const scrollback = term.getScrollBuffer();
-				for (let i = 0; i < 70; i++) {
-					expect(countMatches(scrollback, new RegExp(`\\bline-${i}\\b`))).toBe(1);
-				}
-				for (let i = 0; i <= tick; i++) {
-					expect(countMatches(scrollback, new RegExp(`\\bstatus-${i}\\b`))).toBeLessThanOrEqual(1);
-				}
-
 				const viewport = visible(term).map(line => line.trim());
 				expect(viewport.at(-1)).toBe("line-69");
 				for (let i = 1; i < viewport.length; i++) {
@@ -768,6 +759,40 @@ describe("TUI terminal-state regressions", () => {
 					const next = Number.parseInt(viewport[i]!.slice(5), 10);
 					expect(next - prev).toBe(1);
 				}
+			} finally {
+				tui.stop();
+			}
+		});
+		it("repaints viewport when offscreen expansion and append land together", async () => {
+			const term = new VirtualTerminal(32, 6);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(["status-0", ...rows("line-", 11)]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(visible(term).map(line => line.trim())).toEqual([
+					"line-5",
+					"line-6",
+					"line-7",
+					"line-8",
+					"line-9",
+					"line-10",
+				]);
+
+				component.setLines(["status-1", "expanded-details", ...rows("line-", 12)]);
+				tui.requestRender();
+				await settle(term);
+
+				expect(visible(term).map(line => line.trim())).toEqual([
+					"line-6",
+					"line-7",
+					"line-8",
+					"line-9",
+					"line-10",
+					"line-11",
+				]);
 			} finally {
 				tui.stop();
 			}

@@ -1259,18 +1259,14 @@ export class TUI extends Container {
 			return;
 		}
 
-		// Differential rendering can only touch what was actually visible. When
-		// offscreen content changes while new rows are appended, preserve append
-		// history and leave the older scrollback copy untouched unless width
-		// reflow invalidated visible row contents.
+		// Differential rendering can only touch what was actually visible. Repaint
+		// the visible viewport when earlier scrollback changes; treating the frame
+		// as append-only can leave shifted rows stale when edits and appends land
+		// together.
 		if (firstChanged < prevViewportTop) {
 			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
-			if (widthChanged || !contentGrew) {
-				viewportRefresh();
-				return;
-			}
-			firstChanged = this.#previousLines.length;
-			lastChanged = newLines.length - 1;
+			viewportRefresh();
+			return;
 		}
 
 		const appendStart = appendedLines && firstChanged === this.#previousLines.length && firstChanged > 0;
