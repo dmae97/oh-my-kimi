@@ -170,6 +170,26 @@ describe("TUI overlays", () => {
 
 		tui.stop();
 	});
+	it("does not duplicate transcript into scrollback on repeated forced redraws", async () => {
+		const term = new VirtualTerminal(40, 4);
+		const tui = new TUI(term);
+		const component = new MutableContentComponent(buildRows(60));
+		tui.addChild(component);
+
+		tui.start();
+		await flushRender(term);
+		const baseline = term.getScrollBuffer().filter(line => /^row-\d+$/.test(line.trim())).length;
+
+		for (let i = 0; i < 5; i++) {
+			tui.requestRender(true);
+			await flushRender(term);
+		}
+
+		const after = term.getScrollBuffer().filter(line => /^row-\d+$/.test(line.trim())).length;
+		expect(after).toBeLessThanOrEqual(baseline + 4);
+
+		tui.stop();
+	});
 	it("fully redraws on height increase to avoid stale viewport rows", async () => {
 		const term = new VirtualTerminal(40, 4);
 		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");

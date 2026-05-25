@@ -256,6 +256,7 @@ export class TUI extends Container {
 	#maxLinesRendered = 0; // Line count from last render, used for viewport calculation
 	#fullRedrawCount = 0;
 	#clearScrollbackOnNextRender = false;
+	#hasEverRendered = false;
 	#stopped = false;
 
 	// Overlay stack for modal components rendered on top of base content
@@ -1151,11 +1152,23 @@ export class TUI extends Container {
 			this.#previousHeight = height;
 		};
 
-		// First render outputs the full transcript so terminal scrollback contains
-		// the initial TUI state. Forced first renders still clear only the viewport.
+		// First-paint policy:
+		// - Initial startup (no prior render): emit the full transcript so terminal
+		//   scrollback receives the initial UI state.
+		// - Forced reset later in the session: repaint the visible viewport only,
+		//   so we don't duplicate the transcript into terminal scrollback. The
+		//   caller can opt into clearing scrollback via `{ clearScrollback: true }`
+		//   for intentional transcript replacement (e.g. `/new`).
 		if (this.#previousLines.length === 0) {
 			logRedraw("first render");
-			fullRender(widthChanged || heightChanged);
+			if (!this.#hasEverRendered) {
+				fullRender(false);
+			} else if (this.#clearScrollbackOnNextRender) {
+				fullRender(true);
+			} else {
+				viewportRefresh();
+			}
+			this.#hasEverRendered = true;
 			return;
 		}
 		const contentGrew = newLines.length > this.#previousLines.length;
