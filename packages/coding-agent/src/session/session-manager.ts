@@ -943,11 +943,70 @@ function extractFirstUserPrompt(entries: Array<Record<string, unknown>>): string
 }
 
 /**
+ * Promote orphaned `<basename>.jsonl.<snowflake>.bak` backups created by
+ * `#replaceSessionFileAfterEperm` back to their primary path when the primary
+ * is missing. This runs once per session-dir scan, before the main `*.jsonl`
+ * glob, so a crash between the two renames in the EPERM-rewrite path does not
+ * leave the user's last good state stranded outside the loader's view.
+ *
+ * Exported for testing.
+ */
+export async function recoverOrphanedBackups(sessionDir: string, storage: SessionStorage): Promise<void> {
+	let backups: string[];
+	try {
+		backups = storage.listFilesSync(sessionDir, "*.bak");
+	} catch {
+		return;
+	}
+	if (backups.length === 0) return;
+	// For each primary path, pick the newest backup (highest mtime) as the recovery source.
+	const candidates = new Map<string, { backup: string; mtimeMs: number }>();
+	for (const backup of backups) {
+		const name = path.basename(backup);
+		// Expect "<primary>.<snowflake>.bak" where <primary> ends in ".jsonl".
+		if (!name.endsWith(".bak")) continue;
+		const trimmed = name.slice(0, -".bak".length);
+		const dotIdx = trimmed.lastIndexOf(".");
+		if (dotIdx <= 0) continue;
+		const primaryName = trimmed.slice(0, dotIdx);
+		if (!primaryName.endsWith(".jsonl")) continue;
+		const primaryPath = path.join(sessionDir, primaryName);
+		let mtimeMs = 0;
+		try {
+			mtimeMs = storage.statSync(backup).mtimeMs;
+		} catch {
+			continue;
+		}
+		const existing = candidates.get(primaryPath);
+		if (!existing || mtimeMs > existing.mtimeMs) {
+			candidates.set(primaryPath, { backup, mtimeMs });
+		}
+	}
+	for (const [primaryPath, { backup }] of candidates) {
+		if (storage.existsSync(primaryPath)) continue;
+		try {
+			await storage.rename(backup, primaryPath);
+			logger.warn("Recovered orphaned session backup", {
+				sessionFile: primaryPath,
+				backupPath: backup,
+			});
+		} catch (err) {
+			logger.warn("Failed to recover orphaned session backup", {
+				sessionFile: primaryPath,
+				backupPath: backup,
+				error: toError(err).message,
+			});
+		}
+	}
+}
+
+/**
  * Reads all session files from the directory and returns them sorted by mtime (newest first).
  * Uses low-level file I/O to efficiently read only the first 4KB of each file
  * to extract the JSON header and first user message without loading entire session logs into memory.
  */
 async function getSortedSessions(sessionDir: string, storage: SessionStorage): Promise<RecentSessionInfo[]> {
+	await recoverOrphanedBackups(sessionDir, storage);
 	try {
 		const files: string[] = storage.listFilesSync(sessionDir, "*.jsonl");
 		const sessions: RecentSessionInfo[] = [];
@@ -2149,10 +2208,14 @@ export class SessionManager {
 	}
 	// Windows can reject overwrite-style rename with EPERM even after our own writer is closed.
 	// Move the old session file aside first so a failed retry can roll back to the last good file.
+	// The backup uses a plain `<basename>.<snowflake>.bak` name (no leading dot) so that if the
+	// process crashes between the two renames, `recoverOrphanedBackups` can find it via the
+	// shared `*.bak` glob on both real and in-memory storage backends and promote it back to
+	// the primary on the next session-dir scan.
 
 	async #replaceSessionFileAfterEperm(tempPath: string, targetPath: string, renameError: unknown): Promise<void> {
 		const dir = path.resolve(targetPath, "..");
-		const backupPath = path.join(dir, `.${path.basename(targetPath)}.${Snowflake.next()}.bak`);
+		const backupPath = path.join(dir, `${path.basename(targetPath)}.${Snowflake.next()}.bak`);
 		try {
 			await this.storage.rename(targetPath, backupPath);
 		} catch (err) {
@@ -2167,13 +2230,14 @@ export class SessionManager {
 			await this.storage.rename(tempPath, targetPath);
 		} catch (err) {
 			const replaceError = toError(err);
+			const originalError = toError(renameError);
 			try {
 				await this.storage.rename(backupPath, targetPath);
 			} catch (rollbackErr) {
 				const rollbackError = toError(rollbackErr);
 				throw new Error(
-					`Failed to replace session file after EPERM (${replaceError.message}); rollback from ${backupPath} also failed: ${rollbackError.message}`,
-					{ cause: replaceError },
+					`Failed to replace session file after EPERM (original: ${originalError.message}; retry: ${replaceError.message}); rollback from ${backupPath} also failed: ${rollbackError.message}`,
+					{ cause: originalError },
 				);
 			}
 			throw replaceError;
@@ -3244,6 +3308,7 @@ export class SessionManager {
 	): Promise<SessionInfo[]> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		try {
+			await recoverOrphanedBackups(dir, storage);
 			const files = storage.listFilesSync(dir, "*.jsonl");
 			return await collectSessionsFromFiles(files, storage);
 		} catch {
