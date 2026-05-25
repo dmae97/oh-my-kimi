@@ -459,29 +459,32 @@ const CCH_SEED = 0x4d659218e32a3268n;
 const CCH_PLACEHOLDER_STR = "cch=00000";
 const cchEncoder = new TextEncoder();
 const CCH_PLACEHOLDER = cchEncoder.encode(CCH_PLACEHOLDER_STR);
-// Anchor replacement to the billing-header value only: search for
-// CLAUDE_BILLING_HEADER_PREFIX bytes (only injected by createClaudeBillingHeader
-// into system[0]) then scan the next 150 bytes for the placeholder. system[0]
-// always serializes first in the "system" array, so the first occurrence of the
-// prefix in the body is always ours — user/tool content in system[2] can never
-// appear before it or within this window.
-const BILLING_HEADER_MARKER = cchEncoder.encode(CLAUDE_BILLING_HEADER_PREFIX);
+// Combined anchor for the billing-header placeholder inside system[0].
+// "system":[{"type":"text","text":"x-anthropic-billing-header:
+// Matches the exact JSON prefix of the first system block when
+// createClaudeBillingHeader injects system[0].  "messages" serializes before
+// "system" in Anthropic SDK payloads (~byte 29 vs ~byte 4705), so user content
+// in the messages array can never match this sequence.  User system prompt text
+// lives in system[2] and therefore also cannot match.
+const BILLING_SYSTEM_MARKER = cchEncoder.encode(
+	'"system":[{"type":"text","text":"' + CLAUDE_BILLING_HEADER_PREFIX,
+);
 const CCH_BILLING_SEARCH_WINDOW = 150;
 
 function patchCch(body: Uint8Array): Uint8Array {
-	// Step 1: find the billing-header key — only injected by createClaudeBillingHeader.
-	let bhIdx = -1;
-	outer: for (let i = 0; i <= body.length - BILLING_HEADER_MARKER.length; i++) {
-		for (let j = 0; j < BILLING_HEADER_MARKER.length; j++) {
-			if (body[i + j] !== BILLING_HEADER_MARKER[j]) continue outer;
+	// Find the combined system[0] + billing-header prefix marker.
+	let markerIdx = -1;
+	outer: for (let i = 0; i <= body.length - BILLING_SYSTEM_MARKER.length; i++) {
+		for (let j = 0; j < BILLING_SYSTEM_MARKER.length; j++) {
+			if (body[i + j] !== BILLING_SYSTEM_MARKER[j]) continue outer;
 		}
-		bhIdx = i;
+		markerIdx = i;
 		break;
 	}
-	if (bhIdx === -1) return body; // no billing header → not a CC request
+	if (markerIdx === -1) return body; // no CC billing header injected
 
-	// Step 2: scan at most CCH_BILLING_SEARCH_WINDOW bytes after the header key.
-	const searchFrom = bhIdx + BILLING_HEADER_MARKER.length;
+	// Scan at most CCH_BILLING_SEARCH_WINDOW bytes after the marker for the placeholder.
+	const searchFrom = markerIdx + BILLING_SYSTEM_MARKER.length;
 	const searchTo = Math.min(searchFrom + CCH_BILLING_SEARCH_WINDOW, body.length - CCH_PLACEHOLDER.length);
 	let idx = -1;
 	outer2: for (let i = searchFrom; i <= searchTo; i++) {
