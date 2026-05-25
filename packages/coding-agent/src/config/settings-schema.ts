@@ -836,6 +836,16 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	"retry.baseDelayMs": { type: "number", default: 2000 },
+	"retry.maxDelayMs": {
+		type: "number",
+		default: 5 * 60 * 1000,
+		ui: {
+			tab: "model",
+			label: "Max Retry Delay",
+			description:
+				"Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows).",
+		},
+	},
 	"retry.fallbackChains": { type: "record", default: {} as Record<string, string[]> },
 	"retry.fallbackRevertPolicy": {
 		type: "enum",
@@ -2859,6 +2869,7 @@ export interface RetrySettings {
 	enabled: boolean;
 	maxRetries: number;
 	baseDelayMs: number;
+	maxDelayMs: number;
 }
 
 export interface MemoriesSettings {

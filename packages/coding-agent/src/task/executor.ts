@@ -1350,6 +1350,30 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			const MAX_YIELD_RETRIES = 3;
 			unsubscribe = session.subscribe(event => {
+				if (event.type === "auto_retry_start") {
+					progress.retryState = {
+						attempt: event.attempt,
+						maxAttempts: event.maxAttempts,
+						delayMs: event.delayMs,
+						errorMessage: event.errorMessage,
+						startedAtMs: Date.now(),
+					};
+					progress.retryFailure = undefined;
+					scheduleProgress(true);
+					return;
+				}
+				if (event.type === "auto_retry_end") {
+					const attempt = progress.retryState?.attempt ?? event.attempt;
+					progress.retryState = undefined;
+					if (!event.success) {
+						progress.retryFailure = {
+							attempt,
+							errorMessage: event.finalError ?? "Auto-retry failed",
+						};
+					}
+					scheduleProgress(true);
+					return;
+				}
 				if (isAgentEvent(event)) {
 					try {
 						processEvent(event);
@@ -1385,6 +1409,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			let retryCount = 0;
 			while (!yieldCalled && retryCount < MAX_YIELD_RETRIES && !abortSignal.aborted) {
+				// Skip reminders when the model returned a terminal error (e.g.
+				// rate-limit cap hit, auth failure). Re-prompting would just
+				// hit the same wall, multiplying the failure noise without
+				// any chance of producing a yield.
+				const lastBeforeReminder = session.getLastAssistantMessage();
+				if (lastBeforeReminder?.stopReason === "error") break;
 				try {
 					retryCount++;
 					const reminder = prompt.render(submitReminderTemplate, {
@@ -1584,6 +1614,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		usage: hasUsage ? accumulatedUsage : undefined,
 		outputPath,
 		extractedToolData: progress.extractedToolData,
+		retryFailure: progress.retryFailure,
 		outputMeta,
 	};
 }
