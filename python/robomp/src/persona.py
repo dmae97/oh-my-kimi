@@ -263,6 +263,7 @@ def followup_comment(
     workspace: Workspace,
     pr_status: str,
     pr_number: int | None = None,
+    thread: tuple = (),
 ) -> str:
     return render(
         _load("followup_comment.md"),
@@ -271,6 +272,7 @@ def followup_comment(
             "issue": issue,
             "workspace": workspace,
             "comment": comment,
+            "thread": _render_thread(thread),
             "state": {"pr_status": pr_status},
             "inbound": _inbound_scope(issue, pr_number),
             "origin": _origin_scope(issue),

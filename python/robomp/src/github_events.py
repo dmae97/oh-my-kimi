@@ -157,11 +157,16 @@ def route(
         return issue_key(repo, pr_number)  # type: ignore[arg-type]
 
     def _reviewer_bot_login(user: Mapping[str, Any] | None) -> str | None:
-        """Return the lowercased login if this user is a configured reviewer bot."""
+        """Return the normalized login if this user is a configured reviewer bot."""
         if not isinstance(user, Mapping):
             return None
-        login = str(user.get("login") or "").lower()
-        return login if login and login in reviewer_bots else None
+        raw_login = str(user.get("login") or "").lower()
+        if not raw_login:
+            return None
+        login = raw_login.removesuffix("[bot]")
+        if login in reviewer_bots:
+            return login
+        return raw_login if raw_login in reviewer_bots else None
 
     def _directive_kwargs(comment: Mapping[str, Any] | None, login: str | None, assoc: str | None) -> dict[str, Any]:
         """Decide whether this comment is a directive (reviewer-bot OR maintainer-mention)."""
