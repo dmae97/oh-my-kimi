@@ -97,9 +97,10 @@ describe("readImageFromClipboard on WSL", () => {
 		expect(nativeSpy).not.toHaveBeenCalled();
 	});
 
-	it("falls back to the native bridge when PowerShell returns no payload", async () => {
+	it("falls back to the native bridge when PowerShell returns no payload and a display is present", async () => {
 		setPlatform("linux");
 		process.env.WSL_INTEROP = "/run/WSL/1_interop";
+		process.env.WAYLAND_DISPLAY = "wayland-0";
 
 		spyPowershell([], "");
 		const nativeSpy = vi.spyOn(native, "readImageFromClipboard").mockResolvedValue(null);
@@ -110,15 +111,28 @@ describe("readImageFromClipboard on WSL", () => {
 		expect(nativeSpy).toHaveBeenCalledTimes(1);
 	});
 
-	it("falls back to the native bridge when PowerShell exits non-zero", async () => {
+	it("falls back to the native bridge when PowerShell exits non-zero (with display)", async () => {
 		setPlatform("linux");
 		process.env.WSL_DISTRO_NAME = "Ubuntu";
+		process.env.DISPLAY = ":0";
 
 		spyPowershell([], "noise", 1);
 		const nativeSpy = vi.spyOn(native, "readImageFromClipboard").mockResolvedValue(null);
 
 		await readImageFromClipboard();
 		expect(nativeSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns null without invoking arboard on headless WSL when PowerShell yields nothing", async () => {
+		setPlatform("linux");
+		process.env.WSL_DISTRO_NAME = "Ubuntu";
+		// No DISPLAY / WAYLAND_DISPLAY — arboard would reject, so we must short-circuit.
+
+		spyPowershell([], "");
+		const nativeSpy = vi.spyOn(native, "readImageFromClipboard");
+
+		expect(await readImageFromClipboard()).toBeNull();
+		expect(nativeSpy).not.toHaveBeenCalled();
 	});
 });
 

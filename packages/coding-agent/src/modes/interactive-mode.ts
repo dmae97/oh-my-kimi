@@ -691,7 +691,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#isLoopAutoSubmitBlocked(): boolean {
-		return this.session.isStreaming || this.session.isCompacting;
+		return this.session.isStreaming || this.session.isCompacting || this.session.hasPostPromptWork;
 	}
 
 	#submitLoopPromptWhenReady(prompt: string): void {
@@ -1876,12 +1876,23 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	async #handleGoalSetSubcommand(rest: string): Promise<void> {
-		if (this.goalModeEnabled) {
-			this.showStatus("Goal mode is already active. Use /goal drop to start over.");
-			return;
+	async #replaceGoalFromObjective(objective: string): Promise<void> {
+		const state = await this.session.goalRuntime.replaceGoal({ objective });
+		this.session.setGoalModeState(state);
+		this.goalModeEnabled = true;
+		this.goalModePaused = false;
+		this.#resetGoalContinuationSuppression();
+		this.#updateGoalModeStatus();
+		if (this.session.isStreaming) {
+			await this.session.sendGoalModeContext({ deliverAs: "steer" });
 		}
-		if (this.#getPausedGoalState()) {
+		if (this.onInputCallback) {
+			this.onInputCallback(this.startPendingSubmission({ text: objective }));
+		}
+	}
+
+	async #handleGoalSetSubcommand(rest: string): Promise<void> {
+		if (!this.goalModeEnabled && this.#getPausedGoalState()) {
 			this.showWarning("Resume the current goal first, or drop it before setting a new objective.");
 			return;
 		}
@@ -1889,6 +1900,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			? rest.trim()
 			: (await this.showHookEditor("Goal objective", undefined, undefined, { promptStyle: true }))?.trim();
 		if (!objective) return;
+		if (this.goalModeEnabled) {
+			await this.#replaceGoalFromObjective(objective);
+			return;
+		}
 		await this.#startGoalFromObjective(objective);
 	}
 
@@ -2312,8 +2327,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#uiHelpers.renderSessionContext(sessionContext, options);
 	}
 
-	renderInitialMessages(prebuiltContext?: SessionContext): void {
-		this.#uiHelpers.renderInitialMessages(prebuiltContext);
+	renderInitialMessages(prebuiltContext?: SessionContext, options?: { preserveExistingChat?: boolean }): void {
+		this.#uiHelpers.renderInitialMessages(prebuiltContext, options);
 	}
 
 	getUserMessageText(message: Message): string {

@@ -1582,8 +1582,14 @@ export class Editor implements Component, Focusable {
 				return match;
 			});
 
-			// Clean the pasted text
-			const cleanText = decodedText.replace(/\r\n?/g, "\n");
+			// Clean the pasted text. NFC-normalize so macOS Finder drag-drops of
+			// Korean filenames (which arrive as NFD: e.g. `ᄒ`+`ᅪ` instead of `화`)
+			// land in the buffer as the same precomposed syllables a terminal
+			// renders — without this, cursor column accounting drifts by
+			// `(NFD cells − NFC cells)` and the visible glyph desyncs from the
+			// hardware cursor. Matches the `Input` component's prior fix; this
+			// is the same fix on the real OMP prompt component (`Editor`).
+			const cleanText = decodedText.replace(/\r\n?/g, "\n").normalize("NFC");
 
 			// Convert tabs to spaces (4 spaces per tab)
 			const tabExpandedText = cleanText.replace(/\t/g, "    ");

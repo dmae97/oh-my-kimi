@@ -38,6 +38,8 @@ export default class AuthGateway extends Command {
 		"# Rotate the gateway bearer token\n  omp auth-gateway token --regenerate",
 		"# Run on loopback without any bearer (anyone on this host can call)\n  omp auth-gateway serve --no-auth",
 		"# Show local gateway + broker config status\n  omp auth-gateway status",
+		"# Probe each broker credential to see which one is producing 401s\n  omp auth-gateway check",
+		"# Same, machine-readable for scripts\n  omp auth-gateway check --json",
 	];
 
 	async run(): Promise<void> {

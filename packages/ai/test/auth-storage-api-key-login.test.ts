@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
+import * as deepseekModule from "../src/utils/oauth/deepseek";
 import * as kagiModule from "../src/utils/oauth/kagi";
 import * as ollamaCloudModule from "../src/utils/oauth/ollama-cloud";
 
@@ -25,6 +26,7 @@ describe("AuthStorage api-key login replacement", () => {
 	let dbPath = "";
 	let store: SqliteAuthCredentialStore | null = null;
 	let authStorage: AuthStorage | null = null;
+	let loginDeepSeekSpy: Mock<typeof deepseekModule.loginDeepSeek>;
 	let loginKagiSpy: Mock<typeof kagiModule.loginKagi>;
 	let loginOllamaCloudSpy: Mock<typeof ollamaCloudModule.loginOllamaCloud>;
 
@@ -33,6 +35,7 @@ describe("AuthStorage api-key login replacement", () => {
 		dbPath = path.join(tempDir, "agent.db");
 		store = await SqliteAuthCredentialStore.open(dbPath);
 		authStorage = new AuthStorage(store);
+		loginDeepSeekSpy = vi.spyOn(deepseekModule, "loginDeepSeek");
 		loginKagiSpy = vi.spyOn(kagiModule, "loginKagi");
 		loginOllamaCloudSpy = vi.spyOn(ollamaCloudModule, "loginOllamaCloud");
 	});
@@ -99,5 +102,31 @@ describe("AuthStorage api-key login replacement", () => {
 		expect(stored.credential.key).toBe("same-ollama-cloud-key");
 		expect(store.getApiKey("ollama-cloud")).toBe("same-ollama-cloud-key");
 		expect(await authStorage.getApiKey("ollama-cloud", "session-ollama-cloud-relogin")).toBe("same-ollama-cloud-key");
+	});
+
+	it("stores DeepSeek login credentials as a reusable api-key credential", async () => {
+		if (!store || !authStorage || !dbPath) throw new Error("test setup failed");
+
+		loginDeepSeekSpy.mockResolvedValueOnce("same-deepseek-key").mockResolvedValueOnce("same-deepseek-key");
+
+		const controller = {
+			onAuth: () => {},
+			onPrompt: async () => "",
+		};
+
+		await authStorage.login("deepseek", controller);
+		await authStorage.login("deepseek", controller);
+
+		expect(countCredentialRows(dbPath, "deepseek")).toBe(1);
+		const credentials = store.listAuthCredentials("deepseek");
+		expect(credentials).toHaveLength(1);
+		const [stored] = credentials;
+		expect(stored?.credential.type).toBe("api_key");
+		if (!stored || stored.credential.type !== "api_key") {
+			throw new Error("expected stored api-key credential");
+		}
+		expect(stored.credential.key).toBe("same-deepseek-key");
+		expect(store.getApiKey("deepseek")).toBe("same-deepseek-key");
+		expect(await authStorage.getApiKey("deepseek", "session-deepseek-relogin")).toBe("same-deepseek-key");
 	});
 });

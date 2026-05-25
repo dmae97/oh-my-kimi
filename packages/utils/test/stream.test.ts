@@ -220,6 +220,12 @@ describe("readSseEvents", () => {
 		expect(evt.raw).toEqual([": keep-alive", "event: ping", "data: ok"]);
 	});
 
+	it("does not carry pure comment keepalives into the next event raw lines", async () => {
+		const stream = bytesStreamFromChunks([encoder.encode(": keepalive\n\nevent: ping\ndata: ok\n\n")]);
+		const [evt] = await collectAsync(readSseEvents(stream));
+		expect(evt.raw).toEqual(["event: ping", "data: ok"]);
+	});
+
 	it("strips a single optional space after the field colon (and only one)", async () => {
 		const stream = bytesStreamFromChunks([encoder.encode("event:  spaced\ndata:  body\n\n")]);
 		const [evt] = await collectAsync(readSseEvents(stream));

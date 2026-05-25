@@ -460,6 +460,58 @@ const sessionNameSegment: StatusLineSegment = {
 	},
 };
 
+function pickUsageColor(percent: number): "muted" | "warning" | "error" {
+	if (percent >= 80) return "error";
+	if (percent >= 50) return "warning";
+	return "muted";
+}
+
+function formatUsageReset(value: number, unit: "m" | "h"): string {
+	if (unit === "m") {
+		// total minutes (5h window: max 300)
+		if (value < 60) return `${value}m`;
+		const hours = Math.floor(value / 60);
+		const mins = value % 60;
+		return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+	}
+	// total hours (7d window: max 168)
+	if (value < 24) return `${value}h`;
+	const days = Math.floor(value / 24);
+	const hours = value % 24;
+	return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+}
+
+const usageSegment: StatusLineSegment = {
+	id: "usage",
+	render(ctx) {
+		const u = ctx.usage;
+		if (!u || (!u.fiveHour && !u.sevenDay)) {
+			return { content: "", visible: false };
+		}
+		const parts: string[] = [];
+		if (u.fiveHour) {
+			const pct = u.fiveHour.percent;
+			const pctText = theme.fg(pickUsageColor(pct), `${Math.round(pct)}%`);
+			const reset =
+				u.fiveHour.resetMinutes !== undefined
+					? theme.fg("muted", ` (${formatUsageReset(u.fiveHour.resetMinutes, "m")})`)
+					: "";
+			parts.push(`5h ${pctText}${reset}`);
+		}
+		if (u.sevenDay) {
+			const pct = u.sevenDay.percent;
+			const pctText = theme.fg(pickUsageColor(pct), `${Math.round(pct)}%`);
+			const reset =
+				u.sevenDay.resetHours !== undefined
+					? theme.fg("muted", ` (${formatUsageReset(u.sevenDay.resetHours, "h")})`)
+					: "";
+			parts.push(`7d ${pctText}${reset}`);
+		}
+		const content = withIcon(theme.icon.time, parts.join(theme.sep.dot));
+		return { content, visible: true };
+	},
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Segment Registry
 // ═══════════════════════════════════════════════════════════════════════════
@@ -486,6 +538,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	cache_read: cacheReadSegment,
 	cache_write: cacheWriteSegment,
 	session_name: sessionNameSegment,
+	usage: usageSegment,
 };
 
 export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): RenderedSegment {

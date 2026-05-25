@@ -21,8 +21,17 @@ import type {
 	RefresherSchedule,
 	SnapshotEntry,
 	SnapshotResponse,
+	SnapshotStreamEntryEvent,
+	SnapshotStreamRemovedEvent,
+	SnapshotStreamSnapshotEvent,
 } from "./types";
-import { DEFAULT_AUTH_BROKER_BIND, DEFAULT_REFRESH_INTERVAL_MS, DEFAULT_REFRESH_SKEW_MS } from "./types";
+import {
+	DEFAULT_AUTH_BROKER_BIND,
+	DEFAULT_REFRESH_INTERVAL_MS,
+	DEFAULT_REFRESH_SKEW_MS,
+	DEFAULT_SERVER_IDLE_TIMEOUT_S,
+	DEFAULT_STREAM_KEEPALIVE_MS,
+} from "./types";
 import { credentialDisableRequestSchema, credentialUploadRequestSchema } from "./wire-schemas";
 
 export interface AuthBrokerServerOptions {
@@ -40,6 +49,12 @@ export interface AuthBrokerServerOptions {
 	refreshIntervalMs?: number;
 	/** Disable the background refresher (e.g. for tests). */
 	disableRefresher?: boolean;
+	/**
+	 * Override SSE keepalive cadence in milliseconds for `/v1/snapshot/stream`.
+	 * Internal-only — tests use a short interval so they can assert heartbeats
+	 * without long sleeps. Default {@link DEFAULT_STREAM_KEEPALIVE_MS}.
+	 */
+	streamKeepaliveMs?: number;
 }
 
 export interface AuthBrokerServerHandle {
@@ -310,11 +325,182 @@ async function serveSnapshot(
 	return empty(304, snapshotHeaders(currentGeneration));
 }
 
+/**
+ * Stable per-credential fingerprint for SSE delta detection. Field order is
+ * fixed by this serializer (NOT by entry insertion order) so a credential
+ * built by two different paths still produces the same fingerprint.
+ *
+ * `rotatesInMs` is intentionally part of the fingerprint: when it shifts we
+ * want the client to recompute its `prepareForRequest` deadline rather than
+ * keep the stale projection.
+ */
+function fingerprintEntry(entry: SnapshotEntry): string {
+	return JSON.stringify([entry.id, entry.provider, entry.identityKey, entry.rotatesInMs, entry.credential]);
+}
+
+function sseEvent(event: string, body: unknown): string {
+	return `event: ${event}\ndata: ${JSON.stringify(body)}\n\n`;
+}
+
+function serveSnapshotStream(
+	req: Request,
+	storage: AuthStorage,
+	refresher: AuthBrokerRefresher | undefined,
+	peer: string,
+	keepaliveMs: number,
+): Response {
+	const encoder = new TextEncoder();
+	const openedAt = Date.now();
+	const lastByCredId = new Map<number, string>();
+	let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+	let unsubscribe: (() => void) | null = null;
+	let keepaliveTimer: NodeJS.Timeout | undefined;
+	let abortHandler: (() => void) | null = null;
+	let processing = false;
+	let pendingBumps = 0;
+	let closed = false;
+	let lastGeneration = -1;
+
+	const cleanup = (): void => {
+		if (closed) return;
+		closed = true;
+		if (keepaliveTimer !== undefined) {
+			clearInterval(keepaliveTimer);
+			keepaliveTimer = undefined;
+		}
+		if (unsubscribe) {
+			unsubscribe();
+			unsubscribe = null;
+		}
+		if (abortHandler) {
+			req.signal.removeEventListener("abort", abortHandler);
+			abortHandler = null;
+		}
+		try {
+			controller?.close();
+		} catch {
+			// Already closed by Bun on client disconnect; harmless.
+		}
+		logger.info("auth-broker stream closed", { peer, durationMs: Date.now() - openedAt });
+	};
+
+	const write = (chunk: string): boolean => {
+		if (closed || !controller) return false;
+		try {
+			controller.enqueue(encoder.encode(chunk));
+			return true;
+		} catch (err) {
+			logger.debug("auth-broker stream enqueue failed", { peer, error: String(err) });
+			cleanup();
+			return false;
+		}
+	};
+
+	const processGenerationBump = async (): Promise<void> => {
+		if (closed) return;
+		if (processing) {
+			pendingBumps += 1;
+			return;
+		}
+		processing = true;
+		try {
+			do {
+				pendingBumps = 0;
+				await storage.reload();
+				if (closed) return;
+				const snapshot = buildSnapshot(storage, refresher);
+				// Generation must move forward; a duplicate listener firing without a
+				// real bump is a no-op below (fingerprints unchanged).
+				if (snapshot.generation < lastGeneration) {
+					logger.warn("auth-broker stream generation went backwards", {
+						peer,
+						previous: lastGeneration,
+						current: snapshot.generation,
+					});
+				}
+				lastGeneration = snapshot.generation;
+				const seenIds = new Set<number>();
+				for (const entry of snapshot.credentials) {
+					seenIds.add(entry.id);
+					const fp = fingerprintEntry(entry);
+					if (lastByCredId.get(entry.id) === fp) continue;
+					lastByCredId.set(entry.id, fp);
+					const payload: SnapshotStreamEntryEvent = {
+						kind: "entry",
+						generation: snapshot.generation,
+						serverNowMs: snapshot.serverNowMs,
+						refresher: snapshot.refresher,
+						entry,
+					};
+					if (!write(sseEvent("entry", payload))) return;
+					logger.debug("auth-broker stream entry", {
+						peer,
+						id: entry.id,
+						provider: entry.provider,
+						generation: snapshot.generation,
+					});
+				}
+				for (const id of [...lastByCredId.keys()]) {
+					if (seenIds.has(id)) continue;
+					lastByCredId.delete(id);
+					const payload: SnapshotStreamRemovedEvent = {
+						kind: "removed",
+						generation: snapshot.generation,
+						serverNowMs: snapshot.serverNowMs,
+						refresher: snapshot.refresher,
+						id,
+					};
+					if (!write(sseEvent("removed", payload))) return;
+					logger.debug("auth-broker stream removed", { peer, id, generation: snapshot.generation });
+				}
+			} while (pendingBumps > 0 && !closed);
+		} finally {
+			processing = false;
+		}
+	};
+
+	const stream = new ReadableStream<Uint8Array>({
+		async start(c) {
+			controller = c;
+			await storage.reload();
+			const initial = buildSnapshot(storage, refresher);
+			lastGeneration = initial.generation;
+			for (const entry of initial.credentials) lastByCredId.set(entry.id, fingerprintEntry(entry));
+			const initialEvent: SnapshotStreamSnapshotEvent = { kind: "snapshot", ...initial };
+			if (!write(sseEvent("snapshot", initialEvent))) return;
+			keepaliveTimer = setInterval(() => {
+				write(": keepalive\n\n");
+			}, keepaliveMs);
+			keepaliveTimer.unref?.();
+			unsubscribe = storage.onGenerationChanged(() => {
+				void processGenerationBump();
+			});
+			abortHandler = (): void => cleanup();
+			req.signal.addEventListener("abort", abortHandler);
+			logger.info("auth-broker stream opened", { peer, generation: initial.generation });
+		},
+		cancel() {
+			cleanup();
+		},
+	});
+
+	return new Response(stream, {
+		status: 200,
+		headers: {
+			"Content-Type": "text/event-stream; charset=utf-8",
+			"Cache-Control": "no-cache",
+			Connection: "keep-alive",
+			"X-Accel-Buffering": "no",
+		},
+	});
+}
+
 /** Boot the broker. Caller owns lifecycle; `handle.close()` to stop. */
 export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServerHandle {
 	const bind = parseBind(opts.bind ?? DEFAULT_AUTH_BROKER_BIND);
 	const tokens = new Set<string>(opts.bearerTokens);
 	const version = opts.version;
+	const streamKeepaliveMs = opts.streamKeepaliveMs ?? DEFAULT_STREAM_KEEPALIVE_MS;
 
 	const refresher = opts.disableRefresher
 		? undefined
@@ -329,6 +515,7 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 	const server = Bun.serve({
 		hostname: bind.hostname,
 		port: bind.port,
+		idleTimeout: DEFAULT_SERVER_IDLE_TIMEOUT_S,
 		fetch: async (req): Promise<Response> => {
 			const url = new URL(req.url);
 			const pathname = url.pathname;
@@ -342,6 +529,9 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				if (!isAuthorized(req, tokens)) {
 					logger.info("auth-broker request unauthorized", { method: req.method, path: pathname, peer });
 					return json(401, { error: "unauthorized" });
+				}
+				if (req.method === "GET" && pathname === "/v1/snapshot/stream") {
+					return serveSnapshotStream(req, opts.storage, refresher, peer, streamKeepaliveMs);
 				}
 				if (req.method === "GET" && pathname === "/v1/snapshot") {
 					return serveSnapshot(req, url, opts.storage, generationGate, refresher, peer);

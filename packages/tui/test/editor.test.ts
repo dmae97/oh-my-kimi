@@ -2039,4 +2039,44 @@ describe("Editor component", () => {
 			expect(submitted).toBe(pastedText);
 		});
 	});
+
+	describe("Korean NFC paste normalization", () => {
+		// macOS Finder drag-drops/Copy-As-Pathname emit Korean filenames as
+		// NFD (decomposed) — e.g. `화` becomes `ᄒ`(U+1112) + `ᅪ`(U+116A).
+		// `Bun.stringWidth` measures NFD jamo at 3 cells per syllable while
+		// terminals render the precomposed syllable at 2 cells, so without
+		// normalization the cursor column drifts past the visible filename
+		// and subsequent input renders into the wrong row. The earlier fix
+		// landed on the legacy `Input` component; OMP's interactive prompt
+		// uses `Editor`, so the fix has to live here too.
+
+		it("normalizes NFD Korean bracketed-paste to NFC", () => {
+			const editor = new Editor(defaultEditorTheme);
+			const nfcPath = "/Users/leo/Documents/260411_아빠-창고-미팅-1회차";
+			const nfdPath = nfcPath.normalize("NFD");
+			expect(nfdPath).not.toBe(nfcPath);
+			expect(nfdPath.length).toBeGreaterThan(nfcPath.length);
+
+			editor.handleInput(`\x1b[200~${nfdPath}\x1b[201~`);
+
+			expect(editor.getText()).toBe(nfcPath);
+		});
+
+		it("renders pasted Korean path as precomposed syllables, not NFD jamo", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.focused = true;
+			const nfdPath = "/Users/leo/화면 기록.mov".normalize("NFD");
+			editor.handleInput(`\x1b[200~${nfdPath}\x1b[201~`);
+
+			const rendered = editor.render(120).join("\n");
+			// Precomposed syllables (`화`, `면`, `기`, `록`) must appear in the
+			// rendered output. If NFC normalization is missing, the rendered
+			// text contains NFD jamo (`ᄒ`+`ᅪ`+`ᇁ` etc.) instead.
+			expect(rendered).toContain("화면");
+			expect(rendered).toContain("기록");
+			// The leading Hangul jamo block (U+1100..U+1112) only appears in
+			// NFD output. The Editor must not leak it after normalization.
+			expect(rendered).not.toMatch(/[\u1100-\u1112]/);
+		});
+	});
 });
