@@ -103,6 +103,7 @@ import {
 	RequestContextResultSchema,
 	RequestContextSchema,
 	RequestContextSuccessSchema,
+	ResumeActionSchema,
 	SetBlobResultSchema,
 	type ShellArgs,
 	ShellFailureSchema,
@@ -2330,21 +2331,22 @@ function buildGrpcRequest(
 				: extractText(lastMessage.content)
 			: "";
 
-	// Validate that we have non-empty user text for the action
-	if (!userText || userText.trim().length === 0) {
-		throw new Error("Cannot send empty user message to Cursor API");
-	}
-
-	const userMessage = create(UserMessageSchema, {
-		text: userText,
-		messageId: crypto.randomUUID(),
-	});
-
 	const action = create(ConversationActionSchema, {
-		action: {
-			case: "userMessageAction",
-			value: create(UserMessageActionSchema, { userMessage }),
-		},
+		action:
+			userText.trim().length > 0
+				? {
+						case: "userMessageAction",
+						value: create(UserMessageActionSchema, {
+							userMessage: create(UserMessageSchema, {
+								text: userText,
+								messageId: crypto.randomUUID(),
+							}),
+						}),
+					}
+				: {
+						case: "resumeAction",
+						value: create(ResumeActionSchema, {}),
+					},
 	});
 
 	// Build conversation turns from prior messages (excluding the last user message).

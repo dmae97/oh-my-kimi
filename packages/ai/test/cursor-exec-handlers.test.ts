@@ -1,5 +1,40 @@
 import { describe, expect, it } from "bun:test";
-import { buildCursorSystemPromptJsons, resolveExecHandler } from "../src/providers/cursor";
+import { buildCursorSystemPromptJsons, resolveExecHandler, streamCursor } from "../src/providers/cursor";
+import type { AgentRunRequest } from "../src/providers/cursor/gen/agent_pb";
+import type { Context, Model } from "../src/types";
+
+const cursorModel: Model<"cursor-agent"> = {
+	id: "cursor-composer-2.5",
+	name: "Cursor Composer 2.5",
+	api: "cursor-agent",
+	provider: "cursor",
+	baseUrl: "",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1,
+	maxTokens: 1,
+};
+
+function captureCursorPayload(context: Context): Promise<AgentRunRequest> {
+	const { promise, resolve, reject } = Promise.withResolvers<AgentRunRequest>();
+	streamCursor(cursorModel, context, {
+		apiKey: "test-token",
+		onPayload: payload => {
+			if (isAgentRunRequest(payload)) {
+				resolve(payload);
+			} else {
+				reject(new Error("Cursor payload was not an AgentRunRequest"));
+			}
+			throw new Error("stop after capturing Cursor payload");
+		},
+	});
+	return promise;
+}
+
+function isAgentRunRequest(payload: unknown): payload is AgentRunRequest {
+	return !!payload && typeof payload === "object" && "$typeName" in payload;
+}
 
 describe("Cursor resolveExecHandler execHandlers binding", () => {
 	it("invokes handler with correct this when passed as bound method", async () => {
@@ -63,5 +98,22 @@ describe("Cursor system prompt encoding", () => {
 		const jsons = buildCursorSystemPromptJsons(["", ""]);
 		expect(jsons).toHaveLength(1);
 		expect(JSON.parse(jsons[0])).toEqual({ role: "system", content: "You are a helpful assistant." });
+	});
+});
+describe("Cursor request action encoding", () => {
+	it("uses a resume action for empty user turns", async () => {
+		const payload = await captureCursorPayload({
+			messages: [{ role: "user", content: "   ", timestamp: 0 }],
+		});
+
+		expect(payload.action?.action.case).toBe("resumeAction");
+	});
+
+	it("uses a user message action for non-empty user turns", async () => {
+		const payload = await captureCursorPayload({
+			messages: [{ role: "user", content: "continue", timestamp: 0 }],
+		});
+
+		expect(payload.action?.action.case).toBe("userMessageAction");
 	});
 });
