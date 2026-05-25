@@ -601,6 +601,22 @@ export const SETTINGS_SCHEMA = {
 		default: 3,
 	},
 
+	"display.shimmer": {
+		type: "enum",
+		values: ["classic", "kitt", "disabled"] as const,
+		default: "classic",
+		ui: {
+			tab: "appearance",
+			label: "Shimmer",
+			description: "Animation style for working/loading messages",
+			options: [
+				{ value: "classic", label: "Classic", description: "Soft cosine wave sweeping across the text" },
+				{ value: "kitt", label: "KITT Scanner", description: "Knight Rider 1982 red light bouncing left-right" },
+				{ value: "disabled", label: "Disabled", description: "No animation; static muted text" },
+			],
+		},
+	},
+
 	"display.showTokenUsage": {
 		type: "boolean",
 		default: false,

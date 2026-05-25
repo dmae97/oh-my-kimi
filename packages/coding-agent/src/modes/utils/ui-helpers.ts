@@ -113,21 +113,39 @@ export class UiHelpers {
 								type?: "bash" | "task";
 								label?: string;
 								durationMs?: number;
+								jobs?: Array<{
+									jobId?: string;
+									type?: "bash" | "task";
+									label?: string;
+									durationMs?: number;
+								}>;
 							}>
 						).details;
-						const jobId = details?.jobId ?? "unknown";
-						const typeLabel = details?.type ? `[${details.type}]` : "[job]";
-						const duration =
-							typeof details?.durationMs === "number" ? formatDuration(details.durationMs) : undefined;
-						const line = [
-							theme.fg("success", `${theme.status.success} Background job completed`),
-							theme.fg("dim", typeLabel),
-							theme.fg("accent", jobId),
-							duration ? theme.fg("dim", `(${duration})`) : undefined,
-						]
-							.filter(Boolean)
-							.join(" ");
-						this.ctx.chatContainer.addChild(new Text(line, 1, 0));
+						const jobs =
+							details?.jobs && details.jobs.length > 0
+								? details.jobs
+								: [
+										{
+											jobId: details?.jobId,
+											type: details?.type,
+											label: details?.label,
+											durationMs: details?.durationMs,
+										},
+									];
+						for (const job of jobs) {
+							const jobId = job.jobId ?? "unknown";
+							const typeLabel = job.type ? `[${job.type}]` : "[job]";
+							const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
+							const line = [
+								theme.fg("success", `${theme.status.success} Background job completed`),
+								theme.fg("dim", typeLabel),
+								theme.fg("accent", jobId),
+								duration ? theme.fg("dim", `(${duration})`) : undefined,
+							]
+								.filter(Boolean)
+								.join(" ");
+							this.ctx.chatContainer.addChild(new Text(line, 1, 0));
+						}
 						break;
 					}
 					if (message.customType === SKILL_PROMPT_MESSAGE_TYPE) {

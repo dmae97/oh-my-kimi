@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 
-import { getWorktreesDir, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { getWorktreeDir, hashPath, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { Settings } from "../config/settings";
 import githubDescription from "../prompts/tools/github.md" with { type: "text" };
@@ -859,18 +859,8 @@ function sanitizeRemoteName(value: string): string {
 	return sanitized.length > 0 ? `fork-${sanitized}` : "fork";
 }
 
-/**
- * Encode an absolute repository path into a single filesystem-safe segment.
- * Mirrors the legacy session-dir encoding used elsewhere in the project: drop
- * the leading separator, then collapse `/`, `\\`, and `:` to `-`. The result
- * is not strictly injective for pathological inputs (e.g. `/a/b` vs `/a-b`)
- * but matches the rest of the codebase and stays human-readable.
- */
-function encodeRepoPathForFilesystem(repoPath: string): string {
-	const resolved = path.resolve(repoPath);
-	const encoded = resolved.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
-	return encoded || "root";
-}
+/** Maximum disambiguation suffixes we try before giving up on a worktree path. */
+const WORKTREE_PATH_MAX_SUFFIX = 100;
 
 function toLocalBranchRef(value: string): string {
 	return `refs/heads/${value}`;
@@ -912,25 +902,38 @@ async function requireCurrentGitHead(cwd: string, signal?: AbortSignal): Promise
 	return headSha;
 }
 
-async function ensureGitWorktreePathAvailable(
-	worktreePath: string,
+/**
+ * Resolve a worktree path that is free of conflicts.
+ *
+ * Given a `basePath`, return either `basePath` itself or `${basePath}-2`,
+ * `${basePath}-3`, … up to {@link WORKTREE_PATH_MAX_SUFFIX} — whichever is the
+ * first variant that is **not** registered with git as another worktree and
+ * **not** present on disk. The numeric tail salvages two rare cases that
+ * would otherwise abort a checkout: stale leftover dirs from an interrupted
+ * `git worktree add`, and the (vanishingly unlikely) `hashPath` collision
+ * between two repos that happen to produce the same 7-hex digest.
+ */
+async function resolveAvailableWorktreePath(
+	basePath: string,
 	existingWorktrees: git.GitWorktreeEntry[],
-): Promise<void> {
-	const normalizedTarget = path.resolve(worktreePath);
-	const conflictingWorktree = existingWorktrees.find(entry => path.resolve(entry.path) === normalizedTarget);
-	if (conflictingWorktree) {
-		throw new ToolError(`worktree path is already registered: ${conflictingWorktree.path}`);
-	}
-
-	try {
-		await fs.stat(normalizedTarget);
-		throw new ToolError(`worktree path already exists: ${normalizedTarget}`);
-	} catch (error) {
-		if (isEnoent(error)) {
-			return;
+): Promise<string> {
+	const registered = new Set(existingWorktrees.map(entry => path.resolve(entry.path)));
+	for (let attempt = 0; attempt < WORKTREE_PATH_MAX_SUFFIX; attempt += 1) {
+		const candidate = attempt === 0 ? basePath : `${basePath}-${attempt + 1}`;
+		const normalized = path.resolve(candidate);
+		if (registered.has(normalized)) continue;
+		try {
+			await fs.stat(normalized);
+		} catch (error) {
+			if (isEnoent(error)) {
+				return candidate;
+			}
+			throw error;
 		}
-		throw error;
 	}
+	throw new ToolError(
+		`could not find an unused worktree path under ${basePath} (tried ${WORKTREE_PATH_MAX_SUFFIX} suffixes)`,
+	);
 }
 
 function selectPrCloneUrl(originUrl: string | undefined, repo: Pick<GhRepoViewData, "url" | "sshUrl">): string {
@@ -2939,7 +2942,7 @@ async function checkoutPullRequest(
 	const repoRoot = await requireGitRepoRoot(session.cwd, signal);
 	const primaryRepoRoot = await requirePrimaryGitRepoRoot(repoRoot, signal);
 	const localBranch = `pr-${prNumber}`;
-	const worktreePath = path.join(getWorktreesDir(), encodeRepoPathForFilesystem(primaryRepoRoot), localBranch);
+	const worktreePath = getWorktreeDir(`${prNumber}-${hashPath(primaryRepoRoot)}`);
 
 	// Every git mutation against `repoRoot` from here on must run under the
 	// per-repo lock. Worktrees of the same primary repo share `.git/config`,
@@ -3003,9 +3006,9 @@ async function checkoutPullRequest(
 				signal,
 			);
 
-			const finalWorktreePath = existingWorktree?.path ?? worktreePath;
+			let finalWorktreePath = existingWorktree?.path ?? worktreePath;
 			if (!existingWorktree) {
-				await ensureGitWorktreePathAvailable(finalWorktreePath, existingWorktrees);
+				finalWorktreePath = await resolveAvailableWorktreePath(worktreePath, existingWorktrees);
 				await fs.mkdir(path.dirname(finalWorktreePath), { recursive: true });
 				await git.worktree.add(repoRoot, finalWorktreePath, localBranch, { signal });
 			}

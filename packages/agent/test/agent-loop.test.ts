@@ -919,4 +919,37 @@ describe("agentLoopContinue with AgentMessage", () => {
 			expect(JSON.stringify(toolEnd.result)).toContain("hook exploded");
 		}
 	});
+	it("runs onBeforeYield before polling follow-up messages", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const queuedFollowUps: AgentMessage[] = [];
+		let hookCalls = 0;
+		const mock = createMockModel({
+			responses: [{ content: ["first"] }, { content: ["second"] }],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			onBeforeYield: () => {
+				hookCalls++;
+				if (hookCalls === 1) {
+					queuedFollowUps.push(createUserMessage("follow-up"));
+				}
+			},
+			getFollowUpMessages: async () => queuedFollowUps.splice(0),
+		};
+
+		const stream = agentLoop([createUserMessage("initial")], context, config, undefined, mock.stream);
+		for await (const _ of stream) {
+			// drain
+		}
+
+		const messages = await stream.result();
+		expect(hookCalls).toBe(2);
+		expect(messages.map(message => message.role)).toEqual(["user", "assistant", "user", "assistant"]);
+		expect(messages[2]).toMatchObject({ role: "user", content: "follow-up" });
+	});
 });

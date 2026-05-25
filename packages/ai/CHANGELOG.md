@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [15.2.4] - 2026-05-22
+
+### Fixed
+
+- Fixed ChatGPT Plus/Pro (Codex) OAuth login returning `Token exchange failed: 403` on Windows. When port 1455 was in use, the callback server silently fell back to a random port; OpenAI's authorization endpoint accepts any localhost redirect URI (loose validation), so the browser callback succeeds and shows "Authentication Successful", but the token endpoint rejects the non-registered port with 403. The `OpenAICodexOAuthFlow` now enforces a fixed `redirectUri` option so a busy port immediately surfaces as "port unavailable" instead of producing a confusing 403 ([#1277](https://github.com/can1357/oh-my-pi/issues/1277)).
+- Improved `exchangeCodeForToken` error diagnostics: the 403 response body (`error` / `error_description` fields) is now included in the thrown message, matching the existing `refreshOpenAICodexToken` behaviour.
+
+### Added
+
+- Added `ChatGPT Plus/Pro (Codex, headless/device)` (`openai-codex-device`) as an alternative login method for the Codex provider. Uses OpenAI's device-code flow (`/api/accounts/deviceauth/usercode` → poll `/api/accounts/deviceauth/token`), which avoids a local callback server and port 1455 entirely. Credentials are stored under the existing `openai-codex` provider key so all models and tooling continue to work without reconfiguration ([#1277](https://github.com/can1357/oh-my-pi/issues/1277)).
+
 ## [15.2.2] - 2026-05-22
 
 ### Fixed

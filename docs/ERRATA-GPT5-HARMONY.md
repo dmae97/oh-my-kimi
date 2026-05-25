@@ -138,7 +138,7 @@ The `edit` tool exists in two variants in the corpus:
 
 | Variant                  | Calls | Recovery |
 |--------------------------|------:|----------|
-| Patch-DSL (`@PATH`/anchor/`~payload`) | 27 | **Recoverable** by op-truncation (§3.3) |
+| Patch-DSL (`§PATH`/anchor/`«»≔` ops) | 27 | **Recoverable** by op-truncation (§3.3) |
 | JSON-schema (`{path,edits:[…]}`)      | 11 | **Not recoverable** — contamination is escaped *inside* JSON strings, parser accepts it cleanly, content would be written verbatim into source files |
 
 For Patch-DSL leaks specifically:

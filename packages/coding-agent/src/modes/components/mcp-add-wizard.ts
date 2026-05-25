@@ -1157,10 +1157,11 @@ export class MCPAddWizard extends Container {
 			this.#contentContainer.addChild(new Text(theme.fg("success", "✓ Authentication successful!"), 0, 0));
 			this.#contentContainer.addChild(new Spacer(1));
 			this.#contentContainer.addChild(new Text(theme.fg("muted", "Running connection health check..."), 0, 0));
-			const healthText = new Text(theme.fg("muted", "| Checking server connection..."), 0, 0);
+			const spinnerFrames = theme.spinnerFrames;
+			const initialFrame = spinnerFrames[0] ?? "|";
+			const healthText = new Text(theme.fg("muted", `${initialFrame} Checking server connection...`), 0, 0);
 			this.#contentContainer.addChild(healthText);
 
-			const spinnerFrames = ["|", "/", "-", "\\"];
 			let spinnerIndex = 0;
 			const spinner = setInterval(() => {
 				healthText.setText(
@@ -1168,7 +1169,7 @@ export class MCPAddWizard extends Container {
 				);
 				spinnerIndex++;
 				this.#requestRender();
-			}, 120);
+			}, 80);
 
 			let healthPassed = true;
 			let healthError = "";

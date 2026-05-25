@@ -3,6 +3,57 @@
 ## [Unreleased]
 
 - Added Kagi V1 web search provider support for the new API, intentionally left V0 in for now to not break any existing users.
+### Fixed
+
+- Fixed clipboard image paste (Ctrl+V) silently failing on WSL2 by routing image reads through a `powershell.exe` bridge when WSL interop is detected, since `arboard` returns `ContentNotAvailable` under WSLg ([#1280](https://github.com/can1357/oh-my-pi/issues/1280))
+
+## [15.2.4] - 2026-05-22
+### Breaking Changes
+
+- Replaced the legacy `@@` header and `+`/`<`/`=`/`-` hashline syntax with the new `§PATH` header and `«`/`»`/`≔` operation format, so existing hashline scripts and prompts using old symbols must be updated
+
+### Added
+
+- Added one-anchor `≔ANCHOR` shorthand equivalent to `≔ANCHOR..ANCHOR` for single-line replace/delete
+
+### Changed
+
+- Changed `≔A..B` so an omitted payload now deletes the range, and added an explicit empty payload line to keep a literal blank replacement line
+
+### Removed
+
+- Removed the `hsep` prompt helper and `PI_HL_SEP` payload-prefix configuration because hashline payloads are no longer line-prefixed
+
+### Fixed
+
+- Fixed hashline payload handling in parser and streaming preview to preserve blank lines as actual payload text until the next op, file header, or envelope marker
+
+## [15.2.3] - 2026-05-22
+### Breaking Changes
+
+- Changed PR and task-isolation worktree directory layout to hash-based `~/.omp/wt/<identifier>-<path-hash>` style paths, replacing the previous nested encoded-repo layout
+
+### Added
+
+- Added `omp worktree` command (alias `wt`) to list and manage agent-managed worktrees under `~/.omp/wt`
+- Added `omp worktree clear` to remove orphaned worktree directories, with `--all` to include live PR-checkouts, `--dry-run` for preview, and `--json` reporting
+- Added machine-readable JSON output to `omp worktree list` for scripted inspection
+- Added `display.shimmer` appearance setting with `classic`, `kitt` (Knight Rider K.I.T.T. scanner), and `disabled` modes
+
+### Changed
+
+- Changed the welcome intro animation to a 3-second eased gradient sweep with a diagonal shine highlight across the logo
+- Changed background job completion follow-ups to batch multiple finished jobs into a single `async-result` message, showing each completed job and its result in one place
+- Changed MCP notification follow-ups to combine multiple resource updates into a single consolidated message and suppress duplicate server/uri entries
+- Updated PR checkout to reuse `hashPath`-based worktree roots when creating and scanning worktrees for cleanup
+- Updated `worktree` cleanup logic to gracefully prune parent git metadata after removing worktree directories
+- Reworked working-message shimmer animation for 60fps rendering: ANSI sequences are coalesced per same-tier run instead of emitted per code point, palettes compile once and cache per active theme, and the band position is now fractional so motion is smooth at any frame rate
+- Switched MCP health-check and "Connecting to…" spinners from hard-coded ASCII (`|/-\`) to `theme.spinnerFrames` so they pick up the active symbol preset (braille on unicode/nerd, ASCII when explicitly themed)
+
+### Fixed
+
+- Fixed PR checkout failures when the default worktree path was already registered or occupied by stale leftovers by automatically selecting suffixed alternatives (`-2`, `-3`, etc.)
+- Fixed Memory tab in the settings UI not revealing or hiding the Hindsight-only rows (`Hindsight API URL`, `Hindsight Bank ID`, `Hindsight Scoping`, etc.) when `Memory Backend` was switched via the inline submenu. The selector now rebuilds its item list after every change so condition-gated rows appear/disappear immediately instead of requiring a tab switch
 
 ## [15.2.2] - 2026-05-22
 

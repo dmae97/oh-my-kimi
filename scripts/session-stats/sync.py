@@ -15,7 +15,7 @@ Schema (all tables prefixed `ss_` to avoid collision with packages/stats):
   ss_assistant_msgs   one row per assistant message (text + thinking blobs)
   ss_user_msgs        one row per user message (text blob)
   ss_edit_calls       one row per edit toolCall (success + warnings paired in)
-  ss_edit_sections    one row per @PATH section inside an edit toolCall, with
+  ss_edit_sections    one row per §PATH section inside an edit toolCall, with
                       precomputed detector outputs (longest_repeat_*, dup_anchors)
 
 Run:
@@ -52,11 +52,11 @@ except ImportError:
 SESSIONS_ROOT = Path.home() / ".omp" / "agent" / "sessions"
 DB_PATH = Path.home() / ".omp" / "stats.db"
 TOKENIZER_NAME = "o200k_base"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 # Bump whenever parse_hashline_input / find_longest_repeat / duplicated_anchors
 # / looks_successful / extract_warnings semantics change. Bump invalidates
 # previously-stored ss_edit_* rows on next sync.
-EDIT_PARSER_VERSION = 1
+EDIT_PARSER_VERSION = 4
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS ss_sessions (
@@ -231,6 +231,8 @@ def batch_count_tokens(strings: list[str]) -> list[int]:
 
 _RANGE_RE = re.compile(r"^\s*(\d+)[a-z*]+(?:\.\.(\d+)[a-z*]+)?\s*$")
 _SINGLE_ANCHOR_RE = re.compile(r"^\s*(\d+)[a-z*]+\s*$")
+_HASHLINE_OP_RE = re.compile(r"^([«»≔])\s*(\S+)\s*$")
+_HASHLINE_ENVELOPE_MARKERS = {"*** Begin Patch", "*** End Patch", "*** Abort"}
 
 
 def _parse_range(raw: str) -> tuple[int, tuple[int, int] | None]:
@@ -290,66 +292,57 @@ def parse_hashline_input(input_str: str) -> list[EditSection]:
 
     for raw_line in input_str.split("\n"):
         line = raw_line[:-1] if raw_line.endswith("\r") else raw_line
+        trimmed_end = line.rstrip()
 
-        if line.startswith("@"):
+        if trimmed_end in _HASHLINE_ENVELOPE_MARKERS:
+            if trimmed_end != "*** Begin Patch":
+                break
+            continue
+
+        if line.startswith("§"):
             if cur is not None:
                 sections.append(cur)
-            cur = EditSection(target_file=line[1:].strip())
+            prefix_end = 0
+            while prefix_end < len(line) and line[prefix_end] == "§":
+                prefix_end += 1
+            cur = EditSection(target_file=line[prefix_end:].strip())
             open_idx = None
             continue
         if cur is None:
             continue
 
-        if line.startswith("~"):
-            payload = line[1:]
-            if open_idx is None:
+        op_match = _HASHLINE_OP_RE.match(line)
+        if op_match:
+            op = op_match.group(1)
+            body = op_match.group(2)
+            if op in ("«", "»"):
+                anchor_trimmed = body.strip()
+                if anchor_trimmed and anchor_trimmed not in ("BOF", "EOF"):
+                    cur.op_anchors.append(anchor_trimmed)
+                line_no = _parse_anchor_line(body)
+                if line_no is not None:
+                    cur.touch(line_no)
                 open_idx = open_new(cur)
-            cur.payload_blocks[open_idx].append(payload)
-            continue
+                cur.op_count += 1
+                continue
+            if op == "≔":
+                size, lines = _parse_range(body)
+                cur.deleted_lines += size
+                if lines is not None:
+                    cur.touch(lines[0])
+                    cur.touch(lines[1])
+                for part in body.strip().split(".."):
+                    t = part.strip()
+                    if t:
+                        cur.op_anchors.append(t)
+                cur.op_count += 1
+                open_idx = open_new(cur)
+                continue
 
-        trimmed = line.lstrip()
-        if not trimmed:
+        if open_idx is not None:
+            cur.payload_blocks[open_idx].append(line)
+        elif not line.strip():
             continue
-        op = trimmed[0]
-        if op in ("+", "<"):
-            body = trimmed[1:].lstrip()
-            if "~" in body:
-                anchor_part, tail = body.split("~", 1)
-            else:
-                anchor_part, tail = body, None
-            anchor_trimmed = anchor_part.strip()
-            if anchor_trimmed and anchor_trimmed not in ("BOF", "EOF"):
-                cur.op_anchors.append(anchor_trimmed)
-            line_no = _parse_anchor_line(anchor_part)
-            if line_no is not None:
-                cur.touch(line_no)
-            if tail is not None:
-                # Inline `+ ANCHOR~text`: replaces a single line.
-                if open_idx is None:
-                    open_idx = open_new(cur)
-                cur.payload_blocks[open_idx].append(tail)
-                cur.deleted_lines += 1
-                open_idx = None
-            else:
-                open_idx = open_new(cur)
-            cur.op_count += 1
-        elif op in ("-", "="):
-            body = trimmed[1:].lstrip()
-            size, lines = _parse_range(body)
-            cur.deleted_lines += size
-            if lines is not None:
-                cur.touch(lines[0])
-                cur.touch(lines[1])
-            for part in body.strip().split(".."):
-                t = part.strip()
-                if t:
-                    cur.op_anchors.append(t)
-            cur.op_count += 1
-            if op == "=":
-                open_idx = open_new(cur)
-            else:
-                open_idx = None
-        # else: blank / unrecognized — keep payload state.
 
     if cur is not None:
         sections.append(cur)
@@ -676,7 +669,7 @@ def _ingest_edit_call(rec, sf, seq, ts, call_id, arg_obj, arg_json) -> None:
         (sf, call_id, seq, ts, raw_input_len, EDIT_PARSER_VERSION)
     )
 
-    if not input_str.lstrip().startswith("@"):
+    if not any(line.startswith("§") for line in input_str.lstrip("\ufeff").splitlines()):
         # Vim-mode or other shape — no sections to record.
         return
 

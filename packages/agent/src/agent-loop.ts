@@ -589,6 +589,7 @@ async function runLoopBody(
 		}
 
 		// Agent would stop here. Check for follow-up messages.
+		await config.onBeforeYield?.();
 		const followUpMessages = (await config.getFollowUpMessages?.()) || [];
 		if (followUpMessages.length > 0) {
 			// Set as pending so inner loop processes them

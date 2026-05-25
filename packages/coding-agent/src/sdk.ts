@@ -31,7 +31,7 @@ import {
 	Snowflake,
 } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
-import { AsyncJobManager, isBackgroundJobSupportEnabled } from "./async";
+import { type AsyncJob, AsyncJobManager, isBackgroundJobSupportEnabled } from "./async";
 import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
@@ -101,7 +101,7 @@ import {
 import { AgentSession } from "./session/agent-session";
 import { resolveAuthBrokerConfig } from "./session/auth-broker-config";
 import { AuthBrokerClient, AuthStorage, RemoteAuthCredentialStore } from "./session/auth-storage";
-import { convertToLlm } from "./session/messages";
+import { type CustomMessage, convertToLlm } from "./session/messages";
 import { SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
@@ -151,6 +151,83 @@ import { queueResolveHandler } from "./tools/resolve";
 import { EventBus } from "./utils/event-bus";
 import { buildNamedToolChoice } from "./utils/tool-choice";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
+
+type AsyncResultEntry = {
+	jobId: string;
+	result: string;
+	job: AsyncJob | undefined;
+	durationMs: number | undefined;
+};
+
+type AsyncResultJobDetails = {
+	jobId: string;
+	type?: "bash" | "task";
+	label?: string;
+	durationMs?: number;
+};
+
+type AsyncResultDetails = {
+	jobs: AsyncResultJobDetails[];
+};
+
+type McpNotificationEntry = {
+	serverName: string;
+	uri: string;
+};
+
+function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): CustomMessage<AsyncResultDetails> | null {
+	if (entries.length === 0) return null;
+	const jobs = entries.map(entry => ({
+		jobId: entry.jobId,
+		result: entry.result,
+		type: entry.job?.type,
+		label: entry.job?.label,
+		durationMs: entry.durationMs,
+	}));
+	const details: AsyncResultDetails = {
+		jobs: jobs.map(job => ({
+			jobId: job.jobId,
+			type: job.type,
+			label: job.label,
+			durationMs: job.durationMs,
+		})),
+	};
+	return {
+		role: "custom",
+		customType: "async-result",
+		content: prompt.render(asyncResultTemplate, {
+			multiple: jobs.length > 1,
+			jobs,
+		}),
+		display: true,
+		attribution: "agent",
+		details,
+		timestamp: Date.now(),
+	};
+}
+
+function buildMcpNotificationBatchMessage(entries: McpNotificationEntry[]): AgentMessage | null {
+	const resources: McpNotificationEntry[] = [];
+	const seen = new Set<string>();
+	for (const entry of entries) {
+		const key = `${entry.serverName}\0${entry.uri}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		resources.push(entry);
+	}
+	if (resources.length === 0) return null;
+	const lines = [`[MCP notification] ${resources.length} resource(s) updated:`];
+	for (const resource of resources) {
+		lines.push(`- server="${resource.serverName}" uri=${resource.uri}`);
+	}
+	lines.push('Use read(path="mcp://<uri>") to inspect if relevant.');
+	return {
+		role: "user",
+		content: [{ type: "text", text: lines.join("\n") }],
+		attribution: "agent",
+		timestamp: Date.now(),
+	};
+}
 
 // Types
 export interface CreateAgentSessionOptions {
@@ -1035,23 +1112,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						const formattedResult = await formatAsyncResultForFollowUp(result);
 						if (asyncJobManager!.isDeliverySuppressed(jobId)) return;
 
-						const message = prompt.render(asyncResultTemplate, { jobId, result: formattedResult });
 						const durationMs = job ? Math.max(0, Date.now() - job.startTime) : undefined;
-						await session.sendCustomMessage(
-							{
-								customType: "async-result",
-								content: message,
-								display: true,
-								attribution: "agent",
-								details: {
-									jobId,
-									type: job?.type,
-									label: job?.label,
-									durationMs,
-								},
-							},
-							{ deliverAs: "followUp", triggerTurn: true },
-						);
+						session.yieldQueue.enqueue<AsyncResultEntry>("async-result", {
+							jobId,
+							result: formattedResult,
+							job,
+							durationMs,
+						});
 					},
 				})
 			: undefined;
@@ -1902,6 +1969,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			providerSessionId: options.providerSessionId,
 		});
 		hasSession = true;
+		if (asyncJobManager) {
+			session.yieldQueue.register<AsyncResultEntry>("async-result", {
+				isStale: entry => asyncJobManager.isDeliverySuppressed(entry.jobId),
+				build: buildAsyncResultBatchMessage,
+			});
+		}
+		session.yieldQueue.register<McpNotificationEntry>("mcp-notification", {
+			build: buildMcpNotificationBatchMessage,
+		});
 
 		// Attach the live session to the pre-registered ref so peers can route IRC
 		// messages here. Refresh sessionFile in case it was unavailable at pre-register
@@ -2036,9 +2112,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						notificationDebounceTimers.delete(key);
 						// Re-check: user may have disabled notifications during the debounce window
 						if (!settings.get("mcp.notifications")) return;
-						void session.followUp(
-							`[MCP notification] Server "${serverName}" reports resource \`${uri}\` was updated. Use read(path="mcp://${uri}") to inspect if relevant.`,
-						);
+						session.yieldQueue.enqueue<McpNotificationEntry>("mcp-notification", { serverName, uri });
 					}, debounceMs),
 				);
 			});

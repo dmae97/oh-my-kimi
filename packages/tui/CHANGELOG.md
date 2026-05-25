@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [15.2.3] - 2026-05-22
+### Added
+
+- Added `SettingsList#setItems` to replace the entire settings list with a new items array while automatically clamping selection to a valid index
+
+### Changed
+
+- Updated `Loader` to drive renders at ~60fps (16ms tick) while keeping spinner-frame advancement at 80ms so shimmer/animated message colorizers update smoothly without altering spinner cadence
+
 ## [15.1.9] - 2026-05-21
 
 ### Fixed

@@ -26,7 +26,7 @@ import {
 	TUI,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { APP_NAME, getProjectDir, hsvToRgb, isEnoent, logger, postmortem, prompt } from "@oh-my-pi/pi-utils";
+import { APP_NAME, adjustHsv, getProjectDir, hsvToRgb, isEnoent, logger, postmortem, prompt } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { KeybindingsManager } from "../config/keybindings";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
@@ -98,6 +98,7 @@ import {
 } from "./loop-limit";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { SessionObserverRegistry } from "./session-observer-registry";
+import { interruptHint } from "./shared";
 import { type ShimmerPalette, shimmerSegments, shimmerText } from "./theme/shimmer";
 import type { Theme } from "./theme/theme";
 import {
@@ -111,18 +112,43 @@ import {
 import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoItem, TodoPhase } from "./types";
 import { UiHelpers } from "./utils/ui-helpers";
 
-const WORKING_INTERRUPT_HINT = " (esc to interrupt)";
-
 const HINT_SHIMMER_PALETTE: ShimmerPalette = {
 	low: "dim",
 	mid: "muted",
 	high: "borderAccent",
 };
 
-function renderWorkingMessage(message: string): string {
-	if (!message.endsWith(WORKING_INTERRUPT_HINT)) return shimmerText(message, theme);
-	const header = message.slice(0, -WORKING_INTERRUPT_HINT.length);
-	return shimmerSegments([{ text: header }, { text: WORKING_INTERRUPT_HINT, palette: HINT_SHIMMER_PALETTE }], theme);
+interface WorkingMessageAccent {
+	main: string;
+	dim: string;
+}
+
+function renderWorkingMessage(message: string, accent?: WorkingMessageAccent): string {
+	const palette = accent
+		? ({
+				low: "dim",
+				mid: { ansi: accent.main },
+				high: { ansi: accent.main },
+				bold: true,
+			} satisfies ShimmerPalette)
+		: undefined;
+	const hint = interruptHint();
+	if (!message.endsWith(hint)) return shimmerText(message, theme, palette);
+	const header = message.slice(0, -hint.length);
+	const hintPalette = accent
+		? ({
+				low: "dim",
+				mid: { ansi: accent.dim },
+				high: { ansi: accent.dim },
+			} satisfies ShimmerPalette)
+		: HINT_SHIMMER_PALETTE;
+	return shimmerSegments(
+		[
+			{ text: header, palette },
+			{ text: hint, palette: hintPalette },
+		],
+		theme,
+	);
 }
 
 const EDITOR_MAX_HEIGHT_MIN = 6;
@@ -232,7 +258,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	autoCompactionLoader: Loader | undefined = undefined;
 	retryLoader: Loader | undefined = undefined;
 	#pendingWorkingMessage: string | undefined;
-	readonly #defaultWorkingMessage = `Working… (esc to interrupt)`;
+	get #defaultWorkingMessage(): string {
+		return `Working…${interruptHint()}`;
+	}
 	autoCompactionEscapeHandler?: () => void;
 	retryEscapeHandler?: () => void;
 	unsubscribe?: () => void;
@@ -2189,13 +2217,26 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
+	#getWorkingMessageAccent(): WorkingMessageAccent | undefined {
+		const accentEnabled = !isSettingsInitialized() || settings.get("statusLine.sessionAccent") !== false;
+		const sessionName = accentEnabled ? this.sessionManager.getSessionName() : undefined;
+		if (!sessionName) return undefined;
+		const hex = getSessionAccentHex(sessionName);
+		const main = getSessionAccentAnsi(hex);
+		const dim = getSessionAccentAnsi(adjustHsv(hex, { s: 0.55, v: 0.65 }));
+		return main && dim ? { main, dim } : undefined;
+	}
+
 	ensureLoadingAnimation(): void {
 		if (!this.loadingAnimation) {
 			this.statusContainer.clear();
 			this.loadingAnimation = new Loader(
 				this.ui,
-				spinner => theme.fg("accent", spinner),
-				renderWorkingMessage,
+				spinner => {
+					const accent = this.#getWorkingMessageAccent();
+					return accent ? `${accent.main}${spinner}\x1b[39m` : theme.fg("accent", spinner);
+				},
+				message => renderWorkingMessage(message, this.#getWorkingMessageAccent()),
 				this.#defaultWorkingMessage,
 				getSymbolTheme().spinnerFrames,
 			);

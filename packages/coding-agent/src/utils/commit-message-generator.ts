@@ -15,6 +15,8 @@ import { toReasoningEffort } from "../thinking";
 
 const COMMIT_SYSTEM_PROMPT = prompt.render(commitSystemPrompt);
 const MAX_DIFF_CHARS = 4000;
+const COMMIT_MAX_TOKENS = 60;
+const REASONING_SAFE_MAX_TOKENS = 1024;
 
 /** File patterns that should be excluded from commit message generation diffs. */
 const NOISE_SUFFIXES = [".lock", ".lockb", "-lock.json", "-lock.yaml"];
@@ -99,13 +101,16 @@ export async function generateCommitMessage(
 		if (!apiKey) continue;
 
 		try {
+			const maxTokens = candidate.model.reasoning
+				? Math.max(COMMIT_MAX_TOKENS, REASONING_SAFE_MAX_TOKENS)
+				: COMMIT_MAX_TOKENS;
 			const response = await completeSimple(
 				candidate.model,
 				{
 					systemPrompt: [COMMIT_SYSTEM_PROMPT],
 					messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
 				},
-				{ apiKey, maxTokens: 60, reasoning: toReasoningEffort(candidate.thinkingLevel) },
+				{ apiKey, maxTokens, reasoning: toReasoningEffort(candidate.thinkingLevel) },
 			);
 
 			if (response.stopReason === "error") {

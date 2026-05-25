@@ -14,6 +14,14 @@ const testTheme = {
 	bold(text: string): string {
 		return `\x1b[1m${text}\x1b[22m`;
 	},
+	getFgAnsi(color: Parameters<Theme["fg"]>[0]): string {
+		const codes = {
+			accent: "\x1b[36m",
+			dim: "\x1b[2m",
+			muted: "\x1b[90m",
+		};
+		return codes[color as "accent" | "dim" | "muted"] ?? "";
+	},
 };
 
 describe("renderAsciiBar", () => {

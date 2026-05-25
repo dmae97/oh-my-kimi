@@ -6,6 +6,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { HL_FILE_PREFIX } from "../hashline/hash";
 import type { FileDiagnosticsResult } from "../lsp";
 import { renderDiff as renderDiffColored } from "../modes/components/diff";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
@@ -328,7 +329,6 @@ function getCallPreview(
 }
 
 const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** End Patch'";
-const HL_INPUT_HEADER_PREFIX = "@";
 
 function normalizeHashlineInputPreviewPath(rawPath: string): string {
 	const trimmed = rawPath.trim();
@@ -342,13 +342,11 @@ function normalizeHashlineInputPreviewPath(rawPath: string): string {
 }
 
 function parseHashlineInputPreviewHeader(line: string): string | null {
-	if (!line.startsWith(HL_INPUT_HEADER_PREFIX)) return null;
-	// The real parser (`parseHashlineHeaderLine` in `hashline/input.ts`) strips
-	// every leading "@" before resolving the path so canonical "@@ PATH" headers
-	// (and stray "@ PATH" / "@@@ PATH" runs) all route to the same file. Mirror
-	// that here so the renderer doesn't surface a literal "@ " in the title.
+	if (!line.startsWith(HL_FILE_PREFIX)) return null;
+	// Mirror hashline/input.ts: strip every leading file marker so canonical
+	// `§ PATH` headers and stray `§§ PATH` / `§§§PATH` runs render clean paths.
 	let prefixEnd = 0;
-	while (prefixEnd < line.length && line[prefixEnd] === HL_INPUT_HEADER_PREFIX) prefixEnd++;
+	while (prefixEnd < line.length && line[prefixEnd] === HL_FILE_PREFIX) prefixEnd++;
 	const body = line.slice(prefixEnd).trim();
 	const previewPath = normalizeHashlineInputPreviewPath(body);
 	return previewPath.length > 0 ? previewPath : null;

@@ -495,14 +495,6 @@ export class SettingsSelectorComponent extends Container {
 	 */
 	#showSettingsTab(tabId: SettingTab): void {
 		const defs = getSettingsForTab(tabId);
-		const items: SettingItem[] = [];
-
-		for (const def of defs) {
-			const item = this.#defToItem(def);
-			if (item) {
-				items.push(item);
-			}
-		}
 
 		// Add status line preview for appearance tab
 		if (tabId === "appearance") {
@@ -516,7 +508,7 @@ export class SettingsSelectorComponent extends Container {
 		}
 
 		this.#currentList = new SettingsList(
-			items,
+			this.#buildItemsForDefs(defs),
 			10,
 			getSettingsListTheme(),
 			(id, newValue) => {
@@ -537,12 +529,33 @@ export class SettingsSelectorComponent extends Container {
 					settings.set(path, newValue as never);
 					this.callbacks.onChange(path, newValue);
 				}
-				// Submenu types are handled in createSubmenu
+				// Submenu/text types already persisted the value inside their own
+				// done callbacks before SettingsList re-dispatches here. Re-run the
+				// definition-to-item mapping so condition-gated settings (e.g. the
+				// Hindsight cluster guarded by memory.backend) appear/disappear
+				// immediately instead of waiting for the next tab switch.
+				this.#refreshCurrentTabItems(defs);
 			},
 			() => this.callbacks.onCancel(),
 		);
 
 		this.addChild(this.#currentList);
+	}
+
+	/** Map a definition list to UI items, dropping any whose condition is false. */
+	#buildItemsForDefs(defs: SettingDef[]): SettingItem[] {
+		const items: SettingItem[] = [];
+		for (const def of defs) {
+			const item = this.#defToItem(def);
+			if (item) items.push(item);
+		}
+		return items;
+	}
+
+	/** Re-evaluate condition gates against the current settings and refresh the active list. */
+	#refreshCurrentTabItems(defs: SettingDef[]): void {
+		if (this.#currentTabId === "plugins" || !this.#currentList) return;
+		this.#currentList.setItems(this.#buildItemsForDefs(defs));
 	}
 
 	/**

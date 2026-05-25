@@ -8,7 +8,7 @@ import {
 	parseFrontmatter,
 	prompt,
 } from "@oh-my-pi/pi-utils";
-import { computeLineHash, HL_BODY_SEP, HL_EDIT_SEP } from "../hashline/hash";
+import { computeLineHash, HL_BODY_SEP } from "../hashline/hash";
 import { jtdToTypeScript } from "../tools/jtd-to-typescript";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
 
@@ -153,13 +153,6 @@ prompt.registerHelper("hline", function (this: unknown, ...args: unknown[]): str
 	rememberHashlineRef(state, num, ref);
 	return `${ref}${HL_BODY_SEP}${text}`;
 });
-
-/**
- * {{hsep}} — emit the configured hashline payload separator character.
- * Stays in sync with {@link HL_EDIT_SEP} so edit prompt templates
- * never have to hardcode the payload separator.
- */
-prompt.registerHelper("hsep", (): string => HL_EDIT_SEP);
 
 const INLINE_ARG_SHELL_PATTERN = /\$(?:ARGUMENTS|@(?:\[\d+(?::\d*)?\])?|\d+)/;
 const INLINE_ARG_TEMPLATE_PATTERN = /\{\{[\s\S]*?(?:\b(?:arguments|ARGUMENTS|args)\b|\barg\s+[^}]+)[\s\S]*?\}\}/;

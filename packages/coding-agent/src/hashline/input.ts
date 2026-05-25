@@ -1,7 +1,10 @@
 import * as path from "node:path";
-import { ABORT_MARKER, BEGIN_PATCH_MARKER, END_PATCH_MARKER, FILE_HEADER_PREFIX } from "./constants";
-import { HL_EDIT_SEP } from "./hash";
+import { ABORT_MARKER, BEGIN_PATCH_MARKER, END_PATCH_MARKER } from "./constants";
+import { HL_FILE_PREFIX, HL_OP_CHARS } from "./hash";
 import type { SplitHashlineOptions } from "./types";
+
+const regexEscape = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const HASHLINE_OP_LINE_RE = new RegExp(`^[${regexEscape(HL_OP_CHARS)}]`);
 
 export interface HashlineInputSection {
 	path: string;
@@ -26,19 +29,18 @@ function normalizeHashlinePath(rawPath: string, cwd?: string): string {
 
 function parseHashlineHeaderLine(line: string, cwd?: string): HashlineInputSection | null {
 	const trimmed = line.trimEnd();
-	if (!trimmed.startsWith(FILE_HEADER_PREFIX)) return null;
-	// Some models occasionally emit unified-diff-style "@@ path" (or even longer
-	// runs of "@"). Strip every leading "@" before resolving the path so those
-	// stray headers still route to the right file.
+	if (!trimmed.startsWith(HL_FILE_PREFIX)) return null;
+	// Strip a run of leading header markers so canonical `§PATH` and
+	// runaway-prefix forms like `§§PATH` / `§§§PATH` route to the same file.
 	let prefixEnd = 0;
-	while (prefixEnd < trimmed.length && trimmed[prefixEnd] === FILE_HEADER_PREFIX) prefixEnd++;
+	while (prefixEnd < trimmed.length && trimmed[prefixEnd] === HL_FILE_PREFIX) prefixEnd++;
 	const rest = trimmed.slice(prefixEnd);
 	if (rest.trim().length === 0) {
-		throw new Error(`Input header "${FILE_HEADER_PREFIX}" is empty; provide a file path.`);
+		throw new Error(`Input header "${HL_FILE_PREFIX}" is empty; provide a file path.`);
 	}
 	const parsedPath = normalizeHashlinePath(rest, cwd);
 	if (parsedPath.length === 0) {
-		throw new Error(`Input header "${FILE_HEADER_PREFIX}" is empty; provide a file path.`);
+		throw new Error(`Input header "${HL_FILE_PREFIX}" is empty; provide a file path.`);
 	}
 	return { path: parsedPath, diff: "" };
 }
@@ -64,7 +66,7 @@ function stripLeadingBlankLines(input: string): string {
 
 export function containsRecognizableHashlineOperations(input: string): boolean {
 	for (const line of input.split(/\r?\n/)) {
-		if (/^[+<=-]\s+/.test(line) || line.startsWith(HL_EDIT_SEP)) return true;
+		if (HASHLINE_OP_LINE_RE.test(line)) return true;
 	}
 	return false;
 }
@@ -79,7 +81,7 @@ function normalizeFallbackInput(input: string, options: SplitHashlineOptions): s
 	if (!options.path || !containsRecognizableHashlineOperations(input)) return input;
 	const fallbackPath = normalizeHashlinePath(options.path, options.cwd);
 	if (fallbackPath.length === 0) return input;
-	return `${FILE_HEADER_PREFIX} ${fallbackPath}\n${input}`;
+	return `${HL_FILE_PREFIX}${fallbackPath}\n${input}`;
 }
 
 export function splitHashlineInput(input: string, options: SplitHashlineOptions = {}): { path: string; diff: string } {
@@ -95,8 +97,8 @@ export function splitHashlineInputs(input: string, options: SplitHashlineOptions
 	if (parseHashlineHeaderLine(firstLine, options.cwd) === null) {
 		const preview = JSON.stringify(firstLine.slice(0, 120));
 		throw new Error(
-			`input must begin with "@@ PATH" on the first non-blank line; got: ${preview}. ` +
-				`Example: "@@ src/foo.ts" then edit ops.`,
+			`input must begin with "${HL_FILE_PREFIX}PATH" on the first non-blank line; got: ${preview}. ` +
+				`Example: "${HL_FILE_PREFIX}src/foo.ts" then edit ops.`,
 		);
 	}
 

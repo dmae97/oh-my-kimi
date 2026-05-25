@@ -22,6 +22,8 @@ import {
 	containsRecognizableHashlineOperations,
 	END_PATCH_MARKER,
 	type HashlineInputSection,
+	HL_FILE_PREFIX,
+	HL_OP_CHARS,
 	splitHashlineInputs,
 } from "../hashline";
 import type { Theme } from "../modes/theme/theme";
@@ -77,8 +79,19 @@ const STREAMING_FALLBACK_LINES = 12;
 const STREAMING_FALLBACK_WIDTH = 80;
 
 function isHashlineHeaderLine(line: string): boolean {
+	return line.trimEnd().startsWith(HL_FILE_PREFIX);
+}
+
+function parseHashlineHeaderPath(line: string): string {
 	const trimmed = line.trimEnd();
-	return trimmed.startsWith("@") && trimmed.length > 1;
+	let prefixEnd = 0;
+	while (prefixEnd < trimmed.length && trimmed[prefixEnd] === HL_FILE_PREFIX) prefixEnd++;
+	return trimmed.slice(prefixEnd).trim();
+}
+
+function isHashlineOpLine(line: string): boolean {
+	const first = line[0];
+	return first !== undefined && HL_OP_CHARS.includes(first);
 }
 
 function isHashlineEnvelopeMarkerLine(line: string): boolean {
@@ -358,11 +371,11 @@ function buildApplyPatchNaturalOrderPreviews(input: string): PerFileDiffPreview[
 }
 
 /**
- * Hashline equivalent: emit each section's `~payload` lines as `+added`
- * lines in the order the model typed them. We deliberately omit op headers
- * and removal targets from the streaming preview because their content
- * lives in the file and would require a costly re-apply per tick; the
- * complete unified diff is shown once streaming finishes.
+ * Hashline equivalent: emit each payload line as a `+added` line in the
+ * order the model typed it. We deliberately omit op headers and removal
+ * targets from the streaming preview because their content lives in the file
+ * and would require a costly re-apply per tick; the complete unified diff is
+ * shown once streaming finishes.
  */
 function buildHashlineNaturalOrderPreviews(
 	input: string,
@@ -382,13 +395,12 @@ function buildHashlineNaturalOrderPreviews(
 	for (const raw of lines) {
 		if (isHashlineEnvelopeMarkerLine(raw)) continue;
 		if (isHashlineHeaderLine(raw)) {
-			currentPath = raw.trimEnd().slice(1).trim();
+			currentPath = parseHashlineHeaderPath(raw);
 			if (currentPath) ensure(currentPath);
 			continue;
 		}
-		if (raw.startsWith("~")) {
-			ensure(currentPath).push(`+${raw.slice(1)}`);
-		}
+		if (isHashlineOpLine(raw) || !currentPath) continue;
+		ensure(currentPath).push(`+${raw}`);
 	}
 	if (groups.size === 0) return null;
 	const previews: PerFileDiffPreview[] = [];
@@ -409,7 +421,7 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		if (input.length === 0) return null;
 		if (ctx.isStreaming) {
 			// Skip the costly per-tick re-apply and avoid `Diff.structuredPatch`
-			// reordering by showing the model's `~payload` lines in input order.
+			// reordering by showing payload lines in input order.
 			return buildHashlineNaturalOrderPreviews(input, args.path);
 		}
 		ctx.signal.throwIfAborted();
@@ -419,7 +431,7 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 			sections = splitHashlineInputs(input, { cwd: ctx.cwd, path: args.path });
 		} catch {
 			// Single-section fallback keeps the original error rendering for the
-			// "haven't typed `@@ PATH` yet" case.
+			// "haven't typed `§ PATH` yet" case.
 			const result = await computeHashlineDiff({ input, path: args.path }, ctx.cwd, {
 				autoDropPureInsertDuplicates: ctx.hashlineAutoDropPureInsertDuplicates,
 			});

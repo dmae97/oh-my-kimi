@@ -122,6 +122,13 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * continues with another turn.
 	 */
 	getFollowUpMessages?: () => Promise<AgentMessage[]>;
+	/**
+	 * Hook fired right before the loop would exit.
+	 *
+	 * Called when the agent has no more tool calls and no steering messages,
+	 * immediately before polling follow-up messages.
+	 */
+	onBeforeYield?: () => Promise<void> | void;
 
 	/**
 	 * Provides tool execution context, resolved per tool call.

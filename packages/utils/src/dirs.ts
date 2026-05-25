@@ -279,7 +279,7 @@ export function getRemoteDir(): string {
 	return dirs.rootSubdir("remote", "data");
 }
 
-/** Get the PR worktrees directory (~/.omp/wt). */
+/** Get the agent-managed worktrees directory (~/.omp/wt). */
 export function getWorktreesDir(): string {
 	return dirs.rootSubdir("wt", "data");
 }
@@ -309,14 +309,22 @@ export function getPuppeteerDir(): string {
 	return dirs.rootSubdir("puppeteer", "cache");
 }
 
-/** Get the worktree base directory (~/.omp/wt). */
-export function getWorktreeBaseDir(): string {
-	return dirs.rootSubdir("wt", "data");
+/**
+ * Stable 7-character hex digest of an absolute filesystem path.
+ *
+ * Used to pack the project identity into a single short fs-safe segment
+ * (e.g. PR-checkout and task-isolation worktree dirs under `~/.omp/wt/`).
+ * Bun.hash is non-cryptographic — collision space is ~2^28, which is fine
+ * for naming a handful of repos on a single machine. Same input on the
+ * same Bun runtime yields the same output.
+ */
+export function hashPath(absPath: string): string {
+	return Bun.hash(path.resolve(absPath)).toString(16).padStart(16, "0").slice(-7);
 }
 
-/** Get the path to a worktree directory (~/.omp/wt/<project>/<id>). */
-export function getWorktreeDir(encodedProject: string, id: string): string {
-	return path.join(getWorktreeBaseDir(), encodedProject, id);
+/** Get the path to a single worktree directory (~/.omp/wt/<segment>). */
+export function getWorktreeDir(segment: string): string {
+	return path.join(getWorktreesDir(), segment);
 }
 
 /** Get the GPU cache path (~/.omp/gpu_cache.json). */

@@ -763,17 +763,18 @@ export class MCPCommandController {
 		if (!this.ctx.mcpManager) return "disconnected";
 
 		this.ctx.chatContainer.addChild(new Spacer(1));
-		const statusText = new Text(theme.fg("muted", `| Connecting to "${name}"...`), 1, 0);
+		const frames = theme.spinnerFrames;
+		const initialFrame = frames[0] ?? "|";
+		const statusText = new Text(theme.fg("muted", `${initialFrame} Connecting to "${name}"...`), 1, 0);
 		this.ctx.chatContainer.addChild(statusText);
 		this.ctx.ui.requestRender();
 
-		const frames = ["|", "/", "-", "\\"];
 		let frame = 0;
 		const interval = setInterval(() => {
 			statusText.setText(theme.fg("muted", `${frames[frame % frames.length]} Connecting to "${name}"...`));
 			frame++;
 			this.ctx.ui.requestRender();
-		}, 120);
+		}, 80);
 
 		try {
 			try {
