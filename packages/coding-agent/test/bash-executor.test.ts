@@ -6,6 +6,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { executeBash } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
+import type { Shell } from "@oh-my-pi/pi-natives";
 import * as piNatives from "@oh-my-pi/pi-natives";
 
 // Matches the schema default for `tools.artifactHeadBytes` (20 KB) used by
@@ -165,14 +166,20 @@ describe("executeBash", () => {
 		expect(result.output).toContain("Command cancelled");
 	});
 
-	it("returns promptly when native abort cleanup stalls", async () => {
+	it("returns promptly and quarantines the session key when native abort cleanup stalls", async () => {
 		if (process.platform === "win32") {
 			return;
 		}
 
-		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
-			onChunk?.(null, "started\n");
-			return new Promise(() => {});
+		const originalRun = piNatives.Shell.prototype.run;
+		let runCalls = 0;
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(function (this: Shell, options, onChunk) {
+			runCalls++;
+			if (runCalls === 1) {
+				onChunk?.(null, "started\n");
+				return new Promise(() => {});
+			}
+			return originalRun.call(this, options, onChunk);
 		});
 		const abortSpy = vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
 
@@ -198,17 +205,51 @@ describe("executeBash", () => {
 		}
 		expect(abortSpy).toHaveBeenCalled();
 
+		const next = await executeBash("echo next", {
+			cwd: tempDir,
+			timeout: 5000,
+			sessionKey: "hung-native-abort",
+		});
+		expect(next.output.trim()).toBe("next");
+		expect(runCalls).toBe(1);
+	});
+
+	it("restores persistent sessions after native abort cleanup settles", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+
+		const nativeResult = Promise.withResolvers<{ exitCode: undefined; cancelled: true; timedOut: false }>();
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
+			onChunk?.(null, "started\n");
+			return nativeResult.promise;
+		});
+		vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+
+		const controller = new AbortController();
+		const promise = executeBash("sleep 10", {
+			cwd: tempDir,
+			timeout: 5000,
+			signal: controller.signal,
+			sessionKey: "settled-native-abort",
+		});
+		await Bun.sleep(50);
+		controller.abort();
+		await promise;
+
+		nativeResult.resolve({ exitCode: undefined, cancelled: true, timedOut: false });
+		await Bun.sleep(0);
 		vi.restoreAllMocks();
 
 		await executeBash("export PI_AFTER_ABORT=still_persistent", {
 			cwd: tempDir,
 			timeout: 5000,
-			sessionKey: "hung-native-abort",
+			sessionKey: "settled-native-abort",
 		});
 		const next = await executeBash("printf '%s\n' \"$PI_AFTER_ABORT\"", {
 			cwd: tempDir,
 			timeout: 5000,
-			sessionKey: "hung-native-abort",
+			sessionKey: "settled-native-abort",
 		});
 		expect(next.output.trim()).toBe("still_persistent");
 	});

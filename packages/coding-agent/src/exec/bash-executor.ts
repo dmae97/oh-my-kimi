@@ -204,9 +204,12 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 
 		if (winner.kind === "timeout" || winner.kind === "abort") {
 			acceptingChunks = false;
-			void runPromise.catch(() => undefined);
 			if (shellSession) {
 				resetSession = true;
+				brokenShellSessions.add(sessionKey);
+				void runPromise.finally(() => brokenShellSessions.delete(sessionKey)).catch(() => undefined);
+			} else {
+				void runPromise.catch(() => undefined);
 			}
 			return {
 				exitCode: undefined,
