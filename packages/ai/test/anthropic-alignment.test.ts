@@ -18,9 +18,9 @@ import {
 	streamAnthropic,
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
-import { xxhash64 } from "@oh-my-pi/pi-ai/utils/xxhash64";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Model, TJsonSchema, TokenTaskBudget, Tool } from "@oh-my-pi/pi-ai/types";
+import { xxhash64 } from "@oh-my-pi/pi-ai/utils/xxhash64";
 import * as z from "zod/v4";
 import { withEnv } from "./helpers";
 

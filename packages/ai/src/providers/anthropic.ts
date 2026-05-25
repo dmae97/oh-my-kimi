@@ -466,9 +466,7 @@ const CCH_PLACEHOLDER = cchEncoder.encode(CCH_PLACEHOLDER_STR);
 // "system" in Anthropic SDK payloads (~byte 29 vs ~byte 4705), so user content
 // in the messages array can never match this sequence.  User system prompt text
 // lives in system[2] and therefore also cannot match.
-const BILLING_SYSTEM_MARKER = cchEncoder.encode(
-	'"system":[{"type":"text","text":"' + CLAUDE_BILLING_HEADER_PREFIX,
-);
+const BILLING_SYSTEM_MARKER = cchEncoder.encode(`"system":[{"type":"text","text":"${CLAUDE_BILLING_HEADER_PREFIX}`);
 const CCH_BILLING_SEARCH_WINDOW = 150;
 
 function patchCch(body: Uint8Array): Uint8Array {
@@ -508,11 +506,7 @@ type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Re
 
 function wrapFetchForCch(base: FetchFn): FetchFn {
 	return (input, init) => {
-		if (
-			init?.body &&
-			typeof init.body === "string" &&
-			init.body.includes(CCH_PLACEHOLDER_STR)
-		) {
+		if (init?.body && typeof init.body === "string" && init.body.includes(CCH_PLACEHOLDER_STR)) {
 			const encoded = cchEncoder.encode(init.body);
 			const patched = patchCch(encoded);
 			return base(input, { ...init, body: patched });
