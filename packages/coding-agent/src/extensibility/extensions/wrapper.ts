@@ -111,11 +111,12 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		context?: AgentToolContext,
 	) {
 		// 1. Check approval policy (before extension handlers).
-		// Resolution order:
+		// Resolution:
 		//   - CLI `--auto-approve` always wins (covers automation/CI).
-		//   - `tools.approvalMode = "auto"` (default) acts the same.
-		//   - `tools.approvalMode = "prompt"` uses built-in per-tool defaults only.
-		//   - `tools.approvalMode = "custom"` layers user `tools.approval.<tool>` config on top.
+		//   - `tools.approvalMode = "auto"` (default) → skip approval entirely; `tools.approval` is ignored.
+		//   - `tools.approvalMode = "prompt"` → built-in per-tool defaults only; `tools.approval` is ignored.
+		//   - `tools.approvalMode = "custom"` → user `tools.approval.<tool>` config wins; built-in defaults
+		//     fall back only for tools the user hasn't configured. Critical-pattern overrides still apply.
 		const cliAutoApprove = context?.autoApprove === true;
 		const settings: Settings | undefined = context?.settings;
 		const approvalMode = (settings?.get("tools.approvalMode") ?? "auto") as "auto" | "prompt" | "custom";
