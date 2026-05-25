@@ -642,6 +642,7 @@ export class AuthStorage {
 	#generation = 1;
 	#generationListeners: Set<(generation: number) => void> = new Set();
 	#oauthRefreshInFlight: Map<number, Promise<AuthCredentialSnapshotEntry>> = new Map();
+	#oauthCredentialRefreshInFlight: Map<number, Promise<OAuthCredentials>> = new Map();
 	#closed = false;
 
 	constructor(store: AuthCredentialStore, options: AuthStorageOptions = {}) {
@@ -2611,7 +2612,27 @@ export class AuthStorage {
 		credentialId: number | undefined,
 		signal?: AbortSignal,
 	): Promise<OAuthCredentials> {
+		if (credentialId !== undefined) {
+			const existing = this.#oauthCredentialRefreshInFlight.get(credentialId);
+			if (existing) return raceCredentialRefreshWithSignal(existing, signal);
+		}
 		if (Date.now() < credential.expires) return credential;
+		if (credentialId === undefined) {
+			return this.#refreshOAuthCredentialUnshared(provider, credential, undefined, signal);
+		}
+		const promise = this.#refreshOAuthCredentialUnshared(provider, credential, credentialId).finally(() => {
+			this.#oauthCredentialRefreshInFlight.delete(credentialId);
+		});
+		this.#oauthCredentialRefreshInFlight.set(credentialId, promise);
+		return raceCredentialRefreshWithSignal(promise, signal);
+	}
+
+	async #refreshOAuthCredentialUnshared(
+		provider: Provider,
+		credential: OAuthCredential,
+		credentialId: number | undefined,
+		signal?: AbortSignal,
+	): Promise<OAuthCredentials> {
 		let refreshPromise: Promise<OAuthCredentials>;
 		// Caller override > store-level hook > local per-provider refresh.
 		// `RemoteAuthCredentialStore` exposes the hook so a broker-backed gateway
