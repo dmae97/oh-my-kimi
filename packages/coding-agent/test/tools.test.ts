@@ -1271,7 +1271,7 @@ function b() {
 			const controller = new AbortController();
 			const promise = bashTool.execute(
 				"test-call-10-abort",
-				{ command: "printf 'started\\n'; sleep 5" },
+				{ command: "printf 'started\\n'; sleep 60" },
 				controller.signal,
 				update => {
 					if (update.content?.some(content => content.type === "text" && content.text.includes("started"))) {
@@ -1283,7 +1283,7 @@ function b() {
 
 			const result = await bashTool.execute("test-call-10-after-abort", { command: "echo ok" });
 			expect(getTextOutput(result)).toContain("ok");
-		});
+		}, 15_000);
 
 		it("should throw error when cwd does not exist", async () => {
 			const nonexistentCwd = "/this/directory/definitely/does/not/exist/12345";

@@ -2612,6 +2612,22 @@ export const SETTINGS_SCHEMA = {
 			description: "Use Parallel extract API for URL fetching when credentials are available",
 		},
 	},
+	"provider.appendOnlyContext": {
+		type: "enum",
+		values: ["auto", "on", "off"] as const,
+		default: "auto",
+		ui: {
+			tab: "providers",
+			label: "Append-Only Context",
+			description:
+				"Cache system prompt + tool specs and keep an append-only message log so provider prefix caches (DeepSeek, Anthropic) hit at maximum rate. Auto enables for DeepSeek.",
+			options: [
+				{ value: "auto", label: "Auto", description: "Enable for DeepSeek (recommended)" },
+				{ value: "on", label: "On", description: "Always enable append-only context" },
+				{ value: "off", label: "Off", description: "Disable append-only context" },
+			],
+		},
+	},
 
 	// Exa
 	"exa.enabled": {
