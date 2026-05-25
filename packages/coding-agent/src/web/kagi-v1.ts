@@ -23,7 +23,8 @@ export interface KagiV1SearchRequest {
 	limit?: number;
 	/** Lens identifier (e.g., "news", "reddit") */
 	lens?: string;
-	/** Time-based filter: ISO date string or relative (day|week|month) */
+
+	/** Time-based filter: ISO date string (YYYY-MM-DD, e.g. 2025-04-25) */
 	filters?: {
 		after?: string;
 		before?: string;
@@ -194,29 +195,38 @@ function buildRequestBody(query: string, options: KagiV1SearchOptions): KagiV1Se
 		limit: options.limit,
 	};
 
-	// Map recency to V1 time filters
+	// Map recency to ISO date string for filters.after
 	if (options.recency) {
-		switch (options.recency) {
-			case "day": {
-				req.filters = { ...req.filters, after: "1d ago" };
-				break;
-			}
-			case "week": {
-				req.filters = { ...req.filters, after: "1w ago" };
-				break;
-			}
-			case "month": {
-				req.filters = { ...req.filters, after: "1mo ago" };
-				break;
-			}
-			case "year": {
-				req.filters = { ...req.filters, after: "1y ago" };
-				break;
-			}
-		}
+		req.filters = { ...req.filters, after: recencyToDate(options.recency) };
 	}
 
 	return req;
+}
+
+/// Compute the date string YYYY-MM-DD in local time by subtracting the given
+/// recency unit from today. Uses Date setters to correctly handle month drift
+/// (e.g. Mar 31 −1 month → Feb 28/29) and leap years (e.g. Mar 1 −1 year →
+/// Mar 1 2024, not Mar 2).
+function recencyToDate(recency: "day" | "week" | "month" | "year"): string {
+	const d = new Date();
+	switch (recency) {
+		case "day":
+			d.setDate(d.getDate() - 1);
+			break;
+		case "week":
+			d.setDate(d.getDate() - 7);
+			break;
+		case "month":
+			d.setMonth(d.getMonth() - 1);
+			break;
+		case "year":
+			d.setFullYear(d.getFullYear() - 1);
+			break;
+	}
+	const yyyy = d.getFullYear();
+	const mm = String(d.getMonth() + 1).padStart(2, "0");
+	const dd = String(d.getDate()).padStart(2, "0");
+	return `${yyyy}-${mm}-${dd}`;
 }
 
 export async function searchWithKagiV1(query: string, options: KagiV1SearchOptions = {}): Promise<KagiV1SearchResult> {

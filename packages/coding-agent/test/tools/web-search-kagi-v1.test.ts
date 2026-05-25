@@ -176,7 +176,7 @@ describe("Kagi V1 search result parsing", () => {
 		expect(result.answer).toBeUndefined();
 	});
 
-	it("maps recency 'month' to time_after filter in request body", async () => {
+	it("maps recency 'month' to filters.after with ISO date", async () => {
 		let capturedBody: Record<string, unknown> | undefined;
 		using _hook = hookFetch((input: string | URL | Request, init) => {
 			const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -198,11 +198,11 @@ describe("Kagi V1 search result parsing", () => {
 		expect(capturedBody).toMatchObject({
 			query: "recency test",
 			workflow: "search",
-			filters: { after: "1mo ago" },
 		});
+		expect(capturedBody!.filters!.after!).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 	});
 
-	it("maps recency 'year' to filters.after with 1y ago", async () => {
+	it("maps recency 'year' to filters.after with ISO date", async () => {
 		let capturedBody: Record<string, unknown> | undefined;
 		using _hook = hookFetch((input: string | URL | Request, init) => {
 			const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -221,9 +221,8 @@ describe("Kagi V1 search result parsing", () => {
 
 		await searchWithKagiV1("year recency", { recency: "year" });
 
-		expect(capturedBody).toMatchObject({
-			filters: { after: "1y ago" },
-		});
+		expect(capturedBody).toMatchObject({});
+		expect(capturedBody!.filters!.after!).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 	});
 
 	it("uses Bearer auth header for V1 API", async () => {
