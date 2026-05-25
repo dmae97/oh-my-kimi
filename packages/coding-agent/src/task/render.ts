@@ -639,7 +639,8 @@ function renderAgentProgress(
 			}
 		}
 
-		for (const [toolName, dataArray] of Object.entries(progress.extractedToolData)) {
+		for (const toolName in progress.extractedToolData) {
+			const dataArray = progress.extractedToolData[toolName];
 			// Handle report_finding with tree formatting
 			if (toolName === "report_finding") {
 				const findings = normalizeReportFindings(dataArray);
@@ -648,6 +649,11 @@ function renderAgentProgress(
 				lines.push(...renderFindings(findings, continuePrefix, expanded, theme));
 				continue;
 			}
+
+			// Nested `task` data has its own dedicated tree renderer below that
+			// also merges in the in-flight snapshot — skip the generic inline
+			// path so we don't render twice.
+			if (toolName === "task") continue;
 
 			const handler = subprocessToolRegistry.getHandler(toolName);
 			if (handler?.renderInline) {
@@ -668,6 +674,20 @@ function renderAgentProgress(
 					);
 				}
 			}
+		}
+	}
+
+	// Nested `task` tree: completed sub-calls from `extractedToolData.task` plus
+	// the in-flight snapshot (if any). Surfacing this in the live view means
+	// the user sees deep-tree progress without waiting for this agent to finish
+	// its own turn.
+	const completedTaskCalls = (progress.extractedToolData?.task as TaskToolDetails[] | undefined) ?? [];
+	const inflight = progress.inflightTaskDetails;
+	if (completedTaskCalls.length > 0 || inflight) {
+		const snapshots = inflight ? [...completedTaskCalls, inflight] : completedTaskCalls;
+		const nestedLines = renderNestedTaskTree(snapshots, expanded, theme, spinnerFrame);
+		for (const line of nestedLines) {
+			lines.push(`${continuePrefix}${line}`);
 		}
 	}
 
@@ -1063,6 +1083,38 @@ function renderNestedTaskResults(detailsList: TaskToolDetails[], expanded: boole
 			const isLast = index === details.results.length - 1;
 			lines.push(...renderAgentResult(result, isLast, expanded, theme));
 		});
+	}
+	return lines;
+}
+
+/**
+ * Render a list of `TaskToolDetails` snapshots — completed (`results[]`) or
+ * in-flight (`progress[]`) — as an interleaved tree. Used by the live progress
+ * view to surface nested subagent activity while this agent is still running.
+ */
+function renderNestedTaskTree(
+	detailsList: TaskToolDetails[],
+	expanded: boolean,
+	theme: Theme,
+	spinnerFrame?: number,
+): string[] {
+	const lines: string[] = [];
+	for (const details of detailsList) {
+		const hasResults = Boolean(details.results && details.results.length > 0);
+		if (hasResults) {
+			details.results.forEach((result, index) => {
+				const isLast = index === details.results.length - 1;
+				lines.push(...renderAgentResult(result, isLast, expanded, theme));
+			});
+			continue;
+		}
+		const inflight = details.progress;
+		if (inflight && inflight.length > 0) {
+			inflight.forEach((prog, index) => {
+				const isLast = index === inflight.length - 1;
+				lines.push(...renderAgentProgress(prog, isLast, expanded, theme, spinnerFrame));
+			});
+		}
 	}
 	return lines;
 }

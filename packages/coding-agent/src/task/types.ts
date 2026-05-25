@@ -236,6 +236,14 @@ export interface AgentProgress {
 		attempt: number;
 		errorMessage: string;
 	};
+	/**
+	 * Snapshot of the most recent `task` tool call's in-flight `TaskToolDetails`,
+	 * captured from `tool_execution_update`. Lets the parent UI surface live
+	 * nested-subagent progress while this agent is still inside its own `task`
+	 * call. Cleared when the call ends — finalized data lives in
+	 * `extractedToolData.task` after that.
+	 */
+	inflightTaskDetails?: TaskToolDetails;
 }
 
 /** Result from a single agent execution */

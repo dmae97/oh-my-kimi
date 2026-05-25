@@ -49,6 +49,7 @@ import {
 	TASK_SUBAGENT_EVENT_CHANNEL,
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
+	type TaskToolDetails,
 } from "./types";
 
 const MCP_CALL_TIMEOUT_MS = 60_000;
@@ -909,6 +910,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				if (intent) {
 					progress.lastIntent = intent;
 				}
+				// Reset any prior in-flight task snapshot so we don't show stale
+				// nested progress when the agent enters a fresh `task` call.
+				if (event.toolName === "task") {
+					progress.inflightTaskDetails = undefined;
+				}
 				break;
 			}
 
@@ -927,6 +933,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				progress.currentTool = undefined;
 				progress.currentToolArgs = undefined;
 				progress.currentToolStartMs = undefined;
+				// The finalized TaskToolDetails will be captured below into
+				// `extractedToolData.task`; drop the in-flight snapshot so the
+				// renderer doesn't double-count it against the final entry.
+				if (event.toolName === "task") {
+					progress.inflightTaskDetails = undefined;
+				}
 
 				// Check for registered subagent tool handler
 				const handler = subprocessToolRegistry.getHandler(event.toolName);
@@ -976,6 +988,23 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					}
 				}
 				flushProgress = true;
+				break;
+			}
+
+			case "tool_execution_update": {
+				// Surface nested-subagent progress mid-flight. The child task
+				// tool emits incremental `onUpdate` calls carrying its current
+				// `TaskToolDetails` (results + progress); we stash the latest
+				// snapshot so the parent UI can render the in-flight subtree
+				// without waiting for the call to finish.
+				if (event.toolName === "task") {
+					const partial = (event as { partialResult?: { details?: unknown } }).partialResult;
+					const details = partial && typeof partial === "object" ? partial.details : undefined;
+					if (details && typeof details === "object" && "results" in (details as TaskToolDetails)) {
+						progress.inflightTaskDetails = details as TaskToolDetails;
+						flushProgress = true;
+					}
+				}
 				break;
 			}
 
