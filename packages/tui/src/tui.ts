@@ -1251,10 +1251,11 @@ export class TUI extends Container {
 
 		// Differential rendering can only touch what was actually visible. When
 		// offscreen content changes while new rows are appended, preserve append
-		// history and leave the older scrollback copy untouched.
+		// history and leave the older scrollback copy untouched unless width
+		// reflow invalidated visible row contents.
 		if (firstChanged < prevViewportTop) {
 			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
-			if (!contentGrew) {
+			if (widthChanged || !contentGrew) {
 				viewportRefresh();
 				return;
 			}

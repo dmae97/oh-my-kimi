@@ -20,6 +20,31 @@ class MutableLinesComponent implements Component {
 	}
 }
 
+class WrappingLinesComponent implements Component {
+	#lines: string[];
+
+	constructor(lines: string[]) {
+		this.#lines = [...lines];
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const chunkWidth = Math.max(1, width);
+		const rendered: string[] = [];
+		for (const line of this.#lines) {
+			if (line.length === 0) {
+				rendered.push("");
+				continue;
+			}
+			for (let offset = 0; offset < line.length; offset += chunkWidth) {
+				rendered.push(line.slice(offset, offset + chunkWidth));
+			}
+		}
+		return rendered;
+	}
+}
+
 function rows(prefix: string, count: number): string[] {
 	return Array.from({ length: count }, (_v, i) => `${prefix}${i}`);
 }
@@ -265,6 +290,36 @@ describe("TUI terminal-state regressions", () => {
 					await settle(term);
 					expect(visible(term)).toEqual(expectedViewport(width, 18));
 				}
+			} finally {
+				tui.stop();
+			}
+		});
+		it("repaints viewport when width reflow grows rendered lines", async () => {
+			const term = new VirtualTerminal(40, 10);
+			const tui = new TUI(term);
+			const lines = [
+				...Array.from({ length: 5 }, (_v, i) => `long-${i}-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`),
+				...Array.from({ length: 20 }, (_v, i) => `tail-${i}`),
+			];
+			tui.addChild(new WrappingLinesComponent(lines));
+
+			const expectedViewport = (width: number, height: number): string[] => {
+				const rendered = new WrappingLinesComponent(lines).render(width);
+				const top = Math.max(0, rendered.length - height);
+				const viewport = rendered.slice(top, top + height);
+				while (viewport.length < height) viewport.push("");
+				return viewport.map(line => line.trimEnd());
+			};
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(visible(term)).toEqual(expectedViewport(40, 10));
+
+				term.resize(20, 10);
+				await settle(term);
+
+				expect(visible(term)).toEqual(expectedViewport(20, 10));
 			} finally {
 				tui.stop();
 			}
