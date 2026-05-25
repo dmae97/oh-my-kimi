@@ -1,11 +1,20 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added `GET /v1/snapshot/stream` for live auth-broker snapshot updates via SSE with `snapshot`, `entry`, and `removed` event frames
+- Added `AuthBrokerClient.openSnapshotStream()` for consuming SSE snapshot streams from `/v1/snapshot/stream`
+- Added `streamSnapshots` option to `RemoteAuthCredentialStore` (default `true`) to enable or disable SSE-based snapshot synchronization
+- Added `streamKeepaliveMs` to `startAuthBroker()` to tune heartbeat frequency for the SSE stream
 - Added `AuthStorage.checkCredentials({ signal?, timeoutMs?, baseUrlResolver? })` that returns a per-credential `CredentialHealthResult` with tri-state `ok` (`true` / `false` / `null`-unverifiable), the credential's identity (provider, type, email/accountId, broker-refresh flag), and the upstream error string when the probe fails. Iterates sequentially over `listAuthCredentials()`, exercises OAuth refresh on expiry, then calls the per-provider `UsageProvider.fetchUsage` without swallowing errors — so callers can identify which row in a multi-account broker is producing 401s instead of getting a silently-deduplicated `fetchUsageReports` list.
 - Added `GET /v1/credentials/check` to `startAuthGateway()` that forwards to `AuthStorage.checkCredentials` and returns `{ generatedAt, credentials }`. Gated by the same bearer as the rest of the gateway.
+
+### Changed
+
+- Changed `RemoteAuthCredentialStore` to prefer SSE snapshot streaming and automatically fall back to long-polling when a broker returns 404 for `/v1/snapshot/stream`
+- Changed snapshot write-refresh flow so `RemoteAuthCredentialStore` skips immediate `/v1/snapshot` refreshes when SSE streaming is active
+- Changed broker SSE stream behavior to keep connections open with periodic keepalives and an increased server idle timeout
 
 ## [15.3.0] - 2026-05-25
 
