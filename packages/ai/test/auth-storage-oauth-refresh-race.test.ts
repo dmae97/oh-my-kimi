@@ -196,4 +196,49 @@ describe("AuthStorage OAuth refresh race", () => {
 			expect(events[0]?.disabledCause).toContain("invalid_grant");
 		});
 	});
+	test("invalidating a session-sticky OAuth credential rotates the retry to another active credential", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		let sessionId = "";
+		for (let index = 0; index < 32; index++) {
+			const candidate = `session-auth-retry-${index}`;
+			if (Bun.hash.xxHash32(candidate) % 2 === 0) {
+				sessionId = candidate;
+				break;
+			}
+		}
+		if (!sessionId) throw new Error("could not find test session id");
+
+		await authStorage.set("unit-oauth-rotation", [
+			{
+				type: "oauth",
+				access: "access-a",
+				refresh: "refresh-a",
+				expires: Date.now() + 60 * 60_000,
+			},
+			{
+				type: "oauth",
+				access: "access-b",
+				refresh: "refresh-b",
+				expires: Date.now() + 60 * 60_000,
+			},
+		]);
+
+		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
+			const credential = credentials[provider];
+			if (!credential) return null;
+			return { newCredentials: credential, apiKey: credential.access };
+		});
+
+		const firstKey = await authStorage.getApiKey("unit-oauth-rotation", sessionId);
+		expect(firstKey).toBe("access-a");
+
+		const invalidated = await authStorage.invalidateCredentialMatching("unit-oauth-rotation", "access-a", {
+			sessionId,
+		});
+		expect(invalidated).toBe(true);
+
+		const retryKey = await authStorage.getApiKey("unit-oauth-rotation", sessionId);
+		expect(retryKey).toBe("access-b");
+	});
 });

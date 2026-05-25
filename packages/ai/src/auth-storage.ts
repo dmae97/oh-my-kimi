@@ -429,6 +429,16 @@ type AuthApiKeyOptions = {
 	 */
 	signal?: AbortSignal;
 };
+export interface InvalidateCredentialMatchingOptions {
+	signal?: AbortSignal;
+	sessionId?: string;
+}
+
+function isAbortSignalOption(
+	value: InvalidateCredentialMatchingOptions | AbortSignal | undefined,
+): value is AbortSignal {
+	return typeof value === "object" && value !== null && "aborted" in value && "addEventListener" in value;
+}
 
 function requiresOpenAICodexProModel(provider: string, modelId: string | undefined): boolean {
 	return provider === "openai-codex" && typeof modelId === "string" && modelId.includes("-spark");
@@ -1003,6 +1013,17 @@ export class AuthStorage {
 	): { type: AuthCredential["type"]; index: number } | undefined {
 		if (!sessionId) return undefined;
 		return this.#sessionLastCredential.get(provider)?.get(sessionId);
+	}
+
+	/** Clears the last credential used by a session for a provider. */
+	#clearSessionCredential(provider: string, sessionId: string | undefined): void {
+		if (!sessionId) return;
+		const sessionMap = this.#sessionLastCredential.get(provider);
+		if (!sessionMap) return;
+		sessionMap.delete(sessionId);
+		if (sessionMap.size === 0) {
+			this.#sessionLastCredential.delete(provider);
+		}
 	}
 
 	/**
@@ -2955,24 +2976,44 @@ export class AuthStorage {
 		return this.#extractStructuredApiKeyToken(apiKey) === credential.access;
 	}
 
-	async invalidateCredentialMatching(provider: string, apiKey: string, signal?: AbortSignal): Promise<boolean> {
+	async invalidateCredentialMatching(
+		provider: string,
+		apiKey: string,
+		options?: InvalidateCredentialMatchingOptions,
+	): Promise<boolean>;
+	async invalidateCredentialMatching(provider: string, apiKey: string, signal?: AbortSignal): Promise<boolean>;
+	async invalidateCredentialMatching(
+		provider: string,
+		apiKey: string,
+		optionsOrSignal?: InvalidateCredentialMatchingOptions | AbortSignal,
+	): Promise<boolean> {
+		const signal = isAbortSignalOption(optionsOrSignal) ? optionsOrSignal : optionsOrSignal?.signal;
+		const sessionId = isAbortSignalOption(optionsOrSignal) ? undefined : optionsOrSignal?.sessionId;
 		const stored = this.#getStoredCredentials(provider);
-		let matchedId: number | undefined;
-		for (const entry of stored) {
-			if (await this.#credentialMatchesApiKey(entry.credential, apiKey)) {
-				matchedId = entry.id;
+		let matched: { id: number; type: AuthCredential["type"]; index: number } | undefined;
+		for (let index = 0; index < stored.length; index++) {
+			const entry = stored[index];
+			if (entry && (await this.#credentialMatchesApiKey(entry.credential, apiKey))) {
+				matched = { id: entry.id, type: entry.credential.type, index };
 				break;
 			}
 		}
 
-		if (matchedId === undefined) {
+		if (!matched) {
 			await this.reload();
 			return false;
 		}
 
+		this.#clearSessionCredential(provider, sessionId);
+		this.#markCredentialBlocked(
+			this.#getProviderTypeKey(provider, matched.type),
+			matched.index,
+			Date.now() + AuthStorage.#defaultBackoffMs,
+		);
+
 		const markSuspect = this.#store.markCredentialSuspect?.bind(this.#store);
 		if (markSuspect) {
-			await markSuspect(matchedId, { signal });
+			await markSuspect(matched.id, { signal });
 		} else {
 			await this.reload();
 		}

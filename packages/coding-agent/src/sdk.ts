@@ -1893,7 +1893,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				streamSimple(streamModel, context, {
 					...streamOptions,
 					onAuthError: async (provider, oldKey, error) => {
-						await modelRegistry.authStorage.invalidateCredentialMatching(provider, oldKey, streamOptions?.signal);
+						await modelRegistry.authStorage.invalidateCredentialMatching(provider, oldKey, {
+							signal: streamOptions?.signal,
+							sessionId: agent.sessionId,
+						});
 						logger.debug("Retrying provider request after credential invalidation", {
 							provider,
 							error: error instanceof Error ? error.message : String(error),
