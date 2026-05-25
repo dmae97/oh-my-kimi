@@ -271,8 +271,32 @@ def test_parse_issue_ref_accepts_owner_repo_hash_number() -> None:
     assert parse_issue_ref("  octo/widget#42  ") == ("octo/widget", 42)
 
 
+def test_parse_issue_ref_accepts_github_issue_urls() -> None:
+    cases = (
+        "https://github.com/can1357/oh-my-pi/issues/1348",
+        "http://github.com/can1357/oh-my-pi/issues/1348",
+        "github.com/can1357/oh-my-pi/issues/1348",
+        "https://www.github.com/can1357/oh-my-pi/issues/1348",
+        "https://github.com/can1357/oh-my-pi/issues/1348/",
+        "https://github.com/can1357/oh-my-pi/issues/1348?foo=bar",
+        "https://github.com/can1357/oh-my-pi/issues/1348#issuecomment-99",
+        "  https://github.com/can1357/oh-my-pi/issues/1348  ",
+    )
+    for case in cases:
+        assert parse_issue_ref(case) == ("can1357/oh-my-pi", 1348), case
+
+
 def test_parse_issue_ref_rejects_garbage() -> None:
-    for bad in ("widget#1", "octo/widget", "octo/widget#abc", "octo widget#1", ""):
+    for bad in (
+        "widget#1",
+        "octo/widget",
+        "octo/widget#abc",
+        "octo widget#1",
+        "",
+        "https://github.com/octo/widget/pull/1",
+        "https://github.com/octo/widget/issues/",
+        "https://gitlab.com/octo/widget/issues/1",
+    ):
         with pytest.raises(InvalidIssueRef):
             parse_issue_ref(bad)
 
