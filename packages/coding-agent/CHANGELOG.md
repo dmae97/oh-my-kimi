@@ -128,6 +128,7 @@
 - Fixed built-in `explore` agent failing every invocation with `schema_violation: files.0.ref: must not be present` on releases prior to 15.3.2 by renaming the `files[].ref` property to `files[].path` in the agent's output schema; `ref` is a JTD-reserved keyword (RFC 8927) and collides with JSON Type Definition's schema-reference form, so the converter previously dropped it from the generated JSON Schema. Defense-in-depth alongside the 15.3.2 converter fix ([#1379](https://github.com/can1357/oh-my-pi/issues/1379)).
 - Increased the `yield` tool's schema-validation retry budget from 1 to 3 so subagents whose first structured-output attempt mismatches the declared output schema get up to three retries before the parent's post-mortem `schema_violation` check hard-fails the task. The tool now also surfaces remaining retry attempts and an explicit "call yield again with the corrected shape" directive in each rejection message, giving the model the context it needs to converge — particularly helpful for models like GLM that tend to invent per-element field names instead of following the declared schema.
 - Fixed CLI PDF file arguments being decoded as raw bytes for local vision models; `.pdf` and other supported document files now go through the same Markit conversion path as the `read` tool before entering the prompt ([#1401](https://github.com/can1357/oh-my-pi/issues/1401)).
+- Fixed the `bash` tool hanging until the 305 s hard timeout when a command writes a file via heredoc on Windows (bodies > ~4 KiB) or macOS (bodies > 16-64 KiB). Root cause was in the embedded brush shell; see `@oh-my-pi/pi-natives` changelog for the underlying fix.
 
 ## [15.3.2] - 2026-05-25
 ### Added
@@ -141,8 +142,6 @@
 
 - Fixed parsing of inline `|TEXT` payloads containing whitespace on `»` and `«` inserts, which previously failed with unrecognized-op errors
 - Fixed anchored insert handling so an inline `|TEXT` body matching the anchor line is treated as anchor decoration and no longer inserted as a duplicate
-- Fixed clipboard image paste (Ctrl+V) silently failing on WSL2 by routing image reads through a `powershell.exe` bridge when WSL interop is detected, since `arboard` returns `ContentNotAvailable` under WSLg ([#1280](https://github.com/can1357/oh-my-pi/issues/1280))
-- Fixed the `bash` tool hanging until the 305 s hard timeout when a command writes a file via heredoc on Windows (bodies > ~4 KiB) or macOS (bodies > 16-64 KiB). Root cause was in the embedded brush shell; see `@oh-my-pi/pi-natives` changelog for the underlying fix.
 
 ## [15.3.0] - 2026-05-25
 

@@ -2167,10 +2167,12 @@ fn setup_process_substitution(
 //
 // We keep the `F_SETPIPE_SZ` fast path for Linux (avoids a thread spawn
 // for the common in-process case) but fall through to a detached writer
-// thread on every other platform, and on Linux when the kernel rejects
-// the requested size (body > `pipe-max-size`). The thread owns the
-// writer; it terminates naturally when the consumer drains the pipe or
-// drops the reader (`BrokenPipe`), so no `JoinHandle` is retained.
+// thread on every other platform with OS threads, and on Linux when the
+// kernel rejects the requested size (body > `pipe-max-size`). The thread
+// owns the writer; it terminates naturally when the consumer drains the
+// pipe or drops the reader (`BrokenPipe`), so no `JoinHandle` is retained.
+// Targets without OS thread support keep upstream's synchronous write path
+// so heredocs continue to work there instead of failing at thread spawn.
 fn setup_open_file_with_contents(contents: &str) -> Result<OpenFile, error::Error> {
 	let (reader, mut writer) = std::io::pipe()?;
 	let bytes = contents.as_bytes();
@@ -2191,20 +2193,28 @@ fn setup_open_file_with_contents(contents: &str) -> Result<OpenFile, error::Erro
 			return Ok(reader.into());
 		}
 	}
-
-	// Generic path: detached writer thread. Writing inline deadlocks
-	// once `bytes.len()` exceeds the OS pipe buffer (Windows ~4 KiB,
-	// macOS 16-64 KiB), neither of which has a `F_SETPIPE_SZ`
-	// equivalent.
-	let payload = bytes.to_vec();
-	std::thread::Builder::new()
-		.name("brush-heredoc-writer".into())
-		.spawn(move || {
-			// `BrokenPipe` is expected when the consumer drops the
-			// reader before the body is fully written; there is
-			// nothing useful to do with that error here.
-			let _ = writer.write_all(&payload);
-		})?;
+	#[cfg(target_family = "wasm")]
+	{
+		writer.write_all(bytes)?;
+		drop(writer);
+		return Ok(reader.into());
+	}
+	#[cfg(not(target_family = "wasm"))]
+	{
+		// Generic path: detached writer thread. Writing inline deadlocks
+		// once `bytes.len()` exceeds the OS pipe buffer (Windows ~4 KiB,
+		// macOS 16-64 KiB), neither of which has a `F_SETPIPE_SZ`
+		// equivalent.
+		let payload = bytes.to_vec();
+		std::thread::Builder::new()
+			.name("brush-heredoc-writer".into())
+			.spawn(move || {
+				// `BrokenPipe` is expected when the consumer drops the
+				// reader before the body is fully written; there is
+				// nothing useful to do with that error here.
+				let _ = writer.write_all(&payload);
+			})?;
+	}
 
 	Ok(reader.into())
 }
