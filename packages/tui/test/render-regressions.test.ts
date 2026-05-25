@@ -157,7 +157,7 @@ describe("TUI terminal-state regressions", () => {
 	});
 
 	describe("resize + viewport behavior", () => {
-		it("clears preexisting shell rows on startup and resize redraw", async () => {
+		it("preserves preexisting shell scrollback on startup and resize redraw", async () => {
 			const term = new VirtualTerminal(50, 5);
 			term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
 			await settle(term);
@@ -174,7 +174,7 @@ describe("TUI terminal-state regressions", () => {
 				await settle(term);
 
 				const buffer = term.getScrollBuffer().join("\n");
-				expect(buffer.includes("shell-")).toBeFalsy();
+				expect(buffer.includes("shell-")).toBeTruthy();
 			} finally {
 				tui.stop();
 			}

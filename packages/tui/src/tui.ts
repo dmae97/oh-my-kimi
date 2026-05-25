@@ -1054,16 +1054,16 @@ export class TUI extends Container {
 		// path so cache comparisons stay byte-accurate.
 		newLines = this.#applyLineResets(newLines);
 
-		// Width changed - need full re-render (line wrapping changes)
+		// Width/height changes can require viewport repainting.
 		const widthChanged = this.#previousWidth !== 0 && this.#previousWidth !== width;
 		const heightChanged = this.#previousHeight !== 0 && this.#previousHeight !== height;
 
-		// Helper to clear scrollback and viewport and render all new lines
+		// Helper to clear the viewport and render all new lines
 		const fullRender = (clear: boolean): void => {
 			this.#fullRedrawCount += 1;
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
-			// Skip clearing scrollback (3J) in multiplexers — users actively navigate scrollback history
-			if (clear) buffer += isMultiplexer ? "\x1b[2J\x1b[H" : "\x1b[2J\x1b[H\x1b[3J";
+			// ED 3 clears terminal scrollback and disrupts manual scrollback inspection.
+			if (clear) buffer += "\x1b[2J\x1b[H";
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
 				// Lines were pre-terminated/normalized by #applyLineResets; image
@@ -1095,27 +1095,75 @@ export class TUI extends Container {
 			const msg = `[${new Date().toISOString()}] fullRender: ${reason} (prev=${this.#previousLines.length}, new=${newLines.length}, height=${height})\n`;
 			fs.appendFileSync(logPath, msg);
 		};
+		const viewportRefresh = (): void => {
+			this.#fullRedrawCount += 1;
+			const nextViewportTop = Math.max(0, newLines.length - height);
+			let buffer = "\x1b[?2026h\x1b[H";
 
-		// First render - just output everything without clearing (assumes clean screen)
-		if (this.#previousLines.length === 0 && !widthChanged && !heightChanged) {
+			for (let screenRow = 0; screenRow < height; screenRow++) {
+				if (screenRow > 0) buffer += "\r\n";
+				buffer += "\x1b[2K";
+				const line = newLines[nextViewportTop + screenRow] ?? "";
+				let truncatedLine = line;
+				const isImage = TERMINAL.isImageLine(line);
+				if (!isImage && visibleWidth(line) > width) {
+					if (debugRedraw) {
+						const debugData = [
+							`[TUI Truncate] ${new Date().toISOString()}`,
+							`Line ${nextViewportTop + screenRow} truncated: ${visibleWidth(line)} > ${width}`,
+							`Content preview: ${line.slice(0, 100)}...`,
+							"",
+						].join("\n");
+						try {
+							fs.appendFileSync(getDebugLogPath(), debugData);
+						} catch {
+							// Ignore write errors - truncation should still work
+						}
+					}
+					truncatedLine = truncateToWidth(line, width, Ellipsis.Omit);
+					truncatedLine += truncatedLine.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET;
+				}
+				buffer += truncatedLine;
+			}
+
+			const finalCursorRow = Math.min(Math.max(0, newLines.length - 1), nextViewportTop + height - 1);
+			const { seq, toRow } = this.#cursorControlSequence(cursorPos, newLines.length, finalCursorRow);
+			this.#hardwareCursorRow = toRow;
+			buffer += seq;
+			buffer += "\x1b[?2026l";
+			this.terminal.write(buffer);
+
+			this.#cursorRow = Math.max(0, newLines.length - 1);
+			this.#maxLinesRendered = newLines.length;
+			this.#viewportTopRow = nextViewportTop;
+			this.#previousLines = newLines;
+			this.#previousWidth = width;
+			this.#previousHeight = height;
+		};
+
+		// First render outputs the full transcript so terminal scrollback contains
+		// the initial TUI state. Forced first renders still clear only the viewport.
+		if (this.#previousLines.length === 0) {
 			logRedraw("first render");
-			fullRender(false);
+			fullRender(widthChanged || heightChanged);
 			return;
 		}
+		const contentGrew = newLines.length > this.#previousLines.length;
 
-		// Width changes always need a full re-render because wrapping changes.
-		if (widthChanged) {
+		// Width changes need a viewport repaint because wrapping changes. If new
+		// rows also arrived, keep the append path so history reaches scrollback.
+		if (widthChanged && !contentGrew) {
 			logRedraw(`terminal width changed (${this.#previousWidth} -> ${width})`);
-			fullRender(true);
+			viewportRefresh();
 			return;
 		}
 
-		// Height changes normally need a full re-render to keep the visible viewport aligned,
+		// Height changes need a viewport repaint to keep the visible rows aligned,
 		// but Termux changes height when the software keyboard shows or hides.
-		// In that environment, a full redraw causes the entire history to replay on every toggle.
-		if (heightChanged && !isTermuxSession() && !isMultiplexer) {
+		// In that environment, repainting causes the viewport to jump on every toggle.
+		if (heightChanged && !contentGrew && !isTermuxSession() && !isMultiplexer) {
 			logRedraw(`terminal height changed (${this.#previousHeight} -> ${height})`);
-			fullRender(true);
+			viewportRefresh();
 			return;
 		}
 
@@ -1124,7 +1172,7 @@ export class TUI extends Container {
 		// Configurable via setClearOnShrink() or PI_CLEAR_ON_SHRINK=0 env var
 		if (this.#clearOnShrink && newLines.length < this.#previousLines.length && this.overlayStack.length === 0) {
 			logRedraw(`clearOnShrink (prev=${this.#previousLines.length}, new=${newLines.length})`);
-			fullRender(true);
+			viewportRefresh();
 			return;
 		}
 
@@ -1150,8 +1198,6 @@ export class TUI extends Container {
 			}
 			lastChanged = newLines.length - 1;
 		}
-		const appendStart = appendedLines && firstChanged === this.#previousLines.length && firstChanged > 0;
-
 		// No changes - but still need to update hardware cursor position if it moved
 		if (firstChanged === -1) {
 			this.#writeCursorPosition(cursorPos, newLines.length);
@@ -1173,7 +1219,7 @@ export class TUI extends Container {
 				const extraLines = this.#previousLines.length - newLines.length;
 				if (extraLines > height) {
 					logRedraw(`extraLines > height (${extraLines} > ${height})`);
-					fullRender(true);
+					viewportRefresh();
 					return;
 				}
 				const clearStartOffset = newLines.length > 0 && extraLines > 0 ? 1 : 0;
@@ -1203,14 +1249,20 @@ export class TUI extends Container {
 			return;
 		}
 
-		// Differential rendering can only touch what was actually visible.
-		// Any change above the previous viewport requires a full redraw so terminal
-		// scrollback ends up consistent with the new transcript state.
+		// Differential rendering can only touch what was actually visible. When
+		// offscreen content changes while new rows are appended, preserve append
+		// history and leave the older scrollback copy untouched.
 		if (firstChanged < prevViewportTop) {
 			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
-			fullRender(true);
-			return;
+			if (!contentGrew) {
+				viewportRefresh();
+				return;
+			}
+			firstChanged = this.#previousLines.length;
+			lastChanged = newLines.length - 1;
 		}
+
+		const appendStart = appendedLines && firstChanged === this.#previousLines.length && firstChanged > 0;
 
 		// Render from first changed line to end
 		// Build buffer with all updates wrapped in synchronized output

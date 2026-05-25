@@ -108,7 +108,7 @@ describe("TUI overlays", () => {
 		expect(term.getScrollBuffer().length).toBeLessThan(200);
 	});
 
-	it("clears preexisting terminal scrollback on startup full redraw", async () => {
+	it("preserves preexisting terminal scrollback on startup resize redraw", async () => {
 		const term = new VirtualTerminal(40, 4);
 		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
 		await flushRender(term);
@@ -124,7 +124,7 @@ describe("TUI overlays", () => {
 		await flushRender(term);
 
 		const scrollback = term.getScrollBuffer().join("\n");
-		expect(scrollback.includes("shell-0")).toBeFalsy();
+		expect(scrollback.includes("shell-0")).toBeTruthy();
 
 		tui.stop();
 	});
@@ -221,7 +221,7 @@ describe("TUI overlays", () => {
 			term.resize(39, 4);
 			await flushRender(term);
 			const scrollback = term.getScrollBuffer().join("\n");
-			expect(scrollback.includes("shell-0")).toBeFalsy();
+			expect(scrollback.includes("shell-0")).toBeTruthy();
 		} finally {
 			tui.stop();
 		}
