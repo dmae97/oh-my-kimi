@@ -5,12 +5,13 @@
  * optional synthesized answer.
  */
 import { getEnvApiKey } from "@oh-my-pi/pi-ai";
+import type { AgentStorage } from "../../../session/agent-storage";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { classifyProviderHttpError, findCredential, isApiKeyAvailable, withHardTimeout } from "./utils";
+import { classifyProviderHttpError, findCredential, withHardTimeout } from "./utils";
 
 const TAVILY_SEARCH_URL = "https://api.tavily.com/search";
 const DEFAULT_NUM_RESULTS = 5;
@@ -59,8 +60,8 @@ function getErrorMessage(value: unknown): string | null {
 }
 
 /** Find Tavily API key from environment or agent.db credentials. */
-export async function findApiKey(): Promise<string | null> {
-	return findCredential(getEnvApiKey("tavily"), "tavily");
+export function findApiKey(storage: AgentStorage): string | null {
+	return findCredential(storage, getEnvApiKey("tavily"), "tavily");
 }
 
 /** Exported for testing. Builds the Tavily request body from unified params. */
@@ -116,8 +117,8 @@ async function callTavilySearch(apiKey: string, params: TavilySearchParams): Pro
 }
 
 /** Execute Tavily web search. */
-export async function searchTavily(params: TavilySearchParams): Promise<SearchResponse> {
-	const apiKey = await findApiKey();
+export async function searchTavily(params: TavilySearchParams, storage: AgentStorage): Promise<SearchResponse> {
+	const apiKey = findApiKey(storage);
 	if (!apiKey) {
 		throw new Error(
 			'Tavily credentials not found. Set TAVILY_API_KEY or store an API key for provider "tavily" in agent.db.',
@@ -153,16 +154,19 @@ export class TavilyProvider extends SearchProvider {
 	readonly id = "tavily";
 	readonly label = "Tavily";
 
-	isAvailable(): Promise<boolean> {
-		return isApiKeyAvailable(findApiKey);
+	isAvailable(storage: AgentStorage): boolean {
+		return !!findApiKey(storage);
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
-		return searchTavily({
-			query: params.query,
-			num_results: params.numSearchResults ?? params.limit,
-			recency: params.recency,
-			signal: params.signal,
-		});
+	search(params: SearchParams, storage: AgentStorage): Promise<SearchResponse> {
+		return searchTavily(
+			{
+				query: params.query,
+				num_results: params.numSearchResults ?? params.limit,
+				recency: params.recency,
+				signal: params.signal,
+			},
+			storage,
+		);
 	}
 }

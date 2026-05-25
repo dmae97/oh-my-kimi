@@ -14,6 +14,7 @@ import {
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
+import type { AgentStorage } from "../../../session/agent-storage";
 import type {
 	AnthropicApiResponse,
 	AnthropicCitation,
@@ -242,8 +243,8 @@ function parseResponse(response: AnthropicApiResponse): SearchResponse {
  * @returns Search response with synthesized answer, sources, and citations
  * @throws {Error} If no Anthropic credentials are configured
  */
-export async function searchAnthropic(params: AnthropicSearchParams): Promise<SearchResponse> {
-	const auth = await findAnthropicAuth();
+export async function searchAnthropic(params: AnthropicSearchParams, storage: AgentStorage): Promise<SearchResponse> {
+	const auth = await findAnthropicAuth(storage.authStore);
 	if (!auth) {
 		throw new Error(
 			"No Anthropic credentials found. Set ANTHROPIC_API_KEY or configure OAuth in ~/.omp/agent/agent.db",
@@ -276,18 +277,21 @@ export class AnthropicProvider extends SearchProvider {
 	readonly id = "anthropic";
 	readonly label = "Anthropic";
 
-	isAvailable() {
-		return findAnthropicAuth().then(Boolean);
+	isAvailable(storage: AgentStorage) {
+		return findAnthropicAuth(storage.authStore).then(Boolean);
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
-		return searchAnthropic({
-			query: params.query,
-			system_prompt: params.systemPrompt,
-			num_results: params.numSearchResults ?? params.limit,
-			max_tokens: params.maxOutputTokens,
-			temperature: params.temperature,
-			signal: params.signal,
-		});
+	search(params: SearchParams, storage: AgentStorage): Promise<SearchResponse> {
+		return searchAnthropic(
+			{
+				query: params.query,
+				system_prompt: params.systemPrompt,
+				num_results: params.numSearchResults ?? params.limit,
+				max_tokens: params.maxOutputTokens,
+				temperature: params.temperature,
+				signal: params.signal,
+			},
+			storage,
+		);
 	}
 }

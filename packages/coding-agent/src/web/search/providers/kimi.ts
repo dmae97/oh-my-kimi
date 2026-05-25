@@ -6,12 +6,13 @@
  */
 import { getEnvApiKey } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
+import type { AgentStorage } from "../../../session/agent-storage";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { classifyProviderHttpError, findCredential, isApiKeyAvailable, withHardTimeout } from "./utils";
+import { classifyProviderHttpError, findCredential, withHardTimeout } from "./utils";
 
 const KIMI_SEARCH_URL = "https://api.kimi.com/coding/v1/search";
 
@@ -52,13 +53,13 @@ function resolveBaseUrl(): string {
 }
 
 /** Find Kimi search credentials from environment or agent.db credentials. */
-async function findApiKey(): Promise<string | null> {
+function findApiKey(storage: AgentStorage): string | null {
 	const envKey =
 		asTrimmed($env.MOONSHOT_SEARCH_API_KEY) ??
 		asTrimmed($env.KIMI_SEARCH_API_KEY) ??
 		getEnvApiKey("moonshot") ??
 		null;
-	return findCredential(envKey, "moonshot", "kimi-code");
+	return findCredential(storage, envKey, "moonshot", "kimi-code");
 }
 
 async function callKimiSearch(
@@ -98,8 +99,8 @@ async function callKimiSearch(
 }
 
 /** Execute Kimi web search. */
-export async function searchKimi(params: KimiSearchParams): Promise<SearchResponse> {
-	const apiKey = await findApiKey();
+export async function searchKimi(params: KimiSearchParams, storage: AgentStorage): Promise<SearchResponse> {
+	const apiKey = findApiKey(storage);
 	if (!apiKey) {
 		throw new Error(
 			"Kimi search credentials not found. Set MOONSHOT_SEARCH_API_KEY, KIMI_SEARCH_API_KEY, MOONSHOT_API_KEY, or login with 'omp /login moonshot'.",
@@ -141,15 +142,18 @@ export class KimiProvider extends SearchProvider {
 	readonly id = "kimi";
 	readonly label = "Kimi";
 
-	isAvailable(): Promise<boolean> {
-		return isApiKeyAvailable(findApiKey);
+	isAvailable(storage: AgentStorage): boolean {
+		return !!findApiKey(storage);
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
-		return searchKimi({
-			query: params.query,
-			num_results: params.numSearchResults ?? params.limit,
-			signal: params.signal,
-		});
+	search(params: SearchParams, storage: AgentStorage): Promise<SearchResponse> {
+		return searchKimi(
+			{
+				query: params.query,
+				num_results: params.numSearchResults ?? params.limit,
+				signal: params.signal,
+			},
+			storage,
+		);
 	}
 }

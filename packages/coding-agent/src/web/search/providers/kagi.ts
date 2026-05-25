@@ -3,6 +3,7 @@
  *
  * Thin wrapper that adapts shared Kagi API utilities to SearchResponse shape.
  */
+import type { AgentStorage } from "../../../session/agent-storage";
 import type { SearchResponse } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { findKagiApiKey, KagiApiError, searchWithKagi } from "../../kagi";
@@ -15,18 +16,25 @@ const DEFAULT_NUM_RESULTS = 10;
 const MAX_NUM_RESULTS = 40;
 
 /** Execute Kagi web search. */
-export async function searchKagi(params: {
-	query: string;
-	num_results?: number;
-	signal?: AbortSignal;
-}): Promise<SearchResponse> {
+export async function searchKagi(
+	params: {
+		query: string;
+		num_results?: number;
+		signal?: AbortSignal;
+	},
+	storage: AgentStorage,
+): Promise<SearchResponse> {
 	const numResults = clampNumResults(params.num_results, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
 
 	try {
-		const result = await searchWithKagi(params.query, {
-			limit: numResults,
-			signal: params.signal,
-		});
+		const result = await searchWithKagi(
+			params.query,
+			{
+				limit: numResults,
+				signal: params.signal,
+			},
+			storage,
+		);
 
 		return {
 			provider: "kagi",
@@ -51,19 +59,22 @@ export class KagiProvider extends SearchProvider {
 	readonly id = "kagi";
 	readonly label = "Kagi";
 
-	async isAvailable() {
+	async isAvailable(storage: AgentStorage) {
 		try {
-			return !!(await findKagiApiKey());
+			return !!findKagiApiKey(storage);
 		} catch {
 			return false;
 		}
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
-		return searchKagi({
-			query: params.query,
-			num_results: params.numSearchResults ?? params.limit,
-			signal: params.signal,
-		});
+	search(params: SearchParams, storage: AgentStorage): Promise<SearchResponse> {
+		return searchKagi(
+			{
+				query: params.query,
+				num_results: params.numSearchResults ?? params.limit,
+				signal: params.signal,
+			},
+			storage,
+		);
 	}
 }

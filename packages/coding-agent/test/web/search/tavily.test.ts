@@ -5,6 +5,7 @@ import {
 	type TavilySearchParams,
 } from "@oh-my-pi/pi-coding-agent/web/search/providers/tavily";
 import { hookFetch } from "@oh-my-pi/pi-utils";
+import type { AgentStorage } from "../../../src/session/agent-storage";
 
 describe("Tavily buildRequestBody", () => {
 	afterEach(() => {
@@ -52,6 +53,12 @@ describe("Tavily searchTavily request shape (integration)", () => {
 		delete process.env.TAVILY_API_KEY;
 	});
 
+	const fakeStorage = {
+		listAuthCredentials: () => [],
+		updateAuthCredential: () => undefined,
+		get authStore() { return null as never; },
+	} as unknown as AgentStorage;
+
 	it("does not send topic=news to the upstream API when recency is set", async () => {
 		process.env.TAVILY_API_KEY = "test-key";
 
@@ -83,7 +90,7 @@ describe("Tavily searchTavily request shape (integration)", () => {
 			query: "Bun runtime latest release notes",
 			recency: "week",
 		};
-		const response = await searchTavily(params);
+		const response = await searchTavily(params, fakeStorage);
 
 		expect(capturedBody).toBeDefined();
 		// The core regression: recency must not coerce topic to news. Topic should
@@ -115,7 +122,7 @@ describe("Tavily searchTavily request shape (integration)", () => {
 			return new Response("not mocked", { status: 500 });
 		});
 
-		await searchTavily({ query: "bun sqlite" });
+		await searchTavily({ query: "bun sqlite" }, fakeStorage);
 
 		expect(capturedBody).toBeDefined();
 		expect(capturedBody).not.toHaveProperty("topic");

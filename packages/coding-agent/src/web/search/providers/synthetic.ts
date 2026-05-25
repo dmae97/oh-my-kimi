@@ -6,11 +6,12 @@
  */
 
 import { getEnvApiKey } from "@oh-my-pi/pi-ai";
+import type { AgentStorage } from "../../../session/agent-storage";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { classifyProviderHttpError, findCredential, isApiKeyAvailable, withHardTimeout } from "./utils";
+import { classifyProviderHttpError, findCredential, withHardTimeout } from "./utils";
 
 const SYNTHETIC_SEARCH_URL = "https://api.synthetic.new/v2/search";
 
@@ -26,8 +27,8 @@ interface SyntheticSearchResponse {
 }
 
 /** Find Synthetic API key from environment or agent.db credentials. */
-export async function findApiKey(): Promise<string | null> {
-	return findCredential(getEnvApiKey("synthetic"), "synthetic");
+export function findApiKey(storage: AgentStorage): string | null {
+	return findCredential(storage, getEnvApiKey("synthetic"), "synthetic");
 }
 
 /** Call Synthetic search API. */
@@ -61,12 +62,15 @@ async function callSyntheticSearch(
 }
 
 /** Execute Synthetic web search. */
-export async function searchSynthetic(params: {
-	query: string;
-	num_results?: number;
-	signal?: AbortSignal;
-}): Promise<SearchResponse> {
-	const apiKey = await findApiKey();
+export async function searchSynthetic(
+	params: {
+		query: string;
+		num_results?: number;
+		signal?: AbortSignal;
+	},
+	storage: AgentStorage,
+): Promise<SearchResponse> {
+	const apiKey = findApiKey(storage);
 	if (!apiKey) {
 		throw new Error("Synthetic credentials not found. Set SYNTHETIC_API_KEY or login with 'omp /login synthetic'.");
 	}
@@ -97,15 +101,18 @@ export class SyntheticProvider extends SearchProvider {
 	readonly id = "synthetic";
 	readonly label = "Synthetic";
 
-	isAvailable(): Promise<boolean> {
-		return isApiKeyAvailable(findApiKey);
+	isAvailable(storage: AgentStorage): boolean {
+		return !!findApiKey(storage);
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
-		return searchSynthetic({
-			query: params.query,
-			num_results: params.numSearchResults ?? params.limit,
-			signal: params.signal,
-		});
+	search(params: SearchParams, storage: AgentStorage): Promise<SearchResponse> {
+		return searchSynthetic(
+			{
+				query: params.query,
+				num_results: params.numSearchResults ?? params.limit,
+				signal: params.signal,
+			},
+			storage,
+		);
 	}
 }

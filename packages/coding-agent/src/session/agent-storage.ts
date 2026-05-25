@@ -314,6 +314,16 @@ FROM model_usage_legacy
 	}
 
 	/**
+	 * Returns the underlying {@link AuthCredentialStore} so callers that need
+	 * the lower-level pi-ai abstraction (e.g. `findAnthropicAuth(store)`) can
+	 * reuse this storage's open database connection instead of opening their
+	 * own.
+	 */
+	get authStore(): AuthCredentialStore {
+		return this.#authStore;
+	}
+
+	/**
 	 * Lists auth credentials, optionally filtered by provider.
 	 * Only returns active (non-disabled) credentials by default.
 	 * @param provider - Optional provider name to filter by

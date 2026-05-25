@@ -10,6 +10,7 @@ import type { Settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { type Theme, theme } from "../modes/theme/theme";
 import type { ToolSession } from "../sdk";
+import type { AgentStorage } from "../session/agent-storage";
 import { DEFAULT_MAX_BYTES, truncateHead } from "../session/streaming-output";
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
@@ -542,7 +543,8 @@ async function renderHtmlToText(
 	html: string,
 	timeout: number,
 	settings: Settings,
-	userSignal?: AbortSignal,
+	userSignal: AbortSignal | undefined,
+	storage: AgentStorage | null,
 ): Promise<{ content: string; ok: boolean; method: string }> {
 	const signal = ptree.combineSignals(userSignal, timeout * 1000);
 	const execOptions = {
@@ -554,14 +556,18 @@ async function renderHtmlToText(
 	};
 
 	// Try Parallel extract first when credentials are configured
-	if (settings.get("providers.parallelFetch") && (await findParallelApiKey())) {
+	if (storage && settings.get("providers.parallelFetch") && findParallelApiKey(storage)) {
 		try {
-			const parallelResult = await extractWithParallel([url], {
-				objective: "Extract the main content",
-				excerpts: true,
-				fullContent: false,
-				signal,
-			});
+			const parallelResult = await extractWithParallel(
+				[url],
+				{
+					objective: "Extract the main content",
+					excerpts: true,
+					fullContent: false,
+					signal,
+				},
+				storage,
+			);
 			const firstDocument = parallelResult.results[0];
 			if (firstDocument) {
 				const content = getParallelExtractContent(firstDocument);
@@ -682,13 +688,14 @@ type FetchRenderResult = RenderResult & {
 async function handleSpecialUrls(
 	url: string,
 	timeout: number,
-	signal?: AbortSignal,
+	signal: AbortSignal | undefined,
+	storage: AgentStorage | null,
 ): Promise<FetchRenderResult | null> {
 	for (const handler of specialHandlers) {
 		if (signal?.aborted) {
 			throw new ToolAbortError();
 		}
-		const result = await handler(url, timeout, signal);
+		const result = await handler(url, timeout, signal, storage);
 		if (result) return result;
 	}
 	return null;
@@ -706,7 +713,8 @@ async function renderUrl(
 	timeout: number,
 	raw: boolean,
 	settings: Settings,
-	signal?: AbortSignal,
+	signal: AbortSignal | undefined,
+	storage: AgentStorage | null,
 ): Promise<FetchRenderResult> {
 	const notes: string[] = [];
 	const fetchedAt = new Date().toISOString();
@@ -733,7 +741,7 @@ async function renderUrl(
 
 	// Step 1: Try special handlers for known sites (unless raw mode)
 	if (!raw) {
-		const specialResult = await handleSpecialUrls(url, timeout, signal);
+		const specialResult = await handleSpecialUrls(url, timeout, signal, storage);
 		if (specialResult) return specialResult;
 	}
 
@@ -1051,7 +1059,7 @@ async function renderUrl(
 		}
 
 		// 5E: Render HTML with lynx or html2text
-		const htmlResult = await renderHtmlToText(finalUrl, rawContent, timeout, settings, signal);
+		const htmlResult = await renderHtmlToText(finalUrl, rawContent, timeout, settings, signal, storage);
 		if (!htmlResult.ok) {
 			notes.push("html rendering failed (lynx/html2text unavailable)");
 			const output = finalizeOutput(rawContent);
@@ -1233,7 +1241,8 @@ async function buildReadUrlCacheEntry(
 		throw new ToolAbortError();
 	}
 
-	const result = await renderUrl(url, effectiveTimeout, raw, session.settings, signal);
+	const storage = session.settings.getStorage();
+	const result = await renderUrl(url, effectiveTimeout, raw, session.settings, signal, storage);
 	const output = buildUrlReadOutput(result, result.content);
 	const artifactId = options?.ensureArtifact ? await persistReadUrlArtifact(session, output) : undefined;
 

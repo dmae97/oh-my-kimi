@@ -6,11 +6,17 @@
  * Returns synthesized answers with web search sources.
  */
 import * as os from "node:os";
-import { getBundledModels } from "@oh-my-pi/pi-ai";
-import { decodeJwt } from "@oh-my-pi/pi-ai/utils/oauth/openai-codex";
-import { $env, getAgentDbPath, readSseJson } from "@oh-my-pi/pi-utils";
+import {
+	type AuthCredential,
+	getBundledModels,
+	type OAuthCredential,
+	type OAuthCredentials,
+	REMOTE_REFRESH_SENTINEL,
+} from "@oh-my-pi/pi-ai";
+import { decodeJwt, refreshOpenAICodexToken } from "@oh-my-pi/pi-ai/utils/oauth/openai-codex";
+import { $env, logger, readSseJson } from "@oh-my-pi/pi-utils";
 import packageJson from "../../../../package.json" with { type: "json" };
-import { AgentStorage } from "../../../session/agent-storage";
+import type { AgentStorage } from "../../../session/agent-storage";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
@@ -239,33 +245,90 @@ function getAccountId(accessToken: string): string | null {
 }
 
 /**
- * Finds valid Codex OAuth credentials from agent.db.
- * Checks agent credentials and returns the first non-expired credential.
+ * Finds valid Codex OAuth credentials in the given storage handle.
+ *
+ * Walks each stored "openai-codex" OAuth row; for the first usable row,
+ * returns its access token + account ID. When the access token is expired (or
+ * near expiry) and a refresh token is available, refreshes it via the OpenAI
+ * token endpoint and persists the refreshed credential back to storage so the
+ * next call sees the updated row.
+ *
+ * Credentials with a broker-redacted refresh slot
+ * ({@link REMOTE_REFRESH_SENTINEL}) cannot be refreshed from this provider —
+ * the refresh token lives on the auth-broker — so they are skipped once
+ * expired. The main agent session refreshes such credentials through
+ * `AuthStorage.refreshOAuthCredential` and persists them to the same row,
+ * which means subsequent web_search calls will pick them up.
+ *
  * @returns OAuth credential with access token and account ID, or null if none found
  */
-async function findCodexAuth(): Promise<{ accessToken: string; accountId: string } | null> {
+async function findCodexAuth(storage: AgentStorage): Promise<{ accessToken: string; accountId: string } | null> {
 	const expiryBuffer = 5 * 60 * 1000; // 5 minutes
 	const now = Date.now();
 
+	let records: ReadonlyArray<{ id: number; credential: AuthCredential }>;
 	try {
-		const storage = await AgentStorage.open(getAgentDbPath());
-		const records = storage.listAuthCredentials("openai-codex");
-
-		for (const record of records) {
-			const credential = record.credential;
-			if (credential.type !== "oauth") continue;
-
-			const oauthCred = credential as CodexOAuthCredential;
-			if (!oauthCred.access) continue;
-			if (oauthCred.expires <= now + expiryBuffer) continue;
-
-			const accountId = oauthCred.accountId ?? getAccountId(oauthCred.access);
-			if (!accountId) continue;
-
-			return { accessToken: oauthCred.access, accountId };
-		}
+		records = storage.listAuthCredentials("openai-codex");
 	} catch {
 		return null;
+	}
+
+	for (const record of records) {
+		const credential = record.credential;
+		if (credential.type !== "oauth") continue;
+
+		const oauthCred = credential as CodexOAuthCredential;
+		if (!oauthCred.access) continue;
+
+		let accessToken = oauthCred.access;
+		let expires = oauthCred.expires;
+		let refreshToken = oauthCred.refresh;
+
+		if (expires <= now + expiryBuffer) {
+			// Stored access token is expired or about to expire. Refresh
+			// inline so codex web_search stays available between agent
+			// sessions and after long-running turns. The main agent's
+			// AuthStorage refreshes the same row on its own schedule; both
+			// writers are safe because updateAuthCredential is a row-level
+			// UPDATE keyed by the stored record id.
+			if (!refreshToken || refreshToken === REMOTE_REFRESH_SENTINEL) continue;
+
+			let refreshed: OAuthCredentials;
+			try {
+				refreshed = await refreshOpenAICodexToken(refreshToken);
+			} catch (error) {
+				logger.warn("codex web_search: token refresh failed; skipping credential", {
+					credentialId: record.id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				continue;
+			}
+
+			accessToken = refreshed.access;
+			expires = refreshed.expires;
+			refreshToken = refreshed.refresh || refreshToken;
+
+			const updated: OAuthCredential = {
+				...oauthCred,
+				access: accessToken,
+				refresh: refreshToken,
+				expires,
+				accountId: refreshed.accountId ?? oauthCred.accountId,
+			};
+			try {
+				storage.updateAuthCredential(record.id, updated);
+			} catch (error) {
+				logger.warn("codex web_search: failed to persist refreshed credential", {
+					credentialId: record.id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		const accountId = oauthCred.accountId ?? getAccountId(accessToken);
+		if (!accountId) continue;
+
+		return { accessToken, accountId };
 	}
 
 	return null;
@@ -462,8 +525,8 @@ async function callCodexSearch(
  * @returns Search response with synthesized answer, sources, and usage
  * @throws {Error} If no Codex OAuth credentials are configured
  */
-export async function searchCodex(params: CodexSearchParams): Promise<SearchResponse> {
-	const auth = await findCodexAuth();
+export async function searchCodex(params: CodexSearchParams, storage: AgentStorage): Promise<SearchResponse> {
+	const auth = await findCodexAuth(storage);
 	if (!auth) {
 		throw new Error(
 			"No Codex OAuth credentials found. Login with 'omp /login openai-codex' to enable Codex web search.",
@@ -502,26 +565,29 @@ export async function searchCodex(params: CodexSearchParams): Promise<SearchResp
  * Checks if Codex web search is available.
  * @returns True if valid OAuth credentials exist for openai-codex
  */
-export async function hasCodexSearch(): Promise<boolean> {
-	const auth = await findCodexAuth();
+export async function hasCodexSearch(storage: AgentStorage): Promise<boolean> {
+	const auth = await findCodexAuth(storage);
 	return auth !== null;
 }
 
 /** Search provider for OpenAI Codex web search. */
 export class CodexProvider extends SearchProvider {
 	readonly id = "codex";
-	readonly label = "Codex";
+	readonly label = "OpenAI";
 
-	isAvailable(): Promise<boolean> {
-		return Promise.resolve(hasCodexSearch());
+	isAvailable(storage: AgentStorage): Promise<boolean> {
+		return Promise.resolve(hasCodexSearch(storage));
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
-		return searchCodex({
-			signal: params.signal,
-			query: params.query,
-			system_prompt: params.systemPrompt,
-			num_results: params.numSearchResults ?? params.limit,
-		});
+	search(params: SearchParams, storage: AgentStorage): Promise<SearchResponse> {
+		return searchCodex(
+			{
+				signal: params.signal,
+				query: params.query,
+				system_prompt: params.systemPrompt,
+				num_results: params.numSearchResults ?? params.limit,
+			},
+			storage,
+		);
 	}
 }

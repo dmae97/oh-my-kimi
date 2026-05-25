@@ -5,13 +5,14 @@
  * the unified SearchResponse shape used by the web search tool.
  */
 import { getEnvApiKey } from "@oh-my-pi/pi-ai";
+import type { AgentStorage } from "../../../session/agent-storage";
 import { asRecord, asString } from "../../../web/scrapers/utils";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { classifyProviderHttpError, findCredential, isApiKeyAvailable, withHardTimeout } from "./utils";
+import { classifyProviderHttpError, findCredential, withHardTimeout } from "./utils";
 
 const ZAI_MCP_URL = "https://api.z.ai/api/mcp/web_search_prime/mcp";
 const ZAI_TOOL_NAME = "web_search_prime";
@@ -52,8 +53,8 @@ interface JsonRpcPayload {
 }
 
 /** Find Z.AI API credentials from environment or saved auth storage. */
-export async function findApiKey(): Promise<string | null> {
-	return findCredential(getEnvApiKey("zai"), "zai");
+export function findApiKey(storage: AgentStorage): string | null {
+	return findCredential(storage, getEnvApiKey("zai"), "zai");
 }
 
 async function callZaiTool(apiKey: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
@@ -271,8 +272,8 @@ function toSources(results: ZaiSearchResult[]): SearchSource[] {
 }
 
 /** Execute Z.AI web search via remote MCP endpoint. */
-export async function searchZai(params: ZaiSearchParams): Promise<SearchResponse> {
-	const apiKey = await findApiKey();
+export async function searchZai(params: ZaiSearchParams, storage: AgentStorage): Promise<SearchResponse> {
+	const apiKey = findApiKey(storage);
 	if (!apiKey) {
 		throw new Error("Z.AI credentials not found. Set ZAI_API_KEY or login with 'omp /login zai'.");
 	}
@@ -298,15 +299,18 @@ export class ZaiProvider extends SearchProvider {
 	readonly id = "zai";
 	readonly label = "Z.AI";
 
-	isAvailable(): Promise<boolean> {
-		return isApiKeyAvailable(findApiKey);
+	isAvailable(storage: AgentStorage): boolean {
+		return !!findApiKey(storage);
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
-		return searchZai({
-			query: params.query,
-			num_results: params.numSearchResults ?? params.limit,
-			signal: params.signal,
-		});
+	search(params: SearchParams, storage: AgentStorage): Promise<SearchResponse> {
+		return searchZai(
+			{
+				query: params.query,
+				num_results: params.numSearchResults ?? params.limit,
+				signal: params.signal,
+			},
+			storage,
+		);
 	}
 }

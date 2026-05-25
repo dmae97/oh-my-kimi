@@ -2552,7 +2552,21 @@ export const SETTINGS_SCHEMA = {
 					label: "Perplexity",
 					description: "Requires PERPLEXITY_COOKIES or PERPLEXITY_API_KEY",
 				},
-				{ value: "anthropic", label: "Anthropic", description: "Uses Anthropic web search" },
+				{
+					value: "anthropic",
+					label: "Anthropic",
+					description: "Claude's native web_search tool (uses Anthropic OAuth or ANTHROPIC_API_KEY)",
+				},
+				{
+					value: "codex",
+					label: "OpenAI",
+					description: "OpenAI's native web_search (uses ChatGPT OAuth via /login openai-codex)",
+				},
+				{
+					value: "gemini",
+					label: "Gemini",
+					description: "Google Search grounding via Gemini (uses google-gemini-cli or google-antigravity OAuth)",
+				},
 				{ value: "zai", label: "Z.AI", description: "Calls Z.AI webSearchPrime MCP" },
 				{ value: "tavily", label: "Tavily", description: "Requires TAVILY_API_KEY" },
 				{ value: "kagi", label: "Kagi", description: "Requires KAGI_API_KEY and Kagi Search API beta access" },

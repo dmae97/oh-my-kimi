@@ -26,6 +26,7 @@
  */
 
 import { settings } from "../../../config/settings";
+import type { AgentStorage } from "../../../session/agent-storage";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
@@ -288,7 +289,7 @@ export class SearXNGProvider extends SearchProvider {
 	readonly id = "searxng";
 	readonly label = "SearXNG";
 
-	isAvailable() {
+	isAvailable(_storage: AgentStorage): boolean {
 		try {
 			return !!findEndpoint();
 		} catch {
@@ -296,7 +297,7 @@ export class SearXNGProvider extends SearchProvider {
 		}
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
+	search(params: SearchParams, _storage: AgentStorage): Promise<SearchResponse> {
 		return searchSearXNG({
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,

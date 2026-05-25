@@ -6,12 +6,13 @@
  *
  */
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { CustomTool, CustomToolContext, RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme } from "../../modes/theme/theme";
 import webSearchSystemPrompt from "../../prompts/system/web-search.md" with { type: "text" };
 import webSearchDescription from "../../prompts/tools/web-search.md" with { type: "text" };
+import { AgentStorage } from "../../session/agent-storage";
 import type { ToolSession } from "../../tools";
 import { formatAge } from "../../tools/render-utils";
 import { throwIfAborted } from "../../tools/tool-errors";
@@ -120,12 +121,13 @@ async function executeSearch(
 	params: SearchQueryParams,
 	signal?: AbortSignal,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails }> {
+	const storage = await AgentStorage.open(getAgentDbPath());
 	const providers =
 		params.provider && params.provider !== "auto"
-			? await getSearchProvider(params.provider).then(provider =>
-					provider.isAvailable() ? [provider] : resolveProviderChain("auto"),
+			? await getSearchProvider(params.provider).then(async provider =>
+					(await provider.isAvailable(storage)) ? [provider] : resolveProviderChain(storage, "auto"),
 				)
-			: await resolveProviderChain();
+			: await resolveProviderChain(storage);
 	if (providers.length === 0) {
 		const message = "No web search provider configured.";
 		return {
@@ -139,16 +141,19 @@ async function executeSearch(
 	for (const provider of providers) {
 		lastProvider = provider;
 		try {
-			const response = await provider.search({
-				query: params.query.replace(/202\d/g, String(new Date().getFullYear())), // LUL
-				limit: params.limit,
-				recency: params.recency,
-				systemPrompt: webSearchSystemPrompt,
-				maxOutputTokens: params.max_tokens,
-				numSearchResults: params.num_search_results,
-				temperature: params.temperature,
-				signal,
-			});
+			const response = await provider.search(
+				{
+					query: params.query.replace(/202\d/g, String(new Date().getFullYear())), // LUL
+					limit: params.limit,
+					recency: params.recency,
+					systemPrompt: webSearchSystemPrompt,
+					maxOutputTokens: params.max_tokens,
+					numSearchResults: params.num_search_results,
+					temperature: params.temperature,
+					signal,
+				},
+				storage,
+			);
 
 			const text = formatForLLM(response);
 

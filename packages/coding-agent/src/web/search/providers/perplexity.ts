@@ -8,8 +8,8 @@
  */
 
 import { getEnvApiKey } from "@oh-my-pi/pi-ai";
-import { $env, getAgentDbPath, readSseJson } from "@oh-my-pi/pi-utils";
-import { AgentStorage } from "../../../session/agent-storage";
+import { $env, readSseJson } from "@oh-my-pi/pi-utils";
+import type { AgentStorage } from "../../../session/agent-storage";
 import type {
 	PerplexityMessageOutput,
 	PerplexityRequest,
@@ -194,10 +194,9 @@ function jwtExpiryMs(token: string): number | undefined {
 	}
 }
 
-async function findOAuthToken(): Promise<string | null> {
+async function findOAuthToken(storage: AgentStorage): Promise<string | null> {
 	const now = Date.now();
 	try {
-		const storage = await AgentStorage.open(getAgentDbPath());
 		const records = storage.listAuthCredentials("perplexity");
 		for (const record of records) {
 			if (record.credential.type !== "oauth") continue;
@@ -216,14 +215,14 @@ async function findOAuthToken(): Promise<string | null> {
 	return null;
 }
 
-async function findPerplexityAuth(): Promise<PerplexityAuth | null> {
+async function findPerplexityAuth(storage: AgentStorage): Promise<PerplexityAuth | null> {
 	// 1. PERPLEXITY_COOKIES env var
 	const cookies = $env.PERPLEXITY_COOKIES?.trim();
 	if (cookies) {
 		return { type: "cookies", cookies };
 	}
 	// 2. OAuth token from agent.db
-	const oauthToken = await findOAuthToken();
+	const oauthToken = await findOAuthToken(storage);
 	if (oauthToken) {
 		return { type: "oauth", token: oauthToken };
 	}
@@ -492,8 +491,8 @@ function applySourceLimit(result: SearchResponse, limit?: number): SearchRespons
 }
 
 /** Execute Perplexity web search */
-export async function searchPerplexity(params: PerplexitySearchParams): Promise<SearchResponse> {
-	const auth = await findPerplexityAuth();
+export async function searchPerplexity(params: PerplexitySearchParams, storage: AgentStorage): Promise<SearchResponse> {
+	const auth = await findPerplexityAuth(storage);
 	if (!auth) {
 		throw new Error("Perplexity auth not found. Set PERPLEXITY_COOKIES, PERPLEXITY_API_KEY, or login via OAuth.");
 	}
@@ -551,24 +550,27 @@ export class PerplexityProvider extends SearchProvider {
 	readonly id = "perplexity";
 	readonly label = "Perplexity";
 
-	async isAvailable() {
+	async isAvailable(storage: AgentStorage) {
 		try {
-			return !!(await findPerplexityAuth());
+			return !!(await findPerplexityAuth(storage));
 		} catch {
 			return false;
 		}
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
-		return searchPerplexity({
-			signal: params.signal,
-			query: params.query,
-			temperature: params.temperature,
-			max_tokens: params.maxOutputTokens,
-			num_search_results: params.numSearchResults,
-			system_prompt: params.systemPrompt,
-			search_recency_filter: params.recency,
-			num_results: params.limit,
-		});
+	search(params: SearchParams, storage: AgentStorage): Promise<SearchResponse> {
+		return searchPerplexity(
+			{
+				signal: params.signal,
+				query: params.query,
+				temperature: params.temperature,
+				max_tokens: params.maxOutputTokens,
+				num_search_results: params.numSearchResults,
+				system_prompt: params.systemPrompt,
+				search_recency_filter: params.recency,
+				num_results: params.limit,
+			},
+			storage,
+		);
 	}
 }

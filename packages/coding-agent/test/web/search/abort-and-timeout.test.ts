@@ -21,9 +21,15 @@ import { searchAnthropic } from "../../../src/web/search/providers/anthropic";
 import type { SearchParams } from "../../../src/web/search/providers/base";
 import { searchBrave } from "../../../src/web/search/providers/brave";
 import { withHardTimeout } from "../../../src/web/search/providers/utils";
+import type { AgentStorage } from "../../../src/session/agent-storage";
 import type { SearchProviderId, SearchResponse } from "../../../src/web/search/types";
 
 const FAKE_SESSION = {} as ToolSession;
+const fakeStorage = {
+	listAuthCredentials: () => [],
+	updateAuthCredential: () => undefined,
+	get authStore() { return null as never; },
+} as unknown as AgentStorage;
 
 describe("withHardTimeout", () => {
 	it("returns a signal that aborts on the hard timeout when no caller signal is supplied", async () => {
@@ -66,7 +72,7 @@ describe("Anthropic provider hard-timeout wiring", () => {
 			});
 		});
 
-		await searchAnthropic({ query: "ping", system_prompt: "" });
+		await searchAnthropic({ query: "ping", system_prompt: "" }, fakeStorage);
 
 		// Without the hard-timeout wrapper, init.signal would be undefined when
 		// the caller didn't supply one — leaving fetch with no cancellation at
@@ -88,7 +94,7 @@ describe("Anthropic provider hard-timeout wiring", () => {
 			});
 		});
 
-		await searchAnthropic({ query: "ping", system_prompt: "", signal: ac.signal });
+		await searchAnthropic({ query: "ping", system_prompt: "", signal: ac.signal }, fakeStorage);
 
 		// The signal handed to fetch must be a *composed* one, not the raw
 		// caller signal: that's what guarantees the hard timeout fires even

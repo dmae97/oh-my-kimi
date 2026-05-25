@@ -1,3 +1,4 @@
+import type { AgentStorage } from "../../../session/agent-storage";
 import type { SearchProviderId, SearchResponse } from "../types";
 
 /** Shared web search parameters passed to providers. */
@@ -33,6 +34,18 @@ export abstract class SearchProvider {
 	abstract readonly id: SearchProviderId;
 	abstract readonly label: string;
 
-	abstract isAvailable(): Promise<boolean> | boolean;
-	abstract search(params: SearchParams): Promise<SearchResponse>;
+	/**
+	 * Indicates whether this provider has the credentials/config it needs to
+	 * service a request right now. Implementations may consult the shared
+	 * {@link AgentStorage} handle for stored OAuth credentials and avoid
+	 * opening their own connection.
+	 */
+	abstract isAvailable(storage: AgentStorage): Promise<boolean> | boolean;
+
+	/**
+	 * Execute a search. Implementations that read credentials from
+	 * {@link AgentStorage} MUST use the passed handle instead of opening a
+	 * second one.
+	 */
+	abstract search(params: SearchParams, storage: AgentStorage): Promise<SearchResponse>;
 }

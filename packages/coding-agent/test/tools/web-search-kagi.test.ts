@@ -3,6 +3,15 @@ import { hookFetch } from "@oh-my-pi/pi-utils";
 import { searchWithKagi } from "../../src/web/kagi";
 import { searchKagi } from "../../src/web/search/providers/kagi";
 import { SearchProviderError } from "../../src/web/search/types";
+import type { AgentStorage } from "../../src/session/agent-storage";
+
+const fakeStorage = {
+	listAuthCredentials: () => [],
+	updateAuthCredential: () => undefined,
+	get authStore() {
+		return null as never;
+	},
+} as unknown as AgentStorage;
 
 describe("Kagi web search error handling", () => {
 	beforeEach(() => {
@@ -27,7 +36,7 @@ describe("Kagi web search error handling", () => {
 		);
 
 		try {
-			await searchKagi({ query: "kagi beta" });
+			await searchKagi({ query: "kagi beta" }, fakeStorage);
 			expect.unreachable("expected searchKagi to throw");
 		} catch (error) {
 			expect(error).toBeInstanceOf(SearchProviderError);
@@ -39,7 +48,7 @@ describe("Kagi web search error handling", () => {
 	it("falls back to plain text for non-JSON error bodies", async () => {
 		using _hook = hookFetch(() => new Response("upstream unavailable", { status: 503 }));
 
-		await expect(searchWithKagi("plain text error")).rejects.toThrow("Kagi API error (503): upstream unavailable");
+		await expect(searchWithKagi("plain text error", {}, fakeStorage)).rejects.toThrow("Kagi API error (503): upstream unavailable");
 	});
 
 	it("preserves successful search parsing", async () => {
@@ -63,7 +72,7 @@ describe("Kagi web search error handling", () => {
 				),
 		);
 
-		await expect(searchWithKagi("success case")).resolves.toEqual({
+		await expect(searchWithKagi("success case", {}, fakeStorage)).resolves.toEqual({
 			requestId: "req-kagi-success",
 			sources: [
 				{

@@ -6,11 +6,12 @@
  */
 
 import { getEnvApiKey } from "@oh-my-pi/pi-ai";
+import type { AgentStorage } from "../../../session/agent-storage";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { classifyProviderHttpError, isApiKeyAvailable, withHardTimeout } from "./utils";
+import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 const JINA_SEARCH_URL = "https://s.jina.ai";
 
@@ -87,11 +88,11 @@ export class JinaProvider extends SearchProvider {
 	readonly id = "jina";
 	readonly label = "Jina";
 
-	isAvailable() {
-		return isApiKeyAvailable(findApiKey);
+	isAvailable(_storage: AgentStorage): boolean {
+		return !!findApiKey();
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
+	search(params: SearchParams, _storage: AgentStorage): Promise<SearchResponse> {
 		return searchJina({
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,

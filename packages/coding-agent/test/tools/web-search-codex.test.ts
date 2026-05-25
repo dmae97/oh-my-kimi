@@ -174,23 +174,28 @@ function makePlainUrlPunctuationSseResponse(model: string): string {
 }
 
 describe("searchCodex model selection", () => {
+	const fakeStorage = {
+		listAuthCredentials: () => [
+			{
+				id: 1,
+				credential: {
+					type: "oauth",
+					access: "test-access-token",
+					expires: Date.now() + 600_000,
+					accountId: "acct-test",
+				},
+			},
+		],
+		updateAuthCredential: () => undefined,
+		get authStore() {
+			return null as never;
+		},
+	} as unknown as AgentStorage;
 	let capturedRequest: CapturedRequest | null = null;
 
 	function mockCodexFetch(responseModel: string, responseBody?: string): Disposable {
 		capturedRequest = null;
-		vi.spyOn(AgentStorage, "open").mockResolvedValue({
-			listAuthCredentials: () => [
-				{
-					id: 1,
-					credential: {
-						type: "oauth",
-						access: "test-access-token",
-						expires: Date.now() + 600_000,
-						accountId: "acct-test",
-					},
-				},
-			],
-		} as unknown as AgentStorage);
+		vi.spyOn(AgentStorage, "open").mockResolvedValue(fakeStorage);
 		return hookFetch((url, init) => {
 			capturedRequest = {
 				url: typeof url === "string" ? url : url.toString(),
@@ -218,7 +223,7 @@ describe("searchCodex model selection", () => {
 		delete process.env.PI_CODEX_WEB_SEARCH_MODEL;
 		using _hook = mockCodexFetch("gpt-5-codex-mini");
 
-		const result = await searchCodex({ query: "default codex model" });
+		const result = await searchCodex({ query: "default codex model" }, fakeStorage);
 
 		expect(capturedRequest).not.toBeNull();
 		expect(capturedRequest?.url).toBe("https://chatgpt.com/backend-api/codex/responses");
@@ -231,7 +236,7 @@ describe("searchCodex model selection", () => {
 		process.env.PI_CODEX_WEB_SEARCH_MODEL = "   ";
 		using _hook = mockCodexFetch("gpt-5-codex-mini");
 
-		const result = await searchCodex({ query: "blank codex model" });
+		const result = await searchCodex({ query: "blank codex model" }, fakeStorage);
 
 		expect(capturedRequest).not.toBeNull();
 		expect(capturedRequest?.body?.model).toBe("gpt-5-codex-mini");
@@ -242,7 +247,7 @@ describe("searchCodex model selection", () => {
 		process.env.PI_CODEX_WEB_SEARCH_MODEL = "gpt-5.4-mini";
 		using _hook = mockCodexFetch("gpt-5.4-mini");
 
-		const result = await searchCodex({ query: "overridden codex model" });
+		const result = await searchCodex({ query: "overridden codex model" }, fakeStorage);
 
 		expect(capturedRequest).not.toBeNull();
 		expect(capturedRequest?.body?.model).toBe("gpt-5.4-mini");
@@ -253,7 +258,7 @@ describe("searchCodex model selection", () => {
 		process.env.PI_CODEX_WEB_SEARCH_MODEL = "gpt-5.4";
 		using _hook = mockCodexFetch("gpt-5.4", makeMarkdownLinkSseResponse("gpt-5.4"));
 
-		const result = await searchCodex({ query: "markdown citations" });
+		const result = await searchCodex({ query: "markdown citations" }, fakeStorage);
 
 		expect(capturedRequest).not.toBeNull();
 		expect(capturedRequest?.body?.tool_choice).toEqual({ type: "web_search" });
@@ -264,7 +269,7 @@ describe("searchCodex model selection", () => {
 		process.env.PI_CODEX_WEB_SEARCH_MODEL = "gpt-5.4";
 		using _hook = mockCodexFetch("gpt-5.4", makePlainUrlSseResponse("gpt-5.4"));
 
-		const result = await searchCodex({ query: "plain url citations" });
+		const result = await searchCodex({ query: "plain url citations" }, fakeStorage);
 
 		expect(result.sources).toEqual([
 			{ title: "https://example.com/article", url: "https://example.com/article" },
@@ -276,7 +281,7 @@ describe("searchCodex model selection", () => {
 		process.env.PI_CODEX_WEB_SEARCH_MODEL = "gpt-5.4";
 		using _hook = mockCodexFetch("gpt-5.4", makeMarkdownParenthesesSseResponse("gpt-5.4"));
 
-		const result = await searchCodex({ query: "markdown parentheses citations" });
+		const result = await searchCodex({ query: "markdown parentheses citations" }, fakeStorage);
 
 		expect(result.sources).toEqual([
 			{ title: "Function", url: "https://en.wikipedia.org/wiki/Function_(mathematics)" },
@@ -287,7 +292,7 @@ describe("searchCodex model selection", () => {
 		process.env.PI_CODEX_WEB_SEARCH_MODEL = "gpt-5.4";
 		using _hook = mockCodexFetch("gpt-5.4", makePlainUrlPunctuationSseResponse("gpt-5.4"));
 
-		const result = await searchCodex({ query: "plain url punctuation" });
+		const result = await searchCodex({ query: "plain url punctuation" }, fakeStorage);
 
 		expect(result.sources).toEqual([
 			{ title: "https://example.com/article", url: "https://example.com/article" },
@@ -300,19 +305,7 @@ describe("searchCodex model selection", () => {
 	});
 
 	it("prefers streamed text when the final item only contains an image placeholder", async () => {
-		vi.spyOn(AgentStorage, "open").mockResolvedValue({
-			listAuthCredentials: () => [
-				{
-					id: 1,
-					credential: {
-						type: "oauth",
-						access: "test-access-token",
-						expires: Date.now() + 600_000,
-						accountId: "acct-test",
-					},
-				},
-			],
-		} as unknown as AgentStorage);
+		vi.spyOn(AgentStorage, "open").mockResolvedValue(fakeStorage);
 		using _hook = hookFetch(() => {
 			return new Response(makeImagePlaceholderSseResponse("gpt-5.4-mini"), {
 				status: 200,
@@ -320,7 +313,7 @@ describe("searchCodex model selection", () => {
 			});
 		});
 
-		const result = await searchCodex({ query: "responses api store semantics" });
+		const result = await searchCodex({ query: "responses api store semantics" }, fakeStorage);
 
 		expect(result.answer).toBe("OpenAI Responses API defaults `store` to false unless you opt in.");
 		expect(result.sources).toEqual([

@@ -1,4 +1,5 @@
 import { getEnvApiKey } from "@oh-my-pi/pi-ai";
+import type { AgentStorage } from "../session/agent-storage";
 import { findCredential, withHardTimeout } from "./search/providers/utils";
 
 const KAGI_SEARCH_URL = "https://kagi.com/api/v0/search";
@@ -113,8 +114,8 @@ export interface KagiSearchResult {
 	relatedQuestions: string[];
 }
 
-export async function findKagiApiKey(): Promise<string | null> {
-	return findCredential(getEnvApiKey("kagi"), "kagi");
+export function findKagiApiKey(storage: AgentStorage): string | null {
+	return findCredential(storage, getEnvApiKey("kagi"), "kagi");
 }
 
 function getAuthHeaders(apiKey: string): Record<string, string> {
@@ -124,8 +125,12 @@ function getAuthHeaders(apiKey: string): Record<string, string> {
 	};
 }
 
-export async function searchWithKagi(query: string, options: KagiSearchOptions = {}): Promise<KagiSearchResult> {
-	const apiKey = await findKagiApiKey();
+export async function searchWithKagi(
+	query: string,
+	options: KagiSearchOptions = {},
+	storage: AgentStorage,
+): Promise<KagiSearchResult> {
+	const apiKey = findKagiApiKey(storage);
 	if (!apiKey) {
 		throw new KagiApiError("Kagi credentials not found. Set KAGI_API_KEY or login with 'omp /login kagi'.");
 	}
