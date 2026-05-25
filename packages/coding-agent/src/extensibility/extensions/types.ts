@@ -968,7 +968,7 @@ export interface ExtensionAPI {
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
 	): void;
 
-	/** Send a user message to the agent. Always triggers a turn. */
+	/** Send a user message to the agent, or queue it when deliverAs is set. */
 	sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
 		options?: { deliverAs?: "steer" | "followUp" },

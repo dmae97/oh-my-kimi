@@ -4535,11 +4535,11 @@ export class AgentSession {
 	}
 
 	/**
-	 * Send a user message to the agent. Always triggers a turn.
-	 * When the agent is streaming, use deliverAs to specify how to queue the message.
+	 * Send a user message to the agent.
+	 * When deliverAs is set, queue the message instead of starting a new turn.
 	 *
 	 * @param content User message content (string or content array)
-	 * @param options.deliverAs Delivery mode when streaming: "steer" or "followUp"
+	 * @param options.deliverAs Delivery mode: "steer" or "followUp"
 	 */
 	async sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
@@ -4565,10 +4565,18 @@ export class AgentSession {
 			if (images.length === 0) images = undefined;
 		}
 
+		if (options?.deliverAs === "followUp") {
+			await this.#queueFollowUp(text, images);
+			return;
+		}
+		if (options?.deliverAs === "steer") {
+			await this.#queueSteer(text, images);
+			return;
+		}
+
 		// Use prompt() with expandPromptTemplates: false to skip command handling and template expansion
 		await this.prompt(text, {
 			expandPromptTemplates: false,
-			streamingBehavior: options?.deliverAs,
 			images,
 		});
 	}

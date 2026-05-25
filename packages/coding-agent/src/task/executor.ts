@@ -1292,22 +1292,25 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			const extensionRunner = session.extensionRunner;
+			const pendingExtensionMessages: Promise<void>[] = [];
 			if (extensionRunner) {
 				extensionRunner.initialize(
 					{
 						sendMessage: (message, options) => {
-							session.sendCustomMessage(message, options).catch(e => {
+							const sendPromise = session.sendCustomMessage(message, options).catch(e => {
 								logger.error("Extension sendMessage failed", {
 									error: e instanceof Error ? e.message : String(e),
 								});
 							});
+							pendingExtensionMessages.push(sendPromise);
 						},
 						sendUserMessage: (content, options) => {
-							session.sendUserMessage(content, options).catch(e => {
+							const sendPromise = session.sendUserMessage(content, options).catch(e => {
 								logger.error("Extension sendUserMessage failed", {
 									error: e instanceof Error ? e.message : String(e),
 								});
 							});
+							pendingExtensionMessages.push(sendPromise);
 						},
 						appendEntry: (customType, data) => {
 							session.sessionManager.appendCustomEntry(customType, data);
@@ -1343,6 +1346,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					logger.error("Extension error", { path: err.extensionPath, error: err.error });
 				});
 				await awaitAbortable(extensionRunner.emit({ type: "session_start" }));
+				while (pendingExtensionMessages.length > 0) {
+					await awaitAbortable(Promise.all(pendingExtensionMessages.splice(0)));
+				}
 			}
 
 			const MAX_YIELD_RETRIES = 3;
