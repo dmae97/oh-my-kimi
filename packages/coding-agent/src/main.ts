@@ -281,7 +281,7 @@ async function runInteractiveMode(
 		})
 		.catch(() => {});
 
-	mode.renderInitialMessages();
+	mode.renderInitialMessages(undefined, { preserveExistingChat: true });
 
 	for (const notify of notifs) {
 		if (!notify) {

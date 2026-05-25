@@ -760,6 +760,14 @@ export class EventController {
 		if (this.ctx.isBackgrounded === false) return;
 		const notify = settings.get("completion.notify");
 		if (notify === "off") return;
+
+		// Skip when the turn was aborted (e.g. ask cancelled with Ctrl+C) or
+		// errored — those are not "Task complete" events. Mirrors the gate
+		// already used by #currentContextTokens, #handleMessageEnd, and the
+		// retry / TTSR / compaction skip paths across agent-session.ts.
+		const last = this.ctx.session.getLastAssistantMessage?.();
+		if (last?.stopReason === "aborted" || last?.stopReason === "error") return;
+
 		const title = this.ctx.sessionManager.getSessionName();
 		const message = title ? `${title}: Complete` : "Complete";
 		TERMINAL.sendNotification(message);

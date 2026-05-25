@@ -2,6 +2,12 @@
 
 Thread context: {{origin.description}}. PR state: `{{state.pr_status}}`.
 
+## Prior conversation
+
+{{thread}}
+
+---
+
 ## New comment by @{{comment.author}} ({{comment.created_at}})
 
 {{comment.body}}

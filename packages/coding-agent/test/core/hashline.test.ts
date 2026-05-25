@@ -366,6 +366,61 @@ describe("hashline parser — block op syntax", () => {
 	it("describes current sigils for unknown op syntax", () => {
 		expect(() => parseHashline(`-${sameLineRange(tag(2, "bbb"))}`)).toThrow(/Use «ANCHOR.*»ANCHOR.*≔A\.\.B/);
 	});
+
+	it("leniently tolerates a trailing `|TEXT` body on anchors copied verbatim from read output", () => {
+		const anchor = tag(2, "bbb");
+		// Bare trailing `|`, full `|TEXT` body, and both sides of a range.
+		expect(applyDiff(content, [`≔${anchor}|`, pl("BBB")].join("\n"))).toBe("aaa\nBBB\nccc");
+		expect(applyDiff(content, [`≔${anchor}|bbb`, pl("BBB")].join("\n"))).toBe("aaa\nBBB\nccc");
+		expect(applyDiff(content, [`«${anchor}|bbb`, pl("X")].join("\n"))).toBe("aaa\nX\nbbb\nccc");
+		expect(applyDiff(content, [`»${anchor}|bbb`, pl("X")].join("\n"))).toBe("aaa\nbbb\nX\nccc");
+		expect(applyDiff(content, `≔${anchor}|bbb..${tag(3, "ccc")}|ccc`)).toBe("aaa");
+	});
+
+	it("leniently strips `*`/`>` line-marker decoration from anchors", () => {
+		const anchor = tag(2, "bbb");
+		expect(applyDiff(content, [`≔*${anchor}`, pl("BBB")].join("\n"))).toBe("aaa\nBBB\nccc");
+		expect(applyDiff(content, [`«>${anchor}`, pl("X")].join("\n"))).toBe("aaa\nX\nbbb\nccc");
+	});
+
+	it("treats a non-matching `|TEXT` body on »/« as an inline payload line (single-line insert)", () => {
+		// content is "aaa\nbbb\nccc"; "NEW" does not match line 2 ("bbb"), so the
+		// body becomes the only payload line — no following payload required.
+		const anchor = tag(2, "bbb");
+		expect(applyDiff(content, `»${anchor}|NEW`)).toBe("aaa\nbbb\nNEW\nccc");
+		expect(applyDiff(content, `«${anchor}|NEW`)).toBe("aaa\nNEW\nbbb\nccc");
+	});
+
+	it("accepts inline `|TEXT` payload containing whitespace on »/«", () => {
+		// Regression: the prior regex required `\S+` after the op sigil, so an
+		// inline payload like `»2bx|\tconst foo = bar` failed with "unrecognized
+		// op" the moment the body contained any whitespace.
+		const anchor = tag(2, "bbb");
+		const payload = "\tconst streamKeepaliveMs = opts.streamKeepaliveMs;";
+		expect(applyDiff(content, `»${anchor}|${payload}`)).toBe(`aaa\nbbb\n${payload}\nccc`);
+		expect(applyDiff(content, `«${anchor}|${payload}`)).toBe(`aaa\n${payload}\nbbb\nccc`);
+	});
+
+	it("prepends a non-matching inline `|TEXT` body before subsequent payload lines", () => {
+		const anchor = tag(2, "bbb");
+		const diff = [`»${anchor}|first inline`, pl("second from next line")].join("\n");
+		expect(applyDiff(content, diff)).toBe("aaa\nbbb\nfirst inline\nsecond from next line\nccc");
+	});
+
+	it("discards an inline `|TEXT` body that matches the anchored line content", () => {
+		// When `|TEXT` reproduces line 2 verbatim it's just visual decoration —
+		// require a real payload from the following lines.
+		const anchor = tag(2, "bbb");
+		const diff = [`»${anchor}|bbb`, pl("X"), pl("Y")].join("\n");
+		expect(applyDiff(content, diff)).toBe("aaa\nbbb\nX\nY\nccc");
+		// Matching body with no follow-up payload is still an error.
+		expect(() => parseHashline(`»${anchor}|bbb`)).toThrow(/require at least one/);
+	});
+
+	it("treats `|TEXT` after BOF/EOF as a payload line (no anchor hash to compare)", () => {
+		expect(applyDiff(content, `»BOF|HEAD`)).toBe("HEAD\naaa\nbbb\nccc");
+		expect(applyDiff(content, `»EOF|TAIL`)).toBe("aaa\nbbb\nccc\nTAIL");
+	});
 });
 
 describe("hashline — stale anchors", () => {

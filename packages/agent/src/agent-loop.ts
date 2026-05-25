@@ -363,7 +363,7 @@ function injectIntentIntoSchema(schema: unknown, mode: "require" | "optional" = 
 	};
 }
 
-function normalizeTools(tools: AgentContext["tools"], injectIntent: boolean): Context["tools"] {
+export function normalizeTools(tools: AgentContext["tools"], injectIntent: boolean): Context["tools"] {
 	injectIntent = injectIntent && Bun.env.PI_NO_INTENT !== "1";
 	return tools?.map(t => {
 		const intentMode = resolveIntentMode(t.intent);
@@ -647,12 +647,19 @@ async function streamAssistantResponse(
 	const llmMessages = await config.convertToLlm(messages);
 	const normalizedMessages = normalizeMessagesForProvider(llmMessages, config.model);
 
-	// Build LLM context
-	const llmContext: Context = {
-		systemPrompt: context.systemPrompt,
-		messages: normalizedMessages,
-		tools: normalizeTools(context.tools, !!config.intentTracing),
-	};
+	// Build LLM context — append-only mode caches system prompt + tools
+	// AND keeps an append-only message log so prior-turn bytes are stable.
+	let llmContext: Context;
+	if (config.appendOnlyContext) {
+		config.appendOnlyContext.syncMessages(normalizedMessages);
+		llmContext = config.appendOnlyContext.build(context, { intentTracing: !!config.intentTracing });
+	} else {
+		llmContext = {
+			systemPrompt: context.systemPrompt,
+			messages: normalizedMessages,
+			tools: normalizeTools(context.tools, !!config.intentTracing),
+		};
+	}
 
 	const streamFunction = streamFn || streamSimple;
 

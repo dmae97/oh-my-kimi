@@ -551,8 +551,15 @@ function renderAgentProgress(
 	const titlePart = description ? `${theme.bold(displayId)}: ${description}` : displayId;
 	let statusLine = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;
 
-	// Only show badge for non-running states (spinner already indicates running)
-	if (progress.status === "failed" || progress.status === "aborted") {
+	// Show retry-blocked badge so the parent immediately sees that a child
+	// is sleeping on a provider 429, not silently progressing. Wins over the
+	// generic running spinner because "we're waiting on a quota window" is
+	// the operationally meaningful state.
+	if (progress.retryState && progress.status === "running") {
+		statusLine += ` ${formatBadge("retrying", "warning", theme)}`;
+	} else if (progress.retryFailure && (progress.status === "failed" || progress.status === "aborted")) {
+		statusLine += ` ${formatBadge("rate-limited", "error", theme)}`;
+	} else if (progress.status === "failed" || progress.status === "aborted") {
 		const statusLabel = progress.status === "failed" ? "failed" : "aborted";
 		statusLine += ` ${formatBadge(statusLabel, iconColor, theme)}`;
 	}
@@ -598,6 +605,23 @@ function renderAgentProgress(
 		}
 	}
 
+	// Retry detail line: surface why the subagent is paused and roughly how
+	// long until the next attempt. Without this, the parent UI would just
+	// keep spinning while a child sleeps on a 3-hour provider rate-limit.
+	if (progress.retryState && progress.status === "running") {
+		const remainingMs = Math.max(0, progress.retryState.startedAtMs + progress.retryState.delayMs - Date.now());
+		const waitLabel = remainingMs > 0 ? `in ${formatDuration(remainingMs)}` : "now";
+		const summary =
+			`retrying ${progress.retryState.attempt}/${progress.retryState.maxAttempts} ${waitLabel}: ` +
+			truncateToWidth(replaceTabs(progress.retryState.errorMessage), 60);
+		lines.push(`${continuePrefix}${theme.tree.hook} ${theme.fg("warning", summary)}`);
+	} else if (progress.retryFailure && progress.status !== "running") {
+		const summary = `auto-retry gave up after ${progress.retryFailure.attempt} attempt${
+			progress.retryFailure.attempt === 1 ? "" : "s"
+		}: ${truncateToWidth(replaceTabs(progress.retryFailure.errorMessage), 80)}`;
+		lines.push(`${continuePrefix}${theme.tree.hook} ${theme.fg("error", summary)}`);
+	}
+
 	// Render extracted tool data inline (e.g., review findings)
 	if (progress.extractedToolData) {
 		// For completed tasks, check for review verdict from yield tool
@@ -615,7 +639,8 @@ function renderAgentProgress(
 			}
 		}
 
-		for (const [toolName, dataArray] of Object.entries(progress.extractedToolData)) {
+		for (const toolName in progress.extractedToolData) {
+			const dataArray = progress.extractedToolData[toolName];
 			// Handle report_finding with tree formatting
 			if (toolName === "report_finding") {
 				const findings = normalizeReportFindings(dataArray);
@@ -624,6 +649,11 @@ function renderAgentProgress(
 				lines.push(...renderFindings(findings, continuePrefix, expanded, theme));
 				continue;
 			}
+
+			// Nested `task` data has its own dedicated tree renderer below that
+			// also merges in the in-flight snapshot — skip the generic inline
+			// path so we don't render twice.
+			if (toolName === "task") continue;
 
 			const handler = subprocessToolRegistry.getHandler(toolName);
 			if (handler?.renderInline) {
@@ -644,6 +674,20 @@ function renderAgentProgress(
 					);
 				}
 			}
+		}
+	}
+
+	// Nested `task` tree: completed sub-calls from `extractedToolData.task` plus
+	// the in-flight snapshot (if any). Surfacing this in the live view means
+	// the user sees deep-tree progress without waiting for this agent to finish
+	// its own turn.
+	const completedTaskCalls = (progress.extractedToolData?.task as TaskToolDetails[] | undefined) ?? [];
+	const inflight = progress.inflightTaskDetails;
+	if (completedTaskCalls.length > 0 || inflight) {
+		const snapshots = inflight ? [...completedTaskCalls, inflight] : completedTaskCalls;
+		const nestedLines = renderNestedTaskTree(snapshots, expanded, theme, spinnerFrame);
+		for (const line of nestedLines) {
+			lines.push(`${continuePrefix}${line}`);
 		}
 	}
 
@@ -1039,6 +1083,38 @@ function renderNestedTaskResults(detailsList: TaskToolDetails[], expanded: boole
 			const isLast = index === details.results.length - 1;
 			lines.push(...renderAgentResult(result, isLast, expanded, theme));
 		});
+	}
+	return lines;
+}
+
+/**
+ * Render a list of `TaskToolDetails` snapshots — completed (`results[]`) or
+ * in-flight (`progress[]`) — as an interleaved tree. Used by the live progress
+ * view to surface nested subagent activity while this agent is still running.
+ */
+function renderNestedTaskTree(
+	detailsList: TaskToolDetails[],
+	expanded: boolean,
+	theme: Theme,
+	spinnerFrame?: number,
+): string[] {
+	const lines: string[] = [];
+	for (const details of detailsList) {
+		const hasResults = Boolean(details.results && details.results.length > 0);
+		if (hasResults) {
+			details.results.forEach((result, index) => {
+				const isLast = index === details.results.length - 1;
+				lines.push(...renderAgentResult(result, isLast, expanded, theme));
+			});
+			continue;
+		}
+		const inflight = details.progress;
+		if (inflight && inflight.length > 0) {
+			inflight.forEach((prog, index) => {
+				const isLast = index === inflight.length - 1;
+				lines.push(...renderAgentProgress(prog, isLast, expanded, theme, spinnerFrame));
+			});
+		}
 	}
 	return lines;
 }

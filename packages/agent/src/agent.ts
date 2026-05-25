@@ -21,6 +21,7 @@ import {
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import { agentLoop, agentLoopContinue } from "./agent-loop";
+import type { AppendOnlyContextManager } from "./append-only-context";
 import type { HarmonyAuditEvent } from "./harmony-leak";
 import type {
 	AgentContext,
@@ -227,6 +228,11 @@ export interface AgentOptions {
 	 * {@link AgentLoopConfig.telemetry} for the full surface.
 	 */
 	telemetry?: AgentLoopConfig["telemetry"];
+	/**
+	 * Immutable context mode — stabilizes system prompt + tool spec bytes
+	 * across turns so DeepSeek/Anthropic prefix caches hit at maximum rate.
+	 */
+	appendOnlyContext?: AppendOnlyContextManager;
 }
 
 export interface AgentPromptOptions {
@@ -292,6 +298,7 @@ export class Agent {
 	#onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
 	#onBeforeYield?: () => Promise<void> | void;
 	#telemetry?: AgentLoopConfig["telemetry"];
+	#appendOnlyContext?: AppendOnlyContextManager;
 
 	/** Buffered Cursor tool results with text length at time of call (for correct ordering) */
 	#cursorToolResultBuffer: CursorToolResultEntry[] = [];
@@ -346,6 +353,7 @@ export class Agent {
 		this.beforeToolCall = opts.beforeToolCall;
 		this.afterToolCall = opts.afterToolCall;
 		this.#telemetry = opts.telemetry;
+		this.#appendOnlyContext = opts.appendOnlyContext;
 	}
 
 	/**
@@ -539,6 +547,14 @@ export class Agent {
 
 	get state(): AgentState {
 		return this.#state;
+	}
+
+	get appendOnlyContext(): AppendOnlyContextManager | undefined {
+		return this.#appendOnlyContext;
+	}
+
+	setAppendOnlyContext(manager?: AppendOnlyContextManager): void {
+		this.#appendOnlyContext = manager;
 	}
 
 	subscribe(fn: (e: AgentEvent) => void): () => void {
@@ -925,6 +941,7 @@ export class Agent {
 			cursorOnToolResult,
 			transformToolCallArguments: this.#transformToolCallArguments,
 			intentTracing: this.#intentTracing,
+			appendOnlyContext: this.#appendOnlyContext,
 			beforeToolCall: this.beforeToolCall ? (ctx, signal) => this.beforeToolCall?.(ctx, signal) : undefined,
 			afterToolCall: this.afterToolCall ? (ctx, signal) => this.afterToolCall?.(ctx, signal) : undefined,
 			onAssistantMessageEvent: this.#onAssistantMessageEvent,

@@ -26,6 +26,7 @@ import {
 	type AgentMessage,
 	type AgentState,
 	type AgentTool,
+	AppendOnlyContextManager,
 	resolveTelemetry,
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
@@ -98,6 +99,7 @@ import {
 } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
+import { onAppendOnlyModeChanged } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
@@ -749,6 +751,9 @@ export class AgentSession {
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
+	#unsubscribeAppendOnly?: () => void;
+	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
+	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
 
 	/** Tracks pending steering messages for UI display. Removed when delivered.
@@ -1138,6 +1143,8 @@ export class AgentSession {
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
 		this.#unsubscribeAgent = this.agent.subscribe(this.#handleAgentEvent);
+		// Re-evaluate append-only context mode when the setting changes at runtime.
+		this.#unsubscribeAppendOnly = onAppendOnlyModeChanged(_value => this.#syncAppendOnlyContext(this.model));
 	}
 
 	/** Model registry for API key resolution and model discovery */
@@ -2781,6 +2788,10 @@ export class AgentSession {
 		await hindsightState?.flushRetainQueue();
 		hindsightState?.dispose();
 		this.#disconnectFromAgent();
+		if (this.#unsubscribeAppendOnly) {
+			this.#unsubscribeAppendOnly();
+			this.#unsubscribeAppendOnly = undefined;
+		}
 		this.#eventListeners = [];
 	}
 
@@ -3571,6 +3582,18 @@ export class AgentSession {
 	/** Whether auto-compaction is currently running */
 	get isCompacting(): boolean {
 		return this.#autoCompactionAbortController !== undefined || this.#compactionAbortController !== undefined;
+	}
+
+	/**
+	 * Whether idle-flush tasks, auto-continuations, or other short-lived
+	 * post-prompt work are pending.  True in the brief window after
+	 * `session.prompt()` returns but before a scheduled background delivery
+	 * (e.g. an async-job result) has finished its own streaming turn.
+	 * Loop-mode and similar auto-submit paths should treat this as a block
+	 * to avoid racing against the delivery turn.
+	 */
+	get hasPostPromptWork(): boolean {
+		return this.#postPromptTasks.size > 0;
 	}
 
 	/** All messages including custom types like BashExecutionMessage */
@@ -5947,12 +5970,38 @@ export class AgentSession {
 			this.#closeProviderSessionsForModelSwitch(currentModel, model);
 		}
 		this.agent.setModel(model);
+
+		// Re-evaluate append-only context mode — provider or setting may have changed
+		this.#syncAppendOnlyContext(model);
 	}
 
 	#closeCodexProviderSessionsForHistoryRewrite(): void {
 		const currentModel = this.model;
 		if (!currentModel || currentModel.api !== "openai-codex-responses") return;
 		this.#closeProviderSessionsForModelSwitch(currentModel, currentModel);
+	}
+
+	/**
+	 * Re-evaluate append-only context mode, creating or destroying the
+	 * manager as needed. Called on model switch AND setting change.
+	 */
+	#syncAppendOnlyContext(model: Model | null | undefined): void {
+		const setting = this.settings.get("provider.appendOnlyContext") ?? "auto";
+		const providerId = model?.provider;
+		const enable = setting === "on" || (setting === "auto" && providerId === "deepseek");
+		const prev = this.#lastAppendOnlyResolution;
+		if (prev && prev.enable === enable && prev.providerId === providerId) return;
+		this.#lastAppendOnlyResolution = { enable, providerId };
+
+		if (enable && !this.agent.appendOnlyContext) {
+			this.agent.setAppendOnlyContext(new AppendOnlyContextManager());
+		} else if (enable && this.agent.appendOnlyContext) {
+			// Already active — invalidate prefix + log so the next turn
+			// rebuilds for the current model's normalization.
+			this.agent.appendOnlyContext.invalidateForModelChange();
+		} else if (!enable && this.agent.appendOnlyContext) {
+			this.agent.setAppendOnlyContext(undefined);
+		}
 	}
 
 	#closeProviderSessionsForModelSwitch(currentModel: Model, nextModel: Model): void {
@@ -7069,6 +7118,27 @@ export class AgentSession {
 			} else if (parsedRetryAfterMs && parsedRetryAfterMs > delayMs) {
 				delayMs = parsedRetryAfterMs;
 			}
+		}
+
+		// Fail-fast cap: if the provider asks us to wait longer than
+		// retry.maxDelayMs and we have no fallback credential or model to
+		// switch to, surface the error instead of sleeping. Defends against
+		// 3-hour Anthropic rate-limit windows that would otherwise leave a
+		// subagent (or interactive session) silently hung. The original
+		// assistant error message is preserved in agent state so the caller
+		// can act on it.
+		const maxDelayMs = retrySettings.maxDelayMs;
+		if (maxDelayMs > 0 && delayMs > maxDelayMs && !switchedCredential && !switchedModel) {
+			const attempt = this.#retryAttempt;
+			this.#retryAttempt = 0;
+			await this.#emitSessionEvent({
+				type: "auto_retry_end",
+				success: false,
+				attempt,
+				finalError: `Provider requested ${delayMs}ms wait, exceeds retry.maxDelayMs (${maxDelayMs}ms). Original error: ${errorMessage}`,
+			});
+			this.#resolveRetry();
+			return false;
 		}
 
 		await this.#emitSessionEvent({

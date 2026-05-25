@@ -425,7 +425,7 @@ describe("openai-completions compatibility", () => {
 		);
 	});
 
-	it("preserves the streamed reasoning field name for follow-up requests", async () => {
+	it("preserves the streamed reasoning field name when replay requires reasoning content", async () => {
 		const model: Model<"openai-completions"> = {
 			...getBundledModel("openai", "gpt-4o-mini"),
 			api: "openai-completions",
@@ -460,7 +460,8 @@ describe("openai-completions compatibility", () => {
 			thinkingSignature: "reasoning_text",
 		});
 
-		const messages = convertMessages(model, { messages: [result] }, detectCompat(model));
+		const compat = { ...detectCompat(model), requiresReasoningContentForToolCalls: true };
+		const messages = convertMessages(model, { messages: [result] }, compat);
 		const assistant = messages.find(message => message.role === "assistant");
 		expect(assistant).toBeDefined();
 		const assistantObject = toObject(assistant);
@@ -536,6 +537,53 @@ describe("kimi model detection via detectCompat", () => {
 		const assistant = messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
 		expect(Reflect.get(assistant as object, "reasoning_content")).toBeUndefined();
+	});
+
+	it("does not replay streamed reasoning fields for kimi on opencode-go", () => {
+		const model = kimiOpenCodeModel("kimi-k2.6");
+		const compat = detectCompat(model);
+		const toolCallMessage: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "." },
+				{
+					type: "thinking",
+					thinking: "The user wants to install...",
+					thinkingSignature: "reasoning",
+				},
+				{
+					type: "toolCall",
+					id: "call_abc123",
+					name: "bash",
+					arguments: { command: "echo ok" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+
+		expect(compat.requiresReasoningContentForToolCalls).toBe(false);
+		const messages = convertMessages(model, { messages: [toolCallMessage] }, compat);
+		const assistant = messages.find(m => m.role === "assistant");
+		const assistantObject = toObject(assistant);
+		expect(assistantObject).toBeDefined();
+		if (!assistantObject) {
+			throw new Error("assistant message missing");
+		}
+		expect(Reflect.get(assistantObject, "reasoning")).toBeUndefined();
+		expect(Reflect.get(assistantObject, "reasoning_content")).toBeUndefined();
+		expect(Reflect.get(assistantObject, "reasoning_text")).toBeUndefined();
 	});
 
 	it("injects reasoning_content placeholder when kimi-on-moonshot has tool calls without reasoning field", () => {

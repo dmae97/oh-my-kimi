@@ -16,6 +16,8 @@ import type { Provider } from "./types";
 import type {
 	CredentialRankingStrategy,
 	UsageCredential,
+	UsageFetchContext,
+	UsageFetchParams,
 	UsageLimit,
 	UsageLogger,
 	UsageProvider,
@@ -29,6 +31,7 @@ import { kimiUsageProvider } from "./usage/kimi";
 import { codexRankingStrategy, openaiCodexUsageProvider } from "./usage/openai-codex";
 import { zaiUsageProvider } from "./usage/zai";
 import { getOAuthApiKey, getOAuthProvider, refreshOAuthToken } from "./utils/oauth";
+import { loginDeepSeek } from "./utils/oauth/deepseek";
 import { loginOpenAICodexDevice } from "./utils/oauth/openai-codex";
 import type { OAuthController, OAuthCredentials, OAuthProvider, OAuthProviderId } from "./utils/oauth/types";
 
@@ -77,6 +80,47 @@ export interface StoredAuthCredential {
 	provider: string;
 	credential: AuthCredential;
 	disabledCause: string | null;
+}
+
+/**
+ * Per-credential health record returned by {@link AuthStorage.checkCredentials}.
+ *
+ * Use this to identify which credential in a multi-account pool is causing
+ * auth errors. `ok` is tri-state:
+ *
+ * - `true` — credential authenticated against the provider's auth-verifying
+ *   probe (today: the usage endpoint). For OAuth this also exercises refresh
+ *   when the access token was expired.
+ * - `false` — the probe rejected the credential (401/403/refresh failure/etc).
+ *   `reason` carries the upstream error string.
+ * - `null` — no probe is configured for this provider (or the configured
+ *   probe doesn't support this credential type). The credential's auth
+ *   status is unverifiable from here.
+ */
+export interface CredentialHealthResult {
+	/** Database row id (matches {@link StoredAuthCredential.id}). */
+	id: number;
+	provider: string;
+	type: AuthCredential["type"];
+	/** OAuth email if known on the stored credential or surfaced by the probe. */
+	email?: string;
+	/** OAuth account id / org id if known. */
+	accountId?: string;
+	/** `true` when the refresh token lives on a remote broker (sentinel was present). */
+	remoteRefresh?: true;
+	ok: boolean | null;
+	/** Failure / unverifiable reason; absent when `ok === true`. */
+	reason?: string;
+	/** Probe usage report (raw payload stripped) when `ok === true`. */
+	report?: Omit<UsageReport, "raw">;
+}
+
+export interface CheckCredentialsOptions {
+	signal?: AbortSignal;
+	/** Per-credential probe timeout (ms). Defaults to the configured usage request timeout. */
+	timeoutMs?: number;
+	/** Provider → base URL override, same shape as {@link AuthStorage.fetchUsageReports}. */
+	baseUrlResolver?: (provider: Provider) => string | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -385,6 +429,16 @@ type AuthApiKeyOptions = {
 	 */
 	signal?: AbortSignal;
 };
+export interface InvalidateCredentialMatchingOptions {
+	signal?: AbortSignal;
+	sessionId?: string;
+}
+
+function isAbortSignalOption(
+	value: InvalidateCredentialMatchingOptions | AbortSignal | undefined,
+): value is AbortSignal {
+	return typeof value === "object" && value !== null && "aborted" in value && "addEventListener" in value;
+}
 
 function requiresOpenAICodexProModel(provider: string, modelId: string | undefined): boolean {
 	return provider === "openai-codex" && typeof modelId === "string" && modelId.includes("-spark");
@@ -588,6 +642,7 @@ export class AuthStorage {
 	#generation = 1;
 	#generationListeners: Set<(generation: number) => void> = new Set();
 	#oauthRefreshInFlight: Map<number, Promise<AuthCredentialSnapshotEntry>> = new Map();
+	#oauthCredentialRefreshInFlight: Map<number, Promise<OAuthCredentials>> = new Map();
 	#closed = false;
 
 	constructor(store: AuthCredentialStore, options: AuthStorageOptions = {}) {
@@ -959,6 +1014,17 @@ export class AuthStorage {
 	): { type: AuthCredential["type"]; index: number } | undefined {
 		if (!sessionId) return undefined;
 		return this.#sessionLastCredential.get(provider)?.get(sessionId);
+	}
+
+	/** Clears the last credential used by a session for a provider. */
+	#clearSessionCredential(provider: string, sessionId: string | undefined): void {
+		if (!sessionId) return;
+		const sessionMap = this.#sessionLastCredential.get(provider);
+		if (!sessionMap) return;
+		sessionMap.delete(sessionId);
+		if (sessionMap.size === 0) {
+			this.#sessionLastCredential.delete(provider);
+		}
 	}
 
 	/**
@@ -1375,6 +1441,11 @@ export class AuthStorage {
 			case "cerebras": {
 				const { loginCerebras } = await import("./utils/oauth/cerebras");
 				const apiKey = await loginCerebras(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "deepseek": {
+				const apiKey = await loginDeepSeek(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
@@ -2097,6 +2168,130 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Probe each stored credential against its provider's auth-verifying usage
+	 * endpoint and report per-credential auth health.
+	 *
+	 * Surfaces the identity of failing credentials so callers running a
+	 * multi-account pool (e.g. a broker-backed auth-gateway) can tell which
+	 * row is producing 401s. The probe mirrors the per-credential fan-out
+	 * inside {@link AuthStorage.fetchUsageReports} (OAuth refresh-on-expiry,
+	 * then `UsageProvider.fetchUsage`) but does NOT swallow errors — every
+	 * credential gets either `ok: true`, `ok: false` with `reason`, or
+	 * `ok: null` when no probe is configured for the provider.
+	 *
+	 * Iterates sequentially to avoid synchronized N-account fan-out that
+	 * upstream `/usage` rate limiters (per source IP) treat as a burst.
+	 *
+	 * Only inspects active rows from {@link AuthCredentialStore.listAuthCredentials};
+	 * soft-disabled rows are already known-bad and don't need a network probe.
+	 * Environment-variable API keys are not enumerated — the caller's intent
+	 * here is "which of my stored credentials is broken".
+	 */
+	async checkCredentials(options?: CheckCredentialsOptions): Promise<CredentialHealthResult[]> {
+		options?.signal?.throwIfAborted();
+		const stored = this.#store.listAuthCredentials();
+		const resolver = this.#usageProviderResolver;
+		const timeoutMs = options?.timeoutMs ?? this.#usageRequestTimeoutMs;
+		const ctx: UsageFetchContext = { fetch: this.#usageFetch, logger: this.#usageLogger };
+
+		const results: CredentialHealthResult[] = [];
+		for (const row of stored) {
+			options?.signal?.throwIfAborted();
+			const base: CredentialHealthResult = {
+				id: row.id,
+				provider: row.provider,
+				type: row.credential.type,
+				ok: null,
+			};
+			if (row.credential.type === "oauth") {
+				if (row.credential.email) base.email = row.credential.email;
+				if (row.credential.accountId) base.accountId = row.credential.accountId;
+				if (row.credential.refresh === REMOTE_REFRESH_SENTINEL) base.remoteRefresh = true;
+			}
+
+			const providerImpl = resolver?.(row.provider as Provider);
+			if (!providerImpl) {
+				base.reason = `no usage probe configured for provider ${row.provider}`;
+				results.push(base);
+				continue;
+			}
+
+			const baseUrl = options?.baseUrlResolver?.(row.provider as Provider);
+			const cred = row.credential;
+			const initialRequest: UsageRequestDescriptor =
+				cred.type === "api_key"
+					? this.#buildUsageRequest(row.provider as Provider, { type: "api_key", apiKey: cred.key }, baseUrl)
+					: this.#buildUsageRequestForOauth(row.provider as Provider, cred, baseUrl);
+
+			if (providerImpl.supports && !providerImpl.supports(initialRequest)) {
+				base.reason = `usage probe does not support ${cred.type} credentials for ${row.provider}`;
+				results.push(base);
+				continue;
+			}
+
+			const timeoutSignal = AbortSignal.timeout(timeoutMs);
+			const probeSignal = options?.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+			let params: UsageFetchParams & { signal: AbortSignal } = { ...initialRequest, signal: probeSignal };
+
+			// Refresh expired OAuth before probing — without this an expired access
+			// token reports as `false` when the credential is actually healthy
+			// (broker would happily refresh it on the next real request).
+			if (
+				cred.type === "oauth" &&
+				initialRequest.credential.type === "oauth" &&
+				initialRequest.credential.expiresAt !== undefined &&
+				Date.now() >= initialRequest.credential.expiresAt
+			) {
+				const refreshable = this.#buildRefreshableOauthCredential(initialRequest.credential);
+				if (refreshable) {
+					try {
+						const refreshed = await this.#refreshOAuthCredential(
+							row.provider as Provider,
+							refreshable,
+							row.id,
+							probeSignal,
+						);
+						const refreshedCredential = this.#mergeRefreshedUsageCredential(initialRequest.credential, refreshed);
+						this.#persistRefreshedUsageCredential(
+							row.provider as Provider,
+							initialRequest.credential,
+							refreshedCredential,
+						);
+						params = { ...params, credential: refreshedCredential };
+					} catch (error) {
+						base.ok = false;
+						base.reason = `oauth refresh failed: ${error instanceof Error ? error.message : String(error)}`;
+						results.push(base);
+						continue;
+					}
+				}
+			}
+
+			try {
+				const report = await providerImpl.fetchUsage(params, ctx);
+				if (report === null) {
+					base.reason = "usage probe returned no data for this credential";
+				} else {
+					base.ok = true;
+					const accountId = this.#getUsageReportMetadataValue(report, "accountId");
+					const email = this.#getUsageReportMetadataValue(report, "email");
+					if (accountId) base.accountId = accountId;
+					if (email) base.email = email;
+					const { raw: _raw, ...trimmed } = report;
+					base.report = trimmed;
+				}
+			} catch (error) {
+				base.ok = false;
+				base.reason = error instanceof Error ? error.message : String(error);
+			}
+
+			results.push(base);
+		}
+
+		return results;
+	}
+
+	/**
 	 * Marks the current session's credential as temporarily blocked due to usage limits.
 	 * Uses usage reports to determine accurate reset time when available.
 	 * Returns true if a credential was blocked, enabling automatic fallback to the next credential.
@@ -2369,11 +2564,13 @@ export class AuthStorage {
 						credentialId,
 						options?.signal,
 					);
-					candidate.selection.credential = {
+					const updated: OAuthCredential = {
 						...candidate.selection.credential,
 						...refreshedCredentials,
 						type: "oauth",
 					};
+					candidate.selection.credential = updated;
+					this.#replaceCredentialAt(provider, candidate.selection.index, updated);
 				} catch {}
 			}),
 		);
@@ -2415,7 +2612,27 @@ export class AuthStorage {
 		credentialId: number | undefined,
 		signal?: AbortSignal,
 	): Promise<OAuthCredentials> {
+		if (credentialId !== undefined) {
+			const existing = this.#oauthCredentialRefreshInFlight.get(credentialId);
+			if (existing) return raceCredentialRefreshWithSignal(existing, signal);
+		}
 		if (Date.now() < credential.expires) return credential;
+		if (credentialId === undefined) {
+			return this.#refreshOAuthCredentialUnshared(provider, credential, undefined, signal);
+		}
+		const promise = this.#refreshOAuthCredentialUnshared(provider, credential, credentialId).finally(() => {
+			this.#oauthCredentialRefreshInFlight.delete(credentialId);
+		});
+		this.#oauthCredentialRefreshInFlight.set(credentialId, promise);
+		return raceCredentialRefreshWithSignal(promise, signal);
+	}
+
+	async #refreshOAuthCredentialUnshared(
+		provider: Provider,
+		credential: OAuthCredential,
+		credentialId: number | undefined,
+		signal?: AbortSignal,
+	): Promise<OAuthCredentials> {
 		let refreshPromise: Promise<OAuthCredentials>;
 		// Caller override > store-level hook > local per-provider refresh.
 		// `RemoteAuthCredentialStore` exposes the hook so a broker-backed gateway
@@ -2782,24 +2999,44 @@ export class AuthStorage {
 		return this.#extractStructuredApiKeyToken(apiKey) === credential.access;
 	}
 
-	async invalidateCredentialMatching(provider: string, apiKey: string, signal?: AbortSignal): Promise<boolean> {
+	async invalidateCredentialMatching(
+		provider: string,
+		apiKey: string,
+		options?: InvalidateCredentialMatchingOptions,
+	): Promise<boolean>;
+	async invalidateCredentialMatching(provider: string, apiKey: string, signal?: AbortSignal): Promise<boolean>;
+	async invalidateCredentialMatching(
+		provider: string,
+		apiKey: string,
+		optionsOrSignal?: InvalidateCredentialMatchingOptions | AbortSignal,
+	): Promise<boolean> {
+		const signal = isAbortSignalOption(optionsOrSignal) ? optionsOrSignal : optionsOrSignal?.signal;
+		const sessionId = isAbortSignalOption(optionsOrSignal) ? undefined : optionsOrSignal?.sessionId;
 		const stored = this.#getStoredCredentials(provider);
-		let matchedId: number | undefined;
-		for (const entry of stored) {
-			if (await this.#credentialMatchesApiKey(entry.credential, apiKey)) {
-				matchedId = entry.id;
+		let matched: { id: number; type: AuthCredential["type"]; index: number } | undefined;
+		for (let index = 0; index < stored.length; index++) {
+			const entry = stored[index];
+			if (entry && (await this.#credentialMatchesApiKey(entry.credential, apiKey))) {
+				matched = { id: entry.id, type: entry.credential.type, index };
 				break;
 			}
 		}
 
-		if (matchedId === undefined) {
+		if (!matched) {
 			await this.reload();
 			return false;
 		}
 
+		this.#clearSessionCredential(provider, sessionId);
+		this.#markCredentialBlocked(
+			this.#getProviderTypeKey(provider, matched.type),
+			matched.index,
+			Date.now() + AuthStorage.#defaultBackoffMs,
+		);
+
 		const markSuspect = this.#store.markCredentialSuspect?.bind(this.#store);
 		if (markSuspect) {
-			await markSuspect(matchedId, { signal });
+			await markSuspect(matched.id, { signal });
 		} else {
 			await this.reload();
 		}

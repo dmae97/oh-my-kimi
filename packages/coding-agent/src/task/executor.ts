@@ -17,7 +17,7 @@ import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
-import type { Skill } from "../extensibility/skills";
+import { buildSkillPromptMessage, type Skill } from "../extensibility/skills";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { callTool } from "../mcp/client";
@@ -29,6 +29,7 @@ import { createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { ArtifactManager } from "../session/artifacts";
 import type { AuthStorage } from "../session/auth-storage";
+import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
 import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
 import type { ContextFileEntry } from "../tools";
@@ -49,6 +50,7 @@ import {
 	TASK_SUBAGENT_EVENT_CHANNEL,
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
+	type TaskToolDetails,
 } from "./types";
 
 const MCP_CALL_TIMEOUT_MS = 60_000;
@@ -191,6 +193,8 @@ export interface ExecutorOptions {
 	 * transition explicitly.
 	 */
 	parentTelemetry?: AgentTelemetryConfig;
+	/** Skills to autoload via sendCustomMessage before the first prompt */
+	autoloadSkills?: Skill[];
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -907,6 +911,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				if (intent) {
 					progress.lastIntent = intent;
 				}
+				// Reset any prior in-flight task snapshot so we don't show stale
+				// nested progress when the agent enters a fresh `task` call.
+				if (event.toolName === "task") {
+					progress.inflightTaskDetails = undefined;
+				}
 				break;
 			}
 
@@ -925,6 +934,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				progress.currentTool = undefined;
 				progress.currentToolArgs = undefined;
 				progress.currentToolStartMs = undefined;
+				// The finalized TaskToolDetails will be captured below into
+				// `extractedToolData.task`; drop the in-flight snapshot so the
+				// renderer doesn't double-count it against the final entry.
+				if (event.toolName === "task") {
+					progress.inflightTaskDetails = undefined;
+				}
 
 				// Check for registered subagent tool handler
 				const handler = subprocessToolRegistry.getHandler(event.toolName);
@@ -974,6 +989,23 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					}
 				}
 				flushProgress = true;
+				break;
+			}
+
+			case "tool_execution_update": {
+				// Surface nested-subagent progress mid-flight. The child task
+				// tool emits incremental `onUpdate` calls carrying its current
+				// `TaskToolDetails` (results + progress); we stash the latest
+				// snapshot so the parent UI can render the in-flight subtree
+				// without waiting for the call to finish.
+				if (event.toolName === "task") {
+					const partial = (event as { partialResult?: { details?: unknown } }).partialResult;
+					const details = partial && typeof partial === "object" ? partial.details : undefined;
+					if (details && typeof details === "object" && "results" in (details as TaskToolDetails)) {
+						progress.inflightTaskDetails = details as TaskToolDetails;
+						flushProgress = true;
+					}
+				}
 				break;
 			}
 
@@ -1348,6 +1380,30 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			const MAX_YIELD_RETRIES = 3;
 			unsubscribe = session.subscribe(event => {
+				if (event.type === "auto_retry_start") {
+					progress.retryState = {
+						attempt: event.attempt,
+						maxAttempts: event.maxAttempts,
+						delayMs: event.delayMs,
+						errorMessage: event.errorMessage,
+						startedAtMs: Date.now(),
+					};
+					progress.retryFailure = undefined;
+					scheduleProgress(true);
+					return;
+				}
+				if (event.type === "auto_retry_end") {
+					const attempt = progress.retryState?.attempt ?? event.attempt;
+					progress.retryState = undefined;
+					if (!event.success) {
+						progress.retryFailure = {
+							attempt,
+							errorMessage: event.finalError ?? "Auto-retry failed",
+						};
+					}
+					scheduleProgress(true);
+					return;
+				}
 				if (isAgentEvent(event)) {
 					try {
 						processEvent(event);
@@ -1361,6 +1417,21 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			});
 
 			checkAbort();
+			// Autoload skills via sendCustomMessage (same mechanic as /skill:<name>)
+			if (options.autoloadSkills?.length) {
+				for (const skill of options.autoloadSkills) {
+					const { message } = await buildSkillPromptMessage(skill, "");
+					await session.sendCustomMessage(
+						{
+							customType: SKILL_PROMPT_MESSAGE_TYPE,
+							content: message,
+							display: false,
+							details: { name: skill.name, path: skill.filePath },
+						},
+						{ triggerTurn: false },
+					);
+				}
+			}
 			await awaitAbortable(session.prompt(task, { attribution: "agent" }));
 			await awaitAbortable(session.waitForIdle());
 
@@ -1368,6 +1439,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			let retryCount = 0;
 			while (!yieldCalled && retryCount < MAX_YIELD_RETRIES && !abortSignal.aborted) {
+				// Skip reminders when the model returned a terminal error (e.g.
+				// rate-limit cap hit, auth failure). Re-prompting would just
+				// hit the same wall, multiplying the failure noise without
+				// any chance of producing a yield.
+				const lastBeforeReminder = session.getLastAssistantMessage();
+				if (lastBeforeReminder?.stopReason === "error") break;
 				try {
 					retryCount++;
 					const reminder = prompt.render(submitReminderTemplate, {
@@ -1568,6 +1645,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		usage: hasUsage ? accumulatedUsage : undefined,
 		outputPath,
 		extractedToolData: progress.extractedToolData,
+		retryFailure: progress.retryFailure,
 		outputMeta,
 	};
 }

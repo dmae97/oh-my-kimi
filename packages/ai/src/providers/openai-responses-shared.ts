@@ -117,6 +117,76 @@ export function collectCustomCallIds(messages: ResponseInput): Set<string> {
 	return customCallIds;
 }
 
+/**
+ * Convert orphan `function_call_output` / `custom_tool_call_output` items —
+ * those whose `call_id` has no matching preceding `function_call` /
+ * `custom_tool_call` in the same input — into assistant text notes.
+ *
+ * The Responses API rejects unpaired outputs with
+ * `400 No tool call found for function call output with call_id …`. Orphans
+ * sneak in through two paths today:
+ *
+ * - A previous turn's `providerPayload` snapshot replaces the input array via
+ *   the `dt: false` splice (see {@link convertConversationMessages}), wiping
+ *   the matching `function_call` while leaving the matching
+ *   `function_call_output` queued in a later `toolResult`.
+ * - A locally-rejected tool call (argument-validation failure, hook reject,
+ *   aborted turn before the call streamed) produces a tool result without a
+ *   `function_call` ever landing in any persisted provider payload.
+ *
+ * Dropping the result loses information the model needs to recover; sending
+ * it as-is 400s the request. Folding it into an assistant `message` preserves
+ * the payload (call_id + truncated output) while staying within the Responses
+ * input grammar. Matches the behavior of {@link transformRequestBody} in the
+ * codex provider — issue #1351 / regression of #472.
+ */
+export function repairOrphanResponsesToolOutputs(input: ResponseInput): ResponseInput {
+	const knownCallIds = new Set<string>();
+	for (const item of input) {
+		const t = (item as { type?: string }).type;
+		const callId = (item as { call_id?: unknown }).call_id;
+		if (typeof callId !== "string") continue;
+		if (t === "function_call" || t === "custom_tool_call") knownCallIds.add(callId);
+	}
+	let hasOrphan = false;
+	for (const item of input) {
+		const t = (item as { type?: string }).type;
+		if (t !== "function_call_output" && t !== "custom_tool_call_output") continue;
+		const callId = (item as { call_id?: unknown }).call_id;
+		if (typeof callId === "string" && !knownCallIds.has(callId)) {
+			hasOrphan = true;
+			break;
+		}
+	}
+	if (!hasOrphan) return input;
+	return input.map(item => {
+		const t = (item as { type?: string }).type;
+		if (t !== "function_call_output" && t !== "custom_tool_call_output") return item;
+		const record = item as { call_id?: unknown; output?: unknown; name?: unknown };
+		const callId = record.call_id;
+		if (typeof callId !== "string" || knownCallIds.has(callId)) return item;
+		const toolName = typeof record.name === "string" && record.name.length > 0 ? record.name : "tool";
+		const rawOutput = record.output;
+		let text: string;
+		if (typeof rawOutput === "string") text = rawOutput;
+		else if (rawOutput == null) text = "";
+		else {
+			try {
+				text = JSON.stringify(rawOutput);
+			} catch {
+				text = String(rawOutput);
+			}
+		}
+		const ORPHAN_OUTPUT_LIMIT = 16_000;
+		if (text.length > ORPHAN_OUTPUT_LIMIT) text = `${text.slice(0, ORPHAN_OUTPUT_LIMIT)}\n...[truncated]`;
+		return {
+			type: "message",
+			role: "assistant",
+			content: `[Orphan ${toolName} result; call_id=${callId}]: ${text}`,
+		} as ResponseInput[number];
+	});
+}
+
 export function convertResponsesInputContent(
 	content: string | Array<TextContent | ImageContent>,
 	supportsImages: boolean,
