@@ -18,6 +18,7 @@ import {
 	streamAnthropic,
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
+import { xxhash64 } from "@oh-my-pi/pi-ai/utils/xxhash64";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Model, TJsonSchema, TokenTaskBudget, Tool } from "@oh-my-pi/pi-ai/types";
 import * as z from "zod/v4";
@@ -1181,7 +1182,6 @@ describe("cch attestation", () => {
 		expect(m).not.toBeNull();
 
 		// Self-consistency: hashing the body with the placeholder restored must reproduce the embedded cch.
-		const { xxhash64 } = await import("@oh-my-pi/pi-ai/utils/xxhash64");
 		const CCH_SEED = 0x4d659218e32a3268n;
 		const withPlaceholder = capturedBody.replace(/cch=[0-9a-f]{5}/, "cch=00000");
 		const h = xxhash64(new TextEncoder().encode(withPlaceholder), CCH_SEED);
