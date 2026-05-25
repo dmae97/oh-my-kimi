@@ -175,4 +175,44 @@ describe("Input component", () => {
 		const width = 40;
 		expect(renderedWidth(input, width)).toBeLessThanOrEqual(width);
 	});
+
+	it("normalizes NFD Korean pastes (macOS Finder drag-drop) to NFC", () => {
+		// macOS Finder drag-drops file paths in NFD (decomposed Unicode).
+		// Korean syllable `화` is U+D654 (1 char, 2 cells) in NFC, but
+		// ᄒ(U+1112) + ᅪ(U+116A) (2 chars, 3 cells per Bun.stringWidth) in NFD.
+		// Without normalization, the cursor lands `(NFD cells - NFC cells)`
+		// past the visible filename — the documented "cursor displacement"
+		// bug after drag-dropping a Korean filename.
+		const input = new Input();
+		input.focused = true;
+		const nfcPath = "/Users/leo/Downloads/화면.mov";
+		const nfdPath = nfcPath.normalize("NFD");
+		// Sanity: ensure our test fixture really differs between NFC and NFD.
+		expect(nfdPath).not.toBe(nfcPath);
+		expect(nfdPath.length).toBeGreaterThan(nfcPath.length);
+
+		// Simulate macOS bracketed-paste drop of an NFD path.
+		input.handleInput(`\x1b[200~${nfdPath}\x1b[201~`);
+
+		// Stored value must be NFC — no more NFD characters in the buffer.
+		expect(input.getValue()).toBe(nfcPath);
+	});
+
+	it("NFC paste: cursor column matches visible cells (no displacement)", () => {
+		// Regression guard for the "cursor floats past the filename" bug.
+		// After paste, the cursor must be at a column == visibleWidth(value)
+		// (plus 2 for the "> " prompt prefix).
+		const input = new Input();
+		input.focused = true;
+		const nfdPath = "/Users/leo/화면\\ 기록.mov".normalize("NFD");
+		input.handleInput(`\x1b[200~${nfdPath}\x1b[201~`);
+
+		const [line] = input.render(120);
+		const markerIdx = line.indexOf(CURSOR_MARKER);
+		expect(markerIdx).toBeGreaterThanOrEqual(0);
+		const col = visibleWidth(line.slice(0, markerIdx));
+		// Prompt "> " (2 cells) + value width in NFC (matches terminal rendering).
+		const expectedCol = 2 + visibleWidth(input.getValue());
+		expect(col).toBe(expectedCol);
+	});
 });

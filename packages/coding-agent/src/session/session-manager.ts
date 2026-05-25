@@ -18,6 +18,7 @@ import {
 	getProjectDir,
 	getSessionsDir,
 	getTerminalSessionsDir,
+	hasFsCode,
 	isEnoent,
 	logger,
 	parseJsonlLenient,
@@ -2146,7 +2147,59 @@ export class SessionManager {
 			{ ignoreError: true },
 		);
 	}
+	// Windows can reject overwrite-style rename with EPERM even after our own writer is closed.
+	// Move the old session file aside first so a failed retry can roll back to the last good file.
 
+	async #replaceSessionFileAfterEperm(tempPath: string, targetPath: string, renameError: unknown): Promise<void> {
+		const dir = path.resolve(targetPath, "..");
+		const backupPath = path.join(dir, `.${path.basename(targetPath)}.${Snowflake.next()}.bak`);
+		try {
+			await this.storage.rename(targetPath, backupPath);
+		} catch (err) {
+			if (isEnoent(err)) {
+				await this.storage.rename(tempPath, targetPath);
+				return;
+			}
+			throw toError(renameError);
+		}
+
+		try {
+			await this.storage.rename(tempPath, targetPath);
+		} catch (err) {
+			const replaceError = toError(err);
+			try {
+				await this.storage.rename(backupPath, targetPath);
+			} catch (rollbackErr) {
+				const rollbackError = toError(rollbackErr);
+				throw new Error(
+					`Failed to replace session file after EPERM (${replaceError.message}); rollback from ${backupPath} also failed: ${rollbackError.message}`,
+					{ cause: replaceError },
+				);
+			}
+			throw replaceError;
+		}
+
+		try {
+			await this.storage.unlink(backupPath);
+		} catch (err) {
+			if (!isEnoent(err)) {
+				logger.warn("Failed to remove session rewrite backup", {
+					sessionFile: targetPath,
+					backupPath,
+					error: toError(err).message,
+				});
+			}
+		}
+	}
+
+	async #replaceSessionFile(tempPath: string, targetPath: string): Promise<void> {
+		try {
+			await this.storage.rename(tempPath, targetPath);
+		} catch (err) {
+			if (!hasFsCode(err, "EPERM")) throw toError(err);
+			await this.#replaceSessionFileAfterEperm(tempPath, targetPath, err);
+		}
+	}
 	async #writeEntriesAtomically(entries: FileEntry[]): Promise<void> {
 		if (!this.#sessionFile) return;
 		const dir = path.resolve(this.#sessionFile, "..");
@@ -2159,7 +2212,7 @@ export class SessionManager {
 			await writer.flush();
 			await writer.fsync();
 			await writer.close();
-			await this.storage.rename(tempPath, this.#sessionFile);
+			await this.#replaceSessionFile(tempPath, this.#sessionFile);
 		} catch (err) {
 			try {
 				await writer.close();

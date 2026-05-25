@@ -109,6 +109,7 @@ Providers:
   kagi              Kagi
   tavily            Tavily
   zai               Z.AI (GLM Coding Plan)
+  deepseek          DeepSeek
   nanogpt           NanoGPT
   minimax-code      MiniMax Coding Plan (International)
   minimax-code-cn   MiniMax Coding Plan (China)

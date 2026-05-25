@@ -15,6 +15,7 @@ import type {
 	ToolResultMessage,
 	TSchema,
 } from "@oh-my-pi/pi-ai";
+import type { AppendOnlyContextManager } from "./append-only-context";
 import type { HarmonyAuditEvent } from "./harmony-leak";
 import type { AgentRunCoverage, AgentRunSummary } from "./run-collector";
 import type { AgentTelemetryConfig } from "./telemetry";
@@ -154,6 +155,15 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * then strips from arguments before executing tools.
 	 */
 	intentTracing?: boolean;
+	/**
+	 * Append-only context mode — stabilizes system prompt + tool spec bytes
+	 * across turns so provider prefix caches hit at maximum rate.
+	 *
+	 * When set, the loop reads messages from the append-only log (stable
+	 * byte prefix) and caches system prompt + tools. Tools exclude per-turn
+	 * `_i` intent fields.
+	 */
+	appendOnlyContext?: AppendOnlyContextManager;
 
 	/**
 	 * Inspect assistant streaming events before they are published to the outer agent event stream.

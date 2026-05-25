@@ -72,7 +72,12 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		inlineHint: "[prompt]",
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
+			const hadArgs = !!command.args;
 			await runtime.ctx.handlePlanModeCommand(command.args || undefined);
+			if (hadArgs && runtime.ctx.planModeEnabled) {
+				// plan was already active — preserve the typed command in input history
+				runtime.ctx.editor.addToHistory(command.text);
+			}
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -90,7 +95,12 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		inlineHint: "[objective]",
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
+			const hadArgs = !!command.args;
 			await runtime.ctx.handleGoalModeCommand(command.args || undefined);
+			if (hadArgs && runtime.ctx.goalModeEnabled) {
+				// goal was already active — preserve the typed command in input history
+				runtime.ctx.editor.addToHistory(command.text);
+			}
 			runtime.ctx.editor.setText("");
 		},
 	},

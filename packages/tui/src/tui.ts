@@ -1088,6 +1088,109 @@ export class TUI extends Container {
 			this.#previousHeight = height;
 		};
 
+		// Soft full-render of just the visible viewport: optionally scroll the
+		// previous top-of-screen rows into terminal scrollback to preserve
+		// history, then cursor-home + per-line erase-after-content paint of the
+		// last `height` content rows. Used when a change above the previous
+		// viewport top would otherwise force `fullRender(true)`.
+		//
+		// Motivation: `fullRender(true)` emits `\x1b[2J\x1b[H` which causes a
+		// brief black flash in tmux + ghostty because the BSU envelope can split
+		// across PTY reads. The `firstChanged < prevViewportTop` case is by far
+		// the most frequent full-redraw trigger during streaming (markdown fence
+		// lines like ``` -> ```python change above the viewport top), and only
+		// the visible viewport actually needs repainting.
+		//
+		// IMPORTANT: this MUST write at most `height` lines into the visible
+		// viewport. The pre-fix implementation wrote every line in `newLines`,
+		// which on terminals without alt-screen (OMP runs on the main screen)
+		// pushed `newLines.length - height` rows into scrollback on every
+		// refresh. With `PI_DEBUG_REDRAW=1` on a 24-row terminal and a 52-line
+		// transcript that fired every 30ms during streaming, the user saw
+		// historical prompt frames stacking up in scrollback — even though the
+		// visible viewport rendered correctly. Anchoring the repaint window to
+		// the bottom of `newLines` (last `height` rows) keeps cursor-home +
+		// line writes strictly inside the visible viewport, so no scroll
+		// occurs from the repaint itself.
+		//
+		// Pre-scroll: when the bottom-anchored visible window slid forward
+		// since the last render (i.e. content grew enough to push old
+		// top-of-screen rows out of view), we MUST scroll those rows into
+		// scrollback first. The differential-append path does the same — losing
+		// "scrolled-off" content silently would break `Ctrl+B [` / mouse-wheel
+		// scrollback for the user. The old on-screen content from the previous
+		// render is exactly what we want preserved, so a simple `\r\n` from the
+		// bottom row scrolls each one in (and the loop only runs when the
+		// viewport actually slid forward — static viewports stay untouched).
+		//
+		// Lines wider than `width` are truncated to prevent terminal auto-wrap
+		// from pushing repaint content past the bottom row and re-introducing
+		// scroll. Image lines are passed through (their geometry is handled by
+		// the image protocol).
+		const viewportRefresh = (): void => {
+			this.#fullRedrawCount += 1;
+			const visibleStart = Math.max(0, newLines.length - height);
+			const visibleCount = newLines.length - visibleStart;
+			let buffer = "\x1b[?2026h";
+
+			// Preserve scrollback for content that slid out of the visible
+			// window since the last render. `scrollOut` is bounded by `height`
+			// because anything beyond that just scrolls blank rows into
+			// scrollback (a no-op for the user, wasteful in bytes).
+			const scrollOut = Math.min(height, Math.max(0, visibleStart - prevViewportTop));
+			if (scrollOut > 0) {
+				const currentScreenRow = Math.max(0, Math.min(height - 1, hardwareCursorRow - prevViewportTop));
+				const moveToBottom = height - 1 - currentScreenRow;
+				if (moveToBottom > 0) buffer += `\x1b[${moveToBottom}B`;
+				else if (moveToBottom < 0) buffer += `\x1b[${-moveToBottom}A`;
+				buffer += "\r";
+				buffer += "\r\n".repeat(scrollOut);
+			}
+
+			// Repaint the visible viewport from screen row 0. `\x1b[H` is safe
+			// post-scroll: it just parks the cursor at the top-left, and the
+			// subsequent `visibleCount` lines fit exactly in the visible area
+			// so the final `\r\n` between them does NOT scroll.
+			buffer += "\x1b[H";
+			for (let i = 0; i < visibleCount; i++) {
+				if (i > 0) buffer += "\r\n";
+				// Erase-after-content (`\x1b[m\x1b[K` AFTER the line) keeps the
+				// line non-blank if BSU mode 2026 splits across PTY reads in
+				// tmux + ghostty — the worst-case visible artifact becomes a
+				// frame of stale trailing characters rather than a black bar.
+				const line = newLines[visibleStart + i];
+				let outLine = line;
+				const isImage = TERMINAL.isImageLine(line);
+				if (!isImage && visibleWidth(line) > width) {
+					outLine = truncateToWidth(line, width, Ellipsis.Omit);
+					outLine += outLine.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET;
+				}
+				buffer += outLine;
+				buffer += "\x1b[m\x1b[K";
+			}
+			// After the loop the hardware cursor sits at screen row
+			// (visibleCount - 1), which corresponds to content row
+			// (visibleStart + visibleCount - 1) === (newLines.length - 1) when
+			// `newLines.length >= 1`. Use that as the `fromRow` baseline for
+			// the cursor-control sequence so its rowDelta math stays in screen
+			// units. When `newLines.length === 0`, fall back to 0.
+			const finalContentRow = Math.max(0, visibleStart + visibleCount - 1);
+			this.#cursorRow = Math.max(0, newLines.length - 1);
+			const { seq, toRow } = this.#cursorControlSequence(cursorPos, newLines.length, finalContentRow);
+			this.#hardwareCursorRow = toRow;
+			buffer += seq;
+			buffer += "\x1b[?2026l";
+			this.terminal.write(buffer);
+			// Track historical max for consistency with other render paths, but
+			// anchor the new viewport top to what we actually painted. This
+			// keeps `prevViewportTop`/`viewportTop` in sync with the screen so
+			// the next differential frame's `computeLineDiff` is accurate.
+			this.#maxLinesRendered = newLines.length;
+			this.#viewportTopRow = visibleStart;
+			this.#previousLines = newLines;
+			this.#previousWidth = width;
+			this.#previousHeight = height;
+		};
 		const debugRedraw = $flag("PI_DEBUG_REDRAW");
 		const logRedraw = (reason: string): void => {
 			if (!debugRedraw) return;
@@ -1181,7 +1284,10 @@ export class TUI extends Container {
 					buffer += `\x1b[${clearStartOffset}B`;
 				}
 				for (let i = 0; i < extraLines; i++) {
-					buffer += "\r\x1b[2K";
+					// Erase-after-CR: `\r` parks the cursor at column 0; `\x1b[m\x1b[K`
+					// resets SGR and erases from cursor to EOL. Same effect as
+					// `\x1b[2K` but with no transient blank state if BSU splits.
+					buffer += "\r\x1b[m\x1b[K";
 					if (i < extraLines - 1) buffer += "\x1b[1B";
 				}
 				const moveUp = extraLines - 1 + clearStartOffset;
@@ -1206,9 +1312,21 @@ export class TUI extends Container {
 		// Differential rendering can only touch what was actually visible.
 		// Any change above the previous viewport requires a full redraw so terminal
 		// scrollback ends up consistent with the new transcript state.
+		// When the change reaches above the previous viewport, the visible
+		// viewport needs to be repainted — but a hard `fullRender(true)` is
+		// overkill here and causes the `\x1b[2J` black-flash users see during
+		// streaming. `viewportRefresh()` rewrites the viewport content with
+		// per-line erase-after-content instead, no screen clear. Scrollback
+		// above the viewport is briefly stale but invisible to a user
+		// actively streaming output. (See 498e9c2cc dropped commit for
+		// original rationale; this call-site swap was missing after slim.)
 		if (firstChanged < prevViewportTop) {
-			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
-			fullRender(true);
+			const visibleStart = Math.max(0, newLines.length - height);
+			const visibleCount = newLines.length - visibleStart;
+			logRedraw(
+				`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop}) — viewport refresh, painting rows ${visibleStart}..${visibleStart + visibleCount - 1} (${visibleCount}/${newLines.length})`,
+			);
+			viewportRefresh();
 			return;
 		}
 
@@ -1245,7 +1363,12 @@ export class TUI extends Container {
 		const renderEnd = Math.min(lastChanged, newLines.length - 1);
 		for (let i = firstChanged; i <= renderEnd; i++) {
 			if (i > firstChanged) buffer += "\r\n";
-			buffer += "\x1b[2K"; // Clear current line
+			// Erase-after-content (`\x1b[m\x1b[K` after `truncatedLine`, below)
+			// instead of erase-before-content (`\x1b[2K` here). Old content
+			// stays on screen until the new content overwrites it character by
+			// character, so a BSU split between the cursor move and the line
+			// content never leaves the line blank — only the tail-stale state,
+			// which is rare and invisible during keystroke-paced repaint.
 			const line = newLines[i];
 			let truncatedLine = line;
 			const isImage = TERMINAL.isImageLine(line);
@@ -1273,6 +1396,11 @@ export class TUI extends Container {
 			// Non-image lines are pre-terminated/normalized by #applyLineResets;
 			// truncated lines re-append LINE_TERMINATOR above.
 			buffer += truncatedLine;
+			// SGR reset + erase-to-EOL so any trailing remnants of the old line
+			// past the new content's length are cleared using default attrs
+			// (avoids a leftover background-color strip if the new content
+			// ended mid-SGR before #applyLineResets terminated it).
+			buffer += "\x1b[m\x1b[K";
 		}
 
 		// Track where cursor ended up after rendering
@@ -1288,7 +1416,11 @@ export class TUI extends Container {
 			}
 			const extraLines = this.#previousLines.length - newLines.length;
 			for (let i = newLines.length; i < this.#previousLines.length; i++) {
-				buffer += "\r\n\x1b[2K";
+				// Erase-after-newline: `\r\n` parks the cursor at column 0 of the
+				// next line; `\x1b[m\x1b[K` then resets SGR and erases from
+				// cursor to EOL — same final effect as `\x1b[2K` but with no
+				// transient blank state if BSU splits.
+				buffer += "\r\n\x1b[m\x1b[K";
 			}
 			// Move cursor back to end of new content
 			buffer += `\x1b[${extraLines}A`;

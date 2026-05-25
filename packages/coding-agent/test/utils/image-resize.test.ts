@@ -81,4 +81,14 @@ describe("resizeImage defaults", () => {
 		expect(["image/jpeg", "image/webp"]).toContain(result.mimeType);
 		expect(result.buffer.length).toBeLessThanOrEqual(500 * 1024);
 	});
+
+	it("excludes WebP when excludeWebP option is true", async () => {
+		const data = await makeRedPng(2000, 2000);
+
+		const result = await resizeImage({ type: "image", data, mimeType: "image/png" }, { excludeWebP: true });
+
+		expect(result.wasResized).toBe(true);
+		expect(["image/png", "image/jpeg"]).toContain(result.mimeType);
+		expect(result.mimeType).not.toBe("image/webp");
+	});
 });

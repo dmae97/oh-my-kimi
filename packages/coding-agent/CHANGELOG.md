@@ -2,11 +2,16 @@
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
+- Added `OMP_NO_WEBP` environment variable to disable WebP encoding in image resize, fixing HTTP 400 errors when attaching browser snapshots to vision models running on local llama.cpp (which uses STB library that lacks WebP support)
+- Fixed loop mode submitting the next prompt while a background async-job delivery turn (idle flush) was still pending, which could cause the job result to be silently dropped and make the session appear to keep firing while work was ongoing ([#1294](https://github.com/can1357/oh-my-pi/issues/1294))
 - Fixed clipboard image paste (Ctrl+V) silently failing on WSL2 by routing image reads through a `powershell.exe` bridge when WSL interop is detected, since `arboard` returns `ContentNotAvailable` under WSLg ([#1280](https://github.com/can1357/oh-my-pi/issues/1280))
 - Fixed extension `ctx.ui.notify()` messages emitted during `session_start` being cleared before the first interactive render ([#1316](https://github.com/can1357/oh-my-pi/issues/1316)).
+- Fixed append-only context mode not being recomputed after model switches — the mode was frozen at session construction time using the initial model's provider, so `provider.appendOnlyContext=auto` left append-only enabled after switching away from DeepSeek (or disabled after switching to DeepSeek) for the rest of the session
 
+### Fixed
+- Fixed clipboard image paste (Ctrl+V) silently failing on WSL2 by routing image reads through a `powershell.exe` bridge when WSL interop is detected, since `arboard` returns `ContentNotAvailable` under WSLg ([#1280](https://github.com/can1357/oh-my-pi/issues/1280))
 ## [15.2.4] - 2026-05-22
 ### Breaking Changes
 
@@ -127,6 +132,9 @@
 - Fixed hashline edit payloads that use a readability space after `~` by warning on separator-padding-shaped payload blocks and tightening the model prompt. ([#1166](https://github.com/can1357/oh-my-pi/issues/1166))
 - Fixed ACP bash permission requests to include execute tool metadata and command content so clients can render command approval prompts consistently. ([#1189](https://github.com/can1357/oh-my-pi/issues/1189))
 - Fixed the status-line fast-mode indicator (`⚡`) rendering for scoped service tiers (`openai-only`, `claude-only`) even when the active model's provider didn't realize them — e.g. `serviceTier: "openai-only"` would still show the indicator next to a Claude model the wire request couldn't apply fast mode to. The indicator now consults a new `AgentSession.isFastModeActive()` predicate that runs the configured tier through `resolveServiceTier(tier, model.provider)` and only lights up when the result is `"priority"` for the current model. `isFastModeEnabled()` keeps its scope-aware semantics so `/fast on|off|toggle` and `/fast status` continue to reflect the user's configured intent.
+### Fixed
+
+- Fixed status-line context% computation freezing the UI for ~1.1 s every 2 s on long sessions (2,000+ messages). The earlier alignment fix (which uses `computeContextBreakdown` to match the `/context` slash command) was running on every agent event via `updateEditorTopBorder()` (event-controller.ts:163), and `computeContextBreakdown` walks every message through the native `countTokens` tokenizer (~0.5 ms each) — for the user's 2,312-message session this was ~1,120 ms synchronous blocking per cache miss, producing the user-visible "jittery rendering" and "status bar disappearing during streaming". `StatusLineComponent.getCachedContextBreakdown()` now uses an incremental per-message token cache: messages are walked ONCE during warm-up, and subsequent refreshes only compute tokens for the NEW messages appended since last call (typically 0–1 per refresh during streaming). The LAST message is always recomputed because its content may still be growing mid-stream; all prior messages are immutable once a newer message exists. Compaction (messages array shrinks) resets the cache. Non-message tokens (system prompt + tools + skills) are cached separately and invalidated via a cheap identity fingerprint. Result: 2,300-message warm refresh drops from ~1,120 ms to ~0.04 ms — 28,000× faster. Functional parity with the prior `computeContextBreakdown` path is preserved.
 
 ### Added
 

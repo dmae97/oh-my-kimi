@@ -37,7 +37,7 @@ export interface ContextBreakdown {
 	freeTokens: number;
 }
 
-function estimateSkillsTokens(skills: readonly Skill[]): number {
+export function estimateSkillsTokens(skills: readonly Skill[]): number {
 	const fragments: string[] = [];
 	for (const skill of skills) {
 		// "- name: description\n" wire framing tokenizes ~identically to the
@@ -47,7 +47,9 @@ function estimateSkillsTokens(skills: readonly Skill[]): number {
 	return countTokens(fragments);
 }
 
-function estimateToolSchemaTokens(tools: ReadonlyArray<Pick<Tool, "name" | "description" | "parameters">>): number {
+export function estimateToolSchemaTokens(
+	tools: ReadonlyArray<Pick<Tool, "name" | "description" | "parameters">>,
+): number {
 	const fragments: string[] = [];
 	for (const tool of tools) {
 		fragments.push(tool.name, tool.description);
@@ -58,6 +60,26 @@ function estimateToolSchemaTokens(tools: ReadonlyArray<Pick<Tool, "name" | "desc
 		}
 	}
 	return countTokens(fragments);
+}
+
+/**
+ * Compute just the NON-MESSAGE token total: system prompt (with its skills
+ * section subtracted, since skills are tokenized separately) + system context
+ * (the rest of the system-prompt array) + tools + skills.
+ *
+ * Exposed so callers like `StatusLineComponent` can cache the non-message
+ * total separately from the message total. Non-message inputs (skills,
+ * tools, system prompt) change rarely; the message list grows on every
+ * streaming turn. Splitting the two lets the caller refresh each on its own
+ * cadence — non-message recomputed only when the inputs identity changes,
+ * messages walked incrementally as new entries append.
+ */
+export function computeNonMessageTokens(session: AgentSession): number {
+	const skillsTokens = estimateSkillsTokens(session.skills);
+	const toolsTokens = estimateToolSchemaTokens(session.agent.state.tools);
+	const systemContextTokens = countTokens(session.systemPrompt.slice(1));
+	const systemPromptTokens = Math.max(0, countTokens(session.systemPrompt[0] ?? "") - skillsTokens);
+	return systemPromptTokens + systemContextTokens + toolsTokens + skillsTokens;
 }
 
 /**
