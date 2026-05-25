@@ -14,7 +14,7 @@ use napi::{JsString, bindgen_prelude::*};
 use napi_derive::napi;
 use smallvec::{SmallVec, smallvec};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 
 const MIN_TAB_WIDTH: u32 = 1;
 const MAX_TAB_WIDTH: u32 = 16;
@@ -379,6 +379,20 @@ const fn ascii_cell_width_u16(u: u16, tab_width: usize) -> usize {
 }
 
 #[inline]
+fn char_width_corrected(c: char) -> Option<usize> {
+	// Hangul Compatibility Jamo U+3131..=U+318E render as a single cell in
+	// the terminals we ship to (Ghostty, Terminal.app, iTerm2) even though
+	// UAX#11 classifies them as Wide. Mirrors the TS-side correction in
+	// packages/tui/src/utils.ts (visibleWidth). U+318F is reserved and
+	// intentionally excluded.
+	let cp = c as u32;
+	if (0x3131..=0x318e).contains(&cp) {
+		return Some(1);
+	}
+	UnicodeWidthChar::width(c)
+}
+
+#[inline]
 fn grapheme_width_str(g: &str, tab_width: usize) -> usize {
 	if g == "\t" {
 		return tab_width;
@@ -388,9 +402,14 @@ fn grapheme_width_str(g: &str, tab_width: usize) -> usize {
 		return 0;
 	};
 	if it.next().is_none() {
-		return UnicodeWidthChar::width(c0).unwrap_or(0);
+		return char_width_corrected(c0).unwrap_or(0);
 	}
-	UnicodeWidthStr::width(g)
+	// Multi-char grapheme: sum per-char corrected widths so the jamo
+	// override applies even inside combining clusters. Matches what
+	// UnicodeWidthStr would compute, minus the UAX#11 jamo bias.
+	g.chars()
+		.map(|c| char_width_corrected(c).unwrap_or(0))
+		.sum()
 }
 
 thread_local! {

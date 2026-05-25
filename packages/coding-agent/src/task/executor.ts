@@ -17,7 +17,7 @@ import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
-import type { Skill } from "../extensibility/skills";
+import { buildSkillPromptMessage, type Skill } from "../extensibility/skills";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { callTool } from "../mcp/client";
@@ -29,6 +29,7 @@ import { createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { ArtifactManager } from "../session/artifacts";
 import type { AuthStorage } from "../session/auth-storage";
+import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
 import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
 import type { ContextFileEntry } from "../tools";
@@ -190,6 +191,8 @@ export interface ExecutorOptions {
 	 * transition explicitly.
 	 */
 	parentTelemetry?: AgentTelemetryConfig;
+	/** Skills to autoload via sendCustomMessage before the first prompt */
+	autoloadSkills?: Skill[];
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -1347,6 +1350,30 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			const MAX_YIELD_RETRIES = 3;
 			unsubscribe = session.subscribe(event => {
+				if (event.type === "auto_retry_start") {
+					progress.retryState = {
+						attempt: event.attempt,
+						maxAttempts: event.maxAttempts,
+						delayMs: event.delayMs,
+						errorMessage: event.errorMessage,
+						startedAtMs: Date.now(),
+					};
+					progress.retryFailure = undefined;
+					scheduleProgress(true);
+					return;
+				}
+				if (event.type === "auto_retry_end") {
+					const attempt = progress.retryState?.attempt ?? event.attempt;
+					progress.retryState = undefined;
+					if (!event.success) {
+						progress.retryFailure = {
+							attempt,
+							errorMessage: event.finalError ?? "Auto-retry failed",
+						};
+					}
+					scheduleProgress(true);
+					return;
+				}
 				if (isAgentEvent(event)) {
 					try {
 						processEvent(event);
@@ -1360,6 +1387,21 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			});
 
 			checkAbort();
+			// Autoload skills via sendCustomMessage (same mechanic as /skill:<name>)
+			if (options.autoloadSkills?.length) {
+				for (const skill of options.autoloadSkills) {
+					const { message } = await buildSkillPromptMessage(skill, "");
+					await session.sendCustomMessage(
+						{
+							customType: SKILL_PROMPT_MESSAGE_TYPE,
+							content: message,
+							display: false,
+							details: { name: skill.name, path: skill.filePath },
+						},
+						{ triggerTurn: false },
+					);
+				}
+			}
 			await awaitAbortable(session.prompt(task, { attribution: "agent" }));
 			await awaitAbortable(session.waitForIdle());
 
@@ -1367,6 +1409,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			let retryCount = 0;
 			while (!yieldCalled && retryCount < MAX_YIELD_RETRIES && !abortSignal.aborted) {
+				// Skip reminders when the model returned a terminal error (e.g.
+				// rate-limit cap hit, auth failure). Re-prompting would just
+				// hit the same wall, multiplying the failure noise without
+				// any chance of producing a yield.
+				const lastBeforeReminder = session.getLastAssistantMessage();
+				if (lastBeforeReminder?.stopReason === "error") break;
 				try {
 					retryCount++;
 					const reminder = prompt.render(submitReminderTemplate, {
@@ -1566,6 +1614,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		usage: hasUsage ? accumulatedUsage : undefined,
 		outputPath,
 		extractedToolData: progress.extractedToolData,
+		retryFailure: progress.retryFailure,
 		outputMeta,
 	};
 }

@@ -1408,28 +1408,26 @@ export interface XiaomiModelManagerConfig {
 
 export function xiaomiModelManagerOptions(
 	config?: XiaomiModelManagerConfig,
-): ModelManagerOptions<"anthropic-messages"> {
+): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
 	// Xiaomi splits API keys across two backends: standard `sk-` keys hit
-	// api.xiaomimimo.com; "token plan" `tp-` keys hit the EU token-plan host.
-	// Both expose the same Anthropic-compat layout under /anthropic/v1/*.
-	const defaultBaseUrl = apiKey?.startsWith("tp-")
-		? "https://token-plan-ams.xiaomimimo.com/anthropic"
-		: "https://api.xiaomimimo.com/anthropic";
-	const baseUrl = normalizeAnthropicBaseUrl(config?.baseUrl, defaultBaseUrl);
-	// Xiaomi hosts chat completions under /anthropic/* but exposes model
-	// discovery at the OpenAI-style /v1/models endpoint on the root host.
-	const discoveryRoot = baseUrl.endsWith("/anthropic") ? baseUrl.slice(0, -"/anthropic".length) : baseUrl;
-	const discoveryBaseUrl = toAnthropicDiscoveryBaseUrl(discoveryRoot);
-	const references = createBundledReferenceMap<"anthropic-messages">("xiaomi");
+	// api.xiaomimimo.com; "token plan" `tp-` keys hit either the SG or EU
+	// token-plan host. Try SGP first; if discovery fails, retry AMS.
+	const TOKEN_PLAN_SGP_BASE_URL = "https://token-plan-sgp.xiaomimimo.com/v1";
+	const TOKEN_PLAN_AMS_BASE_URL = "https://token-plan-ams.xiaomimimo.com/v1";
+	const defaultBaseUrl = apiKey?.startsWith("tp-") ? TOKEN_PLAN_SGP_BASE_URL : "https://api.xiaomimimo.com/v1";
+	// Token-plan keys always use the TP baseUrl; config?.baseUrl (from catalog)
+	// would incorrectly pin to the standard endpoint (api.xiaomimimo.com).
+	const baseUrl = apiKey?.startsWith("tp-") ? defaultBaseUrl : (config?.baseUrl ?? defaultBaseUrl);
+	const references = createBundledReferenceMap<"openai-completions">("xiaomi");
 	return {
 		providerId: "xiaomi",
 		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "anthropic-messages",
+			fetchDynamicModels: async () => {
+				const sgpResult = await fetchOpenAICompatibleModels({
+					api: "openai-completions",
 					provider: "xiaomi",
-					baseUrl: discoveryBaseUrl,
+					baseUrl,
 					apiKey,
 					filterModel: (_entry, model) => !model.id.includes("-tts"),
 					mapModel: (entry, defaults) => {
@@ -1438,10 +1436,29 @@ export function xiaomiModelManagerOptions(
 						return {
 							...model,
 							name: toModelName(entry.display_name, model.name),
-							baseUrl,
 						};
 					},
-				}),
+				});
+				if (sgpResult || !apiKey?.startsWith("tp-")) {
+					return sgpResult;
+				}
+				// Token-plan discovery failed with SGP; retry with AMS
+				return fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "xiaomi",
+					baseUrl: TOKEN_PLAN_AMS_BASE_URL,
+					apiKey,
+					filterModel: (_entry, model) => !model.id.includes("-tts"),
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						const model = mapWithBundledReference(entry, defaults, reference);
+						return {
+							...model,
+							name: toModelName(entry.display_name, model.name),
+						};
+					},
+				});
+			},
 		}),
 	};
 }

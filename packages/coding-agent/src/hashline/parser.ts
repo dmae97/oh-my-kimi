@@ -10,7 +10,12 @@ import {
 } from "./hash";
 import type { Anchor, HashlineCursor, HashlineEdit } from "./types";
 
-const LID_CAPTURE_RE = new RegExp(`^${HL_HASH_CAPTURE_RE_RAW}$`);
+// Leniently accept anchors copied from read/search output:
+//   - optional leading line-marker decoration (`*`, `>`, `+`, `-`)
+//   - the required `LINE+HASH`
+//   - an optional trailing `|TEXT` body (or anything after the hash) so users
+//     can paste a full `LINE+HASH|TEXT` line verbatim.
+const LID_CAPTURE_RE = new RegExp(`^\\s*[>+\\-*]*\\s*${HL_HASH_CAPTURE_RE_RAW}(?:\\|.*)?\\s*$`);
 const regexEscape = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function parseLid(raw: string, lineNum: number): Anchor {

@@ -4,6 +4,7 @@ import {
 	type AgentMessage,
 	type AgentTelemetryConfig,
 	type AgentTool,
+	AppendOnlyContextManager,
 	INTENT_FIELD,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
@@ -587,6 +588,24 @@ function registerPythonCleanup(): void {
 	if (pythonCleanupRegistered) return;
 	pythonCleanupRegistered = true;
 	postmortem.register("python-cleanup", disposeAllKernelSessions);
+}
+
+/**
+ * Resolve whether to enable append-only context mode based on the setting and provider.
+ *
+ * - `"on"` → always enable
+ * - `"off"` → never enable
+ * - `"auto"` → enable for DeepSeek (prefix-caching provider)
+ */
+function resolveAppendOnlyMode(setting: "auto" | "on" | "off" | undefined, provider: string): boolean {
+	switch (setting ?? "auto") {
+		case "on":
+			return true;
+		case "off":
+			return false;
+		default:
+			return provider === "deepseek";
+	}
 }
 
 function customToolToDefinition(tool: CustomTool): ToolDefinition {
@@ -1897,6 +1916,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			intentTracing: !!intentField,
 			getToolChoice: () => session?.nextToolChoice(),
 			telemetry: options.telemetry,
+			appendOnlyContext: model
+				? resolveAppendOnlyMode(settings.get("provider.appendOnlyContext"), model.provider)
+					? new AppendOnlyContextManager()
+					: undefined
+				: undefined,
 		});
 
 		cursorEventEmitter = event => agent.emitExternalEvent(event);
