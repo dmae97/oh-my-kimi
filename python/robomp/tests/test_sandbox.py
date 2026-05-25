@@ -616,6 +616,28 @@ def test_slot_subprocess_kwargs_run_as_slot_on_linux_root(monkeypatch: pytest.Mo
     }
 
 
+def test_chown_workspace_normalizes_to_root_when_slots_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[list[str], bool | None]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((cmd, kwargs.get("check") if isinstance(kwargs.get("check"), bool) else None))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("robomp.sandbox.platform.system", lambda: "Linux")
+    monkeypatch.setattr("robomp.sandbox.os.geteuid", lambda: 0)
+    monkeypatch.setattr("robomp.sandbox.os.getegid", lambda: 0)
+    monkeypatch.setattr("robomp.sandbox.subprocess.run", fake_run)
+
+    _chown_workspace(tmp_path, None)
+
+    assert calls == [
+        (["chown", "-R", "0:0", str(tmp_path)], True),
+        (["chmod", "-R", "u=rwX,g=rwX,o=", str(tmp_path)], True),
+    ]
+
+
 def test_prepare_slot_runtime_env_returns_workspace_private_paths_without_chown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
