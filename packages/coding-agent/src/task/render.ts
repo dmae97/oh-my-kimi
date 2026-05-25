@@ -551,8 +551,15 @@ function renderAgentProgress(
 	const titlePart = description ? `${theme.bold(displayId)}: ${description}` : displayId;
 	let statusLine = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;
 
-	// Only show badge for non-running states (spinner already indicates running)
-	if (progress.status === "failed" || progress.status === "aborted") {
+	// Show retry-blocked badge so the parent immediately sees that a child
+	// is sleeping on a provider 429, not silently progressing. Wins over the
+	// generic running spinner because "we're waiting on a quota window" is
+	// the operationally meaningful state.
+	if (progress.retryState && progress.status === "running") {
+		statusLine += ` ${formatBadge("retrying", "warning", theme)}`;
+	} else if (progress.retryFailure && (progress.status === "failed" || progress.status === "aborted")) {
+		statusLine += ` ${formatBadge("rate-limited", "error", theme)}`;
+	} else if (progress.status === "failed" || progress.status === "aborted") {
 		const statusLabel = progress.status === "failed" ? "failed" : "aborted";
 		statusLine += ` ${formatBadge(statusLabel, iconColor, theme)}`;
 	}
@@ -596,6 +603,23 @@ function renderAgentProgress(
 			}
 			lines.push(toolLine);
 		}
+	}
+
+	// Retry detail line: surface why the subagent is paused and roughly how
+	// long until the next attempt. Without this, the parent UI would just
+	// keep spinning while a child sleeps on a 3-hour provider rate-limit.
+	if (progress.retryState && progress.status === "running") {
+		const remainingMs = Math.max(0, progress.retryState.startedAtMs + progress.retryState.delayMs - Date.now());
+		const waitLabel = remainingMs > 0 ? `in ${formatDuration(remainingMs)}` : "now";
+		const summary =
+			`retrying ${progress.retryState.attempt}/${progress.retryState.maxAttempts} ${waitLabel}: ` +
+			truncateToWidth(replaceTabs(progress.retryState.errorMessage), 60);
+		lines.push(`${continuePrefix}${theme.tree.hook} ${theme.fg("warning", summary)}`);
+	} else if (progress.retryFailure && progress.status !== "running") {
+		const summary = `auto-retry gave up after ${progress.retryFailure.attempt} attempt${
+			progress.retryFailure.attempt === 1 ? "" : "s"
+		}: ${truncateToWidth(replaceTabs(progress.retryFailure.errorMessage), 80)}`;
+		lines.push(`${continuePrefix}${theme.tree.hook} ${theme.fg("error", summary)}`);
 	}
 
 	// Render extracted tool data inline (e.g., review findings)

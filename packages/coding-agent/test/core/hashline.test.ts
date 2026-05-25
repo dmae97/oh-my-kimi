@@ -366,6 +366,22 @@ describe("hashline parser — block op syntax", () => {
 	it("describes current sigils for unknown op syntax", () => {
 		expect(() => parseHashline(`-${sameLineRange(tag(2, "bbb"))}`)).toThrow(/Use «ANCHOR.*»ANCHOR.*≔A\.\.B/);
 	});
+
+	it("leniently tolerates a trailing `|TEXT` body on anchors copied verbatim from read output", () => {
+		const anchor = tag(2, "bbb");
+		// Bare trailing `|`, full `|TEXT` body, and both sides of a range.
+		expect(applyDiff(content, [`≔${anchor}|`, pl("BBB")].join("\n"))).toBe("aaa\nBBB\nccc");
+		expect(applyDiff(content, [`≔${anchor}|bbb`, pl("BBB")].join("\n"))).toBe("aaa\nBBB\nccc");
+		expect(applyDiff(content, [`«${anchor}|bbb`, pl("X")].join("\n"))).toBe("aaa\nX\nbbb\nccc");
+		expect(applyDiff(content, [`»${anchor}|bbb`, pl("X")].join("\n"))).toBe("aaa\nbbb\nX\nccc");
+		expect(applyDiff(content, `≔${anchor}|bbb..${tag(3, "ccc")}|ccc`)).toBe("aaa");
+	});
+
+	it("leniently strips `*`/`>` line-marker decoration from anchors", () => {
+		const anchor = tag(2, "bbb");
+		expect(applyDiff(content, [`≔*${anchor}`, pl("BBB")].join("\n"))).toBe("aaa\nBBB\nccc");
+		expect(applyDiff(content, [`«>${anchor}`, pl("X")].join("\n"))).toBe("aaa\nX\nbbb\nccc");
+	});
 });
 
 describe("hashline — stale anchors", () => {

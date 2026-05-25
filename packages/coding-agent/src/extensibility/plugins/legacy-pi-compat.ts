@@ -98,7 +98,16 @@ function rewriteLegacyPiImports(source: string): string {
 				return match;
 			}
 
-			return `${prefix}${toImportSpecifier(getResolvedSpecifier(remappedSpecifier))}${suffix}`;
+			try {
+				return `${prefix}${toImportSpecifier(getResolvedSpecifier(remappedSpecifier))}${suffix}`;
+			} catch {
+				// Resolution failed — typically in compiled binary mode where
+				// Bun.resolveSync cannot walk up from /$bunfs/root to find the
+				// bundled node_modules. Return the original specifier unchanged so
+				// rewriteBareImportsForLegacyExtension can resolve it against the
+				// plugin's own installed peer deps instead.
+				return match;
+			}
 		},
 	);
 }
@@ -232,15 +241,28 @@ function getLoader(path: string): "js" | "jsx" | "ts" | "tsx" {
 	return "js";
 }
 
-function resolveLegacyPiSpecifier(args: { path: string }): { path: string } | undefined {
+function resolveLegacyPiSpecifier(args: { path: string; importer: string }): { path: string } | undefined {
 	const remappedSpecifier = remapLegacyPiSpecifier(args.path);
 	if (!remappedSpecifier) {
 		return undefined;
 	}
 
-	return {
-		path: getResolvedSpecifier(remappedSpecifier),
-	};
+	// Primary: resolve the canonical @oh-my-pi/* specifier from the host binary
+	// location. Works in dev mode and in source-link installs.
+	try {
+		return { path: getResolvedSpecifier(remappedSpecifier) };
+	} catch {
+		// Fallback for compiled binary mode: the bundled packages live inside
+		// /$bunfs/root and aren't reachable by filesystem resolution. Try the
+		// original (pre-remap) specifier against the importing file's directory,
+		// which resolves to the plugin's installed peer dep.
+		const importerDir = path.dirname(args.importer);
+		try {
+			return { path: Bun.resolveSync(args.path, importerDir) };
+		} catch {
+			return undefined;
+		}
+	}
 }
 
 function resolveTypeBoxSpecifier(): { path: string } {

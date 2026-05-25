@@ -92,9 +92,26 @@ interface MenuRoleAction {
 	role: string; // now accepts custom role strings
 }
 
+interface ProviderTabState {
+	id: string;
+	label: string;
+	providerId?: string;
+}
 const ALL_TAB = "ALL";
 const CANONICAL_TAB = "CANONICAL";
 
+const STATIC_PROVIDER_TABS: ProviderTabState[] = [
+	{ id: ALL_TAB, label: ALL_TAB },
+	{ id: CANONICAL_TAB, label: CANONICAL_TAB },
+];
+
+function formatProviderTabLabel(providerId: string): string {
+	return providerId.replace(/[-_]+/g, " ").toUpperCase();
+}
+
+function createProviderTab(providerId: string): ProviderTabState {
+	return { id: providerId, label: formatProviderTabLabel(providerId), providerId };
+}
 /**
  * Component that renders a model selector with provider tabs and context menu.
  * - Tab/Arrow Left/Right: Switch between provider tabs
@@ -126,7 +143,7 @@ export class ModelSelectorComponent extends Container {
 	#menuRoleActions: MenuRoleAction[] = [];
 
 	// Tab state
-	#providers: string[] = [ALL_TAB];
+	#providers: ProviderTabState[] = STATIC_PROVIDER_TABS;
 	#activeTabIndex: number = 0;
 
 	// Context menu state
@@ -432,23 +449,29 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#buildProviderTabs(): void {
+		const activeTabId = this.#getActiveTab().id;
 		const providerSet = new Set<string>();
 		for (const item of this.#allModels) {
-			providerSet.add(item.provider.toUpperCase());
+			providerSet.add(item.provider);
 		}
 		for (const provider of this.#modelRegistry.getDiscoverableProviders()) {
-			providerSet.add(provider.toUpperCase());
+			providerSet.add(provider);
 		}
-		const sortedProviders = Array.from(providerSet).sort();
-		this.#providers = [ALL_TAB, CANONICAL_TAB, ...sortedProviders];
+		const sortedProviderIds = Array.from(providerSet).sort((left, right) =>
+			formatProviderTabLabel(left).localeCompare(formatProviderTabLabel(right)),
+		);
+		this.#providers = [...STATIC_PROVIDER_TABS, ...sortedProviderIds.map(createProviderTab)];
+		const activeIndex = this.#providers.findIndex(tab => tab.id === activeTabId);
+		this.#activeTabIndex =
+			activeIndex >= 0 ? activeIndex : Math.min(this.#activeTabIndex, this.#providers.length - 1);
 	}
 
 	async #refreshSelectedProvider(): Promise<void> {
-		const activeProvider = this.#getActiveProvider();
-		if (this.#scopedModels.length > 0 || activeProvider === ALL_TAB || activeProvider === CANONICAL_TAB) {
+		const providerId = this.#getActiveProviderId();
+		if (this.#scopedModels.length > 0 || !providerId) {
 			return;
 		}
-		await this.#modelRegistry.refreshProvider(activeProvider.toLowerCase());
+		await this.#modelRegistry.refreshProvider(providerId);
 		await this.#loadModels();
 		this.#buildProviderTabs();
 		this.#updateTabBar();
@@ -459,7 +482,7 @@ export class ModelSelectorComponent extends Container {
 	#updateTabBar(): void {
 		this.#headerContainer.clear();
 
-		const tabs: Tab[] = this.#providers.map(provider => ({ id: provider, label: provider }));
+		const tabs: Tab[] = this.#providers.map(provider => ({ id: provider.id, label: provider.label }));
 		const tabBar = new TabBar("Models", tabs, getTabBarTheme(), this.#activeTabIndex);
 		tabBar.onTabChange = (_tab, index) => {
 			this.#activeTabIndex = index;
@@ -475,29 +498,38 @@ export class ModelSelectorComponent extends Container {
 		this.#headerContainer.addChild(tabBar);
 	}
 
-	#getActiveProvider(): string {
-		return this.#providers[this.#activeTabIndex] ?? ALL_TAB;
+	#getActiveTab(): ProviderTabState {
+		return this.#providers[this.#activeTabIndex] ?? STATIC_PROVIDER_TABS[0]!;
+	}
+
+	#getActiveTabId(): string {
+		return this.#getActiveTab().id;
+	}
+
+	#getActiveProviderId(): string | undefined {
+		return this.#getActiveTab().providerId;
 	}
 
 	#isCanonicalTab(): boolean {
-		return this.#getActiveProvider() === CANONICAL_TAB;
+		return this.#getActiveTabId() === CANONICAL_TAB;
 	}
 
 	#filterModels(query: string): void {
-		const activeProvider = this.#getActiveProvider();
-		const isCanonicalTab = activeProvider === CANONICAL_TAB;
+		const activeTabId = this.#getActiveTabId();
+		const activeProviderId = this.#getActiveProviderId();
+		const isCanonicalTab = activeTabId === CANONICAL_TAB;
 
 		// Start with all models or filter by provider/canonical view
 		let baseModels = this.#allModels;
 		const baseCanonicalModels = this.#canonicalModels;
-		if (!isCanonicalTab && activeProvider !== ALL_TAB) {
-			baseModels = this.#allModels.filter(m => m.provider.toUpperCase() === activeProvider);
+		if (activeProviderId) {
+			baseModels = this.#allModels.filter(m => m.provider === activeProviderId);
 		}
 
 		// Apply fuzzy filter if query is present
 		if (query.trim()) {
 			// If user is searching from a provider tab, auto-switch to ALL to show global provider results.
-			if (activeProvider !== ALL_TAB && !isCanonicalTab) {
+			if (activeProviderId && !isCanonicalTab) {
 				this.#activeTabIndex = 0;
 				if (this.#tabBar && this.#tabBar.getActiveIndex() !== 0) {
 					this.#tabBar.setActiveIndex(0);
@@ -577,11 +609,11 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#getProviderEmptyStateMessage(): string | undefined {
-		const activeProvider = this.#getActiveProvider();
-		if (activeProvider === ALL_TAB || activeProvider === CANONICAL_TAB || this.#searchInput.getValue().trim()) {
+		const activeProviderId = this.#getActiveProviderId();
+		if (!activeProviderId || this.#searchInput.getValue().trim()) {
 			return undefined;
 		}
-		const state = this.#modelRegistry.getProviderDiscoveryState(activeProvider.toLowerCase());
+		const state = this.#modelRegistry.getProviderDiscoveryState(activeProviderId);
 		if (!state) {
 			return undefined;
 		}
@@ -619,8 +651,7 @@ export class ModelSelectorComponent extends Container {
 		);
 		const endIndex = Math.min(startIndex + maxVisible, visibleItems.length);
 
-		const activeProvider = this.#getActiveProvider();
-		const showProvider = activeProvider === ALL_TAB;
+		const showProvider = this.#getActiveTabId() === ALL_TAB;
 
 		// Show visible slice of filtered models
 		for (let i = startIndex; i < endIndex; i++) {

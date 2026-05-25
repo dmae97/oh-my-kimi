@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { resizeImage } from "../../src/utils/image-resize";
 
 // 1x1 red PNG (69 bytes) — used as a Bun.Image seed to synthesize larger fixtures
@@ -9,6 +9,15 @@ const RED_1X1_PNG_BASE64 =
 async function makeRedPng(width: number, height: number): Promise<string> {
 	const seed = Buffer.from(RED_1X1_PNG_BASE64, "base64");
 	const upscaled = await new Bun.Image(seed).resize(width, height, { filter: "nearest" }).png().bytes();
+	return Buffer.from(upscaled).toBase64();
+}
+
+async function makeRedWebP(width: number, height: number): Promise<string> {
+	const seed = Buffer.from(RED_1X1_PNG_BASE64, "base64");
+	const upscaled = await new Bun.Image(seed)
+		.resize(width, height, { filter: "nearest" })
+		.webp({ quality: 90 })
+		.bytes();
 	return Buffer.from(upscaled).toBase64();
 }
 
@@ -80,5 +89,61 @@ describe("resizeImage defaults", () => {
 		// because lossy encoding at <=1568px for a solid square is trivially small.
 		expect(["image/jpeg", "image/webp"]).toContain(result.mimeType);
 		expect(result.buffer.length).toBeLessThanOrEqual(500 * 1024);
+	});
+
+	it("excludes WebP when excludeWebP option is true", async () => {
+		const data = await makeRedPng(2000, 2000);
+
+		const result = await resizeImage({ type: "image", data, mimeType: "image/png" }, { excludeWebP: true });
+
+		expect(result.wasResized).toBe(true);
+		expect(["image/png", "image/jpeg"]).toContain(result.mimeType);
+		expect(result.mimeType).not.toBe("image/webp");
+	});
+
+	it("re-encodes a WebP source out of WebP when excludeWebP is set, even on the fast path", async () => {
+		// 200x200 WebP — well below 1568px and ~tiny bytes, so it would hit the
+		// fast path and pass through as image/webp. excludeWebP MUST force a
+		// re-encode to a non-WebP format.
+		const data = await makeRedWebP(200, 200);
+
+		const result = await resizeImage({ type: "image", data, mimeType: "image/webp" }, { excludeWebP: true });
+
+		expect(result.mimeType).not.toBe("image/webp");
+		expect(["image/png", "image/jpeg"]).toContain(result.mimeType);
+	});
+});
+
+describe("resizeImage env wiring", () => {
+	const prior = Bun.env.OMP_NO_WEBP;
+
+	beforeEach(() => {
+		delete (Bun.env as Record<string, string | undefined>).OMP_NO_WEBP;
+	});
+
+	afterEach(() => {
+		if (prior === undefined) delete (Bun.env as Record<string, string | undefined>).OMP_NO_WEBP;
+		else Bun.env.OMP_NO_WEBP = prior;
+	});
+
+	it("treats OMP_NO_WEBP=1 set at call time as exclusion (not baked at module load)", async () => {
+		const data = await makeRedWebP(200, 200);
+		Bun.env.OMP_NO_WEBP = "1";
+
+		const result = await resizeImage({ type: "image", data, mimeType: "image/webp" });
+
+		expect(result.mimeType).not.toBe("image/webp");
+	});
+
+	it("treats OMP_NO_WEBP='' / '0' as NOT excluded", async () => {
+		const data = await makeRedWebP(200, 200);
+
+		Bun.env.OMP_NO_WEBP = "";
+		const empty = await resizeImage({ type: "image", data, mimeType: "image/webp" });
+		expect(empty.mimeType).toBe("image/webp");
+
+		Bun.env.OMP_NO_WEBP = "0";
+		const zero = await resizeImage({ type: "image", data, mimeType: "image/webp" });
+		expect(zero.mimeType).toBe("image/webp");
 	});
 });

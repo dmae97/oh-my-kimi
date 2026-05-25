@@ -14,6 +14,7 @@ export type OAuthProvider =
 	| "cerebras"
 	| "cloudflare-ai-gateway"
 	| "cursor"
+	| "deepseek"
 	| "fireworks"
 	| "firepass"
 	| "github-copilot"

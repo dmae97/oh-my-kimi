@@ -40,6 +40,7 @@ function createCtx(usage: Partial<SegmentContext["usageStats"]>): SegmentContext
 			status: null,
 			pr: null,
 		},
+		usage: null,
 	};
 }
 

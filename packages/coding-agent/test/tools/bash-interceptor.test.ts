@@ -95,7 +95,7 @@ describe("BashTool head/tail stripping", () => {
 		return new BashTool(session);
 	}
 
-	it("executes the stripped command and surfaces a notice", async () => {
+	it("executes the stripped command", async () => {
 		const tool = createBashToolWithStrip(true);
 		// `seq 1 100 | head -3` would emit "1\n2\n3"; stripped, it emits 1..100.
 		// We assert on the tail of the output rather than head, so a successful
@@ -105,8 +105,6 @@ describe("BashTool head/tail stripping", () => {
 		} as AgentToolContext);
 		const text = result.content.find(b => b.type === "text")?.text ?? "";
 		expect(text).toContain("100");
-		expect(text).toContain("<system-warning>");
-		expect(text).toContain("Stripped redundant `| head -3`");
 	});
 
 	it("does not strip when the setting is disabled", async () => {

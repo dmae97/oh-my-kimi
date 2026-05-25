@@ -395,6 +395,15 @@ export class CommandController {
 		info += `${theme.fg("dim", "Tool Calls:")} ${stats.toolCalls}\n`;
 		info += `${theme.fg("dim", "Tool Results:")} ${stats.toolResults}\n`;
 		info += `${theme.fg("dim", "Total:")} ${stats.totalMessages}\n\n`;
+		// Append-only context
+		{
+			const setting = this.ctx.settings.get("provider.appendOnlyContext") ?? "auto";
+			const provider = this.ctx.session.model?.provider;
+			const mode = setting === "on" ? true : setting === "off" ? false : provider === "deepseek";
+			const activeLabel = mode ? theme.fg("success", "active") : theme.fg("dim", "inactive");
+			const settingLabel = setting === "auto" ? `${setting} (${provider ?? "?"})` : setting;
+			info += `${theme.fg("dim", "Append-Only:")} ${activeLabel} (setting: ${settingLabel})\n`;
+		}
 		info += `${theme.bold("Tokens")}\n`;
 		info += `${theme.fg("dim", "Input:")} ${stats.tokens.input.toLocaleString()}\n`;
 		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
