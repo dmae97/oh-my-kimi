@@ -17,7 +17,7 @@
  * regression sanity check.
  */
 import { describe, expect, it } from "bun:test";
-import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { Ellipsis, sliceWithWidth, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 
 describe("visibleWidth — Hangul Compatibility Jamo correction", () => {
 	it("single compatibility jamo is 1 cell (not 2)", () => {
@@ -92,5 +92,38 @@ describe("visibleWidth — Hangul Compatibility Jamo correction", () => {
 		expect(visibleWidth("\uffa1")).toBe(1);
 		// U+FFDC HALFWIDTH HANGUL LETTER I
 		expect(visibleWidth("\uffdc")).toBe(1);
+	});
+});
+
+describe("native text helpers — Hangul Compatibility Jamo correction", () => {
+	// These exercise the Rust-side `char_width_corrected` wrapper in
+	// crates/pi-natives/src/text.rs. They will fail until the native
+	// binding is rebuilt (`bun run build:native`); CI rebuilds natives so
+	// they pass there. Mirrors the TS-side range U+3131..=U+318E.
+
+	it("sliceWithWidth treats jamo as 1 cell per character", () => {
+		// 8 jamo at 1 cell each must fit fully in an 8-cell slice
+		// (pre-fix: native counted 2 cells/jamo and returned 4 chars).
+		const input = "ㅁ".repeat(8);
+		const { text, width } = sliceWithWidth(input, 0, 8, true);
+		expect(text).toBe(input);
+		expect(width).toBe(8);
+	});
+
+	it("truncateToWidth keeps 8 jamo within an 8-cell budget", () => {
+		// Pre-fix: native truncated to 4 jamo because each was 2 cells.
+		const result = truncateToWidth("ㅁ".repeat(20), 8, Ellipsis.Omit);
+		// Strip any trailing pad to count jamo content.
+		const jamo = result.replaceAll(/[^\u3131-\u318E]/g, "");
+		expect(jamo.length).toBe(8);
+	});
+
+	it("native and TS visibleWidth agree on a jamo run", () => {
+		// Cross-layer parity guard: without the native fix, the TS path
+		// (Bun.stringWidth + manual correction) and the native path
+		// (unicode_width) disagreed by a factor of 2.
+		const input = "ㅁㄴㅇㅂㅈㄷㄱㅅ";
+		expect(visibleWidth(input)).toBe(8);
+		expect(sliceWithWidth(input, 0, 8, true).width).toBe(8);
 	});
 });
