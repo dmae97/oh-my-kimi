@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `AuthStorage.checkCredentials({ signal?, timeoutMs?, baseUrlResolver? })` that returns a per-credential `CredentialHealthResult` with tri-state `ok` (`true` / `false` / `null`-unverifiable), the credential's identity (provider, type, email/accountId, broker-refresh flag), and the upstream error string when the probe fails. Iterates sequentially over `listAuthCredentials()`, exercises OAuth refresh on expiry, then calls the per-provider `UsageProvider.fetchUsage` without swallowing errors — so callers can identify which row in a multi-account broker is producing 401s instead of getting a silently-deduplicated `fetchUsageReports` list.
+- Added `GET /v1/credentials/check` to `startAuthGateway()` that forwards to `AuthStorage.checkCredentials` and returns `{ generatedAt, credentials }`. Gated by the same bearer as the rest of the gateway.
+
 ## [15.3.0] - 2026-05-25
 
 ### Added
