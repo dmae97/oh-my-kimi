@@ -404,10 +404,7 @@ function buildParams(
 			// All other endpoints (including third-party /v1/responses proxies) use
 			// the canonical top-level `instructions` field so that proxies that
 			// reject `input[{role:"system"}]` work out of the box.
-			systemInstructions = systemPrompts[0];
-			if (systemPrompts.length > 1) {
-				messages.unshift(...systemPrompts.slice(1).map(p => ({ role: "system" as const, content: p })));
-			}
+			systemInstructions = systemPrompts.join("\n\n");
 		}
 	}
 

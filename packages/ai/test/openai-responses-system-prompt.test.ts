@@ -77,17 +77,16 @@ describe("openai-responses system prompt routing", () => {
 			expect(input.every(m => m.role !== "system")).toBe(true);
 		});
 
-		it("sends first of multiple system prompts as instructions, extras as input[role=system]", async () => {
+		it("joins multiple system prompts into a single instructions string", async () => {
 			const context: Context = {
 				systemPrompt: ["Primary prompt.", "Secondary prompt."],
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 			};
 			const body = await captureRequestBody(gpt4oMiniModel, context);
 
-			expect(body.instructions).toBe("Primary prompt.");
+			expect(body.instructions).toBe("Primary prompt.\n\nSecondary prompt.");
 			const input = body.input as Array<{ role: string; content: string }>;
-			const systemMessages = input.filter(m => m.role === "system");
-			expect(systemMessages).toEqual([{ role: "system", content: "Secondary prompt." }]);
+			expect(input.every(m => m.role !== "system")).toBe(true);
 		});
 
 		it("omits instructions field when there is no system prompt", async () => {

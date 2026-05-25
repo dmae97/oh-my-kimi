@@ -332,11 +332,8 @@ describe("OpenAI responses history payload", () => {
 			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 		})) as { input?: unknown[]; instructions?: string };
 
-		expect(payload.instructions).toBe("stable instructions");
-		expect(payload.input).toEqual([
-			{ role: "system", content: "second instructions" },
-			{ role: "user", content: [{ type: "input_text", text: "hi" }] },
-		]);
+		expect(payload.instructions).toBe("stable instructions\n\nsecond instructions");
+		expect(payload.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "hi" }] }]);
 	});
 
 	it("keeps system instruction order ahead of replayed native history", async () => {
