@@ -22,6 +22,10 @@
 
 - Added DeepSeek to the built-in API-key login provider catalog so `omp login deepseek` stores a reusable `DEEPSEEK_API_KEY` credential for the bundled DeepSeek models.
 
+### Fixed
+
+- Fixed `openai-responses` requests intermittently 400ing with `No tool call found for function call output with call_id …` after an aborted turn or a locally-rejected tool call (e.g. argument-validation failure). `convertConversationMessages` now folds orphan `function_call_output` / `custom_tool_call_output` items — those whose matching `function_call` was wiped by an earlier `dt: false` snapshot splice or never landed in any persisted provider payload — into assistant text notes, preserving the payload while keeping the request grammatically valid ([#1351](https://github.com/can1357/oh-my-pi/issues/1351)).
+
 ## [15.2.4] - 2026-05-22
 
 ### Fixed

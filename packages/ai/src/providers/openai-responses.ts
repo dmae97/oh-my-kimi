@@ -61,6 +61,7 @@ import {
 	createInitialResponsesAssistantMessage,
 	normalizeResponsesToolCallIdForTransform,
 	processResponsesStream,
+	repairOrphanResponsesToolOutputs,
 } from "./openai-responses-shared";
 import { transformMessages } from "./transform-messages";
 
@@ -555,7 +556,7 @@ function convertConversationMessages(
 		msgIndex++;
 	}
 
-	return messages;
+	return repairOrphanResponsesToolOutputs(messages);
 }
 
 /**
