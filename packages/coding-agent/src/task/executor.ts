@@ -34,6 +34,7 @@ import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
 import type { ContextFileEntry } from "../tools";
 import { jtdToJsonSchema, normalizeSchema } from "../tools/jtd-to-json-schema";
+import { type ReportFindingDetails, toReviewFinding } from "../tools/review";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
@@ -1547,7 +1548,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	// Use final output if available, otherwise accumulated output
 	let rawOutput = finalOutputChunks.length > 0 ? finalOutputChunks.join("") : outputChunks.join("");
 	const yieldItems = progress.extractedToolData?.yield as YieldItem[] | undefined;
-	const reportFindings = progress.extractedToolData?.report_finding as ReviewFinding[] | undefined;
+	const reportFindingDetails = progress.extractedToolData?.report_finding as ReportFindingDetails[] | undefined;
+	const reportFindings: ReviewFinding[] | undefined = reportFindingDetails?.map(toReviewFinding);
 	const finalized = finalizeSubprocessOutput({
 		rawOutput,
 		exitCode,
