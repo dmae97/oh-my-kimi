@@ -26,6 +26,7 @@ import {
 	type AgentMessage,
 	type AgentState,
 	type AgentTool,
+	AppendOnlyContextManager,
 	resolveTelemetry,
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
@@ -98,6 +99,7 @@ import {
 } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
+import { onAppendOnlyModeChanged } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
@@ -1138,6 +1140,8 @@ export class AgentSession {
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
 		this.#unsubscribeAgent = this.agent.subscribe(this.#handleAgentEvent);
+		// Re-evaluate append-only context mode when the setting changes at runtime.
+		onAppendOnlyModeChanged(_value => this.#syncAppendOnlyContext(this.model));
 	}
 
 	/** Model registry for API key resolution and model discovery */
@@ -3573,6 +3577,18 @@ export class AgentSession {
 		return this.#autoCompactionAbortController !== undefined || this.#compactionAbortController !== undefined;
 	}
 
+	/**
+	 * Whether idle-flush tasks, auto-continuations, or other short-lived
+	 * post-prompt work are pending.  True in the brief window after
+	 * `session.prompt()` returns but before a scheduled background delivery
+	 * (e.g. an async-job result) has finished its own streaming turn.
+	 * Loop-mode and similar auto-submit paths should treat this as a block
+	 * to avoid racing against the delivery turn.
+	 */
+	get hasPostPromptWork(): boolean {
+		return this.#postPromptTasks.size > 0;
+	}
+
 	/** All messages including custom types like BashExecutionMessage */
 	get messages(): AgentMessage[] {
 		return this.agent.state.messages;
@@ -5947,12 +5963,33 @@ export class AgentSession {
 			this.#closeProviderSessionsForModelSwitch(currentModel, model);
 		}
 		this.agent.setModel(model);
+
+		// Re-evaluate append-only context mode — provider or setting may have changed
+		this.#syncAppendOnlyContext(model);
 	}
 
 	#closeCodexProviderSessionsForHistoryRewrite(): void {
 		const currentModel = this.model;
 		if (!currentModel || currentModel.api !== "openai-codex-responses") return;
 		this.#closeProviderSessionsForModelSwitch(currentModel, currentModel);
+	}
+
+	/**
+	 * Re-evaluate append-only context mode, creating or destroying the
+	 * manager as needed. Called on model switch AND setting change.
+	 */
+	#syncAppendOnlyContext(model: Model | null | undefined): void {
+		const setting = this.settings.get("provider.appendOnlyContext") ?? "auto";
+		const enable = setting === "on" || (setting === "auto" && model?.provider === "deepseek");
+		if (enable && !this.agent.appendOnlyContext) {
+			this.agent.setAppendOnlyContext(new AppendOnlyContextManager());
+		} else if (enable && this.agent.appendOnlyContext) {
+			// Already active — invalidate prefix + log so the next turn
+			// rebuilds for the current model's normalization.
+			this.agent.appendOnlyContext.invalidateForModelChange();
+		} else if (!enable && this.agent.appendOnlyContext) {
+			this.agent.setAppendOnlyContext(undefined);
+		}
 	}
 
 	#closeProviderSessionsForModelSwitch(currentModel: Model, nextModel: Model): void {
