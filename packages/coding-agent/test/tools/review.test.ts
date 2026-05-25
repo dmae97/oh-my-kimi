@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { subprocessToolRegistry } from "../../src/task/subprocess-tool-registry";
 import { finalizeSubprocessOutput } from "../../src/task/executor";
+import { subprocessToolRegistry } from "../../src/task/subprocess-tool-registry";
 import { parseReportFindingDetails, toReviewFinding } from "../../src/tools/review";
 
 describe("report_finding subprocess extraction", () => {
