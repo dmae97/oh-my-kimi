@@ -459,27 +459,30 @@ const CCH_SEED = 0x4d659218e32a3268n;
 const CCH_PLACEHOLDER_STR = "cch=00000";
 const cchEncoder = new TextEncoder();
 const CCH_PLACEHOLDER = cchEncoder.encode(CCH_PLACEHOLDER_STR);
-// Scope replacement to the system block: find '"system":[' then scan at most
-// 300 bytes for the placeholder. This avoids mutating user/tool content that
-// happens to contain the literal "cch=00000" — messages precede system in JSON.
-const SYSTEM_MARKER = cchEncoder.encode('"system":[');
-const CCH_SEARCH_WINDOW = 300;
+// Anchor replacement to the billing-header value only: search for
+// CLAUDE_BILLING_HEADER_PREFIX bytes (only injected by createClaudeBillingHeader
+// into system[0]) then scan the next 150 bytes for the placeholder. system[0]
+// always serializes first in the "system" array, so the first occurrence of the
+// prefix in the body is always ours — user/tool content in system[2] can never
+// appear before it or within this window.
+const BILLING_HEADER_MARKER = cchEncoder.encode(CLAUDE_BILLING_HEADER_PREFIX);
+const CCH_BILLING_SEARCH_WINDOW = 150;
 
 function patchCch(body: Uint8Array): Uint8Array {
-	// Step 1: find '"system":['
-	let sysIdx = -1;
-	outer: for (let i = 0; i <= body.length - SYSTEM_MARKER.length; i++) {
-		for (let j = 0; j < SYSTEM_MARKER.length; j++) {
-			if (body[i + j] !== SYSTEM_MARKER[j]) continue outer;
+	// Step 1: find the billing-header key — only injected by createClaudeBillingHeader.
+	let bhIdx = -1;
+	outer: for (let i = 0; i <= body.length - BILLING_HEADER_MARKER.length; i++) {
+		for (let j = 0; j < BILLING_HEADER_MARKER.length; j++) {
+			if (body[i + j] !== BILLING_HEADER_MARKER[j]) continue outer;
 		}
-		sysIdx = i;
+		bhIdx = i;
 		break;
 	}
-	if (sysIdx === -1) return body; // not a CC messages request
+	if (bhIdx === -1) return body; // no billing header → not a CC request
 
-	// Step 2: scan at most CCH_SEARCH_WINDOW bytes after '"system":['
-	const searchFrom = sysIdx + SYSTEM_MARKER.length;
-	const searchTo = Math.min(searchFrom + CCH_SEARCH_WINDOW, body.length - CCH_PLACEHOLDER.length);
+	// Step 2: scan at most CCH_BILLING_SEARCH_WINDOW bytes after the header key.
+	const searchFrom = bhIdx + BILLING_HEADER_MARKER.length;
+	const searchTo = Math.min(searchFrom + CCH_BILLING_SEARCH_WINDOW, body.length - CCH_PLACEHOLDER.length);
 	let idx = -1;
 	outer2: for (let i = searchFrom; i <= searchTo; i++) {
 		for (let j = 0; j < CCH_PLACEHOLDER.length; j++) {
@@ -488,9 +491,9 @@ function patchCch(body: Uint8Array): Uint8Array {
 		idx = i;
 		break;
 	}
-	if (idx === -1) return body; // no placeholder in system block
+	if (idx === -1) return body; // placeholder not within the billing header value
 
-	// Hash the body with the placeholder in place (matches Bun's in-place behaviour).
+	// Hash the body with the placeholder in place (matches CC's in-place behaviour).
 	const h = xxhash64(body, CCH_SEED);
 	const cch = (h & 0xfffffn).toString(16).padStart(5, "0");
 
@@ -505,7 +508,6 @@ function wrapFetchForCch(base: FetchFn): FetchFn {
 		if (
 			init?.body &&
 			typeof init.body === "string" &&
-			init.body.includes(CLAUDE_BILLING_HEADER_PREFIX) &&
 			init.body.includes(CCH_PLACEHOLDER_STR)
 		) {
 			const encoded = cchEncoder.encode(init.body);
