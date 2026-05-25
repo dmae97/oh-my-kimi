@@ -1088,50 +1088,6 @@ export class TUI extends Container {
 			this.#previousHeight = height;
 		};
 
-		// Soft full-render that skips the `\x1b[2J` screen clear: cursor home
-		// + per-line `\x1b[2K` + line content. Used when the visible viewport
-		// content is changing but we don't need to wipe the whole pane.
-		//
-		// Motivation: `fullRender(true)` emits `\x1b[2J\x1b[H` which causes a
-		// brief black flash in tmux+ghostty (especially with multiple panes
-		// open) because the BSU envelope can split across PTY reads. The
-		// `firstChanged < prevViewportTop` case below is by far the most
-		// frequent full-redraw trigger during streaming (markdown fence lines
-		// like ``` -> ```python change above the viewport top), and it
-		// doesn't need a hard clear — only the visible viewport needs to be
-		// repainted. Per-line `\x1b[2K` handles stale trailing characters.
-		//
-		// Scrollback above the viewport may briefly show stale rendering of
-		// the SAME lines that just changed — but the user isn't scrolled
-		// up during streaming, so it's invisible. The next non-soft frame
-		// (e.g. on resize or stop) will fully reconcile.
-		const viewportRefresh = (): void => {
-			this.#fullRedrawCount += 1;
-			let buffer = "\x1b[?2026h";
-			buffer += "\x1b[H";
-			for (let i = 0; i < newLines.length; i++) {
-				if (i > 0) buffer += "\r\n";
-				// Write new content FIRST, then `\x1b[m\x1b[K` to reset SGR and
-				// erase any trailing remnants of the previous line. Emitting the
-				// erase AFTER the content (instead of `\x1b[2K` before it) keeps
-				// the line non-blank if BSU mode 2026 splits across PTY reads in
-				// tmux + ghostty — the worst-case visible artifact becomes a frame
-				// of stale trailing characters rather than a black bar.
-				buffer += newLines[i];
-				buffer += "\x1b[m\x1b[K";
-			}
-			this.#cursorRow = Math.max(0, newLines.length - 1);
-			const { seq, toRow } = this.#cursorControlSequence(cursorPos, newLines.length, this.#cursorRow);
-			this.#hardwareCursorRow = toRow;
-			buffer += seq;
-			buffer += "\x1b[?2026l";
-			this.terminal.write(buffer);
-			this.#maxLinesRendered = Math.max(this.#maxLinesRendered, newLines.length);
-			this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
-			this.#previousLines = newLines;
-			this.#previousWidth = width;
-			this.#previousHeight = height;
-		};
 		const debugRedraw = $flag("PI_DEBUG_REDRAW");
 		const logRedraw = (reason: string): void => {
 			if (!debugRedraw) return;
@@ -1225,10 +1181,7 @@ export class TUI extends Container {
 					buffer += `\x1b[${clearStartOffset}B`;
 				}
 				for (let i = 0; i < extraLines; i++) {
-					// Erase-after-CR: `\r` parks the cursor at column 0; `\x1b[m\x1b[K`
-					// resets SGR and erases from cursor to EOL. Same effect as
-					// `\x1b[2K` but with no transient blank state if BSU splits.
-					buffer += "\r\x1b[m\x1b[K";
+					buffer += "\r\x1b[2K";
 					if (i < extraLines - 1) buffer += "\x1b[1B";
 				}
 				const moveUp = extraLines - 1 + clearStartOffset;
@@ -1253,17 +1206,9 @@ export class TUI extends Container {
 		// Differential rendering can only touch what was actually visible.
 		// Any change above the previous viewport requires a full redraw so terminal
 		// scrollback ends up consistent with the new transcript state.
-		// When the change reaches above the previous viewport, the visible
-		// viewport needs to be repainted — but a hard `fullRender(true)` is
-		// overkill here and causes the `\x1b[2J` black-flash users see during
-		// streaming. `viewportRefresh()` rewrites the viewport content with
-		// per-line erase-after-content instead, no screen clear. Scrollback
-		// above the viewport is briefly stale but invisible to a user
-		// actively streaming output. (See 498e9c2cc dropped commit for
-		// original rationale; this call-site swap was missing after slim.)
 		if (firstChanged < prevViewportTop) {
-			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop}) — viewport refresh`);
-			viewportRefresh();
+			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
+			fullRender(true);
 			return;
 		}
 
@@ -1300,12 +1245,7 @@ export class TUI extends Container {
 		const renderEnd = Math.min(lastChanged, newLines.length - 1);
 		for (let i = firstChanged; i <= renderEnd; i++) {
 			if (i > firstChanged) buffer += "\r\n";
-			// Erase-after-content (`\x1b[m\x1b[K` after `truncatedLine`, below)
-			// instead of erase-before-content (`\x1b[2K` here). Old content
-			// stays on screen until the new content overwrites it character by
-			// character, so a BSU split between the cursor move and the line
-			// content never leaves the line blank — only the tail-stale state,
-			// which is rare and invisible during keystroke-paced repaint.
+			buffer += "\x1b[2K"; // Clear current line
 			const line = newLines[i];
 			let truncatedLine = line;
 			const isImage = TERMINAL.isImageLine(line);
@@ -1333,11 +1273,6 @@ export class TUI extends Container {
 			// Non-image lines are pre-terminated/normalized by #applyLineResets;
 			// truncated lines re-append LINE_TERMINATOR above.
 			buffer += truncatedLine;
-			// SGR reset + erase-to-EOL so any trailing remnants of the old line
-			// past the new content's length are cleared using default attrs
-			// (avoids a leftover background-color strip if the new content
-			// ended mid-SGR before #applyLineResets terminated it).
-			buffer += "\x1b[m\x1b[K";
 		}
 
 		// Track where cursor ended up after rendering
@@ -1353,11 +1288,7 @@ export class TUI extends Container {
 			}
 			const extraLines = this.#previousLines.length - newLines.length;
 			for (let i = newLines.length; i < this.#previousLines.length; i++) {
-				// Erase-after-newline: `\r\n` parks the cursor at column 0 of the
-				// next line; `\x1b[m\x1b[K` then resets SGR and erases from
-				// cursor to EOL — same final effect as `\x1b[2K` but with no
-				// transient blank state if BSU splits.
-				buffer += "\r\n\x1b[m\x1b[K";
+				buffer += "\r\n\x1b[2K";
 			}
 			// Move cursor back to end of new content
 			buffer += `\x1b[${extraLines}A`;
