@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.3.2] - 2026-05-25
 ### Added
 
 - Added `GET /v1/snapshot/stream` for live auth-broker snapshot updates via SSE with `snapshot`, `entry`, and `removed` event frames

@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.3.2] - 2026-05-25
 ### Added
 
 - Added inline `|TEXT` payload support to `»` and `«` hashline insert operations, allowing single-line inserts on the op line and still supporting additional payload lines
