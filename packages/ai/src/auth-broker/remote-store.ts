@@ -191,8 +191,14 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	async markCredentialSuspect(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
-		await this.#client.refreshCredential(credentialId, opts.signal);
-		await this.waitForFreshSnapshot(MAX_WAIT_MS, opts);
+		const { entry } = await this.#client.refreshCredential(credentialId, opts.signal);
+		if (entry.credential.type !== "oauth") {
+			throw new Error(`Broker returned non-OAuth credential for id=${credentialId}`);
+		}
+		this.#applyCredentialEntry(entry);
+		void this.refreshSnapshot().catch(error => {
+			logger.debug("auth-broker snapshot refresh after suspect credential refresh failed", { error: String(error) });
+		});
 	}
 
 	replaceAuthCredentialsForProvider(_provider: string, _credentials: AuthCredential[]): StoredAuthCredential[] {
@@ -294,6 +300,17 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const others = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
 		const incoming = entries.map(entry => ({ ...entry, rotatesInMs: null }));
 		this.#snapshot = { ...this.#snapshot, credentials: [...others, ...incoming] };
+	}
+	#applyCredentialEntry(entry: AuthCredentialSnapshotEntry): void {
+		const incoming = { ...entry, rotatesInMs: null };
+		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === entry.id);
+		if (index === -1) {
+			this.#snapshot = { ...this.#snapshot, credentials: [...this.#snapshot.credentials, incoming] };
+			return;
+		}
+		const credentials = [...this.#snapshot.credentials];
+		credentials[index] = incoming;
+		this.#snapshot = { ...this.#snapshot, credentials };
 	}
 
 	#removeProviderEntries(provider: string): void {
