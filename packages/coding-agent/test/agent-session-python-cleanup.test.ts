@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as pythonExecutor from "@oh-my-pi/pi-coding-agent/eval/py/executor";
@@ -401,7 +402,9 @@ describe("AgentSession python cleanup", () => {
 		expect(EvalTool).toBeDefined();
 		let toolExecutionSettled = false;
 		const toolExecution = EvalTool!
-			.execute("call-id", { cells: [{ language: "py", code: "print('tool')" }] }, undefined, undefined, undefined)
+			.execute("call-id", { cells: [{ language: "py", code: "print('tool')" }] }, undefined, undefined, {
+				autoApprove: true,
+			} as AgentToolContext)
 			.finally(() => {
 				toolExecutionSettled = true;
 			});
@@ -627,13 +630,9 @@ describe("AgentSession python cleanup", () => {
 		expect(EvalTool).toBeDefined();
 		const disposeSession = session.dispose();
 		await expect(
-			EvalTool!.execute(
-				"call-id",
-				{ cells: [{ language: "py", code: "print('late')" }] },
-				undefined,
-				undefined,
-				undefined,
-			),
+			EvalTool!.execute("call-id", { cells: [{ language: "py", code: "print('late')" }] }, undefined, undefined, {
+				autoApprove: true,
+			} as AgentToolContext),
 		).rejects.toThrow("Python execution is unavailable while session disposal is in progress");
 		await disposeSession;
 		expect(executeSpy).not.toHaveBeenCalled();
@@ -671,7 +670,7 @@ describe("AgentSession python cleanup", () => {
 			{ cells: [{ language: "py", code: "print('late after artifact')" }] },
 			undefined,
 			undefined,
-			undefined,
+			{ autoApprove: true } as AgentToolContext,
 		);
 		await artifactStarted.promise;
 		const disposeSession = session.dispose();
