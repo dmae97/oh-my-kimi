@@ -339,36 +339,37 @@ describe("auth-broker wire surface", () => {
 		} finally {
 			dummy.stop(true);
 		}
-		test("openSnapshotStream rejects 200 responses that are not SSE", async () => {
-			const dummy = Bun.serve({
-				hostname: "127.0.0.1",
-				port: 0,
-				fetch: () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
-			});
-			try {
-				const client = new AuthBrokerClient({ url: `http://${dummy.hostname}:${dummy.port}`, token });
-				const iter = client.openSnapshotStream();
-				await expect(iter.next()).rejects.toThrow(/non-SSE/);
-			} finally {
-				dummy.stop(true);
-			}
-		});
+	});
 
-		test("openSnapshotStream rejects SSE responses without an initial snapshot", async () => {
-			const dummy = Bun.serve({
-				hostname: "127.0.0.1",
-				port: 0,
-				fetch: () =>
-					new Response(": keepalive\n\n", { status: 200, headers: { "Content-Type": "text/event-stream" } }),
-			});
-			try {
-				const client = new AuthBrokerClient({ url: `http://${dummy.hostname}:${dummy.port}`, token });
-				const iter = client.openSnapshotStream();
-				await expect(iter.next()).rejects.toThrow(/initial snapshot/);
-			} finally {
-				dummy.stop(true);
-			}
+	test("openSnapshotStream rejects 200 responses that are not SSE", async () => {
+		const dummy = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
 		});
+		try {
+			const client = new AuthBrokerClient({ url: `http://${dummy.hostname}:${dummy.port}`, token });
+			const iter = client.openSnapshotStream();
+			await expect(iter.next()).rejects.toThrow(/non-SSE/);
+		} finally {
+			dummy.stop(true);
+		}
+	});
+
+	test("openSnapshotStream rejects SSE responses without an initial snapshot", async () => {
+		const dummy = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () =>
+				new Response(": keepalive\n\n", { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+		});
+		try {
+			const client = new AuthBrokerClient({ url: `http://${dummy.hostname}:${dummy.port}`, token });
+			const iter = client.openSnapshotStream();
+			await expect(iter.next()).rejects.toThrow(/initial snapshot/);
+		} finally {
+			dummy.stop(true);
+		}
 	});
 });
 
