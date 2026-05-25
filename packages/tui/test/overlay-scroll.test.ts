@@ -149,6 +149,27 @@ describe("TUI overlays", () => {
 
 		tui.stop();
 	});
+	it("clears rendered scrollback when forced redraw replaces terminal history", async () => {
+		const term = new VirtualTerminal(40, 4);
+		const tui = new TUI(term);
+		const component = new MutableContentComponent(buildRows(120));
+		tui.addChild(component);
+
+		tui.start();
+		await flushRender(term);
+
+		expect(term.getScrollBuffer().join("\n").includes("row-0")).toBeTruthy();
+
+		component.setLines(["new-session-0", "new-session-1", "new-session-2", "new-session-3"]);
+		tui.requestRender(true, { clearScrollback: true });
+		await flushRender(term);
+
+		const scrollback = term.getScrollBuffer().join("\n");
+		expect(scrollback.includes("row-0")).toBeFalsy();
+		expect(scrollback.includes("new-session-3")).toBeTruthy();
+
+		tui.stop();
+	});
 	it("fully redraws on height increase to avoid stale viewport rows", async () => {
 		const term = new VirtualTerminal(40, 4);
 		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");

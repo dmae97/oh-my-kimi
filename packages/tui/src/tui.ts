@@ -70,6 +70,12 @@ export interface Focusable {
 	focused: boolean;
 }
 
+/** Options for scheduling a TUI render. */
+export interface RenderRequestOptions {
+	/** Clear terminal scrollback for intentional transcript replacement. */
+	clearScrollback?: boolean;
+}
+
 /** Type guard to check if a component implements Focusable */
 export function isFocusable(component: Component | null): component is Component & Focusable {
 	return component !== null && "focused" in component;
@@ -249,6 +255,7 @@ export class TUI extends Container {
 	#clearOnShrink = $flag("PI_CLEAR_ON_SHRINK"); // Clear empty rows when content shrinks (default: off)
 	#maxLinesRendered = 0; // Line count from last render, used for viewport calculation
 	#fullRedrawCount = 0;
+	#clearScrollbackOnNextRender = false;
 	#stopped = false;
 
 	// Overlay stack for modal components rendered on top of base content
@@ -583,8 +590,9 @@ export class TUI extends Container {
 		this.terminal.stop();
 	}
 
-	requestRender(force = false): void {
+	requestRender(force = false, options?: RenderRequestOptions): void {
 		if (force) {
+			this.#clearScrollbackOnNextRender ||= options?.clearScrollback === true;
 			this.#previousLines = [];
 			this.#previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
 			this.#previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
@@ -1062,8 +1070,10 @@ export class TUI extends Container {
 		const fullRender = (clear: boolean): void => {
 			this.#fullRedrawCount += 1;
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
-			// ED 3 clears terminal scrollback and disrupts manual scrollback inspection.
-			if (clear) buffer += "\x1b[2J\x1b[H";
+			if (clear) {
+				buffer += this.#clearScrollbackOnNextRender ? "\x1b[2J\x1b[H\x1b[3J" : "\x1b[2J\x1b[H";
+				this.#clearScrollbackOnNextRender = false;
+			}
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
 				// Lines were pre-terminated/normalized by #applyLineResets; image
