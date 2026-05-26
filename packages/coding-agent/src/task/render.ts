@@ -8,6 +8,7 @@ import path from "node:path";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Container, Text } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
+import { settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import {
@@ -59,6 +60,7 @@ function appendAgentStats(
 		contextTokens?: number;
 		contextWindow?: number;
 		cost: number;
+		resolvedModel?: string;
 	},
 	theme: Theme,
 ): string {
@@ -82,6 +84,9 @@ function appendAgentStats(
 	}
 	if (opts.cost > 0) {
 		line += `${theme.sep.dot}${theme.fg("statusLineCost", `$${opts.cost.toFixed(2)}`)}`;
+	}
+	if (opts.resolvedModel && settings.get("task.showResolvedModelBadge")) {
+		line += `${theme.sep.dot}${theme.fg("dim", opts.resolvedModel)}`;
 	}
 	return line;
 }
@@ -845,6 +850,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 			contextTokens: result.contextTokens,
 			contextWindow: result.contextWindow,
 			cost: result.usage?.cost.total ?? 0,
+			resolvedModel: result.resolvedModel,
 		},
 		theme,
 	);

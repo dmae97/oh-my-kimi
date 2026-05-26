@@ -2458,6 +2458,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.showResolvedModelBadge": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			label: "Show Resolved Model Badge",
+			description: "Display the actual model ID used by each subagent in the task widget status line",
+		},
+	},
+
 	// Skills
 	"skills.enabled": { type: "boolean", default: true },
 
