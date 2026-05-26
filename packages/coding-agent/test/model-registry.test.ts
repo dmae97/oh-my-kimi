@@ -2234,4 +2234,26 @@ describe("ModelRegistry", () => {
 
 		expect(registry.find("ollama-cloud", "deepseek-v4-pro")?.maxTokens).toBe(384_000);
 	});
+
+	test("replaces bundled google-vertex models with authoritative Vertex project discovery", () => {
+		const cachedModel: Model<"openai-completions"> = {
+			id: "zai-org/glm-4.7-maas",
+			name: "GLM-4.7",
+			api: "openai-completions",
+			provider: "google-vertex",
+			baseUrl: "https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/endpoints/openapi",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 222_222,
+			maxTokens: 8_888,
+		};
+		writeModelCache("google-vertex", Date.now(), [cachedModel], true, "", cacheDbPath);
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const vertexModels = getModelsForProvider(registry, "google-vertex");
+
+		expect(vertexModels.map(model => model.id)).toEqual(["zai-org/glm-4.7-maas"]);
+		expect(registry.find("google-vertex", "gemini-1.5-pro")).toBeUndefined();
+	});
 });
