@@ -31,11 +31,11 @@
 
 ### Breaking Changes
 
+### Breaking Changes
 - The `vim` edit mode option is no longer available; configurations using `edit.mode: vim` will be automatically mapped to `hashline` mode
 - Hashline payload semantics are now strictly inline-first: the first payload line is whatever follows the sigil on the op line itself, and subsequent lines append after it. A newline immediately after `↑`/`↓`/`:` is no longer a free separator — it produces a blank first payload line. Use `LINE↓content` for a one-line insert, `LINE↓firstline\nsecondline` for two lines; bare `LINE↓` / `LINE↑` / `LINE:` (no inline payload) still insert/replace with one blank line as before.
 
 ### Added
-
 - Added `irc.timeoutMs` setting to configure IRC message timeout duration with a default of 120 seconds
 - Added timeout enforcement for IRC send operations to prevent indefinite hangs when recipients are unresponsive
 - Added evaluator state inheritance for `task`-spawned subagents so JavaScript and Python variables are visible between a parent agent and its child sessions
@@ -48,6 +48,9 @@
 - Added file-read snapshot caching with multi-snapshot ring per path for recovery from agent's own writes
 - Added delete operation (`!`) support to hashline grammar for explicit line deletion
 - Added structural bracket/brace balance warnings when deleting lines with unclosed constructs
+- Added resource metadata URL (RFC 9728) support to OAuth discovery for chaining authorization server resolution from protected-resource metadata ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
+- Added path-prefixed well-known URL fallback in OAuth discovery to support authorization servers behind gateways with sub-path routing ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
+- Added relative URL resolution for `Mcp-Auth-Server` header values against the server URL ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
 
 ### Changed
 
@@ -75,9 +78,14 @@
 - Modified hashline grammar to accept optional file hash in headers and removed hash requirements from line anchors
 - Changed hashline diff preview format to use `LINE:content` instead of `LINE+HASH|content`
 - Updated prompt documentation to reflect new `¶PATH#HASH` header and bare line-number syntax
+- Updated `discoverOAuthEndpoints` to accept `resourceMetadataUrl` parameter and prioritize the resource-metadata chain ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
+- Updated `parseMcpAuthServerUrl` and `extractMcpAuthServerUrl` to accept optional `serverUrl` for relative URL resolution ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
+- Updated `MCPOAuthFlow.#resolveRegistrationEndpoint` to try origin-root well-known first, then fall back to path-prefixed well-known ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
+
+### Fixed
+- Fixed missing `await` on `#tryWellKnownForRegistration` call in `#resolveRegistrationEndpoint` that caused path-prefixed well-known fallback to never actually execute, returning the unresolved Promise object instead of the registration endpoint ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
 
 ### Removed
-
 - Removed the `installH2Fetch()` activation from CLI startup; HTTPS fetches now use Bun's default transport
 - Removed the `vim` edit mode along with the `VimTool` module, prompt, and supporting buffer/engine/renderer stack
 - Removed per-line hash anchors (2-letter bigram hashes) from hashline format
@@ -96,7 +104,6 @@
 - Fixed JavaScript `eval` imports to preserve module-level singletons across re-imports of unchanged local files and reload them only after edits
 - Fixed concurrent Python evaluator tool calls to use per-run identifiers so tool responses and output are routed to the correct execution
 - Fixed the `search` tool argument validation to accept a single string `paths` value as a one-path search.
-
 ## [15.4.0] - 2026-05-26
 
 ### Breaking Changes

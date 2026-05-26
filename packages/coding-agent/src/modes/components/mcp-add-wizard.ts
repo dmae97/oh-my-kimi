@@ -965,14 +965,18 @@ export class MCPAddWizard extends Container {
 			}, 1000);
 		} catch (error) {
 			// Connection failed - check if it's an auth error
-			const authResult = analyzeAuthError(error as Error);
+			const authResult = analyzeAuthError(error as Error, this.#state.url);
 
 			if (authResult.requiresAuth) {
 				// Prefer OAuth first: use error metadata, then well-known discovery fallback.
 				let oauth = authResult.authType === "oauth" ? (authResult.oauth ?? null) : null;
 				if (!oauth && this.#state.transport !== "stdio" && this.#state.url) {
 					try {
-						oauth = await discoverOAuthEndpoints(this.#state.url, authResult.authServerUrl);
+						oauth = await discoverOAuthEndpoints(
+							this.#state.url,
+							authResult.authServerUrl,
+							authResult.resourceMetadataUrl,
+						);
 					} catch {
 						// Ignore discovery failures and fallback to manual auth.
 					}

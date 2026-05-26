@@ -401,12 +401,16 @@ export class MCPCommandController {
 						);
 						return;
 					}
-					const authResult = analyzeAuthError(error as Error);
+					const authResult = analyzeAuthError(error as Error, finalConfig.url);
 					if (authResult.requiresAuth) {
 						let oauth = authResult.authType === "oauth" ? (authResult.oauth ?? null) : null;
 						if (!oauth && finalConfig.url) {
 							try {
-								oauth = await discoverOAuthEndpoints(finalConfig.url, authResult.authServerUrl);
+								oauth = await discoverOAuthEndpoints(
+									finalConfig.url,
+									authResult.authServerUrl,
+									authResult.resourceMetadataUrl,
+								);
 							} catch {
 								// Ignore discovery error and handle below.
 							}
@@ -742,11 +746,11 @@ export class MCPCommandController {
 		}
 
 		// Analyze the connection error to extract OAuth endpoints
-		const authResult = analyzeAuthError(connectionError!);
+		const authResult = analyzeAuthError(connectionError!, "url" in config ? config.url : undefined);
 		let oauth = authResult.authType === "oauth" ? (authResult.oauth ?? null) : null;
 
 		if (!oauth && (config.type === "http" || config.type === "sse") && config.url) {
-			oauth = await discoverOAuthEndpoints(config.url, authResult.authServerUrl);
+			oauth = await discoverOAuthEndpoints(config.url, authResult.authServerUrl, authResult.resourceMetadataUrl);
 		}
 
 		if (!oauth) {
