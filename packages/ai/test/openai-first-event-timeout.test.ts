@@ -151,6 +151,20 @@ function createDelayedFetch(delayMs: number, responseFactory: () => Response): t
 
 	return Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
 }
+function createAbortObservingDelayedFetch(delayMs: number, onAbort: () => void): typeof fetch {
+	async function mockFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+		const signal = getRequestSignal(input, init);
+		try {
+			await waitForDelayOrAbort(delayMs, signal);
+		} catch (error) {
+			if (signal?.aborted) onAbort();
+			throw error;
+		}
+		return createOpenAIResponsesSuccessResponse();
+	}
+
+	return Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
+}
 
 function createOpenAIResponsesSuccessResponse(): Response {
 	return createSseResponse([
@@ -382,6 +396,22 @@ describe("OpenAI-family provider stream silence", () => {
 				}).result(),
 			createOpenAIResponsesSuccessResponse,
 		);
+	});
+
+	it("maps explicit OpenAI responses first-event timeout to the SDK request timeout", async () => {
+		let abortObserved = false;
+		global.fetch = createAbortObservingDelayedFetch(1_000, () => {
+			abortObserved = true;
+		});
+
+		const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+			apiKey: "test-key",
+			streamFirstEventTimeoutMs: 10,
+		}).result();
+
+		expect(abortObserved).toBe(true);
+		expect(result.stopReason).toBe("error");
+		expect(getFirstTextContent(result)).toBeUndefined();
 	});
 
 	it("does not apply a default first-event timeout before OpenAI completions stream setup finishes", async () => {
