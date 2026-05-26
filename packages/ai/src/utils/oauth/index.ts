@@ -151,6 +151,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "zhipu-coding-plan",
+		name: "Zhipu Coding Plan (智谱)",
+		available: true,
+	},
+	{
 		id: "minimax-code",
 		name: "MiniMax Coding Plan (International)",
 		available: true,
@@ -328,6 +333,7 @@ export async function refreshOAuthToken(
 		case "ollama-cloud":
 		case "xiaomi":
 		case "zai":
+		case "zhipu-coding-plan":
 		case "qianfan":
 		case "venice":
 		case "minimax-code":
