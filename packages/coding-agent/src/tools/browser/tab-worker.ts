@@ -578,7 +578,7 @@ export class WorkerCore {
 				const hooks = this.#hooksForActiveRun();
 				if (!hooks) throw new ToolError("Browser runtime started without an active run");
 				const returnValue = await Promise.race([
-					runtime.run(msg.code, `browser-run-${msg.id}.js`, hooks, { runId: msg.id, cwd: session.cwd }),
+					runtime.run(msg.code, `browser-run-${msg.id}.js`, hooks, { runId: msg.id, cwd: msg.session.cwd }),
 					cancelRejection,
 				]);
 				await this.#postReadyInfo();
