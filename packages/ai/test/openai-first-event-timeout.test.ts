@@ -435,4 +435,22 @@ describe("OpenAI-family provider stream silence", () => {
 			createOpenAIResponsesSuccessResponse,
 		);
 	});
+
+	it("maps explicit Azure OpenAI responses first-event timeout to the SDK request timeout", async () => {
+		let abortObserved = false;
+		global.fetch = createAbortObservingDelayedFetch(1_000, () => {
+			abortObserved = true;
+		});
+
+		const result = await streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
+			apiKey: "test-key",
+			azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
+			azureApiVersion: "v1",
+			streamFirstEventTimeoutMs: 10,
+		}).result();
+
+		expect(abortObserved).toBe(true);
+		expect(result.stopReason).toBe("error");
+		expect(getFirstTextContent(result)).toBeUndefined();
+	});
 });

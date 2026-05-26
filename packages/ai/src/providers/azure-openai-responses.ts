@@ -120,7 +120,8 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				url: `${baseUrl}/responses`,
 				body: params,
 			};
-			const openaiStream = await client.responses.create(params, { signal: requestSignal });
+			const requestOptions = createStreamRequestOptions(requestSignal, options?.streamFirstEventTimeoutMs);
+			const openaiStream = await client.responses.create(params, requestOptions);
 			stream.push({ type: "start", partial: output });
 
 			await processResponsesStream(iterateUntilAbort(openaiStream, options?.signal), output, stream, model, {
@@ -216,6 +217,12 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
 
 	const baseFetch = options?.fetch ?? fetch;
 	const onSseEvent = options?.onSseEvent;
+	const sdkTimeoutMs =
+		options?.streamFirstEventTimeoutMs !== undefined &&
+		Number.isFinite(options.streamFirstEventTimeoutMs) &&
+		options.streamFirstEventTimeoutMs > 0
+			? Math.trunc(options.streamFirstEventTimeoutMs)
+			: undefined;
 	return new AzureOpenAI({
 		apiKey,
 		apiVersion,
@@ -224,7 +231,26 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
 		defaultHeaders: headers,
 		baseURL: baseUrl,
 		fetch: onSseEvent ? wrapFetchForSseDebug(baseFetch, event => onSseEvent(event, model)) : baseFetch,
+		...(sdkTimeoutMs !== undefined ? { timeout: sdkTimeoutMs } : {}),
 	});
+}
+
+function createStreamRequestOptions(
+	signal: AbortSignal,
+	streamFirstEventTimeoutMs: number | undefined,
+): { signal: AbortSignal; timeout?: number; maxRetries?: number } {
+	if (
+		streamFirstEventTimeoutMs !== undefined &&
+		Number.isFinite(streamFirstEventTimeoutMs) &&
+		streamFirstEventTimeoutMs > 0
+	) {
+		return {
+			signal,
+			timeout: Math.trunc(streamFirstEventTimeoutMs),
+			maxRetries: 0,
+		};
+	}
+	return { signal };
 }
 
 function buildParams(
