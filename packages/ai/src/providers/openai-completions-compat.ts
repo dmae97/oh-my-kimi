@@ -181,7 +181,13 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 
 	return {
 		supportsStore: !isNonStandard,
-		supportsDeveloperRole: !isNonStandard,
+		// `developer` is an OpenAI-Responses-era extension to the chat-completions schema. Almost
+		// every OpenAI-compatible host other than OpenAI itself (and Azure OpenAI, which mirrors
+		// the schema exactly) treats it as an unknown role: Moonshot returns a 400 "tokenization
+		// failed", Groq/Cerebras/etc. error or silently misroute. Default to `system` and require
+		// callers to opt in via `compat.supportsDeveloperRole: true` for hosts known to mirror
+		// OpenAI's reasoning-API surface.
+		supportsDeveloperRole: isOpenAIHost || isAzureHost,
 		supportsMultipleSystemMessages: supportsMultipleSystemMessagesDefault,
 		supportsReasoningEffort: !isGrok && !isZai,
 		reasoningEffortMap,

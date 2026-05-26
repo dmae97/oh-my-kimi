@@ -183,6 +183,57 @@ describe("openai-completions compatibility", () => {
 		]);
 	});
 
+	it("defaults supportsDeveloperRole to off for non-OpenAI/Azure hosts", () => {
+		// Regression: Moonshot's Kimi chat template rejects the `developer` role
+		// with `400 Invalid request: tokenization failed` because `developer` is
+		// an OpenAI extension and most other hosts don't carry it through their
+		// tokenizer. The default for any non-OpenAI/Azure host MUST be `system`,
+		// so reasoning models on those hosts cannot accidentally emit `developer`.
+		const cases: Array<{ provider: string; baseUrl: string; expected: boolean }> = [
+			{ provider: "openai", baseUrl: "https://api.openai.com/v1", expected: true },
+			{ provider: "azure", baseUrl: "https://example.openai.azure.com/openai", expected: true },
+			{ provider: "moonshot", baseUrl: "https://api.moonshot.ai/v1", expected: false },
+			{ provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1", expected: false },
+			{ provider: "groq", baseUrl: "https://api.groq.com/openai/v1", expected: false },
+			{ provider: "github-copilot", baseUrl: "https://api.githubcopilot.com", expected: false },
+		];
+		for (const { provider, baseUrl, expected } of cases) {
+			const model: Model<"openai-completions"> = {
+				...getBundledModel("openai", "gpt-4o-mini"),
+				api: "openai-completions",
+				provider: provider as Model["provider"],
+				baseUrl,
+				reasoning: true,
+			};
+			expect(detectCompat(model).supportsDeveloperRole).toBe(expected);
+		}
+	});
+
+	it("emits system role for reasoning models on Moonshot (kimi tokenization rejects developer)", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "moonshot",
+			baseUrl: "https://api.moonshot.ai/v1",
+			id: "kimi-k2.5",
+			reasoning: true,
+		};
+
+		const messages = convertMessages(
+			model,
+			{
+				systemPrompt: ["you are a helpful assistant"],
+				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+			},
+			detectCompat(model),
+		);
+
+		expect(messages.slice(0, 2)).toEqual([
+			{ role: "system", content: "you are a helpful assistant" },
+			{ role: "user", content: "hi" },
+		]);
+	});
+
 	it("coalesces ordered system prompts when the host disables multi-system support", () => {
 		const model: Model<"openai-completions"> = {
 			...getBundledModel("openai", "gpt-4o-mini"),
