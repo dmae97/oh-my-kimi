@@ -1287,7 +1287,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								}
 							}
 						} else if (event.type === "message_delta") {
-							const rawStopReason = event.delta.stop_reason;
+							const rawStopReason = event.delta.stop_reason as string | null | undefined;
 							if (rawStopReason) {
 								output.stopReason = mapStopReason(rawStopReason);
 								sawTerminalEnvelope = true;
