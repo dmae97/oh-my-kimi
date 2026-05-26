@@ -153,6 +153,17 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		config => fireworksModelManagerOptions(config),
 		catalog("Fireworks", ["FIREWORKS_API_KEY"]),
 	),
+	// Fire Pass does not expose a /v1/models endpoint — the API returns HTTP 403
+	// on any catalog-discovery request, so dynamic model listing is not feasible.
+	//
+	// The single model `kimi-k2.6-turbo` is seeded via the `prevModelsJson`
+	// fallback in `generate-models.ts`, which preserves entries from the previous
+	// catalog snapshot when a provider does not surface them dynamically.
+	//
+	// IMPORTANT: Do NOT delete the firepass section from models.json. No
+	// descriptor here produces that entry dynamically — removing it from
+	// models.json would permanently drop the model from the catalog with no
+	// automated mechanism to restore it.
 	descriptor("firepass", "kimi-k2.6-turbo", config => firepassModelManagerOptions(config)),
 	descriptor("xai", "grok-4-fast-non-reasoning", config => xaiModelManagerOptions(config)),
 	catalogDescriptor(

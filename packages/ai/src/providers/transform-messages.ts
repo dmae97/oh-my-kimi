@@ -281,7 +281,7 @@ export function transformMessages<TApi extends Api>(
 				//
 				// Drop the orphan silently in that case; the upcoming real
 				// `tool_result` will land normally on the next iteration.
-				if (pendingToolCalls.length > 0 || pendingAbortedToolCalls.size > 0) {
+				if (pendingToolCalls.some(tc => !toolCallStatus.has(tc.id)) || pendingAbortedToolCalls.size > 0) {
 					continue;
 				}
 				// No pending tool-call window: safe to preserve the text payload so the
