@@ -254,25 +254,27 @@ describe("hashline parser — suffix-op syntax", () => {
 
 	it("does not auto-drop generic (multi-line) pure-insert duplicate boundaries by default", () => {
 		// Multi-line context echo (`aaa`, `bbb`) is gated on the
-		// `autoDropPureInsertDuplicates` opt-in, unlike the single-line
-		// structural absorb covered by the test below.
+		// `autoDropPureInsertDuplicates` opt-in. Single-line pure-insert
+		// duplicates stay literal because they are ambiguous.
 		const source = ["aaa", "bbb", "ccc"].join("\n");
 		const diff = [`${tag(2, "bbb")}↓aaa`, pl("bbb"), pl("NEW")].join("\n");
 		expect(applyDiff(source, diff)).toBe("aaa\nbbb\naaa\nbbb\nNEW\nccc");
 	});
 
-	it("auto-drops a duplicated single structural suffix for pure insert by default", () => {
+	it("preserves a duplicated single structural suffix for pure insert by default", () => {
 		const source = ["if ok {", "   keep();", "   }"].join("\n");
 		const diff = [`${tag(3, "   }")}↑   added();`, pl("   }")].join("\n");
 
-		expect(applyDiff(source, diff)).toBe(["if ok {", "   keep();", "   added();", "   }"].join("\n"));
+		expect(applyDiff(source, diff)).toBe(["if ok {", "   keep();", "   added();", "   }", "   }"].join("\n"));
 	});
 
-	it("auto-drops a duplicated single structural prefix for pure insert by default", () => {
+	it("preserves a duplicated single structural prefix for pure insert even when duplicate absorption is enabled", () => {
 		const source = ["   });", "next();"].join("\n");
 		const diff = [`${tag(1, "   });")}↓   });`, pl("added();")].join("\n");
+		const result = applyHashlineEdits(source, parseHashline(diff).edits, { autoDropPureInsertDuplicates: true });
 
-		expect(applyDiff(source, diff)).toBe(["   });", "added();", "next();"].join("\n"));
+		expect(result.lines).toBe(["   });", "   });", "added();", "next();"].join("\n"));
+		expect(result.warnings).toBeUndefined();
 	});
 
 	it("preserves an intentional non-structural anchor duplicate for `ANCHOR↓` by default", () => {
@@ -334,11 +336,11 @@ describe("hashline parser — suffix-op syntax", () => {
 		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("NEW\naaa\nbbb\nccc");
 	});
 
-	it("auto-drops a single duplicated anchor line in a pure insert when generic duplicate absorption is enabled", () => {
+	it("preserves a single duplicated anchor line in a pure insert even when generic duplicate absorption is enabled", () => {
 		const source = ["aaa", "bbb", "ccc"].join("\n");
 		const diff = [`${tag(2, "bbb")}↓bbb`, pl("NEW")].join("\n");
 
-		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("aaa\nbbb\nNEW\nccc");
+		expect(applyDiffWithPureInsertAutoDrop(source, diff)).toBe("aaa\nbbb\nbbb\nNEW\nccc");
 	});
 
 	it("surfaces a warning when pure-insert duplicates are auto-dropped", () => {

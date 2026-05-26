@@ -160,10 +160,10 @@ function countMatchingSuffixBlock(fileLines: string[], endLine: number, replacem
 	return 0;
 }
 
-// Single-line duplicate absorption is limited to structural closing delimiters.
-// General one-line context is too easy to delete incorrectly, but duplicated
-// `};` / `)` / `]` boundaries usually indicate a replacement range stopped one
-// line early and would otherwise produce a syntax error.
+// Single-line replacement-boundary absorption is limited to structural closing
+// delimiters. General one-line context is too easy to delete incorrectly, but
+// duplicated `};` / `)` / `]` boundaries often mean a replacement range stopped
+// one line early and would otherwise produce a syntax error.
 const STRUCTURAL_CLOSING_BOUNDARY_RE = /^\s*[\])}]+[;,]?\s*$/;
 
 function isStructuralClosingBoundaryLine(line: string): boolean {
@@ -175,8 +175,6 @@ interface DelimiterBalance {
 	bracket: number;
 	brace: number;
 }
-
-const ZERO_DELIMITER_BALANCE: DelimiterBalance = { paren: 0, bracket: 0, brace: 0 };
 
 /**
  * Naive bracket counter — does NOT skip string/template/comment contents. The
@@ -400,12 +398,11 @@ interface PureInsertAbsorbResult {
 }
 
 /**
- * Mirror of replacement-absorb's prefix/suffix block check, but for pure
- * inserts: drop payload lines that exactly duplicate the file lines
- * immediately above (leading) or immediately below (trailing) the insertion
- * point. Generic context echo absorption requires the caller's opt-in setting;
- * without it, only single structural closing delimiters use the
- * balance-validated structural rule below.
+ * For a pure-insert group, drop only multi-line context echoes that exactly
+ * duplicate the file lines adjacent to the insertion point. Single-line pure
+ * insert duplicates are ambiguous (`N↓}` may be an accidental anchor echo or an
+ * intentional inserted delimiter), so they are left literal even when generic
+ * duplicate absorption is enabled.
  */
 function tryAbsorbPureInsertGroup(
 	group: HashlinePureInsertGroup,
@@ -435,33 +432,11 @@ function tryAbsorbPureInsertGroup(
 			}
 		}
 	}
-	if (
-		absorbedLeading === 0 &&
-		allowGenericBoundaryAbsorb &&
-		group.cursor.kind === "after_anchor" &&
-		group.payload.length > 0 &&
-		aboveEndIdx >= 0 &&
-		!isStructuralClosingBoundaryLine(group.payload[0]) &&
-		group.payload[0] === fileLines[aboveEndIdx]
-	) {
-		absorbedLeading = 1;
-	}
-	if (
-		absorbedLeading === 0 &&
-		group.payload.length > 0 &&
-		aboveEndIdx >= 0 &&
-		isStructuralClosingBoundaryLine(group.payload[0]) &&
-		group.payload[0] === fileLines[aboveEndIdx] &&
-		shouldDropSingleStructuralBoundary(group.payload, group.payload.slice(1), ZERO_DELIMITER_BALANCE)
-	) {
-		absorbedLeading = 1;
-	}
 
 	// Trailing: payload[len-k..len-1] vs fileLines[belowStartIdx..belowStartIdx+k-1].
 	// Don't double-count payload lines already absorbed as leading.
 	let absorbedTrailing = 0;
-	const remainingPayload = group.payload.slice(absorbedLeading);
-	const remaining = remainingPayload.length;
+	const remaining = group.payload.length - absorbedLeading;
 	if (allowGenericBoundaryAbsorb) {
 		const maxTrail = Math.min(remaining, fileLines.length - belowStartIdx);
 		for (let count = maxTrail; count >= 2; count--) {
@@ -477,27 +452,6 @@ function tryAbsorbPureInsertGroup(
 				break;
 			}
 		}
-	}
-	if (
-		absorbedTrailing === 0 &&
-		group.cursor.kind === "before_anchor" &&
-		allowGenericBoundaryAbsorb &&
-		remaining > 0 &&
-		belowStartIdx < fileLines.length &&
-		!isStructuralClosingBoundaryLine(remainingPayload[remainingPayload.length - 1]) &&
-		remainingPayload[remainingPayload.length - 1] === fileLines[belowStartIdx]
-	) {
-		absorbedTrailing = 1;
-	}
-	if (
-		absorbedTrailing === 0 &&
-		remaining > 0 &&
-		belowStartIdx < fileLines.length &&
-		isStructuralClosingBoundaryLine(remainingPayload[remainingPayload.length - 1]) &&
-		remainingPayload[remainingPayload.length - 1] === fileLines[belowStartIdx] &&
-		shouldDropSingleStructuralBoundary(remainingPayload, remainingPayload.slice(0, -1), ZERO_DELIMITER_BALANCE)
-	) {
-		absorbedTrailing = 1;
 	}
 
 	if (absorbedLeading === 0 && absorbedTrailing === 0) return empty;
