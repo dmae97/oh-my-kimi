@@ -1287,8 +1287,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								}
 							}
 						} else if (event.type === "message_delta") {
-							if (event.delta.stop_reason) {
-								output.stopReason = mapStopReason(event.delta.stop_reason);
+							const rawStopReason = event.delta.stop_reason;
+							if (rawStopReason) {
+								output.stopReason = mapStopReason(rawStopReason);
 								sawTerminalEnvelope = true;
 							}
 							const stopDetails = event.delta.stop_details;
@@ -1297,6 +1298,16 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								const category = stopDetails.category;
 								const label = category ? `Refusal (${category})` : "Refusal";
 								output.errorMessage = explanation ? `${label}: ${explanation}` : label;
+							} else if (output.stopReason === "error" && !output.errorMessage) {
+								// Anthropic flagged an error-class stop (refusal / sensitive) without
+								// populating stop_details. Surface the raw reason instead of falling
+								// through to the generic "unknown error" string when we throw below.
+								output.errorMessage =
+									rawStopReason === "refusal"
+										? "Refusal (no details provided)"
+										: rawStopReason === "sensitive"
+											? "Content flagged by safety filters"
+											: `Anthropic stream ended with stop_reason: ${rawStopReason ?? "unknown"}`;
 							}
 							if (event.usage.input_tokens != null) {
 								output.usage.input = event.usage.input_tokens;
