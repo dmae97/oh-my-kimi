@@ -6,6 +6,7 @@
 
 - Changed the default `task.simple` mode from `default` to `schema-free`, so task-call `schema` inputs are disabled by default while shared `context` and user prompt/session-defined output schemas remain available
 - Changed `tools.approvalMode: yolo` to auto-approve tool calls even when a tool marks `override: true`; user `tools.approval.<tool>` policies (`allow`/`prompt`/`deny`) now remain the only controls for yolo mode.
+- Changed the hashline edit executor to coalesce two consecutive `A-B:` ops on the identical range last-wins (the model painted a before/after pair) and append a warning, instead of throwing `anchor line X is already targeted by the :/! op on line Y`. Other overlap shapes (different ranges, `A-B:`+`!`, `!`+`!`) still throw.
 
 ## [15.5.1] - 2026-05-26
 

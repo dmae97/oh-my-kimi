@@ -20,3 +20,11 @@ export const ABORT_MARKER = "*** Abort";
 /** Warning text appended to the tool result when ABORT_MARKER terminates parsing. */
 export const ABORT_WARNING =
 	"Tool stream truncated mid-call due to detected output corruption. Applied ops above are valid. Re-issue any remaining edits.";
+
+/**
+ * Warning text appended when two consecutive `A-B:` ops on the exact same
+ * range get coalesced (model painted a before/after pair). The second op
+ * wins; the first op's payload is silently discarded.
+ */
+export const REPLACE_PAIR_COALESCED_WARNING =
+	"Detected an identical-range before/after replace pair; kept only the second block's payload. Issue ONE op per range — the payload is the final desired content, never both old and new.";

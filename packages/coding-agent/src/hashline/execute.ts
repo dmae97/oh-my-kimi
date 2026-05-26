@@ -14,7 +14,7 @@ import { HashlineMismatchError } from "./anchors";
 import { applyHashlineEdits, type HashlineApplyResult } from "./apply";
 import { buildCompactHashlineDiffPreview } from "./diff-preview";
 import { parseHashline } from "./executor";
-import { computeFileHash } from "./hash";
+import { computeFileHash, formatHashlineHeader } from "./hash";
 import { splitHashlineInputs } from "./input";
 import { tryRecoverHashlineWithCache } from "./recovery";
 import type {
@@ -224,9 +224,10 @@ async function executeHashlineSection(
 	// of the file: the model just received it back as the diff/preview. Cache
 	// it so a follow-up edit anchored against this state can still recover
 	// if the file is touched out-of-band before the next edit lands.
+	const newFileHash = computeFileHash(result.lines);
 	getFileReadCache(session).recordContiguous(absolutePath, 1, result.lines.split("\n"), {
 		fullText: result.lines,
-		fileHash: computeFileHash(result.lines),
+		fileHash: newFileHash,
 	});
 
 	const diffResult = generateDiffString(originalNormalized, result.lines);
@@ -238,6 +239,7 @@ async function executeHashlineSection(
 	const warnings = [...parseWarnings, ...(result.warnings ?? [])];
 	const warningsBlock = warnings.length > 0 ? `\n\nWarnings:\n${warnings.join("\n")}` : "";
 	const previewBlock = preview.preview ? `\n${preview.preview}` : "";
+	const newHashLine = `\n${formatHashlineHeader(sourcePath, newFileHash)}`;
 	const headline = preview.preview
 		? `${sourcePath}:`
 		: source.exists
@@ -245,7 +247,7 @@ async function executeHashlineSection(
 			: `Created ${sourcePath}`;
 
 	return {
-		content: [{ type: "text", text: `${headline}${previewBlock}${warningsBlock}` }],
+		content: [{ type: "text", text: `${headline}${newHashLine}${previewBlock}${warningsBlock}` }],
 		details: {
 			diff: diffResult.diff,
 			firstChangedLine: result.firstChangedLine ?? diffResult.firstChangedLine,

@@ -1,4 +1,4 @@
-import { ABORT_WARNING } from "./constants";
+import { ABORT_WARNING, REPLACE_PAIR_COALESCED_WARNING } from "./constants";
 import { HL_OP_CHARS, HL_OP_DELETE, HL_OP_INSERT_AFTER, HL_OP_INSERT_BEFORE, HL_OP_REPLACE } from "./hash";
 import {
 	cloneCursor,
@@ -13,6 +13,10 @@ function validateRangeOrder(range: ParsedRange, lineNum: number): void {
 	if (range.end.line < range.start.line) {
 		throw new Error(`line ${lineNum}: range ${range.start.line}-${range.end.line} ends before it starts.`);
 	}
+}
+
+function rangesEqual(a: ParsedRange, b: ParsedRange): boolean {
+	return a.start.line === b.start.line && a.end.line === b.end.line;
 }
 
 function expandRange(range: ParsedRange): Anchor[] {
@@ -108,8 +112,24 @@ export class HashlineExecutor {
 				};
 				return;
 			case "op-replace":
-				this.#flushPending();
 				validateRangeOrder(token.range, token.lineNum);
+				// Common shape: model emits the same `A-B:` block twice — a "before"
+				// payload followed by an "after" payload. The first op's payload is
+				// just informational (and will be replaced wholesale by the second
+				// op's payload anyway), so discard the pending op silently and let
+				// the second op proceed. Other overlap shapes (different ranges,
+				// replace+delete, delete+delete) still hit the post-hoc validator.
+				if (
+					this.#pending !== undefined &&
+					this.#pending.op.kind === "replace" &&
+					rangesEqual(this.#pending.op.range, token.range)
+				) {
+					this.#pending = undefined;
+					if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_WARNING)) {
+						this.#warnings.push(REPLACE_PAIR_COALESCED_WARNING);
+					}
+				}
+				this.#flushPending();
 				this.#pending = {
 					op: { kind: "replace", range: token.range, lineNum: token.lineNum },
 					payload: [token.inlineBody ?? ""],
@@ -122,9 +142,10 @@ export class HashlineExecutor {
 	 * Flush any open pending op (with its full accumulated payload, blanks
 	 * included) and return the accumulated edits and warnings. The executor
 	 * is single-use; reset() is required for reuse.
-	 * Throws if two replace/delete ops target the same line — that pattern
-	 * means the diff is painting a before/after picture instead of stating
-	 * the final state, and applying both would silently duplicate content.
+	 * Throws if two replace/delete ops target the same line with non-identical
+	 * shapes (different ranges, replace+delete, delete+delete). Identical-range
+	 * `A-B:` pairs in the same hunk are coalesced last-wins by `feed()` with a
+	 * warning, so they never reach the validator.
 	 */
 	end(): { edits: HashlineEdit[]; warnings: string[] } {
 		this.#flushPending();
@@ -145,10 +166,11 @@ export class HashlineExecutor {
 	 * Each `:` / `!` op contributes a delete edit per line in its range; if
 	 * any line ends up targeted by deletes originating from two different
 	 * source ops (distinguished by their `lineNum`), the patch is internally
-	 * inconsistent. Common shape: a "before" `A-B:` followed by an "after"
-	 * `A-B:` over the same range, or an `A-B:` that overlaps a later `N!` /
-	 * `N:`. The applier would run both literally and the file would end up
-	 * with two copies of the line, not a chosen winner.
+	 * inconsistent. Identical-range `A-B:` pairs are already collapsed by
+	 * `feed()`; remaining shapes here are an `A-B:` that overlaps a later
+	 * `N!`/`N:` with a different range, or two `!` deletes on the same line.
+	 * The applier would run both literally and the file would end up with two
+	 * copies of the line, not a chosen winner.
 	 */
 	#validateNoOverlappingDeletes(): void {
 		const sourceLinesByAnchor = new Map<number, number[]>();

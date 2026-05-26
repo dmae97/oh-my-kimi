@@ -439,16 +439,27 @@ describe("hashline parser — suffix-op syntax", () => {
 		);
 	});
 
-	it("rejects two replace ops targeting the same single line", () => {
+	it("coalesces two replace ops targeting the same single line (last wins)", () => {
 		const diff = `${tag(2, "bbb")}:BBB\n${tag(2, "bbb")}:BBB2`;
-		expect(() => parseHashline(diff).edits).toThrow(/anchor line 2 is already targeted by the .+ op on line 1/);
+		const { edits, warnings } = parseHashline(diff);
+		expect(applyHashlineEdits("aaa\nbbb\nccc", edits).lines).toBe("aaa\nBBB2\nccc");
+		expect(warnings).toEqual([
+			"Detected an identical-range before/after replace pair; kept only the second block's payload. Issue ONE op per range — the payload is the final desired content, never both old and new.",
+		]);
 	});
 
-	it("rejects two replace ops covering the same range (before/after-block pattern)", () => {
+	it("coalesces two replace ops covering the same range (before/after-block pattern, last wins)", () => {
 		const diff = `${tag(2, "bbb")}-${tag(3, "ccc")}:OLD\nOLD2\n${tag(2, "bbb")}-${tag(3, "ccc")}:NEW\nNEW2`;
-		expect(() => parseHashline(diff).edits).toThrow(
-			/Issue ONE op per range; payload is only the final desired content/,
-		);
+		const { edits, warnings } = parseHashline(diff);
+		expect(applyHashlineEdits("aaa\nbbb\nccc\nddd", edits).lines).toBe("aaa\nNEW\nNEW2\nddd");
+		expect(warnings).toEqual([
+			"Detected an identical-range before/after replace pair; kept only the second block's payload. Issue ONE op per range — the payload is the final desired content, never both old and new.",
+		]);
+	});
+
+	it("still rejects two replace ops with non-identical overlapping ranges", () => {
+		const diff = `${tag(2, "bbb")}-${tag(4, "ddd")}:NEW1\n${tag(3, "ccc")}-${tag(4, "ddd")}:NEW2`;
+		expect(() => parseHashline(diff).edits).toThrow(/anchor line 3 is already targeted by the .+ op on line 1/);
 	});
 
 	it("rejects a replace overlapping a later delete", () => {
