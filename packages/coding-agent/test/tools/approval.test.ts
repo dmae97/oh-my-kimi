@@ -5,7 +5,6 @@ import {
 	CRITICAL_BASH_PATTERNS,
 	DEBUG_READONLY_ACTIONS,
 	DEFAULT_APPROVAL_POLICIES,
-	formatApprovalPrompt,
 	getApprovalPolicy,
 	LSP_READONLY_ACTIONS,
 	requiresApproval,
@@ -277,42 +276,6 @@ describe("requiresApproval", () => {
 	});
 });
 
-describe("formatApprovalPrompt", () => {
-	it("formats bash command prompt", () => {
-		const prompt = formatApprovalPrompt("bash", { command: "rm test.txt" });
-		expect(prompt).toContain("bash");
-		expect(prompt).toContain("rm test.txt");
-	});
-
-	it("formats write tool prompt", () => {
-		const prompt = formatApprovalPrompt("write", { path: "config.yml", content: "key: value" });
-		expect(prompt).toContain("write");
-		expect(prompt).toContain("config.yml");
-	});
-
-	it("formats edit tool prompt", () => {
-		const prompt = formatApprovalPrompt("edit", { input: "@test.txt\n= 1..5\n~new content" });
-		expect(prompt).toContain("edit");
-		expect(prompt).toContain("test.txt");
-	});
-
-	it("formats LSP rename prompt", () => {
-		const prompt = formatApprovalPrompt("lsp", { action: "rename", file: "src/main.ts", symbol: "oldName" });
-		expect(prompt).toContain("lsp");
-		expect(prompt).toContain("rename");
-	});
-
-	it("includes custom reason when provided", () => {
-		const prompt = formatApprovalPrompt("bash", { command: "rm -rf /" }, "Critical pattern detected: rm -rf /");
-		expect(prompt).toContain("Critical pattern");
-	});
-
-	it("handles unknown tools gracefully", () => {
-		const prompt = formatApprovalPrompt("custom-mcp-tool", { arg: "value" });
-		expect(prompt).toContain("custom-mcp-tool");
-	});
-});
-
 describe("approval policy integration", () => {
 	it("allows read → deny write → deny bash workflow", () => {
 		const userConfig: Record<string, ApprovalPolicy> = {
@@ -486,99 +449,6 @@ describe("getApprovalPolicy — user config validation", () => {
 	});
 });
 
-describe("formatApprovalPrompt — improvements", () => {
-	it("truncates extremely long bash commands", () => {
-		const cmd = `echo ${"x".repeat(2000)}`;
-		const prompt = formatApprovalPrompt("bash", { command: cmd });
-		expect(prompt.length).toBeLessThan(cmd.length);
-		expect(prompt).toContain("…");
-	});
-
-	it("labels MCP-style tool names as MCP server tools", () => {
-		const prompt = formatApprovalPrompt("mcp__github__create_issue", { title: "x" });
-		expect(prompt).toContain("MCP server tool");
-	});
-
-	it("does NOT label built-in tools as MCP", () => {
-		const prompt = formatApprovalPrompt("bash", { command: "ls" });
-		expect(prompt).not.toContain("MCP server tool");
-	});
-
-	it("does NOT label extension tools that merely contain `__` as MCP", () => {
-		// Strict prefix only — `mcp__server__tool`. An extension tool legally named with `__` separators
-		// (e.g. `my__feature`, `pkg__util__do`) is not from an MCP server and must not get the MCP label.
-		const prompt = formatApprovalPrompt("my__feature", { foo: "bar" });
-		expect(prompt).not.toContain("MCP server tool");
-		const prompt2 = formatApprovalPrompt("pkg__util__do", {});
-		expect(prompt2).not.toContain("MCP server tool");
-	});
-
-	it("shows eval language and code body", () => {
-		const prompt = formatApprovalPrompt("eval", {
-			cells: [{ language: "py", code: "import os; os.system('rm -rf /')" }],
-		});
-		expect(prompt).toContain("Language: py");
-		expect(prompt).toContain("rm -rf /");
-	});
-
-	it("annotates eval multi-cell payloads with cell count", () => {
-		const prompt = formatApprovalPrompt("eval", {
-			cells: [
-				{ language: "py", code: "print(1)" },
-				{ language: "js", code: "console.log(2)" },
-			],
-		});
-		expect(prompt).toContain("+1 more cell");
-	});
-
-	it("shows task agent + first assignment so parent approval is informed", () => {
-		const prompt = formatApprovalPrompt("task", {
-			agent: "reviewer",
-			tasks: [{ id: "AuditAuth", description: "ui", assignment: "Audit the auth module for SQL injection." }],
-		});
-		expect(prompt).toContain("Agent: reviewer");
-		expect(prompt).toContain("Task: AuditAuth");
-		expect(prompt).toContain("Audit the auth module");
-	});
-
-	it("shows ast_edit pattern, replacement, and paths", () => {
-		const prompt = formatApprovalPrompt("ast_edit", {
-			ops: [{ pat: "oldApi($$$A)", out: "newApi($$$A)" }],
-			paths: ["src/foo.ts", "src/bar.ts"],
-		});
-		expect(prompt).toContain("Pattern: oldApi($$$A)");
-		expect(prompt).toContain("Replacement: newApi($$$A)");
-		expect(prompt).toContain("Paths: src/foo.ts, src/bar.ts");
-	});
-
-	it("shows browser action, tab, url, and code", () => {
-		const prompt = formatApprovalPrompt("browser", {
-			action: "run",
-			name: "main",
-			code: "await tab.click('text/Submit');",
-		});
-		expect(prompt).toContain("Action: run");
-		expect(prompt).toContain("Tab: main");
-		expect(prompt).toContain("await tab.click");
-	});
-
-	it("shows write content alongside path", () => {
-		const prompt = formatApprovalPrompt("write", { path: "/etc/passwd", content: "root::0:0::/root:/bin/sh" });
-		expect(prompt).toContain("Path: /etc/passwd");
-		expect(prompt).toContain("Content: root::0:0");
-	});
-
-	it("extracts § path for edit tool (current hashline header)", () => {
-		const prompt = formatApprovalPrompt("edit", { input: "§packages/foo.ts\n≔1ab\nx" });
-		expect(prompt).toContain("packages/foo.ts");
-	});
-
-	it("surfaces ssh host alongside command", () => {
-		const prompt = formatApprovalPrompt("ssh", { host: "prod-1", command: "uptime" });
-		expect(prompt).toContain("prod-1");
-		expect(prompt).toContain("uptime");
-	});
-});
 describe("getApprovalPolicy — deny respect", () => {
 	it("user `bash: deny` wins over critical-pattern override", () => {
 		const result = getApprovalPolicy("bash", { command: "rm -rf /" }, { bash: "deny" });
@@ -601,32 +471,5 @@ describe("DEFAULT_APPROVAL_POLICIES — hindsight tool keys", () => {
 		expect(DEFAULT_APPROVAL_POLICIES.reflect).toBe("prompt");
 		expect("hindsight_recall" in DEFAULT_APPROVAL_POLICIES).toBe(false);
 		expect("hindsight_retain" in DEFAULT_APPROVAL_POLICIES).toBe(false);
-	});
-});
-
-describe("formatApprovalPrompt — head+tail truncation", () => {
-	it("keeps a destructive suffix visible after a long benign preamble", () => {
-		const preamble = "echo benign; ".repeat(60); // ~780 chars
-		const command = `${preamble}rm -rf /`;
-		const prompt = formatApprovalPrompt("bash", { command }, "Critical pattern detected");
-		// Head: the start of the preamble must be present.
-		expect(prompt).toContain("echo benign");
-		// Tail: the destructive suffix MUST survive truncation.
-		expect(prompt).toContain("rm -rf /");
-		// Elision marker confirms middle was dropped (head-only slice would not have it).
-		expect(prompt).toMatch(/chars elided/);
-	});
-
-	it("leaves short commands untouched", () => {
-		const prompt = formatApprovalPrompt("bash", { command: "ls -la" });
-		expect(prompt).toContain("ls -la");
-		expect(prompt).not.toMatch(/chars elided/);
-	});
-
-	it("applies head+tail truncation to ssh commands as well", () => {
-		const command = `${"a".repeat(500)}rm -rf /`;
-		const prompt = formatApprovalPrompt("ssh", { host: "h", command });
-		expect(prompt).toContain("rm -rf /");
-		expect(prompt).toMatch(/chars elided/);
 	});
 });

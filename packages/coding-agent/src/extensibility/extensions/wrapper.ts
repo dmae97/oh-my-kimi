@@ -5,7 +5,7 @@ import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-m
 import type { ImageContent, Static, TextContent, TSchema } from "@oh-my-pi/pi-ai";
 import type { Settings } from "../../config/settings";
 import type { Theme } from "../../modes/theme/theme";
-import { formatApprovalPrompt, requiresApproval } from "../../tools/approval";
+import { requiresApproval } from "../../tools/approval";
 import { applyToolProxy } from "../tool-proxy";
 import type { ExtensionRunner } from "./runner";
 import type { RegisteredTool, ToolCallEventResult } from "./types";
@@ -139,14 +139,16 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 					);
 				}
 
-				// Format prompt message
-				const message = formatApprovalPrompt(this.tool.name, params, approvalCheck.reason);
-
-				// Show approval dialog
+				// Approval selector. The in-progress tool-call cell rendered above is the
+				// source of truth for *what* is being approved (args, command, diff). The
+				// selector replaces the editor with Approve/Deny choices; the reason (if
+				// any — e.g. "Critical bash pattern detected") surfaces as helpText so the
+				// user knows *why* the prompt fired without duplicating the cell content.
 				const uiContext = this.runner.getUIContext();
-				const approved = await uiContext.confirm(`Approve ${this.tool.name}?`, message);
-
-				if (!approved) {
+				const choice = await uiContext.select(`Approve ${this.tool.name}?`, ["Approve", "Deny"], {
+					helpText: approvalCheck.reason,
+				});
+				if (choice !== "Approve") {
 					throw new Error(`Tool call denied by user: ${this.tool.name}`);
 				}
 			}

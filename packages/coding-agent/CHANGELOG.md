@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `OMP_MCP_TIMEOUT_MS` environment variable to override MCP client request timeout for every server (in milliseconds); set to `0` to disable client-side timeouts. Invalid (negative or non-numeric) values are ignored with a warning and fall back to the per-server timeout or default 30s ([#1415](https://github.com/can1357/oh-my-pi/pull/1415)).
@@ -11,6 +12,7 @@
 
 ### Changed
 
+- Changed tool-approval prompts to use an explicit `Approve`/`Deny` selector and show the denial reason as contextual help text
 - Changed `omp auth-broker login` to support interactive provider selection when invoked without a provider argument
 - Changed `omp auth-broker logout` to support interactive provider selection from stored credentials when invoked without a provider argument
 - Changed `omp auth-broker login` to drive the per-provider OAuth/API-key flow in-process via `AuthStorage.login()` instead of spawning the `pi-ai` CLI subprocess. The pi-ai bin is being removed; the same login surface now lives entirely inside `omp`.
