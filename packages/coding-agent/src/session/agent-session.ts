@@ -898,7 +898,7 @@ export class AgentSession {
 	 *  combined with `Date.now()` so tags stay unique even across rapid
 	 *  same-tick enqueues. */
 	#customDisplayTagCounter = 0;
-	#postPromptTasks = new Set<Promise<void>>();
+	#postPromptTasks = new Set<Promise<unknown>>();
 	#postPromptTasksPromise: Promise<void> | undefined = undefined;
 	#postPromptTasksResolve: (() => void) | undefined = undefined;
 	#postPromptTasksAbortController = new AbortController();
@@ -1786,10 +1786,17 @@ export class AgentSession {
 
 			const compactionTask = this.#checkCompaction(msg);
 			this.#trackPostPromptTask(compactionTask);
-			await compactionTask;
+			const compactionDeferredHandoff = await compactionTask;
 			// Check for incomplete todos only after a final assistant stop, not intermediate tool-use turns.
 			const hasToolCalls = msg.content.some(content => content.type === "toolCall");
 			if (hasToolCalls) {
+				return;
+			}
+			// When checkCompaction scheduled a deferred handoff, skip the rewind/todo passes:
+			// any reminder we append here would race the handoff's session reset, and
+			// #scheduleAgentContinue would start a fresh streaming turn alongside the handoff
+			// LLM call (visible as "Auto-handoff" loader + an assistant message still streaming).
+			if (compactionDeferredHandoff) {
 				return;
 			}
 			if (msg.stopReason !== "error" && msg.stopReason !== "aborted") {
@@ -1840,7 +1847,7 @@ export class AgentSession {
 		this.#postPromptTasksPromise = undefined;
 	}
 
-	#trackPostPromptTask(task: Promise<void>): void {
+	#trackPostPromptTask(task: Promise<unknown>): void {
 		this.#postPromptTasks.add(task);
 		this.#ensurePostPromptTasksPromise();
 		void task
@@ -1889,8 +1896,17 @@ export class AgentSession {
 	}): void {
 		this.#schedulePostPromptTask(
 			async () => {
+				// Defense in depth: if compaction/handoff slipped onto the post-prompt queue
+				// alongside us (e.g. via a scheduler we don't own), refuse to start a fresh
+				// streaming turn — agent.continue() here would race the handoff's session
+				// reset. The first-class fix is in #checkCompaction/the agent_end handler,
+				// but this guard catches anything that bypasses that path.
+				if (this.isCompacting || this.isGeneratingHandoff) {
+					options?.onSkip?.();
+					return;
+				}
 				if (options?.shouldContinue && !options.shouldContinue()) {
-					options.onSkip?.();
+					options?.onSkip?.();
 					return;
 				}
 				try {
@@ -2756,6 +2772,21 @@ export class AgentSession {
 		} catch (error) {
 			logger.warn("Failed to emit session_shutdown event", { error: String(error) });
 		}
+		// Abort post-prompt work so the drain below can complete. Without this, a
+		// deferred-handoff task that has already advanced into
+		// `await this.handoff(...) → generateHandoff(...)` keeps awaiting a live LLM stream
+		// — Promise.allSettled() in #cancelPostPromptTasks then waits forever, freezing
+		// /exit and Ctrl+C-double-tap. The post-prompt task's own AbortSignal does not
+		// propagate into the inner handoff/compaction controllers, so we abort them
+		// explicitly. agent.abort() is needed for an agent.continue() that may have
+		// raced the deferred handoff (its streaming loop is awaited by the wrapper IIFE).
+		//
+		// Tool work (bash/eval/python) is NOT aborted here — those have their own
+		// dispose paths and shared kernels are contractually allowed to survive a
+		// session's dispose.
+		this.abortRetry();
+		this.abortCompaction();
+		this.agent.abort();
 		await this.#cancelPostPromptTasks();
 		// Cancel jobs this agent registered so a subagent's teardown doesn't
 		// leak its background bash/task work into the parent's manager. Only
@@ -4050,10 +4081,13 @@ export class AgentSession {
 				);
 			}
 
-			// Check if we need to compact before sending (catches aborted responses)
+			// Check if we need to compact before sending (catches aborted responses). Run
+			// inline (allowDefer=false) so the handoff/maintenance fully settles before this
+			// prompt's agent loop starts — otherwise a deferred handoff would fire on the
+			// next microtask alongside the new turn.
 			const lastAssistant = this.#findLastAssistantMessage();
 			if (lastAssistant && !options?.skipCompactionCheck) {
-				await this.#checkCompaction(lastAssistant, false);
+				await this.#checkCompaction(lastAssistant, false, false);
 			}
 
 			// Build messages array (session context, eager todo prelude, then active prompt message)
@@ -5602,10 +5636,23 @@ export class AgentSession {
 	 *
 	 * @param assistantMessage The assistant message to check
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
+	 * @param allowDefer If true, threshold-driven handoff strategy may schedule itself as a
+	 *   deferred post-prompt task instead of running inline. Callers running inside the
+	 *   `agent_end` handler set this to true so `session.prompt()` resolves cleanly; callers
+	 *   on the pre-prompt path (where the next agent turn is about to start) set it to false
+	 *   to avoid racing the deferred handoff against the new turn.
+	 * @returns true when a deferred handoff was scheduled. Callers MUST then skip any
+	 *   subsequent `#scheduleAgentContinue` / reminder appends for this turn — the
+	 *   handoff will replace session state and a concurrent `agent.continue()` would
+	 *   stream into the soon-to-be-discarded session.
 	 */
-	async #checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<void> {
+	async #checkCompaction(
+		assistantMessage: AssistantMessage,
+		skipAbortedCheck = true,
+		allowDefer = true,
+	): Promise<boolean> {
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
-		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return;
+		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return false;
 		const contextWindow = this.model?.contextWindow ?? 0;
 		const generation = this.#promptGeneration;
 		// Skip overflow check if the message came from a different model.
@@ -5634,22 +5681,22 @@ export class AgentSession {
 			if (promoted) {
 				// Retry on the promoted (larger) model without compacting
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
-				return;
+				return false;
 			}
 
 			// No promotion target available fall through to compaction
 			const compactionSettings = this.settings.getGroup("compaction");
 			if (compactionSettings.enabled && compactionSettings.strategy !== "off") {
-				await this.#runAutoCompaction("overflow", true);
+				await this.#runAutoCompaction("overflow", true, false, allowDefer);
 			}
-			return;
+			return false;
 		}
 		const compactionSettings = this.settings.getGroup("compaction");
-		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return;
+		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return false;
 
 		// Case 2: Threshold - turn succeeded but context is getting large
 		// Skip if this was an error (non-overflow errors don't have usage data)
-		if (assistantMessage.stopReason === "error") return;
+		if (assistantMessage.stopReason === "error") return false;
 		const pruneResult = await this.#pruneToolOutputs();
 		let contextTokens = calculateContextTokens(assistantMessage.usage);
 		if (pruneResult) {
@@ -5659,9 +5706,10 @@ export class AgentSession {
 			// Try promotion first — if a larger model is available, switch instead of compacting
 			const promoted = await this.#tryContextPromotion(assistantMessage);
 			if (!promoted) {
-				await this.#runAutoCompaction("threshold", false);
+				return await this.#runAutoCompaction("threshold", false, false, allowDefer);
 			}
 		}
+		return false;
 	}
 	#assistantEndedWithSuccessfulYield(assistantMessage: AssistantMessage): boolean {
 		const toolCallId = this.#lastSuccessfulYieldToolCallId;
@@ -6352,17 +6400,34 @@ export class AgentSession {
 
 	/**
 	 * Internal: Run auto-compaction with events.
+	 *
+	 * @param allowDefer If true (default), threshold-driven handoff strategy is allowed to
+	 *   schedule itself as a deferred post-prompt task and return `true` immediately. The
+	 *   caller MUST treat that as "compaction will happen async — do not also schedule
+	 *   `agent.continue()` for this turn", otherwise the deferred handoff races a fresh
+	 *   streaming turn (the symptom: "Auto-handoff" loader + assistant message still
+	 *   streaming). Callers on a path that is about to start a new agent turn (e.g.
+	 *   the pre-prompt check in `#promptWithMessage`) pass `false` to force inline
+	 *   execution so the handoff completes before the new turn begins.
+	 * @returns true when a deferred handoff was scheduled. Inline runs always return false.
 	 */
 	async #runAutoCompaction(
 		reason: "overflow" | "threshold" | "idle",
 		willRetry: boolean,
 		deferred = false,
-	): Promise<void> {
+		allowDefer = true,
+	): Promise<boolean> {
 		const compactionSettings = this.settings.getGroup("compaction");
-		if (compactionSettings.strategy === "off") return;
-		if (reason !== "idle" && !compactionSettings.enabled) return;
+		if (compactionSettings.strategy === "off") return false;
+		if (reason !== "idle" && !compactionSettings.enabled) return false;
 		const generation = this.#promptGeneration;
-		if (!deferred && reason !== "overflow" && reason !== "idle" && compactionSettings.strategy === "handoff") {
+		if (
+			!deferred &&
+			allowDefer &&
+			reason !== "overflow" &&
+			reason !== "idle" &&
+			compactionSettings.strategy === "handoff"
+		) {
 			this.#schedulePostPromptTask(
 				async signal => {
 					await Promise.resolve();
@@ -6371,7 +6436,7 @@ export class AgentSession {
 				},
 				{ generation },
 			);
-			return;
+			return true;
 		}
 
 		let action: "context-full" | "handoff" =
@@ -6400,7 +6465,7 @@ export class AgentSession {
 							aborted: true,
 							willRetry: false,
 						});
-						return;
+						return false;
 					}
 					logger.warn("Auto-handoff returned no document; falling back to context-full maintenance", {
 						reason,
@@ -6418,7 +6483,7 @@ export class AgentSession {
 					if (!autoCompactionSignal.aborted && reason !== "idle" && compactionSettings.autoContinue !== false) {
 						this.#scheduleAutoContinuePrompt(generation);
 					}
-					return;
+					return false;
 				}
 			}
 
@@ -6431,7 +6496,7 @@ export class AgentSession {
 					willRetry: false,
 					skipped: true,
 				});
-				return;
+				return false;
 			}
 
 			const availableModels = this.#modelRegistry.getAvailable();
@@ -6444,7 +6509,7 @@ export class AgentSession {
 					willRetry: false,
 					skipped: true,
 				});
-				return;
+				return false;
 			}
 
 			const pathEntries = this.sessionManager.getBranch();
@@ -6466,7 +6531,7 @@ export class AgentSession {
 						shouldContinue: () => this.agent.hasQueuedMessages(),
 					});
 				}
-				return;
+				return false;
 			}
 
 			let hookCompaction: CompactionResult | undefined;
@@ -6490,7 +6555,7 @@ export class AgentSession {
 						aborted: true,
 						willRetry: false,
 					});
-					return;
+					return false;
 				}
 
 				if (hookResult?.compaction) {
@@ -6621,7 +6686,7 @@ export class AgentSession {
 					aborted: true,
 					willRetry: false,
 				});
-				return;
+				return false;
 			}
 
 			this.sessionManager.appendCompaction(
@@ -6692,7 +6757,7 @@ export class AgentSession {
 					aborted: true,
 					willRetry: false,
 				});
-				return;
+				return false;
 			}
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			await this.#emitSessionEvent({
@@ -6711,6 +6776,7 @@ export class AgentSession {
 				this.#autoCompactionAbortController = undefined;
 			}
 		}
+		return false;
 	}
 
 	/**

@@ -432,6 +432,118 @@ describe("AgentSession handoff", () => {
 		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
 	});
 
+	it("does not start agent.continue when threshold-handoff defers and todos are incomplete", async () => {
+		// Reproduces the user-reported race: at agent_end, threshold + handoff strategy
+		// schedules a deferred handoff and returns. The handler used to fall through to
+		// #checkTodoCompletion, which scheduled agent.continue() — both fired concurrently,
+		// rendering as "Auto-handoff" loader + an assistant message still streaming.
+		session.settings.set("compaction.strategy", "handoff");
+		session.settings.set("compaction.thresholdPercent", 1);
+		session.settings.set("contextPromotion.enabled", false);
+		session.settings.set("todo.enabled", true);
+		session.settings.set("todo.reminders", true);
+
+		// Active todo phase with an incomplete task so #checkTodoCompletion would normally fire.
+		session.setTodoPhases([{ name: "Phase 1", tasks: [{ content: "unfinished work", status: "pending" }] }]);
+
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+
+		const handoffSpy = vi
+			.spyOn(session, "handoff")
+			.mockResolvedValue({ document: "## Goal\nContinue", savedPath: undefined });
+		const continueSpy = vi.spyOn(session.agent, "continue");
+
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "maintenance trigger" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 10_000,
+				output: 1_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 11_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+		await Bun.sleep(20);
+
+		expect(handoffSpy).toHaveBeenCalledTimes(1);
+		// The bug surfaced as agent.continue() racing the deferred handoff. With the fix,
+		// the agent_end handler short-circuits after the deferred-handoff signal.
+		expect(continueSpy).not.toHaveBeenCalled();
+	});
+
+	it("dispose unblocks the post-prompt drain when a deferred handoff is mid-flight", async () => {
+		// Reproduces /exit / Ctrl+C-double-tap hanging when a deferred handoff is awaiting
+		// the LLM call: dispose() now aborts the handoff controller before draining post-prompt
+		// tasks, so Promise.allSettled() in #cancelPostPromptTasks can resolve.
+		session.settings.set("compaction.strategy", "handoff");
+		session.settings.set("compaction.thresholdPercent", 1);
+		session.settings.set("contextPromotion.enabled", false);
+
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+
+		const { promise: handoffPending, resolve: resolveHandoff } = Promise.withResolvers<string | undefined>();
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoff")
+			.mockImplementation(async (_msgs, _model, _key, _opts, signal) => {
+				// Mirror the real generateHandoff contract: reject when the caller aborts.
+				return await new Promise<string | undefined>((resolve, reject) => {
+					signal?.addEventListener("abort", () => reject(new Error("Handoff cancelled")), { once: true });
+					handoffPending.then(resolve, reject);
+				});
+			});
+
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "maintenance trigger" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 10_000,
+				output: 1_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 11_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+		// Let the deferred handoff post-prompt task enter the generateHandoff await.
+		await Bun.sleep(20);
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
+		expect(session.isGeneratingHandoff).toBe(true);
+
+		// dispose must NOT wait for the LLM call to resolve on its own — it must abort it.
+		const disposed = Promise.race([
+			session.dispose().then(() => "disposed" as const),
+			Bun.sleep(2_000).then(() => "timeout" as const),
+		]);
+
+		await expect(disposed).resolves.toBe("disposed");
+		// Releasing after the fact must not leak into other tests.
+		resolveHandoff(undefined);
+	});
+
 	it("falls back to context-full when handoff strategy returns no document", async () => {
 		session.settings.set("compaction.strategy", "handoff");
 		session.settings.set("compaction.thresholdPercent", 1);
