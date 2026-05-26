@@ -245,11 +245,13 @@ export default function contextFilter(omp: HookAPI): void {
 | `select(title, options)` | Show a selection dialog |
 | `confirm(title, message)` | Show a yes/no dialog |
 | `input(title, placeholder?)` | Show a text input dialog |
-| `editor(title, prefill?, { signal }?)` | Show a multi-line editor |
+| `editor(title, prefill?, { signal }?, { promptStyle }?)` | Show a multi-line editor |
 | `setEditorText(text)` | Set the input editor content |
 | `getEditorText()` | Get current input editor content |
 | `custom(factory)` | Render a custom TUI component |
 | `theme` | Current theme object |
+
+Pass `{ promptStyle: true }` as the fourth argument when Enter should submit and Shift+Enter should insert a newline. The default hook editor behavior keeps Enter as newline and Ctrl+Enter as submit.
 
 `ctx.hasUI` is `false` in headless/print/subagent mode — always guard interactive calls.
 

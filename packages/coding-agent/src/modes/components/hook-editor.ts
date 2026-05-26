@@ -17,6 +17,10 @@ export interface HookEditorOptions {
 	promptStyle?: boolean;
 }
 
+function isCtrlEnterSubmit(keyData: string): boolean {
+	return matchesKey(keyData, "ctrl+enter") || (keyData.charCodeAt(0) === 10 && keyData.length > 1);
+}
+
 export class HookEditorComponent extends Container {
 	#editor: Editor;
 	#onSubmitCallback: (value: string) => void;
@@ -78,6 +82,10 @@ export class HookEditorComponent extends Container {
 		}
 	}
 
+	#submitCurrentText(): void {
+		this.#onSubmitCallback(this.#editor.getExpandedText());
+	}
+
 	/** Prompt-style: raw Enter submits; Editor owns newline-producing sequences. */
 	#handlePromptStyleInput(keyData: string): void {
 		// Prompt-style keeps Escape as an explicit cancel key and also honors app.interrupt remaps.
@@ -94,7 +102,7 @@ export class HookEditorComponent extends Container {
 
 		// Submit on any plain Enter encoding, including terminals that report unmodified Enter as LF.
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return")) {
-			this.#onSubmitCallback(this.#editor.getText());
+			this.#submitCurrentText();
 			return;
 		}
 
@@ -105,8 +113,8 @@ export class HookEditorComponent extends Container {
 	/** Hook-style: Enter=newline, Ctrl+Enter=submit (original behavior) */
 	#handleHookStyleInput(keyData: string): void {
 		// Ctrl+Enter to submit. Use key matching so lock-key and keypad Enter variants work.
-		if (matchesKey(keyData, "ctrl+enter")) {
-			this.#onSubmitCallback(this.#editor.getText());
+		if (isCtrlEnterSubmit(keyData)) {
+			this.#submitCurrentText();
 			return;
 		}
 

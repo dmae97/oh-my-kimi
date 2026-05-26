@@ -146,6 +146,12 @@
 - Fixed CLI PDF file arguments being decoded as raw bytes for local vision models; `.pdf` and other supported document files now go through the same Markit conversion path as the `read` tool before entering the prompt ([#1401](https://github.com/can1357/oh-my-pi/issues/1401)).
 - Fixed the `bash` tool hanging until the 305 s hard timeout when a command writes a file via heredoc on Windows (bodies > ~4 KiB) or macOS (bodies > 16-64 KiB). Root cause was in the embedded brush shell; see `@oh-my-pi/pi-natives` changelog for the underlying fix.
 
+### Fixed
+
+- Fixed `/review` custom prompt orchestration text to use static prompt templates and consistently instruct reviewer task delegation.
+- Fixed `/review` custom-instructions submission on terminals that cannot distinguish Ctrl+Enter by using prompt-style input where Enter submits and Shift+Enter inserts a newline.
+- Fixed hook editor submissions sending large-paste placeholders such as `[paste #1 +27 lines]` instead of the pasted content.
+
 ## [15.3.2] - 2026-05-25
 ### Added
 
