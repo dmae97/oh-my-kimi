@@ -103,6 +103,9 @@ import {
 	RequestContextResultSchema,
 	RequestContextSchema,
 	RequestContextSuccessSchema,
+	ResumeActionSchema,
+	SelectedContextSchema,
+	SelectedImageSchema,
 	SetBlobResultSchema,
 	type ShellArgs,
 	ShellFailureSchema,
@@ -2055,6 +2058,14 @@ function storeCursorBlob(blobStore: Map<string, Uint8Array>, data: Uint8Array): 
 	return blobId;
 }
 
+function readCursorBlob(blobStore: Map<string, Uint8Array>, blobId: Uint8Array): Uint8Array {
+	const data = blobStore.get(Buffer.from(blobId).toString("hex"));
+	if (!data) {
+		throw new Error("Cursor blob not found");
+	}
+	return data;
+}
+
 const CURSOR_NATIVE_TOOL_NAMES = new Set(["bash", "read", "write", "delete", "ls", "grep", "lsp", "todo_write"]);
 
 function buildMcpToolDefinitions(tools: Tool[] | undefined): McpToolDefinition[] {
@@ -2098,6 +2109,52 @@ function extractUserMessageText(msg: Message): string {
 	return text.trim();
 }
 
+function hasUserMessageImages(msg: Message): boolean {
+	return (
+		(msg.role === "user" || msg.role === "developer") &&
+		Array.isArray(msg.content) &&
+		msg.content.some(item => item.type === "image")
+	);
+}
+
+type CursorRootPromptContentPart = { type: "text"; text: string } | { type: "image"; image: string; mediaType: string };
+
+function buildCursorRootPromptContent(content: string | (TextContent | ImageContent)[]): CursorRootPromptContentPart[] {
+	if (typeof content === "string") {
+		const text = content.trim();
+		return text ? [{ type: "text", text }] : [];
+	}
+	const parts: CursorRootPromptContentPart[] = [];
+	for (const item of content) {
+		if (item.type === "text") {
+			const text = item.text.trim();
+			if (text) {
+				parts.push({ type: "text", text });
+			}
+		} else {
+			parts.push({ type: "image", image: item.data, mediaType: item.mimeType });
+		}
+	}
+	return parts;
+}
+
+function cursorUserContentKey(content: string | (TextContent | ImageContent)[]): string {
+	if (typeof content === "string") {
+		return content.trim();
+	}
+	const hash = createHash("sha256");
+	for (const item of content) {
+		hash.update(item.type);
+		if (item.type === "text") {
+			hash.update(item.text);
+		} else {
+			hash.update(item.mimeType);
+			hash.update(item.data);
+		}
+	}
+	return hash.digest("hex");
+}
+
 /**
  * Extract text content from an assistant message.
  */
@@ -2116,7 +2173,9 @@ function extractAssistantMessageText(msg: Message): string {
  * requests, so `conversationBlobStores` does not grow unboundedly and
  * unchanged history reuses existing blob IDs.
  */
-function deterministicMessageId(key: string): string {
+type CursorMessageId = `${string}-${string}-${string}-${string}-${string}`;
+
+function deterministicMessageId(key: string): CursorMessageId {
 	const hex = createHash("sha256").update(key).digest("hex");
 	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
@@ -2181,9 +2240,9 @@ function buildRootPromptMessagesJson(
 		if (i === lastUserIdx) break;
 		const msg = messages[i];
 		if (msg.role === "user" || msg.role === "developer") {
-			const text = extractUserMessageText(msg);
-			if (!text) continue;
-			pushJson({ role: "user", content: [{ type: "text", text }] });
+			const content = buildCursorRootPromptContent(msg.content);
+			if (content.length === 0) continue;
+			pushJson({ role: "user", content });
 		} else if (msg.role === "assistant") {
 			const text = extractAssistantMessageText(msg);
 			if (!text) continue;
@@ -2237,15 +2296,16 @@ function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint
 
 		// Create and serialize user message
 		const userText = extractUserMessageText(msg);
-		if (!userText || userText.length === 0) {
+		if (userText.length === 0 && !hasUserMessageImages(msg)) {
 			i++;
 			continue;
 		}
 
-		const userMessage = create(UserMessageSchema, {
-			text: userText,
-			messageId: deterministicMessageId(`u:${turns.length}:${userText}`),
-		});
+		const userMessage = createCursorUserMessage(
+			msg.content,
+			userText,
+			deterministicMessageId(`u:${turns.length}:${cursorUserContentKey(msg.content)}`),
+		);
 		const userMessageBytes = toBinary(UserMessageSchema, userMessage);
 		const userMessageBlobId = storeCursorBlob(blobStore, userMessageBytes);
 
@@ -2302,6 +2362,60 @@ function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint
 	return turns;
 }
 
+/** Exported for tests: decodes Cursor history blobs built from conversation messages. */
+export function buildCursorHistoryForTest(messages: Message[]): {
+	rootPromptMessagesJson: unknown[];
+	turnUserMessagesJson: JsonValue[];
+} {
+	const blobStore = new Map<string, Uint8Array>();
+	const rootPromptMessagesJson = buildRootPromptMessagesJson(messages, [], blobStore).map(blobId =>
+		JSON.parse(new TextDecoder().decode(readCursorBlob(blobStore, blobId))),
+	);
+	const turnUserMessagesJson: JsonValue[] = [];
+	for (const turnBlobId of buildConversationTurns(messages, blobStore)) {
+		const turn = fromBinary(ConversationTurnStructureSchema, readCursorBlob(blobStore, turnBlobId));
+		if (turn.turn.case !== "agentConversationTurn") {
+			continue;
+		}
+		const userMessage = fromBinary(UserMessageSchema, readCursorBlob(blobStore, turn.turn.value.userMessage));
+		turnUserMessagesJson.push(toJson(UserMessageSchema, userMessage));
+	}
+	return { rootPromptMessagesJson, turnUserMessagesJson };
+}
+function createCursorUserMessage(
+	content: string | (TextContent | ImageContent)[],
+	text: string,
+	messageId = crypto.randomUUID(),
+) {
+	const images = typeof content === "string" ? [] : extractImages(content);
+	return create(UserMessageSchema, {
+		text,
+		messageId,
+		...(images.length > 0
+			? {
+					selectedContext: create(SelectedContextSchema, {
+						selectedImages: images,
+					}),
+				}
+			: {}),
+	});
+}
+
+function extractImages(content: (TextContent | ImageContent)[]) {
+	return content
+		.filter((item): item is ImageContent => item.type === "image")
+		.map(image =>
+			create(SelectedImageSchema, {
+				uuid: crypto.randomUUID(),
+				mimeType: image.mimeType,
+				dataOrBlobId: {
+					case: "data",
+					value: Uint8Array.from(Buffer.from(image.data, "base64")),
+				},
+			}),
+		);
+}
+
 function buildGrpcRequest(
 	model: Model<"cursor-agent">,
 	context: Context,
@@ -2323,28 +2437,32 @@ function buildGrpcRequest(
 	);
 
 	const lastMessage = context.messages[context.messages.length - 1];
-	const userText =
-		lastMessage?.role === "user" || lastMessage?.role === "developer"
-			? typeof lastMessage.content === "string"
-				? lastMessage.content.trim()
-				: extractText(lastMessage.content)
-			: "";
-
-	// Validate that we have non-empty user text for the action
-	if (!userText || userText.trim().length === 0) {
-		throw new Error("Cannot send empty user message to Cursor API");
+	let userContent: string | (TextContent | ImageContent)[] | undefined;
+	let userText = "";
+	let hasUserImages = false;
+	if (lastMessage?.role === "user" || lastMessage?.role === "developer") {
+		userContent = lastMessage.content;
+		if (typeof userContent === "string") {
+			userText = userContent.trim();
+		} else {
+			userText = extractText(userContent);
+			hasUserImages = hasImages(userContent);
+		}
 	}
 
-	const userMessage = create(UserMessageSchema, {
-		text: userText,
-		messageId: crypto.randomUUID(),
-	});
-
 	const action = create(ConversationActionSchema, {
-		action: {
-			case: "userMessageAction",
-			value: create(UserMessageActionSchema, { userMessage }),
-		},
+		action:
+			userContent && (userText.trim().length > 0 || hasUserImages)
+				? {
+						case: "userMessageAction",
+						value: create(UserMessageActionSchema, {
+							userMessage: createCursorUserMessage(userContent, userText),
+						}),
+					}
+				: {
+						case: "resumeAction",
+						value: create(ResumeActionSchema, {}),
+					},
 	});
 
 	// Build conversation turns from prior messages (excluding the last user message).
@@ -2432,6 +2550,9 @@ function buildGrpcRequest(
 	return { requestBytes, blobStore, conversationState };
 }
 
+function hasImages(content: (TextContent | ImageContent)[]): boolean {
+	return content.some(item => item.type === "image");
+}
 function extractText(content: (TextContent | ImageContent)[]): string {
 	return content
 		.filter((c): c is TextContent => c.type === "text")
