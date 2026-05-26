@@ -335,7 +335,6 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 						{
 							pattern: globPattern,
 							path: searchPath,
-							fileType: natives.FileType.File,
 							hidden: includeHidden,
 							maxResults: effectiveLimit,
 							sortByMtime: true,

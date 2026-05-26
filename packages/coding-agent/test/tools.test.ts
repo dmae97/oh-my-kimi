@@ -1782,6 +1782,43 @@ function b() {
 			expect(output).not.toContain(".env.generated");
 			expect(elapsedMs).toBeLessThan(1000);
 		});
+
+		it("should return directories alongside files with a trailing slash", async () => {
+			fs.mkdirSync(path.join(testDir, "pkg"));
+			fs.mkdirSync(path.join(testDir, "pkg", "nested"));
+			fs.writeFileSync(path.join(testDir, "pkg", "file.txt"), "f");
+			fs.writeFileSync(path.join(testDir, "pkg", "nested", "deep.txt"), "d");
+
+			const result = await findTool.execute("test-call-14f", {
+				paths: [`${testDir}/pkg/**/*`],
+			});
+
+			const outputLines = getTextOutput(result)
+				.split("\n")
+				.map(line => line.trim())
+				.filter(Boolean)
+				.sort();
+
+			expect(outputLines).toEqual(["pkg/file.txt", "pkg/nested/", "pkg/nested/deep.txt"]);
+		});
+
+		it("should match a directory by glob and emit it with trailing slash", async () => {
+			fs.mkdirSync(path.join(testDir, "alpha", "tests"), { recursive: true });
+			fs.mkdirSync(path.join(testDir, "beta", "tests"), { recursive: true });
+			fs.writeFileSync(path.join(testDir, "alpha", "tests", "a.ts"), "a");
+
+			const result = await findTool.execute("test-call-14g", {
+				paths: [`${testDir}/**/tests`],
+			});
+
+			const outputLines = getTextOutput(result)
+				.split("\n")
+				.map(line => line.trim())
+				.filter(Boolean)
+				.sort();
+
+			expect(outputLines).toEqual(["alpha/tests/", "beta/tests/"]);
+		});
 	});
 });
 
