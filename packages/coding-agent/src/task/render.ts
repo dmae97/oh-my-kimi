@@ -61,6 +61,7 @@ function appendAgentStats(
 		contextWindow?: number;
 		cost: number;
 		resolvedModel?: string;
+		showResolvedModelBadge?: boolean;
 	},
 	theme: Theme,
 ): string {
@@ -85,8 +86,8 @@ function appendAgentStats(
 	if (opts.cost > 0) {
 		line += `${theme.sep.dot}${theme.fg("statusLineCost", `$${opts.cost.toFixed(2)}`)}`;
 	}
-	if (opts.resolvedModel && settings.get("task.showResolvedModelBadge")) {
-		line += `${theme.sep.dot}${theme.fg("dim", opts.resolvedModel)}`;
+	if (opts.resolvedModel && opts.showResolvedModelBadge) {
+		line += `${theme.sep.dot}${theme.fg("dim", truncateToWidth(replaceTabs(opts.resolvedModel), 30))}`;
 	}
 	return line;
 }
@@ -574,9 +575,9 @@ function renderAgentProgress(
 			const taskPreview = truncateToWidth(progress.assignment ?? progress.task, 40);
 			statusLine += ` ${theme.fg("muted", taskPreview)}`;
 		}
-		statusLine = appendAgentStats(statusLine, progress, theme);
+		statusLine = appendAgentStats(statusLine, { ...progress, showResolvedModelBadge: settings.get("task.showResolvedModelBadge") }, theme);
 	} else if (progress.status === "completed") {
-		statusLine = appendAgentStats(statusLine, progress, theme);
+		statusLine = appendAgentStats(statusLine, { ...progress, showResolvedModelBadge: settings.get("task.showResolvedModelBadge") }, theme);
 	}
 
 	lines.push(statusLine);
@@ -851,6 +852,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 			contextWindow: result.contextWindow,
 			cost: result.usage?.cost.total ?? 0,
 			resolvedModel: result.resolvedModel,
+			showResolvedModelBadge: settings.get("task.showResolvedModelBadge"),
 		},
 		theme,
 	);
