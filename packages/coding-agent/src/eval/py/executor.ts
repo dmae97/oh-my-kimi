@@ -4,11 +4,12 @@ import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
 import type { JsStatusEvent } from "../js/shared/types";
-import type { KernelDisplayOutput } from "./display";
 import {
 	checkPythonKernelAvailability,
+	type KernelDisplayOutput,
 	type KernelExecuteOptions,
 	type KernelExecuteResult,
+	type KernelRuntimeEnv,
 	PythonKernel,
 } from "./kernel";
 import { ensurePyToolBridge, registerPyToolBridge } from "./tool-bridge";
@@ -240,19 +241,40 @@ function createCancelledPythonResult(timedOut: boolean, timeoutMs?: number): Pyt
 // Kernel start helpers
 // ---------------------------------------------------------------------------
 
+const MANAGED_KERNEL_ENV_KEYS = [
+	"PI_SESSION_FILE",
+	"PI_ARTIFACTS_DIR",
+	"PI_TOOL_BRIDGE_URL",
+	"PI_TOOL_BRIDGE_TOKEN",
+	"PI_TOOL_BRIDGE_SESSION",
+] as const;
+
+function buildKernelEnvPatch(options: {
+	sessionFile?: string;
+	artifactsDir?: string;
+	bridgeSessionId?: string;
+	bridge?: { url: string; token: string };
+}): KernelRuntimeEnv {
+	return {
+		PI_SESSION_FILE: options.sessionFile ?? null,
+		PI_ARTIFACTS_DIR: options.artifactsDir ?? null,
+		PI_TOOL_BRIDGE_URL: options.bridge?.url ?? null,
+		PI_TOOL_BRIDGE_TOKEN: options.bridge?.token ?? null,
+		PI_TOOL_BRIDGE_SESSION: options.bridge && options.bridgeSessionId ? options.bridgeSessionId : null,
+	};
+}
+
 function buildKernelEnv(options: {
 	sessionFile?: string;
 	artifactsDir?: string;
 	bridgeSessionId?: string;
 	bridge?: { url: string; token: string };
 }): Record<string, string> | undefined {
+	const patch = buildKernelEnvPatch(options);
 	const env: Record<string, string> = {};
-	if (options.sessionFile) env.PI_SESSION_FILE = options.sessionFile;
-	if (options.artifactsDir) env.PI_ARTIFACTS_DIR = options.artifactsDir;
-	if (options.bridge && options.bridgeSessionId) {
-		env.PI_TOOL_BRIDGE_URL = options.bridge.url;
-		env.PI_TOOL_BRIDGE_TOKEN = options.bridge.token;
-		env.PI_TOOL_BRIDGE_SESSION = options.bridgeSessionId;
+	for (const key of MANAGED_KERNEL_ENV_KEYS) {
+		const value = patch[key];
+		if (value !== null) env[key] = value;
 	}
 	return Object.keys(env).length > 0 ? env : undefined;
 }
@@ -415,6 +437,8 @@ async function executeWithKernel(
 	try {
 		executionTimeoutMs = requireRemainingTimeoutMs(deadlineMs);
 		const result = await kernel.execute(code, {
+			cwd: options?.cwd,
+			env: buildKernelEnvPatch(options ?? {}),
 			id: runId,
 			signal: options?.signal,
 			timeoutMs: executionTimeoutMs,
@@ -563,6 +587,7 @@ export async function executePython(code: string, options?: PythonExecutorOption
 	const deadlineMs = getExecutionDeadlineMs(options);
 	const executionOptions: PythonExecutorOptions = {
 		...(options ?? {}),
+		cwd,
 		deadlineMs,
 	};
 

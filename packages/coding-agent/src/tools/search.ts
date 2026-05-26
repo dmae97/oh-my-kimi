@@ -9,7 +9,7 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { getFileReadCache } from "../edit/file-read-cache";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { formatHashlineHeader } from "../hashline/hash";
+import { computeFileHash, formatHashlineHeader } from "../hashline/hash";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
 import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../session/streaming-output";
@@ -634,7 +634,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 
 interface SearchRenderArgs {
 	pattern: string;
-	paths?: string[];
+	paths?: string | string[];
 	i?: boolean;
 	gitignore?: boolean;
 	skip?: number;
@@ -645,8 +645,9 @@ const COLLAPSED_TEXT_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
 export const searchToolRenderer = {
 	inline: true,
 	renderCall(args: SearchRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+		const paths = typeof args.paths === "string" ? [args.paths] : (args.paths ?? []);
 		const meta: string[] = [];
-		if (args.paths?.length) meta.push(`in ${args.paths.join(", ")}`);
+		if (paths.length) meta.push(`in ${paths.join(", ")}`);
 		if (args.i) meta.push("case:insensitive");
 		if (args.gitignore === false) meta.push("gitignore:false");
 		if (args.skip !== undefined && args.skip > 0) meta.push(`skip:${args.skip}`);

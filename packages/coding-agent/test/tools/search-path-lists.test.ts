@@ -4,8 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { RenderResultOptions } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
+import type { Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { searchToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/search";
+import { Text } from "@oh-my-pi/pi-tui";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -17,6 +21,18 @@ function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): T
 		...overrides,
 	};
 }
+
+const plainTheme = {
+	fg: (_color: unknown, text: string) => text,
+	styledSymbol: () => "…",
+	sep: { dot: " • " },
+	format: { bracketLeft: "[", bracketRight: "]" },
+} as unknown as Theme;
+
+const renderOptions: RenderResultOptions = {
+	expanded: false,
+	isPartial: true,
+};
 
 function getText(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content
@@ -113,6 +129,17 @@ describe("tool path arrays", () => {
 		expect(text).toContain("note.txt");
 		expect(details?.fileCount).toBe(1);
 		expect(details?.scopePath).toBe("folder with spaces");
+	});
+
+	it("search pending renderer accepts a single string path", () => {
+		const component = searchToolRenderer.renderCall(
+			{ pattern: "space-needle", paths: "folder with spaces/" },
+			renderOptions,
+			plainTheme,
+		);
+
+		expect(component).toBeInstanceOf(Text);
+		expect((component as Text).getText()).toContain("in folder with spaces/");
 	});
 
 	it("search keeps a single path that contains spaces", async () => {

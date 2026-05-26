@@ -5,6 +5,7 @@ wrapper writes typed frames back.
 
 Host -> wrapper:
   {"id": str, "code": str, "silent": bool?, "storeHistory": bool?}
+  {"id": str, "code": str, "silent": bool?, "storeHistory": bool?, "cwd": str?, "env": dict?}
   {"type": "exit"}                                # graceful shutdown
 
 Wrapper -> host:
@@ -27,8 +28,8 @@ from __future__ import annotations
 
 import asyncio
 import ast
-import base64
 import contextvars
+import base64
 import builtins
 import inspect
 import io
@@ -44,7 +45,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Frame writer
@@ -123,6 +124,7 @@ class _RunnerState:
         }
         self.last_install_marker: int = 0
         self.loop: asyncio.AbstractEventLoop | None = None
+        self.active_executions: int = 0
 
 
 _CURRENT_RID: contextvars.ContextVar[str | None] = contextvars.ContextVar("omp_current_rid", default=None)
@@ -718,25 +720,20 @@ def _run_compiled_sync(code, ns: dict, *, want_value: bool) -> Any:
     return None
 
 
-async def _run_in_executor_with_context(fn: Callable[[], Any]) -> Any:
-    loop = asyncio.get_running_loop()
-    ctx = contextvars.copy_context()
-    return await loop.run_in_executor(None, ctx.run, fn)
-
 
 async def _run_compiled_async(code, ns: dict, *, want_value: bool) -> Any:
     """Execute a code object in the persistent event loop.
 
     Coroutine code is awaited in this task so top-level ``await`` interleaves
-    with sibling requests. Plain statement/expression code runs in the default
-    executor with the current ContextVar state copied into that thread.
+    with sibling requests. Plain statement/expression code runs on the main
+    runner thread so SIGINT can interrupt it reliably.
     """
     if code.co_flags & inspect.CO_COROUTINE:
         result = await eval(code, ns)
         return result if want_value else None
     if want_value:
-        return await _run_in_executor_with_context(lambda: eval(code, ns))
-    await _run_in_executor_with_context(lambda: exec(code, ns))
+        return eval(code, ns)
+    exec(code, ns)
     return None
 
 
@@ -804,6 +801,46 @@ def _install_exec_sigint() -> None:
         pass
 
 
+def _begin_exec_sigint() -> None:
+    _STATE.active_executions += 1
+    _install_exec_sigint()
+
+
+def _end_exec_sigint() -> None:
+    if _STATE.active_executions > 0:
+        _STATE.active_executions -= 1
+    if _STATE.active_executions == 0:
+        _install_idle_sigint()
+
+
+_MANAGED_ENV_KEYS = (
+    "PI_SESSION_FILE",
+    "PI_ARTIFACTS_DIR",
+    "PI_TOOL_BRIDGE_URL",
+    "PI_TOOL_BRIDGE_TOKEN",
+    "PI_TOOL_BRIDGE_SESSION",
+)
+
+
+def _apply_request_runtime(req: dict) -> None:
+    cwd = req.get("cwd")
+    if isinstance(cwd, str) and cwd:
+        os.chdir(cwd)
+        try:
+            sys.path.remove(cwd)
+        except ValueError:
+            pass
+        sys.path.insert(0, cwd)
+
+    env = req.get("env")
+    if isinstance(env, dict):
+        for key in _MANAGED_ENV_KEYS:
+            value = env.get(key)
+            if isinstance(value, str):
+                os.environ[key] = value
+            elif value is None:
+                os.environ.pop(key, None)
+
 def _start_parent_watchdog() -> None:
     """Self-terminate when the host process dies.
 
@@ -853,6 +890,7 @@ async def _handle_request_async(req: dict) -> None:
 
     try:
         try:
+            _apply_request_runtime(req)
             transformed = transform_cell(req.get("code", ""))
         except SyntaxError as exc:
             _emit_error(rid, exc)
@@ -864,21 +902,32 @@ async def _handle_request_async(req: dict) -> None:
                 "cancelled": False,
             })
             return
+        except BaseException as exc:  # noqa: BLE001 - runtime setup errors must settle the request
+            _emit_error(rid, exc)
+            _emit({
+                "type": "done",
+                "id": rid,
+                "status": "error",
+                "executionCount": execution_count,
+                "cancelled": False,
+            })
+            return
 
-        _install_exec_sigint()
+        _begin_exec_sigint()
         try:
             await _exec_source_async(transformed, _STATE.user_ns)
         except KeyboardInterrupt:
             cancelled = True
             status = "error"
             _emit_error(rid, KeyboardInterrupt("Execution interrupted"))
-        except SystemExit:
-            raise
+        except SystemExit as exc:
+            status = "error"
+            _emit_error(rid, exc)
         except BaseException as exc:  # noqa: BLE001 - we want to surface every user error
             status = "error"
             _emit_error(rid, exc)
         finally:
-            _install_idle_sigint()
+            _end_exec_sigint()
             try:
                 _flush_matplotlib_figures()
             except Exception:

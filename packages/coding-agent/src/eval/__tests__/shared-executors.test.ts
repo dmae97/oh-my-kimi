@@ -151,6 +151,66 @@ describe("shared eval executors", () => {
 		expect(result.output.trim()).toBe("42");
 	});
 
+	it("updates Python cwd when one shared session id runs from multiple directories", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-py-cwd-");
+		const dirA = path.join(tempDir.path(), "a");
+		const dirB = path.join(tempDir.path(), "b");
+		await fs.mkdir(dirA);
+		await fs.mkdir(dirB);
+		const realDirA = await fs.realpath(dirA);
+		const realDirB = await fs.realpath(dirB);
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `py-cwd:${crypto.randomUUID()}`;
+
+		const first = await executePython("import os\nprint(os.getcwd())", { cwd: dirA, sessionId, sessionFile });
+		const second = await executePython("import os\nprint(os.getcwd())", { cwd: dirB, sessionId, sessionFile });
+
+		expect(first.exitCode).toBe(0);
+		expect(first.output.trim()).toBe(realDirA);
+		expect(second.exitCode).toBe(0);
+		expect(second.output.trim()).toBe(realDirB);
+	});
+
+	it("interrupts timed out synchronous Python cells before they mutate shared state", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-py-sync-timeout-");
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `py-sync-timeout:${crypto.randomUUID()}`;
+
+		const timedOut = await executePython("import time\ntime.sleep(0.2)\nleaked_after_timeout = True", {
+			cwd: tempDir.path(),
+			sessionId,
+			sessionFile,
+			timeoutMs: 20,
+		});
+		await Bun.sleep(250);
+		const probe = await executePython('print("leaked_after_timeout" in globals())', {
+			cwd: tempDir.path(),
+			sessionId,
+			sessionFile,
+		});
+
+		expect(timedOut.cancelled).toBe(true);
+		expect(probe.exitCode).toBe(0);
+		expect(probe.output.trim()).toBe("False");
+	});
+
+	it("settles Python cells that raise SystemExit", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-py-system-exit-");
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `py-system-exit:${crypto.randomUUID()}`;
+
+		const result = await executePython('raise SystemExit("bye")', {
+			cwd: tempDir.path(),
+			sessionId,
+			sessionFile,
+			timeoutMs: 500,
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.output).toContain("SystemExit");
+		expect(result.output).toContain("bye");
+	});
+
 	it("lets a subagent inherit parent JavaScript and Python eval state", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-subagent-");
 		const sessionFile = path.join(tempDir.path(), "session.jsonl");
