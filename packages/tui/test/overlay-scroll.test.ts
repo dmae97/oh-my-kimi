@@ -272,6 +272,36 @@ describe("TUI overlays", () => {
 
 		tui.stop();
 	});
+	it("keeps single viewport copy under simultaneous height and content changes", async () => {
+		const term = new VirtualTerminal(60, 8);
+		const tui = new TUI(term);
+		const component = new MutableContentComponent(buildRows(4));
+		tui.addChild(component);
+		try {
+			tui.start();
+			await flushRender(term);
+
+			for (let i = 0; i < 12; i++) {
+				component.setLines(buildRows(4 + i));
+				term.resize(60, i % 2 === 0 ? 7 : 9);
+				await flushRender(term);
+			}
+
+			const viewport = term.getViewport();
+			const rowOccurrences = new Map<string, number>();
+			for (const line of viewport) {
+				const trimmed = line.trim();
+				if (!/^row-\d+$/.test(trimmed)) continue;
+				rowOccurrences.set(trimmed, (rowOccurrences.get(trimmed) ?? 0) + 1);
+			}
+			for (const [row, count] of rowOccurrences) {
+				expect(count, `${row} should appear at most once in the viewport`).toBe(1);
+			}
+			expect(viewport.at(-1)?.trim()).toBe("row-14");
+		} finally {
+			tui.stop();
+		}
+	});
 	it("renders viewport-only on resize when content size is stable", async () => {
 		const term = new VirtualTerminal(60, 8);
 		const tui = new TUI(term);

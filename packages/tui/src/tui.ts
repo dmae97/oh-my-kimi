@@ -1376,7 +1376,11 @@ export class TUI extends Container {
 	): void {
 		if (start >= lines.length) return;
 		let buffer = "\x1b[?2026h";
-		const currentScreenRow = Math.max(0, Math.min(height - 1, prevHardwareCursorRow - prevViewportTop));
+		// Clamp tracked cursor to the visible viewport bottom — terminals clamp
+		// on resize, so a prior frame may have committed a row that no longer
+		// exists. Without this the scroll math points outside the viewport.
+		const clampedCursor = Math.min(prevHardwareCursorRow, prevViewportTop + height - 1);
+		const currentScreenRow = Math.max(0, Math.min(height - 1, clampedCursor - prevViewportTop));
 		const moveToBottom = height - 1 - currentScreenRow;
 		if (moveToBottom > 0) buffer += `\x1b[${moveToBottom}B`;
 		for (let i = start; i < lines.length; i++) {
@@ -1417,7 +1421,8 @@ export class TUI extends Container {
 
 		let buffer = "\x1b[?2026h";
 
-		const currentScreenRow = prevHardwareCursorRow - prevViewportTop;
+		const clampedCursor = Math.min(prevHardwareCursorRow, prevViewportTop + height - 1);
+		const currentScreenRow = clampedCursor - prevViewportTop;
 		const targetScreenRow = targetRow - viewportTop;
 		const lineDiff = targetScreenRow - currentScreenRow;
 		if (lineDiff > 0) buffer += `\x1b[${lineDiff}B`;
@@ -1464,8 +1469,11 @@ export class TUI extends Container {
 		prevHardwareCursorRow: number,
 	): void {
 		let viewportTop = Math.max(0, this.#maxLinesRendered - height);
-		let hardwareCursorRow = prevHardwareCursorRow;
 		let activeViewportTop = prevViewportTop;
+		// Terminals clamp the hardware cursor to the visible viewport on resize.
+		// If our tracked row is past the viewport bottom, the real cursor was
+		// clamped; clamp our tracking to match so relative moves land correctly.
+		let hardwareCursorRow = Math.min(prevHardwareCursorRow, activeViewportTop + height - 1);
 
 		const appendStart = appendedLines && firstChanged === this.#previousLines.length && firstChanged > 0;
 		const moveTargetRow = appendStart ? firstChanged - 1 : firstChanged;
