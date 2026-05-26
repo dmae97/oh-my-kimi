@@ -570,14 +570,15 @@ function renderAgentProgress(
 		statusLine += ` ${formatBadge(statusLabel, iconColor, theme)}`;
 	}
 
+	const showBadge = settings.get("task.showResolvedModelBadge");
 	if (progress.status === "running") {
 		if (!description) {
 			const taskPreview = truncateToWidth(progress.assignment ?? progress.task, 40);
 			statusLine += ` ${theme.fg("muted", taskPreview)}`;
 		}
-		statusLine = appendAgentStats(statusLine, { ...progress, showResolvedModelBadge: settings.get("task.showResolvedModelBadge") }, theme);
+		statusLine = appendAgentStats(statusLine, { ...progress, showResolvedModelBadge: showBadge }, theme);
 	} else if (progress.status === "completed") {
-		statusLine = appendAgentStats(statusLine, { ...progress, showResolvedModelBadge: settings.get("task.showResolvedModelBadge") }, theme);
+		statusLine = appendAgentStats(statusLine, { ...progress, showResolvedModelBadge: showBadge }, theme);
 	}
 
 	lines.push(statusLine);
@@ -844,6 +845,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 		iconColor,
 		theme,
 	)}`;
+	const showBadge = settings.get("task.showResolvedModelBadge");
 	statusLine = appendAgentStats(
 		statusLine,
 		{
@@ -852,7 +854,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 			contextWindow: result.contextWindow,
 			cost: result.usage?.cost.total ?? 0,
 			resolvedModel: result.resolvedModel,
-			showResolvedModelBadge: settings.get("task.showResolvedModelBadge"),
+			showResolvedModelBadge: showBadge,
 		},
 		theme,
 	);
