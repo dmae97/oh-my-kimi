@@ -30,7 +30,6 @@ type PendingOp =
 interface Pending {
 	op: PendingOp;
 	payload: string[];
-	pendingBlanks: number;
 }
 
 /**
@@ -81,16 +80,16 @@ export class HashlineExecutor {
 				this.#terminated = true;
 				return;
 			case "header":
-				this.#flushPending(false);
+				this.#flushPending();
 				return;
 			case "blank":
-				if (this.#pending) this.#pending.pendingBlanks++;
+				if (this.#pending) this.#pending.payload.push("");
 				return;
 			case "payload":
 				this.#handlePayload(token.text, token.lineNum);
 				return;
 			case "op-delete":
-				this.#flushPending(false);
+				this.#flushPending();
 				if (token.trailingPayload) {
 					throw new Error(
 						`line ${token.lineNum}: ${HL_OP_DELETE} deletes only. Payload is forbidden after ${HL_OP_DELETE}; use ${HL_OP_REPLACE} to replace.`,
@@ -102,32 +101,34 @@ export class HashlineExecutor {
 				}
 				return;
 			case "op-insert":
-				this.#flushPending(false);
+				this.#flushPending();
 				this.#pending = {
 					op: { kind: "insert", cursor: token.cursor, lineNum: token.lineNum },
 					payload: [token.inlineBody ?? ""],
-					pendingBlanks: 0,
 				};
 				return;
 			case "op-replace":
-				this.#flushPending(false);
+				this.#flushPending();
 				validateRangeOrder(token.range, token.lineNum);
 				this.#pending = {
 					op: { kind: "replace", range: token.range, lineNum: token.lineNum },
 					payload: [token.inlineBody ?? ""],
-					pendingBlanks: 0,
 				};
 				return;
 		}
 	}
 
 	/**
-	 * Flush any open pending op (including its trailing blank lines, which
-	 * are payload-significant) and return the accumulated edits and
-	 * warnings. The executor is single-use; reset() is required for reuse.
+	 * Flush any open pending op (with its full accumulated payload, blanks
+	 * included) and return the accumulated edits and warnings. The executor
+	 * is single-use; reset() is required for reuse.
+	 * Throws if two replace/delete ops target the same line — that pattern
+	 * means the diff is painting a before/after picture instead of stating
+	 * the final state, and applying both would silently duplicate content.
 	 */
 	end(): { edits: HashlineEdit[]; warnings: string[] } {
-		this.#flushPending(true);
+		this.#flushPending();
+		this.#validateNoOverlappingDeletes();
 		return { edits: this.#edits, warnings: this.#warnings };
 	}
 
@@ -140,16 +141,44 @@ export class HashlineExecutor {
 		this.#terminated = false;
 	}
 
+	/**
+	 * Each `:` / `!` op contributes a delete edit per line in its range; if
+	 * any line ends up targeted by deletes originating from two different
+	 * source ops (distinguished by their `lineNum`), the patch is internally
+	 * inconsistent. Common shape: a "before" `A-B:` followed by an "after"
+	 * `A-B:` over the same range, or an `A-B:` that overlaps a later `N!` /
+	 * `N:`. The applier would run both literally and the file would end up
+	 * with two copies of the line, not a chosen winner.
+	 */
+	#validateNoOverlappingDeletes(): void {
+		const sourceLinesByAnchor = new Map<number, number[]>();
+		for (const edit of this.#edits) {
+			if (edit.kind !== "delete") continue;
+			let sourceLines = sourceLinesByAnchor.get(edit.anchor.line);
+			if (sourceLines === undefined) {
+				sourceLines = [];
+				sourceLinesByAnchor.set(edit.anchor.line, sourceLines);
+			}
+			if (!sourceLines.includes(edit.lineNum)) sourceLines.push(edit.lineNum);
+		}
+		for (const [anchorLine, sourceLines] of sourceLinesByAnchor) {
+			if (sourceLines.length < 2) continue;
+			const [firstOp, secondOp] = [...sourceLines].sort((a, b) => a - b);
+			throw new Error(
+				`line ${secondOp}: anchor line ${anchorLine} is already targeted by the ${HL_OP_REPLACE}/${HL_OP_DELETE} op on line ${firstOp}. ` +
+					`Issue ONE op per range; payload is only the final desired content, never a before/after pair.`,
+			);
+		}
+	}
+
 	#handlePayload(text: string, lineNum: number): void {
 		if (this.#pending) {
-			this.#flushPendingBlanks();
 			this.#pending.payload.push(text);
 			return;
 		}
 
-		// Whitespace-only payload outside any pending op is a visual
-		// separator (matches the legacy outer-loop isBlankLine skip);
-		// only fully-empty lines arrive as `blank` tokens.
+		// Whitespace-only payload outside any pending op is silently dropped;
+		// fully empty lines arrive as `blank` tokens.
 		if (text.trim().length === 0) return;
 		// Orphan payload outside any pending op: pick the most specific
 		// diagnostic so the model sees the actionable hint.
@@ -174,16 +203,9 @@ export class HashlineExecutor {
 		);
 	}
 
-	#flushPendingBlanks(): void {
-		if (!this.#pending) return;
-		for (let count = 0; count < this.#pending.pendingBlanks; count++) this.#pending.payload.push("");
-		this.#pending.pendingBlanks = 0;
-	}
-
-	#flushPending(includeTrailingBlanks: boolean): void {
+	#flushPending(): void {
 		const pending = this.#pending;
 		if (!pending) return;
-		if (includeTrailingBlanks) this.#flushPendingBlanks();
 
 		const { op, payload } = pending;
 		const linesToInsert = payload;

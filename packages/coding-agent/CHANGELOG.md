@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the `href`, `hrefr`, and `hline` Handlebars prompt helpers along with the shared hashline anchor state; none were referenced by any built-in or user prompt template
+
 ## [15.5.0] - 2026-05-26
 
 ### Added

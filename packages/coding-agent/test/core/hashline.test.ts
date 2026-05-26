@@ -366,12 +366,11 @@ describe("hashline parser — suffix-op syntax", () => {
 		expect(applyDiff(content, diff)).toBe("aaa\nfirst\n\n\nafter\nccc");
 	});
 
-	it("drops blank lines between ops (separator, not payload)", () => {
-		// Blank lines immediately before a next op are visual separators, not
-		// payload. This prevents agents from silently inflating a payload and
-		// shifting downstream line numbers.
+	it("appends blank lines between ops to the previous payload", () => {
+		// Blank lines while a payload run is open are payload, never silent
+		// separators — every blank in `1:AAA\n\n\n3:CCC` ends up on disk.
 		const diff = [`${sameLineRange(tag(1, "aaa"))}:AAA`, "", "", `${sameLineRange(tag(3, "ccc"))}:CCC`].join("\n");
-		expect(applyDiff(content, diff)).toBe("AAA\nbbb\nCCC");
+		expect(applyDiff(content, diff)).toBe("AAA\n\n\nbbb\nCCC");
 	});
 
 	it("treats a bare insert op as inserting one empty line", () => {
@@ -438,6 +437,44 @@ describe("hashline parser — suffix-op syntax", () => {
 		expect(() => parseHashline(`2!keep`).edits).toThrow(
 			/deletes only\. Payload is forbidden after !; use : to replace/,
 		);
+	});
+
+	it("rejects two replace ops targeting the same single line", () => {
+		const diff = `${tag(2, "bbb")}:BBB\n${tag(2, "bbb")}:BBB2`;
+		expect(() => parseHashline(diff).edits).toThrow(/anchor line 2 is already targeted by the .+ op on line 1/);
+	});
+
+	it("rejects two replace ops covering the same range (before/after-block pattern)", () => {
+		const diff = `${tag(2, "bbb")}-${tag(3, "ccc")}:OLD\nOLD2\n${tag(2, "bbb")}-${tag(3, "ccc")}:NEW\nNEW2`;
+		expect(() => parseHashline(diff).edits).toThrow(
+			/Issue ONE op per range; payload is only the final desired content/,
+		);
+	});
+
+	it("rejects a replace overlapping a later delete", () => {
+		const diff = `${tag(2, "bbb")}-${tag(4, "ddd")}:X\n${tag(3, "ccc")}!`;
+		expect(() => parseHashline(diff).edits).toThrow(/anchor line 3 is already targeted by the .+ op on line 1/);
+	});
+
+	it("rejects two deletes on the same line", () => {
+		const diff = `${tag(2, "bbb")}!\n${tag(2, "bbb")}!`;
+		expect(() => parseHashline(diff).edits).toThrow(/anchor line 2 is already targeted by the .+ op on line 1/);
+	});
+
+	it("accepts multiple inserts at the same anchor (sequential, not duplicates)", () => {
+		// Two ↑ at the same line is a legitimate accumulation pattern — both
+		// inserts above land in source order. Only deletes/replaces are
+		// considered overlapping.
+		const diff = `${tag(2, "bbb")}↑X\n${tag(2, "bbb")}↑Y`;
+		expect(() => parseHashline(diff).edits).not.toThrow();
+	});
+
+	it("accepts a replace alongside an insert at the same anchor", () => {
+		// `N:foo` deletes line N and inserts at before_anchor: N; `N↑bar`
+		// adds another insert at the same cursor. No conflicting delete, so
+		// this is allowed.
+		const diff = `${tag(2, "bbb")}:NEW\n${tag(2, "bbb")}↑ABOVE`;
+		expect(() => parseHashline(diff).edits).not.toThrow();
 	});
 });
 
@@ -987,29 +1024,29 @@ describe("hashline apply — brace-delete soft warning", () => {
 	});
 });
 
-describe("hashline parser — blank line is a separator before next op", () => {
-	it("blank line between ops is NOT absorbed into previous payload", () => {
+describe("hashline parser — blank line extends the open payload", () => {
+	it("blank line between ops is appended to the previous payload", () => {
 		const text = "a\nb\nc\nd\ne\n";
 		const ops = `${header("a.ts", text)}\n1:A\n\n3:C\n`;
 		const { diff } = splitHashlineInput(ops);
-		// Both replaces land on their target lines without inflating either payload.
-		expect(applyDiff(text, diff)).toBe("A\nb\nC\nd\ne\n");
+		// `1:A` payload becomes [A, ""]; line 3 is then replaced with C.
+		expect(applyDiff(text, diff)).toBe("A\n\nb\nC\nd\ne\n");
 	});
 
-	it("multiple blank lines between ops are also dropped", () => {
+	it("multiple blank lines between ops are all appended as payload", () => {
 		const text = "a\nb\nc\nd\ne\n";
 		const ops = `${header("a.ts", text)}\n1:A\n\n\n\n3:C\n`;
 		const { diff } = splitHashlineInput(ops);
-		expect(applyDiff(text, diff)).toBe("A\nb\nC\nd\ne\n");
+		expect(applyDiff(text, diff)).toBe("A\n\n\n\nb\nC\nd\ne\n");
 	});
 
-	it("blank-only payload before next op blanks the line", () => {
-		// Agent typed `2:` then a blank separator then `4:D`. Under bare-`A:`
-		// blank-replace semantics, `2:` blanks line 2 and `4:D` replaces line 4.
+	it("bare A: followed by a blank line replaces the line with two blanks", () => {
+		// `2:` seeds payload with `[""]`, the standalone blank line appends
+		// another `""`, then `4:D` flushes the run.
 		const text = "a\nb\nc\nd\ne\n";
 		const ops = `${header("a.ts", text)}\n2:\n\n4:D\n`;
 		const { diff } = splitHashlineInput(ops);
-		expect(applyDiff(text, diff)).toBe("a\n\nc\nD\ne\n");
+		expect(applyDiff(text, diff)).toBe("a\n\n\nc\nD\ne\n");
 	});
 
 	it("blank line inside payload between two content lines is preserved", () => {
