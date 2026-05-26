@@ -210,6 +210,31 @@ export function transformMessages<TApi extends Api>(
 			const assistantMsg = msg as AssistantMessage;
 			const toolCalls = assistantMsg.content.filter(b => b.type === "toolCall") as ToolCall[];
 
+			// Drop assistant turns that carry no actionable content (no `text`, no `toolCall`)
+			// AND were terminated by a truncating stop reason (`length` / `error` / `aborted`).
+			// These are produced when the provider returns `stop_reason: "max_tokens"` (or a
+			// stream error) mid-thinking, leaving a `[thinking]`-only message with a valid
+			// signature but nothing for the next turn to anchor on. Keeping it creates
+			// back-to-back assistant turns once the next response lands, which Anthropic
+			// rejects with "messages.X.content.Y: `thinking` blocks in the latest assistant
+			// message cannot be modified".
+			//
+			// `stopReason: "stop"` thinking-only messages are intentionally preserved: they
+			// represent reasoning-only assistant turns used for replay round-trips
+			// (OpenAI completions `reasoning_text`, Google signed thought parts).
+			const isTruncatedStop =
+				assistantMsg.stopReason === "length" ||
+				assistantMsg.stopReason === "error" ||
+				assistantMsg.stopReason === "aborted";
+			if (isTruncatedStop && toolCalls.length === 0 && !assistantMsg.content.some(b => b.type === "text")) {
+				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+					// Still arm the aborted-turn note so downstream guidance fires.
+					pendingAbortedToolCalls = new Map();
+					pendingAbortedTimestamp = assistantMsg.timestamp;
+				}
+				continue;
+			}
+
 			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
 				// Keep the assistant message with tool calls intact. If real tool results follow, preserve them;
 				// otherwise synthesize aborted results before the next turn boundary.

@@ -281,6 +281,15 @@ export class TUI extends Container {
 	#showHardwareCursor = $flag("PI_HARDWARE_CURSOR");
 	#clearOnShrink = $flag("PI_CLEAR_ON_SHRINK"); // Clear empty rows when content shrinks (default: off)
 	#maxLinesRendered = 0; // Line count from last render, used for viewport calculation
+	// Highest count of content rows currently sitting in terminal scrollback
+	// above the visible viewport. Used to detect shrink-across-viewport-boundary
+	// frames where the new transcript would re-expose rows the terminal has
+	// already committed to history — without intervention the rows visibly
+	// duplicate once the user scrolls back.
+	#scrollbackHighWater = 0;
+	// Set after a clear+full replay so the next insert-above-suffix frame does
+	// not scroll replayed live chrome (status/editor) into fresh history.
+	#suppressNextSuffixScroll = false;
 	#fullRedrawCount = 0;
 	#clearScrollbackOnNextRender = false;
 	#hasEverRendered = false;
@@ -1085,7 +1094,7 @@ export class TUI extends Container {
 		const heightChanged = this.#previousHeight > 0 && this.#previousHeight !== height;
 
 		// 3. Classify intent.
-		const intent = this.#planRender(lines, widthChanged, heightChanged, prevViewportTop);
+		const intent = this.#planRender(lines, widthChanged, heightChanged, prevViewportTop, height);
 		this.#logRedraw(intent, lines.length, height);
 
 		// 4. Execute.
@@ -1149,6 +1158,7 @@ export class TUI extends Container {
 		widthChanged: boolean,
 		heightChanged: boolean,
 		prevViewportTop: number,
+		height: number,
 	): RenderIntent {
 		// Initial paint after start(): scrollback must keep its prior shell
 		// content, but the viewport must be cleared so stale rows do not bleed
@@ -1164,6 +1174,32 @@ export class TUI extends Container {
 		if (this.#previousLines.length === 0) return { kind: "viewportRepaint" };
 
 		const diff = this.#diffLines(newLines);
+
+		// Shrink-across-viewport-boundary: if a shrink would place the new
+		// viewport above rows already committed to terminal scrollback, those
+		// rows would appear twice when the user scrolls back. A clear+replay
+		// keeps the current OMP transcript scrollable while dropping stale
+		// terminal history.
+		const naturalViewportTop = Math.max(0, newLines.length - height);
+		if (
+			diff.firstChanged !== -1 &&
+			newLines.length < this.#previousLines.length &&
+			naturalViewportTop < this.#scrollbackHighWater &&
+			!isMultiplexerSession()
+		) {
+			return { kind: "historyRebuild" };
+		}
+
+		const suppressSuffixScroll = this.#suppressNextSuffixScroll;
+		this.#suppressNextSuffixScroll = false;
+		if (
+			suppressSuffixScroll &&
+			diff.appendedLines &&
+			diff.firstChanged < this.#previousLines.length &&
+			!isMultiplexerSession()
+		) {
+			return { kind: "viewportRepaint" };
+		}
 
 		if (diff.firstChanged === -1) {
 			// Content unchanged. Width change still alters wrapping geometry;
@@ -1329,6 +1365,14 @@ export class TUI extends Container {
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = options.clearViewport ? lines.length : Math.max(this.#maxLinesRendered, lines.length);
+		if (options.clearScrollback) {
+			this.#scrollbackHighWater = 0;
+			this.#suppressNextSuffixScroll = lines.length > height;
+		}
+		const pushedNow = Math.max(0, lines.length - height);
+		if (pushedNow > this.#scrollbackHighWater) {
+			this.#scrollbackHighWater = pushedNow;
+		}
 		this.#commit(lines, width, height, Math.max(0, this.#maxLinesRendered - height), toRow);
 	}
 
@@ -1389,6 +1433,10 @@ export class TUI extends Container {
 		}
 		buffer += "\x1b[?2026l";
 		this.terminal.write(buffer);
+		const pushedNow = Math.max(0, lines.length - height);
+		if (pushedNow > this.#scrollbackHighWater) {
+			this.#scrollbackHighWater = pushedNow;
+		}
 	}
 
 	/**
@@ -1547,6 +1595,12 @@ export class TUI extends Container {
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = lines.length;
+		if (lines.length > this.#previousLines.length) {
+			const pushedNow = Math.max(0, lines.length - height);
+			if (pushedNow > this.#scrollbackHighWater) {
+				this.#scrollbackHighWater = pushedNow;
+			}
+		}
 		this.#commit(lines, width, height, Math.max(0, lines.length - height), toRow);
 	}
 

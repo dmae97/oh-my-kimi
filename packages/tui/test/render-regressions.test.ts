@@ -848,6 +848,114 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+
+		it("tail-cell mutation after the transcript overflowed does not re-deposit header rows", async () => {
+			// Repro for the reported scrollback-duplication bug: once a header
+			// (e.g. the welcome screen) has scrolled into terminal history, the
+			// last tool cell mutating (grow/shrink cycles, completion collapse)
+			// must not re-emit those header rows in a way that visibly
+			// duplicates them when the user scrolls back.
+			const term = new VirtualTerminal(40, 10);
+			const tui = new TUI(term);
+			const header = new MutableLinesComponent(["HEADER-0", "HEADER-1", "HEADER-2", "HEADER-3", "HEADER-4"]);
+			const tail = new MutableLinesComponent(["cell-init"]);
+			tui.addChild(header);
+			tui.addChild(tail);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				// Stream output until the transcript exceeds the viewport.
+				const out: string[] = [];
+				for (let i = 0; i < 15; i++) {
+					out.push(`cell-${i}`);
+					tail.setLines([...out, "[footer]"]);
+					tui.requestRender();
+					await settle(term);
+				}
+
+				// Repeatedly shrink (collapse preview) and grow (more output)
+				// across the previous viewport bottom. This is what triggers
+				// the duplication: each shrink-then-grow cycle would otherwise
+				// re-emit HEADER rows that are already in scrollback.
+				for (let cycle = 0; cycle < 6; cycle++) {
+					tail.setLines([...out.slice(0, 5), "[summary]", "[footer]"]);
+					tui.requestRender();
+					await settle(term);
+
+					out.push(`cell-grew-${cycle}-a`, `cell-grew-${cycle}-b`);
+					tail.setLines([...out, "[footer]"]);
+					tui.requestRender();
+					await settle(term);
+				}
+
+				// Final completion-style collapse: full transcript fits in the
+				// viewport again, even though scrollback already holds an
+				// earlier copy of HEADER.
+				tail.setLines(["[completed: many lines]", "[footer]"]);
+				tui.requestRender();
+				await settle(term);
+
+				const scrollback = term.getScrollBuffer();
+				for (let i = 0; i < 5; i++) {
+					const pattern = new RegExp(`\\bHEADER-${i}\\b`);
+					expect(countMatches(scrollback, pattern), `HEADER-${i} should appear at most once`).toBeLessThanOrEqual(
+						1,
+					);
+				}
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("scrollback grows again after stale history is cleared", async () => {
+			const term = new VirtualTerminal(60, 20);
+			const tui = new TUI(term);
+			const toast = new MutableLinesComponent(["TOAST"]);
+			const userMessage = new MutableLinesComponent(["USER"]);
+			const chat = new MutableLinesComponent([]);
+			const footer = new MutableLinesComponent(["STATUS", "EDITOR-TOP", "EDITOR-CONTENT", "EDITOR-BOTTOM"]);
+
+			tui.addChild(toast);
+			tui.addChild(userMessage);
+			tui.addChild(chat);
+			tui.addChild(footer);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const thinkingLines = ["THINKING-0"];
+				for (let i = 0; i < 25; i++) {
+					thinkingLines.push(`THINKING-${i + 1}`);
+					chat.setLines(thinkingLines);
+					tui.requestRender();
+					await settle(term);
+				}
+
+				// Collapse below the previous scrollback boundary, forcing the
+				// stale-history reset path.
+				chat.setLines(thinkingLines.slice(0, 5));
+				tui.requestRender();
+				await settle(term);
+				const afterResetLength = term.getScrollBuffer().length;
+
+				// Subsequent growth must be allowed to scroll normally. A
+				// viewport-only repaint loop here leaves the user with no
+				// terminal history to scroll back through.
+				for (let i = 0; i < 30; i++) {
+					thinkingLines.push(`LATER-${i}`);
+					chat.setLines(thinkingLines);
+					tui.requestRender();
+					await settle(term);
+				}
+
+				expect(term.getScrollBuffer().length).toBeGreaterThan(afterResetLength);
+			} finally {
+				tui.stop();
+			}
+		});
 	});
 
 	describe("overlay compositing", () => {

@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Removed `findAnthropicAuth` from `anthropic-auth` and replaced store-driven auth discovery with `buildAnthropicAuthConfig`, requiring callers to provide an already-resolved API key before building Anthropic auth config
@@ -26,6 +25,8 @@
 
 ### Fixed
 
+- Dropped truncated, thinking-only assistant turns with only `thinking`/`redacted_thinking` blocks and no `text` or `tool` content during message transformation, preventing Anthropic requests from sending consecutive assistant messages after a `max_tokens`/`error`/`aborted` interruption
+- Updated `isRetryableError` to treat Bun HTTP/2 transport errors (`HTTP2StreamReset`, `HTTP2RefusedStream`) as retryable so transient stream-reset failures can be retried
 - Fixed Codex WebSocket streaming to recover from stalled sessions by falling back to SSE when the first event or subsequent progress is delayed beyond the configured websocket timeout
 - Fixed expired OAuth handling so provider-level paths no longer attempt direct token refresh calls for expired credentials and instead rely on `AuthStorage` for rotation
 - Fixed provider streams aborting slow-but-valid first tokens or silent inter-event gaps with OMP-owned first-event/idle watchdog errors. Built-in lazy streams, OpenAI/Anthropic/Azure/Codex SSE, and Codex WebSocket streams now wait for provider output, provider/socket errors, caller aborts, or explicit request-layer timeouts instead of treating provider silence as failure ([#1392](https://github.com/can1357/oh-my-pi/issues/1392)).
