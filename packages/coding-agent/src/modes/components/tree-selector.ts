@@ -15,6 +15,7 @@ import { theme } from "../../modes/theme/theme";
 import { matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
 import type { SessionTreeNode } from "../../session/session-manager";
 import { shortenPath } from "../../tools/render-utils";
+import { toPathList } from "../../tools/search";
 import { DynamicBorder } from "./dynamic-border";
 
 /** Gutter info: position (displayIndent where connector was) and whether to show │ */
@@ -690,8 +691,15 @@ class TreeList implements Component {
 			}
 			case "search": {
 				const pattern = String(args.pattern || "");
-				const paths = Array.isArray(args.paths) ? args.paths.join(", ") : String(args.path || ".");
-				return `[search: /${pattern}/ in ${shortenPath(paths)}]`;
+				const searchPathsInput =
+					typeof args.paths === "string" || Array.isArray(args.paths)
+						? args.paths
+						: typeof args.path === "string"
+							? args.path
+							: undefined;
+				const paths = toPathList(searchPathsInput);
+				const scope = paths.length > 0 ? paths.join(", ") : ".";
+				return `[search: /${pattern}/ in ${shortenPath(scope)}]`;
 			}
 			case "find": {
 				const paths = Array.isArray(args.paths) ? args.paths.join(", ") : String(args.pattern || ".");

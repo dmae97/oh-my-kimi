@@ -352,12 +352,13 @@ export interface StreamOptions {
 	 */
 	onSseEvent?: (event: RawSseEvent, model?: Model<Api>) => void;
 	/**
-	 * Optional override for the first-event watchdog in milliseconds. When the
-	 * underlying transport exposes a per-request timeout (OpenAI/Anthropic SDKs),
-	 * this value is also applied to the HTTP layer so the SDK gives up before the
-	 * wrapping iterator watchdog would have. Set to `0` to disable both watchdogs
-	 * for this request. Falls back to `PI_STREAM_FIRST_EVENT_TIMEOUT_MS` and then
-	 * to a 100s default.
+	 * Optional override for the first-event watchdog in milliseconds. Built-in
+	 * providers apply this budget twice when they can: once to the underlying
+	 * SDK/request while waiting for the HTTP stream object to exist, then again
+	 * in the iterator while waiting for the first semantic stream event. Set to
+	 * `0` to disable both layers for this request. After the first semantic
+	 * event arrives, `streamIdleTimeoutMs` governs inter-event stalls. Falls
+	 * back to `PI_STREAM_FIRST_EVENT_TIMEOUT_MS` and then to a 100s default.
 	 *
 	 * Iterator-level honored by: every built-in provider (via the lazy-stream
 	 * forwarder in `register-builtins`). SDK-request honored by:

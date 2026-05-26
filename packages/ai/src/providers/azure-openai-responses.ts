@@ -1,9 +1,10 @@
 import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
-import { AzureOpenAI } from "openai";
+import { AzureOpenAI, APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
 import type {
 	Tool as OpenAITool,
 	ResponseCreateParamsStreaming,
 	ResponseInput,
+	ResponseStreamEvent,
 } from "openai/resources/responses/responses";
 import { getEnvApiKey } from "../stream";
 import type {
@@ -21,7 +22,6 @@ import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
-	createWatchdog,
 	getOpenAIStreamIdleTimeoutMs,
 	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
@@ -29,11 +29,7 @@ import {
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
-import {
-	isOpenAIResponsesProgressEvent,
-	normalizeOpenAIResponsesPromptCacheKey,
-	supportsDeveloperRole,
-} from "./openai-responses";
+import { normalizeOpenAIResponsesPromptCacheKey, supportsDeveloperRole } from "./openai-responses";
 import {
 	appendResponsesToolResultMessages,
 	applyCommonResponsesSamplingParams,
@@ -41,6 +37,7 @@ import {
 	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
 	createInitialResponsesAssistantMessage,
+	isOpenAIResponsesProgressEvent,
 	normalizeResponsesToolCallIdForTransform,
 	processResponsesStream,
 } from "./openai-responses-shared";
@@ -126,6 +123,8 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			options?.onPayload?.(params);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+			const requestTimeoutMs =
+				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			rawRequestDump = {
 				provider: model.provider,
 				api: output.api,
@@ -134,15 +133,29 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				url: `${baseUrl}/responses`,
 				body: params,
 			};
-			const openaiStream = await client.responses.create(params, { signal: requestSignal });
-			const firstEventWatchdog = createWatchdog(firstEventTimeoutMs, () =>
-				abortTracker.abortLocally(firstEventTimeoutAbortError),
-			);
+			let requestTimeout: NodeJS.Timeout | undefined;
+			if (requestTimeoutMs !== undefined) {
+				requestTimeout = setTimeout(() => abortTracker.abortLocally(firstEventTimeoutAbortError), requestTimeoutMs);
+			}
+			let openaiStream: AsyncIterable<ResponseStreamEvent>;
+			try {
+				const requestOptions =
+					requestTimeoutMs === undefined
+						? { signal: requestSignal }
+						: { signal: requestSignal, timeout: requestTimeoutMs };
+				openaiStream = await client.responses.create(params, requestOptions);
+			} catch (error) {
+				if (error instanceof OpenAIConnectionTimeoutError && !abortTracker.wasCallerAbort()) {
+					throw firstEventTimeoutAbortError;
+				}
+				throw error;
+			} finally {
+				if (requestTimeout !== undefined) clearTimeout(requestTimeout);
+			}
 			stream.push({ type: "start", partial: output });
 
 			await processResponsesStream(
 				iterateWithIdleTimeout(openaiStream, {
-					watchdog: firstEventWatchdog,
 					idleTimeoutMs,
 					firstItemTimeoutMs: firstEventTimeoutMs,
 					firstItemErrorMessage: AZURE_OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE,

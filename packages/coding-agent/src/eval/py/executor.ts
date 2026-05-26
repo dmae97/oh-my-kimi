@@ -1,3 +1,5 @@
+import * as path from "node:path";
+
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../config/settings";
 import { OutputSink } from "../../session/streaming-output";
@@ -93,20 +95,32 @@ export interface PythonResult {
 // ---------------------------------------------------------------------------
 // Session bookkeeping
 //
-// One PythonKernel subprocess per session id. Sessions are reused until they
-// die or are explicitly disposed. Multiple agent owners can register against
-// the same session id; the kernel stays alive until the last owner detaches.
+// One PythonKernel subprocess per (session id, cwd) tuple. The runner mutates
+// process-global cwd/sys.path during execution, so cross-directory work MUST
+// never share a live kernel. Multiple agent owners can still register against
+// the same tuple; the kernel stays alive until the last owner detaches.
 // ---------------------------------------------------------------------------
 
 interface PythonSession {
+	sessionKey: string;
 	sessionId: string;
+	cwd: string;
 	kernel: PythonKernel;
 	ownerIds: Set<string>;
 	hasFallbackOwner: boolean;
 }
 
 const sessions = new Map<string, PythonSession>();
+const startingSessions = new Map<string, Promise<PythonSession>>();
 const resettingSessions = new Set<string>();
+
+function normalizeSessionCwd(cwd: string): string {
+	return path.resolve(cwd);
+}
+
+function buildSessionKey(sessionId: string, cwd: string): string {
+	return `${sessionId}\0${normalizeSessionCwd(cwd)}`;
+}
 
 // ---------------------------------------------------------------------------
 // Cancellation plumbing
@@ -304,22 +318,44 @@ function attachOwner(session: PythonSession, sessionId: string, ownerId: string 
 	}
 }
 
-async function acquireSession(sessionId: string, cwd: string, options: PythonExecutorOptions): Promise<PythonSession> {
-	const existing = sessions.get(sessionId);
+async function acquireSession(
+	sessionKey: string,
+	sessionId: string,
+	cwd: string,
+	options: PythonExecutorOptions,
+): Promise<PythonSession> {
+	const existing = sessions.get(sessionKey);
 	if (existing) {
 		attachOwner(existing, sessionId, options.kernelOwnerId);
 		return existing;
 	}
-	const kernel = await startKernel(cwd, options);
-	const session: PythonSession = {
-		sessionId,
-		kernel,
-		ownerIds: new Set(),
-		hasFallbackOwner: false,
-	};
-	attachOwner(session, sessionId, options.kernelOwnerId);
-	sessions.set(sessionId, session);
-	return session;
+	const starting = startingSessions.get(sessionKey);
+	if (starting) {
+		const session = await starting;
+		attachOwner(session, sessionId, options.kernelOwnerId);
+		return session;
+	}
+	const startup = (async () => {
+		const kernel = await startKernel(cwd, options);
+		const session: PythonSession = {
+			sessionKey,
+			sessionId,
+			cwd,
+			kernel,
+			ownerIds: new Set(),
+			hasFallbackOwner: false,
+		};
+		sessions.set(sessionKey, session);
+		return session;
+	})();
+	startingSessions.set(sessionKey, startup);
+	try {
+		const session = await startup;
+		attachOwner(session, sessionId, options.kernelOwnerId);
+		return session;
+	} finally {
+		if (startingSessions.get(sessionKey) === startup) startingSessions.delete(sessionKey);
+	}
 }
 
 async function replaceSessionKernel(
@@ -332,22 +368,22 @@ async function replaceSessionKernel(
 	await old
 		.shutdown(remaining !== undefined ? { timeoutMs: Math.max(0, remaining) } : undefined)
 		.catch(() => undefined);
-	if (sessions.get(session.sessionId) !== session) {
+	if (sessions.get(session.sessionKey) !== session) {
 		throw new PythonExecutionCancelledError(false);
 	}
 	requireRemainingTimeoutMs(options.deadlineMs);
 	const next = await startKernel(cwd, options);
-	if (sessions.get(session.sessionId) !== session) {
+	if (sessions.get(session.sessionKey) !== session) {
 		await next.shutdown().catch(() => undefined);
 		throw new PythonExecutionCancelledError(false);
 	}
 	session.kernel = next;
 }
 
-async function resetSession(sessionId: string): Promise<void> {
-	const existing = sessions.get(sessionId);
+async function resetSession(sessionKey: string): Promise<void> {
+	const existing = sessions.get(sessionKey) ?? (await startingSessions.get(sessionKey)?.catch(() => undefined));
 	if (!existing) return;
-	sessions.delete(sessionId);
+	sessions.delete(sessionKey);
 	await existing.kernel.shutdown().catch(() => undefined);
 }
 
@@ -356,7 +392,16 @@ async function resetSession(sessionId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function disposeAllKernelSessions(): Promise<void> {
+	const pending = [...startingSessions.values()];
+	startingSessions.clear();
+	const started = await Promise.allSettled(pending);
 	const all = [...sessions.entries()];
+	for (const result of started) {
+		if (result.status !== "fulfilled") continue;
+		if (!all.some(([, session]) => session === result.value)) {
+			all.push([result.value.sessionKey, result.value]);
+		}
+	}
 	for (const [id, session] of all) {
 		if (sessions.get(id) === session) sessions.delete(id);
 	}
@@ -366,7 +411,12 @@ export async function disposeAllKernelSessions(): Promise<void> {
 		const result = results[i];
 		if (result.status === "fulfilled" && result.value?.confirmed !== false) continue;
 		const reason = result.status === "rejected" ? result.reason : "not confirmed";
-		logger.warn("Python kernel shutdown not confirmed", { sessionId: id, reason });
+		logger.warn("Python kernel shutdown not confirmed", {
+			sessionId: session.sessionId,
+			sessionKey: id,
+			cwd: session.cwd,
+			reason,
+		});
 		if (!sessions.has(id)) sessions.set(id, session);
 	}
 }
@@ -382,7 +432,7 @@ export async function disposeKernelSessionsByOwner(ownerId: string): Promise<voi
 		session.ownerIds.delete(ownerId);
 	}
 	for (const session of toShutdown) {
-		if (sessions.get(session.sessionId) === session) sessions.delete(session.sessionId);
+		if (sessions.get(session.sessionKey) === session) sessions.delete(session.sessionKey);
 	}
 	const results = await Promise.allSettled(toShutdown.map(session => session.kernel.shutdown()));
 	for (let i = 0; i < toShutdown.length; i += 1) {
@@ -393,8 +443,13 @@ export async function disposeKernelSessionsByOwner(ownerId: string): Promise<voi
 			continue;
 		}
 		const reason = result.status === "rejected" ? result.reason : "not confirmed";
-		logger.warn("Python kernel shutdown not confirmed", { sessionId: session.sessionId, reason });
-		if (!sessions.has(session.sessionId)) sessions.set(session.sessionId, session);
+		logger.warn("Python kernel shutdown not confirmed", {
+			sessionId: session.sessionId,
+			sessionKey: session.sessionKey,
+			cwd: session.cwd,
+			reason,
+		});
+		if (!sessions.has(session.sessionKey)) sessions.set(session.sessionKey, session);
 	}
 }
 
@@ -520,7 +575,7 @@ async function executePerCall(code: string, cwd: string, options: PythonExecutor
 	}
 	const kernel = await startKernel(cwd, options);
 	try {
-		return await executeWithKernel(kernel, code, options);
+		return await executeWithKernel(kernel, code, { ...options, cwd: undefined });
 	} finally {
 		await kernel.shutdown().catch(() => undefined);
 	}
@@ -528,49 +583,52 @@ async function executePerCall(code: string, cwd: string, options: PythonExecutor
 
 async function executeOnSession(code: string, cwd: string, options: PythonExecutorOptions): Promise<PythonResult> {
 	const sessionId = options.sessionId ?? `session:${cwd}`;
+	const sessionKey = buildSessionKey(sessionId, cwd);
 	if (options.bridge && !options.bridgeSessionId) {
 		options.bridgeSessionId = sessionId;
 	}
 	if (options.reset) {
-		if (resettingSessions.has(sessionId)) {
+		if (resettingSessions.has(sessionKey)) {
 			throw new Error("Python kernel reset already in progress");
 		}
-		resettingSessions.add(sessionId);
+		resettingSessions.add(sessionKey);
 		try {
-			await resetSession(sessionId);
+			await resetSession(sessionKey);
 		} finally {
-			resettingSessions.delete(sessionId);
+			resettingSessions.delete(sessionKey);
 		}
-	} else if (resettingSessions.has(sessionId)) {
+	} else if (resettingSessions.has(sessionKey)) {
 		throw new Error("Python kernel reset in progress");
 	}
-	const session = await acquireSession(sessionId, cwd, options);
+	const session = await acquireSession(sessionKey, sessionId, cwd, options);
 	if (options.signal?.aborted) {
 		throw new PythonExecutionCancelledError(isTimedOutCancellation(options.signal.reason, options.signal));
 	}
-	if (sessions.get(session.sessionId) !== session) {
+	if (sessions.get(session.sessionKey) !== session) {
 		throw new PythonExecutionCancelledError(false);
 	}
 	if (!session.kernel.isAlive()) {
 		await replaceSessionKernel(session, cwd, options);
-		if (sessions.get(session.sessionId) !== session) {
+		if (sessions.get(session.sessionKey) !== session) {
 			throw new PythonExecutionCancelledError(false);
 		}
 	}
+	const runOptions = { ...options, cwd: undefined };
 	try {
-		return await executeWithKernel(session.kernel, code, options);
+		return await executeWithKernel(session.kernel, code, runOptions);
 	} catch (err) {
 		if (isCancellationError(err) || options.signal?.aborted) throw err;
 		if (session.kernel.isAlive()) throw err;
-		if (sessions.get(session.sessionId) !== session) {
+		if (sessions.get(session.sessionKey) !== session) {
 			throw new PythonExecutionCancelledError(false);
 		}
-		// Kernel died during execute. Replace it and retry once on a fresh one.
+		// Shared kernels are keyed by cwd, so a dead kernel can be recreated in place
+		// without risking cross-directory state bleed.
 		await replaceSessionKernel(session, cwd, options);
-		if (sessions.get(session.sessionId) !== session) {
+		if (sessions.get(session.sessionKey) !== session) {
 			throw new PythonExecutionCancelledError(false);
 		}
-		return await executeWithKernel(session.kernel, code, options);
+		return await executeWithKernel(session.kernel, code, runOptions);
 	}
 }
 
@@ -583,7 +641,7 @@ export async function executePythonWithKernel(
 }
 
 export async function executePython(code: string, options?: PythonExecutorOptions): Promise<PythonResult> {
-	const cwd = options?.cwd ?? getProjectDir();
+	const cwd = normalizeSessionCwd(options?.cwd ?? getProjectDir());
 	const deadlineMs = getExecutionDeadlineMs(options);
 	const executionOptions: PythonExecutorOptions = {
 		...(options ?? {}),

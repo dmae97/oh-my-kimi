@@ -22,6 +22,7 @@ import { isSilentAbort } from "../../session/messages";
 import type { SessionMessageEntry } from "../../session/session-manager";
 import { parseSessionEntries } from "../../session/session-manager";
 import { PREVIEW_LIMITS, replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
+import { toPathList } from "../../tools/search";
 import type { ObservableSession, SessionObserverRegistry } from "../session-observer-registry";
 import { getMarkdownTheme, theme } from "../theme/theme";
 import { DynamicBorder } from "./dynamic-border";
@@ -533,13 +534,21 @@ export class SessionObserverOverlayComponent extends Container {
 			case "write":
 			case "edit":
 				return args.path ? `path: ${args.path}` : "";
-			case "search":
+			case "search": {
+				const searchPathsInput =
+					typeof args.paths === "string" || Array.isArray(args.paths)
+						? args.paths
+						: typeof args.path === "string"
+							? args.path
+							: undefined;
+				const searchPaths = toPathList(searchPathsInput);
 				return [
 					args.pattern ? `pattern: ${args.pattern}` : "",
-					Array.isArray(args.paths) ? `paths: ${args.paths.join(", ")}` : "",
+					searchPaths.length > 0 ? `paths: ${searchPaths.join(", ")}` : "",
 				]
 					.filter(Boolean)
 					.join(", ");
+			}
 			case "find":
 				return Array.isArray(args.paths) ? `paths: ${args.paths.join(", ")}` : "";
 			case "bash": {

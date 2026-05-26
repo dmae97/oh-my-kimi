@@ -128,11 +128,8 @@ describe("iterateWithIdleTimeout", () => {
 		}
 	});
 
-	it("clears external first-event watchdogs when iteration exits before progress", async () => {
-		let watchdogFired = false;
-		const watchdog = setTimeout(() => {
-			watchdogFired = true;
-		}, 10);
+	it("cleans first-item timers when the source throws before progress", async () => {
+		let firstItemTimedOut = false;
 
 		// biome-ignore lint/correctness/useYield: intentionally yields nothing — the test exercises the path where the source generator throws before its first yield.
 		async function* failingStream(): AsyncGenerator<string> {
@@ -141,14 +138,45 @@ describe("iterateWithIdleTimeout", () => {
 
 		await expectRejectsWithMessage(async () => {
 			for await (const _item of iterateWithIdleTimeout(failingStream(), {
-				watchdog,
+				firstItemTimeoutMs: 10,
 				errorMessage: "idle timeout",
+				firstItemErrorMessage: "first progress timeout",
+				onFirstItemTimeout: () => {
+					firstItemTimedOut = true;
+				},
 			})) {
 				// Unreachable.
 			}
 		}, "stream failed");
 
 		await Bun.sleep(20);
-		expect(watchdogFired).toBe(false);
+		expect(firstItemTimedOut).toBe(false);
+	});
+
+	it("cleans first-item timers when the consumer returns before progress", async () => {
+		let firstItemTimedOut = false;
+
+		async function* noProgressItems(): AsyncGenerator<{ type: "keepalive" }> {
+			while (true) {
+				await Bun.sleep(2);
+				yield { type: "keepalive" };
+			}
+		}
+
+		for await (const _item of iterateWithIdleTimeout(noProgressItems(), {
+			firstItemTimeoutMs: 10,
+			idleTimeoutMs: 1_000,
+			errorMessage: "idle timeout",
+			firstItemErrorMessage: "first progress timeout",
+			onFirstItemTimeout: () => {
+				firstItemTimedOut = true;
+			},
+			isProgressItem: () => false,
+		})) {
+			break;
+		}
+
+		await Bun.sleep(20);
+		expect(firstItemTimedOut).toBe(false);
 	});
 });
