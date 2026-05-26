@@ -32,7 +32,7 @@ export * from "./apply-patch";
 export * from "./diff";
 export * from "./file-read-cache";
 
-// Resolve the `$HFMT$`, `$HOP_*$`, `$HOP_CHARS$`, and `$HFILE$` placeholders in the hashline Lark grammar.
+// Resolve hashline grammar placeholders from the TypeScript constants.
 const hashlineGrammar = resolveHashlineGrammarPlaceholders(hashlineGrammarTemplate);
 
 export * from "../hashline";

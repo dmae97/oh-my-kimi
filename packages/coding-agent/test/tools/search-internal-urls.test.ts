@@ -146,8 +146,9 @@ describe("SearchTool internal URL resolution", () => {
 
 		const text = getResultText(result);
 		expect(text).toContain("needle");
-		// No hashline anchors (LINE+ID|content) for immutable sources
-		expect(text).not.toMatch(/^\*?\s*\d+[a-z]{2}\|/m);
+		// No hashline section headers or numbered editable lines for immutable sources.
+		expect(text).not.toMatch(/^¶.*#[0-9a-f]{4}$/m);
+		expect(text).not.toMatch(/^\*?\s*\d+:/m);
 	});
 
 	it("resolves local:// URLs before file-name lookup", async () => {
@@ -185,8 +186,9 @@ describe("SearchTool internal URL resolution", () => {
 
 		const text = getResultText(result);
 		expect(text).toContain("needle");
-		// Hashline anchor (LINE+ID|content) is kept for mutable local:// sources
-		expect(text).toMatch(/^\*?\s*\d+[a-z]{2}\|/m);
+		// Mutable local:// sources keep a hashline section header plus numbered match lines.
+		expect(text).toMatch(/^¶.*#[0-9a-f]{4}$/m);
+		expect(text).toMatch(/^\*\d+:.*needle/m);
 	});
 
 	it("keeps hashlines on mutable files when mixed with immutable artifact:// inputs", async () => {
@@ -204,8 +206,9 @@ describe("SearchTool internal URL resolution", () => {
 
 		const text = getResultText(result);
 		expect(text).toContain("needle");
-		// Mutable mixed.txt keeps hashlines somewhere in the output
-		expect(text).toMatch(/^\*?\s*\d+[a-z]{2}\|.*mixed needle/m);
+		// Mutable mixed.txt keeps hashlines somewhere in the output.
+		expect(text).toMatch(/^# mixed\.txt#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^\*\d+:.*mixed needle/m);
 	});
 
 	it("throws on nonexistent artifact ID", async () => {

@@ -9,6 +9,7 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { getFileReadCache } from "../edit/file-read-cache";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { computeFileHash, formatHashlineHeader } from "../hashline/hash";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
 import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../session/streaming-output";
@@ -303,7 +304,6 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				}
 				const { globFilter } = scope;
 				const baseDisplayMode = resolveFileDisplayMode(this.session);
-				const immutableDisplayMode = resolveFileDisplayMode(this.session, { immutable: true });
 
 				const effectiveOutputMode = GrepOutputMode.Content;
 				// Multi-scope = more than one file may match. We fetch up to
@@ -485,14 +485,27 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					matchesByFile.get(relativePath)!.push(match);
 				}
 				const displayLines: string[] = [];
+				const hashContexts = new Map<string, { absolutePath: string; fileHash: string }>();
+				if (baseDisplayMode.hashLines) {
+					for (const relativePath of fileList) {
+						if (archiveDisplaySet.has(relativePath)) continue;
+						const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
+						if (immutableSourcePaths.has(absoluteFilePath)) continue;
+						try {
+							const fullText = await Bun.file(absoluteFilePath).text();
+							const fileHash = computeFileHash(fullText);
+							hashContexts.set(relativePath, { absolutePath: absoluteFilePath, fileHash });
+						} catch {
+							// Best-effort: if the file disappeared between grep and render, fall back to plain line output.
+						}
+					}
+				}
 				const renderMatchesForFile = (relativePath: string): { model: string[]; display: string[] } => {
 					const modelOut: string[] = [];
 					const displayOut: string[] = [];
 					const fileMatches = matchesByFile.get(relativePath) ?? [];
-					const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
-					const useHashLines = immutableSourcePaths.has(absoluteFilePath)
-						? immutableDisplayMode.hashLines
-						: baseDisplayMode.hashLines;
+					const hashContext = hashContexts.get(relativePath);
+					const useHashLines = hashContext !== undefined;
 					const lineNumberWidth = fileMatches.reduce((width, match) => {
 						let nextWidth = Math.max(width, String(match.lineNumber).length);
 						for (const ctx of match.contextBefore ?? []) {
@@ -533,17 +546,21 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						}
 						fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 					}
-					if (cacheEntries.length > 0 && !archiveDisplaySet.has(relativePath)) {
-						getFileReadCache(this.session).recordSparse(path.resolve(searchPath, relativePath), cacheEntries);
+					if (cacheEntries.length > 0 && hashContext) {
+						getFileReadCache(this.session).recordSparse(hashContext.absolutePath, cacheEntries, {
+							fileHash: hashContext.fileHash,
+						});
 					}
 					return { model: modelOut, display: displayOut };
 				};
 				if (isDirectory) {
 					const grouped = formatGroupedFiles(fileList, relativePath => {
 						const rendered = renderMatchesForFile(relativePath);
+						const hashContext = hashContexts.get(relativePath);
 						return {
 							modelLines: rendered.model,
 							displayLines: rendered.display,
+							headerSuffix: hashContext ? `#${hashContext.fileHash}` : "",
 							skip: rendered.model.length === 0,
 						};
 					});
@@ -552,6 +569,15 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				} else {
 					for (const relativePath of fileList) {
 						const rendered = renderMatchesForFile(relativePath);
+						if (rendered.model.length === 0) continue;
+						if (outputLines.length > 0) {
+							outputLines.push("");
+							displayLines.push("");
+						}
+						const hashContext = hashContexts.get(relativePath);
+						if (hashContext) {
+							outputLines.push(formatHashlineHeader(relativePath, hashContext.fileHash));
+						}
 						outputLines.push(...rendered.model);
 						displayLines.push(...rendered.display);
 					}
@@ -745,11 +771,12 @@ export const searchToolRenderer = {
 							let contextDir = searchBase ?? "";
 							return group.map(line => {
 								if (line.startsWith("## ")) {
-									// Strip optional ` (suffix)` like ` (3 replacements)` before resolving.
+									// Strip optional ` (suffix)` and `#hash` before resolving.
 									const fileName = line
 										.slice(3)
 										.trimEnd()
-										.replace(/\s+\([^)]*\)\s*$/, "");
+										.replace(/\s+\([^)]*\)\s*$/, "")
+										.replace(/#[0-9a-f]+$/, "");
 									const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
 									const styled = uiTheme.fg("dim", line);
 									return absPath ? fileHyperlink(absPath, styled) : styled;
@@ -760,7 +787,7 @@ export const searchToolRenderer = {
 										.trimEnd()
 										.replace(/\s+\([^)]*\)\s*$/, "");
 									const isDirectory = raw.endsWith("/");
-									const name = raw.replace(/\/$/, "");
+									const name = isDirectory ? raw.replace(/\/$/, "") : raw.replace(/#[0-9a-f]+$/, "");
 									if (isDirectory) {
 										if (searchBase) {
 											contextDir = name === "." ? searchBase : path.join(searchBase, name);

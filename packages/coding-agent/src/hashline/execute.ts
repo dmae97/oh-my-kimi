@@ -13,13 +13,15 @@ import { enforcePlanModeWrite, resolvePlanPath } from "../tools/plan-mode-guard"
 import { HashlineMismatchError } from "./anchors";
 import { applyHashlineEdits, type HashlineApplyResult } from "./apply";
 import { buildCompactHashlineDiffPreview } from "./diff-preview";
-import { type HashlineInputSection, splitHashlineInputs } from "./input";
-import { parseHashlineWithWarnings } from "./parser";
+import { parseHashline } from "./executor";
+import { computeFileHash } from "./hash";
+import { splitHashlineInputs } from "./input";
 import { tryRecoverHashlineWithCache } from "./recovery";
 import type {
 	ExecuteHashlineSingleOptions,
 	HashlineApplyOptions,
 	HashlineEdit,
+	HashlineInputSection,
 	hashlineEditParamsSchema,
 } from "./types";
 
@@ -46,6 +48,27 @@ function hasAnchorScopedEdit(edits: HashlineEdit[]): boolean {
 	});
 }
 
+function collectAnchorLines(edits: HashlineEdit[]): number[] {
+	const lines = new Set<number>();
+	for (const edit of edits) {
+		if (edit.kind === "delete") {
+			lines.add(edit.anchor.line);
+			continue;
+		}
+		if (edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor") {
+			lines.add(edit.cursor.anchor.line);
+		}
+	}
+	return [...lines].sort((a, b) => a - b);
+}
+
+function assertSectionHashAllowed(sectionPath: string, fileHash: string | undefined, edits: HashlineEdit[]): void {
+	if (fileHash !== undefined || !hasAnchorScopedEdit(edits)) return;
+	throw new Error(
+		`Missing hashline file hash for anchored edit to ${sectionPath}; use \`¶${sectionPath}#hash\` from your latest read.`,
+	);
+}
+
 function formatNoChangeDiagnostic(pathText: string): string {
 	return `Edits to ${pathText} resulted in no changes being made.`;
 }
@@ -65,36 +88,48 @@ function getEditDetails(result: AgentToolResult<EditToolDetails>): EditToolDetai
 }
 
 /**
- * Apply hashline edits with anchor-stale recovery: on `HashlineMismatchError`,
- * consult the read-snapshot cache for the file and 3-way-merge the edits onto
- * the current text. If recovery succeeds, return the merged result with a
- * synthetic warning. Otherwise re-throw the original mismatch error.
+ * Apply hashline edits with file-hash stale recovery. The section hash gates
+ * line-number edits against the version shown to the model; if the live file
+ * drifted, snapshot recovery attempts a strict 3-way merge.
  */
 function applyHashlineEditsWithRecovery(
 	session: ToolSession,
 	absolutePath: string,
+	pathText: string,
 	text: string,
+	fileHash: string | undefined,
 	edits: HashlineEdit[],
 	options: HashlineApplyOptions,
 ): HashlineApplyResult {
-	try {
-		return applyHashlineEdits(text, edits, options);
-	} catch (err) {
-		if (!(err instanceof HashlineMismatchError)) throw err;
-		const recovered = tryRecoverHashlineWithCache({
-			cache: getFileReadCache(session),
-			absolutePath,
-			currentText: text,
-			edits,
-			options,
-		});
-		if (!recovered) throw err;
+	if (fileHash === undefined) return applyHashlineEdits(text, edits, options);
+
+	const currentHash = computeFileHash(text);
+	if (currentHash === fileHash) return applyHashlineEdits(text, edits, options);
+
+	const cache = getFileReadCache(session);
+	const recovered = tryRecoverHashlineWithCache({
+		cache,
+		absolutePath,
+		currentText: text,
+		fileHash,
+		edits,
+		options,
+	});
+	if (recovered) {
 		return {
 			lines: recovered.lines,
 			firstChangedLine: recovered.firstChangedLine,
 			warnings: recovered.warnings,
 		};
 	}
+
+	throw new HashlineMismatchError({
+		path: pathText,
+		expectedFileHash: fileHash,
+		actualFileHash: currentHash,
+		fileLines: text.split("\n"),
+		anchorLines: collectAnchorLines(edits),
+	});
 }
 
 /**
@@ -103,10 +138,11 @@ function applyHashlineEditsWithRecovery(
  * any changes in a multi-section batch.
  */
 async function preflightHashlineSection(options: ExecuteHashlineSingleOptions & HashlineInputSection): Promise<void> {
-	const { session, path: sectionPath, diff } = options;
+	const { session, path: sectionPath, fileHash, diff } = options;
 
 	const absolutePath = resolvePlanPath(session, sectionPath);
-	const { edits } = parseHashlineWithWarnings(diff);
+	const { edits } = parseHashline(diff);
+	assertSectionHashAllowed(sectionPath, fileHash, edits);
 	enforcePlanModeWrite(session, sectionPath, { op: "update" });
 
 	const source = await readHashlineFile(absolutePath, sectionPath);
@@ -118,7 +154,9 @@ async function preflightHashlineSection(options: ExecuteHashlineSingleOptions & 
 	const result = applyHashlineEditsWithRecovery(
 		session,
 		absolutePath,
+		sectionPath,
 		normalized,
+		source.exists ? fileHash : undefined,
 		edits,
 		getHashlineApplyOptions(session),
 	);
@@ -131,6 +169,7 @@ async function executeHashlineSection(
 	const {
 		session,
 		path: sourcePath,
+		fileHash,
 		diff,
 		signal,
 		batchRequest,
@@ -139,7 +178,8 @@ async function executeHashlineSection(
 	} = options;
 
 	const absolutePath = resolvePlanPath(session, sourcePath);
-	const { edits, warnings: parseWarnings } = parseHashlineWithWarnings(diff);
+	const { edits, warnings: parseWarnings } = parseHashline(diff);
+	assertSectionHashAllowed(sourcePath, fileHash, edits);
 	enforcePlanModeWrite(session, sourcePath, { op: "update" });
 
 	const source = await readHashlineFile(absolutePath, sourcePath);
@@ -152,7 +192,9 @@ async function executeHashlineSection(
 	const result = applyHashlineEditsWithRecovery(
 		session,
 		absolutePath,
+		sourcePath,
 		originalNormalized,
+		source.exists ? fileHash : undefined,
 		edits,
 		getHashlineApplyOptions(session),
 	);
@@ -182,7 +224,10 @@ async function executeHashlineSection(
 	// of the file: the model just received it back as the diff/preview. Cache
 	// it so a follow-up edit anchored against this state can still recover
 	// if the file is touched out-of-band before the next edit lands.
-	getFileReadCache(session).recordContiguous(absolutePath, 1, result.lines.split("\n"));
+	getFileReadCache(session).recordContiguous(absolutePath, 1, result.lines.split("\n"), {
+		fullText: result.lines,
+		fileHash: computeFileHash(result.lines),
+	});
 
 	const diffResult = generateDiffString(originalNormalized, result.lines);
 	const meta = outputMeta()
@@ -257,11 +302,31 @@ export async function executeHashlineSingle(
  * Path order is preserved by first occurrence.
  */
 function mergeSamePathSections(sections: HashlineInputSection[]): HashlineInputSection[] {
-	const byPath = new Map<string, string[]>();
+	const byPath = new Map<string, { fileHash?: string; diffs: string[] }>();
 	for (const section of sections) {
 		const existing = byPath.get(section.path);
-		if (existing) existing.push(section.diff);
-		else byPath.set(section.path, [section.diff]);
+		if (existing) {
+			if (
+				existing.fileHash !== undefined &&
+				section.fileHash !== undefined &&
+				existing.fileHash !== section.fileHash
+			) {
+				throw new Error(
+					`Conflicting hashline file hashes for ${section.path}: #${existing.fileHash} and #${section.fileHash}. Re-read the file and retry with one current header.`,
+				);
+			}
+			if (existing.fileHash === undefined && section.fileHash !== undefined) existing.fileHash = section.fileHash;
+			existing.diffs.push(section.diff);
+			continue;
+		}
+		byPath.set(section.path, {
+			...(section.fileHash !== undefined ? { fileHash: section.fileHash } : {}),
+			diffs: [section.diff],
+		});
 	}
-	return Array.from(byPath, ([path, diffs]) => ({ path, diff: diffs.join("\n") }));
+	return Array.from(byPath, ([path, entry]) => ({
+		path,
+		...(entry.fileHash !== undefined ? { fileHash: entry.fileHash } : {}),
+		diff: entry.diffs.join("\n"),
+	}));
 }

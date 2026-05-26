@@ -252,9 +252,9 @@ describe("hashline prompt helpers", () => {
 			'{{hline 2 "const timeout = 5000;"}}\nquoted={{href 2}}\nraw={{hrefr 2}}\nlast={{hrefr}}',
 		);
 		const [line, quoted, raw, last] = result.split("\n");
-		const ref = line.split("|", 1)[0];
+		const ref = line.split(":", 1)[0];
 
-		expect(line).toBe(`${ref}|const timeout = 5000;`);
+		expect(line).toBe(`${ref}:const timeout = 5000;`);
 		expect(quoted).toBe(`quoted="${ref}"`);
 		expect(raw).toBe(`raw=${ref}`);
 		expect(last).toBe(`last=${ref}`);
@@ -266,11 +266,11 @@ describe("hashline prompt helpers", () => {
 		const ref = raw.slice("raw=".length);
 
 		expect(quoted).toBe(`quoted="${ref}"`);
-		expect(ref).toMatch(/^5[a-z]{2}$/);
+		expect(ref).toBe("5");
 	});
 
 	test("href should not reuse hline state across prompt renders", () => {
-		expect(expandPrompt('{{hline 1 "const x = 1;"}}\n{{hrefr}}')).toMatch(/^1[a-z]{2}\|const x = 1;\n1[a-z]{2}$/);
+		expect(expandPrompt('{{hline 1 "const x = 1;"}}\n{{hrefr}}')).toBe("1:const x = 1;\n1");
 		expect(() => expandPrompt("{{hrefr}}")).toThrow("previous {{hline}}");
 	});
 });

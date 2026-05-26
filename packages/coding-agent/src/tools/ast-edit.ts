@@ -6,7 +6,7 @@ import { Text } from "@oh-my-pi/pi-tui";
 import { $envpos, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { computeLineHash, HL_BODY_SEP } from "../hashline/hash";
+import { computeFileHash, formatHashlineHeader } from "../hashline/hash";
 import type { Theme } from "../modes/theme/theme";
 import astEditDescription from "../prompts/tools/ast-edit.md" with { type: "text" };
 import { Ellipsis, fileHyperlink, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
@@ -257,12 +257,26 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			}
 
 			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
+			const hashContexts = new Map<string, { fileHash: string }>();
+			if (useHashLines) {
+				for (const relativePath of fileList) {
+					const absolutePath = path.resolve(this.session.cwd, relativePath);
+					try {
+						const fullText = await Bun.file(absolutePath).text();
+						const fileHash = computeFileHash(fullText);
+						hashContexts.set(relativePath, { fileHash });
+					} catch {
+						// Best-effort: if a file disappears between ast-edit and rendering, emit plain line output.
+					}
+				}
+			}
 			const outputLines: string[] = [];
 			const displayLines: string[] = [];
 			const renderChangesForFile = (relativePath: string): { model: string[]; display: string[] } => {
 				const modelOut: string[] = [];
 				const displayOut: string[] = [];
 				const fileChanges = changesByFile.get(relativePath) ?? [];
+				const hashContext = hashContexts.get(relativePath);
 				const lineNumberWidth = fileChanges.reduce(
 					(width, change) => Math.max(width, String(change.startLine).length),
 					0,
@@ -272,13 +286,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					const afterFirstLine = change.after.split("\n", 1)[0] ?? "";
 					const beforeLine = beforeFirstLine.slice(0, 120);
 					const afterLine = afterFirstLine.slice(0, 120);
-					const beforeRef = useHashLines
-						? `${change.startLine}${computeLineHash(change.startLine, beforeFirstLine)}`
-						: `${change.startLine}:${change.startColumn}`;
-					const afterRef = useHashLines
-						? `${change.startLine}${computeLineHash(change.startLine, afterFirstLine)}`
-						: `${change.startLine}:${change.startColumn}`;
-					const lineSeparator = useHashLines ? HL_BODY_SEP : " ";
+					const beforeRef = hashContext ? `${change.startLine}` : `${change.startLine}:${change.startColumn}`;
+					const afterRef = hashContext ? `${change.startLine}` : `${change.startLine}:${change.startColumn}`;
+					const lineSeparator = hashContext ? ":" : " ";
 					modelOut.push(`-${beforeRef}${lineSeparator}${beforeLine}`);
 					modelOut.push(`+${afterRef}${lineSeparator}${afterLine}`);
 					displayOut.push(formatCodeFrameLine("-", change.startLine, beforeLine, lineNumberWidth));
@@ -291,10 +301,13 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				const grouped = formatGroupedFiles(fileList, relativePath => {
 					const rendered = renderChangesForFile(relativePath);
 					const count = fileReplacementCounts.get(relativePath) ?? 0;
+					const hashContext = hashContexts.get(relativePath);
+					const hashSuffix = hashContext ? `#${hashContext.fileHash}` : "";
 					return {
-						headerSuffix: ` (${formatCount("replacement", count)})`,
+						headerSuffix: `${hashSuffix} (${formatCount("replacement", count)})`,
 						modelLines: rendered.model,
 						displayLines: rendered.display,
+						skip: rendered.model.length === 0,
 					};
 				});
 				outputLines.push(...grouped.model);
@@ -302,6 +315,15 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			} else {
 				for (const relativePath of fileList) {
 					const rendered = renderChangesForFile(relativePath);
+					if (rendered.model.length === 0) continue;
+					if (outputLines.length > 0) {
+						outputLines.push("");
+						displayLines.push("");
+					}
+					const hashContext = hashContexts.get(relativePath);
+					if (hashContext) {
+						outputLines.push(formatHashlineHeader(relativePath, hashContext.fileHash));
+					}
 					outputLines.push(...rendered.model);
 					displayLines.push(...rendered.display);
 				}
@@ -499,11 +521,12 @@ export const astEditToolRenderer = {
 							let contextDir = searchBase ?? "";
 							return group.map(line => {
 								if (line.startsWith("## ")) {
-									// Strip ` (3 replacements)` suffix attached by formatGroupedFiles.
+									// Strip ` (3 replacements)` and `#hash` suffixes from formatGroupedFiles.
 									const fileName = line
 										.slice(3)
 										.trimEnd()
-										.replace(/\s+\([^)]*\)\s*$/, "");
+										.replace(/\s+\([^)]*\)\s*$/, "")
+										.replace(/#[0-9a-f]+$/, "");
 									const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
 									const styled = uiTheme.fg("dim", line);
 									return absPath ? fileHyperlink(absPath, styled) : styled;
@@ -514,14 +537,14 @@ export const astEditToolRenderer = {
 										.trimEnd()
 										.replace(/\s+\([^)]*\)\s*$/, "");
 									const isDirectory = raw.endsWith("/");
-									const name = raw.replace(/\/$/, "");
+									const name = isDirectory ? raw.replace(/\/$/, "") : raw.replace(/#[0-9a-f]+$/, "");
 									if (isDirectory) {
 										if (searchBase) {
 											contextDir = name === "." ? searchBase : path.join(searchBase, name);
 										}
 										return uiTheme.fg("accent", line);
 									}
-									// Root-level file with optional suffix, e.g. `# foo.ts (3 replacements)`.
+									// Root-level file with optional `#hash` and ` (3 replacements)` suffixes.
 									const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
 									const styled = uiTheme.fg("accent", line);
 									return absPath ? fileHyperlink(absPath, styled) : styled;

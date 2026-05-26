@@ -1,4 +1,3 @@
-import { computeLineHash, HL_BODY_SEP } from "./hash";
 import type { CompactHashlineDiffOptions, CompactHashlineDiffPreview } from "./types";
 
 export function buildCompactHashlineDiffPreview(
@@ -11,7 +10,7 @@ export function buildCompactHashlineDiffPreview(
 
 	// `generateDiffString` numbers `+` lines with the post-edit line number,
 	// `-` lines with the pre-edit line number, and context lines with the
-	// pre-edit line number. To emit fresh anchors usable for follow-up edits,
+	// pre-edit line number. To emit fresh line numbers usable for follow-up edits,
 	// we convert context-line numbers to post-edit positions by tracking the
 	// running offset (added so far - removed so far) as we walk the diff.
 	const formatted = lines.map(line => {
@@ -28,13 +27,13 @@ export function buildCompactHashlineDiffPreview(
 		switch (kind) {
 			case "+":
 				addedLines++;
-				return `+${lineNumber}${computeLineHash(lineNumber, content)}${HL_BODY_SEP}${content}`;
+				return `+${lineNumber}:${content}`;
 			case "-":
 				removedLines++;
-				return `-${lineNumber}--${HL_BODY_SEP}${content}`;
+				return `-${lineNumber}:${content}`;
 			default: {
 				const newLineNumber = lineNumber + addedLines - removedLines;
-				return ` ${newLineNumber}${computeLineHash(newLineNumber, content)}${HL_BODY_SEP}${content}`;
+				return ` ${newLineNumber}:${content}`;
 			}
 		}
 	});

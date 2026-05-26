@@ -305,13 +305,15 @@ const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** E
 
 function normalizeHashlineInputPreviewPath(rawPath: string): string {
 	const trimmed = rawPath.trim();
-	if (trimmed.length < 2) return trimmed;
-	const first = trimmed[0];
-	const last = trimmed[trimmed.length - 1];
+	const hashStart = /#[0-9a-f]{4}$/u.exec(trimmed)?.index;
+	const withoutHash = hashStart === undefined ? trimmed : trimmed.slice(0, hashStart);
+	if (withoutHash.length < 2) return withoutHash;
+	const first = withoutHash[0];
+	const last = withoutHash[withoutHash.length - 1];
 	if ((first === '"' || first === "'") && first === last) {
-		return trimmed.slice(1, -1);
+		return withoutHash.slice(1, -1);
 	}
-	return trimmed;
+	return withoutHash;
 }
 
 function parseHashlineInputPreviewHeader(line: string): string | null {

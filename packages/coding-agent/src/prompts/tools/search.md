@@ -9,7 +9,7 @@ Searches files using powerful regex matching.
 
 <output>
 {{#if IS_HL_MODE}}
-- Text output is anchor-prefixed: `*5th|content` (match) or ` 9x}|content` (context, leading space). The 2-char suffix is a content fingerprint. The `|` before content is a separator, not part of the file content.
+- Text output emits a file-hash header per matched file plus numbered lines: `¶src/login.ts#3c4d`, `*42:if (user.id) {` (match), ` 43:return user;` (context). Copy the header for anchored edits; ops use bare line numbers.
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - Text output is line-number-prefixed

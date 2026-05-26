@@ -12,7 +12,7 @@ import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { glob } from "@oh-my-pi/pi-natives";
 import { fuzzyMatch } from "@oh-my-pi/pi-tui";
 import { formatAge, formatBytes, readImageMetadata } from "@oh-my-pi/pi-utils";
-import { formatHashLines } from "../hashline/hash";
+import { computeFileHash, formatHashlineHeader, formatNumberedLines } from "../hashline/hash";
 import type { FileMentionMessage } from "../session/messages";
 import {
 	DEFAULT_MAX_BYTES,
@@ -356,7 +356,7 @@ export async function generateFileMentionMessages(
 			const content = await Bun.file(absolutePath).text();
 			let { output, lineCount } = buildTextOutput(content);
 			if (options?.useHashLines) {
-				output = formatHashLines(output);
+				output = `${formatHashlineHeader(resolvedPath, computeFileHash(content))}\n${formatNumberedLines(output)}`;
 			}
 			files.push({ path: resolvedPath, content: output, lineCount });
 		} catch {

@@ -1603,7 +1603,8 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "editing",
 			label: "Hash Lines",
-			description: "Include line hashes in read output for hashline edit mode (LINE+ID|content)",
+			description:
+				"Include file-hash headers and line numbers in read output for hashline edit mode (¶PATH#hash plus LINE:content)",
 		},
 	},
 

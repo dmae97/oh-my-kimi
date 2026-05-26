@@ -513,8 +513,12 @@ async function main(): Promise<void> {
 
 	console.log("");
 	console.log("Benchmark complete!");
-	console.log(`  Success rate: ${(result.summary.overallSuccessRate * 100).toFixed(1)}%`);
-	console.log(`  Total tokens: ${result.summary.totalTokens.input} in / ${result.summary.totalTokens.output} out`);
+	console.log(
+		`  Task success rate (best of ${config.runsPerTask}): ${(result.summary.taskSuccessRate * 100).toFixed(1)}% (${result.summary.successfulTasks}/${result.summary.totalTasks})`,
+	);
+	console.log(
+		`  Total tokens (best): ${result.summary.totalTokens.input} in / ${result.summary.totalTokens.output} out`,
+	);
 	if (result.summary.ghostRuns > 0) {
 		console.log(`  Ghost runs (0/0/0): ${result.summary.ghostRuns}`);
 	}

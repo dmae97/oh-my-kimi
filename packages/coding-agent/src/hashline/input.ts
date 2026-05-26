@@ -1,13 +1,10 @@
 import * as path from "node:path";
-import { ABORT_MARKER, BEGIN_PATCH_MARKER, END_PATCH_MARKER } from "./constants";
-import { HL_FILE_PREFIX } from "./hash";
-import { isHashlineOpLineText } from "./parser";
-import type { SplitHashlineOptions } from "./types";
+import { HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./hash";
+import { HashlineTokenizer } from "./tokenizer";
+import type { HashlineInputSection, SplitHashlineOptions } from "./types";
 
-export interface HashlineInputSection {
-	path: string;
-	diff: string;
-}
+// Pure classification — single shared tokenizer is safe.
+const TOKENIZER = new HashlineTokenizer();
 
 function unquoteHashlinePath(pathText: string): string {
 	if (pathText.length < 2) return pathText;
@@ -25,27 +22,30 @@ function normalizeHashlinePath(rawPath: string, cwd?: string): string {
 	return isWithinCwd ? relative || "." : unquoted;
 }
 
+/**
+ * Parse a `¶PATH[#hash]` header line. Returns `null` for lines that do not
+ * begin with the `¶` prefix; throws the existing "Input header must be …"
+ * error when a `¶`-prefixed line fails the strict shape (so malformed paths
+ * surface immediately instead of being silently re-classified as payload).
+ */
 function parseHashlineHeaderLine(line: string, cwd?: string): HashlineInputSection | null {
 	const trimmed = line.trimEnd();
 	if (!trimmed.startsWith(HL_FILE_PREFIX)) return null;
-	// Strip a run of leading header markers so canonical `¶PATH` and
-	// runaway-prefix forms like `¶¶PATH` / `¶¶¶PATH` route to the same file.
-	let prefixEnd = 0;
-	while (prefixEnd < trimmed.length && trimmed[prefixEnd] === HL_FILE_PREFIX) prefixEnd++;
-	const rest = trimmed.slice(prefixEnd);
-	if (rest.trim().length === 0) {
-		throw new Error(`Input header "${HL_FILE_PREFIX}" is empty; provide a file path.`);
+
+	const token = TOKENIZER.tokenize(trimmed);
+	if (token.kind !== "header") {
+		throw new Error(
+			`Input header must be ${HL_FILE_PREFIX}PATH or ${HL_FILE_PREFIX}PATH${HL_FILE_HASH_SEP}HASH with a 4-hex file hash; got ${JSON.stringify(trimmed)}.`,
+		);
 	}
-	const parsedPath = normalizeHashlinePath(rest, cwd);
+
+	const parsedPath = normalizeHashlinePath(token.path, cwd);
 	if (parsedPath.length === 0) {
 		throw new Error(`Input header "${HL_FILE_PREFIX}" is empty; provide a file path.`);
 	}
-	return { path: parsedPath, diff: "" };
-}
-
-function isPatchEnvelopeMarker(line: string): boolean {
-	const trimmed = line.trimEnd();
-	return trimmed === BEGIN_PATCH_MARKER || trimmed === END_PATCH_MARKER;
+	return token.fileHash !== undefined
+		? { path: parsedPath, fileHash: token.fileHash, diff: "" }
+		: { path: parsedPath, diff: "" };
 }
 
 function stripLeadingBlankLines(input: string): string {
@@ -53,7 +53,7 @@ function stripLeadingBlankLines(input: string): string {
 	const lines = stripped.split("\n");
 	while (lines.length > 0) {
 		const head = lines[0].replace(/\r$/, "");
-		if (head.trim().length === 0 || head.trimEnd() === BEGIN_PATCH_MARKER) {
+		if (head.trim().length === 0 || TOKENIZER.tokenize(head).kind === "envelope-begin") {
 			lines.shift();
 			continue;
 		}
@@ -64,7 +64,7 @@ function stripLeadingBlankLines(input: string): string {
 
 export function containsRecognizableHashlineOperations(input: string): boolean {
 	for (const line of input.split(/\r?\n/)) {
-		if (isHashlineOpLineText(line)) return true;
+		if (TOKENIZER.isOp(line)) return true;
 	}
 	return false;
 }
@@ -82,7 +82,7 @@ function normalizeFallbackInput(input: string, options: SplitHashlineOptions): s
 	return `${HL_FILE_PREFIX}${fallbackPath}\n${input}`;
 }
 
-export function splitHashlineInput(input: string, options: SplitHashlineOptions = {}): { path: string; diff: string } {
+export function splitHashlineInput(input: string, options: SplitHashlineOptions = {}): HashlineInputSection {
 	const [section] = splitHashlineInputs(input, options);
 	return section;
 }
@@ -95,33 +95,42 @@ export function splitHashlineInputs(input: string, options: SplitHashlineOptions
 	if (parseHashlineHeaderLine(firstLine, options.cwd) === null) {
 		const preview = JSON.stringify(firstLine.slice(0, 120));
 		throw new Error(
-			`input must begin with "${HL_FILE_PREFIX}PATH" on the first non-blank line; got: ${preview}. ` +
-				`Example: "${HL_FILE_PREFIX}src/foo.ts" then edit ops.`,
+			`input must begin with "${HL_FILE_PREFIX}PATH${HL_FILE_HASH_SEP}HASH" on the first non-blank line for anchored edits; got: ${preview}. ` +
+				`Example: "${HL_FILE_PREFIX}src/foo.ts${HL_FILE_HASH_SEP}1a2b" then edit ops.`,
 		);
 	}
 
 	const sections: HashlineInputSection[] = [];
-	let currentPath = "";
+	let current: HashlineInputSection | undefined;
 	let currentLines: string[] = [];
 
 	const flush = () => {
-		if (currentPath.length === 0) return;
+		if (!current) return;
 		const hasOps = currentLines.some(line => line.trim().length > 0);
-		if (hasOps) sections.push({ path: currentPath, diff: currentLines.join("\n") });
+		if (hasOps) sections.push({ ...current, diff: currentLines.join("\n") });
 		currentLines = [];
 	};
 
 	for (const line of lines) {
-		if (line.trimEnd() === END_PATCH_MARKER || line.trimEnd() === ABORT_MARKER) break;
-		if (isPatchEnvelopeMarker(line)) continue;
-		const header = parseHashlineHeaderLine(line, options.cwd);
-		if (header !== null) {
-			flush();
-			currentPath = header.path;
-			currentLines = [];
-		} else {
-			currentLines.push(line);
+		const trimmed = line.trimEnd();
+		const token = TOKENIZER.tokenize(line);
+		if (token.kind === "envelope-end" || token.kind === "abort") break;
+		if (token.kind === "envelope-begin") continue;
+
+		// Route every `¶`-prefixed line through parseHashlineHeaderLine so
+		// malformed headers still raise the strict "Input header must be …"
+		// diagnostic (the tokenizer alone would silently classify them as
+		// payload).
+		if (trimmed.startsWith(HL_FILE_PREFIX)) {
+			const header = parseHashlineHeaderLine(line, options.cwd);
+			if (header !== null) {
+				flush();
+				current = header;
+				currentLines = [];
+				continue;
+			}
 		}
+		currentLines.push(line);
 	}
 	flush();
 	return sections;

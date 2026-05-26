@@ -49,7 +49,7 @@ Single-shot result.
 - Archive writes return empty `details`.
 
 ## Flow
-1. `WriteTool.execute()` in `packages/coding-agent/src/tools/write.ts` strips `LINE+ID|` hashline prefixes from `content` when the session is in hashline display mode.
+1. `WriteTool.execute()` in `packages/coding-agent/src/tools/write.ts` strips pasted `¶PATH#HASH` headers and `LINE:` hashline prefixes from `content` when the session is in hashline display mode.
 2. It calls `#resolveArchiveWritePath()` first. That uses `parseArchivePathCandidates()` from `packages/coding-agent/src/tools/archive-reader.ts`, checks candidate archive files on disk, and falls back to the longest matching archive suffix even when the archive file does not exist yet.
 3. Archive writes call `enforcePlanModeWrite(..., { op: exists ? "update" : "create" })`, then `#writeArchiveEntry()`.
    - The parent directory of the archive file is created with `fs.mkdir(..., { recursive: true })`.

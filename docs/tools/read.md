@@ -101,11 +101,11 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
   - Default open-ended limit is `min(session setting read.defaultLimit, DEFAULT_MAX_LINES)`.
   - Explicit ranges expand by `RANGE_LEADING_CONTEXT_LINES = 1` / `RANGE_TRAILING_CONTEXT_LINES = 3` on the constrained sides only.
   - Non-raw output uses `resolveFileDisplayMode()`:
-    - hashline anchors when edit mode is hashline, read is not raw, source is mutable, edit tool exists, and `readHashLines !== false`
+    - hashline numbered output when edit mode is hashline, read is not raw, source is mutable, edit tool exists, and `readHashLines !== false`
     - otherwise optional line numbers when `readLineNumbers === true`
     - raw mode suppresses both
-- Prefix format in hashline mode is `lineNumber + 2-char line hash + "|"`, e.g. `41th|def alpha():`, from `formatHashLine()` in `packages/coding-agent/src/hashline/hash.ts`.
-- Those anchors are what the `edit`/hashline path consumes later; immutable sources and `:raw` intentionally suppress them.
+- Prefix format in hashline mode is a `¶PATH#HASH` header followed by `LINE:TEXT`, e.g. `¶src/foo.ts#1a2b` and `41:def alpha():`, from `computeFileHash()` / `formatNumberedLine()` in `packages/coding-agent/src/hashline/hash.ts`.
+- The `edit`/hashline path consumes that header plus bare line numbers later; immutable sources and `:raw` intentionally suppress them.
 
 ### Directory listings
 - `#readDirectory()` calls `buildDirectoryTree()` with:
