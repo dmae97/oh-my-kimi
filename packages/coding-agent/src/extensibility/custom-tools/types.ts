@@ -80,6 +80,8 @@ export interface CustomToolContext {
 	abort(): void;
 	/** Settings instance for the current session. Prefer over the global singleton. */
 	settings?: Settings;
+	/** Whether to auto-approve all destructive tool operations (--auto-approve CLI flag) */
+	autoApprove?: boolean;
 }
 
 /** Session event passed to onSession callback */

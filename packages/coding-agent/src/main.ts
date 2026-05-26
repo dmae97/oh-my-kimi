@@ -529,6 +529,7 @@ async function buildSessionOptions(
 ): Promise<{ options: CreateAgentSessionOptions }> {
 	const options: CreateAgentSessionOptions = {
 		cwd: parsed.cwd ?? getProjectDir(),
+		autoApprove: parsed.autoApprove ?? false,
 	};
 
 	// Auto-discover SYSTEM.md if no CLI system prompt provided

@@ -120,6 +120,14 @@ export default class Index extends Command {
 		"no-title": Flags.boolean({
 			description: "Disable title auto-generation",
 		}),
+		// `--auto-approve` / `--yolo`: declared here so oclif's auto-generated `--help` lists it.
+		// Runtime parsing happens in `cli/args.ts parseArgs` (line 176 in that file) — `runRootCommand`
+		// consumes the manual-parser output, not these oclif flag values. If you rename or remove
+		// either form, update both call sites in lockstep.
+		"auto-approve": Flags.boolean({
+			aliases: ["yolo"],
+			description: "Auto-approve all tool calls (skip approval prompts)",
+		}),
 	};
 
 	static examples = [

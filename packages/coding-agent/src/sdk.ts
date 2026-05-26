@@ -60,7 +60,6 @@ import {
 } from "./extensibility/custom-commands";
 import { discoverAndLoadCustomTools } from "./extensibility/custom-tools";
 import type { CustomTool, CustomToolContext, CustomToolSessionEvent } from "./extensibility/custom-tools/types";
-import { CustomToolAdapter } from "./extensibility/custom-tools/wrapper";
 import {
 	discoverAndLoadExtensions,
 	type ExtensionContext,
@@ -343,6 +342,9 @@ export interface CreateAgentSessionOptions {
 	 * `@opentelemetry/api` package returns a no-op tracer in that case.
 	 */
 	telemetry?: AgentTelemetryConfig;
+
+	/** Whether to auto-approve all tool calls (--auto-approve CLI flag). Default: false */
+	autoApprove?: boolean;
 }
 
 /** Result from createAgentSession */
@@ -835,7 +837,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// buffer — so we can't rely on it to catch startup events for the extension runner.
 	const startupCredentialDisabledEvents: CredentialDisabledEvent[] = [];
 	let credentialDisabledTarget: ExtensionRunner | undefined;
-	let unsubscribeCredentialDisabled: (() => void) | undefined = authStorage.onCredentialDisabled(event => {
+	const unsubscribeCredentialDisabled: (() => void) | undefined = authStorage.onCredentialDisabled(event => {
 		if (credentialDisabledTarget) {
 			// Discard return: any handler error is routed through runner.onError listeners.
 			void credentialDisabledTarget.emitCredentialDisabled(event);
@@ -1455,29 +1457,25 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		let extensionRunner: ExtensionRunner | undefined;
-		if (extensionsResult.extensions.length > 0) {
-			extensionRunner = new ExtensionRunner(
-				extensionsResult.extensions,
-				extensionsResult.runtime,
-				cwd,
-				sessionManager,
-				modelRegistry,
-			);
-		}
+		// The runner is created unconditionally — even with zero extensions loaded — because the
+		// `ExtensionToolWrapper` installed below is the only place the per-tool approval gate runs.
+		// A conditional runner means the approval system silently disappears for users with no
+		// extensions, contradicting `tools.approvalMode: prompt | custom` settings without feedback.
+		// (Today `createAutoresearchExtension` is unconditionally pushed below, so this scenario
+		// is unreachable; the unconditional construction makes that invariant explicit instead of
+		// implicit, so a future change to make autoresearch optional cannot silently re-open the hole.)
+		const extensionRunner: ExtensionRunner = new ExtensionRunner(
+			extensionsResult.extensions,
+			extensionsResult.runtime,
+			cwd,
+			sessionManager,
+			modelRegistry,
+		);
 
-		if (extensionRunner) {
-			credentialDisabledTarget = extensionRunner;
-			for (const event of startupCredentialDisabledEvents.splice(0)) {
-				// Discard return: any handler error is routed through runner.onError listeners.
-				void extensionRunner.emitCredentialDisabled(event);
-			}
-		} else {
-			// No runner to forward to; release our subscription. The embedder's own
-			// onCredentialDisabled (if any) keeps firing through its own subscription.
-			startupCredentialDisabledEvents.length = 0;
-			unsubscribeCredentialDisabled?.();
-			unsubscribeCredentialDisabled = undefined;
+		credentialDisabledTarget = extensionRunner;
+		for (const event of startupCredentialDisabledEvents.splice(0)) {
+			// Discard return: any handler error is routed through runner.onError listeners.
+			void extensionRunner.emitCredentialDisabled(event);
 		}
 
 		const getSessionContext = () => ({
@@ -1490,38 +1488,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				session.abort();
 			},
 			settings,
+			autoApprove: options.autoApprove ?? false,
 		});
 		const toolContextStore = new ToolContextStore(getSessionContext);
 
-		const registeredTools = extensionRunner?.getAllRegisteredTools() ?? [];
-		let wrappedExtensionTools: Tool[];
-
-		if (extensionRunner) {
-			// With extension runner: convert CustomTools to ToolDefinitions and wrap all together
-			const allCustomTools = [
-				...registeredTools,
-				...(options.customTools?.map(tool => {
-					const definition = isCustomTool(tool) ? customToolToDefinition(tool) : tool;
-					return { definition, extensionPath: "<sdk>" };
-				}) ?? []),
-			];
-			wrappedExtensionTools = wrapRegisteredTools(allCustomTools, extensionRunner);
-		} else {
-			// Without extension runner: wrap CustomTools directly with CustomToolAdapter
-			// ToolDefinition items require ExtensionContext and cannot be used without a runner
-			const customToolContext = (): CustomToolContext => ({
-				sessionManager,
-				modelRegistry,
-				model: agent?.state.model,
-				isIdle: () => !session?.isStreaming,
-				hasQueuedMessages: () => (session?.queuedMessageCount ?? 0) > 0,
-				abort: () => session?.abort(),
-				settings,
-			});
-			wrappedExtensionTools = (options.customTools ?? [])
-				.filter(isCustomTool)
-				.map(tool => CustomToolAdapter.wrap(tool, customToolContext));
-		}
+		const registeredTools = extensionRunner.getAllRegisteredTools();
+		const allCustomTools = [
+			...registeredTools,
+			...(options.customTools?.map(tool => {
+				const definition = isCustomTool(tool) ? customToolToDefinition(tool) : tool;
+				return { definition, extensionPath: "<sdk>" };
+			}) ?? []),
+		];
+		const wrappedExtensionTools: Tool[] = wrapRegisteredTools(allCustomTools, extensionRunner);
 
 		// All built-in tools are active (conditional tools like git/ask return null from factory if disabled)
 		const toolRegistry = new Map<string, Tool>();
@@ -1537,10 +1516,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		for (const tool of wrappedExtensionTools) {
 			toolRegistry.set(tool.name, tool);
 		}
-		if (extensionRunner) {
-			for (const tool of toolRegistry.values()) {
-				toolRegistry.set(tool.name, new ExtensionToolWrapper(tool, extensionRunner));
-			}
+		// Wrap every tool with `ExtensionToolWrapper` so the per-tool approval gate runs on every
+		// call site, regardless of whether any user extensions are loaded. See the runner-construction
+		// comment above for the safety invariant this enforces.
+		for (const tool of toolRegistry.values()) {
+			toolRegistry.set(tool.name, new ExtensionToolWrapper(tool, extensionRunner));
 		}
 		if (model?.provider === "cursor") {
 			toolRegistry.delete("edit");
@@ -1564,7 +1544,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			})) as unknown as AgentTool | null;
 			if (!sshTool) return null;
 			const wrapped = wrapToolWithMetaNotice(sshTool);
-			return (extensionRunner ? new ExtensionToolWrapper(wrapped, extensionRunner) : wrapped) as AgentTool;
+			return new ExtensionToolWrapper(wrapped, extensionRunner) as AgentTool;
 		};
 
 		let cursorEventEmitter: ((event: AgentEvent) => void) | undefined;
@@ -1824,21 +1804,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (!obfuscator?.hasSecrets()) return converted;
 			return obfuscateMessages(obfuscator, converted);
 		};
-		const transformContext = extensionRunner
-			? async (messages: AgentMessage[], _signal?: AbortSignal) => {
-					return await extensionRunner.emitContext(messages);
-				}
-			: undefined;
-		const onPayload = extensionRunner
-			? async (payload: unknown, _model?: Model) => {
-					return await extensionRunner.emitBeforeProviderRequest(payload);
-				}
-			: undefined;
-		const onResponse: SimpleStreamOptions["onResponse"] | undefined = extensionRunner
-			? async (response, model) => {
-					await extensionRunner.emitAfterProviderResponse(response, model);
-				}
-			: undefined;
+		const transformContext = async (messages: AgentMessage[], _signal?: AbortSignal) => {
+			return await extensionRunner.emitContext(messages);
+		};
+		const onPayload = async (payload: unknown, _model?: Model) => {
+			return await extensionRunner.emitBeforeProviderRequest(payload);
+		};
+		const onResponse: SimpleStreamOptions["onResponse"] = async (response, model) => {
+			await extensionRunner.emitAfterProviderResponse(response, model);
+		};
 
 		const setToolUIContext = (uiContext: ExtensionUIContext, hasUI: boolean) => {
 			toolContextStore.setUIContext(uiContext, hasUI);

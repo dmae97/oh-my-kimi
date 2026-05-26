@@ -3,7 +3,9 @@
  */
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Static, TextContent, TSchema } from "@oh-my-pi/pi-ai";
+import type { Settings } from "../../config/settings";
 import type { Theme } from "../../modes/theme/theme";
+import { formatApprovalPrompt, requiresApproval } from "../../tools/approval";
 import { applyToolProxy } from "../tool-proxy";
 import type { ExtensionRunner } from "./runner";
 import type { RegisteredTool, ToolCallEventResult } from "./types";
@@ -108,7 +110,49 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
 	) {
-		// Emit tool_call event - extensions can block execution
+		// 1. Check approval policy (before extension handlers).
+		// Resolution:
+		//   - CLI `--auto-approve` always wins (covers automation/CI).
+		//   - `tools.approvalMode = "auto"` (default) → skip approval entirely; `tools.approval` is ignored.
+		//   - `tools.approvalMode = "prompt"` → built-in per-tool defaults only; `tools.approval` is ignored.
+		//   - `tools.approvalMode = "custom"` → user `tools.approval.<tool>` config wins; built-in defaults
+		//     fall back only for tools the user hasn't configured. Critical-pattern overrides still apply.
+		const cliAutoApprove = context?.autoApprove === true;
+		const settings: Settings | undefined = context?.settings;
+		const approvalMode = (settings?.get("tools.approvalMode") ?? "auto") as "auto" | "prompt" | "custom";
+		const autoApprove = cliAutoApprove || approvalMode === "auto";
+		const userPolicies =
+			approvalMode === "custom" ? ((settings?.get("tools.approval") ?? {}) as Record<string, unknown>) : {};
+
+		if (!autoApprove) {
+			const approvalCheck = requiresApproval(this.tool.name, params, userPolicies);
+
+			if (approvalCheck.required) {
+				// Check if UI is available
+				if (!this.runner.hasUI()) {
+					throw new Error(
+						`Tool "${this.tool.name}" requires approval but no interactive UI available.\n` +
+							`Options:\n` +
+							`  1. Use --auto-approve flag\n` +
+							`  2. Set tools.approvalMode: auto in /settings (default)\n` +
+							`  3. Set tools.approvalMode: custom and add tools.approval.${this.tool.name}: allow to config`,
+					);
+				}
+
+				// Format prompt message
+				const message = formatApprovalPrompt(this.tool.name, params, approvalCheck.reason);
+
+				// Show approval dialog
+				const uiContext = this.runner.getUIContext();
+				const approved = await uiContext.confirm(`Approve ${this.tool.name}?`, message);
+
+				if (!approved) {
+					throw new Error(`Tool call denied by user: ${this.tool.name}`);
+				}
+			}
+		}
+
+		// 2. Emit tool_call event - extensions can block execution
 		if (this.runner.hasHandlers("tool_call")) {
 			try {
 				const callResult = (await this.runner.emitToolCall({

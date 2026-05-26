@@ -532,6 +532,11 @@ function createSubagentSettings(baseSettings: Settings): Settings {
 		...snapshot,
 		"async.enabled": false,
 		"bash.autoBackground.enabled": false,
+		// Subagents run headless — there is no UI to confirm prompts against, so
+		// any non-auto mode would deadlock on the first destructive call. The
+		// parent's approval of the `task` invocation is the user's authorization
+		// for the work the subagent performs.
+		"tools.approvalMode": "auto",
 	});
 }
 
