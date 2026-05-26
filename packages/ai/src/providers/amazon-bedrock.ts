@@ -65,6 +65,12 @@ export interface BedrockOptions extends StreamOptions {
 	 */
 	thinkingDisplay?: BedrockThinkingDisplay;
 }
+const AUTHENTICATED_API_KEY_SENTINEL = "<authenticated>";
+
+function resolveBearerToken(options: BedrockOptions): string | undefined {
+	const apiKey = options.apiKey === AUTHENTICATED_API_KEY_SENTINEL ? undefined : options.apiKey;
+	return options.bearerToken || apiKey || $env.AWS_BEARER_TOKEN_BEDROCK;
+}
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
 
@@ -234,7 +240,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				accept: "application/vnd.amazon.eventstream",
 			};
 
-			const bearerToken = options.bearerToken || options.apiKey || $env.AWS_BEARER_TOKEN_BEDROCK;
+			const bearerToken = resolveBearerToken(options);
 			let requestHeaders: Record<string, string>;
 			if (bearerToken) {
 				requestHeaders = { ...baseHeaders, Authorization: `Bearer ${bearerToken}` };
