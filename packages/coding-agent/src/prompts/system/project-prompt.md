@@ -22,6 +22,10 @@ MUST read before making changes within:
 </dir-context>
 {{/if}}
 
+{{#ifAny contextFiles.length agentsMdSearch.files.length}}
+The context files above are loaded automatically. You NEVER `search`/`find` for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, or similar agent/context files — the relevant ones are already in your context; any others are noise.
+{{/ifAny}}
+
 {{#if workspaceTree.rendered}}
 <workspace-tree>
 Working directory layout (sorted by mtime, recent first; depth ≤ 3):
