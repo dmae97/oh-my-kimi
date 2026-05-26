@@ -888,6 +888,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						persistArtifacts: !!artifactsDir,
 						artifactsDir: effectiveArtifactsDir,
 						contextFile: contextFilePath,
+						enableLsp: this.session.enableLsp,
 						signal,
 						eventBus: this.session.eventBus,
 						onProgress: progress => {
@@ -942,6 +943,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						persistArtifacts: !!artifactsDir,
 						artifactsDir: effectiveArtifactsDir,
 						contextFile: contextFilePath,
+						enableLsp: this.session.enableLsp,
 						signal,
 						eventBus: this.session.eventBus,
 						onProgress: progress => {

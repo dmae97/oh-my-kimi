@@ -86,7 +86,9 @@ function createYieldingSession(): AgentSession {
 	} as unknown as AgentSession;
 }
 
-function createSession(options: { isolationMode?: "none" | "auto"; planMode?: PlanModeState } = {}): ToolSession {
+function createSession(
+	options: { enableLsp?: boolean; isolationMode?: "none" | "auto"; planMode?: PlanModeState } = {},
+): ToolSession {
 	const modelRegistry = {
 		authStorage: undefined,
 		refresh: async () => {},
@@ -98,6 +100,7 @@ function createSession(options: { isolationMode?: "none" | "auto"; planMode?: Pl
 		cwd: "/tmp",
 		hasUI: false,
 		settings: Settings.isolated({ "async.enabled": false, "task.isolation.mode": options.isolationMode ?? "none" }),
+		enableLsp: options.enableLsp,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		modelRegistry,
@@ -172,6 +175,22 @@ describe("subagent LSP availability", () => {
 
 		expect(getOptions()?.enableLsp).toBe(true);
 		expect(getOptions()?.toolNames).toContain("lsp");
+	});
+
+	it("propagates the parent --no-lsp flag into subagents", async () => {
+		mockAgents({
+			name: "task",
+			description: "Task agent",
+			systemPrompt: "Use normal tools.",
+			source: "bundled",
+			tools: ["lsp"],
+		});
+		const { getOptions } = mockCreateAgentSession();
+
+		const tool = await TaskTool.create(createSession({ enableLsp: false }));
+		await tool.execute("tool-call", TEST_TASK);
+
+		expect(getOptions()?.enableLsp).toBe(false);
 	});
 
 	it("inherits the executor default instead of disabling LSP for isolated subagents", async () => {
