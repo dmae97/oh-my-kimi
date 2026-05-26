@@ -283,6 +283,7 @@ function countMatchingSingleNonStructuralPrefixDuplicate(
 ): number {
 	if (replacement.length === 0 || startLine <= 1) return 0;
 	const line = replacement[0];
+	if (line.trim().length === 0) return 0;
 	if (isStructuralClosingBoundaryLine(line)) return 0;
 	if (fileLines[startLine - 2] !== line) return 0;
 	return 1;
@@ -295,6 +296,7 @@ function countMatchingSingleNonStructuralSuffixDuplicate(
 ): number {
 	if (replacement.length === 0 || endLine >= fileLines.length) return 0;
 	const line = replacement[replacement.length - 1];
+	if (line.trim().length === 0) return 0;
 	if (isStructuralClosingBoundaryLine(line)) return 0;
 	if (fileLines[endLine] !== line) return 0;
 	return 1;
