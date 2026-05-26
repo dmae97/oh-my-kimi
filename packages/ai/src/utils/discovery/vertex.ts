@@ -1,7 +1,7 @@
 import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "@oh-my-pi/pi-ai";
 import * as z from "zod/v4";
-import type { FetchImpl, Model } from "../../types";
 import { getVertexAccessToken } from "../../providers/google-auth";
+import type { FetchImpl, Model } from "../../types";
 
 const API_VERSION = "v1";
 const DEFAULT_PAGE_SIZE = 100;
