@@ -1810,7 +1810,7 @@ export class AuthStorage {
 		if (
 			request.credential.type === "oauth" &&
 			request.credential.expiresAt !== undefined &&
-			Date.now() >= request.credential.expiresAt
+			Date.now() + OAUTH_REFRESH_SKEW_MS >= request.credential.expiresAt
 		) {
 			const refreshableCredential = this.#buildRefreshableOauthCredential(request.credential);
 			if (refreshableCredential) {
@@ -2821,8 +2821,19 @@ export class AuthStorage {
 					: refreshedCredentials.access;
 				result = { newCredentials: refreshedCredentials, apiKey };
 			} else {
+				// Refresh first through the broker-aware single-flighted machinery
+				// so transient failures surface as network errors (5-min temp block)
+				// instead of `getOAuthApiKey`'s "expired" precondition error, which
+				// the definitive-failure regex below would otherwise classify as
+				// auth failure and soft-disable a still-valid credential.
+				const refreshedCredentials = await this.#refreshOAuthCredential(
+					provider,
+					selection.credential,
+					this.#getStoredCredentials(provider)[selection.index]?.id,
+					options?.signal,
+				);
 				const oauthCreds: Record<string, OAuthCredentials> = {
-					[provider]: selection.credential,
+					[provider]: refreshedCredentials,
 				};
 				result = await getOAuthApiKey(provider as OAuthProvider, oauthCreds);
 			}

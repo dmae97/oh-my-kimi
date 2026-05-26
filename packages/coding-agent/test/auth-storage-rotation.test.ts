@@ -42,6 +42,12 @@ describe("AuthStorage account rotation", () => {
 			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
 		});
 
+		// Stub the refresh path so AuthStorage doesn't hit a real OAuth endpoint
+		// when the credential lands inside the 60s skew. Returning the credential
+		// unchanged preserves the test's deterministic accountId routing.
+		vi.spyOn(oauth, "refreshOAuthToken").mockImplementation(async (_provider, credential) => {
+			return credential;
+		});
 		vi.spyOn(oauth, "getOAuthApiKey").mockImplementation(async (_provider, credentials) => {
 			const credential = credentials["openai-codex"] as OAuthCredentials | undefined;
 			if (!credential) return null;

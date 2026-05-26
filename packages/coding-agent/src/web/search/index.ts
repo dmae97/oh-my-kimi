@@ -266,7 +266,8 @@ export const webSearchCustomTool: CustomTool<typeof webSearchSchema, SearchRende
 		signal?: AbortSignal,
 	) {
 		const authStorage = ctx.modelRegistry?.authStorage ?? (await discoverAuthStorage());
-		return executeSearch(toolCallId, params, { authStorage, signal });
+		const sessionId = ctx.sessionManager.getSessionId();
+		return executeSearch(toolCallId, params, { authStorage, sessionId, signal });
 	},
 
 	renderCall(args: SearchToolParams, options: RenderResultOptions, theme: Theme) {
