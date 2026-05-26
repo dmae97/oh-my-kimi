@@ -85,11 +85,7 @@ import type { HindsightSessionState } from "./hindsight/state";
 import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./mcp";
-import {
-	collectDiscoverableMCPTools,
-	formatDiscoverableMCPToolServerSummary,
-	selectDiscoverableMCPToolNamesByServer,
-} from "./mcp/discoverable-tool-metadata";
+
 import { resolveMemoryBackend } from "./memory-backend";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
@@ -118,6 +114,9 @@ import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } f
 import {
 	collectDiscoverableTools,
 	type DiscoverableTool,
+	filterBySource,
+	formatDiscoverableToolServerSummary,
+	selectDiscoverableToolNamesByServer,
 	summarizeDiscoverableTools,
 } from "./tool-discovery/tool-index";
 import {
@@ -1201,8 +1200,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getTodoPhases: () => session.getTodoPhases(),
 			setTodoPhases: phases => session.setTodoPhases(phases),
 			isMCPDiscoveryEnabled: () => session.isMCPDiscoveryEnabled(),
-			getDiscoverableMCPTools: () => session.getDiscoverableMCPTools(),
-			getDiscoverableMCPSearchIndex: () => session.getDiscoverableMCPSearchIndex(),
 			getSelectedMCPToolNames: () => session.getSelectedMCPToolNames(),
 			activateDiscoveredMCPTools: toolNames => session.activateDiscoveredMCPTools(toolNames),
 			// Generic tool discovery (unified — covers built-in + MCP + extension)
@@ -1586,7 +1583,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			tools: Map<string, AgentTool>,
 		): Promise<BuildSystemPromptResult> => {
 			toolContextStore.setToolNames(toolNames);
-			const discoverableMCPTools = mcpDiscoveryEnabled ? collectDiscoverableMCPTools(tools.values()) : [];
+			const discoverableMCPTools: DiscoverableTool[] = mcpDiscoveryEnabled
+				? filterBySource(collectDiscoverableTools(tools.values()), "mcp")
+				: [];
 			const activeToolNames = new Set(toolNames);
 			const discoverableBuiltinTools: DiscoverableTool[] =
 				effectiveDiscoveryMode === "all"
@@ -1597,18 +1596,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							{ source: "builtin" },
 						)
 					: [];
-			const discoverableToolsForDesc: DiscoverableTool[] = [
-				...discoverableBuiltinTools,
-				...discoverableMCPTools.map(t => ({
-					name: t.name,
-					label: t.label,
-					summary: t.description,
-					source: "mcp" as const,
-					serverName: t.serverName,
-					mcpToolName: t.mcpToolName,
-					schemaKeys: t.schemaKeys,
-				})),
-			];
+			const discoverableToolsForDesc: DiscoverableTool[] = [...discoverableBuiltinTools, ...discoverableMCPTools];
 			const discoverableToolSummary = summarizeDiscoverableTools(discoverableToolsForDesc);
 			const hasDiscoverableTools =
 				mcpDiscoveryEnabled && toolNames.includes("search_tool_bm25") && discoverableToolsForDesc.length > 0;
@@ -1652,7 +1640,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				repeatToolDescriptions,
 				intentField,
 				mcpDiscoveryMode: hasDiscoverableTools,
-				mcpDiscoveryServerSummaries: discoverableToolSummary.servers.map(formatDiscoverableMCPToolServerSummary),
+				mcpDiscoveryServerSummaries: discoverableToolSummary.servers.map(formatDiscoverableToolServerSummary),
 				eagerTasks,
 				secretsEnabled,
 				workspaceTree: workspaceTreePromise,
@@ -1698,8 +1686,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			(settings.get("mcp.discoveryDefaultServers") ?? []).map(serverName => serverName.trim()).filter(Boolean),
 		);
 		const discoveryDefaultServerToolNames = mcpDiscoveryEnabled
-			? selectDiscoverableMCPToolNamesByServer(
-					collectDiscoverableMCPTools(toolRegistry.values()),
+			? selectDiscoverableToolNamesByServer(
+					filterBySource(collectDiscoverableTools(toolRegistry.values()), "mcp"),
 					discoveryDefaultServers,
 				)
 			: [];

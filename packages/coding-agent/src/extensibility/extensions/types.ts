@@ -283,8 +283,6 @@ export interface ExtensionContext {
 	shutdown(): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string[];
-	/** @deprecated Use hasPendingMessages() instead */
-	hasQueuedMessages(): boolean;
 }
 
 /**

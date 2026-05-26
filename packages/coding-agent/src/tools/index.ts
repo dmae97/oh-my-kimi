@@ -103,7 +103,6 @@ export type ContextFileEntry = {
 	depth?: number;
 };
 
-export type { DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 export type {
 	DiscoverableTool,
 	DiscoverableToolSearchIndex,
@@ -195,12 +194,6 @@ export interface ToolSession {
 	setTodoPhases?: (phases: TodoPhase[]) => void;
 	/** Whether MCP tool discovery is active for this session. */
 	isMCPDiscoveryEnabled?: () => boolean;
-	/** Get hidden-but-discoverable MCP tools for search_tool_bm25 prompts and fallbacks.
-	 * @deprecated Use getDiscoverableTools with source filter instead. */
-	getDiscoverableMCPTools?: () => import("../mcp/discoverable-tool-metadata").DiscoverableMCPTool[];
-	/** Get the cached discoverable MCP search index for search_tool_bm25 execution.
-	 * @deprecated Use getDiscoverableToolSearchIndex instead. */
-	getDiscoverableMCPSearchIndex?: () => import("../tool-discovery/tool-index").DiscoverableMCPSearchIndex;
 	/** Get MCP tools activated by prior search_tool_bm25 calls. */
 	getSelectedMCPToolNames?: () => string[];
 	/** Merge MCP tool selections into the active session tool set. */

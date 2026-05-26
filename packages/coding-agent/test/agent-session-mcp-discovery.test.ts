@@ -123,8 +123,8 @@ describe("AgentSession MCP discovery", () => {
 		});
 		sessions.push(session);
 
-		const firstIndex = session.getDiscoverableMCPSearchIndex();
-		const secondIndex = session.getDiscoverableMCPSearchIndex();
+		const firstIndex = session.getDiscoverableToolSearchIndex();
+		const secondIndex = session.getDiscoverableToolSearchIndex();
 		expect(secondIndex).toBe(firstIndex);
 		expect(firstIndex.documents.map(document => document.tool.name)).toEqual(["mcp__docs_search"]);
 
@@ -132,7 +132,7 @@ describe("AgentSession MCP discovery", () => {
 			createMcpCustomTool("mcp__pager_list", "pager", "list", "List pager alerts", ["service"]),
 		]);
 
-		const refreshedIndex = session.getDiscoverableMCPSearchIndex();
+		const refreshedIndex = session.getDiscoverableToolSearchIndex();
 		expect(refreshedIndex).not.toBe(firstIndex);
 		expect(refreshedIndex.documents.map(document => document.tool.name)).toEqual(["mcp__pager_list"]);
 	});
@@ -310,7 +310,7 @@ describe("AgentSession MCP discovery", () => {
 		sessions.push(session);
 
 		expect(session.getActiveToolNames()).toEqual(["read"]);
-		expect(session.getDiscoverableMCPTools().map(tool => tool.name)).toEqual([
+		expect(session.getDiscoverableTools({ source: "mcp" }).map(tool => tool.name)).toEqual([
 			"mcp__docs_search",
 			"mcp__slack_send_message",
 		]);
@@ -816,66 +816,6 @@ describe("AgentSession MCP discovery", () => {
 		expect(session.getActiveToolNames()).toEqual(["read"]);
 		expect(session.systemPrompt).toEqual(["tools:read"]);
 	});
-
-	// ── Findings #2: legacy MCP discovery shapes ───────────────────────────────
-	it("getDiscoverableMCPTools returns the legacy MCP shape with `description` populated", () => {
-		const readTool = createBasicTool("read", "Read");
-		const docsSearchTool = createMcpTool("mcp__docs_search", "docs", "search", "Search internal docs", ["query"]);
-		const toolRegistry = new Map([
-			[readTool.name, readTool],
-			[docsSearchTool.name, docsSearchTool],
-		]);
-		const agent = new Agent({
-			initialState: { model: createModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
-		});
-		const session = new AgentSession({
-			agent,
-			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "mcp.discoveryMode": true }),
-			modelRegistry: {} as never,
-			toolRegistry,
-			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [`tools:${toolNames.join(",")}`] }),
-		});
-		sessions.push(session);
-
-		const discoverable = session.getDiscoverableMCPTools();
-		expect(discoverable).toHaveLength(1);
-		const entry = discoverable[0]!;
-		expect(entry.name).toBe("mcp__docs_search");
-		expect(entry.description).toBe("Search internal docs");
-		// Legacy shape must NOT carry `summary` — back-compat callers expect `description`.
-		expect((entry as { summary?: string }).summary).toBeUndefined();
-	});
-
-	it("getDiscoverableMCPSearchIndex documents expose tool.description (legacy shape)", () => {
-		const readTool = createBasicTool("read", "Read");
-		const docsSearchTool = createMcpTool("mcp__docs_search", "docs", "search", "Search internal docs", ["query"]);
-		const toolRegistry = new Map([
-			[readTool.name, readTool],
-			[docsSearchTool.name, docsSearchTool],
-		]);
-		const agent = new Agent({
-			initialState: { model: createModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
-		});
-		const session = new AgentSession({
-			agent,
-			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "mcp.discoveryMode": true }),
-			modelRegistry: {} as never,
-			toolRegistry,
-			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [`tools:${toolNames.join(",")}`] }),
-		});
-		sessions.push(session);
-
-		const index = session.getDiscoverableMCPSearchIndex();
-		expect(index.documents).toHaveLength(1);
-		const doc = index.documents[0]!;
-		expect(doc.tool.name).toBe("mcp__docs_search");
-		expect(doc.tool.description).toBe("Search internal docs");
-	});
-
 	// ── Findings #3: discovery index is invalidated on active-tool changes ─────
 	it("setActiveToolsByName invalidates the generic discoverable tool search index", async () => {
 		const readTool = createBasicTool("read", "Read");

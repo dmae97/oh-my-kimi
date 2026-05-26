@@ -71,9 +71,6 @@ export function resolveHashlineGrammarPlaceholders(grammar: string): string {
 		.replaceAll("$HFILE$", HL_FILE_PREFIX);
 }
 
-/** @deprecated Use {@link resolveHashlineGrammarPlaceholders}. */
-export const resolveLarkLidPlaceholders = resolveHashlineGrammarPlaceholders;
-
 /**
  * op lines have an `ANCHOR<SIGIL>[INLINE_PAYLOAD]` shape, where SIGIL is one of
  * {@link HL_OP_INSERT_BEFORE}, {@link HL_OP_INSERT_AFTER}, {@link HL_OP_REPLACE},
