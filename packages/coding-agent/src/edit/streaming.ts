@@ -386,13 +386,23 @@ function buildHashlineNaturalOrderPreviews(
 			case "envelope-begin":
 			case "envelope-end":
 			case "abort":
-			case "op-insert":
-			case "op-replace":
 			case "op-delete":
 				continue;
 			case "header":
 				currentPath = token.path;
 				if (currentPath) ensure(currentPath);
+				continue;
+			case "op-insert":
+			case "op-replace":
+				// Inline body on the op line itself (`N↓payload`, `A-B:payload`) is
+				// payload content that just happens to share a line with the op
+				// header — render it the same as a standalone payload token so
+				// the very first character the model types after the sigil shows
+				// up in the streaming preview. Without this, the preview is
+				// empty until a newline arrives, and the renderer falls back to
+				// raw input ("A-B: bla bla bla") instead of "+ bla bla bla".
+				if (!currentPath || token.inlineBody === undefined) continue;
+				ensure(currentPath).push(`+${token.inlineBody}`);
 				continue;
 			case "blank":
 				if (!currentPath) continue;
