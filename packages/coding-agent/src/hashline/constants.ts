@@ -28,3 +28,14 @@ export const ABORT_WARNING =
  */
 export const REPLACE_PAIR_COALESCED_WARNING =
 	"Detected an identical-range before/after replace pair; kept only the second block's payload. Issue ONE op per range — the payload is the final desired content, never both old and new.";
+
+/**
+ * Warning text appended when a single-line replace op like `83: content`
+ * arrives while a multi-line replace `A-B:` is still pending and `83` is
+ * inside `A-B`. The model used the read-output `LINE:TEXT` format as if it
+ * were a payload-continuation line; we strip the `LINE:` prefix and treat
+ * `content` as the next payload line, but warn so the model learns the
+ * cleaner format on its own.
+ */
+export const PAYLOAD_LINE_PREFIX_DEMOTED_WARNING =
+	"Detected one or more `LINE:TEXT` lines whose anchors fell inside the pending replace range; treated them as payload-continuation lines and stripped the `LINE:` prefix. Inside a multi-line `A-B:` block, payload lines after the first do not need a line-number prefix.";

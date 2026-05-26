@@ -459,9 +459,43 @@ describe("hashline parser — suffix-op syntax", () => {
 		]);
 	});
 
-	it("still rejects two replace ops with non-identical overlapping ranges", () => {
-		const diff = `${tag(2, "bbb")}-${tag(4, "ddd")}:NEW1\n${tag(3, "ccc")}-${tag(4, "ddd")}:NEW2`;
+	it("still rejects two replace ops whose ranges partially overlap without containment", () => {
+		// 3-5 extends past the outer 2-4, so it is neither identical nor contained.
+		// The inner anchors still clash with the outer range's deletes and the
+		// post-hoc validator catches the overlap.
+		const diff = `${tag(2, "bbb")}-${tag(4, "ddd")}:NEW1\n${tag(3, "ccc")}-${tag(5, "eee")}:NEW2`;
 		expect(() => parseHashline(diff).edits).toThrow(/anchor line 3 is already targeted by the .+ op on line 1/);
+	});
+
+	it("demotes a single-line `N:` op inside a pending `A-B:` to a payload line", () => {
+		const diff = `${tag(2, "bbb")}-${tag(4, "ddd")}:line one\n${tag(3, "ccc")}:line two\n${tag(4, "ddd")}:line three`;
+		const { edits, warnings } = parseHashline(diff);
+		expect(applyHashlineEdits("aaa\nbbb\nccc\nddd\neee", edits).lines).toBe(
+			"aaa\nline one\nline two\nline three\neee",
+		);
+		expect(warnings).toEqual([
+			"Detected one or more `LINE:TEXT` lines whose anchors fell inside the pending replace range; treated them as payload-continuation lines and stripped the `LINE:` prefix. Inside a multi-line `A-B:` block, payload lines after the first do not need a line-number prefix.",
+		]);
+	});
+
+	it("demotes a sub-range `A-B:` inside a pending outer `A-B:` to a payload line", () => {
+		const diff = `${tag(2, "bbb")}-${tag(5, "eee")}:line one\n${tag(3, "ccc")}-${tag(4, "ddd")}:collapsed pair`;
+		const { edits, warnings } = parseHashline(diff);
+		expect(applyHashlineEdits("aaa\nbbb\nccc\nddd\neee\nfff", edits).lines).toBe(
+			"aaa\nline one\ncollapsed pair\nfff",
+		);
+		expect(warnings).toEqual([
+			"Detected one or more `LINE:TEXT` lines whose anchors fell inside the pending replace range; treated them as payload-continuation lines and stripped the `LINE:` prefix. Inside a multi-line `A-B:` block, payload lines after the first do not need a line-number prefix.",
+		]);
+	});
+
+	it("treats `N:` outside the pending range as a separate op (no demote)", () => {
+		const diff = `${tag(2, "bbb")}-${tag(3, "ccc")}:line one\n${tag(5, "eee")}:line five`;
+		const { edits, warnings } = parseHashline(diff);
+		expect(applyHashlineEdits("aaa\nbbb\nccc\nddd\neee\nfff", edits).lines).toBe(
+			"aaa\nline one\nddd\nline five\nfff",
+		);
+		expect(warnings).toEqual([]);
 	});
 
 	it("rejects a replace overlapping a later delete", () => {

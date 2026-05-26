@@ -1,4 +1,4 @@
-import { ABORT_WARNING, REPLACE_PAIR_COALESCED_WARNING } from "./constants";
+import { ABORT_WARNING, PAYLOAD_LINE_PREFIX_DEMOTED_WARNING, REPLACE_PAIR_COALESCED_WARNING } from "./constants";
 import { HL_OP_CHARS, HL_OP_DELETE, HL_OP_INSERT_AFTER, HL_OP_INSERT_BEFORE, HL_OP_REPLACE } from "./hash";
 import {
 	cloneCursor,
@@ -17,6 +17,10 @@ function validateRangeOrder(range: ParsedRange, lineNum: number): void {
 
 function rangesEqual(a: ParsedRange, b: ParsedRange): boolean {
 	return a.start.line === b.start.line && a.end.line === b.end.line;
+}
+
+function rangeContains(outer: ParsedRange, inner: ParsedRange): boolean {
+	return outer.start.line <= inner.start.line && inner.end.line <= outer.end.line;
 }
 
 function expandRange(range: ParsedRange): Anchor[] {
@@ -113,20 +117,31 @@ export class HashlineExecutor {
 				return;
 			case "op-replace":
 				validateRangeOrder(token.range, token.lineNum);
-				// Common shape: model emits the same `A-B:` block twice — a "before"
-				// payload followed by an "after" payload. The first op's payload is
-				// just informational (and will be replaced wholesale by the second
-				// op's payload anyway), so discard the pending op silently and let
-				// the second op proceed. Other overlap shapes (different ranges,
-				// replace+delete, delete+delete) still hit the post-hoc validator.
-				if (
-					this.#pending !== undefined &&
-					this.#pending.op.kind === "replace" &&
-					rangesEqual(this.#pending.op.range, token.range)
-				) {
-					this.#pending = undefined;
-					if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_WARNING)) {
-						this.#warnings.push(REPLACE_PAIR_COALESCED_WARNING);
+				if (this.#pending !== undefined && this.#pending.op.kind === "replace") {
+					const outer = this.#pending.op.range;
+					const inner = token.range;
+					if (rangesEqual(outer, inner)) {
+						// Identical-range before/after pair. Drop the "before" payload
+						// silently; the second op proceeds as the lone winner. Other
+						// overlap shapes (different ranges, replace+delete,
+						// delete+delete) still hit the post-hoc validator.
+						this.#pending = undefined;
+						if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_WARNING)) {
+							this.#warnings.push(REPLACE_PAIR_COALESCED_WARNING);
+						}
+					} else if (rangeContains(outer, inner)) {
+						// Model wrote a payload line in read-output `LINE:TEXT` format
+						// (or `A-B:TEXT` for a sub-range) inside an outer `A-B:` block.
+						// The tokenizer can't tell payload from op when the anchor and
+						// sigil shape are identical, so demote: append the op's inline
+						// body to the pending payload, strip the `LINE:` prefix, and
+						// keep accumulating. Without this the inner anchors would each
+						// register as their own delete and clash with the outer range.
+						this.#pending.payload.push(token.inlineBody ?? "");
+						if (!this.#warnings.includes(PAYLOAD_LINE_PREFIX_DEMOTED_WARNING)) {
+							this.#warnings.push(PAYLOAD_LINE_PREFIX_DEMOTED_WARNING);
+						}
+						return;
 					}
 				}
 				this.#flushPending();
