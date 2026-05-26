@@ -13,7 +13,7 @@ import {
 	TabBar,
 	Text,
 } from "@oh-my-pi/pi-tui";
-import { type SettingPath, settings } from "../../config/settings";
+import { getDefault, type SettingPath, settings } from "../../config/settings";
 import type {
 	SettingTab,
 	StatusLinePreset,
@@ -294,6 +294,7 @@ export class SettingsSelectorComponent extends Container {
 		}
 
 		const currentValue = this.#getCurrentValue(def);
+		const changed = this.#isChanged(def, currentValue);
 
 		switch (def.type) {
 			case "boolean":
@@ -303,6 +304,7 @@ export class SettingsSelectorComponent extends Container {
 					description: def.description,
 					currentValue: currentValue ? "true" : "false",
 					values: ["true", "false"],
+					changed,
 				};
 
 			case "enum":
@@ -312,6 +314,7 @@ export class SettingsSelectorComponent extends Container {
 					description: def.description,
 					currentValue: currentValue as string,
 					values: [...def.values],
+					changed,
 				};
 
 			case "submenu":
@@ -321,6 +324,7 @@ export class SettingsSelectorComponent extends Container {
 					description: def.description,
 					currentValue: this.#getSubmenuCurrentValue(def.path, currentValue),
 					submenu: (cv, done) => this.#createSubmenu(def, cv, done),
+					changed,
 				};
 
 			case "text":
@@ -330,6 +334,7 @@ export class SettingsSelectorComponent extends Container {
 					description: def.description,
 					currentValue: (currentValue as string) ?? "",
 					submenu: (cv, done) => this.#createTextInput(def, cv, done),
+					changed,
 				};
 		}
 	}
@@ -339,6 +344,10 @@ export class SettingsSelectorComponent extends Container {
 	 */
 	#getCurrentValue(def: SettingDef): unknown {
 		return settings.get(def.path);
+	}
+
+	#isChanged(def: SettingDef, currentValue: unknown): boolean {
+		return !Object.is(currentValue, getDefault(def.path));
 	}
 
 	#getSubmenuCurrentValue(path: SettingPath, value: unknown): string {
