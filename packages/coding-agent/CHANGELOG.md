@@ -3,6 +3,7 @@
 ## [Unreleased]
 ### Breaking Changes
 
+
 - The `vim` edit mode option is no longer available; configurations using `edit.mode: vim` will be automatically mapped to `hashline` mode
 
 ### Added
@@ -14,7 +15,6 @@
 
 ### Changed
 
-- Mapped deprecated `vim` edit mode settings to `hashline` during config resolution to preserve compatibility
 - Updated the edit mode option set to support `replace`, `patch`, `hashline`, and `apply_patch` variants
 - Bare `A:` / `A-B:` (no payload, no inline body) now replaces the line/range with a single blank line, symmetric with bare `A↑` / `A↓` inserting a blank line; previously rejected as ambiguous
 - Simplified hashline anchor format from `LINE+HASH` to bare `LINE` numbers in edit operations
@@ -28,10 +28,7 @@
 
 ### Removed
 
-- Removed the `vim` edit mode and all associated interactive Vim buffer editing functionality
-- Removed the `VimTool` class and vim tool module from the public API
-- Removed the dedicated Vim-style `vim` edit mode and its interactive tooling stack from the edit command path
-- Removed the exported `vim` tool module and prompt so interactive Vim buffer editing is no longer available
+- Removed the `vim` edit mode along with the `VimTool` module, prompt, and supporting buffer/engine/renderer stack
 - Removed per-line hash anchors (2-letter bigram hashes) from hashline format
 - Removed `RANGE_INTERIOR_HASH` constant; multi-line ranges no longer use `**` filler
 - Removed `HashMismatch` type and hash mismatch error reporting; replaced with file-level validation

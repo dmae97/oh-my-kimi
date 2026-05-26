@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Removed
+
+- Removed `installH2Fetch` and the `fetch` patch that forced HTTP/2 on HTTPS requests; callers now use the default Bun `fetch` transport
 
 ## [15.4.0] - 2026-05-26
 ### Breaking Changes
