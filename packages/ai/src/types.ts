@@ -336,7 +336,10 @@ export interface StreamOptions {
 	 */
 	onResponse?: (response: ProviderResponseMetadata, model?: Model<Api>) => void | Promise<void>;
 	/**
-	 * Optional callback for raw Server-Sent Events as they arrive from HTTP streaming providers.
+	 * Optional callback for raw Server-Sent Events as they arrive from HTTP streaming providers,
+	 * plus synthesized SSE-shaped frames for the Codex WebSocket transport (one synthetic frame
+	 * per JSON request/response message). WebSocket frames are tagged with a leading
+	 * `: ws → <type>` (outbound) or `: ws ← <type>` (inbound) comment line in `RawSseEvent.raw`.
 	 *
 	 * Diagnostic only: provider implementations must ignore callback failures and must not
 	 * let observers alter stream contents.

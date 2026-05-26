@@ -10,6 +10,7 @@
 
 - Added `codex` and `gemini` to the web search provider settings so users can configure OpenAI and Gemini web search directly from provider selection
 - Added OpenAI (`codex`) and Gemini web search options with updated setup descriptions for `omp /login openai-codex` and Gemini OAuth login
+- Added pretty-printing for wide JSON `data:` payloads in the raw provider-stream debug viewer so streamed event bodies expand across multiple `data:` lines instead of getting clipped by the per-line truncator, and updated the viewer header to read `raw provider stream (SSE + WS)` now that Codex WebSocket frames also flow through the buffer
 
 ### Changed
 

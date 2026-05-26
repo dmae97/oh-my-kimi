@@ -359,6 +359,63 @@ describe("openai-codex streaming", () => {
 		expect(result.stopReason).toBe("stop");
 	});
 
+	it("forwards websocket frames through onSseEvent for the raw-SSE debug viewer", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+
+		class ObservedWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				this.emitCodexResponse({ messageId: "msg_obs", responseId: "resp_obs", text: "Observed" });
+			}
+		}
+		global.WebSocket = ObservedWebSocket as unknown as typeof WebSocket;
+
+		const observed: Array<{ event: string | null; data: string; raw: string[] }> = [];
+		const result = await streamOpenAICodexResponses(
+			createCodexTestModel("https://chatgpt.com/backend-api"),
+			createCodexTestContext(),
+			{
+				apiKey: token,
+				sessionId: "ws-observer-session",
+				providerSessionState: new Map<string, ProviderSessionState>(),
+				onSseEvent: event => {
+					observed.push({ event: event.event, data: event.data, raw: [...event.raw] });
+				},
+			},
+		).result();
+
+		expect(result.stopReason).toBe("stop");
+
+		// First record is the outbound request frame (the JSON we sent).
+		const [outbound, ...inbound] = observed;
+		expect(outbound).toBeDefined();
+		expect(outbound.raw[0]).toMatch(/^: ws → /);
+		expect(outbound.data.length).toBeGreaterThan(0);
+		expect(() => JSON.parse(outbound.data)).not.toThrow();
+
+		// Inbound frames mirror the Codex response sequence emitted by `emitCodexResponse`.
+		expect(inbound.map(e => e.event)).toEqual([
+			"response.output_item.added",
+			"response.content_part.added",
+			"response.output_text.delta",
+			"response.output_item.done",
+			"response.done",
+		]);
+		for (const event of inbound) {
+			expect(event.raw[0]).toBe(`: ws ← ${event.event}`);
+			// Synthesized SSE wire shape: `event:` line then `data:` line.
+			expect(event.raw[1]).toBe(`event: ${event.event}`);
+			expect(event.raw[2]).toBe(`data: ${event.data}`);
+			expect(JSON.parse(event.data)).toMatchObject({ type: event.event });
+		}
+	});
+
 	it("omits request-body headers and replaces stale beta headers for websocket handshakes", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());

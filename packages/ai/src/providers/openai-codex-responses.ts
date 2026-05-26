@@ -29,6 +29,7 @@ import {
 	type FetchImpl,
 	type Model,
 	type ProviderSessionState,
+	type RawSseEvent,
 	resolveServiceTier,
 	type ServiceTier,
 	type StreamFunction,
@@ -50,6 +51,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
+import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
 import { CODEX_BASE_URL, getCodexAccountId, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "./openai-codex/constants";
 import {
@@ -356,6 +358,52 @@ function extractCodexWebSocketHandshakeHeaders(socket: Bun.WebSocket, openEvent?
 	);
 }
 
+// Synthesizes a `RawSseEvent` for a Codex WebSocket frame so the same debug
+// pipeline used for HTTP SSE (`onSseEvent` → `RawSseDebugBuffer.recordEvent`)
+// also captures WebSocket traffic. The `raw` array mirrors SSE wire format
+// (one line per field) so the existing TUI viewer renders it identically:
+//   : ws ← <type>
+//   event: <type>
+//   data: <json>
+// Outbound (client → server) uses `: ws → <type>`. The viewer pretty-prints
+// `data:` JSON lines, so we keep the wire JSON single-line here and let the
+// renderer expand it.
+function notifyCodexWebSocketInbound(
+	observer: ((event: RawSseEvent) => void) | undefined,
+	parsed: Record<string, unknown>,
+	text: string,
+): void {
+	const type = typeof parsed.type === "string" ? parsed.type : null;
+	const raw: string[] = [`: ws ← ${type ?? "(untyped)"}`];
+	if (type) raw.push(`event: ${type}`);
+	raw.push(`data: ${text}`);
+	notifyRawSseEvent(observer, { event: type, data: text, raw });
+}
+
+function notifyCodexWebSocketOutbound(
+	observer: ((event: RawSseEvent) => void) | undefined,
+	request: Record<string, unknown>,
+	payload: string,
+): void {
+	const type = typeof request.type === "string" ? request.type : null;
+	const raw: string[] = [`: ws → ${type ?? "(untyped)"}`];
+	if (type) raw.push(`event: ${type}`);
+	raw.push(`data: ${payload}`);
+	notifyRawSseEvent(observer, { event: type, data: payload, raw });
+}
+
+function notifyCodexWebSocketMalformed(
+	observer: ((event: RawSseEvent) => void) | undefined,
+	data: unknown,
+	error: unknown,
+): void {
+	const text = typeof data === "string" ? data : "";
+	const reason = error instanceof Error ? error.message : String(error);
+	const raw: string[] = [`: ws ← (parse-error: ${reason})`];
+	if (text) raw.push(`data: ${text}`);
+	notifyRawSseEvent(observer, { event: "parse_error", data: text, raw });
+}
+
 /** @internal Exported for tests. */
 export function normalizeCodexToolChoice(
 	choice: ToolChoice | undefined,
@@ -613,7 +661,13 @@ async function openInitialCodexEventStream(
 		let websocketRetries = 0;
 		while (true) {
 			try {
-				return await openCodexWebSocketTransport(requestContext, requestSetup, websocketState, websocketRetries);
+				return await openCodexWebSocketTransport(
+					requestContext,
+					requestSetup,
+					websocketState,
+					websocketRetries,
+					options ? event => options.onSseEvent?.(event, model) : undefined,
+				);
 			} catch (error) {
 				const websocketError = error instanceof Error ? error : new Error(String(error));
 				const isFatal = isCodexWebSocketFatalError(websocketError);
@@ -644,6 +698,7 @@ async function openCodexWebSocketTransport(
 	requestSetup: CodexRequestSetup,
 	websocketState: CodexWebSocketSessionState,
 	retry: number,
+	onSseEvent?: (event: RawSseEvent) => void,
 ): Promise<{
 	eventStream: AsyncGenerator<Record<string, unknown>>;
 	requestBodyForState: RequestBody;
@@ -676,6 +731,7 @@ async function openCodexWebSocketTransport(
 		websocketRequest,
 		websocketState,
 		requestSetup.requestSignal,
+		onSseEvent,
 	);
 	return { eventStream, requestBodyForState, transport: "websocket" };
 }
@@ -721,6 +777,7 @@ async function reopenCodexWebSocketRuntimeStream(
 			context.requestSetup,
 			state,
 			runtime.websocketStreamRetries,
+			context.options ? event => context.options?.onSseEvent?.(event, context.model) : undefined,
 		);
 		runtime.eventStream = next.eventStream;
 		runtime.requestBodyForState = next.requestBodyForState;
@@ -1865,6 +1922,7 @@ class CodexWebSocketConnection {
 	#waiters: Array<() => void> = [];
 	#connectPromise?: Promise<void>;
 	#activeRequest = false;
+	#streamObserver?: (event: RawSseEvent) => void;
 
 	constructor(url: string, headers: Record<string, string>, options: CodexWebSocketConnectionOptions) {
 		this.#url = url;
@@ -1983,8 +2041,10 @@ class CodexWebSocketConnection {
 						parsed.message = inner.message;
 					}
 				}
+				notifyCodexWebSocketInbound(this.#streamObserver, parsed, text);
 				this.#push(parsed);
 			} catch (error) {
+				notifyCodexWebSocketMalformed(this.#streamObserver, event.data, error);
 				this.#push(createCodexWebSocketTransportError(String(error)));
 			}
 		};
@@ -2000,6 +2060,7 @@ class CodexWebSocketConnection {
 	async *streamRequest(
 		request: Record<string, unknown>,
 		signal?: AbortSignal,
+		onSseEvent?: (event: RawSseEvent) => void,
 	): AsyncGenerator<Record<string, unknown>> {
 		if (!this.#socket || this.#socket.readyState !== WebSocket.OPEN) {
 			throw createCodexWebSocketTransportError("websocket connection is unavailable");
@@ -2008,6 +2069,7 @@ class CodexWebSocketConnection {
 			throw createCodexWebSocketTransportError("websocket request already in progress");
 		}
 		this.#activeRequest = true;
+		this.#streamObserver = onSseEvent;
 		const onAbort = () => {
 			this.close("aborted");
 			this.#push(createCodexWebSocketTransportError("request was aborted"));
@@ -2021,7 +2083,9 @@ class CodexWebSocketConnection {
 		}
 
 		try {
-			this.#socket.send(JSON.stringify(request));
+			const requestPayload = JSON.stringify(request);
+			notifyCodexWebSocketOutbound(onSseEvent, request, requestPayload);
+			this.#socket.send(requestPayload);
 			let sawFirstEvent = false;
 			let lastProgressAt = Date.now();
 			while (true) {
@@ -2060,6 +2124,7 @@ class CodexWebSocketConnection {
 			}
 		} finally {
 			this.#activeRequest = false;
+			this.#streamObserver = undefined;
 			if (signal) {
 				signal.removeEventListener("abort", onAbort);
 			}
@@ -2193,9 +2258,10 @@ async function openCodexWebSocketEventStream(
 	request: Record<string, unknown>,
 	state: CodexWebSocketSessionState,
 	signal?: AbortSignal,
+	onSseEvent?: (event: RawSseEvent) => void,
 ): Promise<AsyncGenerator<Record<string, unknown>>> {
 	const connection = await getOrCreateCodexWebSocketConnection(state, url, headers, signal);
-	return connection.streamRequest(request, signal);
+	return connection.streamRequest(request, signal, onSseEvent);
 }
 
 function createCodexHeaders(

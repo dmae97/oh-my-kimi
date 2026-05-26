@@ -9,6 +9,7 @@
 
 - Added `PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS` and `PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS` options to tune Codex WebSocket timeout behavior before fallback
 - Added `AuthStorage.getOAuthAccess` to return a refreshed OAuth access token with identity metadata (`accountId`, `email`, `projectId`, `enterpriseUrl`) for callers that need bearer-token headers together
+- Added Codex WebSocket forwarding to the `onSseEvent` observer so the raw provider-stream debug viewer captures the inbound JSON frames and the outbound request frame from the WS transport using the same synthesized SSE-wire shape (`event:` + `data:` lines, prefixed with a `: ws ← <type>` (inbound) or `: ws → <type>` (outbound) comment).
 
 ### Changed
 
