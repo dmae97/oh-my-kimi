@@ -77,4 +77,41 @@ describe("google-vertex model discovery", () => {
 			"https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/endpoints/openapi/models?pageSize=100",
 		);
 	});
+
+	it("omits the bundled Vertex Gemini static fallback when neither ADC project nor API key are configured", async () => {
+		const previousProject = Bun.env.GOOGLE_CLOUD_PROJECT;
+		const previousGcpProject = Bun.env.GCP_PROJECT;
+		const previousGcloudProject = Bun.env.GCLOUD_PROJECT;
+		const previousVertexLocation = Bun.env.GOOGLE_VERTEX_LOCATION;
+		const previousCloudLocation = Bun.env.GOOGLE_CLOUD_LOCATION;
+		const previousLocation = Bun.env.VERTEX_LOCATION;
+		const previousApiKey = Bun.env.GOOGLE_CLOUD_API_KEY;
+		delete Bun.env.GOOGLE_CLOUD_PROJECT;
+		delete Bun.env.GCP_PROJECT;
+		delete Bun.env.GCLOUD_PROJECT;
+		delete Bun.env.GOOGLE_VERTEX_LOCATION;
+		delete Bun.env.GOOGLE_CLOUD_LOCATION;
+		delete Bun.env.VERTEX_LOCATION;
+		delete Bun.env.GOOGLE_CLOUD_API_KEY;
+		try {
+			const options = googleVertexModelManagerOptions();
+			const result = await resolveProviderModels({ ...options, cacheDbPath: dbPath }, "offline");
+			expect(result.models).toEqual([]);
+		} finally {
+			if (previousProject === undefined) delete Bun.env.GOOGLE_CLOUD_PROJECT;
+			else Bun.env.GOOGLE_CLOUD_PROJECT = previousProject;
+			if (previousGcpProject === undefined) delete Bun.env.GCP_PROJECT;
+			else Bun.env.GCP_PROJECT = previousGcpProject;
+			if (previousGcloudProject === undefined) delete Bun.env.GCLOUD_PROJECT;
+			else Bun.env.GCLOUD_PROJECT = previousGcloudProject;
+			if (previousVertexLocation === undefined) delete Bun.env.GOOGLE_VERTEX_LOCATION;
+			else Bun.env.GOOGLE_VERTEX_LOCATION = previousVertexLocation;
+			if (previousCloudLocation === undefined) delete Bun.env.GOOGLE_CLOUD_LOCATION;
+			else Bun.env.GOOGLE_CLOUD_LOCATION = previousCloudLocation;
+			if (previousLocation === undefined) delete Bun.env.VERTEX_LOCATION;
+			else Bun.env.VERTEX_LOCATION = previousLocation;
+			if (previousApiKey === undefined) delete Bun.env.GOOGLE_CLOUD_API_KEY;
+			else Bun.env.GOOGLE_CLOUD_API_KEY = previousApiKey;
+		}
+	});
 });

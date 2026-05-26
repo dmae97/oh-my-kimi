@@ -41,21 +41,29 @@ export function googleModelManagerOptions(
 export function googleVertexModelManagerOptions(config?: GoogleVertexModelManagerConfig): ModelManagerOptions {
 	const project = resolveVertexProject(config);
 	const location = resolveVertexLocation(config);
-	return {
-		providerId: "google-vertex",
-		...(project && location
-			? {
-					staticModels: [],
-					fetchDynamicModels: () =>
-						fetchVertexOpenAIModels({
-							project,
-							location,
-							signal: config?.signal,
-							fetch: config?.fetch,
-						}),
-				}
-			: undefined),
-	};
+	if (project && location) {
+		return {
+			providerId: "google-vertex",
+			staticModels: [],
+			fetchDynamicModels: () =>
+				fetchVertexOpenAIModels({
+					project,
+					location,
+					signal: config?.signal,
+					fetch: config?.fetch,
+				}),
+		};
+	}
+	// API-key-only callers hit `aiplatform.googleapis.com/v1/publishers/google/models/...`
+	// directly, so the bundled Gemini catalog is the right fallback. Otherwise — no
+	// project, no location, no API key — drop the bundled static models so stale
+	// fallbacks (e.g. `gemini-1.5-*`) cannot leak into `/models` alongside an
+	// authoritative cached Vertex project catalog on the next refresh.
+	const hasApiKey = (config?.apiKey ?? Bun.env.GOOGLE_CLOUD_API_KEY ?? "").trim().length > 0;
+	if (hasApiKey) {
+		return { providerId: "google-vertex" };
+	}
+	return { providerId: "google-vertex", staticModels: [] };
 }
 function resolveVertexProject(config?: GoogleVertexModelManagerConfig): string | undefined {
 	const project = config?.project ?? Bun.env.GOOGLE_CLOUD_PROJECT ?? Bun.env.GCP_PROJECT ?? Bun.env.GCLOUD_PROJECT;
