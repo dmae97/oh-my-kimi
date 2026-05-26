@@ -29,6 +29,10 @@ export async function* iterateUntilAbort<T>(iterable: AsyncIterable<T>, signal?:
 		);
 
 	while (true) {
+		if (signal?.aborted) {
+			closeIterator();
+			throw abortReason(signal);
+		}
 		const racers: Array<
 			Promise<{ kind: "next"; result: IteratorResult<T> } | { kind: "error"; error: unknown } | { kind: "abort" }>
 		> = [withResult(iterator.next())];
