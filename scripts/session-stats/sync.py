@@ -15,7 +15,7 @@ Schema (all tables prefixed `ss_` to avoid collision with packages/stats):
   ss_assistant_msgs   one row per assistant message (text + thinking blobs)
   ss_user_msgs        one row per user message (text blob)
   ss_edit_calls       one row per edit toolCall (success + warnings paired in)
-  ss_edit_sections    one row per §PATH section inside an edit toolCall, with
+  ss_edit_sections    one row per ¶PATH section inside an edit toolCall, with
                       precomputed detector outputs (longest_repeat_*, dup_anchors)
 
 Run:
@@ -56,7 +56,7 @@ SCHEMA_VERSION = 3
 # Bump whenever parse_hashline_input / find_longest_repeat / duplicated_anchors
 # / looks_successful / extract_warnings semantics change. Bump invalidates
 # previously-stored ss_edit_* rows on next sync.
-EDIT_PARSER_VERSION = 4
+EDIT_PARSER_VERSION = 5
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS ss_sessions (
@@ -227,17 +227,39 @@ def batch_count_tokens(strings: list[str]) -> list[int]:
 
 
 # --------------------------------------------------------------------------- #
-# Hashline edit parser (port of cmd_followups.rs::parse_hashline_input).
+# Hashline edit parser.
+#
+# Supports two on-the-wire formats so the analytic tables stay coherent across
+# the format transition:
+#
+#   new (current):   ¶PATH[#HASH], LINE↑[body], LINE↓[body], A[-B]:[body], A[-B]!
+#   legacy:          §PATH,        «ANCHOR,    »ANCHOR,    ≔ANCHOR[..ANCHOR]
+#
+# Legacy "anchor" tokens were `<line><2-letter-hash>` (e.g. `4fb`, `12*`);
+# new ops use bare line numbers and hoist the file hash into the header.
 
-_RANGE_RE = re.compile(r"^\s*(\d+)[a-z*]+(?:\.\.(\d+)[a-z*]+)?\s*$")
-_SINGLE_ANCHOR_RE = re.compile(r"^\s*(\d+)[a-z*]+\s*$")
-_HASHLINE_OP_RE = re.compile(r"^([«»≔])\s*(\S+)\s*$")
+_LEGACY_RANGE_RE = re.compile(r"^\s*(\d+)[a-z*]+(?:\.\.(\d+)[a-z*]+)?\s*$")
+_LEGACY_SINGLE_ANCHOR_RE = re.compile(r"^\s*(\d+)[a-z*]+\s*$")
+_LEGACY_OP_RE = re.compile(r"^([«»≔])\s*(\S+)\s*$")
+
+# Header: one or more `¶`, optional whitespace, path (no whitespace/#/¶),
+# optional `#HASH` (4 lowercase hex).
+_HEADER_NEW_RE = re.compile(r"^¶+\s*([^\s#¶]+)(?:#([0-9a-f]{4}))?\s*$")
+# Insert op: LINE↑BODY / LINE↓BODY / BOF↑BODY / EOF↓BODY …
+_OP_INSERT_NEW_RE = re.compile(
+    r"^\s*(?:[>+\-*]+\s*)?(?P<anchor>[1-9][0-9]*|BOF|EOF)(?P<sigil>[↑↓])(?P<inline>.*)$"
+)
+# Replace / delete op: A:BODY / A-B:BODY / A! / A-B!
+_OP_RANGE_NEW_RE = re.compile(
+    r"^\s*(?:[>+\-*]+\s*)?(?P<a>[1-9][0-9]*)(?:-(?P<b>[1-9][0-9]*))?(?P<sigil>[:!])(?P<inline>.*)$"
+)
+
 _HASHLINE_ENVELOPE_MARKERS = {"*** Begin Patch", "*** End Patch", "*** Abort"}
 
 
-def _parse_range(raw: str) -> tuple[int, tuple[int, int] | None]:
+def _parse_legacy_range(raw: str) -> tuple[int, tuple[int, int] | None]:
     """Returns (range_size, optional (start_line, end_line)). Size >= 1."""
-    m = _RANGE_RE.match(raw.strip())
+    m = _LEGACY_RANGE_RE.match(raw.strip())
     if not m:
         return (1, None)
     start = int(m.group(1))
@@ -248,8 +270,8 @@ def _parse_range(raw: str) -> tuple[int, tuple[int, int] | None]:
     return (size, lines)
 
 
-def _parse_anchor_line(raw: str) -> int | None:
-    m = _SINGLE_ANCHOR_RE.match(raw.strip())
+def _parse_legacy_anchor_line(raw: str) -> int | None:
+    m = _LEGACY_SINGLE_ANCHOR_RE.match(raw.strip())
     if not m:
         return None
     try:
@@ -284,6 +306,7 @@ class EditSection:
 def parse_hashline_input(input_str: str) -> list[EditSection]:
     sections: list[EditSection] = []
     cur: EditSection | None = None
+    cur_format: str | None = None  # "new" | "legacy"
     open_idx: int | None = None  # current open payload block in cur
 
     def open_new(s: EditSection) -> int:
@@ -299,6 +322,15 @@ def parse_hashline_input(input_str: str) -> list[EditSection]:
                 break
             continue
 
+        # Headers — new format first, then legacy.
+        new_header = _HEADER_NEW_RE.match(line)
+        if new_header:
+            if cur is not None:
+                sections.append(cur)
+            cur = EditSection(target_file=new_header.group(1))
+            cur_format = "new"
+            open_idx = None
+            continue
         if line.startswith("§"):
             if cur is not None:
                 sections.append(cur)
@@ -306,38 +338,86 @@ def parse_hashline_input(input_str: str) -> list[EditSection]:
             while prefix_end < len(line) and line[prefix_end] == "§":
                 prefix_end += 1
             cur = EditSection(target_file=line[prefix_end:].strip())
+            cur_format = "legacy"
             open_idx = None
             continue
+
         if cur is None:
             continue
 
-        op_match = _HASHLINE_OP_RE.match(line)
-        if op_match:
-            op = op_match.group(1)
-            body = op_match.group(2)
-            if op in ("«", "»"):
-                anchor_trimmed = body.strip()
-                if anchor_trimmed and anchor_trimmed not in ("BOF", "EOF"):
-                    cur.op_anchors.append(anchor_trimmed)
-                line_no = _parse_anchor_line(body)
-                if line_no is not None:
-                    cur.touch(line_no)
+        if cur_format == "new":
+            ins = _OP_INSERT_NEW_RE.match(line)
+            if ins:
+                anchor = ins.group("anchor")
+                inline = ins.group("inline")
+                cur.op_anchors.append(anchor)
+                if anchor not in ("BOF", "EOF"):
+                    try:
+                        cur.touch(int(anchor))
+                    except ValueError:
+                        pass
                 open_idx = open_new(cur)
                 cur.op_count += 1
+                if inline:
+                    cur.payload_blocks[open_idx].append(inline)
                 continue
-            if op == "≔":
-                size, lines = _parse_range(body)
+
+            rng = _OP_RANGE_NEW_RE.match(line)
+            if rng:
+                sigil = rng.group("sigil")
+                a_str = rng.group("a")
+                b_str = rng.group("b") or a_str
+                inline = rng.group("inline")
+                try:
+                    a = int(a_str)
+                    b = int(b_str)
+                    size = max(b - a + 1, 1)
+                    cur.touch(a)
+                    cur.touch(b)
+                except ValueError:
+                    size = 1
+                cur.op_anchors.append(a_str)
+                if b_str != a_str:
+                    cur.op_anchors.append(b_str)
                 cur.deleted_lines += size
-                if lines is not None:
-                    cur.touch(lines[0])
-                    cur.touch(lines[1])
-                for part in body.strip().split(".."):
-                    t = part.strip()
-                    if t:
-                        cur.op_anchors.append(t)
                 cur.op_count += 1
+                if sigil == "!":
+                    # Delete op: payload forbidden by the production parser; close.
+                    open_idx = None
+                    continue
+                # sigil == ":" — replace.
                 open_idx = open_new(cur)
+                if inline:
+                    cur.payload_blocks[open_idx].append(inline)
                 continue
+        else:
+            op_match = _LEGACY_OP_RE.match(line)
+            if op_match:
+                op = op_match.group(1)
+                body = op_match.group(2)
+                if op in ("«", "»"):
+                    anchor_trimmed = body.strip()
+                    if anchor_trimmed and anchor_trimmed not in ("BOF", "EOF"):
+                        cur.op_anchors.append(anchor_trimmed)
+                    line_no = _parse_legacy_anchor_line(body)
+                    if line_no is not None:
+                        cur.touch(line_no)
+                    open_idx = open_new(cur)
+                    cur.op_count += 1
+                    continue
+                if op == "≔":
+                    size, lines = _parse_legacy_range(body)
+                    cur.deleted_lines += size
+                    if lines is not None:
+                        cur.touch(lines[0])
+                        cur.touch(lines[1])
+                    for part in body.strip().split(".."):
+                        t = part.strip()
+                        if t:
+                            cur.op_anchors.append(t)
+                    cur.op_count += 1
+                    open_idx = open_new(cur)
+                    continue
 
         if open_idx is not None:
             cur.payload_blocks[open_idx].append(line)
@@ -669,7 +749,7 @@ def _ingest_edit_call(rec, sf, seq, ts, call_id, arg_obj, arg_json) -> None:
         (sf, call_id, seq, ts, raw_input_len, EDIT_PARSER_VERSION)
     )
 
-    if not any(line.startswith("§") for line in input_str.lstrip("\ufeff").splitlines()):
+    if not any(line.startswith(("¶", "§")) for line in input_str.lstrip("\ufeff").splitlines()):
         # Vim-mode or other shape — no sections to record.
         return
 
