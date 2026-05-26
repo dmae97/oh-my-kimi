@@ -42,7 +42,7 @@ Patch language inside `input`:
 
 Anchors come from `read`/`search` output. `read` formats lines as `LINEhh|TEXT` via `formatHashLine` / `formatHashLines` in `packages/coding-agent/src/hashline/hash.ts`; copy only the token left of `|` into op lines.
 
-Other edit modes exist (`replace`, `patch`, `vim`, `apply_patch`) and are selected outside the tool payload by `resolveEditMode()` in `packages/coding-agent/src/utils/edit-mode.ts`. Their schemas are different; this document covers the default hashline mode.
+Other edit modes exist (`replace`, `patch`, `apply_patch`) and are selected outside the tool payload by `resolveEditMode()` in `packages/coding-agent/src/utils/edit-mode.ts`. Their schemas are different; this document covers the default hashline mode.
 
 ## Outputs
 - Single-shot tool result; hashline mode does not use a `resolve` preview/apply handshake.
@@ -98,7 +98,6 @@ Warnings:
 - `replace` — exact/fuzzy old/new text replacement (`packages/coding-agent/src/edit/modes/replace.ts`).
 - `patch` — structured JSON diff-hunk mode (`packages/coding-agent/src/edit/modes/patch.ts`).
 - `apply_patch` — freeform Codex-style `*** Begin Patch` envelope, internally expanded into patch-mode entries (`packages/coding-agent/src/edit/modes/apply-patch.ts`).
-- `vim` — persistent modal editing buffer (`packages/coding-agent/src/tools/vim.ts`).
 
 Hashline op examples:
 

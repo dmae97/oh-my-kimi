@@ -25,10 +25,8 @@ import {
 	shortenPath,
 	truncateDiffByHunk,
 } from "../tools/render-utils";
-import { type VimRenderArgs, vimToolRenderer } from "../tools/vim";
 import { fileHyperlink, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
 import type { EditMode } from "../utils/edit-mode";
-import type { VimToolDetails } from "../vim/types";
 import type { DiffError, DiffResult } from "./diff";
 import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
 import type { Operation } from "./modes/patch";
@@ -125,31 +123,6 @@ interface HashlineInputRenderSummary {
 interface ApplyPatchRenderSummary {
 	entries: ApplyPatchEntry[];
 	error?: string;
-}
-
-function isVimRenderArgs(args: EditRenderArgs | VimRenderArgs): args is VimRenderArgs {
-	return (
-		typeof args === "object" &&
-		args !== null &&
-		typeof (args as { file?: unknown }).file === "string" &&
-		!("path" in args) &&
-		!("file_path" in args) &&
-		!("edits" in args)
-	);
-}
-
-function isVimToolDetails(details: unknown): details is VimToolDetails {
-	if (!details || typeof details !== "object" || Array.isArray(details)) {
-		return false;
-	}
-	const cursor = (details as { cursor?: unknown }).cursor;
-	const viewportLines = (details as { viewportLines?: unknown }).viewportLines;
-	return (
-		typeof (details as { file?: unknown }).file === "string" &&
-		typeof cursor === "object" &&
-		cursor !== null &&
-		Array.isArray(viewportLines)
-	);
 }
 
 /** Extended context for edit tool rendering */
@@ -460,16 +433,11 @@ export const editToolRenderer = {
 	mergeCallAndResult: true,
 
 	renderCall(
-		args: EditRenderArgs | VimRenderArgs,
+		args: EditRenderArgs,
 		options: RenderResultOptions & { renderContext?: EditRenderContext },
 		uiTheme: Theme,
 	): Component {
 		const renderContext = options.renderContext;
-		// Dispatch on the explicit editMode when available; fall back to the
-		// shape probe for legacy call sites that don't thread renderContext.
-		if (renderContext?.editMode === "vim" || isVimRenderArgs(args)) {
-			return vimToolRenderer.renderCall(args as VimRenderArgs, options, uiTheme);
-		}
 
 		const editArgs = args as EditRenderArgs;
 		const hashlineInputSummary = getHashlineInputRenderSummary(editArgs, renderContext?.editMode);
@@ -514,14 +482,6 @@ export const editToolRenderer = {
 		uiTheme: Theme,
 		args?: EditRenderArgs,
 	): Component {
-		if (options.renderContext?.editMode === "vim" || isVimToolDetails(result.details)) {
-			return vimToolRenderer.renderResult(
-				result as { content: Array<{ type: string; text?: string }>; details?: VimToolDetails; isError?: boolean },
-				options,
-				uiTheme,
-			);
-		}
-
 		const perFileResults = result.details?.perFileResults;
 		const totalFiles = args?.edits ? countEditFiles(args.edits) : 0;
 		if (perFileResults && (perFileResults.length > 1 || totalFiles > 1)) {

@@ -1,6 +1,40 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- The `vim` edit mode option is no longer available; configurations using `edit.mode: vim` will be automatically mapped to `hashline` mode
+
+### Added
+
+- Added file-hash computation and validation for hashline sections to detect stale edits
+- Added file-read snapshot caching with multi-snapshot ring per path for recovery from agent's own writes
+- Added delete operation (`!`) support to hashline grammar for explicit line deletion
+- Added structural bracket/brace balance warnings when deleting lines with unclosed constructs
+
+### Changed
+
+- Mapped deprecated `vim` edit mode settings to `hashline` during config resolution to preserve compatibility
+- Updated the edit mode option set to support `replace`, `patch`, `hashline`, and `apply_patch` variants
+- Bare `A:` / `A-B:` (no payload, no inline body) now replaces the line/range with a single blank line, symmetric with bare `A↑` / `A↓` inserting a blank line; previously rejected as ambiguous
+- Simplified hashline anchor format from `LINE+HASH` to bare `LINE` numbers in edit operations
+- Updated hashline file headers to include 4-hex file hash: `¶PATH#HASH` format for anchored edits
+- Changed hashline line separator from `|` to `:` in editable output (e.g., `42:content` instead of `42ab|content`)
+- Removed per-line hash validation; file-level hash now validates entire section integrity
+- Updated read/search output to emit file-hash headers (`¶PATH#HASH`) followed by numbered lines for hashline mode
+- Modified hashline grammar to accept optional file hash in headers and removed hash requirements from line anchors
+- Changed hashline diff preview format to use `LINE:content` instead of `LINE+HASH|content`
+- Updated prompt documentation to reflect new `¶PATH#HASH` header and bare line-number syntax
+
+### Removed
+
+- Removed the `vim` edit mode and all associated interactive Vim buffer editing functionality
+- Removed the `VimTool` class and vim tool module from the public API
+- Removed the dedicated Vim-style `vim` edit mode and its interactive tooling stack from the edit command path
+- Removed the exported `vim` tool module and prompt so interactive Vim buffer editing is no longer available
+- Removed per-line hash anchors (2-letter bigram hashes) from hashline format
+- Removed `RANGE_INTERIOR_HASH` constant; multi-line ranges no longer use `**` filler
+- Removed `HashMismatch` type and hash mismatch error reporting; replaced with file-level validation
 
 ## [15.4.0] - 2026-05-26
 

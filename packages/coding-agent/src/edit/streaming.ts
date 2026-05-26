@@ -523,27 +523,11 @@ const applyPatchStrategy: EditStreamingStrategy<ApplyPatchArgs> = {
 		return "";
 	},
 };
-
-// Vim streaming preview is handled by the existing vimToolRenderer inside
-// edit/renderer.ts. The strategy here is a no-op so the registry is total.
-const vimStrategy: EditStreamingStrategy<unknown> = {
-	extractCompleteEdits(args) {
-		return args;
-	},
-	async computeDiffPreview() {
-		return null;
-	},
-	renderStreamingFallback() {
-		return "";
-	},
-};
-
 export const EDIT_MODE_STRATEGIES: Record<EditMode, EditStreamingStrategy<unknown>> = {
 	replace: replaceStrategy as EditStreamingStrategy<unknown>,
 	patch: patchStrategy as EditStreamingStrategy<unknown>,
 	hashline: hashlineStrategy as EditStreamingStrategy<unknown>,
 	apply_patch: applyPatchStrategy as EditStreamingStrategy<unknown>,
-	vim: vimStrategy,
 };
 
 export { resolveEditMode };
