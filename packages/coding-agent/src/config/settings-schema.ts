@@ -1805,7 +1805,7 @@ export const SETTINGS_SCHEMA = {
 	// Default tool approval mode (interaction tab, but governs the tool wrapper).
 	//   "always-ask" — auto-approves read-tier tools only; prompts for write/exec.
 	//   "write"      — auto-approves read and write-tier tools; prompts for exec.
-	//   "yolo"       — auto-approves every tier unless a tool declares `override: true`.
+	//   "yolo"       — auto-approves every tier.
 	"tools.approvalMode": {
 		type: "enum",
 		values: ["always-ask", "write", "yolo"] as const,
@@ -1814,7 +1814,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "interaction",
 			label: "Tool Approval",
 			description:
-				"Default approval behaviour for tool calls. 'Always ask' auto-approves read-only tools only. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves every tier unless a tool declares a safety override. `tools.approval.<tool>` overrides are honored in every mode.",
+				"Default approval behaviour for tool calls. 'Always ask' auto-approves read-only tools only. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
 			options: [
 				{
 					value: "always-ask",
@@ -1831,7 +1831,7 @@ export const SETTINGS_SCHEMA = {
 					value: "yolo",
 					label: "Yolo",
 					description:
-						"Auto-approve read, write, and exec tools. Safety overrides declared by tools (for example critical bash patterns) still require confirmation.",
+						"Auto-approve read, write, and exec tools. User policy can still require confirmation or block calls.",
 				},
 			],
 		},

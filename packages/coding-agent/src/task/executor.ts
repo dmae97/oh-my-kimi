@@ -532,10 +532,10 @@ function createSubagentSettings(baseSettings: Settings): Settings {
 		...snapshot,
 		"async.enabled": false,
 		"bash.autoBackground.enabled": false,
+
 		// Subagents run headless — there is no UI to confirm prompts against, so
 		// the parent task approval is the authorization boundary. Use yolo mode
-		// to preserve unattended subagent execution while still honoring any
-		// tool-level safety override that can be handled before execution.
+		// to preserve unattended subagent execution. User `tools.approval` policies still apply.
 		"tools.approvalMode": "yolo",
 	});
 }

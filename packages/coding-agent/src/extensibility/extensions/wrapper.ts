@@ -111,9 +111,8 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		context?: AgentToolContext,
 	) {
 		// 1. Check approval policy (before extension handlers).
-		// CLI `--auto-approve` / `--yolo` forces yolo mode for the session, but
-		// tool-level safety overrides still prompt. User `tools.approval.<tool>`
-		// policies are honored in every mode.
+		// CLI `--auto-approve` / `--yolo` sets approval mode to yolo.
+		// User `tools.approval.<tool>` policies are still applied in all modes.
 		const cliAutoApprove = context?.autoApprove === true;
 		const settings: Settings | undefined = context?.settings;
 		const configuredMode = (settings?.get("tools.approvalMode") ?? "yolo") as ApprovalMode;

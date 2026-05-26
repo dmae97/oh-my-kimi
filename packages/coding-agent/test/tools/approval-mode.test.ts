@@ -156,7 +156,7 @@ describe("tools.approvalMode setting", () => {
 		}
 	});
 
-	it("critical bash patterns prompt even in yolo mode when bash is user-allowed", async () => {
+	it("critical bash patterns do not prompt in yolo mode with bash allowed", async () => {
 		const { tempDir, session, settings } = await makeSession({
 			"tools.approvalMode": "yolo",
 			"tools.approval": { bash: "allow" },
@@ -165,11 +165,17 @@ describe("tools.approvalMode setting", () => {
 		try {
 			const bash = session.getToolByName("bash");
 			if (!bash) throw new Error("Expected bash tool");
-			await expect(
-				bash.execute("critical", { command: "rm -rf /" }, undefined, undefined, {
+
+			const result = await bash.execute(
+				"critical",
+				{ command: "rm -f /tmp/bun-fake-timer-probe.test.ts" },
+				undefined,
+				undefined,
+				{
 					settings,
-				} as AgentToolContext),
-			).rejects.toThrow(/requires approval but no interactive UI available/);
+				} as AgentToolContext,
+			);
+			expect(textOf(result)).toBe("(no output)");
 		} finally {
 			await session.dispose();
 		}
@@ -193,7 +199,7 @@ describe("tools.approvalMode setting", () => {
 		}
 	});
 
-	it("CLI --auto-approve does not bypass tool safety overrides", async () => {
+	it("CLI --auto-approve also bypasses safety-override patterns", async () => {
 		const { tempDir, session, settings } = await makeSession({
 			"tools.approvalMode": "always-ask",
 		});
@@ -201,12 +207,17 @@ describe("tools.approvalMode setting", () => {
 		try {
 			const bash = session.getToolByName("bash");
 			if (!bash) throw new Error("Expected bash tool");
-			await expect(
-				bash.execute("cli-critical", { command: "rm -rf /" }, undefined, undefined, {
+			const result = await bash.execute(
+				"cli-critical",
+				{ command: "rm -f /tmp/bun-fake-timer-probe.test.ts" },
+				undefined,
+				undefined,
+				{
 					settings,
 					autoApprove: true,
-				} as AgentToolContext),
-			).rejects.toThrow(/requires approval but no interactive UI available/);
+				} as AgentToolContext,
+			);
+			expect(textOf(result)).toBe("(no output)");
 		} finally {
 			await session.dispose();
 		}

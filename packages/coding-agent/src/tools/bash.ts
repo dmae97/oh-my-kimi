@@ -42,11 +42,11 @@ const BASH_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS = 60_000;
 
 /**
- * Bash patterns that force an approval prompt even in yolo mode.
+ * Bash patterns flagged as safety critical for approval policy.
  *
- * Kept intentionally tight — the cost of a false positive is one extra prompt;
- * the cost of a false negative is data loss or a compromised host. New patterns
- * should target shapes that are virtually never legitimate in automation.
+ * Kept intentionally tight — the cost of a false negative is data loss or a compromised host,
+ * while false positives remain actionable through user policy control.
+ * New patterns should target shapes that are virtually never legitimate in automation.
  */
 export const CRITICAL_BASH_PATTERNS = [
 	// Recursive destruction.

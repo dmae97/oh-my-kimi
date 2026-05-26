@@ -4,7 +4,8 @@
 
 ### Changed
 
-- Changed the default `task.simple` mode from `default` to `schema-free`, so task-call `schema` inputs are disabled by default while shared `context` and agent/session-defined output schemas remain available
+- Changed the default `task.simple` mode from `default` to `schema-free`, so task-call `schema` inputs are disabled by default while shared `context` and user prompt/session-defined output schemas remain available
+- Changed `tools.approvalMode: yolo` to auto-approve tool calls even when a tool marks `override: true`; user `tools.approval.<tool>` policies (`allow`/`prompt`/`deny`) now remain the only controls for yolo mode.
 
 ## [15.5.1] - 2026-05-26
 

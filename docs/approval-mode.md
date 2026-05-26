@@ -14,13 +14,15 @@ Tools without an `approval` declaration are treated as `exec`. This is the safe 
 
 Configure with `tools.approvalMode`:
 
+## Modes
+
 | Mode | Auto-approves | Prompts for |
 | --- | --- | --- |
 | `always-ask` | `read` | `write`, `exec` |
 | `write` | `read`, `write` | `exec` |
-| `yolo` (default) | `read`, `write`, `exec` | nothing unless a tool declares `override: true` |
+| `yolo` (default) | `read`, `write`, `exec` | none |
 
-`--auto-approve` and `--yolo` force `tools.approvalMode: yolo` for the session. They do **not** bypass tool safety overrides.
+`--auto-approve` and `--yolo` force `tools.approvalMode: yolo` for the session.
 
 ## User overrides
 
@@ -38,11 +40,10 @@ tools:
 Resolution per tool call:
 
 1. Compute the tool's approval decision from `tool.approval(args)`; omitted means `exec`.
-2. If the decision has `override: true`:
-   - `tools.approval.<tool>: deny` blocks the call.
-   - every other policy prompts, even in `yolo`.
-3. Otherwise, a valid `tools.approval.<tool>` value wins.
-4. Otherwise, the active mode auto-approves or prompts by tier.
+2. A user policy in `tools.approval.<tool>` is always applied.
+3. In `yolo` mode, with no user policy, the call is auto-approved.
+4. In non-yolo modes, if the tool sets `override: true`, `deny` is blocked and all other cases prompt.
+5. Otherwise, the active mode auto-approves or prompts by tier.
 
 Invalid policy values are ignored and fall back to the tool tier/mode decision.
 
@@ -54,7 +55,7 @@ A tool can force a prompt with object-form approval:
 approval: { tier: "exec", override: true, reason: "Critical pattern detected" }
 ```
 
-`bash` uses this for critical destructive patterns such as `rm -rf /`, fork bombs, remote-fetch-then-execute, writes to `/etc/passwd`, and host shutdown commands. These prompt even in `yolo`; in non-interactive/headless sessions they fail instead of running unattended.
+ `bash` uses this for critical destructive patterns such as `rm -rf /`, fork bombs, remote-fetch-then-execute, writes to `/etc/passwd`, and host shutdown commands. These surface as `reason` in the approval prompt, but in `yolo` mode they are auto-approved unless a user policy for the tool is set to `prompt` or `deny`.
 
 ## Per-tool prompt details
 
@@ -92,4 +93,4 @@ approval: args => isCritical(args.command)
 
 ## Subagents
 
-Subagents run headless with `tools.approvalMode: yolo` so they do not stall waiting for UI. The parent `task` approval is the authorization boundary. Tool-level safety overrides still apply; a critical override inside a headless subagent fails rather than running without confirmation.
+Subagents run headless with `tools.approvalMode: yolo` so they do not stall waiting for UI. The parent `task` approval is the authorization boundary. User `tools.approval.<tool>` settings continue to control whether a tool is allowed, prompted, or blocked.
