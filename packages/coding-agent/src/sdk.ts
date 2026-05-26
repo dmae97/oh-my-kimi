@@ -1666,7 +1666,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// `createTools`), but an explicit `toolNames` list would otherwise drop it from the
 		// active set — leaving the model unable to satisfy the contract. Mirror the same
 		// invariant `parseAgentFields` enforces on frontmatter `tools`.
-		if (options.requireYieldTool === true && explicitlyRequestedToolNames && !explicitlyRequestedToolNames.includes("yield")) {
+		if (
+			options.requireYieldTool === true &&
+			explicitlyRequestedToolNames &&
+			!explicitlyRequestedToolNames.includes("yield")
+		) {
 			explicitlyRequestedToolNames.push("yield");
 		}
 		const requestedToolNames = explicitlyRequestedToolNames ?? toolNamesFromRegistry;
