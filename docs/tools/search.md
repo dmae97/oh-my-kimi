@@ -21,7 +21,7 @@
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `pattern` | `string` | Yes | Regex pattern. `search.ts` trims it and rejects empty input. The native matcher enables multiline only when the pattern text contains a literal newline or the two-character sequence `\\n`. The model prompt explicitly documents literal-brace escaping such as ``interface\\{\\}``, although the native layer also auto-escapes braces that cannot be valid repetition quantifiers. |
-| `paths` | `string[]` | Yes | One or more file paths, directory paths, glob-like paths, or internal URLs. Empty strings are rejected after trimming/quote stripping. Internal URLs must resolve to a backing file and cannot contain glob characters. |
+| `paths` | `string \| string[]` | Yes | One file path, directory path, glob-like path, internal URL, or an array of those. Empty strings are rejected after trimming/quote stripping. Internal URLs must resolve to a backing file and cannot contain glob characters. |
 | `i` | `boolean` | No | Case-insensitive search. Defaults to `false`. Passed to native `ignoreCase`. |
 | `gitignore` | `boolean` | No | Respect `.gitignore` during directory scans. Defaults to `true`. Passed to native `gitignore`. |
 | `skip` | `number` | No | Global match offset. Defaults to `0`. `search.ts` floors finite numbers and rejects negative or non-finite values. |
@@ -49,7 +49,8 @@ The tool returns a single text block in `content[0].text` plus structured `detai
    - trims `pattern`, rejects empty patterns;
    - normalizes `skip` to a non-negative integer;
    - reads `search.contextBefore` and `search.contextAfter` from session settings (`1` and `3` by default);
-   - enables multiline only when `pattern` contains `\n` or an actual newline.
+   - enables multiline only when `pattern` contains `\n` or an actual newline;
+   - wraps a single string `paths` value into a one-element list before path resolution.
 2. Each `paths` entry is normalized with `normalizePathLikeInput()`.
 3. Internal URLs are resolved through `session.internalRouter`:
    - glob metacharacters (`*`, `?`, `[`, `{`) are rejected for internal URLs;

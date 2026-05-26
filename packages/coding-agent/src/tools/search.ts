@@ -9,11 +9,12 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { getFileReadCache } from "../edit/file-read-cache";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { computeFileHash, formatHashlineHeader } from "../hashline/hash";
+import { formatHashlineHeader, getHashlineSyntax } from "../hashline/hash";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
 import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../session/streaming-output";
 import { Ellipsis, fileHyperlink, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
+import { resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import {
@@ -39,13 +40,13 @@ import {
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
+const searchPathEntrySchema = z.string().describe("file, directory, glob, or internal URL to search");
 const searchSchema = z
 	.object({
 		pattern: z.string().describe("regex pattern"),
 		paths: z
-			.array(z.string().describe("file, directory, glob, or internal URL to search"))
-			.min(1)
-			.describe("files, directories, globs, or internal URLs to search"),
+			.union([searchPathEntrySchema, z.array(searchPathEntrySchema).min(1)])
+			.describe("file, directory, glob, internal URL, or array of those to search"),
 		i: z.boolean().optional().describe("case-insensitive search"),
 		gitignore: z.boolean().optional().describe("respect gitignore"),
 		skip: z
@@ -237,7 +238,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 		_onUpdate?: AgentToolUpdateCallback<SearchToolDetails>,
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<SearchToolDetails>> {
-		const { pattern, paths, i, gitignore, skip } = params;
+		const { pattern, paths: rawPaths, i, gitignore, skip } = params;
 
 		return untilAborted(signal, async () => {
 			const normalizedPattern = pattern.trim();
@@ -249,6 +250,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			if (normalizedSkip < 0 || !Number.isFinite(normalizedSkip)) {
 				throw new ToolError("Skip must be a non-negative number");
 			}
+			const paths = typeof rawPaths === "string" ? [rawPaths] : rawPaths;
 			for (const entry of paths) {
 				if (containsTopLevelComma(entry)) {
 					throw new ToolError('paths is an array — pass ["a", "b"] not ["a,b"]');
@@ -486,6 +488,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				}
 				const displayLines: string[] = [];
 				const hashContexts = new Map<string, { absolutePath: string; fileHash: string }>();
+				const hashlineSyntax = getHashlineSyntax(resolveEditMode(this.session));
 				if (baseDisplayMode.hashLines) {
 					for (const relativePath of fileList) {
 						if (archiveDisplaySet.has(relativePath)) continue;
@@ -493,7 +496,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						if (immutableSourcePaths.has(absoluteFilePath)) continue;
 						try {
 							const fullText = await Bun.file(absoluteFilePath).text();
-							const fileHash = computeFileHash(fullText);
+							const fileHash = hashlineSyntax.computeFileHash(fullText);
 							hashContexts.set(relativePath, { absolutePath: absoluteFilePath, fileHash });
 						} catch {
 							// Best-effort: if the file disappeared between grep and render, fall back to plain line output.
@@ -525,7 +528,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 								modelOut.push("...");
 								displayOut.push(`${gutterPad}│...`);
 							}
-							modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
+							modelOut.push(
+								formatMatchLine(lineNumber, line, isMatch, { useHashLines, syntax: hashlineSyntax }),
+							);
 							displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
 							if (recordable) cacheEntries.push([lineNumber, line] as const);
 							lastEmittedLine = lineNumber;
@@ -560,7 +565,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						return {
 							modelLines: rendered.model,
 							displayLines: rendered.display,
-							headerSuffix: hashContext ? `#${hashContext.fileHash}` : "",
+							headerSuffix: hashContext && hashlineSyntax.id === "file" ? `#${hashContext.fileHash}` : "",
 							skip: rendered.model.length === 0,
 						};
 					});
@@ -576,7 +581,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						}
 						const hashContext = hashContexts.get(relativePath);
 						if (hashContext) {
-							outputLines.push(formatHashlineHeader(relativePath, hashContext.fileHash));
+							outputLines.push(formatHashlineHeader(relativePath, hashContext.fileHash, hashlineSyntax));
 						}
 						outputLines.push(...rendered.model);
 						displayLines.push(...rendered.display);
