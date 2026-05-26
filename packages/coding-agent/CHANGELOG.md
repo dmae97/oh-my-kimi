@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.5.2] - 2026-05-26
 ### Breaking Changes
 
 - Changed the hashline patch format so payload continuation lines now require a leading `+`, rejecting unprefixed multiline payload rows that were previously accepted as fallback payload text
