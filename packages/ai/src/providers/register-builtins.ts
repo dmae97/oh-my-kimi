@@ -176,13 +176,12 @@ function hasFinalResult(
 interface LazyStreamLimits {
 	defaultFirstEventTimeoutMs?: number;
 	defaultIdleTimeoutMs?: number;
-}
 	/**
 	 * The provider implementation already wraps its upstream transport with
 	 * stream timeouts. Keep the lazy loader from racing it with generic errors.
 	 */
 	providerHandlesStreamTimeouts?: boolean;
-
+}
 /**
  * Cloud Code Assist (google-gemini-cli / google-antigravity) routinely takes
  * longer than the global 100s default to emit its first SSE event when serving
@@ -199,6 +198,7 @@ const GOOGLE_GEMINI_CLI_LAZY_STREAM_LIMITS: LazyStreamLimits = {
 const PROVIDER_HANDLED_STREAM_TIMEOUTS: LazyStreamLimits = {
 	providerHandlesStreamTimeouts: true,
 };
+
 function forwardStream<TApi extends Api>(
 	target: EventStreamImpl,
 	source: AsyncIterable<AssistantMessageEvent>,
