@@ -56,6 +56,9 @@ const searchSchema = z
 	.strict();
 
 export type SearchToolInput = z.infer<typeof searchSchema>;
+export function toPathList(input: string | string[] | undefined): string[] {
+	return typeof input === "string" ? [input] : (input ?? []);
+}
 
 /** Maximum number of distinct files surfaced in a single response. The
  * agent paginates further pages via `skip`. */
@@ -249,7 +252,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			if (normalizedSkip < 0 || !Number.isFinite(normalizedSkip)) {
 				throw new ToolError("Skip must be a non-negative number");
 			}
-			const paths = typeof rawPaths === "string" ? [rawPaths] : rawPaths;
+			const paths = toPathList(rawPaths);
 			for (const entry of paths) {
 				if (containsTopLevelComma(entry)) {
 					throw new ToolError('paths is an array — pass ["a", "b"] not ["a,b"]');
@@ -645,7 +648,7 @@ const COLLAPSED_TEXT_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
 export const searchToolRenderer = {
 	inline: true,
 	renderCall(args: SearchRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const paths = typeof args.paths === "string" ? [args.paths] : (args.paths ?? []);
+		const paths = toPathList(args.paths);
 		const meta: string[] = [];
 		if (paths.length) meta.push(`in ${paths.join(", ")}`);
 		if (args.i) meta.push("case:insensitive");

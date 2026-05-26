@@ -1886,13 +1886,12 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("waits for caller abort when websocket status events do not make semantic progress", async () => {
+	it("surfaces a websocket idle-timeout error when status events never make semantic progress", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
-		const sse = createCompletedCodexSse("Hello fallback");
 		const fetchMock = vi.fn(async () => {
-			return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+			throw new Error("SSE fallback should not run once the websocket stream becomes replay-unsafe");
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
@@ -1916,6 +1915,16 @@ describe("openai-codex streaming", () => {
 						arguments: "",
 					},
 				});
+				this.sendJson({
+					type: "response.output_item.done",
+					item: {
+						type: "function_call",
+						id: "fc_ws_stalled",
+						call_id: "call_ws_stalled",
+						name: "todo_write",
+						arguments: "{}",
+					},
+				});
 				interval = setInterval(() => {
 					this.sendJson({
 						type: "response.in_progress",
@@ -1933,18 +1942,25 @@ describe("openai-codex streaming", () => {
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 		const providerSessionState = new Map<string, ProviderSessionState>();
-		const controller = new AbortController();
-		setTimeout(() => controller.abort(), 30);
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
 			apiKey: token,
 			sessionId: "ws-no-progress-session",
 			providerSessionState,
-			signal: controller.signal,
 			streamIdleTimeoutMs: 5,
 		}).result();
 
 		expect(sendCount).toBe(1);
-		expect(result.stopReason).toBe("aborted");
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("idle timeout waiting for websocket");
+		expect(result.content).toEqual([
+			expect.objectContaining({
+				type: "toolCall",
+				id: "call_ws_stalled|fc_ws_stalled",
+				name: "todo_write",
+				arguments: {},
+				partialJson: "",
+			}),
+		]);
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 

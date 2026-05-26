@@ -43,6 +43,15 @@ function getRequestSignal(input: string | URL | Request, init: RequestInit | und
 	return undefined;
 }
 
+function getRequestHeader(input: string | URL | Request, init: RequestInit | undefined, name: string): string | null {
+	if (init?.headers) {
+		return new Headers(init.headers).get(name);
+	}
+	if (input instanceof Request) {
+		return input.headers.get(name);
+	}
+	return null;
+}
 function createHangingSseResponse(signal: AbortSignal | undefined): Response {
 	let abortListener: (() => void) | undefined;
 	const stream = new ReadableStream<Uint8Array>({
@@ -144,8 +153,13 @@ function createNoProgressOpenAIResponsesStream(signal: AbortSignal | undefined):
 	});
 }
 
-function createDelayedFetch(delayMs: number, responseFactory: () => Response): typeof fetch {
+function createDelayedFetch(
+	delayMs: number,
+	responseFactory: () => Response,
+	onRequest?: (input: string | URL | Request, init: RequestInit | undefined) => void,
+): typeof fetch {
 	async function mockFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+		onRequest?.(input, init);
 		await waitForDelayOrAbort(delayMs, getRequestSignal(input, init));
 		return responseFactory();
 	}
@@ -226,6 +240,23 @@ async function expectFirstEventTimeout(
 	expect(result.errorMessage).toBe(expectedMessage);
 }
 
+async function expectRequestSetupTimeout(
+	run: (streamFirstEventTimeoutMs: number) => Promise<{ stopReason: string; errorMessage?: string }>,
+	expectedMessage: string,
+	responseFactory: () => Response,
+): Promise<void> {
+	const timeoutHeaders: string[] = [];
+	global.fetch = createDelayedFetch(30, responseFactory, (input, init) => {
+		timeoutHeaders.push(getRequestHeader(input, init, "X-Stainless-Timeout") ?? "");
+	});
+
+	const result = await run(20);
+
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage).toBe(expectedMessage);
+	expect(timeoutHeaders).toContain("0");
+}
+
 async function expectCallerAbort(
 	run: (
 		signal: AbortSignal,
@@ -256,7 +287,7 @@ async function expectDelayedRequestSetupSucceeds(
 ): Promise<void> {
 	global.fetch = createDelayedFetch(30, responseFactory);
 
-	const result = await run(20);
+	const result = await run(50);
 
 	expect(result.stopReason).toBe("stop");
 	expect(getFirstTextContent(result)).toMatchObject({ type: "text", text: "Hello delayed" });
@@ -275,6 +306,17 @@ describe("OpenAI-family first-event timeouts", () => {
 					streamFirstEventTimeoutMs,
 				}).result(),
 			"OpenAI responses stream timed out while waiting for the first event",
+		);
+	});
+	it("times out OpenAI responses before the stream opens and forwards the budget to the SDK request", async () => {
+		await expectRequestSetupTimeout(
+			streamFirstEventTimeoutMs =>
+				streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+					apiKey: "test-key",
+					streamFirstEventTimeoutMs,
+				}).result(),
+			"OpenAI responses stream timed out while waiting for the first event",
+			createOpenAIResponsesSuccessResponse,
 		);
 	});
 
@@ -332,6 +374,17 @@ describe("OpenAI-family first-event timeouts", () => {
 			"OpenAI completions stream timed out while waiting for the first event",
 		);
 	});
+	it("times out OpenAI completions before the stream opens and forwards the budget to the SDK request", async () => {
+		await expectRequestSetupTimeout(
+			streamFirstEventTimeoutMs =>
+				streamOpenAICompletions(openAICompletionsModel, baseContext(), {
+					apiKey: "test-key",
+					streamFirstEventTimeoutMs,
+				}).result(),
+			"OpenAI completions stream timed out while waiting for the first event",
+			() => createOpenAICompletionsSuccessResponse(openAICompletionsModel.id),
+		);
+	});
 
 	it("surfaces the Azure OpenAI responses first-event timeout message", async () => {
 		await expectFirstEventTimeout(
@@ -343,6 +396,19 @@ describe("OpenAI-family first-event timeouts", () => {
 					streamFirstEventTimeoutMs,
 				}).result(),
 			"Azure OpenAI responses stream timed out while waiting for the first event",
+		);
+	});
+	it("times out Azure OpenAI responses before the stream opens and forwards the budget to the SDK request", async () => {
+		await expectRequestSetupTimeout(
+			streamFirstEventTimeoutMs =>
+				streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
+					apiKey: "test-key",
+					azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
+					azureApiVersion: "v1",
+					streamFirstEventTimeoutMs,
+				}).result(),
+			"Azure OpenAI responses stream timed out while waiting for the first event",
+			createOpenAIResponsesSuccessResponse,
 		);
 	});
 

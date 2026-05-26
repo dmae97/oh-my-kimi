@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Breaking Changes
+
+### Breaking Changes
 - The `vim` edit mode option is no longer available; configurations using `edit.mode: vim` will be automatically mapped to `hashline` mode
 - Hashline payload semantics are now strictly inline-first: the first payload line is whatever follows the sigil on the op line itself, and subsequent lines append after it. A newline immediately after `↑`/`↓`/`:` is no longer a free separator — it produces a blank first payload line. Use `LINE↓content` for a one-line insert, `LINE↓firstline\nsecondline` for two lines; bare `LINE↓` / `LINE↑` / `LINE:` (no inline payload) still insert/replace with one blank line as before.
 
@@ -24,6 +26,10 @@
 - Added relative URL resolution for `Mcp-Auth-Server` header values against the server URL ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
 
 ### Changed
+
+- Changed Python shared eval sessions to be keyed by `sessionId` and `cwd` so code state no longer leaks across different directories when reusing a session
+- Changed shared JavaScript and Python startup to deduplicate concurrent first-time session initialization so parallel first calls share one warm session
+- Changed shared JavaScript and Python execution output handling so interleaved async runs keep their `display` output scoped to the originating run
 - Changed Python tool bridge to use per-run identifiers alongside session IDs for correct routing of tool responses and output in concurrent evaluations
 - Changed JavaScript and Python `eval` execution to allow overlapping asynchronous cells on the same session ID to run concurrently instead of being strictly queued
 - Updated the edit mode option set to support `replace`, `patch`, `hashline`, and `apply_patch` variants
@@ -63,6 +69,11 @@
 - Removed `HashMismatch` type and hash mismatch error reporting; replaced with file-level validation
 
 ### Fixed
+
+- Fixed JavaScript module reloading to refresh local re-exports when transitive dependency files are edited
+- Fixed Python tool calls in warm kernels to initialize once bridge environment variables appear after startup and to return a clear `tool bridge is unavailable` error when missing
+- Fixed IRC `send` handling to preserve recipient incoming messages when auto-reply timeouts instead of dropping them
+- Fixed Python session disposal to cancel all concurrent active executions in a shared kernel
 - Fixed JavaScript `eval` imports to preserve module-level singletons across re-imports of unchanged local files and reload them only after edits
 - Fixed concurrent Python evaluator tool calls to use per-run identifiers so tool responses and output are routed to the correct execution
 - Fixed the `search` tool argument validation to accept a single string `paths` value as a one-path search.

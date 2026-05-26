@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { RenderResultOptions } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
@@ -10,6 +11,11 @@ import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-q
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { searchToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/search";
 import { Text } from "@oh-my-pi/pi-tui";
+import { SessionObserverOverlayComponent } from "../../src/modes/components/session-observer-overlay";
+import { TreeSelectorComponent } from "../../src/modes/components/tree-selector";
+import type { ObservableSession, SessionObserverRegistry } from "../../src/modes/session-observer-registry";
+import { initTheme } from "../../src/modes/theme/theme";
+import type { SessionEntry, SessionTreeNode } from "../../src/session/session-manager";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -72,11 +78,52 @@ async function createSearchFixture(rootDir: string): Promise<void> {
 		"const providerOptions = {};\nlegacyWrap(otherValue, otherArg);\n",
 	);
 }
+async function makeJsonlSessionFile(dirPath: string, entries: object[]): Promise<string> {
+	const filePath = path.join(dirPath, "session.jsonl");
+	await Bun.write(filePath, `${entries.map(entry => JSON.stringify(entry)).join("\n")}\n`);
+	return filePath;
+}
+
+function makeSubagentRegistry(sessions: ObservableSession[]): SessionObserverRegistry {
+	return {
+		getSessions: () => sessions,
+		onChange: () => () => {},
+		setMainSession: () => {},
+		getActiveSubagentCount: () => sessions.filter(session => session.status === "active").length,
+	} as unknown as SessionObserverRegistry;
+}
+
+let treeEntryCounter = 0;
+function makeMessageNode(message: AgentMessage, parentId: string | null = null): SessionTreeNode {
+	const entry: SessionEntry = {
+		type: "message",
+		id: `entry-${treeEntryCounter++}`,
+		parentId,
+		timestamp: new Date().toISOString(),
+		message,
+	};
+	return { entry, children: [] };
+}
+
+function renderTree(tree: SessionTreeNode[], currentLeafId: string): string {
+	const selector = new TreeSelectorComponent(
+		tree,
+		currentLeafId,
+		60,
+		() => {},
+		() => {},
+	);
+	return Bun.stripANSI(selector.render(120).join("\n"));
+}
 
 describe("tool path arrays", () => {
 	let tempDir: string;
 
+	beforeAll(async () => {
+		await initTheme(false, undefined, undefined, "dark", "light");
+	});
 	beforeEach(async () => {
+		treeEntryCounter = 0;
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "search-path-lists-"));
 		await createSearchFixture(tempDir);
 	});
@@ -140,6 +187,125 @@ describe("tool path arrays", () => {
 
 		expect(component).toBeInstanceOf(Text);
 		expect((component as Text).getText()).toContain("in folder with spaces/");
+	});
+	it("session observer overlay renders a single-string search path summary", async () => {
+		const sessionFile = await makeJsonlSessionFile(tempDir, [
+			{ type: "session", version: 3, id: "search-overlay-session", timestamp: new Date().toISOString() },
+			{
+				type: "message",
+				id: "msg-user-1",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				message: { role: "user", content: "search", timestamp: 1 },
+			},
+			{
+				type: "message",
+				id: "msg-assistant-1",
+				parentId: "msg-user-1",
+				timestamp: new Date().toISOString(),
+				message: {
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: "search-call-1",
+							name: "search",
+							arguments: { pattern: "space-needle", paths: "folder with spaces/" },
+						},
+					],
+					api: "test",
+					provider: "test",
+					model: "test",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					timestamp: 2,
+				},
+			},
+			{
+				type: "message",
+				id: "msg-tool-1",
+				parentId: "msg-assistant-1",
+				timestamp: new Date().toISOString(),
+				message: {
+					role: "toolResult",
+					toolName: "search",
+					toolCallId: "search-call-1",
+					content: [{ type: "text", text: "note.txt" }],
+					isError: false,
+					timestamp: 3,
+				},
+			},
+		]);
+		const registry = makeSubagentRegistry([
+			{
+				id: "search-overlay-session",
+				kind: "subagent",
+				label: "Search Overlay",
+				status: "active",
+				sessionFile,
+				lastUpdate: Date.now(),
+			},
+		]);
+
+		const overlay = new SessionObserverOverlayComponent(registry, () => {}, ["ctrl+s"]);
+		const rendered = Bun.stripANSI(overlay.render(120).join("\n"));
+
+		expect(rendered).toContain("paths: folder with spaces/");
+	});
+
+	it("tree selector renders a single-string search path summary", () => {
+		const root = makeMessageNode({ role: "user", content: "search", timestamp: 1 });
+		const assistant = makeMessageNode(
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "search-call-1",
+						name: "search",
+						arguments: { pattern: "space-needle", paths: "folder with spaces/" },
+					},
+				],
+				api: "test",
+				provider: "test",
+				model: "test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: 2,
+				stopReason: "stop",
+			} as AgentMessage,
+			root.entry.id,
+		);
+		const toolResult = makeMessageNode(
+			{
+				role: "toolResult",
+				toolCallId: "search-call-1",
+				toolName: "search",
+				content: [{ type: "text", text: "note.txt" }],
+				isError: false,
+				timestamp: 3,
+			} as AgentMessage,
+			assistant.entry.id,
+		);
+		root.children.push(assistant);
+		assistant.children.push(toolResult);
+
+		const rendered = renderTree([root], toolResult.entry.id);
+
+		expect(rendered).toContain("[search: /space-needle/ in folder with spaces/]");
+		expect(rendered).not.toContain("[search: /space-needle/ in .]");
 	});
 
 	it("search keeps a single path that contains spaces", async () => {

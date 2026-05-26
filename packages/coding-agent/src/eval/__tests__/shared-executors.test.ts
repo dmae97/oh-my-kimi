@@ -39,6 +39,21 @@ function createToolSession(cwd: string, sessionFile: string | null, evalSessionI
 	} as unknown as ToolSession;
 }
 
+function createBridgeToolSession(resultText: string, calls: unknown[]): ToolSession {
+	const readTool = {
+		name: "read",
+		label: "read",
+		description: "read",
+		parameters: { type: "object" },
+		async execute(_id: string, args: unknown) {
+			calls.push(args);
+			return { content: [{ type: "text" as const, text: resultText }] };
+		},
+	};
+	const tools = new Map<string, unknown>([["read", readTool]]);
+	return { getToolByName: (name: string) => tools.get(name) } as unknown as ToolSession;
+}
+
 function assistantStopMessage(text: string): AssistantMessage {
 	return {
 		role: "assistant",
@@ -151,7 +166,68 @@ describe("shared eval executors", () => {
 		expect(result.output.trim()).toBe("42");
 	});
 
-	it("updates Python cwd when one shared session id runs from multiple directories", async () => {
+	it("deduplicates concurrent first JavaScript session acquisition", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-js-cold-start-");
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `js-cold-start:${crypto.randomUUID()}`;
+		const session = createToolSession(tempDir.path(), sessionFile);
+
+		const [first, second] = await Promise.all([
+			executeJs(
+				"globalThis.sharedMarker ??= crypto.randomUUID(); await Bun.sleep(50); return globalThis.sharedMarker;",
+				{
+					sessionId,
+					session,
+					sessionFile,
+				},
+			),
+			executeJs("globalThis.sharedMarker ??= crypto.randomUUID(); return globalThis.sharedMarker;", {
+				sessionId,
+				session,
+				sessionFile,
+			}),
+		]);
+		const third = await executeJs("return globalThis.sharedMarker;", { sessionId, session, sessionFile });
+
+		expect(first.exitCode).toBe(0);
+		expect(second.exitCode).toBe(0);
+		expect(third.exitCode).toBe(0);
+		expect(first.output.trim()).toBe(second.output.trim());
+		expect(third.output.trim()).toBe(first.output.trim());
+	});
+
+	it("deduplicates concurrent first Python session acquisition", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-py-cold-start-");
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `py-cold-start:${crypto.randomUUID()}`;
+
+		const [first, second] = await Promise.all([
+			executePython(
+				`import asyncio, uuid
+shared_marker = globals().get("shared_marker") or str(uuid.uuid4())
+globals()["shared_marker"] = shared_marker
+await asyncio.sleep(0.05)
+print(shared_marker)`,
+				{ cwd: tempDir.path(), sessionId, sessionFile },
+			),
+			executePython(
+				`import uuid
+shared_marker = globals().get("shared_marker") or str(uuid.uuid4())
+globals()["shared_marker"] = shared_marker
+print(shared_marker)`,
+				{ cwd: tempDir.path(), sessionId, sessionFile },
+			),
+		]);
+		const third = await executePython("print(shared_marker)", { cwd: tempDir.path(), sessionId, sessionFile });
+
+		expect(first.exitCode).toBe(0);
+		expect(second.exitCode).toBe(0);
+		expect(third.exitCode).toBe(0);
+		expect(first.output.trim()).toBe(second.output.trim());
+		expect(third.output.trim()).toBe(first.output.trim());
+	});
+
+	it("splits retained Python kernels by cwd for one shared session id", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-py-cwd-");
 		const dirA = path.join(tempDir.path(), "a");
 		const dirB = path.join(tempDir.path(), "b");
@@ -162,13 +238,34 @@ describe("shared eval executors", () => {
 		const sessionFile = path.join(tempDir.path(), "session.jsonl");
 		const sessionId = `py-cwd:${crypto.randomUUID()}`;
 
-		const first = await executePython("import os\nprint(os.getcwd())", { cwd: dirA, sessionId, sessionFile });
-		const second = await executePython("import os\nprint(os.getcwd())", { cwd: dirB, sessionId, sessionFile });
+		const first = await executePython(
+			`import os
+token = "from-a"
+print(os.getcwd())`,
+			{
+				cwd: dirA,
+				sessionId,
+				sessionFile,
+			},
+		);
+		const second = await executePython(
+			`import os
+print(os.getcwd())
+print("token" in globals())`,
+			{
+				cwd: dirB,
+				sessionId,
+				sessionFile,
+			},
+		);
+		const third = await executePython("print(token)", { cwd: dirA, sessionId, sessionFile });
 
 		expect(first.exitCode).toBe(0);
 		expect(first.output.trim()).toBe(realDirA);
 		expect(second.exitCode).toBe(0);
-		expect(second.output.trim()).toBe(realDirB);
+		expect(second.output.trim().split("\n")).toEqual([realDirB, "False"]);
+		expect(third.exitCode).toBe(0);
+		expect(third.output.trim()).toBe("from-a");
 	});
 
 	it("interrupts timed out synchronous Python cells before they mutate shared state", async () => {
@@ -265,67 +362,59 @@ describe("shared eval executors", () => {
 		expect(seenPy).toBe("hello-py");
 	});
 
-	it("interleaves async JavaScript runs on one session id", async () => {
+	it("routes interleaved JavaScript display output to the matching run", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-js-interleave-");
 		const sessionFile = path.join(tempDir.path(), "session.jsonl");
 		const sessionId = `js-interleave:${crypto.randomUUID()}`;
 		const session = createToolSession(tempDir.path(), sessionFile);
-		const events: string[] = [];
 
-		const first = executeJs('await Bun.sleep(80); display("A");', {
+		const first = executeJs('await Bun.sleep(80); display({ label: "A" });', {
 			sessionId,
 			session,
 			sessionFile,
-			onChunk: chunk => {
-				events.push(chunk.trim());
-			},
 		});
 		await Bun.sleep(10);
-		const second = executeJs('display("B");', {
+		const second = executeJs('display({ label: "B" });', {
 			sessionId,
 			session,
 			sessionFile,
-			onChunk: chunk => {
-				events.push(chunk.trim());
-			},
 		});
 
 		const [firstResult, secondResult] = await Promise.all([first, second]);
 		expect(firstResult.exitCode).toBe(0);
 		expect(secondResult.exitCode).toBe(0);
-		expect(events.filter(Boolean)).toEqual(["B", "A"]);
+		expect(firstResult.displayOutputs).toEqual([{ type: "json", data: { label: "A" } }]);
+		expect(secondResult.displayOutputs).toEqual([{ type: "json", data: { label: "B" } }]);
 	});
 
-	it("interleaves async Python runs on one session id", async () => {
+	it("routes interleaved Python display output to the matching run", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-py-interleave-");
 		const sessionFile = path.join(tempDir.path(), "session.jsonl");
 		const sessionId = `py-interleave:${crypto.randomUUID()}`;
-		const events: string[] = [];
 
-		const first = executePython('import asyncio\nawait asyncio.sleep(0.08)\nprint("A")', {
-			cwd: tempDir.path(),
-			sessionId,
-			sessionFile,
-			onChunk: chunk => {
-				events.push(chunk.trim());
+		const first = executePython(
+			`import asyncio
+await asyncio.sleep(0.08)
+display({"label": "A"})`,
+			{
+				cwd: tempDir.path(),
+				sessionId,
+				sessionFile,
 			},
-		});
+		);
 		await Bun.sleep(10);
-		const second = executePython('print("B")', {
+		const second = executePython('display({"label": "B"})', {
 			cwd: tempDir.path(),
 			sessionId,
 			sessionFile,
-			onChunk: chunk => {
-				events.push(chunk.trim());
-			},
 		});
 
 		const [firstResult, secondResult] = await Promise.all([first, second]);
 		expect(firstResult.exitCode).toBe(0);
 		expect(secondResult.exitCode).toBe(0);
-		expect(events.filter(Boolean)).toEqual(["B", "A"]);
+		expect(firstResult.displayOutputs).toEqual([{ type: "json", data: { label: "A" } }]);
+		expect(secondResult.displayOutputs).toEqual([{ type: "json", data: { label: "B" } }]);
 	});
-
 	it("preserves module-level singleton state across re-imports of an unchanged file", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-js-mtime-");
 		const sessionFile = path.join(tempDir.path(), "session.jsonl");
@@ -369,5 +458,63 @@ describe("shared eval executors", () => {
 		});
 		expect(reloadResult.exitCode).toBe(0);
 		expect(reloadResult.output.trim()).toBe("0");
+	});
+
+	it("reloads a local re-export when a transitive dependency changes", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-js-transitive-");
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `js-transitive:${crypto.randomUUID()}`;
+		const session = createToolSession(tempDir.path(), sessionFile);
+		const leafPath = path.join(tempDir.path(), "leaf.ts");
+		const entryPath = path.join(tempDir.path(), "entry.ts");
+		const entrySpec = JSON.stringify(entryPath);
+		await Bun.write(leafPath, "export const value = 1;\n");
+		await Bun.write(entryPath, 'export { value } from "./leaf.ts";\n');
+
+		const initial = await executeJs(`const mod = await import(${entrySpec}); return mod.value;`, {
+			sessionId,
+			session,
+			sessionFile,
+		});
+		expect(initial.exitCode).toBe(0);
+		expect(initial.output.trim()).toBe("1");
+
+		await Bun.write(leafPath, "export const value = 2;\n");
+		const future = new Date(Date.now() + 5_000);
+		await fs.utimes(leafPath, future, future);
+
+		const reloaded = await executeJs(`const mod = await import(${entrySpec}); return mod.value;`, {
+			sessionId,
+			session,
+			sessionFile,
+		});
+		expect(reloaded.exitCode).toBe(0);
+		expect(reloaded.output.trim()).toBe("2");
+	});
+
+	it("refreshes the Python tool proxy when bridge env appears after kernel warm-up", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-py-tool-proxy-");
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `py-tool-proxy:${crypto.randomUUID()}`;
+		const bridgeCalls: unknown[] = [];
+		const bridgeSession = createBridgeToolSession("bridge-ok", bridgeCalls);
+
+		const withoutBridge = await executePython(
+			'try:\n    print(tool.read({"path": "foo.txt"}))\nexcept Exception as exc:\n    print(type(exc).__name__)\n    print(str(exc))',
+			{ cwd: tempDir.path(), sessionId, sessionFile },
+		);
+		const withBridge = await executePython('print(tool.read({"path": "foo.txt"}))', {
+			cwd: tempDir.path(),
+			sessionId,
+			sessionFile,
+			toolSession: bridgeSession,
+		});
+
+		expect(withoutBridge.exitCode).toBe(0);
+		expect(withoutBridge.output).toContain("RuntimeError");
+		expect(withoutBridge.output).toContain("tool bridge is unavailable");
+		expect(withBridge.exitCode).toBe(0);
+		expect(withBridge.output.trim()).toBe("bridge-ok");
+		expect(bridgeCalls).toEqual([{ path: "foo.txt", _i: "py prelude" }]);
 	});
 });

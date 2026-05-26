@@ -1,5 +1,5 @@
 import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
-import OpenAI from "openai";
+import OpenAI, { APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
 import type {
 	ChatCompletionAssistantMessageParam,
 	ChatCompletionChunk,
@@ -46,7 +46,6 @@ import {
 	rewriteCopilotError,
 } from "../utils/http-inspector";
 import {
-	createWatchdog,
 	getOpenAIStreamIdleTimeoutMs,
 	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
@@ -394,7 +393,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const idleTimeoutMs = getOpenAIStreamIdleTimeoutMs();
+			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
+			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+			const requestTimeoutMs =
+				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			const {
 				client,
 				copilotPremiumRequests,
@@ -410,7 +412,6 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				options?.initiatorOverride,
 				options?.onSseEvent,
 				options?.fetch,
-				options?.streamFirstEventTimeoutMs,
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			getCapturedErrorResponse = captureErrorResponse;
@@ -443,11 +444,31 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					headers: requestHeaders,
 					body: params,
 				};
-				const { data, response, request_id } = await client.chat.completions
-					.create(params, { signal: requestSignal })
-					.withResponse();
-				await notifyProviderResponse(options, response, model, request_id);
-				return data;
+				const requestOptions =
+					requestTimeoutMs === undefined
+						? { signal: requestSignal }
+						: { signal: requestSignal, timeout: requestTimeoutMs };
+				let requestTimeout: NodeJS.Timeout | undefined;
+				if (requestTimeoutMs !== undefined) {
+					requestTimeout = setTimeout(
+						() => abortTracker.abortLocally(firstEventTimeoutAbortError),
+						requestTimeoutMs,
+					);
+				}
+				try {
+					const { data, response, request_id } = await client.chat.completions
+						.create(params, requestOptions)
+						.withResponse();
+					await notifyProviderResponse(options, response, model, request_id);
+					return data;
+				} catch (error) {
+					if (error instanceof OpenAIConnectionTimeoutError && !abortTracker.wasCallerAbort()) {
+						throw firstEventTimeoutAbortError;
+					}
+					throw error;
+				} finally {
+					if (requestTimeout !== undefined) clearTimeout(requestTimeout);
+				}
 			};
 			let openaiStream: AsyncIterable<ChatCompletionChunk>;
 			try {
@@ -476,10 +497,6 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					openaiStream = await createCompletionsStream("none");
 				}
 			}
-			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
-			const firstEventWatchdog = createWatchdog(firstEventTimeoutMs, () =>
-				abortTracker.abortLocally(firstEventTimeoutAbortError),
-			);
 			if (premiumRequestsTotal !== undefined) {
 				output.usage.premiumRequests = premiumRequestsTotal;
 			}
@@ -660,7 +677,6 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			};
 
 			for await (const chunk of iterateWithIdleTimeout(openaiStream, {
-				watchdog: firstEventWatchdog,
 				idleTimeoutMs,
 				firstItemTimeoutMs: firstEventTimeoutMs,
 				firstItemErrorMessage: OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE,
@@ -888,7 +904,6 @@ async function createClient(
 	initiatorOverride?: MessageAttribution,
 	onSseEvent?: OpenAICompletionsOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
-	streamFirstEventTimeoutOverride?: number,
 ): Promise<{
 	client: OpenAI;
 	copilotPremiumRequests: number | undefined;
@@ -987,25 +1002,6 @@ async function createClient(
 		baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {},
 	);
 	const debugFetch = onSseEvent ? wrapFetchForSseDebug(wrappedFetch, event => onSseEvent(event, model)) : wrappedFetch;
-	// Bound HTTP request timeout to roughly the first-event watchdog window.
-	// The OpenAI SDK's default is 10 minutes per attempt × `maxRetries`, which
-	// turns a stalled-before-headers fetch into a multi-minute hang invisible
-	// to the agent loop (the iterator watchdog only arms AFTER `create()` returns).
-	// Using the first-event timeout keeps both layers aligned: the SDK gives up
-	// before the agent watchdog would have, surfacing a real error to the catch
-	// in the IIFE.
-	// A caller may raise `StreamOptions.streamFirstEventTimeoutMs` for a slow-
-	// before-headers provider; respect it so the SDK doesn't give up before the
-	// wrapping watchdog arms. An explicit `0` disables the first-event watchdog,
-	// and the SDK treats `timeout: 0` as an immediate timeout, so do not pass a
-	// request timeout in that case.
-	const envSdkTimeoutMs = getStreamFirstEventTimeoutMs(getOpenAIStreamIdleTimeoutMs());
-	const sdkTimeoutMs =
-		streamFirstEventTimeoutOverride === 0
-			? undefined
-			: streamFirstEventTimeoutOverride !== undefined
-				? Math.max(envSdkTimeoutMs ?? 0, streamFirstEventTimeoutOverride)
-				: envSdkTimeoutMs;
 	return {
 		client: new OpenAI({
 			apiKey,
@@ -1015,7 +1011,6 @@ async function createClient(
 			defaultHeaders: headers,
 			defaultQuery: azureDefaultQuery,
 			fetch: debugFetch,
-			...(sdkTimeoutMs !== undefined ? { timeout: sdkTimeoutMs } : {}),
 		}),
 		copilotPremiumRequests,
 		baseUrl,

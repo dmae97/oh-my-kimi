@@ -57,24 +57,7 @@ export function getStreamFirstEventTimeoutMs(
 	return normalizeIdleTimeoutMs($env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS, fallback);
 }
 
-export type Watchdog = NodeJS.Timeout | undefined;
-
-const dummyWatchdog = setTimeout(() => {}, 1);
-clearTimeout(dummyWatchdog);
-
-/**
- * Starts a watchdog that aborts a request if no first stream event arrives in time.
- * Call `markFirstEventReceived()` as soon as the first event is observed.
- */
-export function createWatchdog(timeoutMs: number | undefined, onTimeout: () => void): Watchdog {
-	if (timeoutMs !== undefined && timeoutMs > 0) {
-		return setTimeout(onTimeout, timeoutMs);
-	}
-	return undefined;
-}
-
 export interface IdleTimeoutIteratorOptions {
-	watchdog?: Watchdog;
 	idleTimeoutMs?: number;
 	firstItemTimeoutMs?: number;
 	errorMessage: string;
@@ -108,8 +91,7 @@ export async function* iterateWithIdleTimeout<T>(
 	iterable: AsyncIterable<T>,
 	options: IdleTimeoutIteratorOptions,
 ): AsyncGenerator<T> {
-	let watchdog = options.watchdog;
-	const firstItemTimeoutMs = options.firstItemTimeoutMs ?? (watchdog ? undefined : options.idleTimeoutMs);
+	const firstItemTimeoutMs = options.firstItemTimeoutMs ?? options.idleTimeoutMs;
 	const firstItemDeadlineMs =
 		firstItemTimeoutMs !== undefined && firstItemTimeoutMs > 0 ? Date.now() + firstItemTimeoutMs : undefined;
 	const abortSignal = options.abortSignal;
@@ -135,8 +117,6 @@ export async function* iterateWithIdleTimeout<T>(
 
 	let awaitingFirstItem = true;
 	const markFirstItemReceived = () => {
-		watchdog && clearTimeout(watchdog);
-		watchdog = undefined;
 		awaitingFirstItem = false;
 	};
 	const isProgressItem = (item: T): boolean => {
@@ -153,107 +133,100 @@ export async function* iterateWithIdleTimeout<T>(
 		(firstItemTimeoutMs === undefined || firstItemTimeoutMs <= 0) &&
 		(options.idleTimeoutMs === undefined || options.idleTimeoutMs <= 0);
 
-	try {
-		while (true) {
-			let activeTimeoutMs: number | undefined;
-			if (awaitingFirstItem) {
-				if (firstItemDeadlineMs !== undefined) {
-					activeTimeoutMs = firstItemDeadlineMs - Date.now();
-					if (activeTimeoutMs <= 0) {
-						options.onFirstItemTimeout?.();
-						closeIterator();
-						throw new Error(options.firstItemErrorMessage ?? options.errorMessage);
-					}
-				}
-			} else if (options.idleTimeoutMs !== undefined && options.idleTimeoutMs > 0) {
-				activeTimeoutMs = options.idleTimeoutMs - (Date.now() - lastProgressAt);
+	while (true) {
+		let activeTimeoutMs: number | undefined;
+		if (awaitingFirstItem) {
+			if (firstItemDeadlineMs !== undefined) {
+				activeTimeoutMs = firstItemDeadlineMs - Date.now();
 				if (activeTimeoutMs <= 0) {
-					options.onIdle?.();
+					options.onFirstItemTimeout?.();
 					closeIterator();
-					throw new Error(options.errorMessage);
+					throw new Error(options.firstItemErrorMessage ?? options.errorMessage);
 				}
 			}
-
-			const nextResultPromise = withRacy(iterator.next());
-
-			const racers: Array<
-				Promise<
-					| { kind: "next"; result: IteratorResult<T> }
-					| { kind: "error"; error: unknown }
-					| { kind: "timeout" }
-					| { kind: "abort" }
-				>
-			> = [nextResultPromise];
-
-			let timer: NodeJS.Timeout | undefined;
-			let resolveTimeout: ((value: { kind: "timeout" }) => void) | undefined;
-			const enforceTimeout = !noTimeoutEnforced && activeTimeoutMs !== undefined && activeTimeoutMs > 0;
-			if (enforceTimeout) {
-				const { promise, resolve } = Promise.withResolvers<{ kind: "timeout" }>();
-				resolveTimeout = resolve;
-				timer = setTimeout(() => resolve({ kind: "timeout" }), activeTimeoutMs);
-				racers.push(promise);
-			}
-
-			let abortListener: (() => void) | undefined;
-			let resolveAbort: ((value: { kind: "abort" }) => void) | undefined;
-			if (abortSignal) {
-				const { promise, resolve } = Promise.withResolvers<{ kind: "abort" }>();
-				resolveAbort = resolve;
-				abortListener = () => resolve({ kind: "abort" });
-				abortSignal.addEventListener("abort", abortListener, { once: true });
-				racers.push(promise);
-			}
-
-			try {
-				const outcome = await Promise.race(racers);
-				if (outcome.kind === "abort") {
-					closeIterator();
-					throw abortReason(abortSignal!);
-				}
-				if (outcome.kind === "timeout") {
-					if (!awaitingFirstItem) {
-						options.onIdle?.();
-					} else {
-						options.onFirstItemTimeout?.();
-					}
-					closeIterator();
-					throw new Error(
-						!awaitingFirstItem ? options.errorMessage : (options.firstItemErrorMessage ?? options.errorMessage),
-					);
-				}
-				if (outcome.kind === "error") {
-					throw outcome.error;
-				}
-				if (outcome.result.done) {
-					markFirstItemReceived();
-					return;
-				}
-				const item = outcome.result.value;
-				// Non-progress items (e.g. provider keepalives, synthetic `start` events that
-				// arrive before the model has produced any tokens) MUST NOT flip us out of
-				// `awaitingFirstItem`. Otherwise the next iteration switches from the (longer)
-				// first-item watchdog to the (shorter) idle watchdog while we're still waiting
-				// on the model's first real output.
-				if (isProgressItem(item)) {
-					markFirstItemReceived();
-					lastProgressAt = Date.now();
-				}
-				yield item;
-			} finally {
-				if (timer !== undefined) clearTimeout(timer);
-				// Resolve dangling promises so the racers don't leak (Promise.race is one-shot).
-				resolveTimeout?.({ kind: "timeout" });
-				if (abortListener && abortSignal) {
-					abortSignal.removeEventListener("abort", abortListener);
-				}
-				resolveAbort?.({ kind: "abort" });
+		} else if (options.idleTimeoutMs !== undefined && options.idleTimeoutMs > 0) {
+			activeTimeoutMs = options.idleTimeoutMs - (Date.now() - lastProgressAt);
+			if (activeTimeoutMs <= 0) {
+				options.onIdle?.();
+				closeIterator();
+				throw new Error(options.errorMessage);
 			}
 		}
-	} finally {
-		if (watchdog) {
-			clearTimeout(watchdog);
-			watchdog = undefined;
+
+		const nextResultPromise = withRacy(iterator.next());
+
+		const racers: Array<
+			Promise<
+				| { kind: "next"; result: IteratorResult<T> }
+				| { kind: "error"; error: unknown }
+				| { kind: "timeout" }
+				| { kind: "abort" }
+			>
+		> = [nextResultPromise];
+
+		let timer: NodeJS.Timeout | undefined;
+		let resolveTimeout: ((value: { kind: "timeout" }) => void) | undefined;
+		const enforceTimeout = !noTimeoutEnforced && activeTimeoutMs !== undefined && activeTimeoutMs > 0;
+		if (enforceTimeout) {
+			const { promise, resolve } = Promise.withResolvers<{ kind: "timeout" }>();
+			resolveTimeout = resolve;
+			timer = setTimeout(() => resolve({ kind: "timeout" }), activeTimeoutMs);
+			racers.push(promise);
+		}
+
+		let abortListener: (() => void) | undefined;
+		let resolveAbort: ((value: { kind: "abort" }) => void) | undefined;
+		if (abortSignal) {
+			const { promise, resolve } = Promise.withResolvers<{ kind: "abort" }>();
+			resolveAbort = resolve;
+			abortListener = () => resolve({ kind: "abort" });
+			abortSignal.addEventListener("abort", abortListener, { once: true });
+			racers.push(promise);
+		}
+
+		try {
+			const outcome = await Promise.race(racers);
+			if (outcome.kind === "abort") {
+				closeIterator();
+				throw abortReason(abortSignal!);
+			}
+			if (outcome.kind === "timeout") {
+				if (!awaitingFirstItem) {
+					options.onIdle?.();
+				} else {
+					options.onFirstItemTimeout?.();
+				}
+				closeIterator();
+				throw new Error(
+					!awaitingFirstItem ? options.errorMessage : (options.firstItemErrorMessage ?? options.errorMessage),
+				);
+			}
+			if (outcome.kind === "error") {
+				throw outcome.error;
+			}
+			if (outcome.result.done) {
+				markFirstItemReceived();
+				return;
+			}
+			const item = outcome.result.value;
+			// Non-progress items (e.g. provider keepalives, synthetic `start` events that
+			// arrive before the model has produced any tokens) MUST NOT flip us out of
+			// `awaitingFirstItem`. Otherwise the next iteration switches from the (longer)
+			// first-item watchdog to the (shorter) idle watchdog while we're still waiting
+			// on the model's first real output.
+			if (isProgressItem(item)) {
+				markFirstItemReceived();
+				lastProgressAt = Date.now();
+			}
+			yield item;
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+			// Resolve dangling promises so the racers don't leak (Promise.race is one-shot).
+			resolveTimeout?.({ kind: "timeout" });
+			if (abortListener && abortSignal) {
+				abortSignal.removeEventListener("abort", abortListener);
+			}
+			resolveAbort?.({ kind: "abort" });
 		}
 	}
 }

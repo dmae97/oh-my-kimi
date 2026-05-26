@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `isOpenAICompletionsProgressChunk` export to identify real progress chunks vs. keepalives in OpenAI completions streams
@@ -12,6 +11,7 @@
 
 ### Changed
 
+- Enabled OpenAI Codex WebSocket streams to apply `streamIdleTimeoutMs` and `streamFirstEventTimeoutMs` from `StreamOptions` per request instead of fixed internal defaults
 - Changed stream idle watchdog implementation from `iterateUntilAbort` to `iterateWithIdleTimeout`, which now enforces maximum idle gaps between streamed events and distinguishes between first-event and steady-state timeouts
 - Changed Anthropic, OpenAI Responses, OpenAI Completions, Azure OpenAI Responses, and OpenAI Codex Responses providers to use the new idle-timeout iterator with per-provider progress predicates so empty keepalive frames cannot keep a stalled stream alive
 - Changed Codex WebSocket transport to reset `lastProgressAt` only on progress events (not keepalives), giving the 300s WS-internal idle ceiling the same liveness semantics as the SSE path
@@ -29,6 +29,7 @@
 
 ### Fixed
 
+- Fixed first-item timeout handling so `iterateWithIdleTimeout` no longer keeps first-event timers active after the source throws or the consumer stops before semantic progress
 - Fixed silent multi-hour hangs on Codex WebSocket subagent runs when the broker dropped frames between deltas by restoring per-provider stream watchdogs with progress-event filtering
 - Fixed z.ai/GLM-via-OpenRouter subagent stalls where no-op keepalive chunks reset the idle watchdog indefinitely by filtering non-progress items before resetting the deadline
 

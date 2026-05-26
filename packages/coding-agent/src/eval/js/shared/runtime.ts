@@ -4,13 +4,13 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { Writable } from "node:stream";
-import { pathToFileURL } from "node:url";
 import * as util from "node:util";
 
 import { logger } from "@oh-my-pi/pi-utils";
 
 import { createHelpers, type HelperBundle } from "./helpers";
 import { awaitMaybePromise, indirectEval } from "./indirect-eval";
+import { LocalModuleLoader } from "./local-module-loader";
 import { JAVASCRIPT_PRELUDE_SOURCE } from "./prelude";
 import { wrapCode } from "./rewrite-imports";
 import type { JsDisplayOutput, JsStatusEvent } from "./types";
@@ -125,18 +125,13 @@ export class JsRuntime {
 	readonly sessionId: string;
 	#env: Map<string, string>;
 	#als = new AsyncLocalStorage<RunContext>();
-	/**
-	 * mtime (ms) of every user-owned absolute path we've routed through `__omp_import__`.
-	 * Powers edit-aware cache eviction: an unchanged file keeps its existing module
-	 * instance — and therefore its module-private singletons — across cells; a bumped
-	 * mtime triggers a one-shot `require.cache` eviction so the next `import` reloads.
-	 */
-	#moduleMtimes = new Map<string, number>();
+	#moduleLoader: LocalModuleLoader;
 
 	constructor(opts: RuntimeOptions) {
 		this.#cwd = opts.initialCwd;
 		this.sessionId = opts.sessionId;
 		this.#env = new Map();
+		this.#moduleLoader = new LocalModuleLoader(this.sessionId);
 		this.helpers = createHelpers({
 			cwd: () => this.#activeCwd(),
 			env: this.#env,
@@ -242,6 +237,34 @@ export class JsRuntime {
 		return hooks;
 	}
 
+	#activeRequire(moduleUrlOrPath?: string): NodeJS.Require {
+		return this.#moduleLoader.requireForFile(moduleUrlOrPath, this.#activeCwd());
+	}
+
+	#moduleFilename(moduleUrlOrPath?: string): string {
+		return this.#moduleLoader.filenameForUrl(moduleUrlOrPath) ?? path.join(this.#activeCwd(), "[eval]");
+	}
+
+	#moduleDirname(moduleUrlOrPath?: string): string {
+		return this.#moduleLoader.dirnameForUrl(moduleUrlOrPath, this.#activeCwd());
+	}
+
+	#buildDynamicRequire(): NodeJS.Require {
+		const dynamicRequire = ((id: string) => this.#activeRequire()(id)) as NodeJS.Require;
+		const resolve = ((id: string, options?: { paths?: string[] }) =>
+			this.#activeRequire().resolve(id, options)) as NodeJS.Require["resolve"] & {
+			paths(request: string): string[] | null;
+		};
+		resolve.paths = request => this.#activeRequire().resolve.paths(request);
+		Object.defineProperties(dynamicRequire, {
+			resolve: { value: resolve, configurable: true },
+			cache: { get: () => this.#activeRequire().cache, configurable: true },
+			extensions: { get: () => this.#activeRequire().extensions, configurable: true },
+			main: { get: () => this.#activeRequire().main, configurable: true },
+		});
+		return dynamicRequire;
+	}
+
 	#install(extraGlobals: Record<string, unknown> | undefined): void {
 		const injected: Record<string, unknown> = {
 			__omp_session__: { cwd: this.#cwd, sessionId: this.sessionId },
@@ -252,35 +275,20 @@ export class JsRuntime {
 				return await hooks.callTool(name, args);
 			},
 			__omp_import__: async (source: string, options?: ImportCallOptions) => {
-				const target = resolveImportSpecifier(this.#activeCwd(), source);
-				// Edit-aware module cache eviction for user-owned source files (relative or
-				// absolute paths). Bun's module cache otherwise pins the first evaluation for
-				// the lifetime of the worker, which (a) hides edits made between cells and
-				// (b) would force any module-private singleton state to be re-initialized on
-				// every re-import — breaking patterns like `Settings.init()`'s module-scoped
-				// `globalInstance` when one cell inits and a later cell re-imports.
-				//
-				// Strategy: stat the resolved file, compare mtime to the last value we saw,
-				// and only evict when the file actually changed. First sight just records
-				// the mtime so the current module instance — and any singleton state it
-				// owns — survives subsequent imports until the user edits the file. Bare
-				// specifiers and URL schemes are left alone: `node:` built-ins cannot be
-				// reloaded and busting packages would defeat module identity across cells.
-				if (isLocalPathSpecifier(source) && path.isAbsolute(target)) {
-					try {
-						const mtime = fs.statSync(target).mtimeMs;
-						const prev = this.#moduleMtimes.get(target);
-						if (prev !== undefined && prev !== mtime) {
-							delete require.cache[target];
-						}
-						this.#moduleMtimes.set(target, mtime);
-					} catch {
-						// stat failure (missing file, permission error, …) — fall through and
-						// let the real `import` surface the underlying error.
-					}
-				}
+				const resolved = await this.#moduleLoader.resolveForRun(this.#activeCwd(), source);
+				if (resolved.mode === "local") return resolved.value;
+				const target = resolved.target;
 				return options !== undefined ? await import(target, options) : await import(target);
 			},
+			__omp_import_from__: async (moduleUrl: string, source: string, options?: ImportCallOptions) => {
+				const resolved = await this.#moduleLoader.resolveForModule(moduleUrl, source, this.#activeCwd());
+				if (resolved.mode === "local") return resolved.value;
+				const target = resolved.target;
+				return options !== undefined ? await import(target, options) : await import(target);
+			},
+			__omp_get_require__: (moduleUrl?: string) => this.#activeRequire(moduleUrl),
+			__omp_get_filename__: (moduleUrl?: string) => this.#moduleFilename(moduleUrl),
+			__omp_get_dirname__: (moduleUrl?: string) => this.#moduleDirname(moduleUrl),
 			__omp_emit_status__: (op: string, data: Record<string, unknown> = {}) => {
 				const event: JsStatusEvent = { op, ...data };
 				this.#activeHooks("emitStatus")?.onDisplay({ type: "status", event });
@@ -318,7 +326,7 @@ export class JsRuntime {
 			// `process` is intentionally not overridden — user code gets the host worker's real
 			// `process` object. Subsetting it caused segfaults in workers that share state with
 			// puppeteer/worker_threads internals.
-			require: buildRequire(this.#cwd),
+			require: this.#buildDynamicRequire(),
 			createRequire,
 			fs,
 		};
@@ -333,42 +341,4 @@ function formatConsoleArgs(args: unknown[]): string {
 	return args
 		.map(arg => (typeof arg === "string" ? arg : util.inspect(arg, { depth: 6, colors: false, breakLength: 120 })))
 		.join(" ");
-}
-
-function buildRequire(cwd: string): NodeJS.Require {
-	return createRequire(pathToFileURL(path.join(cwd, "[eval]")).href);
-}
-
-/**
- * Resolve an import specifier emitted by `rewriteImports` against the active session
- * cwd. Relative paths (`./`, `../`, `/`) and bare specifiers (`pkg`, `@scope/pkg`) both go
- * through `Bun.resolveSync` rooted at the cwd so user-pasted ESM behaves as if it lived in
- * the project — not next to the worker module. URL-like specifiers (`file://`, `data:`,
- * `node:`, `http:`) are passed through unchanged.
- */
-function resolveImportSpecifier(cwd: string, source: string): string {
-	if (/^[a-z][a-z0-9+.-]*:/i.test(source)) return source;
-	try {
-		return Bun.resolveSync(source, cwd);
-	} catch {
-		return source;
-	}
-}
-
-/**
- * Returns true when the original specifier is a relative or absolute filesystem path
- * (i.e. user-owned source the agent is iterating on). Bare specifiers and URL schemes
- * are excluded — `node:` built-ins cannot be reloaded, and busting bare packages would
- * defeat module identity for every cell while bringing no editing benefit.
- */
-function isLocalPathSpecifier(source: string): boolean {
-	return (
-		source.startsWith("./") ||
-		source.startsWith("../") ||
-		source === "." ||
-		source === ".." ||
-		source.startsWith("/") ||
-		source.startsWith("~/") ||
-		/^[a-zA-Z]:[\\/]/.test(source)
-	);
 }

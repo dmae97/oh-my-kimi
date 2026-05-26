@@ -7548,11 +7548,11 @@ export class AgentSession {
 	 * Generate an ephemeral reply to a background message (e.g. an IRC ping from
 	 * another agent) using this session's current model + system prompt + history.
 	 *
-	 * The reply is computed via a side-channel `streamSimple` call (analogous to
-	 * `/btw`) so it never blocks on the recipient's in-flight tool calls.  After
-	 * the reply is generated, both the incoming question and the auto-reply are
-	 * queued for injection into the recipient's persisted history so the model
-	 * sees the exchange on its next turn.  Injection happens immediately when the
+	 * The incoming message is queued for injection into the recipient's persisted
+	 * history immediately so timeouts/abort still preserve delivery. The reply is
+	 * computed via a side-channel `streamSimple` call (analogous to `/btw`) so it
+	 * never blocks on the recipient's in-flight tool calls. When a reply is
+	 * generated, it is queued separately. Injection happens immediately when the
 	 * session is idle, otherwise it is deferred until streaming ends.
 	 */
 	async respondAsBackground(args: {
@@ -7581,8 +7581,8 @@ export class AgentSession {
 			timestamp: incomingTimestamp,
 		});
 
+		this.#queueBackgroundExchangeInjection([incomingRecord]);
 		if (!awaitReply) {
-			this.#queueBackgroundExchangeInjection([incomingRecord]);
 			return { replyText: null };
 		}
 
@@ -7612,7 +7612,7 @@ export class AgentSession {
 			kind: "reply",
 			timestamp: replyRecord.timestamp,
 		});
-		this.#queueBackgroundExchangeInjection([incomingRecord, replyRecord]);
+		this.#queueBackgroundExchangeInjection([replyRecord]);
 
 		return { replyText };
 	}
