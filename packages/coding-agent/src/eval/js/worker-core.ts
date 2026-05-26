@@ -3,6 +3,7 @@ import { JsRuntime, type RuntimeHooks } from "./shared/runtime";
 import type { RunErrorPayload, SessionSnapshot, ToolReply, Transport, WorkerInbound } from "./worker-protocol";
 
 interface PendingTool {
+	runId: string;
 	resolve(value: unknown): void;
 	reject(error: Error): void;
 }
@@ -36,8 +37,7 @@ function errorFromPayload(payload: RunErrorPayload): Error {
 export class WorkerCore {
 	#transport: Transport;
 	#runtime: JsRuntime | null = null;
-	#queue: Promise<void> = Promise.resolve();
-	#active: ActiveRun | null = null;
+	#runs = new Map<string, ActiveRun>();
 	#unsubscribe: () => void;
 
 	constructor(transport: Transport) {
@@ -52,7 +52,7 @@ export class WorkerCore {
 				this.#ensureRuntime(msg.snapshot);
 				return;
 			case "run":
-				this.#enqueueRun(msg.runId, msg.code, msg.filename, msg.snapshot);
+				void this.#runOne(msg.runId, msg.code, msg.filename, msg.snapshot);
 				return;
 			case "tool-reply":
 				this.#deliverToolReply(msg.id, msg.reply);
@@ -71,73 +71,58 @@ export class WorkerCore {
 		this.#runtime = new JsRuntime({
 			initialCwd: snapshot.cwd,
 			sessionId: snapshot.sessionId,
-			getHooks: () => this.#hooksForCurrentRun(),
 		});
 		return this.#runtime;
-	}
-
-	#hooksForCurrentRun(): RuntimeHooks | null {
-		const active = this.#active;
-		if (!active) return null;
-		const runId = active.runId;
-		return {
-			onText: chunk => this.#transport.send({ type: "text", runId, chunk }),
-			onDisplay: output => this.#transport.send({ type: "display", runId, output }),
-			callTool: (name, args) => this.#callTool(active, name, args),
-		};
-	}
-
-	#enqueueRun(runId: string, code: string, filename: string, snapshot: SessionSnapshot): void {
-		const previous = this.#queue;
-		const next = (async () => {
-			await previous.catch(() => undefined);
-			await this.#runOne(runId, code, filename, snapshot);
-		})();
-		this.#queue = next.catch(() => undefined);
 	}
 
 	async #runOne(runId: string, code: string, filename: string, snapshot: SessionSnapshot): Promise<void> {
 		const runtime = this.#ensureRuntime(snapshot);
 		runtime.setCwd(snapshot.cwd);
-		this.#active = { runId, pendingTools: new Map() };
+		const active: ActiveRun = { runId, pendingTools: new Map() };
+		this.#runs.set(runId, active);
+		const hooks: RuntimeHooks = {
+			onText: chunk => this.#transport.send({ type: "text", runId, chunk }),
+			onDisplay: output => this.#transport.send({ type: "display", runId, output }),
+			callTool: (name, args) => this.#callTool(active, name, args),
+		};
 		try {
-			const value = await runtime.run(code, filename);
-			runtime.displayValue(value);
+			const value = await runtime.run(code, filename, hooks, { runId, cwd: snapshot.cwd });
+			runtime.displayValue(value, hooks);
 			this.#transport.send({ type: "result", runId, ok: true });
 		} catch (error) {
 			this.#transport.send({ type: "result", runId, ok: false, error: errorPayload(error) });
 		} finally {
-			this.#active = null;
+			this.#runs.delete(runId);
 		}
 	}
 
 	async #callTool(active: ActiveRun, name: string, args: unknown): Promise<unknown> {
 		const id = `tc-${active.runId}-${crypto.randomUUID()}`;
 		const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-		active.pendingTools.set(id, { resolve, reject });
+		active.pendingTools.set(id, { runId: active.runId, resolve, reject });
 		this.#transport.send({ type: "tool-call", id, runId: active.runId, name, args });
 		return await promise;
 	}
 
 	#deliverToolReply(id: string, reply: ToolReply): void {
-		const active = this.#active;
-		if (!active) return;
-		const pending = active.pendingTools.get(id);
-		if (!pending) return;
-		active.pendingTools.delete(id);
-		if (reply.ok) pending.resolve(reply.value);
-		else pending.reject(errorFromPayload(reply.error));
+		for (const active of this.#runs.values()) {
+			const pending = active.pendingTools.get(id);
+			if (!pending) continue;
+			active.pendingTools.delete(id);
+			if (reply.ok) pending.resolve(reply.value);
+			else pending.reject(errorFromPayload(reply.error));
+			return;
+		}
 	}
 
 	#close(): void {
-		const active = this.#active;
-		if (active) {
+		for (const active of this.#runs.values()) {
 			for (const pending of active.pendingTools.values()) {
 				pending.reject(new ToolError("JS worker closed"));
 			}
 			active.pendingTools.clear();
 		}
-		this.#active = null;
+		this.#runs.clear();
 		this.#runtime = null;
 		this.#transport.send({ type: "closed" });
 		this.#unsubscribe();

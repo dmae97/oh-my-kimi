@@ -185,6 +185,8 @@ export interface ExecutorOptions {
 	 */
 	parentArtifactManager?: ArtifactManager;
 	parentHindsightSessionState?: HindsightSessionState;
+	/** Parent agent's eval executor session id. Subagents reuse it so eval state is shared. */
+	parentEvalSessionId?: string;
 	/**
 	 * Parent agent's OpenTelemetry configuration. When defined, the subagent's
 	 * loop is started with the same tracer/hooks but its own agent identity
@@ -1236,6 +1238,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 					localProtocolOptions: options.localProtocolOptions,
 					telemetry: subagentTelemetry,
+					parentEvalSessionId: options.parentEvalSessionId,
 				}),
 			);
 

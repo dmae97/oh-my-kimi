@@ -1,12 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - The `vim` edit mode option is no longer available; configurations using `edit.mode: vim` will be automatically mapped to `hashline` mode
 
 ### Added
 
+- Added evaluator state inheritance for `task`-spawned subagents so JavaScript and Python variables are visible between a parent agent and its child sessions
+- Added `hashline-per` edit mode to restore the legacy per-line hashline dialect alongside the default file-hash dialect
+- Added file-hash computation and validation for hashline sections to detect stale edits
+- Added file-read snapshot caching with multi-snapshot ring per path for recovery from agent's own writes
+- Added delete operation (`!`) support to hashline grammar for explicit line deletion
+- Added structural bracket/brace balance warnings when deleting lines with unclosed constructs
 - Added file-hash computation and validation for hashline sections to detect stale edits
 - Added file-read snapshot caching with multi-snapshot ring per path for recovery from agent's own writes
 - Added delete operation (`!`) support to hashline grammar for explicit line deletion
@@ -14,7 +21,17 @@
 
 ### Changed
 
+- Changed JavaScript and Python `eval` execution to allow overlapping asynchronous cells on the same session ID to run concurrently instead of being strictly queued
 - Updated the edit mode option set to support `replace`, `patch`, `hashline`, and `apply_patch` variants
+- Bare `A:` / `A-B:` (no payload, no inline body) now replaces the line/range with a single blank line, symmetric with bare `A↑` / `A↓` inserting a blank line; previously rejected as ambiguous
+- Simplified hashline anchor format from `LINE+HASH` to bare `LINE` numbers in edit operations
+- Updated hashline file headers to include 4-hex file hash: `¶PATH#HASH` format for anchored edits
+- Changed hashline line separator from `|` to `:` in editable output (e.g., `42:content` instead of `42ab|content`)
+- Removed per-line hash validation; file-level hash now validates entire section integrity
+- Updated read/search output to emit file-hash headers (`¶PATH#HASH`) followed by numbered lines for hashline mode
+- Modified hashline grammar to accept optional file hash in headers and removed hash requirements from line anchors
+- Changed hashline diff preview format to use `LINE:content` instead of `LINE+HASH|content`
+- Updated prompt documentation to reflect new `¶PATH#HASH` header and bare line-number syntax
 - Bare `A:` / `A-B:` (no payload, no inline body) now replaces the line/range with a single blank line, symmetric with bare `A↑` / `A↓` inserting a blank line; previously rejected as ambiguous
 - Simplified hashline anchor format from `LINE+HASH` to bare `LINE` numbers in edit operations
 - Updated hashline file headers to include 4-hex file hash: `¶PATH#HASH` format for anchored edits
@@ -32,30 +49,15 @@
 - Removed per-line hash anchors (2-letter bigram hashes) from hashline format
 - Removed `RANGE_INTERIOR_HASH` constant; multi-line ranges no longer use `**` filler
 - Removed `HashMismatch` type and hash mismatch error reporting; replaced with file-level validation
-### Added
-
-- Added file-hash computation and validation for hashline sections to detect stale edits
-- Added file-read snapshot caching with multi-snapshot ring per path for recovery from agent's own writes
-- Added delete operation (`!`) support to hashline grammar for explicit line deletion
-- Added structural bracket/brace balance warnings when deleting lines with unclosed constructs
-
-### Changed
-
-- Bare `A:` / `A-B:` (no payload, no inline body) now replaces the line/range with a single blank line, symmetric with bare `A↑` / `A↓` inserting a blank line; previously rejected as ambiguous
-- Simplified hashline anchor format from `LINE+HASH` to bare `LINE` numbers in edit operations
-- Updated hashline file headers to include 4-hex file hash: `¶PATH#HASH` format for anchored edits
-- Changed hashline line separator from `|` to `:` in editable output (e.g., `42:content` instead of `42ab|content`)
-- Removed per-line hash validation; file-level hash now validates entire section integrity
-- Updated read/search output to emit file-hash headers (`¶PATH#HASH`) followed by numbered lines for hashline mode
-- Modified hashline grammar to accept optional file hash in headers and removed hash requirements from line anchors
-- Changed hashline diff preview format to use `LINE:content` instead of `LINE+HASH|content`
-- Updated prompt documentation to reflect new `¶PATH#HASH` header and bare line-number syntax
-
-### Removed
-
 - Removed per-line hash anchors (2-letter bigram hashes) from hashline format
 - Removed `RANGE_INTERIOR_HASH` constant; multi-line ranges no longer use `**` filler
 - Removed `HashMismatch` type and hash mismatch error reporting; replaced with file-level validation
+
+### Fixed
+
+- Fixed JavaScript `eval` imports to preserve module-level singletons across re-imports of unchanged local files and reload them only after edits
+- Fixed concurrent Python evaluator tool calls to use per-run identifiers so tool responses and output are routed to the correct execution
+- Fixed the `search` tool argument validation to accept a single string `paths` value as a one-path search.
 
 ## [15.4.0] - 2026-05-26
 

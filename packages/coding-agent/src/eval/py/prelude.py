@@ -402,8 +402,10 @@ if "__omp_prelude_loaded__" not in globals():
             merged.update(kwargs)
             if "_i" not in merged:
                 merged["_i"] = "py prelude"
+            _run_id_getter = globals().get("__omp_current_run_id__")
+            _run_id = _run_id_getter() if callable(_run_id_getter) else globals().get("__omp_run_id__")
             payload = json.dumps(
-                {"session": self._proxy._session, "name": self._name, "args": merged}
+                {"session": self._proxy._session, "run": _run_id, "name": self._name, "args": merged}
             ).encode("utf-8")
             req = urllib.request.Request(
                 f"{self._proxy._base}/v1/tool",

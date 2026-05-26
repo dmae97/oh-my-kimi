@@ -108,6 +108,7 @@ import {
 	executePython as executePythonCommand,
 	type PythonResult,
 } from "../eval/py/executor";
+import { defaultEvalSessionId } from "../eval/session-id";
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
 import { exportSessionToHtml } from "../export/html";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
@@ -139,6 +140,7 @@ import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
 import { GoalRuntime } from "../goals/runtime";
 import type { Goal, GoalModeState } from "../goals/state";
+import { getHashlineSyntax } from "../hashline/hash";
 import type { HindsightSessionState } from "../hindsight/state";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import {
@@ -312,6 +314,8 @@ export interface AgentSessionConfig {
 	ttsrManager?: TtsrManager;
 	/** Secret obfuscator for deobfuscating streaming edit content */
 	obfuscator?: SecretObfuscator;
+	/** Inherited eval executor session id from a parent agent. */
+	parentEvalSessionId?: string;
 	/** Logical owner for retained Python kernels created by this session. */
 	evalKernelOwnerId?: string;
 	/**
@@ -808,6 +812,8 @@ export class AgentSession {
 	// Python execution state
 	#evalAbortControllers = new Set<AbortController>();
 	#evalKernelOwnerId: string;
+	#parentEvalSessionId: string | undefined;
+	#cachedEvalSessionId: string | null | undefined;
 	/**
 	 * AsyncJobManager owned by this session (top-level only). Subagents leave
 	 * this undefined and **MUST NOT** dispose the global instance on teardown.
@@ -997,6 +1003,7 @@ export class AgentSession {
 		this.settings = config.settings;
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
 		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
+		this.#parentEvalSessionId = config.parentEvalSessionId;
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#scopedModels = config.scopedModels ?? [];
 		this.#thinkingLevel = config.thinkingLevel;
@@ -3693,6 +3700,16 @@ export class AgentSession {
 	get sessionId(): string {
 		return this.#providerSessionId ?? this.sessionManager.getSessionId();
 	}
+	getEvalSessionId(): string | null {
+		if (this.#cachedEvalSessionId !== undefined) return this.#cachedEvalSessionId;
+		this.#cachedEvalSessionId =
+			this.#parentEvalSessionId ??
+			defaultEvalSessionId({
+				cwd: this.sessionManager.getCwd(),
+				getSessionFile: () => this.sessionManager.getSessionFile() ?? null,
+			});
+		return this.#cachedEvalSessionId;
+	}
 
 	/** Current session display name, if set */
 	get sessionName(): string | undefined {
@@ -4120,6 +4137,7 @@ export class AgentSession {
 				const fileMentionMessages = await generateFileMentionMessages(fileMentions, this.sessionManager.getCwd(), {
 					autoResizeImages: this.settings.get("images.autoResize"),
 					useHashLines: resolveFileDisplayMode(this).hashLines,
+					syntax: getHashlineSyntax(this.#resolveActiveEditMode()),
 				});
 				messages.push(...fileMentionMessages);
 			}
@@ -7430,9 +7448,13 @@ export class AgentSession {
 				}
 			}
 
-			// Use the same session ID as eval's Python backend for kernel sharing
-			const sessionFile = this.sessionManager.getSessionFile();
-			const sessionId = sessionFile ? `session:${sessionFile}:cwd:${cwd}` : `cwd:${cwd}`;
+			// Use the same session ID as eval's Python backend for kernel sharing.
+			const sessionId =
+				this.getEvalSessionId() ??
+				defaultEvalSessionId({
+					cwd,
+					getSessionFile: () => this.sessionManager.getSessionFile() ?? null,
+				});
 			const result = await executePythonCommand(code, {
 				cwd,
 				sessionId,
@@ -7717,10 +7739,17 @@ export class AgentSession {
 			// removes the surface entirely.
 			tools: [],
 		};
+		const cacheSessionId = this.sessionId;
 		const options = this.prepareSimpleStreamOptions(
 			{
 				apiKey,
-				sessionId: this.sessionId,
+				// Side-channel turns must not share OpenAI/Codex append-only
+				// conversation state with the main agent turn: IRC and /btw can run
+				// while the main turn is mid-tool-call. Keep the prompt-cache key
+				// stable, but give provider routing a unique request lineage.
+				sessionId: `${cacheSessionId}:side:${Snowflake.next()}`,
+				promptCacheKey: cacheSessionId,
+				preferWebsockets: false,
 				reasoning: toReasoningEffort(this.thinkingLevel),
 				hideThinkingSummary: this.agent.hideThinkingSummary,
 				serviceTier: this.serviceTier,

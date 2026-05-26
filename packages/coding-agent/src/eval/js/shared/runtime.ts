@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Console } from "node:console";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
@@ -8,7 +9,6 @@ import * as util from "node:util";
 
 import { logger } from "@oh-my-pi/pi-utils";
 
-import { ToolError } from "../../../tools/tool-errors";
 import { createHelpers, type HelperBundle } from "./helpers";
 import { awaitMaybePromise, indirectEval } from "./indirect-eval";
 import { JAVASCRIPT_PRELUDE_SOURCE } from "./prelude";
@@ -16,10 +16,8 @@ import { wrapCode } from "./rewrite-imports";
 import type { JsDisplayOutput, JsStatusEvent } from "./types";
 
 /**
- * Per-run callbacks. Returned by `getHooks()` on each helper/tool/display invocation so
- * the embedding worker can route emissions to the currently active run. Returning `null`
- * makes status/display/tool calls reject with an error — useful for guarding against
- * helpers being invoked outside a run window.
+ * Per-run callbacks. Runtime globals resolve these from AsyncLocalStorage so
+ * overlapping async cells can route output/tool calls back to their own run.
  */
 export interface RuntimeHooks {
 	onText(chunk: string): void;
@@ -27,11 +25,17 @@ export interface RuntimeHooks {
 	callTool(name: string, args: unknown): Promise<unknown>;
 }
 
+export interface RunContext {
+	runId: string;
+	hooks: RuntimeHooks;
+	cwd: string;
+	finalExpressionSet: boolean;
+	finalExpressionValue: unknown;
+}
+
 export interface RuntimeOptions {
 	initialCwd: string;
 	sessionId: string;
-	/** Resolve hooks for the run currently in flight, or `null` if nothing is active. */
-	getHooks(): RuntimeHooks | null;
 	/**
 	 * Extra globals installed alongside `__omp_helpers__` / prelude. Use for stable, lifetime-
 	 * of-the-worker bindings (e.g. browser's `page`, `browser`). Per-run scope should be set
@@ -120,19 +124,23 @@ export class JsRuntime {
 	#cwd: string;
 	readonly sessionId: string;
 	#env: Map<string, string>;
-	#getHooks: () => RuntimeHooks | null;
-	#finalExpressionSet = false;
-	#finalExpressionValue: unknown;
+	#als = new AsyncLocalStorage<RunContext>();
+	/**
+	 * mtime (ms) of every user-owned absolute path we've routed through `__omp_import__`.
+	 * Powers edit-aware cache eviction: an unchanged file keeps its existing module
+	 * instance — and therefore its module-private singletons — across cells; a bumped
+	 * mtime triggers a one-shot `require.cache` eviction so the next `import` reloads.
+	 */
+	#moduleMtimes = new Map<string, number>();
 
 	constructor(opts: RuntimeOptions) {
 		this.#cwd = opts.initialCwd;
 		this.sessionId = opts.sessionId;
 		this.#env = new Map();
-		this.#getHooks = opts.getHooks;
 		this.helpers = createHelpers({
-			cwd: () => this.#cwd,
+			cwd: () => this.#activeCwd(),
 			env: this.#env,
-			emitStatus: event => this.#getHooks()?.onDisplay({ type: "status", event }),
+			emitStatus: event => this.#activeHooks("emitStatus")?.onDisplay({ type: "status", event }),
 		});
 		this.#install(opts.extraGlobals);
 	}
@@ -156,29 +164,42 @@ export class JsRuntime {
 		Object.assign(globalThis, scope);
 	}
 
-	async run(code: string, filename?: string): Promise<unknown> {
-		this.#finalExpressionSet = false;
-		this.#finalExpressionValue = undefined;
-		const wrapped = wrapCode(code);
-		const value = indirectEval(wrapped.source, filename);
-		if (wrapped.finalExpressionReturned) {
-			const awaited = await awaitMaybePromise(value);
-			if (this.#finalExpressionSet) {
-				const finalValue = this.#finalExpressionValue;
-				this.#finalExpressionSet = false;
-				this.#finalExpressionValue = undefined;
-				const resolved = await awaitMaybePromise(finalValue);
-				return resolved;
+	async run(
+		code: string,
+		filename: string | undefined,
+		hooks: RuntimeHooks,
+		options: { runId?: string; cwd?: string } = {},
+	): Promise<unknown> {
+		const context: RunContext = {
+			runId: options.runId ?? crypto.randomUUID(),
+			hooks,
+			cwd: options.cwd ?? this.#cwd,
+			finalExpressionSet: false,
+			finalExpressionValue: undefined,
+		};
+		return await this.#als.run(context, async () => {
+			const wrapped = wrapCode(code);
+			const value = indirectEval(wrapped.source, filename);
+			if (wrapped.finalExpressionReturned) {
+				const awaited = await awaitMaybePromise(value);
+				if (context.finalExpressionSet) {
+					const finalValue = context.finalExpressionValue;
+					context.finalExpressionSet = false;
+					context.finalExpressionValue = undefined;
+					return await awaitMaybePromise(finalValue);
+				}
+				return awaited;
 			}
-			return awaited;
-		}
-		return await awaitMaybePromise(value);
+			return await awaitMaybePromise(value);
+		});
 	}
 
-	displayValue(value: unknown): void {
+	displayValue(value: unknown, hooks: RuntimeHooks | undefined = this.#als.getStore()?.hooks): void {
 		if (value === undefined) return;
-		const hooks = this.#getHooks();
-		if (!hooks) return;
+		if (!hooks) {
+			logger.warn("js runtime display called outside an active run");
+			return;
+		}
 		if (value && typeof value === "object") {
 			const record = value as Record<string, unknown>;
 			if (record.type === "image" && typeof record.mimeType === "string") {
@@ -209,37 +230,68 @@ export class JsRuntime {
 		hooks.onText(`${String(value)}\n`);
 	}
 
+	#activeCwd(): string {
+		return this.#als.getStore()?.cwd ?? this.#cwd;
+	}
+
+	#activeHooks(action: string): RuntimeHooks | undefined {
+		const hooks = this.#als.getStore()?.hooks;
+		if (!hooks) {
+			logger.warn("js runtime helper called outside an active run", { action });
+		}
+		return hooks;
+	}
+
 	#install(extraGlobals: Record<string, unknown> | undefined): void {
 		const injected: Record<string, unknown> = {
 			__omp_session__: { cwd: this.#cwd, sessionId: this.sessionId },
 			__omp_helpers__: this.helpers,
 			__omp_call_tool__: async (name: string, args: unknown) => {
-				const hooks = this.#getHooks();
-				if (!hooks) throw new ToolError("Tool calls are only valid inside an active run");
+				const hooks = this.#activeHooks("tool");
+				if (!hooks) return undefined;
 				return await hooks.callTool(name, args);
 			},
 			__omp_import__: async (source: string, options?: ImportCallOptions) => {
-				const target = resolveImportSpecifier(this.#cwd, source);
-				// Always invalidate cached module records for user-owned source files so edits
-				// between cells are picked up. Bun ignores query-string busting on `file:` URLs
-				// but honors `delete require.cache[absPath]`; bare specifiers and URL schemes are
-				// left alone to keep package identity stable across cells.
+				const target = resolveImportSpecifier(this.#activeCwd(), source);
+				// Edit-aware module cache eviction for user-owned source files (relative or
+				// absolute paths). Bun's module cache otherwise pins the first evaluation for
+				// the lifetime of the worker, which (a) hides edits made between cells and
+				// (b) would force any module-private singleton state to be re-initialized on
+				// every re-import — breaking patterns like `Settings.init()`'s module-scoped
+				// `globalInstance` when one cell inits and a later cell re-imports.
+				//
+				// Strategy: stat the resolved file, compare mtime to the last value we saw,
+				// and only evict when the file actually changed. First sight just records
+				// the mtime so the current module instance — and any singleton state it
+				// owns — survives subsequent imports until the user edits the file. Bare
+				// specifiers and URL schemes are left alone: `node:` built-ins cannot be
+				// reloaded and busting packages would defeat module identity across cells.
 				if (isLocalPathSpecifier(source) && path.isAbsolute(target)) {
-					delete require.cache[target];
+					try {
+						const mtime = fs.statSync(target).mtimeMs;
+						const prev = this.#moduleMtimes.get(target);
+						if (prev !== undefined && prev !== mtime) {
+							delete require.cache[target];
+						}
+						this.#moduleMtimes.set(target, mtime);
+					} catch {
+						// stat failure (missing file, permission error, …) — fall through and
+						// let the real `import` surface the underlying error.
+					}
 				}
 				return options !== undefined ? await import(target, options) : await import(target);
 			},
 			__omp_emit_status__: (op: string, data: Record<string, unknown> = {}) => {
 				const event: JsStatusEvent = { op, ...data };
-				this.#getHooks()?.onDisplay({ type: "status", event });
+				this.#activeHooks("emitStatus")?.onDisplay({ type: "status", event });
 			},
 			__omp_log__: (level: string, ...args: unknown[]) => {
 				const prefix = level === "error" ? "[error] " : level === "warn" ? "[warn] " : "";
 				const text = `${prefix}${formatConsoleArgs(args)}`;
-				this.#getHooks()?.onText(text.endsWith("\n") ? text : `${text}\n`);
+				this.#activeHooks("log")?.onText(text.endsWith("\n") ? text : `${text}\n`);
 			},
 			__omp_table__: (...args: unknown[]) => {
-				const hooks = this.#getHooks();
+				const hooks = this.#activeHooks("table");
 				if (!hooks) return;
 				let buffer = "";
 				const stream = new Writable({
@@ -254,8 +306,13 @@ export class JsRuntime {
 			},
 			__omp_display__: (value: unknown) => this.displayValue(value),
 			__omp_set_final_expr__: (value: unknown) => {
-				this.#finalExpressionSet = true;
-				this.#finalExpressionValue = value;
+				const context = this.#als.getStore();
+				if (!context) {
+					logger.warn("js runtime final expression set outside an active run");
+					return;
+				}
+				context.finalExpressionSet = true;
+				context.finalExpressionValue = value;
 			},
 			webcrypto: crypto,
 			// `process` is intentionally not overridden — user code gets the host worker's real

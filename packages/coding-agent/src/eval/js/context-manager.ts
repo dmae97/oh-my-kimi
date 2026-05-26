@@ -48,10 +48,10 @@ interface JsSession {
 	worker: WorkerHandle;
 	state: "alive" | "dead";
 	pending: Map<string, PendingRun>;
-	queue: Promise<void>;
 }
 
 const sessions = new Map<string, JsSession>();
+const resettingSessions = new Set<string>();
 const READY_TIMEOUT_MS_DEFAULT = 5_000;
 
 export async function executeInVmContext(options: {
@@ -66,14 +66,24 @@ export async function executeInVmContext(options: {
 	runState: VmRunState;
 }): Promise<{ value: unknown }> {
 	if (options.reset) {
-		await resetVmContext(options.sessionKey);
+		if (resettingSessions.has(options.sessionKey)) {
+			throw new ToolError("JS context reset already in progress");
+		}
+		resettingSessions.add(options.sessionKey);
+		try {
+			await resetVmContext(options.sessionKey);
+		} finally {
+			resettingSessions.delete(options.sessionKey);
+		}
+	} else if (resettingSessions.has(options.sessionKey)) {
+		throw new ToolError("JS context reset in progress");
 	}
 	const session = await acquireSession(
 		options.sessionKey,
 		{ cwd: options.cwd, sessionId: options.sessionId },
 		options.timeoutMs,
 	);
-	return await runQueued(session, () => runOnce(session, options));
+	return await runOnce(session, options);
 }
 
 export async function resetVmContext(sessionKey: string): Promise<void> {
@@ -87,22 +97,6 @@ export async function disposeAllVmContexts(): Promise<void> {
 	const all = [...sessions.values()];
 	sessions.clear();
 	await Promise.all(all.map(session => killSession(session, new ToolError("JS context disposed"))));
-}
-
-async function runQueued<T>(session: JsSession, work: () => Promise<T>): Promise<T> {
-	const previous = session.queue;
-	const { promise, resolve } = Promise.withResolvers<void>();
-	session.queue = promise;
-	try {
-		await previous;
-	} catch {
-		// Previous run's failure must not poison this one.
-	}
-	try {
-		return await work();
-	} finally {
-		resolve();
-	}
 }
 
 async function runOnce(
@@ -169,7 +163,6 @@ async function acquireSession(sessionKey: string, snapshot: SessionSnapshot, tim
 		worker,
 		state: "alive",
 		pending: new Map(),
-		queue: Promise.resolve(),
 	};
 	const { promise: readyPromise, resolve: resolveReady, reject: rejectReady } = Promise.withResolvers<void>();
 	let resolved = false;

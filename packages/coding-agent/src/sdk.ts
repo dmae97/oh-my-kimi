@@ -51,6 +51,7 @@ import "./discovery";
 import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
 import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
+import { defaultEvalSessionId } from "./eval/session-id";
 import { TtsrManager } from "./export/ttsr";
 import {
 	type CustomCommandsLoadResult,
@@ -318,6 +319,8 @@ export interface CreateAgentSessionOptions {
 	agentRegistry?: AgentRegistry;
 	/** Parent task ID prefix for nested artifact naming (e.g., "6-Extensions") */
 	parentTaskPrefix?: string;
+	/** Inherited eval executor session id for subagents sharing parent eval state. */
+	parentEvalSessionId?: string;
 
 	/** Session manager. Default: session stored under the configured agentDir sessions root */
 	sessionManager?: SessionManager;
@@ -1177,6 +1180,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			taskDepth: options.taskDepth ?? 0,
 			getSessionFile: () => sessionManager.getSessionFile() ?? null,
 			getEvalKernelOwnerId: () => evalKernelOwnerId,
+			getEvalSessionId: () =>
+				session?.getEvalSessionId() ?? options.parentEvalSessionId ?? defaultEvalSessionId(toolSession),
 			assertEvalExecutionAllowed: () => session?.assertEvalExecutionAllowed(),
 			trackEvalExecution: (execution, abortController) =>
 				session ? session.trackEvalExecution(execution, abortController) : execution,
@@ -1994,6 +1999,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			agentId: resolvedAgentId,
 			agentRegistry,
 			providerSessionId: options.providerSessionId,
+			parentEvalSessionId: options.parentEvalSessionId,
 		});
 		hasSession = true;
 		if (asyncJobManager) {

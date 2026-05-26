@@ -90,21 +90,22 @@ Side-channel artifacts:
    - `js` is gated on `eval.js !== false`.
    - A disabled or unavailable requested backend throws `ToolError`; there is no auto-fallback or sniffing.
 3. The tool allocates an `OutputSink`, a `TailBuffer`, per-cell result objects, and a `sessionAbortController`. `session.trackEvalExecution?.(...)` can wrap the whole run for external cancellation tracking.
-4. Cells execute sequentially. For each cell, `execute()`:
+4. It resolves the executor session id from `session.getEvalSessionId?.()`, falling back to `defaultEvalSessionId(session)`. Subagents inherit the parent's id so both sides share the same JS VM and Python kernel for each backend.
+5. Cells execute sequentially within one eval tool call. For each cell, `execute()`:
    - clamps `(cell.timeout ?? 30) * 1000` ms through `clampTimeout("eval", ...)`
    - builds a combined abort signal from the tool signal, the timeout, and the session abort controller
    - marks the cell `running` and emits an update
    - calls the backend’s `execute()` with `cwd`, `sessionId`, `sessionFile`, `kernelOwnerId`, `deadlineMs`, `reset` (defaults to `false`), artifact info, and chunk callback
-5. JS cells dispatch through `packages/coding-agent/src/eval/js/index.ts` into `executeJs()`; Python cells dispatch through `packages/coding-agent/src/eval/py/index.ts` into `executePython()`.
-6. Backend text chunks stream into the shared `OutputSink`; rich outputs are accumulated separately as JSON, images, markdown markers, and status events.
-7. After each cell:
+6. JS cells dispatch through `packages/coding-agent/src/eval/js/index.ts` into `executeJs()`; Python cells dispatch through `packages/coding-agent/src/eval/py/index.ts` into `executePython()`.
+7. Backend text chunks stream into the shared `OutputSink`; rich outputs are accumulated separately as JSON, images, markdown markers, and status events.
+8. After each cell:
    - text output is trimmed and stored on that cell result
    - multi-cell runs prefix text with `[i/n]` and the optional title
    - cancellations return early with `isError: true` and a cell-specific abort message
    - non-zero exit codes return early with `isError: true` and a message naming the failed cell
    - later cells are skipped after the first error, but earlier cell state persists in the underlying runtime
-8. On success, the tool joins all cell outputs, synthesizes `(no text output)` or `(no output)` when needed, and attaches truncation metadata from `summarizeFinal()`.
-9. The renderer uses `details.cells`, `details.jsonOutputs`, and `details.statusEvents` to build notebook-style output. `mergeCallAndResult = true` and `inline = true`, so call and result render together in the transcript.
+9. On success, the tool joins all cell outputs, synthesizes `(no text output)` or `(no output)` when needed, and attaches truncation metadata from `summarizeFinal()`.
+10. The renderer uses `details.cells`, `details.jsonOutputs`, and `details.statusEvents` to build notebook-style output. `mergeCallAndResult = true` and `inline = true`, so call and result render together in the transcript.
 
 ## Modes / Variants
 
@@ -121,8 +122,8 @@ If the requested backend is disabled or unavailable, the tool throws `ToolError`
 
 Implemented in `packages/coding-agent/src/eval/js/context-manager.ts` and `packages/coding-agent/src/eval/js/prelude.txt`.
 
-- Persistent `vm.Context` instances keyed by `js:${sessionId}` in `vmContexts`
-- `reset: true` calls `resetVmContext(sessionKey)` before the cell executes
+- Persistent worker-backed VM sessions keyed by `js:${sessionId}`
+- `reset: true` calls `resetVmContext(sessionKey)` before the cell executes; reset is destructive for all live runs on that JS session
 - Top-level `await` and bare `return` are supported by wrapping code in an async IIFE when `wrapCode()` sees `await` or `return`
 - Top-level static `import ... from ...` and dynamic `import(...)` calls are routed through `rewriteImports()`, which sends them via `__omp_import__` so the specifier resolves against the session cwd
 - Module cache is busted for **local** imports between cells so edits to source files are picked up without restarting the runtime. `__omp_import__` deletes `require.cache[absPath]` before re-importing whenever the original specifier is a filesystem path: relative (`./x`, `../x`, `.`, `..`), POSIX-absolute (`/...`), home-prefixed (`~/...`), or Windows drive-letter (`C:\...` / `C:/...`). Bare specifiers (`react`, `lodash/x`) and URL/scheme specifiers (`node:fs`, `file://...`, `https://...`) are left in cache so package identity stays stable across cells. The cache-bust only fires when the resolved target is an absolute path — unresolved bare-package fallbacks (`resolveImportSpecifier()` returning the original specifier) skip it.
@@ -136,7 +137,7 @@ Implemented in `packages/coding-agent/src/eval/js/context-manager.ts` and `packa
   - `{ type: "image", data, mimeType }` becomes an image output
   - scalars become text
 - The VM exposes a restricted `process` subset plus `Buffer`, `fetch`, `Blob`, `File`, `Headers`, `Request`, `Response`, `fs`, `require`, and browser-style globals
-- Per-session VM runs are serialized with `runQueued()`
+- Concurrent runs on the same VM are not queued end-to-end. Synchronous JS still runs on the single event loop; awaited regions can interleave with sibling runs.
 
 ### Python runtime
 
@@ -150,9 +151,9 @@ Implemented in `packages/coding-agent/src/eval/py/executor.ts`, `packages/coding
   - create/connect kernel
   - initialize cwd / env / `sys.path`
   - execute `PYTHON_PRELUDE`
-- Python cells run inside IPython/Jupyter, so top-level `await` works; the prompt warns not to use `asyncio.run(...)`
-- The Python prelude defines synchronous helpers with the same surface as JS (except `tool.<name>` exists only in JS)
-- `display(value)` wraps dict/list/tuple values in `IPython.display.JSON`; rich display MIME bundles are preserved
+- Python cells run in the runner's persistent asyncio event loop, so top-level `await` works; the prompt warns not to use `asyncio.run(...)`
+- The Python prelude defines helpers with the same surface as JS where practical, including `tool.<name>(args)` through a per-run loopback bridge
+- Synchronous statement blocks run in the default executor with ContextVar state copied in; the GIL still serializes bytecode execution, but awaited regions can interleave with sibling cells
 - Kernel `display_data` / `execute_result` messages map to:
   - `application/x-omp-status` → status event
   - `image/png` → image output
@@ -184,14 +185,14 @@ A single tool call can mix Python and JS cells. Persistence is per language runt
 - Session state
   - `session.assertEvalExecutionAllowed?.()` can block execution.
   - `session.trackEvalExecution?.(...)` can register cancellable eval work.
-  - `session.getSessionFile?.()` and `session.getEvalKernelOwnerId?.()` influence kernel reuse and artifact lookup.
-  - JS VM contexts persist in `vmContexts` across eval calls until reset/disposal.
-  - Python retained kernels persist in `kernelSessions` until reset, eviction, idle cleanup, or owner cleanup.
+  - `session.getSessionFile?.()`, `session.getEvalSessionId?.()`, and `session.getEvalKernelOwnerId?.()` influence VM/kernel reuse and artifact lookup.
+  - JS VM contexts persist across eval calls until reset/disposal.
+  - Python retained kernels persist until reset, owner cleanup, or process exit.
 - User-visible prompts / interactive UI
   - none; stdin requests are rejected programmatically
 - Background work / cancellation
   - Python retained kernels have heartbeat and idle cleanup timers.
-  - Cancellation interrupts a running Python kernel and aborts JS promise waits.
+  - Cancellation hard-kills/resets the shared executor for that backend: JS terminates the worker, Python sends SIGINT and may escalate to subprocess shutdown.
 
 ## Limits & Caps
 
@@ -224,14 +225,21 @@ A single tool call can mix Python and JS cells. Persistence is per language runt
 - Cancellation is returned, not thrown, once backend execution has started. The tool formats it as a cell failure and sets `details.isError = true`.
 - If output truncates, the tool still succeeds; truncation is surfaced through `details.meta` and artifact-backed full output when available.
 
+## Shared executor trade-offs
+
+- Parent agents and subagents share eval state bidirectionally when a subagent inherits the parent's executor id. Mutations in either direction are visible to the other participant.
+- Async regions of concurrent runs can interleave. Synchronous JS still blocks the VM event loop; synchronous Python still contends on the GIL.
+- Cancelling one run is destructive to the shared backend executor. This is intentional: JS worker termination and Python SIGINT/subprocess shutdown are the only reliable way to interrupt arbitrary user code.
+- `reset: true` is destructive for every live run on that backend session id. New starts on that backend are rejected while reset is in flight.
+
 ## Notes
 
 - Backend selection is now strictly explicit per cell: `language` must be `"py"` or `"js"`. The previous `*** Cell` header parser, the `eval.lark` constrained grammar, and the sniffer-based fallback have all been removed.
 - `EvalTool.customFormat` no longer exists. Tool calls flow through the standard JSON schema; there is no Lark-constrained sampling path.
-- `tool.<name>()` exists only in JS. Python prelude helpers do not call back into the full tool registry.
+- `tool.<name>()` exists in both JS and Python. Python calls route through a per-run loopback bridge keyed by the current cell id.
 - JS helper paths reject protocol URIs (`://`) in `resolvePath()`; the JS prelude is filesystem-only unless the code calls `tool.read(...)` or another tool explicitly.
 - Python helper `output(...)` depends on `PI_SESSION_FILE`; it fails outside a session-backed run.
 - `display()` can produce text and structured outputs from the same value; the renderer prefers markdown over `text/plain` when both exist.
 - JS static imports are rewritten only at top level. Nested imports stay invalid and surface normal JS syntax/runtime errors.
-- `EvalTool` is `concurrency = "exclusive"`, so eval calls do not overlap within a session.
+- `EvalTool` is `concurrency = "exclusive"` within one agent session, but parent and subagent sessions can run eval concurrently when they share an inherited executor id.
 - The tool description shown to the model is templated by backend availability (`getEvalToolDescription()`); if Python is unavailable, the prompt omits Python-specific instructions.

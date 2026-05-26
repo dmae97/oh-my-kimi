@@ -102,10 +102,10 @@ interface PythonSession {
 	kernel: PythonKernel;
 	ownerIds: Set<string>;
 	hasFallbackOwner: boolean;
-	queue: Promise<void>;
 }
 
 const sessions = new Map<string, PythonSession>();
+const resettingSessions = new Set<string>();
 
 // ---------------------------------------------------------------------------
 // Cancellation plumbing
@@ -294,7 +294,6 @@ async function acquireSession(sessionId: string, cwd: string, options: PythonExe
 		kernel,
 		ownerIds: new Set(),
 		hasFallbackOwner: false,
-		queue: Promise.resolve(),
 	};
 	attachOwner(session, sessionId, options.kernelOwnerId);
 	sessions.set(sessionId, session);
@@ -328,27 +327,6 @@ async function resetSession(sessionId: string): Promise<void> {
 	if (!existing) return;
 	sessions.delete(sessionId);
 	await existing.kernel.shutdown().catch(() => undefined);
-}
-
-async function runQueued<T>(
-	session: PythonSession,
-	options: Pick<PythonExecutorOptions, "signal" | "deadlineMs">,
-	work: () => Promise<T>,
-): Promise<T> {
-	const previous = session.queue;
-	const { promise: ourSlot, resolve: releaseSlot } = Promise.withResolvers<void>();
-	// Keep the queue chained even if WE bail out: future runs must still wait
-	// for `previous` to finish before they touch the kernel.
-	session.queue = previous.catch(() => undefined).then(() => ourSlot);
-	try {
-		await waitForPromiseWithCancellation(
-			previous.catch(() => undefined),
-			options,
-		);
-		return await work();
-	} finally {
-		releaseSlot();
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -424,9 +402,10 @@ async function executeWithKernel(
 		((event: JsStatusEvent) => {
 			displayOutputs.push({ type: "status", event });
 		});
+	const runId = `py-${crypto.randomUUID()}`;
 	const unregisterBridge =
 		options?.toolSession && options?.bridgeSessionId
-			? registerPyToolBridge(options.bridgeSessionId, {
+			? registerPyToolBridge(options.bridgeSessionId, runId, {
 					toolSession: options.toolSession,
 					signal: options.signal,
 					emitStatus,
@@ -436,6 +415,7 @@ async function executeWithKernel(
 	try {
 		executionTimeoutMs = requireRemainingTimeoutMs(deadlineMs);
 		const result = await kernel.execute(code, {
+			id: runId,
 			signal: options?.signal,
 			timeoutMs: executionTimeoutMs,
 			onChunk: text => sink.push(text),
@@ -528,38 +508,46 @@ async function executeOnSession(code: string, cwd: string, options: PythonExecut
 		options.bridgeSessionId = sessionId;
 	}
 	if (options.reset) {
-		await resetSession(sessionId);
+		if (resettingSessions.has(sessionId)) {
+			throw new Error("Python kernel reset already in progress");
+		}
+		resettingSessions.add(sessionId);
+		try {
+			await resetSession(sessionId);
+		} finally {
+			resettingSessions.delete(sessionId);
+		}
+	} else if (resettingSessions.has(sessionId)) {
+		throw new Error("Python kernel reset in progress");
 	}
 	const session = await acquireSession(sessionId, cwd, options);
-	return await runQueued(session, options, async () => {
-		if (options.signal?.aborted) {
-			throw new PythonExecutionCancelledError(isTimedOutCancellation(options.signal.reason, options.signal));
-		}
+	if (options.signal?.aborted) {
+		throw new PythonExecutionCancelledError(isTimedOutCancellation(options.signal.reason, options.signal));
+	}
+	if (sessions.get(session.sessionId) !== session) {
+		throw new PythonExecutionCancelledError(false);
+	}
+	if (!session.kernel.isAlive()) {
+		await replaceSessionKernel(session, cwd, options);
 		if (sessions.get(session.sessionId) !== session) {
 			throw new PythonExecutionCancelledError(false);
 		}
-		if (!session.kernel.isAlive()) {
-			await replaceSessionKernel(session, cwd, options);
-			if (sessions.get(session.sessionId) !== session) {
-				throw new PythonExecutionCancelledError(false);
-			}
+	}
+	try {
+		return await executeWithKernel(session.kernel, code, options);
+	} catch (err) {
+		if (isCancellationError(err) || options.signal?.aborted) throw err;
+		if (session.kernel.isAlive()) throw err;
+		if (sessions.get(session.sessionId) !== session) {
+			throw new PythonExecutionCancelledError(false);
 		}
-		try {
-			return await executeWithKernel(session.kernel, code, options);
-		} catch (err) {
-			if (isCancellationError(err) || options.signal?.aborted) throw err;
-			if (session.kernel.isAlive()) throw err;
-			if (sessions.get(session.sessionId) !== session) {
-				throw new PythonExecutionCancelledError(false);
-			}
-			// Kernel died during execute. Replace it and retry once on a fresh one.
-			await replaceSessionKernel(session, cwd, options);
-			if (sessions.get(session.sessionId) !== session) {
-				throw new PythonExecutionCancelledError(false);
-			}
-			return await executeWithKernel(session.kernel, code, options);
+		// Kernel died during execute. Replace it and retry once on a fresh one.
+		await replaceSessionKernel(session, cwd, options);
+		if (sessions.get(session.sessionId) !== session) {
+			throw new PythonExecutionCancelledError(false);
 		}
-	});
+		return await executeWithKernel(session.kernel, code, options);
+	}
 }
 
 export async function executePythonWithKernel(
