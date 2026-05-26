@@ -554,9 +554,9 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 		return false;
 	};
 
-	// ESC-prefixed sequences (terminals with metaSendsEscape / "Use Option as Meta"):
-	// \x1b\x1b[...] = Alt + inner-key. Strip the ESC prefix and match the inner
-	// sequence against the base key (without alt modifier).
+	// ESC-prefixed sequences (terminals with metaSendsEscape / "Use Option as
+	// Meta"): \x1b\x1b[...] = Alt + inner-key. Strip the ESC prefix and match the
+	// inner sequence against the base key (without alt modifier).
 	// Example: \x1b\x1b[A matches "alt+up" because \x1b[A matches "up".
 	// Active in BOTH legacy and kitty mode (mixed mode) because terminals like
 	// Zellij in mixed mode may send legacy Alt sequences alongside Kitty ones.
@@ -571,8 +571,12 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 			key.to_string()
 		} else {
 			let mut s = String::with_capacity(16);
-			if inner_modifier & MOD_SHIFT != 0 { s.push_str("shift+"); }
-			if inner_modifier & MOD_CTRL != 0  { s.push_str("ctrl+"); }
+			if inner_modifier & MOD_SHIFT != 0 {
+				s.push_str("shift+");
+			}
+			if inner_modifier & MOD_CTRL != 0 {
+				s.push_str("ctrl+");
+			}
 			s.push_str(key);
 			s
 		};
@@ -1050,18 +1054,18 @@ fn parse_key_inner(bytes: &[u8], kitty_protocol_active: bool) -> Option<Cow<'sta
 		return format_kitty_key(&parsed);
 	}
 
-	// ESC-prefixed sequences (terminals with metaSendsEscape / "Use Option as Meta"):
-	// \x1b + inner-sequence = Alt modifier on that key.
+	// ESC-prefixed sequences (terminals with metaSendsEscape / "Use Option as
+	// Meta"): \x1b + inner-sequence = Alt modifier on that key.
 	// Example: iTerm2 "Use Option as Meta" sends \x1b\x1b[A for Alt+Up.
 	// Active in BOTH legacy and kitty mode (mixed mode) because terminals like
 	// Zellij in mixed mode may send legacy Alt sequences alongside Kitty ones.
-	if bytes.len() > 2 && bytes[0] == 0x1b && bytes[1] == 0x1b
+	if bytes.len() > 2
+		&& bytes[0] == 0x1b
+		&& bytes[1] == 0x1b
 		&& (bytes[2] == b'[' || bytes[2] == b'O')
-	{
-		if let Some(inner_key) = parse_key_inner(&bytes[1..], true) {
+		&& let Some(inner_key) = parse_key_inner(&bytes[1..], true) {
 			return Some(Cow::Owned(format!("alt+{inner_key}")));
 		}
-	}
 
 	// Two-byte ESC sequences (legacy ALT prefix, with exceptions even in kitty
 	// mode)

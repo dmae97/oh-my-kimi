@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task";
 import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/render";
@@ -10,9 +11,15 @@ import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/render";
 // output — same way it surfaces in the finished result.
 describe("task renderer: nested live rendering", () => {
 	beforeAll(async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, cwd: process.cwd() });
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
 		setThemeInstance(theme!);
+	});
+
+	afterAll(() => {
+		resetSettingsForTest();
 	});
 
 	function makeRunningProgress(overrides: Partial<AgentProgress>): AgentProgress {
