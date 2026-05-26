@@ -476,9 +476,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					openaiStream = await createCompletionsStream("none");
 				}
 			}
-			const firstEventWatchdog = createWatchdog(
-				options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs),
-				() => abortTracker.abortLocally(firstEventTimeoutAbortError),
+			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+			const firstEventWatchdog = createWatchdog(firstEventTimeoutMs, () =>
+				abortTracker.abortLocally(firstEventTimeoutAbortError),
 			);
 			if (premiumRequestsTotal !== undefined) {
 				output.usage.premiumRequests = premiumRequestsTotal;
@@ -662,8 +662,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			for await (const chunk of iterateWithIdleTimeout(openaiStream, {
 				watchdog: firstEventWatchdog,
 				idleTimeoutMs,
+				firstItemTimeoutMs: firstEventTimeoutMs,
+				firstItemErrorMessage: OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE,
 				errorMessage: "OpenAI completions stream stalled while waiting for the next event",
 				onIdle: () => requestAbortController.abort(),
+				onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
 				abortSignal: options?.signal,
 				isProgressItem: isOpenAICompletionsProgressChunk,
 			})) {

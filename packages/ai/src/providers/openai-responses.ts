@@ -123,7 +123,7 @@ const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES = new Set([
 	"error",
 ]);
 
-function isOpenAIResponsesProgressEvent(event: unknown): boolean {
+export function isOpenAIResponsesProgressEvent(event: unknown): boolean {
 	if (!event || typeof event !== "object") return false;
 	const type = (event as { type?: unknown }).type;
 	return typeof type === "string" && OPENAI_RESPONSES_PROGRESS_EVENT_TYPES.has(type);
@@ -220,6 +220,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
 			const { params } = buildParams(model, context, options, providerSessionState, baseUrl);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
+			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
 			options?.onPayload?.(params);
 			rawRequestDump = {
 				provider: model.provider,
@@ -240,9 +241,8 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				{ provider: model.provider, signal: requestSignal },
 			);
 			if (premiumRequestsTotal !== undefined) output.usage.premiumRequests = premiumRequestsTotal;
-			const firstEventWatchdog = createWatchdog(
-				options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs),
-				() => abortTracker.abortLocally(firstEventTimeoutAbortError),
+			const firstEventWatchdog = createWatchdog(firstEventTimeoutMs, () =>
+				abortTracker.abortLocally(firstEventTimeoutAbortError),
 			);
 			stream.push({ type: "start", partial: output });
 
@@ -250,8 +250,11 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			await processResponsesStream(
 				iterateWithIdleTimeout(openaiStream, {
 					idleTimeoutMs,
+					firstItemTimeoutMs: firstEventTimeoutMs,
+					firstItemErrorMessage: OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE,
 					watchdog: firstEventWatchdog,
 					errorMessage: "OpenAI responses stream stalled while waiting for the next event",
+					onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
 					onIdle: () => requestAbortController.abort(),
 					abortSignal: options?.signal,
 					isProgressItem: isOpenAIResponsesProgressEvent,

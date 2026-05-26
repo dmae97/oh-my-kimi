@@ -29,7 +29,11 @@ import {
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
-import { normalizeOpenAIResponsesPromptCacheKey, supportsDeveloperRole } from "./openai-responses";
+import {
+	isOpenAIResponsesProgressEvent,
+	normalizeOpenAIResponsesPromptCacheKey,
+	supportsDeveloperRole,
+} from "./openai-responses";
 import {
 	appendResponsesToolResultMessages,
 	applyCommonResponsesSamplingParams,
@@ -120,7 +124,8 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			const { baseUrl } = resolveAzureConfig(model, options);
 			const params = buildParams(model, context, options, deploymentName, baseUrl);
 			options?.onPayload?.(params);
-			const idleTimeoutMs = getOpenAIStreamIdleTimeoutMs();
+			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
+			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
 			rawRequestDump = {
 				provider: model.provider,
 				api: output.api,
@@ -130,9 +135,8 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				body: params,
 			};
 			const openaiStream = await client.responses.create(params, { signal: requestSignal });
-			const firstEventWatchdog = createWatchdog(
-				options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs),
-				() => abortTracker.abortLocally(firstEventTimeoutAbortError),
+			const firstEventWatchdog = createWatchdog(firstEventTimeoutMs, () =>
+				abortTracker.abortLocally(firstEventTimeoutAbortError),
 			);
 			stream.push({ type: "start", partial: output });
 
@@ -140,8 +144,13 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				iterateWithIdleTimeout(openaiStream, {
 					watchdog: firstEventWatchdog,
 					idleTimeoutMs,
+					firstItemTimeoutMs: firstEventTimeoutMs,
+					firstItemErrorMessage: AZURE_OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE,
 					errorMessage: "Azure OpenAI responses stream stalled while waiting for the next event",
 					onIdle: () => requestAbortController.abort(),
+					onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
+					abortSignal: options?.signal,
+					isProgressItem: isOpenAIResponsesProgressEvent,
 				}),
 				output,
 				stream,

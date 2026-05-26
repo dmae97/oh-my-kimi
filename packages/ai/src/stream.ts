@@ -565,6 +565,8 @@ function mapOptionsForApi<TApi extends Api>(
 		metadata: options?.metadata,
 		sessionId: options?.sessionId,
 		promptCacheKey: options?.promptCacheKey,
+		streamFirstEventTimeoutMs: options?.streamFirstEventTimeoutMs,
+		streamIdleTimeoutMs: options?.streamIdleTimeoutMs,
 		providerSessionState: options?.providerSessionState,
 		onPayload: options?.onPayload,
 		onResponse: options?.onResponse,
