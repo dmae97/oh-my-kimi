@@ -48,6 +48,7 @@ import type {
 	AgentToolResult,
 	StreamFn,
 } from "./types";
+import { yieldIfDue } from "./utils/yield";
 
 /** Sentinel returned by the abort race in `streamAssistantResponse`. */
 const ABORTED: unique symbol = Symbol("agent-loop-aborted");
@@ -463,6 +464,9 @@ async function runLoopBody(
 
 		// Inner loop: process tool calls and steering messages
 		while (hasMoreToolCalls || pendingMessages.length > 0) {
+			// Yield at the top of each iteration to prevent busy-wait when
+			// the agent loop is executing tool calls back-to-back.
+			await yieldIfDue();
 			if (!firstTurn) {
 				stream.push({ type: "turn_start" });
 			} else {
@@ -785,6 +789,9 @@ async function streamAssistantResponse(
 					if (next.done) break;
 
 					const event = next.value;
+					// Yield to the event loop periodically to prevent busy-wait
+					// when the LLM is streaming chunks faster than the loop can rest.
+					await yieldIfDue();
 
 					switch (event.type) {
 						case "start":
@@ -1208,6 +1215,9 @@ async function executeToolCalls(
 	}
 
 	await Promise.allSettled(tasks);
+	// Yield after batch tool execution to let GC and I/O catch up,
+	// especially when tool results are large (e.g. bash output).
+	await yieldIfDue();
 
 	for (const record of records) {
 		if (!record.toolResultMessage) {
