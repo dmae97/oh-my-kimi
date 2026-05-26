@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -88,6 +89,30 @@ describe("tool path arrays", () => {
 		expect(text).not.toContain("# other");
 		expect(details?.fileCount).toBe(3);
 		expect(details?.scopePath).toBe("apps/, packages/, phases/");
+	});
+
+	it("search accepts a single string path through tool validation", async () => {
+		const tools = await createTools(createTestSession(tempDir));
+		const tool = tools.find(entry => entry.name === "search");
+		expect(tool).toBeDefined();
+		if (!tool) throw new Error("Missing search tool");
+
+		const args = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "search-single-string-path",
+			name: tool.name,
+			arguments: {
+				pattern: "space-needle",
+				paths: "folder with spaces/",
+			},
+		});
+		const result = await tool.execute("search-single-string-path", args);
+		const text = getText(result);
+		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
+
+		expect(text).toContain("note.txt");
+		expect(details?.fileCount).toBe(1);
+		expect(details?.scopePath).toBe("folder with spaces");
 	});
 
 	it("search keeps a single path that contains spaces", async () => {

@@ -9,12 +9,11 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { getFileReadCache } from "../edit/file-read-cache";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { formatHashlineHeader, getHashlineSyntax } from "../hashline/hash";
+import { formatHashlineHeader } from "../hashline/hash";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
 import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../session/streaming-output";
 import { Ellipsis, fileHyperlink, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
-import { resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import {
@@ -488,7 +487,6 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				}
 				const displayLines: string[] = [];
 				const hashContexts = new Map<string, { absolutePath: string; fileHash: string }>();
-				const hashlineSyntax = getHashlineSyntax(resolveEditMode(this.session));
 				if (baseDisplayMode.hashLines) {
 					for (const relativePath of fileList) {
 						if (archiveDisplaySet.has(relativePath)) continue;
@@ -496,7 +494,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						if (immutableSourcePaths.has(absoluteFilePath)) continue;
 						try {
 							const fullText = await Bun.file(absoluteFilePath).text();
-							const fileHash = hashlineSyntax.computeFileHash(fullText);
+							const fileHash = computeFileHash(fullText);
 							hashContexts.set(relativePath, { absolutePath: absoluteFilePath, fileHash });
 						} catch {
 							// Best-effort: if the file disappeared between grep and render, fall back to plain line output.
@@ -528,9 +526,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 								modelOut.push("...");
 								displayOut.push(`${gutterPad}│...`);
 							}
-							modelOut.push(
-								formatMatchLine(lineNumber, line, isMatch, { useHashLines, syntax: hashlineSyntax }),
-							);
+							modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
 							displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
 							if (recordable) cacheEntries.push([lineNumber, line] as const);
 							lastEmittedLine = lineNumber;
@@ -565,7 +561,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						return {
 							modelLines: rendered.model,
 							displayLines: rendered.display,
-							headerSuffix: hashContext && hashlineSyntax.id === "file" ? `#${hashContext.fileHash}` : "",
+							headerSuffix: hashContext ? `#${hashContext.fileHash}` : "",
 							skip: rendered.model.length === 0,
 						};
 					});
@@ -581,7 +577,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						}
 						const hashContext = hashContexts.get(relativePath);
 						if (hashContext) {
-							outputLines.push(formatHashlineHeader(relativePath, hashContext.fileHash, hashlineSyntax));
+							outputLines.push(formatHashlineHeader(relativePath, hashContext.fileHash));
 						}
 						outputLines.push(...rendered.model);
 						displayLines.push(...rendered.display);

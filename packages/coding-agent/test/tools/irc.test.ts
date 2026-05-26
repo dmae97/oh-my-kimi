@@ -14,21 +14,43 @@ interface FakeSession {
 	setError: (error: Error) => void;
 	/** Resolve the next respondAsBackground call only when allowed. */
 	gateNextCall: () => { release: () => void };
+	/** Keep the next respondAsBackground call pending until aborted. */
+	hangNextCall: () => void;
 }
-
 function makeFakeSession(): FakeSession {
 	let nextReply = "auto-reply";
 	let nextError: Error | null = null;
 	let gate: { promise: Promise<void>; release: () => void } | null = null;
+	let hangNext = false;
 	const calls: Array<{ from: string; message: string; awaitReply: boolean }> = [];
 	const session = {
-		respondAsBackground: async (args: { from: string; message: string; awaitReply?: boolean }) => {
+		respondAsBackground: async (args: {
+			from: string;
+			message: string;
+			awaitReply?: boolean;
+			signal?: AbortSignal;
+		}) => {
 			const awaitReply = args.awaitReply !== false;
 			calls.push({ from: args.from, message: args.message, awaitReply });
 			if (gate) {
 				const g = gate;
 				gate = null;
 				await g.promise;
+			}
+			if (hangNext) {
+				hangNext = false;
+				const deferred = Promise.withResolvers<never>();
+				if (args.signal?.aborted) {
+					deferred.reject(args.signal.reason instanceof Error ? args.signal.reason : new Error("aborted"));
+				} else {
+					args.signal?.addEventListener(
+						"abort",
+						() =>
+							deferred.reject(args.signal?.reason instanceof Error ? args.signal.reason : new Error("aborted")),
+						{ once: true },
+					);
+				}
+				return await deferred.promise;
 			}
 			if (nextError) {
 				const err = nextError;
@@ -48,12 +70,12 @@ function makeFakeSession(): FakeSession {
 			nextError = error;
 		},
 		gateNextCall: () => {
-			let release!: () => void;
-			const promise = new Promise<void>(resolve => {
-				release = resolve;
-			});
-			gate = { promise, release };
-			return { release };
+			const { promise, resolve } = Promise.withResolvers<void>();
+			gate = { promise, release: resolve };
+			return { release: resolve };
+		},
+		hangNextCall: () => {
+			hangNext = true;
 		},
 	};
 }
@@ -200,6 +222,23 @@ describe("IrcTool", () => {
 		const result = await tool.execute("call-5", { op: "send", to: "0-Ghost", message: "hi" });
 		expect(result.details?.delivered ?? []).toEqual([]);
 		expect(result.details?.notFound).toEqual(["0-Ghost"]);
+	});
+
+	it("op=send fails a hung recipient after the configured timeout", async () => {
+		const main = makeFakeSession();
+		const sub = makeFakeSession();
+		sub.hangNextCall();
+		registry.register({ id: "0-Main", displayName: "main", kind: "main", session: main.session });
+		registry.register({ id: "0-Hung", displayName: "task", kind: "sub", parentId: "0-Main", session: sub.session });
+
+		const toolSession = makeToolSession(registry, "0-Main");
+		toolSession.settings.set("irc.timeoutMs", 5);
+		const tool = new IrcTool(toolSession);
+		const result = await tool.execute("call-timeout", { op: "send", to: "0-Hung", message: "ping" });
+
+		expect(result.details?.delivered ?? []).toEqual([]);
+		expect(result.details?.failed).toEqual([{ id: "0-Hung", error: "IRC timed out waiting for 0-Hung after 5 ms" }]);
+		expect(sub.calls).toEqual([{ from: "0-Main", message: "ping", awaitReply: true }]);
 	});
 
 	it("op=send surfaces recipient errors as failed", async () => {

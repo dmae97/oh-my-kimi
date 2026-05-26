@@ -1,13 +1,14 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - The `vim` edit mode option is no longer available; configurations using `edit.mode: vim` will be automatically mapped to `hashline` mode
 
 ### Added
 
+- Added `irc.timeoutMs` setting to configure IRC message timeout duration with a default of 120 seconds
+- Added timeout enforcement for IRC send operations to prevent indefinite hangs when recipients are unresponsive
 - Added evaluator state inheritance for `task`-spawned subagents so JavaScript and Python variables are visible between a parent agent and its child sessions
 - Added `hashline-per` edit mode to restore the legacy per-line hashline dialect alongside the default file-hash dialect
 - Added file-hash computation and validation for hashline sections to detect stale edits
@@ -21,6 +22,7 @@
 
 ### Changed
 
+- Changed Python tool bridge to use per-run identifiers alongside session IDs for correct routing of tool responses and output in concurrent evaluations
 - Changed JavaScript and Python `eval` execution to allow overlapping asynchronous cells on the same session ID to run concurrently instead of being strictly queued
 - Updated the edit mode option set to support `replace`, `patch`, `hashline`, and `apply_patch` variants
 - Bare `A:` / `A-B:` (no payload, no inline body) now replaces the line/range with a single blank line, symmetric with bare `A↑` / `A↓` inserting a blank line; previously rejected as ambiguous
