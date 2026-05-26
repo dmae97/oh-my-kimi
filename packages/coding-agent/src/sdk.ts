@@ -1658,9 +1658,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		};
 
 		const toolNamesFromRegistry = Array.from(toolRegistry.keys());
-		const requestedToolNames =
-			(options.toolNames ? [...new Set(options.toolNames.map(name => name.toLowerCase()))] : undefined) ??
-			toolNamesFromRegistry;
+		const explicitlyRequestedToolNames = options.toolNames
+			? [...new Set(options.toolNames.map(name => name.toLowerCase()))]
+			: undefined;
+		// When `requireYieldTool` is set, the subagent's prompts and idle-reminders demand a
+		// `yield` call to terminate. The tool registry already includes `yield` (see
+		// `createTools`), but an explicit `toolNames` list would otherwise drop it from the
+		// active set — leaving the model unable to satisfy the contract. Mirror the same
+		// invariant `parseAgentFields` enforces on frontmatter `tools`.
+		if (options.requireYieldTool === true && explicitlyRequestedToolNames && !explicitlyRequestedToolNames.includes("yield")) {
+			explicitlyRequestedToolNames.push("yield");
+		}
+		const requestedToolNames = explicitlyRequestedToolNames ?? toolNamesFromRegistry;
 		const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
 		const requestedToolNameSet = new Set(normalizedRequested);
 		// Effective discovery mode: tools.discoveryMode takes precedence; mcp.discoveryMode is back-compat alias.
