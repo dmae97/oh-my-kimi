@@ -117,7 +117,7 @@ The tool returns a single text block in `content[0].text` plus structured `detai
 ## Limits & Caps
 - Visible page limit: `100` matches (`DEFAULT_MATCH_LIMIT` in `packages/coding-agent/src/tools/search.ts`).
 - Native preselection limit: `500` matches (`internalLimit = Math.min(DEFAULT_MATCH_LIMIT * 5, 2000)` in `packages/coding-agent/src/tools/search.ts`).
-- Line truncation: `1024` characters per emitted line (`DEFAULT_MAX_COLUMN` in `packages/coding-agent/src/session/streaming-output.ts`). Native grep marks truncated lines; JS reports `linesTruncated`.
+- Line truncation: `512` characters per emitted line (`DEFAULT_MAX_COLUMN` in `packages/coding-agent/src/session/streaming-output.ts`). Native grep marks truncated lines; JS reports `linesTruncated`.
 - Final text truncation: `truncateHead()` default byte cap `50 * 1024` bytes (`DEFAULT_MAX_BYTES` in `packages/coding-agent/src/session/streaming-output.ts`). `search.ts` overrides `maxLines` to `Number.MAX_SAFE_INTEGER`, so normal search output is byte-capped, not line-capped.
 - Context defaults: `search.contextBefore = 1`, `search.contextAfter = 3` in `packages/coding-agent/src/config/settings-schema.ts`.
 - Pagination: `skip` is a global match offset. In single-base searches it is pushed into native `offset`; in exact-file/multi-target aggregation it is applied in JS with `matches.slice(skip)`.
