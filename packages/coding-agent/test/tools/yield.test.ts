@@ -224,21 +224,26 @@ describe("YieldTool", () => {
 		};
 		// validateToolArguments should succeed (no $ref to resolve)
 		const firstArgs = validateToolArguments(toolDefinition, firstCall);
-		// Runtime AJV still validates the original schema — token too short
-		await expect(tool.execute("call-ref-1", firstArgs as never)).rejects.toThrow("Output does not match schema");
+		// Runtime AJV still validates the original schema — token too short.
+		// First MAX_SCHEMA_RETRIES (=3) invalid yields throw with a retry hint.
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			await expect(tool.execute(`call-ref-${attempt}`, firstArgs as never)).rejects.toThrow(
+				"Output does not match schema",
+			);
+		}
 
-		const secondCall: ToolCall = {
+		const overrideCall: ToolCall = {
 			type: "toolCall",
-			id: "call-ref-2",
+			id: "call-ref-override",
 			name: tool.name,
 			arguments: { result: { data: { kind: "A", token: "x" } } },
 		};
-		const secondArgs = validateToolArguments(toolDefinition, secondCall);
-		const secondResult = await tool.execute("call-ref-2", secondArgs as never);
-		expect(secondResult.content).toEqual([
+		const overrideArgs = validateToolArguments(toolDefinition, overrideCall);
+		const overrideResult = await tool.execute("call-ref-override", overrideArgs as never);
+		expect(overrideResult.content).toEqual([
 			{
 				type: "text",
-				text: "Result submitted (schema validation overridden after 2 failed attempt(s)).",
+				text: "Result submitted (schema validation overridden after 4 failed attempt(s)).",
 			},
 		]);
 	});
@@ -358,7 +363,7 @@ describe("YieldTool", () => {
 		expect(result.details).toEqual({ data: { token: "abcd" }, status: "success", error: undefined });
 	});
 
-	it("throws on first schema validation failure and accepts non-conforming data on second failure", async () => {
+	it("retries on schema failures up to MAX_SCHEMA_RETRIES and overrides afterward", async () => {
 		const outputSchema = {
 			type: "object",
 			properties: {
@@ -371,16 +376,22 @@ describe("YieldTool", () => {
 		};
 		const tool = new YieldTool(createSession({ outputSchema }));
 
-		await expect(tool.execute("call-short-1", { result: { data: { token: "ab" } } } as never)).rejects.toThrow(
-			"Output does not match schema",
-		);
+		// First three invalid yields throw with retry guidance.
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			await expect(
+				tool.execute(`call-short-${attempt}`, { result: { data: { token: "ab" } } } as never),
+			).rejects.toThrow("Output does not match schema");
+		}
 
-		const secondResult = await tool.execute("call-short-2", { result: { data: { token: "ab" } } } as never);
-		expect(secondResult.details).toEqual({ data: { token: "ab" }, status: "success", error: undefined });
-		expect(secondResult.content).toEqual([
+		// Fourth invalid yield is accepted with override.
+		const overrideResult = await tool.execute("call-short-override", {
+			result: { data: { token: "ab" } },
+		} as never);
+		expect(overrideResult.details).toEqual({ data: { token: "ab" }, status: "success", error: undefined });
+		expect(overrideResult.content).toEqual([
 			{
 				type: "text",
-				text: "Result submitted (schema validation overridden after 2 failed attempt(s)).",
+				text: "Result submitted (schema validation overridden after 4 failed attempt(s)).",
 			},
 		]);
 	});
@@ -409,6 +420,49 @@ describe("YieldTool", () => {
 		).rejects.toThrow("Output does not match schema");
 	});
 
+	it("rejects nested-array shape mismatches with a retry hint (explore-style JTD)", async () => {
+		// Regression for the GLM/explore failure mode: model invents per-file fields
+		// (`ref`, `surface`, …) instead of the schema's `path` + `description`. The
+		// in-tool validator MUST surface the mismatch with a retry directive so the
+		// subagent can fix its output before the parent runs its post-mortem check.
+		const outputSchema = {
+			properties: {
+				summary: { type: "string" },
+				files: {
+					elements: {
+						properties: {
+							path: { type: "string" },
+							description: { type: "string" },
+						},
+					},
+				},
+			},
+		};
+		const tool = new YieldTool(createSession({ outputSchema }));
+		const badPayload = {
+			summary: "analysis",
+			files: [
+				{
+					ref: "finding.md",
+					surface: "gossip",
+					auth: "pre-auth",
+					allocation: "unbounded",
+					mechanism: "loop",
+				},
+			],
+		};
+
+		await expect(tool.execute("call-explore-1", { result: { data: badPayload } } as never)).rejects.toThrow(
+			/files\/0\/path: is required.*Call yield again with the corrected shape/,
+		);
+
+		// Third retry still throws with one attempt remaining advertised in the hint.
+		await tool.execute("call-explore-2", { result: { data: badPayload } } as never).catch(() => {});
+		await expect(tool.execute("call-explore-3", { result: { data: badPayload } } as never)).rejects.toThrow(
+			"this is the final retry before the schema constraint is dropped",
+		);
+	});
+
 	it("still throws structural errors after schema validation has been degraded", async () => {
 		const outputSchema = {
 			type: "object",
@@ -422,13 +476,17 @@ describe("YieldTool", () => {
 		};
 		const tool = new YieldTool(createSession({ outputSchema }));
 
-		await expect(tool.execute("call-struct-1", { result: { data: { token: "ab" } } } as never)).rejects.toThrow(
-			"Output does not match schema",
-		);
+		// Exhaust the schema-retry budget.
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			await expect(
+				tool.execute(`call-struct-${attempt}`, { result: { data: { token: "ab" } } } as never),
+			).rejects.toThrow("Output does not match schema");
+		}
 		await expect(
-			tool.execute("call-struct-2", { result: { data: { token: "ab" } } } as never),
+			tool.execute("call-struct-override", { result: { data: { token: "ab" } } } as never),
 		).resolves.toBeDefined();
 
+		// Structural errors (missing result wrapper) still throw even after override.
 		await expect(tool.execute("call-struct-missing", {} as never)).rejects.toThrow(
 			"result must be an object containing either data or error",
 		);

@@ -7,7 +7,6 @@
 import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentTelemetryConfig, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
-import { type JsonSchemaValidationIssue, validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema";
 import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelOverrideWithAuthFallback } from "../config/model-resolver";
@@ -33,7 +32,9 @@ import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
 import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
 import type { ContextFileEntry } from "../tools";
-import { jtdToJsonSchema, normalizeSchema } from "../tools/jtd-to-json-schema";
+import { normalizeSchema } from "../tools/jtd-to-json-schema";
+import { buildOutputValidator, summarizeValidationFailure } from "../tools/output-schema-validator";
+
 import { type ReportFindingDetails, toReviewFinding } from "../tools/review";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
@@ -209,51 +210,6 @@ function parseStringifiedJson(value: unknown): unknown {
 	}
 }
 
-interface OutputValidator {
-	validate: (value: unknown) => { ok: true } | { ok: false; message: string; missingRequired: string[] };
-	requiredFields: string[];
-}
-
-function buildOutputValidator(schema: unknown): { validator?: OutputValidator; error?: string } {
-	const { normalized, error } = normalizeSchema(schema);
-	if (error) return { error };
-	if (normalized === undefined) return {};
-	const jsonSchema = jtdToJsonSchema(normalized);
-	const required = extractRequiredFields(jsonSchema);
-	return {
-		validator: {
-			requiredFields: required,
-			validate: value => {
-				const result = validateJsonSchemaValue(jsonSchema, value);
-				if (result.success) return { ok: true };
-				const missing = computeMissingRequired(required, value);
-				const message = formatValidationIssue(result.issues[0]) ?? "schema validation failed";
-				return { ok: false, message, missingRequired: missing };
-			},
-		},
-	};
-}
-
-function extractRequiredFields(jsonSchema: unknown): string[] {
-	if (!jsonSchema || typeof jsonSchema !== "object") return [];
-	const required = (jsonSchema as { required?: unknown }).required;
-	return Array.isArray(required) ? required.filter((k): k is string => typeof k === "string") : [];
-}
-
-function computeMissingRequired(required: readonly string[], value: unknown): string[] {
-	if (required.length === 0) return [];
-	if (value === null || value === undefined) return [...required];
-	if (typeof value !== "object" || Array.isArray(value)) return [];
-	const record = value as Record<string, unknown>;
-	return required.filter(key => !(key in record) || record[key] === undefined);
-}
-
-function formatValidationIssue(issue: JsonSchemaValidationIssue | undefined): string | undefined {
-	if (!issue) return undefined;
-	const path = issue.path.length > 0 ? issue.path.map(String).join(".") : "(root)";
-	return `${path}: ${issue.message}`;
-}
-
 function previewOffendingData(value: unknown, maxLength = 500): string {
 	let serialized: string;
 	try {
@@ -307,7 +263,7 @@ function resolveFallbackCompletion(rawOutput: string, outputSchema: unknown): { 
 	if (candidate === undefined) return null;
 	const { validator, error } = buildOutputValidator(outputSchema);
 	if (error) return null;
-	if (validator && !validator.validate(candidate).ok) return null;
+	if (validator && !validator.validate(candidate).success) return null;
 	return { data: candidate };
 }
 
@@ -394,9 +350,10 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 					stderr = `schema_violation: invalid output schema: ${schemaError}`;
 					exitCode = 1;
 				} else {
-					const verdict = validator ? validator.validate(completeData) : { ok: true as const };
-					if (!verdict.ok) {
-						const outcome = buildSchemaViolationOutcome(verdict, completeData);
+					const result = validator?.validate(completeData) ?? { success: true as const };
+					if (!result.success) {
+						const summary = summarizeValidationFailure(result, completeData, validator?.requiredFields ?? []);
+						const outcome = buildSchemaViolationOutcome(summary, completeData);
 						rawOutput = outcome.rawOutput;
 						stderr = outcome.stderr;
 						exitCode = outcome.exitCode;
@@ -421,9 +378,10 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		if (fallback) {
 			const completeData = normalizeCompleteData(fallback.data, reportFindings);
 			const { validator } = buildOutputValidator(outputSchema);
-			const verdict = validator ? validator.validate(completeData) : { ok: true as const };
-			if (!verdict.ok) {
-				const outcome = buildSchemaViolationOutcome(verdict, completeData);
+			const result = validator?.validate(completeData) ?? { success: true as const };
+			if (!result.success) {
+				const summary = summarizeValidationFailure(result, completeData, validator?.requiredFields ?? []);
+				const outcome = buildSchemaViolationOutcome(summary, completeData);
 				rawOutput = outcome.rawOutput;
 				stderr = outcome.stderr;
 				exitCode = outcome.exitCode;
