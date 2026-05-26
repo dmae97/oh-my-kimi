@@ -647,6 +647,9 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails
 				await validateLaunchProgram(program, commandCwd);
 				const adapter = selectLaunchAdapter(program, commandCwd, params.adapter);
 				if (!adapter) {
+					if (params.adapter === "debugpy") {
+						throw new ToolError("adapter 'debugpy' is not available: python not found in PATH");
+					}
 					throw new ToolError(
 						`No debugger adapter available. Installed adapters: ${getConfiguredAdapters(commandCwd)}`,
 					);
@@ -667,6 +670,9 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails
 				const commandCwd = params.cwd ? resolveToCwd(params.cwd, this.session.cwd) : this.session.cwd;
 				const adapter = selectAttachAdapter(commandCwd, params.adapter, params.port);
 				if (!adapter) {
+					if (params.adapter === "debugpy") {
+						throw new ToolError("adapter 'debugpy' is not available: python not found in PATH");
+					}
 					throw new ToolError(
 						`No debugger adapter available. Installed adapters: ${getConfiguredAdapters(commandCwd)}`,
 					);
