@@ -316,11 +316,17 @@ export interface StreamOptions {
 	 */
 	metadata?: Record<string, unknown>;
 	/**
-	 * Optional session identifier for providers that support session-based caching.
-	 * Providers can use this to enable prompt caching, request routing, or other
-	 * session-aware features. Ignored by providers that don't support it.
+	 * Optional session identifier for providers that support session-based
+	 * routing, request affinity, or transport reuse. Providers may also use this
+	 * as the prompt-cache key when `promptCacheKey` is not set.
 	 */
 	sessionId?: string;
+	/**
+	 * Optional prompt-cache identity. When set, OpenAI Responses-compatible
+	 * providers use this for `prompt_cache_key` while keeping `sessionId` for
+	 * provider routing / conversation headers.
+	 */
+	promptCacheKey?: string;
 	/**
 	 * Provider-scoped mutable state store for this agent session.
 	 * Providers can use this to persist transport/session state between turns.
@@ -346,23 +352,26 @@ export interface StreamOptions {
 	 */
 	onSseEvent?: (event: RawSseEvent, model?: Model<Api>) => void;
 	/**
-	 * Optional SDK/request timeout hint in milliseconds applied to the underlying HTTP
-	 * request when the provider's transport exposes a per-request timeout.
+	 * Optional override for the first-event watchdog in milliseconds. When the
+	 * underlying transport exposes a per-request timeout (OpenAI/Anthropic SDKs),
+	 * this value is also applied to the HTTP layer so the SDK gives up before the
+	 * wrapping iterator watchdog would have. Set to `0` to disable both watchdogs
+	 * for this request. Falls back to `PI_STREAM_FIRST_EVENT_TIMEOUT_MS` and then
+	 * to a 100s default.
 	 *
-	 * Honored by: `openai-completions`, `openai-responses`, `azure-openai-responses`,
-	 *   `anthropic-messages`.
-	 * Ignored by: `openai-codex-responses` (uses its own websocket/SSE transport),
-	 *   `google`, `google-gemini-cli`, `google-vertex`, `bedrock-converse`, `cursor-agent`.
-	 *
-	 * Provider stream silence is never treated as failure on its own — once the request
-	 * has started, callers must abort to interrupt a silent stream.
+	 * Iterator-level honored by: every built-in provider (via the lazy-stream
+	 * forwarder in `register-builtins`). SDK-request honored by:
+	 * `openai-completions`, `openai-responses`, `azure-openai-responses`,
+	 * `anthropic-messages`.
 	 */
 	streamFirstEventTimeoutMs?: number;
 	/**
-	 * @deprecated Stream idle watchdogs were removed; provider streams now wait for
-	 * provider output, provider/socket errors, caller aborts, or request-layer timeouts.
-	 * This field is accepted for backwards compatibility but no longer wired anywhere.
-	 * Will be removed in the next major release.
+	 * Optional override for the maximum idle gap between streamed events in
+	 * milliseconds. Once the first event arrives, this guards against silent
+	 * mid-stream stalls (broker dies, half-open socket, model produces no real
+	 * progress for too long). Set to `0` to disable. Falls back to
+	 * `PI_STREAM_IDLE_TIMEOUT_MS` (alias: `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS`)
+	 * and then to a 120s default.
 	 */
 	streamIdleTimeoutMs?: number;
 	/**

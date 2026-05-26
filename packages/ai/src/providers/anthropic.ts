@@ -53,17 +53,16 @@ import {
 	resolveCacheRetention,
 } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
-import { iterateUntilAbort } from "../utils/abortable-iterator";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
+import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { isCopilotTransientModelError } from "../utils/retry";
 import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { spillToDescription } from "../utils/schema/spill";
-import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
 import {
 	buildCopilotDynamicHeaders,
@@ -1089,17 +1088,20 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				| TextContent
 				| (ToolCall & { partialJson: string })
 			) & { index: number };
+			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getStreamIdleTimeoutMs();
+			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const blocks = output.content as Block[];
 			stream.push({ type: "start", partial: output });
 			// Retry loop for transient errors from the stream.
 			// Provider-level transport/rate-limit failures: only before any streamed content starts.
 			// Malformed envelopes/JSON: only before replay-unsafe text/tool events are visible on this stream.
 			let providerRetryAttempt = 0;
+			const firstEventTimeoutAbortError = new Error("Anthropic stream timed out while waiting for the first event");
+			const idleTimeoutAbortError = new Error("Anthropic stream stalled while waiting for the next event");
 			while (true) {
 				activeAbortTracker = createAbortSourceTracker(options?.signal);
 				const { requestSignal } = activeAbortTracker;
-				const requestOptions = createSdkStreamRequestOptions(requestSignal, options?.streamFirstEventTimeoutMs);
-				const anthropicRequest = client.messages.create({ ...params, stream: true }, requestOptions);
+				const anthropicRequest = client.messages.create({ ...params, stream: true }, { signal: requestSignal });
 				let streamedReplayUnsafeContent = false;
 
 				try {
@@ -1117,7 +1119,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					let sawMessageStart = false;
 					let sawTerminalEnvelope = false;
 
-					for await (const event of iterateUntilAbort(anthropicStream, options?.signal)) {
+					for await (const event of iterateWithIdleTimeout(anthropicStream, {
+						idleTimeoutMs,
+						firstItemTimeoutMs: firstEventTimeoutMs,
+						errorMessage: idleTimeoutAbortError.message,
+						firstItemErrorMessage: firstEventTimeoutAbortError.message,
+						onIdle: () => activeAbortTracker.abortLocally(idleTimeoutAbortError),
+						onFirstItemTimeout: () => activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
+						abortSignal: options?.signal,
+					})) {
 						sawEvent = true;
 
 						if (event.type === "message_start") {
@@ -1425,9 +1435,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				delete (block as { index?: number }).index;
 				delete (block as { partialJson?: string }).partialJson;
 			}
+			const firstEventTimeoutError = activeAbortTracker.getLocalAbortReason();
 			output.stopReason = activeAbortTracker.wasCallerAbort() ? "aborted" : "error";
 			output.errorStatus = extractHttpStatusFromError(error);
-			output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
+			output.errorMessage = firstEventTimeoutError?.message ?? (await finalizeErrorMessage(error, rawRequestDump));
 			output.errorMessage = rewriteCopilotError(output.errorMessage, error, model.provider);
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

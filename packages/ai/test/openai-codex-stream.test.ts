@@ -286,7 +286,6 @@ describe("openai-codex streaming", () => {
 		const result = await streamOpenAICodexResponses(model, context, {
 			apiKey: token,
 			signal: controller.signal,
-			streamIdleTimeoutMs: 5,
 		}).result();
 
 		expect(result.stopReason).toBe("aborted");
@@ -963,6 +962,48 @@ describe("openai-codex streaming", () => {
 
 		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, sessionId });
 		await streamResult.result();
+	});
+	it("keeps prompt_cache_key separate from Codex conversation headers", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+
+		const token = createCodexTestToken();
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const sessionId = "side-channel-session";
+		const promptCacheKey = "main-session-cache";
+		let capturedHeaders: Headers | undefined;
+		let capturedBody: Record<string, unknown> | undefined;
+
+		global.fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				capturedHeaders = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+				capturedBody =
+					typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+				return new Response(createCompletedCodexSse("Hello"), {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}
+			return new Response("not found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: token,
+			sessionId,
+			promptCacheKey,
+		}).result();
+
+		expect(capturedHeaders?.get("conversation_id")).toBe(sessionId);
+		expect(capturedHeaders?.get("session_id")).toBe(sessionId);
+		expect(capturedHeaders?.get("x-client-request-id")).toBe(sessionId);
+		expect(capturedBody?.prompt_cache_key).toBe(promptCacheKey);
 	});
 
 	it("rejects gpt-5.3-codex minimal reasoning effort instead of clamping", async () => {

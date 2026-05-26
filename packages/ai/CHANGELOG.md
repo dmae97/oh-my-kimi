@@ -1,9 +1,36 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added `isOpenAICompletionsProgressChunk` export to identify real progress chunks vs. keepalives in OpenAI completions streams
+- Added per-provider stream watchdog overrides via `getStreamIdleTimeoutMs(fallbackMs)` and `getStreamFirstEventTimeoutMs(idleTimeoutMs, fallbackMs)` to allow providers like Google Gemini CLI to extend first-event timeouts without affecting global defaults
+- Added `promptCacheKey` to `StreamOptions` and passed it through stream option mapping so callers can specify an explicit prompt-cache key separate from `sessionId`
+- Added `promptCacheKey` support to the native server option whitelist so `promptCacheKey` is accepted by `pi-native-server` streams
+- Restored the per-provider stream watchdog (`iterateWithIdleTimeout`) on top of the abortable iterator. The lazy stream forwarder in `register-builtins` now wraps every provider's event stream with the first-event + steady-state idle watchdog (`PI_STREAM_FIRST_EVENT_TIMEOUT_MS`, `PI_STREAM_IDLE_TIMEOUT_MS`; aliases honored), and Anthropic / OpenAI Completions / OpenAI Responses / Azure OpenAI Responses / Codex SSE re-emit their per-provider progress predicates so empty keepalive frames cannot keep a stalled stream alive. Reverts the partial regression from #1392 that left Codex WebSocket subagent runs hanging silently for hours when the broker dropped frames between deltas. The Codex WebSocket transport additionally now resets `lastProgressAt` only on progress events (not keepalives), giving the 300s WS-internal idle ceiling the same liveness semantics as the SSE path.
+
+### Changed
+
+- Changed stream idle watchdog implementation from `iterateUntilAbort` to `iterateWithIdleTimeout`, which now enforces maximum idle gaps between streamed events and distinguishes between first-event and steady-state timeouts
+- Changed Anthropic, OpenAI Responses, OpenAI Completions, Azure OpenAI Responses, and OpenAI Codex Responses providers to use the new idle-timeout iterator with per-provider progress predicates so empty keepalive frames cannot keep a stalled stream alive
+- Changed Codex WebSocket transport to reset `lastProgressAt` only on progress events (not keepalives), giving the 300s WS-internal idle ceiling the same liveness semantics as the SSE path
+- Changed Google Gemini CLI stream forwarding defaults to use a 5-minute first-event floor via per-provider lazy-stream limits to avoid premature first-event timeouts on slow startup
+- Changed OpenAI Responses and OpenAI Codex request handling to keep `sessionId` for provider routing and conversation headers while `promptCacheKey` controls the `prompt_cache_key` payload independently
+- Changed `StreamOptions.streamIdleTimeoutMs` documentation to clarify it is now wired into every built-in provider and the lazy stream forwarder, and that `streamFirstEventTimeoutMs` is honored at both the SDK-request layer and the iterator-watchdog layer
+- Changed OpenAI Responses and OpenAI Codex request handling so `sessionId` continues to drive provider routing and state while `promptCacheKey` controls the `prompt_cache_key` payload
+- Changed Google Gemini CLI stream forwarding defaults to use a 5-minute first-event floor to avoid premature first-event timeouts on slow startup
+- Changed auth-gateway request mapping to preserve incoming `prompt_cache_key` as both `promptCacheKey` and `sessionId` when routing OpenAI-compatible sessions
+- Un-deprecated `StreamOptions.streamIdleTimeoutMs`; the option is wired into every built-in provider and the lazy stream forwarder again. `streamFirstEventTimeoutMs` is now honored at both the SDK-request layer (via `createSdkStreamRequestOptions`) and the iterator-watchdog layer, in cooperation.
+
 ### Removed
 
 - Removed `installH2Fetch` and the `fetch` patch that forced HTTP/2 on HTTPS requests; callers now use the default Bun `fetch` transport
+
+### Fixed
+
+- Fixed silent multi-hour hangs on Codex WebSocket subagent runs when the broker dropped frames between deltas by restoring per-provider stream watchdogs with progress-event filtering
+- Fixed z.ai/GLM-via-OpenRouter subagent stalls where no-op keepalive chunks reset the idle watchdog indefinitely by filtering non-progress items before resetting the deadline
 
 ## [15.4.0] - 2026-05-26
 ### Breaking Changes

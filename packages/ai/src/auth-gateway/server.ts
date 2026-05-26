@@ -145,7 +145,9 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 	// Client-supplied `prompt_cache_key` wins; otherwise derive a stable
 	// key from the model + system + tools so prefix caching engages on
 	// Codex-class backends across turns of the same logical conversation.
-	opts.sessionId = options.promptCacheKey ?? deriveSessionId(parsed.modelId, parsed.context);
+	const promptCacheKey = options.promptCacheKey ?? deriveSessionId(parsed.modelId, parsed.context);
+	opts.promptCacheKey = promptCacheKey;
+	opts.sessionId = promptCacheKey;
 	if (options.thinkingBudgets) {
 		opts.thinkingBudgets = { ...(opts.thinkingBudgets ?? {}), ...options.thinkingBudgets };
 	}

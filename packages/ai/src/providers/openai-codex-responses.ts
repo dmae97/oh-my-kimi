@@ -46,9 +46,9 @@ import {
 	getOpenAIResponsesHistoryPayload,
 	normalizeSystemPrompts,
 } from "../utils";
-import { iterateUntilAbort } from "../utils/abortable-iterator";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
+import { getOpenAIStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
@@ -118,6 +118,32 @@ const X_REASONING_INCLUDED_HEADER = "x-reasoning-included";
 const CODEX_WEBSOCKET_FATAL_PATTERNS = ["websocket error:", "websocket closed before open", "connection timeout"];
 /** Max total time to spend retrying 429s with server-provided delays (5 minutes). */
 const CODEX_RATE_LIMIT_BUDGET_MS = 5 * 60 * 1000;
+const CODEX_PROGRESS_EVENT_TYPES = new Set([
+	"response.created",
+	"response.output_item.added",
+	"response.reasoning_summary_part.added",
+	"response.reasoning_summary_text.delta",
+	"response.reasoning_summary_part.done",
+	"response.content_part.added",
+	"response.output_text.delta",
+	"response.refusal.delta",
+	"response.function_call_arguments.delta",
+	"response.function_call_arguments.done",
+	"response.custom_tool_call_input.delta",
+	"response.custom_tool_call_input.done",
+	"response.output_item.done",
+	"response.completed",
+	"response.done",
+	"response.incomplete",
+	"response.failed",
+	"error",
+]);
+
+function isCodexStreamProgressEvent(event: unknown): boolean {
+	if (!event || typeof event !== "object") return false;
+	const type = (event as { type?: unknown }).type;
+	return typeof type === "string" && CODEX_PROGRESS_EVENT_TYPES.has(type);
+}
 
 type CodexTransport = "sse" | "websocket";
 type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
@@ -159,6 +185,7 @@ interface CodexRequestContext {
 	baseUrl: string;
 	url: string;
 	requestHeaders: Record<string, string>;
+	transportSessionId?: string;
 	providerSessionState?: CodexProviderSessionState;
 	websocketState?: CodexWebSocketSessionState;
 	transformedBody: RequestBody;
@@ -167,6 +194,8 @@ interface CodexRequestContext {
 
 interface CodexRequestSetup {
 	requestSignal: AbortSignal;
+	wrapCodexSseStream: (source: AsyncGenerator<Record<string, unknown>>) => AsyncGenerator<Record<string, unknown>>;
+	requestAbortController: AbortController;
 }
 
 interface CodexStreamRuntime {
@@ -520,7 +549,21 @@ function removeTransientBlockIndices(output: AssistantMessage): void {
 }
 
 function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): CodexRequestSetup {
-	return { requestSignal: options?.signal ?? new AbortController().signal };
+	const requestAbortController = new AbortController();
+	const requestSignal = options?.signal
+		? AbortSignal.any([options.signal, requestAbortController.signal])
+		: requestAbortController.signal;
+	const wrapCodexSseStream = (
+		source: AsyncGenerator<Record<string, unknown>>,
+	): AsyncGenerator<Record<string, unknown>> =>
+		iterateWithIdleTimeout(source, {
+			idleTimeoutMs: options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs(),
+			errorMessage: "OpenAI Codex SSE stream stalled while waiting for the next event",
+			onIdle: () => requestAbortController.abort(),
+			abortSignal: options?.signal,
+			isProgressItem: isCodexStreamProgressEvent,
+		});
+	return { requestAbortController, requestSignal, wrapCodexSseStream };
 }
 
 async function buildCodexRequestContext(
@@ -537,8 +580,9 @@ async function buildCodexRequestContext(
 	const accountId = getAccountId(apiKey);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
 	const url = resolveCodexResponsesUrl(baseUrl);
-	const promptCacheKey = normalizeOpenAIResponsesPromptCacheKey(options?.sessionId);
-	const transformedBody = await buildTransformedCodexRequestBody(model, context, options);
+	const promptCacheKey = resolveCodexPromptCacheKey(options);
+	const transportSessionId = resolveCodexTransportSessionId(options);
+	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, promptCacheKey);
 	options?.onPayload?.(transformedBody);
 
 	const requestHeaders = { ...(model.headers ?? {}), ...(options?.headers ?? {}) };
@@ -552,20 +596,20 @@ async function buildCodexRequestContext(
 	};
 
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
-	const sessionKey = getCodexWebSocketSessionKey(promptCacheKey, model, accountId, baseUrl);
-	const publicSessionKey = getCodexPublicSessionKey(promptCacheKey, model, baseUrl);
+	const sessionKey = getCodexWebSocketSessionKey(transportSessionId, model, accountId, baseUrl);
+	const publicSessionKey = getCodexPublicSessionKey(transportSessionId, model, baseUrl);
 	if (sessionKey && publicSessionKey) {
 		providerSessionState?.webSocketPublicToPrivate.set(publicSessionKey, sessionKey);
 	}
 	const websocketState =
 		sessionKey && providerSessionState ? getCodexWebSocketSessionState(sessionKey, providerSessionState) : undefined;
-
 	return {
 		apiKey,
 		accountId,
 		baseUrl,
 		url,
 		requestHeaders,
+		transportSessionId,
 		providerSessionState,
 		websocketState,
 		transformedBody,
@@ -577,12 +621,13 @@ async function buildTransformedCodexRequestBody(
 	model: Model<"openai-codex-responses">,
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
+	promptCacheKey = resolveCodexPromptCacheKey(options),
 ): Promise<RequestBody> {
 	const params: RequestBody = {
 		model: model.id,
 		input: [...convertMessages(model, context)],
 		stream: true,
-		prompt_cache_key: normalizeOpenAIResponsesPromptCacheKey(options?.sessionId),
+		prompt_cache_key: promptCacheKey,
 	};
 
 	if (options?.maxTokens) {
@@ -709,7 +754,7 @@ async function openCodexWebSocketTransport(
 		requestContext.requestHeaders,
 		requestContext.accountId,
 		requestContext.apiKey,
-		requestContext.transformedBody.prompt_cache_key,
+		requestContext.transportSessionId,
 		"websocket",
 		websocketState,
 	);
@@ -748,20 +793,19 @@ async function openCodexSseTransport(
 	requestBodyForState: RequestBody;
 	transport: CodexTransport;
 }> {
-	const eventStream = iterateUntilAbort(
+	const eventStream = requestSetup.wrapCodexSseStream(
 		await openCodexSseEventStream(
 			requestContext.url,
 			requestContext.requestHeaders,
 			requestContext.accountId,
 			requestContext.apiKey,
-			body.prompt_cache_key,
+			requestContext.transportSessionId,
 			body,
 			state,
 			requestSetup.requestSignal,
 			event => options?.onSseEvent?.(event, model),
 			options?.fetch,
 		),
-		requestSetup.requestSignal,
 	);
 	return { eventStream, requestBodyForState: structuredCloneJSON(body), transport: "sse" };
 }
@@ -1659,6 +1703,18 @@ export async function prewarmOpenAICodexResponses(
 	state.prewarmed = true;
 }
 
+function resolveCodexPromptCacheKey(
+	options: Pick<OpenAICodexResponsesOptions, "promptCacheKey" | "sessionId"> | undefined,
+): string | undefined {
+	return normalizeOpenAIResponsesPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
+}
+
+function resolveCodexTransportSessionId(
+	options: Pick<OpenAICodexResponsesOptions, "sessionId"> | undefined,
+): string | undefined {
+	return normalizeOpenAIResponsesPromptCacheKey(options?.sessionId);
+}
+
 function getCodexWebSocketSessionKey(
 	sessionId: string | undefined,
 	model: Model<"openai-codex-responses">,
@@ -2109,7 +2165,9 @@ class CodexWebSocketConnection {
 					throw createCodexWebSocketTransportError("websocket closed before response completion");
 				}
 				sawFirstEvent = true;
-				lastProgressAt = Date.now();
+				if (isCodexStreamProgressEvent(next)) {
+					lastProgressAt = Date.now();
+				}
 				yield next;
 				const eventType = typeof next.type === "string" ? next.type : "";
 				if (
@@ -2268,7 +2326,7 @@ function createCodexHeaders(
 	initHeaders: Record<string, string> | undefined,
 	accountId: string,
 	accessToken: string,
-	promptCacheKey?: string,
+	sessionId?: string,
 	transport: CodexTransport = "sse",
 	state?: CodexWebSocketSessionState,
 ): Headers {
@@ -2285,10 +2343,10 @@ function createCodexHeaders(
 	headers.set(OPENAI_HEADERS.BETA, betaHeader);
 	headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
 	headers.set("User-Agent", getCodexUserAgent());
-	if (promptCacheKey) {
-		headers.set(OPENAI_HEADERS.CONVERSATION_ID, promptCacheKey);
-		headers.set(OPENAI_HEADERS.SESSION_ID, promptCacheKey);
-		headers.set("x-client-request-id", promptCacheKey);
+	if (sessionId) {
+		headers.set(OPENAI_HEADERS.CONVERSATION_ID, sessionId);
+		headers.set(OPENAI_HEADERS.SESSION_ID, sessionId);
+		headers.set("x-client-request-id", sessionId);
 	} else {
 		headers.delete(OPENAI_HEADERS.CONVERSATION_ID);
 		headers.delete(OPENAI_HEADERS.SESSION_ID);
