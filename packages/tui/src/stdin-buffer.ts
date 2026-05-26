@@ -67,6 +67,18 @@ function isCompleteSequence(data: string): "complete" | "incomplete" | "not-esca
 		return afterEsc.length >= 2 ? "complete" : "incomplete";
 	}
 
+	// ESC-prefixed sequences (terminals with metaSendsEscape):
+	// Only when the inner ESC starts a CSI ('[') or SS3 ('O') sequence.
+	// Bare double-ESC (e.g. \x1b\x1bX) remains complete to avoid 10ms timeout lag.
+	if (afterEsc.startsWith(ESC)) {
+		const inner = data.slice(1);
+		const third = inner.charCodeAt(1);
+		if (third === 0x5b || third === 0x4f) {
+			return isCompleteSequence(inner);
+		}
+		return "complete";
+	}
+
 	// Meta key sequences: ESC followed by a single character
 	if (afterEsc.length === 1) {
 		return "complete";

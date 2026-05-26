@@ -554,6 +554,31 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 		return false;
 	};
 
+	// ESC-prefixed sequences (terminals with metaSendsEscape / "Use Option as Meta"):
+	// \x1b\x1b[...] = Alt + inner-key. Strip the ESC prefix and match the inner
+	// sequence against the base key (without alt modifier).
+	// Example: \x1b\x1b[A matches "alt+up" because \x1b[A matches "up".
+	// Active in BOTH legacy and kitty mode (mixed mode) because terminals like
+	// Zellij in mixed mode may send legacy Alt sequences alongside Kitty ones.
+	if modifier & MOD_ALT != 0
+		&& bytes.len() > 2
+		&& bytes[0] == 0x1b
+		&& bytes[1] == 0x1b
+		&& (bytes[2] == b'[' || bytes[2] == b'O')
+	{
+		let inner_modifier = modifier & !MOD_ALT;
+		let inner_key_id: String = if inner_modifier == 0 {
+			key.to_string()
+		} else {
+			let mut s = String::with_capacity(16);
+			if inner_modifier & MOD_SHIFT != 0 { s.push_str("shift+"); }
+			if inner_modifier & MOD_CTRL != 0  { s.push_str("ctrl+"); }
+			s.push_str(key);
+			s
+		};
+		return matches_key_inner(&bytes[1..], &inner_key_id, true);
+	}
+
 	// Parse Kitty once (avoid repeated parsing in branches).
 	let kitty_parsed = parse_kitty_sequence_bytes(bytes);
 	let kitty_matches = |codepoint: i32, m: u32| -> bool {
@@ -1025,6 +1050,19 @@ fn parse_key_inner(bytes: &[u8], kitty_protocol_active: bool) -> Option<Cow<'sta
 		return format_kitty_key(&parsed);
 	}
 
+	// ESC-prefixed sequences (terminals with metaSendsEscape / "Use Option as Meta"):
+	// \x1b + inner-sequence = Alt modifier on that key.
+	// Example: iTerm2 "Use Option as Meta" sends \x1b\x1b[A for Alt+Up.
+	// Active in BOTH legacy and kitty mode (mixed mode) because terminals like
+	// Zellij in mixed mode may send legacy Alt sequences alongside Kitty ones.
+	if bytes.len() > 2 && bytes[0] == 0x1b && bytes[1] == 0x1b
+		&& (bytes[2] == b'[' || bytes[2] == b'O')
+	{
+		if let Some(inner_key) = parse_key_inner(&bytes[1..], true) {
+			return Some(Cow::Owned(format!("alt+{inner_key}")));
+		}
+	}
+
 	// Two-byte ESC sequences (legacy ALT prefix, with exceptions even in kitty
 	// mode)
 	if bytes.len() == 2 {
@@ -1462,6 +1500,26 @@ fn parse_optional_digits(bytes: &[u8], idx: usize, end: usize) -> (Option<u32>, 
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn esc_prefix_alt_arrows_mixed_mode() {
+		// Mixed mode: legacy Alt sequences must parse even when kitty is active
+		assert!(matches_key_inner(b"\x1b\x1b[A", "alt+up", true));
+		assert!(matches_key_inner(b"\x1b\x1b[B", "alt+down", true));
+		assert!(matches_key_inner(b"\x1b\x1b[C", "alt+right", true));
+		assert!(matches_key_inner(b"\x1b\x1b[D", "alt+left", true));
+		assert_eq!(parse_key_inner(b"\x1b\x1b[A", true).as_deref(), Some("alt+up"));
+		assert_eq!(parse_key_inner(b"\x1b\x1b[B", true).as_deref(), Some("alt+down"));
+		// Bare double ESC should NOT be parsed as alt
+		assert_eq!(parse_key_inner(b"\x1b\x1b", true).as_deref(), None);
+	}
+
+	#[test]
+	fn esc_prefix_csi_only() {
+		// Only CSI and SS3 inner sequences parse as Alt; other double-ESC does not
+		assert_eq!(parse_key_inner(b"\x1b\x1bX", true).as_deref(), None);
+		assert_eq!(parse_key_inner(b"\x1b\x1bX", false).as_deref(), None);
+	}
 
 	#[test]
 	fn matches_key_ignores_kitty_release_events() {

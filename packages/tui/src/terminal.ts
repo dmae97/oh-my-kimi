@@ -324,41 +324,54 @@ export class ProcessTerminal implements Terminal {
 				}
 			}
 
-			// Check for Kitty protocol response (only if not already enabled)
-			if (!this.#kittyProtocolActive) {
-				const match = sequence.match(kittyResponsePattern);
-				if (match) {
-					if (this.#modifyOtherKeysTimeout) {
-						clearTimeout(this.#modifyOtherKeysTimeout);
-						this.#modifyOtherKeysTimeout = undefined;
-					}
-					this.#kittyProtocolActive = true;
-					setKittyProtocolActive(true);
-
-					// Enable Kitty keyboard protocol (push flags)
-					// Flag 1 = disambiguate escape codes
-					// Flag 2 = report event types (press/repeat/release)
-					// Flag 4 = report alternate keys
-					this.#safeWrite("\x1b[>7u");
-					return; // Don't forward protocol response to TUI
-				}
-			}
-
 			// DA1 response: swallow our sentinel reply regardless of whether OSC 11
 			// already succeeded. Other terminal probes should never see these replies.
 			if (da1ResponsePattern.test(sequence) && this.#pendingDa1Sentinels > 0) {
 				this.#pendingDa1Sentinels--;
 				if (this.#osc11Pending) {
-					// DA1 arrived before OSC 11 response: terminal does not support
-					// OSC 11. Clear the pending state without starting a queued query
-					// (queued query is started below, after sentinel is consumed).
+					// DA1 before OSC 11: terminal does not support OSC 11.
 					this.#osc11Pending = false;
 					this.#osc11ResponseBuffer = "";
 				}
-				// Now that this DA1 cycle is complete, start any queued query.
+				// Start queued OSC 11 query after this DA1 cycle.
 				if (this.#osc11QueryQueued && !this.#dead) {
 					this.#osc11QueryQueued = false;
 					this.#startOsc11Query();
+				}
+				// Keyboard probe only: OSC 11 uses the same DA1 sentinel counter.
+				// If kitty reply has not arrived yet, DA1 means no progressive enhancement.
+				if (!this.#kittyProtocolActive && !this.#modifyOtherKeysActive && this.#modifyOtherKeysTimeout) {
+					clearTimeout(this.#modifyOtherKeysTimeout);
+					this.#modifyOtherKeysTimeout = undefined;
+					this.#safeWrite("\x1b[>4;2m");
+					this.#modifyOtherKeysActive = true;
+				}
+				return;
+			}
+
+			// Progressive enhancement: parse Kitty response flags to determine level.
+			const match = sequence.match(kittyResponsePattern);
+			if (match && !this.#modifyOtherKeysActive) {
+				if (this.#modifyOtherKeysTimeout) {
+					clearTimeout(this.#modifyOtherKeysTimeout);
+					this.#modifyOtherKeysTimeout = undefined;
+				}
+				const reportedFlags = parseInt(match[1]!, 10);
+				if (reportedFlags >= 3) {
+					// Full Kitty protocol (level 2+)
+					this.#kittyProtocolActive = true;
+					setKittyProtocolActive(true);
+					this.#safeWrite("\x1b[>7u");
+				} else if (reportedFlags >= 1) {
+					// Level 1 (disambiguate escape codes) – enough for Shift+Enter
+					// without modifyOtherKeys fallback that caused regression #3259.
+					this.#kittyProtocolActive = true;
+					setKittyProtocolActive(true);
+					this.#safeWrite("\x1b[>1u");
+				} else if (reportedFlags === 0) {
+					// Terminal explicitly says "no kitty support" (flag 0)
+					this.#safeWrite("\x1b[>4;2m");
+					this.#modifyOtherKeysActive = true;
 				}
 				return;
 			}
@@ -498,7 +511,10 @@ export class ProcessTerminal implements Terminal {
 	#queryAndEnableKittyProtocol(): void {
 		this.#setupStdinBuffer();
 		process.stdin.on("data", this.#stdinDataHandler!);
-		this.#safeWrite("\x1b[?u");
+		// Progressive enhancement query: send CSI >31u (request capability flags),
+		// then CSI ?u (query mode), then DA1 sentinel. If terminal replies with
+		// CSI ?<flags>u before DA1, we know the exact supported level.
+		this.#safeWrite("\x1b[>31u\x1b[?u\x1b[c");
 		this.#modifyOtherKeysTimeout = setTimeout(() => {
 			this.#modifyOtherKeysTimeout = undefined;
 			if (this.#kittyProtocolActive || this.#modifyOtherKeysActive) {
