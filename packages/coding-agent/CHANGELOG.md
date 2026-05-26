@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.5.0] - 2026-05-26
+
 ### Added
 
 - Added per-tool approval declarations so each built-in, custom, or extension tool can declare its capability tier and approval prompt details.
