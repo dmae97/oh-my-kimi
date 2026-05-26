@@ -1520,6 +1520,12 @@ export class AuthStorage {
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
+			case "zhipu-coding-plan": {
+				const { loginZhipuCodingPlan } = await import("./utils/oauth/zhipu");
+				const apiKey = await loginZhipuCodingPlan(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
 			case "qianfan": {
 				const { loginQianfan } = await import("./utils/oauth/qianfan");
 				const apiKey = await loginQianfan(ctrl);

@@ -42,6 +42,7 @@ import {
 	xaiModelManagerOptions,
 	xiaomiModelManagerOptions,
 	zenmuxModelManagerOptions,
+	zhipuCodingPlanModelManagerOptions,
 } from "./openai-compat";
 import { cursorModelManagerOptions, zaiModelManagerOptions } from "./special";
 
@@ -292,6 +293,12 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		catalog("ZenMux", ["ZENMUX_API_KEY"]),
 	),
 	catalogDescriptor("zai", "glm-5.1", config => zaiModelManagerOptions(config), catalog("zAI", ["ZAI_API_KEY"])),
+	catalogDescriptor(
+		"zhipu-coding-plan",
+		"glm-5.1",
+		config => zhipuCodingPlanModelManagerOptions(config),
+		catalog("Zhipu Coding Plan", ["ZHIPU_API_KEY"]),
+	),
 	descriptor("github-copilot", "gpt-4o", config => githubCopilotModelManagerOptions(config)),
 	descriptor("google", "gemini-2.5-pro", config => googleModelManagerOptions(config)),
 	descriptor("google-vertex", "gemini-3-pro-preview", config => googleVertexModelManagerOptions(config), {
