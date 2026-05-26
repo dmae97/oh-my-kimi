@@ -1,6 +1,8 @@
+import { Console } from "node:console";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import * as util from "node:util";
 
@@ -235,6 +237,20 @@ export class JsRuntime {
 				const prefix = level === "error" ? "[error] " : level === "warn" ? "[warn] " : "";
 				const text = `${prefix}${formatConsoleArgs(args)}`;
 				this.#getHooks()?.onText(text.endsWith("\n") ? text : `${text}\n`);
+			},
+			__omp_table__: (...args: unknown[]) => {
+				const hooks = this.#getHooks();
+				if (!hooks) return;
+				let buffer = "";
+				const stream = new Writable({
+					write(chunk, _enc, cb) {
+						buffer += typeof chunk === "string" ? chunk : (chunk as Buffer).toString("utf8");
+						cb();
+					},
+				});
+				const tableConsole = new Console({ stdout: stream, colorMode: false });
+				(tableConsole.table as (...a: unknown[]) => void)(...args);
+				hooks.onText(buffer.endsWith("\n") ? buffer : `${buffer}\n`);
 			},
 			__omp_display__: (value: unknown) => this.displayValue(value),
 			__omp_set_final_expr__: (value: unknown) => {
