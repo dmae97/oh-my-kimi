@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ptree, Snowflake } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
+import type { AgentStorage } from "../../session/agent-storage";
 import { throwIfAborted } from "../../tools/tool-errors";
 import { ensureTool } from "../../utils/tools-manager";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../parallel";
@@ -101,6 +102,7 @@ export const handleYouTube: SpecialHandler = async (
 	url: string,
 	timeout: number,
 	userSignal?: AbortSignal,
+	storage?: AgentStorage | null,
 ): Promise<RenderResult | null> => {
 	throwIfAborted(userSignal);
 	const yt = parseYouTubeUrl(url);
@@ -112,14 +114,18 @@ export const handleYouTube: SpecialHandler = async (
 	const videoUrl = `https://www.youtube.com/watch?v=${yt.videoId}`;
 
 	// Prefer Parallel extract when credentials are available
-	if (settings.get("providers.parallelFetch") && (await findParallelApiKey())) {
+	if (settings.get("providers.parallelFetch") && findParallelApiKey(storage)) {
 		try {
-			const parallelResult = await extractWithParallel([videoUrl], {
-				objective: "Extract the main content of this YouTube video page",
-				excerpts: true,
-				fullContent: false,
-				signal,
-			});
+			const parallelResult = await extractWithParallel(
+				[videoUrl],
+				{
+					objective: "Extract the main content of this YouTube video page",
+					excerpts: true,
+					fullContent: false,
+					signal,
+				},
+				storage,
+			);
 			const firstDocument = parallelResult.results[0];
 			if (firstDocument) {
 				const content = getParallelExtractContent(firstDocument);

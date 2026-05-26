@@ -4,14 +4,15 @@
  * Uses Moonshot Kimi Code search API to retrieve web results.
  * Endpoint: POST https://api.kimi.com/coding/v1/search
  */
-import { getEnvApiKey } from "@oh-my-pi/pi-ai";
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
+
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { classifyProviderHttpError, findCredential, isApiKeyAvailable, withHardTimeout } from "./utils";
+import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 const KIMI_SEARCH_URL = "https://api.kimi.com/coding/v1/search";
 
@@ -24,6 +25,8 @@ export interface KimiSearchParams {
 	num_results?: number;
 	include_content?: boolean;
 	signal?: AbortSignal;
+	authStorage: AuthStorage;
+	sessionId?: string;
 }
 
 interface KimiSearchResult {
@@ -51,14 +54,20 @@ function resolveBaseUrl(): string {
 	return asTrimmed($env.MOONSHOT_SEARCH_BASE_URL) ?? asTrimmed($env.KIMI_SEARCH_BASE_URL) ?? KIMI_SEARCH_URL;
 }
 
-/** Find Kimi search credentials from environment or agent.db credentials. */
-async function findApiKey(): Promise<string | null> {
-	const envKey =
-		asTrimmed($env.MOONSHOT_SEARCH_API_KEY) ??
-		asTrimmed($env.KIMI_SEARCH_API_KEY) ??
-		getEnvApiKey("moonshot") ??
-		null;
-	return findCredential(envKey, "moonshot", "kimi-code");
+/** Find Kimi search credentials from environment or AuthStorage. */
+async function findApiKey(
+	authStorage: AuthStorage,
+	sessionId: string | undefined,
+	signal: AbortSignal | undefined,
+): Promise<string | null> {
+	const envKey = asTrimmed($env.MOONSHOT_SEARCH_API_KEY) ?? asTrimmed($env.KIMI_SEARCH_API_KEY);
+	if (envKey) return envKey;
+
+	return (
+		(await authStorage.getApiKey("moonshot", sessionId, { signal })) ??
+		(await authStorage.getApiKey("kimi-code", sessionId, { signal })) ??
+		null
+	);
 }
 
 async function callKimiSearch(
@@ -99,7 +108,7 @@ async function callKimiSearch(
 
 /** Execute Kimi web search. */
 export async function searchKimi(params: KimiSearchParams): Promise<SearchResponse> {
-	const apiKey = await findApiKey();
+	const apiKey = await findApiKey(params.authStorage, params.sessionId, params.signal);
 	if (!apiKey) {
 		throw new Error(
 			"Kimi search credentials not found. Set MOONSHOT_SEARCH_API_KEY, KIMI_SEARCH_API_KEY, MOONSHOT_API_KEY, or login with 'omp /login moonshot'.",
@@ -141,8 +150,13 @@ export class KimiProvider extends SearchProvider {
 	readonly id = "kimi";
 	readonly label = "Kimi";
 
-	isAvailable(): Promise<boolean> {
-		return isApiKeyAvailable(findApiKey);
+	isAvailable(authStorage: AuthStorage): boolean {
+		return (
+			!!asTrimmed($env.MOONSHOT_SEARCH_API_KEY) ||
+			!!asTrimmed($env.KIMI_SEARCH_API_KEY) ||
+			authStorage.hasAuth("moonshot") ||
+			authStorage.hasAuth("kimi-code")
+		);
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
@@ -150,6 +164,8 @@ export class KimiProvider extends SearchProvider {
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,
 			signal: params.signal,
+			authStorage: params.authStorage,
+			sessionId: params.sessionId,
 		});
 	}
 }

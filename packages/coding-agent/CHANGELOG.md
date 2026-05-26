@@ -5,6 +5,25 @@
 ### Added
 - Added Kagi V1 web search provider support for the new API, intentionally left V0 in for now to not break any existing users.
 
+- Added `codex` and `gemini` to the web search provider settings so users can configure OpenAI and Gemini web search directly from provider selection
+- Added OpenAI (`codex`) and Gemini web search options with updated setup descriptions for `omp /login openai-codex` and Gemini OAuth login
+
+### Changed
+
+- Changed web search provider credential lookup to use the shared `AuthStorage` pipeline (`getApiKey`/`getOAuthAccess`) for API-key and OAuth auth instead of direct `AgentStorage` access
+- Changed the `codex` web search provider display label from `Codex` to `OpenAI`
+- Updated `anthropic` and `openai`/`gemini` web search option descriptions to reflect their native `web_search`/OAuth requirements
+
+### Fixed
+
+- Fixed web search OAuth-backed providers (including Codex and Gemini) to use broker-managed token retrieval and account metadata, avoiding direct token-store refresh behavior that could cause search authentication failures
+- Updated Tavily missing-credential feedback to prompt users to configure an API-key provider setting instead of referencing `agent.db` directly
+- Refreshed expired OpenAI Codex OAuth tokens during `web_search` execution and persisted the updated credentials so searches continue working after token expiry
+
+### Fixed
+
+- Fixed built-in `explore` agent failing every invocation with `schema_violation: files.0.ref: must not be present` on releases prior to 15.3.2 by renaming the `files[].ref` property to `files[].path` in the agent's output schema; `ref` is a JTD-reserved keyword (RFC 8927) and collides with JSON Type Definition's schema-reference form, so the converter previously dropped it from the generated JSON Schema. Defense-in-depth alongside the 15.3.2 converter fix ([#1379](https://github.com/can1357/oh-my-pi/issues/1379)).
+
 ## [15.3.2] - 2026-05-25
 ### Added
 

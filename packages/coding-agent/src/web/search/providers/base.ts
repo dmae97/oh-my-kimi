@@ -1,6 +1,16 @@
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import type { SearchProviderId, SearchResponse } from "../types";
 
-/** Shared web search parameters passed to providers. */
+/**
+ * Shared web search parameters passed to providers.
+ *
+ * `authStorage` is the **only** credential source providers may consult.
+ * Opening a sibling SQLite handle or calling provider-direct refresh helpers
+ * (e.g. `refreshOpenAICodexToken`, `refreshGoogleCloudToken`) is prohibited:
+ * it races the broker's per-credential refresh and POSTs the broker sentinel
+ * (`REMOTE_REFRESH_SENTINEL`) to the upstream token endpoint, which classifies
+ * as `invalid_grant` and disables the row.
+ */
 export interface SearchParams {
 	query: string;
 	limit?: number;
@@ -26,6 +36,20 @@ export interface SearchParams {
 	googleSearch?: Record<string, unknown>;
 	codeExecution?: Record<string, unknown>;
 	urlContext?: Record<string, unknown>;
+	/**
+	 * The single source of truth for credentials. Providers MUST consult this
+	 * handle exclusively (`getApiKey` for bearer-style auth, `getOAuthAccess`
+	 * when identity metadata is required). Do not open `AgentStorage` or any
+	 * `AuthCredentialStore` directly — that bypasses the broker pipeline and
+	 * the per-credential single-flight refresh.
+	 */
+	authStorage: AuthStorage;
+	/**
+	 * Optional session id used as the round-robin / sticky key when selecting
+	 * among multiple credentials for the same provider. Pass through from the
+	 * caller's agent session when available; otherwise omit.
+	 */
+	sessionId?: string;
 }
 
 /** Base class for web search providers. */
@@ -33,6 +57,15 @@ export abstract class SearchProvider {
 	abstract readonly id: SearchProviderId;
 	abstract readonly label: string;
 
-	abstract isAvailable(): Promise<boolean> | boolean;
+	/**
+	 * Indicates whether this provider has the credentials/config it needs to
+	 * service a request right now. Implementations consult the passed
+	 * {@link AuthStorage} — never a sibling store.
+	 */
+	abstract isAvailable(authStorage: AuthStorage): Promise<boolean> | boolean;
+
+	/**
+	 * Execute a search. Credentials MUST be resolved through `params.authStorage`.
+	 */
 	abstract search(params: SearchParams): Promise<SearchResponse>;
 }

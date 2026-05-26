@@ -2383,6 +2383,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.enableLsp": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			label: "LSP in Subagents",
+			description:
+				"Allow subagents spawned via the task tool to use the lsp tool. Off by default to keep subagents cheap; enable when LSP-aware delegation is worth the extra tokens.",
+		},
+	},
+
 	"task.maxRecursionDepth": {
 		type: "number",
 		default: 2,
@@ -2553,7 +2564,21 @@ export const SETTINGS_SCHEMA = {
 					label: "Perplexity",
 					description: "Requires PERPLEXITY_COOKIES or PERPLEXITY_API_KEY",
 				},
-				{ value: "anthropic", label: "Anthropic", description: "Uses Anthropic web search" },
+				{
+					value: "anthropic",
+					label: "Anthropic",
+					description: "Claude's native web_search tool (uses Anthropic OAuth or ANTHROPIC_API_KEY)",
+				},
+				{
+					value: "codex",
+					label: "OpenAI",
+					description: "OpenAI's native web_search (uses ChatGPT OAuth via /login openai-codex)",
+				},
+				{
+					value: "gemini",
+					label: "Gemini",
+					description: "Google Search grounding via Gemini (uses google-gemini-cli or google-antigravity OAuth)",
+				},
 				{ value: "zai", label: "Z.AI", description: "Calls Z.AI webSearchPrime MCP" },
 				{ value: "tavily", label: "Tavily", description: "Requires TAVILY_API_KEY" },
 				{ value: "kagi", label: "Kagi", description: "Requires KAGI_API_KEY and Kagi Search API beta access" },

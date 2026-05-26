@@ -1,9 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { hookFetch } from "@oh-my-pi/pi-utils";
+import type { AgentStorage } from "../../src/session/agent-storage";
 import { searchWithParallel } from "../../src/web/parallel";
 import { searchParallel } from "../../src/web/search/providers/parallel";
 
 describe("Parallel web search", () => {
+	const fakeStorage = {
+		listAuthCredentials: () => [
+			{
+				id: 1,
+				credential: {
+					type: "oauth",
+					access: "test-access-token",
+					expires: Date.now() + 600_000,
+					accountId: "acct-test",
+				},
+			},
+		],
+		updateAuthCredential: () => undefined,
+		get authStore() {
+			return null as never;
+		},
+	} as unknown as AgentStorage;
+	const fakeAuthStorage = {
+		async getApiKey() {
+			return process.env.PARALLEL_API_KEY ?? undefined;
+		},
+		hasAuth() {
+			return Boolean(process.env.PARALLEL_API_KEY);
+		},
+	} as unknown as AuthStorage;
+
 	let capturedRequestBody: unknown;
 
 	beforeEach(() => {
@@ -43,7 +71,7 @@ describe("Parallel web search", () => {
 			usage: [{ name: "sku_search", count: 1 }],
 		});
 
-		const result = await searchWithParallel("parallel query", ["parallel query"]);
+		const result = await searchWithParallel("parallel query", ["parallel query"], {}, fakeStorage);
 		expect(capturedRequestBody).toEqual({
 			objective: "parallel query",
 			search_queries: ["parallel query"],
@@ -82,7 +110,7 @@ describe("Parallel web search", () => {
 			usage: null,
 		});
 
-		const result = await searchParallel({ query: "alpha search" });
+		const result = await searchParallel({ query: "alpha search" }, fakeAuthStorage);
 		expect(result.provider).toBe("parallel");
 		expect(result.requestId).toBe("search-parallel-2");
 		expect(result.sources).toEqual([
@@ -98,7 +126,7 @@ describe("Parallel web search", () => {
 
 	it("surfaces plain-text Parallel API errors", async () => {
 		using _hook = hookFetch(() => new Response("upstream unavailable", { status: 503 }));
-		await expect(searchParallel({ query: "broken" })).rejects.toMatchObject({
+		await expect(searchParallel({ query: "broken" }, fakeAuthStorage)).rejects.toMatchObject({
 			provider: "parallel",
 			status: 503,
 			message: "Parallel API error (503): upstream unavailable",

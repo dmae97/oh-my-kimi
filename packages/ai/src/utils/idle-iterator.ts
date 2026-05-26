@@ -16,12 +16,13 @@ function normalizeIdleTimeoutMs(value: string | undefined, fallback: number): nu
  *
  * `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS` is accepted as a backward-compatible alias.
  * Set `PI_STREAM_IDLE_TIMEOUT_MS=0` to disable the watchdog.
+ *
+ * Providers that legitimately stream much slower than the global default can pass
+ * `fallbackMs` to widen the floor used when neither env var nor caller option is set.
+ * Caller options still take precedence; env overrides still trump the fallback.
  */
-export function getStreamIdleTimeoutMs(): number | undefined {
-	return normalizeIdleTimeoutMs(
-		$env.PI_STREAM_IDLE_TIMEOUT_MS ?? $env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS,
-		DEFAULT_STREAM_IDLE_TIMEOUT_MS,
-	);
+export function getStreamIdleTimeoutMs(fallbackMs: number = DEFAULT_STREAM_IDLE_TIMEOUT_MS): number | undefined {
+	return normalizeIdleTimeoutMs($env.PI_STREAM_IDLE_TIMEOUT_MS ?? $env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS, fallbackMs);
 }
 
 /**
@@ -42,12 +43,17 @@ export function getOpenAIStreamIdleTimeoutMs(): number | undefined {
  * so the default never undershoots the steady-state idle timeout.
  *
  * Set `PI_STREAM_FIRST_EVENT_TIMEOUT_MS=0` to disable the watchdog.
+ *
+ * Providers whose first response can legitimately take longer (heavy reasoning,
+ * slow cold-start proxies) can pass `fallbackMs` to widen the floor used when
+ * neither env var nor caller option is set. Caller options still take precedence;
+ * env overrides still trump the fallback.
  */
-export function getStreamFirstEventTimeoutMs(idleTimeoutMs?: number): number | undefined {
-	const fallback =
-		idleTimeoutMs === undefined
-			? DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS
-			: Math.max(DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS, idleTimeoutMs);
+export function getStreamFirstEventTimeoutMs(
+	idleTimeoutMs?: number,
+	fallbackMs: number = DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS,
+): number | undefined {
+	const fallback = idleTimeoutMs === undefined ? fallbackMs : Math.max(fallbackMs, idleTimeoutMs);
 	return normalizeIdleTimeoutMs($env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS, fallback);
 }
 

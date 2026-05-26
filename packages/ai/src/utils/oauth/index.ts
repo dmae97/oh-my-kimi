@@ -362,13 +362,16 @@ function getPerplexityJwtExpiryMs(token: string): number | undefined {
 }
 
 /**
- * Get API key for a provider from OAuth credentials.
- * Automatically refreshes expired tokens.
+ * Build API-key bytes for a provider from an already-fresh OAuth credential.
  *
- * For providers that need credential metadata at request time, returns JSON-encoded credentials
- * plus refresh/expiry metadata for proactive refresh support.
+ * Refresh is owned by AuthStorage. This helper deliberately refuses expired
+ * credentials so it cannot POST broker redaction sentinels to upstream token
+ * endpoints as a side channel.
+ *
+ * For providers that need credential metadata at request time, returns
+ * JSON-encoded credentials plus expiry metadata for diagnostics/edge guards.
  * @returns API key string, or null if no credentials
- * @throws Error if refresh fails
+ * @throws Error if the credential is expired and must be refreshed upstream
  */
 export async function getOAuthApiKey(
 	provider: OAuthProvider,
@@ -392,21 +395,24 @@ export async function getOAuthApiKey(
 			creds = { ...creds, expires };
 		}
 	}
-	// Refresh if expired
+	// Refresh is the sole responsibility of `AuthStorage` (which calls
+	// `refreshOAuthToken` directly with broker-aware single-flighting). If we
+	// reach here with an expired credential, the outer pipeline failed to
+	// refresh before this call OR the refresh slot is the broker sentinel —
+	// either way, posting the credential to a provider endpoint would only
+	// trigger a `__remote__`-against-real-provider failure that gets classified
+	// as `invalid_grant` and disables the row. Refuse loudly instead.
 	if (Date.now() >= creds.expires) {
-		try {
-			creds = await refreshOAuthToken(provider, creds);
-		} catch (refreshError) {
-			if (provider === "perplexity") {
-				const jwtExpiry = getPerplexityJwtExpiryMs(creds.access);
-				if (jwtExpiry && Date.now() < jwtExpiry) {
-					const fallbackCredentials = { ...creds, expires: jwtExpiry };
-					return { newCredentials: fallbackCredentials, apiKey: fallbackCredentials.access };
-				}
+		if (provider === "perplexity") {
+			const jwtExpiry = getPerplexityJwtExpiryMs(creds.access);
+			if (jwtExpiry && Date.now() < jwtExpiry) {
+				const fallbackCredentials = { ...creds, expires: jwtExpiry };
+				return { newCredentials: fallbackCredentials, apiKey: fallbackCredentials.access };
 			}
-			const reason = refreshError instanceof Error ? refreshError.message : String(refreshError);
-			throw new Error(`Failed to refresh OAuth token for ${provider}: ${reason}`);
 		}
+		throw new Error(
+			`OAuth credential for ${provider} is expired and must be refreshed via AuthStorage before getOAuthApiKey is called`,
+		);
 	}
 	// For providers that need request-time credential metadata, return JSON.
 	const needsStructuredApiKey =

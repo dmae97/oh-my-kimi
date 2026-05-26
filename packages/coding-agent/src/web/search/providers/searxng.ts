@@ -25,6 +25,8 @@
  * Reference: https://docs.searxng.org/dev/search_api.html
  */
 
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
+
 import { settings } from "../../../config/settings";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
@@ -288,7 +290,7 @@ export class SearXNGProvider extends SearchProvider {
 	readonly id = "searxng";
 	readonly label = "SearXNG";
 
-	isAvailable() {
+	isAvailable(_authStorage: AuthStorage): boolean {
 		try {
 			return !!findEndpoint();
 		} catch {

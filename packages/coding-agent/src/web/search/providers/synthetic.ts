@@ -5,12 +5,12 @@
  * Endpoint: POST https://api.synthetic.new/v2/search
  */
 
-import { getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { classifyProviderHttpError, findCredential, isApiKeyAvailable, withHardTimeout } from "./utils";
+import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 const SYNTHETIC_SEARCH_URL = "https://api.synthetic.new/v2/search";
 
@@ -25,9 +25,13 @@ interface SyntheticSearchResponse {
 	results: SyntheticSearchResult[];
 }
 
-/** Find Synthetic API key from environment or agent.db credentials. */
-export async function findApiKey(): Promise<string | null> {
-	return findCredential(getEnvApiKey("synthetic"), "synthetic");
+/** Resolve Synthetic API key through the shared auth storage pipeline. */
+export function findApiKey(
+	authStorage: AuthStorage,
+	sessionId?: string,
+	signal?: AbortSignal,
+): Promise<string | undefined> {
+	return authStorage.getApiKey("synthetic", sessionId, { signal });
 }
 
 /** Call Synthetic search API. */
@@ -61,12 +65,8 @@ async function callSyntheticSearch(
 }
 
 /** Execute Synthetic web search. */
-export async function searchSynthetic(params: {
-	query: string;
-	num_results?: number;
-	signal?: AbortSignal;
-}): Promise<SearchResponse> {
-	const apiKey = await findApiKey();
+export async function searchSynthetic(params: SearchParams): Promise<SearchResponse> {
+	const apiKey = await findApiKey(params.authStorage, params.sessionId, params.signal);
 	if (!apiKey) {
 		throw new Error("Synthetic credentials not found. Set SYNTHETIC_API_KEY or login with 'omp /login synthetic'.");
 	}
@@ -84,7 +84,8 @@ export async function searchSynthetic(params: {
 		});
 	}
 
-	const limitedSources = params.num_results ? sources.slice(0, params.num_results) : sources;
+	const numResults = params.numSearchResults ?? params.limit;
+	const limitedSources = numResults ? sources.slice(0, numResults) : sources;
 
 	return {
 		provider: "synthetic",
@@ -97,15 +98,11 @@ export class SyntheticProvider extends SearchProvider {
 	readonly id = "synthetic";
 	readonly label = "Synthetic";
 
-	isAvailable(): Promise<boolean> {
-		return isApiKeyAvailable(findApiKey);
+	isAvailable(authStorage: AuthStorage): boolean {
+		return authStorage.hasAuth("synthetic") || !!getEnvApiKey("synthetic");
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
-		return searchSynthetic({
-			query: params.query,
-			num_results: params.numSearchResults ?? params.limit,
-			signal: params.signal,
-		});
+		return searchSynthetic(params);
 	}
 }

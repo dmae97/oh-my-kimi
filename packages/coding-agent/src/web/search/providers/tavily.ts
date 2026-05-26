@@ -4,13 +4,13 @@
  * Uses Tavily's agent-focused search API to return structured results with an
  * optional synthesized answer.
  */
-import { getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { classifyProviderHttpError, findCredential, isApiKeyAvailable, withHardTimeout } from "./utils";
+import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 const TAVILY_SEARCH_URL = "https://api.tavily.com/search";
 const DEFAULT_NUM_RESULTS = 5;
@@ -58,9 +58,13 @@ function getErrorMessage(value: unknown): string | null {
 	return null;
 }
 
-/** Find Tavily API key from environment or agent.db credentials. */
-export async function findApiKey(): Promise<string | null> {
-	return findCredential(getEnvApiKey("tavily"), "tavily");
+/** Find Tavily API key through AuthStorage's unified refresh pipeline. */
+export async function findApiKey(
+	authStorage: AuthStorage,
+	sessionId: string | undefined,
+	signal: AbortSignal | undefined,
+): Promise<string | null> {
+	return (await authStorage.getApiKey("tavily", sessionId, { signal })) ?? null;
 }
 
 /** Exported for testing. Builds the Tavily request body from unified params. */
@@ -116,16 +120,22 @@ async function callTavilySearch(apiKey: string, params: TavilySearchParams): Pro
 }
 
 /** Execute Tavily web search. */
-export async function searchTavily(params: TavilySearchParams): Promise<SearchResponse> {
-	const apiKey = await findApiKey();
+export async function searchTavily(params: SearchParams): Promise<SearchResponse> {
+	const tavilyParams: TavilySearchParams = {
+		query: params.query,
+		num_results: params.numSearchResults ?? params.limit,
+		recency: params.recency,
+		signal: params.signal,
+	};
+	const apiKey = await findApiKey(params.authStorage, params.sessionId, params.signal);
 	if (!apiKey) {
 		throw new Error(
-			'Tavily credentials not found. Set TAVILY_API_KEY or store an API key for provider "tavily" in agent.db.',
+			'Tavily credentials not found. Set TAVILY_API_KEY or configure an API key for provider "tavily".',
 		);
 	}
 
-	const numResults = clampNumResults(params.num_results, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
-	const response = await callTavilySearch(apiKey, params);
+	const numResults = clampNumResults(tavilyParams.num_results, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
+	const response = await callTavilySearch(apiKey, tavilyParams);
 	const sources: SearchSource[] = [];
 
 	for (const result of response.results ?? []) {
@@ -153,16 +163,11 @@ export class TavilyProvider extends SearchProvider {
 	readonly id = "tavily";
 	readonly label = "Tavily";
 
-	isAvailable(): Promise<boolean> {
-		return isApiKeyAvailable(findApiKey);
+	isAvailable(authStorage: AuthStorage): boolean {
+		return authStorage.hasAuth("tavily") || !!getEnvApiKey("tavily");
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
-		return searchTavily({
-			query: params.query,
-			num_results: params.numSearchResults ?? params.limit,
-			recency: params.recency,
-			signal: params.signal,
-		});
+		return searchTavily(params);
 	}
 }

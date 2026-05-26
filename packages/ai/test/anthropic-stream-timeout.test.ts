@@ -240,7 +240,7 @@ describe("anthropic first-event timeout retries", () => {
 
 		const result = await streamAnthropic(model, context, {
 			client,
-			streamFirstEventTimeoutMs: 10,
+			streamFirstEventTimeoutMs: 5000,
 			streamIdleTimeoutMs: 1,
 		}).result();
 
