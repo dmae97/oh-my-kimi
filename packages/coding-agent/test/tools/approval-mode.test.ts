@@ -193,4 +193,21 @@ describe("tools.approvalMode setting", () => {
 			await session.dispose();
 		}
 	});
+
+	it("constructs an extensionRunner unconditionally so the approval gate is always installed", async () => {
+		// Regression lock for the architectural fix: the per-tool approval gate is implemented
+		// inside `ExtensionToolWrapper`, which is only attached when `session.extensionRunner` exists.
+		// Historically the runner was conditional on `extensionsResult.extensions.length > 0`, which
+		// meant the entire approval system silently disappeared for users with no extensions loaded —
+		// any `tools.approvalMode: prompt | custom` setting would be a no-op without feedback. The
+		// fix is to construct the runner unconditionally; this test makes that contract explicit so
+		// a future change to make the runner optional again cannot silently re-open the hole.
+		const { tempDir, session } = await makeSession();
+		tempDirs.push(tempDir);
+		try {
+			expect(session.extensionRunner).toBeDefined();
+		} finally {
+			await session.dispose();
+		}
+	});
 });

@@ -109,6 +109,7 @@ export const CRITICAL_BASH_PATTERNS = [
 	/\brm\s+-[a-z]*[rRfF][a-z]*\s+\//i, // rm -rf /, rm -fr /, rm -r /, rm -f /…
 	/\bsudo\s+rm\b/i, // any `sudo rm`.
 	/\bchmod\s+-R\s+[0-7]+\s+\//i, // `chmod -R 777 /`.
+	/\bchmod\s+-R\s+[ugoa+\-=rwxXst,]+\s+\//, // `chmod -R u+x /`, `chmod -R u+rwx,o+w /etc` (symbolic mode, root target).
 	/\bchown\s+-R\s+\S+\s+\//i, // `chown -R user /`.
 
 	// Fork bomb (a few common spacings).
@@ -123,10 +124,15 @@ export const CRITICAL_BASH_PATTERNS = [
 
 	// System-config destruction.
 	/>\s*\/etc\/(?:passwd|shadow|sudoers)\b/i,
+	/\btee\s+(?:-a\s+)?\/etc\/(?:passwd|shadow|sudoers)\b/i, // `tee /etc/passwd`, `tee -a /etc/sudoers`.
 
 	// Remote-fetch-then-execute (curl/wget piped to a shell or process-subbed).
 	/\b(?:curl|wget|fetch)\b[^|]*\|\s*(?:bash|sh|zsh|fish)\b/i,
-	/\b(?:bash|sh|zsh)\s+<\(\s*(?:curl|wget|fetch)\b/i,
+	// Process-sub variants — `bash <(curl …)`, `source <(curl …)`, `. <(curl …)`. `.` and `source` are
+	// anchored to a command boundary so `find . -name` and similar don't false-positive.
+	/(?:^|[\s;&|(])(?:bash|sh|zsh|source|\.)\s+<\(\s*(?:curl|wget|fetch)\b/i,
+	// `eval "$(curl …)"` / `eval $(curl …)` / `eval \`curl …\``.
+	/\beval\s+["'`]?\$\(\s*(?:curl|wget|fetch)\b|\beval\s+`\s*(?:curl|wget|fetch)\b/i,
 
 	// Process/host control.
 	/\bkill\s+-9\s+1\b/, // kill PID 1.
@@ -312,9 +318,10 @@ function truncateForPrompt(value: string): string {
 	return `${value.slice(0, PROMPT_FIELD_HEAD_LEN)}…[${elided} chars elided]…${value.slice(-PROMPT_FIELD_TAIL_LEN)}`;
 }
 
-/** MCP-style tool names: `mcp__<server>__<tool>` or `<server>__<tool>`. */
+/** MCP-style tool names: `mcp__<server>__<tool>`. Strict prefix only — a tool name that merely happens
+ * to contain `__` (e.g. an extension's `my__feature`) is not an MCP tool and must not be mislabelled. */
 function isMcpToolName(toolName: string): boolean {
-	return toolName.startsWith("mcp__") || toolName.includes("__");
+	return toolName.startsWith("mcp__");
 }
 
 /**
@@ -340,6 +347,9 @@ export function formatApprovalPrompt(toolName: string, input: unknown, reason?: 
 		parts.push(`Command: ${truncateForPrompt(record.command)}`);
 	} else if (toolName === "write" && typeof record.path === "string") {
 		parts.push(`Path: ${record.path}`);
+		if (typeof record.content === "string") {
+			parts.push(`Content: ${truncateForPrompt(record.content)}`);
+		}
 	} else if (toolName === "edit" && typeof record.input === "string") {
 		const match = record.input.match(/§([^\n]+)/) ?? record.input.match(/@([^\n]+)/);
 		if (match) parts.push(`File: ${match[1]}`);
@@ -352,6 +362,47 @@ export function formatApprovalPrompt(toolName: string, input: unknown, reason?: 
 	} else if (toolName === "ssh" && typeof record.command === "string") {
 		if (typeof record.host === "string") parts.push(`Host: ${record.host}`);
 		parts.push(`Command: ${truncateForPrompt(record.command)}`);
+	} else if (toolName === "eval" && Array.isArray(record.cells)) {
+		// Show the first cell's language and code — multi-cell payloads stay collapsed by design;
+		// the user is approving the eval call as a unit, not per-cell.
+		const cells = record.cells as unknown[];
+		const first = asRecord(cells[0]);
+		if (first) {
+			const language = typeof first.language === "string" ? first.language : "?";
+			const code = typeof first.code === "string" ? first.code : "";
+			const suffix = cells.length > 1 ? ` (+${cells.length - 1} more cell${cells.length > 2 ? "s" : ""})` : "";
+			parts.push(`Language: ${language}${suffix}`);
+			if (code) parts.push(`Code: ${truncateForPrompt(code)}`);
+		}
+	} else if (toolName === "task" && Array.isArray(record.tasks)) {
+		// Subagents always run with tools.approvalMode: auto (see executor.ts createSubagentSettings),
+		// so this prompt is the user's only chokepoint on what the subagent is being told to do.
+		if (typeof record.agent === "string") parts.push(`Agent: ${record.agent}`);
+		const tasks = record.tasks as unknown[];
+		const first = asRecord(tasks[0]);
+		if (first) {
+			if (typeof first.id === "string") parts.push(`Task: ${first.id}`);
+			if (typeof first.assignment === "string") {
+				parts.push(`Assignment: ${truncateForPrompt(first.assignment)}`);
+			}
+		}
+		if (tasks.length > 1) parts.push(`(+${tasks.length - 1} more task${tasks.length > 2 ? "s" : ""})`);
+	} else if (toolName === "ast_edit" && Array.isArray(record.ops)) {
+		const ops = record.ops as unknown[];
+		const first = asRecord(ops[0]);
+		if (first && typeof first.pat === "string") {
+			parts.push(`Pattern: ${truncateForPrompt(first.pat)}`);
+			if (typeof first.out === "string") parts.push(`Replacement: ${truncateForPrompt(first.out)}`);
+		}
+		if (Array.isArray(record.paths) && record.paths.length > 0) {
+			parts.push(`Paths: ${(record.paths as unknown[]).slice(0, 3).join(", ")}`);
+		}
+		if (ops.length > 1) parts.push(`(+${ops.length - 1} more op${ops.length > 2 ? "s" : ""})`);
+	} else if (toolName === "browser" && typeof record.action === "string") {
+		parts.push(`Action: ${record.action}`);
+		if (typeof record.name === "string") parts.push(`Tab: ${record.name}`);
+		if (typeof record.url === "string") parts.push(`URL: ${record.url}`);
+		if (typeof record.code === "string") parts.push(`Code: ${truncateForPrompt(record.code)}`);
 	}
 
 	return parts.join("\n");

@@ -16,6 +16,8 @@ The CLI flag `--auto-approve` (alias `--yolo`) always wins, regardless of mode.
 
 > **Common pitfall:** setting `tools.approval.bash: prompt` without setting `tools.approvalMode: custom` is a silent no-op. The default `auto` mode skips the approval layer wholesale.
 
+> **⚠ Subagent caveat:** the `task` tool spawns a subagent that always runs with `tools.approvalMode: auto` because it has no UI to prompt against. Anything `task` is asked to do — including `bash`, `write`, `eval` — runs unattended once the parent `task` call is approved. The single approval prompt on `task` is the chokepoint; the prompt now shows the agent id and assignment so you can decide what you're authorizing. See [Subagents](#subagents) below.
+
 ### Built-in defaults (mode `prompt` / `custom`)
 
 - **Read-only tools** (read, find, search, ast_grep, web_search, recall, inspect_image, job) are auto-allowed.
