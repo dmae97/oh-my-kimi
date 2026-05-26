@@ -396,6 +396,7 @@ type CalculatorParams = z.infer<typeof calculatorSchema>;
  */
 export class CalculatorTool implements AgentTool<typeof calculatorSchema, CalculatorToolDetails> {
 	readonly name = "calc";
+	readonly approval = "read" as const;
 	readonly label = "Calc";
 	readonly summary = "Evaluate a mathematical expression";
 	readonly loadMode = "discoverable";

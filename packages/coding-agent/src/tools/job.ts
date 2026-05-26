@@ -67,6 +67,7 @@ export interface JobToolDetails {
 
 export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 	readonly name = "job";
+	readonly approval = "read" as const;
 	readonly label = "Job";
 	readonly summary = "Manage long-running background jobs (async bash/python)";
 	readonly description: string;

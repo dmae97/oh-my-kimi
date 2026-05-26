@@ -99,6 +99,7 @@ const MAX_SCHEMA_RETRIES = 3;
 
 export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 	readonly name = "yield";
+	readonly approval = "read" as const;
 	readonly label = "Submit Result";
 	readonly description =
 		"Finish the task with structured JSON output. Call exactly once at the end of the task.\n\n" +

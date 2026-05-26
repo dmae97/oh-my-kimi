@@ -14,6 +14,7 @@ export type HindsightReflectParams = z.infer<typeof hindsightReflectSchema>;
 
 export class HindsightReflectTool implements AgentTool<typeof hindsightReflectSchema> {
 	readonly name = "reflect";
+	readonly approval = "read" as const;
 	readonly label = "Reflect";
 	readonly description = reflectDescription;
 	readonly parameters = hindsightReflectSchema;

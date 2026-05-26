@@ -180,6 +180,7 @@ function renderFallbackResult(text: string, theme: Theme): Component {
  */
 export class SearchToolBm25Tool implements AgentTool<typeof searchToolBm25Schema, SearchToolBm25Details> {
 	readonly name = "search_tool_bm25";
+	readonly approval = "read" as const;
 	readonly label = "SearchTools";
 	readonly loadMode = "essential";
 	get description(): string {

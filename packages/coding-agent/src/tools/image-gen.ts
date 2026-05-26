@@ -901,6 +901,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 	name: "generate_image",
 	label: "GenerateImage",
 	strict: false,
+	approval: "write",
 	description: prompt.render(imageGenDescription),
 	parameters: imageGenSchema,
 	async execute(_toolCallId, params, _onUpdate, ctx, signal) {

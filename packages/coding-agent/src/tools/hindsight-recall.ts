@@ -13,6 +13,7 @@ export type HindsightRecallParams = z.infer<typeof hindsightRecallSchema>;
 
 export class HindsightRecallTool implements AgentTool<typeof hindsightRecallSchema> {
 	readonly name = "recall";
+	readonly approval = "read" as const;
 	readonly label = "Recall";
 	readonly description = recallDescription;
 	readonly parameters = hindsightRecallSchema;

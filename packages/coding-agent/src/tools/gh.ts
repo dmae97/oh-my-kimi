@@ -2,7 +2,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	ToolApprovalDecision,
+} from "@oh-my-pi/pi-agent-core";
 
 import { getWorktreeDir, hashPath, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
@@ -196,6 +202,15 @@ const RUN_URL_PATTERN = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/actions\/runs\/
 const RUN_SUCCESS_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 const RUN_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
 const JOB_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required"]);
+const GITHUB_READONLY_OPS: ReadonlySet<string> = new Set([
+	"repo_view",
+	"search_issues",
+	"search_prs",
+	"search_code",
+	"search_commits",
+	"search_repos",
+	"run_watch",
+]);
 
 const githubSchema = z
 	.object({
@@ -2344,6 +2359,11 @@ function buildTextResult(
 
 export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails> {
 	readonly name = "github";
+	readonly approval = (args: unknown): ToolApprovalDecision => {
+		const rawOp = (args as Partial<GithubInput>).op;
+		const op = typeof rawOp === "string" ? rawOp : "";
+		return GITHUB_READONLY_OPS.has(op) ? "read" : "exec";
+	};
 	readonly summary = "Interact with GitHub issues, pull requests, and repositories";
 	readonly loadMode = "discoverable";
 	readonly label = "GitHub";

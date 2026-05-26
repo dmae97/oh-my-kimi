@@ -160,6 +160,7 @@ export async function runResolveInvocation(
 
 export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolDetails> {
 	readonly name = "resolve";
+	readonly approval = "read" as const;
 	readonly label = "Resolve";
 	readonly hidden = true;
 	readonly description: string;

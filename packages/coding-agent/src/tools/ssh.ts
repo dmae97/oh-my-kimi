@@ -16,6 +16,7 @@ import { executeSSH } from "../ssh/ssh-executor";
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import type { ToolSession } from ".";
+import { truncateForPrompt } from "./approval";
 import { formatStyledTruncationWarning, type OutputMeta, stripOutputNotice } from "./output-meta";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -120,6 +121,13 @@ type SshToolParams = z.infer<typeof sshSchema>;
 
 export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 	readonly name = "ssh";
+	readonly approval = "exec" as const;
+	readonly formatApprovalDetails = (args: unknown): string[] => {
+		const params = args as Partial<SshToolParams>;
+		const host = typeof params.host === "string" ? params.host : "(missing)";
+		const command = typeof params.command === "string" ? params.command : "(missing)";
+		return [`Host: ${truncateForPrompt(host)}`, `Command: ${truncateForPrompt(command)}`];
+	};
 	readonly summary = "Execute a command on a remote host over SSH";
 	readonly loadMode = "discoverable";
 	readonly label = "SSH";

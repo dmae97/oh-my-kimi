@@ -18,6 +18,7 @@ const hindsightRetainSchema = z.object({
 export type HindsightRetainParams = z.infer<typeof hindsightRetainSchema>;
 export class HindsightRetainTool implements AgentTool<typeof hindsightRetainSchema> {
 	readonly name = "retain";
+	readonly approval = "read" as const;
 	readonly label = "Retain";
 	readonly description = retainDescription;
 	readonly parameters = hindsightRetainSchema;

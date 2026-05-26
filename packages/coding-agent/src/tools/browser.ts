@@ -3,6 +3,7 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import browserDescription from "../prompts/tools/browser.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
+import { truncateForPrompt } from "./approval";
 import { acquireBrowser, type BrowserHandle, type BrowserKind, type BrowserKindTag } from "./browser/registry";
 import type { Observation, ScreenshotResult } from "./browser/tab-protocol";
 import { acquireTab, dropHeadlessTabs, getTab, releaseAllTabs, releaseTab, runInTab } from "./browser/tab-supervisor";
@@ -87,6 +88,20 @@ function resolveBrowserKind(params: BrowserParams, session: ToolSession): Browse
  */
 export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolDetails> {
 	readonly name = "browser";
+	readonly approval = "exec" as const;
+	readonly formatApprovalDetails = (args: unknown): string[] => {
+		const params = args as Partial<BrowserParams>;
+		const lines = [`Action: ${typeof params.action === "string" ? params.action : "(missing)"}`];
+		const tabName = typeof params.name === "string" ? params.name : DEFAULT_TAB_NAME;
+		lines.push(`Tab: ${truncateForPrompt(tabName)}`);
+		if (typeof params.url === "string" && params.url.length > 0) {
+			lines.push(`URL: ${truncateForPrompt(params.url)}`);
+		}
+		if (typeof params.code === "string" && params.code.length > 0) {
+			lines.push(`Code:\n${truncateForPrompt(params.code)}`);
+		}
+		return lines;
+	};
 	readonly label = "Browser";
 	readonly loadMode = "discoverable";
 	readonly summary = "Control a headless browser to navigate and interact with web pages";

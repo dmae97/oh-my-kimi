@@ -718,6 +718,7 @@ interface ResolvedSqliteReadPath {
  */
 export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	readonly name = "read";
+	readonly approval = "read" as const;
 	readonly label = "Read";
 	readonly loadMode = "essential";
 	readonly description: string;

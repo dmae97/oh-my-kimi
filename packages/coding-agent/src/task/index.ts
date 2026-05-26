@@ -27,6 +27,7 @@ import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" wit
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
+import { truncateForPrompt } from "../tools/approval";
 import { formatBytes, formatDuration } from "../tools/render-utils";
 import {
 	type AgentDefinition,
@@ -214,6 +215,24 @@ function validateTaskModeParams(simpleMode: TaskSimpleMode, params: TaskParams):
  */
 export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetails, Theme> {
 	readonly name = "task";
+	readonly approval = "exec" as const;
+	readonly formatApprovalDetails = (args: unknown): string[] => {
+		const params = args as Partial<TaskParams>;
+		const lines: string[] = [];
+		if (typeof params.agent === "string") {
+			lines.push(`Agent: ${truncateForPrompt(params.agent)}`);
+		}
+		const tasks = Array.isArray(params.tasks) ? params.tasks : [];
+		const firstTask = tasks[0];
+		if (firstTask) {
+			lines.push(`Task: ${truncateForPrompt(firstTask.id)}`);
+			lines.push(`Assignment:\n${truncateForPrompt(firstTask.assignment)}`);
+			if (tasks.length > 1) {
+				lines.push(`+${tasks.length - 1} more task${tasks.length === 2 ? "" : "s"}`);
+			}
+		}
+		return lines;
+	};
 	readonly label = "Task";
 	readonly summary = "Spawn a subagent to complete a parallel task";
 	readonly strict = true;

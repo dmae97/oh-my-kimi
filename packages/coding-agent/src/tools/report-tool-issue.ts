@@ -466,6 +466,7 @@ export function createReportToolIssueTool(session: ToolSession, activeBuiltinNam
 		name: "report_tool_issue",
 		label: "Report Tool Issue",
 		strict: false,
+		approval: "write",
 		description: "Report unexpected tool behavior for automated QA tracking.",
 		parameters: buildReportToolIssueParams(activeBuiltinNames),
 		intent: "omit",

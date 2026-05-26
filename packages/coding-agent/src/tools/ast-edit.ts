@@ -12,10 +12,11 @@ import astEditDescription from "../prompts/tools/ast-edit.md" with { type: "text
 import { Ellipsis, fileHyperlink, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
+import { truncateForPrompt } from "./approval";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { formatGroupedFiles } from "./grouped-file-output";
 import type { OutputMeta } from "./output-meta";
-import { resolveToolSearchScope } from "./path-utils";
+import { isInternalUrlPath, resolveToolSearchScope } from "./path-utils";
 import {
 	appendParseErrorsBulletList,
 	capParseErrors,
@@ -162,6 +163,29 @@ export interface AstEditToolDetails {
 
 export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolDetails> {
 	readonly name = "ast_edit";
+	readonly approval = (args: unknown) => {
+		const paths = Array.isArray((args as Partial<z.infer<typeof astEditSchema>>).paths)
+			? ((args as Partial<z.infer<typeof astEditSchema>>).paths as string[])
+			: [];
+		return paths.length > 0 && paths.every(path => isInternalUrlPath(path)) ? "read" : "write";
+	};
+	readonly formatApprovalDetails = (args: unknown): string[] => {
+		const params = args as Partial<z.infer<typeof astEditSchema>>;
+		const lines: string[] = [];
+		const ops = Array.isArray(params.ops) ? params.ops : [];
+		const firstOp = ops[0];
+		if (firstOp) {
+			lines.push(`Pattern: ${truncateForPrompt(firstOp.pat)}`);
+			lines.push(`Replacement: ${truncateForPrompt(firstOp.out)}`);
+			if (ops.length > 1) {
+				lines.push(`+${ops.length - 1} more op${ops.length === 2 ? "" : "s"}`);
+			}
+		}
+		if (Array.isArray(params.paths) && params.paths.length > 0) {
+			lines.push(`Paths: ${truncateForPrompt(params.paths.join(", "))}`);
+		}
+		return lines;
+	};
 	readonly label = "AST Edit";
 	readonly summary = "Perform AST-aware code edits (structural refactoring)";
 	readonly description: string;

@@ -4,7 +4,13 @@
  * Custom tools are TypeScript modules that define additional tools for the agent.
  * They can provide custom rendering for tool calls and results in the TUI.
  */
-import type { AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	ToolApproval,
+	ToolApprovalDecision,
+	ToolTier,
+} from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model, Static, TSchema } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -23,7 +29,7 @@ export type CustomToolUIContext = HookUIContext;
 // Re-export for backward compatibility
 export type { ExecOptions, ExecResult } from "../../exec/exec";
 /** Re-export for custom tools to use in execute signature */
-export type { AgentToolResult, AgentToolUpdateCallback };
+export type { AgentToolResult, AgentToolUpdateCallback, ToolApproval, ToolApprovalDecision, ToolTier };
 
 /** Pending action entry consumed by the hidden resolve tool */
 export interface CustomToolPendingAction {
@@ -193,6 +199,12 @@ export interface CustomTool<TParams extends TSchema = TSchema, TDetails = any> {
 	mcpServerName?: string;
 	/** Original MCP tool name for discovery/search metadata. */
 	mcpToolName?: string;
+
+	/** Capability tier declaration used by approval gates. Omitted means "exec". */
+	approval?: ToolApproval;
+
+	/** Lines appended after the standard approval prompt header. */
+	formatApprovalDetails?: (args: unknown) => string | string[] | undefined;
 	/**
 	 * Execute the tool.
 	 * @param toolCallId - Unique ID for this tool call

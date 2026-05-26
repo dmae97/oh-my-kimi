@@ -493,6 +493,7 @@ function formatSummary(phases: TodoPhase[], errors: string[]): string {
 
 export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWriteToolDetails> {
 	readonly name = "todo_write";
+	readonly approval = "read" as const;
 	readonly label = "Todo Write";
 	readonly summary = "Write a structured todo list to track progress within a session";
 	readonly description: string;

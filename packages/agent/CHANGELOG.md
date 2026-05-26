@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `approval` support to `AgentTool` declarations with the new `ToolTier` and `ToolApproval` APIs, allowing tools to declare capability tiers (`read`, `write`, or `exec`) and optional override/reason metadata for approval gating
+- Added `formatApprovalDetails` on `AgentTool` to append custom detail text or lines to approval prompts
+- Added exported `ToolTier` and `ToolApproval` type aliases for tool approval declarations
 
 ### Fixed
 

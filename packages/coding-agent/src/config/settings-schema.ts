@@ -1797,42 +1797,40 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "Tool Approval Policies",
 			description:
-				"Per-tool approval policies. Set to 'allow' to auto-approve, 'prompt' to require confirmation, or 'deny' to block. Use '_default' for fallback policy for unknown tools.",
+				"Per-tool approval policies. Set to 'allow' to auto-approve, 'prompt' to require confirmation, or 'deny' to block. Overrides are honored in every approval mode.",
 		},
 	},
 
 	// Default tool approval mode (interaction tab, but governs the tool wrapper).
-	//   "auto"   — auto-approves every tool call (yolo); matches --auto-approve / --yolo.
-	//   "prompt" — uses built-in per-tool defaults (read/find/search auto-allow; bash/edit/write/eval prompt).
-	//              Ignores user `tools.approval.<tool>` overrides.
-	//   "custom" — your `tools.approval.<tool>` config wins. Built-in defaults only apply to tools you
-	//              haven't configured. Critical safety patterns (e.g. `rm -rf /`) still prompt.
+	//   "always-ask" — auto-approves read-tier tools only; prompts for write/exec.
+	//   "write"      — auto-approves read and write-tier tools; prompts for exec.
+	//   "yolo"       — auto-approves every tier unless a tool declares `override: true`.
 	"tools.approvalMode": {
 		type: "enum",
-		values: ["auto", "prompt", "custom"] as const,
-		default: "auto",
+		values: ["always-ask", "write", "yolo"] as const,
+		default: "yolo",
 		ui: {
 			tab: "interaction",
 			label: "Tool Approval",
 			description:
-				"Default approval behaviour for tool calls. 'Auto-approve' skips every prompt (yolo). 'Prompt' uses built-in defaults only. 'Custom' uses your `tools.approval` config (your settings win over built-in defaults).",
+				"Default approval behaviour for tool calls. 'Always ask' auto-approves read-only tools only. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves every tier unless a tool declares a safety override. `tools.approval.<tool>` overrides are honored in every mode.",
 			options: [
 				{
-					value: "auto",
-					label: "Auto-approve (yolo)",
-					description: "Skip every approval prompt — the agent may run any tool unattended.",
+					value: "always-ask",
+					label: "Always ask",
+					description: "Auto-approve read-only tools; require confirmation for write and exec tools.",
 				},
 				{
-					value: "prompt",
-					label: "Prompt (built-in defaults)",
+					value: "write",
+					label: "Write",
 					description:
-						"Use built-in per-tool defaults. Read-only tools auto-allow; destructive tools (bash, edit, write, eval, …) require confirmation. `tools.approval.<tool>` overrides in config.yml are ignored.",
+						"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, task, recipe, and ssh.",
 				},
 				{
-					value: "custom",
-					label: "Custom (use tools.approval config)",
+					value: "yolo",
+					label: "Yolo",
 					description:
-						"Your `tools.approval.<tool>: allow | deny | prompt` config wins. Built-in defaults are only used as a fallback for tools you haven't configured. Critical safety patterns (e.g. `rm -rf /`, fork bombs) still prompt even when the tool is allowed.",
+						"Auto-approve read, write, and exec tools. Safety overrides declared by tools (for example critical bash patterns) still require confirmation.",
 				},
 			],
 		},

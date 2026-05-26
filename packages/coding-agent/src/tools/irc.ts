@@ -54,6 +54,7 @@ export interface IrcDetails {
 
 export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 	readonly name = "irc";
+	readonly approval = "read" as const;
 	readonly label = "IRC";
 	readonly summary = "Send and receive messages between agents over IRC-like channels";
 	readonly description: string;

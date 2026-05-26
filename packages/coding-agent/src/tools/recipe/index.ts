@@ -27,6 +27,7 @@ type RecipeRenderResult = {
 export class RecipeTool implements AgentTool<typeof recipeSchema, BashToolDetails, Theme> {
 	readonly name = "recipe";
 	readonly label = "Run";
+	readonly approval = "exec" as const;
 	readonly description: string;
 	readonly parameters = recipeSchema;
 	readonly strict = true;

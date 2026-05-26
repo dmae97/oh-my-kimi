@@ -5,7 +5,7 @@ import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-m
 import type { ImageContent, Static, TextContent, TSchema } from "@oh-my-pi/pi-ai";
 import type { Settings } from "../../config/settings";
 import type { Theme } from "../../modes/theme/theme";
-import { requiresApproval } from "../../tools/approval";
+import { type ApprovalMode, formatApprovalPrompt, requiresApproval } from "../../tools/approval";
 import { applyToolProxy } from "../tool-proxy";
 import type { ExtensionRunner } from "./runner";
 import type { RegisteredTool, ToolCallEventResult } from "./types";
@@ -111,46 +111,35 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		context?: AgentToolContext,
 	) {
 		// 1. Check approval policy (before extension handlers).
-		// Resolution:
-		//   - CLI `--auto-approve` always wins (covers automation/CI).
-		//   - `tools.approvalMode = "auto"` (default) → skip approval entirely; `tools.approval` is ignored.
-		//   - `tools.approvalMode = "prompt"` → built-in per-tool defaults only; `tools.approval` is ignored.
-		//   - `tools.approvalMode = "custom"` → user `tools.approval.<tool>` config wins; built-in defaults
-		//     fall back only for tools the user hasn't configured. Critical-pattern overrides still apply.
+		// CLI `--auto-approve` / `--yolo` forces yolo mode for the session, but
+		// tool-level safety overrides still prompt. User `tools.approval.<tool>`
+		// policies are honored in every mode.
 		const cliAutoApprove = context?.autoApprove === true;
 		const settings: Settings | undefined = context?.settings;
-		const approvalMode = (settings?.get("tools.approvalMode") ?? "auto") as "auto" | "prompt" | "custom";
-		const autoApprove = cliAutoApprove || approvalMode === "auto";
-		const userPolicies =
-			approvalMode === "custom" ? ((settings?.get("tools.approval") ?? {}) as Record<string, unknown>) : {};
+		const configuredMode = (settings?.get("tools.approvalMode") ?? "yolo") as ApprovalMode;
+		const approvalMode: ApprovalMode = cliAutoApprove ? "yolo" : configuredMode;
+		const userPolicies = (settings?.get("tools.approval") ?? {}) as Record<string, unknown>;
+		const approvalCheck = requiresApproval(this.tool, params, approvalMode, userPolicies);
 
-		if (!autoApprove) {
-			const approvalCheck = requiresApproval(this.tool.name, params, userPolicies);
+		if (approvalCheck.required) {
+			// Check if UI is available
+			if (!this.runner.hasUI()) {
+				throw new Error(
+					`Tool "${this.tool.name}" requires approval but no interactive UI available.\n` +
+						`Options:\n` +
+						`  1. Set tools.approvalMode: yolo in /settings\n` +
+						`  2. Add tools.approval.${this.tool.name}: allow to config\n` +
+						`  3. Use an interactive UI to approve the tool call`,
+				);
+			}
 
-			if (approvalCheck.required) {
-				// Check if UI is available
-				if (!this.runner.hasUI()) {
-					throw new Error(
-						`Tool "${this.tool.name}" requires approval but no interactive UI available.\n` +
-							`Options:\n` +
-							`  1. Use --auto-approve flag\n` +
-							`  2. Set tools.approvalMode: auto in /settings (default)\n` +
-							`  3. Set tools.approvalMode: custom and add tools.approval.${this.tool.name}: allow to config`,
-					);
-				}
-
-				// Approval selector. The in-progress tool-call cell rendered above is the
-				// source of truth for *what* is being approved (args, command, diff). The
-				// selector replaces the editor with Approve/Deny choices; the reason (if
-				// any — e.g. "Critical bash pattern detected") surfaces as helpText so the
-				// user knows *why* the prompt fired without duplicating the cell content.
-				const uiContext = this.runner.getUIContext();
-				const choice = await uiContext.select(`Approve ${this.tool.name}?`, ["Approve", "Deny"], {
-					helpText: approvalCheck.reason,
-				});
-				if (choice !== "Approve") {
-					throw new Error(`Tool call denied by user: ${this.tool.name}`);
-				}
+			const uiContext = this.runner.getUIContext();
+			const choice = await uiContext.select(formatApprovalPrompt(this.tool, params, approvalCheck.reason), [
+				"Approve",
+				"Deny",
+			]);
+			if (choice !== "Approve") {
+				throw new Error(`Tool call denied by user: ${this.tool.name}`);
 			}
 		}
 

@@ -33,6 +33,7 @@ export interface InspectImageToolDetails {
 
 export class InspectImageTool implements AgentTool<typeof inspectImageSchema, InspectImageToolDetails> {
 	readonly name = "inspect_image";
+	readonly approval = "read" as const;
 	readonly label = "InspectImage";
 	readonly loadMode = "discoverable";
 	readonly summary = "Describe or analyze an image file";

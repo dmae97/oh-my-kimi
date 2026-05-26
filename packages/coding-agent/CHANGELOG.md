@@ -4,19 +4,25 @@
 
 ### Added
 
+- Added per-tool approval declarations so each built-in, custom, or extension tool can declare its capability tier and approval prompt details.
 - Added `OMP_MCP_TIMEOUT_MS` environment variable to override MCP client request timeout for every server (in milliseconds); set to `0` to disable client-side timeouts. Invalid (negative or non-numeric) values are ignored with a warning and fall back to the per-server timeout or default 30s ([#1415](https://github.com/can1357/oh-my-pi/pull/1415)).
-- Added interactive provider selection to `omp auth-broker logout` when no provider argument is supplied
-- Added `--json` flag to `omp auth-broker list` for machine-readable output
-- Added `omp auth-broker list` to enumerate supported OAuth providers (replaces `bunx @oh-my-pi/pi-ai list`).
-- Added interactive provider selection to `omp auth-broker login` and `omp auth-broker logout` when no provider argument is supplied (replaces `bunx @oh-my-pi/pi-ai login` / `logout` interactive flows).
+- Added `omp auth-broker list` (with `--json` for machine-readable output) to enumerate supported OAuth providers, replacing `bunx @oh-my-pi/pi-ai list`.
+- Added interactive provider selection to `omp auth-broker login` and `omp auth-broker logout` when invoked without a provider argument (replacing the equivalent `bunx @oh-my-pi/pi-ai login`/`logout` flows). The logout picker is sourced from stored credentials so it only lists providers the user is actually signed in to.
+- Added directory matches to the `find` tool: glob searches now return directories alongside files, with directory hits emitted with a trailing `/` marker. `find` for `**/tests` no longer requires a follow-up `read` to surface a directory hit; tool prompt and output docs were updated to reflect that paths may be either kind.
+- Added the RFC 8414 §3.1 path-ful issuer form (`/.well-known/oauth-authorization-server<issuer-path>`) as a third candidate in MCP OAuth discovery, after origin-root and path-prefixed well-known URLs, so deployments that publish authorization-server metadata at the path-ful location resolve correctly. Single-segment authorization URLs (e.g. `https://gateway/my-service`) are now treated as the gateway prefix instead of being dropped back to the origin root.
 
 ### Changed
 
-- Changed tool-approval prompts to use an explicit `Approve`/`Deny` selector and show the denial reason as contextual help text
-- Changed `omp auth-broker login` to support interactive provider selection when invoked without a provider argument
-- Changed `omp auth-broker logout` to support interactive provider selection from stored credentials when invoked without a provider argument
-- Changed `omp auth-broker login` to drive the per-provider OAuth/API-key flow in-process via `AuthStorage.login()` instead of spawning the `pi-ai` CLI subprocess. The pi-ai bin is being removed; the same login surface now lives entirely inside `omp`.
-- Changed default per-line truncation cap for search/grep output (`DEFAULT_MAX_COLUMN`) from `1024` to `512` characters.
+- Changed tool-approval prompts to use an explicit `Approve`/`Deny` selector and surface the denial reason as contextual help text instead of a bare confirm/cancel toggle.
+- Changed approval safety overrides to prompt even in `yolo` / `--auto-approve` sessions, so critical tool-declared patterns no longer run unattended.
+- Changed `omp auth-broker login` to drive the per-provider OAuth/API-key flow in-process via `AuthStorage.login()` instead of spawning the `pi-ai` CLI subprocess. The `pi-ai` bin is being removed; the same login surface now lives entirely inside `omp`.
+- Changed the default per-line truncation cap for search/grep output (`DEFAULT_MAX_COLUMN`) from `1024` to `512` characters to keep wide minified single-line bundles from blowing out the model's context.
+
+### Fixed
+
+- Fixed the agent loop and bash executor busy-spinning when scheduler waits returned early. napi `uv_async_send` callbacks can wake the event loop after only ~1–2 ms even when the caller asked for a longer sleep, so `yieldIfDue()` now compensates by retrying `Bun.sleep()` until the requested wall-clock duration has elapsed, and the bash executor wraps its `runPromise`/timeout/abort race in an `ExponentialYield` (20 ms → 10 s) so long-running commands stop hot-looping on the race. Yields are additionally throttled by a module-level 50 ms gate, and losing timers in the race are aborted via `AbortSignal` so they don't keep firing after a winner is selected ([#1396](https://github.com/can1357/oh-my-pi/pull/1396) by [@hezhiyang2000](https://github.com/hezhiyang2000), closes [#1384](https://github.com/can1357/oh-my-pi/issues/1384)).
+- Fixed streaming edit previews going blank for inline-payload ops. `LINE↓payload` / `A-B:payload` are valid single-line writes, but the natural-order preview was skipping the entire op token until a newline arrived — so the first character the model typed after the sigil only appeared after the next line ended, and the renderer would fall back to rendering the raw `A-B: bla bla bla` input. Inline-body content on `op-insert` and `op-replace` tokens is now emitted as a `+payload` line on the same op tick.
+- Fixed `/usage` and the status-line reset countdown rendering stale negative deltas after a Codex window had elapsed: Codex keeps reporting the prior window's `reset_at` until a new request opens a fresh window, which turned the `resets in …` suffix into a meaningless negative duration. `formatDuration` now clamps non-positive, NaN, and infinite inputs to `0ms`, and both renderers suppress the `resets in …` suffix entirely once `resetsAt <= now`.
 
 ## [15.4.3] - 2026-05-26
 

@@ -20,6 +20,8 @@ import hashlineDescription from "../prompts/tools/hashline.md" with { type: "tex
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
 import type { ToolSession } from "../tools";
+import { truncateForPrompt } from "../tools/approval";
+import { isInternalUrlPath } from "../tools/path-utils";
 import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit-mode";
 import { type ApplyPatchParams, applyPatchSchema, expandApplyPatchToEntries } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
@@ -266,7 +268,31 @@ async function executeSinglePathEntries(
 	};
 }
 
+function extractApprovalPath(args: unknown): string {
+	const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+	const targetPath = record.path;
+	if (typeof targetPath === "string" && targetPath.length > 0) {
+		return targetPath;
+	}
+
+	const input = typeof record.input === "string" ? record.input : undefined;
+	if (!input) return "(unknown)";
+
+	const hashlineMatch = /^(?:¶|§|@)([^\s#]+)/m.exec(input);
+	if (hashlineMatch?.[1]) return hashlineMatch[1];
+
+	const applyPatchMatch = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/m.exec(input);
+	return applyPatchMatch?.[1]?.trim() || "(unknown)";
+}
+
 export class EditTool implements AgentTool<TInput> {
+	readonly approval = (args: unknown) => {
+		const targetPath = extractApprovalPath(args);
+		return targetPath !== "(unknown)" && isInternalUrlPath(targetPath) ? "read" : "write";
+	};
+	readonly formatApprovalDetails = (args: unknown): string[] => [
+		`File: ${truncateForPrompt(extractApprovalPath(args))}`,
+	];
 	readonly name = "edit";
 	readonly label = "Edit";
 	readonly loadMode = "essential";

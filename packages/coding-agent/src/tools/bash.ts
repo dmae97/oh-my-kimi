@@ -1,5 +1,11 @@
 import * as fs from "node:fs";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	ToolApprovalDecision,
+} from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { ImageProtocol, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
@@ -17,6 +23,7 @@ import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { getSixelLineMask } from "../utils/sixel";
 import type { ToolSession } from ".";
+import { truncateForPrompt } from "./approval";
 import { applyBashFixups } from "./bash-command-fixup";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
@@ -33,6 +40,54 @@ export const BASH_DEFAULT_PREVIEW_LINES = 10;
 
 const BASH_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS = 60_000;
+
+/**
+ * Bash patterns that force an approval prompt even in yolo mode.
+ *
+ * Kept intentionally tight — the cost of a false positive is one extra prompt;
+ * the cost of a false negative is data loss or a compromised host. New patterns
+ * should target shapes that are virtually never legitimate in automation.
+ */
+export const CRITICAL_BASH_PATTERNS = [
+	// Recursive destruction.
+	/\brm\s+-[a-z]*[rRfF][a-z]*\s+\//i, // rm -rf /, rm -fr /, rm -r /, rm -f /…
+	/\bsudo\s+rm\b/i, // any `sudo rm`.
+	/\bchmod\s+-R\s+[0-7]+\s+\//i, // `chmod -R 777 /`.
+	/\bchmod\s+-R\s+[ugoa+\-=rwxXst,]+\s+\//, // `chmod -R u+x /`, `chmod -R u+rwx,o+w /etc` (symbolic mode, root target).
+	/\bchown\s+-R\s+\S+\s+\//i, // `chown -R user /`.
+
+	// Fork bomb (a few common spacings).
+	/:\(\)\s*\{\s*:\s*\|\s*:/i,
+
+	// Disk / filesystem destruction.
+	/>\s*\/dev\/sd[a-z]/i, // write to disk device.
+	/\bmkfs(\.|\b)/i, // format filesystem.
+	/\bdd\s+if=.+of=\/dev\//i, // dd to a device.
+	/\bshred\s+\/dev\//i,
+	/\bcryptsetup\b/i,
+
+	// System-config destruction.
+	/>\s*\/etc\/(?:passwd|shadow|sudoers)\b/i,
+	/\btee\s+(?:-a\s+)?\/etc\/(?:passwd|shadow|sudoers)\b/i, // `tee /etc/passwd`, `tee -a /etc/sudoers`.
+
+	// Remote-fetch-then-execute (curl/wget piped to a shell or process-subbed).
+	/\b(?:curl|wget|fetch)\b[^|]*\|\s*(?:bash|sh|zsh|fish)\b/i,
+	// Process-sub variants — `bash <(curl …)`, `source <(curl …)`, `. <(curl …)`. `.` and `source` are
+	// anchored to a command boundary so `find . -name` and similar don't false-positive.
+	/(?:^|[\s;&|(])(?:bash|sh|zsh|source|\.)\s+<\(\s*(?:curl|wget|fetch)\b/i,
+	// `eval "$(curl …)"` / `eval $(curl …)` / `eval \`curl …\``.
+	/\beval\s+["'`]?\$\(\s*(?:curl|wget|fetch)\b|\beval\s+`\s*(?:curl|wget|fetch)\b/i,
+
+	// Process/host control.
+	/\bkill\s+-9\s+1\b/, // kill PID 1.
+	// Process/host control — must sit at command position so `npm run reboot-tests`
+	// or `echo 'shutdown the queue'` don't false-positive.
+	/(?:^|[\s;&|(])(?:shutdown|poweroff|reboot|halt)(?:\s|$|[;|&])/i,
+	/(?:^|[\s;&|(])init\s+0\b/i,
+
+	// Network-shell exfil.
+	/\bnc\b[^|;]*\s-[a-zA-Z]*[ec][a-zA-Z]*\s/i, // `nc -e` / `nc -c`.
+] as const;
 
 async function saveBashOriginalArtifact(session: ToolSession, originalText: string): Promise<string | undefined> {
 	try {
@@ -224,6 +279,19 @@ function formatTimeoutClampNotice(requestedTimeoutSec: number, effectiveTimeoutS
  */
 export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	readonly name = "bash";
+	readonly approval = (args: unknown): ToolApprovalDecision => {
+		const rawCommand = (args as Partial<BashToolInput>).command;
+		const command = typeof rawCommand === "string" ? rawCommand : "";
+		if (command !== "" && CRITICAL_BASH_PATTERNS.some(pattern => pattern.test(command))) {
+			return { tier: "exec", override: true, reason: "Critical pattern detected" };
+		}
+		return "exec";
+	};
+	readonly formatApprovalDetails = (args: unknown): string[] => {
+		const rawCommand = (args as Partial<BashToolInput>).command;
+		const command = typeof rawCommand === "string" ? rawCommand : "(missing)";
+		return [`Command: ${truncateForPrompt(command)}`];
+	};
 	readonly label = "Bash";
 	readonly loadMode = "essential";
 	readonly description: string;

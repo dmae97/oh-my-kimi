@@ -1460,7 +1460,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// The runner is created unconditionally — even with zero extensions loaded — because the
 		// `ExtensionToolWrapper` installed below is the only place the per-tool approval gate runs.
 		// A conditional runner means the approval system silently disappears for users with no
-		// extensions, contradicting `tools.approvalMode: prompt | custom` settings without feedback.
+		// extensions, contradicting non-yolo `tools.approvalMode` settings without feedback.
 		// (Today `createAutoresearchExtension` is unconditionally pushed below, so this scenario
 		// is unreachable; the unconditional construction makes that invariant explicit instead of
 		// implicit, so a future change to make autoresearch optional cannot silently re-open the hole.)

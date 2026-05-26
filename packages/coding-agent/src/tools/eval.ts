@@ -15,6 +15,7 @@ import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
 import { resolveEvalBackends, type ToolSession } from ".";
+import { truncateForPrompt } from "./approval";
 import {
 	formatStyledTruncationWarning,
 	resolveOutputMaxColumns,
@@ -202,6 +203,20 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 
 export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly name = "eval";
+	readonly approval = "exec" as const;
+	readonly formatApprovalDetails = (args: unknown): string[] => {
+		const params = args as Partial<EvalToolParams>;
+		const cells = Array.isArray(params.cells) ? params.cells : [];
+		const firstCell = cells[0] as Partial<EvalCellInput> | undefined;
+		if (!firstCell) return [];
+		const language = typeof firstCell.language === "string" ? firstCell.language : "(missing)";
+		const code = typeof firstCell.code === "string" ? firstCell.code : "";
+		const lines = [`Language: ${language}`, `Code:\n${truncateForPrompt(code)}`];
+		if (cells.length > 1) {
+			lines.push(`+${cells.length - 1} more cell${cells.length === 2 ? "" : "s"}`);
+		}
+		return lines;
+	};
 	readonly summary = "Execute Python or JavaScript code in an in-process eval backend";
 	readonly loadMode = "discoverable";
 	readonly label = "Eval";

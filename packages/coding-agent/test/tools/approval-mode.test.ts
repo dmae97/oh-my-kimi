@@ -61,19 +61,19 @@ describe("tools.approvalMode setting", () => {
 					const code = (err as NodeJS.ErrnoException).code;
 					if (code !== "EBUSY" && code !== "ENOTEMPTY" && code !== "EPERM") throw err;
 					if (attempt === 4) break; // best-effort: OS will reclaim
-					await new Promise(resolve => setTimeout(resolve, 50 * (attempt + 1)));
+					await Bun.sleep(50 * (attempt + 1));
 				}
 			}
 		}
 	});
 
-	it("auto mode (default) bypasses approval", async () => {
+	it("yolo mode (default) bypasses approval for non-overriding tool calls", async () => {
 		const { tempDir, session, settings } = await makeSession();
 		tempDirs.push(tempDir);
 		try {
 			const bash = session.getToolByName("bash");
 			if (!bash) throw new Error("Expected bash tool");
-			const result = await bash.execute("auto", { command: "echo ok" }, undefined, undefined, {
+			const result = await bash.execute("yolo", { command: "echo ok" }, undefined, undefined, {
 				settings,
 			} as AgentToolContext);
 			expect(textOf(result)).toContain("ok");
@@ -82,16 +82,16 @@ describe("tools.approvalMode setting", () => {
 		}
 	});
 
-	it("prompt mode rejects destructive tools when no UI is available", async () => {
+	it("always-ask mode rejects exec tools when no UI is available", async () => {
 		const { tempDir, session, settings } = await makeSession({
-			"tools.approvalMode": "prompt",
+			"tools.approvalMode": "always-ask",
 		});
 		tempDirs.push(tempDir);
 		try {
 			const bash = session.getToolByName("bash");
 			if (!bash) throw new Error("Expected bash tool");
 			await expect(
-				bash.execute("prompt", { command: "echo blocked" }, undefined, undefined, {
+				bash.execute("always-ask", { command: "echo blocked" }, undefined, undefined, {
 					settings,
 				} as AgentToolContext),
 			).rejects.toThrow(/requires approval but no interactive UI available/);
@@ -100,47 +100,46 @@ describe("tools.approvalMode setting", () => {
 		}
 	});
 
-	it("prompt mode ignores tools.approval.<tool>: allow overrides", async () => {
+	it("per-tool allow overrides are honored in every mode", async () => {
 		const { tempDir, session, settings } = await makeSession({
-			"tools.approvalMode": "prompt",
+			"tools.approvalMode": "always-ask",
 			"tools.approval": { bash: "allow" },
 		});
 		tempDirs.push(tempDir);
 		try {
 			const bash = session.getToolByName("bash");
 			if (!bash) throw new Error("Expected bash tool");
-			await expect(
-				bash.execute("prompt-with-allow", { command: "echo still-blocked" }, undefined, undefined, {
-					settings,
-				} as AgentToolContext),
-			).rejects.toThrow(/requires approval but no interactive UI available/);
-		} finally {
-			await session.dispose();
-		}
-	});
-
-	it("custom mode honours tools.approval.<tool>: allow overrides", async () => {
-		const { tempDir, session, settings } = await makeSession({
-			"tools.approvalMode": "custom",
-			"tools.approval": { bash: "allow" },
-		});
-		tempDirs.push(tempDir);
-		try {
-			const bash = session.getToolByName("bash");
-			if (!bash) throw new Error("Expected bash tool");
-			const result = await bash.execute("custom-allow", { command: "echo custom" }, undefined, undefined, {
+			const result = await bash.execute("always-ask-allow", { command: "echo allowed" }, undefined, undefined, {
 				settings,
 			} as AgentToolContext);
-			expect(textOf(result)).toContain("custom");
+			expect(textOf(result)).toContain("allowed");
 		} finally {
 			await session.dispose();
 		}
 	});
 
-	it("custom mode falls back to built-in defaults for unconfigured tools", async () => {
+	it("per-tool prompt overrides can tighten yolo mode", async () => {
 		const { tempDir, session, settings } = await makeSession({
-			"tools.approvalMode": "custom",
-			// Empty config — bash should fall back to built-in "prompt".
+			"tools.approvalMode": "yolo",
+			"tools.approval": { bash: "prompt" },
+		});
+		tempDirs.push(tempDir);
+		try {
+			const bash = session.getToolByName("bash");
+			if (!bash) throw new Error("Expected bash tool");
+			await expect(
+				bash.execute("yolo-prompt", { command: "echo blocked" }, undefined, undefined, {
+					settings,
+				} as AgentToolContext),
+			).rejects.toThrow(/requires approval but no interactive UI available/);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("write mode still prompts exec-tier tools", async () => {
+		const { tempDir, session, settings } = await makeSession({
+			"tools.approvalMode": "write",
 			"tools.approval": {},
 		});
 		tempDirs.push(tempDir);
@@ -148,7 +147,7 @@ describe("tools.approvalMode setting", () => {
 			const bash = session.getToolByName("bash");
 			if (!bash) throw new Error("Expected bash tool");
 			await expect(
-				bash.execute("custom-default", { command: "echo unconfigured" }, undefined, undefined, {
+				bash.execute("write-mode", { command: "echo unconfigured" }, undefined, undefined, {
 					settings,
 				} as AgentToolContext),
 			).rejects.toThrow(/requires approval but no interactive UI available/);
@@ -157,9 +156,9 @@ describe("tools.approvalMode setting", () => {
 		}
 	});
 
-	it("custom mode keeps critical bash patterns prompting even when bash is user-allowed", async () => {
+	it("critical bash patterns prompt even in yolo mode when bash is user-allowed", async () => {
 		const { tempDir, session, settings } = await makeSession({
-			"tools.approvalMode": "custom",
+			"tools.approvalMode": "yolo",
 			"tools.approval": { bash: "allow" },
 		});
 		tempDirs.push(tempDir);
@@ -176,9 +175,9 @@ describe("tools.approvalMode setting", () => {
 		}
 	});
 
-	it("CLI --auto-approve wins over mode=prompt", async () => {
+	it("CLI --auto-approve forces yolo mode for non-overriding tool calls", async () => {
 		const { tempDir, session, settings } = await makeSession({
-			"tools.approvalMode": "prompt",
+			"tools.approvalMode": "always-ask",
 		});
 		tempDirs.push(tempDir);
 		try {
@@ -194,12 +193,31 @@ describe("tools.approvalMode setting", () => {
 		}
 	});
 
+	it("CLI --auto-approve does not bypass tool safety overrides", async () => {
+		const { tempDir, session, settings } = await makeSession({
+			"tools.approvalMode": "always-ask",
+		});
+		tempDirs.push(tempDir);
+		try {
+			const bash = session.getToolByName("bash");
+			if (!bash) throw new Error("Expected bash tool");
+			await expect(
+				bash.execute("cli-critical", { command: "rm -rf /" }, undefined, undefined, {
+					settings,
+					autoApprove: true,
+				} as AgentToolContext),
+			).rejects.toThrow(/requires approval but no interactive UI available/);
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("constructs an extensionRunner unconditionally so the approval gate is always installed", async () => {
 		// Regression lock for the architectural fix: the per-tool approval gate is implemented
 		// inside `ExtensionToolWrapper`, which is only attached when `session.extensionRunner` exists.
 		// Historically the runner was conditional on `extensionsResult.extensions.length > 0`, which
 		// meant the entire approval system silently disappeared for users with no extensions loaded —
-		// any `tools.approvalMode: prompt | custom` setting would be a no-op without feedback. The
+		// any non-yolo approval mode setting would be a no-op without feedback. The
 		// fix is to construct the runner unconditionally; this test makes that contract explicit so
 		// a future change to make the runner optional again cannot silently re-open the hole.
 		const { tempDir, session } = await makeSession();

@@ -100,7 +100,6 @@ function setByPath(obj: RawSettings, segments: string[], value: unknown): void {
 }
 
 const PATH_SCOPED_ARRAY_SETTINGS = new Set<SettingPath>(["enabledModels", "disabledProviders"]);
-
 type PathScopedStringArrayEntry = {
 	path?: unknown;
 	paths?: unknown;
@@ -218,6 +217,8 @@ export class Settings {
 			for (const [key, value] of Object.entries(options.overrides)) {
 				setByPath(this.#overrides, key.split("."), value);
 			}
+
+			this.#overrides = this.#migrateRawSettings(this.#overrides);
 		}
 	}
 
