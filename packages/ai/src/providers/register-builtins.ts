@@ -20,8 +20,8 @@ import type {
 	OptionsForApi,
 } from "../types";
 import { type AbortSourceTracker, createAbortSourceTracker } from "../utils/abort";
+import { iterateUntilAbort } from "../utils/abortable-iterator";
 import { AssistantMessageEventStream as EventStreamImpl } from "../utils/event-stream";
-import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import type { BedrockOptions } from "./amazon-bedrock";
 import type { AnthropicOptions } from "./anthropic";
 import type { AzureOpenAIResponsesOptions } from "./azure-openai-responses";
@@ -157,39 +157,11 @@ export function setBedrockProviderModule(module: BedrockProviderModule): void {
 // Stream forwarding / error helpers
 // ---------------------------------------------------------------------------
 
-const LAZY_STREAM_IDLE_TIMEOUT_ERROR = "Provider stream stalled while waiting for the next event";
-const LAZY_STREAM_FIRST_EVENT_TIMEOUT_ERROR = "Provider stream timed out while waiting for the first event";
-
 function hasFinalResult(
 	source: AsyncIterable<AssistantMessageEvent>,
 ): source is AsyncIterable<AssistantMessageEvent> & { result(): Promise<AssistantMessage> } {
 	return typeof (source as { result?: unknown }).result === "function";
 }
-
-/**
- * Per-provider default overrides for the lazy stream watchdogs. These widen the
- * floor used when neither caller option nor env var pins a value. The env vars
- * (`PI_STREAM_FIRST_EVENT_TIMEOUT_MS`, `PI_STREAM_IDLE_TIMEOUT_MS`) still take
- * precedence; `StreamOptions.streamFirstEventTimeoutMs` / `streamIdleTimeoutMs`
- * still trump everything.
- */
-interface LazyStreamLimits {
-	defaultFirstEventTimeoutMs?: number;
-	defaultIdleTimeoutMs?: number;
-}
-
-/**
- * Cloud Code Assist (google-gemini-cli / google-antigravity) routinely takes
- * longer than the global 100s default to emit its first SSE event when serving
- * the heavier Gemini 3.x Pro tiers at high thinking levels. Bump the first-event
- * floor to five minutes so duke et al. stop seeing spurious "stream timed out
- * while waiting for the first event" aborts on legitimate cold reasoning starts.
- * The steady-state idle watchdog stays on the global default since the upstream
- * emits thinking tokens frequently once it gets going.
- */
-const GOOGLE_GEMINI_CLI_LAZY_STREAM_LIMITS: LazyStreamLimits = {
-	defaultFirstEventTimeoutMs: 300_000,
-};
 
 function forwardStream<TApi extends Api>(
 	target: EventStreamImpl,
@@ -197,30 +169,10 @@ function forwardStream<TApi extends Api>(
 	model: Model<TApi>,
 	options: OptionsForApi<TApi>,
 	abortTracker: AbortSourceTracker,
-	limits?: LazyStreamLimits,
 ): void {
 	(async () => {
 		try {
-			const idleTimeoutMs = options.streamIdleTimeoutMs ?? getStreamIdleTimeoutMs(limits?.defaultIdleTimeoutMs);
-			const watchedSource = iterateWithIdleTimeout(source, {
-				idleTimeoutMs,
-				firstItemTimeoutMs:
-					options.streamFirstEventTimeoutMs ??
-					getStreamFirstEventTimeoutMs(idleTimeoutMs, limits?.defaultFirstEventTimeoutMs),
-				errorMessage: LAZY_STREAM_IDLE_TIMEOUT_ERROR,
-				firstItemErrorMessage: LAZY_STREAM_FIRST_EVENT_TIMEOUT_ERROR,
-				onIdle: () => abortTracker.abortLocally(new Error(LAZY_STREAM_IDLE_TIMEOUT_ERROR)),
-				onFirstItemTimeout: () => abortTracker.abortLocally(new Error(LAZY_STREAM_FIRST_EVENT_TIMEOUT_ERROR)),
-				abortSignal: options.signal,
-				// The synthetic `start` event is yielded immediately by every provider before
-				// the upstream model has emitted any tokens. Treating it as the first "real"
-				// item would flip the watchdog from `firstItemTimeoutMs` to the much shorter
-				// `idleTimeoutMs` while we're still legitimately waiting on the model's
-				// first response (slow first-token from reasoning models, cold proxies, etc.).
-				isProgressItem: event => (event as AssistantMessageEvent).type !== "start",
-			});
-
-			for await (const event of watchedSource) {
+			for await (const event of iterateUntilAbort(source, options.signal)) {
 				target.push(event);
 			}
 			if (hasFinalResult(source)) {
@@ -269,7 +221,6 @@ function createLazyLoadErrorMessage<TApi extends Api>(
 
 function createLazyStream<TApi extends Api>(
 	loadModule: () => Promise<LazyProviderModule<TApi>>,
-	limits?: LazyStreamLimits,
 ): (model: Model<TApi>, context: Context, options: OptionsForApi<TApi>) => EventStreamImpl {
 	return (model, context, options) => {
 		const outer = new EventStreamImpl();
@@ -280,7 +231,7 @@ function createLazyStream<TApi extends Api>(
 				const abortTracker = createAbortSourceTracker(streamOptions.signal);
 				const providerOptions = { ...streamOptions, signal: abortTracker.requestSignal } as OptionsForApi<TApi>;
 				const inner = module.stream(model, context, providerOptions);
-				forwardStream(outer, inner, model, streamOptions, abortTracker, limits);
+				forwardStream(outer, inner, model, streamOptions, abortTracker);
 			})
 			.catch(error => {
 				const message = createLazyLoadErrorMessage(model, error);
@@ -398,10 +349,7 @@ function loadBedrockProviderModule(): Promise<LazyProviderModule<"bedrock-conver
 export const streamAnthropic = createLazyStream(loadAnthropicProviderModule);
 export const streamAzureOpenAIResponses = createLazyStream(loadAzureOpenAIResponsesProviderModule);
 export const streamGoogle = createLazyStream(loadGoogleProviderModule);
-export const streamGoogleGeminiCli = createLazyStream(
-	loadGoogleGeminiCliProviderModule,
-	GOOGLE_GEMINI_CLI_LAZY_STREAM_LIMITS,
-);
+export const streamGoogleGeminiCli = createLazyStream(loadGoogleGeminiCliProviderModule);
 export const streamGoogleVertex = createLazyStream(loadGoogleVertexProviderModule);
 export const streamOpenAICodexResponses = createLazyStream(loadOpenAICodexResponsesProviderModule);
 export const streamOpenAICompletions = createLazyStream(loadOpenAICompletionsProviderModule);

@@ -343,13 +343,13 @@ export interface StreamOptions {
 	 */
 	onSseEvent?: (event: RawSseEvent, model?: Model<Api>) => void;
 	/**
-	 * Optional override for the first streamed event watchdog in milliseconds.
-	 * Set to 0 to disable the first-event watchdog for this request.
+	 * Optional SDK/request timeout hint in milliseconds for transports that support
+	 * a pre-stream request timeout. Provider stream silence is not treated as failure.
 	 */
 	streamFirstEventTimeoutMs?: number;
 	/**
-	 * Optional override for the maximum idle gap between streamed events in milliseconds.
-	 * Set to 0 to disable the inter-event idle watchdog for this request.
+	 * Deprecated legacy stream-watchdog override. Provider streams now wait for
+	 * provider output, provider/socket errors, caller aborts, or request-layer timeouts.
 	 */
 	streamIdleTimeoutMs?: number;
 	/**
