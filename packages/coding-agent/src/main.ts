@@ -770,6 +770,11 @@ export async function runRootCommand(
 
 	const cwd = getProjectDir();
 	const settingsInstance = deps.settings ?? (await logger.time("settings:init", Settings.init, { cwd }));
+	if (parsedArgs.approvalMode) {
+		// Runtime override (not persisted): every settings.get("tools.approvalMode") downstream
+		// sees this value. The wrapper still honours --auto-approve / --yolo on top of it.
+		settingsInstance.override("tools.approvalMode", parsedArgs.approvalMode);
+	}
 	if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") {
 		applyRpcDefaultSettingOverrides(settingsInstance);
 	}

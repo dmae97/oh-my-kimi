@@ -128,6 +128,14 @@ export default class Index extends Command {
 			aliases: ["yolo"],
 			description: "Auto-approve all tool calls (skip approval prompts)",
 		}),
+		// `--approval-mode`: declared here so oclif's auto-generated `--help` lists it; runtime parsing
+		// happens in `cli/args.ts parseArgs`. The value is applied via `Settings.override("tools.approvalMode", …)`
+		// in `main.ts` after the `Settings` instance is constructed, so every `settings.get("tools.approvalMode")`
+		// site (wrapper, `/settings` UI) observes the same value.
+		"approval-mode": Flags.string({
+			options: ["auto", "prompt", "custom"],
+			description: "Override tools.approvalMode for this session (auto|prompt|custom)",
+		}),
 	};
 
 	static examples = [
