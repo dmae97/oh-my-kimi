@@ -107,4 +107,37 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			await session.dispose();
 		}
 	});
+
+	it("activates the yield tool when requireYieldTool is set and toolNames is explicit", async () => {
+		// Regression for #1408: plan-mode subagents pass an explicit `toolNames` list
+		// (e.g. `["read", "search", "find", "lsp", "web_search"]`). Without this
+		// invariant, `yield` ended up registered but not active, and the model
+		// could not satisfy the idle-reminder contract that demands a `yield` call.
+		const tempDir = path.join(os.tmpdir(), `pi-sdk-tool-activation-${Snowflake.next()}`);
+		tempDirs.push(tempDir);
+		fs.mkdirSync(tempDir, { recursive: true });
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated(),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			requireYieldTool: true,
+			toolNames: ["read", "search", "find", "web_search"],
+		});
+
+		try {
+			expect(session.getActiveToolNames()).toContain("yield");
+		} finally {
+			await session.dispose();
+		}
+	});
 });
