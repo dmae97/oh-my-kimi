@@ -52,6 +52,20 @@ runs:
            cache-on-failure: true
            save-if: ${{ inputs.save_cache == 'true' }}
            cache-workspace-crates: true
+      # `Swatinem/rust-cache` keys target/ off Cargo.lock content; release
+      # tag pushes bump workspace versions, busting that key every time. sccache
+      # caches at the rustc-invocation level (source + flags), so it still hits
+      # across version bumps. Layered on top of rust-cache: target/ wins when
+      # warm, sccache fills the gaps when target/ is cold.
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Enable sccache for cargo
+        shell: bash
+        run: |
+           {
+             echo "SCCACHE_GHA_ENABLED=true"
+             echo "RUSTC_WRAPPER=sccache"
+           } >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@v2
         if: inputs.target == ''
         with:
@@ -72,7 +86,11 @@ runs:
         shell: bash
         run: bun run check:rs
       - name: Test workspace (Rust)
-        if: inputs.target == ''
+        # macOS has no `#[cfg(target_os = "macos")]` tests in the workspace —
+        # every test there duplicates the Linux native_linux run. Windows still
+        # needs the pass for `#[cfg(windows)]` modules (pi-shell/windows.rs and
+        # vendored brush-core sys/windows tests).
+        if: inputs.target == '' && inputs.platform != 'darwin'
         shell: bash
         run: bun run test:rs
       - name: Build native addon(s)

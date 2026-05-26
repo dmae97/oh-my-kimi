@@ -19,16 +19,22 @@ concurrency:
 
 jobs:
    # Compute a stable hash of every input that affects the native cdylib output,
-   # then look for any prior successful main run that already uploaded the linux-x64
-   # artifacts for this hash. If found, test jobs reuse those artifacts instead of
-   # rebuilding them on non-release commits. The non-tag native_linux job is skipped
-   # in that case, so the canary's retention window (see build-native action) is the
-   # effective TTL of a cache hit before main rebuilds anyway.
+   # then look for any prior successful main run that already uploaded the
+   # native artifacts for this hash. Two independent outputs:
+   #   * `linux-run-id` — set when the linux x64 canary (`pi-natives-linux-x64-modern-h<hash>`)
+   #     is present on a prior main run, so `test`/`native_linux` can reuse it.
+   #   * `release-run-id` — set when ALL native_release platforms also have
+   #     non-expired artifacts on that same prior run, so `native_release` can
+   #     skip the cold rebuild on main pushes after dep changes have already
+   #     warmed sccache there.
+   # Non-tag native jobs are skipped when their canary hits; the canary
+   # retention window (see build-native action) is the effective TTL.
    rust-hash:
       runs-on: ubuntu-22.04
       outputs:
          hash: ${{ steps.compute.outputs.hash }}
-         run-id: ${{ steps.find.outputs.run-id }}
+         linux-run-id: ${{ steps.find.outputs.linux-run-id }}
+         release-run-id: ${{ steps.find.outputs.release-run-id }}
       steps:
          - uses: actions/checkout@v4
          - name: Compute rust source hash
@@ -45,34 +51,70 @@ jobs:
                     | cut -c1-16)
               echo "hash=$hash" >> "$GITHUB_OUTPUT"
               echo "Rust source hash: $hash"
-         - name: Find prior main build with matching hash
+         - name: Find prior main build with matching native artifacts
            id: find
            env:
               GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
            shell: bash
            run: |
               hash="${{ steps.compute.outputs.hash }}"
-              # Canary artifact: native_linux builds baseline + modern together,
-              # so the modern artifact's presence on any prior main run implies
-              # both linux x64 test artifacts are cached and downloadable.
-              canary="pi-natives-linux-x64-modern-h${hash}"
-              run_id=""
+              # Canary for native_linux: presence of the modern artifact implies
+              # the baseline sibling is also there (they upload from the same job).
+              linux_canary="pi-natives-linux-x64-modern-h${hash}"
+              # Required set for native_release reuse — names must match the
+              # `actions/upload-artifact` `name:` template in build-native action.
+              release_required=(
+                "pi-natives-linux-arm64-h${hash}"
+                "pi-natives-darwin-x64-baseline-h${hash}"
+                "pi-natives-darwin-arm64-h${hash}"
+                "pi-natives-win32-x64-baseline-h${hash}"
+              )
+              linux_run_id=""
+              release_run_id=""
               for candidate in $(gh run list \
                   --workflow=ci.yml --branch=main --status=success --event=push \
                   --limit=20 --json databaseId --jq='.[].databaseId'); do
-                if gh api "/repos/${{ github.repository }}/actions/runs/$candidate/artifacts?per_page=100" \
-                    --jq ".artifacts[] | select(.name == \"$canary\") | select(.expired == false) | .id" \
-                    | grep -q .; then
-                  run_id="$candidate"
+                names=$(gh api "/repos/${{ github.repository }}/actions/runs/$candidate/artifacts?per_page=100" \
+                    --jq '.artifacts[] | select(.expired == false) | .name')
+                if [ -z "$linux_run_id" ] && echo "$names" | grep -qFx "$linux_canary"; then
+                  linux_run_id="$candidate"
+                fi
+                if [ -z "$release_run_id" ]; then
+                  all_found=true
+                  # Release reuse requires the linux canary AND every cross-platform
+                  # artifact, since release_binary downloads them from the same run.
+                  if ! echo "$names" | grep -qFx "$linux_canary"; then
+                    all_found=false
+                  else
+                    for req in "${release_required[@]}"; do
+                      if ! echo "$names" | grep -qFx "$req"; then
+                        all_found=false
+                        break
+                      fi
+                    done
+                  fi
+                  if $all_found; then
+                    release_run_id="$candidate"
+                  fi
+                fi
+                if [ -n "$linux_run_id" ] && [ -n "$release_run_id" ]; then
                   break
                 fi
               done
-              if [ -n "$run_id" ]; then
-                echo "Reusing native artifacts from run $run_id"
+              if [ -n "$linux_run_id" ]; then
+                echo "Reusing native_linux artifacts from run $linux_run_id"
               else
-                echo "No cached native artifacts for hash $hash; native job will rebuild."
+                echo "No cached native_linux artifacts for hash $hash; native_linux will rebuild."
               fi
-              echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+              if [ -n "$release_run_id" ]; then
+                echo "Reusing native_release artifacts from run $release_run_id"
+              else
+                echo "No cached native_release artifacts for hash $hash; native_release will rebuild on main."
+              fi
+              {
+                echo "linux-run-id=$linux_run_id"
+                echo "release-run-id=$release_run_id"
+              } >> "$GITHUB_OUTPUT"
 
    # Fast lint + type check (no Rust, no native build needed)
    check:
@@ -95,7 +137,7 @@ jobs:
    # unless rust-hash found a cached run. Tags always rebuild for fresh artifacts.
    native_linux:
       needs: [rust-hash]
-      if: ${{ startsWith(github.ref, 'refs/tags/v') || needs.rust-hash.outputs.run-id == '' }}
+      if: ${{ startsWith(github.ref, 'refs/tags/v') || needs.rust-hash.outputs.linux-run-id == '' }}
       runs-on: ubuntu-22.04
       strategy:
          fail-fast: false
@@ -114,10 +156,12 @@ jobs:
               rust_checks: ${{ matrix.rust_checks && 'true' || 'false' }}
               save_cache: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
 
-   # Remaining platforms only ship in release tags; PRs and main never build them.
+   # Pre-warm the cross-platform native build cache on `main`, in addition to
+   # building the artifacts that ship in release tags. Skipped on main when the
+   # rust-hash canary already found a recent run with all artifacts intact.
    native_release:
       needs: [rust-hash]
-      if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.rust-hash.outputs.release-run-id == '') }}
       strategy:
          fail-fast: false
          matrix:
@@ -167,7 +211,7 @@ jobs:
               if [ "${{ needs.native_linux.result }}" = "success" ]; then
                 echo "run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
               else
-                echo "run-id=${{ needs.rust-hash.outputs.run-id }}" >> "$GITHUB_OUTPUT"
+                echo "run-id=${{ needs.rust-hash.outputs.linux-run-id }}" >> "$GITHUB_OUTPUT"
               fi
          - name: Download native addons
            uses: actions/download-artifact@v4
@@ -206,6 +250,18 @@ jobs:
               save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' ||
                  startsWith(github.ref, 'refs/tags/v')) }}
               cache-workspace-crates: true
+         # Layer sccache on top of rust-cache for the same reason as the
+         # build-native action: tag pushes bump workspace versions and bust
+         # the target/ cache, but sccache hits at the rustc-unit level survive.
+         - name: Setup sccache
+           uses: mozilla-actions/sccache-action@v0.0.10
+         - name: Enable sccache for cargo
+           shell: bash
+           run: |
+              {
+                echo "SCCACHE_GHA_ENABLED=true"
+                echo "RUSTC_WRAPPER=sccache"
+              } >> "$GITHUB_ENV"
          - name: Cache bun dependencies
            uses: actions/cache@v4
            with:
