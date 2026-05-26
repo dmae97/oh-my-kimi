@@ -3,6 +3,7 @@ import { getBundledModel } from "../src/models";
 import { streamAzureOpenAIResponses } from "../src/providers/azure-openai-responses";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
 import { streamOpenAIResponses } from "../src/providers/openai-responses";
+import { streamSimple } from "../src/stream";
 import type { Context, Model, TextContent } from "../src/types";
 import { waitForDelayOrAbort } from "./helpers";
 
@@ -300,6 +301,27 @@ describe("OpenAI-family first-event timeouts", () => {
 		]);
 	});
 
+	it("forwards streamSimple per-call timeout options to OpenAI-family providers", async () => {
+		global.fetch = createHangingFetch();
+		const controller = new AbortController();
+		const abortTimer = setTimeout(() => controller.abort(new Error("fallback abort")), 200);
+		abortTimer.unref();
+
+		try {
+			const result = await streamSimple(openAIResponsesModel, baseContext(), {
+				apiKey: "test-key",
+				signal: controller.signal,
+				streamFirstEventTimeoutMs: 20,
+				streamIdleTimeoutMs: 20,
+			}).result();
+
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toBe("OpenAI responses stream timed out while waiting for the first event");
+		} finally {
+			clearTimeout(abortTimer);
+		}
+	});
+
 	it("surfaces the OpenAI completions first-event timeout message", async () => {
 		await expectFirstEventTimeout(
 			streamFirstEventTimeoutMs =>
@@ -322,6 +344,30 @@ describe("OpenAI-family first-event timeouts", () => {
 				}).result(),
 			"Azure OpenAI responses stream timed out while waiting for the first event",
 		);
+	});
+
+	it("times out Azure responses streams that only emit no-progress status events", async () => {
+		global.fetch = ((input: string | URL | Request, init?: RequestInit) =>
+			Promise.resolve(createNoProgressOpenAIResponsesStream(getRequestSignal(input, init)))) as typeof fetch;
+		const controller = new AbortController();
+		const abortTimer = setTimeout(() => controller.abort(new Error("fallback abort")), 200);
+		abortTimer.unref();
+
+		try {
+			const result = await streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
+				apiKey: "test-key",
+				azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
+				azureApiVersion: "v1",
+				signal: controller.signal,
+				streamFirstEventTimeoutMs: 1_000,
+				streamIdleTimeoutMs: 20,
+			}).result();
+
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toBe("Azure OpenAI responses stream stalled while waiting for the next event");
+		} finally {
+			clearTimeout(abortTimer);
+		}
 	});
 
 	it("keeps caller aborts as aborted for OpenAI responses", async () => {

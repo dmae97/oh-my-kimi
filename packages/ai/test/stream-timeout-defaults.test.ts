@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs } from "../src/utils/idle-iterator";
+import {
+	getStreamFirstEventTimeoutMs,
+	getStreamIdleTimeoutMs,
+	iterateWithIdleTimeout,
+} from "../src/utils/idle-iterator";
 
 /**
  * Per-provider fallback overrides on the stream-watchdog helpers.
@@ -77,5 +81,73 @@ describe("getStreamFirstEventTimeoutMs(idleTimeoutMs, fallbackMs)", () => {
 
 	it("falls back to the 100s global default when no fallback or env is provided", () => {
 		expect(getStreamFirstEventTimeoutMs()).toBe(100_000);
+	});
+});
+
+async function expectRejectsWithMessage(run: () => Promise<void>, message: string): Promise<void> {
+	let caught: unknown;
+	try {
+		await run();
+	} catch (err) {
+		caught = err;
+	}
+	expect(caught).toBeInstanceOf(Error);
+	expect((caught as Error).message).toBe(message);
+}
+
+describe("iterateWithIdleTimeout", () => {
+	it("does not reset the first-progress deadline for no-progress items", async () => {
+		const abortController = new AbortController();
+		const abortTimer = setTimeout(() => abortController.abort(new Error("fallback abort")), 150);
+		abortTimer.unref();
+
+		async function* noProgressItems(): AsyncGenerator<{ type: "keepalive" }> {
+			while (true) {
+				await Bun.sleep(2);
+				yield { type: "keepalive" };
+			}
+		}
+
+		try {
+			const run = async (): Promise<void> => {
+				for await (const _item of iterateWithIdleTimeout(noProgressItems(), {
+					firstItemTimeoutMs: 20,
+					idleTimeoutMs: 1_000,
+					errorMessage: "idle timeout",
+					firstItemErrorMessage: "first progress timeout",
+					abortSignal: abortController.signal,
+					isProgressItem: () => false,
+				})) {
+					// Consume until the watchdog fires.
+				}
+			};
+
+			await expectRejectsWithMessage(run, "first progress timeout");
+		} finally {
+			clearTimeout(abortTimer);
+		}
+	});
+
+	it("clears external first-event watchdogs when iteration exits before progress", async () => {
+		let watchdogFired = false;
+		const watchdog = setTimeout(() => {
+			watchdogFired = true;
+		}, 10);
+
+		async function* failingStream(): AsyncGenerator<string> {
+			throw new Error("stream failed");
+		}
+
+		await expectRejectsWithMessage(async () => {
+			for await (const _item of iterateWithIdleTimeout(failingStream(), {
+				watchdog,
+				errorMessage: "idle timeout",
+			})) {
+				// Unreachable.
+			}
+		}, "stream failed");
+
+		await Bun.sleep(20);
+		expect(watchdogFired).toBe(false);
 	});
 });
