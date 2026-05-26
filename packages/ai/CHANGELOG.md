@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.4.3] - 2026-05-26
+
 ### Fixed
 
 - Fixed Google Vertex model discovery to use the project-scoped OpenAI-compatible model list so Vertex Model Garden models such as GLM and Claude are available through ADC auth ([#1412](https://github.com/can1357/oh-my-pi/issues/1412)).
