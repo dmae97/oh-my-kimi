@@ -277,7 +277,12 @@ export class ModelSelectorComponent extends Container {
 		}
 	}
 
-	#sortModels(models: ModelItem[]): void {
+	/**
+	 * @param skipRoleRank When a search query is narrowing the list, role assignments
+	 *   should NOT promote a weakly-matching default model above a perfect text
+	 *   match — defer to MRU/version instead so user affinity drives the order.
+	 */
+	#sortModels(models: ModelItem[], { skipRoleRank = false }: { skipRoleRank?: boolean } = {}): void {
 		// Sort: tagged models (default/smol/slow/plan) first, then MRU, then alphabetical
 		const mruOrder = this.#settings.getStorage()?.getModelUsageOrder() ?? [];
 		const mruIndex = new Map(mruOrder.map((key, i) => [key, i]));
@@ -291,9 +296,11 @@ export class ModelSelectorComponent extends Container {
 			const aKey = a.selector;
 			const bKey = b.selector;
 
-			const aRank = modelRank(a);
-			const bRank = modelRank(b);
-			if (aRank !== bRank) return aRank - bRank;
+			if (!skipRoleRank) {
+				const aRank = modelRank(a);
+				const bRank = modelRank(b);
+				if (aRank !== bRank) return aRank - bRank;
+			}
 
 			// Then MRU order (models in mruIndex come before those not in it)
 			const aMru = mruIndex.get(aKey) ?? Number.MAX_SAFE_INTEGER;
@@ -340,16 +347,18 @@ export class ModelSelectorComponent extends Container {
 		});
 	}
 
-	#sortCanonicalModels(models: CanonicalModelItem[]): void {
+	#sortCanonicalModels(models: CanonicalModelItem[], { skipRoleRank = false }: { skipRoleRank?: boolean } = {}): void {
 		const mruOrder = this.#settings.getStorage()?.getModelUsageOrder() ?? [];
 		const mruIndex = new Map(mruOrder.map((key, i) => [key, i]));
 
 		const modelRank = (item: CanonicalModelItem) => computeModelRank(item.model, this.#roles);
 
 		models.sort((a, b) => {
-			const aRank = modelRank(a);
-			const bRank = modelRank(b);
-			if (aRank !== bRank) return aRank - bRank;
+			if (!skipRoleRank) {
+				const aRank = modelRank(a);
+				const bRank = modelRank(b);
+				if (aRank !== bRank) return aRank - bRank;
+			}
 
 			const aMru = mruIndex.get(`${a.model.provider}/${a.model.id}`) ?? Number.MAX_SAFE_INTEGER;
 			const bMru = mruIndex.get(`${b.model.provider}/${b.model.id}`) ?? Number.MAX_SAFE_INTEGER;
@@ -558,19 +567,26 @@ export class ModelSelectorComponent extends Container {
 						: alphaFiltered.length > 0
 							? alphaFiltered
 							: baseCanonicalModels;
-				// fuzzyFilter sorts by relevance score; keep that order so the best
-				// text match wins. baseCanonicalModels is pre-sorted by role rank /
-				// MRU at load time, and V8 sort is stable, so those criteria still
-				// act as tiebreakers for equally-relevant matches.
-				this.#filteredCanonicalModels = fuzzyFilter(fuzzySource, query, ({ searchText }) => searchText);
+				// Fuzzy provides the candidate set, but `${provider}/${id}` scoring
+				// is biased by provider-prefix length (e.g. `openai/X` beats
+				// `openai-codex/X` purely because the prefix is shorter). Re-sort by
+				// affinity — MRU then version — so the user's actually-used model
+				// wins. Role rank is skipped: when narrowing by query, a weakly
+				// matching default model should not be promoted above a stronger
+				// non-default match.
+				const fuzzyMatches = fuzzyFilter(fuzzySource, query, ({ searchText }) => searchText);
+				this.#sortCanonicalModels(fuzzyMatches, { skipRoleRank: true });
+				this.#filteredCanonicalModels = fuzzyMatches;
 			} else {
 				// Match against the displayed "provider/id" string so the user can
 				// type what they see: bare names (`mimo`, `kimi`), provider prefixes
 				// (`openrouter`), or scoped queries (`openrouter/mimo`) all flow
-				// through the same fuzzy matcher. fuzzyFilter orders by relevance
-				// score; do not re-sort here, or a weakly-matching default model
-				// would be pushed above a perfect non-default match.
-				this.#filteredModels = fuzzyFilter(baseModels, query, ({ id, provider }) => `${provider}/${id}`);
+				// through the same fuzzy matcher. The score is biased by provider-
+				// prefix length, so re-sort by MRU/version afterwards; skip role
+				// rank so a weakly matching default doesn't trump a stronger match.
+				const fuzzyMatches = fuzzyFilter(baseModels, query, ({ id, provider }) => `${provider}/${id}`);
+				this.#sortModels(fuzzyMatches, { skipRoleRank: true });
+				this.#filteredModels = fuzzyMatches;
 			}
 		} else {
 			this.#filteredModels = baseModels;
