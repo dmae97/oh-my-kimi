@@ -17,6 +17,7 @@
 - Changed approval safety overrides to prompt even in `yolo` / `--auto-approve` sessions, so critical tool-declared patterns no longer run unattended.
 - Changed `omp auth-broker login` to drive the per-provider OAuth/API-key flow in-process via `AuthStorage.login()` instead of spawning the `pi-ai` CLI subprocess. The `pi-ai` bin is being removed; the same login surface now lives entirely inside `omp`.
 - Changed the default per-line truncation cap for search/grep output (`DEFAULT_MAX_COLUMN`) from `1024` to `512` characters to keep wide minified single-line bundles from blowing out the model's context.
+- Changed `edit.hashlineAutoDropPureInsertDuplicates` to also fire on `A-B:payload` replacement ops when a single non-structural boundary payload line duplicates the line immediately above the deleted range (prefix) or immediately below it (suffix). Catches the common mistake of `A-B:foo` where the user meant `A-B!` but typed a payload that happens to match adjacent context. The existing 2+-line block absorb and balance-validated structural single-line absorb already covered the multi-line and structural-delimiter cases; this closes the single-line non-structural gap.
 
 ### Fixed
 

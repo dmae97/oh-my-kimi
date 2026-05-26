@@ -35,6 +35,7 @@ A!             shorthand for A-A!
 - **Read lines look like replace ops.** `84:content` already means "make line 84 equal to content" — don't echo a context line before it.
 - **NEVER fabricate file hashes.** Missing? Re-`read`.
 - **`A!` deletes silently.** Deleting a line that closes/opens a block (`}`, `} else {`, `})`, `*/`) breaks structure with no parse error.
+- **Pure removal uses `A-B!`, NEVER `A-B:something`.** If you have nothing to put in the range, use `!`. `A-B:X` where line `A-1` or `B+1` already reads `X` silently produces two copies of `X` — the tool trusts your payload literally. Before writing `A-B:payload`, glance at `A-1` and `B+1` and confirm payload doesn't echo either.
 </common-failures>
 
 <case file="mod.ts">

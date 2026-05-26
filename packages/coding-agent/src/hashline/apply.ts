@@ -264,6 +264,44 @@ function countMatchingSingleStructuralSuffixBoundary(
 	return shouldDropSingleStructuralBoundary(replacement, replacement.slice(0, -1), expectedBalance) ? 1 : 0;
 }
 
+/**
+ * Single-line non-structural boundary duplicate detector for replacement
+ * groups. Mirrors the same boundary check the pure-insert absorber uses for
+ * `ANCHOR↓` (leading) / `ANCHOR↑` (trailing) inserts, but applied to the
+ * top/bottom edges of an `A-B:payload` range. Catches mistakes like
+ * `103-138:const X = …` where line 102 already reads `const X = …` and the
+ * user really meant `103-138!` (delete only).
+ *
+ * Gated by `options.autoDropPureInsertDuplicates`: the existing 2+-line block
+ * absorb already runs unconditionally, and the structural single-line
+ * absorber is balance-validated; a non-structural single-line duplicate is
+ * ambiguous (could be an intentional `2:foo` over a line that happens to
+ * sit next to another `foo`), so we only fire when the user has opted in.
+ */
+function countMatchingSingleNonStructuralPrefixDuplicate(
+	fileLines: string[],
+	startLine: number,
+	replacement: string[],
+): number {
+	if (replacement.length === 0 || startLine <= 1) return 0;
+	const line = replacement[0];
+	if (isStructuralClosingBoundaryLine(line)) return 0;
+	if (fileLines[startLine - 2] !== line) return 0;
+	return 1;
+}
+
+function countMatchingSingleNonStructuralSuffixDuplicate(
+	fileLines: string[],
+	endLine: number,
+	replacement: string[],
+): number {
+	if (replacement.length === 0 || endLine >= fileLines.length) return 0;
+	const line = replacement[replacement.length - 1];
+	if (isStructuralClosingBoundaryLine(line)) return 0;
+	if (fileLines[endLine] !== line) return 0;
+	return 1;
+}
+
 function hasExternalTargets(lines: Iterable<number>, externalTargetLines: Set<number>): boolean {
 	for (const line of lines) {
 		if (externalTargetLines.has(line)) return true;
@@ -552,12 +590,19 @@ function absorbReplacementBoundaryDuplicates(
 		const deletedBalance = computeDelimiterBalance(
 			group.deletes.map(deleteEdit => fileLines[deleteEdit.anchor.line - 1] ?? ""),
 		);
+		const optInSingleLineAbsorb = options.autoDropPureInsertDuplicates === true;
 		const prefixCount =
 			countMatchingPrefixBlock(fileLines, startLine, group.replacement) ||
-			countMatchingSingleStructuralPrefixBoundary(fileLines, startLine, group.replacement, deletedBalance);
+			countMatchingSingleStructuralPrefixBoundary(fileLines, startLine, group.replacement, deletedBalance) ||
+			(optInSingleLineAbsorb
+				? countMatchingSingleNonStructuralPrefixDuplicate(fileLines, startLine, group.replacement)
+				: 0);
 		const suffixCount =
 			countMatchingSuffixBlock(fileLines, endLine, group.replacement) ||
-			countMatchingSingleStructuralSuffixBoundary(fileLines, endLine, group.replacement, deletedBalance);
+			countMatchingSingleStructuralSuffixBoundary(fileLines, endLine, group.replacement, deletedBalance) ||
+			(optInSingleLineAbsorb
+				? countMatchingSingleNonStructuralSuffixDuplicate(fileLines, endLine, group.replacement)
+				: 0);
 		const prefixLines = contiguousRange(startLine - prefixCount, prefixCount);
 		const suffixLines = contiguousRange(endLine + 1, suffixCount);
 		const safePrefixCount = hasExternalTargets(prefixLines, allTargetLines) ? 0 : prefixCount;

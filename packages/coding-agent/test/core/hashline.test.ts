@@ -214,6 +214,44 @@ describe("hashline parser — suffix-op syntax", () => {
 		);
 	});
 
+	it("auto-absorbs a single duplicated non-structural prefix during replacement when opt-in is set", () => {
+		// Regression: `103-138:const X = …` over a file whose line 102 already
+		// reads `const X = …` produced two consecutive declarations. With the
+		// opt-in on, the leading boundary line gets dropped.
+		const source = ["const X = …", "", "const LEGACY = {", "  a: 1,", "}"].join("\n");
+		const diff = [`${tag(2, "")}-${tag(5, "}")}:const X = …`].join("\n");
+
+		const result = applyHashlineEdits(source, parseHashline(diff).edits, { autoDropPureInsertDuplicates: true });
+		expect(result.lines).toBe(["const X = …"].join("\n"));
+		expect(result.warnings).toEqual(
+			expect.arrayContaining([expect.stringMatching(/Auto-absorbed 1 duplicate line\(s\) above replacement/)]),
+		);
+	});
+
+	it("auto-absorbs a single duplicated non-structural suffix during replacement when opt-in is set", () => {
+		// Regression: `93-104:## Subagents` over a file whose line 105 already
+		// reads `## Subagents` produced two consecutive headings. With the
+		// opt-in on, the trailing boundary line gets dropped.
+		const source = ["## Legacy", "", "stale content", "", "## Subagents"].join("\n");
+		const diff = [`${tag(1, "## Legacy")}-${tag(4, "")}:## Subagents`].join("\n");
+
+		const result = applyHashlineEdits(source, parseHashline(diff).edits, { autoDropPureInsertDuplicates: true });
+		expect(result.lines).toBe(["## Subagents"].join("\n"));
+		expect(result.warnings).toEqual(
+			expect.arrayContaining([expect.stringMatching(/Auto-absorbed 1 duplicate line\(s\) below replacement/)]),
+		);
+	});
+
+	it("preserves a legitimate single-line replacement that happens to match an adjacent line by default", () => {
+		// Without the opt-in, `2:foo` over `[1]foo,[2]bar,[3]baz` must still
+		// produce two consecutive `foo` lines. The non-structural single-line
+		// absorber stays gated on `autoDropPureInsertDuplicates`.
+		const source = ["foo", "bar", "baz"].join("\n");
+		const diff = [`${sameLineRange(tag(2, "bar"))}:foo`].join("\n");
+
+		expect(applyDiff(source, diff)).toBe(["foo", "foo", "baz"].join("\n"));
+	});
+
 	it("does not auto-drop generic (multi-line) pure-insert duplicate boundaries by default", () => {
 		// Multi-line context echo (`aaa`, `bbb`) is gated on the
 		// `autoDropPureInsertDuplicates` opt-in, unlike the single-line
