@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed Google Vertex cached project discovery replacing the bundled fallback catalog so `/models` does not keep showing outdated Gemini entries after authoritative Vertex discovery ([#1412](https://github.com/can1357/oh-my-pi/issues/1412)).
+- Fixed Google Vertex cached project discovery replacing the bundled fallback catalog so `/models` does not keep showing outdated Gemini entries after authoritative Vertex discovery, while keeping the bundled fallback in place when the cached snapshot is stale or non-authoritative (e.g. after an ADC discovery failure) ([#1412](https://github.com/can1357/oh-my-pi/issues/1412)).
 
 ## [15.4.2] - 2026-05-26
 
