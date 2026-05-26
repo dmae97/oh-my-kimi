@@ -1148,6 +1148,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			if (model?.contextWindow && model.contextWindow > 0) {
 				progress.contextWindow = model.contextWindow;
 			}
+			if (model) {
+				progress.resolvedModel = explicitThinkingLevel
+					? `${model.provider}/${model.id}:${resolvedThinkingLevel}`
+					: `${model.provider}/${model.id}`;
+			}
 			const effectiveThinkingLevel = explicitThinkingLevel
 				? resolvedThinkingLevel
 				: (thinkingLevel ?? resolvedThinkingLevel);
@@ -1606,6 +1611,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		contextTokens: progress.contextTokens,
 		contextWindow: progress.contextWindow,
 		modelOverride,
+		resolvedModel: progress.resolvedModel,
 		error: exitCode !== 0 && stderr ? stderr : undefined,
 		aborted: wasAborted,
 		abortReason: finalAbortReason,
