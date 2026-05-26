@@ -53,12 +53,60 @@ describe("splitInternalUrlSel", () => {
 		expect(splitInternalUrlSel("agent://1-50")).toEqual({ path: "agent://1-50" });
 	});
 
-	it("leaves mcp:// URLs alone (mcp resource URIs may legitimately contain colons)", () => {
+	it("keeps bare-integer suffixes on mcp:// URLs (could be a port)", () => {
 		expect(splitInternalUrlSel("mcp://some/resource:1234")).toEqual({
 			path: "mcp://some/resource:1234",
 		});
-		expect(splitInternalUrlSel("mcp://server://uri:1-50")).toEqual({
-			path: "mcp://server://uri:1-50",
+	});
+
+	it("treats mcp:// URIs as opaque by default — selector-shaped suffixes are NOT peeled", () => {
+		// MCP resource URIs are server-defined and may legitimately end with `:raw`,
+		// `:1-50`, etc. Without an explicit escape the URI must be forwarded verbatim
+		// to the protocol handler so server-defined resources remain reachable.
+		expect(splitInternalUrlSel("mcp://server/resource:1-50")).toEqual({
+			path: "mcp://server/resource:1-50",
+		});
+		expect(splitInternalUrlSel("mcp://server/resource:raw")).toEqual({
+			path: "mcp://server/resource:raw",
+		});
+		expect(splitInternalUrlSel("mcp://server/resource:L10")).toEqual({
+			path: "mcp://server/resource:L10",
+		});
+		expect(splitInternalUrlSel("mcp://server/resource:conflicts")).toEqual({
+			path: "mcp://server/resource:conflicts",
+		});
+	});
+
+	it("keeps escaped selector-shaped mcp:// suffixes opaque too", () => {
+		// MCP resource URIs are exact server-defined IDs. A resource may
+		// legitimately end in `/:raw` or `/:1-50`; splitting before resolution
+		// would make that resource unreachable with no exact-URI escape hatch.
+		expect(splitInternalUrlSel("mcp://server/resource/:1-50")).toEqual({
+			path: "mcp://server/resource/:1-50",
+		});
+		expect(splitInternalUrlSel("mcp://server/resource/:raw")).toEqual({
+			path: "mcp://server/resource/:raw",
+		});
+		expect(splitInternalUrlSel("mcp://server/resource/:L10")).toEqual({
+			path: "mcp://server/resource/:L10",
+		});
+		expect(splitInternalUrlSel("mcp://server/resource/:conflicts")).toEqual({
+			path: "mcp://server/resource/:conflicts",
+		});
+	});
+
+	it("does not peel when the only slash before the colon is part of the `://` separator", () => {
+		// Guards against degenerate inputs like `mcp://:1-50` — stripping the
+		// scheme's own slash would emit `mcp:/` as the path. The peeler refuses
+		// when the resulting path no longer carries a scheme separator.
+		expect(splitInternalUrlSel("mcp://:1-50")).toEqual({ path: "mcp://:1-50" });
+		expect(splitInternalUrlSel("mcp://:raw")).toEqual({ path: "mcp://:raw" });
+	});
+
+	it("rejects bare-integer suffixes even with the trailing-slash escape", () => {
+		// Could still be a port number after a path; require a richer selector form.
+		expect(splitInternalUrlSel("mcp://server/resource/:1234")).toEqual({
+			path: "mcp://server/resource/:1234",
 		});
 	});
 

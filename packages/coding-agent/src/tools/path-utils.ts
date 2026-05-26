@@ -173,10 +173,27 @@ export function splitPathAndSel(rawPath: string): { path: string; sel?: string }
  *
  * Falls back to the input unchanged when nothing matches.
  */
+/** MCP resource URIs are server-defined and may legitimately end with
+ * selector-shaped tails like `:raw`, `:conflicts`, `:1-50`, or even `/:raw`.
+ * `McpProtocolHandler` resolves by exact resource URI match (`r.uri === uri`),
+ * so syntactically peeling a selector here can make valid resources
+ * unreachable. Keep mcp:// opaque; selector support for MCP resources needs a
+ * resolver-aware path that can try the exact URI before interpreting a suffix
+ * as a read selector. */
+function keepOpaqueResourceUri(rawPath: string): { path: string } {
+	return { path: rawPath };
+}
+
 export function splitInternalUrlSel(rawPath: string): { path: string; sel?: string } {
 	const schemeMatch = rawPath.match(INTERNAL_URL_SCHEME_RE);
 	if (!schemeMatch) return { path: rawPath };
-	if (!INTERNAL_SCHEMES_WITH_SELECTORS[schemeMatch[1].toLowerCase()]) return { path: rawPath };
+	const scheme = schemeMatch[1].toLowerCase();
+	// `mcp://` resource URIs are server-defined and may legitimately contain
+	// selector-shaped suffixes. Keep them opaque so exact resource lookup wins.
+	if (!INTERNAL_SCHEMES_WITH_SELECTORS[scheme]) {
+		if (scheme === "mcp") return keepOpaqueResourceUri(rawPath);
+		return { path: rawPath };
+	}
 
 	const schemeEnd = schemeMatch[0].length;
 	let path = rawPath;

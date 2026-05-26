@@ -64,6 +64,10 @@ function validateFindPathInputs(paths: readonly string[]): void {
 		let braceDepth = 0;
 		for (let i = 0; i < entry.length; i++) {
 			const ch = entry.charCodeAt(i);
+			if (ch === 0x5c /* \ */ && i + 1 < entry.length) {
+				i++;
+				continue;
+			}
 			if (ch === 0x7b /* { */) braceDepth++;
 			else if (ch === 0x7d /* } */) {
 				if (braceDepth > 0) braceDepth--;
@@ -304,6 +308,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 
 			let matches: natives.GlobMatch[];
 			const onUpdateMatches: string[] = [];
+			const onUpdateMtimes: number[] = [];
 			const updateIntervalMs = 200;
 			let lastUpdate = 0;
 			const emitUpdate = () => {
@@ -323,9 +328,10 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				});
 			};
 			const onMatch = (err: Error | null, match: natives.GlobMatch | null) => {
-				if (err || signal?.aborted || !match?.path) return;
+				if (err || combinedSignal.aborted || !match?.path) return;
 				const relativePath = formatMatchPath(match.path, match.fileType);
 				onUpdateMatches.push(relativePath);
+				onUpdateMtimes.push(match.mtime ?? 0);
 				emitUpdate();
 			};
 
@@ -371,15 +377,18 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				// instead of throwing — empty results after a multi-second wait force the
 				// caller to retry blind, which is the worst possible outcome.
 				const seen = new Set<string>();
-				const partial: string[] = [];
-				for (const entry of onUpdateMatches) {
+				const partial: Array<{ p: string; m: number }> = [];
+				for (let i = 0; i < onUpdateMatches.length; i++) {
+					const entry = onUpdateMatches[i];
 					if (seen.has(entry)) continue;
 					seen.add(entry);
-					partial.push(entry);
+					partial.push({ p: entry, m: onUpdateMtimes[i] ?? 0 });
 				}
+				partial.sort((a, b) => b.m - a.m);
+				const sortedPaths = partial.map(e => e.p);
 				const seconds = timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}` : (timeoutMs / 1000).toFixed(1);
-				const notice = `find timed out after ${seconds}s; returning ${partial.length} partial matches — increase timeout or narrow pattern`;
-				return buildResult(partial, { notice, forceTruncated: true });
+				const notice = `find timed out after ${seconds}s; returning ${sortedPaths.length} partial matches — increase timeout or narrow pattern`;
+				return buildResult(sortedPaths, { notice, forceTruncated: true });
 			}
 
 			const relativized: string[] = [];

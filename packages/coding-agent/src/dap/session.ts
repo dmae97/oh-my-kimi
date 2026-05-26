@@ -108,14 +108,20 @@ function toErrorMessage(value: unknown): string {
 interface DapStartRequestFailure {
 	rejected: boolean;
 	error?: unknown;
+	settled?: Promise<void>;
 }
 
 function trackDapStartRequest<T>(promise: Promise<T>, failure: DapStartRequestFailure): Promise<T> {
-	return promise.catch(error => {
+	const tracked = promise.catch(error => {
 		failure.rejected = true;
 		failure.error = error;
 		throw error;
 	});
+	failure.settled = tracked.then(
+		() => {},
+		() => {},
+	);
+	return tracked;
 }
 
 function combineDapStartErrors(command: "launch" | "attach", startError: unknown, configurationError: unknown): Error {
@@ -134,7 +140,7 @@ async function throwPreferredDapStartError(
 	startFailure: DapStartRequestFailure,
 	configurationError: unknown,
 ): Promise<never> {
-	await Promise.resolve();
+	await Promise.race([startFailure.settled ?? Promise.resolve(), timers.setTimeout(50)]);
 	if (startFailure.rejected) {
 		throw combineDapStartErrors(command, startFailure.error, configurationError);
 	}
@@ -274,6 +280,9 @@ export class DapSessionManager {
 			return buildSummary(session);
 		} catch (error) {
 			await this.#disposeSession(session);
+			if (options.adapter.name === "debugpy" && /No module named ['"]?debugpy['"]?/.test(toErrorMessage(error))) {
+				throw new Error("adapter 'debugpy' is not available: install with 'pip install debugpy'");
+			}
 			throw error;
 		}
 	}
@@ -330,6 +339,9 @@ export class DapSessionManager {
 			return buildSummary(session);
 		} catch (error) {
 			await this.#disposeSession(session);
+			if (options.adapter.name === "debugpy" && /No module named ['"]?debugpy['"]?/.test(toErrorMessage(error))) {
+				throw new Error("adapter 'debugpy' is not available: install with 'pip install debugpy'");
+			}
 			throw error;
 		}
 	}

@@ -182,6 +182,22 @@ describe("DAP launch failure handling", () => {
 			process.off("unhandledRejection", onUnhandled);
 		}
 	});
+
+	it("surfaces the adapter name and ENOENT when spawn fails", async () => {
+		const manager = new DapSessionManager();
+		spyOn(DapClient, "spawn").mockRejectedValue(new Error("ENOENT: no such file or directory, spawn 'lldb-dap'"));
+
+		let message = "";
+		try {
+			await manager.launch({ adapter: TEST_ADAPTER, program: "/bin/echo", cwd: process.cwd() });
+		} catch (error) {
+			expect(error).toBeInstanceOf(Error);
+			message = (error as Error).message;
+		}
+
+		expect(message).toContain("ENOENT");
+		expect(message).toContain(TEST_ADAPTER.name);
+	});
 });
 
 describe("DebugTool launch validation", () => {
