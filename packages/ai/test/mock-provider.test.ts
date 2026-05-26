@@ -5,7 +5,7 @@ import {
 	isMockModel,
 	MOCK_API,
 	type MockHandler,
-	type MockModelHandle,
+	type MockModel,
 	registerMockApi,
 	streamMock,
 } from "../src/providers/mock";
@@ -298,7 +298,7 @@ describe("mock provider — async-iterable response sources", () => {
 
 	test("generator can react to call state via the shared handle", async () => {
 		// Each yield reads `mock.calls` to react to what just happened.
-		let handle!: MockModelHandle;
+		let handle!: MockModel;
 		const gen = async function* () {
 			yield { content: ["turn 0"] };
 			// At this point mock.calls.length === 1.
