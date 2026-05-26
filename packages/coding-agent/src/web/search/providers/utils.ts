@@ -16,11 +16,12 @@ import { dateToAgeSeconds } from "../utils";
  * @param storageProviders - Provider names to look up in AgentStorage
  */
 export function findCredential(
-	storage: AgentStorage,
+	storage: AgentStorage | null | undefined,
 	envKey: string | null | undefined,
 	...storageProviders: string[]
 ): string | null {
 	if (envKey) return envKey;
+	if (!storage) return null;
 
 	try {
 		for (const provider of storageProviders) {

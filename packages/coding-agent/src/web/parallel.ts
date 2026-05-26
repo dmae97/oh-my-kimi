@@ -74,7 +74,7 @@ export class ParallelApiError extends Error {
 	}
 }
 
-export function findParallelApiKey(storage: AgentStorage): string | null {
+export function findParallelApiKey(storage: AgentStorage | null | undefined): string | null {
 	return findCredential(storage, getEnvApiKey("parallel"), "parallel");
 }
 
@@ -286,7 +286,7 @@ export async function searchWithParallel(
 	objective: string,
 	queries: string[],
 	options: ParallelSearchOptions,
-	storage: AgentStorage,
+	storage: AgentStorage | null | undefined,
 ): Promise<ParallelSearchResult> {
 	const apiKey = findParallelApiKey(storage);
 	if (!apiKey) {
@@ -319,7 +319,7 @@ export async function searchWithParallel(
 export async function extractWithParallel(
 	urls: string[],
 	options: ParallelExtractOptions,
-	storage: AgentStorage,
+	storage: AgentStorage | null | undefined,
 ): Promise<ParallelExtractResult> {
 	const apiKey = findParallelApiKey(storage);
 	if (!apiKey) {
