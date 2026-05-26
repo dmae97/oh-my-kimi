@@ -1804,21 +1804,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (!obfuscator?.hasSecrets()) return converted;
 			return obfuscateMessages(obfuscator, converted);
 		};
-		const transformContext = extensionRunner
-			? async (messages: AgentMessage[], _signal?: AbortSignal) => {
-					return await extensionRunner.emitContext(messages);
-				}
-			: undefined;
-		const onPayload = extensionRunner
-			? async (payload: unknown, _model?: Model) => {
-					return await extensionRunner.emitBeforeProviderRequest(payload);
-				}
-			: undefined;
-		const onResponse: SimpleStreamOptions["onResponse"] | undefined = extensionRunner
-			? async (response, model) => {
-					await extensionRunner.emitAfterProviderResponse(response, model);
-				}
-			: undefined;
+		const transformContext = async (messages: AgentMessage[], _signal?: AbortSignal) => {
+			return await extensionRunner.emitContext(messages);
+		};
+		const onPayload = async (payload: unknown, _model?: Model) => {
+			return await extensionRunner.emitBeforeProviderRequest(payload);
+		};
+		const onResponse: SimpleStreamOptions["onResponse"] = async (response, model) => {
+			await extensionRunner.emitAfterProviderResponse(response, model);
+		};
 
 		const setToolUIContext = (uiContext: ExtensionUIContext, hasUI: boolean) => {
 			toolContextStore.setUIContext(uiContext, hasUI);
