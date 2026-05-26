@@ -2405,7 +2405,7 @@ export const SETTINGS_SCHEMA = {
 	"task.simple": {
 		type: "enum",
 		values: TASK_SIMPLE_MODES,
-		default: "default",
+		default: "schema-free",
 		ui: {
 			tab: "tasks",
 			label: "Task Input Mode",

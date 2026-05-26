@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed the default `task.simple` mode from `default` to `schema-free`, so task-call `schema` inputs are disabled by default while shared `context` and agent/session-defined output schemas remain available
+
 ## [15.5.1] - 2026-05-26
 
 ### Breaking Changes
