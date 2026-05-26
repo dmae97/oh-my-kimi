@@ -497,12 +497,13 @@ describe("AgentSession handoff", () => {
 			throw new Error("Expected model to be set");
 		}
 
-		const { promise: handoffPending, resolve: resolveHandoff } = Promise.withResolvers<string | undefined>();
+		const { promise: handoffPending, resolve: resolveHandoff } = Promise.withResolvers<string>();
+
 		const generateHandoffSpy = vi
 			.spyOn(compactionModule, "generateHandoff")
 			.mockImplementation(async (_msgs, _model, _key, _opts, signal) => {
 				// Mirror the real generateHandoff contract: reject when the caller aborts.
-				return await new Promise<string | undefined>((resolve, reject) => {
+				return await new Promise<string>((resolve, reject) => {
 					signal?.addEventListener("abort", () => reject(new Error("Handoff cancelled")), { once: true });
 					handoffPending.then(resolve, reject);
 				});
@@ -541,7 +542,7 @@ describe("AgentSession handoff", () => {
 
 		await expect(disposed).resolves.toBe("disposed");
 		// Releasing after the fact must not leak into other tests.
-		resolveHandoff(undefined);
+		resolveHandoff("handoff");
 	});
 
 	it("falls back to context-full when handoff strategy returns no document", async () => {
