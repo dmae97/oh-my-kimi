@@ -2256,4 +2256,50 @@ describe("ModelRegistry", () => {
 		expect(vertexModels.map(model => model.id)).toEqual(["zai-org/glm-4.7-maas"]);
 		expect(registry.find("google-vertex", "gemini-1.5-pro")).toBeUndefined();
 	});
+
+	test("keeps bundled google-vertex fallback when cached project catalog is non-authoritative", () => {
+		const cachedModel: Model<"openai-completions"> = {
+			id: "zai-org/glm-4.7-maas",
+			name: "GLM-4.7",
+			api: "openai-completions",
+			provider: "google-vertex",
+			baseUrl: "https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/endpoints/openapi",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 222_222,
+			maxTokens: 8_888,
+		};
+		writeModelCache("google-vertex", Date.now(), [cachedModel], false, "", cacheDbPath);
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const vertexModels = getModelsForProvider(registry, "google-vertex");
+
+		expect(vertexModels.some(model => model.id === "zai-org/glm-4.7-maas")).toBe(true);
+		expect(vertexModels.some(model => model.id.startsWith("gemini-"))).toBe(true);
+	});
+
+	test("keeps bundled google-vertex fallback when cached project catalog is stale", () => {
+		const cachedModel: Model<"openai-completions"> = {
+			id: "zai-org/glm-4.7-maas",
+			name: "GLM-4.7",
+			api: "openai-completions",
+			provider: "google-vertex",
+			baseUrl: "https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/endpoints/openapi",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 222_222,
+			maxTokens: 8_888,
+		};
+		// 25h old > 24h TTL → cache.fresh === false even though authoritative === true.
+		const staleTimestamp = Date.now() - 25 * 60 * 60 * 1000;
+		writeModelCache("google-vertex", staleTimestamp, [cachedModel], true, "", cacheDbPath);
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const vertexModels = getModelsForProvider(registry, "google-vertex");
+
+		expect(vertexModels.some(model => model.id === "zai-org/glm-4.7-maas")).toBe(true);
+		expect(vertexModels.some(model => model.id.startsWith("gemini-"))).toBe(true);
+	});
 });

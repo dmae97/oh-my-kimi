@@ -900,9 +900,20 @@ export class ModelRegistry {
 
 		this.#addImplicitDiscoverableProviders(configuredProviders);
 		let builtInModels = this.#applyHardcodedModelPolicies(this.#loadBuiltInModels(overrides));
-		const cachedStandardModels = this.#applyHardcodedModelPolicies(this.#loadCachedStandardProviderModels());
+		const cachedStandardResult = this.#loadCachedStandardProviderModels();
+		const cachedStandardModels = this.#applyHardcodedModelPolicies(cachedStandardResult.models);
 		const cachedDiscoveries = this.#applyHardcodedModelPolicies(this.#loadCachedDiscoverableModels());
-		const cachedAuthoritativeProviders = providersWithAuthoritativeProjectCatalog(cachedStandardModels);
+		// Only drop bundled fallback models when the cached project-catalog row is
+		// itself fresh AND authoritative. A stale or non-authoritative snapshot
+		// (e.g. after ADC discovery failure rewrote the row with authoritative=0)
+		// must not strip bundled Vertex Gemini entries — that would leave only the
+		// stale project-scoped rows in API-key-only environments.
+		const cachedAuthoritativeProviders = new Set<string>();
+		for (const provider of providersWithAuthoritativeProjectCatalog(cachedStandardModels)) {
+			if (cachedStandardResult.authoritativeFreshProviders.has(provider)) {
+				cachedAuthoritativeProviders.add(provider);
+			}
+		}
 		if (cachedAuthoritativeProviders.size > 0) {
 			builtInModels = dropProviderModels(builtInModels, cachedAuthoritativeProviders);
 		}
@@ -1008,9 +1019,10 @@ export class ModelRegistry {
 		return merged;
 	}
 
-	#loadCachedStandardProviderModels(): Model<Api>[] {
+	#loadCachedStandardProviderModels(): { models: Model<Api>[]; authoritativeFreshProviders: Set<string> } {
 		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(provider => provider.provider));
 		const cachedModels: Model<Api>[] = [];
+		const authoritativeFreshProviders = new Set<string>();
 		for (const descriptor of PROVIDER_DESCRIPTORS) {
 			if (configuredDiscoveryProviders.has(descriptor.providerId)) {
 				continue;
@@ -1018,6 +1030,9 @@ export class ModelRegistry {
 			const cache = readModelCache<Api>(descriptor.providerId, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
 			if (!cache) {
 				continue;
+			}
+			if (cache.fresh && cache.authoritative) {
+				authoritativeFreshProviders.add(descriptor.providerId);
 			}
 			const models = cache.models.map(model =>
 				model.provider === descriptor.providerId ? model : { ...model, provider: descriptor.providerId },
@@ -1031,7 +1046,7 @@ export class ModelRegistry {
 				: withTransport;
 			cachedModels.push(...this.#applyProviderModelOverrides(descriptor.providerId, withCompat));
 		}
-		return cachedModels;
+		return { models: cachedModels, authoritativeFreshProviders };
 	}
 
 	#loadCachedDiscoverableModels(): Model<Api>[] {

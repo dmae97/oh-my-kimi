@@ -78,6 +78,20 @@ describe("google-vertex model discovery", () => {
 		);
 	});
 
+	it("keeps the API-key Vertex Gemini catalog when project and location are also configured", async () => {
+		const options = googleVertexModelManagerOptions({
+			apiKey: "vertex-api-key",
+			project: "vertex-project",
+			location: "global",
+		});
+
+		const result = await resolveProviderModels({ ...options, cacheDbPath: dbPath }, "offline");
+
+		expect(result.models.some(model => model.id === "gemini-2.5-pro")).toBe(true);
+		expect(result.models.every(model => model.provider === "google-vertex")).toBe(true);
+		expect(result.models.every(model => model.api === "google-vertex")).toBe(true);
+	});
+
 	it("omits the bundled Vertex Gemini static fallback when neither ADC project nor API key are configured", async () => {
 		const previousProject = Bun.env.GOOGLE_CLOUD_PROJECT;
 		const previousGcpProject = Bun.env.GCP_PROJECT;

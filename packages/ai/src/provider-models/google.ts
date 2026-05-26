@@ -40,7 +40,11 @@ export function googleModelManagerOptions(
 
 export function googleVertexModelManagerOptions(config?: GoogleVertexModelManagerConfig): ModelManagerOptions {
 	const project = resolveVertexProject(config);
+	const hasApiKey = (config?.apiKey ?? Bun.env.GOOGLE_CLOUD_API_KEY ?? "").trim().length > 0;
 	const location = resolveVertexLocation(config);
+	if (hasApiKey) {
+		return { providerId: "google-vertex" };
+	}
 	if (project && location) {
 		return {
 			providerId: "google-vertex",
@@ -54,15 +58,10 @@ export function googleVertexModelManagerOptions(config?: GoogleVertexModelManage
 				}),
 		};
 	}
-	// API-key-only callers hit `aiplatform.googleapis.com/v1/publishers/google/models/...`
-	// directly, so the bundled Gemini catalog is the right fallback. Otherwise — no
-	// project, no location, no API key — drop the bundled static models so stale
-	// fallbacks (e.g. `gemini-1.5-*`) cannot leak into `/models` alongside an
-	// authoritative cached Vertex project catalog on the next refresh.
-	const hasApiKey = (config?.apiKey ?? Bun.env.GOOGLE_CLOUD_API_KEY ?? "").trim().length > 0;
-	if (hasApiKey) {
-		return { providerId: "google-vertex" };
-	}
+	// With neither ADC project+location nor API key auth configured, drop the
+	// bundled static catalog so stale fallbacks (e.g. `gemini-1.5-*`) cannot leak
+	// into `/models` alongside an authoritative cached Vertex project catalog on
+	// the next refresh.
 	return { providerId: "google-vertex", staticModels: [] };
 }
 function resolveVertexProject(config?: GoogleVertexModelManagerConfig): string | undefined {
