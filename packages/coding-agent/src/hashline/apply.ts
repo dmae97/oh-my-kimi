@@ -53,6 +53,57 @@ function validateHashlineLineBounds(edits: HashlineEdit[], fileLines: string[]):
 	}
 }
 
+/**
+ * Refuse a single-line replace whose target line is blank and whose payload is
+ * non-empty. The model is almost certainly miscounting: `A:CONTENT` overwrites
+ * the existing line, so applying it to a blank target deletes the blank cadence
+ * and inserts content in its place. To insert content at a blank line, use
+ * `A↑` (insert before) or `A↓` (insert after) instead.
+ *
+ * Only fires for the simple shape: exactly one `insert(before_anchor A)` + one
+ * `delete(A)` sharing the same source op line, no other inserts/deletes from
+ * that op.
+ */
+function detectReplaceOnBlankTarget(edits: HashlineEdit[], fileLines: string[]): string | null {
+	type Pair = {
+		insert?: Extract<HashlineEdit, { kind: "insert" }>;
+		delete?: Extract<HashlineEdit, { kind: "delete" }>;
+		multi?: boolean;
+	};
+	const byOpLine = new Map<number, Pair>();
+	for (const edit of edits) {
+		const pair = byOpLine.get(edit.lineNum) ?? {};
+		if (pair.multi) continue;
+		if (edit.kind === "insert") {
+			if (pair.insert) pair.multi = true;
+			else pair.insert = edit;
+		} else {
+			if (pair.delete) pair.multi = true;
+			else pair.delete = edit;
+		}
+		byOpLine.set(edit.lineNum, pair);
+	}
+	for (const pair of byOpLine.values()) {
+		if (pair.multi || !pair.insert || !pair.delete) continue;
+		const insert = pair.insert;
+		const del = pair.delete;
+		if (insert.cursor.kind !== "before_anchor") continue;
+		if (insert.cursor.anchor.line !== del.anchor.line) continue;
+		if (insert.text.includes("\n")) continue;
+		if (insert.text.trim().length === 0) continue;
+		const targetLine = del.anchor.line;
+		const oldLine = fileLines[targetLine - 1];
+		if (oldLine === undefined || oldLine.trim().length !== 0) continue;
+		return (
+			`Edit rejected: replace at line ${targetLine} targets a blank line but the payload is non-empty. ` +
+			`'A:CONTENT' overwrites the line at A; to insert content next to a blank line, use 'A${"\u2191"}' (insert before) ` +
+			`or 'A${"\u2193"}' (insert after) instead. If you really meant to replace this blank with content, ` +
+			`widen the range to include surrounding non-blank lines so the intent is explicit.`
+		);
+	}
+	return null;
+}
+
 function insertAtStart(fileLines: string[], lineOrigins: HashlineLineOrigin[], lines: string[]): void {
 	if (lines.length === 0) return;
 	const origins = lines.map((): HashlineLineOrigin => "insert");
@@ -638,6 +689,9 @@ export function applyHashlineEdits(
 	};
 
 	validateHashlineLineBounds(edits, fileLines);
+
+	const blankTargetError = detectReplaceOnBlankTarget(edits, fileLines);
+	if (blankTargetError !== null) throw new Error(blankTargetError);
 
 	const normalizedEdits = absorbReplacementBoundaryDuplicates(edits, fileLines, warnings, options);
 
