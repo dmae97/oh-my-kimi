@@ -47,8 +47,9 @@ The broker is the only writer of OAuth refresh tokens. Clients (including the ga
 ```
 omp auth-broker serve     [--bind=host:port]                    # boot the broker
 omp auth-broker token     [--regenerate] [--json]               # print or rotate the bearer token
-omp auth-broker login     <provider> [--via=user@host] [--dry-run]
-omp auth-broker logout    <provider>
+omp auth-broker login     [<provider>] [--via=user@host] [--dry-run]
+omp auth-broker logout    [<provider>]
+omp auth-broker list      [--json]
 omp auth-broker import    <file|dir> [--provider=<id>] [--include-disabled] [--dry-run] [--json]
 omp auth-broker migrate   --from-local [--dry-run] [--json]
 omp auth-broker status    [--json]
@@ -56,8 +57,9 @@ omp auth-broker status    [--json]
 
 - `serve` opens the local SQLite store at `getAgentDbPath()` and binds an HTTP listener (default `127.0.0.1:8765`). On startup a token is ensured at `<config-dir>/auth-broker.token` (mode `0600`, `0700` parent dir). The background refresher refreshes any OAuth credential whose `expires - Date.now() < refreshSkewMs` (default 5 min) every `refreshIntervalMs` (default 60 s).
 - `token` prints the cached bearer or generates a new one. `--regenerate` rotates it.
-- `login <provider>` runs the per-provider OAuth flow locally, or — with `--via=user@host` — `ssh -L <callback-port>:127.0.0.1:<callback-port> user@host omp auth-broker login <provider>` so the OAuth callback hits the local browser but the credential is written on the broker host. Built-in callback ports: `anthropic:54545`, `openai-codex:1455`, `google-gemini-cli:8085`, `google-antigravity:51121`, `gitlab-duo:8080`.
-- `logout <provider>` deletes every credential row for `<provider>`.
+- `login [<provider>]` runs the per-provider OAuth flow locally — when no provider is supplied, it falls back to an interactive numbered picker. With `--via=user@host` it shells out `ssh -L <callback-port>:127.0.0.1:<callback-port> user@host omp auth-broker login <provider>` so the OAuth callback hits the local browser but the credential is written on the broker host (`--via` requires `<provider>`). Built-in callback ports: `anthropic:54545`, `openai-codex:1455`, `google-gemini-cli:8085`, `google-antigravity:51121`, `gitlab-duo:8080`. The OAuth dance is driven in-process via `AuthStorage.login()` — there is no longer a `pi-ai` bin to spawn.
+- `logout [<provider>]` deletes every credential row for `<provider>`. With no argument it shows an interactive numbered picker of currently-stored providers.
+- `list` enumerates every registered OAuth provider id/name (the union of built-ins + `registerOAuthProvider` custom providers). `--json` emits a machine-readable array.
 - `import <file|dir>` imports CLIProxyAPI-style JSON credentials into the local SQLite store. Maps `type` field → omp provider (`claude → anthropic`, `codex → openai-codex`, `gemini → google-gemini-cli`, `antigravity → google-antigravity`, `gemini-cli → google-gemini-cli`).
 - `migrate --from-local` walks the local SQLite store + env-derived credentials and idempotently uploads them to the configured broker (`POST /v1/credential`).
 - `status` health-pings the configured remote broker.

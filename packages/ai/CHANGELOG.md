@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the `pi-ai` CLI binary (`packages/ai/src/cli.ts`) and its `bin` entry. Use the in-process equivalent in the omp coding-agent CLI: `omp auth-broker login [provider]`, `omp auth-broker logout [provider]`, and `omp auth-broker list`. The library API (`AuthStorage.login()`, `getOAuthProviders()`, etc.) is unchanged.
+
 ## [15.4.3] - 2026-05-26
 
 ### Fixed

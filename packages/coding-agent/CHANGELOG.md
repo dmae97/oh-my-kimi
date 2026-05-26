@@ -1,6 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added interactive provider selection to `omp auth-broker logout` when no provider argument is supplied
+- Added `--json` flag to `omp auth-broker list` for machine-readable output
+- Added `omp auth-broker list` to enumerate supported OAuth providers (replaces `bunx @oh-my-pi/pi-ai list`).
+- Added interactive provider selection to `omp auth-broker login` and `omp auth-broker logout` when no provider argument is supplied (replaces `bunx @oh-my-pi/pi-ai login` / `logout` interactive flows).
+
+### Changed
+
+- Changed `omp auth-broker login` to support interactive provider selection when invoked without a provider argument
+- Changed `omp auth-broker logout` to support interactive provider selection from stored credentials when invoked without a provider argument
+- Changed `omp auth-broker login` to drive the per-provider OAuth/API-key flow in-process via `AuthStorage.login()` instead of spawning the `pi-ai` CLI subprocess. The pi-ai bin is being removed; the same login surface now lives entirely inside `omp`.
+- Changed default per-line truncation cap for search/grep output (`DEFAULT_MAX_COLUMN`) from `1024` to `512` characters.
 
 ## [15.4.3] - 2026-05-26
 
