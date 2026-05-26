@@ -31,6 +31,7 @@ import { formatBytes, formatDuration } from "../../tools/render-utils";
 type TextBlock = { type: "text"; text: string };
 interface RenderInitialMessagesOptions {
 	preserveExistingChat?: boolean;
+	clearTerminalHistory?: boolean;
 }
 
 type QueuedMessages = {
@@ -489,6 +490,9 @@ export class UiHelpers {
 		if (compactionCount > 0) {
 			const times = compactionCount === 1 ? "1 time" : `${compactionCount} times`;
 			this.ctx.showStatus(`Session compacted ${times}`);
+		}
+		if (options.clearTerminalHistory) {
+			this.ctx.ui.requestRender(true, { clearScrollback: true });
 		}
 		if (preservedChatChildren && preservedChatChildren.length > 0) {
 			for (const child of preservedChatChildren) {

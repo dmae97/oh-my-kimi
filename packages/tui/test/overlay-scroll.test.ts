@@ -36,6 +36,16 @@ class MutableContentComponent implements Component {
 		return [...this.#lines];
 	}
 }
+class WidthAwareHistoryComponent implements Component {
+	invalidate(): void {
+		// No cached state
+	}
+
+	render(width: number): string[] {
+		const prefix = width < 30 ? "narrow" : "wide";
+		return Array.from({ length: 24 }, (_v, i) => `${prefix}-row-${i}`);
+	}
+}
 
 class CursorOnlyComponent implements Component {
 	#cursorCol = 0;
@@ -80,6 +90,19 @@ function longestBlankRun(lines: string[]): number {
 	}
 	return longest;
 }
+async function withEnv(name: string, value: string, run: () => Promise<void>): Promise<void> {
+	const previous = Bun.env[name];
+	Bun.env[name] = value;
+	try {
+		await run();
+	} finally {
+		if (previous === undefined) {
+			delete Bun.env[name];
+		} else {
+			Bun.env[name] = previous;
+		}
+	}
+}
 
 async function flushRender(term: VirtualTerminal): Promise<void> {
 	await new Promise<void>(resolve => process.nextTick(resolve));
@@ -108,7 +131,7 @@ describe("TUI overlays", () => {
 		expect(term.getScrollBuffer().length).toBeLessThan(200);
 	});
 
-	it("clears preexisting terminal scrollback on startup full redraw", async () => {
+	it("preserves preexisting terminal scrollback on startup resize redraw", async () => {
 		const term = new VirtualTerminal(40, 4);
 		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
 		await flushRender(term);
@@ -124,9 +147,26 @@ describe("TUI overlays", () => {
 		await flushRender(term);
 
 		const scrollback = term.getScrollBuffer().join("\n");
-		expect(scrollback.includes("shell-0")).toBeFalsy();
+		expect(scrollback.includes("shell-0")).toBeTruthy();
 
 		tui.stop();
+	});
+	it("clears stale viewport content on launch without clearing shell scrollback", async () => {
+		const term = new VirtualTerminal(40, 4);
+		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
+		await flushRender(term);
+
+		const tui = new TUI(term);
+		tui.addChild(new MutableContentComponent(["ui-0", "ui-1"]));
+		try {
+			tui.start();
+			await flushRender(term);
+
+			expect(term.getViewport().join("\n").includes("shell-")).toBeFalsy();
+			expect(term.getScrollBuffer().join("\n").includes("shell-0")).toBeTruthy();
+		} finally {
+			tui.stop();
+		}
 	});
 
 	it("preserves rendered scrollback on forced redraw after startup", async () => {
@@ -149,6 +189,69 @@ describe("TUI overlays", () => {
 
 		tui.stop();
 	});
+	it("clears rendered scrollback when forced redraw replaces terminal history", async () => {
+		const term = new VirtualTerminal(40, 4);
+		const tui = new TUI(term);
+		const component = new MutableContentComponent(buildRows(120));
+		tui.addChild(component);
+
+		tui.start();
+		await flushRender(term);
+
+		expect(term.getScrollBuffer().join("\n").includes("row-0")).toBeTruthy();
+
+		component.setLines(["new-session-0", "new-session-1", "new-session-2", "new-session-3"]);
+		tui.requestRender(true, { clearScrollback: true });
+		await flushRender(term);
+
+		const scrollback = term.getScrollBuffer().join("\n");
+		expect(scrollback.includes("row-0")).toBeFalsy();
+		expect(scrollback.includes("new-session-3")).toBeTruthy();
+
+		tui.stop();
+	});
+	it("preserves multiplexer scrollback when replacing terminal history", async () => {
+		await withEnv("TMUX", "1", async () => {
+			const term = new VirtualTerminal(40, 4);
+			const tui = new TUI(term);
+			const component = new MutableContentComponent(buildRows(120));
+			tui.addChild(component);
+
+			tui.start();
+			await flushRender(term);
+			expect(term.getScrollBuffer().join("\n").includes("row-0")).toBeTruthy();
+
+			component.setLines(["new-session-0", "new-session-1", "new-session-2", "new-session-3"]);
+			tui.requestRender(true, { clearScrollback: true });
+			await flushRender(term);
+
+			const scrollback = term.getScrollBuffer().join("\n");
+			expect(scrollback.includes("row-0")).toBeTruthy();
+			expect(term.getViewport().join("\n").includes("new-session-3")).toBeTruthy();
+
+			tui.stop();
+		});
+	});
+	it("does not duplicate transcript into scrollback on repeated forced redraws", async () => {
+		const term = new VirtualTerminal(40, 4);
+		const tui = new TUI(term);
+		const component = new MutableContentComponent(buildRows(60));
+		tui.addChild(component);
+
+		tui.start();
+		await flushRender(term);
+		const baseline = term.getScrollBuffer().filter(line => /^row-\d+$/.test(line.trim())).length;
+
+		for (let i = 0; i < 5; i++) {
+			tui.requestRender(true);
+			await flushRender(term);
+		}
+
+		const after = term.getScrollBuffer().filter(line => /^row-\d+$/.test(line.trim())).length;
+		expect(after).toBeLessThanOrEqual(baseline + 4);
+
+		tui.stop();
+	});
 	it("fully redraws on height increase to avoid stale viewport rows", async () => {
 		const term = new VirtualTerminal(40, 4);
 		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
@@ -168,6 +271,36 @@ describe("TUI overlays", () => {
 		expect(viewport.includes("shell-")).toBeFalsy();
 
 		tui.stop();
+	});
+	it("keeps single viewport copy under simultaneous height and content changes", async () => {
+		const term = new VirtualTerminal(60, 8);
+		const tui = new TUI(term);
+		const component = new MutableContentComponent(buildRows(4));
+		tui.addChild(component);
+		try {
+			tui.start();
+			await flushRender(term);
+
+			for (let i = 0; i < 12; i++) {
+				component.setLines(buildRows(4 + i));
+				term.resize(60, i % 2 === 0 ? 7 : 9);
+				await flushRender(term);
+			}
+
+			const viewport = term.getViewport();
+			const rowOccurrences = new Map<string, number>();
+			for (const line of viewport) {
+				const trimmed = line.trim();
+				if (!/^row-\d+$/.test(trimmed)) continue;
+				rowOccurrences.set(trimmed, (rowOccurrences.get(trimmed) ?? 0) + 1);
+			}
+			for (const [row, count] of rowOccurrences) {
+				expect(count, `${row} should appear at most once in the viewport`).toBe(1);
+			}
+			expect(viewport.at(-1)?.trim()).toBe("row-14");
+		} finally {
+			tui.stop();
+		}
 	});
 	it("renders viewport-only on resize when content size is stable", async () => {
 		const term = new VirtualTerminal(60, 8);
@@ -208,6 +341,26 @@ describe("TUI overlays", () => {
 			tui.stop();
 		}
 	});
+	it("replays width-dependent offscreen scrollback on terminal width changes", async () => {
+		const term = new VirtualTerminal(40, 4);
+		const tui = new TUI(term);
+		tui.addChild(new WidthAwareHistoryComponent());
+		try {
+			tui.start();
+			await flushRender(term);
+			expect(term.getScrollBuffer().join("\n").includes("wide-row-0")).toBeTruthy();
+
+			term.resize(20, 4);
+			await flushRender(term);
+
+			const scrollback = term.getScrollBuffer().join("\n");
+			expect(scrollback.includes("narrow-row-0")).toBeTruthy();
+			expect(scrollback.includes("wide-row-0")).toBeFalsy();
+			expect(term.getViewport().at(-1)?.trim()).toBe("narrow-row-23");
+		} finally {
+			tui.stop();
+		}
+	});
 
 	it("keeps scrollback on viewport-only resize redraw", async () => {
 		const term = new VirtualTerminal(40, 4);
@@ -221,7 +374,7 @@ describe("TUI overlays", () => {
 			term.resize(39, 4);
 			await flushRender(term);
 			const scrollback = term.getScrollBuffer().join("\n");
-			expect(scrollback.includes("shell-0")).toBeFalsy();
+			expect(scrollback.includes("shell-0")).toBeTruthy();
 		} finally {
 			tui.stop();
 		}

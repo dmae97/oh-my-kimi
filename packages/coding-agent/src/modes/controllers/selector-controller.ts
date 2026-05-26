@@ -553,7 +553,7 @@ export class SelectorController {
 					}
 
 					this.ctx.chatContainer.clear();
-					this.ctx.renderInitialMessages();
+					this.ctx.renderInitialMessages(undefined, { clearTerminalHistory: true });
 					this.ctx.editor.setText(result.selectedText);
 					done();
 					this.ctx.showStatus("Branched to new session");
@@ -664,7 +664,7 @@ export class SelectorController {
 
 						// Update UI — pass the context built by navigateTree to skip a second O(N) walk.
 						this.ctx.chatContainer.clear();
-						this.ctx.renderInitialMessages(result.sessionContext);
+						this.ctx.renderInitialMessages(result.sessionContext, { clearTerminalHistory: true });
 						await this.ctx.reloadTodos();
 						if (result.editorText && !this.ctx.editor.getText().trim()) {
 							this.ctx.editor.setText(result.editorText);
@@ -772,9 +772,9 @@ export class SelectorController {
 		this.ctx.statusLine.setSessionStartTime(Date.now());
 		this.ctx.updateEditorTopBorder();
 		this.ctx.updateEditorBorderColor();
-		this.ctx.renderInitialMessages();
+		this.ctx.renderInitialMessages(undefined, { clearTerminalHistory: true });
 		await this.ctx.reloadTodos();
-		this.ctx.ui.requestRender();
+		this.ctx.ui.requestRender(true, { clearScrollback: true });
 		return true;
 	}
 
@@ -788,7 +788,7 @@ export class SelectorController {
 
 		// Clear and re-render the chat
 		this.ctx.chatContainer.clear();
-		this.ctx.renderInitialMessages();
+		this.ctx.renderInitialMessages(undefined, { clearTerminalHistory: true });
 		await this.ctx.reloadTodos();
 		this.ctx.showStatus("Resumed session");
 	}

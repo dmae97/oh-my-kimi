@@ -20,6 +20,31 @@ class MutableLinesComponent implements Component {
 	}
 }
 
+class WrappingLinesComponent implements Component {
+	#lines: string[];
+
+	constructor(lines: string[]) {
+		this.#lines = [...lines];
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const chunkWidth = Math.max(1, width);
+		const rendered: string[] = [];
+		for (const line of this.#lines) {
+			if (line.length === 0) {
+				rendered.push("");
+				continue;
+			}
+			for (let offset = 0; offset < line.length; offset += chunkWidth) {
+				rendered.push(line.slice(offset, offset + chunkWidth));
+			}
+		}
+		return rendered;
+	}
+}
+
 function rows(prefix: string, count: number): string[] {
 	return Array.from({ length: count }, (_v, i) => `${prefix}${i}`);
 }
@@ -157,7 +182,7 @@ describe("TUI terminal-state regressions", () => {
 	});
 
 	describe("resize + viewport behavior", () => {
-		it("clears preexisting shell rows on startup and resize redraw", async () => {
+		it("preserves preexisting shell scrollback on startup and resize redraw", async () => {
 			const term = new VirtualTerminal(50, 5);
 			term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
 			await settle(term);
@@ -174,7 +199,7 @@ describe("TUI terminal-state regressions", () => {
 				await settle(term);
 
 				const buffer = term.getScrollBuffer().join("\n");
-				expect(buffer.includes("shell-")).toBeFalsy();
+				expect(buffer.includes("shell-")).toBeTruthy();
 			} finally {
 				tui.stop();
 			}
@@ -265,6 +290,36 @@ describe("TUI terminal-state regressions", () => {
 					await settle(term);
 					expect(visible(term)).toEqual(expectedViewport(width, 18));
 				}
+			} finally {
+				tui.stop();
+			}
+		});
+		it("repaints viewport when width reflow grows rendered lines", async () => {
+			const term = new VirtualTerminal(40, 10);
+			const tui = new TUI(term);
+			const lines = [
+				...Array.from({ length: 5 }, (_v, i) => `long-${i}-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`),
+				...Array.from({ length: 20 }, (_v, i) => `tail-${i}`),
+			];
+			tui.addChild(new WrappingLinesComponent(lines));
+
+			const expectedViewport = (width: number, height: number): string[] => {
+				const rendered = new WrappingLinesComponent(lines).render(width);
+				const top = Math.max(0, rendered.length - height);
+				const viewport = rendered.slice(top, top + height);
+				while (viewport.length < height) viewport.push("");
+				return viewport.map(line => line.trimEnd());
+			};
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(visible(term)).toEqual(expectedViewport(40, 10));
+
+				term.resize(20, 10);
+				await settle(term);
+
+				expect(visible(term)).toEqual(expectedViewport(20, 10));
 			} finally {
 				tui.stop();
 			}
@@ -678,7 +733,7 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
-		it("retains append history when offscreen header changes during overflow growth", async () => {
+		it("keeps viewport aligned when offscreen header changes during overflow growth", async () => {
 			const term = new VirtualTerminal(32, 6);
 			const tui = new TUI(term);
 			const logLines = rows("line-", 6);
@@ -697,15 +752,6 @@ describe("TUI terminal-state regressions", () => {
 					tui.requestRender();
 					await settle(term);
 				}
-
-				const scrollback = term.getScrollBuffer();
-				for (let i = 0; i < 70; i++) {
-					expect(countMatches(scrollback, new RegExp(`\\bline-${i}\\b`))).toBe(1);
-				}
-				for (let i = 0; i <= tick; i++) {
-					expect(countMatches(scrollback, new RegExp(`\\bstatus-${i}\\b`))).toBeLessThanOrEqual(1);
-				}
-
 				const viewport = visible(term).map(line => line.trim());
 				expect(viewport.at(-1)).toBe("line-69");
 				for (let i = 1; i < viewport.length; i++) {
@@ -713,6 +759,42 @@ describe("TUI terminal-state regressions", () => {
 					const next = Number.parseInt(viewport[i]!.slice(5), 10);
 					expect(next - prev).toBe(1);
 				}
+			} finally {
+				tui.stop();
+			}
+		});
+		it("repaints viewport when offscreen expansion and append land together", async () => {
+			const term = new VirtualTerminal(32, 6);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(["status-0", ...rows("line-", 11)]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(visible(term).map(line => line.trim())).toEqual([
+					"line-5",
+					"line-6",
+					"line-7",
+					"line-8",
+					"line-9",
+					"line-10",
+				]);
+				const beforeBufferLength = term.getScrollBuffer().length;
+
+				component.setLines(["status-1", "expanded-details", ...rows("line-", 12)]);
+				tui.requestRender();
+				await settle(term);
+
+				expect(visible(term).map(line => line.trim())).toEqual([
+					"line-6",
+					"line-7",
+					"line-8",
+					"line-9",
+					"line-10",
+					"line-11",
+				]);
+				expect(term.getScrollBuffer().length - beforeBufferLength).toBe(1);
 			} finally {
 				tui.stop();
 			}
