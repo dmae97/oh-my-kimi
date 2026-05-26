@@ -71,7 +71,7 @@ export class HashlineMismatchError extends Error {
 		const pathText = details.path ? ` for ${details.path}` : "";
 		return [
 			`Edit rejected${pathText}: file changed between read and edit.`,
-			`Section is bound to ${HL_FILE_HASH_SEP}${details.expectedFileHash}, but the current file hashes to ${HL_FILE_HASH_SEP}${details.actualFileHash}; re-read and try again.`,
+			`Section is bound to ${HL_FILE_HASH_SEP}${details.expectedFileHash}, but the current file hashes to ${HL_FILE_HASH_SEP}${details.actualFileHash}. If your previous edit in this session modified this file, copy the ${HL_FILE_PREFIX}path${HL_FILE_HASH_SEP}newhash from that edit's response. Otherwise re-read the file before retrying.`,
 		];
 	}
 
