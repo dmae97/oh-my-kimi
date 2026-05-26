@@ -1368,10 +1368,12 @@ function formatUnlimitedReportLabel(report: UsageReport, index: number): string 
 }
 
 function formatResetShort(limit: UsageLimit, nowMs: number): string | undefined {
-	if (limit.window?.resetsAt !== undefined) {
-		return formatDuration(limit.window.resetsAt - nowMs);
-	}
-	return undefined;
+	const resetsAt = limit.window?.resetsAt;
+	if (resetsAt === undefined) return undefined;
+	// Codex returns the prior window's reset_at until a new request opens a fresh window —
+	// rendering a negative delta is meaningless, so drop the suffix in that case.
+	if (resetsAt <= nowMs) return undefined;
+	return formatDuration(resetsAt - nowMs);
 }
 
 function formatAccountHeaderRow(
