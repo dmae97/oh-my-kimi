@@ -1919,4 +1919,32 @@ mod tests {
 		}
 		assert_eq!(stdout, b"prod:8080");
 	}
+
+	/// Regression for a Windows/macOS deadlock in
+	/// `brush_core::interp::setup_open_file_with_contents`. The body is
+	/// 256 KiB — well past the default pipe buffer on every platform
+	/// (Windows ~4 KiB, macOS 16-64 KiB, Linux 64 KiB), so any inline
+	/// `write_all` on the calling thread blocks forever. The `:` builtin
+	/// never reads its stdin, so the only way `echo done` runs is if the
+	/// heredoc writer is decoupled from the main thread (or, on Linux,
+	/// the pipe buffer was grown via `F_SETPIPE_SZ`). The
+	/// `tokio::time::timeout` is the safety net that turns a regression
+	/// into a 10 s failure instead of hanging CI for the full
+	/// hard-timeout window.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn large_heredoc_does_not_deadlock() {
+		let body = "X".repeat(256 * 1024);
+		let command = format!(": <<'EOF'\n{body}\nEOF\necho done");
+		let options = ShellExecuteOptions { command, ..Default::default() };
+
+		let result = time::timeout(
+			Duration::from_secs(10),
+			execute_shell(options, None, CancelToken::default()),
+		)
+		.await
+		.expect("execute_shell hung past 10 s — heredoc writer deadlocked")
+		.expect("execute_shell errored");
+
+		assert_eq!(result.exit_code, Some(0), "command did not run to completion");
+	}
 }
