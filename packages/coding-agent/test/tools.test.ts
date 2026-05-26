@@ -957,6 +957,16 @@ function b() {
 			expect(result.details?.timeoutSeconds).toBe(300);
 		});
 
+		it("should record wall time in text content and details", async () => {
+			const result = await bashTool.execute("test-call-walltime", { command: "echo wt" });
+
+			const output = getTextOutput(result);
+			expect(output).toContain("wt");
+			expect(output).toMatch(/Wall time: \d+\.\d{2} seconds/);
+			expect(typeof result.details?.wallTimeMs).toBe("number");
+			expect(result.details?.wallTimeMs).toBeGreaterThanOrEqual(0);
+		});
+
 		it("should expose built-in interceptor defaults truthfully", () => {
 			const defaultSettings = Settings.isolated({ "bashInterceptor.enabled": true });
 			const explicitEmptySettings = Settings.isolated({

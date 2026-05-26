@@ -128,6 +128,7 @@ export interface BashToolDetails {
 	meta?: OutputMeta;
 	timeoutSeconds?: number;
 	requestedTimeoutSeconds?: number;
+	wallTimeMs?: number;
 	terminalId?: string;
 	async?: {
 		state: "running" | "completed" | "failed";
@@ -272,6 +273,34 @@ function formatTimeoutClampNotice(requestedTimeoutSec: number, effectiveTimeoutS
 		: undefined;
 }
 
+function formatWallTimeSeconds(wallTimeMs: number): string {
+	return (wallTimeMs / 1000).toFixed(2);
+}
+
+function formatWallTimeNotice(wallTimeMs: number): string {
+	return `Wall time: ${formatWallTimeSeconds(wallTimeMs)} seconds`;
+}
+
+/**
+ * Strip the trailing `Wall time: <secs> seconds` notice from text so the TUI
+ * can render the wall time via its styled `[Wall: …]` label without echoing
+ * the same value verbatim in the output pane.
+ */
+function stripWallTimeNotice(text: string, wallTimeMs: number | undefined): string {
+	if (wallTimeMs === undefined) return text;
+	// Reconstruct the notice from the same value the result was tagged with so
+	// a literal sub-string match never strips a coincidental in-output token —
+	// only the exact line we appended in #buildCompletedResult.
+	const notice = formatWallTimeNotice(wallTimeMs);
+	const idx = text.lastIndexOf(notice);
+	if (idx === -1) return text;
+	let start = idx;
+	let end = idx + notice.length;
+	if (text[start - 1] === "\n") start -= 1;
+	if (text[end] === "\n") end += 1;
+	return (text.slice(0, start) + text.slice(end)).trimEnd();
+}
+
 /**
  * Bash tool implementation.
  *
@@ -347,10 +376,23 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	#buildCompletedResult(
 		result: BashResult | BashInteractiveResult,
 		timeoutSec: number,
-		options: { requestedTimeoutSec?: number; notices?: readonly string[]; terminalId?: string } = {},
+		options: {
+			requestedTimeoutSec?: number;
+			notices?: readonly string[];
+			terminalId?: string;
+			wallTimeMs?: number;
+		} = {},
 	): AgentToolResult<BashToolDetails> {
 		const outputLines = [this.#formatResultOutput(result)];
-		const notices = options.notices?.filter(Boolean) ?? [];
+		const notices: string[] = [];
+		if (options.wallTimeMs !== undefined) {
+			notices.push(formatWallTimeNotice(options.wallTimeMs));
+		}
+		if (options.notices) {
+			for (const notice of options.notices) {
+				if (notice) notices.push(notice);
+			}
+		}
 		if (notices.length > 0) outputLines.push("", ...notices);
 		const outputText = outputLines.join("\n");
 		const details: BashToolDetails = { timeoutSeconds: timeoutSec };
@@ -359,6 +401,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		}
 		if (options.terminalId !== undefined) {
 			details.terminalId = options.terminalId;
+		}
+		if (options.wallTimeMs !== undefined) {
+			details.wallTimeMs = options.wallTimeMs;
 		}
 		const resultBuilder = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" });
 		this.#buildResultText(result, timeoutSec, outputText);
@@ -430,6 +475,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			async ({ jobId, signal: runSignal, reportProgress }) => {
 				const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("bash")) ?? {};
 				const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
+				const wallTimeStart = performance.now();
 				try {
 					const result = await executeBash(options.command, {
 						cwd: options.commandCwd,
@@ -446,9 +492,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						},
 						onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
 					});
+					const wallTimeMs = performance.now() - wallTimeStart;
 					const finalResult = this.#buildCompletedResult(result, options.timeoutSec, {
 						requestedTimeoutSec: options.requestedTimeoutSec,
 						notices: options.notices ?? [],
+						wallTimeMs,
 					});
 					const finalText = this.#extractTextResult(finalResult);
 					latestText = finalText;
@@ -697,6 +745,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		// Skip when pty=true (PTY needs the local terminal UI).
 		const clientBridge = this.session.getClientBridge?.();
 		if (clientBridge?.capabilities.terminal && clientBridge.createTerminal && !pty) {
+			const bridgeWallTimeStart = performance.now();
 			const handle = await clientBridge.createTerminal({
 				command,
 				cwd: commandCwd,
@@ -792,6 +841,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 								requestedTimeoutSec,
 								notices: pendingNotices,
 								terminalId: handle.terminalId,
+								wallTimeMs: performance.now() - bridgeWallTimeStart,
 							});
 						}
 
@@ -852,6 +902,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					requestedTimeoutSec,
 					notices: bridgeNotices,
 					terminalId: handle.terminalId,
+					wallTimeMs: performance.now() - bridgeWallTimeStart,
 				});
 			} finally {
 				try {
@@ -869,6 +920,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("bash")) ?? {};
 
 		const interactiveUi = canUseInteractiveBashPty(pty, ctx) ? ctx?.ui : undefined;
+		const wallTimeStart = performance.now();
 		const result: BashResult | BashInteractiveResult = interactiveUi
 			? await runInteractiveBashPty(interactiveUi, {
 					command,
@@ -890,6 +942,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					onChunk: streamTailUpdates(tailBuffer, onUpdate),
 					onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
 				});
+		const wallTimeMs = performance.now() - wallTimeStart;
 		if (result.cancelled) {
 			if (signal?.aborted) {
 				throw new ToolAbortError(normalizeResultOutput(result) || "Command aborted");
@@ -902,6 +955,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		return this.#buildCompletedResult(result, timeoutSec, {
 			requestedTimeoutSec,
 			notices: pendingNotices,
+			wallTimeMs,
 		});
 	}
 }
@@ -1032,22 +1086,32 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					// Strip the LLM-facing notice appended by wrappedExecute so we don't
 					// double-print it alongside the styled warning line below.
 					const rawOutput = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
-					const output = stripOutputNotice(rawOutput, details?.meta);
+					const strippedOutput = stripOutputNotice(rawOutput, details?.meta);
+					const output = stripWallTimeNotice(strippedOutput, details?.wallTimeMs);
 					const displayOutput = output.trimEnd();
 					const showingFullOutput = expanded && renderContext?.isFullOutput === true;
 
 					// Build truncation warning
 					const timeoutSeconds = details?.timeoutSeconds ?? renderContext?.timeout;
 					const requestedTimeoutSeconds = details?.requestedTimeoutSeconds;
-					const timeoutLabel =
-						typeof timeoutSeconds === "number"
-							? requestedTimeoutSeconds !== undefined && requestedTimeoutSeconds !== timeoutSeconds
+					const wallTimeMs = details?.wallTimeMs;
+					const statsParts: string[] = [];
+					if (wallTimeMs !== undefined) {
+						statsParts.push(`Wall: ${formatWallTimeSeconds(wallTimeMs)}s`);
+					}
+					if (typeof timeoutSeconds === "number") {
+						statsParts.push(
+							requestedTimeoutSeconds !== undefined && requestedTimeoutSeconds !== timeoutSeconds
 								? `Timeout: ${timeoutSeconds}s (requested ${requestedTimeoutSeconds}s clamped)`
-								: `Timeout: ${timeoutSeconds}s`
-							: undefined;
+								: `Timeout: ${timeoutSeconds}s`,
+						);
+					}
 					const timeoutLine =
-						timeoutLabel !== undefined
-							? uiTheme.fg("dim", `${uiTheme.format.bracketLeft}${timeoutLabel}${uiTheme.format.bracketRight}`)
+						statsParts.length > 0
+							? uiTheme.fg(
+									"dim",
+									`${uiTheme.format.bracketLeft}${statsParts.join(" | ")}${uiTheme.format.bracketRight}`,
+								)
 							: undefined;
 					let warningLine: string | undefined;
 					if (details?.meta?.truncation && !showingFullOutput) {

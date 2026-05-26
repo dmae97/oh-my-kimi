@@ -84,6 +84,28 @@ describe("bashToolRenderer", () => {
 		expect(rendered).not.toContain("Timeout: 1200s");
 	});
 
+	it("renders wall time alongside the timeout label and strips the textual notice", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const component = bashToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "hello\n\nWall time: 1.23 seconds" }],
+				details: { timeoutSeconds: 5, wallTimeMs: 1230 },
+				isError: false,
+			},
+			{ expanded: false, isPartial: false },
+			uiTheme,
+			{ command: "echo hi" },
+		);
+		const rendered = sanitizeText(component.render(120).join("\n"));
+		expect(rendered).toContain("Wall: 1.23s");
+		expect(rendered).toContain("Timeout: 5s");
+		// Notice text must not appear in the output region — the styled label is the
+		// only place wall time is shown so users don't read it twice.
+		expect(rendered).not.toContain("Wall time: 1.23 seconds");
+	});
+
 	it("bypasses truncation/styling for SIXEL lines", async () => {
 		terminal.imageProtocol = ImageProtocol.Sixel;
 		const theme = await getThemeByName("dark");
