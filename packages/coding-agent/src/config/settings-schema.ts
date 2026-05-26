@@ -2383,6 +2383,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.enableLsp": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			label: "LSP in Subagents",
+			description:
+				"Allow subagents spawned via the task tool to use the lsp tool. Off by default to keep subagents cheap; enable when LSP-aware delegation is worth the extra tokens.",
+		},
+	},
+
 	"task.maxRecursionDepth": {
 		type: "number",
 		default: 2,
