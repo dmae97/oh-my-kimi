@@ -558,6 +558,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const commitStyle = this.session.settings.get("task.isolation.commits");
 		const maxConcurrency = this.session.settings.get("task.maxConcurrency");
 		const taskDepth = this.session.taskDepth ?? 0;
+		const subagentLspEnabled = (this.session.enableLsp ?? true) && this.session.settings.get("task.enableLsp");
 
 		if (isolationMode === "none" && "isolated" in params) {
 			return {
@@ -872,7 +873,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				if (!isIsolated) {
 					return runSubprocess({
 						cwd: this.session.cwd,
-						agent,
+						agent: effectiveAgent,
 						task: renderSubagentUserPrompt(task.assignment, simpleMode),
 						assignment: task.assignment.trim(),
 						context: sharedContext,
@@ -888,7 +889,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						persistArtifacts: !!artifactsDir,
 						artifactsDir: effectiveArtifactsDir,
 						contextFile: contextFilePath,
-						enableLsp: false,
+						enableLsp: subagentLspEnabled,
 						signal,
 						eventBus: this.session.eventBus,
 						onProgress: progress => {
@@ -927,7 +928,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					const result = await runSubprocess({
 						cwd: this.session.cwd,
 						worktree: isolationDir,
-						agent,
+						agent: effectiveAgent,
 						task: renderSubagentUserPrompt(task.assignment, simpleMode),
 						assignment: task.assignment.trim(),
 						context: sharedContext,
@@ -943,7 +944,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						persistArtifacts: !!artifactsDir,
 						artifactsDir: effectiveArtifactsDir,
 						contextFile: contextFilePath,
-						enableLsp: false,
+						enableLsp: subagentLspEnabled,
 						signal,
 						eventBus: this.session.eventBus,
 						onProgress: progress => {
