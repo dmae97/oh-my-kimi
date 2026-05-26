@@ -302,6 +302,7 @@ Extra conditional behavior:
 | `PI_FORCE_IMAGE_PROTOCOL`    | Forces supported image protocol (`kitty`, `iterm2`/`iterm`, `sixel`, `none`) where used            |
 | `PI_ALLOW_SIXEL_PASSTHROUGH` | Allows SIXEL passthrough when `PI_FORCE_IMAGE_PROTOCOL=sixel`                                      |
 | `PI_NO_PTY`                  | If `1`, disables interactive PTY path for bash tool                                                |
+| `OMP_MCP_TIMEOUT_MS`         | Overrides MCP client request timeout (ms) for every MCP server. `0` disables client-side timeouts (`AbortSignal` never fires). Invalid (negative or non-numeric) values are ignored with a warning and the per-server config or default (`30000`) is used. |
 
 `PI_NO_PTY` is also set internally when CLI `--no-pty` is used.
 

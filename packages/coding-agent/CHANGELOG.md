@@ -3,6 +3,7 @@
 ## [Unreleased]
 ### Added
 
+- Added `OMP_MCP_TIMEOUT_MS` environment variable to override MCP client request timeout for every server (in milliseconds); set to `0` to disable client-side timeouts. Invalid (negative or non-numeric) values are ignored with a warning and fall back to the per-server timeout or default 30s ([#1415](https://github.com/can1357/oh-my-pi/pull/1415)).
 - Added interactive provider selection to `omp auth-broker logout` when no provider argument is supplied
 - Added `--json` flag to `omp auth-broker list` for machine-readable output
 - Added `omp auth-broker list` to enumerate supported OAuth providers (replaces `bunx @oh-my-pi/pi-ai list`).
