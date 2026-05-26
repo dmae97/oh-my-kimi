@@ -1063,9 +1063,10 @@ fn parse_key_inner(bytes: &[u8], kitty_protocol_active: bool) -> Option<Cow<'sta
 		&& bytes[0] == 0x1b
 		&& bytes[1] == 0x1b
 		&& (bytes[2] == b'[' || bytes[2] == b'O')
-		&& let Some(inner_key) = parse_key_inner(&bytes[1..], true) {
-			return Some(Cow::Owned(format!("alt+{inner_key}")));
-		}
+		&& let Some(inner_key) = parse_key_inner(&bytes[1..], true)
+	{
+		return Some(Cow::Owned(format!("alt+{inner_key}")));
+	}
 
 	// Two-byte ESC sequences (legacy ALT prefix, with exceptions even in kitty
 	// mode)

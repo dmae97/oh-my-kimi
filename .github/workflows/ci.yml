@@ -321,6 +321,11 @@ jobs:
          contents: write
       steps:
          - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - name: Generate release notes from CHANGELOGs
+           run: bun scripts/ci-release-notes.ts
          - name: Download release binaries
            uses: actions/download-artifact@v4
            with:
@@ -332,6 +337,7 @@ jobs:
            with:
               files: |
                  packages/coding-agent/binaries/omp-*
+              body_path: release-notes.md
               generate_release_notes: true
 
 
