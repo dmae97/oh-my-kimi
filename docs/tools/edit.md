@@ -8,7 +8,7 @@
 - Key collaborators:
   - `packages/coding-agent/src/utils/edit-mode.ts` — selects active edit mode
   - `packages/coding-agent/src/hashline/grammar.lark` — custom-tool grammar for hashline mode
-  - `packages/coding-agent/src/hashline/input.ts` — splits `§PATH` sections
+  - `packages/coding-agent/src/hashline/input.ts` — splits `¶PATH` sections
   - `packages/coding-agent/src/hashline/parser.ts` — parses op-prefixed edits and verbatim payload lines
   - `packages/coding-agent/src/hashline/apply.ts` — validates anchors and applies edits
   - `packages/coding-agent/src/hashline/anchors.ts` — stale-anchor mismatch formatting
@@ -26,17 +26,17 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `input` | `string` | Yes | One or more edit sections. First non-blank line must be `§PATH` unless the caller supplies the legacy fallback `path` outside the model schema and the body already looks like hashline ops (`packages/coding-agent/src/hashline/input.ts`). Optional `*** Begin Patch` / `*** End Patch` envelope is ignored if present. |
+| `input` | `string` | Yes | One or more edit sections. First non-blank line must be `¶PATH` unless the caller supplies the legacy fallback `path` outside the model schema and the body already looks like hashline ops (`packages/coding-agent/src/hashline/input.ts`). Optional `*** Begin Patch` / `*** End Patch` envelope is ignored if present. |
 
 Patch language inside `input`:
 
-- Section header: `§PATH`
-- Insert after: `»ANCHOR`
-- Insert before: `«ANCHOR`
-- Replace/delete range: `≔A..B`
-- Single-line replace/delete sugar: `≔A` means `≔A..A`
-- `≔A..B` with no payload deletes the range. To keep a blank line, include one explicit empty payload line.
-- Payload lines: verbatim file content after `»`, `«`, or `≔`
+- Section header: `¶PATH`
+- Insert after: `ANCHOR↓`
+- Insert before: `ANCHOR↑`
+- Replace/delete range: `A-B→`
+- Single-line replace/delete sugar: `A→` means `A-A→`
+- `A-B→` with no payload deletes the range. To keep a blank line, include one explicit empty payload line.
+- Inline payload: content after `↓`/`↑`/`→` on the same line is the first payload line; subsequent lines append to it
 - Special anchors: `BOF`, `EOF`
 - Anchor token: `<line><2-char-hash>`, for example `41th`
 
@@ -68,16 +68,16 @@ Warnings:
 
 ## Flow
 1. `EditTool.execute()` in `packages/coding-agent/src/edit/index.ts` resolves the active mode. Default is `hashline`; `customFormat` exposes `packages/coding-agent/src/hashline/grammar.lark` with `$HFMT$` / `$HOP_INSERT_BEFORE$` / `$HOP_INSERT_AFTER$` / `$HOP_REPLACE$` / `$HOP_CHARS$` / `$HFILE$` placeholders filled from `packages/coding-agent/src/hashline/hash.ts`.
-2. `executeHashlineSingle()` in `packages/coding-agent/src/hashline/execute.ts` splits the raw `input` into `§PATH` sections with `splitHashlineInputs()`.
+2. `executeHashlineSingle()` in `packages/coding-agent/src/hashline/execute.ts` splits the raw `input` into `¶PATH` sections with `splitHashlineInputs()`.
 3. If multiple sections target the same path, `mergeSamePathSections()` concatenates them before execution so every op still refers to the original file snapshot.
 4. Multi-section calls run a preflight pass (`preflightHashlineSection()`): parse ops, enforce plan-mode write rules, load the current file, reject anchor-scoped edits against missing files, reject auto-generated files, apply edits in memory, and fail if the result is a no-op. This prevents partial batches.
 5. `parseHashlineWithWarnings()` in `packages/coding-agent/src/hashline/parser.ts` tokenizes the diff body:
    - ignores blank lines and optional `*** Begin Patch`
    - stops at `*** End Patch`
    - stops at `*** Abort` and emits `ABORT_WARNING`
-   - turns `»` / `«` payload runs into one `insert` edit per payload line
-   - turns `≔A..B` with payload into inserts before `A`, then deletes for `A..B`
-   - turns `≔A..B` with no payload into one `delete` edit per line in the range; a blank-in-place edit requires one explicit empty payload line
+   - turns `↓` / `↑` payload runs into one `insert` edit per payload line
+   - turns `A-B→` with payload into inserts before `A`, then deletes for `A-B`
+   - turns `A-B→` with no payload into one `delete` edit per line in the range; a blank-in-place edit requires one explicit empty payload line
 6. `applyHashlineEdits()` in `packages/coding-agent/src/hashline/apply.ts` validates every referenced anchor before mutating anything. Each anchor hash is recomputed from current file content with `computeLineHash()`.
 7. If any anchor hash differs, `applyHashlineEdits()` throws `HashlineMismatchError`. `execute.ts` catches only that class and calls `tryRecoverHashlineWithCache()`.
 8. Recovery replays the edits against the most recent cached read/search snapshot for that path (`packages/coding-agent/src/edit/file-read-cache.ts`), then 3-way merges the result onto current disk content using `Diff.applyPatch(..., { fuzzFactor: 3 })` in `packages/coding-agent/src/hashline/recovery.ts`. On success the edit proceeds with a warning; on failure the original mismatch error is re-thrown.
@@ -103,25 +103,25 @@ Warnings:
 Hashline op examples:
 
 ```text
-§src/a.ts
-»4fb
+¶src/a.ts
+4fb↓
 const added = true;
 ```
 
 ```text
-§src/a.ts
-«4fb
+¶src/a.ts
+4fb↑
 const addedBefore = true;
 ```
 
 ```text
-§src/a.ts
-≔4fb..6qx
+¶src/a.ts
+4fb-6qx→
 ```
 
 ```text
-§src/a.ts
-≔4fb..5dm
+¶src/a.ts
+4fb-5dm→
 const clean = (name || DEF).trim();
 return clean.length === 0 ? DEF : clean.toUpperCase();
 ```
@@ -129,29 +129,29 @@ return clean.length === 0 ? DEF : clean.toUpperCase();
 BOF/EOF examples:
 
 ```text
-§src/a.ts
-»BOF
+¶src/a.ts
+BOF↓
 const HEADER = true;
 ```
 
 ```text
-§src/a.ts
-»EOF
+¶src/a.ts
+EOF↓
 export const done = true;
 ```
 
 Delete / blank examples:
 
 ```text
-§src/a.ts
-≔4fb
+¶src/a.ts
+4fb→
 ```
 
 ```text
-§src/a.ts
-≔4fb
+¶src/a.ts
+4fb→
 
-»EOF
+EOF↓
 export const done = true;
 ```
 
@@ -178,28 +178,27 @@ export const done = true;
 - Stale-anchor recovery uses `fuzzFactor: 3` (`HASHLINE_RECOVERY_FUZZ_FACTOR`) in `packages/coding-agent/src/hashline/recovery.ts`.
 - The per-session read cache keeps at most 30 paths (`MAX_PATHS_PER_SESSION`) in `packages/coding-agent/src/edit/file-read-cache.ts`.
 - Hashline streaming chunk defaults are 200 lines or 64 KiB per chunk (`packages/coding-agent/src/hashline/types.ts`, consumed by `packages/coding-agent/src/hashline/stream.ts`).
-- `HL_OP_INSERT_BEFORE` is `«`, `HL_OP_INSERT_AFTER` is `»`, `HL_OP_REPLACE` is `≔`, `HL_OP_CHARS` is `«»≔`, `HL_FILE_PREFIX` is `§`, and `HL_BODY_SEP` is `|` (`packages/coding-agent/src/hashline/hash.ts`).
+- `HL_OP_INSERT_BEFORE` is `↑`, `HL_OP_INSERT_AFTER` is `↓`, `HL_OP_REPLACE` is `→`, `HL_OP_CHARS` is `↑↓→`, `HL_FILE_PREFIX` is `¶`, and `HL_BODY_SEP` is `|` (`packages/coding-agent/src/hashline/hash.ts`).
 
 ## Errors
 - Missing section header:
-  - `input must begin with "§PATH" on the first non-blank line; got: ... Example: "§src/foo.ts" then edit ops.`
+  - `input must begin with "¶PATH" on the first non-blank line; got: ... Example: "¶src/foo.ts" then edit ops.`
 - Empty header:
-  - `Input header "§" is empty; provide a file path.`
+  - `Input header "¶" is empty; provide a file path.`
 - Bad anchor token:
   - `line N: expected a full anchor such as "119sr"; got "...".`
 - Bad range syntax:
-  - `line N: explicit ranges are required for replacement...`
-  - `line N: range must include exactly two full anchors separated by "..".`
-  - `line N: range A..B ends before it starts.`
-  - `line N: range A..B uses two different hashes for the same line.`
-- Missing payload for `»` / `«`:
-  - `line N: » and « operations require at least one verbatim payload line.`
+  - `line N: range must be ANCHOR or ANCHOR-ANCHOR (one dash, no spaces); got ...`
+  - `line N: range A-B ends before it starts.`
+  - `line N: range A-B uses two different hashes for the same line.`
+- Missing payload for `↓` / `↑`:
+  - `line N: ↑ and ↓ operations require at least one verbatim payload line.`
 - Stray payload line:
-  - `line N: payload line has no preceding », «, or ≔ operation.`
+  - `line N: payload line has no preceding ↑, ↓, or → operation.`
 - Unknown op:
-  - `line N: unrecognized op. Use «ANCHOR..., »ANCHOR..., ≔A..B...`
+  - `line N: unrecognized op. Use ANCHOR↑ (insert before), ANCHOR↓ (insert after), or A-B→ (replace/delete).`
 - Delete vs blank:
-  - `≔A..B` with no payload deletes. To blank in place, include one explicit empty payload line before the next op/header/EOF.
+  - `A-B→` with no payload deletes. To blank in place, include one explicit empty payload line before the next op/header/EOF.
 - Missing file for anchor-scoped edits:
   - `File not found: <path>`
 - Out-of-range anchor:
@@ -212,12 +211,12 @@ export const done = true;
 ## Notes
 - `read` and `search` are the authoritative source of anchors. The edit parser does not want the trailing `|TEXT`; copy only the `LINEhh` token.
 - Multi-op patches are parsed against the original file snapshot. Do not renumber later anchors after earlier ops; `applyHashlineEdits()` buckets and applies them bottom-up.
-- `≔A..B` is not a primitive replace in the parser. With payload, it expands to inserts before `A` plus deletes for `A..B`; with no payload, it only deletes `A..B`. To blank in place, include one explicit empty payload line. Stale-anchor checking still happens on the original range lines.
+- `A-B→` is not a primitive replace in the parser. With payload, it expands to inserts before `A` plus deletes for `A-B`; with no payload, it only deletes `A-B`. To blank in place, include one explicit empty payload line. Stale-anchor checking still happens on the original range lines.
 - Interior lines of a multi-line range use hash `**` (`RANGE_INTERIOR_HASH`) and are not individually verified; only the first and last anchor hashes are checked.
 - `computeLineHash()` trims trailing whitespace before hashing. Anchors survive line-ending changes and trailing-space-only changes, but not substantive line edits.
 - For punctuation-only lines, the hash mixes in the line number; identical `}` lines on different lines intentionally get different anchors.
-- `splitHashlineInputs()` normalizes absolute `§PATH` headers back to a cwd-relative path when the file is inside the current working tree. Headers with any run of leading `§` chars (e.g. `§foo.ts`, `§§foo.ts`, `§§§foo.ts`) are accepted; the canonical form is `§PATH`.
-- Optional `*** Begin Patch` / `*** End Patch` markers are accepted in hashline mode, but the file sections are still `§PATH`-based, not Codex `*** Update File:` hunks.
+- `splitHashlineInputs()` normalizes absolute `¶PATH` headers back to a cwd-relative path when the file is inside the current working tree. Headers with any run of leading `¶` chars (e.g. `¶foo.ts`, `¶¶foo.ts`, `¶¶¶foo.ts`) are accepted; the canonical form is `¶PATH`.
+- Optional `*** Begin Patch` / `*** End Patch` markers are accepted in hashline mode, but the file sections are still `¶PATH`-based, not Codex `*** Update File:` hunks.
 - `*** Abort` terminates parsing early and returns `ABORT_WARNING`; ops parsed before the marker still apply.
 - File-read cache invalidation is conflict-based, not write-through invalidation. If `read` later records content for a line that disagrees with the cached snapshot, the entire snapshot for that path is replaced with the newly observed lines (`packages/coding-agent/src/edit/file-read-cache.ts`).
 - There is no resolve-style apply/discard phase for hashline edits. The only preview path is the transient TUI diff preview in `packages/coding-agent/src/edit/streaming.ts`.

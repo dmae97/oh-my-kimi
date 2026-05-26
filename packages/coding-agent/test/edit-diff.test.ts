@@ -236,10 +236,10 @@ describe("computeHashlineDiff", () => {
 		const line = "unchanged content";
 		await Bun.write(sourcePath, `${line}\n`);
 
-		// `≔1<hash>` with the same line as payload is a true no-op: the edit
+		// `1<hash>→` with the same line as payload is a true no-op: the edit
 		// fires through computeHashlineDiff but produces identical content.
 		const anchor = formatLineHash(1, line);
-		const input = `§${sourcePath}\n≔${anchor}\n${line}\n`;
+		const input = `¶${sourcePath}\n${anchor}→\n${line}\n`;
 		const result = await computeHashlineDiff({ input }, tempDir);
 		expect("error" in result).toBe(true);
 		if ("error" in result) {
@@ -251,14 +251,14 @@ describe("computeHashlineDiff", () => {
 		const sourcePath = path.join(tempDir, "source.txt");
 		await Bun.write(sourcePath, "first\n");
 
-		const result = await computeHashlineDiff({ input: `§${sourcePath}\n»EOF\nsecond` }, tempDir);
+		const result = await computeHashlineDiff({ input: `¶${sourcePath}\nEOF↓\nsecond` }, tempDir);
 		expect("diff" in result).toBe(true);
 		if ("diff" in result) {
 			expect(result.diff).toContain("second");
 		}
 	});
 	test("returns a handled error when the source path is a local URL", async () => {
-		const result = await computeHashlineDiff({ input: "§local://PLAN.md\n»EOF\n" }, tempDir);
+		const result = await computeHashlineDiff({ input: "¶local://PLAN.md\nEOF↓\n" }, tempDir);
 
 		expect("error" in result).toBe(true);
 		if ("error" in result) {

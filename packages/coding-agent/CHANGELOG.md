@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
+### Breaking Changes
+
+- Replaced the hashline patch format from `§`, `«`, `»`, `≔`, and `..` to `¶`, `↑`, `↓`, `→` with range separators written as `A-B`, requiring users to migrate hashline edit inputs
+
 ### Added
 
 - Added `codex` and `gemini` to the web search provider settings so users can configure OpenAI and Gemini web search directly from provider selection
@@ -8,6 +13,8 @@
 
 ### Changed
 
+- Updated hashline operation syntax to support inline payload text on the same op line for insert and replace (`ANCHOR↑/↓/...→`) while still accepting payload lines that follow
+- Updated hashline anchor parsing so copied `|TEXT` decorations remain cosmetic and payload must be provided on or after the operator
 - Unified subagent output-schema validation into a single shared module (`tools/output-schema-validator.ts`) used by both the in-process `yield` tool (validates before the subagent yields) and the executor's post-mortem `finalizeSubprocessOutput` path (validates after subprocess exit). Previously each side ran its own `normalizeSchema` → `jtdToJsonSchema` → `validateJsonSchemaValue` chain in parallel, which was semantically equivalent but invited drift: a future tweak on one side could silently disagree with the other and cause yields that pass in-tool to fail post-mortem (or vice versa). The unification preserves both call sites' existing behavior (yield throws an actionable per-issue error for the model; executor produces a `schema_violation` outcome with the first issue and missing-required fields) by exposing two output formatters (`formatAllValidationIssues` for retries, `formatValidationIssueHeadline` for headlines).
 - Changed web search provider credential lookup to use the shared `AuthStorage` pipeline (`getApiKey`/`getOAuthAccess`) for API-key and OAuth auth instead of direct `AgentStorage` access
 - Changed the `codex` web search provider display label from `Codex` to `OpenAI`
@@ -15,6 +22,7 @@
 
 ### Fixed
 
+- Fixed hashline inline payload parsing so same-line payloads containing whitespace, including tab-indented text, are preserved instead of being rejected
 - Fixed Bun HTTP/2 transport errors (`HTTP2StreamReset`, `HTTP2RefusedStream`, and `HTTP2EnhanceYourCalm`) to be treated as transient so the assistant now retries automatically instead of stopping on these recoverable failures
 - Fixed web search OAuth-backed providers (including Codex and Gemini) to use broker-managed token retrieval and account metadata, avoiding direct token-store refresh behavior that could cause search authentication failures
 - Updated Tavily missing-credential feedback to prompt users to configure an API-key provider setting instead of referencing `agent.db` directly

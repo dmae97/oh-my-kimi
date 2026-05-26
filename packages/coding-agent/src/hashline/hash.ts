@@ -91,22 +91,23 @@ const regexEscape = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, 
 
 /**
  * Hashline edit input markers. File section headers start with {@link HL_FILE_PREFIX};
- * op lines start with a direction/action sigil: {@link HL_OP_INSERT_BEFORE},
- * {@link HL_OP_INSERT_AFTER}, or {@link HL_OP_REPLACE}. Payload lines are
- * verbatim file content and have no per-line marker.
+ * op lines have an `ANCHOR<SIGIL>[INLINE_PAYLOAD]` shape, where SIGIL is one of
+ * {@link HL_OP_INSERT_BEFORE}, {@link HL_OP_INSERT_AFTER}, or {@link HL_OP_REPLACE}.
+ * Multi-line payloads follow on subsequent lines as verbatim file content with no
+ * per-line marker.
  *
  * These constants are the single source of truth for the edit parser, grammar,
  * renderer, and prompt.
  */
-export const HL_OP_INSERT_BEFORE = "«";
-export const HL_OP_INSERT_AFTER = "»";
-export const HL_OP_REPLACE = "≔";
+export const HL_OP_INSERT_BEFORE = "↑";
+export const HL_OP_INSERT_AFTER = "↓";
+export const HL_OP_REPLACE = "→";
 
 /** All hashline edit op sigils, concatenated for fast membership tests. */
 export const HL_OP_CHARS = `${HL_OP_INSERT_BEFORE}${HL_OP_INSERT_AFTER}${HL_OP_REPLACE}`;
 
 /** Hashline edit file section header marker. */
-export const HL_FILE_PREFIX = "§";
+export const HL_FILE_PREFIX = "¶";
 
 /** Stable separator for read/search/hashline display output. Intentionally not configurable. */
 export const HL_BODY_SEP = "|";

@@ -1,10 +1,8 @@
 import * as path from "node:path";
 import { ABORT_MARKER, BEGIN_PATCH_MARKER, END_PATCH_MARKER } from "./constants";
-import { HL_FILE_PREFIX, HL_OP_CHARS } from "./hash";
+import { HL_FILE_PREFIX } from "./hash";
+import { isHashlineOpLineText } from "./parser";
 import type { SplitHashlineOptions } from "./types";
-
-const regexEscape = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const HASHLINE_OP_LINE_RE = new RegExp(`^[${regexEscape(HL_OP_CHARS)}]`);
 
 export interface HashlineInputSection {
 	path: string;
@@ -30,8 +28,8 @@ function normalizeHashlinePath(rawPath: string, cwd?: string): string {
 function parseHashlineHeaderLine(line: string, cwd?: string): HashlineInputSection | null {
 	const trimmed = line.trimEnd();
 	if (!trimmed.startsWith(HL_FILE_PREFIX)) return null;
-	// Strip a run of leading header markers so canonical `§PATH` and
-	// runaway-prefix forms like `§§PATH` / `§§§PATH` route to the same file.
+	// Strip a run of leading header markers so canonical `¶PATH` and
+	// runaway-prefix forms like `¶¶PATH` / `¶¶¶PATH` route to the same file.
 	let prefixEnd = 0;
 	while (prefixEnd < trimmed.length && trimmed[prefixEnd] === HL_FILE_PREFIX) prefixEnd++;
 	const rest = trimmed.slice(prefixEnd);
@@ -66,7 +64,7 @@ function stripLeadingBlankLines(input: string): string {
 
 export function containsRecognizableHashlineOperations(input: string): boolean {
 	for (const line of input.split(/\r?\n/)) {
-		if (HASHLINE_OP_LINE_RE.test(line)) return true;
+		if (isHashlineOpLineText(line)) return true;
 	}
 	return false;
 }

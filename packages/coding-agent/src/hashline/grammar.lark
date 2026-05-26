@@ -8,14 +8,17 @@ update_hunk: "$HFILE$" filename LF line_op*
 filename: /(.+)/
 
 line_op: insert_before | insert_after | replace | blank
-insert_before: "$HOP_INSERT_BEFORE$" anchor LF payload+
-insert_after: "$HOP_INSERT_AFTER$" anchor LF payload+
-replace: "$HOP_REPLACE$" range LF payload*
-payload: /[^$HOP_CHARS$$HFILE$\n][^\n]*/ LF | LF
+insert_before: anchor "$HOP_INSERT_BEFORE$" inline_body LF payload*
+             | anchor "$HOP_INSERT_BEFORE$" LF payload+
+insert_after: anchor "$HOP_INSERT_AFTER$" inline_body LF payload*
+            | anchor "$HOP_INSERT_AFTER$" LF payload+
+replace: range "$HOP_REPLACE$" inline_body? LF payload*
+inline_body: /[^\n]+/
+payload: /[^$HFILE$\n][^\n]*/ LF | LF
 blank: LF
 
 anchor: LID | "EOF" | "BOF"
-range: LID (".." LID)?
+range: LID ("-" LID)?
 LID: /[1-9]\d*$HFMT$/
 
 %import common.LF

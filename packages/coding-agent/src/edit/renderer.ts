@@ -344,7 +344,7 @@ function normalizeHashlineInputPreviewPath(rawPath: string): string {
 function parseHashlineInputPreviewHeader(line: string): string | null {
 	if (!line.startsWith(HL_FILE_PREFIX)) return null;
 	// Mirror hashline/input.ts: strip every leading file marker so canonical
-	// `§ PATH` headers and stray `§§ PATH` / `§§§PATH` runs render clean paths.
+	// `¶ PATH` headers and stray `¶¶ PATH` / `¶¶¶PATH` runs render clean paths.
 	let prefixEnd = 0;
 	while (prefixEnd < line.length && line[prefixEnd] === HL_FILE_PREFIX) prefixEnd++;
 	const body = line.slice(prefixEnd).trim();

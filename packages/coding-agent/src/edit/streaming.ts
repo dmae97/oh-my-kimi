@@ -23,7 +23,7 @@ import {
 	END_PATCH_MARKER,
 	type HashlineInputSection,
 	HL_FILE_PREFIX,
-	HL_OP_CHARS,
+	isHashlineOpLineText,
 	splitHashlineInputs,
 } from "../hashline";
 import type { Theme } from "../modes/theme/theme";
@@ -90,8 +90,7 @@ function parseHashlineHeaderPath(line: string): string {
 }
 
 function isHashlineOpLine(line: string): boolean {
-	const first = line[0];
-	return first !== undefined && HL_OP_CHARS.includes(first);
+	return isHashlineOpLineText(line);
 }
 
 function isHashlineEnvelopeMarkerLine(line: string): boolean {
@@ -431,7 +430,7 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 			sections = splitHashlineInputs(input, { cwd: ctx.cwd, path: args.path });
 		} catch {
 			// Single-section fallback keeps the original error rendering for the
-			// "haven't typed `§ PATH` yet" case.
+			// "haven't typed `¶ PATH` yet" case.
 			const result = await computeHashlineDiff({ input, path: args.path }, ctx.cwd, {
 				autoDropPureInsertDuplicates: ctx.hashlineAutoDropPureInsertDuplicates,
 			});
