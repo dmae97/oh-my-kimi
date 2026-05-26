@@ -99,8 +99,7 @@ const SCHEMA_ARRAY_KEYS = ["anyOf", "oneOf", "allOf", "prefixItems"] as const;
 /** True when `val` is a plain empty object `{}`. */
 function isEmptyObject(val: unknown): val is Record<string, never> {
 	if (val === null || typeof val !== "object" || Array.isArray(val)) return false;
-	for (const _ in val as object) return false;
-	return true;
+	return Object.keys(val).length === 0;
 }
 
 function walk(node: unknown): void {
