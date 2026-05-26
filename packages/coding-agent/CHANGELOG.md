@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
+### Added
 - Added Kagi V1 web search provider support for the new API, intentionally left V0 in for now to not break any existing users.
+
 ## [15.3.2] - 2026-05-25
 ### Added
 
