@@ -203,6 +203,15 @@ export class VirtualTerminal implements Terminal {
 	}
 
 	/**
+	 * Get the hardware cursor position within the visible viewport.
+	 * Both coordinates are 0-indexed; row is relative to the top of the viewport.
+	 */
+	getCursor(): { row: number; col: number } {
+		const buffer = this.xterm.buffer.active;
+		return { row: buffer.cursorY, col: buffer.cursorX };
+	}
+
+	/**
 	 * Clear the terminal viewport
 	 */
 	clear(): void {

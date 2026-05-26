@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { type Component, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, CURSOR_MARKER, type Focusable, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class MutableLinesComponent implements Component {
@@ -952,6 +952,44 @@ describe("TUI terminal-state regressions", () => {
 				}
 
 				expect(term.getScrollBuffer().length).toBeGreaterThan(afterResetLength);
+			} finally {
+				tui.stop();
+			}
+		});
+		it("places hardware cursor at the focused row after a height-grow resize", async () => {
+			// Mirrors the editor input layout: the focused component sits at the
+			// last content row and emits CURSOR_MARKER. When the terminal grows
+			// taller than the rendered content, #emitViewportRepaint must move
+			// the hardware cursor up to the marker row instead of leaving it at
+			// the viewport bottom (the rows below the content are blank padding).
+			const term = new VirtualTerminal(40, 6);
+			const tui = new TUI(term, true);
+			const cursorAnchorRow = 5;
+			class CursorAnchor implements Component, Focusable {
+				focused = false;
+				invalidate(): void {}
+				render(_width: number): string[] {
+					return [`anchor>${CURSOR_MARKER}`];
+				}
+			}
+			tui.addChild(new MutableLinesComponent(rows("body-", cursorAnchorRow)));
+			const anchor = new CursorAnchor();
+			tui.addChild(anchor);
+			tui.setFocus(anchor);
+
+			try {
+				tui.start();
+				await settle(term);
+				// Sanity check: content fills the viewport exactly.
+				expect(term.getCursor().row).toBe(cursorAnchorRow);
+
+				// Grow the terminal so it has more rows than the rendered content.
+				term.resize(40, 20);
+				await settle(term);
+
+				// Regression: the cursor must follow the marker, not the bottom
+				// of the now-taller viewport.
+				expect(term.getCursor().row).toBe(cursorAnchorRow);
 			} finally {
 				tui.stop();
 			}

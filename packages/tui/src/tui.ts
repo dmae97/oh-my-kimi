@@ -1395,7 +1395,14 @@ export class TUI extends Container {
 			const line = lines[viewportTop + screenRow] ?? "";
 			buffer += this.#fitLineToWidth(line, width);
 		}
-		const finalRow = Math.min(Math.max(0, lines.length - 1), viewportTop + height - 1);
+		// The loop unconditionally writes `height` rows from screen row 0, so the
+		// hardware cursor lands at screen row `height - 1` regardless of how many
+		// of those rows held actual content. Tracking it as `lines.length - 1`
+		// when the content is shorter than the viewport makes the relative
+		// `rowDelta` math in `#cursorControlSequence` underestimate the upward
+		// move and the IME cursor stays pinned to the viewport bottom on
+		// height-grow resizes.
+		const finalRow = viewportTop + height - 1;
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
 		buffer += seq;
 		buffer += "\x1b[?2026l";
