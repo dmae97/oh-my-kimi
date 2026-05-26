@@ -7,6 +7,7 @@ import {
 	HL_OP_INSERT_AFTER,
 	HL_OP_INSERT_BEFORE,
 	HL_OP_REPLACE,
+	HL_PAYLOAD_PREFIX,
 } from "./hash";
 import type { Anchor, HashlineCursor } from "./types";
 
@@ -20,6 +21,7 @@ const CHAR_SPACE = 32;
 const CHAR_LOWER_A = 97;
 const CHAR_LOWER_F = 102;
 const CHAR_PILCROW = HL_FILE_PREFIX.charCodeAt(0);
+const CHAR_PAYLOAD_PREFIX = HL_PAYLOAD_PREFIX.charCodeAt(0);
 const FILE_HASH_LENGTH = 4;
 
 function isDigitCode(code: number): boolean {
@@ -31,7 +33,7 @@ function isNonZeroDigitCode(code: number): boolean {
 }
 
 function isDecorationCode(code: number): boolean {
-	return code === 42 || code === 43 || code === 45 || code === 62;
+	return code === 42 || code === 45 || code === 62;
 }
 
 function isHexDigitCode(code: number): boolean {
@@ -91,7 +93,7 @@ export function cloneCursor(cursor: HashlineCursor): HashlineCursor {
 }
 
 // Leniently accept anchors copied from read/search output:
-//   - optional leading line-marker decoration (`*`, `>`, `+`, `-`)
+//   - optional leading line-marker decoration (`*`, `>`, `-`)
 //   - the required bare line number
 function skipDecoratedAnchorPrefix(line: string, end = trimEndIndex(line)): number {
 	let index = skipWhitespace(line, 0, end);
@@ -339,7 +341,8 @@ export type HashlineToken =
 	| (TokenBase & { kind: "op-insert"; cursor: HashlineCursor; inlineBody: string | undefined })
 	| (TokenBase & { kind: "op-replace"; range: ParsedRange; inlineBody: string | undefined })
 	| (TokenBase & { kind: "op-delete"; range: ParsedRange; trailingPayload: boolean })
-	| (TokenBase & { kind: "payload"; text: string });
+	| (TokenBase & { kind: "payload"; text: string })
+	| (TokenBase & { kind: "raw"; text: string });
 
 function classifyLine(line: string, lineNum: number): HashlineToken {
 	if (isEmptyLine(line)) return { kind: "blank", lineNum };
@@ -356,6 +359,9 @@ function classifyLine(line: string, lineNum: number): HashlineToken {
 		}
 	}
 
+	if (line.charCodeAt(0) === CHAR_PAYLOAD_PREFIX) {
+		return { kind: "payload", lineNum, text: line.slice(HL_PAYLOAD_PREFIX.length) };
+	}
 	const op = tryParseOp(line);
 	if (op !== null) {
 		if (op.kind === "insert") {
@@ -367,7 +373,7 @@ function classifyLine(line: string, lineNum: number): HashlineToken {
 		return { kind: "op-delete", lineNum, range: op.range, trailingPayload: op.trailingPayload };
 	}
 
-	return { kind: "payload", lineNum, text: line };
+	return { kind: "raw", lineNum, text: line };
 }
 
 /**

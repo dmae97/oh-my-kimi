@@ -88,7 +88,6 @@ function replaySessionChainOnCurrent(
 	};
 }
 
-
 function buildSparseOverlayText(currentText: string, snapshotLines: ReadonlyMap<number, string>): string {
 	const overlaid = currentText.split("\n");
 	let maxCachedLine = 0;

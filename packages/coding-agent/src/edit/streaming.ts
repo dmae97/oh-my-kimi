@@ -388,6 +388,9 @@ function buildHashlineNaturalOrderPreviews(
 			case "abort":
 			case "op-delete":
 				continue;
+			case "blank":
+			case "raw":
+				continue;
 			case "header":
 				currentPath = token.path;
 				if (currentPath) ensure(currentPath);
@@ -403,10 +406,6 @@ function buildHashlineNaturalOrderPreviews(
 				// raw input ("A-B: bla bla bla") instead of "+ bla bla bla".
 				if (!currentPath || token.inlineBody === undefined) continue;
 				ensure(currentPath).push(`+${token.inlineBody}`);
-				continue;
-			case "blank":
-				if (!currentPath) continue;
-				ensure(currentPath).push("+");
 				continue;
 			case "payload":
 				if (!currentPath) continue;

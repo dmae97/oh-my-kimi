@@ -14,7 +14,7 @@ insert_after: anchor "$HOP_INSERT_AFTER$" inline_body? LF payload*
 replace: range "$HOP_REPLACE$" inline_body? LF payload*
 delete: range "$HOP_DELETE$" LF
 inline_body: /[^\n]+/
-payload: /(.*)/ LF
+payload: "+" /[^\n]*/ LF
 
 anchor: LID | "EOF" | "BOF"
 range: LID ("-" LID)?

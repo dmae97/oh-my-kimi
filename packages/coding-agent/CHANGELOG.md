@@ -1,12 +1,21 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed the hashline patch format so payload continuation lines now require a leading `+`, rejecting unprefixed multiline payload rows that were previously accepted as fallback payload text
 
 ### Changed
 
+- Changed hashline payload parsing so blank lines are only preserved when prefixed with `+`, so blank separator lines between operations are ignored unless explicitly marked
+- Changed payload escaping so a line beginning with `+` is now represented as `++...` while the leading marker is stripped before writing
 - Changed the default `task.simple` mode from `default` to `schema-free`, so task-call `schema` inputs are disabled by default while shared `context` and user prompt/session-defined output schemas remain available
 - Changed `tools.approvalMode: yolo` to auto-approve tool calls even when a tool marks `override: true`; user `tools.approval.<tool>` policies (`allow`/`prompt`/`deny`) now remain the only controls for yolo mode.
 - Changed the hashline edit executor to coalesce two consecutive `A-B:` ops on the identical range last-wins (the model painted a before/after pair) and append a warning, instead of throwing `anchor line X is already targeted by the :/! op on line Y`. Other overlap shapes (different ranges, `A-B:`+`!`, `!`+`!`) still throw.
+
+### Fixed
+
+- Fixed nested replace parsing so line-anchored `N:` rows inside a pending `A-B:` replacement now trigger overlap errors instead of being silently folded into the replacement payload
 
 ## [15.5.1] - 2026-05-26
 

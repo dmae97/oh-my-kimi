@@ -7,12 +7,12 @@ const regexEscape = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, 
 
 /**
  * Decoration prefix that may precede a line number in tool output:
- * `>` (context line in grep), `+` (added line in diff), `-` (removed line),
- * `*` (match line). Any combination, in any order, surrounded by optional
+ * `>` (context line in grep), `-` (removed line), `*` (match line).
+ * Any combination, in any order, surrounded by optional
  * whitespace. Output formatters emit at most one decoration per line; the
  * parser stays liberal because it accepts whatever the model echoes back.
  */
-export const HL_ANCHOR_DECORATION_RE_RAW = `\\s*[>+\\-*]*\\s*`;
+export const HL_ANCHOR_DECORATION_RE_RAW = `\\s*[>\\-*]*\\s*`;
 
 /** Capture-group regex source for a decorated bare line-number anchor. */
 export const HL_ANCHOR_RE_RAW = `${HL_ANCHOR_DECORATION_RE_RAW}(\\d+)`;
@@ -74,9 +74,9 @@ export function resolveHashlineGrammarPlaceholders(grammar: string): string {
 /**
  * op lines have an `ANCHOR<SIGIL>[INLINE_PAYLOAD]` shape, where SIGIL is one of
  * {@link HL_OP_INSERT_BEFORE}, {@link HL_OP_INSERT_AFTER}, {@link HL_OP_REPLACE},
- * or {@link HL_OP_DELETE}.
- * Multi-line payloads follow on subsequent lines as verbatim file content with no
- * per-line marker.
+ * or {@link HL_OP_DELETE}. Multi-line payloads follow on subsequent lines
+ * prefixed with {@link HL_PAYLOAD_PREFIX}; that prefix is stripped before the
+ * payload is written.
  *
  * These constants are the single source of truth for the edit parser, grammar,
  * renderer, and prompt.
@@ -85,6 +85,9 @@ export const HL_OP_INSERT_BEFORE = "↑";
 export const HL_OP_INSERT_AFTER = "↓";
 export const HL_OP_REPLACE = ":";
 export const HL_OP_DELETE = "!";
+
+/** Prefix for payload continuation lines. The prefix itself is not written. */
+export const HL_PAYLOAD_PREFIX = "+";
 
 /** All hashline edit op sigils, concatenated for fast membership tests. */
 export const HL_OP_CHARS = `${HL_OP_INSERT_BEFORE}${HL_OP_INSERT_AFTER}${HL_OP_REPLACE}${HL_OP_DELETE}`;
