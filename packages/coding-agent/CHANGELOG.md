@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.4.1] - 2026-05-26
+
 ### Breaking Changes
 
 - The `vim` edit mode option is no longer available; configurations using `edit.mode: vim` will be automatically mapped to `hashline` mode

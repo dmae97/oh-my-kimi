@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.4.1] - 2026-05-26
 ### Added
 
 - Added `isOpenAICompletionsProgressChunk` export to identify real progress chunks vs. keepalives in OpenAI completions streams
