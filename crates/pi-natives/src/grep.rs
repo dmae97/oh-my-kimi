@@ -922,6 +922,7 @@ mod tests {
 	use std::{
 		fs,
 		path::{Path, PathBuf},
+		sync::atomic::{AtomicU64, Ordering},
 		time::{Duration, SystemTime, UNIX_EPOCH},
 	};
 
@@ -934,11 +935,14 @@ mod tests {
 
 	impl TempDirGuard {
 		fn new() -> Self {
-			let unique = SystemTime::now()
+			static COUNTER: AtomicU64 = AtomicU64::new(0);
+			let nanos = SystemTime::now()
 				.duration_since(UNIX_EPOCH)
 				.expect("system time is after UNIX_EPOCH")
 				.as_nanos();
-			let path = std::env::temp_dir().join(format!("pi-grep-test-{unique}"));
+			let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+			let pid = std::process::id();
+			let path = std::env::temp_dir().join(format!("pi-grep-test-{pid}-{nanos}-{seq}"));
 			fs::create_dir_all(&path).expect("create temp test directory");
 			Self(path)
 		}
