@@ -135,7 +135,9 @@ function isTermuxSession(): boolean {
 }
 
 /** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
-const isMultiplexer = Boolean(Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ);
+function isMultiplexerSession(): boolean {
+	return Boolean(Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ);
+}
 
 /**
  * Options for overlay positioning and sizing.
@@ -1072,7 +1074,8 @@ export class TUI extends Container {
 			this.#fullRedrawCount += 1;
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
 			if (clear) {
-				buffer += this.#clearScrollbackOnNextRender ? "\x1b[2J\x1b[H\x1b[3J" : "\x1b[2J\x1b[H";
+				const clearScrollback = this.#clearScrollbackOnNextRender && !isMultiplexerSession();
+				buffer += clearScrollback ? "\x1b[2J\x1b[H\x1b[3J" : "\x1b[2J\x1b[H";
 				this.#clearScrollbackOnNextRender = false;
 			}
 			for (let i = 0; i < newLines.length; i++) {
@@ -1172,19 +1175,10 @@ export class TUI extends Container {
 			return;
 		}
 		const contentGrew = newLines.length > this.#previousLines.length;
-
-		// Width changes need a viewport repaint because wrapping changes. If new
-		// rows also arrived, keep the append path so history reaches scrollback.
-		if (widthChanged && !contentGrew) {
-			logRedraw(`terminal width changed (${this.#previousWidth} -> ${width})`);
-			viewportRefresh();
-			return;
-		}
-
 		// Height changes need a viewport repaint to keep the visible rows aligned,
 		// but Termux changes height when the software keyboard shows or hides.
 		// In that environment, repainting causes the viewport to jump on every toggle.
-		if (heightChanged && !contentGrew && !isTermuxSession() && !isMultiplexer) {
+		if (heightChanged && !contentGrew && !isTermuxSession() && !isMultiplexerSession()) {
 			logRedraw(`terminal height changed (${this.#previousHeight} -> ${height})`);
 			viewportRefresh();
 			return;
@@ -1221,11 +1215,35 @@ export class TUI extends Container {
 			}
 			lastChanged = newLines.length - 1;
 		}
-		// No changes - but still need to update hardware cursor position if it moved
+		// No changes - but still need to update hardware cursor position if it moved.
 		if (firstChanged === -1) {
+			if (widthChanged) {
+				logRedraw(`terminal width changed (${this.#previousWidth} -> ${width})`);
+				viewportRefresh();
+				return;
+			}
 			this.#writeCursorPosition(cursorPos, newLines.length);
 			this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
+			this.#previousWidth = width;
+			this.#previousHeight = height;
 			return;
+		}
+
+		// Width changes alter wrapping for the whole transcript. If offscreen
+		// rows changed, replay the rendered transcript so scrollback receives
+		// the new width. Pure appends can keep the append path because there is
+		// no older width-dependent row to refresh.
+		if (widthChanged) {
+			logRedraw(`terminal width changed (${this.#previousWidth} -> ${width})`);
+			const pureAppend = appendedLines && firstChanged === this.#previousLines.length;
+			if (firstChanged < prevViewportTop) {
+				fullRender(true);
+				return;
+			}
+			if (!pureAppend) {
+				viewportRefresh();
+				return;
+			}
 		}
 
 		// All changes are in deleted lines (nothing to render, just clear)
