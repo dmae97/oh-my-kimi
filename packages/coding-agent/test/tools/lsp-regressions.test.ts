@@ -11,6 +11,8 @@ import { applyWorkspaceEdit } from "@oh-my-pi/pi-coding-agent/lsp/edits";
 import { renderCall, renderResult } from "@oh-my-pi/pi-coding-agent/lsp/render";
 import type {
 	CodeAction,
+	CreateFile,
+	DeleteFile,
 	Diagnostic,
 	LspClient,
 	RenameFile,
@@ -1040,6 +1042,129 @@ describe("lsp regressions", () => {
 			// Final state: new.ts holds the moved-in content (rename ran last and won).
 			expect(fs.existsSync(oldPath)).toBe(false);
 			expect(fs.readFileSync(newPath, "utf8")).toBe("export const moved = 1;\n");
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+	it("resolves $-prefixed identifiers past compound matches", async () => {
+		// Pre-fix, BARE_IDENTIFIER_RE rejected leading `$`, so requireWordBoundary
+		// was false and `resolveSymbolColumn(_, _, "$store")` returned the column
+		// inside `bar$store` rather than the standalone occurrence, feeding the
+		// LSP server the wrong column. The new regex `/^[$A-Za-z_][\w$]*$/` plus
+		// IDENTIFIER_CHAR_RE's existing `$` membership enforces the boundary.
+		const tempDir = TempDir.createSync("@omp-lsp-dollar-identifier-");
+		try {
+			const filePath = path.join(tempDir.path(), "store.ts");
+			// Standalone `$store` starts at column 16; compound `bar$store`
+			// contains the substring at column 7. Old code returned 7; new code
+			// returns 16.
+			await Bun.write(filePath, "let bar$store = $store + 1;\n");
+
+			const column = await resolveSymbolColumn(filePath, 1, "$store");
+			expect(column).toBe(16);
+
+			// `bar$store` is itself a valid `$`-bearing identifier and resolves
+			// to its own start, not into either fragment.
+			const compoundColumn = await resolveSymbolColumn(filePath, 1, "bar$store");
+			expect(compoundColumn).toBe(4);
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	it("applies a create op followed by a text edit for the same URI in declared order", async () => {
+		// LSP §3.16.2 motivating case for the rewrite: "Extract to new file"
+		// code actions emit `[CreateFile(newUri), TextDocumentEdit(newUri, ...)]`.
+		// Pre-fix, all text edits flushed first → applyTextEdits opened a
+		// not-yet-created file → ENOENT. The new walk processes each entry in
+		// order, so the create lands first and the edit reads the empty file
+		// the create just wrote.
+		const tempDir = TempDir.createSync("@omp-lsp-create-then-edit-");
+		try {
+			const newFilePath = path.join(tempDir.path(), "extracted.ts");
+			expect(fs.existsSync(newFilePath)).toBe(false);
+
+			const newUri = fileToUri(newFilePath);
+			const createOp: CreateFile = {
+				kind: "create",
+				uri: newUri,
+			};
+			const textEdit: TextDocumentEdit = {
+				textDocument: { uri: newUri, version: null },
+				edits: [
+					{
+						range: {
+							start: { line: 0, character: 0 },
+							end: { line: 0, character: 0 },
+						},
+						newText: "export const extracted = 42;\n",
+					},
+				],
+			};
+			const workspaceEdit: WorkspaceEdit = {
+				documentChanges: [createOp, textEdit],
+			};
+
+			const applied = await applyWorkspaceEdit(workspaceEdit, tempDir.path());
+
+			expect(fs.existsSync(newFilePath)).toBe(true);
+			expect(fs.readFileSync(newFilePath, "utf8")).toBe("export const extracted = 42;\n");
+
+			// Declared order observable in the applied log: create first, then edit.
+			expect(applied).toHaveLength(2);
+			expect(applied[0]).toContain("Created");
+			expect(applied[0]).toContain("extracted.ts");
+			expect(applied[1]).toContain("Applied 1 edit(s)");
+			expect(applied[1]).toContain("extracted.ts");
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	it("flushes pending descendant text edits before a folder delete", async () => {
+		// Mirror of the folder-rename subtree-flush test for the `delete` arm:
+		// edits queued against a child URI must land at the original path
+		// BEFORE the parent folder is removed, otherwise the flush at end of
+		// walk would target a non-existent path and throw.
+		const tempDir = TempDir.createSync("@omp-lsp-folder-delete-");
+		try {
+			const srcDir = path.join(tempDir.path(), "src");
+			fs.mkdirSync(srcDir, { recursive: true });
+			const childPath = path.join(srcDir, "a.ts");
+			await Bun.write(childPath, "export const a = 1;\n");
+
+			const childUri = fileToUri(childPath);
+			const folderUri = fileToUri(srcDir);
+
+			const childEdit: TextDocumentEdit = {
+				textDocument: { uri: childUri, version: null },
+				edits: [
+					{
+						range: {
+							start: { line: 0, character: 18 },
+							end: { line: 0, character: 19 },
+						},
+						newText: "999",
+					},
+				],
+			};
+			const folderDelete: DeleteFile = {
+				kind: "delete",
+				uri: folderUri,
+			};
+			const workspaceEdit: WorkspaceEdit = {
+				documentChanges: [childEdit, folderDelete],
+			};
+
+			const applied = await applyWorkspaceEdit(workspaceEdit, tempDir.path());
+
+			// Folder is gone; "Applied" message proves the flush ran before delete.
+			expect(fs.existsSync(srcDir)).toBe(false);
+			expect(applied).toHaveLength(2);
+			expect(applied[0]).toContain("Applied 1 edit(s)");
+			expect(applied[0]).toContain("src/a.ts");
+			expect(applied[1]).toContain("Deleted");
+			expect(applied[1]).toContain("src");
 		} finally {
 			tempDir.removeSync();
 		}
