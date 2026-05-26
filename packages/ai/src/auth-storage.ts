@@ -414,6 +414,29 @@ const OAUTH_REFRESH_SKEW_MS = 60_000;
  */
 const MAX_PENDING_DISABLED_EVENTS = 32;
 
+/**
+ * Classify an OAuth refresh error as a definitive credential failure (the
+ * refresh token is dead — re-login required) versus a transient blip
+ * (network/5xx — retry next sweep).
+ *
+ * Anchored at module scope so all three refresh sites — in-stream
+ * {@link AuthStorage.getApiKey}, the usage probe in
+ * {@link AuthStorage.fetchUsageReports}, and the auth-broker background
+ * refresher — disable rows on the same criteria. A drifting classifier
+ * between sites would let stale last-good usage reports surface indefinitely
+ * while streaming requests correctly tear the row down.
+ */
+const OAUTH_DEFINITIVE_FAILURE_REGEX =
+	/invalid_grant|invalid_token|revoked|unauthorized|expired.*refresh|refresh.*expired/i;
+const OAUTH_TRANSIENT_FAILURE_REGEX = /timeout|network|fetch failed|ECONNREFUSED/i;
+const OAUTH_HTTP_AUTH_REGEX = /\b(401|403)\b/;
+
+export function isDefinitiveOAuthFailure(errorMsg: string): boolean {
+	if (OAUTH_DEFINITIVE_FAILURE_REGEX.test(errorMsg)) return true;
+	if (OAUTH_HTTP_AUTH_REGEX.test(errorMsg) && !OAUTH_TRANSIENT_FAILURE_REGEX.test(errorMsg)) return true;
+	return false;
+}
+
 type UsageCacheEntry<T> = {
 	value: T;
 	expiresAt: number;
@@ -1832,9 +1855,50 @@ export class AuthStorage {
 						credential: refreshedCredential,
 					};
 				} catch (error) {
+					const errorMsg = String(error);
+					// Definitive failure (invalid_grant / 401 not from a network blip) means
+					// the refresh token itself is dead — probing with the original credential
+					// will 401, the catch below will return null, and #fetchUsageCached's
+					// last-good fallback will surface yesterday's report indefinitely
+					// (including its already-elapsed `resetsAt`). CAS-disable the row and
+					// clear the cache so the credential drops out of the report instead of
+					// freezing in place until the user notices and re-logs in.
+					if (isDefinitiveOAuthFailure(errorMsg)) {
+						const credentialId = this.#findStoredCredentialIdForUsageCredential(
+							request.provider,
+							request.credential,
+						);
+						if (credentialId !== undefined) {
+							const entries = this.#getStoredCredentials(request.provider);
+							const index = entries.findIndex(entry => entry.id === credentialId);
+							if (index !== -1) {
+								const disabled = this.#tryDisableCredentialAtIfMatches(
+									request.provider,
+									index,
+									refreshableCredential,
+									`oauth refresh failed during usage probe: ${errorMsg}`,
+								);
+								if (disabled) {
+									this.#usageLogger?.warn(
+										"Usage credential refresh failed definitively; credential disabled",
+										{ provider: request.provider, credentialId, error: errorMsg },
+									);
+									// Neutralize last-good for this cache key: write a null
+									// entry with an immediately-elapsed expiry so a future
+									// getStale lookup (e.g. on re-login under the same
+									// account identity) can't replay the stale report.
+									this.#usageCache.set(this.#buildUsageReportCacheKey(request), {
+										value: null,
+										expiresAt: 0,
+									});
+									return null;
+								}
+							}
+						}
+					}
 					this.#usageLogger?.debug("Usage credential refresh failed, using original credential", {
 						provider: request.provider,
-						error: String(error),
+						error: errorMsg,
 					});
 				}
 			}
@@ -2877,9 +2941,7 @@ export class AuthStorage {
 			const errorMsg = String(error);
 			// Only remove credentials for definitive auth failures
 			// Keep credentials for transient errors (network, 5xx) and block temporarily
-			const isDefinitiveFailure =
-				/invalid_grant|invalid_token|revoked|unauthorized|expired.*refresh|refresh.*expired/i.test(errorMsg) ||
-				(/\b(401|403)\b/.test(errorMsg) && !/timeout|network|fetch failed|ECONNREFUSED/i.test(errorMsg));
+			const isDefinitiveFailure = isDefinitiveOAuthFailure(errorMsg);
 
 			logger.warn("OAuth token refresh failed", {
 				provider,

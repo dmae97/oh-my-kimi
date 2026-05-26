@@ -272,3 +272,167 @@ describe("AuthStorage usage cache: jitter", () => {
 		}
 	});
 });
+
+describe("AuthStorage usage cache: terminal refresh failure", () => {
+	// Regression: a revoked refresh token used to fail the in-line OAuth refresh
+	// inside the usage probe, get silently swallowed, then trigger the upstream
+	// 401 → null → last-good fallback chain. The credential was therefore never
+	// removed from the candidate set and the /usage TUI kept rendering yesterday's
+	// report — including its now-elapsed `resetsAt`, which the renderer printed
+	// as e.g. `(-612090ms)`. The fix CAS-disables the row on a definitive refresh
+	// failure and clears the cache, so the credential drops out cleanly.
+	it("disables credential and suppresses last-good when OAuth refresh fails with invalid_grant", async () => {
+		// Row whose access token has just expired — within the 60s refresh skew so
+		// the usage probe is forced to refresh before issuing the upstream call.
+		const row = oauthRow(1, "a@example.com");
+		(row.credential as { expires: number }).expires = Date.now() - 1000;
+		const rows = [row];
+
+		// `makeStore` returns `false` from `tryDisableAuthCredentialIfMatches`,
+		// which would short-circuit our disable. Use a local store that actually
+		// performs the soft-delete so we can observe the AuthStorage-side effects.
+		const cache = new Map<string, CacheEntry>();
+		let disableCalls = 0;
+		const store: ObservableStore = {
+			cache,
+			close() {},
+			listAuthCredentials: () => rows.filter(r => !r.disabledCause),
+			updateAuthCredential() {},
+			deleteAuthCredential(id: number, cause: string) {
+				const target = rows.find(r => r.id === id);
+				if (target) target.disabledCause = cause;
+			},
+			tryDisableAuthCredentialIfMatches(id: number, _data: string, cause: string) {
+				disableCalls += 1;
+				const target = rows.find(r => r.id === id);
+				if (!target) return false;
+				target.disabledCause = cause;
+				return true;
+			},
+			replaceAuthCredentialsForProvider: () => rows,
+			upsertAuthCredentialForProvider: () => rows,
+			deleteAuthCredentialsForProvider() {},
+			getCache(key: string, options?: { includeExpired?: boolean }) {
+				const entry = cache.get(key);
+				if (!entry) return null;
+				if (!options?.includeExpired && entry.expiresAtSec * 1000 <= Date.now()) return null;
+				return entry.value;
+			},
+			setCache(key: string, value: string, expiresAtSec: number) {
+				cache.set(key, { value, expiresAtSec });
+			},
+			cleanExpiredCache() {},
+		};
+
+		// Pre-populate the cache with a "last good" report whose inner expiresAt
+		// is in the past (so `get()` misses) but the entry is still reachable via
+		// `getStale()`. Mirrors what the prior poll would have written.
+		const lastGood = makeReport("a@example.com");
+		const cacheKey = "usage_cache:report:anthropic:default:oauth|account:account-1|email:a@example.com";
+		cache.set(cacheKey, {
+			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
+			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
+		});
+
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+			refreshOAuthCredential: async () => {
+				throw new Error("OAuth refresh failed: 400 invalid_grant: refresh token revoked");
+			},
+		});
+		await storage.reload();
+
+		const fetchSpy = vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage");
+
+		try {
+			const reports = anthropicReports(await storage.fetchUsageReports());
+
+			// No last-good fallback: the row was disabled before lastGood could leak.
+			expect(reports).toHaveLength(0);
+			// CAS disable was attempted exactly once on the failing row.
+			expect(disableCalls).toBe(1);
+			expect(rows[0].disabledCause).toContain("invalid_grant");
+			// Upstream probe is short-circuited — no point asking the provider
+			// with a credential we've just torn down.
+			expect(fetchSpy).not.toHaveBeenCalled();
+			// Cache entry was neutralized: a future `getStale` lookup (e.g. on
+			// re-login under the same account identity) returns null, not the
+			// stale report with its already-elapsed `resetsAt`.
+			const rawAfter = cache.get(cacheKey);
+			expect(rawAfter).toBeDefined();
+			const parsedAfter = JSON.parse(rawAfter!.value);
+			expect(parsedAfter.value).toBeNull();
+			// And a second poll surfaces nothing — the credential is gone from
+			// `listAuthCredentials`, so `#collectUsageRequests` doesn't even
+			// look it up.
+			const secondPoll = anthropicReports(await storage.fetchUsageReports());
+			expect(secondPoll).toHaveLength(0);
+		} finally {
+			storage.close();
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("preserves last-good fallback for transient (non-definitive) refresh failures", async () => {
+		// Mirror image: a 502 from the token endpoint is transient — we keep the
+		// row, fall back to the prior good report, and try again next poll.
+		const row = oauthRow(2, "b@example.com");
+		(row.credential as { expires: number }).expires = Date.now() - 1000;
+		const rows = [row];
+
+		const cache = new Map<string, CacheEntry>();
+		const store: ObservableStore = {
+			cache,
+			close() {},
+			listAuthCredentials: () => rows.filter(r => !r.disabledCause),
+			updateAuthCredential() {},
+			deleteAuthCredential() {},
+			tryDisableAuthCredentialIfMatches() {
+				return true;
+			},
+			replaceAuthCredentialsForProvider: () => rows,
+			upsertAuthCredentialForProvider: () => rows,
+			deleteAuthCredentialsForProvider() {},
+			getCache(key: string, options?: { includeExpired?: boolean }) {
+				const entry = cache.get(key);
+				if (!entry) return null;
+				if (!options?.includeExpired && entry.expiresAtSec * 1000 <= Date.now()) return null;
+				return entry.value;
+			},
+			setCache(key: string, value: string, expiresAtSec: number) {
+				cache.set(key, { value, expiresAtSec });
+			},
+			cleanExpiredCache() {},
+		};
+
+		const lastGood = makeReport("b@example.com");
+		const cacheKey = "usage_cache:report:anthropic:default:oauth|account:account-2|email:b@example.com";
+		cache.set(cacheKey, {
+			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
+			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
+		});
+
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+			refreshOAuthCredential: async () => {
+				throw new Error("fetch failed: connect ECONNREFUSED 1.2.3.4:443");
+			},
+		});
+		await storage.reload();
+
+		// The provider probe runs with the stale credential and fails — we don't
+		// need a real upstream response, just a deterministic null so the lastGood
+		// path is the one being tested.
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockResolvedValue(null);
+
+		try {
+			const reports = anthropicReports(await storage.fetchUsageReports());
+			expect(reports).toHaveLength(1);
+			expect(reports[0]?.metadata?.email).toBe("b@example.com");
+			expect(rows[0].disabledCause).toBeNull();
+		} finally {
+			storage.close();
+			vi.restoreAllMocks();
+		}
+	});
+});

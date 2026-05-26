@@ -1,10 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Removed
 
 - Removed the `pi-ai` CLI binary (`packages/ai/src/cli.ts`) and its `bin` entry. Use the in-process equivalent in the omp coding-agent CLI: `omp auth-broker login [provider]`, `omp auth-broker logout [provider]`, and `omp auth-broker list`. The library API (`AuthStorage.login()`, `getOAuthProviders()`, etc.) is unchanged.
+
+### Fixed
+
+- Fixed usage polling to disable credentials when OAuth refresh fails definitively (for example `invalid_grant`) and clear cached last-good usage data so stale reports no longer remain visible
 
 ## [15.4.3] - 2026-05-26
 
