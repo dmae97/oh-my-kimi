@@ -529,6 +529,11 @@ async function main(): Promise<void> {
 	if (cleanup) {
 		await cleanup();
 	}
+
+	// In-process benchmark runs can leave provider keep-alive sockets and
+	// background AgentSession timers alive after the report is written. Treat the
+	// final report as the CLI boundary so the command returns to the shell.
+	await postmortem.quit(0);
 }
 
 class LiveProgress {
@@ -711,7 +716,7 @@ class LiveProgress {
 	}
 }
 
-main().catch(err => {
+main().catch(async err => {
 	console.error("Benchmark failed:", err);
-	process.exit(1);
+	await postmortem.quit(1);
 });

@@ -42,7 +42,7 @@ type ConversationDumpSessionState = {
 /** Common interface for both RPC and in-process clients */
 interface BenchmarkClient {
 	start(): Promise<void>;
-	setThinkingLevel(level: import("@oh-my-pi/pi-agent-core").ResolvedThinkingLevel): Promise<void>;
+	setThinkingLevel(level: ResolvedThinkingLevel): Promise<void>;
 	onEvent(listener: (event: { type: string; [key: string]: unknown }) => void): () => void;
 	prompt(text: string): Promise<void>;
 	followUp(text: string): Promise<void>;
@@ -1887,32 +1887,36 @@ export async function runBenchmark(
 			})
 		: undefined;
 
-	const runItems: TaskRunItem[] = tasks.flatMap(task =>
-		Array.from({ length: config.runsPerTask }, (_, runIndex) => ({ task, runIndex })),
-	);
+	try {
+		const runItems: TaskRunItem[] = tasks.flatMap(task =>
+			Array.from({ length: config.runsPerTask }, (_, runIndex) => ({ task, runIndex })),
+		);
 
-	const pending = shuffle(runItems);
-	const resultsByTask = new Map<string, TaskRunResult[]>();
-	const concurrency = Math.max(1, Math.floor(config.taskConcurrency));
-	const running: Promise<void>[] = [];
+		const pending = shuffle(runItems);
+		const resultsByTask = new Map<string, TaskRunResult[]>();
+		const concurrency = Math.max(1, Math.floor(config.taskConcurrency));
+		const running: Promise<void>[] = [];
 
-	const runNext = async (): Promise<void> => {
-		const nextItem = pending.shift();
-		if (!nextItem) return;
-		const { task, result } = await runConcurrentBenchmarkRun(nextItem, config, onProgress, shared);
-		const list = resultsByTask.get(task.id) ?? [];
-		list.push(result);
-		resultsByTask.set(task.id, list);
-		onResultSnapshot?.(buildBenchmarkResult({ tasks, config, resultsByTask, startTime }));
-		await runNext();
-	};
+		const runNext = async (): Promise<void> => {
+			const nextItem = pending.shift();
+			if (!nextItem) return;
+			const { task, result } = await runConcurrentBenchmarkRun(nextItem, config, onProgress, shared);
+			const list = resultsByTask.get(task.id) ?? [];
+			list.push(result);
+			resultsByTask.set(task.id, list);
+			onResultSnapshot?.(buildBenchmarkResult({ tasks, config, resultsByTask, startTime }));
+			await runNext();
+		};
 
-	const slots = Math.min(concurrency, pending.length);
-	for (let i = 0; i < slots; i++) {
-		running.push(runNext());
+		const slots = Math.min(concurrency, pending.length);
+		for (let i = 0; i < slots; i++) {
+			running.push(runNext());
+		}
+
+		await Promise.all(running);
+
+		return buildBenchmarkResult({ tasks, config, resultsByTask, startTime });
+	} finally {
+		shared?.authStorage.close();
 	}
-
-	await Promise.all(running);
-
-	return buildBenchmarkResult({ tasks, config, resultsByTask, startTime });
 }
