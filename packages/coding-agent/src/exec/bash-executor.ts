@@ -5,7 +5,7 @@
  */
 import * as fs from "node:fs/promises";
 import { ExponentialYield } from "@oh-my-pi/pi-agent-core/utils/yield";
-import { executeShell, type MinimizerOptions, Shell } from "@oh-my-pi/pi-natives";
+import { executeShell, type MinimizerOptions, Shell, type ShellRunResult } from "@oh-my-pi/pi-natives";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
@@ -200,7 +200,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 
 		const ey = new ExponentialYield();
 		const winner = await ey.race<
-			| { kind: "result"; result: Awaited<ReturnType<typeof executeShell>> }
+			| { kind: "result"; result: ShellRunResult }
 			| { kind: "timeout" }
 			| { kind: "abort" }
 		>([
