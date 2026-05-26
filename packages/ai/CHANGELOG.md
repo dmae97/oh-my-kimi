@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Synthetic model discovery to treat the provider `/models` response as authoritative so deprecated bundled IDs are pruned from the runtime cache, and changed Synthetic login validation to avoid probing a specific model ([#1417](https://github.com/can1357/oh-my-pi/issues/1417)).
+
 ## [15.5.0] - 2026-05-26
 ### Added
 
