@@ -108,6 +108,14 @@ function toErrorMessage(value: unknown): string {
 interface DapStartRequestFailure {
 	rejected: boolean;
 	error?: unknown;
+	/**
+	 * Resolves (never rejects) when the underlying launch/attach request
+	 * settles either way. Set by {@link trackDapStartRequest} on each call,
+	 * so a single failure object must not be reused across launch attempts.
+	 * Consumed by {@link throwPreferredDapStartError} to bound how long to
+	 * wait for a delayed adapter-side rejection before falling back to the
+	 * cascade error from configurationDone.
+	 */
 	settled?: Promise<void>;
 }
 
@@ -146,6 +154,21 @@ async function throwPreferredDapStartError(
 	}
 	throw configurationError;
 }
+
+const DEBUGPY_MISSING_MODULE_RE = /No module named ['"]?debugpy['"]?/;
+
+/**
+ * Map a generic adapter-side failure into the targeted `pip install debugpy`
+ * hint when the adapter is debugpy and stderr/the wrapping error mentions
+ * the missing module. Returns null when the heuristic does not apply, so the
+ * caller can rethrow the original error untouched.
+ */
+function mapDebugpyMissingModule(adapterName: string, error: unknown): Error | null {
+	if (adapterName !== "debugpy") return null;
+	if (!DEBUGPY_MISSING_MODULE_RE.test(toErrorMessage(error))) return null;
+	return new Error("adapter 'debugpy' is not available: install with 'pip install debugpy'");
+}
+
 function normalizePath(filePath: string): string {
 	return path.resolve(filePath);
 }
@@ -280,9 +303,8 @@ export class DapSessionManager {
 			return buildSummary(session);
 		} catch (error) {
 			await this.#disposeSession(session);
-			if (options.adapter.name === "debugpy" && /No module named ['"]?debugpy['"]?/.test(toErrorMessage(error))) {
-				throw new Error("adapter 'debugpy' is not available: install with 'pip install debugpy'");
-			}
+			const mapped = mapDebugpyMissingModule(options.adapter.name, error);
+			if (mapped) throw mapped;
 			throw error;
 		}
 	}
@@ -339,9 +361,8 @@ export class DapSessionManager {
 			return buildSummary(session);
 		} catch (error) {
 			await this.#disposeSession(session);
-			if (options.adapter.name === "debugpy" && /No module named ['"]?debugpy['"]?/.test(toErrorMessage(error))) {
-				throw new Error("adapter 'debugpy' is not available: install with 'pip install debugpy'");
-			}
+			const mapped = mapDebugpyMissingModule(options.adapter.name, error);
+			if (mapped) throw mapped;
 			throw error;
 		}
 	}

@@ -59,7 +59,7 @@ const MAX_GLOB_TIMEOUT_MS = 60_000;
  * Commas inside brace expansion (`{a,b}`) are legitimate glob syntax and
  * must pass through.
  */
-function validateFindPathInputs(paths: readonly string[]): void {
+export function validateFindPathInputs(paths: readonly string[]): void {
 	for (const entry of paths) {
 		let braceDepth = 0;
 		for (let i = 0; i < entry.length; i++) {

@@ -29,6 +29,13 @@ const INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
 	rule: true,
 	skill: true,
 };
+// Schemes whose resource URIs are server-defined and may legitimately end
+// with selector-shaped tails (e.g. `:raw`, `:conflicts`, `:1-50`, `/:raw`).
+// `McpProtocolHandler` resolves by exact URI match (`r.uri === uri`), so
+// peeling syntactically can make valid resources unreachable. Keep these
+// schemes opaque; selector support for them needs a resolver-aware path that
+// tries the exact URI before interpreting any suffix as a read selector.
+const OPAQUE_RESOURCE_SCHEMES: ReadonlySet<string> = new Set(["mcp"]);
 const INTERNAL_URL_SCHEME_RE = /^([a-z][a-z0-9+.-]*):\/\//i;
 const NARROW_NO_BREAK_SPACE = "\u202F";
 const TOP_LEVEL_INTERNAL_URL_PREFIXES = [
@@ -173,27 +180,16 @@ export function splitPathAndSel(rawPath: string): { path: string; sel?: string }
  *
  * Falls back to the input unchanged when nothing matches.
  */
-/** MCP resource URIs are server-defined and may legitimately end with
- * selector-shaped tails like `:raw`, `:conflicts`, `:1-50`, or even `/:raw`.
- * `McpProtocolHandler` resolves by exact resource URI match (`r.uri === uri`),
- * so syntactically peeling a selector here can make valid resources
- * unreachable. Keep mcp:// opaque; selector support for MCP resources needs a
- * resolver-aware path that can try the exact URI before interpreting a suffix
- * as a read selector. */
-function keepOpaqueResourceUri(rawPath: string): { path: string } {
-	return { path: rawPath };
-}
 
 export function splitInternalUrlSel(rawPath: string): { path: string; sel?: string } {
 	const schemeMatch = rawPath.match(INTERNAL_URL_SCHEME_RE);
 	if (!schemeMatch) return { path: rawPath };
 	const scheme = schemeMatch[1].toLowerCase();
-	// `mcp://` resource URIs are server-defined and may legitimately contain
-	// selector-shaped suffixes. Keep them opaque so exact resource lookup wins.
-	if (!INTERNAL_SCHEMES_WITH_SELECTORS[scheme]) {
-		if (scheme === "mcp") return keepOpaqueResourceUri(rawPath);
-		return { path: rawPath };
-	}
+	// Opaque schemes (mcp://, etc.) carry server-defined resource URIs that may
+	// legitimately end in selector-shaped tails. Forward verbatim — see
+	// OPAQUE_RESOURCE_SCHEMES.
+	if (OPAQUE_RESOURCE_SCHEMES.has(scheme)) return { path: rawPath };
+	if (!INTERNAL_SCHEMES_WITH_SELECTORS[scheme]) return { path: rawPath };
 
 	const schemeEnd = schemeMatch[0].length;
 	let path = rawPath;

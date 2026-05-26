@@ -95,16 +95,19 @@ describe("splitInternalUrlSel", () => {
 		});
 	});
 
-	it("does not peel when the only slash before the colon is part of the `://` separator", () => {
-		// Guards against degenerate inputs like `mcp://:1-50` — stripping the
-		// scheme's own slash would emit `mcp:/` as the path. The peeler refuses
-		// when the resulting path no longer carries a scheme separator.
+	it("keeps `mcp://:1-50`-shaped degenerate inputs opaque", () => {
+		// All mcp:// inputs are forwarded verbatim (see OPAQUE_RESOURCE_SCHEMES in
+		// path-utils.ts). This covers the edge case where the only `:` candidate
+		// for peeling sits next to the scheme's own `://`, so any peeler that ever
+		// replaces the opaque-scheme guard must still refuse these inputs.
 		expect(splitInternalUrlSel("mcp://:1-50")).toEqual({ path: "mcp://:1-50" });
 		expect(splitInternalUrlSel("mcp://:raw")).toEqual({ path: "mcp://:raw" });
 	});
 
-	it("rejects bare-integer suffixes even with the trailing-slash escape", () => {
-		// Could still be a port number after a path; require a richer selector form.
+	it("keeps mcp:// trailing-slash bare-integer suffixes opaque", () => {
+		// `:1234` could be a port number after a path. The opaque-scheme rule keeps
+		// it verbatim either way; if mcp ever moves to selector-aware peeling, a
+		// richer selector form should be required before treating `:N` as a tail.
 		expect(splitInternalUrlSel("mcp://server/resource/:1234")).toEqual({
 			path: "mcp://server/resource/:1234",
 		});
