@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `zhipu-coding-plan` provider for Zhipu (智谱) BigModel's domestic coding-plan SKU at `https://open.bigmodel.cn/api/coding/paas/v4`, with dynamic model discovery (`ZHIPU_API_KEY`), zai-format thinking, `reasoning_content` field, and OAuth login flow ([#1340](https://github.com/can1357/oh-my-pi/issues/1340)).
@@ -12,6 +11,8 @@
 
 ### Fixed
 
+- Fixed delayed `toolResult` emissions so real tool results are emitted in the correct assistant `toolCall` window after handoff/compaction, preventing out-of-order or orphaned tool results
+- Fixed delayed `toolResult` handling for aborted calls so a late real result is emitted instead of a synthetic `aborted` result for the same `toolCallId`
 - Fixed usage polling to disable credentials when OAuth refresh fails definitively (for example `invalid_grant`) and clear cached last-good usage data so stale reports no longer remain visible
 
 ## [15.4.3] - 2026-05-26
