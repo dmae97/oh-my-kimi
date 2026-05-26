@@ -1,4 +1,9 @@
-import { ABORT_WARNING, REPLACE_PAIR_COALESCED_WARNING } from "./constants";
+import {
+	ABORT_WARNING,
+	IMPLICIT_CONTINUATION_WARNING,
+	PAYLOAD_LINE_PREFIX_DEMOTED_WARNING,
+	REPLACE_PAIR_COALESCED_WARNING,
+} from "./constants";
 import {
 	HL_OP_CHARS,
 	HL_OP_DELETE,
@@ -24,6 +29,10 @@ function validateRangeOrder(range: ParsedRange, lineNum: number): void {
 
 function rangesEqual(a: ParsedRange, b: ParsedRange): boolean {
 	return a.start.line === b.start.line && a.end.line === b.end.line;
+}
+
+function rangeContains(outer: ParsedRange, inner: ParsedRange): boolean {
+	return outer.start.line <= inner.start.line && inner.end.line <= outer.end.line;
 }
 
 function expandRange(range: ParsedRange): Anchor[] {
@@ -122,18 +131,31 @@ export class HashlineExecutor {
 				return;
 			case "op-replace":
 				validateRangeOrder(token.range, token.lineNum);
-				if (
-					this.#pending !== undefined &&
-					this.#pending.op.kind === "replace" &&
-					rangesEqual(this.#pending.op.range, token.range)
-				) {
-					// Identical-range before/after pair. Drop the "before" payload
-					// silently; the second op proceeds as the lone winner. Other
-					// overlap shapes (different ranges, replace+delete, delete+delete)
-					// still hit the post-hoc validator.
-					this.#pending = undefined;
-					if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_WARNING)) {
-						this.#warnings.push(REPLACE_PAIR_COALESCED_WARNING);
+				if (this.#pending !== undefined && this.#pending.op.kind === "replace") {
+					const outer = this.#pending.op.range;
+					const inner = token.range;
+					if (rangesEqual(outer, inner)) {
+						// Identical-range before/after pair. Drop the "before" payload
+						// silently; the second op proceeds as the lone winner. Other
+						// overlap shapes (different ranges, replace+delete, delete+delete)
+						// still hit the post-hoc validator.
+						this.#pending = undefined;
+						if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_WARNING)) {
+							this.#warnings.push(REPLACE_PAIR_COALESCED_WARNING);
+						}
+					} else if (rangeContains(outer, inner)) {
+						// Model wrote a payload line in read-output `LINE:TEXT` format
+						// (or `A-B:TEXT` for a sub-range) inside an outer `A-B:` block.
+						// The tokenizer can't tell payload from op when the anchor and
+						// sigil shape are identical, so demote: append the op's inline
+						// body to the pending payload, strip the `LINE:` prefix, and
+						// keep accumulating. Without this the inner anchors would each
+						// register as their own delete and clash with the outer range.
+						this.#pending.payload.push(token.inlineBody ?? "");
+						if (!this.#warnings.includes(PAYLOAD_LINE_PREFIX_DEMOTED_WARNING)) {
+							this.#warnings.push(PAYLOAD_LINE_PREFIX_DEMOTED_WARNING);
+						}
+						return;
 					}
 				}
 				this.#flushPending();
@@ -215,10 +237,17 @@ export class HashlineExecutor {
 	#handleRaw(text: string, lineNum: number): void {
 		if (this.#pending) {
 			if (text.trim().length === 0) return;
-			throw new Error(
-				`line ${lineNum}: payload continuation lines must start with ${HL_PAYLOAD_PREFIX}. ` +
-					`Got ${JSON.stringify(text)}.`,
-			);
+			// Lenient legacy fallback: the tokenizer routes a line to `raw` only
+			// when it does not parse as an op, header, payload, or envelope
+			// marker. A `raw` token while a pending op exists is therefore an
+			// unambiguous continuation row that the model authored without the
+			// `+` prefix. Accept it as payload and warn so the canonical
+			// `+`-prefixed form remains preferred.
+			this.#pending.payload.push(text);
+			if (!this.#warnings.includes(IMPLICIT_CONTINUATION_WARNING)) {
+				this.#warnings.push(IMPLICIT_CONTINUATION_WARNING);
+			}
+			return;
 		}
 
 		// Whitespace-only raw lines outside any pending op are silently dropped;

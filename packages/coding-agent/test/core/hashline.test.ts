@@ -145,11 +145,11 @@ describe("hashline parser — suffix-op syntax", () => {
 		expect(applyDiff(content, diff)).toBe("aaa\nFIRST\nSECOND\nccc");
 	});
 
-	it("rejects unprefixed payload continuation lines", () => {
+	it("accepts unprefixed payload continuation lines as implicit continuation with a warning", () => {
 		const anchor = tag(2, "bbb");
-		expect(() => parseHashline(`${anchor}:FIRST\nSECOND`).edits).toThrow(
-			/payload continuation lines must start with \+/,
-		);
+		const parsed = parseHashline(`${anchor}:FIRST\nSECOND`);
+		expect(parsed.warnings.some(w => w.includes("without the `+` prefix"))).toBe(true);
+		expect(applyDiff(content, `${anchor}:FIRST\nSECOND`)).toBe("aaa\nFIRST\nSECOND\nccc");
 	});
 
 	it("preserves whitespace-bearing inline payload exactly", () => {
@@ -488,9 +488,11 @@ describe("hashline parser — suffix-op syntax", () => {
 		expect(warnings).toEqual([]);
 	});
 
-	it("rejects read-output `N:` lines inside a pending `A-B:` as overlapping ops", () => {
+	it("demotes read-output `N:` lines inside a pending `A-B:` as payload continuation with a warning", () => {
 		const diff = `${tag(2, "bbb")}-${tag(4, "ddd")}:line one\n${tag(3, "ccc")}:line two`;
-		expect(() => parseHashline(diff).edits).toThrow(/anchor line 3 is already targeted by the .+ op on line 1/);
+		const { warnings } = parseHashline(diff);
+		expect(warnings.some(w => w.includes("LINE:TEXT"))).toBe(true);
+		expect(applyDiff("aaa\nbbb\nccc\nddd\neee", diff)).toBe("aaa\nline one\nline two\neee");
 	});
 
 	it("treats `N:` outside the pending range as a separate op", () => {
