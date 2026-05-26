@@ -69,7 +69,7 @@ export interface KagiV1SearchData {
 export interface KagiV1SearchResponse {
 	meta?: {
 		trace: string;
-    ms: number
+		ms: number;
 	};
 	data?: KagiV1SearchData;
 	error?: KagiV1ErrorEntry[];

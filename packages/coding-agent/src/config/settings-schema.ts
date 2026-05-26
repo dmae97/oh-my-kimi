@@ -2548,7 +2548,11 @@ export const SETTINGS_SCHEMA = {
 				{ value: "brave", label: "Brave", description: "Requires BRAVE_API_KEY" },
 				{ value: "jina", label: "Jina", description: "Requires JINA_API_KEY" },
 				{ value: "kimi", label: "Kimi", description: "Requires MOONSHOT_SEARCH_API_KEY or MOONSHOT_API_KEY" },
-				{ value: "perplexity", label: "Perplexity", description: "Requires PERPLEXITY_COOKIES or PERPLEXITY_API_KEY" },
+				{
+					value: "perplexity",
+					label: "Perplexity",
+					description: "Requires PERPLEXITY_COOKIES or PERPLEXITY_API_KEY",
+				},
 				{ value: "anthropic", label: "Anthropic", description: "Uses Anthropic web search" },
 				{ value: "zai", label: "Z.AI", description: "Calls Z.AI webSearchPrime MCP" },
 				{ value: "tavily", label: "Tavily", description: "Requires TAVILY_API_KEY" },
