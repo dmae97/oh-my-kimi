@@ -88,6 +88,66 @@ describe("path-prefixed auth servers", () => {
 		expect(calls).toContain("https://gateway.example.com/my-service/.well-known/oauth-authorization-server");
 	});
 
+	it("discovers endpoints via single-segment path prefix (no trailing endpoint segment)", async () => {
+		const calls: string[] = [];
+		using _hook = hookFetch(input => {
+			const url = String(input);
+			calls.push(url);
+
+			if (url === "https://gateway.example.com/.well-known/oauth-authorization-server") {
+				return new Response("not found", { status: 404 });
+			}
+			if (url === "https://gateway.example.com/my-service/.well-known/oauth-authorization-server") {
+				return new Response(
+					JSON.stringify({
+						authorization_endpoint: "https://gateway.example.com/my-service/oauth/authorize",
+						token_endpoint: "https://gateway.example.com/my-service/oauth/token",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response("not found", { status: 404 });
+		});
+
+		const oauth = await discoverOAuthEndpoints("https://gateway.example.com/my-service");
+
+		expect(oauth).toEqual({
+			authorizationUrl: "https://gateway.example.com/my-service/oauth/authorize",
+			tokenUrl: "https://gateway.example.com/my-service/oauth/token",
+		});
+		expect(calls[0]).toBe("https://gateway.example.com/.well-known/oauth-authorization-server");
+		expect(calls).toContain("https://gateway.example.com/my-service/.well-known/oauth-authorization-server");
+	});
+
+	it("falls back to RFC 8414 path-ful issuer form (/.well-known/oauth-authorization-server/<path>)", async () => {
+		const calls: string[] = [];
+		using _hook = hookFetch(input => {
+			const url = String(input);
+			calls.push(url);
+
+			if (url === "https://gateway.example.com/.well-known/oauth-authorization-server/my-service") {
+				return new Response(
+					JSON.stringify({
+						authorization_endpoint: "https://gateway.example.com/my-service/oauth",
+						token_endpoint: "https://gateway.example.com/my-service/token",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response("not found", { status: 404 });
+		});
+
+		const oauth = await discoverOAuthEndpoints("https://gateway.example.com/my-service");
+
+		expect(oauth).toEqual({
+			authorizationUrl: "https://gateway.example.com/my-service/oauth",
+			tokenUrl: "https://gateway.example.com/my-service/token",
+		});
+		expect(calls).toContain("https://gateway.example.com/.well-known/oauth-authorization-server/my-service");
+	});
+
 	it("prefers absolute well-known when it succeeds (origin-root servers still work)", async () => {
 		const calls: string[] = [];
 		using _hook = hookFetch(input => {

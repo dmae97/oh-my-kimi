@@ -334,13 +334,25 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		// path-prefixed well-known for gateways (e.g. https://gateway.example.com/my-service/).
 		const normalizedPath = authorizationUrl.pathname.replace(/\/$/, "");
 		const lastSlash = normalizedPath.lastIndexOf("/");
-		if (lastSlash <= 0) return null;
+		// Bare-origin authorization URL — nothing further to try.
+		if (lastSlash < 0) return null;
 
+		// Single-segment paths are the gateway prefix itself; multi-segment paths
+		// drop the trailing segment (typically a service endpoint).
+		const prefixPath = lastSlash === 0 ? normalizedPath : normalizedPath.slice(0, lastSlash);
 		const prefixedUrl = new URL(
 			".well-known/oauth-authorization-server",
-			`${authorizationUrl.origin}${normalizedPath.slice(0, lastSlash)}/`,
+			`${authorizationUrl.origin}${prefixPath}/`,
 		).toString();
-		return await this.#tryWellKnownForRegistration(prefixedUrl);
+		const prefixedEndpoint = await this.#tryWellKnownForRegistration(prefixedUrl);
+		if (prefixedEndpoint) return prefixedEndpoint;
+
+		// RFC 8414 §3.1 path-ful issuer form: /.well-known/oauth-authorization-server/<path>.
+		const pathfulUrl = new URL(
+			`/.well-known/oauth-authorization-server${normalizedPath}`,
+			authorizationUrl.origin,
+		).toString();
+		return await this.#tryWellKnownForRegistration(pathfulUrl);
 	}
 
 	async #tryWellKnownForRegistration(wellKnownUrl: string): Promise<string | null> {

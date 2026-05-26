@@ -407,8 +407,31 @@ function buildWellKnownUrls(wellKnownPath: string, baseUrl: string): URL[] {
 
 	const normalizedPath = parsed.pathname.replace(/\/$/, "");
 	const lastSlash = normalizedPath.lastIndexOf("/");
-	if (lastSlash <= 0) return [absUrl];
+	// Bare origin (no path beyond "/") — only the origin-root candidate applies.
+	if (lastSlash < 0) return [absUrl];
 
-	const relUrl = new URL(wellKnownPath.slice(1), `${parsed.origin}${normalizedPath.slice(0, lastSlash)}/`);
-	return relUrl.href !== absUrl.href ? [absUrl, relUrl] : [absUrl];
+	// Path-prefixed well-known (common for gateways with sub-path routing).
+	// Multi-segment paths drop the trailing segment (typically the MCP endpoint);
+	// single-segment paths (lastSlash === 0) are themselves the gateway prefix.
+	const prefixPath = lastSlash === 0 ? normalizedPath : normalizedPath.slice(0, lastSlash);
+	const relUrl = new URL(wellKnownPath.slice(1), `${parsed.origin}${prefixPath}/`);
+
+	const candidates: URL[] = [absUrl];
+	const seen = new Set<string>([absUrl.href]);
+	const push = (u: URL): void => {
+		if (!seen.has(u.href)) {
+			candidates.push(u);
+			seen.add(u.href);
+		}
+	};
+	push(relUrl);
+
+	// RFC 8414 §3.1 path-ful issuer form: /.well-known/<suffix>/<issuer-path>.
+	// Only meaningful for well-known metadata documents.
+	if (wellKnownPath.startsWith("/.well-known/")) {
+		const pathfulUrl = new URL(`${wellKnownPath}${normalizedPath}`, parsed.origin);
+		push(pathfulUrl);
+	}
+
+	return candidates;
 }
