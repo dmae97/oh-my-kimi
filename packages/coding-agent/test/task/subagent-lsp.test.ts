@@ -87,7 +87,12 @@ function createYieldingSession(): AgentSession {
 }
 
 function createSession(
-	options: { enableLsp?: boolean; isolationMode?: "none" | "auto"; planMode?: PlanModeState } = {},
+	options: {
+		isolationMode?: "none" | "auto";
+		parentEnableLsp?: boolean;
+		planMode?: PlanModeState;
+		taskEnableLsp?: boolean;
+	} = {},
 ): ToolSession {
 	const modelRegistry = {
 		authStorage: undefined,
@@ -99,10 +104,11 @@ function createSession(
 	return {
 		cwd: "/tmp",
 		hasUI: false,
+		enableLsp: options.parentEnableLsp,
 		settings: Settings.isolated({
 			"async.enabled": false,
 			"task.isolation.mode": options.isolationMode ?? "none",
-			...(options.enableLsp !== undefined ? { "task.enableLsp": options.enableLsp } : {}),
+			...(options.taskEnableLsp !== undefined ? { "task.enableLsp": options.taskEnableLsp } : {}),
 		}),
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
@@ -189,11 +195,27 @@ describe("subagent LSP availability", () => {
 		});
 		const { getOptions } = mockCreateAgentSession();
 
-		const tool = await TaskTool.create(createSession({ enableLsp: true }));
+		const tool = await TaskTool.create(createSession({ taskEnableLsp: true }));
 		await tool.execute("tool-call", TEST_TASK);
 
 		expect(getOptions()?.enableLsp).toBe(true);
 		expect(getOptions()?.toolNames).toContain("lsp");
+	});
+
+	it("keeps subagent LSP disabled when the parent session disables LSP", async () => {
+		mockAgents({
+			name: "task",
+			description: "Task agent",
+			systemPrompt: "Use normal tools.",
+			source: "bundled",
+			tools: ["lsp"],
+		});
+		const { getOptions } = mockCreateAgentSession();
+
+		const tool = await TaskTool.create(createSession({ parentEnableLsp: false, taskEnableLsp: true }));
+		await tool.execute("tool-call", TEST_TASK);
+
+		expect(getOptions()?.enableLsp).toBe(false);
 	});
 
 	it("disables LSP for isolated subagents by default", async () => {
@@ -225,7 +247,7 @@ describe("subagent LSP availability", () => {
 		const { getOptions } = mockCreateAgentSession();
 		const planMode = { enabled: true, planFilePath: "local://PLAN.md" };
 
-		const tool = await TaskTool.create(createSession({ enableLsp: true, planMode }));
+		const tool = await TaskTool.create(createSession({ planMode, taskEnableLsp: true }));
 		await tool.execute("tool-call", TEST_TASK);
 
 		expect(getOptions()?.enableLsp).toBe(true);
