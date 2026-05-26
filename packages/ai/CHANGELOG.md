@@ -26,6 +26,7 @@
 ### Fixed
 
 - Dropped truncated, thinking-only assistant turns with only `thinking`/`redacted_thinking` blocks and no `text` or `tool` content during message transformation, preventing Anthropic requests from sending consecutive assistant messages after a `max_tokens`/`error`/`aborted` interruption
+- Fixed Amazon Bedrock bearer-token authentication to honor `AWS_BEARER_TOKEN_BEDROCK` before resolving AWS profiles or running `credential_process`, matching Bedrock API-key precedence. ([#1399](https://github.com/can1357/oh-my-pi/issues/1399))
 - Updated `isRetryableError` to treat Bun HTTP/2 transport errors (`HTTP2StreamReset`, `HTTP2RefusedStream`) as retryable so transient stream-reset failures can be retried
 - Fixed Codex WebSocket streaming to recover from stalled sessions by falling back to SSE when the first event or subsequent progress is delayed beyond the configured websocket timeout
 - Fixed expired OAuth handling so provider-level paths no longer attempt direct token refresh calls for expired credentials and instead rely on `AuthStorage` for rotation

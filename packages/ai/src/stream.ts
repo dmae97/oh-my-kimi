@@ -126,9 +126,9 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 		}
 	},
 	// Amazon Bedrock supports multiple credential sources:
-	// 1. AWS_PROFILE - named profile from ~/.aws/credentials
+	// 1. AWS_BEARER_TOKEN_BEDROCK - Bedrock API keys (bearer token)
 	// 2. AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY - standard IAM keys
-	// 3. AWS_BEARER_TOKEN_BEDROCK - Bedrock API keys (bearer token)
+	// 3. AWS_PROFILE - named profile from ~/.aws/credentials
 	// 4. AWS_CONTAINER_CREDENTIALS_* - ECS/Task IAM role credentials
 	// 5. AWS_WEB_IDENTITY_TOKEN_FILE + AWS_ROLE_ARN - IRSA (EKS) web identity
 	"amazon-bedrock": () => {
