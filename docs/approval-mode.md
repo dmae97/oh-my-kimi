@@ -4,13 +4,26 @@ Per-tool approval policies allow fine-grained control over which tools require u
 
 ## Overview
 
-By default:
-- **Read-only tools** (read, find, search, ast_grep, web_search) are auto-allowed
-- **Destructive tools** (bash, write, edit, ast_edit, debug, browser, eval) require approval
-- **External/custom tools** (MCP, extensions) require approval
-- **LSP tool** requires approval by default, but read-only actions (`diagnostics`, `definition`, `references`, `hover`, `symbols`, …) are auto-allowed
-- **Debug tool** requires approval by default, but inspection actions (`threads`, `stack_trace`, `variables`, `scopes`, `read_memory`, …) are auto-allowed
-- **Critical bash patterns** always prompt, even if bash is allowlisted (safety override)
+Approval is gated by **two** settings:
+
+1. **`tools.approvalMode`** — the top-level switch. Defaults to `auto`.
+   - `auto` (default) — skip approval entirely. **`tools.approval` is ignored.**
+   - `prompt` — apply the built-in per-tool defaults (read-only allowed, destructive prompts). `tools.approval` is still ignored.
+   - `custom` — your `tools.approval.<tool>` config wins; built-in defaults fill in tools you didn't configure.
+2. **`tools.approval`** — the per-tool policy map. **Only consulted when `tools.approvalMode: custom`.**
+
+The CLI flag `--auto-approve` (alias `--yolo`) always wins, regardless of mode.
+
+> **Common pitfall:** setting `tools.approval.bash: prompt` without setting `tools.approvalMode: custom` is a silent no-op. The default `auto` mode skips the approval layer wholesale.
+
+### Built-in defaults (mode `prompt` / `custom`)
+
+- **Read-only tools** (read, find, search, ast_grep, web_search, recall, inspect_image, job) are auto-allowed.
+- **Destructive tools** (bash, write, edit, ast_edit, debug, browser, eval, task, ssh, retain, reflect, checkpoint, rewind) require approval.
+- **External/custom tools** (MCP, extensions) require approval.
+- **LSP** prompts by default, but read-only actions (`diagnostics`, `definition`, `references`, `hover`, `symbols`, …) are auto-allowed.
+- **Debug** prompts by default, but inspection actions (`threads`, `stack_trace`, `variables`, `scopes`, `read_memory`, …) are auto-allowed.
+- **Critical bash patterns** always prompt, even if bash is allowlisted — except when you explicitly `deny` bash, in which case the deny still wins.
 
 ### Action-Based Exceptions
 
@@ -23,8 +36,8 @@ Some tools have **action-based exceptions** that apply policy based on specific 
 
 **Bash Tool** (safety override):
 - Default policy: `prompt`
-- Exception: critical patterns → force prompt (overrides user config)
-- Result: `rm -rf /`, `sudo rm`, fork bombs always prompt, even with `bash: allow`
+- Exception: critical patterns → force prompt (overrides user `allow`)
+- Result: `rm -rf /`, `sudo rm`, fork bombs always prompt when bash is `allow` or unset; a user `bash: deny` still wins.
 
 ## Quick Start
 
@@ -35,30 +48,39 @@ omp --auto-approve -p "Fix all TypeScript errors"
 omp --yolo -p "Refactor the auth module"
 ```
 
-### Configure per-tool policies
+### Enable per-tool prompts for interactive work
 
-Add to `~/.omp/agent/config.yml` or `.omp/config.yml`:
+Per-tool policies require **both** the mode switch and the policy map. Add to `~/.omp/agent/config.yml` or `.omp/config.yml`:
 
 ```yaml
 tools:
+  approvalMode: custom    # REQUIRED — without this, `tools.approval` is ignored
   approval:
-    bash: allow        # Never prompt for bash
-    write: prompt      # Always prompt for write (default)
-    edit: allow        # Never prompt for edit
-    custom-tool: deny  # Block a custom tool entirely
+    bash: allow           # Never prompt for bash
+    write: prompt         # Always prompt for write
+    edit: allow           # Never prompt for edit
+    custom-tool: deny     # Block a custom tool entirely
 ```
 
 ## Configuration
 
-### Policy Values
+### `tools.approvalMode`
+
+| Value    | Behavior                                                                  |
+| -------- | ------------------------------------------------------------------------- |
+| `auto`   | (default) Skip approval. `tools.approval` is **not** consulted.           |
+| `prompt` | Use built-in per-tool defaults. `tools.approval` is **not** consulted.    |
+| `custom` | Use `tools.approval.<tool>`; fall back to built-in defaults for the rest. |
+
+### Policy Values (under `tools.approval.<tool>`)
 
 - `allow` — Auto-approve (never prompt)
 - `deny` — Block the tool entirely (throws error)
 - `prompt` — Require user confirmation (default for destructive tools)
 
-### Resolution Order
+### Resolution Order (mode `custom`)
 
-1. **Overriding** action exceptions (safety rules; user config cannot bypass).
+1. **Overriding** action exceptions (safety rules) — but a user `deny` still wins.
 2. User config for the specific tool (`tools.approval.<toolName>`), validated — invalid values fall through.
 3. **Non-overriding** action exceptions (performance optimizations).
 4. Built-in default for the tool (see `DEFAULT_APPROVAL_POLICIES`).
@@ -67,7 +89,7 @@ tools:
 
 ### Critical Pattern Override
 
-Dangerous bash patterns **always** prompt, regardless of policy:
+Dangerous bash patterns **always** prompt when bash is `allow` or unset:
 
 ```bash
 rm -rf /
@@ -76,7 +98,7 @@ sudo rm -rf
 chmod -R 777 /
 ```
 
-These patterns force confirmation even if `tools.approval.bash: allow` is set.
+These patterns force confirmation even if `tools.approval.bash: allow` is set. If you set `tools.approval.bash: deny`, the deny wins — the override never re-arms a denied tool.
 
 ## Non-Interactive Mode
 
@@ -86,8 +108,13 @@ When approval is required but no UI is available (e.g., RPC mode, `--mode json`)
 Tool "bash" requires approval but no interactive UI available.
 Options:
   1. Use --auto-approve flag
-  2. Add to config: tools.approval.bash: allow
+  2. Set tools.approvalMode: auto in config (default)
+  3. Set tools.approvalMode: custom and add tools.approval.bash: allow
 ```
+
+## Subagents
+
+Subagents launched by the `task` tool always run with `tools.approvalMode: auto` regardless of parent settings, because they have no UI to prompt against. The user's approval of the parent `task` call is the authorization for the subagent's work — configure the parent to gate task dispatch (`tools.approval.task: prompt` under `tools.approvalMode: custom`) if you want a chokepoint.
 
 ## Automated Workflows
 
@@ -105,8 +132,9 @@ omp --yolo -p "Update dependencies and commit"
 
 - **Trust your prompts**: `--auto-approve` bypasses all safety checks
 - **Review allowlists**: Regularly audit `tools.approval` config
-- **Critical patterns**: Cannot be disabled (this is intentional)
+- **Critical patterns**: Cannot be `allow`-ed away (this is intentional); `deny` still wins
 - **External tools**: Require approval by default (no built-in allowlist)
+- **Subagents**: Inherit auto-approve unconditionally — the chokepoint is the parent `task` call.
 
 ## Examples
 
@@ -115,6 +143,7 @@ omp --yolo -p "Update dependencies and commit"
 ```yaml
 # .omp/config.yml (project-local)
 tools:
+  approvalMode: custom
   approval:
     bash: allow
     write: allow
@@ -125,6 +154,7 @@ tools:
 ```yaml
 # ~/.omp/agent/config.yml (user-global)
 tools:
+  approvalMode: custom
   approval:
     browser: deny
 ```
@@ -144,7 +174,7 @@ omp -p "Refactor authentication module"
 If you previously used a custom extension for approval (e.g., `confirm-destructive.ts`), you can:
 
 1. **Remove the extension** — built-in approval supersedes it
-2. **Migrate allowlists** — convert extension config to `tools.approval.*`
+2. **Migrate allowlists** — convert extension config to `tools.approval.*` and set `tools.approvalMode: custom`
 3. **Test behavior** — verify prompts appear as expected
 
 Example migration:
@@ -152,9 +182,12 @@ Example migration:
 ```typescript
 // Old extension: ~/.omp/agent/extensions/confirm-destructive.ts
 const ALLOWED_TOOLS = ["read", "find", "search"];
+```
 
-// New config: ~/.omp/agent/config.yml
+```yaml
+# New config: ~/.omp/agent/config.yml
 tools:
+  approvalMode: custom
   approval:
     bash: prompt
     write: prompt
@@ -164,30 +197,38 @@ tools:
 
 ## Troubleshooting
 
+### "I set `tools.approval.bash: prompt` but nothing prompts"
+
+**Problem**: `tools.approvalMode` is still at its `auto` default, which ignores `tools.approval`.
+
+**Solution**: Add `tools.approvalMode: custom` to the same config file.
+
 ### "Tool requires approval but no UI available"
 
-**Problem**: Running in non-interactive mode (RPC, JSON, headless)
+**Problem**: Running in non-interactive mode (RPC, JSON, headless) with approval required.
 
 **Solution**:
 - Add `--auto-approve` flag, or
-- Set `tools.approval.<tool>: allow` in config
+- Set `tools.approvalMode: auto` (or back to the default), or
+- Set `tools.approvalMode: custom` and `tools.approval.<tool>: allow`
 
 ### Prompts appear for read-only tools
 
-**Problem**: Custom or MCP tools may not be recognized as read-only
+**Problem**: Custom or MCP tools may not be recognized as read-only.
 
 **Solution**:
 ```yaml
 tools:
+  approvalMode: custom
   approval:
     custom-readonly-tool: allow
 ```
 
 ### Critical pattern bypass attempt
 
-**Problem**: `rm -rf /` prompts even though bash is allowlisted
+**Problem**: `rm -rf /` prompts even though bash is allowlisted.
 
-**Behavior**: **This is intentional**. Critical patterns cannot be auto-approved.
+**Behavior**: **This is intentional**. Critical patterns cannot be auto-approved via `tools.approval.bash: allow`. If you genuinely want to block bash entirely, use `tools.approval.bash: deny` — that wins over the override.
 
 ## See Also
 

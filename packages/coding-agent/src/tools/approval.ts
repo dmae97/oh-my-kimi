@@ -64,7 +64,7 @@ export const DEFAULT_APPROVAL_POLICIES: Record<string, ApprovalPolicy> = {
 	search: "allow",
 	ast_grep: "allow",
 	web_search: "allow",
-	hindsight_recall: "allow",
+	recall: "allow",
 	inspect_image: "allow",
 	job: "allow", // Polling/status check.
 
@@ -81,7 +81,8 @@ export const DEFAULT_APPROVAL_POLICIES: Record<string, ApprovalPolicy> = {
 	task: "prompt",
 	eval: "prompt",
 	ssh: "prompt",
-	hindsight_retain: "prompt",
+	retain: "prompt",
+	reflect: "prompt",
 	checkpoint: "prompt",
 	rewind: "prompt",
 
@@ -230,8 +231,15 @@ export function getApprovalPolicy(
 	const exceptions = ACTION_EXCEPTIONS[toolName] ?? [];
 
 	// 1. Overriding exceptions (safety rules).
+	//
+	// Overrides only *tighten* the user's stance — they never loosen `deny` to
+	// `prompt`. A user who set `bash: deny` is asking us never to run bash, and
+	// the critical-pattern override (which downgrades to `prompt`) must not
+	// silently re-arm a denied tool.
+	const userPolicy = Object.hasOwn(userConfig, toolName) ? normalizePolicy(userConfig[toolName]) : undefined;
 	for (const exception of exceptions) {
 		if (exception.override && exception.matches(input)) {
+			if (userPolicy === "deny") return { policy: "deny" };
 			return { policy: exception.policy, reason: exception.reason };
 		}
 	}
@@ -290,10 +298,18 @@ export function requiresApproval(
 }
 
 const MAX_PROMPT_FIELD_LEN = 240;
+const PROMPT_FIELD_HEAD_LEN = 160;
+const PROMPT_FIELD_TAIL_LEN = 60;
 
+/**
+ * Head-and-tail truncation. Bash/ssh attackers love to bury a destructive suffix
+ * after a long benign preamble (`echo …; rm -rf /`); a head-only slice would
+ * hide the payload, so we keep both ends visible and elide the middle.
+ */
 function truncateForPrompt(value: string): string {
 	if (value.length <= MAX_PROMPT_FIELD_LEN) return value;
-	return `${value.slice(0, MAX_PROMPT_FIELD_LEN - 1)}…`;
+	const elided = value.length - PROMPT_FIELD_HEAD_LEN - PROMPT_FIELD_TAIL_LEN;
+	return `${value.slice(0, PROMPT_FIELD_HEAD_LEN)}…[${elided} chars elided]…${value.slice(-PROMPT_FIELD_TAIL_LEN)}`;
 }
 
 /** MCP-style tool names: `mcp__<server>__<tool>` or `<server>__<tool>`. */

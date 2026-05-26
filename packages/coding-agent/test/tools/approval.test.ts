@@ -488,3 +488,54 @@ describe("formatApprovalPrompt — improvements", () => {
 		expect(prompt).toContain("uptime");
 	});
 });
+describe("getApprovalPolicy — deny respect", () => {
+	it("user `bash: deny` wins over critical-pattern override", () => {
+		const result = getApprovalPolicy("bash", { command: "rm -rf /" }, { bash: "deny" });
+		expect(result.policy).toBe("deny");
+	});
+
+	it("requiresApproval throws even when critical pattern matches if bash is denied", () => {
+		expect(() => requiresApproval("bash", { command: ":(){ :|:& };:" }, { bash: "deny" })).toThrow(
+			'Tool "bash" is blocked by user policy',
+		);
+	});
+});
+
+describe("DEFAULT_APPROVAL_POLICIES — hindsight tool keys", () => {
+	it("uses the actual registered hindsight tool names", () => {
+		// Tools are registered as `recall`, `retain`, `reflect` (not the legacy
+		// `hindsight_recall` / `hindsight_retain` prefixed names) — see tools/index.ts.
+		expect(DEFAULT_APPROVAL_POLICIES.recall).toBe("allow");
+		expect(DEFAULT_APPROVAL_POLICIES.retain).toBe("prompt");
+		expect(DEFAULT_APPROVAL_POLICIES.reflect).toBe("prompt");
+		expect("hindsight_recall" in DEFAULT_APPROVAL_POLICIES).toBe(false);
+		expect("hindsight_retain" in DEFAULT_APPROVAL_POLICIES).toBe(false);
+	});
+});
+
+describe("formatApprovalPrompt — head+tail truncation", () => {
+	it("keeps a destructive suffix visible after a long benign preamble", () => {
+		const preamble = "echo benign; ".repeat(60); // ~780 chars
+		const command = `${preamble}rm -rf /`;
+		const prompt = formatApprovalPrompt("bash", { command }, "Critical pattern detected");
+		// Head: the start of the preamble must be present.
+		expect(prompt).toContain("echo benign");
+		// Tail: the destructive suffix MUST survive truncation.
+		expect(prompt).toContain("rm -rf /");
+		// Elision marker confirms middle was dropped (head-only slice would not have it).
+		expect(prompt).toMatch(/chars elided/);
+	});
+
+	it("leaves short commands untouched", () => {
+		const prompt = formatApprovalPrompt("bash", { command: "ls -la" });
+		expect(prompt).toContain("ls -la");
+		expect(prompt).not.toMatch(/chars elided/);
+	});
+
+	it("applies head+tail truncation to ssh commands as well", () => {
+		const command = `${"a".repeat(500)}rm -rf /`;
+		const prompt = formatApprovalPrompt("ssh", { host: "h", command });
+		expect(prompt).toContain("rm -rf /");
+		expect(prompt).toMatch(/chars elided/);
+	});
+});
