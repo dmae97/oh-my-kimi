@@ -343,13 +343,23 @@ export interface StreamOptions {
 	 */
 	onSseEvent?: (event: RawSseEvent, model?: Model<Api>) => void;
 	/**
-	 * Optional SDK/request timeout hint in milliseconds for transports that support
-	 * a pre-stream request timeout. Provider stream silence is not treated as failure.
+	 * Optional SDK/request timeout hint in milliseconds applied to the underlying HTTP
+	 * request when the provider's transport exposes a per-request timeout.
+	 *
+	 * Honored by: `openai-completions`, `openai-responses`, `azure-openai-responses`,
+	 *   `anthropic-messages`.
+	 * Ignored by: `openai-codex-responses` (uses its own websocket/SSE transport),
+	 *   `google`, `google-gemini-cli`, `google-vertex`, `bedrock-converse`, `cursor-agent`.
+	 *
+	 * Provider stream silence is never treated as failure on its own — once the request
+	 * has started, callers must abort to interrupt a silent stream.
 	 */
 	streamFirstEventTimeoutMs?: number;
 	/**
-	 * Deprecated legacy stream-watchdog override. Provider streams now wait for
+	 * @deprecated Stream idle watchdogs were removed; provider streams now wait for
 	 * provider output, provider/socket errors, caller aborts, or request-layer timeouts.
+	 * This field is accepted for backwards compatibility but no longer wired anywhere.
+	 * Will be removed in the next major release.
 	 */
 	streamIdleTimeoutMs?: number;
 	/**

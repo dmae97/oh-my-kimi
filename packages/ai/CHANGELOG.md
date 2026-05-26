@@ -1,12 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Removed `findAnthropicAuth` from `anthropic-auth` and replaced store-driven auth discovery with `buildAnthropicAuthConfig`, requiring callers to provide an already-resolved API key before building Anthropic auth config
 
 ### Added
 
+- Added `PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS` and `PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS` options to tune Codex WebSocket timeout behavior before fallback
 - Added `AuthStorage.getOAuthAccess` to return a refreshed OAuth access token with identity metadata (`accountId`, `email`, `projectId`, `enterpriseUrl`) for callers that need bearer-token headers together
 
 ### Changed
@@ -14,12 +16,17 @@
 - Changed OAuth selection in `AuthStorage` to treat credentials as stale when they are within 60 seconds of expiry and rotate them preemptively
 - Changed Google Gemini CLI, Google Gemini usage, Antigravity usage, and Kimi usage flows to stop refreshing OAuth tokens directly and rely on `AuthStorage` for token rotation
 
+### Deprecated
+
+- Deprecated `streamIdleTimeoutMs` in `StreamOptions` as a compatibility-only field that is no longer used by providers
+
 ### Removed
 
 - Removed provider-local OAuth refresh helpers from Google Gemini CLI and Google/Kimi/Antigravity usage probes, preventing direct refresh calls from those usage paths
 
 ### Fixed
 
+- Fixed Codex WebSocket streaming to recover from stalled sessions by falling back to SSE when the first event or subsequent progress is delayed beyond the configured websocket timeout
 - Fixed expired OAuth handling so provider-level paths no longer attempt direct token refresh calls for expired credentials and instead rely on `AuthStorage` for rotation
 - Fixed provider streams aborting slow-but-valid first tokens or silent inter-event gaps with OMP-owned first-event/idle watchdog errors. Built-in lazy streams, OpenAI/Anthropic/Azure/Codex SSE, and Codex WebSocket streams now wait for provider output, provider/socket errors, caller aborts, or explicit request-layer timeouts instead of treating provider silence as failure ([#1392](https://github.com/can1357/oh-my-pi/issues/1392)).
 - Fixed Claude Opus 4.7 on Amazon Bedrock streaming no reasoning output (and appearing to hang on long reasoning runs) because Anthropic silently switched the adaptive-thinking display default to `"omitted"`. The Bedrock provider now sends `thinking.display = "summarized"` by default on Opus 4.7+ adaptive models and on budget-based Claude models, mirroring the existing direct-Anthropic behavior. `BedrockOptions.thinkingDisplay` (`"summarized" | "omitted"`) is exposed for callers that want to opt out, and `hideThinkingSummary` now wires through to the Bedrock case ([#1373](https://github.com/can1357/oh-my-pi/issues/1373)).

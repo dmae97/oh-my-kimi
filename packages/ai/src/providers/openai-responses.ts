@@ -37,6 +37,7 @@ import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
+import { createSdkStreamRequestOptions, resolveSdkTimeoutMs } from "../utils/sdk-stream-timeout";
 import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
@@ -193,7 +194,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				url: `${baseUrl ?? "https://api.openai.com/v1"}/responses`,
 				body: params,
 			};
-			const requestOptions = createStreamRequestOptions(requestSignal, options?.streamFirstEventTimeoutMs);
+			const requestOptions = createSdkStreamRequestOptions(requestSignal, options?.streamFirstEventTimeoutMs);
 			const openaiStream = await callWithCopilotModelRetry(
 				async () => {
 					const { data, response, request_id } = await client.responses
@@ -297,12 +298,7 @@ function createClient(
 		headers["x-client-request-id"] ??= sessionId;
 	}
 	const baseFetch = fetchOverride ?? fetch;
-	const sdkTimeoutMs =
-		streamFirstEventTimeoutOverride !== undefined &&
-		Number.isFinite(streamFirstEventTimeoutOverride) &&
-		streamFirstEventTimeoutOverride > 0
-			? Math.trunc(streamFirstEventTimeoutOverride)
-			: undefined;
+	const sdkTimeoutMs = resolveSdkTimeoutMs(streamFirstEventTimeoutOverride);
 	return {
 		client: new OpenAI({
 			apiKey,
@@ -316,24 +312,6 @@ function createClient(
 		copilotPremiumRequests,
 		baseUrl,
 	};
-}
-
-function createStreamRequestOptions(
-	signal: AbortSignal,
-	streamFirstEventTimeoutMs: number | undefined,
-): { signal: AbortSignal; timeout?: number; maxRetries?: number } {
-	if (
-		streamFirstEventTimeoutMs !== undefined &&
-		Number.isFinite(streamFirstEventTimeoutMs) &&
-		streamFirstEventTimeoutMs > 0
-	) {
-		return {
-			signal,
-			timeout: Math.trunc(streamFirstEventTimeoutMs),
-			maxRetries: 0,
-		};
-	}
-	return { signal };
 }
 
 function getOpenAIResponsesCacheSessionId(

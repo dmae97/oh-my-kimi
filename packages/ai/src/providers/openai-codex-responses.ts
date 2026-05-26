@@ -86,6 +86,23 @@ const CODEX_DEBUG = $flag("PI_CODEX_DEBUG");
 const CODEX_MAX_RETRIES = 5;
 const CODEX_RETRY_DELAY_MS = 500;
 const CODEX_WEBSOCKET_CONNECT_TIMEOUT_MS = 10000;
+/**
+ * Steady-state liveness ceiling for the Codex WebSocket transport. Distinct from
+ * the OMP-wide stream watchdog removed in #1392: a WebSocket can stay TCP-open
+ * indefinitely without exchanging frames (server crash after upgrade, half-open
+ * network path), so we still need a transport-internal cap to detect those
+ * states and trigger the WS→SSE fallback. Only applies AFTER the first event
+ * has arrived — slow first-token paths wait as long as the caller permits.
+ */
+const CODEX_WEBSOCKET_IDLE_TIMEOUT_MS = 300_000;
+/**
+ * Maximum wait for the first WebSocket event before falling back to SSE.
+ * Unlike a stream watchdog, this triggers a transport switch (not a request
+ * failure) — the outer retry loop catches the timeout error and re-runs on
+ * SSE. Generous default so legitimately slow first-token providers still get
+ * a chance on the WS transport before falling through.
+ */
+const CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS = 60_000;
 const CODEX_WEBSOCKET_RETRY_BUDGET = CODEX_MAX_RETRIES;
 const CODEX_WEBSOCKET_TRANSPORT_ERROR_PREFIX = "Codex websocket transport error";
 const CODEX_RETRYABLE_EVENT_CODES = new Set(["model_error", "server_error", "internal_error"]);
@@ -204,6 +221,17 @@ function getCodexWebSocketRetryBudget(): number {
 function getCodexWebSocketRetryDelayMs(retry: number): number {
 	const baseDelay = parseCodexPositiveInteger($env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS, CODEX_RETRY_DELAY_MS);
 	return baseDelay * Math.max(1, retry);
+}
+
+function getCodexWebSocketIdleTimeoutMs(): number {
+	return parseCodexPositiveInteger($env.PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS, CODEX_WEBSOCKET_IDLE_TIMEOUT_MS);
+}
+
+function getCodexWebSocketFirstEventTimeoutMs(): number {
+	return parseCodexPositiveInteger(
+		$env.PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS,
+		CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS,
+	);
 }
 
 function createCodexProviderSessionState(): CodexProviderSessionState {
@@ -1821,12 +1849,16 @@ function headersToRecord(headers: Headers): Record<string, string> {
 }
 
 interface CodexWebSocketConnectionOptions {
+	idleTimeoutMs: number;
+	firstEventTimeoutMs: number;
 	onHandshakeHeaders?: (headers: Headers) => void;
 }
 
 class CodexWebSocketConnection {
 	#url: string;
 	#headers: Record<string, string>;
+	#idleTimeoutMs: number;
+	#firstEventTimeoutMs: number;
 	#onHandshakeHeaders?: (headers: Headers) => void;
 	#socket: Bun.WebSocket | null = null;
 	#queue: Array<Record<string, unknown> | Error | null> = [];
@@ -1837,6 +1869,8 @@ class CodexWebSocketConnection {
 	constructor(url: string, headers: Record<string, string>, options: CodexWebSocketConnectionOptions) {
 		this.#url = url;
 		this.#headers = headers;
+		this.#idleTimeoutMs = options.idleTimeoutMs;
+		this.#firstEventTimeoutMs = options.firstEventTimeoutMs;
 		this.#onHandshakeHeaders = options.onHandshakeHeaders;
 	}
 
@@ -1988,14 +2022,30 @@ class CodexWebSocketConnection {
 
 		try {
 			this.#socket.send(JSON.stringify(request));
+			let sawFirstEvent = false;
+			let lastProgressAt = Date.now();
 			while (true) {
-				const next = await this.#nextMessage();
+				let timeoutMs: number;
+				let timeoutReason: string;
+				if (sawFirstEvent) {
+					timeoutMs = this.#idleTimeoutMs - (Date.now() - lastProgressAt);
+					timeoutReason = "idle timeout waiting for websocket";
+					if (timeoutMs <= 0) {
+						throw createCodexWebSocketTransportError(timeoutReason);
+					}
+				} else {
+					timeoutMs = this.#firstEventTimeoutMs;
+					timeoutReason = "timeout waiting for first websocket event";
+				}
+				const next = await this.#nextMessage(timeoutMs, timeoutReason);
 				if (next instanceof Error) {
 					throw next;
 				}
 				if (next === null) {
 					throw createCodexWebSocketTransportError("websocket closed before response completion");
 				}
+				sawFirstEvent = true;
+				lastProgressAt = Date.now();
 				yield next;
 				const eventType = typeof next.type === "string" ? next.type : "";
 				if (
@@ -2029,11 +2079,27 @@ class CodexWebSocketConnection {
 		if (waiter) waiter();
 	}
 
-	async #nextMessage(): Promise<Record<string, unknown> | Error | null> {
+	async #nextMessage(timeoutMs: number, timeoutReason: string): Promise<Record<string, unknown> | Error | null> {
 		while (this.#queue.length === 0) {
 			const { promise, resolve } = Promise.withResolvers<void>();
 			this.#waiters.push(resolve);
+			let timedOut = false;
+			let timeout: NodeJS.Timeout | undefined;
+			if (timeoutMs > 0) {
+				timeout = setTimeout(() => {
+					timedOut = true;
+					const waiterIndex = this.#waiters.indexOf(resolve);
+					if (waiterIndex >= 0) {
+						this.#waiters.splice(waiterIndex, 1);
+					}
+					resolve();
+				}, timeoutMs);
+			}
 			await promise;
+			if (timeout) clearTimeout(timeout);
+			if (timedOut && this.#queue.length === 0) {
+				return createCodexWebSocketTransportError(timeoutReason);
+			}
 		}
 		return this.#queue.shift() ?? null;
 	}
@@ -2058,6 +2124,8 @@ async function getOrCreateCodexWebSocketConnection(
 	resetCodexWebSocketAppendState(state);
 	logger.time("codexWs:newSocket");
 	state.connection = new CodexWebSocketConnection(url, headerRecord, {
+		idleTimeoutMs: getCodexWebSocketIdleTimeoutMs(),
+		firstEventTimeoutMs: getCodexWebSocketFirstEventTimeoutMs(),
 		onHandshakeHeaders: handshakeHeaders => {
 			updateCodexSessionMetadataFromHeaders(state, handshakeHeaders);
 		},

@@ -52,6 +52,7 @@ import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, toolWireSchema } from "../utils/schema";
+import { resolveSdkTimeoutMs } from "../utils/sdk-stream-timeout";
 import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { type HealedToolCall, modelMayLeakKimiToolCalls, ToolCallHealer } from "../utils/tool-call-healing";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
@@ -911,12 +912,7 @@ async function createClient(
 		baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {},
 	);
 	const debugFetch = onSseEvent ? wrapFetchForSseDebug(wrappedFetch, event => onSseEvent(event, model)) : wrappedFetch;
-	const sdkTimeoutMs =
-		streamFirstEventTimeoutOverride !== undefined &&
-		Number.isFinite(streamFirstEventTimeoutOverride) &&
-		streamFirstEventTimeoutOverride > 0
-			? Math.trunc(streamFirstEventTimeoutOverride)
-			: undefined;
+	const sdkTimeoutMs = resolveSdkTimeoutMs(streamFirstEventTimeoutOverride);
 	return {
 		client: new OpenAI({
 			apiKey,
