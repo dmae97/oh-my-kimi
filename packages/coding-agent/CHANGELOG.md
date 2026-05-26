@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.4.2] - 2026-05-26
+
 ### Fixed
 
 - Fixed plan-mode subagents being unable to terminate because `yield` was registered but missing from the active tool set when `requireYieldTool` was combined with an explicit `toolNames` list ([#1408](https://github.com/can1357/oh-my-pi/issues/1408))
