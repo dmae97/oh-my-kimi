@@ -15,7 +15,7 @@ output:
         description: Files examined with relevant code references
       elements:
         properties:
-          ref:
+          path:
             metadata:
               description: Project-relative path or paths to the most relevant code reference(s), optionally suffixed with line ranges like `:12-34` when relevant
             type: string
