@@ -1070,11 +1070,12 @@ export class TUI extends Container {
 		const heightChanged = this.#previousHeight !== 0 && this.#previousHeight !== height;
 
 		// Helper to clear the viewport and render all new lines
-		const fullRender = (clear: boolean): void => {
+		const fullRender = (clear: boolean, options: { clearScrollback?: boolean } = {}): void => {
 			this.#fullRedrawCount += 1;
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
 			if (clear) {
-				const clearScrollback = this.#clearScrollbackOnNextRender && !isMultiplexerSession();
+				const clearScrollback =
+					(this.#clearScrollbackOnNextRender || options.clearScrollback === true) && !isMultiplexerSession();
 				buffer += clearScrollback ? "\x1b[2J\x1b[H\x1b[3J" : "\x1b[2J\x1b[H";
 				this.#clearScrollbackOnNextRender = false;
 			}
@@ -1172,8 +1173,8 @@ export class TUI extends Container {
 		};
 
 		// First-paint policy:
-		// - Initial startup (no prior render): emit the full transcript so terminal
-		//   scrollback receives the initial UI state.
+		// - Initial startup (no prior render): clear the viewport before emitting
+		//   the full transcript so stale shell content is not left onscreen.
 		// - Forced reset later in the session: repaint the visible viewport only,
 		//   so we don't duplicate the transcript into terminal scrollback. The
 		//   caller can opt into clearing scrollback via `{ clearScrollback: true }`
@@ -1181,7 +1182,7 @@ export class TUI extends Container {
 		if (this.#previousLines.length === 0) {
 			logRedraw("first render");
 			if (!this.#hasEverRendered) {
-				fullRender(false);
+				fullRender(true);
 			} else if (this.#clearScrollbackOnNextRender) {
 				fullRender(true);
 			} else {
@@ -1272,14 +1273,15 @@ export class TUI extends Container {
 		}
 
 		// Width changes alter wrapping for the whole transcript. If offscreen
-		// rows changed, replay the rendered transcript so scrollback receives
-		// the new width. Pure appends can keep the append path because there is
-		// no older width-dependent row to refresh.
+		// rows changed, rebuild the terminal history with the new width; leaving
+		// the old scrollback copy in place keeps historical components stale.
+		// Pure appends can keep the append path because there is no older
+		// width-dependent row to refresh.
 		if (widthChanged) {
 			logRedraw(`terminal width changed (${this.#previousWidth} -> ${width})`);
 			const pureAppend = appendedLines && firstChanged === this.#previousLines.length;
 			if (firstChanged < prevViewportTop) {
-				fullRender(true);
+				fullRender(true, { clearScrollback: true });
 				return;
 			}
 			if (!pureAppend) {

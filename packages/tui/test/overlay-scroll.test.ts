@@ -151,6 +151,23 @@ describe("TUI overlays", () => {
 
 		tui.stop();
 	});
+	it("clears stale viewport content on launch without clearing shell scrollback", async () => {
+		const term = new VirtualTerminal(40, 4);
+		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
+		await flushRender(term);
+
+		const tui = new TUI(term);
+		tui.addChild(new MutableContentComponent(["ui-0", "ui-1"]));
+		try {
+			tui.start();
+			await flushRender(term);
+
+			expect(term.getViewport().join("\n").includes("shell-")).toBeFalsy();
+			expect(term.getScrollBuffer().join("\n").includes("shell-0")).toBeTruthy();
+		} finally {
+			tui.stop();
+		}
+	});
 
 	it("preserves rendered scrollback on forced redraw after startup", async () => {
 		const term = new VirtualTerminal(40, 4);
@@ -308,6 +325,7 @@ describe("TUI overlays", () => {
 
 			const scrollback = term.getScrollBuffer().join("\n");
 			expect(scrollback.includes("narrow-row-0")).toBeTruthy();
+			expect(scrollback.includes("wide-row-0")).toBeFalsy();
 			expect(term.getViewport().at(-1)?.trim()).toBe("narrow-row-23");
 		} finally {
 			tui.stop();
