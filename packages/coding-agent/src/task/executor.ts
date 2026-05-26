@@ -185,6 +185,8 @@ export interface ExecutorOptions {
 	 */
 	parentArtifactManager?: ArtifactManager;
 	parentHindsightSessionState?: HindsightSessionState;
+	/** Parent agent's eval executor session id. Subagents reuse it so eval state is shared. */
+	parentEvalSessionId?: string;
 	/**
 	 * Parent agent's OpenTelemetry configuration. When defined, the subagent's
 	 * loop is started with the same tracer/hooks but its own agent identity
@@ -1146,6 +1148,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			if (model?.contextWindow && model.contextWindow > 0) {
 				progress.contextWindow = model.contextWindow;
 			}
+			if (model) {
+				progress.resolvedModel = explicitThinkingLevel
+					? `${model.provider}/${model.id}:${resolvedThinkingLevel}`
+					: `${model.provider}/${model.id}`;
+			}
 			const effectiveThinkingLevel = explicitThinkingLevel
 				? resolvedThinkingLevel
 				: (thinkingLevel ?? resolvedThinkingLevel);
@@ -1236,6 +1243,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 					localProtocolOptions: options.localProtocolOptions,
 					telemetry: subagentTelemetry,
+					parentEvalSessionId: options.parentEvalSessionId,
 				}),
 			);
 
@@ -1603,6 +1611,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		contextTokens: progress.contextTokens,
 		contextWindow: progress.contextWindow,
 		modelOverride,
+		resolvedModel: progress.resolvedModel,
 		error: exitCode !== 0 && stderr ? stderr : undefined,
 		aborted: wasAborted,
 		abortReason: finalAbortReason,

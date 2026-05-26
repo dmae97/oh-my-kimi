@@ -3,16 +3,8 @@ import type { LspBatchRequest } from "../edit/renderer";
 import type { WritethroughCallback, WritethroughDeferredHandle } from "../lsp";
 import type { ToolSession } from "../tools";
 
-export interface HashMismatch {
-	line: number;
-	expected: string;
-	actual: string;
-}
-
 export type Anchor = {
 	line: number;
-	hash: string;
-	contentHint?: string;
 };
 
 export type HashlineCursor =
@@ -24,6 +16,12 @@ export type HashlineCursor =
 export type HashlineEdit =
 	| { kind: "insert"; cursor: HashlineCursor; text: string; lineNum: number; index: number }
 	| { kind: "delete"; anchor: Anchor; lineNum: number; index: number; oldAssertion?: string };
+
+export interface HashlineInputSection {
+	path: string;
+	fileHash?: string;
+	diff: string;
+}
 
 /** `path` is accepted by the edit tool runtime; other extra keys are preserved. */
 export const hashlineEditParamsSchema = z.object({ input: z.string(), path: z.string().optional() }).passthrough();

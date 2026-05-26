@@ -6,6 +6,7 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { jsBackend, pythonBackend } from "../eval";
 import type { ExecutorBackend } from "../eval/backend";
+import { defaultEvalSessionId } from "../eval/session-id";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
@@ -347,7 +348,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						pushUpdate();
 					},
 				});
-				const sessionId = sessionFile ? `session:${sessionFile}:cwd:${session.cwd}` : `cwd:${session.cwd}`;
+				const sessionId = session.getEvalSessionId?.() ?? defaultEvalSessionId(session);
 
 				for (let i = 0; i < cells.length; i++) {
 					const cell = cells[i];

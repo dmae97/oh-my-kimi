@@ -1528,7 +1528,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "editing",
 			label: "Edit Mode",
-			description: "Select the edit tool variant (replace, patch, hashline, vim, or apply_patch)",
+			description: "Select the edit tool variant (replace, patch, hashline, or apply_patch)",
 		},
 	},
 
@@ -1603,7 +1603,8 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "editing",
 			label: "Hash Lines",
-			description: "Include line hashes in read output for hashline edit mode (LINE+ID|content)",
+			description:
+				"Include file-hash headers and line numbers in read output for hashline edit mode (¶PATH#hash plus LINE:content)",
 		},
 	},
 
@@ -1902,6 +1903,24 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "IRC",
 			description: "Enable agent-to-agent IRC messaging via the irc tool",
+		},
+	},
+
+	"irc.timeoutMs": {
+		type: "number",
+		default: 120_000,
+		ui: {
+			tab: "tools",
+			label: "IRC Timeout",
+			description:
+				"Drop IRC messages whose recipient does not respond within this many milliseconds (0 disables the timeout)",
+			options: [
+				{ value: "0", label: "Disabled" },
+				{ value: "30000", label: "30 seconds" },
+				{ value: "60000", label: "1 minute" },
+				{ value: "120000", label: "2 minutes" },
+				{ value: "300000", label: "5 minutes" },
+			],
 		},
 	},
 
@@ -2455,6 +2474,16 @@ export const SETTINGS_SCHEMA = {
 				{ value: "3600", label: "1 hour" },
 				{ value: "-1", label: "Never" },
 			],
+		},
+	},
+
+	"task.showResolvedModelBadge": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			label: "Show Resolved Model Badge",
+			description: "Display the actual model ID used by each subagent in the task widget status line",
 		},
 	},
 

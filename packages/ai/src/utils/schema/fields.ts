@@ -34,6 +34,7 @@ export const UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
 	maximum: true,
 	exclusiveMinimum: true,
 	exclusiveMaximum: true,
+	multipleOf: true,
 	pattern: true,
 	format: true,
 };

@@ -1,6 +1,106 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added interactive provider selection to `omp auth-broker logout` when no provider argument is supplied
+- Added `--json` flag to `omp auth-broker list` for machine-readable output
+- Added `omp auth-broker list` to enumerate supported OAuth providers (replaces `bunx @oh-my-pi/pi-ai list`).
+- Added interactive provider selection to `omp auth-broker login` and `omp auth-broker logout` when no provider argument is supplied (replaces `bunx @oh-my-pi/pi-ai login` / `logout` interactive flows).
+
+### Changed
+
+- Changed `omp auth-broker login` to support interactive provider selection when invoked without a provider argument
+- Changed `omp auth-broker logout` to support interactive provider selection from stored credentials when invoked without a provider argument
+- Changed `omp auth-broker login` to drive the per-provider OAuth/API-key flow in-process via `AuthStorage.login()` instead of spawning the `pi-ai` CLI subprocess. The pi-ai bin is being removed; the same login surface now lives entirely inside `omp`.
+- Changed default per-line truncation cap for search/grep output (`DEFAULT_MAX_COLUMN`) from `1024` to `512` characters.
+
+## [15.4.3] - 2026-05-26
+
+### Fixed
+
+- Fixed Google Vertex cached project discovery replacing the bundled fallback catalog so `/models` does not keep showing outdated Gemini entries after authoritative Vertex discovery, while keeping the bundled fallback in place when the cached snapshot is stale or non-authoritative (e.g. after an ADC discovery failure) ([#1412](https://github.com/can1357/oh-my-pi/issues/1412)).
+
+## [15.4.2] - 2026-05-26
+
+### Fixed
+
+- Fixed plan-mode subagents being unable to terminate because `yield` was registered but missing from the active tool set when `requireYieldTool` was combined with an explicit `toolNames` list ([#1408](https://github.com/can1357/oh-my-pi/issues/1408))
+
+## [15.4.1] - 2026-05-26
+
+### Breaking Changes
+- The `vim` edit mode option is no longer available; configurations using `edit.mode: vim` will be automatically mapped to `hashline` mode
+- Hashline payload semantics are now strictly inline-first: the first payload line is whatever follows the sigil on the op line itself, and subsequent lines append after it. A newline immediately after `↑`/`↓`/`:` is no longer a free separator — it produces a blank first payload line. Use `LINE↓content` for a one-line insert, `LINE↓firstline\nsecondline` for two lines; bare `LINE↓` / `LINE↑` / `LINE:` (no inline payload) still insert/replace with one blank line as before.
+
+### Added
+- Added `irc.timeoutMs` setting to configure IRC message timeout duration with a default of 120 seconds
+- Added timeout enforcement for IRC send operations to prevent indefinite hangs when recipients are unresponsive
+- Added evaluator state inheritance for `task`-spawned subagents so JavaScript and Python variables are visible between a parent agent and its child sessions
+- Added `hashline-per` edit mode to restore the legacy per-line hashline dialect alongside the default file-hash dialect
+- Added file-hash computation and validation for hashline sections to detect stale edits
+- Added file-read snapshot caching with multi-snapshot ring per path for recovery from agent's own writes
+- Added delete operation (`!`) support to hashline grammar for explicit line deletion
+- Added structural bracket/brace balance warnings when deleting lines with unclosed constructs
+- Added file-hash computation and validation for hashline sections to detect stale edits
+- Added file-read snapshot caching with multi-snapshot ring per path for recovery from agent's own writes
+- Added delete operation (`!`) support to hashline grammar for explicit line deletion
+- Added structural bracket/brace balance warnings when deleting lines with unclosed constructs
+- Added resource metadata URL (RFC 9728) support to OAuth discovery for chaining authorization server resolution from protected-resource metadata ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
+- Added path-prefixed well-known URL fallback in OAuth discovery to support authorization servers behind gateways with sub-path routing ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
+- Added relative URL resolution for `Mcp-Auth-Server` header values against the server URL ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
+
+### Changed
+
+- Changed Python shared eval sessions to be keyed by `sessionId` and `cwd` so code state no longer leaks across different directories when reusing a session
+- Changed shared JavaScript and Python startup to deduplicate concurrent first-time session initialization so parallel first calls share one warm session
+- Changed shared JavaScript and Python execution output handling so interleaved async runs keep their `display` output scoped to the originating run
+- Changed Python tool bridge to use per-run identifiers alongside session IDs for correct routing of tool responses and output in concurrent evaluations
+- Changed JavaScript and Python `eval` execution to allow overlapping asynchronous cells on the same session ID to run concurrently instead of being strictly queued
+- Updated the edit mode option set to support `replace`, `patch`, `hashline`, and `apply_patch` variants
+- Bare `A:` / `A-B:` (no payload, no inline body) now replaces the line/range with a single blank line, symmetric with bare `A↑` / `A↓` inserting a blank line; previously rejected as ambiguous
+- Simplified hashline anchor format from `LINE+HASH` to bare `LINE` numbers in edit operations
+- Updated hashline file headers to include 4-hex file hash: `¶PATH#HASH` format for anchored edits
+- Changed hashline line separator from `|` to `:` in editable output (e.g., `42:content` instead of `42ab|content`)
+- Removed per-line hash validation; file-level hash now validates entire section integrity
+- Updated read/search output to emit file-hash headers (`¶PATH#HASH`) followed by numbered lines for hashline mode
+- Modified hashline grammar to accept optional file hash in headers and removed hash requirements from line anchors
+- Changed hashline diff preview format to use `LINE:content` instead of `LINE+HASH|content`
+- Updated prompt documentation to reflect new `¶PATH#HASH` header and bare line-number syntax
+- Bare `A:` / `A-B:` (no payload, no inline body) now replaces the line/range with a single blank line, symmetric with bare `A↑` / `A↓` inserting a blank line; previously rejected as ambiguous
+- Simplified hashline anchor format from `LINE+HASH` to bare `LINE` numbers in edit operations
+- Updated hashline file headers to include 4-hex file hash: `¶PATH#HASH` format for anchored edits
+- Changed hashline line separator from `|` to `:` in editable output (e.g., `42:content` instead of `42ab|content`)
+- Removed per-line hash validation; file-level hash now validates entire section integrity
+- Updated read/search output to emit file-hash headers (`¶PATH#HASH`) followed by numbered lines for hashline mode
+- Modified hashline grammar to accept optional file hash in headers and removed hash requirements from line anchors
+- Changed hashline diff preview format to use `LINE:content` instead of `LINE+HASH|content`
+- Updated prompt documentation to reflect new `¶PATH#HASH` header and bare line-number syntax
+- Updated `discoverOAuthEndpoints` to accept `resourceMetadataUrl` parameter and prioritize the resource-metadata chain ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
+- Updated `parseMcpAuthServerUrl` and `extractMcpAuthServerUrl` to accept optional `serverUrl` for relative URL resolution ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
+- Updated `MCPOAuthFlow.#resolveRegistrationEndpoint` to try origin-root well-known first, then fall back to path-prefixed well-known ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
+
+### Removed
+- Removed the `installH2Fetch()` activation from CLI startup; HTTPS fetches now use Bun's default transport
+- Removed the `vim` edit mode along with the `VimTool` module, prompt, and supporting buffer/engine/renderer stack
+- Removed per-line hash anchors (2-letter bigram hashes) from hashline format
+- Removed `RANGE_INTERIOR_HASH` constant; multi-line ranges no longer use `**` filler
+- Removed `HashMismatch` type and hash mismatch error reporting; replaced with file-level validation
+- Removed per-line hash anchors (2-letter bigram hashes) from hashline format
+- Removed `RANGE_INTERIOR_HASH` constant; multi-line ranges no longer use `**` filler
+- Removed `HashMismatch` type and hash mismatch error reporting; replaced with file-level validation
+
+### Fixed
+
+- Fixed missing `await` on `#tryWellKnownForRegistration` call in `#resolveRegistrationEndpoint` that caused path-prefixed well-known fallback to never actually execute, returning the unresolved Promise object instead of the registration endpoint ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
+- Fixed JavaScript module reloading to refresh local re-exports when transitive dependency files are edited
+- Fixed Python tool calls in warm kernels to initialize once bridge environment variables appear after startup and to return a clear `tool bridge is unavailable` error when missing
+- Fixed IRC `send` handling to preserve recipient incoming messages when auto-reply timeouts instead of dropping them
+- Fixed Python session disposal to cancel all concurrent active executions in a shared kernel
+- Fixed JavaScript `eval` imports to preserve module-level singletons across re-imports of unchanged local files and reload them only after edits
+- Fixed concurrent Python evaluator tool calls to use per-run identifiers so tool responses and output are routed to the correct execution
+- Fixed the `search` tool argument validation to accept a single string `paths` value as a one-path search.
+## [15.4.0] - 2026-05-26
 
 ### Breaking Changes
 
@@ -8,8 +108,10 @@
 
 ### Added
 
+- Added resolved subagent model badge to the task widget status line showing `<provider>/<id>` (with optional `:<thinkingLevel>` suffix when thinking is set explicitly), opt-in via `task.showResolvedModelBadge` Appearance setting (default off)
 - Added `codex` and `gemini` to the web search provider settings so users can configure OpenAI and Gemini web search directly from provider selection
 - Added OpenAI (`codex`) and Gemini web search options with updated setup descriptions for `omp /login openai-codex` and Gemini OAuth login
+- Added pretty-printing for wide JSON `data:` payloads in the raw provider-stream debug viewer so streamed event bodies expand across multiple `data:` lines instead of getting clipped by the per-line truncator, and updated the viewer header to read `raw provider stream (SSE + WS)` now that Codex WebSocket frames also flow through the buffer
 
 ### Changed
 
@@ -33,11 +135,15 @@
 - Fixed three correctness issues in the `find` tool. (1) `onMatch` guard checked the outer task `signal?.aborted` instead of `combinedSignal.aborted` (which also includes the per-call timeout signal), so late matches accumulated past the timeout. (2) Timeout-drained partial results were emitted in insertion order while the normal path sorts by mtime descending; callers relying on "most recently modified first" got an inconsistent ordering when the call timed out. The timeout drain now tracks per-entry mtime in a parallel array and applies the same comparator. (3) `validateFindPathInputs` now skips backslash-escaped commas (`\,`) when checking for top-level commas, matching `search.ts:containsTopLevelComma`.
 - Fixed `throwPreferredDapStartError` using a single `await Promise.resolve()` (one microtask) to let a concurrent launch/attach rejection settle before deciding which error to surface. That worked for synchronous-rejection test fakes but not real adapter I/O: the launch failure arrives via socket and lands several ticks after the `configurationDone` failure. `DapStartRequestFailure` now carries a `settled?: Promise<void>` that resolves when the underlying request settles either way, and `throwPreferredDapStartError` races against it with a 50 ms ceiling. The preferred error message (the underlying launch/attach failure rather than the cascade) now surfaces under real I/O.
 - Fixed `adapter: "debugpy"` over-promising in the `debug` tool. `resolveAdapter("debugpy", cwd)` only checks for `python` in `PATH`; it does not verify that the `debugpy` module is importable. Both failure modes — `python` missing and `debugpy` module missing — used to collapse onto a generic `"No suitable debug adapter found"` error. The launch/attach action now throws a targeted `ToolError` naming `python` when `resolveAdapter` returns null for an explicit `adapter: "debugpy"`, and the `DapSessionManager` spawn-catch detects `"No module named debugpy"` in adapter stderr and surfaces a `pip install debugpy` hint. The Python debug tool documentation lists the install hint so the prompt and runtime diagnostics agree.
+- Fixed the LSP symbol-resolver `BARE_IDENTIFIER_RE` (`/^[A-Za-z_][\w]*$/`) rejecting `$`-prefixed identifiers (`$store`, `$count`, RxJS observables, Svelte stores, Angular signals). Without the word-boundary check, searching for `$store` on a line containing `bar$store` returned the offset inside the compound identifier rather than the standalone occurrence, feeding a wrong column to the LSP server. Pattern now `/^[$A-Za-z_][\w$]*$/`; the companion `IDENTIFIER_CHAR_RE` already contained `$`.
+- Fixed `applyWorkspaceEdit` writing all text edits before walking `documentChanges` for resource operations. LSP §3.16.2 requires clients to apply `documentChanges` in declared order, so any server emitting `{kind: "create", uri: X}` followed by a `TextDocumentEdit` for `X` (e.g. "Extract to new file" code actions, some rename responses) broke: the edit ran against a non-existent file, then the create happened. `applyWorkspaceEdit` now walks `documentChanges` once in declared order; per-URI text edits are coalesced into a pending Map and flushed immediately before any subsequent resource op for the same URI. Legacy `changes`-map-only payloads are unchanged. Folder-level `rename`/`delete` ops now flush every pending URI under the affected subtree (not just the exact target) so child-file edits queued before a parent-folder move land at the original location instead of dangling against a non-existent path on the final flush. Rename ops additionally flush pending edits queued against `renameOp.newUri` (and its descendants) **before** `fs.rename` runs, so edits intended for the pre-rename target file are applied before the rename clobbers or replaces it (relevant under `options.overwrite`/`options.ignoreIfExists`). When a `WorkspaceEdit` payload supplies both `changes` and `documentChanges`, the `documentChanges` arm is now used exclusively per LSP §3.16.2 ("if documentChanges are supplied … servers should use them in preference to changes"); previously the two were merged.
 
 ### Fixed
 
 - Fixed built-in `explore` agent failing every invocation with `schema_violation: files.0.ref: must not be present` on releases prior to 15.3.2 by renaming the `files[].ref` property to `files[].path` in the agent's output schema; `ref` is a JTD-reserved keyword (RFC 8927) and collides with JSON Type Definition's schema-reference form, so the converter previously dropped it from the generated JSON Schema. Defense-in-depth alongside the 15.3.2 converter fix ([#1379](https://github.com/can1357/oh-my-pi/issues/1379)).
 - Increased the `yield` tool's schema-validation retry budget from 1 to 3 so subagents whose first structured-output attempt mismatches the declared output schema get up to three retries before the parent's post-mortem `schema_violation` check hard-fails the task. The tool now also surfaces remaining retry attempts and an explicit "call yield again with the corrected shape" directive in each rejection message, giving the model the context it needs to converge — particularly helpful for models like GLM that tend to invent per-element field names instead of following the declared schema.
+- Fixed CLI PDF file arguments being decoded as raw bytes for local vision models; `.pdf` and other supported document files now go through the same Markit conversion path as the `read` tool before entering the prompt ([#1401](https://github.com/can1357/oh-my-pi/issues/1401)).
+- Fixed the `bash` tool hanging until the 305 s hard timeout when a command writes a file via heredoc on Windows (bodies > ~4 KiB) or macOS (bodies > 16-64 KiB). Root cause was in the embedded brush shell; see `@oh-my-pi/pi-natives` changelog for the underlying fix.
 
 ## [15.3.2] - 2026-05-25
 ### Added

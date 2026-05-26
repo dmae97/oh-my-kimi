@@ -1,6 +1,5 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
-import type * as z from "zod/v4";
 import {
 	executeHashlineSingle,
 	HashlineMismatchError,
@@ -21,9 +20,7 @@ import hashlineDescription from "../prompts/tools/hashline.md" with { type: "tex
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
 import type { ToolSession } from "../tools";
-import { VimTool, vimSchema } from "../tools/vim";
 import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit-mode";
-import type { VimToolDetails } from "../vim/types";
 import { type ApplyPatchParams, applyPatchSchema, expandApplyPatchToEntries } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
 import { executePatchSingle, type PatchEditEntry, type PatchParams, patchEditSchema } from "./modes/patch";
@@ -35,7 +32,7 @@ export * from "./apply-patch";
 export * from "./diff";
 export * from "./file-read-cache";
 
-// Resolve the `$HFMT$`, `$HOP_*$`, `$HOP_CHARS$`, and `$HFILE$` placeholders in the hashline Lark grammar.
+// Resolve hashline grammar placeholders from the TypeScript constants.
 const hashlineGrammar = resolveHashlineGrammarPlaceholders(hashlineGrammarTemplate);
 
 export * from "../hashline";
@@ -50,12 +47,9 @@ type TInput =
 	| typeof replaceEditSchema
 	| typeof patchEditSchema
 	| typeof hashlineEditParamsSchema
-	| typeof vimSchema
 	| typeof applyPatchSchema;
 
-type VimParams = z.infer<typeof vimSchema>;
-type EditParams = ReplaceParams | PatchParams | HashlineParams | VimParams | ApplyPatchParams;
-type EditToolResultDetails = EditToolDetails | VimToolDetails;
+type EditParams = ReplaceParams | PatchParams | HashlineParams | ApplyPatchParams;
 
 type EditModeDefinition = {
 	description: (session: ToolSession) => string;
@@ -65,8 +59,8 @@ type EditModeDefinition = {
 		params: EditParams,
 		signal: AbortSignal | undefined,
 		batchRequest: LspBatchRequest | undefined,
-		onUpdate?: (partialResult: AgentToolResult<EditToolResultDetails, TInput>) => void,
-	) => Promise<AgentToolResult<EditToolResultDetails, TInput>>;
+		onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
+	) => Promise<AgentToolResult<EditToolDetails, TInput>>;
 };
 
 function resolveConfiguredEditMode(rawEditMode: string): EditMode | undefined {
@@ -284,7 +278,6 @@ export class EditTool implements AgentTool<TInput> {
 	readonly #fuzzyThreshold: number;
 	readonly #writethrough: WritethroughCallback;
 	readonly #editMode?: EditMode;
-	readonly #vimTool: VimTool;
 	readonly #pendingDeferredFetches = new Map<string, AbortController>();
 
 	constructor(private readonly session: ToolSession) {
@@ -298,7 +291,6 @@ export class EditTool implements AgentTool<TInput> {
 		this.#allowFuzzy = resolveAllowFuzzy(session, editFuzzy);
 		this.#fuzzyThreshold = resolveFuzzyThreshold(session, editFuzzyThreshold);
 		this.#writethrough = createEditWritethrough(session);
-		this.#vimTool = new VimTool(session);
 	}
 
 	get mode(): EditMode {
@@ -341,9 +333,9 @@ export class EditTool implements AgentTool<TInput> {
 		_toolCallId: string,
 		params: EditParams,
 		signal?: AbortSignal,
-		onUpdate?: AgentToolUpdateCallback<EditToolResultDetails, TInput>,
+		onUpdate?: AgentToolUpdateCallback<EditToolDetails, TInput>,
 		context?: AgentToolContext,
-	): Promise<AgentToolResult<EditToolResultDetails, TInput>> {
+	): Promise<AgentToolResult<EditToolDetails, TInput>> {
 		const modeDefinition = this.#getModeDefinition();
 		return modeDefinition.execute(this, params, signal, getLspBatchRequest(context?.toolCall), onUpdate);
 	}
@@ -458,29 +450,6 @@ export class EditTool implements AgentTool<TInput> {
 							}),
 					);
 					return executeSinglePathEntries(path, runs, batchRequest, onUpdate);
-				},
-			},
-			vim: {
-				description: () => this.#vimTool.description,
-				parameters: vimSchema,
-				execute: async (
-					tool: EditTool,
-					params: EditParams,
-					signal: AbortSignal | undefined,
-					_batchRequest: LspBatchRequest | undefined,
-					onUpdate?: (partialResult: AgentToolResult<EditToolResultDetails, TInput>) => void,
-				) => {
-					const handleUpdate = onUpdate
-						? (partialResult: AgentToolResult<VimToolDetails>) => {
-								onUpdate(partialResult as AgentToolResult<EditToolResultDetails, TInput>);
-							}
-						: undefined;
-					return (await tool.#vimTool.execute(
-						"edit",
-						params as VimParams,
-						signal,
-						handleUpdate,
-					)) as AgentToolResult<EditToolResultDetails, TInput>;
 				},
 			},
 		}[this.mode];

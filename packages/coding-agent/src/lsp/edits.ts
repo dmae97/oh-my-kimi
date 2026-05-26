@@ -127,38 +127,91 @@ export async function applyTextEdits(filePath: string, edits: TextEdit[]): Promi
 export async function applyWorkspaceEdit(edit: WorkspaceEdit, cwd: string): Promise<string[]> {
 	const applied: string[] = [];
 
-	// Coalesce all text edits per URI before applying so a single file's edits
-	// are applied in one pass against a single snapshot — multiple TextDocumentEdits
-	// for the same URI would otherwise read stale positions on subsequent writes.
-	const textEditsByUri = flattenWorkspaceTextEdits(edit);
-	for (const [uri, textEdits] of textEditsByUri) {
-		const filePath = uriToFile(uri);
-		await applyTextEdits(filePath, textEdits);
-		applied.push(`Applied ${textEdits.length} edit(s) to ${formatPathRelativeToCwd(filePath, cwd)}`);
-	}
-
-	// Resource operations (create/rename/delete) preserve their original order.
 	if (edit.documentChanges) {
-		for (const change of edit.documentChanges) {
-			if (!("kind" in change) || !change.kind) continue;
-			if (change.kind === "create") {
-				const createOp = change as CreateFile;
-				const filePath = uriToFile(createOp.uri);
-				await Bun.write(filePath, "");
-				applied.push(`Created ${formatPathRelativeToCwd(filePath, cwd)}`);
-			} else if (change.kind === "rename") {
-				const renameOp = change as RenameFile;
-				const oldPath = uriToFile(renameOp.oldUri);
-				const newPath = uriToFile(renameOp.newUri);
-				await fs.mkdir(path.dirname(newPath), { recursive: true });
-				await fs.rename(oldPath, newPath);
-				applied.push(`Renamed ${formatPathRelativeToCwd(oldPath, cwd)} → ${formatPathRelativeToCwd(newPath, cwd)}`);
-			} else if (change.kind === "delete") {
-				const deleteOp = change as DeleteFile;
-				const filePath = uriToFile(deleteOp.uri);
-				await fs.rm(filePath, { recursive: true });
-				applied.push(`Deleted ${formatPathRelativeToCwd(filePath, cwd)}`);
+		// Walk documentChanges in original order. Accumulate text edits per-URI and
+		// flush them before any resource op that touches the same URI (or, for folder
+		// rename/delete, any descendant URI) so that renames, creates, and deletes
+		// always see the correct prior file state.
+		const pending = new Map<string, TextEdit[]>();
+
+		const flushUri = async (uri: string) => {
+			const edits = pending.get(uri);
+			if (!edits) return;
+			pending.delete(uri);
+			const filePath = uriToFile(uri);
+			await applyTextEdits(filePath, edits);
+			applied.push(`Applied ${edits.length} edit(s) to ${formatPathRelativeToCwd(filePath, cwd)}`);
+		};
+
+		// Flush the exact URI plus every pending descendant (for folder-level
+		// resource ops where the queued edits target child files of the target).
+		const flushSubtree = async (uri: string) => {
+			const prefix = uri.endsWith("/") ? uri : `${uri}/`;
+			const matches: string[] = [];
+			for (const candidate of pending.keys()) {
+				if (candidate === uri || candidate.startsWith(prefix)) matches.push(candidate);
 			}
+			for (const target of matches) {
+				await flushUri(target);
+			}
+		};
+
+		for (const change of edit.documentChanges) {
+			if ("textDocument" in change && change.textDocument && "edits" in change && change.edits) {
+				const tdc = change as TextDocumentEdit;
+				const uri = tdc.textDocument.uri;
+				const textEdits = tdc.edits.filter((e): e is TextEdit => "range" in e && "newText" in e);
+				if (textEdits.length > 0) {
+					const prev = pending.get(uri);
+					if (prev) prev.push(...textEdits);
+					else pending.set(uri, [...textEdits]);
+				}
+			} else if ("kind" in change && change.kind) {
+				if (change.kind === "create") {
+					const createOp = change as CreateFile;
+					await flushUri(createOp.uri);
+					const filePath = uriToFile(createOp.uri);
+					await Bun.write(filePath, "");
+					applied.push(`Created ${formatPathRelativeToCwd(filePath, cwd)}`);
+				} else if (change.kind === "rename") {
+					const renameOp = change as RenameFile;
+					// Per LSP §3.16.2 documentChanges are applied in declared order.
+					// Flush both the source subtree (so prior edits land before the move)
+					// AND the destination subtree (so prior edits land on whatever exists
+					// at newUri before the rename overwrites/replaces it — relevant under
+					// `options.overwrite` and `options.ignoreIfExists`).
+					await flushSubtree(renameOp.oldUri);
+					await flushSubtree(renameOp.newUri);
+					const oldPath = uriToFile(renameOp.oldUri);
+					const newPath = uriToFile(renameOp.newUri);
+					await fs.mkdir(path.dirname(newPath), { recursive: true });
+					await fs.rename(oldPath, newPath);
+					applied.push(
+						`Renamed ${formatPathRelativeToCwd(oldPath, cwd)} → ${formatPathRelativeToCwd(newPath, cwd)}`,
+					);
+				} else if (change.kind === "delete") {
+					const deleteOp = change as DeleteFile;
+					await flushSubtree(deleteOp.uri);
+					const filePath = uriToFile(deleteOp.uri);
+					await fs.rm(filePath, { recursive: true });
+					applied.push(`Deleted ${formatPathRelativeToCwd(filePath, cwd)}`);
+				}
+			}
+		}
+
+		// Flush text edits not followed by a resource op.
+		for (const [uri] of pending) {
+			await flushUri(uri);
+		}
+	} else if (edit.changes) {
+		// Legacy changes-map path: apply all text edits in one pass.
+		const changes = edit.changes;
+		for (const uri in changes) {
+			const textEdits = changes[uri];
+			if (textEdits.length === 0) continue;
+			const filePath = uriToFile(uri);
+			await applyTextEdits(filePath, textEdits);
+			applied.push(`Applied ${textEdits.length} edit(s) to ${formatPathRelativeToCwd(filePath, cwd)}`);
 		}
 	}
 

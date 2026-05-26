@@ -1,4 +1,4 @@
-import { formatHashLine } from "./hash";
+import { formatNumberedLine } from "./hash";
 import type { HashlineStreamOptions } from "./types";
 
 interface ResolvedHashlineStreamOptions {
@@ -34,7 +34,7 @@ function createHashlineChunkEmitter(options: ResolvedHashlineStreamOptions): Has
 	};
 
 	const pushLine = (line: string): string[] => {
-		const formatted = formatHashLine(lineNumber, line);
+		const formatted = formatNumberedLine(lineNumber, line);
 		lineNumber++;
 
 		const chunks: string[] = [];

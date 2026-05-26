@@ -3,6 +3,7 @@ import { getBundledModel } from "../src/models";
 import { streamAzureOpenAIResponses } from "../src/providers/azure-openai-responses";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
 import { streamOpenAIResponses } from "../src/providers/openai-responses";
+import { streamSimple } from "../src/stream";
 import type { Context, Model, TextContent } from "../src/types";
 import { waitForDelayOrAbort } from "./helpers";
 
@@ -42,6 +43,15 @@ function getRequestSignal(input: string | URL | Request, init: RequestInit | und
 	return undefined;
 }
 
+function getRequestHeader(input: string | URL | Request, init: RequestInit | undefined, name: string): string | null {
+	if (init?.headers) {
+		return new Headers(init.headers).get(name);
+	}
+	if (input instanceof Request) {
+		return input.headers.get(name);
+	}
+	return null;
+}
 function createHangingSseResponse(signal: AbortSignal | undefined): Response {
 	let abortListener: (() => void) | undefined;
 	const stream = new ReadableStream<Uint8Array>({
@@ -143,24 +153,15 @@ function createNoProgressOpenAIResponsesStream(signal: AbortSignal | undefined):
 	});
 }
 
-function createDelayedFetch(delayMs: number, responseFactory: () => Response): typeof fetch {
+function createDelayedFetch(
+	delayMs: number,
+	responseFactory: () => Response,
+	onRequest?: (input: string | URL | Request, init: RequestInit | undefined) => void,
+): typeof fetch {
 	async function mockFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+		onRequest?.(input, init);
 		await waitForDelayOrAbort(delayMs, getRequestSignal(input, init));
 		return responseFactory();
-	}
-
-	return Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
-}
-function createAbortObservingDelayedFetch(delayMs: number, onAbort: () => void): typeof fetch {
-	async function mockFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
-		const signal = getRequestSignal(input, init);
-		try {
-			await waitForDelayOrAbort(delayMs, signal);
-		} catch (error) {
-			if (signal?.aborted) onAbort();
-			throw error;
-		}
-		return createOpenAIResponsesSuccessResponse();
 	}
 
 	return Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
@@ -227,22 +228,33 @@ function createOpenAICompletionsSuccessResponse(modelId: string): Response {
 	]);
 }
 
-async function expectProviderSilenceWaitsForCallerAbort(
-	run: (
-		signal: AbortSignal,
-		streamFirstEventTimeoutMs: number,
-	) => Promise<{ stopReason: string; errorMessage?: string }>,
-	unexpectedMessage: string,
+async function expectFirstEventTimeout(
+	run: (streamFirstEventTimeoutMs: number) => Promise<{ stopReason: string; errorMessage?: string }>,
+	expectedMessage: string,
 ): Promise<void> {
 	global.fetch = createHangingFetch();
-	const controller = new AbortController();
-	setTimeout(() => controller.abort(), 30);
 
-	const result = await run(controller.signal, 5);
+	const result = await run(20);
 
-	expect(result.stopReason).toBe("aborted");
-	expect(result.errorMessage).not.toBe(unexpectedMessage);
-	expect((result.errorMessage ?? "").toLowerCase()).toContain("abort");
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage).toBe(expectedMessage);
+}
+
+async function expectRequestSetupTimeout(
+	run: (streamFirstEventTimeoutMs: number) => Promise<{ stopReason: string; errorMessage?: string }>,
+	expectedMessage: string,
+	responseFactory: () => Response,
+): Promise<void> {
+	const timeoutHeaders: string[] = [];
+	global.fetch = createDelayedFetch(30, responseFactory, (input, init) => {
+		timeoutHeaders.push(getRequestHeader(input, init, "X-Stainless-Timeout") ?? "");
+	});
+
+	const result = await run(20);
+
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage).toBe(expectedMessage);
+	expect(timeoutHeaders).toContain("0");
 }
 
 async function expectCallerAbort(
@@ -270,12 +282,12 @@ function getFirstTextContent(result: { content: unknown[] }): TextContent | unde
 }
 
 async function expectDelayedRequestSetupSucceeds(
-	run: () => Promise<{ stopReason: string; content: unknown[] }>,
+	run: (streamFirstEventTimeoutMs: number) => Promise<{ stopReason: string; content: unknown[] }>,
 	responseFactory: () => Response,
 ): Promise<void> {
 	global.fetch = createDelayedFetch(30, responseFactory);
 
-	const result = await run();
+	const result = await run(50);
 
 	expect(result.stopReason).toBe("stop");
 	expect(getFirstTextContent(result)).toMatchObject({ type: "text", text: "Hello delayed" });
@@ -285,34 +297,41 @@ afterEach(() => {
 	global.fetch = originalFetch;
 });
 
-describe("OpenAI-family provider stream silence", () => {
-	it("waits for caller abort when OpenAI responses emits no first event", async () => {
-		await expectProviderSilenceWaitsForCallerAbort(
-			(signal, streamFirstEventTimeoutMs) =>
+describe("OpenAI-family first-event timeouts", () => {
+	it("surfaces the OpenAI responses first-event timeout message instead of a generic abort", async () => {
+		await expectFirstEventTimeout(
+			streamFirstEventTimeoutMs =>
 				streamOpenAIResponses(openAIResponsesModel, baseContext(), {
 					apiKey: "test-key",
-					signal,
 					streamFirstEventTimeoutMs,
 				}).result(),
 			"OpenAI responses stream timed out while waiting for the first event",
 		);
 	});
+	it("times out OpenAI responses before the stream opens and forwards the budget to the SDK request", async () => {
+		await expectRequestSetupTimeout(
+			streamFirstEventTimeoutMs =>
+				streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+					apiKey: "test-key",
+					streamFirstEventTimeoutMs,
+				}).result(),
+			"OpenAI responses stream timed out while waiting for the first event",
+			createOpenAIResponsesSuccessResponse,
+		);
+	});
 
-	it("waits for caller abort when OpenAI responses streams only no-progress status events", async () => {
+	it("times out OpenAI responses streams that only emit no-progress status events", async () => {
 		global.fetch = ((input: string | URL | Request, init?: RequestInit) =>
 			Promise.resolve(createNoProgressOpenAIResponsesStream(getRequestSignal(input, init)))) as typeof fetch;
-		const controller = new AbortController();
-		setTimeout(() => controller.abort(), 30);
 
 		const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
 			apiKey: "test-key",
-			signal: controller.signal,
 			streamFirstEventTimeoutMs: 1_000,
-			streamIdleTimeoutMs: 5,
+			streamIdleTimeoutMs: 20,
 		}).result();
 
-		expect(result.stopReason).toBe("aborted");
-		expect(result.errorMessage).not.toBe("OpenAI responses stream stalled while waiting for the next event");
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("OpenAI responses stream stalled while waiting for the next event");
 		expect(result.content as unknown[]).toEqual([
 			{
 				type: "toolCall",
@@ -324,30 +343,97 @@ describe("OpenAI-family provider stream silence", () => {
 		]);
 	});
 
-	it("waits for caller abort when OpenAI completions emits no first event", async () => {
-		await expectProviderSilenceWaitsForCallerAbort(
-			(signal, streamFirstEventTimeoutMs) =>
+	it("forwards streamSimple per-call timeout options to OpenAI-family providers", async () => {
+		global.fetch = createHangingFetch();
+		const controller = new AbortController();
+		const abortTimer = setTimeout(() => controller.abort(new Error("fallback abort")), 200);
+		abortTimer.unref();
+
+		try {
+			const result = await streamSimple(openAIResponsesModel, baseContext(), {
+				apiKey: "test-key",
+				signal: controller.signal,
+				streamFirstEventTimeoutMs: 20,
+				streamIdleTimeoutMs: 20,
+			}).result();
+
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toBe("OpenAI responses stream timed out while waiting for the first event");
+		} finally {
+			clearTimeout(abortTimer);
+		}
+	});
+
+	it("surfaces the OpenAI completions first-event timeout message", async () => {
+		await expectFirstEventTimeout(
+			streamFirstEventTimeoutMs =>
 				streamOpenAICompletions(openAICompletionsModel, baseContext(), {
 					apiKey: "test-key",
-					signal,
 					streamFirstEventTimeoutMs,
 				}).result(),
 			"OpenAI completions stream timed out while waiting for the first event",
 		);
 	});
+	it("times out OpenAI completions before the stream opens and forwards the budget to the SDK request", async () => {
+		await expectRequestSetupTimeout(
+			streamFirstEventTimeoutMs =>
+				streamOpenAICompletions(openAICompletionsModel, baseContext(), {
+					apiKey: "test-key",
+					streamFirstEventTimeoutMs,
+				}).result(),
+			"OpenAI completions stream timed out while waiting for the first event",
+			() => createOpenAICompletionsSuccessResponse(openAICompletionsModel.id),
+		);
+	});
 
-	it("waits for caller abort when Azure OpenAI responses emits no first event", async () => {
-		await expectProviderSilenceWaitsForCallerAbort(
-			(signal, streamFirstEventTimeoutMs) =>
+	it("surfaces the Azure OpenAI responses first-event timeout message", async () => {
+		await expectFirstEventTimeout(
+			streamFirstEventTimeoutMs =>
 				streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
 					apiKey: "test-key",
 					azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
 					azureApiVersion: "v1",
-					signal,
 					streamFirstEventTimeoutMs,
 				}).result(),
 			"Azure OpenAI responses stream timed out while waiting for the first event",
 		);
+	});
+	it("times out Azure OpenAI responses before the stream opens and forwards the budget to the SDK request", async () => {
+		await expectRequestSetupTimeout(
+			streamFirstEventTimeoutMs =>
+				streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
+					apiKey: "test-key",
+					azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
+					azureApiVersion: "v1",
+					streamFirstEventTimeoutMs,
+				}).result(),
+			"Azure OpenAI responses stream timed out while waiting for the first event",
+			createOpenAIResponsesSuccessResponse,
+		);
+	});
+
+	it("times out Azure responses streams that only emit no-progress status events", async () => {
+		global.fetch = ((input: string | URL | Request, init?: RequestInit) =>
+			Promise.resolve(createNoProgressOpenAIResponsesStream(getRequestSignal(input, init)))) as typeof fetch;
+		const controller = new AbortController();
+		const abortTimer = setTimeout(() => controller.abort(new Error("fallback abort")), 200);
+		abortTimer.unref();
+
+		try {
+			const result = await streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
+				apiKey: "test-key",
+				azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
+				azureApiVersion: "v1",
+				signal: controller.signal,
+				streamFirstEventTimeoutMs: 1_000,
+				streamIdleTimeoutMs: 20,
+			}).result();
+
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toBe("Azure OpenAI responses stream stalled while waiting for the next event");
+		} finally {
+			clearTimeout(abortTimer);
+		}
 	});
 
 	it("keeps caller aborts as aborted for OpenAI responses", async () => {
@@ -388,69 +474,38 @@ describe("OpenAI-family provider stream silence", () => {
 		);
 	});
 
-	it("does not apply a default first-event timeout before OpenAI responses stream setup finishes", async () => {
+	it("does not arm the first-event watchdog before OpenAI responses stream setup finishes", async () => {
 		await expectDelayedRequestSetupSucceeds(
-			() =>
+			streamFirstEventTimeoutMs =>
 				streamOpenAIResponses(openAIResponsesModel, baseContext(), {
 					apiKey: "test-key",
+					streamFirstEventTimeoutMs,
 				}).result(),
 			createOpenAIResponsesSuccessResponse,
 		);
 	});
 
-	it("maps explicit OpenAI responses first-event timeout to the SDK request timeout", async () => {
-		let abortObserved = false;
-		global.fetch = createAbortObservingDelayedFetch(1_000, () => {
-			abortObserved = true;
-		});
-
-		const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
-			apiKey: "test-key",
-			streamFirstEventTimeoutMs: 10,
-		}).result();
-
-		expect(abortObserved).toBe(true);
-		expect(result.stopReason).toBe("error");
-		expect(getFirstTextContent(result)).toBeUndefined();
-	});
-
-	it("does not apply a default first-event timeout before OpenAI completions stream setup finishes", async () => {
+	it("does not arm the first-event watchdog before OpenAI completions stream setup finishes", async () => {
 		await expectDelayedRequestSetupSucceeds(
-			() =>
+			streamFirstEventTimeoutMs =>
 				streamOpenAICompletions(openAICompletionsModel, baseContext(), {
 					apiKey: "test-key",
+					streamFirstEventTimeoutMs,
 				}).result(),
 			() => createOpenAICompletionsSuccessResponse(openAICompletionsModel.id),
 		);
 	});
 
-	it("does not apply a default first-event timeout before Azure OpenAI responses setup finishes", async () => {
+	it("does not arm the first-event watchdog before Azure OpenAI responses setup finishes", async () => {
 		await expectDelayedRequestSetupSucceeds(
-			() =>
+			streamFirstEventTimeoutMs =>
 				streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
 					apiKey: "test-key",
 					azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
 					azureApiVersion: "v1",
+					streamFirstEventTimeoutMs,
 				}).result(),
 			createOpenAIResponsesSuccessResponse,
 		);
-	});
-
-	it("maps explicit Azure OpenAI responses first-event timeout to the SDK request timeout", async () => {
-		let abortObserved = false;
-		global.fetch = createAbortObservingDelayedFetch(1_000, () => {
-			abortObserved = true;
-		});
-
-		const result = await streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
-			apiKey: "test-key",
-			azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
-			azureApiVersion: "v1",
-			streamFirstEventTimeoutMs: 10,
-		}).result();
-
-		expect(abortObserved).toBe(true);
-		expect(result.stopReason).toBe("error");
-		expect(getFirstTextContent(result)).toBeUndefined();
 	});
 });

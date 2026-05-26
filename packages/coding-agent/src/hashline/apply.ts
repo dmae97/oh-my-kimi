@@ -1,8 +1,5 @@
-import { HashlineMismatchError } from "./anchors";
-import { RANGE_INTERIOR_HASH } from "./constants";
-import { computeLineHash } from "./hash";
-import { cloneCursor } from "./parser";
-import type { Anchor, HashlineApplyOptions, HashlineCursor, HashlineEdit, HashMismatch } from "./types";
+import { cloneCursor } from "./tokenizer";
+import type { Anchor, HashlineApplyOptions, HashlineCursor, HashlineEdit } from "./types";
 
 export interface HashlineApplyResult {
 	lines: string;
@@ -43,26 +40,17 @@ function getHashlineEditAnchors(edit: HashlineEdit): Anchor[] {
 }
 
 /**
- * Verify every anchor's hash. Any mismatch is reported as a `HashMismatch`;
- * there is no auto-rebase. Callers are expected to surface mismatches as
- * `HashlineMismatchError` so the model re-reads and re-anchors.
+ * Verify every anchored edit points at an existing line. File-version binding is
+ * checked once per section via the header hash before this function runs.
  */
-function validateHashlineAnchors(edits: HashlineEdit[], fileLines: string[]): HashMismatch[] {
-	const mismatches: HashMismatch[] = [];
+function validateHashlineLineBounds(edits: HashlineEdit[], fileLines: string[]): void {
 	for (const edit of edits) {
 		for (const anchor of getHashlineEditAnchors(edit)) {
 			if (anchor.line < 1 || anchor.line > fileLines.length) {
 				throw new Error(`Line ${anchor.line} does not exist (file has ${fileLines.length} lines)`);
 			}
-			if (anchor.hash === RANGE_INTERIOR_HASH) continue;
-
-			const actualHash = computeLineHash(anchor.line, fileLines[anchor.line - 1] ?? "");
-			if (actualHash === anchor.hash) continue;
-
-			mismatches.push({ line: anchor.line, expected: anchor.hash, actual: actualHash });
 		}
 	}
-	return mismatches;
 }
 
 function insertAtStart(fileLines: string[], lineOrigins: HashlineLineOrigin[], lines: string[]): void {
@@ -287,15 +275,10 @@ function contiguousRange(start: number, count: number): number[] {
 	return Array.from({ length: count }, (_, offset) => start + offset);
 }
 
-function deleteEditForAutoAbsorbedLine(
-	line: number,
-	sourceLineNum: number,
-	index: number,
-	fileLines: string[],
-): HashlineEdit {
+function deleteEditForAutoAbsorbedLine(line: number, sourceLineNum: number, index: number): HashlineEdit {
 	return {
 		kind: "delete",
-		anchor: { line, hash: computeLineHash(line, fileLines[line - 1] ?? "") },
+		anchor: { line },
 		lineNum: sourceLineNum,
 		index,
 	};
@@ -314,7 +297,7 @@ function cursorMatches(a: HashlineCursor, b: HashlineCursor): boolean {
 	if (a.kind === "bof" || a.kind === "eof") return true;
 	const aAnchor = (a as { anchor: Anchor }).anchor;
 	const bAnchor = (b as { anchor: Anchor }).anchor;
-	return aAnchor.line === bAnchor.line && aAnchor.hash === bAnchor.hash;
+	return aAnchor.line === bAnchor.line;
 }
 
 /**
@@ -606,13 +589,13 @@ function absorbReplacementBoundaryDuplicates(
 		}
 
 		for (const line of contiguousRange(startLine - safePrefixCount, safePrefixCount)) {
-			absorbed.push(deleteEditForAutoAbsorbedLine(line, group.sourceLineNum, nextSyntheticIndex++, fileLines));
+			absorbed.push(deleteEditForAutoAbsorbedLine(line, group.sourceLineNum, nextSyntheticIndex++));
 		}
 		for (let groupIndex = group.startIndex; groupIndex <= group.endIndex; groupIndex++) {
 			absorbed.push(edits[groupIndex]);
 		}
 		for (const line of contiguousRange(endLine + 1, safeSuffixCount)) {
-			absorbed.push(deleteEditForAutoAbsorbedLine(line, group.sourceLineNum, nextSyntheticIndex++, fileLines));
+			absorbed.push(deleteEditForAutoAbsorbedLine(line, group.sourceLineNum, nextSyntheticIndex++));
 		}
 
 		index = group.endIndex;
@@ -653,8 +636,7 @@ export function applyHashlineEdits(
 		if (firstChangedLine === undefined || line < firstChangedLine) firstChangedLine = line;
 	};
 
-	const mismatches = validateHashlineAnchors(edits, fileLines);
-	if (mismatches.length > 0) throw new HashlineMismatchError(mismatches, fileLines);
+	validateHashlineLineBounds(edits, fileLines);
 
 	const normalizedEdits = absorbReplacementBoundaryDuplicates(edits, fileLines, warnings, options);
 
@@ -669,10 +651,9 @@ export function applyHashlineEdits(
 			continue;
 		}
 		const nextLineNum = anchorLine + 1;
-		const nextContent = fileLines[nextLineNum - 1] ?? "";
 		edit.cursor = {
 			kind: "before_anchor",
-			anchor: { line: nextLineNum, hash: computeLineHash(nextLineNum, nextContent) },
+			anchor: { line: nextLineNum },
 		};
 	}
 
@@ -711,6 +692,23 @@ export function applyHashlineEdits(
 		}
 		if (beforeLines.length === 0 && !deleteLine) continue;
 
+		const replaceMode = beforeLines.length > 0;
+		if (deleteLine && !replaceMode) {
+			const balance = computeDelimiterBalance([currentLine]);
+			const trimmedCurrentLine = currentLine.trim();
+			const touchesStructuralBoundary =
+				trimmedCurrentLine.startsWith(")") ||
+				trimmedCurrentLine.startsWith("]") ||
+				trimmedCurrentLine.startsWith("}") ||
+				trimmedCurrentLine.endsWith("(") ||
+				trimmedCurrentLine.endsWith("[") ||
+				trimmedCurrentLine.endsWith("{");
+			if (balance.paren !== 0 || balance.bracket !== 0 || balance.brace !== 0 || touchesStructuralBoundary) {
+				warnings.push(
+					`Deleted line ${line} contains a structural bracket/brace boundary (${JSON.stringify(trimmedCurrentLine)}); verify the file is still balanced or use 'A:<replacement>' to keep the boundary intact.`,
+				);
+			}
+		}
 		const replacement = deleteLine ? beforeLines : [...beforeLines, currentLine];
 		const origins = replacement.map((): HashlineLineOrigin => (deleteLine ? "replacement" : "insert"));
 		if (!deleteLine) {

@@ -9,9 +9,10 @@ import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { getFileReadCache } from "../edit/file-read-cache";
+import { normalizeToLF } from "../edit/normalize";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { formatHashLine, formatHashLines, formatLineHash, HL_BODY_SEP } from "../hashline/hash";
+import { computeFileHash, formatHashlineHeader, formatNumberedLine, formatNumberedLines } from "../hashline/hash";
 import { InternalUrlRouter } from "../internal-urls";
 import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
@@ -113,13 +114,50 @@ function prependLineNumbers(text: string, startNum: number): string {
 	return textLines.map((line, i) => `${startNum + i}|${line}`).join("\n");
 }
 
+interface HashlineHeaderContext {
+	header: string;
+	fileHash: string;
+	fullText: string;
+}
+
+function buildHashlineHeaderContext(displayPath: string, fullText: string): HashlineHeaderContext {
+	const normalized = normalizeToLF(fullText);
+	const fileHash = computeFileHash(normalized);
+	return {
+		header: formatHashlineHeader(displayPath, fileHash),
+		fileHash,
+		fullText: normalized,
+	};
+}
+
+async function readHashlineHeaderContext(absolutePath: string, cwd: string): Promise<HashlineHeaderContext> {
+	const fullText = await Bun.file(absolutePath).text();
+	return buildHashlineHeaderContext(formatPathRelativeToCwd(absolutePath, cwd), fullText);
+}
+
+function prependHashlineHeader(text: string, context: HashlineHeaderContext | undefined): string {
+	return context ? `${context.header}\n${text}` : text;
+}
+
+function recordHashlineSnapshot(
+	session: ToolSession,
+	absolutePath: string | undefined,
+	context: HashlineHeaderContext | undefined,
+): void {
+	if (!context || !absolutePath || !path.isAbsolute(absolutePath)) return;
+	getFileReadCache(session).recordContiguous(absolutePath, 1, context.fullText.split("\n"), {
+		fullText: context.fullText,
+		fileHash: context.fileHash,
+	});
+}
+
 function formatTextWithMode(
 	text: string,
 	startNum: number,
 	shouldAddHashLines: boolean,
 	shouldAddLineNumbers: boolean,
 ): string {
-	if (shouldAddHashLines) return formatHashLines(text, startNum);
+	if (shouldAddHashLines) return formatNumberedLines(text, startNum);
 	if (shouldAddLineNumbers) return prependLineNumbers(text, startNum);
 	return text;
 }
@@ -150,7 +188,7 @@ function formatSingleLine(
 	shouldAddHashLines: boolean,
 	shouldAddLineNumbers: boolean,
 ): string {
-	if (shouldAddHashLines) return formatHashLine(line, text);
+	if (shouldAddHashLines) return formatNumberedLine(line, text);
 	if (shouldAddLineNumbers) return `${line}|${text}`;
 	return text;
 }
@@ -165,9 +203,7 @@ function formatMergedBraceLine(
 ): { model: string; display: string } {
 	const merged = `${headText.trimEnd()} .. ${tailText.trim()}`;
 	if (shouldAddHashLines) {
-		const start = formatLineHash(startLine, headText);
-		const end = formatLineHash(endLine, tailText);
-		return { model: `${start}-${end}${HL_BODY_SEP}${merged}`, display: merged };
+		return { model: `${startLine}-${endLine}:${merged}`, display: merged };
 	}
 	if (shouldAddLineNumbers) {
 		return { model: `${startLine}-${endLine}|${merged}`, display: merged };
@@ -180,17 +216,38 @@ function countTextLines(text: string): number {
 	return text.split("\n").length;
 }
 
+/** Inclusive line range describing one elided span in a structural summary. */
+interface ElidedRange {
+	start: number;
+	end: number;
+}
+
+/** Sample ranges shown in the footer to demonstrate the multi-range syntax. */
+const FOOTER_RANGE_SAMPLES = 2;
+
 /**
  * Footer appended to summarized reads telling the model how to recover the
  * elided body. Without this hint, agents either ignore the `...`/`{ .. }`
- * markers or burn a turn guessing the right selector (see issue #1046).
+ * markers or burn a turn guessing the right selector (see issue #1046). The
+ * footer demonstrates the multi-range selector syntax with concrete sample
+ * ranges drawn from the actual elision so the model re-reads only what it
+ * needs instead of falling back to `:raw` or whole-file reads.
  */
-function formatSummaryElisionFooter(readPath: string, elidedSpans: number, elidedLines: number): string {
-	if (elidedSpans <= 0) return "";
-	const spanWord = elidedSpans === 1 ? "region" : "regions";
+function formatSummaryElisionFooter(
+	readPath: string,
+	elidedRanges: ReadonlyArray<ElidedRange>,
+	elidedLines: number,
+): string {
+	if (elidedRanges.length === 0) return "";
 	const lineWord = elidedLines === 1 ? "line" : "lines";
-	const linePart = elidedLines > 0 ? `${elidedLines} ${lineWord} across ` : "";
-	return `[${linePart}${elidedSpans} elided ${spanWord}; read ${readPath}:raw or a line range like ${readPath}:1-9999 for verbatim content]`;
+	const sampleCount = Math.min(elidedRanges.length, FOOTER_RANGE_SAMPLES);
+	const selector = elidedRanges
+		.slice(0, sampleCount)
+		.map(r => `${r.start}-${r.end}`)
+		.join(",");
+	const example = `${readPath}:${selector}`;
+	const tail = elidedRanges.length > sampleCount ? `, e.g. ${example}` : ` with ${example}`;
+	return `[${elidedLines} ${lineWord} elided; re-read needed ranges${tail}]`;
 }
 const READ_CHUNK_SIZE = 8 * 1024;
 
@@ -844,9 +901,18 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const shouldAddHashLines = displayMode.hashLines;
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
+		const hashContext =
+			shouldAddHashLines && options.sourcePath
+				? buildHashlineHeaderContext(formatPathRelativeToCwd(options.sourcePath, this.session.cwd), text)
+				: undefined;
+		recordHashlineSnapshot(this.session, options.sourcePath, hashContext);
+		let emittedHashlineHeader = false;
 		const formatText = (content: string, startNum: number): string => {
 			details.displayContent = { text: content, startLine: startNum };
-			return formatTextWithMode(content, startNum, shouldAddHashLines, shouldAddLineNumbers);
+			const formatted = formatTextWithMode(content, startNum, shouldAddHashLines, shouldAddLineNumbers);
+			if (!hashContext || emittedHashlineHeader) return formatted;
+			emittedHashlineHeader = true;
+			return prependHashlineHeader(formatted, hashContext);
 		};
 
 		let outputText: string;
@@ -862,7 +928,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (shouldAddHashLines) {
 				outputText = `[Line ${startLineDisplay} is ${formatBytes(
 					firstLineBytes,
-				)}, exceeds ${formatBytes(DEFAULT_MAX_BYTES)} limit. Hashline output requires full lines; cannot compute hashes for a truncated preview.]`;
+				)}, exceeds ${formatBytes(DEFAULT_MAX_BYTES)} limit. Hashline output requires full lines; cannot emit an editable numbered preview for a truncated line.]`;
 			} else {
 				outputText = formatText(snippet.text, startLineDisplay);
 			}
@@ -928,6 +994,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const totalLines = allLines.length;
 		const shouldAddHashLines = displayMode.hashLines;
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
+		const hashContext =
+			shouldAddHashLines && options.sourcePath
+				? buildHashlineHeaderContext(formatPathRelativeToCwd(options.sourcePath, this.session.cwd), text)
+				: undefined;
+		recordHashlineSnapshot(this.session, options.sourcePath, hashContext);
+		let emittedHashlineHeader = false;
 
 		const resultBuilder = toolResult(details);
 		if (options.sourcePath) resultBuilder.sourcePath(options.sourcePath);
@@ -943,7 +1015,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 			const effectiveEnd = Math.min(range.endLine ?? totalLines, totalLines);
 			const sliced = allLines.slice(range.startLine - 1, effectiveEnd).join("\n");
-			parts.push(formatTextWithMode(sliced, range.startLine, shouldAddHashLines, shouldAddLineNumbers));
+			const formatted = formatTextWithMode(sliced, range.startLine, shouldAddHashLines, shouldAddLineNumbers);
+			parts.push(hashContext && !emittedHashlineHeader ? prependHashlineHeader(formatted, hashContext) : formatted);
+			if (hashContext) emittedHashlineHeader = true;
 		}
 
 		const outputText = parts.length > 0 ? parts.join("\n\n…\n\n") : "";
@@ -1002,6 +1076,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const shouldAddHashLines = !rawSelector && displayMode.hashLines;
 		const shouldAddLineNumbers = rawSelector ? false : shouldAddHashLines ? false : displayMode.lineNumbers;
+		const hashContext = shouldAddHashLines
+			? await readHashlineHeaderContext(absolutePath, this.session.cwd)
+			: undefined;
+		recordHashlineSnapshot(this.session, absolutePath, hashContext);
+		let emittedHashlineHeader = false;
 		const maxColumns = resolveOutputMaxColumns(this.session.settings);
 
 		const blocks: string[] = [];
@@ -1042,11 +1121,18 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 
 			if (collectedLines.length > 0) {
-				getFileReadCache(this.session).recordContiguous(absolutePath, range.startLine, collectedLines);
+				getFileReadCache(this.session).recordContiguous(
+					absolutePath,
+					range.startLine,
+					collectedLines,
+					hashContext ? { fullText: hashContext.fullText, fileHash: hashContext.fileHash } : {},
+				);
 			}
 
 			const blockText = collectedLines.join("\n");
-			blocks.push(formatTextWithMode(blockText, range.startLine, shouldAddHashLines, shouldAddLineNumbers));
+			const formatted = formatTextWithMode(blockText, range.startLine, shouldAddHashLines, shouldAddLineNumbers);
+			blocks.push(hashContext && !emittedHashlineHeader ? prependHashlineHeader(formatted, hashContext) : formatted);
+			if (hashContext) emittedHashlineHeader = true;
 		}
 
 		let outputText = blocks.join("\n\n…\n\n");
@@ -1335,7 +1421,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	#renderSummary(summary: SummaryResult): {
 		text: string;
 		displayText: string;
-		elidedSpans: number;
+		elidedRanges: ElidedRange[];
 		elidedLines: number;
 	} {
 		const displayMode = resolveFileDisplayMode(this.session);
@@ -1396,13 +1482,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const modelParts: string[] = [];
 		const displayParts: string[] = [];
-		let elidedSpans = 0;
+		const elidedRanges: ElidedRange[] = [];
 		let elidedLines = 0;
 		for (const unit of units) {
 			if (unit.kind === "elided") {
 				modelParts.push("...");
 				displayParts.push("...");
-				elidedSpans++;
+				elidedRanges.push({ start: unit.startLine, end: unit.endLine });
 				elidedLines += unit.endLine - unit.startLine + 1;
 				continue;
 			}
@@ -1417,7 +1503,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				);
 				modelParts.push(formatted.model);
 				displayParts.push(formatted.display);
-				elidedSpans++;
+				// Suggest the full brace range so re-reading shows both braces
+				// plus the elided body in one shot.
+				elidedRanges.push({ start: unit.startLine, end: unit.endLine });
 				// Merged brace pair encloses (start+1)..(end-1) as elided.
 				elidedLines += Math.max(0, unit.endLine - unit.startLine - 1);
 				continue;
@@ -1426,7 +1514,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			displayParts.push(unit.text);
 		}
 
-		return { text: modelParts.join("\n"), displayText: displayParts.join("\n"), elidedSpans, elidedLines };
+		return { text: modelParts.join("\n"), displayText: displayParts.join("\n"), elidedRanges, elidedLines };
 	}
 
 	async execute(
@@ -1674,15 +1762,20 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					const renderedSummary = this.#renderSummary(summary);
 					const footer = formatSummaryElisionFooter(
 						localReadPath,
-						renderedSummary.elidedSpans,
+						renderedSummary.elidedRanges,
 						renderedSummary.elidedLines,
 					);
-					const modelText = footer ? `${renderedSummary.text}\n\n${footer}` : renderedSummary.text;
+					const summaryHashContext = displayMode.hashLines
+						? await readHashlineHeaderContext(absolutePath, this.session.cwd)
+						: undefined;
+					recordHashlineSnapshot(this.session, absolutePath, summaryHashContext);
+					const bodyText = footer ? `${renderedSummary.text}\n\n${footer}` : renderedSummary.text;
+					const modelText = prependHashlineHeader(bodyText, summaryHashContext);
 					details = {
 						displayContent: { text: renderedSummary.displayText, startLine: 1 },
 						summary: {
 							lines: countTextLines(renderedSummary.text),
-							elidedSpans: renderedSummary.elidedSpans,
+							elidedSpans: renderedSummary.elidedRanges.length,
 							elidedLines: renderedSummary.elidedLines,
 						},
 					};
@@ -1820,16 +1913,29 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						firstLineExceedsLimit,
 					};
 
-					if (collectedLines.length > 0 && !firstLineExceedsLimit) {
-						getFileReadCache(this.session).recordContiguous(absolutePath, startLineDisplay, collectedLines);
-					}
-
 					const shouldAddHashLines = !rawSelector && displayMode.hashLines;
 					const shouldAddLineNumbers = rawSelector ? false : shouldAddHashLines ? false : displayMode.lineNumbers;
+					const hashContext = shouldAddHashLines
+						? await readHashlineHeaderContext(absolutePath, this.session.cwd)
+						: undefined;
+
+					if (collectedLines.length > 0 && !firstLineExceedsLimit) {
+						getFileReadCache(this.session).recordContiguous(
+							absolutePath,
+							startLineDisplay,
+							collectedLines,
+							hashContext ? { fullText: hashContext.fullText, fileHash: hashContext.fileHash } : {},
+						);
+					}
+
 					let capturedDisplayContent: { text: string; startLine: number } | undefined;
+					let emittedHashlineHeader = false;
 					const formatText = (text: string, startNum: number): string => {
 						capturedDisplayContent = { text, startLine: startNum };
-						return formatTextWithMode(text, startNum, shouldAddHashLines, shouldAddLineNumbers);
+						const formatted = formatTextWithMode(text, startNum, shouldAddHashLines, shouldAddLineNumbers);
+						if (!hashContext || emittedHashlineHeader) return formatted;
+						emittedHashlineHeader = true;
+						return prependHashlineHeader(formatted, hashContext);
 					};
 
 					let outputText: string;
@@ -1841,7 +1947,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						if (shouldAddHashLines) {
 							outputText = `[Line ${startLineDisplay} is ${formatBytes(
 								firstLineBytes,
-							)}, exceeds ${formatBytes(maxBytesForRead)} limit. Hashline output requires full lines; cannot compute hashes for a truncated preview.]`;
+							)}, exceeds ${formatBytes(maxBytesForRead)} limit. Hashline output requires full lines; cannot emit an editable numbered preview for a truncated line.]`;
 						} else {
 							outputText = formatText(snippet.text, startLineDisplay);
 						}
@@ -1964,7 +2070,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
 
 		const rawText = region.lines.join("\n");
-		const formattedText = formatTextWithMode(rawText, region.startLine, shouldAddHashLines, shouldAddLineNumbers);
+		const hashContext = shouldAddHashLines
+			? await readHashlineHeaderContext(entry.absolutePath, this.session.cwd)
+			: undefined;
+		recordHashlineSnapshot(this.session, entry.absolutePath, hashContext);
+		const formattedBody = formatTextWithMode(rawText, region.startLine, shouldAddHashLines, shouldAddLineNumbers);
+		const formattedText = prependHashlineHeader(formattedBody, hashContext);
 
 		const details: ReadToolDetails = {
 			resolvedPath: entry.absolutePath,

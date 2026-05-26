@@ -1269,16 +1269,11 @@ function b() {
 
 		it("should abort and recover for subsequent commands", async () => {
 			const controller = new AbortController();
-			const promise = bashTool.execute(
-				"test-call-10-abort",
-				{ command: "printf 'started\\n'; sleep 60" },
-				controller.signal,
-				update => {
-					if (update.content?.some(content => content.type === "text" && content.text.includes("started"))) {
-						controller.abort("test abort");
-					}
-				},
-			);
+			const promise = bashTool.execute("test-call-10-abort", { command: "sleep 60" }, controller.signal);
+			// Give the native shell a beat to enter `sleep`; do not depend on chunk
+			// delivery timing, which is flaky on loaded CI runners.
+			await Bun.sleep(100);
+			controller.abort("test abort");
 			await expect(promise).rejects.toThrow(/abort|cancel|timed out/i);
 
 			const result = await bashTool.execute("test-call-10-after-abort", { command: "echo ok" });
@@ -1786,6 +1781,43 @@ function b() {
 			expect(output).not.toContain(".env.local");
 			expect(output).not.toContain(".env.generated");
 			expect(elapsedMs).toBeLessThan(1000);
+		});
+
+		it("should return directories alongside files with a trailing slash", async () => {
+			fs.mkdirSync(path.join(testDir, "pkg"));
+			fs.mkdirSync(path.join(testDir, "pkg", "nested"));
+			fs.writeFileSync(path.join(testDir, "pkg", "file.txt"), "f");
+			fs.writeFileSync(path.join(testDir, "pkg", "nested", "deep.txt"), "d");
+
+			const result = await findTool.execute("test-call-14f", {
+				paths: [`${testDir}/pkg/**/*`],
+			});
+
+			const outputLines = getTextOutput(result)
+				.split("\n")
+				.map(line => line.trim())
+				.filter(Boolean)
+				.sort();
+
+			expect(outputLines).toEqual(["pkg/file.txt", "pkg/nested/", "pkg/nested/deep.txt"]);
+		});
+
+		it("should match a directory by glob and emit it with trailing slash", async () => {
+			fs.mkdirSync(path.join(testDir, "alpha", "tests"), { recursive: true });
+			fs.mkdirSync(path.join(testDir, "beta", "tests"), { recursive: true });
+			fs.writeFileSync(path.join(testDir, "alpha", "tests", "a.ts"), "a");
+
+			const result = await findTool.execute("test-call-14g", {
+				paths: [`${testDir}/**/tests`],
+			});
+
+			const outputLines = getTextOutput(result)
+				.split("\n")
+				.map(line => line.trim())
+				.filter(Boolean)
+				.sort();
+
+			expect(outputLines).toEqual(["alpha/tests/", "beta/tests/"]);
 		});
 	});
 });

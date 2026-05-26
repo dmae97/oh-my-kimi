@@ -1,8 +1,6 @@
-import { HL_BODY_SEP_RE_RAW } from "./hash";
-
-const HL_OUTPUT_PREFIX_SEPARATOR_RE = `[:${HL_BODY_SEP_RE_RAW}]`;
-const HL_PREFIX_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*(?:[+*]\\s*)?\\d+[a-z]{2}${HL_OUTPUT_PREFIX_SEPARATOR_RE}`);
-const HL_PREFIX_PLUS_RE = new RegExp(`^\\s*(?:>>>|>>)?\\s*\\+\\s*\\d+[a-z]{2}${HL_OUTPUT_PREFIX_SEPARATOR_RE}`);
+const HL_PREFIX_RE = /^\s*(?:>>>|>>)?\s*(?:[+*-]\s*)?\d+:/;
+const HL_PREFIX_PLUS_RE = /^\s*(?:>>>|>>)?\s*\+\s*\d+:/;
+const HL_HEADER_RE = /^\s*¶\S+#[0-9a-f]{4}\s*$/;
 const DIFF_PLUS_RE = /^[+](?![+])/;
 const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bUse :L?\d+/;
 
@@ -20,12 +18,14 @@ function stripLeadingHashlinePrefixes(line: string): string {
 // 5. Read-output prefix stripping
 //
 // When a model echoes back content from a `read` or `search` response, every
-// line is prefixed with either a hashline tag (`123ab|`) or, for diff-style
-// echoes, a leading `+`. These helpers detect that and recover the raw text.
+// line is prefixed with either a hashline-mode line number (`123:`) or, for
+// diff-style echoes, a leading `+`. These helpers detect that and recover the
+// raw text.
 // ───────────────────────────────────────────────────────────────────────────
 
 type LinePrefixStats = {
 	nonEmpty: number;
+	headerCount: number;
 	hashPrefixCount: number;
 	diffPlusHashPrefixCount: number;
 	diffPlusCount: number;
@@ -35,6 +35,7 @@ type LinePrefixStats = {
 function collectLinePrefixStats(lines: string[]): LinePrefixStats {
 	const stats: LinePrefixStats = {
 		nonEmpty: 0,
+		headerCount: 0,
 		hashPrefixCount: 0,
 		diffPlusHashPrefixCount: 0,
 		diffPlusCount: 0,
@@ -45,6 +46,11 @@ function collectLinePrefixStats(lines: string[]): LinePrefixStats {
 		if (line.length === 0) continue;
 		if (READ_TRUNCATION_NOTICE_RE.test(line)) {
 			stats.truncationNoticeCount++;
+			continue;
+		}
+		if (HL_HEADER_RE.test(line)) {
+			stats.nonEmpty++;
+			stats.headerCount++;
 			continue;
 		}
 		stats.nonEmpty++;
@@ -59,7 +65,8 @@ export function stripNewLinePrefixes(lines: string[]): string[] {
 	const stats = collectLinePrefixStats(lines);
 	if (stats.nonEmpty === 0) return lines;
 
-	const stripHash = stats.hashPrefixCount > 0 && stats.hashPrefixCount === stats.nonEmpty;
+	const contentLineCount = stats.nonEmpty - stats.headerCount;
+	const stripHash = contentLineCount > 0 && stats.hashPrefixCount === contentLineCount;
 	const stripPlus =
 		!stripHash &&
 		stats.diffPlusHashPrefixCount === 0 &&
@@ -69,7 +76,7 @@ export function stripNewLinePrefixes(lines: string[]): string[] {
 	if (!stripHash && !stripPlus && stats.diffPlusHashPrefixCount === 0) return lines;
 
 	return lines
-		.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line))
+		.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line) && !(stripHash && HL_HEADER_RE.test(line)))
 		.map(line => {
 			if (stripHash) return stripLeadingHashlinePrefixes(line);
 			if (stripPlus) return line.replace(DIFF_PLUS_RE, "");
@@ -83,8 +90,11 @@ export function stripNewLinePrefixes(lines: string[]): string[] {
 export function stripHashlinePrefixes(lines: string[]): string[] {
 	const stats = collectLinePrefixStats(lines);
 	if (stats.nonEmpty === 0) return lines;
-	if (stats.hashPrefixCount !== stats.nonEmpty) return lines;
-	return lines.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line)).map(line => stripLeadingHashlinePrefixes(line));
+	const contentLineCount = stats.nonEmpty - stats.headerCount;
+	if (contentLineCount === 0 || stats.hashPrefixCount !== contentLineCount) return lines;
+	return lines
+		.filter(line => !READ_TRUNCATION_NOTICE_RE.test(line) && !HL_HEADER_RE.test(line))
+		.map(line => stripLeadingHashlinePrefixes(line));
 }
 
 /**

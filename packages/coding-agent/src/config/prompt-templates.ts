@@ -8,7 +8,7 @@ import {
 	parseFrontmatter,
 	prompt,
 } from "@oh-my-pi/pi-utils";
-import { computeLineHash, HL_BODY_SEP } from "../hashline/hash";
+import { HL_LINE_BODY_SEP } from "../hashline/hash";
 import { jtdToTypeScript } from "../tools/jtd-to-typescript";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
 
@@ -34,7 +34,7 @@ function formatHashlineRef(lineNum: unknown, content: unknown): { num: number; t
 	const num = typeof lineNum === "number" ? lineNum : Number.parseInt(String(lineNum), 10);
 	const raw = typeof content === "string" ? content : String(content ?? "");
 	const text = raw.replace(/\\t/g, "\t").replace(/\\n/g, "\n").replace(/\\r/g, "\r");
-	const ref = `${num}${computeLineHash(num, text)}`;
+	const ref = `${num}`;
 	return { num, text, ref };
 }
 
@@ -124,11 +124,11 @@ function resolveHashlineRef(state: HashlineHelperState, args: unknown[]): string
 }
 
 /**
- * {{href lineNum "content"}} — compute a real hashline ref for prompt examples.
+ * {{href lineNum "content"}} — compute a hashline line ref for prompt examples.
  * {{href lineNum}} — quote the ref remembered by the earlier {{hline lineNum "..."}}
  * {{href}} — quote the ref from the previous {{hline}} call.
  * {{href "[" "]"}} — wrap the previous {{hline}} ref with pre/post chars.
- * Returns `"lineNumBIGRAM"` (e.g., `"42nd"`), or `"[42nd]"` when pre/post are supplied.
+ * Returns `"lineNum"` (e.g., `"42"`), or `"[42]"` when pre/post are supplied.
  */
 prompt.registerHelper("href", function (this: unknown, ...args: unknown[]): string {
 	const { positional, options } = splitHelperArgs(args);
@@ -143,7 +143,7 @@ prompt.registerHelper("hrefr", function (this: unknown, ...args: unknown[]): str
 
 /**
  * {{hline lineNum "content"}} — format a full read-style line with prefix.
- * Returns `"lineNumBIGRAM|content"` (pipe between anchor and content).
+ * Returns `"lineNum:content"` (colon between line number and content).
  */
 prompt.registerHelper("hline", function (this: unknown, ...args: unknown[]): string {
 	const { positional, options } = splitHelperArgs(args);
@@ -151,7 +151,7 @@ prompt.registerHelper("hline", function (this: unknown, ...args: unknown[]): str
 	const { num, ref, text } = formatHashlineRef(lineNum, content);
 	const state = getHashlineHelperState(this, options);
 	rememberHashlineRef(state, num, ref);
-	return `${ref}${HL_BODY_SEP}${text}`;
+	return `${ref}${HL_LINE_BODY_SEP}${text}`;
 });
 
 const INLINE_ARG_SHELL_PATTERN = /\$(?:ARGUMENTS|@(?:\[\d+(?::\d*)?\])?|\d+)/;

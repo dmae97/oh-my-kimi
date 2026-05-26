@@ -67,10 +67,10 @@ function resolveApiKey(options?: GoogleVertexOptions): string | undefined {
 }
 
 function resolveProject(options?: GoogleVertexOptions): string {
-	const project = options?.project || $env.GOOGLE_CLOUD_PROJECT || $env.GCLOUD_PROJECT;
+	const project = options?.project || $env.GOOGLE_CLOUD_PROJECT || $env.GCP_PROJECT || $env.GCLOUD_PROJECT;
 	if (!project) {
 		throw new Error(
-			"Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.",
+			"Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCP_PROJECT/GCLOUD_PROJECT or pass project in options.",
 		);
 	}
 	return project;
@@ -80,9 +80,12 @@ function resolveEndpointHost(location: string): string {
 	return location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
 }
 function resolveLocation(options?: GoogleVertexOptions): string {
-	const location = options?.location || $env.GOOGLE_CLOUD_LOCATION;
+	const location =
+		options?.location || $env.GOOGLE_VERTEX_LOCATION || $env.GOOGLE_CLOUD_LOCATION || $env.VERTEX_LOCATION;
 	if (!location) {
-		throw new Error("Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.");
+		throw new Error(
+			"Vertex AI requires a location. Set GOOGLE_VERTEX_LOCATION/GOOGLE_CLOUD_LOCATION/VERTEX_LOCATION or pass location in options.",
+		);
 	}
 	return location;
 }

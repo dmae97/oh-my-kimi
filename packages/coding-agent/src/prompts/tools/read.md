@@ -28,17 +28,17 @@ Append `:<sel>` to `path`. The bare path falls back to the default mode.
 
 - Reading a directory path returns a depth-limited dirent listing.
 {{#if IS_HL_MODE}}
-- Reading a file with an explicit selector returns lines prefixed with `line+hash` anchors: `41th|def alpha():`. The 2-char hash is a content fingerprint that `edit` / `apply_patch` consume — copy it verbatim, NEVER fabricate. The pipe character after the hash is a separator, not part of the file content.
+- Reading a file with an explicit selector emits a file-hash header and numbered lines: `¶src/foo.ts#1a2b` then `41:def alpha():`. Copy the `¶PATH#HASH` header for anchored edits; ops use bare line numbers. NEVER fabricate the hash.
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - Reading a file with an explicit selector returns lines prefixed with line numbers: `41|def alpha():`.
 {{/if}}
 {{/if}}
-- Parseable code without a selector returns a **structural summary**: declarations kept, large bodies collapsed to `..` (merged brace pair) or `…` (standalone). Summarized output ends with a footer of the form:
+- Parseable code without a selector returns a **structural summary**: declarations kept, large bodies collapsed to `..` (merged brace pair) or `…` (standalone). Summarized output ends with a footer demonstrating the multi-range selector you can use to recover the elided bodies, e.g.:
 
-  `[NN lines across MM elided regions; read <path>:raw or a line range like <path>:1-9999 for verbatim content]`
+  `[NN lines elided; re-read needed ranges, e.g. <path>:5-16,40-80]`
 
-  If the elided body is what you actually need, re-issue the **exact selector the footer names**. NEVER guess what's inside `..` / `…` — those markers carry no content.
+  Re-issue **only the relevant range(s)** using the multi-range selector (e.g. `<path>:5-16,120-200`). NEVER guess what's inside `..` / `…` — those markers carry no content. NEVER re-read the whole file or use `:raw` when targeted ranges suffice.
 
 # Documents & Notebooks
 

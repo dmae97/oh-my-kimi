@@ -5,20 +5,26 @@
 import { formatDuration, formatPercent, truncate } from "@oh-my-pi/pi-utils";
 import { type BenchmarkResult, EDIT_FAILURE_CATEGORIES, type TaskResult } from "./runner";
 
-function getStatusEmoji(successRate: number, runsPerTask: number): string {
-	const passing = Math.round(successRate * runsPerTask);
-	if (passing === runsPerTask) return "✅";
-	if (passing === 0) return "❌";
-	return "⚠️";
+function formatBestStatus(task: TaskResult, runsPerTask: number): { status: string; label: string } {
+	const completed = task.runs.filter(run => !isCompletedGhost(run)).length;
+	const succeeded = task.runs.filter(run => run.success).length;
+	if (task.success) {
+		// best-of-N pass; flag flakiness when not every run succeeded.
+		const flaky = completed > 0 && succeeded < completed;
+		const status = flaky ? "⚠️" : "✅";
+		const label = `PASS (${succeeded}/${completed || runsPerTask})`;
+		return { status, label };
+	}
+	return { status: "❌", label: `FAIL (0/${completed || runsPerTask})` };
+}
+
+function isCompletedGhost(run: TaskResult["runs"][number]): boolean {
+	if (run.success) return false;
+	return run.tokens.total === 0 && run.toolCalls.read === 0 && run.toolCalls.edit === 0 && run.toolCalls.write === 0;
 }
 
 function formatNumber(n: number): string {
 	return n.toLocaleString();
-}
-
-function formatPassRate(successRate: number, runsPerTask: number): string {
-	const passing = Math.round(successRate * runsPerTask);
-	return `${passing}/${runsPerTask}`;
 }
 
 function formatRate(numerator: number, denominator: number): string {
@@ -82,7 +88,6 @@ export function generateReport(result: BenchmarkResult): string {
 	);
 	const verifiedRuns = nonGhostRuns.filter(run => run.verificationPassed).length;
 	const editToolRuns = nonGhostRuns.filter(run => run.patchApplied).length;
-	const successRuns = nonGhostRuns.filter(run => run.success).length;
 	const totalEditAttempts = nonGhostRuns.reduce((sum, run) => sum + run.toolCalls.edit, 0);
 	const totalEditFailures = nonGhostRuns.reduce((sum, run) => sum + run.toolCalls.editFailures, 0);
 
@@ -115,17 +120,21 @@ export function generateReport(result: BenchmarkResult): string {
 
 	lines.push("## Summary");
 	lines.push("");
+	lines.push(
+		"Primary metrics (tokens, duration, tool calls) are aggregated over the **best run** of each task. Diagnostic counts (ghost runs, timeouts, retries, failure categories) span every executed run.",
+	);
+	lines.push("");
 	lines.push("| Metric | Value |");
 	lines.push("|--------|-------|");
 	lines.push(`| Total Tasks | ${summary.totalTasks} |`);
 	lines.push(`| Total Runs | ${summary.totalRuns} |`);
 	lines.push(`| Successful Runs | ${summary.successfulRuns} |`);
-	lines.push(`| **Task Success Rate** | **${formatRate(successRuns, summary.totalRuns)}** |`);
+	lines.push(`| **Task Success Rate** | **${formatRate(summary.successfulTasks, summary.totalTasks)}** |`);
 	if (config.editVariant === "hashline") {
 		lines.push(
-			`| **Autocorrect-Free Success Rate** | **${formatRate(summary.autocorrectFreeSuccessfulRuns, summary.totalRuns)}** |`,
+			`| **Autocorrect-Free Success Rate** | **${formatRate(summary.autocorrectFreeSuccessfulTasks, summary.totalTasks)}** |`,
 		);
-		lines.push(`| Autocorrected Runs | ${formatRate(summary.autocorrectedRuns, summary.totalRuns)} |`);
+		lines.push(`| Autocorrected Best Runs | ${formatRate(summary.autocorrectedBestRuns, summary.totalTasks)} |`);
 		lines.push(`| Edit Autocorrect Rate | ${formatPercent(summary.editAutocorrectRate)} |`);
 	}
 	lines.push(`| Verified Rate | ${formatRate(verifiedRuns, summary.totalRuns)} |`);
@@ -149,34 +158,36 @@ export function generateReport(result: BenchmarkResult): string {
 	if (config.editVariant === "patch" || config.editVariant === "hashline") {
 		lines.push(`| Patch Failure Rate | ${formatRate(totalEditFailures, totalEditAttempts)} |`);
 	}
-	lines.push(`| Tasks All Passing | ${summary.tasksWithAllPassing} |`);
-	lines.push(`| Tasks Flaky/Failing | ${summary.tasksWithAnyFailing} |`);
+	lines.push(`| Tasks All Passing | ${summary.consistentlyPassingTasks} |`);
+	lines.push(`| Tasks Flaky/Failing | ${summary.totalTasks - summary.consistentlyPassingTasks} |`);
 	lines.push("");
 	lines.push("### Tool Calls");
 	lines.push("");
-	lines.push("| Tool | Total | Avg/Run |");
-	lines.push("|------|-------|---------|");
-	lines.push(`| Read | ${summary.totalToolCalls.read} | ${summary.avgToolCallsPerRun.read.toFixed(1)} |`);
-	lines.push(`| Edit | ${summary.totalToolCalls.edit} | ${summary.avgToolCallsPerRun.edit.toFixed(1)} |`);
-	lines.push(`| Write | ${summary.totalToolCalls.write} | ${summary.avgToolCallsPerRun.write.toFixed(1)} |`);
+	lines.push("| Tool | Total (best) | Avg/Task |");
+	lines.push("|------|--------------|----------|");
+	lines.push(`| Read | ${summary.totalToolCalls.read} | ${summary.avgToolCallsPerTask.read.toFixed(1)} |`);
+	lines.push(`| Edit | ${summary.totalToolCalls.edit} | ${summary.avgToolCallsPerTask.edit.toFixed(1)} |`);
+	lines.push(`| Write | ${summary.totalToolCalls.write} | ${summary.avgToolCallsPerTask.write.toFixed(1)} |`);
 	lines.push(
-		`| **Tool Input Chars** | ${formatNumber(summary.totalToolCalls.totalInputChars)} | ${formatNumber(Math.round(summary.avgToolCallsPerRun.totalInputChars))} |`,
+		`| **Tool Input Chars** | ${formatNumber(summary.totalToolCalls.totalInputChars)} | ${formatNumber(Math.round(summary.avgToolCallsPerTask.totalInputChars))} |`,
 	);
 	lines.push("");
 	lines.push("### Tokens & Time");
 	lines.push("");
-	lines.push("| Metric | Total | Avg/Run |");
-	lines.push("|--------|-------|---------|");
+	lines.push("| Metric | Total (best) | Avg/Task |");
+	lines.push("|--------|--------------|----------|");
 	lines.push(
-		`| Input Tokens | ${formatNumber(summary.totalTokens.input)} | ${formatNumber(summary.avgTokensPerRun.input)} |`,
+		`| Input Tokens | ${formatNumber(summary.totalTokens.input)} | ${formatNumber(summary.avgTokensPerTask.input)} |`,
 	);
 	lines.push(
-		`| Output Tokens | ${formatNumber(summary.totalTokens.output)} | ${formatNumber(summary.avgTokensPerRun.output)} |`,
+		`| Output Tokens | ${formatNumber(summary.totalTokens.output)} | ${formatNumber(summary.avgTokensPerTask.output)} |`,
 	);
 	lines.push(
-		`| Total Tokens | ${formatNumber(summary.totalTokens.total)} | ${formatNumber(summary.avgTokensPerRun.total)} |`,
+		`| Total Tokens | ${formatNumber(summary.totalTokens.total)} | ${formatNumber(summary.avgTokensPerTask.total)} |`,
 	);
-	lines.push(`| Duration | ${formatDuration(summary.totalDuration)} | ${formatDuration(summary.avgDurationPerRun)} |`);
+	lines.push(
+		`| Duration | ${formatDuration(summary.totalDuration)} | ${formatDuration(summary.avgDurationPerTask)} |`,
+	);
 	lines.push(`| **Avg Indent Score** | — | **${formatScore(summary.avgIndentScore)}** |`);
 	lines.push("");
 
@@ -222,12 +233,11 @@ export function generateReport(result: BenchmarkResult): string {
 	lines.push("|------|------|---------|----------|-------|-----------------|------|--------|");
 
 	for (const task of tasks) {
-		const status = getStatusEmoji(task.successRate, runsPerTask);
-		const passRate = formatPassRate(task.successRate, runsPerTask);
+		const { status, label } = formatBestStatus(task, runsPerTask);
 		const editHitRate = formatPercent(task.editSuccessRate);
-		const toolCalls = `${task.avgToolCalls.read.toFixed(0)}/${task.avgToolCalls.edit.toFixed(0)}/${task.avgToolCalls.write.toFixed(0)}`;
+		const toolCalls = `${task.toolCalls.read.toFixed(0)}/${task.toolCalls.edit.toFixed(0)}/${task.toolCalls.write.toFixed(0)}`;
 		lines.push(
-			`| ${escapeMarkdown(task.name)} | ${escapeMarkdown(formatFiles(task.files))} | ${passRate} ${status} | ${editHitRate} | ${toolCalls} | ${formatNumber(task.avgTokens.input)}/${formatNumber(task.avgTokens.output)} | ${formatDuration(task.avgDuration)} | ${formatScore(task.avgIndentScore)} |`,
+			`| ${escapeMarkdown(task.name)} | ${escapeMarkdown(formatFiles(task.files))} | ${label} ${status} | ${editHitRate} | ${toolCalls} | ${formatNumber(task.tokens.input)}/${formatNumber(task.tokens.output)} | ${formatDuration(task.duration)} | ${formatScore(task.indentScore)} |`,
 		);
 	}
 	lines.push("");
@@ -279,30 +289,38 @@ export function generateReport(result: BenchmarkResult): string {
 		}
 	}
 
-	const flakyTasks = tasks.filter(t => t.successRate > 0 && t.successRate < 1);
+	const flakyTasks = tasks.filter(task => {
+		if (!task.success) return false;
+		const nonGhost = task.runs.filter(run => !isCompletedGhost(run));
+		return nonGhost.length > 0 && nonGhost.some(run => !run.success);
+	});
 	if (flakyTasks.length > 0) {
-		lines.push("## Flaky Tasks (partial passing)");
+		lines.push("## Flaky Tasks (best passed; some runs failed)");
 		lines.push("");
 
 		for (const task of flakyTasks) {
-			const passing = Math.round(task.successRate * runsPerTask);
-			lines.push(`### ${task.name} (${formatFiles(task.files)}) — ${passing}/${runsPerTask}`);
+			const nonGhost = task.runs.filter(run => !isCompletedGhost(run));
+			const passing = nonGhost.filter(run => run.success).length;
+			const denom = nonGhost.length || runsPerTask;
+			const bestNote = task.bestRunIndex >= 0 ? ` (best: run ${task.bestRunIndex + 1})` : "";
+			lines.push(`### ${task.name} (${formatFiles(task.files)}) — ${passing}/${denom}${bestNote}`);
 			lines.push("");
 			lines.push("| Run | Status | Error | Tokens (in/out) | Time |");
 			lines.push("|-----|--------|-------|-----------------|------|");
 
 			for (const run of task.runs) {
+				const marker = run.runIndex === task.bestRunIndex ? " ★" : "";
 				const status = run.success ? "✅" : "❌";
 				const error = run.error ? truncate(escapeMarkdown(run.error), 50) : "—";
 				lines.push(
-					`| ${run.runIndex + 1} | ${status} | ${error} | ${formatNumber(run.tokens.input)} / ${formatNumber(run.tokens.output)} | ${formatDuration(run.duration)} |`,
+					`| ${run.runIndex + 1}${marker} | ${status} | ${error} | ${formatNumber(run.tokens.input)} / ${formatNumber(run.tokens.output)} | ${formatDuration(run.duration)} |`,
 				);
 			}
 			lines.push("");
 		}
 	}
 
-	const failedTasks = tasks.filter(t => t.successRate === 0);
+	const failedTasks = tasks.filter(task => !task.success);
 	if (failedTasks.length > 0) {
 		lines.push("## Failed Tasks (0% passing)");
 		lines.push("");

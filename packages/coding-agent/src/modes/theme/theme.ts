@@ -2404,8 +2404,10 @@ export function getEditorTheme(): EditorTheme {
 
 export function getSettingsListTheme(): import("@oh-my-pi/pi-tui").SettingsListTheme {
 	return {
-		label: (text: string, selected: boolean) => (selected ? theme.fg("accent", text) : text),
-		value: (text: string, selected: boolean) => (selected ? theme.fg("accent", text) : theme.fg("muted", text)),
+		label: (text: string, selected: boolean, changed: boolean) =>
+			changed ? theme.fg("statusLineGitDirty", text) : selected ? theme.fg("accent", text) : text,
+		value: (text: string, selected: boolean, changed: boolean) =>
+			selected ? theme.fg("accent", text) : changed ? theme.fg("statusLineGitDirty", text) : theme.fg("muted", text),
 		description: (text: string) => theme.fg("dim", text),
 		cursor: theme.fg("accent", `${theme.nav.cursor} `),
 		hint: (text: string) => theme.fg("dim", text),

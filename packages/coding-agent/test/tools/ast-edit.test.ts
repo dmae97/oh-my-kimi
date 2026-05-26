@@ -60,7 +60,7 @@ describe("ast_edit tool schema", () => {
 		expect(strict.strict).toBe(true);
 	});
 
-	it("renders +/- lines with aligned hashline prefixes", async () => {
+	it("renders +/- lines with numbered hashline prefixes", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-render-"));
 		try {
 			const filePath = path.join(tempDir, "legacy.ts");
@@ -81,9 +81,9 @@ describe("ast_edit tool schema", () => {
 
 			expect(removedLine).toBeDefined();
 			expect(addedLine).toBeDefined();
-			expect(removedLine).toMatch(/^-\d+[a-z]{2}\|/);
-			expect(addedLine).toMatch(/^\+\d+[a-z]{2}\|/);
-			expect(removedLine?.split("|", 1)[0].length).toBe(addedLine?.split("|", 1)[0].length);
+			expect(removedLine).toMatch(/^-\d+:/);
+			expect(addedLine).toMatch(/^\+\d+:/);
+			expect(removedLine?.split(":", 1)[0].length).toBe(addedLine?.split(":", 1)[0].length);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -211,8 +211,9 @@ describe("ast_edit tool schema", () => {
 				| { totalReplacements?: number; fileReplacements?: Array<{ path: string; count: number }> }
 				| undefined;
 
-			expect(text).toContain("## root.ts (1 replacement)");
-			expect(text).toContain("## child.ts (1 replacement)");
+			// Tree-grouped output: `# packages/pkg-…/src/` then `## root.ts#<hash> (1 replacement)`.
+			expect(text).toMatch(/^## root\.ts#[0-9a-f]{4} \(\d+ replacement[s]?\)$/m);
+			expect(text).toMatch(/^## child\.ts#[0-9a-f]{4} \(\d+ replacement[s]?\)$/m);
 			expect(text).not.toContain("ignore.js");
 			expect(text).not.toContain("outside.ts");
 			expect(details?.totalReplacements).toBe(2);

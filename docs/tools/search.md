@@ -21,7 +21,7 @@
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `pattern` | `string` | Yes | Regex pattern. `search.ts` trims it and rejects empty input. The native matcher enables multiline only when the pattern text contains a literal newline or the two-character sequence `\\n`. The model prompt explicitly documents literal-brace escaping such as ``interface\\{\\}``, although the native layer also auto-escapes braces that cannot be valid repetition quantifiers. |
-| `paths` | `string[]` | Yes | One or more file paths, directory paths, glob-like paths, or internal URLs. Empty strings are rejected after trimming/quote stripping. Internal URLs must resolve to a backing file and cannot contain glob characters. |
+| `paths` | `string \| string[]` | Yes | One file path, directory path, glob-like path, internal URL, or an array of those. Empty strings are rejected after trimming/quote stripping. Internal URLs must resolve to a backing file and cannot contain glob characters. |
 | `i` | `boolean` | No | Case-insensitive search. Defaults to `false`. Passed to native `ignoreCase`. |
 | `gitignore` | `boolean` | No | Respect `.gitignore` during directory scans. Defaults to `true`. Passed to native `gitignore`. |
 | `skip` | `number` | No | Global match offset. Defaults to `0`. `search.ts` floors finite numbers and rejects negative or non-finite values. |
@@ -29,8 +29,8 @@
 ## Outputs
 The tool returns a single text block in `content[0].text` plus structured `details`.
 
-- Match lines are formatted by `formatMatchLine()` as `*<anchor>|<line>` for matches and ` <anchor>|<line>` for context.
-  - Hashline mode: `*5th|content`, ` 9x}|content`.
+- Match lines are formatted by `formatMatchLine()` as `*LINE:content` for matches and ` LINE:content` for context under a `¶PATH#HASH` header in hashline mode.
+  - Hashline mode: `¶src/login.ts#3c4d`, `*5:content`, ` 9:content`.
   - Plain mode: `*5|content`, ` 9|content`.
 - Directory results are grouped by file, with `# <path>` headings and blank lines between groups.
 - `details` may include:
@@ -49,12 +49,13 @@ The tool returns a single text block in `content[0].text` plus structured `detai
    - trims `pattern`, rejects empty patterns;
    - normalizes `skip` to a non-negative integer;
    - reads `search.contextBefore` and `search.contextAfter` from session settings (`1` and `3` by default);
-   - enables multiline only when `pattern` contains `\n` or an actual newline.
+   - enables multiline only when `pattern` contains `\n` or an actual newline;
+   - wraps a single string `paths` value into a one-element list before path resolution.
 2. Each `paths` entry is normalized with `normalizePathLikeInput()`.
 3. Internal URLs are resolved through `session.internalRouter`:
    - glob metacharacters (`*`, `?`, `[`, `{`) are rejected for internal URLs;
    - URLs without `resource.sourcePath` fail;
-   - immutable sources are tracked so output can suppress editable hashline anchors per file.
+   - immutable sources are tracked so output can suppress editable hashline numbered output per file.
 4. For multi-path calls, `partitionExistingPaths()` skips only ENOENT entries. If every entry is missing, the tool errors.
 5. Path resolution branches:
    - one entry: `parseSearchPath()` splits `basePath` and optional glob;
@@ -116,7 +117,7 @@ The tool returns a single text block in `content[0].text` plus structured `detai
 ## Limits & Caps
 - Visible page limit: `100` matches (`DEFAULT_MATCH_LIMIT` in `packages/coding-agent/src/tools/search.ts`).
 - Native preselection limit: `500` matches (`internalLimit = Math.min(DEFAULT_MATCH_LIMIT * 5, 2000)` in `packages/coding-agent/src/tools/search.ts`).
-- Line truncation: `1024` characters per emitted line (`DEFAULT_MAX_COLUMN` in `packages/coding-agent/src/session/streaming-output.ts`). Native grep marks truncated lines; JS reports `linesTruncated`.
+- Line truncation: `512` characters per emitted line (`DEFAULT_MAX_COLUMN` in `packages/coding-agent/src/session/streaming-output.ts`). Native grep marks truncated lines; JS reports `linesTruncated`.
 - Final text truncation: `truncateHead()` default byte cap `50 * 1024` bytes (`DEFAULT_MAX_BYTES` in `packages/coding-agent/src/session/streaming-output.ts`). `search.ts` overrides `maxLines` to `Number.MAX_SAFE_INTEGER`, so normal search output is byte-capped, not line-capped.
 - Context defaults: `search.contextBefore = 1`, `search.contextAfter = 3` in `packages/coding-agent/src/config/settings-schema.ts`.
 - Pagination: `skip` is a global match offset. In single-base searches it is pushed into native `offset`; in exact-file/multi-target aggregation it is applied in JS with `matches.slice(skip)`.
@@ -140,4 +141,4 @@ The tool returns a single text block in `content[0].text` plus structured `detai
 - `hidden:true` is hard-coded in `search.ts`; there is no model-facing flag to exclude dotfiles.
 - `gitignore:false` only affects native directory traversal. It does not disable the tool's own path normalization or explicit-file handling.
 - When `paths` resolves to multiple exact files, `search.ts` does not apply the native `500` match cap and reports `totalMatches` internally as the post-skip length for that branch.
-- The anchor suffix in hashline mode comes from `computeLineHash()` in `packages/coding-agent/src/hashline/hash.ts`; `search` itself only formats it.
+- The section hash in hashline mode comes from `computeFileHash()` in `packages/coding-agent/src/hashline/hash.ts`; `search` emits bare line numbers beneath it.

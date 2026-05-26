@@ -42,6 +42,8 @@ export type BedrockThinkingDisplay = "summarized" | "omitted";
 export interface BedrockOptions extends StreamOptions {
 	region?: string;
 	profile?: string;
+	/** Amazon Bedrock API key sent as `Authorization: Bearer`, ahead of SigV4 credential resolution. */
+	bearerToken?: string;
 	toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
 	/* See https://docs.aws.amazon.com/bedrock/latest/userguide/inference-reasoning.html for supported models. */
 	reasoning?: Effort;
@@ -62,6 +64,12 @@ export interface BedrockOptions extends StreamOptions {
 	 * models (Opus 4.6, Sonnet 4.6+) reject the field, so we omit it for them.
 	 */
 	thinkingDisplay?: BedrockThinkingDisplay;
+}
+const AUTHENTICATED_API_KEY_SENTINEL = "<authenticated>";
+
+function resolveBearerToken(options: BedrockOptions): string | undefined {
+	const apiKey = options.apiKey === AUTHENTICATED_API_KEY_SENTINEL ? undefined : options.apiKey;
+	return options.bearerToken || apiKey || $env.AWS_BEARER_TOKEN_BEDROCK;
 }
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
@@ -225,34 +233,40 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				body: commandInput,
 			};
 
-			let credentials: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
-			if ($flag("AWS_BEDROCK_SKIP_AUTH")) {
-				credentials = { accessKeyId: "dummy-access-key", secretAccessKey: "dummy-secret-key" };
-			} else {
-				credentials = await resolveAwsCredentials({
-					profile: options.profile,
-					region,
-					signal: options.signal,
-				});
-			}
-
 			const bodyText = JSON.stringify(commandInput);
 			const body = new TextEncoder().encode(bodyText);
 			const baseHeaders: Record<string, string> = {
 				"content-type": "application/json",
 				accept: "application/vnd.amazon.eventstream",
 			};
-			const signed = await signRequest({
-				method: "POST",
-				host,
-				path: urlPath,
-				body,
-				region,
-				service: "bedrock",
-				credentials,
-				headers: baseHeaders,
-			});
-			const requestHeaders: Record<string, string> = { ...baseHeaders, ...signed };
+
+			const bearerToken = resolveBearerToken(options);
+			let requestHeaders: Record<string, string>;
+			if (bearerToken) {
+				requestHeaders = { ...baseHeaders, Authorization: `Bearer ${bearerToken}` };
+			} else {
+				let credentials: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
+				if ($flag("AWS_BEDROCK_SKIP_AUTH")) {
+					credentials = { accessKeyId: "dummy-access-key", secretAccessKey: "dummy-secret-key" };
+				} else {
+					credentials = await resolveAwsCredentials({
+						profile: options.profile,
+						region,
+						signal: options.signal,
+					});
+				}
+				const signed = await signRequest({
+					method: "POST",
+					host,
+					path: urlPath,
+					body,
+					region,
+					service: "bedrock",
+					credentials,
+					headers: baseHeaders,
+				});
+				requestHeaders = { ...baseHeaders, ...signed };
+			}
 
 			const response = await fetchWithRetry(url, {
 				method: "POST",

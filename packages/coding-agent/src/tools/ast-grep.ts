@@ -5,7 +5,9 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+import { getFileReadCache } from "../edit/file-read-cache";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { computeFileHash, formatHashlineHeader } from "../hashline/hash";
 import type { Theme } from "../modes/theme/theme";
 import astGrepDescription from "../prompts/tools/ast-grep.md" with { type: "text" };
 import { Ellipsis, fileHyperlink, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
@@ -216,25 +218,43 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 			}
 
 			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
+			const hashContexts = new Map<string, { absolutePath: string; fileHash: string }>();
+			if (useHashLines) {
+				for (const relativePath of fileList) {
+					const absolutePath = path.resolve(this.session.cwd, relativePath);
+					try {
+						const fullText = await Bun.file(absolutePath).text();
+						const fileHash = computeFileHash(fullText);
+						hashContexts.set(relativePath, { absolutePath, fileHash });
+					} catch {
+						// Best-effort: if a file disappears between ast-grep and rendering, emit plain line output.
+					}
+				}
+			}
 			const outputLines: string[] = [];
 			const displayLines: string[] = [];
 			const renderMatchesForFile = (relativePath: string): { model: string[]; display: string[] } => {
 				const modelOut: string[] = [];
 				const displayOut: string[] = [];
 				const fileMatches = matchesByFile.get(relativePath) ?? [];
+				const hashContext = hashContexts.get(relativePath);
 				const lineNumberWidth = fileMatches.reduce((width, match) => {
 					const lineCount = match.text.split("\n").length;
 					const endLine = match.startLine + lineCount - 1;
 					return Math.max(width, String(match.startLine).length, String(endLine).length);
 				}, 0);
+				const cacheEntries: Array<readonly [number, string]> = [];
 				for (const match of fileMatches) {
 					const matchLines = match.text.split("\n");
 					for (let index = 0; index < matchLines.length; index++) {
 						const lineNumber = match.startLine + index;
 						const isMatch = index === 0;
 						const line = matchLines[index] ?? "";
-						modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
+						modelOut.push(
+							formatMatchLine(lineNumber, line, isMatch, { useHashLines: hashContext !== undefined }),
+						);
 						displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
+						cacheEntries.push([lineNumber, line] as const);
 					}
 					if (match.metaVariables && Object.keys(match.metaVariables).length > 0) {
 						const serializedMeta = Object.entries(match.metaVariables)
@@ -246,19 +266,39 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 					}
 					fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 				}
+				if (hashContext && cacheEntries.length > 0) {
+					getFileReadCache(this.session).recordSparse(hashContext.absolutePath, cacheEntries, {
+						fileHash: hashContext.fileHash,
+					});
+				}
 				return { model: modelOut, display: displayOut };
 			};
 
 			if (isDirectory) {
 				const grouped = formatGroupedFiles(fileList, relativePath => {
 					const rendered = renderMatchesForFile(relativePath);
-					return { modelLines: rendered.model, displayLines: rendered.display };
+					const hashContext = hashContexts.get(relativePath);
+					return {
+						modelLines: rendered.model,
+						displayLines: rendered.display,
+						headerSuffix: hashContext ? `#${hashContext.fileHash}` : "",
+						skip: rendered.model.length === 0,
+					};
 				});
 				outputLines.push(...grouped.model);
 				displayLines.push(...grouped.display);
 			} else {
 				for (const relativePath of fileList) {
 					const rendered = renderMatchesForFile(relativePath);
+					if (rendered.model.length === 0) continue;
+					if (outputLines.length > 0) {
+						outputLines.push("");
+						displayLines.push("");
+					}
+					const hashContext = hashContexts.get(relativePath);
+					if (hashContext) {
+						outputLines.push(formatHashlineHeader(relativePath, hashContext.fileHash));
+					}
 					outputLines.push(...rendered.model);
 					displayLines.push(...rendered.display);
 				}
@@ -385,7 +425,8 @@ export const astGrepToolRenderer = {
 									const fileName = line
 										.slice(3)
 										.trimEnd()
-										.replace(/\s+\([^)]*\)\s*$/, "");
+										.replace(/\s+\([^)]*\)\s*$/, "")
+										.replace(/#[0-9a-f]+$/, "");
 									const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
 									const styled = uiTheme.fg("dim", line);
 									return absPath ? fileHyperlink(absPath, styled) : styled;
@@ -396,7 +437,7 @@ export const astGrepToolRenderer = {
 										.trimEnd()
 										.replace(/\s+\([^)]*\)\s*$/, "");
 									const isDirectory = raw.endsWith("/");
-									const name = raw.replace(/\/$/, "");
+									const name = isDirectory ? raw.replace(/\/$/, "") : raw.replace(/#[0-9a-f]+$/, "");
 									if (isDirectory) {
 										if (searchBase) {
 											contextDir = name === "." ? searchBase : path.join(searchBase, name);

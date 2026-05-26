@@ -14,7 +14,7 @@ Performs structural AST-aware rewrites via native ast-grep.
 </instruction>
 
 <output>
-- Replacement summary, per-file replacement counts, and change diffs as `-LINE+ID|before` / `+LINE+ID|after` lines
+- Replacement summary, per-file replacement counts, and change diffs as `¶src/foo.ts#1a2b`, `-12:before`, `+12:after` lines in hashline mode
 - Parse issues when files cannot be processed
 </output>
 

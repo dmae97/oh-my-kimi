@@ -581,7 +581,7 @@ function firstNonWhitespaceColumn(lineText: string): number {
 	return match ? (match.index ?? 0) : 0;
 }
 
-const BARE_IDENTIFIER_RE = /^[A-Za-z_][\w]*$/;
+const BARE_IDENTIFIER_RE = /^[$A-Za-z_][\w$]*$/;
 const IDENTIFIER_CHAR_RE = /[A-Za-z0-9_$]/;
 
 function findSymbolMatchIndexes(lineText: string, symbol: string, caseInsensitive = false): number[] {

@@ -8,6 +8,7 @@ import path from "node:path";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Container, Text } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
+import { settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import {
@@ -59,6 +60,8 @@ function appendAgentStats(
 		contextTokens?: number;
 		contextWindow?: number;
 		cost: number;
+		resolvedModel?: string;
+		showResolvedModelBadge?: boolean;
 	},
 	theme: Theme,
 ): string {
@@ -82,6 +85,9 @@ function appendAgentStats(
 	}
 	if (opts.cost > 0) {
 		line += `${theme.sep.dot}${theme.fg("statusLineCost", `$${opts.cost.toFixed(2)}`)}`;
+	}
+	if (opts.resolvedModel && opts.showResolvedModelBadge) {
+		line += `${theme.sep.dot}${theme.fg("dim", truncateToWidth(replaceTabs(opts.resolvedModel), 30))}`;
 	}
 	return line;
 }
@@ -564,14 +570,15 @@ function renderAgentProgress(
 		statusLine += ` ${formatBadge(statusLabel, iconColor, theme)}`;
 	}
 
+	const showBadge = settings.get("task.showResolvedModelBadge");
 	if (progress.status === "running") {
 		if (!description) {
 			const taskPreview = truncateToWidth(progress.assignment ?? progress.task, 40);
 			statusLine += ` ${theme.fg("muted", taskPreview)}`;
 		}
-		statusLine = appendAgentStats(statusLine, progress, theme);
+		statusLine = appendAgentStats(statusLine, { ...progress, showResolvedModelBadge: showBadge }, theme);
 	} else if (progress.status === "completed") {
-		statusLine = appendAgentStats(statusLine, progress, theme);
+		statusLine = appendAgentStats(statusLine, { ...progress, showResolvedModelBadge: showBadge }, theme);
 	}
 
 	lines.push(statusLine);
@@ -838,6 +845,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 		iconColor,
 		theme,
 	)}`;
+	const showBadge = settings.get("task.showResolvedModelBadge");
 	statusLine = appendAgentStats(
 		statusLine,
 		{
@@ -845,6 +853,8 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 			contextTokens: result.contextTokens,
 			contextWindow: result.contextWindow,
 			cost: result.usage?.cost.total ?? 0,
+			resolvedModel: result.resolvedModel,
+			showResolvedModelBadge: showBadge,
 		},
 		theme,
 	);

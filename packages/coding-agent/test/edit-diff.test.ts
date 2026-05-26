@@ -5,10 +5,10 @@ import * as path from "node:path";
 import {
 	adjustIndentation,
 	computeEditDiff,
+	computeFileHash,
 	computeHashlineDiff,
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
-	formatLineHash,
 } from "@oh-my-pi/pi-coding-agent/edit";
 
 describe("findMatch", () => {
@@ -236,10 +236,9 @@ describe("computeHashlineDiff", () => {
 		const line = "unchanged content";
 		await Bun.write(sourcePath, `${line}\n`);
 
-		// `1<hash>→` with the same line as payload is a true no-op: the edit
+		// `1:` with the same line as payload is a true no-op: the edit
 		// fires through computeHashlineDiff but produces identical content.
-		const anchor = formatLineHash(1, line);
-		const input = `¶${sourcePath}\n${anchor}→\n${line}\n`;
+		const input = `¶${sourcePath}#${computeFileHash(`${line}\n`)}\n1:${line}\n`;
 		const result = await computeHashlineDiff({ input }, tempDir);
 		expect("error" in result).toBe(true);
 		if ("error" in result) {

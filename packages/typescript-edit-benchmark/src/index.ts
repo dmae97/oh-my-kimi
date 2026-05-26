@@ -513,8 +513,12 @@ async function main(): Promise<void> {
 
 	console.log("");
 	console.log("Benchmark complete!");
-	console.log(`  Success rate: ${(result.summary.overallSuccessRate * 100).toFixed(1)}%`);
-	console.log(`  Total tokens: ${result.summary.totalTokens.input} in / ${result.summary.totalTokens.output} out`);
+	console.log(
+		`  Task success rate (best of ${config.runsPerTask}): ${(result.summary.taskSuccessRate * 100).toFixed(1)}% (${result.summary.successfulTasks}/${result.summary.totalTasks})`,
+	);
+	console.log(
+		`  Total tokens (best): ${result.summary.totalTokens.input} in / ${result.summary.totalTokens.output} out`,
+	);
 	if (result.summary.ghostRuns > 0) {
 		console.log(`  Ghost runs (0/0/0): ${result.summary.ghostRuns}`);
 	}
@@ -529,6 +533,11 @@ async function main(): Promise<void> {
 	if (cleanup) {
 		await cleanup();
 	}
+
+	// In-process benchmark runs can leave provider keep-alive sockets and
+	// background AgentSession timers alive after the report is written. Treat the
+	// final report as the CLI boundary so the command returns to the shell.
+	await postmortem.quit(0);
 }
 
 class LiveProgress {
@@ -711,7 +720,7 @@ class LiveProgress {
 	}
 }
 
-main().catch(err => {
+main().catch(async err => {
 	console.error("Benchmark failed:", err);
-	process.exit(1);
+	await postmortem.quit(1);
 });

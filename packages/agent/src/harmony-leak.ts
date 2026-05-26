@@ -38,7 +38,7 @@ const SCRIPT_CLASS =
 const SCRIPT_RUN_RE = new RegExp(`[${SCRIPT_CLASS}]{2,}`, "u");
 
 // Recovery registry. Each entry's parser must recognize the configured
-// sentinel (per-tool, see eval/parse.ts and hashline/parser.ts) and surface
+// sentinel (per-tool, see eval/parse.ts and hashline/executor.ts) and surface
 // a warning to the model so it knows to re-issue any remaining work.
 // `accepts` gates on input shape: tools whose contaminated input doesn't
 // match the parser's expected DSL fall through to abort-and-retry.

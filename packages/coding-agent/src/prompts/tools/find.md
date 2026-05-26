@@ -1,4 +1,4 @@
-Finds files using fast pattern matching that works with any codebase size.
+Finds files and directories using fast pattern matching that works with any codebase size.
 
 <instruction>
 - `paths` is required and accepts an array of globs, files, or directories
@@ -10,7 +10,7 @@ Finds files using fast pattern matching that works with any codebase size.
 </instruction>
 
 <output>
-Matching file paths sorted by modification time (most recent first). Truncated at 1000 entries or 50KB (configurable via `limit`).
+Matching file and directory paths sorted by modification time (most recent first). Directories are suffixed with `/`. Truncated at 1000 entries or 50KB (configurable via `limit`).
 </output>
 
 <examples>
@@ -20,6 +20,8 @@ Matching file paths sorted by modification time (most recent first). Truncated a
 `{"paths": ["src/**/*.ts", "test/**/*.ts"]}`
 # Find gitignored files like .env
 `{"paths": [".env*"], "gitignore": false}`
+# Find directories matching a name (returns both files and dirs; directories are suffixed with `/`)
+`{"paths": ["**/tests"]}`
 # Long-running search on a slow volume
 `{"paths": ["/Volumes/Storage/**/*.py"], "timeout": 30}`
 </examples>

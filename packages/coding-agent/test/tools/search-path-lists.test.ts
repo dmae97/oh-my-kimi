@@ -1,10 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { RenderResultOptions } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
+import type { Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { searchToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/search";
+import { Text } from "@oh-my-pi/pi-tui";
+import { SessionObserverOverlayComponent } from "../../src/modes/components/session-observer-overlay";
+import { TreeSelectorComponent } from "../../src/modes/components/tree-selector";
+import type { ObservableSession, SessionObserverRegistry } from "../../src/modes/session-observer-registry";
+import { initTheme } from "../../src/modes/theme/theme";
+import type { SessionEntry, SessionTreeNode } from "../../src/session/session-manager";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -16,6 +27,18 @@ function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): T
 		...overrides,
 	};
 }
+
+const plainTheme = {
+	fg: (_color: unknown, text: string) => text,
+	styledSymbol: () => "…",
+	sep: { dot: " • " },
+	format: { bracketLeft: "[", bracketRight: "]" },
+} as unknown as Theme;
+
+const renderOptions: RenderResultOptions = {
+	expanded: false,
+	isPartial: true,
+};
 
 function getText(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content
@@ -55,11 +78,52 @@ async function createSearchFixture(rootDir: string): Promise<void> {
 		"const providerOptions = {};\nlegacyWrap(otherValue, otherArg);\n",
 	);
 }
+async function makeJsonlSessionFile(dirPath: string, entries: object[]): Promise<string> {
+	const filePath = path.join(dirPath, "session.jsonl");
+	await Bun.write(filePath, `${entries.map(entry => JSON.stringify(entry)).join("\n")}\n`);
+	return filePath;
+}
+
+function makeSubagentRegistry(sessions: ObservableSession[]): SessionObserverRegistry {
+	return {
+		getSessions: () => sessions,
+		onChange: () => () => {},
+		setMainSession: () => {},
+		getActiveSubagentCount: () => sessions.filter(session => session.status === "active").length,
+	} as unknown as SessionObserverRegistry;
+}
+
+let treeEntryCounter = 0;
+function makeMessageNode(message: AgentMessage, parentId: string | null = null): SessionTreeNode {
+	const entry: SessionEntry = {
+		type: "message",
+		id: `entry-${treeEntryCounter++}`,
+		parentId,
+		timestamp: new Date().toISOString(),
+		message,
+	};
+	return { entry, children: [] };
+}
+
+function renderTree(tree: SessionTreeNode[], currentLeafId: string): string {
+	const selector = new TreeSelectorComponent(
+		tree,
+		currentLeafId,
+		60,
+		() => {},
+		() => {},
+	);
+	return Bun.stripANSI(selector.render(120).join("\n"));
+}
 
 describe("tool path arrays", () => {
 	let tempDir: string;
 
+	beforeAll(async () => {
+		await initTheme(false, undefined, undefined, "dark", "light");
+	});
 	beforeEach(async () => {
+		treeEntryCounter = 0;
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "search-path-lists-"));
 		await createSearchFixture(tempDir);
 	});
@@ -81,13 +145,167 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toContain("# apps");
-		expect(text).toContain("# packages");
-		expect(text).toContain("# phases");
-		expect(text).toContain("## grep.txt");
+		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# packages\/\n## grep\.txt#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# phases\/\n## grep\.txt#[0-9a-f]{4}/m);
+		expect(text).toContain("shared-needle");
 		expect(text).not.toContain("# other");
 		expect(details?.fileCount).toBe(3);
 		expect(details?.scopePath).toBe("apps/, packages/, phases/");
+	});
+
+	it("search accepts a single string path through tool validation", async () => {
+		const tools = await createTools(createTestSession(tempDir));
+		const tool = tools.find(entry => entry.name === "search");
+		expect(tool).toBeDefined();
+		if (!tool) throw new Error("Missing search tool");
+
+		const args = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "search-single-string-path",
+			name: tool.name,
+			arguments: {
+				pattern: "space-needle",
+				paths: "folder with spaces/",
+			},
+		});
+		const result = await tool.execute("search-single-string-path", args);
+		const text = getText(result);
+		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
+
+		expect(text).toContain("note.txt");
+		expect(details?.fileCount).toBe(1);
+		expect(details?.scopePath).toBe("folder with spaces");
+	});
+
+	it("search pending renderer accepts a single string path", () => {
+		const component = searchToolRenderer.renderCall(
+			{ pattern: "space-needle", paths: "folder with spaces/" },
+			renderOptions,
+			plainTheme,
+		);
+
+		expect(component).toBeInstanceOf(Text);
+		expect((component as Text).getText()).toContain("in folder with spaces/");
+	});
+	it("session observer overlay renders a single-string search path summary", async () => {
+		const sessionFile = await makeJsonlSessionFile(tempDir, [
+			{ type: "session", version: 3, id: "search-overlay-session", timestamp: new Date().toISOString() },
+			{
+				type: "message",
+				id: "msg-user-1",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				message: { role: "user", content: "search", timestamp: 1 },
+			},
+			{
+				type: "message",
+				id: "msg-assistant-1",
+				parentId: "msg-user-1",
+				timestamp: new Date().toISOString(),
+				message: {
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: "search-call-1",
+							name: "search",
+							arguments: { pattern: "space-needle", paths: "folder with spaces/" },
+						},
+					],
+					api: "test",
+					provider: "test",
+					model: "test",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					timestamp: 2,
+				},
+			},
+			{
+				type: "message",
+				id: "msg-tool-1",
+				parentId: "msg-assistant-1",
+				timestamp: new Date().toISOString(),
+				message: {
+					role: "toolResult",
+					toolName: "search",
+					toolCallId: "search-call-1",
+					content: [{ type: "text", text: "note.txt" }],
+					isError: false,
+					timestamp: 3,
+				},
+			},
+		]);
+		const registry = makeSubagentRegistry([
+			{
+				id: "search-overlay-session",
+				kind: "subagent",
+				label: "Search Overlay",
+				status: "active",
+				sessionFile,
+				lastUpdate: Date.now(),
+			},
+		]);
+
+		const overlay = new SessionObserverOverlayComponent(registry, () => {}, ["ctrl+s"]);
+		const rendered = Bun.stripANSI(overlay.render(120).join("\n"));
+
+		expect(rendered).toContain("paths: folder with spaces/");
+	});
+
+	it("tree selector renders a single-string search path summary", () => {
+		const root = makeMessageNode({ role: "user", content: "search", timestamp: 1 });
+		const assistant = makeMessageNode(
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "search-call-1",
+						name: "search",
+						arguments: { pattern: "space-needle", paths: "folder with spaces/" },
+					},
+				],
+				api: "test",
+				provider: "test",
+				model: "test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: 2,
+				stopReason: "stop",
+			} as AgentMessage,
+			root.entry.id,
+		);
+		const toolResult = makeMessageNode(
+			{
+				role: "toolResult",
+				toolCallId: "search-call-1",
+				toolName: "search",
+				content: [{ type: "text", text: "note.txt" }],
+				isError: false,
+				timestamp: 3,
+			} as AgentMessage,
+			assistant.entry.id,
+		);
+		root.children.push(assistant);
+		assistant.children.push(toolResult);
+
+		const rendered = renderTree([root], toolResult.entry.id);
+
+		expect(rendered).toContain("[search: /space-needle/ in folder with spaces/]");
+		expect(rendered).not.toContain("[search: /space-needle/ in .]");
 	});
 
 	it("search keeps a single path that contains spaces", async () => {
@@ -141,8 +359,8 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toContain("# apps");
-		expect(text).toContain("## grep.txt");
+		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9a-f]{4}/m);
+		expect(text).toContain("shared-needle");
 		expect(text).not.toContain(tempDir);
 		expect(details?.fileCount).toBe(1);
 		expect(details?.scopePath).toBe("apps");
@@ -198,10 +416,9 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toContain("# apps");
-		expect(text).toContain("# packages");
-		expect(text).toContain("# phases");
-		expect(text).toContain("## ast.ts");
+		expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# packages\/\n## ast\.ts#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# phases\/\n## ast\.ts#[0-9a-f]{4}/m);
 		expect(text).not.toContain("# other");
 		expect(details?.fileCount).toBe(3);
 		expect(details?.scopePath).toBe("apps/**/*.ts, packages/**/*.ts, phases/**/*.ts");
@@ -227,10 +444,9 @@ describe("tool path arrays", () => {
 		const text = getText(preview);
 		const details = preview.details as { totalReplacements?: number; scopePath?: string } | undefined;
 
-		expect(text).toContain("# apps");
-		expect(text).toContain("# packages");
-		expect(text).toContain("# phases");
-		expect(text).toContain("## ast.ts (1 replacement)");
+		expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9a-f]{4} \(\d+ replacement/m);
+		expect(text).toMatch(/^# packages\/\n## ast\.ts#[0-9a-f]{4} \(\d+ replacement/m);
+		expect(text).toMatch(/^# phases\/\n## ast\.ts#[0-9a-f]{4} \(\d+ replacement/m);
 		expect(text).not.toContain("# other");
 		expect(details?.totalReplacements).toBe(3);
 		expect(details?.scopePath).toBe("apps/**/*.ts, packages/**/*.ts, phases/**/*.ts");
@@ -330,9 +546,9 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toContain("# apps");
-		expect(text).toContain("# packages");
-		expect(text).toContain("# phases");
+		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# packages\/\n## grep\.txt#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# phases\/\n## grep\.txt#[0-9a-f]{4}/m);
 		expect(text).not.toContain("# other");
 		expect(details?.fileCount).toBe(3);
 		expect(details?.scopePath).toBe("apps, packages, phases");
@@ -357,8 +573,8 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toContain("# alpha.txt");
-		expect(text).toContain("# beta.txt");
+		expect(text).toMatch(/^# alpha\.txt#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# beta\.txt#[0-9a-f]{4}/m);
 		expect(text).toContain("exact-needle alpha");
 		expect(text).toContain("exact-needle beta");
 		expect(text).not.toContain("nested");
@@ -408,8 +624,8 @@ describe("tool path arrays", () => {
 		});
 		const text = getText(result);
 
-		expect(text).toMatch(/ 1(?:[a-z]{2})?\|#if FLAG/);
-		expect(text).toMatch(/\*2(?:[a-z]{2})?\|needle/);
-		expect(text).toMatch(/ 3(?:[a-z]{2})?\|#endif/);
+		expect(text).toMatch(/ 1:#if FLAG/);
+		expect(text).toMatch(/\*2:needle/);
+		expect(text).toMatch(/ 3:#endif/);
 	});
 });

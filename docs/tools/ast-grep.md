@@ -10,7 +10,7 @@
   - `crates/pi-natives/src/language/mod.rs` — language aliases and extension inference
   - `packages/coding-agent/src/tools/path-utils.ts` — path/glob parsing and multi-path resolution
   - `packages/coding-agent/src/tools/render-utils.ts` — parse-error dedupe and display caps
-  - `packages/coding-agent/src/tools/match-line-format.ts` — anchor-prefixed match rendering
+  - `packages/coding-agent/src/tools/match-line-format.ts` — hashline match rendering
   - `packages/coding-agent/src/utils/file-display-mode.ts` — hashline vs line-number output mode
   - `packages/natives/native/index.d.ts` — JS-visible native binding contract
 
@@ -36,7 +36,7 @@ Pattern grammar and language support exposed to the model:
 - Single-shot tool result.
 - Model-facing `content` is one text block:
   - grouped by file for directory/multi-file searches,
-  - match lines rendered as `*LINE+HASH|text` in hashline mode or `*LINE|text` otherwise,
+  - match lines rendered under `¶PATH#HASH` as `*LINE:text` in hashline mode or `*LINE|text` otherwise,
   - continuation lines for multi-line matches rendered with a leading space,
   - optional `meta: NAME=value` lines when ast-grep captured metavariables.
 - If no matches are found, text is `No matches found` or `No matches found. Parse issues mean the query may be mis-scoped; narrow paths before concluding absence.` plus formatted parse issues.

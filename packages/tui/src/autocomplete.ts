@@ -237,6 +237,17 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const atPrefix = this.#extractAtPrefix(textBeforeCursor);
 		if (atPrefix) {
 			const { rawPrefix, isQuotedPrefix } = parsePathPrefix(atPrefix);
+			// Recursive fuzzy walks rooted outside the project (e.g. `@../`,
+			// `@~/`, `@/abs`) can be huge — a parent dir full of sibling
+			// projects blows past several seconds of latency. Outside cwd,
+			// fall back to plain prefix listing of the immediate directory
+			// (matches Claude Code's behavior). Inside cwd we keep the
+			// fuzzy-then-prefix flow.
+			if (rawPrefix.length > 0 && this.#isOutsideCwd(rawPrefix)) {
+				const items = await this.#getFileSuggestions(atPrefix);
+				if (items.length === 0) return null;
+				return { items, prefix: atPrefix };
+			}
 			const suggestions =
 				rawPrefix.length > 0
 					? await this.#getFuzzyFileSuggestions(rawPrefix, { isQuotedPrefix })
@@ -477,6 +488,28 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			return os.homedir();
 		}
 		return filePath;
+	}
+
+	// Resolve `rawPrefix` lexically (no I/O) and report whether it points
+	// somewhere outside `this.#basePath`. Used to skip recursive fuzzy walks
+	// rooted at parent / absolute / home paths — those routinely include
+	// thousands of unrelated files and stall the UI for seconds.
+	#isOutsideCwd(rawPrefix: string): boolean {
+		if (rawPrefix.length === 0) return false;
+		let target: string;
+		if (rawPrefix.startsWith("~")) {
+			target = this.#expandHomePath(rawPrefix);
+		} else if (path.isAbsolute(rawPrefix)) {
+			target = rawPrefix;
+		} else {
+			target = path.resolve(this.#basePath, rawPrefix);
+		}
+		const rel = path.relative(this.#basePath, target);
+		if (rel === "" || rel === ".") return false;
+		if (path.isAbsolute(rel)) return true;
+		const firstSep = rel.indexOf(path.sep);
+		const head = firstSep === -1 ? rel : rel.slice(0, firstSep);
+		return head === "..";
 	}
 
 	async #resolveScopedFuzzyQuery(

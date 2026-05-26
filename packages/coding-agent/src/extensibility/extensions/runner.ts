@@ -462,7 +462,6 @@ export class ExtensionRunner {
 			hasPendingMessages: () => this.#hasPendingMessagesFn(),
 			shutdown: () => this.#shutdownHandler(),
 			getSystemPrompt: () => this.#getSystemPromptFn(),
-			hasQueuedMessages: () => this.#hasPendingMessagesFn(), // deprecated alias
 		};
 	}
 

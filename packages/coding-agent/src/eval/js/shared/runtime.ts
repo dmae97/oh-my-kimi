@@ -1,23 +1,23 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { Console } from "node:console";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
+import { Writable } from "node:stream";
 import * as util from "node:util";
 
 import { logger } from "@oh-my-pi/pi-utils";
 
-import { ToolError } from "../../../tools/tool-errors";
 import { createHelpers, type HelperBundle } from "./helpers";
 import { awaitMaybePromise, indirectEval } from "./indirect-eval";
+import { LocalModuleLoader } from "./local-module-loader";
 import { JAVASCRIPT_PRELUDE_SOURCE } from "./prelude";
 import { wrapCode } from "./rewrite-imports";
 import type { JsDisplayOutput, JsStatusEvent } from "./types";
 
 /**
- * Per-run callbacks. Returned by `getHooks()` on each helper/tool/display invocation so
- * the embedding worker can route emissions to the currently active run. Returning `null`
- * makes status/display/tool calls reject with an error — useful for guarding against
- * helpers being invoked outside a run window.
+ * Per-run callbacks. Runtime globals resolve these from AsyncLocalStorage so
+ * overlapping async cells can route output/tool calls back to their own run.
  */
 export interface RuntimeHooks {
 	onText(chunk: string): void;
@@ -25,11 +25,17 @@ export interface RuntimeHooks {
 	callTool(name: string, args: unknown): Promise<unknown>;
 }
 
+export interface RunContext {
+	runId: string;
+	hooks: RuntimeHooks;
+	cwd: string;
+	finalExpressionSet: boolean;
+	finalExpressionValue: unknown;
+}
+
 export interface RuntimeOptions {
 	initialCwd: string;
 	sessionId: string;
-	/** Resolve hooks for the run currently in flight, or `null` if nothing is active. */
-	getHooks(): RuntimeHooks | null;
 	/**
 	 * Extra globals installed alongside `__omp_helpers__` / prelude. Use for stable, lifetime-
 	 * of-the-worker bindings (e.g. browser's `page`, `browser`). Per-run scope should be set
@@ -118,19 +124,18 @@ export class JsRuntime {
 	#cwd: string;
 	readonly sessionId: string;
 	#env: Map<string, string>;
-	#getHooks: () => RuntimeHooks | null;
-	#finalExpressionSet = false;
-	#finalExpressionValue: unknown;
+	#als = new AsyncLocalStorage<RunContext>();
+	#moduleLoader: LocalModuleLoader;
 
 	constructor(opts: RuntimeOptions) {
 		this.#cwd = opts.initialCwd;
 		this.sessionId = opts.sessionId;
 		this.#env = new Map();
-		this.#getHooks = opts.getHooks;
+		this.#moduleLoader = new LocalModuleLoader(this.sessionId);
 		this.helpers = createHelpers({
-			cwd: () => this.#cwd,
+			cwd: () => this.#activeCwd(),
 			env: this.#env,
-			emitStatus: event => this.#getHooks()?.onDisplay({ type: "status", event }),
+			emitStatus: event => this.#activeHooks("emitStatus")?.onDisplay({ type: "status", event }),
 		});
 		this.#install(opts.extraGlobals);
 	}
@@ -154,29 +159,42 @@ export class JsRuntime {
 		Object.assign(globalThis, scope);
 	}
 
-	async run(code: string, filename?: string): Promise<unknown> {
-		this.#finalExpressionSet = false;
-		this.#finalExpressionValue = undefined;
-		const wrapped = wrapCode(code);
-		const value = indirectEval(wrapped.source, filename);
-		if (wrapped.finalExpressionReturned) {
-			const awaited = await awaitMaybePromise(value);
-			if (this.#finalExpressionSet) {
-				const finalValue = this.#finalExpressionValue;
-				this.#finalExpressionSet = false;
-				this.#finalExpressionValue = undefined;
-				const resolved = await awaitMaybePromise(finalValue);
-				return resolved;
+	async run(
+		code: string,
+		filename: string | undefined,
+		hooks: RuntimeHooks,
+		options: { runId?: string; cwd?: string } = {},
+	): Promise<unknown> {
+		const context: RunContext = {
+			runId: options.runId ?? crypto.randomUUID(),
+			hooks,
+			cwd: options.cwd ?? this.#cwd,
+			finalExpressionSet: false,
+			finalExpressionValue: undefined,
+		};
+		return await this.#als.run(context, async () => {
+			const wrapped = wrapCode(code);
+			const value = indirectEval(wrapped.source, filename);
+			if (wrapped.finalExpressionReturned) {
+				const awaited = await awaitMaybePromise(value);
+				if (context.finalExpressionSet) {
+					const finalValue = context.finalExpressionValue;
+					context.finalExpressionSet = false;
+					context.finalExpressionValue = undefined;
+					return await awaitMaybePromise(finalValue);
+				}
+				return awaited;
 			}
-			return awaited;
-		}
-		return await awaitMaybePromise(value);
+			return await awaitMaybePromise(value);
+		});
 	}
 
-	displayValue(value: unknown): void {
+	displayValue(value: unknown, hooks: RuntimeHooks | undefined = this.#als.getStore()?.hooks): void {
 		if (value === undefined) return;
-		const hooks = this.#getHooks();
-		if (!hooks) return;
+		if (!hooks) {
+			logger.warn("js runtime display called outside an active run");
+			return;
+		}
 		if (value && typeof value === "object") {
 			const record = value as Record<string, unknown>;
 			if (record.type === "image" && typeof record.mimeType === "string") {
@@ -207,45 +225,108 @@ export class JsRuntime {
 		hooks.onText(`${String(value)}\n`);
 	}
 
+	#activeCwd(): string {
+		return this.#als.getStore()?.cwd ?? this.#cwd;
+	}
+
+	#activeHooks(action: string): RuntimeHooks | undefined {
+		const hooks = this.#als.getStore()?.hooks;
+		if (!hooks) {
+			logger.warn("js runtime helper called outside an active run", { action });
+		}
+		return hooks;
+	}
+
+	#activeRequire(moduleUrlOrPath?: string): NodeJS.Require {
+		return this.#moduleLoader.requireForFile(moduleUrlOrPath, this.#activeCwd());
+	}
+
+	#moduleFilename(moduleUrlOrPath?: string): string {
+		return this.#moduleLoader.filenameForUrl(moduleUrlOrPath) ?? path.join(this.#activeCwd(), "[eval]");
+	}
+
+	#moduleDirname(moduleUrlOrPath?: string): string {
+		return this.#moduleLoader.dirnameForUrl(moduleUrlOrPath, this.#activeCwd());
+	}
+
+	#buildDynamicRequire(): NodeJS.Require {
+		const dynamicRequire = ((id: string) => this.#activeRequire()(id)) as NodeJS.Require;
+		const resolve = ((id: string, options?: { paths?: string[] }) =>
+			this.#activeRequire().resolve(id, options)) as NodeJS.Require["resolve"] & {
+			paths(request: string): string[] | null;
+		};
+		resolve.paths = request => this.#activeRequire().resolve.paths(request);
+		Object.defineProperties(dynamicRequire, {
+			resolve: { value: resolve, configurable: true },
+			cache: { get: () => this.#activeRequire().cache, configurable: true },
+			extensions: { get: () => this.#activeRequire().extensions, configurable: true },
+			main: { get: () => this.#activeRequire().main, configurable: true },
+		});
+		return dynamicRequire;
+	}
+
 	#install(extraGlobals: Record<string, unknown> | undefined): void {
 		const injected: Record<string, unknown> = {
 			__omp_session__: { cwd: this.#cwd, sessionId: this.sessionId },
 			__omp_helpers__: this.helpers,
 			__omp_call_tool__: async (name: string, args: unknown) => {
-				const hooks = this.#getHooks();
-				if (!hooks) throw new ToolError("Tool calls are only valid inside an active run");
+				const hooks = this.#activeHooks("tool");
+				if (!hooks) return undefined;
 				return await hooks.callTool(name, args);
 			},
 			__omp_import__: async (source: string, options?: ImportCallOptions) => {
-				const target = resolveImportSpecifier(this.#cwd, source);
-				// Always invalidate cached module records for user-owned source files so edits
-				// between cells are picked up. Bun ignores query-string busting on `file:` URLs
-				// but honors `delete require.cache[absPath]`; bare specifiers and URL schemes are
-				// left alone to keep package identity stable across cells.
-				if (isLocalPathSpecifier(source) && path.isAbsolute(target)) {
-					delete require.cache[target];
-				}
+				const resolved = await this.#moduleLoader.resolveForRun(this.#activeCwd(), source);
+				if (resolved.mode === "local") return resolved.value;
+				const target = resolved.target;
 				return options !== undefined ? await import(target, options) : await import(target);
 			},
+			__omp_import_from__: async (moduleUrl: string, source: string, options?: ImportCallOptions) => {
+				const resolved = await this.#moduleLoader.resolveForModule(moduleUrl, source, this.#activeCwd());
+				if (resolved.mode === "local") return resolved.value;
+				const target = resolved.target;
+				return options !== undefined ? await import(target, options) : await import(target);
+			},
+			__omp_get_require__: (moduleUrl?: string) => this.#activeRequire(moduleUrl),
+			__omp_get_filename__: (moduleUrl?: string) => this.#moduleFilename(moduleUrl),
+			__omp_get_dirname__: (moduleUrl?: string) => this.#moduleDirname(moduleUrl),
 			__omp_emit_status__: (op: string, data: Record<string, unknown> = {}) => {
 				const event: JsStatusEvent = { op, ...data };
-				this.#getHooks()?.onDisplay({ type: "status", event });
+				this.#activeHooks("emitStatus")?.onDisplay({ type: "status", event });
 			},
 			__omp_log__: (level: string, ...args: unknown[]) => {
 				const prefix = level === "error" ? "[error] " : level === "warn" ? "[warn] " : "";
 				const text = `${prefix}${formatConsoleArgs(args)}`;
-				this.#getHooks()?.onText(text.endsWith("\n") ? text : `${text}\n`);
+				this.#activeHooks("log")?.onText(text.endsWith("\n") ? text : `${text}\n`);
+			},
+			__omp_table__: (...args: unknown[]) => {
+				const hooks = this.#activeHooks("table");
+				if (!hooks) return;
+				let buffer = "";
+				const stream = new Writable({
+					write(chunk, _enc, cb) {
+						buffer += typeof chunk === "string" ? chunk : (chunk as Buffer).toString("utf8");
+						cb();
+					},
+				});
+				const tableConsole = new Console({ stdout: stream, colorMode: false });
+				(tableConsole.table as (...a: unknown[]) => void)(...args);
+				hooks.onText(buffer.endsWith("\n") ? buffer : `${buffer}\n`);
 			},
 			__omp_display__: (value: unknown) => this.displayValue(value),
 			__omp_set_final_expr__: (value: unknown) => {
-				this.#finalExpressionSet = true;
-				this.#finalExpressionValue = value;
+				const context = this.#als.getStore();
+				if (!context) {
+					logger.warn("js runtime final expression set outside an active run");
+					return;
+				}
+				context.finalExpressionSet = true;
+				context.finalExpressionValue = value;
 			},
 			webcrypto: crypto,
 			// `process` is intentionally not overridden — user code gets the host worker's real
 			// `process` object. Subsetting it caused segfaults in workers that share state with
 			// puppeteer/worker_threads internals.
-			require: buildRequire(this.#cwd),
+			require: this.#buildDynamicRequire(),
 			createRequire,
 			fs,
 		};
@@ -260,42 +341,4 @@ function formatConsoleArgs(args: unknown[]): string {
 	return args
 		.map(arg => (typeof arg === "string" ? arg : util.inspect(arg, { depth: 6, colors: false, breakLength: 120 })))
 		.join(" ");
-}
-
-function buildRequire(cwd: string): NodeJS.Require {
-	return createRequire(pathToFileURL(path.join(cwd, "[eval]")).href);
-}
-
-/**
- * Resolve an import specifier emitted by `rewriteImports` against the active session
- * cwd. Relative paths (`./`, `../`, `/`) and bare specifiers (`pkg`, `@scope/pkg`) both go
- * through `Bun.resolveSync` rooted at the cwd so user-pasted ESM behaves as if it lived in
- * the project — not next to the worker module. URL-like specifiers (`file://`, `data:`,
- * `node:`, `http:`) are passed through unchanged.
- */
-function resolveImportSpecifier(cwd: string, source: string): string {
-	if (/^[a-z][a-z0-9+.-]*:/i.test(source)) return source;
-	try {
-		return Bun.resolveSync(source, cwd);
-	} catch {
-		return source;
-	}
-}
-
-/**
- * Returns true when the original specifier is a relative or absolute filesystem path
- * (i.e. user-owned source the agent is iterating on). Bare specifiers and URL schemes
- * are excluded — `node:` built-ins cannot be reloaded, and busting bare packages would
- * defeat module identity for every cell while bringing no editing benefit.
- */
-function isLocalPathSpecifier(source: string): boolean {
-	return (
-		source.startsWith("./") ||
-		source.startsWith("../") ||
-		source === "." ||
-		source === ".." ||
-		source.startsWith("/") ||
-		source.startsWith("~/") ||
-		/^[a-zA-Z]:[\\/]/.test(source)
-	);
 }

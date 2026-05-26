@@ -67,7 +67,7 @@ export interface AuthGatewayParsedRequestOptions {
 	serviceTier?: ServiceTier;
 	/** Cache retention hint derived from inbound `cache_control` markers. */
 	cacheRetention?: CacheRetention;
-	/** OpenAI Responses `prompt_cache_key`; bridges to pi-ai `sessionId`. */
+	/** OpenAI Responses `prompt_cache_key`; also seeds provider routing when no separate session id exists. */
 	promptCacheKey?: string;
 	/** OpenAI Responses `previous_response_id` for response chaining. */
 	previousResponseId?: string;

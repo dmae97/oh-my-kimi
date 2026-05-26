@@ -57,6 +57,10 @@ type BabelExpressionStatement = {
 };
 
 type BabelProgramNode = BabelImportDeclaration | BabelLexicalDecl | BabelExpressionStatement | { type: string };
+type BabelModuleSourceDeclaration = {
+	type: "ImportDeclaration" | "ExportNamedDeclaration" | "ExportAllDeclaration";
+	source?: { value: string; start: number; end: number } | null;
+};
 
 type BabelNode = { type: string; start: number; end: number; [key: string]: unknown };
 
@@ -182,6 +186,84 @@ export function rewriteImports(code: string): string {
 	if (edits.length === 0) return code;
 
 	// Splice from the back so earlier offsets stay valid.
+	edits.sort((a, b) => b.start - a.start);
+	let result = code;
+	for (const edit of edits) {
+		result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
+	}
+	return result;
+}
+export function collectModuleSourceSpecifiers(code: string): string[] {
+	const ast = parseProgram(code);
+	if (!ast) return [];
+	const sources: string[] = [];
+	for (const node of ast.program.body) {
+		if (
+			(node.type === "ImportDeclaration" ||
+				node.type === "ExportNamedDeclaration" ||
+				node.type === "ExportAllDeclaration") &&
+			typeof (node as BabelModuleSourceDeclaration).source?.value === "string"
+		) {
+			sources.push((node as BabelModuleSourceDeclaration).source!.value);
+		}
+	}
+	return sources;
+}
+
+export function rewriteModuleSourceSpecifiers(code: string, replacer: (source: string) => string): string {
+	const ast = parseProgram(code);
+	if (!ast) return code;
+
+	type Edit = { start: number; end: number; text: string };
+	const edits: Edit[] = [];
+
+	for (const node of ast.program.body) {
+		if (
+			node.type !== "ImportDeclaration" &&
+			node.type !== "ExportNamedDeclaration" &&
+			node.type !== "ExportAllDeclaration"
+		) {
+			continue;
+		}
+		const source = (node as BabelModuleSourceDeclaration).source;
+		if (!source || typeof source.value !== "string") continue;
+		const next = replacer(source.value);
+		if (next === source.value) continue;
+		edits.push({ start: source.start, end: source.end, text: JSON.stringify(next) });
+	}
+
+	if (edits.length === 0) return code;
+	edits.sort((a, b) => b.start - a.start);
+	let result = code;
+	for (const edit of edits) {
+		result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
+	}
+	return result;
+}
+
+export function rewriteDynamicImports(code: string, callee = "__omp_import__"): string {
+	if (!code.includes("import")) return code;
+	const ast = parseProgram(code);
+	if (!ast) return code;
+
+	type Edit = { start: number; end: number; text: string };
+	const edits: Edit[] = [];
+	walkNodes(ast, node => {
+		if (node.type !== "CallExpression") return;
+		const call = node as unknown as { callee?: { type?: string; start?: number; end?: number } };
+		const callCallee = call.callee;
+		if (
+			!callCallee ||
+			callCallee.type !== "Import" ||
+			typeof callCallee.start !== "number" ||
+			typeof callCallee.end !== "number"
+		) {
+			return;
+		}
+		edits.push({ start: callCallee.start, end: callCallee.end, text: callee });
+	});
+
+	if (edits.length === 0) return code;
 	edits.sort((a, b) => b.start - a.start);
 	let result = code;
 	for (const edit of edits) {
@@ -389,6 +471,9 @@ function stripTypeScript(code: string): string {
 		// downstream rewriter / VM surfaces the real error to the user.
 		return code;
 	}
+}
+export function stripTypeScriptSyntax(code: string): string {
+	return stripTypeScript(code);
 }
 
 // Heuristic: any of the obvious TS-only tokens. Plain JS using `as` only inside strings

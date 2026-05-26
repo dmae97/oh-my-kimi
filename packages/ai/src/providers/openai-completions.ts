@@ -1,5 +1,5 @@
 import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
-import OpenAI from "openai";
+import OpenAI, { APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
 import type {
 	ChatCompletionAssistantMessageParam,
 	ChatCompletionChunk,
@@ -37,7 +37,6 @@ import {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
-import { iterateUntilAbort } from "../utils/abortable-iterator";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { toFirepassWireModelId, toFireworksWireModelId } from "../utils/fireworks-model-id";
 import {
@@ -46,13 +45,17 @@ import {
 	type RawHttpRequestDump,
 	rewriteCopilotError,
 } from "../utils/http-inspector";
+import {
+	getOpenAIStreamIdleTimeoutMs,
+	getStreamFirstEventTimeoutMs,
+	iterateWithIdleTimeout,
+} from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, toolWireSchema } from "../utils/schema";
-import { resolveSdkTimeoutMs } from "../utils/sdk-stream-timeout";
 import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { type HealedToolCall, modelMayLeakKimiToolCalls, ToolCallHealer } from "../utils/tool-call-healing";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
@@ -162,6 +165,52 @@ function hasToolHistory(messages: Message[]): boolean {
 			}
 		}
 	}
+	return false;
+}
+/**
+ * Identify "real progress" stream chunks vs. keepalives, role-only preambles,
+ * and empty `{choices:[]}` no-ops emitted by some OpenAI-compatible endpoints.
+ * Without this filter, every keepalive resets `iterateWithIdleTimeout`'s
+ * deadline, so a provider that streams nothing but pings keeps the watchdog
+ * asleep indefinitely — observed against z.ai/GLM via OpenRouter where a
+ * subagent stalled for hours with no error surfaced.
+ *
+ * A chunk counts as progress when it carries terminal usage, a finish reason,
+ * or any model-produced delta (content / tool calls / reasoning / refusal).
+ * Role-only `delta: { role: "assistant" }` preambles do NOT count; we want the
+ * (longer) first-event timeout to keep governing until real output appears.
+ */
+export function isOpenAICompletionsProgressChunk(chunk: unknown): boolean {
+	if (!chunk || typeof chunk !== "object") return false;
+	const record = chunk as {
+		usage?: unknown;
+		choices?: ReadonlyArray<{
+			finish_reason?: unknown;
+			usage?: unknown;
+			delta?: {
+				content?: unknown;
+				tool_calls?: unknown;
+				reasoning?: unknown;
+				reasoning_content?: unknown;
+				reasoning_text?: unknown;
+				refusal?: unknown;
+			};
+		}>;
+	};
+	if (record.usage) return true;
+	const choice = Array.isArray(record.choices) ? record.choices[0] : undefined;
+	if (!choice) return false;
+	if (choice.finish_reason) return true;
+	if (choice.usage) return true;
+	const delta = choice.delta;
+	if (!delta) return false;
+	const content = delta.content;
+	if (typeof content === "string" ? content.length > 0 : Array.isArray(content) && content.length > 0) return true;
+	if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) return true;
+	if (typeof delta.reasoning === "string" && delta.reasoning.length > 0) return true;
+	if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) return true;
+	if (typeof delta.reasoning_text === "string" && delta.reasoning_text.length > 0) return true;
+	if (typeof delta.refusal === "string" && delta.refusal.length > 0) return true;
 	return false;
 }
 
@@ -321,6 +370,8 @@ function getTrailingPartialDeepseekToken(text: string): string {
 	if (tail.length > 256) return "";
 	return tail;
 }
+const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
+	"OpenAI completions stream timed out while waiting for the first event";
 
 export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 	model: Model<"openai-completions">,
@@ -337,10 +388,15 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 		const output: AssistantMessage = createInitialResponsesAssistantMessage(model.api, model.provider, model.id);
 		let rawRequestDump: RawHttpRequestDump | undefined;
 		const abortTracker = createAbortSourceTracker(options?.signal);
-		const { requestSignal } = abortTracker;
+		const firstEventTimeoutAbortError = new Error(OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE);
+		const { requestAbortController, requestSignal } = abortTracker;
 
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
+			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+			const requestTimeoutMs =
+				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			const {
 				client,
 				copilotPremiumRequests,
@@ -356,7 +412,6 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				options?.initiatorOverride,
 				options?.onSseEvent,
 				options?.fetch,
-				options?.streamFirstEventTimeoutMs,
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			getCapturedErrorResponse = captureErrorResponse;
@@ -389,11 +444,31 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					headers: requestHeaders,
 					body: params,
 				};
-				const { data, response, request_id } = await client.chat.completions
-					.create(params, { signal: requestSignal })
-					.withResponse();
-				await notifyProviderResponse(options, response, model, request_id);
-				return data;
+				const requestOptions =
+					requestTimeoutMs === undefined
+						? { signal: requestSignal }
+						: { signal: requestSignal, timeout: requestTimeoutMs };
+				let requestTimeout: NodeJS.Timeout | undefined;
+				if (requestTimeoutMs !== undefined) {
+					requestTimeout = setTimeout(
+						() => abortTracker.abortLocally(firstEventTimeoutAbortError),
+						requestTimeoutMs,
+					);
+				}
+				try {
+					const { data, response, request_id } = await client.chat.completions
+						.create(params, requestOptions)
+						.withResponse();
+					await notifyProviderResponse(options, response, model, request_id);
+					return data;
+				} catch (error) {
+					if (error instanceof OpenAIConnectionTimeoutError && !abortTracker.wasCallerAbort()) {
+						throw firstEventTimeoutAbortError;
+					}
+					throw error;
+				} finally {
+					if (requestTimeout !== undefined) clearTimeout(requestTimeout);
+				}
 			};
 			let openaiStream: AsyncIterable<ChatCompletionChunk>;
 			try {
@@ -601,7 +676,16 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				for (const call of calls) emitHealedToolCall(call);
 			};
 
-			for await (const chunk of iterateUntilAbort(openaiStream, options?.signal)) {
+			for await (const chunk of iterateWithIdleTimeout(openaiStream, {
+				idleTimeoutMs,
+				firstItemTimeoutMs: firstEventTimeoutMs,
+				firstItemErrorMessage: OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE,
+				errorMessage: "OpenAI completions stream stalled while waiting for the next event",
+				onIdle: () => requestAbortController.abort(),
+				onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
+				abortSignal: options?.signal,
+				isProgressItem: isOpenAICompletionsProgressChunk,
+			})) {
 				if (!chunk || typeof chunk !== "object") continue;
 
 				// OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
@@ -770,6 +854,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 			finishCurrentBlock(currentBlock);
 
+			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
+			if (firstEventTimeoutError) {
+				throw firstEventTimeoutError;
+			}
 			if (abortTracker.wasCallerAbort()) {
 				throw new Error("Request was aborted");
 			}
@@ -788,9 +876,12 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			stream.end();
 		} catch (error) {
 			for (const block of output.content) delete (block as any).index;
+			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			output.stopReason = abortTracker.wasCallerAbort() ? "aborted" : "error";
 			output.errorStatus = extractHttpStatusFromError(error) ?? getCapturedErrorResponse?.()?.status;
-			output.errorMessage = await finalizeErrorMessage(error, rawRequestDump, getCapturedErrorResponse?.());
+			output.errorMessage =
+				firstEventTimeoutError?.message ??
+				(await finalizeErrorMessage(error, rawRequestDump, getCapturedErrorResponse?.()));
 			// Some providers via OpenRouter include extra details here.
 			const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
@@ -813,7 +904,6 @@ async function createClient(
 	initiatorOverride?: MessageAttribution,
 	onSseEvent?: OpenAICompletionsOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
-	streamFirstEventTimeoutOverride?: number,
 ): Promise<{
 	client: OpenAI;
 	copilotPremiumRequests: number | undefined;
@@ -912,7 +1002,6 @@ async function createClient(
 		baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {},
 	);
 	const debugFetch = onSseEvent ? wrapFetchForSseDebug(wrappedFetch, event => onSseEvent(event, model)) : wrappedFetch;
-	const sdkTimeoutMs = resolveSdkTimeoutMs(streamFirstEventTimeoutOverride);
 	return {
 		client: new OpenAI({
 			apiKey,
@@ -922,7 +1011,6 @@ async function createClient(
 			defaultHeaders: headers,
 			defaultQuery: azureDefaultQuery,
 			fetch: debugFetch,
-			...(sdkTimeoutMs !== undefined ? { timeout: sdkTimeoutMs } : {}),
 		}),
 		copilotPremiumRequests,
 		baseUrl,

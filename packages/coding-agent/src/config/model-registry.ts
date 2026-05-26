@@ -291,6 +291,28 @@ export function mergeDiscoveredModel<TApi extends Api>(
 	return model;
 }
 
+function isAuthoritativeProjectCatalogModel(model: Model<Api>): boolean {
+	return (
+		model.provider === "google-vertex" &&
+		model.api === "openai-completions" &&
+		model.baseUrl.includes("/endpoints/openapi")
+	);
+}
+
+function providersWithAuthoritativeProjectCatalog(models: readonly Model<Api>[]): Set<string> {
+	const providers = new Set<string>();
+	for (const model of models) {
+		if (isAuthoritativeProjectCatalogModel(model)) {
+			providers.add(model.provider);
+		}
+	}
+	return providers;
+}
+
+function dropProviderModels(models: readonly Model<Api>[], providers: ReadonlySet<string>): Model<Api>[] {
+	return models.filter(model => !providers.has(model.provider));
+}
+
 interface DiscoveryProviderConfig {
 	provider: string;
 	api: Api;
@@ -877,9 +899,24 @@ export class ModelRegistry {
 		this.#equivalenceConfig = equivalence;
 
 		this.#addImplicitDiscoverableProviders(configuredProviders);
-		const builtInModels = this.#applyHardcodedModelPolicies(this.#loadBuiltInModels(overrides));
-		const cachedStandardModels = this.#applyHardcodedModelPolicies(this.#loadCachedStandardProviderModels());
+		let builtInModels = this.#applyHardcodedModelPolicies(this.#loadBuiltInModels(overrides));
+		const cachedStandardResult = this.#loadCachedStandardProviderModels();
+		const cachedStandardModels = this.#applyHardcodedModelPolicies(cachedStandardResult.models);
 		const cachedDiscoveries = this.#applyHardcodedModelPolicies(this.#loadCachedDiscoverableModels());
+		// Only drop bundled fallback models when the cached project-catalog row is
+		// itself fresh AND authoritative. A stale or non-authoritative snapshot
+		// (e.g. after ADC discovery failure rewrote the row with authoritative=0)
+		// must not strip bundled Vertex Gemini entries — that would leave only the
+		// stale project-scoped rows in API-key-only environments.
+		const cachedAuthoritativeProviders = new Set<string>();
+		for (const provider of providersWithAuthoritativeProjectCatalog(cachedStandardModels)) {
+			if (cachedStandardResult.authoritativeFreshProviders.has(provider)) {
+				cachedAuthoritativeProviders.add(provider);
+			}
+		}
+		if (cachedAuthoritativeProviders.size > 0) {
+			builtInModels = dropProviderModels(builtInModels, cachedAuthoritativeProviders);
+		}
 		const resolvedDefaults = this.#mergeResolvedModels(
 			this.#mergeResolvedModels(builtInModels, cachedStandardModels),
 			cachedDiscoveries,
@@ -982,9 +1019,10 @@ export class ModelRegistry {
 		return merged;
 	}
 
-	#loadCachedStandardProviderModels(): Model<Api>[] {
+	#loadCachedStandardProviderModels(): { models: Model<Api>[]; authoritativeFreshProviders: Set<string> } {
 		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(provider => provider.provider));
 		const cachedModels: Model<Api>[] = [];
+		const authoritativeFreshProviders = new Set<string>();
 		for (const descriptor of PROVIDER_DESCRIPTORS) {
 			if (configuredDiscoveryProviders.has(descriptor.providerId)) {
 				continue;
@@ -992,6 +1030,9 @@ export class ModelRegistry {
 			const cache = readModelCache<Api>(descriptor.providerId, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
 			if (!cache) {
 				continue;
+			}
+			if (cache.fresh && cache.authoritative) {
+				authoritativeFreshProviders.add(descriptor.providerId);
 			}
 			const models = cache.models.map(model =>
 				model.provider === descriptor.providerId ? model : { ...model, provider: descriptor.providerId },
@@ -1005,7 +1046,7 @@ export class ModelRegistry {
 				: withTransport;
 			cachedModels.push(...this.#applyProviderModelOverrides(descriptor.providerId, withCompat));
 		}
-		return cachedModels;
+		return { models: cachedModels, authoritativeFreshProviders };
 	}
 
 	#loadCachedDiscoverableModels(): Model<Api>[] {
@@ -1229,7 +1270,10 @@ export class ModelRegistry {
 				),
 			),
 		);
-		const resolved = this.#mergeResolvedModels(this.#models, discoveredModels);
+		const authoritativeProviders = providersWithAuthoritativeProjectCatalog(discoveredModels);
+		const baseModels =
+			authoritativeProviders.size > 0 ? dropProviderModels(this.#models, authoritativeProviders) : this.#models;
+		const resolved = this.#mergeResolvedModels(baseModels, discoveredModels);
 		const withConfigModels = this.#mergeCustomModels(resolved, this.#customModelOverlays);
 		// Merge runtime extension models so they survive online discovery completion
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);

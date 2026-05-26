@@ -286,7 +286,6 @@ describe("openai-codex streaming", () => {
 		const result = await streamOpenAICodexResponses(model, context, {
 			apiKey: token,
 			signal: controller.signal,
-			streamIdleTimeoutMs: 5,
 		}).result();
 
 		expect(result.stopReason).toBe("aborted");
@@ -357,6 +356,63 @@ describe("openai-codex streaming", () => {
 		).result();
 		expect(result.content.find(block => block.type === "text")?.text).toBe("Hello binary");
 		expect(result.stopReason).toBe("stop");
+	});
+
+	it("forwards websocket frames through onSseEvent for the raw-SSE debug viewer", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+
+		class ObservedWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				this.emitCodexResponse({ messageId: "msg_obs", responseId: "resp_obs", text: "Observed" });
+			}
+		}
+		global.WebSocket = ObservedWebSocket as unknown as typeof WebSocket;
+
+		const observed: Array<{ event: string | null; data: string; raw: string[] }> = [];
+		const result = await streamOpenAICodexResponses(
+			createCodexTestModel("https://chatgpt.com/backend-api"),
+			createCodexTestContext(),
+			{
+				apiKey: token,
+				sessionId: "ws-observer-session",
+				providerSessionState: new Map<string, ProviderSessionState>(),
+				onSseEvent: event => {
+					observed.push({ event: event.event, data: event.data, raw: [...event.raw] });
+				},
+			},
+		).result();
+
+		expect(result.stopReason).toBe("stop");
+
+		// First record is the outbound request frame (the JSON we sent).
+		const [outbound, ...inbound] = observed;
+		expect(outbound).toBeDefined();
+		expect(outbound.raw[0]).toMatch(/^: ws → /);
+		expect(outbound.data.length).toBeGreaterThan(0);
+		expect(() => JSON.parse(outbound.data)).not.toThrow();
+
+		// Inbound frames mirror the Codex response sequence emitted by `emitCodexResponse`.
+		expect(inbound.map(e => e.event)).toEqual([
+			"response.output_item.added",
+			"response.content_part.added",
+			"response.output_text.delta",
+			"response.output_item.done",
+			"response.done",
+		]);
+		for (const event of inbound) {
+			expect(event.raw[0]).toBe(`: ws ← ${event.event}`);
+			// Synthesized SSE wire shape: `event:` line then `data:` line.
+			expect(event.raw[1]).toBe(`event: ${event.event}`);
+			expect(event.raw[2]).toBe(`data: ${event.data}`);
+			expect(JSON.parse(event.data)).toMatchObject({ type: event.event });
+		}
 	});
 
 	it("omits request-body headers and replaces stale beta headers for websocket handshakes", async () => {
@@ -906,6 +962,48 @@ describe("openai-codex streaming", () => {
 
 		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, sessionId });
 		await streamResult.result();
+	});
+	it("keeps prompt_cache_key separate from Codex conversation headers", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+
+		const token = createCodexTestToken();
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const sessionId = "side-channel-session";
+		const promptCacheKey = "main-session-cache";
+		let capturedHeaders: Headers | undefined;
+		let capturedBody: Record<string, unknown> | undefined;
+
+		global.fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				capturedHeaders = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+				capturedBody =
+					typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+				return new Response(createCompletedCodexSse("Hello"), {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}
+			return new Response("not found", { status: 404 });
+		}) as unknown as typeof fetch;
+
+		await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: token,
+			sessionId,
+			promptCacheKey,
+		}).result();
+
+		expect(capturedHeaders?.get("conversation_id")).toBe(sessionId);
+		expect(capturedHeaders?.get("session_id")).toBe(sessionId);
+		expect(capturedHeaders?.get("x-client-request-id")).toBe(sessionId);
+		expect(capturedBody?.prompt_cache_key).toBe(promptCacheKey);
 	});
 
 	it("rejects gpt-5.3-codex minimal reasoning effort instead of clamping", async () => {
@@ -1788,13 +1886,12 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("waits for caller abort when websocket status events do not make semantic progress", async () => {
+	it("surfaces a websocket idle-timeout error when status events never make semantic progress", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
-		const sse = createCompletedCodexSse("Hello fallback");
 		const fetchMock = vi.fn(async () => {
-			return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+			throw new Error("SSE fallback should not run once the websocket stream becomes replay-unsafe");
 		});
 		global.fetch = fetchMock as unknown as typeof fetch;
 
@@ -1818,6 +1915,16 @@ describe("openai-codex streaming", () => {
 						arguments: "",
 					},
 				});
+				this.sendJson({
+					type: "response.output_item.done",
+					item: {
+						type: "function_call",
+						id: "fc_ws_stalled",
+						call_id: "call_ws_stalled",
+						name: "todo_write",
+						arguments: "{}",
+					},
+				});
 				interval = setInterval(() => {
 					this.sendJson({
 						type: "response.in_progress",
@@ -1835,18 +1942,25 @@ describe("openai-codex streaming", () => {
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 		const providerSessionState = new Map<string, ProviderSessionState>();
-		const controller = new AbortController();
-		setTimeout(() => controller.abort(), 30);
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
 			apiKey: token,
 			sessionId: "ws-no-progress-session",
 			providerSessionState,
-			signal: controller.signal,
 			streamIdleTimeoutMs: 5,
 		}).result();
 
 		expect(sendCount).toBe(1);
-		expect(result.stopReason).toBe("aborted");
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("idle timeout waiting for websocket");
+		expect(result.content).toEqual([
+			expect.objectContaining({
+				type: "toolCall",
+				id: "call_ws_stalled|fc_ws_stalled",
+				name: "todo_write",
+				arguments: {},
+				partialJson: "",
+			}),
+		]);
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 

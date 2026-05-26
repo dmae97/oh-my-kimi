@@ -3,22 +3,21 @@ begin_patch: "*** Begin Patch" LF
 end_patch: "*** End Patch" LF?
 
 hunk: update_hunk
-update_hunk: "$HFILE$" filename LF line_op*
+update_hunk: "$HFILE$" filename ("#" file_hash)? LF line_op*
 
-filename: /(.+)/
+filename: /([^\s#]+)/
+file_hash: /[0-9a-f]{4}/
 
-line_op: insert_before | insert_after | replace | blank
-insert_before: anchor "$HOP_INSERT_BEFORE$" inline_body LF payload*
-             | anchor "$HOP_INSERT_BEFORE$" LF payload+
-insert_after: anchor "$HOP_INSERT_AFTER$" inline_body LF payload*
-            | anchor "$HOP_INSERT_AFTER$" LF payload+
+line_op: insert_before | insert_after | replace | delete
+insert_before: anchor "$HOP_INSERT_BEFORE$" inline_body? LF payload*
+insert_after: anchor "$HOP_INSERT_AFTER$" inline_body? LF payload*
 replace: range "$HOP_REPLACE$" inline_body? LF payload*
+delete: range "$HOP_DELETE$" LF
 inline_body: /[^\n]+/
-payload: /[^$HFILE$\n][^\n]*/ LF | LF
-blank: LF
+payload: /(.*)/ LF
 
 anchor: LID | "EOF" | "BOF"
 range: LID ("-" LID)?
-LID: /[1-9]\d*$HFMT$/
+LID: /[1-9]\d*/
 
 %import common.LF

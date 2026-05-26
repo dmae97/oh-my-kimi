@@ -144,11 +144,6 @@ export interface DashboardState {
 }
 
 /**
- * @deprecated Use FocusRegion instead
- */
-export type FocusPane = "sidebar" | "main" | "inspector";
-
-/**
  * Callbacks from dashboard to parent.
  */
 export interface DashboardCallbacks {

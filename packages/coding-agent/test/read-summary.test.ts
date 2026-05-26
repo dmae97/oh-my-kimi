@@ -183,10 +183,10 @@ describe("read summary", () => {
 		expect(text).toContain("name: Ada");
 	});
 
-	it("renders brace-pair elisions as a single anchored line with `..`", async () => {
+	it("renders brace-pair elisions as a single numbered line with `..`", async () => {
 		// Regression for the read-tool format request: collapse the head /
-		// elided / closing-brace sandwich into one anchored line of the form
-		// `LINE+ID-LINE+ID|head { .. }` instead of three separate lines.
+		// elided / closing-brace sandwich into one numbered line of the form
+		// `START-END:head { .. }` instead of three separate lines.
 		const fixture = path.join(tmpDir, "merge.ts");
 		await fs.writeFile(
 			fixture,
@@ -200,8 +200,8 @@ describe("read summary", () => {
 		expect(text).toContain("export function stripNewLinePrefixes(lines: string[]): string[] { .. }");
 		// The plain `...` ellipsis line must NOT appear once the merge fires.
 		expect(text).not.toContain("\n...\n");
-		// The merged anchor must be a hash-line range (LINE+ID-LINE+ID|head).
-		expect(text).toMatch(/\b1[a-z]{2}-7[a-z]{2}\|export function stripNewLinePrefixes/);
+		// The merged line must use the numbered range shape.
+		expect(text).toMatch(/\b1-7:export function stripNewLinePrefixes/);
 		expect(result.details?.summary?.elidedSpans).toBe(1);
 	});
 
@@ -240,7 +240,7 @@ describe("read summary", () => {
 		expect(text).not.toContain(" .. ");
 	});
 
-	it("appends an elision footer that names the path and `:raw` recovery selector", async () => {
+	it("appends an elision footer that names targeted recovery ranges", async () => {
 		// Regression for issue #1046: summarized reads must tell the model how
 		// to recover the elided body so it does not stall on `...` / `{ .. }`
 		// markers and burn a turn guessing the selector.
@@ -256,12 +256,13 @@ describe("read summary", () => {
 
 		expect(result.details?.summary?.elidedSpans).toBe(2);
 		expect(result.details?.summary?.elidedLines).toBeGreaterThan(0);
-		expect(text).toContain("elided regions");
-		expect(text).toContain(`${fixture}:raw`);
-		expect(text).toContain(`${fixture}:1-9999`);
+		expect(text).toContain("lines elided");
+		expect(text).toContain(`${fixture}:1-5,7-11`);
+		expect(text).not.toContain(`${fixture}:raw`);
+		expect(text).not.toContain(`${fixture}:1-9999`);
 		// Footer must be the LAST block of output so the recovery hint sits
 		// next to the structural summary it describes.
-		expect(text.trimEnd().endsWith("for verbatim content]")).toBe(true);
+		expect(text.trimEnd().endsWith("]")).toBe(true);
 	});
 
 	it("does not append a footer when the file has no elision", async () => {

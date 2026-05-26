@@ -14,6 +14,7 @@ import type { AnthropicOptions } from "./providers/anthropic";
 import type { CursorOptions } from "./providers/cursor";
 import { isGitLabDuoModel, streamGitLabDuo } from "./providers/gitlab-duo";
 import type { GoogleOptions } from "./providers/google";
+import { getVertexAccessToken } from "./providers/google-auth";
 import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
 import type { GoogleVertexOptions } from "./providers/google-vertex";
 import { isKimiModel, streamKimi } from "./providers/kimi";
@@ -47,6 +48,7 @@ import type {
 	AssistantMessage,
 	AssistantMessageEvent,
 	Context,
+	FetchImpl,
 	Model,
 	OptionsForApi,
 	SimpleStreamOptions,
@@ -71,6 +73,24 @@ function hasVertexAdcCredentials(): boolean {
 		}
 	}
 	return cachedVertexAdcCredentialsExists;
+}
+function isGoogleVertexOpenAIModel(model: Model<Api>): boolean {
+	return (
+		model.provider === "google-vertex" &&
+		model.api === "openai-completions" &&
+		model.baseUrl.includes("/endpoints/openapi")
+	);
+}
+
+function createVertexOpenAIFetch(options: StreamOptions | undefined): FetchImpl {
+	const baseFetch = options?.fetch ?? fetch;
+	const vertexFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+		const token = await getVertexAccessToken({ signal: options?.signal, fetch: baseFetch });
+		const headers = new Headers(init?.headers);
+		headers.set("Authorization", `Bearer ${token}`);
+		return baseFetch(input, { ...init, headers });
+	};
+	return Object.assign(vertexFetch, baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {});
 }
 
 type KeyResolver = string | (() => string | undefined);
@@ -119,16 +139,16 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 			return $env.GOOGLE_CLOUD_API_KEY;
 		}
 		const hasCredentials = hasVertexAdcCredentials();
-		const hasProject = !!($env.GOOGLE_CLOUD_PROJECT || $env.GCLOUD_PROJECT);
-		const hasLocation = !!$env.GOOGLE_CLOUD_LOCATION;
+		const hasProject = !!($env.GOOGLE_CLOUD_PROJECT || $env.GCP_PROJECT || $env.GCLOUD_PROJECT);
+		const hasLocation = !!($env.GOOGLE_VERTEX_LOCATION || $env.GOOGLE_CLOUD_LOCATION || $env.VERTEX_LOCATION);
 		if (hasCredentials && hasProject && hasLocation) {
 			return "<authenticated>";
 		}
 	},
 	// Amazon Bedrock supports multiple credential sources:
-	// 1. AWS_PROFILE - named profile from ~/.aws/credentials
+	// 1. AWS_BEARER_TOKEN_BEDROCK - Bedrock API keys (bearer token)
 	// 2. AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY - standard IAM keys
-	// 3. AWS_BEARER_TOKEN_BEDROCK - Bedrock API keys (bearer token)
+	// 3. AWS_PROFILE - named profile from ~/.aws/credentials
 	// 4. AWS_CONTAINER_CREDENTIALS_* - ECS/Task IAM role credentials
 	// 5. AWS_WEB_IDENTITY_TOKEN_FILE + AWS_ROLE_ARN - IRSA (EKS) web identity
 	"amazon-bedrock": () => {
@@ -222,7 +242,9 @@ export function stream<TApi extends Api>(
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
-	const providerOptions = { ...options, apiKey };
+	const providerOptions = isGoogleVertexOpenAIModel(model)
+		? { ...options, apiKey: "vertex-adc", fetch: createVertexOpenAIFetch(options as StreamOptions | undefined) }
+		: { ...options, apiKey };
 
 	const api: Api = model.api;
 	switch (api) {
@@ -564,6 +586,9 @@ function mapOptionsForApi<TApi extends Api>(
 		maxRetryDelayMs: options?.maxRetryDelayMs,
 		metadata: options?.metadata,
 		sessionId: options?.sessionId,
+		promptCacheKey: options?.promptCacheKey,
+		streamFirstEventTimeoutMs: options?.streamFirstEventTimeoutMs,
+		streamIdleTimeoutMs: options?.streamIdleTimeoutMs,
 		providerSessionState: options?.providerSessionState,
 		onPayload: options?.onPayload,
 		onResponse: options?.onResponse,

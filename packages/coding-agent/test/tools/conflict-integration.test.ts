@@ -511,7 +511,7 @@ describe("write resolves conflicts via conflict://N", () => {
 		await read.execute("read-hashed", { path: "hashed.ts" });
 		const result = await write.execute("write-hashed", {
 			path: "conflict://1",
-			content: "42xy|cleanline\n",
+			content: "¶hashed.ts#1a2b\n42:cleanline\n",
 		});
 		expect(getText(result)).toContain("auto-stripped hashline display prefixes");
 		const after = await Bun.file(filePath).text();

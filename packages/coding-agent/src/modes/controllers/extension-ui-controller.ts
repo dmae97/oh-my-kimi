@@ -537,7 +537,6 @@ export class ExtensionUiController {
 						model: this.ctx.session.model,
 						isIdle: () => !this.ctx.session.isStreaming,
 						hasPendingMessages: () => this.ctx.session.queuedMessageCount > 0,
-						hasQueuedMessages: () => this.ctx.session.queuedMessageCount > 0,
 						abort: () => {
 							this.ctx.session.abort();
 						},

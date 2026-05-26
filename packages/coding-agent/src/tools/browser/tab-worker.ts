@@ -575,8 +575,10 @@ export class WorkerCore {
 			if (signal.aborted) onCancel();
 			else signal.addEventListener("abort", onCancel, { once: true });
 			try {
+				const hooks = this.#hooksForActiveRun();
+				if (!hooks) throw new ToolError("Browser runtime started without an active run");
 				const returnValue = await Promise.race([
-					runtime.run(msg.code, `browser-run-${msg.id}.js`),
+					runtime.run(msg.code, `browser-run-${msg.id}.js`, hooks, { runId: msg.id, cwd: msg.session.cwd }),
 					cancelRejection,
 				]);
 				await this.#postReadyInfo();
@@ -601,7 +603,6 @@ export class WorkerCore {
 		this.#runtime = new JsRuntime({
 			initialCwd: session.cwd,
 			sessionId: `browser-tab-${this.#targetId ?? "unknown"}`,
-			getHooks: () => this.#hooksForActiveRun(),
 		});
 		return this.#runtime;
 	}

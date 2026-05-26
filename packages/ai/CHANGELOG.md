@@ -1,6 +1,60 @@
 # Changelog
 
 ## [Unreleased]
+### Removed
+
+- Removed the `pi-ai` CLI binary (`packages/ai/src/cli.ts`) and its `bin` entry. Use the in-process equivalent in the omp coding-agent CLI: `omp auth-broker login [provider]`, `omp auth-broker logout [provider]`, and `omp auth-broker list`. The library API (`AuthStorage.login()`, `getOAuthProviders()`, etc.) is unchanged.
+
+### Fixed
+
+- Fixed usage polling to disable credentials when OAuth refresh fails definitively (for example `invalid_grant`) and clear cached last-good usage data so stale reports no longer remain visible
+
+## [15.4.3] - 2026-05-26
+
+### Fixed
+
+- Fixed Google Vertex model discovery to use the project-scoped OpenAI-compatible model list so Vertex Model Garden models such as GLM and Claude are available through ADC auth ([#1412](https://github.com/can1357/oh-my-pi/issues/1412)).
+
+## [15.4.2] - 2026-05-26
+
+### Fixed
+
+- Fixed OpenCode Zen `big-pickle` follow-up requests replaying assistant tool-call turns without DeepSeek-required `reasoning_content`, which caused HTTP 400 errors in thinking mode.
+
+## [15.4.1] - 2026-05-26
+### Added
+
+- Added `isOpenAICompletionsProgressChunk` export to identify real progress chunks vs. keepalives in OpenAI completions streams
+- Added per-provider stream watchdog overrides via `getStreamIdleTimeoutMs(fallbackMs)` and `getStreamFirstEventTimeoutMs(idleTimeoutMs, fallbackMs)` to allow providers like Google Gemini CLI to extend first-event timeouts without affecting global defaults
+- Added `promptCacheKey` to `StreamOptions` and passed it through stream option mapping so callers can specify an explicit prompt-cache key separate from `sessionId`
+- Added `promptCacheKey` support to the native server option whitelist so `promptCacheKey` is accepted by `pi-native-server` streams
+- Restored the per-provider stream watchdog (`iterateWithIdleTimeout`) on top of the abortable iterator. The lazy stream forwarder in `register-builtins` now wraps every provider's event stream with the first-event + steady-state idle watchdog (`PI_STREAM_FIRST_EVENT_TIMEOUT_MS`, `PI_STREAM_IDLE_TIMEOUT_MS`; aliases honored), and Anthropic / OpenAI Completions / OpenAI Responses / Azure OpenAI Responses / Codex SSE re-emit their per-provider progress predicates so empty keepalive frames cannot keep a stalled stream alive. Reverts the partial regression from #1392 that left Codex WebSocket subagent runs hanging silently for hours when the broker dropped frames between deltas. The Codex WebSocket transport additionally now resets `lastProgressAt` only on progress events (not keepalives), giving the 300s WS-internal idle ceiling the same liveness semantics as the SSE path.
+
+### Changed
+
+- Enabled OpenAI Codex WebSocket streams to apply `streamIdleTimeoutMs` and `streamFirstEventTimeoutMs` from `StreamOptions` per request instead of fixed internal defaults
+- Changed stream idle watchdog implementation from `iterateUntilAbort` to `iterateWithIdleTimeout`, which now enforces maximum idle gaps between streamed events and distinguishes between first-event and steady-state timeouts
+- Changed Anthropic, OpenAI Responses, OpenAI Completions, Azure OpenAI Responses, and OpenAI Codex Responses providers to use the new idle-timeout iterator with per-provider progress predicates so empty keepalive frames cannot keep a stalled stream alive
+- Changed Codex WebSocket transport to reset `lastProgressAt` only on progress events (not keepalives), giving the 300s WS-internal idle ceiling the same liveness semantics as the SSE path
+- Changed Google Gemini CLI stream forwarding defaults to use a 5-minute first-event floor via per-provider lazy-stream limits to avoid premature first-event timeouts on slow startup
+- Changed OpenAI Responses and OpenAI Codex request handling to keep `sessionId` for provider routing and conversation headers while `promptCacheKey` controls the `prompt_cache_key` payload independently
+- Changed `StreamOptions.streamIdleTimeoutMs` documentation to clarify it is now wired into every built-in provider and the lazy stream forwarder, and that `streamFirstEventTimeoutMs` is honored at both the SDK-request layer and the iterator-watchdog layer
+- Changed OpenAI Responses and OpenAI Codex request handling so `sessionId` continues to drive provider routing and state while `promptCacheKey` controls the `prompt_cache_key` payload
+- Changed Google Gemini CLI stream forwarding defaults to use a 5-minute first-event floor to avoid premature first-event timeouts on slow startup
+- Changed auth-gateway request mapping to preserve incoming `prompt_cache_key` as both `promptCacheKey` and `sessionId` when routing OpenAI-compatible sessions
+- Un-deprecated `StreamOptions.streamIdleTimeoutMs`; the option is wired into every built-in provider and the lazy stream forwarder again. `streamFirstEventTimeoutMs` is now honored at both the SDK-request layer (via `createSdkStreamRequestOptions`) and the iterator-watchdog layer, in cooperation.
+
+### Removed
+
+- Removed `installH2Fetch` and the `fetch` patch that forced HTTP/2 on HTTPS requests; callers now use the default Bun `fetch` transport
+
+### Fixed
+
+- Fixed first-item timeout handling so `iterateWithIdleTimeout` no longer keeps first-event timers active after the source throws or the consumer stops before semantic progress
+- Fixed silent multi-hour hangs on Codex WebSocket subagent runs when the broker dropped frames between deltas by restoring per-provider stream watchdogs with progress-event filtering
+- Fixed z.ai/GLM-via-OpenRouter subagent stalls where no-op keepalive chunks reset the idle watchdog indefinitely by filtering non-progress items before resetting the deadline
+
+## [15.4.0] - 2026-05-26
 ### Breaking Changes
 
 - Removed `findAnthropicAuth` from `anthropic-auth` and replaced store-driven auth discovery with `buildAnthropicAuthConfig`, requiring callers to provide an already-resolved API key before building Anthropic auth config
@@ -9,6 +63,7 @@
 
 - Added `PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS` and `PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS` options to tune Codex WebSocket timeout behavior before fallback
 - Added `AuthStorage.getOAuthAccess` to return a refreshed OAuth access token with identity metadata (`accountId`, `email`, `projectId`, `enterpriseUrl`) for callers that need bearer-token headers together
+- Added Codex WebSocket forwarding to the `onSseEvent` observer so the raw provider-stream debug viewer captures the inbound JSON frames and the outbound request frame from the WS transport using the same synthesized SSE-wire shape (`event:` + `data:` lines, prefixed with a `: ws ← <type>` (inbound) or `: ws → <type>` (outbound) comment).
 
 ### Changed
 
@@ -26,12 +81,14 @@
 ### Fixed
 
 - Dropped truncated, thinking-only assistant turns with only `thinking`/`redacted_thinking` blocks and no `text` or `tool` content during message transformation, preventing Anthropic requests from sending consecutive assistant messages after a `max_tokens`/`error`/`aborted` interruption
+- Fixed Amazon Bedrock bearer-token authentication to honor `AWS_BEARER_TOKEN_BEDROCK` before resolving AWS profiles or running `credential_process`, matching Bedrock API-key precedence. ([#1399](https://github.com/can1357/oh-my-pi/issues/1399))
 - Updated `isRetryableError` to treat Bun HTTP/2 transport errors (`HTTP2StreamReset`, `HTTP2RefusedStream`) as retryable so transient stream-reset failures can be retried
 - Fixed Codex WebSocket streaming to recover from stalled sessions by falling back to SSE when the first event or subsequent progress is delayed beyond the configured websocket timeout
 - Fixed expired OAuth handling so provider-level paths no longer attempt direct token refresh calls for expired credentials and instead rely on `AuthStorage` for rotation
 - Fixed provider streams aborting slow-but-valid first tokens or silent inter-event gaps with OMP-owned first-event/idle watchdog errors. Built-in lazy streams, OpenAI/Anthropic/Azure/Codex SSE, and Codex WebSocket streams now wait for provider output, provider/socket errors, caller aborts, or explicit request-layer timeouts instead of treating provider silence as failure ([#1392](https://github.com/can1357/oh-my-pi/issues/1392)).
 - Fixed Claude Opus 4.7 on Amazon Bedrock streaming no reasoning output (and appearing to hang on long reasoning runs) because Anthropic silently switched the adaptive-thinking display default to `"omitted"`. The Bedrock provider now sends `thinking.display = "summarized"` by default on Opus 4.7+ adaptive models and on budget-based Claude models, mirroring the existing direct-Anthropic behavior. `BedrockOptions.thinkingDisplay` (`"summarized" | "omitted"`) is exposed for callers that want to opt out, and `hideThinkingSummary` now wires through to the Bedrock case ([#1373](https://github.com/can1357/oh-my-pi/issues/1373)).
 - Fixed Cursor Composer resume/tool-continuation turns failing with `Cannot send empty user message to Cursor API`. Empty current user turns now use Cursor's `resumeAction` instead of constructing an invalid `userMessageAction` ([#1376](https://github.com/can1357/oh-my-pi/issues/1376)).
+- Fixed `pi-ai login moonshot` failing with `invalid temperature: only 1 is allowed for this model` (HTTP 400) because the API-key validator probed `kimi-k2.5` with `temperature: 0`. Moonshot login now validates against `GET /v1/models`, matching the DeepSeek/Fireworks/NanoGPT/ZenMux pattern and authenticating the key without invoking model-specific parameter restrictions.
 
 ## [15.3.2] - 2026-05-25
 ### Added

@@ -1,9 +1,9 @@
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
 import { BUILTIN_SLASH_COMMANDS_INTERNAL, lookupBuiltinSlashCommand } from "./builtin-registry";
 import { parseSlashCommand } from "./helpers/parse";
-import type { AcpBuiltinCommandRuntime, AcpBuiltinSlashCommandResult } from "./types";
+import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime } from "./types";
 
-export type { AcpBuiltinCommandRuntime, AcpBuiltinSlashCommandResult } from "./types";
+export type { AcpBuiltinSlashCommandResult } from "./types";
 
 /**
  * Commands advertised to ACP clients. Entries without a text-mode `handle`
@@ -34,7 +34,7 @@ export const ACP_BUILTIN_SLASH_COMMANDS: AvailableCommand[] = BUILTIN_SLASH_COMM
  */
 export async function executeAcpBuiltinSlashCommand(
 	text: string,
-	runtime: AcpBuiltinCommandRuntime,
+	runtime: SlashCommandRuntime,
 ): Promise<AcpBuiltinSlashCommandResult> {
 	const parsed = parseSlashCommand(text);
 	if (!parsed) return false;

@@ -15,11 +15,13 @@ export interface SettingItem {
 	values?: string[];
 	/** If provided, Enter opens this submenu. Receives current value and done callback. */
 	submenu?: (currentValue: string, done: (selectedValue?: string) => void) => Component;
+	/** True when the displayed setting differs from its default value. */
+	changed?: boolean;
 }
 
 export interface SettingsListTheme {
-	label: (text: string, selected: boolean) => string;
-	value: (text: string, selected: boolean) => string;
+	label: (text: string, selected: boolean, changed: boolean) => string;
+	value: (text: string, selected: boolean, changed: boolean) => string;
 	description: (text: string) => string;
 	cursor: string;
 	hint: (text: string) => string;
@@ -117,7 +119,7 @@ export class SettingsList implements Component {
 
 			// Pad label to align values
 			const labelPadded = item.label + padding(Math.max(0, maxLabelWidth - visibleWidth(item.label)));
-			const labelText = this.#theme.label(labelPadded, isSelected);
+			const labelText = this.#theme.label(labelPadded, isSelected, item.changed === true);
 
 			// Calculate space for value
 			const separator = "  ";
@@ -127,6 +129,7 @@ export class SettingsList implements Component {
 			const valueText = this.#theme.value(
 				truncateToWidth(item.currentValue, valueMaxWidth, Ellipsis.Omit),
 				isSelected,
+				item.changed === true,
 			);
 
 			lines.push(truncateToWidth(prefix + labelText + separator + valueText, width));
