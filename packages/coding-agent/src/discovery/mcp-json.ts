@@ -74,7 +74,7 @@ function transformMCPConfig(config: MCPConfigFile, source: SourceMeta): MCPServe
 				if (
 					typeof serverConfig.timeout === "number" &&
 					Number.isFinite(serverConfig.timeout) &&
-					serverConfig.timeout > 0
+					serverConfig.timeout >= 0
 				) {
 					timeout = serverConfig.timeout;
 				} else {
