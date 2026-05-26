@@ -68,9 +68,11 @@ Server names must match `^[a-zA-Z0-9_.-]{1,100}$`.
 Shared fields for every transport:
 
 - `enabled?: boolean` — skip this server when `false`
-- `timeout?: number` — connection timeout in milliseconds
+- `timeout?: number` — MCP request timeout in milliseconds; `0` disables client-side MCP timeouts
 - `auth?: { ... }` — auth metadata used by OMP for OAuth/API-key flows
 - `oauth?: { ... }` — explicit OAuth client settings used during auth/reauth
+
+Set `OMP_MCP_TIMEOUT_MS=0` to disable the client-side timeout for every MCP server in the current process. Set it to a positive millisecond value, such as `OMP_MCP_TIMEOUT_MS=120000`, to apply one global timeout without editing each server entry.
 
 ### `stdio` transport
 

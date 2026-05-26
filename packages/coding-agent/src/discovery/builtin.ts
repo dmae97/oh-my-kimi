@@ -132,7 +132,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 			if (serverConfig.timeout === undefined || serverConfig.timeout === null) {
 				timeout = undefined;
 			} else if (typeof serverConfig.timeout === "number") {
-				if (Number.isFinite(serverConfig.timeout) && serverConfig.timeout > 0) {
+				if (Number.isFinite(serverConfig.timeout) && serverConfig.timeout >= 0) {
 					timeout = serverConfig.timeout;
 				} else {
 					logger.warn(`MCP server "${serverName}": invalid timeout ${serverConfig.timeout}, ignoring`);
@@ -140,7 +140,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 				}
 			} else if (typeof serverConfig.timeout === "string") {
 				const parsed = Number(serverConfig.timeout);
-				if (Number.isFinite(parsed) && parsed > 0) {
+				if (Number.isFinite(parsed) && parsed >= 0) {
 					timeout = parsed;
 				} else {
 					logger.warn(`MCP server "${serverName}": invalid timeout "${serverConfig.timeout}", ignoring`);
