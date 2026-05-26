@@ -558,13 +558,19 @@ export class ModelSelectorComponent extends Container {
 						: alphaFiltered.length > 0
 							? alphaFiltered
 							: baseCanonicalModels;
-				const fuzzyMatches = fuzzyFilter(fuzzySource, query, ({ searchText }) => searchText);
-				this.#sortCanonicalModels(fuzzyMatches);
-				this.#filteredCanonicalModels = fuzzyMatches;
+				// fuzzyFilter sorts by relevance score; keep that order so the best
+				// text match wins. baseCanonicalModels is pre-sorted by role rank /
+				// MRU at load time, and V8 sort is stable, so those criteria still
+				// act as tiebreakers for equally-relevant matches.
+				this.#filteredCanonicalModels = fuzzyFilter(fuzzySource, query, ({ searchText }) => searchText);
 			} else {
-				const fuzzyMatches = fuzzyFilter(baseModels, query, ({ id, provider }) => `${id} ${provider}`);
-				this.#sortModels(fuzzyMatches);
-				this.#filteredModels = fuzzyMatches;
+				// Match against the displayed "provider/id" string so the user can
+				// type what they see: bare names (`mimo`, `kimi`), provider prefixes
+				// (`openrouter`), or scoped queries (`openrouter/mimo`) all flow
+				// through the same fuzzy matcher. fuzzyFilter orders by relevance
+				// score; do not re-sort here, or a weakly-matching default model
+				// would be pushed above a perfect non-default match.
+				this.#filteredModels = fuzzyFilter(baseModels, query, ({ id, provider }) => `${provider}/${id}`);
 			}
 		} else {
 			this.#filteredModels = baseModels;
