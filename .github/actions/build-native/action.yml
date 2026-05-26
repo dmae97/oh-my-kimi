@@ -75,21 +75,50 @@ runs:
            bun-version: "1.3"
       - shell: bash
         run: bun install --frozen-lockfile
-      - name: Install cross-compilation toolchain
-        if: inputs.target == 'aarch64-unknown-linux-gnu'
+      # Cross-compile toolchain selection: non-MSVC targets (e.g.
+      # `aarch64-unknown-linux-gnu`) build with `cargo-zigbuild`; MSVC targets
+      # (e.g. `x86_64-pc-windows-msvc`) build with `cargo-xwin`. The napi CLI's
+      # `--cross-compile` flag picks the backend; we just install what it needs.
+      - name: Setup zig (non-MSVC cross-compile)
+        if: inputs.target != '' && !endsWith(inputs.target, '-msvc')
+        uses: mlugg/setup-zig@v2
+        with:
+           version: 0.16.0
+      - name: Install cargo-zigbuild (non-MSVC cross-compile)
+        if: inputs.target != '' && !endsWith(inputs.target, '-msvc')
+        uses: taiki-e/install-action@v2
+        with:
+           tool: cargo-zigbuild
+      - name: Install LLVM tooling (MSVC cross-compile)
+        if: endsWith(inputs.target, '-msvc')
         shell: bash
         run: |
            sudo apt-get update
-           sudo apt-get install -y gcc-aarch64-linux-gnu
+           sudo apt-get install -y clang lld llvm
+      - name: Install cargo-xwin (MSVC cross-compile)
+        if: endsWith(inputs.target, '-msvc')
+        uses: taiki-e/install-action@v2
+        with:
+           tool: cargo-xwin
+      - name: Cache cargo-xwin Windows SDK
+        if: endsWith(inputs.target, '-msvc')
+        uses: actions/cache@v4
+        with:
+           path: ~/.cache/cargo-xwin
+           key: cargo-xwin-${{ runner.os }}-v1
+      - name: Accept xwin license
+        if: endsWith(inputs.target, '-msvc')
+        shell: bash
+        run: echo "XWIN_ACCEPT_LICENSE=1" >> "$GITHUB_ENV"
       - name: Rust checks
         if: inputs.rust_checks == 'true'
         shell: bash
         run: bun run check:rs
       - name: Test workspace (Rust)
-        # macOS has no `#[cfg(target_os = "macos")]` tests in the workspace —
-        # every test there duplicates the Linux native_linux run. Windows still
-        # needs the pass for `#[cfg(windows)]` modules (pi-shell/windows.rs and
-        # vendored brush-core sys/windows tests).
+        # macOS has no `#[cfg(target_os = "macos")]` tests in the workspace,
+        # and Windows-only tests are no longer exercised in CI (`win32-x64`
+        # cross-builds on Linux). Skipping the duplicate Linux runs on macOS
+        # saves ~10 min of parallel runner time.
         if: inputs.target == '' && inputs.platform != 'darwin'
         shell: bash
         run: bun run test:rs
@@ -100,7 +129,6 @@ runs:
            TARGET_PLATFORM: ${{ inputs.platform }}
            TARGET_ARCH: ${{ inputs.arch }}
            TARGET_VARIANTS: ${{ inputs.variant }}
-           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: bun run ci:build:native
       - name: Upload native addon(s)
         uses: actions/upload-artifact@v4

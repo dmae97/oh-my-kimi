@@ -169,7 +169,21 @@ const napiArgs = [
 	profileLabel,
 ];
 
-if (crossTarget) napiArgs.push("--target", crossTarget);
+if (crossTarget) {
+	napiArgs.push("--target", crossTarget);
+	// Route through `cargo-zigbuild` (non-MSVC targets) or `cargo-xwin`
+	// (MSVC targets). The napi CLI picks the right backend from the target.
+	napiArgs.push("--cross-compile");
+	// `zig cc` enables `NDEBUG` at `-O3`, which trips tree-sitter-just's
+	// scanner.c (`#error "expected assertions to be enabled"`). cc-rs reads
+	// CFLAGS_<target> with dashes replaced by underscores; preserve any
+	// caller-supplied flags and append `-UNDEBUG` for zig-driven builds.
+	if (!crossTarget.endsWith("-msvc")) {
+		const envKey = `CFLAGS_${crossTarget.replace(/-/g, "_")}`;
+		const existing = process.env[envKey] ?? "";
+		process.env[envKey] = existing ? `${existing} -UNDEBUG` : "-UNDEBUG";
+	}
+}
 
 const canonicalAddonFilename = `pi_natives.${targetPlatform}-${targetArch}${variantSuffix}.node`;
 const canonicalAddonPath = path.join(nativeDir, canonicalAddonFilename);

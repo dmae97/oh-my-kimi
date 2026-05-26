@@ -169,7 +169,7 @@ jobs:
                - { os: ubuntu-22.04, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu }
                - { os: macos-15-intel, platform: darwin, arch: x64, variant: baseline }
                - { os: macos-14, platform: darwin, arch: arm64 }
-               - { os: windows-latest, platform: win32, arch: x64, variant: baseline }
+               - { os: ubuntu-22.04, platform: win32, arch: x64, target: x86_64-pc-windows-msvc, variant: baseline }
       runs-on: ${{ matrix.os }}
       steps:
          - uses: actions/checkout@v4
@@ -316,7 +316,7 @@ jobs:
                     binary_path: packages/coding-agent/binaries/omp-darwin-arm64,
                  }
                - {
-                    os: windows-latest,
+                    os: ubuntu-22.04,
                     platform: win32,
                     arch: x64,
                     target_id: win32-x64,
@@ -346,22 +346,16 @@ jobs:
            env:
               RELEASE_TARGETS: ${{ matrix.target_id }}
            run: bun run ci:release:build-binaries
+         # Windows binary is cross-built on Linux, so we have no Windows runner
+         # to smoke it on. Cross-build correctness is verified via the napi
+         # entry-point exports (see build-native action) and the bun
+         # `--compile --target=bun-windows-x64-*` cross-compile.
          - name: Smoke release binary
-           if: runner.os != 'Windows'
+           if: matrix.platform != 'win32'
            run: |
               runtime_dir="$(mktemp -d)"
               HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --version
               HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --smoke-test
-         - name: Smoke release binary (Windows)
-           if: runner.os == 'Windows'
-           shell: pwsh
-           run: |
-              $runtimeDir = Join-Path $env:TEMP ("omp-runtime-" + [System.Guid]::NewGuid().ToString("N"))
-              New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
-              $env:HOME = Join-Path $runtimeDir "home"
-              $env:XDG_DATA_HOME = Join-Path $runtimeDir "xdg"
-              & "${{ matrix.binary_path }}" --version
-              & "${{ matrix.binary_path }}" --smoke-test
          - name: Upload release binary artifact
            uses: actions/upload-artifact@v4
            with:
