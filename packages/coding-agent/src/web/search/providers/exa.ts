@@ -6,10 +6,10 @@
  * Requests per-result summaries via `contents.summary` and synthesizes
  * them into a combined `answer` string on the SearchResponse.
  */
-import { getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
 import { settings } from "../../../config/settings";
 import { callExaTool, findApiKey, isSearchResponse } from "../../../exa/mcp-client";
-import type { AgentStorage } from "../../../session/agent-storage";
+
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { dateToAgeSeconds } from "../utils";
@@ -250,7 +250,7 @@ export class ExaProvider extends SearchProvider {
 	readonly id = "exa";
 	readonly label = "Exa";
 
-	isAvailable(_storage: AgentStorage): boolean {
+	isAvailable(_authStorage: AuthStorage): boolean {
 		try {
 			if (settings.get("exa.enabled") === false || settings.get("exa.enableSearch") === false) {
 				return false;
@@ -261,7 +261,7 @@ export class ExaProvider extends SearchProvider {
 		return true;
 	}
 
-	search(params: SearchParams, _storage: AgentStorage): Promise<SearchResponse> {
+	search(params: SearchParams): Promise<SearchResponse> {
 		return searchExa({
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,

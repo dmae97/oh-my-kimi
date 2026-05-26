@@ -1,17 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { hookFetch } from "@oh-my-pi/pi-utils";
 import { searchWithKagi } from "../../src/web/kagi";
 import { searchKagi } from "../../src/web/search/providers/kagi";
 import { SearchProviderError } from "../../src/web/search/types";
-import type { AgentStorage } from "../../src/session/agent-storage";
 
-const fakeStorage = {
-	listAuthCredentials: () => [],
-	updateAuthCredential: () => undefined,
-	get authStore() {
-		return null as never;
+const fakeAuthStorage = {
+	async getApiKey() {
+		return process.env.KAGI_API_KEY ?? undefined;
 	},
-} as unknown as AgentStorage;
+	hasAuth() {
+		return Boolean(process.env.KAGI_API_KEY);
+	},
+} as unknown as AuthStorage;
 
 describe("Kagi web search error handling", () => {
 	beforeEach(() => {
@@ -36,7 +37,7 @@ describe("Kagi web search error handling", () => {
 		);
 
 		try {
-			await searchKagi({ query: "kagi beta" }, fakeStorage);
+			await searchKagi({ query: "kagi beta", authStorage: fakeAuthStorage });
 			expect.unreachable("expected searchKagi to throw");
 		} catch (error) {
 			expect(error).toBeInstanceOf(SearchProviderError);
@@ -48,7 +49,9 @@ describe("Kagi web search error handling", () => {
 	it("falls back to plain text for non-JSON error bodies", async () => {
 		using _hook = hookFetch(() => new Response("upstream unavailable", { status: 503 }));
 
-		await expect(searchWithKagi("plain text error", {}, fakeStorage)).rejects.toThrow("Kagi API error (503): upstream unavailable");
+		await expect(searchWithKagi("plain text error", {}, fakeAuthStorage)).rejects.toThrow(
+			"Kagi API error (503): upstream unavailable",
+		);
 	});
 
 	it("preserves successful search parsing", async () => {
@@ -72,7 +75,7 @@ describe("Kagi web search error handling", () => {
 				),
 		);
 
-		await expect(searchWithKagi("success case", {}, fakeStorage)).resolves.toEqual({
+		await expect(searchWithKagi("success case", {}, fakeAuthStorage)).resolves.toEqual({
 			requestId: "req-kagi-success",
 			sources: [
 				{

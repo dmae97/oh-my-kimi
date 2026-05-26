@@ -1,6 +1,5 @@
-import { getEnvApiKey } from "@oh-my-pi/pi-ai";
-import type { AgentStorage } from "../session/agent-storage";
-import { findCredential, withHardTimeout } from "./search/providers/utils";
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
+import { withHardTimeout } from "./search/providers/utils";
 
 const KAGI_SEARCH_URL = "https://kagi.com/api/v0/search";
 
@@ -98,6 +97,7 @@ function parseKagiErrorResponse(statusCode: number, responseText: string): KagiA
 
 export interface KagiSearchOptions {
 	limit?: number;
+	sessionId?: string;
 	signal?: AbortSignal;
 }
 
@@ -114,8 +114,12 @@ export interface KagiSearchResult {
 	relatedQuestions: string[];
 }
 
-export function findKagiApiKey(storage: AgentStorage): string | null {
-	return findCredential(storage, getEnvApiKey("kagi"), "kagi");
+export async function findKagiApiKey(
+	authStorage: AuthStorage,
+	sessionId?: string,
+	signal?: AbortSignal,
+): Promise<string | null> {
+	return (await authStorage.getApiKey("kagi", sessionId, { signal })) ?? null;
 }
 
 function getAuthHeaders(apiKey: string): Record<string, string> {
@@ -128,9 +132,9 @@ function getAuthHeaders(apiKey: string): Record<string, string> {
 export async function searchWithKagi(
 	query: string,
 	options: KagiSearchOptions = {},
-	storage: AgentStorage,
+	authStorage: AuthStorage,
 ): Promise<KagiSearchResult> {
-	const apiKey = findKagiApiKey(storage);
+	const apiKey = await findKagiApiKey(authStorage, options.sessionId, options.signal);
 	if (!apiKey) {
 		throw new KagiApiError("Kagi credentials not found. Set KAGI_API_KEY or login with 'omp /login kagi'.");
 	}

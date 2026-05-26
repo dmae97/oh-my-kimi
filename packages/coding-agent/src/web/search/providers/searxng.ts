@@ -25,8 +25,9 @@
  * Reference: https://docs.searxng.org/dev/search_api.html
  */
 
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
+
 import { settings } from "../../../config/settings";
-import type { AgentStorage } from "../../../session/agent-storage";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
@@ -289,7 +290,7 @@ export class SearXNGProvider extends SearchProvider {
 	readonly id = "searxng";
 	readonly label = "SearXNG";
 
-	isAvailable(_storage: AgentStorage): boolean {
+	isAvailable(_authStorage: AuthStorage): boolean {
 		try {
 			return !!findEndpoint();
 		} catch {
@@ -297,7 +298,7 @@ export class SearXNGProvider extends SearchProvider {
 		}
 	}
 
-	search(params: SearchParams, _storage: AgentStorage): Promise<SearchResponse> {
+	search(params: SearchParams): Promise<SearchResponse> {
 		return searchSearXNG({
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,

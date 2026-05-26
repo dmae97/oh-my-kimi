@@ -5,8 +5,7 @@
  * cleaned content.
  */
 
-import { getEnvApiKey } from "@oh-my-pi/pi-ai";
-import type { AgentStorage } from "../../../session/agent-storage";
+import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
@@ -88,11 +87,11 @@ export class JinaProvider extends SearchProvider {
 	readonly id = "jina";
 	readonly label = "Jina";
 
-	isAvailable(_storage: AgentStorage): boolean {
+	isAvailable(_authStorage: AuthStorage): boolean {
 		return !!findApiKey();
 	}
 
-	search(params: SearchParams, _storage: AgentStorage): Promise<SearchResponse> {
+	search(params: SearchParams): Promise<SearchResponse> {
 		return searchJina({
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,

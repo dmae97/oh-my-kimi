@@ -4,8 +4,7 @@
  * Calls Brave's web search REST API and maps results into the unified
  * SearchResponse shape used by the web search tool.
  */
-import { getEnvApiKey } from "@oh-my-pi/pi-ai";
-import type { AgentStorage } from "../../../session/agent-storage";
+import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
@@ -135,11 +134,11 @@ export class BraveProvider extends SearchProvider {
 	readonly id = "brave";
 	readonly label = "Brave";
 
-	isAvailable(_storage: AgentStorage): boolean {
+	isAvailable(_authStorage: AuthStorage): boolean {
 		return !!findApiKey();
 	}
 
-	search(params: SearchParams, _storage: AgentStorage): Promise<SearchResponse> {
+	search(params: SearchParams): Promise<SearchResponse> {
 		return searchBrave({
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,

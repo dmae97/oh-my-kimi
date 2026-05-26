@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { hookFetch } from "@oh-my-pi/pi-utils";
+import * as geminiCliProvider from "../src/providers/google-gemini-cli";
 import {
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	buildRequest,
@@ -114,6 +115,11 @@ describe("Google Gemini CLI alignment", () => {
 		expect(shouldRefreshGeminiCliCredentials(preBufferedExpiry, true, issuedAt + 10 * 60 * 1000)).toBe(false);
 		expect(shouldRefreshGeminiCliCredentials(preBufferedExpiry, true, issuedAt + 54 * 60 * 1000)).toBe(true);
 		expect(shouldRefreshGeminiCliCredentials(preBufferedExpiry, false, issuedAt + 54 * 60 * 1000)).toBe(true);
+	});
+
+	it("does not export provider-direct refresh helper", () => {
+		expect(shouldRefreshGeminiCliCredentials).toBe(geminiCliProvider.shouldRefreshGeminiCliCredentials);
+		expect(Object.hasOwn(geminiCliProvider, "refreshGeminiCliCredentialsIfNeeded")).toBe(false);
 	});
 	it("omits antigravity-only metadata in non-antigravity request payloads", () => {
 		const model = createModel("google-gemini-cli");
