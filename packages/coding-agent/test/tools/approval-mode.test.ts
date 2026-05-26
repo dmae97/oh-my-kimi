@@ -50,9 +50,20 @@ function textOf(result: { content?: ReadonlyArray<{ type: string; text?: string 
 describe("tools.approvalMode setting", () => {
 	const tempDirs: string[] = [];
 
-	afterEach(() => {
+	afterEach(async () => {
 		for (const tempDir of tempDirs.splice(0)) {
-			fs.rmSync(tempDir, { recursive: true, force: true });
+			// Windows can briefly hold tempdir handles after session.dispose(); retry a few times.
+			for (let attempt = 0; attempt < 5; attempt++) {
+				try {
+					fs.rmSync(tempDir, { recursive: true, force: true });
+					break;
+				} catch (err) {
+					const code = (err as NodeJS.ErrnoException).code;
+					if (code !== "EBUSY" && code !== "ENOTEMPTY" && code !== "EPERM") throw err;
+					if (attempt === 4) break; // best-effort: OS will reclaim
+					await new Promise(resolve => setTimeout(resolve, 50 * (attempt + 1)));
+				}
+			}
 		}
 	});
 
