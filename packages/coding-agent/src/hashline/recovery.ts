@@ -29,6 +29,8 @@ const HASHLINE_RECOVERY_EXTERNAL_WARNING =
 	"Recovered from a stale file hash using a previous read snapshot (file changed externally between read and edit).";
 const HASHLINE_RECOVERY_SESSION_CHAIN_WARNING =
 	"Recovered from a stale file hash using an earlier in-session snapshot (the file hash advanced after a prior edit in this session).";
+const HASHLINE_RECOVERY_SESSION_REPLAY_WARNING =
+	"Recovered by replaying your edits onto the current file content — your previous edit in this session changed line(s) you re-targeted with a stale hash. Verify the diff matches your intent before continuing.";
 
 function applyEditsToSnapshot(
 	previousText: string,
@@ -61,6 +63,31 @@ function applyEditsToSnapshot(
 		warnings: recoveryWarnings,
 	};
 }
+
+function replaySessionChainOnCurrent(
+	previousText: string,
+	currentText: string,
+	edits: HashlineEdit[],
+	options: HashlineApplyOptions,
+): HashlineRecoveryResult | null {
+	// Only safe when no insert/delete shifted line counts in the prior edit
+	// chain: if total line counts match, every line number in `edits` still
+	// resolves to the same logical row.
+	if (previousText.split("\n").length !== currentText.split("\n").length) return null;
+	let applied: HashlineApplyResult;
+	try {
+		applied = applyHashlineEdits(currentText, edits, options);
+	} catch {
+		return null;
+	}
+	if (applied.lines === currentText) return null;
+	return {
+		lines: applied.lines,
+		firstChangedLine: applied.firstChangedLine,
+		warnings: [HASHLINE_RECOVERY_SESSION_REPLAY_WARNING, ...(applied.warnings ?? [])],
+	};
+}
+
 
 function buildSparseOverlayText(currentText: string, snapshotLines: ReadonlyMap<number, string>): string {
 	const overlaid = currentText.split("\n");
@@ -95,8 +122,16 @@ export function tryRecoverHashlineWithCache(args: HashlineRecoveryArgs): Hashlin
 	if (!snapshot || snapshot.lines.size === 0) return null;
 
 	const recoveryWarning = resolveRecoveryWarning(head, snapshot);
+	const isSessionChain = !isHeadSnapshot(head, snapshot);
 	if (snapshot.fullText !== undefined) {
-		return applyEditsToSnapshot(snapshot.fullText, currentText, edits, options, recoveryWarning);
+		const merged = applyEditsToSnapshot(snapshot.fullText, currentText, edits, options, recoveryWarning);
+		if (merged !== null) return merged;
+		// Session-chain fast-path: prior in-session edit changed the same line(s)
+		// the model is now re-targeting with the stale hash. When line counts
+		// match, the edits' line numbers still resolve to the right rows — replay
+		// onto the current text directly.
+		if (isSessionChain) return replaySessionChainOnCurrent(snapshot.fullText, currentText, edits, options);
+		return null;
 	}
 
 	const overlayText = buildSparseOverlayText(currentText, snapshot.lines);
