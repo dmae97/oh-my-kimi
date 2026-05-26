@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import {
 	buildOutputValidator,
 	computeMissingRequired,
-	evaluateOutputAgainstSchema,
 	extractRequiredFields,
 	formatAllValidationIssues,
 	formatValidationIssueHeadline,
@@ -71,32 +70,9 @@ describe("buildOutputValidator", () => {
 		]);
 	});
 });
-
-describe("evaluateOutputAgainstSchema", () => {
-	it("returns ok for unconstrained schemas", () => {
-		expect(evaluateOutputAgainstSchema(undefined, { anything: 1 })).toEqual({ ok: true });
-		expect(evaluateOutputAgainstSchema(true, { anything: 1 })).toEqual({ ok: true });
-	});
-
-	it("returns ok for conforming payloads", () => {
-		const schema = { properties: { x: { type: "string" } } };
-		expect(evaluateOutputAgainstSchema(schema, { x: "hi" })).toEqual({ ok: true });
-	});
-
-	it("returns the executor headline + missingRequired for failures", () => {
-		const schema = { properties: { x: { type: "string" }, y: { type: "number" } } };
-		const verdict = evaluateOutputAgainstSchema(schema, { x: "ok" });
-		expect(verdict).toMatchObject({ ok: false });
-		if (verdict.ok === false) {
-			expect(verdict.missingRequired).toContain("y");
-			expect(verdict.message).toMatch(/y/);
-		}
-	});
-});
-
 describe("summarizeValidationFailure", () => {
 	it("returns an empty summary when the result is a success", () => {
-		const summary = summarizeValidationFailure({ success: true }, {}, []);
+		const summary = summarizeValidationFailure({ success: true, issues: [] }, {}, []);
 		expect(summary).toEqual({ message: "", missingRequired: [] });
 	});
 

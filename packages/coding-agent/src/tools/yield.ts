@@ -121,9 +121,8 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 				validator,
 				jsonSchema: normalizedSchema,
 				normalized,
-				error: validatorError,
+				error: schemaError,
 			} = buildOutputValidator(session.outputSchema);
-			const schemaError = validatorError;
 			if (validator) {
 				validate = value => validator.validate(value);
 			}

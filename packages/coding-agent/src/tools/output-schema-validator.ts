@@ -15,9 +15,6 @@ import {
 } from "@oh-my-pi/pi-ai/utils/schema";
 import { jtdToJsonSchema, normalizeSchema } from "./jtd-to-json-schema";
 
-/** Verdict for a successful or failed validation, summarized for callers. */
-export type ValidationVerdict = { ok: true } | { ok: false; message: string; missingRequired: string[] };
-
 /** A validator bound to a specific output schema. */
 export interface OutputValidator {
 	/** Run JSON Schema validation; returns the raw `success`/`issues` shape so callers may inspect every failure. */
@@ -45,9 +42,11 @@ export interface BuildOutputValidatorResult {
  * Build the canonical validator for a JTD-or-JSON-Schema output declaration.
  *
  * Returns:
- * - `{ validator, jsonSchema }` for constraining schemas — both callers use this path.
- * - `{}` for absent or fully-permissive schemas (e.g. `true`, `undefined`) — no validation.
- * - `{ error }` when the schema cannot be honored (invalid syntax, `false`, malformed JTD).
+ * - `{ validator, jsonSchema, normalized }` for constraining schemas — both callers use this path.
+ * - `{ normalized: true }` for an intentionally unconstrained schema (the JSON Schema literal `true`).
+ *   No validator, but distinguishable from "no schema provided".
+ * - `{}` for an absent schema (`undefined`).
+ * - `{ error, normalized? }` when the schema cannot be honored (invalid syntax, `false`, malformed JTD).
  */
 export function buildOutputValidator(schema: unknown): BuildOutputValidatorResult {
 	const { normalized, error: normalizeError } = normalizeSchema(schema);
@@ -87,16 +86,6 @@ export function summarizeValidationFailure(
 	const missing = computeMissingRequired(requiredFields, value);
 	const message = formatValidationIssueHeadline(result.issues[0]) ?? "schema validation failed";
 	return { message, missingRequired: missing };
-}
-
-/** Reduce a `BuildOutputValidatorResult` + value to the executor's high-level verdict. */
-export function evaluateOutputAgainstSchema(schema: unknown, value: unknown): ValidationVerdict | { ok: true } {
-	const { validator } = buildOutputValidator(schema);
-	if (!validator) return { ok: true };
-	const result = validator.validate(value);
-	if (result.success) return { ok: true };
-	const { message, missingRequired } = summarizeValidationFailure(result, value, validator.requiredFields);
-	return { ok: false, message, missingRequired };
 }
 
 export function extractRequiredFields(jsonSchema: unknown): string[] {
