@@ -93,41 +93,35 @@ describe("register-builtins lazy streams", () => {
 		expect(result.errorMessage).toContain("bedrock exploded");
 	});
 
-	it("turns idle lazy provider streams into retryable terminal errors", async () => {
+	it("forwards lazy provider streams without first-event or idle watchdogs", async () => {
 		const partialMessage = createAssistantMessage("stop");
-		let providerSignal: AbortSignal | undefined;
+		const finalMessage = createAssistantMessage("stop");
+		finalMessage.content = [{ type: "text", text: "slow ok" }];
 		const source = {
 			async *[Symbol.asyncIterator]() {
+				await Bun.sleep(30);
 				yield { type: "start", partial: partialMessage } as const;
-				yield { type: "text_delta", contentIndex: 0, delta: "hello", partial: partialMessage } as const;
-				const { promise, reject } = Promise.withResolvers<never>();
-				if (providerSignal?.aborted) {
-					reject(new Error("Request was aborted"));
-				}
-				providerSignal?.addEventListener("abort", () => reject(new Error("Request was aborted")), {
-					once: true,
-				});
-				await promise;
+				await Bun.sleep(30);
+				yield { type: "text_delta", contentIndex: 0, delta: "slow ok", partial: finalMessage } as const;
 			},
+			result: async () => finalMessage,
 		} as unknown as AssistantMessageEventStream;
 
 		setBedrockProviderModule({
-			streamBedrock: (_model, _context, options) => {
-				providerSignal = options.signal;
-				return source;
-			},
+			streamBedrock: () => source,
 		});
 
-		const stream = streamBedrock(createModel(), baseContext, { streamIdleTimeoutMs: 10 });
+		const stream = streamBedrock(createModel(), baseContext, {
+			streamFirstEventTimeoutMs: 10,
+			streamIdleTimeoutMs: 10,
+		});
 		const result = await Promise.race([stream.result(), Bun.sleep(500).then(() => "timeout" as const)]);
 
 		expect(result).not.toBe("timeout");
 		if (result === "timeout") {
-			throw new Error("Timed out waiting for forwarded stream stall result");
+			throw new Error("Timed out waiting for forwarded slow stream result");
 		}
-		expect(providerSignal?.aborted).toBe(true);
-		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toBe("Provider stream stalled while waiting for the next event");
+		expect(result).toEqual(finalMessage);
 	});
 
 	it("preserves caller aborts while forwarding lazy provider streams", async () => {
