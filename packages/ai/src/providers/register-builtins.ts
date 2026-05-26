@@ -423,7 +423,10 @@ export const streamOpenAICompletions = createLazyStream(
 	loadOpenAICompletionsProviderModule,
 	PROVIDER_HANDLED_STREAM_TIMEOUTS,
 );
-export const streamOpenAIResponses = createLazyStream(loadOpenAIResponsesProviderModule, PROVIDER_HANDLED_STREAM_TIMEOUTS);
+export const streamOpenAIResponses = createLazyStream(
+	loadOpenAIResponsesProviderModule,
+	PROVIDER_HANDLED_STREAM_TIMEOUTS,
+);
 export const streamCursor = createLazyStream(loadCursorProviderModule);
 export const streamOllama = createLazyStream(loadOllamaProviderModule);
 

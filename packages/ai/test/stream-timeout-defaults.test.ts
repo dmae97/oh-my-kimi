@@ -134,6 +134,7 @@ describe("iterateWithIdleTimeout", () => {
 			watchdogFired = true;
 		}, 10);
 
+		// biome-ignore lint/correctness/useYield: intentionally yields nothing — the test exercises the path where the source generator throws before its first yield.
 		async function* failingStream(): AsyncGenerator<string> {
 			throw new Error("stream failed");
 		}
