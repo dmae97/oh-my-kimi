@@ -369,6 +369,27 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 			expect(rc).toBe("");
 		});
 
+		it("sets reasoning_content to empty string for OpenCode Zen big-pickle tool-call turns", () => {
+			const model = getBundledModel("opencode-zen", "big-pickle") as Model<"openai-completions">;
+			const compat = detectCompat(model);
+			expect(compat.requiresReasoningContentForToolCalls).toBe(true);
+			expect(compat.allowsSyntheticReasoningContentForToolCalls).toBe(false);
+
+			const msg = assistantToolCall(model, [
+				{
+					type: "toolCall",
+					id: "call_big_pickle",
+					name: "bash",
+					arguments: { command: "git status --short" },
+				} as ToolCall,
+			]);
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			expect(Reflect.get(assistant as object, "reasoning_content")).toBe("");
+			expect((assistant as { content: unknown }).content).toBe("");
+		});
+
 		it("sets content to empty string (not null) when reasoning_content is present", () => {
 			const model = deepseekModel({
 				provider: "nvidia",

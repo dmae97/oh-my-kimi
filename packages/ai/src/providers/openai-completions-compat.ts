@@ -74,11 +74,16 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 	// applies when thinking mode is actually engaged.
 	const lowerId = model.id.toLowerCase();
 	const lowerName = (model.name ?? "").toLowerCase();
+	// OpenCode Zen's `big-pickle` is a DeepSeek reasoning alias; the upstream
+	// 400s come from DeepSeek and require exact reasoning_content replay.
+	const isOpenCodeDeepseekAlias =
+		provider === "opencode-zen" && (lowerId === "big-pickle" || lowerName === "big pickle");
 	const isDeepseekFamily =
 		provider === "deepseek" ||
 		baseUrl.includes("deepseek.com") ||
 		lowerId.includes("deepseek") ||
-		lowerName.includes("deepseek");
+		lowerName.includes("deepseek") ||
+		isOpenCodeDeepseekAlias;
 	const isDirectDeepseekApi = provider === "deepseek" || baseUrl.includes("api.deepseek.com");
 	const isDirectDeepseekReasoning = isDirectDeepseekApi && isDeepseekFamily && Boolean(model.reasoning);
 	const isNonStandard =
@@ -211,12 +216,14 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		reasoningContentField: "reasoning_content",
 		// Backends that 400 follow-up requests when prior assistant tool-call turns lack `reasoning_content`:
 		//   - Kimi: documented invariant on its native API.
-		//   - Any reasoning-capable model reached through OpenRouter: DeepSeek V4 Pro and similar enforce
-		//     this server-side whenever the request is in thinking mode. We can't translate Anthropic's
-		//     redacted/encrypted reasoning into DeepSeek's plaintext form, so cross-provider continuations
-		//     rely on a placeholder — see `convertMessages` for the placeholder injection.
-		//   - OpenCode-Go and OpenCode-Zen handle reasoning content internally and reject
-		//     `reasoning_content` in client-sent messages — exclude them even for Kimi models.
+		//   - DeepSeek-family reasoning models, including aliased OpenCode Zen models
+		//     like `big-pickle`, validate exact thinking-mode replay.
+		//   - Any reasoning-capable model reached through OpenRouter can enforce this
+		//     server-side whenever the request is in thinking mode. We can't translate
+		//     Anthropic's redacted/encrypted reasoning into provider-native plaintext,
+		//     so cross-provider continuations rely on a placeholder.
+		// OpenCode Kimi aliases handle reasoning content internally and reject
+		// client-sent `reasoning_content`, so exclude only that Kimi-on-OpenCode path.
 		requiresReasoningContentForToolCalls:
 			(isKimiModel && !isOpenCodeProvider) ||
 			(isDeepseekFamily && Boolean(model.reasoning)) ||
