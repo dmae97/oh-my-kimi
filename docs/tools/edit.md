@@ -31,16 +31,16 @@
 Patch language inside `input`:
 
 - Section header: `¶PATH#HASH` for anchored edits, `¶PATH` for BOF/EOF-only inserts
-- Insert after: `LINE↓`
-- Insert before: `LINE↑`
-- Replace range: `A-B:`
-- Single-line replace sugar: `A:` means `A-A:`
+- Insert after: `LINE↓[payload]`
+- Insert before: `LINE↑[payload]`
+- Replace range: `A-B:[payload]`
+- Single-line replace sugar: `A:[payload]` means `A-A:[payload]`
 - Delete range: `A-B!`
 - Single-line delete sugar: `A!` means `A-A!`
-- `:` / `↑` / `↓` payload may be inline after the sigil and/or on subsequent payload lines. Bare `A↑` / `A↓` insert one blank line; bare `A:` / `A-B:` (no payload) replaces the line/range with a single blank line. Use `A!` / `A-B!` to delete entirely.
+- **Payload semantics:** the first payload line is whatever follows the sigil on the op line itself; additional payload lines follow on subsequent lines and append after the inline first line. An empty inline (just the sigil followed by a newline) means the first payload line is empty. So bare `A↑` / `A↓` insert one blank line, and bare `A:` / `A-B:` replace the line/range with one blank line. But `A↓\nfoo` inserts blank-then-`foo`, not just `foo` — for a single-line insert, put `foo` inline as `A↓foo`.
 - `!` deletes and forbids payload.
-- Inline payload: content after `↓`/`↑`/`:` on the same line is the first payload line; subsequent lines append to it. Read lines like `84:content` are already valid single-line replacements.
-- Special anchors: `BOF`, `EOF`
+- Read lines like `84:content` are already valid single-line replacements.
+- Special anchors: `BOF`, `EOF` (both support inline payload, e.g. `BOF↓export const done = true;`).
 - Anchor token: bare line number, for example `41`
 - File binding: 4-hex hash in the section header, for example `¶src/a.ts#1a2b`
 
@@ -79,7 +79,7 @@ Warnings:
    - ignores blank lines and optional `*** Begin Patch`
    - stops at `*** End Patch`
    - stops at `*** Abort` and emits `ABORT_WARNING`
-   - turns `↓` / `↑` payload runs into one `insert` edit per payload line
+   - turns `↓` / `↑` payload runs (inline plus subsequent lines) into one `insert` edit per payload line
    - turns `A-B:` with payload into inserts before `A`, then deletes for `A-B`
    - turns `A-B!` into one `delete` edit per line in the range; payload is forbidden
 6. `executeHashlineSingle()` computes the current file hash before applying anchored edits. If it differs from the section `#HASH`, recovery tries the read/search snapshot cache before any write.
@@ -103,51 +103,44 @@ Warnings:
 - `patch` — structured JSON diff-hunk mode (`packages/coding-agent/src/edit/modes/patch.ts`).
 - `apply_patch` — freeform Codex-style `*** Begin Patch` envelope, internally expanded into patch-mode entries (`packages/coding-agent/src/edit/modes/apply-patch.ts`).
 
-Hashline op examples:
+Hashline op examples (single-line payloads are inline; multi-line payloads continue on subsequent lines):
 
 ```text
 ¶src/a.ts#1a2b
-4↓
-const added = true;
+4↓const added = true;
 ```
 
 ```text
 ¶src/a.ts#1a2b
-4↑
-const addedBefore = true;
+4↑const addedBefore = true;
 ```
 
 ```text
 ¶src/a.ts#1a2b
-4-6:
-const replacement = true;
+4-6:const replacement = true;
 ```
 
 ```text
 ¶src/a.ts#1a2b
-4-5:
-const clean = (name || DEF).trim();
+4-5:const clean = (name || DEF).trim();
 return clean.length === 0 ? DEF : clean.toUpperCase();
 ```
 
 ```text
 ¶src/a.ts#1a2b
-4:
-const clean = (name || DEF).trim();
+4:const clean = (name || DEF).trim();
 ```
 
 BOF/EOF examples:
 
 ```text
 ¶src/a.ts
-BOF↓
-const HEADER = true;
+BOF↓const HEADER = true;
 ```
 
 ```text
 ¶src/a.ts
-EOF↓
-export const done = true;
+EOF↓export const done = true;
 ```
 
 Delete / blank examples:
@@ -160,7 +153,6 @@ Delete / blank examples:
 ```text
 ¶src/a.ts#1a2b
 4:
-
 ```
 
 ```text
@@ -172,9 +164,7 @@ Multi-file example:
 
 ```text
 ¶src/a.ts#1a2b
-4:
-const enabled = true;
-
+4:const enabled = true;
 ¶src/b.ts#3c4d
 20!
 ```
@@ -238,6 +228,7 @@ const enabled = true;
 - Multi-op patches are parsed against the original file snapshot. Do not renumber later anchors after earlier ops; `applyHashlineEdits()` buckets and applies them bottom-up.
 - Failed hand-edits often come from sequentially shifting later anchors inside the same patch. Treat every op as using the line numbers from the original section header.
 - `A-B:` is not a primitive replace in the parser. With payload, it expands to inserts before `A` plus deletes for `A-B`. `A-B!` is the direct delete form. Bare `A:` / `A-B:` (no payload) replaces with a single blank line; bare `↑` / `↓` insert a blank line.
+- Inline payload tip: trailing whitespace on the op line is trimmed. To preserve trailing spaces in the inserted/replacement content, put that content on the next line instead of inline.
 - `computeFileHash()` normalizes CR characters and trailing whitespace before hashing. The section survives line-ending and trailing-space-only changes, but not substantive file edits.
 - `splitHashlineInputs()` normalizes absolute `¶PATH#HASH` headers back to a cwd-relative path when the file is inside the current working tree. Headers with any run of leading `¶` chars (e.g. `¶foo.ts`, `¶¶foo.ts`, `¶¶¶foo.ts`) are accepted; the canonical form is `¶PATH#HASH` for anchored edits.
 - Optional `*** Begin Patch` / `*** End Patch` markers are accepted in hashline mode, but the file sections are still `¶PATH#HASH`-based, not Codex `*** Update File:` hunks.

@@ -105,7 +105,7 @@ export class HashlineExecutor {
 				this.#flushPending(false);
 				this.#pending = {
 					op: { kind: "insert", cursor: token.cursor, lineNum: token.lineNum },
-					payload: token.inlineBody === undefined ? [] : [token.inlineBody],
+					payload: [token.inlineBody ?? ""],
 					pendingBlanks: 0,
 				};
 				return;
@@ -114,7 +114,7 @@ export class HashlineExecutor {
 				validateRangeOrder(token.range, token.lineNum);
 				this.#pending = {
 					op: { kind: "replace", range: token.range, lineNum: token.lineNum },
-					payload: token.inlineBody === undefined ? [] : [token.inlineBody],
+					payload: [token.inlineBody ?? ""],
 					pendingBlanks: 0,
 				};
 				return;
@@ -186,7 +186,7 @@ export class HashlineExecutor {
 		if (includeTrailingBlanks) this.#flushPendingBlanks();
 
 		const { op, payload } = pending;
-		const linesToInsert = payload.length === 0 ? [""] : payload;
+		const linesToInsert = payload;
 
 		if (op.kind === "insert") {
 			for (const text of linesToInsert) {
