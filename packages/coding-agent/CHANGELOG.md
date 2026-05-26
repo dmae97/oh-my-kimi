@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.4.0] - 2026-05-26
+
 ### Breaking Changes
 
 - Replaced the hashline patch format from `§`, `«`, `»`, `≔`, and `..` to `¶`, `↑`, `↓`, `→` with range separators written as `A-B`, requiring users to migrate hashline edit inputs

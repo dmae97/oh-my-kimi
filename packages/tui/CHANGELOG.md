@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.4.0] - 2026-05-26
+
 ### Fixed
 
 - Fixed terminal scrollback gaining duplicate copies of the welcome screen (and any other header content) when the bottom tool cell mutated across the previous viewport boundary. Once a row scrolls into terminal history it cannot be retracted, so a subsequent shrink that would re-expose that row in the repainted viewport now clears stale scrollback and replays the transcript, then suppresses one immediate suffix-scroll frame so live status/editor chrome is not deposited twice. Multiplexer panes ignore `\x1b[3J`, so the recovery is gated on `!isMultiplexerSession()`.

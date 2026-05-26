@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.4.0] - 2026-05-26
 ### Breaking Changes
 
 - Removed `findAnthropicAuth` from `anthropic-auth` and replaced store-driven auth discovery with `buildAnthropicAuthConfig`, requiring callers to provide an already-resolved API key before building Anthropic auth config
