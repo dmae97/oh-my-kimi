@@ -76,7 +76,6 @@ export function buildMinimizerOptions(group: ShellMinimizerSettings): MinimizerO
 	};
 }
 
-
 export async function executeBash(command: string, options?: BashExecutorOptions): Promise<BashResult> {
 	const settings = await Settings.init();
 	const { shell, env: shellEnv, prefix } = settings.getShellConfig();
@@ -200,9 +199,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 
 		const ey = new ExponentialYield();
 		const winner = await ey.race<
-			| { kind: "result"; result: ShellRunResult }
-			| { kind: "timeout" }
-			| { kind: "abort" }
+			{ kind: "result"; result: ShellRunResult } | { kind: "timeout" } | { kind: "abort" }
 		>([
 			runPromise.then(result => ({ kind: "result" as const, result })),
 			timeoutDeferred.promise.then(kind => ({ kind })),

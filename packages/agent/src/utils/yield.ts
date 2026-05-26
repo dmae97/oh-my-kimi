@@ -106,9 +106,7 @@ export class ExponentialYield {
 			for (;;) {
 				const result = await Promise.race<T | typeof yieldMarker>([
 					racer,
-					this.sleep(controller.signal).then(
-						() => yieldMarker as T | typeof yieldMarker,
-					),
+					this.sleep(controller.signal).then(() => yieldMarker as T | typeof yieldMarker),
 				]);
 				if (result !== yieldMarker) {
 					this.notifyActivity();

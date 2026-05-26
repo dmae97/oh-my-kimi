@@ -346,11 +346,7 @@ export class ProcessTerminal implements Terminal {
 					}
 				} else {
 					// Keyboard probe sentinel: kitty reply never arrived → fall back to modifyOtherKeys.
-					if (
-						!this.#kittyProtocolActive &&
-						!this.#modifyOtherKeysActive &&
-						this.#modifyOtherKeysTimeout
-					) {
+					if (!this.#kittyProtocolActive && !this.#modifyOtherKeysActive && this.#modifyOtherKeysTimeout) {
 						clearTimeout(this.#modifyOtherKeysTimeout);
 						this.#modifyOtherKeysTimeout = undefined;
 						this.#safeWrite("\x1b[>4;2m");

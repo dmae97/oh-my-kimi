@@ -388,9 +388,7 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		// Simulate kitty-capable terminal reply (level >=1).
 		process.stdin.emit("data", "\x1b[?1u");
 
-		const pushes = writes.filter(
-			w => w === "\x1b[>1u" || w === "\x1b[>7u" || w === "\x1b[>31u",
-		).length;
+		const pushes = writes.filter(w => w === "\x1b[>1u" || w === "\x1b[>7u" || w === "\x1b[>31u").length;
 		expect(pushes).toBe(1);
 
 		terminal.stop();
