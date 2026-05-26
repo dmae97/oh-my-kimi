@@ -1154,6 +1154,22 @@ export class TUI extends Container {
 			this.#previousWidth = width;
 			this.#previousHeight = height;
 		};
+		const appendRowsToScrollback = (start: number): void => {
+			if (start >= newLines.length) return;
+
+			let buffer = "\x1b[?2026h";
+			const currentScreenRow = Math.max(0, Math.min(height - 1, hardwareCursorRow - prevViewportTop));
+			const moveToBottom = height - 1 - currentScreenRow;
+			if (moveToBottom > 0) {
+				buffer += `\x1b[${moveToBottom}B`;
+			}
+			for (let i = start; i < newLines.length; i++) {
+				buffer += "\r\n";
+				buffer += newLines[i];
+			}
+			buffer += "\x1b[?2026l";
+			this.terminal.write(buffer);
+		};
 
 		// First-paint policy:
 		// - Initial startup (no prior render): emit the full transcript so terminal
@@ -1215,6 +1231,32 @@ export class TUI extends Container {
 			}
 			lastChanged = newLines.length - 1;
 		}
+		const findAppendedTailStart = (): number => {
+			if (!appendedLines || this.#previousLines.length === 0) return newLines.length;
+
+			const previousLast = this.#previousLines[this.#previousLines.length - 1];
+			let bestEnd = -1;
+			let bestLength = 0;
+			for (let end = newLines.length - 1; end >= 0; end--) {
+				if (newLines[end] !== previousLast) continue;
+
+				let length = 1;
+				while (
+					length < this.#previousLines.length &&
+					end - length >= 0 &&
+					this.#previousLines[this.#previousLines.length - 1 - length] === newLines[end - length]
+				) {
+					length += 1;
+				}
+				if (length > bestLength) {
+					bestLength = length;
+					bestEnd = end;
+				}
+			}
+
+			return bestEnd === -1 ? newLines.length : bestEnd + 1;
+		};
+
 		// No changes - but still need to update hardware cursor position if it moved.
 		if (firstChanged === -1) {
 			if (widthChanged) {
@@ -1293,9 +1335,11 @@ export class TUI extends Container {
 		// Differential rendering can only touch what was actually visible. Repaint
 		// the visible viewport when earlier scrollback changes; treating the frame
 		// as append-only can leave shifted rows stale when edits and appends land
-		// together.
+		// together. If this frame also appended rows, emit only that appended tail
+		// first so the terminal's own scrollback still receives streaming output.
 		if (firstChanged < prevViewportTop) {
 			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
+			appendRowsToScrollback(findAppendedTailStart());
 			viewportRefresh();
 			return;
 		}

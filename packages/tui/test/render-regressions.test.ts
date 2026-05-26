@@ -780,6 +780,7 @@ describe("TUI terminal-state regressions", () => {
 					"line-9",
 					"line-10",
 				]);
+				const beforeBufferLength = term.getScrollBuffer().length;
 
 				component.setLines(["status-1", "expanded-details", ...rows("line-", 12)]);
 				tui.requestRender();
@@ -793,6 +794,7 @@ describe("TUI terminal-state regressions", () => {
 					"line-10",
 					"line-11",
 				]);
+				expect(term.getScrollBuffer().length - beforeBufferLength).toBe(1);
 			} finally {
 				tui.stop();
 			}
