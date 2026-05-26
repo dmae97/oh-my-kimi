@@ -5,7 +5,7 @@ Patch payload is a series of hunks: `¶PATH#HASH` header followed by any number 
 - No context rows, no gutters.
 - NEVER restate unchanged lines "for context".
 - Inline payload after an op is literal. Additional payload lines MUST start with `+`; that delimiter is stripped.
-- Payload indentation after the op sigil or after `+` is literal.
+- Payload indentation is literal.
 </payload>
 
 <ops>
@@ -13,7 +13,7 @@ LINE↑PAYLOAD   insert before (or BOF↑)
 LINE↓PAYLOAD   insert after  (or EOF↓)
 A-B:PAYLOAD    replace A..B  (or A: == A..A)
 A-B!           delete A..B   (or A! == A..A)
-+PAYLOAD      continuation payload line; leading `+` is not written
++PAYLOAD       continuation payload line
 </ops>
 
 <rules>
@@ -51,7 +51,7 @@ A-B!           delete A..B   (or A! == A..A)
 # WRONG — echoing read-style lines as context before the real op
 1:const X = "a";
 1-2:const X = "b";
-export const Y = X;  # raw continuation line missing required `+`
++export const Y = X;
 </anti-pattern>
 
 <critical>
