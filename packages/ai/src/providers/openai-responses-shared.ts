@@ -771,6 +771,7 @@ export function applyResponsesReasoningParams<P extends OpenAI.Responses.Respons
 	messages: ResponseInput,
 	mapEffort?: (effort: string) => string,
 	includeEncryptedReasoning: boolean = true,
+	omitReasoningEffort: boolean = false,
 ): void {
 	if (!model.reasoning) return;
 	// Always request encrypted reasoning content so reasoning items can be replayed in
@@ -781,15 +782,29 @@ export function applyResponsesReasoningParams<P extends OpenAI.Responses.Respons
 	}
 
 	if (options?.reasoning || options?.reasoningSummary !== undefined) {
-		const requested = options?.reasoning || "medium";
-		type ReasoningParam = NonNullable<OpenAI.Responses.ResponseCreateParamsStreaming["reasoning"]>;
-		const reasoningParams: ReasoningParam = {
-			effort: (mapEffort ? mapEffort(requested) : requested) as ReasoningParam["effort"],
-		};
-		if (options?.reasoningSummary !== null) {
-			reasoningParams.summary = options?.reasoningSummary || "auto";
+		// Suppress the effort dial entirely when the upstream provider rejects
+		// `reasoning.effort` for this model (xAI Grok models outside the
+		// effort-capable allowlist 400 with "Model X does not support parameter
+		// reasoningEffort"). Default is false to preserve existing behavior for
+		// every non-xAI caller.
+		if (omitReasoningEffort) {
+			// Still honor reasoningSummary when explicitly requested; xAI
+			// accepts the summary field on every reasoning-capable model.
+			if (options?.reasoningSummary !== undefined && options?.reasoningSummary !== null) {
+				type ReasoningParam = NonNullable<OpenAI.Responses.ResponseCreateParamsStreaming["reasoning"]>;
+				params.reasoning = { summary: options.reasoningSummary || "auto" } as P["reasoning"] & ReasoningParam;
+			}
+		} else {
+			const requested = options?.reasoning || "medium";
+			type ReasoningParam = NonNullable<OpenAI.Responses.ResponseCreateParamsStreaming["reasoning"]>;
+			const reasoningParams: ReasoningParam = {
+				effort: (mapEffort ? mapEffort(requested) : requested) as ReasoningParam["effort"],
+			};
+			if (options?.reasoningSummary !== null) {
+				reasoningParams.summary = options?.reasoningSummary || "auto";
+			}
+			params.reasoning = reasoningParams as P["reasoning"];
 		}
-		params.reasoning = reasoningParams as P["reasoning"];
 	} else if (model.name.toLowerCase().startsWith("gpt-5")) {
 		// Jesus Christ, see https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7
 		messages.push({

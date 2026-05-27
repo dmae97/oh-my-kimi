@@ -112,6 +112,14 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 	 */
 	filterReasoningHistory?: boolean;
 	/**
+	 * Suppress the `reasoning.effort` wire param when set, even if
+	 * `options.reasoning` is requested. Default: false. xAI Grok models
+	 * outside the effort-capable allowlist 400 with "Model X does not
+	 * support parameter reasoningEffort" — the xAI Responses adapter sets
+	 * this when the target model is not in GROK_EFFORT_CAPABLE_PREFIXES.
+	 */
+	omitReasoningEffort?: boolean;
+	/**
 	 * Extra request headers merged onto the underlying client's
 	 * defaultHeaders. Used by adapter wrappers to inject provider-specific
 	 * routing or cache hints.
@@ -487,6 +495,7 @@ function buildParams(
 				model.compat?.reasoningEffortMap,
 			),
 		options?.includeEncryptedReasoning ?? true,
+		options?.omitReasoningEffort ?? false,
 	);
 
 	if (options?.extraBody) {
