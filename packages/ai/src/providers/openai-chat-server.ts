@@ -59,6 +59,12 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	const now = Date.now();
 	const systemParts: string[] = [];
 	const messages: Message[] = [];
+	// Map of `tool_call_id` → function name, populated as we walk assistant
+	// turns. The OpenAI wire spec drops `name` from `role:"tool"` messages,
+	// but downstream providers (notably Google: `functionResponse.name` is
+	// required) need it. We back-resolve from the matching call. If the
+	// client did send a wire `name` we still prefer that (forward-compat).
+	const toolNamesById = new Map<string, string>();
 
 	for (const m of data.messages as OpenAIChatMessage[]) {
 		switch (m.role) {
@@ -74,6 +80,13 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 				messages.push({ role: "user", content: parseUserLikeContent(m.content), timestamp: now });
 				break;
 			case "assistant":
+				if (m.tool_calls) {
+					for (const raw of m.tool_calls) {
+						if (raw.type !== undefined && raw.type !== "function") continue;
+						const fn = (raw as { function?: { name?: string } }).function;
+						if (raw.id && fn?.name) toolNamesById.set(raw.id, fn.name);
+					}
+				}
 				messages.push(
 					buildAssistantMessage(
 						(m.content ?? undefined) as string | OpenAIChatContentPart[] | undefined,
@@ -83,9 +96,15 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 					),
 				);
 				break;
-			case "tool":
-				pushToolResultMessages(messages, m.content, m.tool_call_id, undefined, now);
+			case "tool": {
+				// Prefer the wire `name` when present; otherwise back-resolve from
+				// the assistant `tool_calls` map. Falls through to "" only when no
+				// prior call shares this id, which is the well-known broken case.
+				const wireName = (m as { name?: string }).name;
+				const resolvedName = wireName ?? (m.tool_call_id ? toolNamesById.get(m.tool_call_id) : undefined);
+				pushToolResultMessages(messages, m.content, m.tool_call_id, resolvedName, now);
 				break;
+			}
 			case "function": {
 				// Legacy `function` role (pre-tools API): the message carries the tool's
 				// name on `name` and its output on `content`. Translate to a canonical
