@@ -1307,10 +1307,25 @@ export class AgentSession {
 
 	/** Emit an event to all listeners */
 	#emit(event: AgentSessionEvent): void {
-		// Copy array before iteration to avoid mutation during iteration
+		// Copy array before iteration to avoid mutation during iteration.
 		const listeners = [...this.#eventListeners];
 		for (const l of listeners) {
-			l(event);
+			try {
+				const result = l(event) as unknown;
+				// Listener may be an async function whose returned Promise we don't await;
+				// attach a catch so a rejection does not become an unhandled rejection.
+				if (result instanceof Promise) {
+					result.catch(err => {
+						logger.warn("AgentSession listener rejected", {
+							error: err instanceof Error ? err.message : String(err),
+						});
+					});
+				}
+			} catch (err) {
+				logger.warn("AgentSession listener threw", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
 		}
 	}
 
