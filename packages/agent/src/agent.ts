@@ -1074,7 +1074,16 @@ export class Agent {
 
 	#emit(e: AgentEvent) {
 		for (const listener of this.#listeners) {
-			listener(e);
+			try {
+				const result = listener(e) as unknown;
+				if (result && typeof (result as Promise<unknown>).then === "function") {
+					(result as Promise<unknown>).catch(err => {
+						console.error("Agent listener rejected:", err instanceof Error ? err.message : err);
+					});
+				}
+			} catch (err) {
+				console.error("Agent listener threw:", err instanceof Error ? err.message : err);
+			}
 		}
 	}
 
