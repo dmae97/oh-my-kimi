@@ -36,6 +36,7 @@ describe("xai-oauth bundled catalog (regression)", () => {
 			// Without this the static fallback used on offline boot strips
 			// vision capability silently (Codex PR #1127 review).
 			expect(bundledEntry.input).toEqual(seededModel.input);
+			expect(bundledEntry.compat?.supportsReasoningEffort).toBe(seededModel.compat?.supportsReasoningEffort);
 		});
 	}
 });
