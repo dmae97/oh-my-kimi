@@ -1160,7 +1160,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				if (!ctx.modelRegistry) {
 					throw new Error("Missing modelRegistry for xAI image generation");
 				}
-				const xaiCreds = await resolveXAIHttpCredentials(ctx.modelRegistry);
+				const xaiCreds = await resolveXAIHttpCredentials(ctx.modelRegistry, resolvedModel);
 				if (!xaiCreds) {
 					throw new Error(
 						"No xAI credentials. Run /login → xAI Grok OAuth (SuperGrok Subscription) or set XAI_API_KEY.",

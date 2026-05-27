@@ -63,7 +63,8 @@ function resolveXAIBaseURL(modelRegistry: ModelRegistry, provider: XAIProvider, 
 	}
 	const providerBaseUrl = modelRegistry.getProviderBaseUrl(provider);
 	if (providerBaseUrl) {
-		return providerBaseUrl.replace(/\/$/, "");
+		const normalized = providerBaseUrl.replace(/\/$/, "");
+		if (normalized !== DEFAULT_BASE_URL) return normalized;
 	}
 	return ($env.XAI_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, "");
 }
