@@ -250,6 +250,22 @@ describe("hashline parser — suffix-op syntax", () => {
 		}
 	});
 
+	it("treats a leading inline `\\` as the payload delimiter", () => {
+		const anchor = tag(2, "bbb");
+		const warning = /Accepted inline payload on the op line/;
+		const cases: Array<[string, string]> = [
+			[`${anchor}↓\\NEW`, "aaa\nbbb\nNEW\nccc"],
+			[`${anchor}↑\\NEW`, "aaa\nNEW\nbbb\nccc"],
+			[`${anchor}:\\NEW`, "aaa\nNEW\nccc"],
+			[`${anchor}:\\\\NEW`, "aaa\n\\NEW\nccc"],
+		];
+		for (const [diff, expected] of cases) {
+			const parsed = parseHashline(diff);
+			expect(parsed.warnings.some(w => warning.test(w))).toBe(true);
+			expect(applyDiff(content, diff)).toBe(expected);
+		}
+	});
+
 	it("accepts payload lines on insert ops with `\\` continuation", () => {
 		const anchor = tag(2, "bbb");
 		const diff = [`${anchor}↓`, extra("first line"), extra("second line")].join("\n");

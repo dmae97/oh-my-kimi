@@ -9,6 +9,7 @@
 ### Fixed
 
 - Parser now skips markdown-style `# ...` lines when they directly precede a hashline operation, making model-generated explanatory rows in prompt examples non-blocking.
+- Parser now treats a leading `\` on inline payload bodies as the payload delimiter, matching standalone payload rows.
 
 ### Removed
 

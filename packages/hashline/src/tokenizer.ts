@@ -198,7 +198,10 @@ function parseInsertTarget(raw: string, lineNum: number, kind: "before" | "after
 
 function scanInlineBody(line: string, index: number): string | undefined {
 	const end = trimEndIndex(line);
-	return index < end ? line.slice(index, end) : undefined;
+	if (index >= end) return undefined;
+
+	const body = line.slice(index, end);
+	return body.startsWith(HL_PAYLOAD_PREFIX) ? body.slice(HL_PAYLOAD_PREFIX.length) : body;
 }
 
 interface ParsedInsertOp {
