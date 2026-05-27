@@ -8,6 +8,7 @@ import {
 	formatDiagnostics,
 	formatParseErrors,
 	formatScreenshot,
+	truncateDiffByHunk,
 } from "@oh-my-pi/pi-coding-agent/tools/render-utils";
 
 describe("parse error formatting", () => {
@@ -182,5 +183,72 @@ describe("formatCodeFrameLine", () => {
 		expect(formatCodeFrameLine("*", 448, "match", 3)).toBe("*448│match");
 		expect(formatCodeFrameLine("+", 11, "added", 3)).toBe(" +11│added");
 		expect(formatCodeFrameLine("+", 235, "added", 3)).toBe("+235│added");
+	});
+});
+
+describe("truncateDiffByHunk", () => {
+	function makeHunk(prefix: "-" | "+", line: number, count: number): string[] {
+		return Array.from({ length: count }, (_, i) => `${prefix} ${prefix === "-" ? "old" : "new"} ${line + i}`);
+	}
+
+	function buildDiff(hunkCount: number, linesPerHunk: number): string {
+		const lines: string[] = [];
+		for (let h = 0; h < hunkCount; h++) {
+			lines.push(`@@ hunk ${h} @@`);
+			lines.push(...makeHunk("-", h * 100, linesPerHunk));
+			lines.push(...makeHunk("+", h * 100, linesPerHunk));
+			lines.push(" ctx");
+		}
+		return lines.join("\n");
+	}
+
+	it("keeps trailing hunks when fromTail is set", () => {
+		// 6 hunks total, 2 +/- lines per hunk → 4 change lines per hunk plus
+		// header/context. Cap budget tight enough to force truncation.
+		const diff = buildDiff(6, 2);
+		const head = truncateDiffByHunk(diff, 2, 8);
+		const tail = truncateDiffByHunk(diff, 2, 8, { fromTail: true });
+
+		// Both modes drop the same number of hunks/lines.
+		expect(tail.hiddenHunks).toBe(head.hiddenHunks);
+		expect(tail.hiddenLines).toBe(head.hiddenLines);
+
+		// Head shows the first hunk markers; tail shows the last hunk markers.
+		expect(head.text).toContain("- old 0");
+		expect(head.text).not.toContain("- old 500");
+		expect(tail.text).toContain("- old 500");
+		expect(tail.text).not.toContain("- old 0");
+	});
+
+	it("returns the full diff unchanged when within budget regardless of fromTail", () => {
+		const diff = buildDiff(1, 1);
+		const head = truncateDiffByHunk(diff, 4, 32);
+		const tail = truncateDiffByHunk(diff, 4, 32, { fromTail: true });
+		expect(head.text).toBe(diff);
+		expect(tail.text).toBe(diff);
+		expect(tail.hiddenHunks).toBe(0);
+		expect(tail.hiddenLines).toBe(0);
+	});
+
+	it("preserves change/context line order within a kept hunk under fromTail", () => {
+		// Single hunk with intra-segment context: leading context, change, trailing context.
+		const diff = [
+			"@@ only @@",
+			" leading-ctx-a",
+			" leading-ctx-b",
+			"- old line",
+			"+ new line",
+			" trailing-ctx-a",
+			" trailing-ctx-b",
+		].join("\n");
+		const { text } = truncateDiffByHunk(diff, 4, 32, { fromTail: true });
+		const idxOld = text.indexOf("- old line");
+		const idxNew = text.indexOf("+ new line");
+		const idxLeading = text.indexOf("leading-ctx-a");
+		const idxTrailing = text.indexOf("trailing-ctx-b");
+		// In-order: leading context appears before change which appears before trailing context.
+		expect(idxLeading).toBeLessThan(idxOld);
+		expect(idxOld).toBeLessThan(idxNew);
+		expect(idxNew).toBeLessThan(idxTrailing);
 	});
 });
