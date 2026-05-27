@@ -1012,7 +1012,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #getPlanFilePath(): Promise<string> {
-		return "local://PLAN.md";
+		return this.session.getPlanReferencePath() || "local://PLAN.md";
 	}
 
 	#resolvePlanFilePath(planFilePath: string): string {
