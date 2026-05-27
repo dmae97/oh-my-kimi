@@ -48,4 +48,13 @@ export const IMPLICIT_CONTINUATION_WARNING =
  * canonical `+`-continuation form remains preferred.
  */
 export const PAYLOAD_LINE_PREFIX_DEMOTED_WARNING =
-	"Detected one or more `LINE:TEXT` lines whose anchors fell inside a pending replace range; treated them as payload-continuation lines and stripped the `LINE:` prefix. Inside a multi-line `A-B:` block, payload lines after the first should be prefixed with `+` — never reuse the read-output gutter format.";
+	"Detected one or more `LINE:TEXT` lines whose anchors fell inside a pending replace range; treated them as payload-continuation lines and stripped the `LINE:` prefix. Inside an `A-B:` block, every payload line must be on its own row prefixed with `+` — never reuse the read-output gutter format.";
+/**
+ * Warning text appended when an op carries an inline payload (`LINE:TEXT`,
+ * `A-B:TEXT`, `LINE↑TEXT`, `LINE↓TEXT`). Canonical syntax is bare op +
+ * `+`-prefixed continuation rows; we accept the inline form leniently so the
+ * model's first-attempt edit still lands, but warn so the canonical form
+ * remains preferred.
+ */
+export const INLINE_PAYLOAD_ACCEPTED_WARNING =
+	"Accepted inline payload on the op line (e.g. `LINE:CONTENT`, `LINE↑CONTENT`). Canonical syntax is the bare op followed by `+`-prefixed payload rows on the next line(s). Prefer the explicit form.";

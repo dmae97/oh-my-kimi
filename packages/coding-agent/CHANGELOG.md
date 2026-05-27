@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Disallowed inline payload on hashline `↑`, `↓`, and `:` operations (including BOF/EOF inserts), requiring payload text to be supplied on standalone `+` continuation rows
+
+### Changed
+
+- Warned when legacy inline `LINE:TEXT` lines are accepted as payload continuations only when inside a pending multi-line `A-B:` replacement
 
 ## [15.5.2] - 2026-05-26
 ### Breaking Changes

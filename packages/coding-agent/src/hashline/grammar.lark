@@ -9,11 +9,10 @@ filename: /([^\s#]+)/
 file_hash: /[0-9a-f]{4}/
 
 line_op: insert_before | insert_after | replace | delete
-insert_before: anchor "$HOP_INSERT_BEFORE$" inline_body? LF payload*
-insert_after: anchor "$HOP_INSERT_AFTER$" inline_body? LF payload*
-replace: range "$HOP_REPLACE$" inline_body? LF payload*
+insert_before: anchor "$HOP_INSERT_BEFORE$" LF payload*
+insert_after: anchor "$HOP_INSERT_AFTER$" LF payload*
+replace: range "$HOP_REPLACE$" LF payload*
 delete: range "$HOP_DELETE$" LF
-inline_body: /[^\n]+/
 payload: "+" /[^\n]*/ LF
 
 anchor: LID | "EOF" | "BOF"

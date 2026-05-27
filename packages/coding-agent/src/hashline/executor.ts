@@ -1,6 +1,7 @@
 import {
 	ABORT_WARNING,
 	IMPLICIT_CONTINUATION_WARNING,
+	INLINE_PAYLOAD_ACCEPTED_WARNING,
 	PAYLOAD_LINE_PREFIX_DEMOTED_WARNING,
 	REPLACE_PAIR_COALESCED_WARNING,
 } from "./constants";
@@ -126,8 +127,14 @@ export class HashlineExecutor {
 				this.#flushPending();
 				this.#pending = {
 					op: { kind: "insert", cursor: token.cursor, lineNum: token.lineNum },
-					payload: token.inlineBody === undefined ? [] : [token.inlineBody],
+					payload: [],
 				};
+				if (token.inlineBody !== undefined) {
+					this.#pending.payload.push(token.inlineBody);
+					if (!this.#warnings.includes(INLINE_PAYLOAD_ACCEPTED_WARNING)) {
+						this.#warnings.push(INLINE_PAYLOAD_ACCEPTED_WARNING);
+					}
+				}
 				return;
 			case "op-replace":
 				validateRangeOrder(token.range, token.lineNum);
@@ -161,8 +168,14 @@ export class HashlineExecutor {
 				this.#flushPending();
 				this.#pending = {
 					op: { kind: "replace", range: token.range, lineNum: token.lineNum },
-					payload: token.inlineBody === undefined ? [] : [token.inlineBody],
+					payload: [],
 				};
+				if (token.inlineBody !== undefined) {
+					this.#pending.payload.push(token.inlineBody);
+					if (!this.#warnings.includes(INLINE_PAYLOAD_ACCEPTED_WARNING)) {
+						this.#warnings.push(INLINE_PAYLOAD_ACCEPTED_WARNING);
+					}
+				}
 				return;
 		}
 	}
