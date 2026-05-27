@@ -1,5 +1,7 @@
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
 import * as path from "node:path";
-import { computeFileHash, formatHashlineHeader } from "@oh-my-pi/hashline";
+import { formatHashlineHeader } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type AstFindMatch, astGrep } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -219,14 +221,14 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 			}
 
 			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
-			const hashContexts = new Map<string, { absolutePath: string; fileHash: string }>();
+			const hashContexts = new Map<string, { absolutePath: string; tag?: string }>();
+			const snapshotStore = useHashLines ? getFileSnapshotStore(this.session) : undefined;
 			if (useHashLines) {
 				for (const relativePath of fileList) {
 					const absolutePath = path.resolve(this.session.cwd, relativePath);
 					try {
-						const fullText = await Bun.file(absolutePath).text();
-						const fileHash = computeFileHash(fullText);
-						hashContexts.set(relativePath, { absolutePath, fileHash });
+						await access(absolutePath, constants.R_OK);
+						hashContexts.set(relativePath, { absolutePath });
 					} catch {
 						// Best-effort: if a file disappears between ast-grep and rendering, emit plain line output.
 					}
@@ -268,9 +270,8 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 					fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 				}
 				if (hashContext && cacheEntries.length > 0) {
-					getFileSnapshotStore(this.session).recordSparse(hashContext.absolutePath, cacheEntries, {
-						fileHash: hashContext.fileHash,
-					});
+					const tag = snapshotStore?.recordSparse(hashContext.absolutePath, cacheEntries);
+					if (tag) hashContext.tag = tag;
 				}
 				return { model: modelOut, display: displayOut };
 			};
@@ -282,7 +283,7 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 					return {
 						modelLines: rendered.model,
 						displayLines: rendered.display,
-						headerSuffix: hashContext ? `#${hashContext.fileHash}` : "",
+						headerSuffix: hashContext?.tag ? `#${hashContext.tag}` : "",
 						skip: rendered.model.length === 0,
 					};
 				});
@@ -297,8 +298,8 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 						displayLines.push("");
 					}
 					const hashContext = hashContexts.get(relativePath);
-					if (hashContext) {
-						outputLines.push(formatHashlineHeader(relativePath, hashContext.fileHash));
+					if (hashContext?.tag) {
+						outputLines.push(formatHashlineHeader(relativePath, hashContext.tag));
 					}
 					outputLines.push(...rendered.model);
 					displayLines.push(...rendered.display);

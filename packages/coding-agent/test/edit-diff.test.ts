@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { formatHashlineHeader, InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import {
 	adjustIndentation,
 	computeEditDiff,
-	computeFileHash,
 	computeHashlineDiff,
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
@@ -238,8 +238,11 @@ describe("computeHashlineDiff", () => {
 
 		// `1-1:` with the same line in the replace bucket is a true no-op: the edit
 		// fires through computeHashlineDiff but produces identical content.
-		const input = `¶${sourcePath}#${computeFileHash(`${line}\n`)}\n1-1:\n|${line}\n`;
-		const result = await computeHashlineDiff({ input }, tempDir);
+		const text = `${line}\n`;
+		const snapshotStore = new InMemorySnapshotStore();
+		const tag = snapshotStore.recordContiguous(sourcePath, 1, text.split("\n"), { fullText: text });
+		const input = `${formatHashlineHeader(sourcePath, tag)}\n1-1:\n|${line}\n`;
+		const result = await computeHashlineDiff({ input }, tempDir, snapshotStore);
 		expect("error" in result).toBe(true);
 		if ("error" in result) {
 			expect(result.error).toContain("No changes would be made");
@@ -250,14 +253,22 @@ describe("computeHashlineDiff", () => {
 		const sourcePath = path.join(tempDir, "source.txt");
 		await Bun.write(sourcePath, "first\n");
 
-		const result = await computeHashlineDiff({ input: `¶${sourcePath}\nEOF:\n|second` }, tempDir);
+		const result = await computeHashlineDiff(
+			{ input: `¶${sourcePath}\nEOF:\n|second` },
+			tempDir,
+			new InMemorySnapshotStore(),
+		);
 		expect("diff" in result).toBe(true);
 		if ("diff" in result) {
 			expect(result.diff).toContain("second");
 		}
 	});
 	test("returns a handled error when the source path is a local URL", async () => {
-		const result = await computeHashlineDiff({ input: "¶local://PLAN.md\nEOF:\n|x" }, tempDir);
+		const result = await computeHashlineDiff(
+			{ input: "¶local://PLAN.md\nEOF:\n|x" },
+			tempDir,
+			new InMemorySnapshotStore(),
+		);
 
 		expect("error" in result).toBe(true);
 		if ("error" in result) {

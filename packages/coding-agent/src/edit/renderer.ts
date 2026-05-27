@@ -312,7 +312,7 @@ const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** E
 
 function normalizeHashlineInputPreviewPath(rawPath: string): string {
 	const trimmed = rawPath.trim();
-	const hashStart = /#[0-9a-f]{4}$/u.exec(trimmed)?.index;
+	const hashStart = /#[0-9a-fA-F]{3}$/u.exec(trimmed)?.index;
 	const withoutHash = hashStart === undefined ? trimmed : trimmed.slice(0, hashStart);
 	if (withoutHash.length < 2) return withoutHash;
 	const first = withoutHash[0];

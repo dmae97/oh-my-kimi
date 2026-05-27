@@ -5,16 +5,17 @@
  * pair to {@link generateDiffString} so the renderer can show the diff
  * while the tool call is still streaming.
  *
- * Validation is intentionally light: only the section file hash is checked
+ * Validation is intentionally light: only the section snapshot tag is checked
  * (so the preview goes red when anchors are stale), no plan-mode guards
  * and no auto-generated-file refusal — those belong on the write path.
  */
 import {
-	computeFileHash,
 	Patch as HashlinePatch,
 	normalizeToLF,
 	type Patch,
 	type PatchSection,
+	type Snapshot,
+	type SnapshotStore,
 	stripBom,
 } from "@oh-my-pi/hashline";
 import { resolveToCwd } from "../../tools/path-utils";
@@ -44,20 +45,34 @@ function hasAnchorScoped(section: PatchSection): boolean {
 	return section.hasAnchorScopedEdit;
 }
 
-function validateSectionHash(section: PatchSection, text: string): string | null {
+function snapshotMatchesCurrent(snapshot: Snapshot, currentText: string, anchorLines: readonly number[]): boolean {
+	if (snapshot.fullText !== undefined) return snapshot.fullText === currentText;
+	for (const lineNumber of anchorLines) {
+		if (snapshot.get(lineNumber) === undefined) return false;
+	}
+	return snapshot.matchesLiveFile(currentText.split("\n"));
+}
+
+function validateSectionHash(
+	section: PatchSection,
+	absolutePath: string,
+	text: string,
+	snapshots: SnapshotStore,
+): string | null {
 	if (section.fileHash === undefined) {
 		return hasAnchorScoped(section)
-			? `Missing hashline file hash for anchored edit to ${section.path}; use \`¶${section.path}#hash\` from your latest read.`
+			? `Missing hashline snapshot tag for anchored edit to ${section.path}; use \`¶${section.path}#tag\` from your latest read.`
 			: null;
 	}
-	const currentHash = computeFileHash(text);
-	if (currentHash === section.fileHash) return null;
-	return `Hashline file hash mismatch for ${section.path}: section is bound to #${section.fileHash}, but current file hashes to #${currentHash}; re-read and try again.`;
+	const snapshot = snapshots.byHash(absolutePath, section.fileHash);
+	if (snapshot && snapshotMatchesCurrent(snapshot, text, section.collectAnchorLines())) return null;
+	return `Hashline snapshot tag mismatch for ${section.path}: section is bound to #${section.fileHash}, but current file does not match that snapshot; re-read and try again.`;
 }
 
 export async function computeHashlineSectionDiff(
 	section: PatchSection,
 	cwd: string,
+	snapshots: SnapshotStore,
 	options: HashlineDiffOptions = {},
 ): Promise<{ diff: string; firstChangedLine: number | undefined } | { error: string }> {
 	try {
@@ -65,7 +80,7 @@ export async function computeHashlineSectionDiff(
 		const rawContent = await readSectionText(absolutePath, section.path);
 		const { text: content } = stripBom(rawContent);
 		const normalized = normalizeToLF(content);
-		const hashError = validateSectionHash(section, normalized);
+		const hashError = validateSectionHash(section, absolutePath, normalized, snapshots);
 		if (hashError) return { error: hashError };
 		const result = options.streaming
 			? section.applyPartialTo(normalized, options)
@@ -80,6 +95,7 @@ export async function computeHashlineSectionDiff(
 export async function computeHashlineDiff(
 	input: { input: string },
 	cwd: string,
+	snapshots: SnapshotStore,
 	options: HashlineDiffOptions = {},
 ): Promise<{ diff: string; firstChangedLine: number | undefined } | { error: string }> {
 	let patch: Patch;
@@ -91,5 +107,5 @@ export async function computeHashlineDiff(
 	if (patch.sections.length !== 1) {
 		return { error: "Streaming diff preview supports exactly one hashline section." };
 	}
-	return computeHashlineSectionDiff(patch.sections[0], cwd, options);
+	return computeHashlineSectionDiff(patch.sections[0], cwd, snapshots, options);
 }

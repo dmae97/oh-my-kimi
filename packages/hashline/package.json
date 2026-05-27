@@ -33,8 +33,7 @@
 		"fmt": "biome format --write ."
 	},
 	"dependencies": {
-		"diff": "catalog:",
-		"lru-cache": "catalog:"
+		"diff": "catalog:"
 	},
 	"devDependencies": {
 		"@types/bun": "catalog:"

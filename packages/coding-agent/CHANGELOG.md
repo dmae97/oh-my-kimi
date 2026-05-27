@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed `omp auth-broker serve` crashing at startup with `logger.setTransports is not a function` — switched the call site to `import { setTransports } from "@oh-my-pi/pi-utils/logger"`, bypassing the `logger` namespace re-export that some Bun versions failed to expose at runtime
+
+### Added
+
+- Added strict-mode indicators to `omp auth-gateway check` output by appending `[strict]` to strict-mode text headers and adding a top-level `strict` field in `--json` output
+- `omp auth-gateway check --strict` exercises each broker-supplied credential against its provider's chat-completion endpoint (cheapest bundled chat model per provider, with 15s/attempt timeout and up to 4 catalog fall-throughs on "model not found / invalid model" errors). Surfaces failures where the usage endpoint reports 200 but the chat endpoint 401s the same bearer (revoked OAuth scope, mislabeled provider row, …). Output gains a `[chat: ok|FAIL|skip]` column in text mode and a `completion` field on each credential in `--json` mode; the chat-failed count contributes to the non-zero exit code.
 ### Changed
 
 - Updated hashline syntax: replaced `↑`/`↓` payload sigils with `^` repeat syntax and `|` literal rows for clearer edit semantics

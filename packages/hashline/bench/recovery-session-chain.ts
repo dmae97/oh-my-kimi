@@ -22,13 +22,7 @@
  * Sizes (50/500/5000 lines) × edit batch (1/8 anchors) so the O(N) split cost
  * in `verifyAnchorContent` and the O(K) anchor walk both surface.
  */
-import {
-	computeFileHash,
-	InMemorySnapshotStore,
-	parsePatch,
-	RECOVERY_SESSION_REPLAY_WARNING,
-	Recovery,
-} from "../src";
+import { InMemorySnapshotStore, parsePatch, RECOVERY_SESSION_REPLAY_WARNING, Recovery } from "../src";
 
 const ITERATIONS = Number(Bun.env.HASHLINE_BENCH_ITERATIONS ?? "5000");
 const PATH = "/tmp/__hashline-recovery-bench__.ts";
@@ -49,17 +43,15 @@ function seed(lines: number, rewrittenLine: number): Fixture {
 	v1Lines[rewrittenLine - 1] = `line ${rewrittenLine} REWRITTEN`;
 	const v0Text = `${v0Lines.join("\n")}\n`;
 	const v1Text = `${v1Lines.join("\n")}\n`;
-	const h0 = computeFileHash(v0Text);
-	const h1 = computeFileHash(v1Text);
 	const store = new InMemorySnapshotStore();
-	store.recordContiguous(PATH, 1, v0Text.split("\n"), { fullText: v0Text, fileHash: h0 });
-	store.recordContiguous(PATH, 1, v1Text.split("\n"), { fullText: v1Text, fileHash: h1 });
+	const h0 = store.recordContiguous(PATH, 1, v0Text.split("\n"), { fullText: v0Text });
+	store.recordContiguous(PATH, 1, v1Text.split("\n"), { fullText: v1Text });
 	return { store, v1Text, h0 };
 }
 
 /** Build an N-anchor edit batch whose anchor lines are distinct rows. */
 function batchPatch(anchors: readonly number[]): string {
-	return anchors.map(line => `${line}-${line}:\n+line ${line} MODEL`).join("\n");
+	return anchors.map(line => `${line}-${line}:\n|line ${line} MODEL`).join("\n");
 }
 
 interface Case {
@@ -99,7 +91,7 @@ for (const size of [50, 500, 5000] as const) {
 }
 
 function bench(name: string, fn: () => void): { totalMs: number; perOpUs: number } {
-	// Warm: JIT + InMemorySnapshotStore LRU touches.
+	// Warm: JIT + InMemorySnapshotStore map/ring touches.
 	for (let i = 0; i < Math.min(50, ITERATIONS); i++) fn();
 	const start = Bun.nanoseconds();
 	for (let i = 0; i < ITERATIONS; i++) fn();

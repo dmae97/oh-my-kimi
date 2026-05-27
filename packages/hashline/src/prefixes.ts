@@ -16,7 +16,7 @@
 
 const HL_PREFIX_RE = /^\s*(?:>>>|>>)?\s*(?:[+*-]\s*)?\d+:/;
 const HL_PREFIX_PLUS_RE = /^\s*(?:>>>|>>)?\s*\+\s*\d+:/;
-const HL_HEADER_RE = /^\s*¶\S+#[0-9a-f]{4}\s*$/;
+const HL_HEADER_RE = /^\s*¶\S+#[0-9a-fA-F]{3}\s*$/;
 const DIFF_PLUS_RE = /^[+](?![+])/;
 const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bUse :L?\d+/;
 

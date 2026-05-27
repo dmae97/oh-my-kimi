@@ -1,21 +1,20 @@
 /**
- * Recover from a stale section file-hash by replaying the would-be edit
+ * Recover from a stale section snapshot tag by replaying the would-be edit
  * against a cached pre-edit snapshot of the file and 3-way-merging the
  * result onto the current on-disk content.
  *
- * The patcher consults this when it sees a section hash that doesn't match
- * the live file content. The recovery class is stateless apart from the
- * {@link SnapshotStore} it queries; the snapshot store is the seam that
+ * The patcher consults this when a section tag resolves to a snapshot that no
+ * longer matches the live file content. The recovery class is stateless apart
+ * from the {@link SnapshotStore} it queries; the snapshot store is the seam
  * lets you plug in your own caching strategy.
  */
 import * as Diff from "diff";
 import { applyEdits } from "./apply";
-import { computeFileHash } from "./format";
 import { RECOVERY_EXTERNAL_WARNING, RECOVERY_SESSION_CHAIN_WARNING, RECOVERY_SESSION_REPLAY_WARNING } from "./messages";
 import type { Snapshot, SnapshotStore } from "./snapshots";
 import type { Anchor, ApplyOptions, ApplyResult, Edit } from "./types";
 
-// Section hashes are line-precise; never let Diff.applyPatch slide a hunk
+// Section tags are line-precise; never let Diff.applyPatch slide a hunk
 // onto a duplicate closer 100+ lines away. If snapshot replay does not
 // align exactly, refuse and let the caller re-read.
 const RECOVERY_FUZZ_FACTOR = 0;
@@ -139,17 +138,33 @@ function replaySessionChainOnCurrent(
 	};
 }
 
-function buildSparseOverlayText(currentText: string, snapshotLines: ReadonlyMap<number, string>): string {
+function snapshotHasEntries(snapshot: Snapshot): boolean {
+	for (const _entry of snapshot.entries()) return true;
+	return false;
+}
+
+function buildSparseOverlayText(currentText: string, snapshot: Snapshot): string {
 	const overlaid = currentText.split("\n");
 	let maxCachedLine = 0;
-	for (const lineNum of snapshotLines.keys()) {
+	for (const [lineNum] of snapshot.entries()) {
 		if (lineNum > maxCachedLine) maxCachedLine = lineNum;
 	}
 	while (overlaid.length < maxCachedLine) overlaid.push("");
-	for (const [lineNum, content] of snapshotLines) {
+	for (const [lineNum, content] of snapshot.entries()) {
 		overlaid[lineNum - 1] = content;
 	}
 	return overlaid.join("\n");
+}
+
+function sparseSnapshotCoversAnchors(snapshot: Snapshot, edits: readonly Edit[]): boolean {
+	for (const lineNumber of collectAnchorLines(edits)) {
+		if (snapshot.get(lineNumber) === undefined) return false;
+	}
+	return true;
+}
+
+function sparseSnapshotMatchesCurrent(currentText: string, snapshot: Snapshot): boolean {
+	return snapshot.matchesLiveFile(currentText.split("\n"));
 }
 
 /** First 1-indexed line at which `a` and `b` diverge, or `undefined` if equal. */
@@ -181,8 +196,9 @@ function isHeadSnapshot(head: Snapshot | null, snapshot: Snapshot): boolean {
  *    a dedicated {@link RECOVERY_SESSION_REPLAY_WARNING} because even with
  *    both guards a coincidental insert+delete pair on duplicate rows can
  *    still land the edit on the wrong row; see {@link replaySessionChainOnCurrent}.
- * 3. Reconstruct from a sparse snapshot (lines map only), verify the rebuilt
- *    text hashes to the expected value, then 3-way-merge.
+ * 3. Reconstruct from a sparse snapshot (lines map only), then 3-way-merge.
+ *    Sparse snapshots that still match the live file are direct-apply cases
+ *    owned by the patcher, so recovery declines them.
  */
 export class Recovery {
 	constructor(readonly store: SnapshotStore) {}
@@ -195,7 +211,7 @@ export class Recovery {
 		const { path, currentText, fileHash, edits, options = {} } = args;
 		const head = this.store.head(path);
 		const snapshot = this.store.byHash(path, fileHash);
-		if (!snapshot || snapshot.lines.size === 0) return null;
+		if (!snapshot || !snapshotHasEntries(snapshot)) return null;
 
 		const isHead = isHeadSnapshot(head, snapshot);
 		const recoveryWarning = isHead ? RECOVERY_EXTERNAL_WARNING : RECOVERY_SESSION_CHAIN_WARNING;
@@ -212,8 +228,9 @@ export class Recovery {
 			return null;
 		}
 
-		const overlayText = buildSparseOverlayText(currentText, snapshot.lines);
-		if (computeFileHash(overlayText) !== fileHash) return null;
+		if (!sparseSnapshotCoversAnchors(snapshot, edits)) return null;
+		if (sparseSnapshotMatchesCurrent(currentText, snapshot)) return null;
+		const overlayText = buildSparseOverlayText(currentText, snapshot);
 		return applyEditsToSnapshot(overlayText, currentText, edits, options, recoveryWarning);
 	}
 }

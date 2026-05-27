@@ -52,7 +52,7 @@ function parseHashlineHeaderLine(line: string, cwd?: string): RawSection | null 
 	const token = TOKENIZER.tokenize(trimmed);
 	if (token.kind !== "header") {
 		throw new Error(
-			`Input header must be ${HL_FILE_PREFIX}PATH or ${HL_FILE_PREFIX}PATH${HL_FILE_HASH_SEP}HASH with a 4-hex file hash; got ${JSON.stringify(trimmed)}.`,
+			`Input header must be ${HL_FILE_PREFIX}PATH or ${HL_FILE_PREFIX}PATH${HL_FILE_HASH_SEP}TAG with a 3-hex snapshot tag; got ${JSON.stringify(trimmed)}.`,
 		);
 	}
 
@@ -113,7 +113,7 @@ function splitRawSections(input: string, options: SplitOptions = {}): RawSection
 		const preview = JSON.stringify(firstLine.slice(0, 120));
 		throw new Error(
 			`input must begin with "${HL_FILE_PREFIX}PATH${HL_FILE_HASH_SEP}HASH" on the first non-blank line for anchored edits; got: ${preview}. ` +
-				`Example: "${HL_FILE_PREFIX}src/foo.ts${HL_FILE_HASH_SEP}1a2b" then edit ops.`,
+				`Example: "${HL_FILE_PREFIX}src/foo.ts${HL_FILE_HASH_SEP}0A3" then edit ops.`,
 		);
 	}
 
@@ -223,8 +223,8 @@ export class PatchSection {
 
 	/**
 	 * Apply this section's edits to `text` and return the post-edit result.
-	 * Pure: does no I/O, does not validate the section file hash. The
-	 * {@link Patcher} owns hash validation and recovery; reach for this
+	 * Pure: does no I/O, does not validate the section snapshot tag. The
+	 * {@link Patcher} owns tag validation and recovery; reach for this
 	 * method directly when you've already validated the file content and
 	 * just want the result.
 	 */
@@ -318,7 +318,7 @@ function mergeSamePathSections(sections: RawSection[]): RawSection[] {
 				existing.fileHash !== section.fileHash
 			) {
 				throw new Error(
-					`Conflicting hashline file hashes for ${section.path}: #${existing.fileHash} and #${section.fileHash}. Re-read the file and retry with one current header.`,
+					`Conflicting hashline snapshot tags for ${section.path}: #${existing.fileHash} and #${section.fileHash}. Re-read the file and retry with one current header.`,
 				);
 			}
 			if (existing.fileHash === undefined && section.fileHash !== undefined) existing.fileHash = section.fileHash;

@@ -4,17 +4,18 @@
 
 ## Source
 - Entry: `packages/coding-agent/src/edit/index.ts`
-- Model-facing prompt: `packages/coding-agent/src/prompts/tools/hashline.md`
+- Model-facing prompt: `packages/hashline/src/prompt.md`
 - Key collaborators:
   - `packages/coding-agent/src/utils/edit-mode.ts` — selects active edit mode
-  - `packages/coding-agent/src/hashline/grammar.lark` — custom-tool grammar for hashline mode
-  - `packages/coding-agent/src/hashline/input.ts` — splits `¶PATH` sections
-  - `packages/coding-agent/src/hashline/executor.ts` / `tokenizer.ts` — parses op-prefixed edits and `+`-prefixed payload continuation lines
-  - `packages/coding-agent/src/hashline/apply.ts` — validates anchors and applies edits
-  - `packages/coding-agent/src/hashline/anchors.ts` — stale-anchor mismatch formatting
-  - `packages/coding-agent/src/hashline/recovery.ts` — cache-based stale-anchor recovery
-  - `packages/coding-agent/src/hashline/hash.ts` — computes 4-hex file hashes and `LINE:TEXT` display lines shared with `read`/`search`
-  - `packages/coding-agent/src/edit/file-read-cache.ts` — per-session read snapshot cache
+  - `packages/hashline/src/grammar.lark` — hashline grammar
+  - `packages/hashline/src/format.ts` — sigils and header constants (`¶`, `#`, `:`, `:-`, `+`, `^`)
+  - `packages/hashline/src/input.ts` — parses `¶PATH#TAG` sections
+  - `packages/hashline/src/tokenizer.ts` / `packages/hashline/src/parser.ts` — tokenizes and parses ops
+  - `packages/hashline/src/apply.ts` — applies parsed edits to file text
+  - `packages/hashline/src/mismatch.ts` — stale-anchor mismatch formatting
+  - `packages/hashline/src/recovery.ts` — snapshot-based stale-anchor recovery
+  - `packages/hashline/src/snapshots.ts` — mints and resolves per-path two-hex opaque snapshot tags
+  - `packages/coding-agent/src/edit/file-snapshot-store.ts` — per-session read/search snapshot store wiring
   - `packages/coding-agent/src/tools/read.ts` — emits anchored lines and records read snapshots
   - `packages/coding-agent/src/tools/search.ts` — records sparse snapshots from matches/context
   - `packages/coding-agent/src/tools/fs-cache-invalidation.ts` — invalidates FS scan caches after writes
@@ -26,34 +27,53 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `input` | `string` | Yes | One or more edit sections. Anchored sections must start with `¶PATH#HASH`; unbound `¶PATH` is allowed only for new-file / `BOF` / `EOF` boundary inserts. Optional `*** Begin Patch` / `*** End Patch` envelope is ignored if present. |
+| `input` | `string` | Yes | One or more edit sections. Anchored sections must start with `¶PATH#TAG`; unbound `¶PATH` is allowed only for new-file / `BOF` / `EOF` boundary inserts. Optional `*** Begin Patch` / `*** End Patch` envelope is ignored if present. |
 
 Patch language inside `input`:
 
-- Section header: `¶PATH#HASH` for anchored edits, `¶PATH` for BOF/EOF-only inserts
-- Insert after: `LINE↓[payload]`
-- Insert before: `LINE↑[payload]`
-- Replace range: `A-B:[payload]`
-- Single-line replace sugar: `A:[payload]` means `A-A:[payload]`
-- Delete range: `A-B!`
-- Single-line delete sugar: `A!` means `A-A!`
-- **Payload semantics:** the first payload line may follow the sigil on the op line itself. Additional payload lines must be on subsequent lines prefixed with `+`; that delimiter is stripped before writing. Use `+` alone for an empty payload line, and `++text` to write a payload line that begins with `+text`. Bare `A↑` / `A↓` insert one blank line, and bare `A:` / `A-B:` replace the line/range with one blank line.
-- `!` deletes and forbids payload.
-- Read lines like `84:content` are already valid single-line replacements.
-- Special anchors: `BOF`, `EOF` (both support inline payload, e.g. `BOF↓export const done = true;`).
-- Anchor token: bare line number, for example `41`
-- File binding: 4-hex hash in the section header, for example `¶src/a.ts#1a2b`
+- **Section header**: `¶PATH#TAG` for anchored edits, `¶PATH` for BOF/EOF-only inserts. `TAG` is two lowercase hex chars minted by the session snapshot store.
+- **Anchor blocks** select a range of original lines:
+  - `A-B:` — select lines A..B; the body rows below describe their new content.
+  - `A-B:-` — select lines A..B and delete them. No body permitted.
+  - `A:` is accepted as `A-A:`. `A:-` is accepted as `A-A:-`.
+  - `BOF:` — virtual position before line 1; body rows insert there.
+  - `EOF:` — virtual position after the last line; body rows insert there.
+  - `BOF-BOF:` / `EOF-EOF:` / `BOF-EOF:` are silently normalized to the virtual anchor (range suffix carries no information for virtual positions).
+- **Body rows** (one per line, immediately under the anchor):
+  - `+TEXT` — add the literal line `TEXT` verbatim, including all leading whitespace.
+  - `+` alone — add one blank line.
+  - `^A-B` — re-emit original file lines A..B. Use this to keep some of the lines you selected. `^A` is accepted as `^A-A`.
+- **Semantics of the body**:
+  - The new content of the selected range is just the body rows top-to-bottom.
+  - `A-B:` with no body rows REPLACES the range with one blank line. Use `A-B:-` to delete.
+  - `BOF:` / `EOF:` with no body inserts one blank line at that virtual position.
 
-Anchors come from `read`/`search` output. `read` emits a `¶PATH#HASH` header and lines as `LINE:TEXT`; copy the header into the edit section and copy only the line number into op lines.
+Anchors come from `read`/`search` output. `read` emits a `¶PATH#TAG` header from the session snapshot store and lines as `LINE:TEXT`; copy the header into the edit section and copy only the line number into anchor lines.
 
 Other edit modes exist (`replace`, `patch`, `apply_patch`) and are selected outside the tool payload by `resolveEditMode()` in `packages/coding-agent/src/utils/edit-mode.ts`. Their schemas are different; this document covers the default hashline mode.
+
+### Tolerated input shapes (lenient parsing)
+
+Because models reproduce nearby shapes (`read` output, `apply_patch` envelopes, unified-diff hunks), the parser is liberal about a handful of harmless variants:
+
+- `A:` / `A:-` — single-line shorthand for `A-A:` / `A-A:-`.
+- `^A` — shorthand for `^A-A`.
+- Bare body rows with no `+`/`^` prefix are auto-prepended with `+` and a `BARE_BODY_AUTO_PIPED_WARNING` is appended, BUT only when every row in that block is uniformly bare. Mixed `+`/raw blocks still throw.
+- Lone `-` body row immediately after a bare anchor is retroactively converted to a `:-` delete with a `DASH_PAYLOAD_AUTO_DELETE_WARNING`.
+- An overlapping bare anchor followed by a concrete delete or replace block is treated as a stale "before then after" pair: the bare block is dropped with a `REPLACE_PAIR_COALESCED_OVERLAP_WARNING`. Identical-range pairs use the same coalesce as a stronger guarantee with `REPLACE_PAIR_COALESCED_WARNING`.
+- Two or more consecutive single-line `A-A:` blocks with empty bodies emit a `STACKED_BLANK_REPLACE_WARNING` (the model probably meant `A-B:-`).
+- `*`/`>` decoration prefixes from grep-style output are stripped from anchors.
+- `*** Update File:` / `*** Add File:` / `*** Delete File:` sentinels and unified-diff `@@` headers throw an `apply_patch sentinel … is not valid in hashline` error so the model knows it shipped the wrong format envelope.
+- `-N:` / `-N-M:` apply_patch hunk-anchor prefixes throw an `apply_patch line prefix … is not valid in hashline` error.
+- A lone `-` outside any pending block throws a focused `a lone "-" is not a valid hashline op` error pointing at `A-B:-`.
+- `*** Begin Patch` / `*** End Patch` envelopes are silently consumed. `*** Abort` terminates parsing silently — ops parsed before the marker still apply, no warning is surfaced.
 
 ## Outputs
 - Single-shot tool result; hashline mode does not use a `resolve` preview/apply handshake.
 - `content` contains one text block per call. For a successful single-file edit it is either:
-  - `<path>:` plus a compact diff preview from `packages/coding-agent/src/hashline/diff-preview.ts`, or
+  - `<path>:` plus a compact diff preview from `packages/hashline/src/diff-preview.ts`, or
   - `Updated <path>` / `Created <path>` when no compact preview text is emitted.
-- Parse or recovery warnings are appended as:
+- Parse, apply, or recovery warnings are appended as:
 
 ```text
 Warnings:
@@ -71,31 +91,30 @@ Warnings:
 - While the model is still typing arguments, the TUI can compute a diff preview with `packages/coding-agent/src/edit/streaming.ts`; that preview is not a deferred action and does not block execution.
 
 ## Flow
-1. `EditTool.execute()` in `packages/coding-agent/src/edit/index.ts` resolves the active mode. Default is `hashline`; `customFormat` exposes `packages/hashline/src/grammar.lark` as a constant string with op sigils and the section-header `¶` inlined.
-2. `executeHashlineSingle()` in `packages/coding-agent/src/hashline/execute.ts` splits the raw `input` into `¶PATH#HASH` / `¶PATH` sections with `splitHashlineInputs()`.
-3. If multiple sections target the same path, `mergeSamePathSections()` concatenates them before execution so every op still refers to the original file snapshot.
-4. Multi-section calls run a preflight pass (`preflightHashlineSection()`): parse ops, enforce plan-mode write rules, load the current file, reject anchor-scoped edits against missing files, reject auto-generated files, apply edits in memory, and fail if the result is a no-op. This prevents partial batches.
-5. `parseHashline()` in `packages/coding-agent/src/hashline/executor.ts` tokenizes the diff body:
-   - ignores raw blank lines and optional `*** Begin Patch`
-   - stops at `*** End Patch`
-   - stops at `*** Abort` and emits `ABORT_WARNING`
-   - turns `↓` / `↑` payload runs (inline plus `+`-prefixed subsequent lines) into one `insert` edit per payload line
-   - turns `A-B:` with payload into inserts before `A`, then deletes for `A-B`
-   - turns `A-B!` into one `delete` edit per line in the range; payload is forbidden
-6. `executeHashlineSingle()` computes the current file hash before applying anchored edits. If it differs from the section `#HASH`, recovery tries the read/search snapshot cache before any write.
-7. `applyHashlineEdits()` validates only line bounds, then applies the already hash-bound line-number edits.
-8. Recovery replays the edits against the cached snapshot for the section hash (`packages/coding-agent/src/edit/file-read-cache.ts`), then 3-way merges the result onto current disk content using `Diff.applyPatch(..., { fuzzFactor: 0 })` in `packages/coding-agent/src/hashline/recovery.ts`. On success the edit proceeds with a warning; on failure a `HashlineMismatchError` is surfaced.
-9. Before splicing lines, `absorbReplacementBoundaryDuplicates()` normalizes some malformed-but-recoverable ranges:
-   - duplicate prefix/suffix lines adjacent to a replacement can be absorbed by widening the delete range
-   - pure inserts can auto-drop duplicated leading/trailing payload lines when `edit.hashlineAutoDropPureInsertDuplicates` is enabled
-   - all such fixes append warnings
-10. `after_anchor` inserts are normalized to `before_anchor` of the next line, or `EOF` if the anchor was the last line.
-11. Anchor-targeted edits are bucketed by target line and applied bottom-up so earlier splices do not invalidate later original line numbers. `BOF` and `EOF` inserts are applied after that.
-12. The edited text is restored to the original BOM and line ending style with helpers from `packages/coding-agent/src/edit/normalize.ts` and persisted via `serializeEditFileText()` in `packages/coding-agent/src/edit/read-file.ts`.
-13. The writethrough callback from `createLspWritethrough()` may format the file and fetch diagnostics. Late diagnostics are queued back into session state as a hidden deferred message by `EditTool.#injectLateDiagnostics()` in `packages/coding-agent/src/edit/index.ts`.
-14. `invalidateFsScanAfterWrite()` calls `invalidateFsScanCache(path)` so filesystem-backed tools do not serve stale scan results.
-15. The session file-read cache is refreshed with the post-edit file text via `recordContiguous()`, making the just-written content the new recovery base for subsequent stale-anchor merges.
-16. The final response is built from a unified diff (`generateDiffString()`), a compact preview, and any accumulated warnings.
+1. `EditTool.execute()` in `packages/coding-agent/src/edit/index.ts` resolves the active mode. Default is `hashline`; `customFormat` exposes `packages/hashline/src/grammar.lark` as a constant string for prompt embedding.
+2. `executeHashlineSingle()` in `packages/coding-agent/src/edit/hashline/execute.ts` parses the raw `input` via `Patch.parse()` (`packages/hashline/src/input.ts`), which:
+   - strips a leading BOM and `*** Begin Patch` markers,
+   - splits the input into `¶PATH#TAG` sections,
+   - merges multiple sections targeting the same path so every op refers to the original file snapshot,
+   - rejects malformed headers.
+3. For each section, `Patcher.prepare()` (`packages/hashline/src/patcher.ts`):
+   - parses the diff body via `parsePatch()` (tokenizer + parser),
+   - reads the current file,
+   - resolves the section tag against the session snapshot store,
+   - runs recovery if the tag is stale (recorded snapshot replay + 3-way merge against current disk),
+   - validates anchor line bounds against the resolved file content,
+   - applies the edits in memory via `applyEdits()`.
+4. Multi-section calls preflight every section before any write hits the filesystem so a partial batch never lands.
+5. `applyEdits()` in `packages/hashline/src/apply.ts`:
+   - expands `^A-B` repeat edits into concrete inserts,
+   - runs `absorbReplacementBoundaryDuplicates()` to widen replacement deletes when the payload's leading/trailing rows match adjacent file lines (with an `Auto-absorbed …` warning),
+   - emits a per-line `Deleted line N contains a structural bracket/brace boundary …` warning ONLY when the block's net brace/paren/bracket balance is not preserved by its replacement payload (so well-formed multi-line replaces no longer false-positive),
+   - applies anchor-targeted edits bottom-up so later splices do not invalidate earlier line numbers,
+   - applies BOF and EOF inserts after the per-line bucket.
+6. `Patcher.commit()` writes the result. The writethrough callback from `createLspWritethrough()` may format the file and fetch diagnostics.
+7. `invalidateFsScanAfterWrite()` calls native `invalidateFsScanCache(path)` so filesystem-backed tools do not serve stale scan results.
+8. The session file-read cache is refreshed with the post-edit file text via `recordContiguous()`, making the just-written content the new recovery base for subsequent stale-anchor merges.
+9. The final response is built from a unified diff (`generateDiffString()`), a compact preview, and any accumulated warnings.
 
 ## Modes / Variants
 - `hashline` — default mode; line-anchored patch language described here (`packages/coding-agent/src/utils/edit-mode.ts`).
@@ -103,70 +122,79 @@ Warnings:
 - `patch` — structured JSON diff-hunk mode (`packages/coding-agent/src/edit/modes/patch.ts`).
 - `apply_patch` — freeform Codex-style `*** Begin Patch` envelope, internally expanded into patch-mode entries (`packages/coding-agent/src/edit/modes/apply-patch.ts`).
 
-Hashline op examples (single-line payloads are inline; multi-line payloads continue on `+`-prefixed subsequent lines):
+## Worked examples
+
+Reference file (the exact shape `read` returns):
 
 ```text
-¶src/a.ts#1a2b
-4↓const added = true;
+¶a.ts#0a
+1:const X = "a";
+2:const Y = X;
+3:
+4:console.log(X);
+5:console.log(Y);
+6:export { X, Y };
 ```
 
+Replace line 1 with two lines:
+
 ```text
-¶src/a.ts#1a2b
-4↑const addedBefore = true;
+¶a.ts#0a
+1-1:
++const X = "b";
++export const Y = X;
 ```
 
+Insert BELOW line 5 (keep line 5, add after):
+
 ```text
-¶src/a.ts#1a2b
-4-6:const replacement = true;
+¶a.ts#0a
+5-5:
+^5-5
++console.log(X + Y);
 ```
 
+Insert ABOVE line 5 (add before, keep line 5):
+
 ```text
-¶src/a.ts#1a2b
-4-5:const clean = (name || DEF).trim();
-+return clean.length === 0 ? DEF : clean.toUpperCase();
+¶a.ts#0a
+5-5:
++console.log(X + Y);
+^5-5
 ```
 
+Delete lines 4..5 entirely:
+
 ```text
-¶src/a.ts#1a2b
-4:const clean = (name || DEF).trim();
+¶a.ts#0a
+4-5:-
 ```
 
-BOF/EOF examples:
+Replace lines 4..5 with one blank line (NOT a delete):
 
 ```text
-¶src/a.ts
-BOF↓const HEADER = true;
+¶a.ts#0a
+4-5:
 ```
 
+Insert at start and end of file:
+
 ```text
-¶src/a.ts
-EOF↓export const done = true;
+¶a.ts#0a
+BOF:
++// header
+EOF:
++// trailer
 ```
 
-Delete / blank examples:
+Multi-file:
 
 ```text
-¶src/a.ts#1a2b
-4!
-```
-
-```text
-¶src/a.ts#1a2b
-4:
-```
-
-```text
-¶src/a.ts#1a2b
-4-6!
-```
-
-Multi-file example:
-
-```text
-¶src/a.ts#1a2b
-4:const enabled = true;
-¶src/b.ts#3c4d
-20!
+¶src/a.ts#0a
+4-4:
++const enabled = true;
+¶src/b.ts#1f
+20-20:-
 ```
 
 ## Side Effects
@@ -187,54 +215,66 @@ Multi-file example:
 
 ## Limits & Caps
 - Default mode is `hashline` (`DEFAULT_EDIT_MODE`) in `packages/coding-agent/src/utils/edit-mode.ts`.
-- File hashes are 4 lowercase hex chars from `computeFileHash()` in `packages/coding-agent/src/hashline/hash.ts`.
-- The visible mismatch report shows 2 lines of context on each side (`MISMATCH_CONTEXT`) in `packages/coding-agent/src/hashline/constants.ts`.
-- Stale-anchor recovery uses `fuzzFactor: 0` (`HASHLINE_RECOVERY_FUZZ_FACTOR`) in `packages/coding-agent/src/hashline/recovery.ts`.
-- The per-session read cache keeps at most 30 paths (`MAX_PATHS_PER_SESSION`) in `packages/coding-agent/src/edit/file-read-cache.ts`.
-- Hashline streaming chunk defaults are 200 lines or 64 KiB per chunk (`packages/coding-agent/src/hashline/types.ts`, consumed by `packages/coding-agent/src/hashline/stream.ts`).
-- `HL_OP_INSERT_BEFORE` is `↑`, `HL_OP_INSERT_AFTER` is `↓`, `HL_OP_REPLACE` is `:`, `HL_OP_DELETE` is `!`, `HL_OP_CHARS` is `↑↓:!`, `HL_FILE_PREFIX` is `¶`, `HL_FILE_HASH_SEP` is `#`, and `HL_LINE_BODY_SEP` is `:` (`packages/coding-agent/src/hashline/hash.ts`).
+- File snapshot tags are exactly two lowercase hex chars minted by the per-session snapshot store.
+- Each path gets a 256-slot ring. The initial slot is random, and each store randomizes slot→tag encoding, so tags are opaque rather than predictable counters.
+- The visible mismatch report shows 2 lines of context on each side (`MISMATCH_CONTEXT`) in `packages/hashline/src/messages.ts`.
+- Stale-anchor recovery uses `fuzzFactor: 0` in `packages/hashline/src/recovery.ts`.
+- `HL_OP_REPLACE` is `:`, `HL_OP_DELETE_SUFFIX` is `:-`, `HL_PAYLOAD_REPLACE` is `+`, `HL_PAYLOAD_REPEAT` is `^`, `HL_FILE_PREFIX` is `¶`, and `HL_FILE_HASH_SEP` is `#` (`packages/hashline/src/format.ts`).
 
 ## Errors
 - Missing section header:
   - `input must begin with "¶PATH#HASH" on the first non-blank line for anchored edits; got: ...`
 - Empty header:
   - `Input header "¶" is empty; provide a file path.`
-- Missing hash for anchored edit:
-  - `Missing hashline file hash for anchored edit to <path>; use ¶<path>#hash from your latest read.`
-- Line-hash anchors in edit ops:
-  - `line N: edit ops use bare line numbers. Copy the ¶PATH#hash header, then use anchors like 42, 42-45, BOF, or EOF.`
-- Bad anchor token:
-  - `line N: expected a line number such as "119"; got "...".`
-- Bad range syntax:
-  - `line N: range must be LINE or LINE-LINE (one dash, no spaces); got ...`
-  - `line N: range A-B ends before it starts.`
-- Payload forbidden for `!`:
-  - `line N: ! deletes only. Payload is forbidden after !; use : to replace.`
-- Missing `+` on a continuation line:
-  - `line N: payload continuation lines must start with +.`
+- Missing tag for anchored edit:
+  - `Missing hashline snapshot tag for anchored edit to <path>; use ¶<path>#tag from your latest read/search output.`
+- Inline payload on the anchor line:
+  - `line N: Inline payload on the anchor line is rejected. Write the anchor on its own line (e.g. A-B:), then put the body content on the next line prefixed with + (literal) or ^A-B (repeat). …`
 - Stray payload line:
-  - `line N: payload line has no preceding ↑, ↓, :, or ! operation.`
-- Unknown op:
-  - `line N: unrecognized op. Use LINE↑ (insert before), LINE↓ (insert after), LINE: / A-B: (replace), or LINE! / A-B! (delete).`
+  - `line N: payload line has no preceding A-B:, BOF:, or EOF: anchor. Got "...".`
+- Raw body row with no `+` / `^` prefix in a mixed-prefix block:
+  - `line N: payload row in a hashline block must start with + or ^A-B. Got "...".`
+- Range out of order:
+  - `line N: range A-B ends before it starts.`
+- Overlapping ops on the same anchor:
+  - `line N: anchor line X is already targeted by another op on line Y. Issue ONE block per range; payload is only the final desired content, never a before/after pair.`
+- BOF/EOF used with `:-`:
+  - `line N: BOF:/EOF: anchors are virtual positions and cannot use :-. Use +TEXT or ^A-B body rows to insert at a virtual position.`
+- Lone `-` op at top level:
+  - `line N: a lone "-" is not a valid hashline op. To delete a range, write A-B:- on the anchor line itself (e.g. 5-7:-).`
+- apply_patch / unified-diff contamination:
+  - `line N: apply_patch sentinel "***  …" is not valid in hashline. Use ¶PATH#HASH then A-B: / A-B:- / BOF: / EOF: blocks …`
+  - `line N: unified-diff hunk header (@@) is not valid in hashline. Use a ¶PATH#HASH header and bare A-B: anchor blocks.`
+  - `line N: apply_patch line prefix (-N: / -N-M:) is not valid in hashline. Drop the - prefix; use A-B: (replace) or A-B:- (delete) on the anchor line itself.`
 - Missing file for anchor-scoped edits:
   - `File not found: <path>`
 - Out-of-range anchor:
   - `Line N does not exist (file has M lines)`
-- Stale file hash throws `HashlineMismatchError`. The error contains both hashes, re-read guidance, and nearby current file lines as `*LINE:TEXT` / ` LINE:TEXT`.
+- Stale snapshot tag throws `MismatchError`. The error contains re-read guidance and nearby current file lines as `*LINE:TEXT` / ` LINE:TEXT`.
 - No-op edit:
-  - `Edits to <path> resulted in no changes being made.`
+  - `Edits to <path> parsed and applied cleanly, but produced no change: your body row(s) are byte-identical to the file at the targeted lines. The bug is somewhere else — re-read the file before issuing another edit. Do NOT widen the payload or add lines; verify the anchor first.`
 - Recovery failure is silent internally: if cache-based merge cannot prove a valid result, the mismatch error is surfaced unchanged.
 
+## Warnings
+- `Detected two identical-range hashline blocks; kept only the second block. …` (`REPLACE_PAIR_COALESCED_WARNING`)
+- `Detected an overlapping bare hashline block immediately followed by a concrete block; dropped the earlier bare block. …` (`REPLACE_PAIR_COALESCED_OVERLAP_WARNING`)
+- `Auto-prefixed bare body row(s) with +. Always start payload rows with +TEXT (literal) or ^A-B (repeat) …` (`BARE_BODY_AUTO_PIPED_WARNING`)
+- `Converted a lone - body row to a :- delete on the preceding anchor. Write A-B:- on the anchor line itself to delete the range.` (`DASH_PAYLOAD_AUTO_DELETE_WARNING`)
+- `Detected a run of single-line empty-body blocks (A-A: with no payload). Each one REPLACES its line with a blank; to delete lines use A-B:-.` (`STACKED_BLANK_REPLACE_WARNING`)
+- `Auto-absorbed N duplicate line(s) above replacement (file lines A..B matched the payload's leading lines; widened the deletion to start at file line A instead of C).`
+- `Auto-absorbed N duplicate line(s) below replacement …` (symmetric variant)
+- `Deleted line N contains a structural bracket/brace boundary ("…"); verify the file is still balanced or use '+replacement' payload to keep the boundary intact.` — only fires when the block's net delimiter balance is not preserved by its replacement.
+- Recovery banners: `RECOVERY_EXTERNAL_WARNING`, `RECOVERY_SESSION_CHAIN_WARNING`, `RECOVERY_SESSION_REPLAY_WARNING` (`packages/hashline/src/messages.ts`).
+
 ## Notes
-- `read` and `search` are the authoritative source of section hashes. Copy `¶PATH#HASH`; op lines use bare line numbers and do not want the trailing `:TEXT`.
-- Multi-op patches are parsed against the original file snapshot. Do not renumber later anchors after earlier ops; `applyHashlineEdits()` buckets and applies them bottom-up.
+- `read` and `search` are the authoritative source of section tags. Copy `¶PATH#TAG`; anchor lines use bare line numbers and do not carry the trailing `:TEXT`.
+- Multi-op patches are parsed against the original file snapshot. Do not renumber later anchors after earlier ops; `applyEdits()` buckets and applies them bottom-up.
 - Failed hand-edits often come from sequentially shifting later anchors inside the same patch. Treat every op as using the line numbers from the original section header.
-- Two consecutive `A-B:` ops on the *identical* range in the same hunk are coalesced: the second op's payload wins and the first is dropped (a "Detected an identical-range before/after replace pair" warning is appended). Other overlap shapes — different ranges, `A-B:` overlapping a `N!`/`N:`, or two `!` deletes on the same line — still throw `line N: anchor line X is already targeted by the :/! op on line Y`. The coalesce only fires while the first op is still pending; cross-hunk duplicates still throw.
-- `A-B:` is not a primitive replace in the parser. With payload, it expands to inserts before `A` plus deletes for `A-B`. `A-B!` is the direct delete form. Bare `A:` / `A-B:` (no payload) replaces with a single blank line; bare `↑` / `↓` insert a blank line.
-- Inline payload tip: trailing whitespace on the op line is trimmed. To preserve trailing spaces in the inserted/replacement content, put that content on the next line instead of inline.
-- `computeFileHash()` normalizes CR characters and trailing whitespace before hashing. The section survives line-ending and trailing-space-only changes, but not substantive file edits.
-- `splitHashlineInputs()` normalizes absolute `¶PATH#HASH` headers back to a cwd-relative path when the file is inside the current working tree. Headers with any run of leading `¶` chars (e.g. `¶foo.ts`, `¶¶foo.ts`, `¶¶¶foo.ts`) are accepted; the canonical form is `¶PATH#HASH` for anchored edits.
-- Optional `*** Begin Patch` / `*** End Patch` markers are accepted in hashline mode, but the file sections are still `¶PATH#HASH`-based, not Codex `*** Update File:` hunks.
-- `*** Abort` terminates parsing early and returns `ABORT_WARNING`; ops parsed before the marker still apply.
-- File-read cache invalidation is conflict-based, not write-through invalidation. If `read` later records content for a line that disagrees with the cached snapshot, the entire snapshot for that path is replaced with the newly observed lines (`packages/coding-agent/src/edit/file-read-cache.ts`).
+- Inline payload on the anchor line is rejected. Put the body content on the next line prefixed with `+` (literal) or `^A-B` (repeat).
+- Trailing whitespace on body rows is preserved exactly. To preserve trailing spaces, put them in the `+TEXT` row.
+- Section tags are opaque snapshot-store slots, not content hashes. A tag is valid only in the session store that minted it; if the live file no longer matches the recorded snapshot, stale-anchor recovery must prove a safe merge before writing.
+- `splitRawSections()` (in `packages/hashline/src/input.ts`) normalizes absolute `¶PATH#TAG` headers back to a cwd-relative path when the file is inside the current working tree. Headers with any run of leading `¶` chars (e.g. `¶foo.ts`, `¶¶foo.ts`) are accepted; the canonical form is `¶PATH#TAG` for anchored edits.
+- Optional `*** Begin Patch` / `*** End Patch` markers are accepted, but the file sections are still `¶PATH#TAG`-based, not Codex `*** Update File:` hunks.
+- `*** Abort` terminates parsing silently; ops parsed before the marker still apply, but no warning is surfaced.
+- Snapshot tags are not invalidated on write-through; a tag remains in its path ring until that slot wraps. If a later read records different content, it mints a new tag while old snapshots remain available for recovery until overwritten.
 - There is no resolve-style apply/discard phase for hashline edits. The only preview path is the transient TUI diff preview in `packages/coding-agent/src/edit/streaming.ts`.

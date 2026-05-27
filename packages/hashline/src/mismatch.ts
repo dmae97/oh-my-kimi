@@ -1,5 +1,5 @@
 /**
- * Error type raised when a section's file-hash does not match the live file
+ * Error type raised when a section's snapshot tag does not match the live file
  * content and recovery is unavailable / has failed.
  *
  * Carries enough context to render a useful diagnostic: the anchored lines
@@ -15,8 +15,8 @@ const LINE_REF_RE = /^\s*[>+\-*]*\s*(\d+)(?::.*)?\s*$/;
 export function formatFullAnchorRequirement(raw?: string): string {
 	const received = raw === undefined ? "" : ` Received ${JSON.stringify(raw)}.`;
 	return (
-		`a bare line number from read/search output plus the section header file hash ` +
-		`(for example ${HL_FILE_PREFIX}src/foo.ts${HL_FILE_HASH_SEP}1a2b and line "160")${received}`
+		`a bare line number from read/search output plus the section header snapshot tag ` +
+		`(for example ${HL_FILE_PREFIX}src/foo.ts${HL_FILE_HASH_SEP}0A3 and line "160")${received}`
 	);
 }
 
@@ -51,7 +51,7 @@ function getMismatchDisplayLines(anchorLines: readonly number[], fileLines: stri
 }
 
 /**
- * Raised when a hashline section's file hash doesn't match the live file's
+ * Raised when a hashline section's snapshot tag doesn't match the live file's
  * content (and recovery, if configured, declined the merge). Carries the
  * file lines plus anchored lines so renderers can produce a richer
  * diagnostic via {@link MismatchError.displayMessage}.

@@ -18,6 +18,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { isPromise } from "node:util/types";
+import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import {
 	type AfterToolCallContext,
 	type AfterToolCallResult,
@@ -104,6 +105,7 @@ import { onAppendOnlyModeChanged } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
+import { getFileSnapshotStore } from "../edit/file-snapshot-store";
 import {
 	disposeKernelSessionsByOwner,
 	executePython as executePythonCommand,
@@ -738,6 +740,7 @@ export class AgentSession {
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
 	readonly yieldQueue: YieldQueue;
+	fileSnapshotStore?: InMemorySnapshotStore;
 
 	#powerAssertion: MacOSPowerAssertion | undefined;
 
@@ -4156,6 +4159,7 @@ export class AgentSession {
 				const fileMentionMessages = await generateFileMentionMessages(fileMentions, this.sessionManager.getCwd(), {
 					autoResizeImages: this.settings.get("images.autoResize"),
 					useHashLines: resolveFileDisplayMode(this).hashLines,
+					snapshotStore: getFileSnapshotStore(this),
 				});
 				messages.push(...fileMentionMessages);
 			}

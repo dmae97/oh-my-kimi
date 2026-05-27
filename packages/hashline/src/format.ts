@@ -1,7 +1,7 @@
 /**
- * Hashline format primitives: sigils, separators, regex fragments, and the
- * file-hash computation. These are the single source of truth for the
- * parser, the tokenizer, the prompt, and the formal grammar.
+ * Hashline format primitives: sigils, separators, regex fragments, and
+ * display helpers. These are the single source of truth for the parser, the
+ * tokenizer, the prompt, and the formal grammar.
  */
 
 /** Anchor terminator for every hashline operation block. */
@@ -11,7 +11,7 @@ export const HL_OP_REPLACE = ":";
 export const HL_OP_DELETE_SUFFIX = ":-";
 
 /** Payload sigil for literal body rows. */
-export const HL_PAYLOAD_REPLACE = "|";
+export const HL_PAYLOAD_REPLACE = "+";
 /** Payload sigil for body rows that repeat original file lines. */
 export const HL_PAYLOAD_REPEAT = "^";
 
@@ -21,7 +21,7 @@ export const HL_PAYLOAD_CHARS = `${HL_PAYLOAD_REPLACE}${HL_PAYLOAD_REPEAT}`;
 /** Hashline edit file-section header marker. */
 export const HL_FILE_PREFIX = "¶";
 
-/** Separator between a hashline file path and its file hash. */
+/** Separator between a hashline file path and its opaque snapshot tag. */
 export const HL_FILE_HASH_SEP = "#";
 
 /** Separator between a line number and displayed line content in hashline mode. */
@@ -54,8 +54,11 @@ export const HL_PAYLOAD_REPEAT_RE = new RegExp(
 	`^\\${HL_PAYLOAD_REPEAT}${HL_LINE_CAPTURE_RE_RAW}-${HL_LINE_CAPTURE_RE_RAW}$`,
 );
 
-/** Four-hex-character file hash carried by a hashline section header. */
-export const HL_FILE_HASH_RE_RAW = `[0-9a-f]{4}`;
+/** Number of hex characters in an opaque snapshot tag. */
+export const HL_FILE_HASH_LENGTH = 3;
+
+/** Canonical uppercase hexadecimal opaque snapshot tag carried by a hashline section header. */
+export const HL_FILE_HASH_RE_RAW = `[0-9A-F]{${HL_FILE_HASH_LENGTH}}`;
 
 /** Capture-group form of {@link HL_FILE_HASH_RE_RAW}. */
 export const HL_FILE_HASH_CAPTURE_RE_RAW = `(${HL_FILE_HASH_RE_RAW})`;
@@ -64,10 +67,10 @@ export const HL_FILE_HASH_CAPTURE_RE_RAW = `(${HL_FILE_HASH_RE_RAW})`;
 export const HL_LINE_BODY_SEP_RE_RAW = regexEscape(HL_LINE_BODY_SEP);
 
 /**
- * Representative file hashes for use in user-facing error messages and prompt
- * examples.
+ * Representative snapshot tags for use in user-facing error messages and
+ * prompt examples.
  */
-export const HL_FILE_HASH_EXAMPLES = ["1a2b", "3c4d", "9f3e"] as const;
+export const HL_FILE_HASH_EXAMPLES = ["0A3", "1F7", "3C9"] as const;
 
 /**
  * Format a comma-separated list of example anchors with an optional line-number
@@ -78,26 +81,7 @@ export function describeAnchorExamples(linePrefix = ""): string {
 	return examples.map(e => `"${e}"`).join(", ");
 }
 
-function normalizeFileHashText(text: string): string {
-	return text
-		.replace(/\r/g, "")
-		.split("\n")
-		.map(line => line.trimEnd())
-		.join("\n");
-}
-
-/**
- * Compute the 4-hex-character hash carried by a hashline section header. The
- * hash normalizes CR characters and trailing whitespace before hashing so
- * platform line endings and display-trimmed lines do not invalidate anchors.
- */
-export function computeFileHash(text: string): string {
-	const normalized = normalizeFileHashText(text);
-	const low16 = Bun.hash.xxHash32(normalized, 0) & 0xffff;
-	return low16.toString(16).padStart(4, "0");
-}
-
-/** Format a hashline section header for a file path and file hash. */
+/** Format a hashline section header for a file path and snapshot tag. */
 export function formatHashlineHeader(filePath: string, fileHash: string): string {
 	return `${HL_FILE_PREFIX}${filePath}${HL_FILE_HASH_SEP}${fileHash}`;
 }

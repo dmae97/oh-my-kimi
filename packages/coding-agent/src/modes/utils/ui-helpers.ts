@@ -2,6 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message } from "@oh-my-pi/pi-ai";
 import { type Component, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
+import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BranchSummaryMessageComponent } from "../../modes/components/branch-summary-message";
@@ -377,6 +378,7 @@ export class UiHelpers {
 						content.name,
 						renderArgs,
 						{
+							snapshots: getFileSnapshotStore(this.ctx.session),
 							showImages: settings.get("terminal.showImages"),
 							editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 							editAllowFuzzy: settings.get("edit.fuzzyMatch"),

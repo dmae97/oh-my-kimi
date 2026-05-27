@@ -3,6 +3,7 @@ import { calculatePromptTokens } from "@oh-my-pi/pi-agent-core/compaction/compac
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { type Component, Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
+import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import {
 	ReadToolGroupComponent,
@@ -329,6 +330,7 @@ export class EventController {
 						content.name,
 						renderArgs,
 						{
+							snapshots: getFileSnapshotStore(this.ctx.session),
 							showImages: settings.get("terminal.showImages"),
 							editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 							editAllowFuzzy: settings.get("edit.fuzzyMatch"),
@@ -444,6 +446,7 @@ export class EventController {
 				event.toolName,
 				event.args,
 				{
+					snapshots: getFileSnapshotStore(this.ctx.session),
 					showImages: settings.get("terminal.showImages"),
 					editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 					editAllowFuzzy: settings.get("edit.fuzzyMatch"),

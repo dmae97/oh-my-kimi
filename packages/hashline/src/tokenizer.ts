@@ -15,6 +15,7 @@
 
 import {
 	describeAnchorExamples,
+	HL_FILE_HASH_LENGTH,
 	HL_FILE_HASH_SEP,
 	HL_FILE_PREFIX,
 	HL_OP_DELETE_SUFFIX,
@@ -34,13 +35,14 @@ const CHAR_TAB = 9;
 const CHAR_SPACE = 32;
 const CHAR_HYPHEN = 45;
 
+const CHAR_UPPER_A = 65;
+const CHAR_UPPER_F = 70;
 const CHAR_LOWER_A = 97;
 const CHAR_LOWER_F = 102;
 const CHAR_PILCROW = HL_FILE_PREFIX.charCodeAt(0);
 const CHAR_OP_REPLACE = HL_OP_REPLACE.charCodeAt(0);
 const CHAR_PAYLOAD_REPLACE = HL_PAYLOAD_REPLACE.charCodeAt(0);
 const CHAR_PAYLOAD_REPEAT = HL_PAYLOAD_REPEAT.charCodeAt(0);
-const FILE_HASH_LENGTH = 4;
 
 function isDigitCode(code: number): boolean {
 	return code >= CHAR_ZERO && code <= CHAR_NINE;
@@ -51,11 +53,19 @@ function isNonZeroDigitCode(code: number): boolean {
 }
 
 function isDecorationCode(code: number): boolean {
-	return code === 42 || code === CHAR_HYPHEN || code === 62;
+	// `*` (grep match marker) and `>` (grep context marker). We intentionally
+	// do NOT include `-` here: a leading `-` is the unified-diff "removed
+	// line" prefix and the OpenAI apply_patch hunk-line prefix, both of
+	// which we want to reject loudly rather than silently swallow.
+	return code === 42 || code === 62;
 }
 
 function isHexDigitCode(code: number): boolean {
-	return isDigitCode(code) || (code >= CHAR_LOWER_A && code <= CHAR_LOWER_F);
+	return (
+		isDigitCode(code) ||
+		(code >= CHAR_UPPER_A && code <= CHAR_UPPER_F) ||
+		(code >= CHAR_LOWER_A && code <= CHAR_LOWER_F)
+	);
 }
 
 function skipWhitespace(line: string, index: number, end = line.length): number {
@@ -109,7 +119,7 @@ export function cloneCursor(cursor: Cursor): Cursor {
 	return cursor;
 }
 // Leniently accept anchors copied from read/search output:
-//   - optional leading line-marker decoration (`*`, `>`, `-`)
+//   - optional leading line-marker decoration (`*`, `>`)
 //   - the required bare line number / BOF / EOF anchor
 function skipDecoratedAnchorPrefix(line: string, end = trimEndIndex(line)): number {
 	let index = skipWhitespace(line, 0, end);
@@ -160,15 +170,27 @@ function scanRange(line: string, end = trimEndIndex(line)): RangeScan | null {
 	const start = scanLineNumber(line, numberStart, end);
 	if (start === null) return null;
 
-	// Ranges MUST be written `A-B` (the explicit single-line form `A-A` is fine).
-	if (start.nextIndex >= end || line.charCodeAt(start.nextIndex) !== CHAR_HYPHEN) return null;
-	const endNumber = scanLineNumber(line, start.nextIndex + 1, end);
-	if (endNumber === null) return null;
-
-	return {
-		range: { start: { line: start.line }, end: { line: endNumber.line } },
-		nextIndex: skipWhitespace(line, endNumber.nextIndex, end),
-	};
+	// Canonical form is `A-B` (and `A-A` for one line). The bare single-line
+	// shorthand `A` is also accepted because models that learned the format
+	// from `read` output — which renders each file row as `LINE:content` —
+	// frequently reproduce that shape as an anchor. We treat `A` as `A-A`
+	// here so `tryParseBlockOp` can still raise its strict inline-payload
+	// diagnostic on `A:content` lines.
+	if (start.nextIndex < end && line.charCodeAt(start.nextIndex) === CHAR_HYPHEN) {
+		const endNumber = scanLineNumber(line, start.nextIndex + 1, end);
+		if (endNumber === null) return null;
+		return {
+			range: { start: { line: start.line }, end: { line: endNumber.line } },
+			nextIndex: skipWhitespace(line, endNumber.nextIndex, end),
+		};
+	}
+	if (start.nextIndex < end && line.charCodeAt(start.nextIndex) === CHAR_OP_REPLACE) {
+		return {
+			range: { start: { line: start.line }, end: { line: start.line } },
+			nextIndex: start.nextIndex,
+		};
+	}
+	return null;
 }
 
 function startsWithWord(line: string, index: number, end: number, word: string): boolean {
@@ -189,16 +211,29 @@ interface TargetScan {
 function scanBlockTarget(line: string, end = trimEndIndex(line)): TargetScan | null {
 	const targetStart = skipDecoratedAnchorPrefix(line, end);
 	if (startsWithWord(line, targetStart, end, "BOF")) {
-		const nextIndex = skipWhitespace(line, targetStart + 3, end);
+		const nextIndex = skipBofEofRangeSuffix(line, targetStart + 3, end);
 		return { target: { kind: "bof" }, nextIndex };
 	}
 	if (startsWithWord(line, targetStart, end, "EOF")) {
-		const nextIndex = skipWhitespace(line, targetStart + 3, end);
+		const nextIndex = skipBofEofRangeSuffix(line, targetStart + 3, end);
 		return { target: { kind: "eof" }, nextIndex };
 	}
 
 	const range = scanRange(line, end);
 	return range === null ? null : { target: { kind: "range", range: range.range }, nextIndex: range.nextIndex };
+}
+
+// Models sometimes write `BOF-BOF:`, `EOF-EOF:`, or even `BOF-EOF:` by analogy
+// with the numeric `A-B:` form. The range portion carries no information for
+// virtual anchors (they do not span lines), so we just consume and discard it.
+function skipBofEofRangeSuffix(line: string, index: number, end: number): number {
+	const cursor = skipWhitespace(line, index, end);
+	if (cursor >= end || line.charCodeAt(cursor) !== CHAR_HYPHEN) return cursor;
+	const afterHyphen = skipWhitespace(line, cursor + 1, end);
+	if (startsWithWord(line, afterHyphen, end, "BOF") || startsWithWord(line, afterHyphen, end, "EOF")) {
+		return skipWhitespace(line, afterHyphen + 3, end);
+	}
+	return cursor;
 }
 
 interface ParsedBlockOp {
@@ -231,13 +266,18 @@ function tryParseBlockOp(line: string): ParsedBlockOp | null {
 	};
 }
 
-function tryParseRepeatPayload(line: string): ParsedRange | "shorthand" | null {
+function tryParseRepeatPayload(line: string): ParsedRange | null {
 	const end = trimEndIndex(line);
 	if (line.length === 0 || line.charCodeAt(0) !== CHAR_PAYLOAD_REPEAT) return null;
 
 	const start = scanLineNumber(line, 1, end);
 	if (start === null) return null;
-	if (start.nextIndex === end) return "shorthand";
+	// Canonical form is `^A-B`; the explicit `^A-A` is preferred. The bare
+	// single-line `^A` is also accepted as `^A-A` because the strict form
+	// adds friction without disambiguating anything.
+	if (start.nextIndex === end) {
+		return { start: { line: start.line }, end: { line: start.line } };
+	}
 	if (start.nextIndex >= end || line.charCodeAt(start.nextIndex) !== CHAR_HYPHEN) return null;
 
 	const finish = scanLineNumber(line, start.nextIndex + 1, end);
@@ -248,7 +288,7 @@ function tryParseRepeatPayload(line: string): ParsedRange | "shorthand" | null {
 
 /**
  * Strict header scan: `¶+` prefix, optional whitespace, path body that
- * excludes whitespace, `#`, and `¶`, optional `#[0-9a-f]{4}` hash suffix,
+ * excludes whitespace, `#`, and `¶`, optional three-hex hash suffix,
  * optional trailing whitespace. Returns `null` when any byte deviates from
  * the shape.
  */
@@ -273,12 +313,12 @@ function tryParseHeader(line: string): { path: string; fileHash?: string } | nul
 	let fileHash: string | undefined;
 	if (index < end && line.charCodeAt(index) === CHAR_HASH) {
 		const hashStart = index + 1;
-		const hashEnd = hashStart + FILE_HASH_LENGTH;
+		const hashEnd = hashStart + HL_FILE_HASH_LENGTH;
 		if (hashEnd > end) return null;
 		for (let probe = hashStart; probe < hashEnd; probe++) {
 			if (!isHexDigitCode(line.charCodeAt(probe))) return null;
 		}
-		fileHash = line.slice(hashStart, hashEnd);
+		fileHash = line.slice(hashStart, hashEnd).toUpperCase();
 		index = hashEnd;
 	}
 
@@ -302,7 +342,6 @@ export type Token =
 	| (TokenBase & { kind: "op-block"; target: BlockTarget; inlineBody: string | undefined; deleteSuffix: boolean })
 	| (TokenBase & { kind: "payload-literal"; text: string })
 	| (TokenBase & { kind: "payload-repeat"; range: ParsedRange })
-	| (TokenBase & { kind: "payload-repeat-shorthand" })
 	| (TokenBase & { kind: "raw"; text: string });
 
 function classifyLine(line: string, lineNum: number): Token {
@@ -326,7 +365,6 @@ function classifyLine(line: string, lineNum: number): Token {
 	}
 	if (firstCode === CHAR_PAYLOAD_REPEAT) {
 		const range = tryParseRepeatPayload(line);
-		if (range === "shorthand") return { kind: "payload-repeat-shorthand", lineNum };
 		if (range !== null) return { kind: "payload-repeat", lineNum, range };
 	}
 

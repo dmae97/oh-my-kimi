@@ -44,7 +44,18 @@ function getHashlineApplyOptions(session: ToolSession): { autoDropPureInsertDupl
 }
 
 function noChangeDiagnostic(path: string): string {
-	return `Edits to ${path} resulted in no changes being made.`;
+	// The patch parsed and applied cleanly but produced no change — the
+	// `|literal` body rows matched the file content at the targeted lines
+	// byte-for-byte. The model usually misreads this as "wrong anchor, try
+	// again with a bigger payload" and starts duplicating content; the
+	// message below names the cause directly so the next turn can re-read
+	// instead of expanding the patch.
+	return (
+		`Edits to ${path} parsed and applied cleanly, but produced no change: ` +
+		`your body row(s) are byte-identical to the file at the targeted lines. ` +
+		`The bug is somewhere else — re-read the file before issuing another edit. ` +
+		`Do NOT widen the payload or add lines; verify the anchor first.`
+	);
 }
 
 function assertUniqueCanonicalPaths(prepared: readonly PreparedSection[]): void {

@@ -15,10 +15,13 @@
  */
 import { HL_PAYLOAD_REPEAT, HL_PAYLOAD_REPLACE } from "./format";
 import {
-	ABORT_WARNING,
+	BARE_BODY_AUTO_PIPED_WARNING,
+	DASH_PAYLOAD_AUTO_DELETE_WARNING,
 	INLINE_PAYLOAD_REJECTED_PREFIX,
-	REPEAT_SHORTHAND_REJECTED_MESSAGE,
+	PLUS_PREFIXED_REPEAT_WARNING,
+	REPLACE_PAIR_COALESCED_OVERLAP_WARNING,
 	REPLACE_PAIR_COALESCED_WARNING,
+	STACKED_BLANK_REPLACE_WARNING,
 	VIRTUAL_REPLACE_REJECTED_MESSAGE,
 } from "./messages";
 import { type BlockTarget, cloneCursor, type ParsedRange, type Token, Tokenizer } from "./tokenizer";
@@ -30,12 +33,88 @@ function validateRangeOrder(range: ParsedRange, lineNum: number): void {
 	}
 }
 
+/**
+ * If `text` (the slice after a `+` literal sigil) trims to `^A-B` (or `^A`,
+ * accepted as `^A-A`), return the parsed range. Otherwise `null`. Used to
+ * silently reroute `+^A-B` rows as repeats — models reflexively prefix every
+ * body row with `+`, including ones that should be repeats.
+ */
+function tryParseLiteralAsRepeat(text: string): ParsedRange | null {
+	const stripped = text.trim();
+	if (stripped.length === 0 || stripped.charCodeAt(0) !== 94 /* ^ */) return null;
+	const match = /^\^([1-9]\d*)(?:-([1-9]\d*))?$/.exec(stripped);
+	if (match === null) return null;
+	const start = Number.parseInt(match[1], 10);
+	const end = match[2] !== undefined ? Number.parseInt(match[2], 10) : start;
+	return { start: { line: start }, end: { line: end } };
+}
+
 function rangesEqual(a: ParsedRange, b: ParsedRange): boolean {
 	return a.start.line === b.start.line && a.end.line === b.end.line;
 }
 
 function targetsEqualConcreteRange(a: BlockTarget, b: BlockTarget): boolean {
 	return a.kind === "range" && b.kind === "range" && rangesEqual(a.range, b.range);
+}
+
+function rangesOverlap(a: ParsedRange, b: ParsedRange): boolean {
+	return a.start.line <= b.end.line && b.start.line <= a.end.line;
+}
+
+function rangesOverlapBetweenTargets(a: BlockTarget, b: BlockTarget): boolean {
+	return a.kind === "range" && b.kind === "range" && rangesOverlap(a.range, b.range);
+}
+
+/**
+ * Detect OpenAI-`apply_patch` / unified-diff contamination in a raw line.
+ * Returns the error message to throw, or `null` when the line is clean.
+ *
+ * We only catch shapes that are unambiguously NOT hashline:
+ * - `*** Update File:` / `*** Add File:` / `*** Delete File:` / `*** Move to:` sentinels
+ * - unified-diff hunk headers (`@@`, `@@ -1,3 +1,3 @@`)
+ * - apply_patch hunk-anchor prefixes `-N:` / `-N-M:` — the bare `-N` form
+ *   (no `:` and no `-M`) is intentionally NOT matched so the existing strict
+ *   "unrecognized hashline block" diagnostic still fires on the legacy
+ *   delete-row shape `-5`.
+ *
+ * `+`-prefixed shapes are NOT detected here because `+` is hashline's
+ * literal payload sigil; `+TEXT` / `+N:` are valid payload rows (or, at
+ * top level, orphan payloads that fall through to the standard "no
+ * preceding A-B:" error).
+ */
+function detectApplyPatchContamination(text: string, _hasPending: boolean): string | null {
+	const trimmed = text.trimStart();
+	if (trimmed.length === 0) return null;
+
+	if (
+		trimmed.startsWith("*** Update File:") ||
+		trimmed.startsWith("*** Add File:") ||
+		trimmed.startsWith("*** Delete File:") ||
+		trimmed.startsWith("*** Move to:")
+	) {
+		const preview = trimmed.length > 48 ? `${trimmed.slice(0, 48)}…` : trimmed;
+		return (
+			`apply_patch sentinel ${JSON.stringify(preview)} is not valid in hashline. ` +
+			`Use \`${"\u00b6"}PATH#HASH\` then \`A-B:\` / \`A-B:-\` / \`BOF:\` / \`EOF:\` blocks; do not wrap edits in another format's envelope.`
+		);
+	}
+	if (trimmed === "@@" || trimmed.startsWith("@@ ") || trimmed.startsWith("@@\t")) {
+		return (
+			"unified-diff hunk header (`@@`) is not valid in hashline. " +
+			"Use a `¶PATH#HASH` header and bare `A-B:` anchor blocks."
+		);
+	}
+	if (/^-\d+(-\d+)?:/.test(trimmed)) {
+		return (
+			"apply_patch line prefix (`-N:` / `-N-M:`) is not valid in hashline. " +
+			"Drop the `-` prefix; use `A-B:` (replace) or `A-B:-` (delete) on the anchor line itself."
+		);
+	}
+	return null;
+}
+
+function pendingHasAnyContent(pending: Pending): boolean {
+	return pending.payloads.length > 0 || pending.pendingRaws.length > 0;
 }
 
 function expandRange(range: ParsedRange): Anchor[] {
@@ -70,6 +149,13 @@ interface Pending {
 	target: BlockTarget;
 	lineNum: number;
 	payloads: PayloadRow[];
+	/**
+	 * Bare body rows (no `|`/`^` prefix) buffered while we wait to see
+	 * whether the entire block is uniformly unprefixed. On flush, if every
+	 * row was bare AND no `|`/`^` row was ever observed for this block, we
+	 * auto-pipe the buffered rows and emit a {@link BARE_BODY_AUTO_PIPED_WARNING}.
+	 */
+	pendingRaws: { text: string; lineNum: number }[];
 }
 
 /**
@@ -88,6 +174,13 @@ export class Executor {
 	#pending: Pending | undefined;
 	#terminated = false;
 	#skippableComments: PendingComment[] = [];
+	/**
+	 * Length of the current run of consecutive single-line empty-body
+	 * replacements (`A-A:` with no payload). Reset on every non-matching
+	 * flush; surfaces {@link STACKED_BLANK_REPLACE_WARNING} when the run
+	 * reaches two.
+	 */
+	#blankSingleRun = 0;
 
 	#discardPendingSkippableComments(): void {
 		this.#skippableComments = [];
@@ -122,7 +215,6 @@ export class Executor {
 				this.#terminated = true;
 				return;
 			case "abort":
-				this.#warnings.push(ABORT_WARNING);
 				this.#terminated = true;
 				return;
 			case "header":
@@ -140,9 +232,6 @@ export class Executor {
 				this.#consumePendingSkippableComments();
 				this.#handleRepeatPayload(token.range, token.lineNum);
 				return;
-			case "payload-repeat-shorthand":
-				this.#consumePendingSkippableComments();
-				throw new Error(`line ${token.lineNum}: ${REPEAT_SHORTHAND_REJECTED_MESSAGE}`);
 			case "raw":
 				if (this.#pending === undefined && isSkippableCommentLine(token.text)) {
 					this.#skippableComments.push({ text: token.text, lineNum: token.lineNum });
@@ -158,29 +247,59 @@ export class Executor {
 						throw new Error(`line ${token.lineNum}: ${VIRTUAL_REPLACE_REJECTED_MESSAGE}`);
 					}
 					validateRangeOrder(token.target.range, token.lineNum);
-					this.#flushPending();
+					// L5 (delete-suffix variant): if pending is a bare anchor that
+					// overlaps the new delete range, drop it silently — the model
+					// expressed `A-B:` then `A-B:-` (the classic before-then-after
+					// shape) and the actual intent is "delete A-B".
+					if (
+						this.#pending !== undefined &&
+						!pendingHasAnyContent(this.#pending) &&
+						rangesOverlapBetweenTargets(this.#pending.target, token.target)
+					) {
+						this.#pending = undefined;
+						this.#blankSingleRun = 0;
+						if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_OVERLAP_WARNING)) {
+							this.#warnings.push(REPLACE_PAIR_COALESCED_OVERLAP_WARNING);
+						}
+					} else {
+						this.#flushPending();
+					}
 					for (const anchor of expandRange(token.target.range)) {
 						this.#pushDelete(anchor, token.lineNum);
 					}
+					this.#blankSingleRun = 0;
 					return;
 				}
 				if (token.inlineBody !== undefined) {
 					throw new Error(
 						`line ${token.lineNum}: ${INLINE_PAYLOAD_REJECTED_PREFIX} ` +
-							`Use a bare anchor line such as ${describeTarget(token.target)}, then put body rows below it prefixed with ` +
-							`${HL_PAYLOAD_REPLACE} or ${HL_PAYLOAD_REPEAT}.`,
+							`Write the anchor on its own line (e.g. ${describeTarget(token.target)}), then put the body content on the next line prefixed with ` +
+							`${HL_PAYLOAD_REPLACE} (literal) or ${HL_PAYLOAD_REPEAT}A-B (repeat). If you pasted "${describeTarget(token.target).slice(0, -1)}CONTENT" from \`read\` output, strip the leading "${describeTarget(token.target).slice(0, -1)}" and prefix the rest with ${HL_PAYLOAD_REPLACE}.`,
 					);
 				}
 				if (token.target.kind === "range") validateRangeOrder(token.target.range, token.lineNum);
 				if (this.#pending !== undefined && targetsEqualConcreteRange(this.#pending.target, token.target)) {
+					// Identical-range coalesce: drop the first block. Last-wins.
 					this.#pending = undefined;
 					if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_WARNING)) {
 						this.#warnings.push(REPLACE_PAIR_COALESCED_WARNING);
 					}
+				} else if (
+					this.#pending !== undefined &&
+					!pendingHasAnyContent(this.#pending) &&
+					rangesOverlapBetweenTargets(this.#pending.target, token.target)
+				) {
+					// L5 (replace variant): bare pending block overlaps the new
+					// concrete block; treat as before/after pair, drop the bare
+					// one. The new block becomes pending.
+					this.#pending = undefined;
+					if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_OVERLAP_WARNING)) {
+						this.#warnings.push(REPLACE_PAIR_COALESCED_OVERLAP_WARNING);
+					}
 				} else {
 					this.#flushPending();
 				}
-				this.#pending = { target: token.target, lineNum: token.lineNum, payloads: [] };
+				this.#pending = { target: token.target, lineNum: token.lineNum, payloads: [], pendingRaws: [] };
 				return;
 		}
 	}
@@ -209,7 +328,7 @@ export class Executor {
 	 */
 	endStreaming(): { edits: Edit[]; warnings: string[] } {
 		this.#consumePendingSkippableComments();
-		if (this.#pending && this.#pending.payloads.length > 0) {
+		if (this.#pending && pendingHasAnyContent(this.#pending)) {
 			this.#flushPending();
 		} else {
 			this.#pending = undefined;
@@ -226,6 +345,7 @@ export class Executor {
 		this.#pending = undefined;
 		this.#skippableComments = [];
 		this.#terminated = false;
+		this.#blankSingleRun = 0;
 	}
 
 	/**
@@ -263,6 +383,22 @@ export class Executor {
 					`Got ${JSON.stringify(`${HL_PAYLOAD_REPLACE}${text}`)}.`,
 			);
 		}
+		// Silent recovery: a body row of `+^A-B` (or `+^A` after L2 shorthand)
+		// is a repeat row the model mistakenly prefixed with `+`. Reroute as
+		// a repeat and surface a warning so the model sees the mistake.
+		const repeatRange = tryParseLiteralAsRepeat(text);
+		if (repeatRange !== null) {
+			if (!this.#warnings.includes(PLUS_PREFIXED_REPEAT_WARNING)) {
+				this.#warnings.push(PLUS_PREFIXED_REPEAT_WARNING);
+			}
+			this.#handleRepeatPayload(repeatRange, lineNum);
+			return;
+		}
+		// L3: a `+literal` row after buffered bare raws means the block is
+		// NOT uniformly unprefixed — the bare rows were typos. Reject at the
+		// FIRST bare row's source line so the message points the model at
+		// what to fix.
+		this.#rejectBufferedRawsOnMixedBlock(pending);
 		pending.payloads.push({ kind: "literal", text, lineNum });
 	}
 
@@ -274,17 +410,66 @@ export class Executor {
 					`Got ${JSON.stringify(`${HL_PAYLOAD_REPEAT}${range.start.line}-${range.end.line}`)}.`,
 			);
 		}
+		// L3: same mixed-block guard as the literal path — see above.
+		this.#rejectBufferedRawsOnMixedBlock(pending);
 		validateRangeOrder(range, lineNum);
 		pending.payloads.push({ kind: "repeat", range, lineNum });
 	}
 
+	#rejectBufferedRawsOnMixedBlock(pending: Pending): void {
+		if (pending.pendingRaws.length === 0) return;
+		const first = pending.pendingRaws[0];
+		throw new Error(
+			`line ${first.lineNum}: payload row in a hashline block must start with ` +
+				`${HL_PAYLOAD_REPLACE} or ${HL_PAYLOAD_REPEAT}A-B. Got ${JSON.stringify(first.text)}.`,
+		);
+	}
+
 	#handleRaw(text: string, lineNum: number): void {
+		// L8: detect OpenAI-apply_patch / unified-diff contamination first so
+		// the error message tells the model what format they shipped instead
+		// of the generic "payload row must start with …" diagnostic.
+		const contamination = detectApplyPatchContamination(text, this.#pending !== undefined);
+		if (contamination !== null) throw new Error(`line ${lineNum}: ${contamination}`);
+
 		if (this.#pending) {
 			if (text.trim().length === 0) return;
-			throw new Error(
-				`line ${lineNum}: payload row in a hashline block must start with ` +
-					`${HL_PAYLOAD_REPLACE} or ${HL_PAYLOAD_REPEAT}A-B. Got ${JSON.stringify(text)}.`,
-			);
+
+			// L4: a lone `-` row inside a bare pending block is the classic
+			// "I meant `A-B:-` but typed it on the next line" shape. Convert
+			// retroactively, emit a warning, and clear pending.
+			if (
+				text.trim() === "-" &&
+				this.#pending.payloads.length === 0 &&
+				this.#pending.pendingRaws.length === 0 &&
+				this.#pending.target.kind === "range"
+			) {
+				const pendingRange = this.#pending.target.range;
+				const sourceLine = this.#pending.lineNum;
+				validateRangeOrder(pendingRange, sourceLine);
+				for (const anchor of expandRange(pendingRange)) {
+					this.#pushDelete(anchor, sourceLine);
+				}
+				if (!this.#warnings.includes(DASH_PAYLOAD_AUTO_DELETE_WARNING)) {
+					this.#warnings.push(DASH_PAYLOAD_AUTO_DELETE_WARNING);
+				}
+				this.#pending = undefined;
+				this.#blankSingleRun = 0;
+				return;
+			}
+
+			// L3: buffer the bare row. Mixing this with later `|`/`^` rows
+			// throws via `#rejectBufferedRawsOnMixedBlock`; reject IMMEDIATELY
+			// when the block already has `|`/`^` rows so the error points at
+			// the offending bare row, not the (innocent) first `|` row.
+			if (this.#pending.payloads.length > 0) {
+				throw new Error(
+					`line ${lineNum}: payload row in a hashline block must start with ` +
+						`${HL_PAYLOAD_REPLACE} or ${HL_PAYLOAD_REPEAT}A-B. Got ${JSON.stringify(text)}.`,
+				);
+			}
+			this.#pending.pendingRaws.push({ text, lineNum });
+			return;
 		}
 
 		// Whitespace-only raw lines outside any pending block are silently dropped;
@@ -293,6 +478,11 @@ export class Executor {
 
 		const firstChar = text[0];
 		if (firstChar === "-" || firstChar === "@" || firstChar === "«" || firstChar === "»") {
+			if (text.trim() === "-") {
+				throw new Error(
+					`line ${lineNum}: a lone "-" is not a valid hashline op. To delete a range, write \`A-B:-\` on the anchor line itself (e.g. \`5-7:-\`).`,
+				);
+			}
 			throw new Error(
 				`line ${lineNum}: unrecognized hashline block. Use A-B:, A-B:-, BOF:, or EOF: anchors followed by ` +
 					`${HL_PAYLOAD_REPLACE}TEXT or ${HL_PAYLOAD_REPEAT}A-B body rows. Got ${JSON.stringify(text)}.`,
@@ -342,6 +532,20 @@ export class Executor {
 		const pending = this.#pending;
 		if (!pending) return;
 
+		// L3: convert any buffered bare body rows to literal payloads. Mixed
+		// blocks have already been rejected; we only get here when payloads
+		// is empty AND pendingRaws holds rows, or when both are empty.
+		const hadBareBody = pending.pendingRaws.length > 0;
+		if (hadBareBody) {
+			for (const raw of pending.pendingRaws) {
+				pending.payloads.push({ kind: "literal", text: raw.text, lineNum: raw.lineNum });
+			}
+			pending.pendingRaws = [];
+			if (!this.#warnings.includes(BARE_BODY_AUTO_PIPED_WARNING)) {
+				this.#warnings.push(BARE_BODY_AUTO_PIPED_WARNING);
+			}
+		}
+
 		const { target, lineNum, payloads } = pending;
 		if (target.kind === "bof" || target.kind === "eof") {
 			const cursor: Cursor = target.kind === "bof" ? { kind: "bof" } : { kind: "eof" };
@@ -353,8 +557,15 @@ export class Executor {
 				}
 			}
 			this.#pending = undefined;
+			this.#blankSingleRun = 0;
 			return;
 		}
+
+		// L7 was considered (`^A-B` covering target + literal payload) but
+		// dropped: the same shape is the canonical "keep line A unchanged,
+		// insert new content above/below" idiom (e.g. `2-2:\n^2-2\n|NEW`).
+		// We can't distinguish duplication from intentional pass-through
+		// from the parse tree alone.
 
 		const cursor: Cursor = { kind: "before_anchor", anchor: { ...target.range.start } };
 		if (payloads.length === 0) {
@@ -366,6 +577,20 @@ export class Executor {
 		}
 		for (const anchor of expandRange(target.range)) {
 			this.#pushDelete(anchor, lineNum);
+		}
+
+		// L6: track contiguous runs of single-line blank-body replaces. A
+		// run of two or more is almost always the model mis-using `A-A:` to
+		// mean "delete this line" (it actually replaces with one blank line).
+		const isBlankSingleReplace =
+			target.range.start.line === target.range.end.line && payloads.length === 0 && !hadBareBody;
+		if (isBlankSingleReplace) {
+			this.#blankSingleRun++;
+			if (this.#blankSingleRun >= 2 && !this.#warnings.includes(STACKED_BLANK_REPLACE_WARNING)) {
+				this.#warnings.push(STACKED_BLANK_REPLACE_WARNING);
+			}
+		} else {
+			this.#blankSingleRun = 0;
 		}
 
 		this.#pending = undefined;

@@ -386,6 +386,7 @@ interface PureInsertGroup {
 function cursorMatches(a: Cursor, b: Cursor): boolean {
 	if (a.kind !== b.kind) return false;
 	if (a.kind === "bof" || a.kind === "eof") return true;
+	if (b.kind === "bof" || b.kind === "eof") return false;
 	return a.anchor.line === b.anchor.line;
 }
 
@@ -614,9 +615,9 @@ function absorbReplacementBoundaryDuplicates(
 			if (!emittedAbsorbKeys.has(key)) {
 				emittedAbsorbKeys.add(key);
 				warnings.push(
-					`Auto-absorbed ${safePrefixCount} duplicate line(s) above replacement at line ${group.sourceLineNum} ` +
+					`Auto-absorbed ${safePrefixCount} duplicate line(s) above replacement ` +
 						`(file lines ${absorbStart}..${startLine - 1} matched the payload's leading lines; ` +
-						`widened the deletion to absorb them).`,
+						`widened the deletion to start at file line ${absorbStart} instead of ${startLine}).`,
 				);
 			}
 		}
@@ -626,9 +627,9 @@ function absorbReplacementBoundaryDuplicates(
 			if (!emittedAbsorbKeys.has(key)) {
 				emittedAbsorbKeys.add(key);
 				warnings.push(
-					`Auto-absorbed ${safeSuffixCount} duplicate line(s) below replacement at line ${group.sourceLineNum} ` +
+					`Auto-absorbed ${safeSuffixCount} duplicate line(s) below replacement ` +
 						`(file lines ${endLine + 1}..${absorbEnd} matched the payload's trailing lines; ` +
-						`widened the deletion to absorb them).`,
+						`widened the deletion to end at file line ${absorbEnd} instead of ${endLine}).`,
 				);
 			}
 		}
@@ -727,23 +728,6 @@ export function applyEdits(text: string, edits: Edit[], options: ApplyOptions = 
 		}
 		if (insertLines.length === 0 && replacementLines.length === 0 && !deleteLine) continue;
 
-		const hasReplacementPayload = replacementLines.length > 0;
-		if (deleteLine && !hasReplacementPayload) {
-			const balance = computeDelimiterBalance([currentLine]);
-			const trimmedCurrentLine = currentLine.trim();
-			const touchesStructuralBoundary =
-				trimmedCurrentLine.startsWith(")") ||
-				trimmedCurrentLine.startsWith("]") ||
-				trimmedCurrentLine.startsWith("}") ||
-				trimmedCurrentLine.endsWith("(") ||
-				trimmedCurrentLine.endsWith("[") ||
-				trimmedCurrentLine.endsWith("{");
-			if (balance.paren !== 0 || balance.bracket !== 0 || balance.brace !== 0 || touchesStructuralBoundary) {
-				warnings.push(
-					`Deleted line ${line} contains a structural bracket/brace boundary (${JSON.stringify(trimmedCurrentLine)}); verify the file is still balanced or use '|replacement' payload to keep the boundary intact.`,
-				);
-			}
-		}
 		const replacement = deleteLine
 			? [...insertLines, ...replacementLines]
 			: [...insertLines, ...replacementLines, currentLine];

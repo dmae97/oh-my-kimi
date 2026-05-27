@@ -1,7 +1,8 @@
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { computeFileHash, formatHashlineHeader } from "@oh-my-pi/hashline";
+import { formatHashlineHeader } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type GrepMatch, GrepOutputMode, type GrepResult, grep } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -609,16 +610,16 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					matchesByFile.get(relativePath)!.push(match);
 				}
 				const displayLines: string[] = [];
-				const hashContexts = new Map<string, { absolutePath: string; fileHash: string }>();
+				const hashContexts = new Map<string, { absolutePath: string; tag?: string }>();
+				const snapshotStore = baseDisplayMode.hashLines ? getFileSnapshotStore(this.session) : undefined;
 				if (baseDisplayMode.hashLines) {
 					for (const relativePath of fileList) {
 						if (archiveDisplaySet.has(relativePath)) continue;
 						const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
 						if (immutableSourcePaths.has(absoluteFilePath)) continue;
 						try {
-							const fullText = await Bun.file(absoluteFilePath).text();
-							const fileHash = computeFileHash(fullText);
-							hashContexts.set(relativePath, { absolutePath: absoluteFilePath, fileHash });
+							await access(absoluteFilePath, constants.R_OK);
+							hashContexts.set(relativePath, { absolutePath: absoluteFilePath });
 						} catch {
 							// Best-effort: if the file disappeared between grep and render, fall back to plain line output.
 						}
@@ -671,9 +672,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 					}
 					if (cacheEntries.length > 0 && hashContext) {
-						getFileSnapshotStore(this.session).recordSparse(hashContext.absolutePath, cacheEntries, {
-							fileHash: hashContext.fileHash,
-						});
+						const tag = snapshotStore?.recordSparse(hashContext.absolutePath, cacheEntries);
+						if (tag) hashContext.tag = tag;
 					}
 					return { model: modelOut, display: displayOut };
 				};
@@ -684,7 +684,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						return {
 							modelLines: rendered.model,
 							displayLines: rendered.display,
-							headerSuffix: hashContext ? `#${hashContext.fileHash}` : "",
+							headerSuffix: hashContext?.tag ? `#${hashContext.tag}` : "",
 							skip: rendered.model.length === 0,
 						};
 					});
@@ -699,8 +699,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 							displayLines.push("");
 						}
 						const hashContext = hashContexts.get(relativePath);
-						if (hashContext) {
-							outputLines.push(formatHashlineHeader(relativePath, hashContext.fileHash));
+						if (hashContext?.tag) {
+							outputLines.push(formatHashlineHeader(relativePath, hashContext.tag));
 						}
 						outputLines.push(...rendered.model);
 						displayLines.push(...rendered.display);

@@ -7,9 +7,10 @@
 /// <reference types="./bun-imports.d.ts" />
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { formatHashlineHeader, InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { computeFileHash, formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
+import { formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { diffLines } from "diff";
 import { formatDirectory } from "./formatter";
@@ -528,7 +529,7 @@ async function evaluateMutationIntent(
 }
 
 /**
- * Build a textual hashline patch (with `¶path#hash` section header) that
+ * Build a textual hashline patch (with `¶path#tag` section header) that
  * transforms `actual` into `expected`. Returns null when no changes are
  * needed or the diff isn't expressible as straight insert/replace/delete ops.
  */
@@ -602,7 +603,10 @@ function buildGuidedHashlinePatch(file: string, actual: string, expected: string
 	flush();
 
 	if (ops.length === 0) return null;
-	const header = `¶${file}#${computeFileHash(actual)}`;
+	const normalizedActual = actual.replace(/\r\n?/g, "\n");
+	const snapshots = new InMemorySnapshotStore();
+	const tag = snapshots.recordContiguous(file, 1, normalizedActual.split("\n"), { fullText: normalizedActual });
+	const header = formatHashlineHeader(file, tag);
 	return `${header}\n${ops.join("\n")}`;
 }
 

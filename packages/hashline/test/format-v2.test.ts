@@ -8,7 +8,7 @@ function applyPatch(text: string, diff: string): string {
 describe("hashline format v2", () => {
 	it("emits literal and repeat body rows in textual order", () => {
 		const text = "a\nb\nc";
-		const diff = ["2-2:", "|before", "^1-2", "|after"].join("\n");
+		const diff = ["2-2:", "+before", "^1-2", "+after"].join("\n");
 
 		expect(applyPatch(text, diff)).toBe("a\nbefore\na\nb\nafter\nc");
 	});
@@ -34,7 +34,7 @@ describe("hashline format v2", () => {
 	});
 
 	it("rejects body rows after inline delete", () => {
-		expect(() => parsePatch("2-2:-\n|x")).toThrow(/payload line has no preceding/);
+		expect(() => parsePatch("2-2:-\n+x")).toThrow(/payload line has no preceding/);
 	});
 
 	it("treats an empty concrete block as a blank-line replacement", () => {
@@ -50,13 +50,22 @@ describe("hashline format v2", () => {
 		expect(applyPatch(text, "EOF:")).toBe("a\nb\n");
 	});
 
-	it("rejects repeat shorthand with an explicit-range hint", () => {
-		expect(() => parsePatch("2-2:\n^2")).toThrow(/\^A-A/);
+	it("accepts `^A` repeat shorthand as `^A-A`", () => {
+		const text = "a\nb\nc";
+		// `^A` mirrors `^A-A`; we use it to keep line 2 unchanged while
+		// also targeting it.
+		expect(applyPatch(text, "2-2:\n^2")).toBe(text);
 	});
 
-	it("rejects removed insert sigils through the normal body-row diagnostic", () => {
-		expect(() => parsePatch("2-2:\n↑x")).toThrow(/must start with \| or \^A-B/);
-		expect(() => parsePatch("2-2:\n↓x")).toThrow(/must start with \| or \^A-B/);
+	it("auto-pipes bare body rows (legacy sigils flow through as literal text)", () => {
+		// `↑`/`↓` are no longer reserved sigils; bare body rows are
+		// auto-prefixed with `|` as plain literal text.
+		const text = "a\nb\nc";
+		expect(applyPatch(text, "2-2:\n↑x")).toBe("a\n↑x\nc");
+		expect(applyPatch(text, "2-2:\n↓x")).toBe("a\n↓x\nc");
+		// And the warning is surfaced.
+		const { warnings } = parsePatch("2-2:\n↑x");
+		expect(warnings.some(w => /Auto-prefixed bare body row/.test(w))).toBe(true);
 	});
 
 	it("rejects removed standalone delete rows through the normal op diagnostic", () => {

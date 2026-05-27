@@ -1,7 +1,7 @@
 /**
  * High-level patch orchestrator. Reads each section's target file via the
  * configured {@link Filesystem}, strips BOM and normalizes line endings,
- * validates the section file hash (with optional {@link Recovery}), applies
+ * validates the section snapshot tag (with optional {@link Recovery}), applies
  * the edits, and writes the result back through the same {@link Filesystem}.
  *
  * Two layers:
@@ -11,7 +11,7 @@
  * - {@link Patcher.prepare} / {@link Patcher.commit} — granular primitives
  *   for callers that need per-section control (e.g. batched LSP flush,
  *   custom interleaving). `prepare` performs all the read-side work,
- *   validates the section file hash (with recovery), and applies the
+ *   validates the section snapshot tag (with recovery), and applies the
  *   edits in memory. `commit` writes the prepared result and records a
  *   fresh snapshot.
  *
@@ -23,25 +23,21 @@
  * filesystem configuration.
  */
 import { applyEdits } from "./apply";
-import { computeFileHash, formatHashlineHeader, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
+import { formatHashlineHeader, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
 import type { Filesystem, WriteResult } from "./fs";
 import { isNotFound } from "./fs";
 import type { Patch, PatchSection } from "./input";
 import { MismatchError } from "./mismatch";
 import { detectLineEnding, type LineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./normalize";
 import { Recovery, type RecoveryResult } from "./recovery";
-import type { SnapshotStore } from "./snapshots";
+import type { Snapshot, SnapshotStore } from "./snapshots";
 import type { ApplyOptions, ApplyResult, Edit } from "./types";
 
 export interface PatcherOptions {
 	/** Storage backend used for all reads and writes. */
 	fs: Filesystem;
-	/**
-	 * Optional snapshot store that enables stale-hash recovery. When set, a
-	 * section with a stale hash tries a 3-way merge against a cached
-	 * snapshot before the apply fails with {@link MismatchError}.
-	 */
-	snapshots?: SnapshotStore;
+	/** Snapshot store that minted and resolves hashline section tags. Required. */
+	snapshots: SnapshotStore;
 	/**
 	 * Optional default {@link ApplyOptions} forwarded to every section.
 	 * Per-call overrides win on a key-by-key basis.
@@ -65,9 +61,9 @@ export interface PatchSectionResult {
 	persisted: string;
 	/** Final text that the {@link Filesystem} actually wrote (may differ if the FS transformed it). */
 	written: string;
-	/** 4-hex hash of `after`. Use to anchor follow-up edits. */
+	/** 3-hex opaque snapshot tag for `after`. Use to anchor follow-up edits. */
 	fileHash: string;
-	/** Hashline section header (`¶path#hash`) of the post-edit content. */
+	/** Hashline section header (`¶path#tag`) of the post-edit content. */
 	header: string;
 	/** 1-indexed first changed line in `after`, or `undefined` for noops. */
 	firstChangedLine?: number;
@@ -114,7 +110,7 @@ function hasAnchorScopedEdit(edits: readonly Edit[]): boolean {
 function assertSectionHashAllowed(sectionPath: string, fileHash: string | undefined, edits: readonly Edit[]): void {
 	if (fileHash !== undefined || !hasAnchorScopedEdit(edits)) return;
 	throw new Error(
-		`Missing hashline file hash for anchored edit to ${sectionPath}; use \`${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}hash\` from your latest read.`,
+		`Missing hashline snapshot tag for anchored edit to ${sectionPath}; use \`${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}tag\` from your latest read/search output.`,
 	);
 }
 
@@ -148,22 +144,33 @@ function assertUniqueCanonicalPaths(prepared: readonly PreparedSection[]): void 
 	}
 }
 
+function snapshotMatchesCurrent(snapshot: Snapshot, currentText: string, anchorLines: readonly number[]): boolean {
+	if (snapshot.fullText !== undefined) return snapshot.fullText === currentText;
+	for (const lineNumber of anchorLines) {
+		if (snapshot.get(lineNumber) === undefined) return false;
+	}
+	return snapshot.matchesLiveFile(currentText.split("\n"));
+}
+
 /**
- * High-level patcher. Wires a {@link Filesystem} and an optional
+ * High-level patcher. Wires a {@link Filesystem} and a required
  * {@link SnapshotStore} together with the parsing + applying core.
  *
  * Construct once per FS configuration; reuse across patches.
  */
 export class Patcher {
 	readonly fs: Filesystem;
-	readonly snapshots: SnapshotStore | undefined;
-	readonly recovery: Recovery | undefined;
+	readonly snapshots: SnapshotStore;
+	readonly recovery: Recovery;
 	readonly applyOptions: ApplyOptions;
 
 	constructor(options: PatcherOptions) {
+		if (!options.snapshots) {
+			throw new Error("Hashline Patcher requires a SnapshotStore; section tags are opaque store pointers.");
+		}
 		this.fs = options.fs;
 		this.snapshots = options.snapshots;
-		this.recovery = options.snapshots ? new Recovery(options.snapshots) : undefined;
+		this.recovery = new Recovery(options.snapshots);
 		this.applyOptions = options.applyOptions ?? {};
 	}
 
@@ -215,13 +222,13 @@ export class Patcher {
 	}
 
 	/**
-	 * Read a section's target file, parse the section, validate the file
-	 * hash (with recovery), and apply the edits in memory. Returns a
+	 * Read a section's target file, parse the section, validate the snapshot
+	 * tag (with recovery), and apply the edits in memory. Returns a
 	 * {@link PreparedSection} which can be fed to {@link commit} to land
 	 * the result on the filesystem.
 	 *
 	 * Throws on parse error, missing-file-for-anchored-edit, or unrecovered
-	 * hash mismatch ({@link MismatchError}).
+	 * tag mismatch ({@link MismatchError}).
 	 */
 	async prepare(section: PatchSection, options: ApplyOptions = {}): Promise<PreparedSection> {
 		const applyOptions: ApplyOptions = { ...this.applyOptions, ...options };
@@ -264,8 +271,8 @@ export class Patcher {
 	/**
 	 * Commit a previously {@link prepare}d section to the filesystem.
 	 * Restores line endings and BOM, writes via the {@link Filesystem}, and
-	 * records a fresh snapshot in the {@link SnapshotStore} (when
-	 * configured) keyed by the filesystem-canonical path.
+	 * records a fresh snapshot in the {@link SnapshotStore} keyed by the
+	 * filesystem-canonical path.
 	 */
 	async commit(prepared: PreparedSection): Promise<PatchSectionResult> {
 		const { section, normalized, bom, lineEnding, parseWarnings, exists, applyResult, canonicalPath } = prepared;
@@ -273,7 +280,7 @@ export class Patcher {
 		const warnings = mergeWarnings(parseWarnings, applyResult.warnings);
 
 		if (after === normalized) {
-			const hash = computeFileHash(normalized);
+			const hash = this.#recordFullSnapshot(canonicalPath, normalized);
 			return {
 				path: section.path,
 				canonicalPath,
@@ -290,15 +297,8 @@ export class Patcher {
 
 		const persisted = bom + restoreLineEndings(after, lineEnding);
 		const write: WriteResult = await this.fs.writeText(section.path, persisted);
-		const fileHash = computeFileHash(after);
+		const fileHash = this.#recordFullSnapshot(canonicalPath, after);
 		const op = exists ? "update" : "create";
-
-		if (this.snapshots) {
-			this.snapshots.recordContiguous(canonicalPath, 1, after.split("\n"), {
-				fullText: after,
-				fileHash,
-			});
-		}
 
 		return {
 			path: section.path,
@@ -325,6 +325,10 @@ export class Patcher {
 		}
 	}
 
+	#recordFullSnapshot(canonicalPath: string, normalized: string): string {
+		return this.snapshots.recordContiguous(canonicalPath, 1, normalized.split("\n"), { fullText: normalized });
+	}
+
 	#applyWithRecovery(args: {
 		section: PatchSection;
 		canonicalPath: string;
@@ -337,18 +341,24 @@ export class Patcher {
 		const expected = exists ? section.fileHash : undefined;
 		if (expected === undefined) return applyEdits(normalized, [...edits], applyOptions);
 
-		const currentHash = computeFileHash(normalized);
-		if (currentHash === expected) return applyEdits(normalized, [...edits], applyOptions);
+		const snapshot = this.snapshots.byHash(canonicalPath, expected);
+		const anchorLines = section.collectAnchorLines();
+		if (snapshot && snapshotMatchesCurrent(snapshot, normalized, anchorLines)) {
+			return applyEdits(normalized, [...edits], applyOptions);
+		}
 
-		const recovered = this.recovery?.tryRecover({
-			path: canonicalPath,
-			currentText: normalized,
-			fileHash: expected,
-			edits,
-			options: applyOptions,
-		});
-		if (recovered) return recoveryToApplyResult(recovered);
+		if (snapshot) {
+			const recovered = this.recovery.tryRecover({
+				path: canonicalPath,
+				currentText: normalized,
+				fileHash: expected,
+				edits,
+				options: applyOptions,
+			});
+			if (recovered) return recoveryToApplyResult(recovered);
+		}
 
+		const currentHash = this.#recordFullSnapshot(canonicalPath, normalized);
 		throw new MismatchError({
 			path: section.path,
 			expectedFileHash: expected,
