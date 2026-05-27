@@ -18,7 +18,21 @@ function textOutput(result: AgentToolResult<ReadToolDetails>): string {
 		.join("\n");
 }
 
-function createSession(cwd: string, settings = Settings.isolated()): ToolSession {
+/**
+ * Defaults that pin tests to the legacy outermost-only collector so small
+ * fixtures keep emitting deterministic elisions:
+ *   - `minTotalLines: 0` skips the size gate.
+ *   - `unfoldUntil: 0` short-circuits BFS unfolding.
+ * Tests that need BFS or the size gate override these explicitly.
+ */
+const LEGACY_SUMMARY_OVERRIDES: Record<string, unknown> = {
+	"read.summarize.minTotalLines": 0,
+	"read.summarize.unfoldUntil": 0,
+	"read.summarize.unfoldLimit": 0,
+};
+
+function createSession(cwd: string, overrides: Record<string, unknown> = {}): ToolSession {
+	const settings = Settings.isolated({ ...LEGACY_SUMMARY_OVERRIDES, ...overrides });
 	const sessionFile = path.join(cwd, "session.jsonl");
 	const sessionDir = path.join(cwd, "session");
 	return {
@@ -76,7 +90,7 @@ describe("read summary", () => {
 		expect(textOutput(defaultResult)).toContain("const clean = 'alpha';");
 		expect(defaultResult.details?.summary).toBeUndefined();
 
-		const proseTool = new ReadTool(createSession(tmpDir, Settings.isolated({ "read.summarize.prose": true })));
+		const proseTool = new ReadTool(createSession(tmpDir, { "read.summarize.prose": true }));
 		const proseResult = await proseTool.execute("read-summary-md-prose", { path: fixture });
 		expect(textOutput(proseResult)).not.toContain("const clean = 'alpha';");
 		expect(proseResult.details?.summary?.elidedSpans).toBe(1);
@@ -91,7 +105,7 @@ describe("read summary", () => {
 		).join("\n\n");
 		await fs.writeFile(fixture, `${source}\n`);
 
-		const tool = new ReadTool(createSession(tmpDir, Settings.isolated({ "read.defaultLimit": 10 })));
+		const tool = new ReadTool(createSession(tmpDir, { "read.defaultLimit": 10 }));
 		const result = await tool.execute("read-summary-no-truncate", { path: fixture });
 		const text = textOutput(result);
 
@@ -154,7 +168,7 @@ describe("read summary", () => {
 		await fs.writeFile(valid, "export function alpha(): string {\n\tconst clean = 'alpha';\n\treturn clean;\n}\n");
 		await fs.writeFile(broken, "export function broken( {\n");
 
-		const disabledTool = new ReadTool(createSession(tmpDir, Settings.isolated({ "read.summarize.enabled": false })));
+		const disabledTool = new ReadTool(createSession(tmpDir, { "read.summarize.enabled": false }));
 		const disabled = await disabledTool.execute("read-summary-disabled", { path: valid });
 		expect(textOutput(disabled)).toContain("const clean = 'alpha';");
 		expect(disabled.details?.summary).toBeUndefined();

@@ -66,6 +66,8 @@ import {
 import {
 	expandPath,
 	formatPathRelativeToCwd,
+	type LineRange,
+	parseLineRanges,
 	resolveReadPath,
 	splitInternalUrlSel,
 	splitPathAndSel,
@@ -568,15 +570,11 @@ export interface ReadToolDetails {
 type ReadParams = ReadToolInput;
 
 /** Parsed representation of a path-embedded selector. */
-type LineRange = { startLine: number; endLine: number | undefined };
-
 type ParsedSelector =
 	| { kind: "none" }
 	| { kind: "raw" }
 	| { kind: "conflicts" }
 	| { kind: "lines"; ranges: [LineRange, ...LineRange[]]; raw?: boolean };
-
-const LINE_RANGE_RE = /^L?(\d+)(?:([-+])L?(\d+)?)?$/i;
 
 /** Returns true when the selector requested verbatim/raw output (alone or combined with a range). */
 function isRawSelector(parsed: ParsedSelector): boolean {
@@ -586,67 +584,6 @@ function isRawSelector(parsed: ParsedSelector): boolean {
 /** Returns true when the selector requested multiple line ranges. */
 function isMultiRange(parsed: ParsedSelector): boolean {
 	return parsed.kind === "lines" && parsed.ranges.length > 1;
-}
-
-function parseLineRangeChunk(sel: string): LineRange | null {
-	const lineMatch = LINE_RANGE_RE.exec(sel);
-	if (!lineMatch) return null;
-	const rawStart = Number.parseInt(lineMatch[1]!, 10);
-	if (rawStart < 1) {
-		throw new ToolError("Line selector 0 is invalid; lines are 1-indexed. Use :1.");
-	}
-	const sep = lineMatch[2];
-	const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
-	let rawEnd: number | undefined;
-	if (sep === "+") {
-		if (rhs === undefined || rhs < 1) {
-			throw new ToolError(`Invalid range ${rawStart}+${rhs ?? 0}: count must be >= 1.`);
-		}
-		rawEnd = rawStart + rhs - 1;
-	} else if (sep === "-") {
-		// `301-` is shorthand for "from 301 onward" — equivalent to bare `301`.
-		if (rhs !== undefined) {
-			if (rhs < rawStart) {
-				throw new ToolError(`Invalid range ${rawStart}-${rhs}: end must be >= start.`);
-			}
-			rawEnd = rhs;
-		}
-	}
-	return { startLine: rawStart, endLine: rawEnd };
-}
-
-/**
- * Parse a comma-separated list of line ranges (e.g. `5-16,960-973`). Returns
- * the ranges in ascending order with overlapping/adjacent ranges merged so
- * downstream consumers can stream the file in a single forward pass per range.
- */
-function parseLineRanges(sel: string): [LineRange, ...LineRange[]] | null {
-	const chunks = sel.split(",");
-	const parsed: LineRange[] = [];
-	for (const chunk of chunks) {
-		const range = parseLineRangeChunk(chunk);
-		if (!range) return null;
-		parsed.push(range);
-	}
-	if (parsed.length === 0) return null;
-	parsed.sort((a, b) => a.startLine - b.startLine);
-
-	const merged: LineRange[] = [parsed[0]];
-	for (let i = 1; i < parsed.length; i++) {
-		const current = parsed[i];
-		const last = merged[merged.length - 1];
-		// Open-ended (endLine undefined) means "to EOF" — any later range is absorbed.
-		if (last.endLine === undefined) continue;
-		// Merge when current starts within (or immediately after) the last range.
-		if (current.startLine <= last.endLine + 1) {
-			if (current.endLine === undefined || current.endLine > last.endLine) {
-				merged[merged.length - 1] = { startLine: last.startLine, endLine: current.endLine };
-			}
-			continue;
-		}
-		merged.push(current);
-	}
-	return merged as [LineRange, ...LineRange[]];
 }
 
 function parseSel(sel: string | undefined): ParsedSelector {
@@ -1406,14 +1343,19 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					? await bridgePromise.catch(() => Bun.file(absolutePath).text())
 					: await Bun.file(absolutePath).text();
 			throwIfAborted(signal);
-			if (countTextLines(code) > MAX_SUMMARY_LINES) return null;
+			const lineCount = countTextLines(code);
+			if (lineCount > MAX_SUMMARY_LINES) return null;
+			if (lineCount < this.session.settings.get("read.summarize.minTotalLines")) return null;
 
-			return summarizeCode({
+			const result = summarizeCode({
 				code,
 				path: absolutePath,
 				minBodyLines: this.session.settings.get("read.summarize.minBodyLines"),
 				minCommentLines: this.session.settings.get("read.summarize.minCommentLines"),
+				unfoldUntilLines: this.session.settings.get("read.summarize.unfoldUntil"),
+				unfoldLimitLines: this.session.settings.get("read.summarize.unfoldLimit"),
 			});
+			return result;
 		} catch {
 			return null;
 		}

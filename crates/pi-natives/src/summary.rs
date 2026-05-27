@@ -15,6 +15,12 @@ pub struct SummaryOptions {
 	pub min_body_lines:    Option<u32>,
 	/// Minimum total comment lines before eliding a multiline block comment.
 	pub min_comment_lines: Option<u32>,
+	/// Target visible-line count for BFS unfold. `None` or `0` keeps only
+	/// the outermost elisions (no progressive unfolding).
+	pub unfold_until_lines: Option<u32>,
+	/// Hard ceiling for BFS unfold. Defaults to `unfold_until_lines * 2`
+	/// when omitted.
+	pub unfold_limit_lines: Option<u32>,
 }
 
 #[napi(object)]
@@ -74,6 +80,8 @@ pub fn summarize_code(options: SummaryOptions) -> Result<SummaryResult> {
 		path:              options.path,
 		min_body_lines:    options.min_body_lines,
 		min_comment_lines: options.min_comment_lines,
+		unfold_until_lines: options.unfold_until_lines,
+		unfold_limit_lines: options.unfold_limit_lines,
 	})
 	.map(Into::into)
 	.map_err(|error| Error::from_reason(error.to_string()))

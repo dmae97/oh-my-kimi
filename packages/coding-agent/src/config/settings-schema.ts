@@ -1666,6 +1666,38 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"read.summarize.minTotalLines": {
+		type: "number",
+		default: 100,
+		ui: {
+			tab: "editing",
+			label: "Read Summary Minimum File Length",
+			description: "Files with fewer total lines are read verbatim instead of structurally summarized",
+		},
+	},
+
+	"read.summarize.unfoldUntil": {
+		type: "number",
+		default: 50,
+		ui: {
+			tab: "editing",
+			label: "Read Summary Unfold Target",
+			description:
+				"BFS-unfold elidable spans until the summary is at least this many visible lines. 0 keeps only the outermost elisions.",
+		},
+	},
+
+	"read.summarize.unfoldLimit": {
+		type: "number",
+		default: 100,
+		ui: {
+			tab: "editing",
+			label: "Read Summary Unfold Ceiling",
+			description:
+				"Hard ceiling on summary size while BFS-unfolding. An unfold that would exceed this is reverted and unfolding stops.",
+		},
+	},
+
 	"read.toolResultPreview": {
 		type: "boolean",
 		default: false,

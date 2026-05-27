@@ -133,6 +133,87 @@ export function expandPath(filePath: string): string {
 	const normalized = stripFileUrl(normalizeUnicodeSpaces(normalizeAtPrefix(filePath)));
 	return expandTilde(normalized);
 }
+/**
+ * Inclusive line range describing one selector segment (e.g. `50-100`,
+ * `301-`, or `50+10`). `endLine` is `undefined` for open-ended ranges.
+ */
+export interface LineRange {
+	startLine: number;
+	endLine: number | undefined;
+}
+
+const LINE_RANGE_CHUNK_RE = /^L?(\d+)(?:([-+])L?(\d+)?)?$/i;
+
+/** Parse a single `N`, `N-M`, `N-`, or `N+K` chunk. Throws via {@link ToolError} on invalid bounds. */
+export function parseLineRangeChunk(sel: string): LineRange | null {
+	const lineMatch = LINE_RANGE_CHUNK_RE.exec(sel);
+	if (!lineMatch) return null;
+	const rawStart = Number.parseInt(lineMatch[1]!, 10);
+	if (rawStart < 1) {
+		throw new ToolError("Line selector 0 is invalid; lines are 1-indexed. Use :1.");
+	}
+	const sep = lineMatch[2];
+	const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
+	let rawEnd: number | undefined;
+	if (sep === "+") {
+		if (rhs === undefined || rhs < 1) {
+			throw new ToolError(`Invalid range ${rawStart}+${rhs ?? 0}: count must be >= 1.`);
+		}
+		rawEnd = rawStart + rhs - 1;
+	} else if (sep === "-") {
+		// `301-` is shorthand for "from 301 onward" — equivalent to bare `301`.
+		if (rhs !== undefined) {
+			if (rhs < rawStart) {
+				throw new ToolError(`Invalid range ${rawStart}-${rhs}: end must be >= start.`);
+			}
+			rawEnd = rhs;
+		}
+	}
+	return { startLine: rawStart, endLine: rawEnd };
+}
+
+/**
+ * Parse a comma-separated list of line ranges (e.g. `5-16,960-973`). Returns
+ * the ranges in ascending order with overlapping/adjacent ranges merged so
+ * downstream consumers can stream the file in a single forward pass per range.
+ */
+export function parseLineRanges(sel: string): [LineRange, ...LineRange[]] | null {
+	const chunks = sel.split(",");
+	const parsed: LineRange[] = [];
+	for (const chunk of chunks) {
+		const range = parseLineRangeChunk(chunk);
+		if (!range) return null;
+		parsed.push(range);
+	}
+	if (parsed.length === 0) return null;
+	parsed.sort((a, b) => a.startLine - b.startLine);
+
+	const merged: LineRange[] = [parsed[0]];
+	for (let i = 1; i < parsed.length; i++) {
+		const current = parsed[i];
+		const last = merged[merged.length - 1];
+		// Open-ended (endLine undefined) means "to EOF" — any later range is absorbed.
+		if (last.endLine === undefined) continue;
+		// Merge when current starts within (or immediately after) the last range.
+		if (current.startLine <= last.endLine + 1) {
+			if (current.endLine === undefined || current.endLine > last.endLine) {
+				merged[merged.length - 1] = { startLine: last.startLine, endLine: current.endLine };
+			}
+			continue;
+		}
+		merged.push(current);
+	}
+	return merged as [LineRange, ...LineRange[]];
+}
+
+/** Return `true` when `lineNumber` (1-indexed) falls in any of the supplied ranges. */
+export function isLineInRanges(lineNumber: number, ranges: readonly LineRange[]): boolean {
+	for (const range of ranges) {
+		if (lineNumber < range.startLine) continue;
+		if (range.endLine === undefined || lineNumber <= range.endLine) return true;
+	}
+	return false;
+}
 
 export function splitPathAndSel(rawPath: string): { path: string; sel?: string } {
 	const colon = rawPath.lastIndexOf(":");

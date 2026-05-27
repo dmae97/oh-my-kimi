@@ -1,6 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `read.summarize.minTotalLines` setting (default 100) to set the minimum file length that triggers read summarization
+- Added `<file>:<lines>` support to `search` `paths`, allowing file-scoped constraints such as `:N-M`, `:N+K`, and comma-separated ranges
+
+### Changed
+
+- Changed read to return verbatim contents for files shorter than `read.summarize.minTotalLines` instead of summarizing them
+- Changed `search` path line-range filtering to include only matches and context lines that fall inside the requested ranges
 
 ## [15.5.3] - 2026-05-27
 ### Breaking Changes

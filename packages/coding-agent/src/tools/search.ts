@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
@@ -26,7 +26,15 @@ import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { formatGroupedFiles } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
-import { resolveReadPath, resolveToolSearchScope } from "./path-utils";
+import {
+	hasGlobPathChars,
+	isLineInRanges,
+	type LineRange,
+	parseLineRanges,
+	resolveReadPath,
+	resolveToolSearchScope,
+	splitPathAndSel,
+} from "./path-utils";
 import {
 	createCachedComponent,
 	formatCodeFrameLine,
@@ -39,13 +47,17 @@ import {
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const searchPathEntrySchema = z.string().describe("file, directory, glob, or internal URL to search");
+const searchPathEntrySchema = z
+	.string()
+	.describe(
+		'file, directory, glob, internal URL, or "<file>:<lines>" selector (e.g. "src/foo.ts:50-100", "src/foo.ts:50+10", "src/foo.ts:50-100,200-300")',
+	);
 const searchSchema = z
 	.object({
 		pattern: z.string().describe("regex pattern"),
 		paths: z
 			.union([searchPathEntrySchema, z.array(searchPathEntrySchema).min(1)])
-			.describe("file, directory, glob, internal URL, or array of those to search"),
+			.describe("file, directory, glob, internal URL, or array of those to search; append `:<lines>` to scope a file to specific line ranges"),
 		i: z.boolean().optional().describe("case-insensitive search"),
 		gitignore: z.boolean().optional().describe("respect gitignore"),
 		skip: z
@@ -96,6 +108,65 @@ function containsTopLevelComma(entry: string): boolean {
 		}
 	}
 	return false;
+}
+
+/**
+ * Parsed `paths` entry — a path (possibly archive-shaped) plus an optional
+ * line-range selector peeled off the trailing `:N-M` (or `:N+K`, `:N,M`, …)
+ * chunk via {@link splitPathAndSel}.
+ */
+interface SearchPathSpec {
+	original: string;
+	clean: string;
+	ranges?: [LineRange, ...LineRange[]];
+}
+
+function parsePathSpecs(rawEntries: readonly string[]): SearchPathSpec[] {
+	const specs: SearchPathSpec[] = [];
+	for (const entry of rawEntries) {
+		const split = splitPathAndSel(entry);
+		let clean = entry;
+		let ranges: [LineRange, ...LineRange[]] | undefined;
+		if (split.sel) {
+			const parsed = parseLineRanges(split.sel);
+			if (!parsed) {
+				throw new ToolError(
+					`paths entry "${entry}" — only line-range selectors like ":50-100" are supported (no ":raw"/":conflicts")`,
+				);
+			}
+			if (hasGlobPathChars(split.path)) {
+				throw new ToolError(`Line-range selector requires a single file, not a glob: ${entry}`);
+			}
+			clean = split.path;
+			ranges = parsed;
+		}
+		if (containsTopLevelComma(clean)) {
+			throw new ToolError('paths is an array — pass ["a", "b"] not ["a,b"]');
+		}
+		specs.push({ original: entry, clean, ranges });
+	}
+	return specs;
+}
+
+function mergeRangesInto(
+	map: Map<string, LineRange[]>,
+	absKey: string,
+	ranges: readonly LineRange[],
+): void {
+	// Concat-without-merge is correct: `isLineInRanges` scans linearly, so
+	// duplicates/overlaps only cost a few extra comparisons per match.
+	const existing = map.get(absKey);
+	if (existing) {
+		existing.push(...ranges);
+	} else {
+		map.set(absKey, [...ranges]);
+	}
+}
+
+function matchAbsolutePath(matchPath: string, searchPath: string): string {
+	if (matchPath === "") return searchPath;
+	if (path.isAbsolute(matchPath)) return matchPath;
+	return path.resolve(searchPath, matchPath);
 }
 
 /**
@@ -253,12 +324,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			if (normalizedSkip < 0 || !Number.isFinite(normalizedSkip)) {
 				throw new ToolError("Skip must be a non-negative number");
 			}
-			const paths = toPathList(rawPaths);
-			for (const entry of paths) {
-				if (containsTopLevelComma(entry)) {
-					throw new ToolError('paths is an array — pass ["a", "b"] not ["a,b"]');
-				}
-			}
+			const rawEntries = toPathList(rawPaths);
+			const pathSpecs = parsePathSpecs(rawEntries);
+			const paths = pathSpecs.map(spec => spec.clean);
 			const {
 				resolvedPaths,
 				displayMap: archiveDisplayMap,
@@ -267,6 +335,35 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				cleanup: cleanupArchiveScratch,
 			} = await resolveArchiveSearchPaths(paths, this.session.cwd);
 			try {
+				// Build the per-file line-range filter (keyed by absolute path) now that
+				// archive entries have been materialized to scratch files. Plain entries
+				// resolve through `resolveReadPath`; archive entries are keyed by the
+				// scratch path that grep will actually report against.
+				const rangesByAbsPath = new Map<string, LineRange[]>();
+				for (let idx = 0; idx < pathSpecs.length; idx++) {
+					const spec = pathSpecs[idx];
+					if (!spec.ranges) continue;
+					const resolved = resolvedPaths[idx];
+					if (resolved === spec.clean && !archiveDisplayMap.has(resolved)) {
+						// Non-archive entry; ensure the cleaned path resolves to a regular file.
+						const absKey = path.resolve(resolveReadPath(spec.clean, this.session.cwd));
+						const stats = await stat(absKey).catch(() => null);
+						if (!stats) {
+							throw new ToolError(`Path not found for line-range selector: ${spec.original}`);
+						}
+						if (!stats.isFile()) {
+							throw new ToolError(
+								`Line-range selector requires a single file: ${spec.original} is a directory`,
+							);
+						}
+						mergeRangesInto(rangesByAbsPath, absKey, spec.ranges);
+					} else {
+						// Archive entry — `resolveArchiveSearchPaths` substituted a scratch path.
+						const absKey = path.resolve(resolved);
+						mergeRangesInto(rangesByAbsPath, absKey, spec.ranges);
+					}
+				}
+
 				if (archiveUnreadable.length > 0 && resolvedPaths.length === archiveUnreadable.length) {
 					// All inputs were archive selectors we couldn't materialize; surface the
 					// reason instead of a downstream "path not found" from the scope resolver.
@@ -390,12 +487,38 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					}
 					throw err;
 				}
+				if (rangesByAbsPath.size > 0) {
+					const filteredMatches: GrepMatch[] = [];
+					for (const match of result.matches) {
+						const abs = matchAbsolutePath(match.path, searchPath);
+						const ranges = rangesByAbsPath.get(abs);
+						if (!ranges) {
+							// Path has no line-range constraint (e.g. a peer entry without `:N-M`).
+							filteredMatches.push(match);
+							continue;
+						}
+						if (!isLineInRanges(match.lineNumber, ranges)) continue;
+						// Drop context lines that fall outside the allowed ranges; they would
+						// otherwise leak content the caller explicitly excluded.
+						const trimBefore = match.contextBefore?.filter(c => isLineInRanges(c.lineNumber, ranges));
+						const trimAfter = match.contextAfter?.filter(c => isLineInRanges(c.lineNumber, ranges));
+						filteredMatches.push({
+							...match,
+							contextBefore: trimBefore && trimBefore.length > 0 ? trimBefore : undefined,
+							contextAfter: trimAfter && trimAfter.length > 0 ? trimAfter : undefined,
+						});
+					}
+					result = {
+						matches: filteredMatches,
+						totalMatches: filteredMatches.length,
+						filesWithMatches: new Set(filteredMatches.map(match => match.path)).size,
+						filesSearched: result.filesSearched,
+						limitReached: result.limitReached,
+					};
+				}
 				if (archiveDisplayMap.size > 0) {
 					for (const match of result.matches) {
-						let abs: string;
-						if (match.path === "") abs = searchPath;
-						else if (path.isAbsolute(match.path)) abs = match.path;
-						else abs = path.resolve(searchPath, match.path);
+						const abs = matchAbsolutePath(match.path, searchPath);
 						const display = archiveDisplayMap.get(abs);
 						if (display) match.path = display;
 					}
