@@ -135,6 +135,19 @@ function mergeWarnings(...sources: ReadonlyArray<readonly string[] | undefined>)
 	return out;
 }
 
+function assertUniqueCanonicalPaths(prepared: readonly PreparedSection[]): void {
+	const seen = new Map<string, string>();
+	for (const entry of prepared) {
+		const previous = seen.get(entry.canonicalPath);
+		if (previous !== undefined) {
+			throw new Error(
+				`Multiple hashline sections resolve to the same file (${previous} and ${entry.section.path}). Merge their ops under one header before applying.`,
+			);
+		}
+		seen.set(entry.canonicalPath, entry.section.path);
+	}
+}
+
 /**
  * High-level patcher. Wires a {@link Filesystem} and an optional
  * {@link SnapshotStore} together with the parsing + applying core.
@@ -173,6 +186,7 @@ export class Patcher {
 		// file, parse error, in-memory no-op) surfaces before any write.
 		const prepared: PreparedSection[] = [];
 		for (const section of patch.sections) prepared.push(await this.prepare(section, merged));
+		assertUniqueCanonicalPaths(prepared);
 		for (const entry of prepared) {
 			if (entry.isNoop) {
 				throw new Error(`Edits to ${entry.section.path} resulted in no changes being made.`);
@@ -190,10 +204,12 @@ export class Patcher {
 	 */
 	async preflight(patch: Patch, options: ApplyOptions = {}): Promise<void> {
 		const merged: ApplyOptions = { ...this.applyOptions, ...options };
-		for (const section of patch.sections) {
-			const prepared = await this.prepare(section, merged);
-			if (prepared.isNoop) {
-				throw new Error(`Edits to ${section.path} resulted in no changes being made.`);
+		const prepared: PreparedSection[] = [];
+		for (const section of patch.sections) prepared.push(await this.prepare(section, merged));
+		assertUniqueCanonicalPaths(prepared);
+		for (const entry of prepared) {
+			if (entry.isNoop) {
+				throw new Error(`Edits to ${entry.section.path} resulted in no changes being made.`);
 			}
 		}
 	}
@@ -213,6 +229,7 @@ export class Patcher {
 		assertSectionHashAllowed(section.path, section.fileHash, edits);
 
 		const canonicalPath = this.fs.canonicalPath(section.path);
+		await this.fs.preflightWrite(section.path);
 		const { exists, rawContent } = await this.#tryRead(section.path);
 		if (!exists && hasAnchorScopedEdit(edits)) {
 			throw new Error(`File not found: ${section.path}`);

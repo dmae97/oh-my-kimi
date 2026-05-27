@@ -697,29 +697,35 @@ export function applyEdits(text: string, edits: Edit[], options: ApplyOptions = 
 	if (blankTargetError !== null) throw new Error(blankTargetError);
 
 	const normalizedEdits = absorbReplacementBoundaryDuplicates(edits, fileLines, warnings, options);
+	const targetEdits: Edit[] = [];
 
 	// Normalize after_anchor inserts to before_anchor of the next line, or EOF
-	// when the anchor is the final line. This keeps the bucketing logic below
-	// (which only knows about before_anchor / bof / eof) untouched.
+	// when the anchor is the final line. Keep the authored edit objects
+	// immutable: PatchSection caches parsed edits and callers may apply them
+	// repeatedly against different snapshots.
 	for (const edit of normalizedEdits) {
-		if (edit.kind !== "insert" || edit.cursor.kind !== "after_anchor") continue;
-		const anchorLine = edit.cursor.anchor.line;
-		if (anchorLine >= fileLines.length) {
-			edit.cursor = { kind: "eof" };
+		if (edit.kind !== "insert" || edit.cursor.kind !== "after_anchor") {
+			targetEdits.push(edit);
 			continue;
 		}
-		const nextLineNum = anchorLine + 1;
-		edit.cursor = {
-			kind: "before_anchor",
-			anchor: { line: nextLineNum },
-		};
+		const anchorLine = edit.cursor.anchor.line;
+		targetEdits.push({
+			...edit,
+			cursor:
+				anchorLine >= fileLines.length
+					? { kind: "eof" }
+					: {
+							kind: "before_anchor",
+							anchor: { line: anchorLine + 1 },
+						},
+		});
 	}
 
 	// Partition edits into BOF, EOF, and anchor-targeted buckets.
 	const bofLines: string[] = [];
 	const eofLines: string[] = [];
 	const anchorEdits: IndexedEdit[] = [];
-	normalizedEdits.forEach((edit, idx) => {
+	targetEdits.forEach((edit, idx) => {
 		if (edit.kind === "insert" && edit.cursor.kind === "bof") {
 			bofLines.push(edit.text);
 		} else if (edit.kind === "insert" && edit.cursor.kind === "eof") {

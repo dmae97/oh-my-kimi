@@ -101,8 +101,12 @@ export class HashlineFilesystem extends Filesystem {
 		return content;
 	}
 
-	async writeText(relativePath: string, content: string): Promise<WriteResult> {
+	async preflightWrite(relativePath: string): Promise<void> {
 		enforcePlanModeWrite(this.session, relativePath, { op: "update" });
+	}
+
+	async writeText(relativePath: string, content: string): Promise<WriteResult> {
+		await this.preflightWrite(relativePath);
 		const absolutePath = this.resolveAbsolute(relativePath);
 		const finalContent = await serializeEditFileText(absolutePath, relativePath, content);
 		const diagnostics = await this.#writethrough(

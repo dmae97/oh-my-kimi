@@ -6,14 +6,13 @@
 
 export type LineEnding = "\r\n" | "\n";
 
-/** Detect the predominant line ending in `content`. Defaults to LF when neither is present. */
+/** Detect the first line ending style in `content`. Defaults to LF when neither is present. */
 export function detectLineEnding(content: string): LineEnding {
-	const crlfMatches = content.match(/\r\n/g);
-	const crlfCount = crlfMatches ? crlfMatches.length : 0;
-	const lfMatches = content.match(/\n/g);
-	const lfCount = lfMatches ? lfMatches.length : 0;
-	const standaloneLfCount = lfCount - crlfCount;
-	return crlfCount > standaloneLfCount ? "\r\n" : "\n";
+	const crlfIdx = content.indexOf("\r\n");
+	const lfIdx = content.indexOf("\n");
+	if (lfIdx === -1) return "\n";
+	if (crlfIdx === -1) return "\n";
+	return crlfIdx < lfIdx ? "\r\n" : "\n";
 }
 
 /** Normalize every line ending to LF. */

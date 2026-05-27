@@ -17,6 +17,10 @@
 - Changed read to return verbatim contents for files shorter than `read.summarize.minTotalLines` instead of summarizing them
 - Changed `search` path line-range filtering to include only matches and context lines that fall inside the requested ranges
 
+### Fixed
+
+- Fixed multi-section hashline edits to reject duplicate canonical targets and preflight write guards before any section is committed
+
 ## [15.5.3] - 2026-05-27
 ### Breaking Changes
 

@@ -8,6 +8,7 @@
  * {@link Filesystem.readText} and {@link Filesystem.writeText}; the FS deals
  * only in raw text strings.
  */
+import * as pathModule from "node:path";
 
 /**
  * Result returned by {@link Filesystem.writeText}. The patcher echoes back
@@ -55,6 +56,9 @@ export function isNotFound(error: unknown): boolean {
 export abstract class Filesystem {
 	/** Read the file's full text content. Throw on missing file. */
 	abstract readText(path: string): Promise<string>;
+
+	/** Validate that `path` is writable before a prepared batch starts committing. */
+	async preflightWrite(_path: string): Promise<void> {}
 
 	/** Persist `content` at `path`. Returns the actual final text that was written. */
 	abstract writeText(path: string, content: string): Promise<WriteResult>;
@@ -151,6 +155,10 @@ export class NodeFilesystem extends Filesystem {
 	async writeText(path: string, content: string): Promise<WriteResult> {
 		await Bun.write(path, content);
 		return { text: content };
+	}
+
+	canonicalPath(path: string): string {
+		return pathModule.resolve(path);
 	}
 
 	async exists(path: string): Promise<boolean> {

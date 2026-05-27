@@ -48,6 +48,19 @@ function noChangeDiagnostic(path: string): string {
 	return `Edits to ${path} resulted in no changes being made.`;
 }
 
+function assertUniqueCanonicalPaths(prepared: readonly PreparedSection[]): void {
+	const seen = new Map<string, string>();
+	for (const entry of prepared) {
+		const previous = seen.get(entry.canonicalPath);
+		if (previous !== undefined) {
+			throw new Error(
+				`Multiple hashline sections resolve to the same file (${previous} and ${entry.section.path}). Merge their ops under one header before applying.`,
+			);
+		}
+		seen.set(entry.canonicalPath, entry.section.path);
+	}
+}
+
 function narrowBatchRequest(outer: LspBatchRequest | undefined, isLast: boolean): LspBatchRequest | undefined {
 	if (!outer) return undefined;
 	return { id: outer.id, flush: isLast && outer.flush };
@@ -140,6 +153,7 @@ export async function executeHashlineSingle(
 	// any write hits the filesystem.
 	const prepared: PreparedSection[] = [];
 	for (const section of patch.sections) prepared.push(await patcher.prepare(section));
+	assertUniqueCanonicalPaths(prepared);
 	for (const entry of prepared) {
 		if (entry.isNoop) throw new Error(noChangeDiagnostic(entry.section.path));
 	}

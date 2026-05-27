@@ -7,14 +7,19 @@ import {
 	applyEdits,
 	buildCompactDiffPreview as buildCompactHashlineDiffPreview,
 	computeFileHash,
+	detectLineEnding,
 	type Edit,
 	InMemorySnapshotStore as FileReadCache,
+	Filesystem,
 	MismatchError as HashlineMismatchError,
+	NotFoundError,
 	Patch,
+	Patcher,
 	type PatchSection,
 	parsePatch as parseHashline,
 	Recovery,
 	type SplitOptions,
+	type WriteResult,
 } from "@oh-my-pi/hashline";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
@@ -141,7 +146,51 @@ function hashlineExecuteOptions(
 	};
 }
 
+class PolicyFilesystem extends Filesystem {
+	#files = new Map<string, string>();
+	#blocked = new Set<string>();
+
+	constructor(initial: Iterable<readonly [string, string]>, blocked: Iterable<string>) {
+		super();
+		for (const [filePath, content] of initial) this.#files.set(filePath, content);
+		for (const filePath of blocked) this.#blocked.add(filePath);
+	}
+
+	async readText(filePath: string): Promise<string> {
+		const content = this.#files.get(filePath);
+		if (content === undefined) throw new NotFoundError(filePath);
+		return content;
+	}
+
+	async preflightWrite(filePath: string): Promise<void> {
+		if (this.#blocked.has(filePath)) throw new Error(`blocked write: ${filePath}`);
+	}
+
+	async writeText(filePath: string, content: string): Promise<WriteResult> {
+		this.#files.set(filePath, content);
+		return { text: content };
+	}
+
+	get(filePath: string): string | undefined {
+		return this.#files.get(filePath);
+	}
+}
+
+describe("hashline normalization", () => {
+	it("preserves the first newline style when restoring mixed-ending files", () => {
+		expect(detectLineEnding("a\r\nb\nc")).toBe("\r\n");
+		expect(detectLineEnding("a\nb\r\nc")).toBe("\n");
+	});
+});
+
 describe("hashline parser — suffix-op syntax", () => {
+	it("keeps parsed edits reusable across different target snapshots", () => {
+		const section = Patch.parseSingle(["¶a.ts", `${tag(2, "bbb")}↓`, extra("tail")].join("\n"));
+
+		expect(section.applyTo("aaa\nbbb").text).toBe("aaa\nbbb\ntail");
+		expect(section.applyTo("aaa\nbbb\nccc").text).toBe("aaa\nbbb\ntail\nccc");
+	});
+
 	const content = "aaa\nbbb\nccc";
 
 	it("inserts payload before/after a Lid, and at BOF/EOF", () => {
@@ -707,6 +756,28 @@ describe("splitHashlineInput — ¶ headers", () => {
 	});
 });
 
+it("preflights write policy for every section before committing a batch", async () => {
+	const fixture = new PolicyFilesystem(
+		[
+			["a.ts", "aaa\n"],
+			["b.ts", "bbb\n"],
+		],
+		["b.ts"],
+	);
+	const input = [
+		header("a.ts", "aaa\n"),
+		`${sameLineRange(tag(1, "aaa"))}:`,
+		extra("AAA"),
+		header("b.ts", "bbb\n"),
+		`${sameLineRange(tag(1, "bbb"))}:`,
+		extra("BBB"),
+	].join("\n");
+
+	await expect(new Patcher({ fs: fixture }).apply(Patch.parse(input))).rejects.toThrow(/blocked write: b\.ts/);
+	expect(fixture.get("a.ts")).toBe("aaa\n");
+	expect(fixture.get("b.ts")).toBe("bbb\n");
+});
+
 describe("hashline executor", () => {
 	it("creates a missing file with a file-scoped insert", async () => {
 		await withTempDir(async tempDir => {
@@ -756,6 +827,27 @@ describe("hashline executor", () => {
 			);
 			expect(await Bun.file(aPath).text()).toBe("aaa\n");
 			expect(await Bun.file(bPath).text()).toBe("bbb\n");
+		});
+	});
+
+	it("rejects duplicate canonical targets before writing stale section results", async () => {
+		await withTempDir(async tempDir => {
+			const filePath = path.join(tempDir, "a.ts");
+			const source = "one\ntwo\n";
+			await Bun.write(filePath, source);
+			const input = [
+				header("a.ts", source),
+				`${sameLineRange(tag(1, "one"))}:`,
+				extra("ONE"),
+				header("./a.ts", source),
+				`${sameLineRange(tag(2, "two"))}:`,
+				extra("TWO"),
+			].join("\n");
+
+			await expect(executeHashlineSingle(hashlineExecuteOptions(tempDir, input))).rejects.toThrow(
+				/resolve to the same file/,
+			);
+			expect(await Bun.file(filePath).text()).toBe(source);
 		});
 	});
 
