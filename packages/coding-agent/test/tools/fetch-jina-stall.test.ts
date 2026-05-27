@@ -17,7 +17,11 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 		const settings = Settings.isolated({ "providers.parallelFetch": false });
 		// Substantive HTML so the native converter produces >100 chars and
 		// `isLowQualityOutput` does not reject it.
-		const paragraphs = Array.from({ length: 6 }, (_, i) => `<p>Paragraph number ${i + 1} carries some real content for the article body so the native renderer has enough text to satisfy the length threshold.</p>`).join("");
+		const paragraphs = Array.from(
+			{ length: 6 },
+			(_, i) =>
+				`<p>Paragraph number ${i + 1} carries some real content for the article body so the native renderer has enough text to satisfy the length threshold.</p>`,
+		).join("");
 		const html = `<!doctype html><html><head><title>Example</title></head><body><article><h1>Example article</h1>${paragraphs}</article></body></html>`;
 
 		using _hook = hookFetch((input, _init, _next) => {
@@ -43,14 +47,7 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 		const started = Date.now();
 		// `timeout: 2` keeps the overall budget tight — the test must complete
 		// within ~2s even though Jina would otherwise hang for the full budget.
-		const result = await renderHtmlToText(
-			"https://example.com/article",
-			html,
-			2,
-			settings,
-			undefined,
-			null,
-		);
+		const result = await renderHtmlToText("https://example.com/article", html, 2, settings, undefined, null);
 		const elapsedMs = Date.now() - started;
 
 		expect(result.ok).toBe(true);
@@ -96,6 +93,8 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 		controller.abort();
 		const outcome = await pending;
 		expect(outcome).toBeInstanceOf(Error);
-		expect((outcome as Error).name === "AbortError" || (outcome as Error).message.toLowerCase().includes("abort")).toBe(true);
+		expect(
+			(outcome as Error).name === "AbortError" || (outcome as Error).message.toLowerCase().includes("abort"),
+		).toBe(true);
 	});
 });
