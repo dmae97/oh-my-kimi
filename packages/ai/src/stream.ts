@@ -90,9 +90,34 @@ function createVertexOpenAIFetch(options: StreamOptions | undefined): FetchImpl 
 		const token = await getVertexAccessToken({ signal: options?.signal, fetch: baseFetch });
 		const headers = new Headers(init?.headers);
 		headers.set("Authorization", `Bearer ${token}`);
-		return baseFetch(input, { ...init, headers });
+		return baseFetch(resolveVertexOpenAIRequest(input), { ...init, headers });
 	};
 	return Object.assign(vertexFetch, baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {});
+}
+
+function resolveVertexOpenAIRequest(input: string | URL | Request): string | URL | Request {
+	const project = $env.GOOGLE_CLOUD_PROJECT || $env.GCP_PROJECT || $env.GCLOUD_PROJECT;
+	const location = $env.GOOGLE_VERTEX_LOCATION || $env.GOOGLE_CLOUD_LOCATION || $env.VERTEX_LOCATION;
+	if (!project || !location) return input;
+
+	const rewriteUrl = (url: string): string => {
+		if (!url.includes("{project}") && !url.includes("{location}")) return url;
+		const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
+		return url
+			.replace("https://{location}-aiplatform.googleapis.com", `https://${host}`)
+			.replaceAll("{project}", encodeURIComponent(project))
+			.replaceAll("{location}", encodeURIComponent(location));
+	};
+
+	if (input instanceof Request) {
+		const rewrittenUrl = rewriteUrl(input.url);
+		return rewrittenUrl === input.url ? input : new Request(rewrittenUrl, input);
+	}
+	if (input instanceof URL) {
+		const rewrittenUrl = rewriteUrl(input.toString());
+		return rewrittenUrl === input.toString() ? input : new URL(rewrittenUrl);
+	}
+	return rewriteUrl(input);
 }
 
 type KeyResolver = string | (() => string | undefined);

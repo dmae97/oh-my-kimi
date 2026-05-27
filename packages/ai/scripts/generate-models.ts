@@ -354,18 +354,27 @@ async function generateModels() {
 		}
 	}
 
-	// Merge previous models.json entries as fallback for any provider/model
-	// not fetched dynamically. This replaces all hardcoded fallback lists —
-	// static-only providers (vertex, gemini-cli), auth-gated providers when
-	// credentials are unavailable, and ad-hoc model additions all persist
-	// through the existing models.json seed.
+	const modelsDevAuthoritativeProviders = new Set<string>();
+	for (const model of modelsDevModels) {
+		if (model.provider === "google-vertex") {
+			modelsDevAuthoritativeProviders.add(model.provider);
+		}
+	}
+	// Merge previous models.json entries as fallback for provider/model pairs not
+	// fetched dynamically. Providers that models.dev covers authoritatively keep
+	// the upstream list exactly, so retired entries from the previous snapshot do
+	// not reappear during regeneration.
 	// Discovery-only providers (local inference servers) — never bundle static models.
 	const discoveryOnlyProviders = new Set(["ollama", "vllm"]);
 	const fetchedKeys = new Set(allModels.map(model => `${model.provider}/${model.id}`));
 
 	for (const models of Object.values(prevModelsJson as Record<string, Record<string, Model>>)) {
 		for (const model of Object.values(models)) {
-			if (!fetchedKeys.has(`${model.provider}/${model.id}`) && !discoveryOnlyProviders.has(model.provider)) {
+			if (
+				!fetchedKeys.has(`${model.provider}/${model.id}`) &&
+				!discoveryOnlyProviders.has(model.provider) &&
+				!modelsDevAuthoritativeProviders.has(model.provider)
+			) {
 				allModels.push(model);
 			}
 		}

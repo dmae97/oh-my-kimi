@@ -2,7 +2,6 @@ import type { ModelManagerOptions } from "../model-manager";
 import type { FetchImpl } from "../types";
 import { fetchAntigravityDiscoveryModels } from "../utils/discovery/antigravity";
 import { fetchGeminiModels } from "../utils/discovery/gemini";
-import { fetchVertexOpenAIModels } from "../utils/discovery/vertex";
 
 export interface GoogleModelManagerConfig {
 	apiKey?: string;
@@ -38,43 +37,8 @@ export function googleModelManagerOptions(
 	};
 }
 
-export function googleVertexModelManagerOptions(config?: GoogleVertexModelManagerConfig): ModelManagerOptions {
-	const project = resolveVertexProject(config);
-	const hasApiKey = (config?.apiKey ?? Bun.env.GOOGLE_CLOUD_API_KEY ?? "").trim().length > 0;
-	const location = resolveVertexLocation(config);
-	if (hasApiKey) {
-		return { providerId: "google-vertex" };
-	}
-	if (project && location) {
-		return {
-			providerId: "google-vertex",
-			staticModels: [],
-			fetchDynamicModels: () =>
-				fetchVertexOpenAIModels({
-					project,
-					location,
-					signal: config?.signal,
-					fetch: config?.fetch,
-				}),
-		};
-	}
-	// With neither ADC project+location nor API key auth configured, drop the
-	// bundled static catalog so stale fallbacks (e.g. `gemini-1.5-*`) cannot leak
-	// into `/models` alongside an authoritative cached Vertex project catalog on
-	// the next refresh.
-	return { providerId: "google-vertex", staticModels: [] };
-}
-function resolveVertexProject(config?: GoogleVertexModelManagerConfig): string | undefined {
-	const project = config?.project ?? Bun.env.GOOGLE_CLOUD_PROJECT ?? Bun.env.GCP_PROJECT ?? Bun.env.GCLOUD_PROJECT;
-	const trimmed = project?.trim();
-	return trimmed ? trimmed : undefined;
-}
-
-function resolveVertexLocation(config?: GoogleVertexModelManagerConfig): string | undefined {
-	const location =
-		config?.location ?? Bun.env.GOOGLE_VERTEX_LOCATION ?? Bun.env.GOOGLE_CLOUD_LOCATION ?? Bun.env.VERTEX_LOCATION;
-	const trimmed = location?.trim();
-	return trimmed ? trimmed : undefined;
+export function googleVertexModelManagerOptions(_config?: GoogleVertexModelManagerConfig): ModelManagerOptions {
+	return { providerId: "google-vertex" };
 }
 
 export function googleAntigravityModelManagerOptions(
