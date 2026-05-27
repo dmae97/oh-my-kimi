@@ -225,6 +225,11 @@ struct PendingFileChange {
 	edit:   Edit<String>,
 }
 
+struct PendingWrite {
+	absolute_path: PathBuf,
+	output:        String,
+}
+
 fn to_u32(value: usize) -> u32 {
 	value.min(u32::MAX as usize) as u32
 }
@@ -704,7 +709,37 @@ pub fn ast_edit(options: AstReplaceOptions<'_>) -> task::Promise<AstReplaceResul
 
 	let ct = task::CancelToken::new(timeout_ms, signal);
 	task::blocking("ast_edit", ct, move |ct| {
-		let rewrite_rules = normalize_rewrite_map(rewrites)?;
+		ast_edit_blocking(
+			ct,
+			rewrites,
+			lang,
+			path,
+			glob,
+			selector,
+			strictness,
+			dry_run,
+			max_replacements,
+			max_files,
+			fail_on_parse_error,
+		)
+	})
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ast_edit_blocking(
+	ct: task::CancelToken,
+	rewrites: Option<HashMap<String, String>>,
+	lang: Option<String>,
+	path: Option<String>,
+	glob: Option<String>,
+	selector: Option<String>,
+	strictness: Option<AstMatchStrictness>,
+	dry_run: Option<bool>,
+	max_replacements: Option<u32>,
+	max_files: Option<u32>,
+	fail_on_parse_error: Option<bool>,
+) -> Result<AstReplaceResult> {
+	let rewrite_rules = normalize_rewrite_map(rewrites)?;
 		let strictness = resolve_strictness(strictness);
 		let dry_run = dry_run.unwrap_or(true);
 		let max_replacements = max_replacements.unwrap_or(u32::MAX).max(1);
@@ -754,6 +789,9 @@ pub fn ast_edit(options: AstReplaceOptions<'_>) -> task::Promise<AstReplaceResul
 		let mut file_counts: BTreeMap<String, u32> = BTreeMap::new();
 		let mut files_touched = 0u32;
 		let mut limit_reached = false;
+		// Stage writes in memory so a later compute error cannot leave earlier
+		// files partially modified on disk; flush only after the whole pass succeeds.
+		let mut pending_writes: Vec<PendingWrite> = Vec::new();
 
 		for candidate in &candidates {
 			ct.heartbeat()?;
@@ -843,9 +881,10 @@ pub fn ast_edit(options: AstReplaceOptions<'_>) -> task::Promise<AstReplaceResul
 					.collect();
 				let output = apply_edits(&source, &edits)?;
 				if output != source {
-					std::fs::write(&candidate.absolute_path, output).map_err(|err| {
-						Error::from_reason(format!("Failed to write {}: {err}", candidate.display_path))
-					})?;
+					pending_writes.push(PendingWrite {
+						absolute_path: candidate.absolute_path.clone(),
+						output,
+					});
 				}
 			}
 
@@ -855,21 +894,32 @@ pub fn ast_edit(options: AstReplaceOptions<'_>) -> task::Promise<AstReplaceResul
 			}
 		}
 
+		if !dry_run {
+			for write in &pending_writes {
+				ct.heartbeat()?;
+				std::fs::write(&write.absolute_path, &write.output).map_err(|err| {
+					Error::from_reason(format!(
+						"Failed to write {}: {err}",
+						write.absolute_path.display()
+					))
+				})?;
+			}
+		}
+
 		let file_changes = file_counts
 			.into_iter()
 			.map(|(path, count)| AstReplaceFileChange { path, count })
 			.collect::<Vec<_>>();
 
-		Ok(AstReplaceResult {
-			file_changes,
-			total_replacements: to_u32(changes.len()),
-			files_touched,
-			files_searched: to_u32(candidates.len()),
-			applied: !dry_run,
-			limit_reached,
-			parse_errors: (!parse_errors.is_empty()).then_some(parse_errors),
-			changes,
-		})
+	Ok(AstReplaceResult {
+		file_changes,
+		total_replacements: to_u32(changes.len()),
+		files_touched,
+		files_searched: to_u32(candidates.len()),
+		applied: !dry_run,
+		limit_reached,
+		parse_errors: (!parse_errors.is_empty()).then_some(parse_errors),
+		changes,
 	})
 }
 
@@ -1001,5 +1051,60 @@ mod tests {
 			Edit::<String> { position: 2, deleted_length: 1, inserted_text: b"y".to_vec() },
 		];
 		assert!(apply_edits(source, &edits).is_err());
+	}
+
+	fn make_apply_failure_tree() -> TempTree {
+		let unique = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.expect("system time should be after UNIX_EPOCH")
+			.as_nanos();
+		let root = std::env::temp_dir().join(format!("pi-ast-apply-fail-{unique}"));
+		fs::create_dir_all(&root).expect("temp apply-fail dir should be created");
+		// `a.ts` rewrites cleanly under both rules (one applies, the other doesn't match).
+		fs::write(root.join("a.ts"), "const a = bar;\n").expect("temp file a.ts should be written");
+		// `b.ts` matches both rules with nested ranges (`foo(bar)` contains `bar`),
+		// so `apply_edits` rejects the combined edit set with an overlap error.
+		fs::write(root.join("b.ts"), "const b = foo(bar);\n")
+			.expect("temp file b.ts should be written");
+		TempTree { root }
+	}
+
+	#[test]
+	fn ast_edit_does_not_partially_write_when_apply_fails() {
+		let tree = make_apply_failure_tree();
+		let a_path = tree.root.join("a.ts");
+		let b_path = tree.root.join("b.ts");
+		let a_before = fs::read_to_string(&a_path).expect("a.ts should be readable");
+		let b_before = fs::read_to_string(&b_path).expect("b.ts should be readable");
+
+		let mut rewrites = HashMap::new();
+		rewrites.insert("bar".to_string(), "baz".to_string());
+		rewrites.insert("foo($X)".to_string(), "qux($X)".to_string());
+
+		let result = ast_edit_blocking(
+			task::CancelToken::default(),
+			Some(rewrites),
+			Some("ts".to_string()),
+			Some(tree.root.to_string_lossy().into_owned()),
+			None,
+			None,
+			None,
+			Some(false),
+			None,
+			None,
+			None,
+		);
+		assert!(result.is_err(), "expected ast_edit to error on overlapping edits");
+
+		assert_eq!(
+			fs::read_to_string(&a_path).expect("a.ts should still be readable"),
+			a_before,
+			"a.ts must not be written when the apply pass fails on a later file",
+		);
+		assert_eq!(
+			fs::read_to_string(&b_path).expect("b.ts should still be readable"),
+			b_before,
+			"b.ts must remain unmodified after apply failure",
+		);
 	}
 }
