@@ -3,18 +3,18 @@ begin_patch: "*** Begin Patch" LF
 end_patch: "*** End Patch" LF?
 
 hunk: update_hunk
-update_hunk: "¶" filename ("#" file_hash)? LF line_op*
+update_hunk: "¶" filename ("#" file_hash)? LF block*
 
 filename: /([^\s#]+)/
 file_hash: /[0-9a-f]{4}/
 
-line_op: insert_before | insert_after | replace
-insert_before: anchor "↑" LF payload*
-insert_after: anchor "↓" LF payload*
-replace: range ":" LF payload*
-payload: "\\" /[^\n]*/ LF
+block: anchor ":" LF payload*
+payload: above_payload | replace_payload | below_payload
+above_payload: "↑" /[^\n]*/ LF
+replace_payload: "|" /[^\n]*/ LF
+below_payload: "↓" /[^\n]*/ LF
 
-anchor: LID | "EOF" | "BOF"
+anchor: range | "BOF" | "EOF"
 range: LID ("-" LID)?
 LID: /[1-9]\d*/
 

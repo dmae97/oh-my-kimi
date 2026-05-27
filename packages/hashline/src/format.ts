@@ -4,18 +4,18 @@
  * parser, the tokenizer, the prompt, and the formal grammar.
  */
 
-/** Op sigil used immediately after a line-number anchor to insert before it. */
-export const HL_OP_INSERT_BEFORE = "↑";
-/** Op sigil used immediately after a line-number anchor to insert after it. */
-export const HL_OP_INSERT_AFTER = "↓";
-/** Op sigil used after a range (or single anchor) to replace its lines. */
+/** Anchor terminator for every hashline operation block. */
 export const HL_OP_REPLACE = ":";
 
-/** All hashline edit op sigils, concatenated for fast membership tests. */
-export const HL_OP_CHARS = `${HL_OP_INSERT_BEFORE}${HL_OP_INSERT_AFTER}${HL_OP_REPLACE}`;
+/** Payload sigil for lines that replace the anchored range in place. */
+export const HL_PAYLOAD_REPLACE = "|";
+/** Payload sigil for lines inserted before the anchored range. */
+export const HL_PAYLOAD_ABOVE = "↑";
+/** Payload sigil for lines inserted after the anchored range. */
+export const HL_PAYLOAD_BELOW = "↓";
 
-/** Prefix for payload continuation lines. The prefix itself is not written. */
-export const HL_PAYLOAD_PREFIX = "\\";
+/** All hashline payload sigils, concatenated for fast membership tests. */
+export const HL_PAYLOAD_CHARS = `${HL_PAYLOAD_REPLACE}${HL_PAYLOAD_ABOVE}${HL_PAYLOAD_BELOW}`;
 
 /** Hashline edit file-section header marker. */
 export const HL_FILE_PREFIX = "¶";

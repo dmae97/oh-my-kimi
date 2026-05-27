@@ -10,17 +10,17 @@
  * The tokenizer is intentionally permissive about decorations and prefixes
  * the model may echo back from `read`/`search` output — leading `*`/`>`/`-`
  * markers, CR-terminated lines, leading whitespace before line numbers, and
- * so on are all stripped before classification.
+ * so on are all stripped before anchor classification.
  */
 
 import {
 	describeAnchorExamples,
 	HL_FILE_HASH_SEP,
 	HL_FILE_PREFIX,
-	HL_OP_INSERT_AFTER,
-	HL_OP_INSERT_BEFORE,
 	HL_OP_REPLACE,
-	HL_PAYLOAD_PREFIX,
+	HL_PAYLOAD_ABOVE,
+	HL_PAYLOAD_BELOW,
+	HL_PAYLOAD_REPLACE,
 } from "./format";
 import { ABORT_MARKER, BEGIN_PATCH_MARKER, END_PATCH_MARKER } from "./messages";
 import type { Anchor, Cursor, ParsedRange } from "./types";
@@ -32,10 +32,14 @@ const CHAR_NINE = 57;
 const CHAR_HASH = 35;
 const CHAR_TAB = 9;
 const CHAR_SPACE = 32;
+const CHAR_HYPHEN = 45;
 const CHAR_LOWER_A = 97;
 const CHAR_LOWER_F = 102;
 const CHAR_PILCROW = HL_FILE_PREFIX.charCodeAt(0);
-const CHAR_PAYLOAD_PREFIX = HL_PAYLOAD_PREFIX.charCodeAt(0);
+const CHAR_OP_REPLACE = HL_OP_REPLACE.charCodeAt(0);
+const CHAR_PAYLOAD_REPLACE = HL_PAYLOAD_REPLACE.charCodeAt(0);
+const CHAR_PAYLOAD_ABOVE = HL_PAYLOAD_ABOVE.charCodeAt(0);
+const CHAR_PAYLOAD_BELOW = HL_PAYLOAD_BELOW.charCodeAt(0);
 const FILE_HASH_LENGTH = 4;
 
 function isDigitCode(code: number): boolean {
@@ -47,7 +51,7 @@ function isNonZeroDigitCode(code: number): boolean {
 }
 
 function isDecorationCode(code: number): boolean {
-	return code === 42 || code === 45 || code === 62;
+	return code === 42 || code === CHAR_HYPHEN || code === 62;
 }
 
 function isHexDigitCode(code: number): boolean {
@@ -108,7 +112,7 @@ export function cloneCursor(cursor: Cursor): Cursor {
 
 // Leniently accept anchors copied from read/search output:
 //   - optional leading line-marker decoration (`*`, `>`, `-`)
-//   - the required bare line number
+//   - the required bare line number / BOF / EOF anchor
 function skipDecoratedAnchorPrefix(line: string, end = trimEndIndex(line)): number {
 	let index = skipWhitespace(line, 0, end);
 	while (index < end && isDecorationCode(line.charCodeAt(index))) index++;
@@ -134,7 +138,7 @@ function scanLineNumber(line: string, index: number, end: number): NumberScan | 
 	return { line: lineNumber, nextIndex };
 }
 
-/** Parse a bare line-number anchor (used by insert ops). Throws on malformed input. */
+/** Parse a bare line-number anchor. Throws on malformed input. */
 export function parseLid(raw: string, lineNum: number): Anchor {
 	const end = trimEndIndex(raw);
 	const numberStart = skipDecoratedAnchorPrefix(raw, end);
@@ -160,7 +164,7 @@ function scanRange(line: string, end = trimEndIndex(line)): RangeScan | null {
 
 	let nextIndex = start.nextIndex;
 	let rangeEnd = start.line;
-	if (nextIndex < end && line.charCodeAt(nextIndex) === 45) {
+	if (nextIndex < end && line.charCodeAt(nextIndex) === CHAR_HYPHEN) {
 		const endNumber = scanLineNumber(line, nextIndex + 1, end);
 		if (endNumber === null) return null;
 		rangeEnd = endNumber.line;
@@ -181,100 +185,55 @@ function startsWithWord(line: string, index: number, end: number, word: string):
 	return true;
 }
 
-function parseInsertTarget(raw: string, lineNum: number, kind: "before" | "after"): Cursor {
-	const end = trimEndIndex(raw);
-	const targetStart = skipDecoratedAnchorPrefix(raw, end);
+export type BlockTarget = { kind: "range"; range: ParsedRange } | { kind: "bof" } | { kind: "eof" };
 
-	if (startsWithWord(raw, targetStart, end, "BOF") && skipWhitespace(raw, targetStart + 3, end) === end) {
-		return { kind: "bof" };
-	}
-	if (startsWithWord(raw, targetStart, end, "EOF") && skipWhitespace(raw, targetStart + 3, end) === end) {
-		return { kind: "eof" };
-	}
+export type PayloadBucket = "above" | "replace" | "below";
 
-	const cursorKind = kind === "before" ? "before_anchor" : "after_anchor";
-	return { kind: cursorKind, anchor: parseLid(raw, lineNum) };
+interface TargetScan {
+	target: BlockTarget;
+	nextIndex: number;
 }
 
-function startsWithEscapedIndentPayload(text: string): boolean {
-	if (!text.startsWith(HL_PAYLOAD_PREFIX)) return false;
-	const next = text.charCodeAt(HL_PAYLOAD_PREFIX.length);
-	return next === CHAR_SPACE || next === CHAR_TAB;
-}
-
-function scanInlineBody(line: string, index: number): string | undefined {
-	const end = trimEndIndex(line);
-	if (index >= end) return undefined;
-
-	const body = line.slice(index, end);
-	if (!body.startsWith(HL_PAYLOAD_PREFIX)) return body;
-
-	const payload = body.slice(HL_PAYLOAD_PREFIX.length);
-	return startsWithEscapedIndentPayload(payload) ? payload.slice(HL_PAYLOAD_PREFIX.length) : payload;
-}
-
-interface ParsedInsertOp {
-	kind: "insert";
-	cursor: Cursor;
-	inlineBody: string | undefined;
-}
-
-interface ParsedReplaceOp {
-	kind: "replace";
-	range: ParsedRange;
-	inlineBody: string | undefined;
-}
-
-type ParsedOp = ParsedInsertOp | ParsedReplaceOp;
-
-function tryParseInsertOp(line: string, sigil: string, kind: "before" | "after"): ParsedInsertOp | null {
-	const end = trimEndIndex(line);
+function scanBlockTarget(line: string, end = trimEndIndex(line)): TargetScan | null {
 	const targetStart = skipDecoratedAnchorPrefix(line, end);
-
-	let targetEnd: number;
-	if (startsWithWord(line, targetStart, end, "BOF") || startsWithWord(line, targetStart, end, "EOF")) {
-		targetEnd = targetStart + 3;
-	} else {
-		const anchor = scanLineNumber(line, targetStart, end);
-		if (anchor === null) return null;
-		targetEnd = anchor.nextIndex;
+	if (startsWithWord(line, targetStart, end, "BOF")) {
+		const nextIndex = skipWhitespace(line, targetStart + 3, end);
+		return { target: { kind: "bof" }, nextIndex };
+	}
+	if (startsWithWord(line, targetStart, end, "EOF")) {
+		const nextIndex = skipWhitespace(line, targetStart + 3, end);
+		return { target: { kind: "eof" }, nextIndex };
 	}
 
-	const opIndex = skipWhitespace(line, targetEnd, end);
-	if (opIndex >= end || line[opIndex] !== sigil) return null;
-
-	// parseInsertTarget can only throw on inputs that already passed the
-	// BOF/EOF/line-number scan above, but guard the throw anyway — the
-	// tokenizer contract forbids it and a future refactor of the prefix
-	// scan must not silently start raising here.
-	try {
-		return {
-			kind: "insert",
-			cursor: parseInsertTarget(line.slice(0, opIndex), 0, kind),
-			inlineBody: scanInlineBody(line, opIndex + sigil.length),
-		};
-	} catch {
-		return null;
-	}
+	const range = scanRange(line, end);
+	return range === null ? null : { target: { kind: "range", range: range.range }, nextIndex: range.nextIndex };
 }
 
-function tryParseReplaceOp(line: string): ParsedReplaceOp | null {
+interface ParsedBlockOp {
+	target: BlockTarget;
+	inlineBody: string | undefined;
+}
+
+function tryParseBlockOp(line: string): ParsedBlockOp | null {
 	const end = trimEndIndex(line);
-	const range = scanRange(line, end);
-	if (range === null || range.nextIndex >= end || line[range.nextIndex] !== HL_OP_REPLACE) return null;
+	const target = scanBlockTarget(line, end);
+	if (target === null) return null;
+
+	const opIndex = skipWhitespace(line, target.nextIndex, end);
+	if (opIndex >= end || line.charCodeAt(opIndex) !== CHAR_OP_REPLACE) return null;
+
+	const inlineStart = opIndex + HL_OP_REPLACE.length;
 	return {
-		kind: "replace",
-		range: range.range,
-		inlineBody: scanInlineBody(line, range.nextIndex + HL_OP_REPLACE.length),
+		target: target.target,
+		inlineBody: skipWhitespace(line, inlineStart, end) === end ? undefined : line.slice(inlineStart, end),
 	};
 }
 
-function tryParseOp(line: string): ParsedOp | null {
-	return (
-		tryParseInsertOp(line, HL_OP_INSERT_BEFORE, "before") ??
-		tryParseInsertOp(line, HL_OP_INSERT_AFTER, "after") ??
-		tryParseReplaceOp(line)
-	);
+function payloadBucketForCode(code: number): PayloadBucket | undefined {
+	if (code === CHAR_PAYLOAD_ABOVE) return "above";
+	if (code === CHAR_PAYLOAD_REPLACE) return "replace";
+	if (code === CHAR_PAYLOAD_BELOW) return "below";
+	return undefined;
 }
 
 /**
@@ -330,9 +289,8 @@ export type Token =
 	| (TokenBase & { kind: "envelope-end" })
 	| (TokenBase & { kind: "abort" })
 	| (TokenBase & { kind: "header"; path: string; fileHash?: string })
-	| (TokenBase & { kind: "op-insert"; cursor: Cursor; inlineBody: string | undefined })
-	| (TokenBase & { kind: "op-replace"; range: ParsedRange; inlineBody: string | undefined })
-	| (TokenBase & { kind: "payload"; text: string })
+	| (TokenBase & { kind: "op-block"; target: BlockTarget; inlineBody: string | undefined })
+	| (TokenBase & { kind: "payload"; bucket: PayloadBucket; text: string })
 	| (TokenBase & { kind: "raw"; text: string });
 
 function classifyLine(line: string, lineNum: number): Token {
@@ -350,16 +308,13 @@ function classifyLine(line: string, lineNum: number): Token {
 		}
 	}
 
-	if (line.charCodeAt(0) === CHAR_PAYLOAD_PREFIX) {
-		return { kind: "payload", lineNum, text: line.slice(HL_PAYLOAD_PREFIX.length) };
+	const payloadBucket = payloadBucketForCode(line.charCodeAt(0));
+	if (payloadBucket !== undefined) {
+		return { kind: "payload", lineNum, bucket: payloadBucket, text: line.slice(1) };
 	}
-	const op = tryParseOp(line);
-	if (op !== null) {
-		if (op.kind === "insert") {
-			return { kind: "op-insert", lineNum, cursor: op.cursor, inlineBody: op.inlineBody };
-		}
-		return { kind: "op-replace", lineNum, range: op.range, inlineBody: op.inlineBody };
-	}
+
+	const op = tryParseBlockOp(line);
+	if (op !== null) return { kind: "op-block", lineNum, target: op.target, inlineBody: op.inlineBody };
 
 	return { kind: "raw", lineNum, text: line };
 }
@@ -429,7 +384,7 @@ export class Tokenizer {
 	}
 
 	isOp(line: string): boolean {
-		return tryParseOp(line) !== null;
+		return tryParseBlockOp(line) !== null;
 	}
 
 	isHeader(line: string): boolean {

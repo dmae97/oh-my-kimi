@@ -6,23 +6,28 @@
  * Lifecycle:
  *
  * 1. Construct one {@link Executor} per hunk (or share one with `reset()`).
- * 2. Feed it tokens via {@link Executor.feed}. Multi-line payloads are
- *    accumulated across tokens until the next op flushes them.
- * 3. Call {@link Executor.end} to flush the trailing pending op and validate
- *    cross-op invariants (no overlapping deletes, etc.).
+ * 2. Feed it tokens via {@link Executor.feed}. Block payload rows are
+ *    accumulated across tokens until the next anchor block flushes them.
+ * 3. Call {@link Executor.end} to flush the trailing pending block and validate
+ *    cross-block invariants (no overlapping deletes, etc.).
  *
  * Convenience entry point: {@link parsePatch}.
  */
-import { HL_OP_CHARS, HL_OP_INSERT_AFTER, HL_OP_INSERT_BEFORE, HL_OP_REPLACE, HL_PAYLOAD_PREFIX } from "./format";
+import { HL_OP_REPLACE, HL_PAYLOAD_ABOVE, HL_PAYLOAD_BELOW, HL_PAYLOAD_REPLACE } from "./format";
 import {
 	ABORT_WARNING,
-	ESCAPED_PAYLOAD_DELIMITER_ACCEPTED_WARNING,
-	IMPLICIT_CONTINUATION_WARNING,
-	INLINE_PAYLOAD_ACCEPTED_WARNING,
-	PAYLOAD_LINE_PREFIX_DEMOTED_WARNING,
+	INLINE_PAYLOAD_REJECTED_PREFIX,
 	REPLACE_PAIR_COALESCED_WARNING,
+	VIRTUAL_REPLACE_REJECTED_MESSAGE,
 } from "./messages";
-import { cloneCursor, type ParsedRange, type Token, Tokenizer } from "./tokenizer";
+import {
+	type BlockTarget,
+	cloneCursor,
+	type ParsedRange,
+	type PayloadBucket,
+	type Token,
+	Tokenizer,
+} from "./tokenizer";
 import type { Anchor, Cursor, Edit } from "./types";
 
 function validateRangeOrder(range: ParsedRange, lineNum: number): void {
@@ -31,29 +36,12 @@ function validateRangeOrder(range: ParsedRange, lineNum: number): void {
 	}
 }
 
-function hasEscapedIndentPayloadDelimiter(text: string): boolean {
-	if (!text.startsWith(HL_PAYLOAD_PREFIX)) return false;
-	if (text.length === HL_PAYLOAD_PREFIX.length) return true;
-
-	const next = text.charCodeAt(HL_PAYLOAD_PREFIX.length);
-	return next === 32 || next === 9;
-}
-
-function shouldStripEscapedPayloadDelimiters(payload: readonly string[]): boolean {
-	let sawIndentedPayload = false;
-	for (const text of payload) {
-		if (!hasEscapedIndentPayloadDelimiter(text)) return false;
-		if (text.length > HL_PAYLOAD_PREFIX.length) sawIndentedPayload = true;
-	}
-	return sawIndentedPayload;
-}
-
 function rangesEqual(a: ParsedRange, b: ParsedRange): boolean {
 	return a.start.line === b.start.line && a.end.line === b.end.line;
 }
 
-function rangeContains(outer: ParsedRange, inner: ParsedRange): boolean {
-	return outer.start.line <= inner.start.line && inner.end.line <= outer.end.line;
+function targetsEqualConcreteRange(a: BlockTarget, b: BlockTarget): boolean {
+	return a.kind === "range" && b.kind === "range" && rangesEqual(a.range, b.range);
 }
 
 function expandRange(range: ParsedRange): Anchor[] {
@@ -68,26 +56,42 @@ function isSkippableCommentLine(line: string): boolean {
 	return line.trimStart().startsWith("#");
 }
 
+function sigilForBucket(bucket: PayloadBucket): string {
+	if (bucket === "above") return HL_PAYLOAD_ABOVE;
+	if (bucket === "below") return HL_PAYLOAD_BELOW;
+	return HL_PAYLOAD_REPLACE;
+}
+
+function describeTarget(target: BlockTarget): string {
+	if (target.kind === "bof") return "BOF:";
+	if (target.kind === "eof") return "EOF:";
+	const { start, end } = target.range;
+	return start.line === end.line ? `${start.line}:` : `${start.line}-${end.line}:`;
+}
+
 interface PendingComment {
 	lineNum: number;
 	text: string;
 }
 
-type PendingOp =
-	| { kind: "insert"; cursor: Cursor; lineNum: number }
-	| { kind: "replace"; range: ParsedRange; lineNum: number };
+interface PayloadRow {
+	bucket: PayloadBucket;
+	text: string;
+	lineNum: number;
+}
 
 interface Pending {
-	op: PendingOp;
-	payload: string[];
+	target: BlockTarget;
+	lineNum: number;
+	payloads: PayloadRow[];
 }
 
 /**
  * Token-driven state machine that turns a stream of {@link Token}s into a
  * flat list of {@link Edit}s.
  *
- * `feed()` accepts tokens one at a time; multi-line payloads accumulate
- * until the next op or {@link end} flushes them. After `terminated` flips
+ * `feed()` accepts tokens one at a time; block payload rows accumulate until
+ * the next anchor block or {@link end} flushes them. After `terminated` flips
  * true (on `envelope-end` or `abort`) subsequent feeds are silently ignored
  * so callers can keep draining their tokenizer.
  */
@@ -144,7 +148,7 @@ export class Executor {
 				return;
 			case "payload":
 				this.#consumePendingSkippableComments();
-				this.#handlePayload(token.text, token.lineNum);
+				this.#handlePayload(token.bucket, token.text, token.lineNum);
 				return;
 			case "raw":
 				if (this.#pending === undefined && isSkippableCommentLine(token.text)) {
@@ -154,74 +158,36 @@ export class Executor {
 				this.#consumePendingSkippableComments();
 				this.#handleRaw(token.text, token.lineNum);
 				return;
-			case "op-insert":
+			case "op-block":
 				this.#discardPendingSkippableComments();
-				this.#flushPending();
-				this.#pending = {
-					op: { kind: "insert", cursor: token.cursor, lineNum: token.lineNum },
-					payload: [],
-				};
 				if (token.inlineBody !== undefined) {
-					this.#pending.payload.push(token.inlineBody);
-					if (!this.#warnings.includes(INLINE_PAYLOAD_ACCEPTED_WARNING)) {
-						this.#warnings.push(INLINE_PAYLOAD_ACCEPTED_WARNING);
-					}
+					throw new Error(
+						`line ${token.lineNum}: ${INLINE_PAYLOAD_REJECTED_PREFIX} ` +
+							`Use a bare anchor line such as ${describeTarget(token.target)}, then put payload on following rows prefixed with ` +
+							`${HL_PAYLOAD_REPLACE}, ${HL_PAYLOAD_ABOVE}, or ${HL_PAYLOAD_BELOW}.`,
+					);
 				}
-				return;
-			case "op-replace":
-				this.#discardPendingSkippableComments();
-				validateRangeOrder(token.range, token.lineNum);
-				if (this.#pending !== undefined && this.#pending.op.kind === "replace") {
-					const outer = this.#pending.op.range;
-					const inner = token.range;
-					if (rangesEqual(outer, inner)) {
-						// Identical-range before/after pair. Drop the "before" payload
-						// silently; the second op proceeds as the lone winner. Other
-						// overlap shapes (different ranges) still hit the post-hoc
-						// validator.
-						this.#pending = undefined;
-						if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_WARNING)) {
-							this.#warnings.push(REPLACE_PAIR_COALESCED_WARNING);
-						}
-					} else if (rangeContains(outer, inner)) {
-						// Model wrote a payload line in read-output `LINE:TEXT` format
-						// (or `A-B:TEXT` for a sub-range) inside an outer `A-B:` block.
-						// The tokenizer can't tell payload from op when the anchor and
-						// sigil shape are identical, so demote: append the op's inline
-						// body to the pending payload, strip the `LINE:` prefix, and
-						// keep accumulating. Without this the inner anchors would each
-						// register as their own delete and clash with the outer range.
-						this.#pending.payload.push(token.inlineBody ?? "");
-						if (!this.#warnings.includes(PAYLOAD_LINE_PREFIX_DEMOTED_WARNING)) {
-							this.#warnings.push(PAYLOAD_LINE_PREFIX_DEMOTED_WARNING);
-						}
-						return;
+				if (token.target.kind === "range") validateRangeOrder(token.target.range, token.lineNum);
+				if (this.#pending !== undefined && targetsEqualConcreteRange(this.#pending.target, token.target)) {
+					this.#pending = undefined;
+					if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_WARNING)) {
+						this.#warnings.push(REPLACE_PAIR_COALESCED_WARNING);
 					}
+				} else {
+					this.#flushPending();
 				}
-				this.#flushPending();
-				this.#pending = {
-					op: { kind: "replace", range: token.range, lineNum: token.lineNum },
-					payload: [],
-				};
-				if (token.inlineBody !== undefined) {
-					this.#pending.payload.push(token.inlineBody);
-					if (!this.#warnings.includes(INLINE_PAYLOAD_ACCEPTED_WARNING)) {
-						this.#warnings.push(INLINE_PAYLOAD_ACCEPTED_WARNING);
-					}
-				}
+				this.#pending = { target: token.target, lineNum: token.lineNum, payloads: [] };
 				return;
 		}
 	}
 
 	/**
-	 * Flush any open pending op (with its full accumulated payload, including
-	 * explicit `\` blank lines) and return the accumulated edits and
-	 * warnings. The executor is single-use; {@link reset} is required for
-	 * reuse.
+	 * Flush any open pending block and return the accumulated edits and
+	 * warnings. The executor is single-use; {@link reset} is required for reuse.
 	 *
-	 * Throws if two replace ops target the same line with non-identical
-	 * ranges. Identical-range `A-B:` pairs in the same hunk are coalesced
-	 * last-wins by `feed()` with a warning, so they never reach the
+	 * Throws if two replacement/delete blocks target the same line with
+	 * non-identical ranges. Identical-range blocks in the same hunk are
+	 * coalesced last-wins by `feed()` with a warning, so they never reach the
 	 * validator.
 	 */
 	end(): { edits: Edit[]; warnings: string[] } {
@@ -233,15 +199,13 @@ export class Executor {
 
 	/**
 	 * Streaming-tolerant variant of {@link end}. Identical, except a pending
-	 * op whose payload has not yet accumulated any rows is treated as still
-	 * in flight and dropped instead of flushed (which would otherwise emit a
-	 * phantom blank-line insert/replace). Callers driving an in-progress
-	 * stream should use this so the trailing op the model is still typing
-	 * does not pollute the partial result.
+	 * block whose payload has not yet accumulated any rows is treated as still
+	 * in flight and dropped instead of flushed (which would otherwise preview a
+	 * destructive bare delete while the model may still be typing payload).
 	 */
 	endStreaming(): { edits: Edit[]; warnings: string[] } {
 		this.#consumePendingSkippableComments();
-		if (this.#pending && this.#pending.payload.length > 0) {
+		if (this.#pending && this.#pending.payloads.length > 0) {
 			this.#flushPending();
 		} else {
 			this.#pending = undefined;
@@ -261,14 +225,10 @@ export class Executor {
 	}
 
 	/**
-	 * Each `:` op contributes a delete edit per line in its range; if any
-	 * line ends up targeted by deletes originating from two different source
-	 * ops (distinguished by their `lineNum`), the patch is internally
-	 * inconsistent. Identical-range `A-B:` pairs are already collapsed by
-	 * `feed()`; remaining shapes here are an `A-B:` that overlaps a later
-	 * `N:` with a different range. The applier would run both literally and
-	 * the file would end up with two copies of the line, not a chosen
-	 * winner.
+	 * Each replacement/delete block contributes a delete edit per line in its
+	 * range; if any line ends up targeted by deletes originating from two
+	 * different source blocks (distinguished by their `lineNum`), the patch is
+	 * internally inconsistent.
 	 */
 	#validateNoOverlappingDeletes(): void {
 		const sourceLinesByAnchor = new Map<number, number[]>();
@@ -283,97 +243,116 @@ export class Executor {
 		}
 		for (const [anchorLine, sourceLines] of sourceLinesByAnchor) {
 			if (sourceLines.length < 2) continue;
-			const [firstOp, secondOp] = [...sourceLines].sort((a, b) => a - b);
+			const [firstBlock, secondBlock] = [...sourceLines].sort((a, b) => a - b);
 			throw new Error(
-				`line ${secondOp}: anchor line ${anchorLine} is already targeted by the ${HL_OP_REPLACE} op on line ${firstOp}. ` +
-					`Issue ONE op per range; payload is only the final desired content, never a before/after pair.`,
+				`line ${secondBlock}: anchor line ${anchorLine} is already targeted by the ${HL_OP_REPLACE} block on line ${firstBlock}. ` +
+					`Issue ONE block per range; payload is only the final desired content, never a before/after pair.`,
 			);
 		}
 	}
 
-	#handlePayload(text: string, lineNum: number): void {
-		if (this.#pending) {
-			this.#pending.payload.push(text);
-			return;
+	#handlePayload(bucket: PayloadBucket, text: string, lineNum: number): void {
+		const pending = this.#pending;
+		if (!pending) {
+			throw new Error(
+				`line ${lineNum}: payload line has no preceding A-B:, A:, BOF:, or EOF: anchor. ` +
+					`Got ${JSON.stringify(`${sigilForBucket(bucket)}${text}`)}.`,
+			);
 		}
-
-		throw new Error(
-			`line ${lineNum}: payload line has no preceding ${HL_OP_INSERT_BEFORE}, ${HL_OP_INSERT_AFTER}, or ${HL_OP_REPLACE} operation. ` +
-				`Got ${JSON.stringify(`${HL_PAYLOAD_PREFIX}${text}`)}.`,
-		);
+		if (bucket === "replace" && pending.target.kind !== "range") {
+			throw new Error(`line ${lineNum}: ${VIRTUAL_REPLACE_REJECTED_MESSAGE}`);
+		}
+		pending.payloads.push({ bucket, text, lineNum });
 	}
 
 	#handleRaw(text: string, lineNum: number): void {
 		if (this.#pending) {
 			if (text.trim().length === 0) return;
-			// Lenient legacy fallback: the tokenizer routes a line to `raw` only
-			// when it does not parse as an op, header, payload, or envelope
-			// marker. A `raw` token while a pending op exists is therefore an
-			// unambiguous continuation row that the author wrote without the
-			// `\` prefix. Accept it as payload and warn so the canonical
-			// `\`-prefixed form remains preferred.
-			this.#pending.payload.push(text);
-			if (!this.#warnings.includes(IMPLICIT_CONTINUATION_WARNING)) {
-				this.#warnings.push(IMPLICIT_CONTINUATION_WARNING);
-			}
-			return;
+			throw new Error(
+				`line ${lineNum}: payload row in a hashline block must start with ` +
+					`${HL_PAYLOAD_REPLACE}, ${HL_PAYLOAD_ABOVE}, or ${HL_PAYLOAD_BELOW}. Got ${JSON.stringify(text)}.`,
+			);
 		}
 
-		// Whitespace-only raw lines outside any pending op are silently dropped;
+		// Whitespace-only raw lines outside any pending block are silently dropped;
 		// fully empty lines arrive as `blank` tokens.
 		if (text.trim().length === 0) return;
 
 		const firstChar = text[0];
-		const startsWithOp = firstChar !== undefined && HL_OP_CHARS.includes(firstChar);
-		if (startsWithOp || firstChar === "-" || firstChar === "@" || firstChar === "«" || firstChar === "»") {
+		if (firstChar === "-" || firstChar === "@" || firstChar === "«" || firstChar === "»") {
 			throw new Error(
-				`line ${lineNum}: unrecognized op. Use LINE${HL_OP_INSERT_BEFORE} (insert before), LINE${HL_OP_INSERT_AFTER} (insert after), or LINE${HL_OP_REPLACE} / A-B${HL_OP_REPLACE} (replace). ` +
-					`Got ${JSON.stringify(text)}.`,
+				`line ${lineNum}: unrecognized hashline block. Use A-B:, A:, BOF:, or EOF: anchors followed by ` +
+					`${HL_PAYLOAD_REPLACE}, ${HL_PAYLOAD_ABOVE}, or ${HL_PAYLOAD_BELOW} payload rows. Got ${JSON.stringify(text)}.`,
 			);
 		}
 
 		throw new Error(
-			`line ${lineNum}: payload line has no preceding ${HL_OP_INSERT_BEFORE}, ${HL_OP_INSERT_AFTER}, or ${HL_OP_REPLACE} operation. ` +
-				`Got ${JSON.stringify(text)}.`,
+			`line ${lineNum}: payload line has no preceding A-B:, A:, BOF:, or EOF: anchor. Got ${JSON.stringify(text)}.`,
 		);
+	}
+
+	#pushInsert(cursor: Cursor, text: string, lineNum: number, mode?: "replacement"): void {
+		this.#edits.push({
+			kind: "insert",
+			cursor: cloneCursor(cursor),
+			text,
+			lineNum,
+			index: this.#editIndex++,
+			...(mode === undefined ? {} : { mode }),
+		});
+	}
+
+	#pushDelete(anchor: Anchor, lineNum: number): void {
+		this.#edits.push({ kind: "delete", anchor: { ...anchor }, lineNum, index: this.#editIndex++ });
 	}
 
 	#flushPending(): void {
 		const pending = this.#pending;
 		if (!pending) return;
 
-		const { op, payload } = pending;
-		let linesToInsert = payload.length === 0 ? [""] : payload;
-		if (payload.length > 0 && shouldStripEscapedPayloadDelimiters(payload)) {
-			linesToInsert = payload.map(text => text.slice(HL_PAYLOAD_PREFIX.length));
-			if (!this.#warnings.includes(ESCAPED_PAYLOAD_DELIMITER_ACCEPTED_WARNING)) {
-				this.#warnings.push(ESCAPED_PAYLOAD_DELIMITER_ACCEPTED_WARNING);
+		const { target, lineNum, payloads } = pending;
+		if (target.kind === "bof" || target.kind === "eof") {
+			const cursor: Cursor = target.kind === "bof" ? { kind: "bof" } : { kind: "eof" };
+			for (const payload of payloads) {
+				this.#pushInsert(cursor, payload.text, lineNum);
+			}
+			this.#pending = undefined;
+			return;
+		}
+
+		const above: string[] = [];
+		const replacement: string[] = [];
+		const below: string[] = [];
+		for (const payload of payloads) {
+			if (payload.bucket === "above") above.push(payload.text);
+			else if (payload.bucket === "below") below.push(payload.text);
+			else replacement.push(payload.text);
+		}
+
+		for (const text of above) {
+			this.#pushInsert({ kind: "before_anchor", anchor: { ...target.range.start } }, text, lineNum);
+		}
+
+		if (replacement.length > 0) {
+			for (const text of replacement) {
+				this.#pushInsert(
+					{ kind: "before_anchor", anchor: { ...target.range.start } },
+					text,
+					lineNum,
+					"replacement",
+				);
+			}
+			for (const anchor of expandRange(target.range)) {
+				this.#pushDelete(anchor, lineNum);
+			}
+		} else if (above.length === 0 && below.length === 0) {
+			for (const anchor of expandRange(target.range)) {
+				this.#pushDelete(anchor, lineNum);
 			}
 		}
 
-		if (op.kind === "insert") {
-			for (const text of linesToInsert) {
-				this.#edits.push({
-					kind: "insert",
-					cursor: cloneCursor(op.cursor),
-					text,
-					lineNum: op.lineNum,
-					index: this.#editIndex++,
-				});
-			}
-		} else {
-			for (const text of linesToInsert) {
-				this.#edits.push({
-					kind: "insert",
-					cursor: { kind: "before_anchor", anchor: { ...op.range.start } },
-					text,
-					lineNum: op.lineNum,
-					index: this.#editIndex++,
-				});
-			}
-			for (const anchor of expandRange(op.range)) {
-				this.#edits.push({ kind: "delete", anchor, lineNum: op.lineNum, index: this.#editIndex++ });
-			}
+		for (const text of below) {
+			this.#pushInsert({ kind: "after_anchor", anchor: { ...target.range.end } }, text, lineNum);
 		}
 
 		this.#pending = undefined;
@@ -406,14 +385,14 @@ export function parsePatch(diff: string): { edits: Edit[]; warnings: string[] } 
  * parsed successfully when the diff is still being typed:
  *
  * - per-token feed errors stop the drain but preserve the edits already
- *   collected (the trailing op is malformed mid-stream — wait for the next
+ *   collected (the trailing block is malformed mid-stream — wait for the next
  *   chunk),
- * - the trailing pending op is dropped if it has no payload yet (avoids a
- *   phantom blank-line insert/replace).
+ * - the trailing pending block is dropped if it has no payload yet (avoids a
+ *   destructive bare-delete preview while payload may still be coming).
  *
- * Throws only on the cross-op overlap validator, which catches conflicting
- * shapes (two replaces hitting the same anchor). Streaming preview callers
- * should treat any throw here as "no preview this tick".
+ * Throws only on the cross-block overlap validator, which catches conflicting
+ * shapes (two replacements/deletes hitting the same anchor). Streaming preview
+ * callers should treat any throw here as "no preview this tick".
  */
 export function parsePatchStreaming(diff: string): { edits: Edit[]; warnings: string[] } {
 	const tokenizer = new Tokenizer();

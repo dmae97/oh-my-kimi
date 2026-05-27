@@ -19,10 +19,19 @@ export type Cursor =
 /**
  * A single low-level edit produced by the parser and consumed by the applier.
  * Multi-line replacements decompose to one `insert` per replacement line plus
- * one `delete` per consumed line.
+ * one `delete` per consumed line. Replacement inserts are tagged so the applier
+ * can distinguish "insert above this deleted line" from "new content for this
+ * deleted line" when a source block carries both buckets.
  */
 export type Edit =
-	| { kind: "insert"; cursor: Cursor; text: string; lineNum: number; index: number }
+	| {
+			kind: "insert";
+			cursor: Cursor;
+			text: string;
+			lineNum: number;
+			index: number;
+			mode?: "replacement";
+	  }
 	| { kind: "delete"; anchor: Anchor; lineNum: number; index: number; oldAssertion?: string };
 
 /** Result of applying a parsed set of edits to a text body. */

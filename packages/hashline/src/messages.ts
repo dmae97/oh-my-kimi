@@ -27,49 +27,18 @@ export const ABORT_WARNING =
 	"Tool stream truncated mid-call due to detected output corruption. Applied ops above are valid. Re-issue any remaining edits.";
 
 /**
- * Warning text appended when two consecutive `A-B:` ops on the exact same
- * range get coalesced (model painted a before/after pair). The second op wins;
- * the first op's payload is silently discarded.
+ * Warning text appended when two consecutive blocks target the exact same
+ * concrete range. The second block wins; the first block is discarded.
  */
 export const REPLACE_PAIR_COALESCED_WARNING =
-	"Detected an identical-range before/after replace pair; kept only the second block's payload. Issue ONE op per range — the payload is the final desired content, never both old and new.";
+	"Detected two identical-range hashline blocks; kept only the second block. Issue ONE block per range — payload is the final desired content, never both old and new.";
 
-/**
- * Warning text appended when un-prefixed continuation lines are accepted as
- * implicit payload (lenient legacy behavior). The author wrote a multi-line
- * replace without `\` prefixes; the parser accepted it because the lines did
- * not classify as ops/headers/payloads, but the canonical syntax requires `\`
- * on every continuation line after the op.
- */
-export const IMPLICIT_CONTINUATION_WARNING =
-	"Accepted continuation line(s) without the `\\` prefix as implicit payload. Canonical syntax is `A-B:` followed by `\\` on every continuation row; without `\\`, lines that look like ops will be parsed as new ops instead of payload. Prefer the explicit form.";
+/** Error text prefix emitted when an anchor line carries inline payload. */
+export const INLINE_PAYLOAD_REJECTED_PREFIX = "Inline payload on the anchor line is rejected.";
 
-/**
- * Warning text appended when an inner `LINE:TEXT` (or sub-range `A-B:TEXT`)
- * op arrives while an outer `A-B:` replace is still pending and the inner
- * anchor falls inside the outer range. The author used the read-output
- * `LINE:TEXT` format as if it were a payload-continuation line; we strip the
- * `LINE:` prefix and append the body to the pending payload, but warn so the
- * canonical `\`-continuation form remains preferred.
- */
-export const PAYLOAD_LINE_PREFIX_DEMOTED_WARNING =
-	"Detected one or more `LINE:TEXT` lines whose anchors fell inside a pending replace range; treated them as payload-continuation lines and stripped the `LINE:` prefix. Inside an `A-B:` block, every payload line must be on its own row prefixed with `\\` — never reuse the read-output gutter format.";
-
-/**
- * Warning text appended when an op carries an inline payload (`LINE:TEXT`,
- * `LINE↑CONTENT`, `LINE↓CONTENT`). Canonical syntax is the bare op followed
- * by `\`-prefixed payload rows on the next line(s).
- */
-export const INLINE_PAYLOAD_ACCEPTED_WARNING =
-	"Accepted inline payload on the op line (e.g. `LINE:CONTENT`, `LINE↑CONTENT`). Canonical syntax is the bare op followed by `\\`-prefixed payload rows on the next line(s). Prefer the explicit form.";
-
-/**
- * Warning text appended when a payload row uses an extra `\` before indented
- * content (`\\    TEXT`). Models often JSON-escape the payload delimiter; the
- * parser strips the accidental second delimiter so code indentation survives.
- */
-export const ESCAPED_PAYLOAD_DELIMITER_ACCEPTED_WARNING =
-	"Accepted an extra `\\` before an indented payload row and treated it as the payload delimiter, not file content. Use exactly one `\\` before indented payload lines.";
+/** Error text emitted when `|` replacement payload targets BOF/EOF. */
+export const VIRTUAL_REPLACE_REJECTED_MESSAGE =
+	"BOF:/EOF: anchors are virtual positions and cannot use `|` replacement payload. Use `↑` or `↓` payload lines.";
 
 /** Warning text emitted by `Recovery` when an external write fits a cached snapshot. */
 export const RECOVERY_EXTERNAL_WARNING =

@@ -33,6 +33,10 @@ interface ReplacementGroup {
 	deletes: DeleteEdit[];
 }
 
+function isReplacementInsert(edit: Edit): edit is Extract<Edit, { kind: "insert" }> & { mode: "replacement" } {
+	return edit.kind === "insert" && edit.mode === "replacement";
+}
+
 function getEditAnchors(edit: Edit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
 	if (edit.cursor.kind === "before_anchor") return [edit.cursor.anchor];
@@ -99,14 +103,14 @@ function collectAnchorTargetLines(edits: Edit[]): Set<number> {
 
 function findReplacementGroup(edits: Edit[], startIndex: number): ReplacementGroup | undefined {
 	const first = edits[startIndex];
-	if (first?.kind !== "insert" || first.cursor.kind !== "before_anchor") return undefined;
+	if (!isReplacementInsert(first) || first.cursor.kind !== "before_anchor") return undefined;
 
 	const sourceLineNum = first.lineNum;
 	const replacement: string[] = [];
 	let index = startIndex;
 	while (index < edits.length) {
 		const edit = edits[index];
-		if (edit.kind !== "insert" || edit.lineNum !== sourceLineNum || edit.cursor.kind !== "before_anchor") break;
+		if (!isReplacementInsert(edit) || edit.lineNum !== sourceLineNum || edit.cursor.kind !== "before_anchor") break;
 		replacement.push(edit.text);
 		index++;
 	}
@@ -265,9 +269,9 @@ function countMatchingSingleStructuralSuffixBoundary(
 /**
  * Single-line non-structural boundary duplicate detector for replacement
  * groups. Mirrors the same boundary check the pure-insert absorber uses for
- * `ANCHOR↓` (leading) / `ANCHOR↑` (trailing) inserts, but applied to the
- * top/bottom edges of an `A-B:payload` range. Catches mistakes like
- * `103-138:const X = …` where line 102 already reads `const X = …`.
+ * `A:` + `↓` (leading) / `A:` + `↑` (trailing) inserts, but applied to the
+ * top/bottom edges of an `A-B:` replacement payload. Catches mistakes like
+ * `103-138:` + `|const X = …` where line 102 already reads `const X = …`.
  *
  * Gated by `options.autoDropPureInsertDuplicates`: the existing 2+-line block
  * absorb already runs unconditionally, and the structural single-line
@@ -346,7 +350,7 @@ function cursorMatches(a: Cursor, b: Cursor): boolean {
  */
 function findPureInsertGroup(edits: Edit[], startIndex: number): PureInsertGroup | undefined {
 	const first = edits[startIndex];
-	if (first?.kind !== "insert") return undefined;
+	if (first?.kind !== "insert" || isReplacementInsert(first)) return undefined;
 
 	const sourceLineNum = first.lineNum;
 	const cursor = first.cursor;
@@ -354,7 +358,7 @@ function findPureInsertGroup(edits: Edit[], startIndex: number): PureInsertGroup
 	let index = startIndex;
 	while (index < edits.length) {
 		const edit = edits[index];
-		if (edit.kind !== "insert" || edit.lineNum !== sourceLineNum) break;
+		if (edit.kind !== "insert" || isReplacementInsert(edit) || edit.lineNum !== sourceLineNum) break;
 		if (!cursorMatches(edit.cursor, cursor)) break;
 		payload.push(edit.text);
 		index++;
@@ -686,20 +690,23 @@ export function applyEdits(text: string, edits: Edit[], options: ApplyOptions = 
 
 		const idx = line - 1;
 		const currentLine = fileLines[idx] ?? "";
-		const beforeLines: string[] = [];
+		const insertLines: string[] = [];
+		const replacementLines: string[] = [];
 		let deleteLine = false;
 
 		for (const { edit } of bucket) {
-			if (edit.kind === "insert") {
-				beforeLines.push(edit.text);
+			if (isReplacementInsert(edit)) {
+				replacementLines.push(edit.text);
+			} else if (edit.kind === "insert") {
+				insertLines.push(edit.text);
 			} else if (edit.kind === "delete") {
 				deleteLine = true;
 			}
 		}
-		if (beforeLines.length === 0 && !deleteLine) continue;
+		if (insertLines.length === 0 && replacementLines.length === 0 && !deleteLine) continue;
 
-		const replaceMode = beforeLines.length > 0;
-		if (deleteLine && !replaceMode) {
+		const hasReplacementPayload = replacementLines.length > 0;
+		if (deleteLine && !hasReplacementPayload) {
 			const balance = computeDelimiterBalance([currentLine]);
 			const trimmedCurrentLine = currentLine.trim();
 			const touchesStructuralBoundary =
@@ -711,15 +718,17 @@ export function applyEdits(text: string, edits: Edit[], options: ApplyOptions = 
 				trimmedCurrentLine.endsWith("{");
 			if (balance.paren !== 0 || balance.bracket !== 0 || balance.brace !== 0 || touchesStructuralBoundary) {
 				warnings.push(
-					`Deleted line ${line} contains a structural bracket/brace boundary (${JSON.stringify(trimmedCurrentLine)}); verify the file is still balanced or use 'A:<replacement>' to keep the boundary intact.`,
+					`Deleted line ${line} contains a structural bracket/brace boundary (${JSON.stringify(trimmedCurrentLine)}); verify the file is still balanced or use '|replacement' payload to keep the boundary intact.`,
 				);
 			}
 		}
-		const replacement = deleteLine ? beforeLines : [...beforeLines, currentLine];
-		const origins = replacement.map((): LineOrigin => (deleteLine ? "replacement" : "insert"));
-		if (!deleteLine) {
-			origins[origins.length - 1] = lineOrigins[idx] ?? "original";
-		}
+		const replacement = deleteLine
+			? [...insertLines, ...replacementLines]
+			: [...insertLines, ...replacementLines, currentLine];
+		const origins: LineOrigin[] = [];
+		for (let i = 0; i < insertLines.length; i++) origins.push("insert");
+		for (let i = 0; i < replacementLines.length; i++) origins.push(deleteLine ? "replacement" : "insert");
+		if (!deleteLine) origins.push(lineOrigins[idx] ?? "original");
 
 		fileLines.splice(idx, 1, ...replacement);
 		lineOrigins.splice(idx, 1, ...origins);

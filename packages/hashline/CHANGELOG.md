@@ -6,7 +6,7 @@
 
 ### Breaking Changes
 
-- Changed hashline payload continuations from `+TEXT` to `\TEXT`; use `\` for an explicit blank payload line.
+- Redesigned hashline syntax around range anchors (`A-B:`, `A:`, `BOF:`, `EOF:`) and per-line payload sigils (`|`, `↑`, `↓`). Old op-line insert syntax and `\` payload continuations are no longer supported.
 
 ### Added
 
@@ -16,12 +16,10 @@
 ### Fixed
 
 - Parser now skips markdown-style `# ...` lines when they directly precede a hashline operation, making model-generated explanatory rows in prompt examples non-blocking.
-- Parser now treats a leading `\` on inline payload bodies as the payload delimiter, matching standalone payload rows.
-- Restored the warning emitted when escaped indented payload rows (`\\    TEXT`) are accepted as payload delimiters.
 
 ### Removed
 
-- Removed the `A-B!` / `A!` deletion operator. Use `A-B:` with the desired payload (or empty payload to blank the range) instead.
+- Removed legacy deletion semantics that treated bare `A-B:` as a blank-line replacement; a bare range anchor now deletes the range.
 
 All notable changes to this package will be documented in this file.
 

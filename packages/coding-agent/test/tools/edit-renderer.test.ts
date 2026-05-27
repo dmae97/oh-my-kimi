@@ -38,7 +38,7 @@ describe("editToolRenderer", () => {
 		const uiTheme = await getUiTheme();
 		const component = editToolRenderer.renderCall(
 			{
-				input: "¶packages/coding-agent/src/edit/renderer.ts\nEOF↓\n// preview",
+				input: "¶packages/coding-agent/src/edit/renderer.ts\nEOF:\n↓// preview",
 			},
 			{ expanded: false, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
@@ -49,14 +49,14 @@ describe("editToolRenderer", () => {
 		expect(rendered).not.toContain("The first line of the patch must be");
 	});
 
-	it("shows hashline envelope input while preview diff is not computable yet", async () => {
+	it("shows hashline envelope target path while preview diff is not computable yet", async () => {
 		await getUiTheme();
 		const uiStub = { requestRender() {} } as unknown as TUI;
 		const hashlineTool = { name: "edit", label: "Edit", mode: "hashline" } as unknown as AgentTool;
 		const component = new ToolExecutionComponent(
 			"edit",
 			{
-				input: ["*** Begin Patch", "¶crates/pi-natives/src/shell.rs", "EOF↓", "pub fn streaming_preview() {"].join(
+				input: ["*** Begin Patch", "¶crates/pi-natives/src/shell.rs", "EOF:", "↓pub fn streaming_preview() {"].join(
 					"\n",
 				),
 			},
@@ -67,8 +67,8 @@ describe("editToolRenderer", () => {
 
 		const rendered = Bun.stripANSI(component.render(160).join("\n"));
 		expect(rendered).toContain("crates/pi-natives/src/shell.rs");
-		expect(rendered).toContain("EOF↓");
-		expect(rendered).toContain("pub fn streaming_preview() {");
+		expect(rendered).not.toContain("EOF:");
+		expect(rendered).not.toContain("↓pub fn streaming_preview() {");
 		expect(rendered).not.toContain("*** Begin Patch");
 	});
 
@@ -76,7 +76,7 @@ describe("editToolRenderer", () => {
 		const uiTheme = await getUiTheme();
 		const compactComponent = editToolRenderer.renderCall(
 			{
-				input: "¶foo bar.ts\nBOF↓\n// preview",
+				input: "¶foo bar.ts\nBOF:\n↓// preview",
 			},
 			{ expanded: true, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
@@ -84,7 +84,7 @@ describe("editToolRenderer", () => {
 
 		const quotedComponent = editToolRenderer.renderCall(
 			{
-				input: "¶'baz qux.ts'\nBOF↓\n// preview",
+				input: "¶'baz qux.ts'\nBOF:\n↓// preview",
 			},
 			{ expanded: false, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
@@ -103,7 +103,7 @@ describe("editToolRenderer", () => {
 		// renderer keeps the title clean.
 		const canonical = editToolRenderer.renderCall(
 			{
-				input: "¶packages/coding-agent/src/slash-commands/builtin-registry.ts\nBOF↓\n// preview",
+				input: "¶packages/coding-agent/src/slash-commands/builtin-registry.ts\nBOF:\n↓// preview",
 			},
 			{ expanded: true, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
@@ -111,7 +111,7 @@ describe("editToolRenderer", () => {
 
 		// Even longer runs should still produce the clean path.
 		const triple = editToolRenderer.renderCall(
-			{ input: "¶¶¶a/b/c.ts\nBOF↓\n// preview" },
+			{ input: "¶¶¶a/b/c.ts\nBOF:\n↓// preview" },
 			{ expanded: true, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
 		);
@@ -138,7 +138,7 @@ describe("editToolRenderer", () => {
 			{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
 			uiTheme,
 			{
-				input: "¶packages/coding-agent/src/edit/renderer.ts\nEOF↓\n// preview",
+				input: "¶packages/coding-agent/src/edit/renderer.ts\nEOF:\n↓// preview",
 			},
 		);
 
