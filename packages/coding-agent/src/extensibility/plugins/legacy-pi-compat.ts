@@ -58,6 +58,19 @@ const TYPEBOX_SPECIFIER = "@sinclair/typebox";
 const TYPEBOX_SPECIFIER_FILTER = /^@sinclair\/typebox$/;
 const TYPEBOX_SHIM_PATH = path.resolve(import.meta.dir, "../typebox.ts");
 
+// Legacy extensions historically imported `Type` (and `Static`/`TSchema`) from
+// the package root of `@(scope)/pi-ai`. pi-ai 15.1.0 removed the runtime `Type`
+// export (see `packages/ai/CHANGELOG.md`), so the bare canonical specifier no
+// longer satisfies those imports. The override below redirects only the bare
+// pi-ai package root onto a sibling shim that re-exports the canonical surface
+// plus the borrowed `Type` runtime from the Zod-backed TypeBox shim. Subpath
+// imports such as `@oh-my-pi/pi-ai/utils/oauth` continue to resolve directly
+// against the bundled pi-ai package.
+const LEGACY_PI_AI_SHIM_PATH = path.resolve(import.meta.dir, "../legacy-pi-ai-shim.ts");
+const LEGACY_PI_PACKAGE_ROOT_OVERRIDES: Record<string, string> = {
+	[`${CANONICAL_PI_SCOPE}/pi-ai`]: LEGACY_PI_AI_SHIM_PATH,
+};
+
 let isLegacyPiSpecifierShimInstalled = false;
 
 function remapLegacyPiSpecifier(specifier: string): string | null {
@@ -85,6 +98,22 @@ function getResolvedSpecifier(specifier: string): string {
 	return resolved;
 }
 
+/**
+ * Resolve a canonical `@oh-my-pi/*` specifier to a filesystem path, preferring
+ * a bundled compat shim when one is registered for the package root.
+ *
+ * Falls back to `getResolvedSpecifier` (which may throw under compiled binary
+ * mode); callers handle that the same way they would for non-overridden
+ * specifiers.
+ */
+function resolveCanonicalPiSpecifier(remappedSpecifier: string): string {
+	const override = LEGACY_PI_PACKAGE_ROOT_OVERRIDES[remappedSpecifier];
+	if (override) {
+		return override;
+	}
+	return getResolvedSpecifier(remappedSpecifier);
+}
+
 function toImportSpecifier(resolvedPath: string): string {
 	return url.pathToFileURL(resolvedPath).href;
 }
@@ -99,7 +128,7 @@ function rewriteLegacyPiImports(source: string): string {
 			}
 
 			try {
-				return `${prefix}${toImportSpecifier(getResolvedSpecifier(remappedSpecifier))}${suffix}`;
+				return `${prefix}${toImportSpecifier(resolveCanonicalPiSpecifier(remappedSpecifier))}${suffix}`;
 			} catch {
 				// Resolution failed — typically in compiled binary mode where
 				// Bun.resolveSync cannot walk up from /$bunfs/root to find the
@@ -250,7 +279,7 @@ function resolveLegacyPiSpecifier(args: { path: string; importer: string }): { p
 	// Primary: resolve the canonical @oh-my-pi/* specifier from the host binary
 	// location. Works in dev mode and in source-link installs.
 	try {
-		return { path: getResolvedSpecifier(remappedSpecifier) };
+		return { path: resolveCanonicalPiSpecifier(remappedSpecifier) };
 	} catch {
 		// Fallback for compiled binary mode: the bundled packages live inside
 		// /$bunfs/root and aren't reachable by filesystem resolution. Try the
