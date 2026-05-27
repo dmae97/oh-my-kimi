@@ -94,15 +94,17 @@ describe("imageGenTool", () => {
 		setPreferredImageProvider("xai");
 		let requestUrl: string | undefined;
 		let requestBody: Record<string, unknown> | undefined;
-		let authorization: string | null = null;
-		let userAgent: string | null = null;
+		const captured: { authorization: string | null; userAgent: string | null } = {
+			authorization: null,
+			userAgent: null,
+		};
 
 		const fetchMock: typeof fetch = (async (input: string | URL | Request, init?: RequestInit) => {
 			requestUrl = input.toString();
 			requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
 			const headers = new Headers(init?.headers);
-			authorization = headers.get("authorization");
-			userAgent = headers.get("user-agent");
+			captured.authorization = headers.get("authorization");
+			captured.userAgent = headers.get("user-agent");
 			return new Response(
 				JSON.stringify({
 					data: [{ b64_json: Buffer.from("fake-xai-image").toString("base64") }],
@@ -131,8 +133,8 @@ describe("imageGenTool", () => {
 		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
 
 		expect(requestUrl).toBe("https://api.x.ai/v1/images/generations");
-		expect(authorization).toBe("Bearer test-xai-token");
-		expect(userAgent).toBe("oh-my-pi/xai");
+		expect(captured.authorization).toBe("Bearer test-xai-token");
+		expect(captured.userAgent).toBe("oh-my-pi/xai");
 		expect(requestBody).toMatchObject({
 			model: "grok-imagine-image",
 			prompt: "a cat.",
