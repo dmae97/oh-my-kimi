@@ -3,6 +3,8 @@
  *
  * Spawns the agent in RPC mode and provides a typed API for all operations.
  */
+
+import { isPromise } from "node:util/types";
 import type { AgentEvent, AgentMessage, AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
@@ -790,7 +792,7 @@ export class RpcClient {
 		const stdin = this.#process.stdin as import("bun").FileSink;
 		stdin.write(`${JSON.stringify(frame)}\n`);
 		const flushResult = stdin.flush();
-		if (flushResult instanceof Promise) {
+		if (isPromise(flushResult)) {
 			flushResult.catch((err: Error) => {
 				onError?.(err);
 			});

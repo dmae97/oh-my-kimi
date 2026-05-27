@@ -17,6 +17,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
+import { isPromise } from "node:util/types";
 import {
 	type AfterToolCallContext,
 	type AfterToolCallResult,
@@ -1314,7 +1315,7 @@ export class AgentSession {
 				const result = l(event) as unknown;
 				// Listener may be an async function whose returned Promise we don't await;
 				// attach a catch so a rejection does not become an unhandled rejection.
-				if (result instanceof Promise) {
+				if (isPromise(result)) {
 					result.catch(err => {
 						logger.warn("AgentSession listener rejected", {
 							error: err instanceof Error ? err.message : String(err),
