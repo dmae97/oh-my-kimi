@@ -122,6 +122,11 @@ describe("imageGenTool", () => {
 			} as unknown as ReadonlySessionManager,
 			modelRegistry: {
 				getApiKeyForProvider: async (provider: string) => (provider === "xai-oauth" ? "test-xai-token" : undefined),
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
+				},
 			} as unknown as ModelRegistry,
 			model: undefined,
 			isIdle: () => true,

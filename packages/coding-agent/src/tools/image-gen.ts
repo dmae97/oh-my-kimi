@@ -283,6 +283,36 @@ interface AntigravityRequest {
 	requestId?: string;
 }
 
+interface XAIImageReference {
+	// OpenAI-compat discriminator. Every code example at
+	// docs.x.ai/developers/rest-api-reference/inference/images sends this
+	// alongside `url`; the schema text doesn't strictly require it, but
+	// matching the documented wire format avoids relying on schema-vs-example.
+	readonly type: "image_url";
+	readonly url: string;
+}
+
+interface XAIImageRequestBase {
+	readonly model: string;
+	readonly prompt: string;
+	readonly aspect_ratio: string;
+	readonly resolution: "1k" | "2k";
+	readonly n: number;
+	readonly response_format: "b64_json" | "url";
+}
+
+// xAI image request body. Three shapes:
+//   1. text-only generation                  → POST /v1/images/generations
+//   2. single-source edit (image field)      → POST /v1/images/edits
+//   3. multi-reference edit (images field)   → POST /v1/images/edits
+// `image` and `images` are mutually exclusive per docs.x.ai; the discriminated
+// union enforces that statically. The runtime cap (XAI_MAX_EDIT_IMAGES) bounds
+// the array length, which TypeScript cannot encode without lossy tuple unions.
+type XAIImageRequestBody =
+	| (XAIImageRequestBase & { readonly image?: never; readonly images?: never })
+	| (XAIImageRequestBase & { readonly image: XAIImageReference; readonly images?: never })
+	| (XAIImageRequestBase & { readonly images: readonly XAIImageReference[]; readonly image?: never });
+
 interface AntigravityResponseChunk {
 	response?: {
 		candidates?: Array<{
@@ -896,6 +926,31 @@ function buildAntigravityRequest(
 	};
 }
 
+// xAI image-edit cap per docs.x.ai (POST /v1/images/edits supports up to 3
+// source images for multi-reference editing).
+const XAI_MAX_EDIT_IMAGES = 3;
+
+// Map the OpenAI-style pixel-size enum (image_size) to xAI's discrete tier.
+// "1024x1024" → "1k"; anything wider (1536x... or ...x1536) → "2k". Absent
+// image_size defaults to "1k", matching hermes-agent's DEFAULT_RESOLUTION
+// (plugins/image_gen/xai/__init__.py:71).
+function resolveXAIResolution(imageSize: string | undefined): "1k" | "2k" {
+	if (!imageSize || imageSize === "1024x1024") return "1k";
+	return "2k";
+}
+
+// Build the discriminated edit body. Caller must ensure images.length is in
+// [1, XAI_MAX_EDIT_IMAGES]; the bound check fires earlier in execute().
+function buildXAIEditPayload(base: XAIImageRequestBase, images: readonly InlineImageData[]): XAIImageRequestBody {
+	const refs: readonly XAIImageReference[] = images.map(img => ({
+		type: "image_url",
+		url: toDataUrl(img),
+	}));
+	const [first, ...rest] = refs;
+	if (first === undefined) return base; // unreachable: caller checked images.length > 0
+	return rest.length === 0 ? { ...base, image: first } : { ...base, images: refs };
+}
+
 interface AntigravitySseResult {
 	images: InlineImageData[];
 	text: string[];
@@ -1114,22 +1169,36 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 
 				const prompt = assemblePrompt(params);
 				const aspectRatio = params.aspect_ratio ?? "1:1";
+				const xaiResolution = resolveXAIResolution(params.image_size);
 
-				const xaiResponse = await fetch(`${xaiCreds.baseURL}/images/generations`, {
+				const isEdit = resolvedImages.length > 0;
+				if (isEdit && resolvedImages.length > XAI_MAX_EDIT_IMAGES) {
+					throw new Error(
+						`xAI image edits accept up to ${XAI_MAX_EDIT_IMAGES} reference images; got ${resolvedImages.length}.`,
+					);
+				}
+
+				const xaiBaseBody: XAIImageRequestBase = {
+					model: resolvedModel,
+					prompt,
+					aspect_ratio: aspectRatio,
+					resolution: xaiResolution,
+					n: 1,
+					response_format: "b64_json",
+				};
+				const xaiBody: XAIImageRequestBody = isEdit
+					? buildXAIEditPayload(xaiBaseBody, resolvedImages)
+					: xaiBaseBody;
+				const xaiEndpoint = isEdit ? "/images/edits" : "/images/generations";
+
+				const xaiResponse = await fetch(`${xaiCreds.baseURL}${xaiEndpoint}`, {
 					method: "POST",
 					headers: {
 						Authorization: `Bearer ${xaiCreds.apiKey}`,
 						"Content-Type": "application/json",
 						"User-Agent": ohMyPiXAIUserAgent(),
 					},
-					body: JSON.stringify({
-						model: resolvedModel,
-						prompt,
-						aspect_ratio: aspectRatio,
-						resolution: "1k",
-						n: 1,
-						response_format: "b64_json",
-					}),
+					body: JSON.stringify(xaiBody),
 					signal: requestSignal,
 				});
 

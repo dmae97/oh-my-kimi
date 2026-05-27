@@ -617,14 +617,230 @@ export interface XaiOAuthModelManagerConfig {
 	baseUrl?: string;
 }
 
+interface XAICuratedModel {
+	id: string;
+	contextWindow: number;
+	name?: string;
+	/** Whether the model reasons natively. Defaults to true for Grok-4.x family. */
+	reasoning?: boolean;
+	/**
+	 * Whether xAI accepts the `reasoning.effort` wire param for this model.
+	 * Default true. When false: picker hides the effort dial (via
+	 * getSupportedEfforts in model-thinking.ts) AND wire-side already omits
+	 * the param via GROK_EFFORT_CAPABLE_PREFIXES in providers/xai-responses.ts.
+	 * Must agree with that allowlist; two truths kept in sync by curated-catalog
+	 * author convention until a follow-up Op: compress unifies them.
+	 */
+	supportsReasoningEffort?: boolean;
+	/**
+	 * Input modalities this model accepts. Defaults to `["text"]` when absent.
+	 * Vision-capable Grok models MUST list `"image"` here so the curated layer
+	 * overrides `fetchOpenAICompatibleModels`' default of `["text"]` (which
+	 * otherwise strips image capability on every online refresh).
+	 */
+	input?: ("text" | "image")[];
+}
+
+// Source of truth for the xai-oauth chat picker. Top of list = headline.
+// Context windows from hermes-agent/agent/model_metadata.py:205-220
+// ("Values sourced from models.dev (2026-04)"). grok-build is xAI's
+// coding-fine-tuned chat model; 512K context per user spec (2026-05-17).
+//
+// supportsReasoningEffort=false entries reason natively but reject the wire
+// `reasoning.effort` param (api.x.ai returns HTTP 400). Mirrors the HTTP-side
+// GROK_EFFORT_CAPABLE_PREFIXES allowlist in providers/xai-responses.ts. The
+// curated flag is the picker-visible truth; the HTTP allowlist is the wire
+// truth. omitReasoningEffort in xai-responses.ts already prevents 400s; this
+// fixes the picker UX wart of advertising an inert dial.
+export const XAI_OAUTH_CURATED_MODELS: readonly XAICuratedModel[] = [
+	// grok-build is text-only per the bundled catalog; omit `input` for the default.
+	{ id: "grok-build", contextWindow: 512_000, name: "Grok Build", supportsReasoningEffort: false },
+	{ id: "grok-4.3", contextWindow: 1_000_000, name: "Grok 4.3", input: ["text", "image"] },
+	// grok-4.20-multi-agent-0309 is text-only per the bundled catalog; omit `input` for the default.
+	{ id: "grok-4.20-multi-agent-0309", contextWindow: 2_000_000, name: "Grok 4.20 (Multi-Agent)" },
+	{
+		id: "grok-4.20-0309-reasoning",
+		contextWindow: 2_000_000,
+		name: "Grok 4.20 (Reasoning)",
+		supportsReasoningEffort: false,
+		input: ["text", "image"],
+	},
+	{
+		id: "grok-4.20-0309-non-reasoning",
+		contextWindow: 2_000_000,
+		name: "Grok 4.20 (Non-Reasoning)",
+		reasoning: false,
+		input: ["text", "image"],
+	},
+] as const;
+
+// xAI /v1/models returns chat, image, voice, and STT entries. Tool surfaces
+// route through dedicated tools (generate_image, tts) with their own model
+// strings; the chat picker MUST exclude these prefixes or selecting them 400s.
+const XAI_NON_CHAT_PREFIXES = ["grok-imagine-", "grok-stt-", "grok-voice-"] as const;
+
+// Hermes-agent parity: only the `minimal -> low` clamp is applied (see
+// hermes-agent/agent/transports/codex.py:92 `_effort_clamp = {"minimal":
+// "low"}`). Hermes sends `xhigh` to xAI verbatim and we match that contract
+// — let xAI decide if the level is valid for the specific Grok model.
+// applyResponsesReasoningParams runs this through `model.compat.reasoningEffortMap`
+// at request time, downstream of the omitReasoningEffort gate in xai-responses.ts.
+const XAI_REASONING_EFFORT_MAP = { minimal: "low" } as const;
+
+// Single source of truth for curated → Model fan-in. Used by the static-seed
+// and the dynamic overlay/inject paths (applyXAIOAuthCuration) so curated
+// reasoning/effort flags survive an online refresh (xAI's /v1/models lacks
+// reasoning metadata and fetchOpenAICompatibleModels defaults reasoning to
+// false). Caller supplies a `base` Model (either a freshly synthesised seed
+// or a dynamic-fetched entry); the helper layers curated fields on top.
+// The `minimal -> low` effort clamp (XAI_REASONING_EFFORT_MAP) is always
+// merged in so dynamic-fetched models — which arrive without curated
+// compat keys — still get the clamp applyResponsesReasoningParams expects.
+function mergeCuratedIntoModel(base: Model<"openai-responses">, curated: XAICuratedModel): Model<"openai-responses"> {
+	const effort = curated.supportsReasoningEffort;
+	const compat = {
+		...(base.compat ?? {}),
+		reasoningEffortMap: { ...XAI_REASONING_EFFORT_MAP, ...(base.compat?.reasoningEffortMap ?? {}) },
+		...(effort === undefined ? {} : { supportsReasoningEffort: effort }),
+	};
+	return {
+		...base,
+		contextWindow: curated.contextWindow,
+		name: curated.name ?? base.name,
+		reasoning: curated.reasoning ?? true,
+		input: curated.input ?? base.input,
+		compat,
+	};
+}
+
+/**
+ * Overlay/inject curated xai-oauth metadata onto dynamic-fetch results so
+ * a successful `online refresh` doesn't regress vision capability, context
+ * window, reasoning flags, or the effort-dial allowlist.
+ *
+ * Three passes:
+ *   1. Filter `XAI_NON_CHAT_PREFIXES` (picker pollution defense for tool
+ *      surfaces routed through dedicated tools — generate_image, tts).
+ *   2. Overlay curated metadata onto dynamic-fetch matches. xAI's /v1/models
+ *      does not return context_window or reasoning metadata, so without
+ *      this overlay the runtime falls back to the bundled-reference default
+ *      (effectively 128k context) and `reasoning: false` (suppressing the
+ *      effort dial and stripping thinking metadata downstream).
+ *   3. Inject curated entries missing from the dynamic fetch. Clones the
+ *      first surviving entry as a template so required Model fields (api,
+ *      provider, baseUrl, cost, etc.) inherit sane defaults. If `filtered`
+ *      is empty (offline / no auth) injection is skipped — the descriptor's
+ *      defaultModel covers the fallback.
+ *
+ * Order: curated models first in declaration order; then dynamic remainder
+ * in original order.
+ */
+function applyXAIOAuthCuration(dynamic: readonly Model<"openai-responses">[]): Model<"openai-responses">[] {
+	const filtered = dynamic.filter(e => !XAI_NON_CHAT_PREFIXES.some(p => e.id.startsWith(p)));
+
+	const byId = new Map<string, Model<"openai-responses">>(filtered.map(e => [e.id, e]));
+	for (const curated of XAI_OAUTH_CURATED_MODELS) {
+		const existing = byId.get(curated.id);
+		if (existing) {
+			byId.set(curated.id, mergeCuratedIntoModel(existing, curated));
+		}
+	}
+
+	const template = filtered[0];
+	if (template) {
+		for (const curated of XAI_OAUTH_CURATED_MODELS) {
+			if (!byId.has(curated.id)) {
+				// Reset id/name on the template before merging so the helper's
+				// `curated.name ?? base.name` clause falls back to curated.id
+				// (the inject contract), not to the unrelated template's label.
+				const base: Model<"openai-responses"> = { ...template, id: curated.id, name: curated.id };
+				byId.set(curated.id, mergeCuratedIntoModel(base, curated));
+			}
+		}
+	}
+
+	const curatedIds = new Set(XAI_OAUTH_CURATED_MODELS.map(c => c.id));
+	const curatedFirst = XAI_OAUTH_CURATED_MODELS.map(c => byId.get(c.id)).filter(
+		(e): e is Model<"openai-responses"> => e !== undefined,
+	);
+	const rest = filtered.filter(e => !curatedIds.has(e.id));
+	return [...curatedFirst, ...rest];
+}
+
+/**
+ * Render `XAI_OAUTH_CURATED_MODELS` as full `Model<"openai-responses">` entries.
+ *
+ * Single source of truth for the curated to Model fan-in, consumed by both
+ * - {@link xaiOAuthModelManagerOptions} (runtime static seed handed to the model
+ *   manager so the picker is populated on a fresh login), and
+ * - `packages/ai/scripts/generate-models.ts` (bundles the same entries into
+ *   `models.json`, so the synchronous `ModelRegistry.#loadModels()` boot path
+ *   sees `xai-oauth` without waiting for a refresh — fixes the boot-time
+ *   default-model reset when `modelRoles.default = "xai-oauth/<id>"`).
+ *
+ * `reasoning` defaults to `true` for the Grok-4.x family; the explicit
+ * `grok-4.20-0309-non-reasoning` entry opts out via `XAICuratedModel.reasoning`.
+ * `maxTokens` uses `UNK_MAX_TOKENS` so id-keyed overlays from a successful
+ * dynamic fetch merge cleanly. Mirrors
+ * `hermes-agent/hermes_cli/models.py:_XAI_STATIC_FALLBACK`.
+ */
+export function buildXaiOAuthStaticSeed(baseUrl?: string): Model<"openai-responses">[] {
+	const resolvedBaseUrl = baseUrl ?? "https://api.x.ai/v1";
+	return XAI_OAUTH_CURATED_MODELS.map(curated => {
+		// Synthesise a bare base then layer curated metadata via the same helper
+		// the dynamic overlay/inject paths use. `name: curated.id` is a sentinel
+		// the helper rewrites to `curated.name ?? base.name`, so curated.name
+		// wins when set.
+		const base: Model<"openai-responses"> = {
+			id: curated.id,
+			name: curated.id,
+			api: "openai-responses",
+			provider: "xai-oauth",
+			baseUrl: resolvedBaseUrl,
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: curated.contextWindow,
+			maxTokens: UNK_MAX_TOKENS,
+			compat: { reasoningEffortMap: XAI_REASONING_EFFORT_MAP },
+		};
+		return mergeCuratedIntoModel(base, curated);
+	});
+}
+
 export function xaiOAuthModelManagerOptions(
 	config?: XaiOAuthModelManagerConfig,
 ): ModelManagerOptions<"openai-responses"> {
-	return createSimpleOpenAIResponsesOptions(
+	const defaultBaseUrl = "https://api.x.ai/v1";
+	const resolvedBaseUrl = config?.baseUrl ?? defaultBaseUrl;
+	const base = createSimpleOpenAIResponsesOptions(
 		"xai-oauth" as Parameters<typeof getBundledModels>[0],
-		"https://api.x.ai/v1",
+		defaultBaseUrl,
 		config,
 	);
+	// Static seed handed to the runtime model manager so the picker populates on
+	// a fresh login even before `fetchDynamicModels` fires (it is gated on
+	// `config.apiKey` at construction time, and OAuth tokens resolve later via
+	// AuthStorage). `generate-models.ts` calls the same builder so `models.json`
+	// carries these entries too — making the synchronous `#loadModels()` boot
+	// path honor `modelRoles.default = "xai-oauth/<id>"` without `await refresh()`.
+	const staticModels = buildXaiOAuthStaticSeed(resolvedBaseUrl);
+	if (!base.fetchDynamicModels) {
+		return { ...base, staticModels };
+	}
+	// Wrap fetchDynamicModels so an `online refresh` against xAI's /v1/models
+	// runs through applyXAIOAuthCuration — preserves curated context windows,
+	// vision modality, reasoning flags, and filters tool-only model ids
+	// (grok-imagine-*, grok-stt-*, grok-voice-*) from the chat picker.
+	const inner = base.fetchDynamicModels;
+	return {
+		...base,
+		staticModels,
+		fetchDynamicModels: async () => {
+			const dynamic = await inner();
+			return dynamic == null ? dynamic : applyXAIOAuthCuration(dynamic);
+		},
+	};
 }
 
 // ---------------------------------------------------------------------------
