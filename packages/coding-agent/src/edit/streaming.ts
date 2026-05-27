@@ -20,11 +20,8 @@ import {
 	END_PATCH_MARKER,
 	type PatchSection as HashlineInputSection,
 	Patch as HashlinePatch,
-	Tokenizer as HashlineTokenizer,
 } from "@oh-my-pi/hashline";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../modes/theme/theme";
-import { replaceTabs, truncateToWidth } from "../tools/render-utils";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { computeEditDiff, type DiffError, type DiffResult } from "./diff";
 import { computeHashlineDiff, computeHashlineSectionDiff } from "./hashline/diff";
@@ -71,48 +68,6 @@ export interface EditStreamingStrategy<Args = unknown> {
 	 * compute returned `null` because args are still too partial).
 	 */
 	renderStreamingFallback(args: Args, uiTheme: Theme): string;
-}
-
-const STREAMING_FALLBACK_LINES = 12;
-const STREAMING_FALLBACK_WIDTH = 80;
-
-// Streaming-preview classification reuses one tokenizer instance for the
-// stateless predicates and `tokenize`/`tokenizeAll` helpers; instances are
-// cheap, but keeping a single module-level reference matches the rest of
-// the hashline package.
-const HASHLINE_TOKENIZER = new HashlineTokenizer();
-
-function trimHashlineStreamingSyntax(lines: string[]): string[] {
-	let index = lines.findIndex(line => line.trim().length > 0);
-	if (index === -1) return [];
-
-	if (HASHLINE_TOKENIZER.tokenize(lines[index]).kind === "envelope-begin") {
-		index++;
-		while (index < lines.length && lines[index].trim().length === 0) index++;
-	}
-	if (index < lines.length && HASHLINE_TOKENIZER.tokenize(lines[index]).kind === "header") {
-		index++;
-	}
-
-	return lines.slice(index).filter(line => !HASHLINE_TOKENIZER.isEnvelopeMarker(line));
-}
-
-function renderHashlineInputFallback(input: string, uiTheme: Theme): string {
-	const lines = trimHashlineStreamingSyntax(sanitizeText(input).split("\n"));
-	if (!lines.some(line => line.trim().length > 0)) return "";
-
-	const displayLines = lines.slice(-STREAMING_FALLBACK_LINES);
-	const hidden = lines.length - displayLines.length;
-	let text = "\n\n";
-	text += displayLines
-		.map(line => uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(line), STREAMING_FALLBACK_WIDTH)))
-		.join("\n");
-	if (hidden > 0) {
-		text += uiTheme.fg("dim", `\n… (streaming +${hidden} lines)`);
-	} else {
-		text += uiTheme.fg("dim", "\n(streaming)");
-	}
-	return text;
 }
 
 // -----------------------------------------------------------------------------

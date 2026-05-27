@@ -238,11 +238,11 @@ function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, labe
 	// Hunk-aware truncation keeps the change rows themselves visible and
 	// trims surrounding context proportionally so a multi-hunk diff doesn't
 	// turn into just the tail of the last hunk while streaming.
-	const { text: truncatedDiff, hiddenHunks, hiddenLines } = truncateDiffByHunk(
-		diff,
-		PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS,
-		EDIT_STREAMING_PREVIEW_LINES,
-	);
+	const {
+		text: truncatedDiff,
+		hiddenHunks,
+		hiddenLines,
+	} = truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, EDIT_STREAMING_PREVIEW_LINES);
 	let text = "\n\n";
 	text += renderDiffColored(truncatedDiff, { filePath: rawPath });
 	if (hiddenHunks > 0 || hiddenLines > 0) {
