@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.5.3] - 2026-05-27
 ### Breaking Changes
 
 - Disallowed inline payload on hashline `↑`, `↓`, and `:` operations (including BOF/EOF inserts), requiring payload text to be supplied on standalone `+` continuation rows
