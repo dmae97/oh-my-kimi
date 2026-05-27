@@ -47,7 +47,3 @@ export const RECOVERY_EXTERNAL_WARNING =
 /** Warning text emitted by `Recovery` when a prior in-session edit advanced the hash. */
 export const RECOVERY_SESSION_CHAIN_WARNING =
 	"Recovered from a stale file hash using an earlier in-session snapshot (the file hash advanced after a prior edit in this session).";
-
-/** Warning text emitted by `Recovery` when the session-chain fast-path was taken. */
-export const RECOVERY_SESSION_REPLAY_WARNING =
-	"Recovered by replaying your edits onto the current file content — your previous edit in this session changed line(s) you re-targeted with a stale hash. Verify the diff matches your intent before continuing.";

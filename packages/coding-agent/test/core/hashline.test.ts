@@ -1092,6 +1092,40 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			expect(text).toMatch(/Recovered from a stale file hash using a previous read snapshot/);
 		});
 	});
+
+	it("rejects replay when a prior in-session edit rewrote the line the model re-targets", async () => {
+		await withTempDir(async tempDir => {
+			const filePath = path.join(tempDir, "a.ts");
+			const v0Lines = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10"];
+			const v0Text = `${v0Lines.join("\n")}\n`;
+			await Bun.write(filePath, v0Text);
+
+			const session = makeHashlineSession(tempDir);
+			getFileReadCache(session).recordContiguous(filePath, 1, v0Text.split("\n"), {
+				fullText: v0Text,
+				fileHash: computeFileHash(v0Text),
+			});
+
+			// First edit lands cleanly against v0: line 5 becomes L5-FIRST.
+			const firstInput = `${header("a.ts", v0Text)}\n${sameLineRange(tag(5, "L5"))}:\n${extra(pl("L5-FIRST"))}\n`;
+			await executeHashlineSingle(hashlineExecuteOptions(tempDir, firstInput, undefined, session));
+
+			const v1Lines = [...v0Lines];
+			v1Lines[4] = "L5-FIRST";
+			expect(await Bun.file(filePath).text()).toBe(`${v1Lines.join("\n")}\n`);
+
+			// Second edit: model is still anchored against v0 (stale hash) and
+			// again targets line 5 — the very line the first edit rewrote.
+			// Recovery must refuse so the model re-reads instead of silently
+			// overwriting L5-FIRST with payload authored against L5.
+			const secondInput = `${header("a.ts", v0Text)}\n${sameLineRange(tag(5, "L5"))}:\n${extra(pl("L5-SECOND"))}\n`;
+			await expect(
+				executeHashlineSingle(hashlineExecuteOptions(tempDir, secondInput, undefined, session)),
+			).rejects.toThrow(HashlineMismatchError);
+			expect(await Bun.file(filePath).text()).toBe(`${v1Lines.join("\n")}\n`);
+		});
+	});
+
 	it("recovers from an older in-session snapshot even if the current file advanced again", () => {
 		const cache = new FileReadCache();
 		const fakePath = "/tmp/__hashline-cache-ring-recovery__.ts";
