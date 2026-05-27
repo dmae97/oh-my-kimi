@@ -1,22 +1,95 @@
 /**
  * Cooperative yield utility for preventing Bun event-loop busy-wait.
  *
- * Bun 1.3.x (JavaScriptCore) does not automatically yield to the kernel when
- * the microtask queue is continuously non-empty.  In long-running agent loops
- * (LLM streaming, tool execution) this causes ~100% CPU usage even when the
- * process is simply waiting for I/O.
+ * ## Root Cause
  *
- * `yieldIfDue()` uses a compensated sleep that retries `scheduler.wait()`
- * until the requested wall-clock duration has actually elapsed.  This is
- * necessary because napi callbacks (e.g. `Shell.run` chunk callbacks via
- * `uv_async_send`) can wake the event loop prematurely, causing the timer
- * to return after only ~1–2 ms regardless of the requested duration.
+ * Bun 1.3.x (JavaScriptCore) event loop busy-waits (spins in userspace)
+ * when the only pending work is an unresolved Promise — even if there are
+ * active I/O watchers (stdin, child process pipes, etc.).  The event loop
+ * continuously polls for microtask resolution instead of blocking in
+ * `epoll_wait`, consuming ~100% of a CPU core.
  *
- * The minimum effective sleep is ~20 ms per yield; at ~30 yield calls/second
- * this gives 600 ms/second of kernel sleep → ~40% CPU under active load.
+ * This affects any `await` on a never-resolved Promise, including:
+ * - `Promise.withResolvers()` used for user input callbacks
+ * - `await proc.exited` for long-running child processes
+ * - Agent loop iterations waiting for the next tool call
+ *
+ * ## Fix
+ *
+ * A recurring `setInterval` keeps the event loop sleeping in `epoll_wait`.
+ * The `EventLoopKeepalive` class and `keepaliveWhile()` wrapper provide a
+ * clean way to install and clean up this keepalive timer.
+ *
+ * The older `yieldIfDue()` and `ExponentialYield` approaches (compensated
+ * sleep loops) are retained for the agent-loop hot-path where Promises
+ * resolve frequently and the keepalive alone is insufficient.
  */
 
 import { scheduler } from "node:timers/promises";
+
+// ---------------------------------------------------------------------------
+// EventLoopKeepalive — the primary fix for idle-state busy-wait
+// ---------------------------------------------------------------------------
+
+const KEEPALIVE_INTERVAL_MS = 86_400_000; // 24 hours — re-armed each interval
+
+/**
+ * Manages a recurring `setInterval` that prevents the Bun event loop
+ * from busy-waiting when only unresolved Promises are pending.
+ *
+ * Uses `setInterval` (not `setTimeout`) so the keepalive automatically
+ * re-arms after each firing.  This ensures that even sessions left idle
+ * for longer than one interval remain covered until `dispose()` is called.
+ *
+ * ```ts
+ * const ka = new EventLoopKeepalive();
+ * await someNeverResolvingPromise;  // Without keepalive: 100% CPU
+ * ka.dispose();                      // Clean up when done
+ * ```
+ */
+export class EventLoopKeepalive {
+	#timer: NodeJS.Timeout | undefined;
+
+	constructor() {
+		this.#timer = setInterval(() => {}, KEEPALIVE_INTERVAL_MS);
+	}
+
+	/** Dispose the keepalive timer. Call when the awaited Promise resolves. */
+	dispose(): void {
+		if (this.#timer !== undefined) {
+			clearInterval(this.#timer);
+			this.#timer = undefined;
+		}
+	}
+}
+
+/**
+ * Await a Promise with an event-loop keepalive active.
+ *
+ * This is the primary fix for Bun's busy-wait on unresolved Promises.
+ * Use it wherever you `await` a Promise that may remain unresolved for
+ * an extended period (user input, long-running subprocess, etc.).
+ *
+ * ```ts
+ * // Before (100% CPU while waiting):
+ * const input = await mode.getUserInput();
+ *
+ * // After (proper epoll_wait sleep):
+ * const input = await keepaliveWhile(mode.getUserInput());
+ * ```
+ */
+export async function keepaliveWhile<T>(promise: Promise<T>): Promise<T> {
+	const ka = new EventLoopKeepalive();
+	try {
+		return await promise;
+	} finally {
+		ka.dispose();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// yieldIfDue — retained for agent-loop hot-path
+// ---------------------------------------------------------------------------
 
 const YIELD_SLEEP_MS = 20;
 const YIELD_INTERVAL_MS = 50;
@@ -63,7 +136,9 @@ export async function yieldIfDue(): Promise<void> {
 	lastYieldAt = Date.now();
 }
 
-// --- ExponentialYield ---
+// ---------------------------------------------------------------------------
+// ExponentialYield — retained for bash-executor long waits
+// ---------------------------------------------------------------------------
 
 const EXP_DEFAULT_MIN_MS = 20;
 const EXP_DEFAULT_MAX_MS = 10_000;

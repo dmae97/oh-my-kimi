@@ -9,6 +9,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
+import { keepaliveWhile } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	$env,
@@ -315,7 +316,7 @@ async function runInteractiveMode(
 	}
 
 	while (true) {
-		const input = await mode.getUserInput();
+		const input = await keepaliveWhile(mode.getUserInput());
 		await submitInteractiveInput(mode, session, input);
 	}
 }
