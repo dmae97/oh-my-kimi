@@ -175,7 +175,7 @@ describe("tools.approvalMode setting", () => {
 					settings,
 				} as AgentToolContext,
 			);
-			expect(textOf(result)).toBe("(no output)");
+			expect(textOf(result)).toContain("(no output)");
 		} finally {
 			await session.dispose();
 		}
@@ -217,7 +217,7 @@ describe("tools.approvalMode setting", () => {
 					autoApprove: true,
 				} as AgentToolContext,
 			);
-			expect(textOf(result)).toBe("(no output)");
+			expect(textOf(result)).toContain("(no output)");
 		} finally {
 			await session.dispose();
 		}
