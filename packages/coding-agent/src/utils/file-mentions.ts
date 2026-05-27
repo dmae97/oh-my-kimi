@@ -7,12 +7,12 @@
  */
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { computeFileHash, formatHashlineHeader, formatNumberedLines } from "@oh-my-pi/hashline";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { glob } from "@oh-my-pi/pi-natives";
 import { fuzzyMatch } from "@oh-my-pi/pi-tui";
 import { formatAge, formatBytes, readImageMetadata } from "@oh-my-pi/pi-utils";
-import { computeFileHash, formatHashlineHeader, formatNumberedLines } from "../hashline/hash";
 import type { FileMentionMessage } from "../session/messages";
 import {
 	DEFAULT_MAX_BYTES,

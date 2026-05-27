@@ -3,16 +3,16 @@ begin_patch: "*** Begin Patch" LF
 end_patch: "*** End Patch" LF?
 
 hunk: update_hunk
-update_hunk: "$HFILE$" filename ("#" file_hash)? LF line_op*
+update_hunk: "¶" filename ("#" file_hash)? LF line_op*
 
 filename: /([^\s#]+)/
 file_hash: /[0-9a-f]{4}/
 
 line_op: insert_before | insert_after | replace | delete
-insert_before: anchor "$HOP_INSERT_BEFORE$" LF payload*
-insert_after: anchor "$HOP_INSERT_AFTER$" LF payload*
-replace: range "$HOP_REPLACE$" LF payload*
-delete: range "$HOP_DELETE$" LF
+insert_before: anchor "↑" LF payload*
+insert_after: anchor "↓" LF payload*
+replace: range ":" LF payload*
+delete: range "!" LF
 payload: "+" /[^\n]*/ LF
 
 anchor: LID | "EOF" | "BOF"

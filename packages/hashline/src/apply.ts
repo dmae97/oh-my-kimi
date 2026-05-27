@@ -1,38 +1,41 @@
+/**
+ * Apply a parsed list of {@link Edit}s to a text body and return the
+ * post-edit lines plus any diagnostic warnings. Pure function: no FS, no
+ * mutation of the input.
+ *
+ * The applier is conservative about edits that look like authoring mistakes:
+ *
+ * - Replace ops on a blank line with non-empty payload are rejected outright
+ *   (the model almost certainly miscounted; recommend `↑`/`↓` instead).
+ * - Multi-line replacement-boundary duplicates are auto-absorbed (model
+ *   echoed surrounding context as if it were payload).
+ * - Single-line structural-boundary duplicates (`}`, `)`, `];`, …) are
+ *   auto-absorbed when delimiter balance suggests the range truncated short.
+ *
+ * Diagnostics are returned as `warnings[]` in {@link ApplyResult}; they do
+ * not abort the apply.
+ */
 import { cloneCursor } from "./tokenizer";
-import type { Anchor, HashlineApplyOptions, HashlineCursor, HashlineEdit } from "./types";
+import type { Anchor, ApplyOptions, ApplyResult, Cursor, Edit } from "./types";
 
-export interface HashlineApplyResult {
-	lines: string;
-	firstChangedLine?: number;
-	warnings?: string[];
-	noopEdits?: HashlineNoopEdit[];
-}
-
-export interface HashlineNoopEdit {
-	editIndex: number;
-	loc: string;
-	reason: string;
-	current: string;
-}
-
-type HashlineLineOrigin = "original" | "insert" | "replacement";
+type LineOrigin = "original" | "insert" | "replacement";
 
 interface IndexedEdit {
-	edit: HashlineEdit;
+	edit: Edit;
 	idx: number;
 }
 
-type HashlineDeleteEdit = Extract<HashlineEdit, { kind: "delete" }>;
+type DeleteEdit = Extract<Edit, { kind: "delete" }>;
 
-interface HashlineReplacementGroup {
+interface ReplacementGroup {
 	startIndex: number;
 	endIndex: number;
 	sourceLineNum: number;
 	replacement: string[];
-	deletes: HashlineDeleteEdit[];
+	deletes: DeleteEdit[];
 }
 
-function getHashlineEditAnchors(edit: HashlineEdit): Anchor[] {
+function getEditAnchors(edit: Edit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
 	if (edit.cursor.kind === "before_anchor") return [edit.cursor.anchor];
 	if (edit.cursor.kind === "after_anchor") return [edit.cursor.anchor];
@@ -43,9 +46,9 @@ function getHashlineEditAnchors(edit: HashlineEdit): Anchor[] {
  * Verify every anchored edit points at an existing line. File-version binding is
  * checked once per section via the header hash before this function runs.
  */
-function validateHashlineLineBounds(edits: HashlineEdit[], fileLines: string[]): void {
+function validateLineBounds(edits: Edit[], fileLines: string[]): void {
 	for (const edit of edits) {
-		for (const anchor of getHashlineEditAnchors(edit)) {
+		for (const anchor of getEditAnchors(edit)) {
 			if (anchor.line < 1 || anchor.line > fileLines.length) {
 				throw new Error(`Line ${anchor.line} does not exist (file has ${fileLines.length} lines)`);
 			}
@@ -55,7 +58,7 @@ function validateHashlineLineBounds(edits: HashlineEdit[], fileLines: string[]):
 
 /**
  * Refuse a single-line replace whose target line is blank and whose payload is
- * non-empty. The model is almost certainly miscounting: `A:CONTENT` overwrites
+ * non-empty. The author is almost certainly miscounting: `A:CONTENT` overwrites
  * the existing line, so applying it to a blank target deletes the blank cadence
  * and inserts content in its place. To insert content at a blank line, use
  * `A↑` (insert before) or `A↓` (insert after) instead.
@@ -64,12 +67,12 @@ function validateHashlineLineBounds(edits: HashlineEdit[], fileLines: string[]):
  * `delete(A)` sharing the same source op line, no other inserts/deletes from
  * that op.
  */
-function detectReplaceOnBlankTarget(edits: HashlineEdit[], fileLines: string[]): string | null {
-	type Pair = {
-		insert?: Extract<HashlineEdit, { kind: "insert" }>;
-		delete?: Extract<HashlineEdit, { kind: "delete" }>;
+function detectReplaceOnBlankTarget(edits: Edit[], fileLines: string[]): string | null {
+	interface Pair {
+		insert?: Extract<Edit, { kind: "insert" }>;
+		delete?: Extract<Edit, { kind: "delete" }>;
 		multi?: boolean;
-	};
+	}
 	const byOpLine = new Map<number, Pair>();
 	for (const edit of edits) {
 		const pair = byOpLine.get(edit.lineNum) ?? {};
@@ -104,9 +107,9 @@ function detectReplaceOnBlankTarget(edits: HashlineEdit[], fileLines: string[]):
 	return null;
 }
 
-function insertAtStart(fileLines: string[], lineOrigins: HashlineLineOrigin[], lines: string[]): void {
+function insertAtStart(fileLines: string[], lineOrigins: LineOrigin[], lines: string[]): void {
 	if (lines.length === 0) return;
-	const origins = lines.map((): HashlineLineOrigin => "insert");
+	const origins = lines.map((): LineOrigin => "insert");
 	if (fileLines.length === 1 && fileLines[0] === "") {
 		fileLines.splice(0, 1, ...lines);
 		lineOrigins.splice(0, 1, ...origins);
@@ -116,9 +119,9 @@ function insertAtStart(fileLines: string[], lineOrigins: HashlineLineOrigin[], l
 	lineOrigins.splice(0, 0, ...origins);
 }
 
-function insertAtEnd(fileLines: string[], lineOrigins: HashlineLineOrigin[], lines: string[]): number | undefined {
+function insertAtEnd(fileLines: string[], lineOrigins: LineOrigin[], lines: string[]): number | undefined {
 	if (lines.length === 0) return undefined;
-	const origins = lines.map((): HashlineLineOrigin => "insert");
+	const origins = lines.map((): LineOrigin => "insert");
 	if (fileLines.length === 1 && fileLines[0] === "") {
 		fileLines.splice(0, 1, ...lines);
 		lineOrigins.splice(0, 1, ...origins);
@@ -132,14 +135,13 @@ function insertAtEnd(fileLines: string[], lineOrigins: HashlineLineOrigin[], lin
 }
 
 /** Bucket edits by the line they target so we can apply each line's group in one splice. */
-
-function getAnchorTargetLine(edit: HashlineEdit): number | undefined {
+function getAnchorTargetLine(edit: Edit): number | undefined {
 	if (edit.kind === "delete") return edit.anchor.line;
 	if (edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor") return edit.cursor.anchor.line;
 	return undefined;
 }
 
-function collectAnchorTargetLines(edits: HashlineEdit[]): Set<number> {
+function collectAnchorTargetLines(edits: Edit[]): Set<number> {
 	const lines = new Set<number>();
 	for (const edit of edits) {
 		const line = getAnchorTargetLine(edit);
@@ -148,7 +150,7 @@ function collectAnchorTargetLines(edits: HashlineEdit[]): Set<number> {
 	return lines;
 }
 
-function findReplacementGroup(edits: HashlineEdit[], startIndex: number): HashlineReplacementGroup | undefined {
+function findReplacementGroup(edits: Edit[], startIndex: number): ReplacementGroup | undefined {
 	const first = edits[startIndex];
 	if (first?.kind !== "insert" || first.cursor.kind !== "before_anchor") return undefined;
 
@@ -162,7 +164,7 @@ function findReplacementGroup(edits: HashlineEdit[], startIndex: number): Hashli
 		index++;
 	}
 
-	const deletes: HashlineDeleteEdit[] = [];
+	const deletes: DeleteEdit[] = [];
 	while (index < edits.length) {
 		const edit = edits[index];
 		if (edit.kind !== "delete" || edit.lineNum !== sourceLineNum) break;
@@ -231,10 +233,10 @@ interface DelimiterBalance {
  * Naive bracket counter — does NOT skip string/template/comment contents. The
  * single-line structural absorb relies on this being safe-by-asymmetry: the
  * candidate boundary line is constrained by `STRUCTURAL_CLOSING_BOUNDARY_RE`
- * to be pure delimiters, so noise in deleted lines or non-boundary kept payload
- * tends to push `expected !== kept` and biases the heuristic toward NOT
- * absorbing (the safe direction). If we ever extend this to opening boundaries
- * or non-structural single lines, swap this for a real tokenizer.
+ * to be pure delimiters, so noise in deleted lines or non-boundary kept
+ * payload tends to push `expected !== kept` and biases the heuristic toward
+ * NOT absorbing (the safe direction). If we ever extend this to opening
+ * boundaries or non-structural single lines, swap this for a real tokenizer.
  */
 function computeDelimiterBalance(lines: string[]): DelimiterBalance {
 	const balance: DelimiterBalance = { paren: 0, bracket: 0, brace: 0 };
@@ -364,7 +366,7 @@ function contiguousRange(start: number, count: number): number[] {
 	return Array.from({ length: count }, (_, offset) => start + offset);
 }
 
-function deleteEditForAutoAbsorbedLine(line: number, sourceLineNum: number, index: number): HashlineEdit {
+function deleteEditForAutoAbsorbedLine(line: number, sourceLineNum: number, index: number): Edit {
 	return {
 		kind: "delete",
 		anchor: { line },
@@ -373,15 +375,15 @@ function deleteEditForAutoAbsorbedLine(line: number, sourceLineNum: number, inde
 	};
 }
 
-interface HashlinePureInsertGroup {
+interface PureInsertGroup {
 	startIndex: number;
 	endIndex: number;
 	sourceLineNum: number;
-	cursor: HashlineCursor;
+	cursor: Cursor;
 	payload: string[];
 }
 
-function cursorMatches(a: HashlineCursor, b: HashlineCursor): boolean {
+function cursorMatches(a: Cursor, b: Cursor): boolean {
 	if (a.kind !== b.kind) return false;
 	if (a.kind === "bof" || a.kind === "eof") return true;
 	const aAnchor = (a as { anchor: Anchor }).anchor;
@@ -396,7 +398,7 @@ function cursorMatches(a: HashlineCursor, b: HashlineCursor): boolean {
  * instead). Returns the contiguous payload so we can check it for boundary
  * duplicates against the file.
  */
-function findPureInsertGroup(edits: HashlineEdit[], startIndex: number): HashlinePureInsertGroup | undefined {
+function findPureInsertGroup(edits: Edit[], startIndex: number): PureInsertGroup | undefined {
 	const first = edits[startIndex];
 	if (first?.kind !== "insert") return undefined;
 
@@ -429,10 +431,7 @@ function findPureInsertGroup(edits: HashlineEdit[], startIndex: number): Hashlin
  *   - `belowStartIdx`: index of the first file line strictly below the
  *     insertion point (`fileLines.length` if none).
  */
-function pureInsertNeighborhood(
-	cursor: HashlineCursor,
-	fileLines: string[],
-): { aboveEndIdx: number; belowStartIdx: number } {
+function pureInsertNeighborhood(cursor: Cursor, fileLines: string[]): { aboveEndIdx: number; belowStartIdx: number } {
 	if (cursor.kind === "bof") return { aboveEndIdx: -1, belowStartIdx: 0 };
 	if (cursor.kind === "eof") return { aboveEndIdx: fileLines.length - 1, belowStartIdx: fileLines.length };
 	if (cursor.kind === "before_anchor") {
@@ -458,7 +457,7 @@ interface PureInsertAbsorbResult {
  * duplicate absorption is enabled.
  */
 function tryAbsorbPureInsertGroup(
-	group: HashlinePureInsertGroup,
+	group: PureInsertGroup,
 	fileLines: string[],
 	allowGenericBoundaryAbsorb: boolean,
 ): PureInsertAbsorbResult {
@@ -521,13 +520,13 @@ function tryAbsorbPureInsertGroup(
 }
 
 function absorbReplacementBoundaryDuplicates(
-	edits: HashlineEdit[],
+	edits: Edit[],
 	fileLines: string[],
 	warnings: string[],
-	options: HashlineApplyOptions,
-): HashlineEdit[] {
+	options: ApplyOptions,
+): Edit[] {
 	let nextSyntheticIndex = edits.length;
-	const absorbed: HashlineEdit[] = [];
+	const absorbed: Edit[] = [];
 
 	// Anchor targets are stable across the loop because we only ever append
 	// synthetic deletes (never mutate originals). A line in this set that
@@ -672,15 +671,19 @@ function bucketAnchorEditsByLine(edits: IndexedEdit[]): Map<number, IndexedEdit[
 	return byLine;
 }
 
-export function applyHashlineEdits(
-	text: string,
-	edits: HashlineEdit[],
-	options: HashlineApplyOptions = {},
-): HashlineApplyResult {
-	if (edits.length === 0) return { lines: text, firstChangedLine: undefined };
+/**
+ * Apply a parsed list of edits to a text body. Pure function — no I/O.
+ *
+ * Returns the post-edit text, the first changed line number (1-indexed), and
+ * any diagnostic warnings produced by the auto-absorb heuristics or by the
+ * structural-boundary delete check. Throws if an anchor is out of bounds or a
+ * blank-target replace is detected.
+ */
+export function applyEdits(text: string, edits: Edit[], options: ApplyOptions = {}): ApplyResult {
+	if (edits.length === 0) return { text, firstChangedLine: undefined };
 
 	const fileLines = text.split("\n");
-	const lineOrigins: HashlineLineOrigin[] = fileLines.map(() => "original");
+	const lineOrigins: LineOrigin[] = fileLines.map(() => "original");
 	const warnings: string[] = [];
 
 	let firstChangedLine: number | undefined;
@@ -688,7 +691,7 @@ export function applyHashlineEdits(
 		if (firstChangedLine === undefined || line < firstChangedLine) firstChangedLine = line;
 	};
 
-	validateHashlineLineBounds(edits, fileLines);
+	validateLineBounds(edits, fileLines);
 
 	const blankTargetError = detectReplaceOnBlankTarget(edits, fileLines);
 	if (blankTargetError !== null) throw new Error(blankTargetError);
@@ -765,7 +768,7 @@ export function applyHashlineEdits(
 			}
 		}
 		const replacement = deleteLine ? beforeLines : [...beforeLines, currentLine];
-		const origins = replacement.map((): HashlineLineOrigin => (deleteLine ? "replacement" : "insert"));
+		const origins = replacement.map((): LineOrigin => (deleteLine ? "replacement" : "insert"));
 		if (!deleteLine) {
 			origins[origins.length - 1] = lineOrigins[idx] ?? "original";
 		}
@@ -783,7 +786,7 @@ export function applyHashlineEdits(
 	if (eofChangedLine !== undefined) trackFirstChanged(eofChangedLine);
 
 	return {
-		lines: fileLines.join("\n"),
+		text: fileLines.join("\n"),
 		firstChangedLine,
 		...(warnings.length > 0 ? { warnings } : {}),
 	};

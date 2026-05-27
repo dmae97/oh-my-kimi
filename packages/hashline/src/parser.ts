@@ -1,10 +1,18 @@
-import {
-	ABORT_WARNING,
-	IMPLICIT_CONTINUATION_WARNING,
-	INLINE_PAYLOAD_ACCEPTED_WARNING,
-	PAYLOAD_LINE_PREFIX_DEMOTED_WARNING,
-	REPLACE_PAIR_COALESCED_WARNING,
-} from "./constants";
+/**
+ * Token-driven state machine that turns a stream of {@link Token}s into a
+ * flat list of {@link Edit}s. Sits between the {@link Tokenizer} and the
+ * applier.
+ *
+ * Lifecycle:
+ *
+ * 1. Construct one {@link Executor} per hunk (or share one with `reset()`).
+ * 2. Feed it tokens via {@link Executor.feed}. Multi-line payloads are
+ *    accumulated across tokens until the next op flushes them.
+ * 3. Call {@link Executor.end} to flush the trailing pending op and validate
+ *    cross-op invariants (no overlapping deletes, etc.).
+ *
+ * Convenience entry point: {@link parsePatch}.
+ */
 import {
 	HL_OP_CHARS,
 	HL_OP_DELETE,
@@ -12,15 +20,16 @@ import {
 	HL_OP_INSERT_BEFORE,
 	HL_OP_REPLACE,
 	HL_PAYLOAD_PREFIX,
-} from "./hash";
+} from "./format";
 import {
-	cloneCursor,
-	type HashlineToken,
-	HashlineTokenizer,
-	isDeleteOpWithPayload,
-	type ParsedRange,
-} from "./tokenizer";
-import type { Anchor, HashlineCursor, HashlineEdit } from "./types";
+	ABORT_WARNING,
+	IMPLICIT_CONTINUATION_WARNING,
+	INLINE_PAYLOAD_ACCEPTED_WARNING,
+	PAYLOAD_LINE_PREFIX_DEMOTED_WARNING,
+	REPLACE_PAIR_COALESCED_WARNING,
+} from "./messages";
+import { cloneCursor, isDeleteOpWithPayload, type ParsedRange, type Token, Tokenizer } from "./tokenizer";
+import type { Anchor, Cursor, Edit } from "./types";
 
 function validateRangeOrder(range: ParsedRange, lineNum: number): void {
 	if (range.end.line < range.start.line) {
@@ -45,7 +54,7 @@ function expandRange(range: ParsedRange): Anchor[] {
 }
 
 type PendingOp =
-	| { kind: "insert"; cursor: HashlineCursor; lineNum: number }
+	| { kind: "insert"; cursor: Cursor; lineNum: number }
 	| { kind: "replace"; range: ParsedRange; lineNum: number };
 
 interface Pending {
@@ -54,24 +63,16 @@ interface Pending {
 }
 
 /**
- * Token-driven state machine that turns a stream of {@link HashlineToken}s
- * into the flat list of {@link HashlineEdit}s applied downstream by the
- * apply/diff layers.
+ * Token-driven state machine that turns a stream of {@link Token}s into a
+ * flat list of {@link Edit}s.
  *
- * The executor owns:
- *   - the running edit index (kept monotonic across pending flushes),
- *   - the pending-payload buffer (lines accumulated for the most recently
- *     opened insert/replace op),
- *   - all parse-time diagnostics (range order, "delete with payload",
- *     orphan payload, unrecognized op),
- *   - the {@link terminated} flag set by `envelope-end`/`abort`.
- *
- * Tokens are dispatched in the order they arrive; the matching tokenizer
- * supplies the line numbers carried inside each token so diagnostics line
- * up with the source.
+ * `feed()` accepts tokens one at a time; multi-line payloads accumulate
+ * until the next op or {@link end} flushes them. After `terminated` flips
+ * true (on `envelope-end` or `abort`) subsequent feeds are silently ignored
+ * so callers can keep draining their tokenizer.
  */
-export class HashlineExecutor {
-	#edits: HashlineEdit[] = [];
+export class Executor {
+	#edits: Edit[] = [];
 	#warnings: string[] = [];
 	#editIndex = 0;
 	#pending: Pending | undefined;
@@ -83,11 +84,11 @@ export class HashlineExecutor {
 	}
 
 	/**
-	 * Consume one token. After `terminated` flips true subsequent feeds
-	 * are silently ignored so callers can keep draining their tokenizer
-	 * without explicit early-exit guards.
+	 * Consume one token. After `terminated` flips true subsequent feeds are
+	 * silently ignored so callers can keep draining their tokenizer without
+	 * explicit early-exit guards.
 	 */
-	feed(token: HashlineToken): void {
+	feed(token: Token): void {
 		if (this.#terminated) return;
 
 		switch (token.kind) {
@@ -182,14 +183,16 @@ export class HashlineExecutor {
 
 	/**
 	 * Flush any open pending op (with its full accumulated payload, including
-	 * explicit `+` blank lines) and return the accumulated edits and warnings.
-	 * The executor is single-use; reset() is required for reuse.
+	 * explicit `+` blank lines) and return the accumulated edits and
+	 * warnings. The executor is single-use; {@link reset} is required for
+	 * reuse.
+	 *
 	 * Throws if two replace/delete ops target the same line with non-identical
 	 * shapes (different ranges, replace+delete, delete+delete). Identical-range
 	 * `A-B:` pairs in the same hunk are coalesced last-wins by `feed()` with a
 	 * warning, so they never reach the validator.
 	 */
-	end(): { edits: HashlineEdit[]; warnings: string[] } {
+	end(): { edits: Edit[]; warnings: string[] } {
 		this.#flushPending();
 		this.#validateNoOverlappingDeletes();
 		return { edits: this.#edits, warnings: this.#warnings };
@@ -253,7 +256,7 @@ export class HashlineExecutor {
 			// Lenient legacy fallback: the tokenizer routes a line to `raw` only
 			// when it does not parse as an op, header, payload, or envelope
 			// marker. A `raw` token while a pending op exists is therefore an
-			// unambiguous continuation row that the model authored without the
+			// unambiguous continuation row that the author wrote without the
 			// `+` prefix. Accept it as payload and warn so the canonical
 			// `+`-prefixed form remains preferred.
 			this.#pending.payload.push(text);
@@ -267,7 +270,7 @@ export class HashlineExecutor {
 		// fully empty lines arrive as `blank` tokens.
 		if (text.trim().length === 0) return;
 		// Orphan raw text outside any pending op: pick the most specific
-		// diagnostic so the model sees the actionable hint.
+		// diagnostic so the user sees the actionable hint.
 		if (isDeleteOpWithPayload(text)) {
 			throw new Error(
 				`line ${lineNum}: ${HL_OP_DELETE} deletes only. Payload is forbidden after ${HL_OP_DELETE}; use ${HL_OP_REPLACE} to replace.`,
@@ -328,14 +331,14 @@ export class HashlineExecutor {
 /**
  * Drive a full hashline diff through the tokenizer + executor pipeline and
  * return the resulting edits plus any parse-time warnings. This is the
- * convenience entry point most callers want; reach for {@link
- * HashlineTokenizer}/{@link HashlineExecutor} directly only when you need
- * streaming feeds, cross-section state, or custom token handling.
+ * convenience entry point most callers want; reach for {@link Tokenizer} /
+ * {@link Executor} directly only when you need streaming feeds, cross-section
+ * state, or custom token handling.
  */
-export function parseHashline(diff: string): { edits: HashlineEdit[]; warnings: string[] } {
-	const tokenizer = new HashlineTokenizer();
-	const executor = new HashlineExecutor();
-	const drain = (tokens: HashlineToken[]): void => {
+export function parsePatch(diff: string): { edits: Edit[]; warnings: string[] } {
+	const tokenizer = new Tokenizer();
+	const executor = new Executor();
+	const drain = (tokens: Token[]): void => {
 		for (const token of tokens) {
 			if (executor.terminated) return;
 			executor.feed(token);

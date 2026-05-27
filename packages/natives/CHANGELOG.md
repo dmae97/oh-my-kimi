@@ -1,6 +1,12 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `Hashline` class with methods to format headers, parse/apply hashline edits, split inputs, compute diffs, generate previews, and recover from stale hashes
+- Added `HashlineChunker` class to stream UTF-8 text into numbered hashline chunks incrementally
+- Added `HashlineCursorKind`, `HashlineEditKind`, and `HashlineTokenKind` exports for hashline cursor/edit/token discrimination
+- Added `unfoldUntilLines` and `unfoldLimitLines` options to `SummaryOptions` to control BFS unfold visibility with an optional hard cap
 
 ## [15.5.0] - 2026-05-26
 

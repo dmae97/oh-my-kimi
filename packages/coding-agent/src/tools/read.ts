@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { computeFileHash, formatHashlineHeader, formatNumberedLine, formatNumberedLines } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { glob, type SummaryResult, summarizeCode } from "@oh-my-pi/pi-natives";
@@ -8,11 +9,10 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { getFileReadCache } from "../edit/file-read-cache";
+import { getFileSnapshotStore } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { computeFileHash, formatHashlineHeader, formatNumberedLine, formatNumberedLines } from "../hashline/hash";
 import { InternalUrlRouter } from "../internal-urls";
 import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
@@ -147,7 +147,7 @@ function recordHashlineSnapshot(
 	context: HashlineHeaderContext | undefined,
 ): void {
 	if (!context || !absolutePath || !path.isAbsolute(absolutePath)) return;
-	getFileReadCache(session).recordContiguous(absolutePath, 1, context.fullText.split("\n"), {
+	getFileSnapshotStore(session).recordContiguous(absolutePath, 1, context.fullText.split("\n"), {
 		fullText: context.fullText,
 		fileHash: context.fileHash,
 	});
@@ -1059,7 +1059,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 
 			if (collectedLines.length > 0) {
-				getFileReadCache(this.session).recordContiguous(
+				getFileSnapshotStore(this.session).recordContiguous(
 					absolutePath,
 					range.startLine,
 					collectedLines,
@@ -1863,7 +1863,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						: undefined;
 
 					if (collectedLines.length > 0 && !firstLineExceedsLimit) {
-						getFileReadCache(this.session).recordContiguous(
+						getFileSnapshotStore(this.session).recordContiguous(
 							absolutePath,
 							startLineDisplay,
 							collectedLines,

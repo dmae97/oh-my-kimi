@@ -13,22 +13,21 @@
  * the injected `editMode` rather than probing argument shape.
  */
 
-import { sanitizeText } from "@oh-my-pi/pi-utils";
 import {
 	ABORT_MARKER,
 	BEGIN_PATCH_MARKER,
-	computeHashlineDiff,
-	computeHashlineSectionDiff,
 	containsRecognizableHashlineOperations,
 	END_PATCH_MARKER,
-	type HashlineInputSection,
-	HashlineTokenizer,
-	splitHashlineInputs,
-} from "../hashline";
+	type PatchSection as HashlineInputSection,
+	Patch as HashlinePatch,
+	Tokenizer as HashlineTokenizer,
+} from "@oh-my-pi/hashline";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../tools/render-utils";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { computeEditDiff, type DiffError, type DiffResult } from "./diff";
+import { computeHashlineDiff, computeHashlineSectionDiff } from "./hashline/diff";
 import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
 import { computePatchDiff, type PatchEditEntry } from "./modes/patch";
 import type { ReplaceEditEntry } from "./modes/replace";
@@ -438,9 +437,9 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		}
 		ctx.signal.throwIfAborted();
 
-		let sections: HashlineInputSection[];
+		let sections: readonly HashlineInputSection[];
 		try {
-			sections = splitHashlineInputs(input, { cwd: ctx.cwd, path: args.path });
+			sections = HashlinePatch.parse(input, { cwd: ctx.cwd, path: args.path }).sections;
 		} catch {
 			// Single-section fallback keeps the original error rendering for the
 			// "haven't typed `¶ PATH` yet" case.

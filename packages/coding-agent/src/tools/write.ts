@@ -1,12 +1,12 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { stripHashlinePrefixes } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { stripHashlinePrefixes } from "../edit";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import { parseInternalUrl } from "../internal-urls/parse";
@@ -487,7 +487,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const batchRequest = getLspBatchRequest(context?.toolCall);
 		const diagnostics = await this.#writethrough(absolutePath, newContent, signal, undefined, batchRequest);
 		invalidateFsScanAfterWrite(absolutePath);
-		this.session.fileReadCache?.invalidate(absolutePath);
+		this.session.fileSnapshotStore?.invalidate(absolutePath);
 		this.session.conflictHistory?.invalidate(entry.id);
 
 		const range =
@@ -609,7 +609,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 			const diagnostics = await this.#writethrough(absolutePath, text, signal, undefined, batchRequest);
 			invalidateFsScanAfterWrite(absolutePath);
-			this.session.fileReadCache?.invalidate(absolutePath);
+			this.session.fileSnapshotStore?.invalidate(absolutePath);
 			for (const entry of fileEntries) history.invalidate(entry.id);
 			succeededFiles.push({ displayPath: sample.displayPath, count: fileEntries.length });
 			totalResolvedIds += fileEntries.length;

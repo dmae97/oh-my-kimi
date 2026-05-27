@@ -1,4 +1,18 @@
-import { ABORT_MARKER, BEGIN_PATCH_MARKER, END_PATCH_MARKER } from "./constants";
+/**
+ * Stateful, line-oriented classifier for hashline diff text.
+ *
+ * The {@link Tokenizer} can be fed in chunks ({@link Tokenizer.feed}/{@link
+ * Tokenizer.end}) for streaming use, or in one shot ({@link
+ * Tokenizer.tokenizeAll}). Each emitted token carries its 1-indexed source
+ * line number so downstream consumers (parser, validators, error messages)
+ * can refer back to the input precisely.
+ *
+ * The tokenizer is intentionally permissive about decorations and prefixes
+ * the model may echo back from `read`/`search` output — leading `*`/`>`/`-`
+ * markers, CR-terminated lines, leading whitespace before line numbers, and
+ * so on are all stripped before classification.
+ */
+
 import {
 	describeAnchorExamples,
 	HL_FILE_HASH_SEP,
@@ -8,8 +22,9 @@ import {
 	HL_OP_INSERT_BEFORE,
 	HL_OP_REPLACE,
 	HL_PAYLOAD_PREFIX,
-} from "./hash";
-import type { Anchor, HashlineCursor } from "./types";
+} from "./format";
+import { ABORT_MARKER, BEGIN_PATCH_MARKER, END_PATCH_MARKER } from "./messages";
+import type { Anchor, Cursor, ParsedRange } from "./types";
 
 const CHAR_LINE_FEED = 10;
 const CHAR_CARRIAGE_RETURN = 13;
@@ -61,9 +76,9 @@ function markerLineEquals(line: string, marker: string): boolean {
  * empty line that callers may rely on for explicit blank payloads. CRLF pairs
  * are normalized to a single line break.
  *
- * This mirrors the line-splitting performed by {@link HashlineTokenizer}'s
- * streaming drain loop and is kept for non-streaming callers that prefer
- * a single-shot split.
+ * This mirrors the line-splitting performed by {@link Tokenizer}'s streaming
+ * drain loop and is kept for non-streaming callers that prefer a single-shot
+ * split.
  */
 export function splitHashlineLines(text: string): string[] {
 	if (text.length === 0) return [""];
@@ -86,7 +101,7 @@ export function splitHashlineLines(text: string): string[] {
 	return lines;
 }
 
-export function cloneCursor(cursor: HashlineCursor): HashlineCursor {
+export function cloneCursor(cursor: Cursor): Cursor {
 	if (cursor.kind === "before_anchor") return { kind: "before_anchor", anchor: { ...cursor.anchor } };
 	if (cursor.kind === "after_anchor") return { kind: "after_anchor", anchor: { ...cursor.anchor } };
 	return cursor;
@@ -134,11 +149,6 @@ export function parseLid(raw: string, lineNum: number): Anchor {
 	return { line: number.line };
 }
 
-export interface ParsedRange {
-	start: Anchor;
-	end: Anchor;
-}
-
 interface RangeScan {
 	range: ParsedRange;
 	nextIndex: number;
@@ -172,7 +182,7 @@ function startsWithWord(line: string, index: number, end: number, word: string):
 	return true;
 }
 
-function parseInsertTarget(raw: string, lineNum: number, kind: "before" | "after"): HashlineCursor {
+function parseInsertTarget(raw: string, lineNum: number, kind: "before" | "after"): Cursor {
 	const end = trimEndIndex(raw);
 	const targetStart = skipDecoratedAnchorPrefix(raw, end);
 
@@ -194,7 +204,7 @@ function scanInlineBody(line: string, index: number): string | undefined {
 
 interface ParsedInsertOp {
 	kind: "insert";
-	cursor: HashlineCursor;
+	cursor: Cursor;
 	inlineBody: string | undefined;
 }
 
@@ -272,9 +282,10 @@ function tryParseOp(line: string): ParsedOp | null {
 }
 
 /**
- * Strict header scan: `¶+` prefix, optional whitespace, path body that excludes
- * whitespace, `#`, and `¶`, optional `#[0-9a-f]{4}` hash suffix, optional
- * trailing whitespace. Returns `null` when any byte deviates from the shape.
+ * Strict header scan: `¶+` prefix, optional whitespace, path body that
+ * excludes whitespace, `#`, and `¶`, optional `#[0-9a-f]{4}` hash suffix,
+ * optional trailing whitespace. Returns `null` when any byte deviates from
+ * the shape.
  */
 function tryParseHeader(line: string): { path: string; fileHash?: string } | null {
 	const end = trimEndIndex(line);
@@ -313,9 +324,9 @@ function tryParseHeader(line: string): { path: string; fileHash?: string } | nul
 }
 
 /**
- * Returns true when the line scans as `LINE!payload` (delete sigil followed by
- * additional content). The executor uses this for the dedicated "deletes only"
- * diagnostic, separate from the standard "unrecognized op" path.
+ * Returns true when the line scans as `LINE!payload` (delete sigil followed
+ * by additional content). The parser uses this for the dedicated "deletes
+ * only" diagnostic, separate from the standard "unrecognized op" path.
  */
 export function isDeleteOpWithPayload(line: string): boolean {
 	const range = scanRange(line, line.length);
@@ -332,19 +343,19 @@ interface TokenBase {
 	lineNum: number;
 }
 
-export type HashlineToken =
+export type Token =
 	| (TokenBase & { kind: "blank" })
 	| (TokenBase & { kind: "envelope-begin" })
 	| (TokenBase & { kind: "envelope-end" })
 	| (TokenBase & { kind: "abort" })
 	| (TokenBase & { kind: "header"; path: string; fileHash?: string })
-	| (TokenBase & { kind: "op-insert"; cursor: HashlineCursor; inlineBody: string | undefined })
+	| (TokenBase & { kind: "op-insert"; cursor: Cursor; inlineBody: string | undefined })
 	| (TokenBase & { kind: "op-replace"; range: ParsedRange; inlineBody: string | undefined })
 	| (TokenBase & { kind: "op-delete"; range: ParsedRange; trailingPayload: boolean })
 	| (TokenBase & { kind: "payload"; text: string })
 	| (TokenBase & { kind: "raw"; text: string });
 
-function classifyLine(line: string, lineNum: number): HashlineToken {
+function classifyLine(line: string, lineNum: number): Token {
 	if (isEmptyLine(line)) return { kind: "blank", lineNum };
 	if (markerLineEquals(line, BEGIN_PATCH_MARKER)) return { kind: "envelope-begin", lineNum };
 	if (markerLineEquals(line, END_PATCH_MARKER)) return { kind: "envelope-end", lineNum };
@@ -377,14 +388,14 @@ function classifyLine(line: string, lineNum: number): HashlineToken {
 }
 
 /**
- * Stateful, line-oriented classifier for hashline diff text. Use the streaming
- * {@link feed}/{@link end} pair to ingest text in chunks (each completed line
- * emits exactly one token; a trailing partial line stays buffered until the
- * next chunk or {@link end}). Use the stateless {@link tokenize}/predicate
- * methods for callers that already hold whole lines and only need
- * classification without buffering.
+ * Stateful, line-oriented classifier for hashline diff text. Use the
+ * streaming {@link feed}/{@link end} pair to ingest text in chunks (each
+ * completed line emits exactly one token; a trailing partial line stays
+ * buffered until the next chunk or {@link end}). Use the stateless
+ * {@link tokenize}/predicate methods for callers that already hold whole
+ * lines and only need classification without buffering.
  */
-export class HashlineTokenizer {
+export class Tokenizer {
 	#buffer = "";
 	#nextLineNum = 1;
 	#closed = false;
@@ -396,8 +407,8 @@ export class HashlineTokenizer {
 	 * `feed`/`end` call so CRLF pairs that straddle chunk boundaries are
 	 * still normalized correctly.
 	 */
-	feed(chunk: string): HashlineToken[] {
-		if (this.#closed) throw new Error("HashlineTokenizer is closed; call reset() before reusing.");
+	feed(chunk: string): Token[] {
+		if (this.#closed) throw new Error("Tokenizer is closed; call reset() before reusing.");
 		if (chunk.length === 0) return [];
 		this.#buffer = this.#buffer ? this.#buffer + chunk : chunk;
 		return this.#drainCompleteLines();
@@ -408,7 +419,7 @@ export class HashlineTokenizer {
 	 * a trailing newline) and mark the tokenizer closed. Calling `end` a
 	 * second time returns `[]`; reuse requires `reset`.
 	 */
-	end(): HashlineToken[] {
+	end(): Token[] {
 		if (this.#closed) return [];
 		this.#closed = true;
 		const buf = this.#buffer;
@@ -428,7 +439,7 @@ export class HashlineTokenizer {
 	}
 
 	/** Convenience: feed an entire text and immediately flush. */
-	tokenizeAll(text: string): HashlineToken[] {
+	tokenizeAll(text: string): Token[] {
 		this.reset();
 		const first = this.feed(text);
 		const last = this.end();
@@ -436,7 +447,7 @@ export class HashlineTokenizer {
 	}
 
 	/** Stateless one-shot classification. Does not touch the streaming buffer. */
-	tokenize(line: string, lineNum = 0): HashlineToken {
+	tokenize(line: string, lineNum = 0): Token {
 		return classifyLine(line, lineNum);
 	}
 
@@ -456,8 +467,8 @@ export class HashlineTokenizer {
 		);
 	}
 
-	#drainCompleteLines(): HashlineToken[] {
-		const tokens: HashlineToken[] = [];
+	#drainCompleteLines(): Token[] {
+		const tokens: Token[] = [];
 		const buf = this.#buffer;
 		let start = 0;
 		for (let index = 0; index < buf.length; index++) {
@@ -471,3 +482,5 @@ export class HashlineTokenizer {
 		return tokens;
 	}
 }
+
+export type { ParsedRange } from "./types";

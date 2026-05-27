@@ -1,13 +1,22 @@
-import { formatNumberedLine } from "./hash";
-import type { HashlineStreamOptions } from "./types";
+/**
+ * Lazily format a stream of UTF-8 bytes into hashline-numbered lines, yielded
+ * as bounded text chunks. Used to send `read`-style file content to consumers
+ * without materializing the full file at once.
+ *
+ * Each yielded chunk is at most {@link StreamOptions.maxChunkLines} lines and
+ * at most {@link StreamOptions.maxChunkBytes} UTF-8 bytes (whichever fires
+ * first).
+ */
+import { formatNumberedLine } from "./format";
+import type { StreamOptions } from "./types";
 
-interface ResolvedHashlineStreamOptions {
+interface ResolvedStreamOptions {
 	startLine: number;
 	maxChunkLines: number;
 	maxChunkBytes: number;
 }
 
-function resolveHashlineStreamOptions(options: HashlineStreamOptions): ResolvedHashlineStreamOptions {
+function resolveStreamOptions(options: StreamOptions): ResolvedStreamOptions {
 	return {
 		startLine: options.startLine ?? 1,
 		maxChunkLines: options.maxChunkLines ?? 200,
@@ -15,12 +24,12 @@ function resolveHashlineStreamOptions(options: HashlineStreamOptions): ResolvedH
 	};
 }
 
-interface HashlineChunkEmitter {
+interface ChunkEmitter {
 	pushLine: (line: string) => string[];
 	flush: () => string | undefined;
 }
 
-function createHashlineChunkEmitter(options: ResolvedHashlineStreamOptions): HashlineChunkEmitter {
+function createChunkEmitter(options: ResolvedStreamOptions): ChunkEmitter {
 	let lineNumber = options.startLine;
 	let outLines: string[] = [];
 	let outBytes = 0;
@@ -83,14 +92,14 @@ async function* bytesFromReadableStream(stream: ReadableStream<Uint8Array>): Asy
 	}
 }
 
-export async function* streamHashLinesFromUtf8(
+export async function* streamHashLines(
 	source: ReadableStream<Uint8Array> | AsyncIterable<Uint8Array>,
-	options: HashlineStreamOptions = {},
+	options: StreamOptions = {},
 ): AsyncGenerator<string> {
-	const resolved = resolveHashlineStreamOptions(options);
+	const resolved = resolveStreamOptions(options);
 	const decoder = new TextDecoder("utf-8");
 	const chunks = isReadableStream(source) ? bytesFromReadableStream(source) : source;
-	const emitter = createHashlineChunkEmitter(resolved);
+	const emitter = createChunkEmitter(resolved);
 
 	let pending = "";
 	let sawAnyLine = false;

@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
+### Breaking Changes
+
+- Removed the package root `hashline` export so imports from the top-level entrypoint can no longer access `hashline` helpers directly
+
 ### Added
 
 - Added `read.summarize.minTotalLines` setting (default 100) to set the minimum file length that triggers read summarization
@@ -8,6 +13,7 @@
 
 ### Changed
 
+- Changed multi-section hashline `edit` execution to defer LSP diagnostics flushing until the final section is written
 - Changed read to return verbatim contents for files shorter than `read.summarize.minTotalLines` instead of summarizing them
 - Changed `search` path line-range filtering to include only matches and context lines that fall inside the requested ranges
 

@@ -1,8 +1,17 @@
-import { MISMATCH_CONTEXT } from "./constants";
-import { formatNumberedLine, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./hash";
+/**
+ * Error type raised when a section's file-hash does not match the live file
+ * content and recovery is unavailable / has failed.
+ *
+ * Carries enough context to render a useful diagnostic: the anchored lines
+ * plus a couple of lines of surrounding context. The {@link MismatchError}
+ * formats this into a message at construction time.
+ */
+import { formatNumberedLine, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
+import { MISMATCH_CONTEXT } from "./messages";
 
 const LINE_REF_RE = /^\s*[>+\-*]*\s*(\d+)(?::.*)?\s*$/;
 
+/** Format the required-shape diagnostic shown when a line reference is malformed. */
 export function formatFullAnchorRequirement(raw?: string): string {
 	const received = raw === undefined ? "" : ` Received ${JSON.stringify(raw)}.`;
 	return (
@@ -11,6 +20,7 @@ export function formatFullAnchorRequirement(raw?: string): string {
 	);
 }
 
+/** Parse a decorated bare line-number anchor like `42`, `*42:foo`, ` > 7`. */
 export function parseTag(ref: string): { line: number } {
 	const match = ref.match(LINE_REF_RE);
 	if (!match) {
@@ -21,7 +31,7 @@ export function parseTag(ref: string): { line: number } {
 	return { line };
 }
 
-export interface HashlineMismatchDetails {
+export interface MismatchDetails {
 	path?: string;
 	expectedFileHash: string;
 	actualFileHash: string;
@@ -40,16 +50,22 @@ function getMismatchDisplayLines(anchorLines: readonly number[], fileLines: stri
 	return [...displayLines].sort((a, b) => a - b);
 }
 
-export class HashlineMismatchError extends Error {
+/**
+ * Raised when a hashline section's file hash doesn't match the live file's
+ * content (and recovery, if configured, declined the merge). Carries the
+ * file lines plus anchored lines so renderers can produce a richer
+ * diagnostic via {@link MismatchError.displayMessage}.
+ */
+export class MismatchError extends Error {
 	readonly path: string | undefined;
 	readonly expectedFileHash: string;
 	readonly actualFileHash: string;
 	readonly fileLines: string[];
 	readonly anchorLines: readonly number[];
 
-	constructor(details: HashlineMismatchDetails) {
-		super(HashlineMismatchError.formatMessage(details));
-		this.name = "HashlineMismatchError";
+	constructor(details: MismatchDetails) {
+		super(MismatchError.formatMessage(details));
+		this.name = "MismatchError";
 		this.path = details.path;
 		this.expectedFileHash = details.expectedFileHash;
 		this.actualFileHash = details.actualFileHash;
@@ -58,7 +74,7 @@ export class HashlineMismatchError extends Error {
 	}
 
 	get displayMessage(): string {
-		return HashlineMismatchError.formatDisplayMessage({
+		return MismatchError.formatDisplayMessage({
 			path: this.path,
 			expectedFileHash: this.expectedFileHash,
 			actualFileHash: this.actualFileHash,
@@ -67,7 +83,7 @@ export class HashlineMismatchError extends Error {
 		});
 	}
 
-	static rejectionHeader(details: HashlineMismatchDetails): string[] {
+	static rejectionHeader(details: MismatchDetails): string[] {
 		const pathText = details.path ? ` for ${details.path}` : "";
 		return [
 			`Edit rejected${pathText}: file changed between read and edit.`,
@@ -75,13 +91,13 @@ export class HashlineMismatchError extends Error {
 		];
 	}
 
-	static formatDisplayMessage(details: HashlineMismatchDetails): string {
-		return HashlineMismatchError.formatMessage(details);
+	static formatDisplayMessage(details: MismatchDetails): string {
+		return MismatchError.formatMessage(details);
 	}
 
-	static formatMessage(details: HashlineMismatchDetails): string {
+	static formatMessage(details: MismatchDetails): string {
 		const anchorSet = new Set(details.anchorLines ?? []);
-		const lines = HashlineMismatchError.rejectionHeader(details);
+		const lines = MismatchError.rejectionHeader(details);
 		const displayLines = getMismatchDisplayLines(details.anchorLines ?? [], details.fileLines);
 		if (displayLines.length === 0) return lines.join("\n");
 		lines.push("");
@@ -97,6 +113,7 @@ export class HashlineMismatchError extends Error {
 	}
 }
 
+/** Throws when the line reference is out of bounds for the given file. */
 export function validateLineRef(ref: { line: number }, fileLines: string[]): void {
 	if (ref.line < 1 || ref.line > fileLines.length) {
 		throw new Error(`Line ${ref.line} does not exist (file has ${fileLines.length} lines)`);

@@ -1,15 +1,15 @@
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { computeFileHash, formatHashlineHeader } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type GrepMatch, GrepOutputMode, type GrepResult, grep } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { getFileReadCache } from "../edit/file-read-cache";
+import { getFileSnapshotStore } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { computeFileHash, formatHashlineHeader } from "../hashline/hash";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
 import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../session/streaming-output";
@@ -57,7 +57,9 @@ const searchSchema = z
 		pattern: z.string().describe("regex pattern"),
 		paths: z
 			.union([searchPathEntrySchema, z.array(searchPathEntrySchema).min(1)])
-			.describe("file, directory, glob, internal URL, or array of those to search; append `:<lines>` to scope a file to specific line ranges"),
+			.describe(
+				"file, directory, glob, internal URL, or array of those to search; append `:<lines>` to scope a file to specific line ranges",
+			),
 		i: z.boolean().optional().describe("case-insensitive search"),
 		gitignore: z.boolean().optional().describe("respect gitignore"),
 		skip: z
@@ -148,11 +150,7 @@ function parsePathSpecs(rawEntries: readonly string[]): SearchPathSpec[] {
 	return specs;
 }
 
-function mergeRangesInto(
-	map: Map<string, LineRange[]>,
-	absKey: string,
-	ranges: readonly LineRange[],
-): void {
+function mergeRangesInto(map: Map<string, LineRange[]>, absKey: string, ranges: readonly LineRange[]): void {
 	// Concat-without-merge is correct: `isLineInRanges` scans linearly, so
 	// duplicates/overlaps only cost a few extra comparisons per match.
 	const existing = map.get(absKey);
@@ -352,9 +350,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 							throw new ToolError(`Path not found for line-range selector: ${spec.original}`);
 						}
 						if (!stats.isFile()) {
-							throw new ToolError(
-								`Line-range selector requires a single file: ${spec.original} is a directory`,
-							);
+							throw new ToolError(`Line-range selector requires a single file: ${spec.original} is a directory`);
 						}
 						mergeRangesInto(rangesByAbsPath, absKey, spec.ranges);
 					} else {
@@ -675,7 +671,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 					}
 					if (cacheEntries.length > 0 && hashContext) {
-						getFileReadCache(this.session).recordSparse(hashContext.absolutePath, cacheEntries, {
+						getFileSnapshotStore(this.session).recordSparse(hashContext.absolutePath, cacheEntries, {
 							fileHash: hashContext.fileHash,
 						});
 					}
