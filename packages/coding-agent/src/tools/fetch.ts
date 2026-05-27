@@ -562,9 +562,22 @@ function parseFeedToMarkdown(content: string, maxItems = 10): string {
 }
 
 /**
- * Render HTML to markdown using Parallel, jina, trafilatura, lynx (in order of preference)
+ * Cap on any single remote reader-mode request (Parallel, Jina) so a stalled
+ * remote endpoint cannot consume the whole reader-mode budget and starve the
+ * local fallback renderers (trafilatura, lynx, native). See #1449.
  */
-async function renderHtmlToText(
+const REMOTE_READER_MAX_MS = 10_000;
+
+/**
+ * Render HTML to markdown using Parallel, jina, trafilatura, lynx, then the
+ * in-process native converter. The overall `timeout` budget bounds the call,
+ * but remote reader requests are additionally capped at `REMOTE_READER_MAX_MS`
+ * so that a hung remote endpoint cannot prevent local fallbacks from running.
+ * Only a real `userSignal` cancellation aborts the chain — remote per-attempt
+ * timeouts and the overall reader-mode timeout still allow later renderers
+ * (especially the purely-local native converter) to be tried.
+ */
+export async function renderHtmlToText(
 	url: string,
 	html: string,
 	timeout: number,
@@ -572,14 +585,15 @@ async function renderHtmlToText(
 	userSignal: AbortSignal | undefined,
 	storage: AgentStorage | null,
 ): Promise<{ content: string; ok: boolean; method: string }> {
-	const signal = ptree.combineSignals(userSignal, timeout * 1000);
+	const overallSignal = ptree.combineSignals(userSignal, timeout * 1000);
 	const execOptions = {
 		mode: "group" as const,
 		allowNonZero: true,
 		allowAbort: true,
 		stderr: "full" as const,
-		signal,
+		signal: overallSignal,
 	};
+	const remoteBudgetMs = Math.min(timeout * 1000, REMOTE_READER_MAX_MS);
 
 	// Try Parallel extract first when credentials are configured
 	if (settings.get("providers.parallelFetch") && findParallelApiKey(storage)) {
@@ -590,7 +604,7 @@ async function renderHtmlToText(
 					objective: "Extract the main content",
 					excerpts: true,
 					fullContent: false,
-					signal,
+					signal: ptree.combineSignals(userSignal, remoteBudgetMs),
 				},
 				storage,
 			);
@@ -602,17 +616,18 @@ async function renderHtmlToText(
 				}
 			}
 		} catch {
-			// Parallel extract failed, continue to next method
-			signal?.throwIfAborted();
+			// Parallel extract failed or stalled; honour real cancellation only.
+			userSignal?.throwIfAborted();
 		}
 	}
 
-	// Try jina first (reader API)
+	// Try jina reader API with its own sub-budget so a stall cannot starve
+	// later fallbacks (#1449).
 	try {
 		const jinaUrl = `https://r.jina.ai/${url}`;
 		const response = await fetch(jinaUrl, {
 			headers: { Accept: "text/markdown" },
-			signal,
+			signal: ptree.combineSignals(userSignal, remoteBudgetMs),
 		});
 		if (response.ok) {
 			const content = await response.text();
@@ -621,37 +636,50 @@ async function renderHtmlToText(
 			}
 		}
 	} catch {
-		// Jina failed, continue to next method
-		signal?.throwIfAborted();
+		// Jina failed or stalled; honour real cancellation only.
+		userSignal?.throwIfAborted();
 	}
 
 	// Try trafilatura (auto-install via uv/pip)
-	const trafilatura = await ensureTool("trafilatura", { signal, silent: true });
-	if (trafilatura) {
-		const result = await ptree.exec([trafilatura, "-u", url, "--output-format", "markdown"], execOptions);
-		if (result.ok && result.stdout.trim().length > 100) {
-			return { content: result.stdout, ok: true, method: "trafilatura" };
+	try {
+		const trafilatura = await ensureTool("trafilatura", { signal: overallSignal, silent: true });
+		if (trafilatura) {
+			const result = await ptree.exec([trafilatura, "-u", url, "--output-format", "markdown"], execOptions);
+			if (result.ok && result.stdout.trim().length > 100) {
+				return { content: result.stdout, ok: true, method: "trafilatura" };
+			}
 		}
+	} catch {
+		// trafilatura unavailable or stalled; continue to next method.
+		userSignal?.throwIfAborted();
 	}
 
 	// Try lynx (can't auto-install, system package)
-	const lynx = hasCommand("lynx");
-	if (lynx) {
-		const result = await ptree.exec(["lynx", "-dump", "-nolist", "-width", "250", url], execOptions);
-		if (result.ok) {
-			return { content: result.stdout, ok: true, method: "lynx" };
+	try {
+		const lynx = hasCommand("lynx");
+		if (lynx) {
+			const result = await ptree.exec(["lynx", "-dump", "-nolist", "-width", "250", url], execOptions);
+			if (result.ok) {
+				return { content: result.stdout, ok: true, method: "lynx" };
+			}
 		}
+	} catch {
+		// lynx failed or stalled; continue to native converter.
+		userSignal?.throwIfAborted();
 	}
 
-	// Fall back to native converter (fastest, no network/subprocess)
+	// Fall back to native converter (purely local, no network/subprocess).
+	// Always attempted: even if remote renderers and subprocesses were aborted
+	// by the overall reader-mode timeout, this still works on already-loaded
+	// HTML (#1449).
 	try {
 		const content = await htmlToMarkdown(html, { cleanContent: true });
 		if (content.trim().length > 100 && !isLowQualityOutput(content)) {
 			return { content, ok: true, method: "native" };
 		}
 	} catch {
-		// Native converter failed, continue to next method
-		signal?.throwIfAborted();
+		// Native converter failed; nothing else to try.
+		userSignal?.throwIfAborted();
 	}
 	return { content: "", ok: false, method: "none" };
 }
