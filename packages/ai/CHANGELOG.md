@@ -13,6 +13,10 @@
 - `OpenAIResponsesOptions` gains four optional, provider-agnostic fields that adapter wrappers can use to compose provider-specific behavior on top of the generic transport: `includeEncryptedReasoning` (gates `include: ["reasoning.encrypted_content"]`; default `true`, preserves current behavior), `filterReasoningHistory` (strips replayed `type: "reasoning"` items from conversation history; default `false`), `headers` (merged onto the client's default headers), and `extraBody` (merged into the request payload).
 - The existing `XAI_API_KEY` path is unchanged — it continues to use the OpenAI-completions transport.
 
+### Fixed
+
+- Fixed OpenRouter DeepSeek V4 tool-call follow-up requests replaying normalized `reasoning` as-is instead of DeepSeek's required `reasoning_content`, which caused HTTP 400 errors in thinking mode. ([#1445](https://github.com/can1357/oh-my-pi/issues/1445))
+
 ## [15.5.6] - 2026-05-27
 ### Added
 

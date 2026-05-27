@@ -242,6 +242,31 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 			expect(assistant).toBeDefined();
 			expect(Reflect.get(assistant as object, "reasoning_content")).toBe("I need to read the file first.");
 		});
+
+		it("normalizes OpenRouter reasoning deltas to DeepSeek reasoning_content on replay", () => {
+			const model = getBundledModel("openrouter", "deepseek/deepseek-v4-pro") as Model<"openai-completions">;
+			const compat = detectCompat(model);
+			expect(compat.requiresReasoningContentForToolCalls).toBe(true);
+			expect(compat.allowsSyntheticReasoningContentForToolCalls).toBe(false);
+
+			const msg = assistantToolCall(model, [
+				{
+					type: "thinking",
+					thinking: "I should inspect the requested file.",
+					thinkingSignature: "reasoning",
+				} as ThinkingContent,
+				{
+					type: "toolCall",
+					id: "call_openrouter_deepseek",
+					name: "read",
+					arguments: { path: "package.json" },
+				} as ToolCall,
+			]);
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			expect(Reflect.get(assistant as object, "reasoning_content")).toBe("I should inspect the requested file.");
+		});
 		it("does not use opaque signature as property name but still sets reasoning_content from thinking text", () => {
 			const model = deepseekModel({
 				provider: "opencode-go",
