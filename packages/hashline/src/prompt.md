@@ -25,22 +25,18 @@ A-B:
 `EOF:` — virtual position after the last line.
 </anchors>
 
-<payload-sigils>
+<sigils>
 `|content` — replace A..B with `content`.
 `↑content` — insert `content` before A.
 `↓content` — insert `content` after B.
-</payload-sigils>
+</sigils>
 
 <semantics>
-- **No payload rows → delete.** `5:` deletes line 5.
-- **Any `|` row → replace.** Delete A..B; insert all `|` rows there.
-- **Only `↑`/`↓` rows → preserve.** Anchor lines stay unchanged.
+- **No payload → delete.** `5:` deletes line 5.
 - **Buckets combine.** `↑` before A, `|` in place, `↓` after B.
 - **Bucket order ignores interleaving.** Output order = all `↑`, then `|`/original, then all `↓`.
 - **Order within a bucket is preserved.** Two `↑` rows stack top-down.
-- **Blank payload rows are explicit.** Bare `|`, `↑`, or `↓` writes one blank line.
-- **BOF/EOF only insert.** `↑` and `↓` are equivalent there; `|` is invalid.
-- **Escape leading payload sigils by doubling.** `||x` writes `|x`; `↑↑x` writes `↑x`; `↓↓x` writes `↓x`.
+- **Blank payload = explicit.** Bare `|`, `↑`, or `↓` writes one blank line.
 - **Line numbers are frozen.** Later anchors still reference pre-edit lines.
 </semantics>
 
@@ -78,6 +74,7 @@ A-B:
 <common-failures>
 - **NEVER use inline payload.** `5:content` is invalid; write `5:` then `|content`.
 - **Do not repeat preserved lines.** If line 5 should survive, omit `|`.
+- **`↑`/`↓` payloads are new bytes only.** Never echo the anchor or a neighbor line — that line already exists; copying it into a `↓` row appends a duplicate.
 - **Do not echo read gutters.** `84:content` is not payload.
 - **Do not replay past B.** Stop before B+1; widen the anchor if B+1 changes.
 - **NEVER fabricate file hashes.** Missing? Re-`read`.
@@ -97,6 +94,15 @@ A-B:
 # RIGHT — no `|`; line 5 survives automatically.
 5:
 ↑const Y = X;
+
+# WRONG — echoing the anchor into a ↓ payload duplicates it.
+# Line 5 already contains `const X = 1;`.
+5:
+↓const X = 1;
+↓const Y = 2;
+# RIGHT — payload is only the new line; the anchor survives automatically.
+5:
+↓const Y = 2;
 
 # WRONG — read-output gutters inside payload.
 5-6:
