@@ -17,6 +17,9 @@ const originalCodexWebSocketRetryDelayMs = Bun.env.PI_CODEX_WEBSOCKET_RETRY_DELA
 const originalCodexWebSocketV2 = Bun.env.PI_CODEX_WEBSOCKET_V2;
 const originalCodexWebSocketIdleTimeoutMs = Bun.env.PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS;
 const originalCodexWebSocketFirstEventTimeoutMs = Bun.env.PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS;
+const originalCodexWebSocketPingIntervalMs = Bun.env.PI_CODEX_WEBSOCKET_PING_INTERVAL_MS;
+const originalCodexWebSocketPongTimeoutMs = Bun.env.PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS;
+const originalCodexWebSocketMessageQueueCapacity = Bun.env.PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY;
 
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -35,6 +38,9 @@ afterEach(() => {
 	restoreEnv("PI_CODEX_WEBSOCKET_V2", originalCodexWebSocketV2);
 	restoreEnv("PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS", originalCodexWebSocketIdleTimeoutMs);
 	restoreEnv("PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS", originalCodexWebSocketFirstEventTimeoutMs);
+	restoreEnv("PI_CODEX_WEBSOCKET_PING_INTERVAL_MS", originalCodexWebSocketPingIntervalMs);
+	restoreEnv("PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS", originalCodexWebSocketPongTimeoutMs);
+	restoreEnv("PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY", originalCodexWebSocketMessageQueueCapacity);
 	vi.restoreAllMocks();
 });
 
@@ -413,6 +419,101 @@ describe("openai-codex streaming", () => {
 			expect(event.raw[2]).toBe(`data: ${event.data}`);
 			expect(JSON.parse(event.data)).toMatchObject({ type: event.event });
 		}
+	});
+
+	it("sends websocket protocol pings while the connection is open", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		Bun.env.PI_CODEX_WEBSOCKET_PING_INTERVAL_MS = "1";
+		const token = createCodexTestToken();
+		let pingCount = 0;
+
+		class HeartbeatWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+
+			ping(): void {
+				pingCount += 1;
+			}
+
+			send(): void {
+				setTimeout(() => {
+					this.emitCodexResponse({ messageId: "msg_ping", responseId: "resp_ping", text: "Pinged" });
+				}, 10);
+			}
+		}
+		global.WebSocket = HeartbeatWebSocket as unknown as typeof WebSocket;
+
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const result = await streamOpenAICodexResponses(
+			createCodexTestModel("https://chatgpt.com/backend-api"),
+			createCodexTestContext(),
+			{
+				apiKey: token,
+				sessionId: "ws-heartbeat-session",
+				providerSessionState,
+			},
+		).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(pingCount).toBeGreaterThan(0);
+		for (const state of providerSessionState.values()) {
+			state.close();
+		}
+	});
+
+	it("falls back to SSE when the websocket inbound queue overflows", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		Bun.env.PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY = "1";
+		Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET = "0";
+		Bun.env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS = "1";
+		const token = createCodexTestToken();
+		const sse = createCompletedCodexSse("Recovered over SSE");
+		const fetchMock = vi.fn(async () => {
+			return new Response(sse, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		class QueueOverflowWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				this.sendJson({ type: "response.created", response: { id: "resp_overflow" } });
+				this.sendJson({
+					type: "response.output_item.added",
+					item: { type: "message", id: "msg_overflow", role: "assistant", status: "in_progress", content: [] },
+				});
+			}
+		}
+		global.WebSocket = QueueOverflowWebSocket as unknown as typeof WebSocket;
+
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: token,
+			sessionId: "ws-queue-overflow-session",
+			providerSessionState,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.role).toBe("assistant");
+		expect(fetchMock).toHaveBeenCalled();
+		const details = getOpenAICodexTransportDetails(model, {
+			sessionId: "ws-queue-overflow-session",
+			providerSessionState,
+		});
+		expect(details.lastTransport).toBe("sse");
+		expect(details.websocketDisabled).toBe(true);
+		expect(details.fallbackCount).toBe(1);
 	});
 
 	it("omits request-body headers and replaces stale beta headers for websocket handshakes", async () => {

@@ -41,6 +41,7 @@ import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
+import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
@@ -208,10 +209,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			};
 			const openaiStream = await callWithCopilotModelRetry(
 				async () => {
-					const requestOptions =
-						requestTimeoutMs === undefined
-							? { signal: requestSignal }
-							: { signal: requestSignal, timeout: requestTimeoutMs };
+					const requestOptions = createSdkStreamRequestOptions(requestSignal, requestTimeoutMs);
 					let requestTimeout: NodeJS.Timeout | undefined;
 					if (requestTimeoutMs !== undefined) {
 						requestTimeout = setTimeout(

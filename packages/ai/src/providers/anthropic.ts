@@ -66,6 +66,7 @@ import { notifyProviderResponse } from "../utils/provider-response";
 import { isCopilotTransientModelError } from "../utils/retry";
 import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { spillToDescription } from "../utils/schema/spill";
+import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
 import {
 	buildCopilotDynamicHeaders,
@@ -1123,10 +1124,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			while (true) {
 				activeAbortTracker = createAbortSourceTracker(options?.signal);
 				const { requestSignal } = activeAbortTracker;
-				const requestOptions =
-					requestTimeoutMs === undefined
-						? { signal: requestSignal }
-						: { signal: requestSignal, timeout: requestTimeoutMs };
+				const requestOptions = createSdkStreamRequestOptions(requestSignal, requestTimeoutMs);
 				const anthropicRequest = client.messages.create({ ...params, stream: true }, requestOptions);
 				let streamedReplayUnsafeContent = false;
 

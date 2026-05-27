@@ -93,6 +93,9 @@ const CODEX_DEBUG = $flag("PI_CODEX_DEBUG");
 const CODEX_MAX_RETRIES = 5;
 const CODEX_RETRY_DELAY_MS = 500;
 const CODEX_WEBSOCKET_CONNECT_TIMEOUT_MS = 10000;
+const CODEX_WEBSOCKET_PING_INTERVAL_MS = 10_000;
+const CODEX_WEBSOCKET_PONG_TIMEOUT_MS = 60_000;
+const CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY = 4096;
 /**
  * Steady-state liveness ceiling for the Codex WebSocket transport. Distinct from
  * the OMP-wide stream watchdog removed in #1392: a WebSocket can stay TCP-open
@@ -130,6 +133,24 @@ function isCodexStreamProgressEvent(event: unknown): boolean {
 	if (!event || typeof event !== "object") return false;
 	const type = (event as { type?: unknown }).type;
 	return typeof type === "string" && CODEX_ADDITIONAL_PROGRESS_EVENT_TYPES.has(type);
+}
+
+type CodexWebSocketTimeoutDetails = {
+	lastEventAt: number;
+	lastEventType?: string;
+	lastProgressAt: number;
+	lastProgressEventType?: string;
+};
+
+function createCodexWebSocketTimeoutMessage(reason: string, details: CodexWebSocketTimeoutDetails): string {
+	const now = Date.now();
+	const lastEvent = details.lastEventType
+		? `${details.lastEventType} ${Math.max(0, now - details.lastEventAt)}ms ago`
+		: "none";
+	const lastProgress = details.lastProgressEventType
+		? `${details.lastProgressEventType} ${Math.max(0, now - details.lastProgressAt)}ms ago`
+		: "none";
+	return `${reason} (last event: ${lastEvent}; last progress: ${lastProgress})`;
 }
 
 type CodexTransport = "sse" | "websocket";
@@ -254,6 +275,21 @@ function getCodexWebSocketFirstEventTimeoutMs(): number {
 	);
 }
 
+function getCodexWebSocketPingIntervalMs(): number {
+	return parseCodexNonNegativeInteger($env.PI_CODEX_WEBSOCKET_PING_INTERVAL_MS, CODEX_WEBSOCKET_PING_INTERVAL_MS);
+}
+
+function getCodexWebSocketPongTimeoutMs(): number {
+	return parseCodexNonNegativeInteger($env.PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS, CODEX_WEBSOCKET_PONG_TIMEOUT_MS);
+}
+
+function getCodexWebSocketMessageQueueCapacity(): number {
+	return parseCodexPositiveInteger(
+		$env.PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY,
+		CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY,
+	);
+}
+
 function createCodexProviderSessionState(): CodexProviderSessionState {
 	const state: CodexProviderSessionState = {
 		webSocketSessions: new Map(),
@@ -301,6 +337,10 @@ function isCodexWebSocketRetryableStreamError(error: unknown): boolean {
 		message.includes("websocket closed (") ||
 		message.includes("websocket closed before response completion") ||
 		message.includes("websocket connection is unavailable") ||
+		message.includes("websocket send failed") ||
+		message.includes("websocket ping failed") ||
+		message.includes("websocket pong timeout") ||
+		message.includes("websocket message queue exceeded") ||
 		message.includes("idle timeout waiting for websocket") ||
 		message.includes("timeout waiting for first websocket event") ||
 		message.includes("syntaxerror") ||
@@ -1986,6 +2026,10 @@ class CodexWebSocketConnection {
 	#connectPromise?: Promise<void>;
 	#activeRequest = false;
 	#streamObserver?: (event: RawSseEvent) => void;
+	#heartbeatInterval: NodeJS.Timeout | undefined;
+	#removePongListener?: () => void;
+	#lastPongAt = 0;
+	#observedPong = false;
 
 	constructor(url: string, headers: Record<string, string>, options: CodexWebSocketConnectionOptions) {
 		this.#url = url;
@@ -2009,6 +2053,7 @@ class CodexWebSocketConnection {
 			this.#socket.close(1000, reason);
 		}
 		this.#socket = null;
+		this.#stopHeartbeat();
 	}
 
 	async connect(signal?: AbortSignal): Promise<void> {
@@ -2059,6 +2104,7 @@ class CodexWebSocketConnection {
 				settled = true;
 				clearPending();
 				this.#captureHandshakeHeaders(socket, event);
+				this.#startHeartbeat(socket);
 				resolve();
 			}
 		};
@@ -2079,6 +2125,7 @@ class CodexWebSocketConnection {
 		};
 		socket.onclose = event => {
 			this.#socket = null;
+			this.#stopHeartbeat();
 			if (!settled) {
 				settled = true;
 				clearPending();
@@ -2147,23 +2194,48 @@ class CodexWebSocketConnection {
 		try {
 			const requestPayload = JSON.stringify(request);
 			notifyCodexWebSocketOutbound(onSseEvent, request, requestPayload);
-			this.#socket.send(requestPayload);
+			try {
+				this.#socket.send(requestPayload);
+			} catch (error) {
+				throw createCodexWebSocketTransportError(
+					`websocket send failed: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
 			let sawFirstEvent = false;
 			const { idleTimeoutMs, firstEventTimeoutMs } = timeouts;
 			let lastProgressAt = Date.now();
+			let lastProgressEventType: string | undefined;
+			let lastEventAt = lastProgressAt;
+			let lastEventType: string | undefined;
 			while (true) {
 				let timeoutMs: number | undefined;
 				let timeoutReason: string;
 				if (sawFirstEvent) {
-					timeoutReason = "idle timeout waiting for websocket";
+					timeoutReason = createCodexWebSocketTimeoutMessage("idle timeout waiting for websocket", {
+						lastEventAt,
+						lastEventType,
+						lastProgressAt,
+						lastProgressEventType,
+					});
 					if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) {
 						timeoutMs = idleTimeoutMs - (Date.now() - lastProgressAt);
 						if (timeoutMs <= 0) {
+							logCodexDebug("codex websocket idle timeout", {
+								lastEventType,
+								lastProgressEventType,
+								msSinceLastEvent: Date.now() - lastEventAt,
+								msSinceLastProgress: Date.now() - lastProgressAt,
+							});
 							throw createCodexWebSocketTransportError(timeoutReason);
 						}
 					}
 				} else {
-					timeoutReason = "timeout waiting for first websocket event";
+					timeoutReason = createCodexWebSocketTimeoutMessage("timeout waiting for first websocket event", {
+						lastEventAt,
+						lastEventType,
+						lastProgressAt,
+						lastProgressEventType,
+					});
 					if (firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0) {
 						timeoutMs = firstEventTimeoutMs;
 					}
@@ -2176,11 +2248,14 @@ class CodexWebSocketConnection {
 					throw createCodexWebSocketTransportError("websocket closed before response completion");
 				}
 				sawFirstEvent = true;
+				const eventType = typeof next.type === "string" ? next.type : "";
+				lastEventAt = Date.now();
+				lastEventType = eventType || undefined;
 				if (isCodexStreamProgressEvent(next)) {
-					lastProgressAt = Date.now();
+					lastProgressAt = lastEventAt;
+					lastProgressEventType = lastEventType;
 				}
 				yield next;
-				const eventType = typeof next.type === "string" ? next.type : "";
 				if (
 					eventType === "response.completed" ||
 					eventType === "response.done" ||
@@ -2207,7 +2282,100 @@ class CodexWebSocketConnection {
 		this.#onHandshakeHeaders(headers);
 	}
 
+	#startHeartbeat(socket: Bun.WebSocket): void {
+		this.#stopHeartbeat();
+		const intervalMs = getCodexWebSocketPingIntervalMs();
+		if (intervalMs <= 0) return;
+
+		this.#lastPongAt = Date.now();
+		this.#observedPong = false;
+		const socketEventTarget = socket as EventTarget;
+		const onPong = () => {
+			this.#observedPong = true;
+			this.#lastPongAt = Date.now();
+		};
+		if (
+			typeof socketEventTarget.addEventListener === "function" &&
+			typeof socketEventTarget.removeEventListener === "function"
+		) {
+			socketEventTarget.addEventListener("pong", onPong);
+			this.#removePongListener = () => socketEventTarget.removeEventListener("pong", onPong);
+		}
+
+		this.#heartbeatInterval = setInterval(() => {
+			if (this.#socket !== socket || socket.readyState !== WebSocket.OPEN) {
+				this.#stopHeartbeat();
+				return;
+			}
+			const pongTimeoutMs = getCodexWebSocketPongTimeoutMs();
+			if (this.#observedPong && pongTimeoutMs > 0 && Date.now() - this.#lastPongAt > pongTimeoutMs) {
+				this.#failQueue(createCodexWebSocketTransportError("websocket pong timeout"), "pong-timeout");
+				return;
+			}
+			if (typeof socket.ping !== "function") {
+				this.#stopHeartbeat();
+				return;
+			}
+			try {
+				socket.ping();
+			} catch (error) {
+				this.#failQueue(
+					createCodexWebSocketTransportError(
+						`websocket ping failed: ${error instanceof Error ? error.message : String(error)}`,
+					),
+					"ping-failed",
+				);
+			}
+		}, intervalMs);
+		this.#heartbeatInterval.unref();
+	}
+
+	#stopHeartbeat(): void {
+		if (this.#heartbeatInterval) {
+			clearInterval(this.#heartbeatInterval);
+			this.#heartbeatInterval = undefined;
+		}
+		if (this.#removePongListener) {
+			this.#removePongListener();
+			this.#removePongListener = undefined;
+		}
+		this.#observedPong = false;
+	}
+
+	#failQueue(error: Error, closeReason: string): void {
+		logCodexDebug("codex websocket transport failure", { error: error.message, closeReason });
+		this.#queue.length = 0;
+		this.#queue.push(error);
+		this.close(closeReason);
+		this.#wakeWaiters();
+	}
+
+	#wakeWaiters(): void {
+		for (;;) {
+			const waiter = this.#waiters.shift();
+			if (!waiter) break;
+			waiter();
+		}
+	}
+
 	#push(item: Record<string, unknown> | Error | null): void {
+		if (item instanceof Error) {
+			if (!(this.#queue[0] instanceof Error)) {
+				this.#queue.length = 0;
+			}
+			this.#queue.push(item);
+			this.#wakeWaiters();
+			return;
+		}
+		if (item !== null && this.#queue.length >= getCodexWebSocketMessageQueueCapacity()) {
+			this.#failQueue(
+				createCodexWebSocketTransportError(
+					`websocket message queue exceeded ${getCodexWebSocketMessageQueueCapacity()} items`,
+				),
+				"queue-overflow",
+			);
+			return;
+		}
 		this.#queue.push(item);
 		const waiter = this.#waiters.shift();
 		if (waiter) waiter();

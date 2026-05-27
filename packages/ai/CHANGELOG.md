@@ -2,9 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `PI_CODEX_WEBSOCKET_PING_INTERVAL_MS` to configure the interval for Codex WebSocket protocol ping heartbeats
+- Added `PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS` to configure the Codex WebSocket pong timeout used to detect unresponsive connections
+- Added `PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY` to configure the maximum buffered Codex WebSocket inbound queue size before transport fallback
+
+### Changed
+
+- Improved Codex WebSocket timeout diagnostics to include last event type and time since last progress event
+- Enhanced Codex WebSocket error classification to recognize ping, pong, send, and queue-overflow failures as retryable
+
 ### Fixed
 
+- Fixed Codex WebSocket send failures by wrapping socket.send() in try-catch and surfacing errors as retryable transport errors
+- Fixed Codex WebSocket inbound queue overflow by adding capacity bounds and triggering fallback to SSE when exceeded
+- Fixed Codex WebSocket pong timeout detection by tracking pong events and failing the connection when no pong is received within the configured timeout
 - Fixed Anthropic streaming to suppress hallucinated meta-prompt thinking blocks (the recent "I don't see any current rewritten thinking..." regression). When the marker phrase `rewritten thinking` appears in a streamed thinking summary the block is collapsed to a plain `Thinking...` placeholder and its signature is dropped so subsequent turns can't re-anchor on the garbled chain.
+- Fixed Codex WebSocket silent stalls by adding protocol pings, inbound queue bounding, clearer idle-timeout diagnostics, and SDK retry clamping for first-event timeouts.
 
 ## [15.5.0] - 2026-05-26
 ### Added
