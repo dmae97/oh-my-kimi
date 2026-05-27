@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed empty assistant stop retry caps resolving without leaving auto-retry callers waiting indefinitely.
+
 ## [15.7.4] - 2026-05-31
 
 ### Removed
