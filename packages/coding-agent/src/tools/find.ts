@@ -39,14 +39,15 @@ const findSchema = z
 		paths: z.array(z.string().describe("glob including search path")).min(1).describe("globs including search paths"),
 		hidden: z.boolean().default(true).describe("include hidden files").optional(),
 		gitignore: z.boolean().default(true).describe("respect gitignore").optional(),
-		limit: z.number().default(1000).describe("max results").optional(),
+		limit: z.number().default(200).describe("max results (clamped to 1-200)").optional(),
 		timeout: z.number().min(0.5).max(60).default(5).describe("timeout in seconds (0.5–60)").optional(),
 	})
 	.strict();
 
 export type FindToolInput = z.infer<typeof findSchema>;
 
-const DEFAULT_LIMIT = 1000;
+const DEFAULT_LIMIT = 200;
+const MAX_LIMIT = 200;
 const DEFAULT_GLOB_TIMEOUT_MS = 5000;
 const MIN_GLOB_TIMEOUT_MS = 500;
 const MAX_GLOB_TIMEOUT_MS = 60_000;
@@ -76,6 +77,37 @@ export function validateFindPathInputs(paths: readonly string[]): void {
 			}
 		}
 	}
+}
+
+/**
+ * Group find matches by their directory so the model doesn't pay repeated
+ * tokens for shared path prefixes. Preserves the input order: groups appear in
+ * the order their first member was emitted (mtime-desc for native glob), and
+ * within a group entries keep their relative order.
+ */
+export function formatFindGroupedOutput(paths: readonly string[]): string {
+	if (paths.length === 0) return "";
+	const groups = new Map<string, string[]>();
+	for (const entry of paths) {
+		const hasTrailingSlash = entry.endsWith("/");
+		const trimmed = hasTrailingSlash ? entry.slice(0, -1) : entry;
+		const slash = trimmed.lastIndexOf("/");
+		const dir = slash === -1 ? "" : trimmed.slice(0, slash);
+		const base = slash === -1 ? trimmed : trimmed.slice(slash + 1);
+		const label = hasTrailingSlash ? `${base}/` : base;
+		const list = groups.get(dir);
+		if (list) list.push(label);
+		else groups.set(dir, [label]);
+	}
+	const sections: string[] = [];
+	for (const [dir, entries] of groups) {
+		if (dir === "") {
+			sections.push(entries.join("\n"));
+		} else {
+			sections.push(`# ${dir}/\n${entries.join("\n")}`);
+		}
+	}
+	return sections.join("\n\n");
 }
 
 export interface FindToolDetails {
@@ -195,11 +227,11 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			if (searchPath === "/") {
 				throw new ToolError("Searching from root directory '/' is not allowed");
 			}
-			const rawLimit = limit ?? DEFAULT_LIMIT;
-			const effectiveLimit = Number.isFinite(rawLimit) ? Math.floor(rawLimit) : Number.NaN;
-			if (!Number.isFinite(effectiveLimit) || effectiveLimit <= 0) {
+			const requestedLimit = limit ?? DEFAULT_LIMIT;
+			if (!Number.isFinite(requestedLimit) || requestedLimit <= 0) {
 				throw new ToolError("Limit must be a positive number");
 			}
+			const effectiveLimit = Math.min(MAX_LIMIT, Math.max(1, Math.floor(requestedLimit)));
 			const includeHidden = hidden ?? true;
 			const useGitignore = gitignore ?? true;
 			const requestedTimeoutMs = timeout != null ? Math.round(timeout * 1000) : DEFAULT_GLOB_TIMEOUT_MS;
@@ -241,7 +273,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				const listLimit = applyListLimit(files, { limit: effectiveLimit });
 				const limited = listLimit.items;
 				const limitMeta = listLimit.meta;
-				const baseOutput = limited.join("\n");
+				const baseOutput = formatFindGroupedOutput(limited);
 				const trailingNotes: string[] = [];
 				if (notice) trailingNotes.push(notice);
 				if (missingPathsNote) trailingNotes.push(missingPathsNote);

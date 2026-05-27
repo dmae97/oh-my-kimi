@@ -13,6 +13,7 @@
 ### Removed
 
 - Removed the `A-B!` / `A!` deletion operator. Use `A-B:` with the desired payload (or empty payload to blank the range) instead.
+
 All notable changes to this package will be documented in this file.
 
 ## [15.5.4] - 2026-05-27

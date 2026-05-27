@@ -1683,13 +1683,9 @@ function b() {
 				hidden: true,
 			});
 
-			const outputLines = getTextOutput(result)
-				.split("\n")
-				.map(line => line.trim())
-				.filter(Boolean);
-
-			expect(outputLines).toContain("visible.txt");
-			expect(outputLines).toContain(".secret/hidden.txt");
+			const files = (result.details?.files ?? []).slice().sort();
+			expect(files).toContain("visible.txt");
+			expect(files).toContain(".secret/hidden.txt");
 		});
 
 		it("should respect .gitignore", async () => {
@@ -1727,12 +1723,7 @@ function b() {
 				paths: [`${testDir}/**/auth-actions.spec.ts`],
 			});
 
-			const outputLines = getTextOutput(result)
-				.split("\n")
-				.map(line => line.trim())
-				.filter(Boolean);
-
-			expect(outputLines).toEqual(["z/auth-actions.spec.ts", "a/auth-actions.spec.ts"]);
+			expect(result.details?.files).toEqual(["z/auth-actions.spec.ts", "a/auth-actions.spec.ts"]);
 		});
 
 		it("should render nested glob results relative to the session cwd", async () => {
@@ -1744,12 +1735,7 @@ function b() {
 				paths: ["apps/daemon/src/**/daemon-telemetry.ts"],
 			});
 
-			const outputLines = getTextOutput(result)
-				.split("\n")
-				.map(line => line.trim())
-				.filter(Boolean);
-
-			expect(outputLines).toEqual(["apps/daemon/src/telemetry/daemon-telemetry.ts"]);
+			expect(result.details?.files).toEqual(["apps/daemon/src/telemetry/daemon-telemetry.ts"]);
 		});
 
 		it("should not double-prefix multi-pattern results under a shared base", async () => {
@@ -1764,13 +1750,8 @@ function b() {
 				paths: ["apps/daemon/src/**/*.ts", "apps/client/src/**/*.ts"],
 			});
 
-			const outputLines = getTextOutput(result)
-				.split("\n")
-				.map(line => line.trim())
-				.filter(Boolean)
-				.sort();
-
-			expect(outputLines).toEqual(["apps/client/src/client.ts", "apps/daemon/src/daemon.ts"]);
+			const files = (result.details?.files ?? []).slice().sort();
+			expect(files).toEqual(["apps/client/src/client.ts", "apps/daemon/src/daemon.ts"]);
 		});
 
 		it("should not disable gitignore after an ignored broad hidden-file search finds no matches", async () => {
@@ -1803,13 +1784,8 @@ function b() {
 				paths: [`${testDir}/pkg/**/*`],
 			});
 
-			const outputLines = getTextOutput(result)
-				.split("\n")
-				.map(line => line.trim())
-				.filter(Boolean)
-				.sort();
-
-			expect(outputLines).toEqual(["pkg/file.txt", "pkg/nested/", "pkg/nested/deep.txt"]);
+			const files = (result.details?.files ?? []).slice().sort();
+			expect(files).toEqual(["pkg/file.txt", "pkg/nested/", "pkg/nested/deep.txt"]);
 		});
 
 		it("should match a directory by glob and emit it with trailing slash", async () => {
@@ -1821,13 +1797,8 @@ function b() {
 				paths: [`${testDir}/**/tests`],
 			});
 
-			const outputLines = getTextOutput(result)
-				.split("\n")
-				.map(line => line.trim())
-				.filter(Boolean)
-				.sort();
-
-			expect(outputLines).toEqual(["alpha/tests/", "beta/tests/"]);
+			const files = (result.details?.files ?? []).slice().sort();
+			expect(files).toEqual(["alpha/tests/", "beta/tests/"]);
 		});
 	});
 });
