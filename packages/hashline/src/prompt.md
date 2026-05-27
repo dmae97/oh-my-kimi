@@ -21,13 +21,18 @@ A-B!     delete A..B   (or A! == A..A)
 - **Use `+` for a blank payload line; use `++text` to write a line starting with `+text`.**
 - **Inserts add ONLY the rows you list.** The file's existing newlines around the anchor stay. NEVER tack a trailing `+` blank "for spacing" — it writes a literal blank line into the file, doubling whatever is already there.
 - **A bare `LINE↑`/`LINE↓` with no payload still inserts ONE blank line.** Not a no-op. Omit the op if you want nothing there.
-- **Go small.** Add → `↑`/`↓`; replace → `:`; delete → `!`.
+- **Pick the op for your intent.** Does the anchor's existing content SURVIVE?
+  - Survives + new lines next to it → `↑` / `↓`. Go small: prefer `↑`/`↓` over `:` whenever you can.
+  - Changes in place → `:`
+  - Goes away → `!`
+  When unsure: you wanted `↓`. `:` is destructive — it deletes the anchor line.
 - **Line numbers are frozen references to what you have seen.** Later ops in the same hunk still use original line numbers; they do NOT shift as earlier ops apply.
 </rules>
 
 <common-failures>
 - **NEVER replay past your range.** Stop before B+1; extend B if needed.
 - **Read lines look like replace ops.** `84:content` = "make line 84 content" — and inline content is rejected. Don't echo read-style rows.
+- **`LINE:` from a read is NOT `LINE:` as an op.** Read shows what's there; the op DELETES it. Want to keep what you just read? Use `↑`/`↓`, not `:`.
 - **NEVER fabricate file hashes.** Missing? Re-`read`.
 </common-failures>
 
@@ -60,6 +65,11 @@ A-B!     delete A..B   (or A! == A..A)
 # WRONG — INSERT used to change a line (old line survives)
 1↓
 +const X = "b";
+# WRONG — REPLACE used to add a line (original is silently deleted)
+# intent: keep `const X = "a";`, add `const Y = X;` on the next line
+1:
++const Y = X;
+# `1:` replaces line 1 — `const X = "a";` is gone, breaking `f()` which returns X. Use `1↓` to insert after.
 # WRONG — echoing read-style lines as context before the real op
 1:const X = "a";
 1-2:
