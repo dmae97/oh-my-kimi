@@ -1,6 +1,12 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Updated hashline syntax: replaced `↑`/`↓` payload sigils with `^` repeat syntax and `|` literal rows for clearer edit semantics
+- Changed hashline delete syntax from bare `A:` or `A-B:` to explicit `A-B:-` inline delete marker
+- Modified hashline anchor syntax to require explicit range notation `A-B:` instead of shorthand `A:` for single-line operations
+- Updated hashline description in settings to clarify pure insert context behavior without arrow notation
 
 ## [15.5.7] - 2026-05-27
 ### Added

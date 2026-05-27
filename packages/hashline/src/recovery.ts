@@ -73,18 +73,14 @@ function collectAnchorLines(edits: readonly Edit[]): number[] {
 
 function getEditAnchors(edit: Edit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
-	switch (edit.cursor.kind) {
-		case "before_anchor":
-		case "after_anchor":
-			return [edit.cursor.anchor];
-		case "bof":
-		case "eof":
-			return [];
-		default: {
-			const _exhaustive: never = edit.cursor;
-			return _exhaustive;
-		}
+	const cursorAnchors = edit.cursor.kind === "before_anchor" ? [edit.cursor.anchor] : [];
+	if (edit.kind === "insert") return cursorAnchors;
+
+	const repeatAnchors: Anchor[] = [];
+	for (let line = edit.range.start.line; line <= edit.range.end.line; line++) {
+		repeatAnchors.push({ line });
 	}
+	return cursorAnchors.concat(repeatAnchors);
 }
 
 /**

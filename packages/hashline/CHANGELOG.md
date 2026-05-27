@@ -1,6 +1,27 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed `A:` shorthand syntax; use explicit `A-A:` for single-line anchors
+- Removed `↑` and `↓` payload sigils; use `|TEXT` for literal rows and `^A-B` for repeating original lines
+- Removed standalone delete rows; use inline `A-B:-` syntax instead
+- Removed `after_anchor` cursor kind; all inserts now use `before_anchor` positioning
+- Replaced insert-above/insert-below payload sigils with linear body rows: `|TEXT` emits literal text and `^A-B` repeats original file lines inline.
+- Replaced standalone delete rows with inline range deletes: use `A-B:-`.
+- Changed empty `A-B:`, `BOF:`, and `EOF:` blocks to write one blank line instead of being rejected.
+
+### Added
+
+- Added `A-B:-` inline delete syntax for concrete range anchors
+- Added `^A-B` repeat payload syntax to emit original file lines inline
+- Added support for empty anchor blocks to write one blank line at the anchor position
+
+### Changed
+
+- Changed payload row format from three sigils (`|`, `↑`, `↓`) to two (`|`, `^`)
+- Changed range anchor syntax to require explicit `A-B` form (no single-line shorthand)
+- Changed error messages to reference new syntax and remove references to removed sigils
 
 ## [15.5.5] - 2026-05-27
 

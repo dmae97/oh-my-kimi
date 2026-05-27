@@ -192,14 +192,14 @@ export class PatchSection {
 	}
 
 	/**
-	 * True when at least one edit anchors to a concrete file line (range or
-	 * before/after_anchor insert). Pure BOF/EOF inserts do not count: those
-	 * are safe to apply to files that don't yet exist.
+	 * True when at least one edit anchors to concrete file content. Pure BOF/EOF
+	 * literal inserts do not count: those are safe to apply to files that don't
+	 * yet exist.
 	 */
 	get hasAnchorScopedEdit(): boolean {
 		return this.edits.some(edit => {
-			if (edit.kind === "delete") return true;
-			return edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor";
+			if (edit.kind === "delete" || edit.kind === "repeat") return true;
+			return edit.cursor.kind === "before_anchor";
 		});
 	}
 
@@ -211,7 +211,10 @@ export class PatchSection {
 				lines.add(edit.anchor.line);
 				continue;
 			}
-			if (edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor") {
+			if (edit.kind === "repeat") {
+				for (let line = edit.range.start.line; line <= edit.range.end.line; line++) lines.add(line);
+			}
+			if (edit.cursor.kind === "before_anchor") {
 				lines.add(edit.cursor.anchor.line);
 			}
 		}

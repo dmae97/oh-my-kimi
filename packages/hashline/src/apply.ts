@@ -18,12 +18,14 @@ import type { Anchor, ApplyOptions, ApplyResult, Cursor, Edit } from "./types";
 
 type LineOrigin = "original" | "insert" | "replacement";
 
+type InsertEdit = Extract<Edit, { kind: "insert" }>;
+type DeleteEdit = Extract<Edit, { kind: "delete" }>;
+type AppliedEdit = InsertEdit | DeleteEdit;
+
 interface IndexedEdit {
-	edit: Edit;
+	edit: AppliedEdit;
 	idx: number;
 }
-
-type DeleteEdit = Extract<Edit, { kind: "delete" }>;
 
 interface ReplacementGroup {
 	startIndex: number;
@@ -33,31 +35,32 @@ interface ReplacementGroup {
 	deletes: DeleteEdit[];
 }
 
-function isReplacementInsert(edit: Edit): edit is Extract<Edit, { kind: "insert" }> & { mode: "replacement" } {
+function isReplacementInsert(edit: Edit): edit is InsertEdit & { mode: "replacement" } {
 	return edit.kind === "insert" && edit.mode === "replacement";
+}
+
+function rangeAnchors(start: Anchor, end: Anchor): Anchor[] {
+	const anchors: Anchor[] = [];
+	for (let line = start.line; line <= end.line; line++) anchors.push({ line });
+	return anchors;
+}
+
+function getCursorAnchors(cursor: Cursor): Anchor[] {
+	return cursor.kind === "before_anchor" ? [cursor.anchor] : [];
 }
 
 function getEditAnchors(edit: Edit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
-	switch (edit.cursor.kind) {
-		case "before_anchor":
-		case "after_anchor":
-			return [edit.cursor.anchor];
-		case "bof":
-		case "eof":
-			return [];
-		default: {
-			const _exhaustive: never = edit.cursor;
-			return _exhaustive;
-		}
-	}
+	if (edit.kind === "repeat")
+		return [...getCursorAnchors(edit.cursor), ...rangeAnchors(edit.range.start, edit.range.end)];
+	return getCursorAnchors(edit.cursor);
 }
 
 /**
  * Verify every anchored edit points at an existing line. File-version binding is
  * checked once per section via the header hash before this function runs.
  */
-function validateLineBounds(edits: Edit[], fileLines: string[]): void {
+function validateLineBounds(edits: AppliedEdit[], fileLines: string[]): void {
 	for (const edit of edits) {
 		for (const anchor of getEditAnchors(edit)) {
 			if (anchor.line < 1 || anchor.line > fileLines.length) {
@@ -65,6 +68,44 @@ function validateLineBounds(edits: Edit[], fileLines: string[]): void {
 			}
 		}
 	}
+}
+
+function assertLineExists(line: number, fileLines: string[]): void {
+	if (line < 1 || line > fileLines.length) {
+		throw new Error(`Line ${line} does not exist (file has ${fileLines.length} lines)`);
+	}
+}
+
+function cloneAppliedEdit(edit: AppliedEdit, index: number): AppliedEdit {
+	if (edit.kind === "delete") return { ...edit, anchor: { ...edit.anchor }, index };
+	return { ...edit, cursor: cloneCursor(edit.cursor), index };
+}
+
+function expandRepeatEdits(edits: Edit[], fileLines: string[]): AppliedEdit[] {
+	const expanded: AppliedEdit[] = [];
+	for (const edit of edits) {
+		if (edit.kind !== "repeat") {
+			expanded.push(cloneAppliedEdit(edit, expanded.length));
+			continue;
+		}
+		if (edit.range.end.line < edit.range.start.line) {
+			throw new Error(
+				`line ${edit.lineNum}: range ${edit.range.start.line}-${edit.range.end.line} ends before it starts.`,
+			);
+		}
+		for (let line = edit.range.start.line; line <= edit.range.end.line; line++) {
+			assertLineExists(line, fileLines);
+			expanded.push({
+				kind: "insert",
+				cursor: cloneCursor(edit.cursor),
+				text: fileLines[line - 1] ?? "",
+				lineNum: edit.lineNum,
+				index: expanded.length,
+				...(edit.mode === undefined ? {} : { mode: edit.mode }),
+			});
+		}
+	}
+	return expanded;
 }
 
 function insertAtStart(fileLines: string[], lineOrigins: LineOrigin[], lines: string[]): void {
@@ -95,13 +136,13 @@ function insertAtEnd(fileLines: string[], lineOrigins: LineOrigin[], lines: stri
 }
 
 /** Bucket edits by the line they target so we can apply each line's group in one splice. */
-function getAnchorTargetLine(edit: Edit): number | undefined {
+function getAnchorTargetLine(edit: AppliedEdit): number | undefined {
 	if (edit.kind === "delete") return edit.anchor.line;
-	if (edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor") return edit.cursor.anchor.line;
+	if (edit.cursor.kind === "before_anchor") return edit.cursor.anchor.line;
 	return undefined;
 }
 
-function collectAnchorTargetLines(edits: Edit[]): Set<number> {
+function collectAnchorTargetLines(edits: AppliedEdit[]): Set<number> {
 	const lines = new Set<number>();
 	for (const edit of edits) {
 		const line = getAnchorTargetLine(edit);
@@ -110,7 +151,7 @@ function collectAnchorTargetLines(edits: Edit[]): Set<number> {
 	return lines;
 }
 
-function findReplacementGroup(edits: Edit[], startIndex: number): ReplacementGroup | undefined {
+function findReplacementGroup(edits: AppliedEdit[], startIndex: number): ReplacementGroup | undefined {
 	const first = edits[startIndex];
 	if (!isReplacementInsert(first) || first.cursor.kind !== "before_anchor") return undefined;
 
@@ -278,14 +319,14 @@ function countMatchingSingleStructuralSuffixBoundary(
 /**
  * Single-line non-structural boundary duplicate detector for replacement
  * groups. Mirrors the same boundary check the pure-insert absorber uses for
- * `A:` + `↓` (leading) / `A:` + `↑` (trailing) inserts, but applied to the
- * top/bottom edges of an `A-B:` replacement payload. Catches mistakes like
+ * leading/trailing context echoes, but applied to the top/bottom edges of an
+ * `A-B:` replacement payload. Catches mistakes like
  * `103-138:` + `|const X = …` where line 102 already reads `const X = …`.
  *
  * Gated by `options.autoDropPureInsertDuplicates`: the existing 2+-line block
  * absorb already runs unconditionally, and the structural single-line
  * absorber is balance-validated; a non-structural single-line duplicate is
- * ambiguous (could be an intentional `2:foo` over a line that happens to
+ * ambiguous (could be an intentional `2-2:foo` over a line that happens to
  * sit next to another `foo`), so we only fire when the user has opted in.
  */
 function countMatchingSingleNonStructuralPrefixDuplicate(
@@ -325,7 +366,7 @@ function contiguousRange(start: number, count: number): number[] {
 	return Array.from({ length: count }, (_, offset) => start + offset);
 }
 
-function deleteEditForAutoAbsorbedLine(line: number, sourceLineNum: number, index: number): Edit {
+function deleteEditForAutoAbsorbedLine(line: number, sourceLineNum: number, index: number): AppliedEdit {
 	return {
 		kind: "delete",
 		anchor: { line },
@@ -345,9 +386,7 @@ interface PureInsertGroup {
 function cursorMatches(a: Cursor, b: Cursor): boolean {
 	if (a.kind !== b.kind) return false;
 	if (a.kind === "bof" || a.kind === "eof") return true;
-	const aAnchor = (a as { anchor: Anchor }).anchor;
-	const bAnchor = (b as { anchor: Anchor }).anchor;
-	return aAnchor.line === bAnchor.line;
+	return a.anchor.line === b.anchor.line;
 }
 
 /**
@@ -357,7 +396,7 @@ function cursorMatches(a: Cursor, b: Cursor): boolean {
  * instead). Returns the contiguous payload so we can check it for boundary
  * duplicates against the file.
  */
-function findPureInsertGroup(edits: Edit[], startIndex: number): PureInsertGroup | undefined {
+function findPureInsertGroup(edits: AppliedEdit[], startIndex: number): PureInsertGroup | undefined {
 	const first = edits[startIndex];
 	if (first?.kind !== "insert" || isReplacementInsert(first)) return undefined;
 
@@ -393,11 +432,7 @@ function findPureInsertGroup(edits: Edit[], startIndex: number): PureInsertGroup
 function pureInsertNeighborhood(cursor: Cursor, fileLines: string[]): { aboveEndIdx: number; belowStartIdx: number } {
 	if (cursor.kind === "bof") return { aboveEndIdx: -1, belowStartIdx: 0 };
 	if (cursor.kind === "eof") return { aboveEndIdx: fileLines.length - 1, belowStartIdx: fileLines.length };
-	if (cursor.kind === "before_anchor") {
-		return { aboveEndIdx: cursor.anchor.line - 2, belowStartIdx: cursor.anchor.line - 1 };
-	}
-	// after_anchor
-	return { aboveEndIdx: cursor.anchor.line - 1, belowStartIdx: cursor.anchor.line };
+	return { aboveEndIdx: cursor.anchor.line - 2, belowStartIdx: cursor.anchor.line - 1 };
 }
 
 interface PureInsertAbsorbResult {
@@ -411,8 +446,8 @@ interface PureInsertAbsorbResult {
 /**
  * For a pure-insert group, drop only multi-line context echoes that exactly
  * duplicate the file lines adjacent to the insertion point. Single-line pure
- * insert duplicates are ambiguous (`N↓}` may be an accidental anchor echo or an
- * intentional inserted delimiter), so they are left literal even when generic
+ * insert duplicates are ambiguous (a repeated `}` may be an accidental anchor
+ * echo or an intentional inserted delimiter), so they are left literal even when
  * duplicate absorption is enabled.
  */
 function tryAbsorbPureInsertGroup(
@@ -479,13 +514,13 @@ function tryAbsorbPureInsertGroup(
 }
 
 function absorbReplacementBoundaryDuplicates(
-	edits: Edit[],
+	edits: AppliedEdit[],
 	fileLines: string[],
 	warnings: string[],
 	options: ApplyOptions,
-): Edit[] {
+): AppliedEdit[] {
 	let nextSyntheticIndex = edits.length;
-	const absorbed: Edit[] = [];
+	const absorbed: AppliedEdit[] = [];
 
 	// Anchor targets are stable across the loop because we only ever append
 	// synthetic deletes (never mutate originals). A line in this set that
@@ -649,32 +684,10 @@ export function applyEdits(text: string, edits: Edit[], options: ApplyOptions = 
 		if (firstChangedLine === undefined || line < firstChangedLine) firstChangedLine = line;
 	};
 
-	validateLineBounds(edits, fileLines);
+	const expandedEdits = expandRepeatEdits(edits, fileLines);
+	validateLineBounds(expandedEdits, fileLines);
 
-	const normalizedEdits = absorbReplacementBoundaryDuplicates(edits, fileLines, warnings, options);
-	const targetEdits: Edit[] = [];
-
-	// Normalize after_anchor inserts to before_anchor of the next line, or EOF
-	// when the anchor is the final line. Keep the authored edit objects
-	// immutable: PatchSection caches parsed edits and callers may apply them
-	// repeatedly against different snapshots.
-	for (const edit of normalizedEdits) {
-		if (edit.kind !== "insert" || edit.cursor.kind !== "after_anchor") {
-			targetEdits.push(edit);
-			continue;
-		}
-		const anchorLine = edit.cursor.anchor.line;
-		targetEdits.push({
-			...edit,
-			cursor:
-				anchorLine >= fileLines.length
-					? { kind: "eof" }
-					: {
-							kind: "before_anchor",
-							anchor: { line: anchorLine + 1 },
-						},
-		});
-	}
+	const targetEdits = absorbReplacementBoundaryDuplicates(expandedEdits, fileLines, warnings, options);
 
 	// Partition edits into BOF, EOF, and anchor-targeted buckets.
 	const bofLines: string[] = [];

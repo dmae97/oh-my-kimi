@@ -7,15 +7,16 @@
 /** Anchor terminator for every hashline operation block. */
 export const HL_OP_REPLACE = ":";
 
-/** Payload sigil for lines that replace the anchored range in place. */
+/** Inline-delete suffix for concrete range anchors (`A-B:-`). */
+export const HL_OP_DELETE_SUFFIX = ":-";
+
+/** Payload sigil for literal body rows. */
 export const HL_PAYLOAD_REPLACE = "|";
-/** Payload sigil for lines inserted before the anchored range. */
-export const HL_PAYLOAD_ABOVE = "↑";
-/** Payload sigil for lines inserted after the anchored range. */
-export const HL_PAYLOAD_BELOW = "↓";
+/** Payload sigil for body rows that repeat original file lines. */
+export const HL_PAYLOAD_REPEAT = "^";
 
 /** All hashline payload sigils, concatenated for fast membership tests. */
-export const HL_PAYLOAD_CHARS = `${HL_PAYLOAD_REPLACE}${HL_PAYLOAD_ABOVE}${HL_PAYLOAD_BELOW}`;
+export const HL_PAYLOAD_CHARS = `${HL_PAYLOAD_REPLACE}${HL_PAYLOAD_REPEAT}`;
 
 /** Hashline edit file-section header marker. */
 export const HL_FILE_PREFIX = "¶";
@@ -46,7 +47,12 @@ export const HL_ANCHOR_RE_RAW = `${HL_ANCHOR_DECORATION_RE_RAW}(\\d+)`;
 export const HL_LINE_RE_RAW = `[1-9]\\d*`;
 
 /** Capture-group form of {@link HL_LINE_RE_RAW}. */
-export const HL_LINE_CAPTURE_RE_RAW = `([1-9]\\d*)`;
+export const HL_LINE_CAPTURE_RE_RAW = `(${HL_LINE_RE_RAW})`;
+
+/** Regex for repeat payload rows (`^A-B`). */
+export const HL_PAYLOAD_REPEAT_RE = new RegExp(
+	`^\\${HL_PAYLOAD_REPEAT}${HL_LINE_CAPTURE_RE_RAW}-${HL_LINE_CAPTURE_RE_RAW}$`,
+);
 
 /** Four-hex-character file hash carried by a hashline section header. */
 export const HL_FILE_HASH_RE_RAW = `[0-9a-f]{4}`;

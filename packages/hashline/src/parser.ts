@@ -13,21 +13,15 @@
  *
  * Convenience entry point: {@link parsePatch}.
  */
-import { HL_OP_REPLACE, HL_PAYLOAD_ABOVE, HL_PAYLOAD_BELOW, HL_PAYLOAD_REPLACE } from "./format";
+import { HL_PAYLOAD_REPEAT, HL_PAYLOAD_REPLACE } from "./format";
 import {
 	ABORT_WARNING,
 	INLINE_PAYLOAD_REJECTED_PREFIX,
+	REPEAT_SHORTHAND_REJECTED_MESSAGE,
 	REPLACE_PAIR_COALESCED_WARNING,
 	VIRTUAL_REPLACE_REJECTED_MESSAGE,
 } from "./messages";
-import {
-	type BlockTarget,
-	cloneCursor,
-	type ParsedRange,
-	type PayloadBucket,
-	type Token,
-	Tokenizer,
-} from "./tokenizer";
+import { type BlockTarget, cloneCursor, type ParsedRange, type Token, Tokenizer } from "./tokenizer";
 import type { Anchor, Cursor, Edit } from "./types";
 
 function validateRangeOrder(range: ParsedRange, lineNum: number): void {
@@ -56,17 +50,11 @@ function isSkippableCommentLine(line: string): boolean {
 	return line.trimStart().startsWith("#");
 }
 
-function sigilForBucket(bucket: PayloadBucket): string {
-	if (bucket === "above") return HL_PAYLOAD_ABOVE;
-	if (bucket === "below") return HL_PAYLOAD_BELOW;
-	return HL_PAYLOAD_REPLACE;
-}
-
 function describeTarget(target: BlockTarget): string {
 	if (target.kind === "bof") return "BOF:";
 	if (target.kind === "eof") return "EOF:";
 	const { start, end } = target.range;
-	return start.line === end.line ? `${start.line}:` : `${start.line}-${end.line}:`;
+	return `${start.line}-${end.line}:`;
 }
 
 interface PendingComment {
@@ -74,11 +62,9 @@ interface PendingComment {
 	text: string;
 }
 
-interface PayloadRow {
-	bucket: PayloadBucket;
-	text: string;
-	lineNum: number;
-}
+type PayloadRow =
+	| { kind: "literal"; text: string; lineNum: number }
+	| { kind: "repeat"; range: ParsedRange; lineNum: number };
 
 interface Pending {
 	target: BlockTarget;
@@ -146,10 +132,17 @@ export class Executor {
 			case "blank":
 				this.#consumePendingSkippableComments();
 				return;
-			case "payload":
+			case "payload-literal":
 				this.#consumePendingSkippableComments();
-				this.#handlePayload(token.bucket, token.text, token.lineNum);
+				this.#handleLiteralPayload(token.text, token.lineNum);
 				return;
+			case "payload-repeat":
+				this.#consumePendingSkippableComments();
+				this.#handleRepeatPayload(token.range, token.lineNum);
+				return;
+			case "payload-repeat-shorthand":
+				this.#consumePendingSkippableComments();
+				throw new Error(`line ${token.lineNum}: ${REPEAT_SHORTHAND_REJECTED_MESSAGE}`);
 			case "raw":
 				if (this.#pending === undefined && isSkippableCommentLine(token.text)) {
 					this.#skippableComments.push({ text: token.text, lineNum: token.lineNum });
@@ -160,11 +153,22 @@ export class Executor {
 				return;
 			case "op-block":
 				this.#discardPendingSkippableComments();
+				if (token.deleteSuffix) {
+					if (token.target.kind !== "range") {
+						throw new Error(`line ${token.lineNum}: ${VIRTUAL_REPLACE_REJECTED_MESSAGE}`);
+					}
+					validateRangeOrder(token.target.range, token.lineNum);
+					this.#flushPending();
+					for (const anchor of expandRange(token.target.range)) {
+						this.#pushDelete(anchor, token.lineNum);
+					}
+					return;
+				}
 				if (token.inlineBody !== undefined) {
 					throw new Error(
 						`line ${token.lineNum}: ${INLINE_PAYLOAD_REJECTED_PREFIX} ` +
-							`Use a bare anchor line such as ${describeTarget(token.target)}, then put payload on following rows prefixed with ` +
-							`${HL_PAYLOAD_REPLACE}, ${HL_PAYLOAD_ABOVE}, or ${HL_PAYLOAD_BELOW}.`,
+							`Use a bare anchor line such as ${describeTarget(token.target)}, then put body rows below it prefixed with ` +
+							`${HL_PAYLOAD_REPLACE} or ${HL_PAYLOAD_REPEAT}.`,
 					);
 				}
 				if (token.target.kind === "range") validateRangeOrder(token.target.range, token.lineNum);
@@ -245,24 +249,33 @@ export class Executor {
 			if (sourceLines.length < 2) continue;
 			const [firstBlock, secondBlock] = [...sourceLines].sort((a, b) => a - b);
 			throw new Error(
-				`line ${secondBlock}: anchor line ${anchorLine} is already targeted by the ${HL_OP_REPLACE} block on line ${firstBlock}. ` +
+				`line ${secondBlock}: anchor line ${anchorLine} is already targeted by another op on line ${firstBlock}. ` +
 					`Issue ONE block per range; payload is only the final desired content, never a before/after pair.`,
 			);
 		}
 	}
 
-	#handlePayload(bucket: PayloadBucket, text: string, lineNum: number): void {
+	#handleLiteralPayload(text: string, lineNum: number): void {
 		const pending = this.#pending;
 		if (!pending) {
 			throw new Error(
-				`line ${lineNum}: payload line has no preceding A-B:, A:, BOF:, or EOF: anchor. ` +
-					`Got ${JSON.stringify(`${sigilForBucket(bucket)}${text}`)}.`,
+				`line ${lineNum}: payload line has no preceding A-B:, BOF:, or EOF: anchor. ` +
+					`Got ${JSON.stringify(`${HL_PAYLOAD_REPLACE}${text}`)}.`,
 			);
 		}
-		if (bucket === "replace" && pending.target.kind !== "range") {
-			throw new Error(`line ${lineNum}: ${VIRTUAL_REPLACE_REJECTED_MESSAGE}`);
+		pending.payloads.push({ kind: "literal", text, lineNum });
+	}
+
+	#handleRepeatPayload(range: ParsedRange, lineNum: number): void {
+		const pending = this.#pending;
+		if (!pending) {
+			throw new Error(
+				`line ${lineNum}: payload line has no preceding A-B:, BOF:, or EOF: anchor. ` +
+					`Got ${JSON.stringify(`${HL_PAYLOAD_REPEAT}${range.start.line}-${range.end.line}`)}.`,
+			);
 		}
-		pending.payloads.push({ bucket, text, lineNum });
+		validateRangeOrder(range, lineNum);
+		pending.payloads.push({ kind: "repeat", range, lineNum });
 	}
 
 	#handleRaw(text: string, lineNum: number): void {
@@ -270,7 +283,7 @@ export class Executor {
 			if (text.trim().length === 0) return;
 			throw new Error(
 				`line ${lineNum}: payload row in a hashline block must start with ` +
-					`${HL_PAYLOAD_REPLACE}, ${HL_PAYLOAD_ABOVE}, or ${HL_PAYLOAD_BELOW}. Got ${JSON.stringify(text)}.`,
+					`${HL_PAYLOAD_REPLACE} or ${HL_PAYLOAD_REPEAT}A-B. Got ${JSON.stringify(text)}.`,
 			);
 		}
 
@@ -281,13 +294,13 @@ export class Executor {
 		const firstChar = text[0];
 		if (firstChar === "-" || firstChar === "@" || firstChar === "«" || firstChar === "»") {
 			throw new Error(
-				`line ${lineNum}: unrecognized hashline block. Use A-B:, A:, BOF:, or EOF: anchors followed by ` +
-					`${HL_PAYLOAD_REPLACE}, ${HL_PAYLOAD_ABOVE}, or ${HL_PAYLOAD_BELOW} payload rows. Got ${JSON.stringify(text)}.`,
+				`line ${lineNum}: unrecognized hashline block. Use A-B:, A-B:-, BOF:, or EOF: anchors followed by ` +
+					`${HL_PAYLOAD_REPLACE}TEXT or ${HL_PAYLOAD_REPEAT}A-B body rows. Got ${JSON.stringify(text)}.`,
 			);
 		}
 
 		throw new Error(
-			`line ${lineNum}: payload line has no preceding A-B:, A:, BOF:, or EOF: anchor. Got ${JSON.stringify(text)}.`,
+			`line ${lineNum}: payload line has no preceding A-B:, BOF:, or EOF: anchor. Got ${JSON.stringify(text)}.`,
 		);
 	}
 
@@ -302,8 +315,27 @@ export class Executor {
 		});
 	}
 
+	#pushRepeat(cursor: Cursor, range: ParsedRange, lineNum: number, mode?: "replacement"): void {
+		this.#edits.push({
+			kind: "repeat",
+			cursor: cloneCursor(cursor),
+			range: { start: { ...range.start }, end: { ...range.end } },
+			lineNum,
+			index: this.#editIndex++,
+			...(mode === undefined ? {} : { mode }),
+		});
+	}
+
 	#pushDelete(anchor: Anchor, lineNum: number): void {
 		this.#edits.push({ kind: "delete", anchor: { ...anchor }, lineNum, index: this.#editIndex++ });
+	}
+
+	#emitPayloadRow(cursor: Cursor, payload: PayloadRow, lineNum: number, mode?: "replacement"): void {
+		if (payload.kind === "literal") {
+			this.#pushInsert(cursor, payload.text, lineNum, mode);
+			return;
+		}
+		this.#pushRepeat(cursor, payload.range, lineNum, mode);
 	}
 
 	#flushPending(): void {
@@ -313,46 +345,27 @@ export class Executor {
 		const { target, lineNum, payloads } = pending;
 		if (target.kind === "bof" || target.kind === "eof") {
 			const cursor: Cursor = target.kind === "bof" ? { kind: "bof" } : { kind: "eof" };
-			for (const payload of payloads) {
-				this.#pushInsert(cursor, payload.text, lineNum);
+			if (payloads.length === 0) {
+				this.#pushInsert(cursor, "", lineNum);
+			} else {
+				for (const payload of payloads) {
+					this.#emitPayloadRow(cursor, payload, lineNum);
+				}
 			}
 			this.#pending = undefined;
 			return;
 		}
 
-		const above: string[] = [];
-		const replacement: string[] = [];
-		const below: string[] = [];
-		for (const payload of payloads) {
-			if (payload.bucket === "above") above.push(payload.text);
-			else if (payload.bucket === "below") below.push(payload.text);
-			else replacement.push(payload.text);
-		}
-
-		for (const text of above) {
-			this.#pushInsert({ kind: "before_anchor", anchor: { ...target.range.start } }, text, lineNum);
-		}
-
-		if (replacement.length > 0) {
-			for (const text of replacement) {
-				this.#pushInsert(
-					{ kind: "before_anchor", anchor: { ...target.range.start } },
-					text,
-					lineNum,
-					"replacement",
-				);
-			}
-			for (const anchor of expandRange(target.range)) {
-				this.#pushDelete(anchor, lineNum);
-			}
-		} else if (above.length === 0 && below.length === 0) {
-			for (const anchor of expandRange(target.range)) {
-				this.#pushDelete(anchor, lineNum);
+		const cursor: Cursor = { kind: "before_anchor", anchor: { ...target.range.start } };
+		if (payloads.length === 0) {
+			this.#pushInsert(cursor, "", lineNum, "replacement");
+		} else {
+			for (const payload of payloads) {
+				this.#emitPayloadRow(cursor, payload, lineNum, "replacement");
 			}
 		}
-
-		for (const text of below) {
-			this.#pushInsert({ kind: "after_anchor", anchor: { ...target.range.end } }, text, lineNum);
+		for (const anchor of expandRange(target.range)) {
+			this.#pushDelete(anchor, lineNum);
 		}
 
 		this.#pending = undefined;

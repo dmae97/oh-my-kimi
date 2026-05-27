@@ -26,7 +26,7 @@ await fs.writeText(
 
 const patcher = new Patcher({ fs });
 const patch = Patch.parse(String.raw`¶hello.ts
-1:
+1-1:
 |const greeting = "hello";`);
 const result = await patcher.apply(patch);
 
@@ -46,12 +46,12 @@ hash and the edit, the patcher refuses (or, with a `SnapshotStore`, tries
 session-aware recovery).
 
 Inside a hunk:
-
-- `A-B:` — anchor lines A..B (single-anchor `A:` is sugar for `A-A:`).
+- `A-B:` — anchor lines A..B (use `A-A:` for a single line; no shorthand).
+- `A-B:-` — delete lines A..B.
 - `BOF:` / `EOF:` — virtual anchors at the beginning/end of file.
-- `|TEXT` — replace-bucket payload. A non-empty replace bucket replaces A..B.
-- `↑TEXT` — insert before A (`BOF:` treats `↑`/`↓` equivalently).
-- `↓TEXT` — insert after B (`EOF:` treats `↑`/`↓` equivalently).
+- `|TEXT` — literal body row.
+- `^A-B` — repeat original file lines A..B inline (`^A-A` for one line).
+- Empty body — write one blank line at the anchor/virtual position.
 
 ## Abstractions
 

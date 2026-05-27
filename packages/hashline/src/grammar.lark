@@ -8,14 +8,15 @@ update_hunk: "¶" filename ("#" file_hash)? LF block*
 filename: /([^\s#]+)/
 file_hash: /[0-9a-f]{4}/
 
-block: anchor ":" LF payload*
-payload: above_payload | replace_payload | below_payload
-above_payload: "↑" /[^\n]*/ LF
-replace_payload: "|" /[^\n]*/ LF
-below_payload: "↓" /[^\n]*/ LF
+block: anchor ":" delete_suffix? LF payload*
+delete_suffix: "-"
+payload: literal_payload | repeat_payload
+literal_payload: "|" /[^\n]*/ LF
+repeat_payload: "^" range LF
 
 anchor: range | "BOF" | "EOF"
-range: LID ("-" LID)?
+range: LID "-" LID
+
 LID: /[1-9]\d*/
 
 %import common.LF

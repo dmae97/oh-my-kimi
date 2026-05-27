@@ -36,9 +36,13 @@ export const REPLACE_PAIR_COALESCED_WARNING =
 /** Error text prefix emitted when an anchor line carries inline payload. */
 export const INLINE_PAYLOAD_REJECTED_PREFIX = "Inline payload on the anchor line is rejected.";
 
-/** Error text emitted when `|` replacement payload targets BOF/EOF. */
+/** Error text emitted when inline delete targets BOF/EOF. */
 export const VIRTUAL_REPLACE_REJECTED_MESSAGE =
-	"BOF:/EOF: anchors are virtual positions and cannot use `|` replacement payload. Use `↑` or `↓` payload lines.";
+	"BOF:/EOF: anchors are virtual positions and cannot use `:-`. Use `|TEXT` or `^A-B` body rows to insert at a virtual position.";
+
+/** Error text emitted when `^A` repeat shorthand is used. */
+export const REPEAT_SHORTHAND_REJECTED_MESSAGE =
+	"Repeat payload shorthand `^A` is rejected. Use explicit `^A-A` for one line.";
 
 /** Warning text emitted by `Recovery` when an external write fits a cached snapshot. */
 export const RECOVERY_EXTERNAL_WARNING =

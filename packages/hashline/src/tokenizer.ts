@@ -17,9 +17,9 @@ import {
 	describeAnchorExamples,
 	HL_FILE_HASH_SEP,
 	HL_FILE_PREFIX,
+	HL_OP_DELETE_SUFFIX,
 	HL_OP_REPLACE,
-	HL_PAYLOAD_ABOVE,
-	HL_PAYLOAD_BELOW,
+	HL_PAYLOAD_REPEAT,
 	HL_PAYLOAD_REPLACE,
 } from "./format";
 import { ABORT_MARKER, BEGIN_PATCH_MARKER, END_PATCH_MARKER } from "./messages";
@@ -33,13 +33,13 @@ const CHAR_HASH = 35;
 const CHAR_TAB = 9;
 const CHAR_SPACE = 32;
 const CHAR_HYPHEN = 45;
+
 const CHAR_LOWER_A = 97;
 const CHAR_LOWER_F = 102;
 const CHAR_PILCROW = HL_FILE_PREFIX.charCodeAt(0);
 const CHAR_OP_REPLACE = HL_OP_REPLACE.charCodeAt(0);
 const CHAR_PAYLOAD_REPLACE = HL_PAYLOAD_REPLACE.charCodeAt(0);
-const CHAR_PAYLOAD_ABOVE = HL_PAYLOAD_ABOVE.charCodeAt(0);
-const CHAR_PAYLOAD_BELOW = HL_PAYLOAD_BELOW.charCodeAt(0);
+const CHAR_PAYLOAD_REPEAT = HL_PAYLOAD_REPEAT.charCodeAt(0);
 const FILE_HASH_LENGTH = 4;
 
 function isDigitCode(code: number): boolean {
@@ -106,10 +106,8 @@ export function splitHashlineLines(text: string): string[] {
 
 export function cloneCursor(cursor: Cursor): Cursor {
 	if (cursor.kind === "before_anchor") return { kind: "before_anchor", anchor: { ...cursor.anchor } };
-	if (cursor.kind === "after_anchor") return { kind: "after_anchor", anchor: { ...cursor.anchor } };
 	return cursor;
 }
-
 // Leniently accept anchors copied from read/search output:
 //   - optional leading line-marker decoration (`*`, `>`, `-`)
 //   - the required bare line number / BOF / EOF anchor
@@ -162,18 +160,14 @@ function scanRange(line: string, end = trimEndIndex(line)): RangeScan | null {
 	const start = scanLineNumber(line, numberStart, end);
 	if (start === null) return null;
 
-	let nextIndex = start.nextIndex;
-	let rangeEnd = start.line;
-	if (nextIndex < end && line.charCodeAt(nextIndex) === CHAR_HYPHEN) {
-		const endNumber = scanLineNumber(line, nextIndex + 1, end);
-		if (endNumber === null) return null;
-		rangeEnd = endNumber.line;
-		nextIndex = endNumber.nextIndex;
-	}
+	// Ranges MUST be written `A-B` (the explicit single-line form `A-A` is fine).
+	if (start.nextIndex >= end || line.charCodeAt(start.nextIndex) !== CHAR_HYPHEN) return null;
+	const endNumber = scanLineNumber(line, start.nextIndex + 1, end);
+	if (endNumber === null) return null;
 
 	return {
-		range: { start: { line: start.line }, end: { line: rangeEnd } },
-		nextIndex: skipWhitespace(line, nextIndex, end),
+		range: { start: { line: start.line }, end: { line: endNumber.line } },
+		nextIndex: skipWhitespace(line, endNumber.nextIndex, end),
 	};
 }
 
@@ -186,8 +180,6 @@ function startsWithWord(line: string, index: number, end: number, word: string):
 }
 
 export type BlockTarget = { kind: "range"; range: ParsedRange } | { kind: "bof" } | { kind: "eof" };
-
-export type PayloadBucket = "above" | "replace" | "below";
 
 interface TargetScan {
 	target: BlockTarget;
@@ -212,6 +204,7 @@ function scanBlockTarget(line: string, end = trimEndIndex(line)): TargetScan | n
 interface ParsedBlockOp {
 	target: BlockTarget;
 	inlineBody: string | undefined;
+	deleteSuffix: boolean;
 }
 
 function tryParseBlockOp(line: string): ParsedBlockOp | null {
@@ -222,18 +215,35 @@ function tryParseBlockOp(line: string): ParsedBlockOp | null {
 	const opIndex = skipWhitespace(line, target.nextIndex, end);
 	if (opIndex >= end || line.charCodeAt(opIndex) !== CHAR_OP_REPLACE) return null;
 
+	if (
+		opIndex === target.nextIndex &&
+		line.startsWith(HL_OP_DELETE_SUFFIX, opIndex) &&
+		opIndex + HL_OP_DELETE_SUFFIX.length === end
+	) {
+		return { target: target.target, inlineBody: undefined, deleteSuffix: true };
+	}
+
 	const inlineStart = opIndex + HL_OP_REPLACE.length;
 	return {
 		target: target.target,
 		inlineBody: skipWhitespace(line, inlineStart, end) === end ? undefined : line.slice(inlineStart, end),
+		deleteSuffix: false,
 	};
 }
 
-function payloadBucketForCode(code: number): PayloadBucket | undefined {
-	if (code === CHAR_PAYLOAD_ABOVE) return "above";
-	if (code === CHAR_PAYLOAD_REPLACE) return "replace";
-	if (code === CHAR_PAYLOAD_BELOW) return "below";
-	return undefined;
+function tryParseRepeatPayload(line: string): ParsedRange | "shorthand" | null {
+	const end = trimEndIndex(line);
+	if (line.length === 0 || line.charCodeAt(0) !== CHAR_PAYLOAD_REPEAT) return null;
+
+	const start = scanLineNumber(line, 1, end);
+	if (start === null) return null;
+	if (start.nextIndex === end) return "shorthand";
+	if (start.nextIndex >= end || line.charCodeAt(start.nextIndex) !== CHAR_HYPHEN) return null;
+
+	const finish = scanLineNumber(line, start.nextIndex + 1, end);
+	if (finish === null) return null;
+	if (skipWhitespace(line, finish.nextIndex, end) !== end) return null;
+	return { start: { line: start.line }, end: { line: finish.line } };
 }
 
 /**
@@ -289,8 +299,10 @@ export type Token =
 	| (TokenBase & { kind: "envelope-end" })
 	| (TokenBase & { kind: "abort" })
 	| (TokenBase & { kind: "header"; path: string; fileHash?: string })
-	| (TokenBase & { kind: "op-block"; target: BlockTarget; inlineBody: string | undefined })
-	| (TokenBase & { kind: "payload"; bucket: PayloadBucket; text: string })
+	| (TokenBase & { kind: "op-block"; target: BlockTarget; inlineBody: string | undefined; deleteSuffix: boolean })
+	| (TokenBase & { kind: "payload-literal"; text: string })
+	| (TokenBase & { kind: "payload-repeat"; range: ParsedRange })
+	| (TokenBase & { kind: "payload-repeat-shorthand" })
 	| (TokenBase & { kind: "raw"; text: string });
 
 function classifyLine(line: string, lineNum: number): Token {
@@ -308,13 +320,26 @@ function classifyLine(line: string, lineNum: number): Token {
 		}
 	}
 
-	const payloadBucket = payloadBucketForCode(line.charCodeAt(0));
-	if (payloadBucket !== undefined) {
-		return { kind: "payload", lineNum, bucket: payloadBucket, text: line.slice(1) };
+	const firstCode = line.charCodeAt(0);
+	if (firstCode === CHAR_PAYLOAD_REPLACE) {
+		return { kind: "payload-literal", lineNum, text: line.slice(1) };
+	}
+	if (firstCode === CHAR_PAYLOAD_REPEAT) {
+		const range = tryParseRepeatPayload(line);
+		if (range === "shorthand") return { kind: "payload-repeat-shorthand", lineNum };
+		if (range !== null) return { kind: "payload-repeat", lineNum, range };
 	}
 
 	const op = tryParseBlockOp(line);
-	if (op !== null) return { kind: "op-block", lineNum, target: op.target, inlineBody: op.inlineBody };
+	if (op !== null) {
+		return {
+			kind: "op-block",
+			lineNum,
+			target: op.target,
+			inlineBody: op.inlineBody,
+			deleteSuffix: op.deleteSuffix,
+		};
+	}
 
 	return { kind: "raw", lineNum, text: line };
 }
