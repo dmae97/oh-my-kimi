@@ -56,6 +56,17 @@ async function main(): Promise<void> {
 					"../stats/src/sync-worker.ts",
 					"./src/tools/browser/tab-worker-entry.ts",
 					"./src/eval/js/worker-entry.ts",
+					// Legacy pi-* extension compat shims served by `legacy-pi-compat.ts`.
+					// Both are reached only via the computed `TYPEBOX_SHIM_PATH` /
+					// `LEGACY_PI_AI_SHIM_PATH` constants (which `--compile`'s static
+					// analyzer cannot trace), so each shim must be listed here to land
+					// in bunfs alongside the workers above. The bunfs entry path is
+					// `--root`-relative with a `.js` extension, e.g.
+					// `/$bunfs/root/packages/coding-agent/src/extensibility/typebox.js`,
+					// which is what the `isCompiledBinary()` branch in
+					// `legacy-pi-compat.ts` resolves to at runtime.
+					"./src/extensibility/typebox.ts",
+					"./src/extensibility/legacy-pi-ai-shim.ts",
 					"--outfile",
 					"dist/omp",
 				],
