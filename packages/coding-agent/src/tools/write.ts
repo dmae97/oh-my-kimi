@@ -70,6 +70,8 @@ export type WriteToolInput = z.infer<typeof writeSchema>;
 export interface WriteToolDetails {
 	diagnostics?: FileDiagnosticsResult;
 	meta?: OutputMeta;
+	/** Set when the file was auto-chmod'd because content begins with a `#!` shebang. */
+	madeExecutable?: boolean;
 }
 
 /**
@@ -100,6 +102,28 @@ function appendNoteToResult(result: AgentToolResult<WriteToolDetails>, note: str
 		firstText.text = firstText.text.length > 0 ? `${firstText.text}\n${note}` : note;
 	} else {
 		result.content.push({ type: "text", text: note });
+	}
+}
+
+/**
+ * If `content` begins with a `#!` shebang, ensure the file is executable.
+ *
+ * Mirrors `chmod a+x` (adds user/group/other execute bits to existing mode).
+ * Errors are swallowed: chmod failure (e.g. Windows ACL, read-only mount)
+ * MUST NOT fail an otherwise successful write. Returns whether the mode
+ * actually changed so the caller can surface a note.
+ */
+async function maybeMarkExecutableForShebang(absolutePath: string, content: string): Promise<boolean> {
+	if (!content.startsWith("#!")) return false;
+	try {
+		const stat = await fs.stat(absolutePath);
+		const currentMode = stat.mode & 0o7777;
+		const newMode = currentMode | 0o111;
+		if (newMode === currentMode) return false;
+		await fs.chmod(absolutePath, newMode);
+		return true;
+	} catch {
+		return false;
 	}
 }
 
@@ -772,6 +796,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 			const diagnostics = await this.#writethrough(absolutePath, cleanContent, signal, undefined, batchRequest);
 			invalidateFsScanAfterWrite(absolutePath);
+			const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, cleanContent);
 
 			const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
 			let resultText = `Successfully wrote ${cleanContent.length} bytes to ${displayPath}`;
@@ -781,7 +806,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (!diagnostics) {
 				return {
 					content: [{ type: "text", text: resultText }],
-					details: {},
+					details: { madeExecutable: madeExecutable || undefined },
 				};
 			}
 
@@ -789,6 +814,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				content: [{ type: "text", text: resultText }],
 				details: {
 					diagnostics,
+					madeExecutable: madeExecutable || undefined,
 					meta: outputMeta()
 						.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
 						.get(),
@@ -915,13 +941,16 @@ export const writeToolRenderer = {
 		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
 		const lineCount = countLines(fileContent);
 		const lineSuffix = formatLineCountSuffix(lineCount, uiTheme);
+		const execSuffix = result.details?.madeExecutable
+			? `${uiTheme.fg("dim", " · ")}${uiTheme.fg("success", "made executable!")}`
+			: "";
 
 		// Build header with status icon
 		const header = renderStatusLine(
 			{
 				icon: "success",
 				title: "Write",
-				description: `${langIcon} ${pathDisplay}${lineSuffix}`,
+				description: `${langIcon} ${pathDisplay}${lineSuffix}${execSuffix}`,
 			},
 			uiTheme,
 		);
