@@ -15,15 +15,15 @@ const DEFAULT_MIN_COMMENT_LINES: u32 = 6;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummaryOptions {
 	/// Source code to summarize.
-	pub code:              String,
+	pub code:               String,
 	/// Language alias (e.g. "rust", "typescript") used before path inference.
-	pub lang:              Option<String>,
+	pub lang:               Option<String>,
 	/// File path used to infer language by extension when `lang` is omitted.
-	pub path:              Option<String>,
+	pub path:               Option<String>,
 	/// Minimum total node lines before eliding a body/literal node.
-	pub min_body_lines:    Option<u32>,
+	pub min_body_lines:     Option<u32>,
 	/// Minimum total comment lines before eliding a multiline block comment.
-	pub min_comment_lines: Option<u32>,
+	pub min_comment_lines:  Option<u32>,
 	/// Target visible-line count for BFS unfold. Starting from every elidable
 	/// span folded, this progressively reveals outer-then-inner spans until
 	/// the visible line count meets the target. `None` or `0` disables BFS
@@ -293,7 +293,14 @@ fn collect_elidable_tree(
 			run_last = Some(child);
 			run_count += 1;
 		} else {
-			flush_groupable_run(run_first, run_last, run_count, min_body_lines, forest, current_parent);
+			flush_groupable_run(
+				run_first,
+				run_last,
+				run_count,
+				min_body_lines,
+				forest,
+				current_parent,
+			);
 			run_first = None;
 			run_last = None;
 			run_count = 0;
@@ -303,7 +310,14 @@ fn collect_elidable_tree(
 
 	for index in 0..child_count {
 		if let Some(child) = node.child(index) {
-			collect_elidable_tree(child, current_parent, language, min_body_lines, min_comment_lines, forest);
+			collect_elidable_tree(
+				child,
+				current_parent,
+				language,
+				min_body_lines,
+				min_comment_lines,
+				forest,
+			);
 		}
 	}
 }
@@ -866,11 +880,11 @@ mod tests {
 
 	fn summarize(code: &str, path: &str) -> SummaryResult {
 		summarize_code(SummaryOptions {
-			code:              code.to_string(),
-			lang:              None,
-			path:              Some(path.to_string()),
-			min_body_lines:    None,
-			min_comment_lines: None,
+			code:               code.to_string(),
+			lang:               None,
+			path:               Some(path.to_string()),
+			min_body_lines:     None,
+			min_comment_lines:  None,
 			unfold_until_lines: None,
 			unfold_limit_lines: None,
 		})
@@ -962,11 +976,11 @@ mod tests {
 		assert!(!default_result.elided);
 
 		let override_result = summarize_code(SummaryOptions {
-			code:              code.to_string(),
-			lang:              Some("typescript".to_string()),
-			path:              None,
-			min_body_lines:    Some(3),
-			min_comment_lines: None,
+			code:               code.to_string(),
+			lang:               Some("typescript".to_string()),
+			path:               None,
+			min_body_lines:     Some(3),
+			min_comment_lines:  None,
 			unfold_until_lines: None,
 			unfold_limit_lines: None,
 		})
@@ -1220,7 +1234,8 @@ mod tests {
 		let code = (0..10)
 			.map(|i| {
 				format!(
-					"export function fn{i}(): number {{\n\tconst a = {i};\n\tconst b = {i};\n\tconst c = {i};\n\treturn a + b + c;\n}}"
+					"export function fn{i}(): number {{\n\tconst a = {i};\n\tconst b = {i};\n\tconst c \
+					 = {i};\n\treturn a + b + c;\n}}"
 				)
 			})
 			.collect::<Vec<_>>()
@@ -1228,7 +1243,11 @@ mod tests {
 
 		let result = summarize_with_unfold(&code, "fixture.ts", 10, 100);
 		assert!(result.elided);
-		let elided_count = result.segments.iter().filter(|s| s.kind == "elided").count();
+		let elided_count = result
+			.segments
+			.iter()
+			.filter(|s| s.kind == "elided")
+			.count();
 		assert_eq!(elided_count, 10);
 	}
 
@@ -1247,6 +1266,13 @@ mod tests {
 		// BFS reverts and leaves the body folded.
 		let result = summarize_with_unfold(&code, "big.ts", 10, 30);
 		// Exactly one elided segment for the function body.
-		assert_eq!(result.segments.iter().filter(|s| s.kind == "elided").count(), 1);
+		assert_eq!(
+			result
+				.segments
+				.iter()
+				.filter(|s| s.kind == "elided")
+				.count(),
+			1
+		);
 	}
 }
