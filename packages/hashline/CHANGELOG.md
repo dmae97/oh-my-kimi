@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.5.5] - 2026-05-27
+
 ### Breaking Changes
 
 - Changed hashline payload continuations from `+TEXT` to `\TEXT`; use `\` for an explicit blank payload line.

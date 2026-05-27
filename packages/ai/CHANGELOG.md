@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.5.5] - 2026-05-27
+
 ### Added
 
 - Added `PI_CODEX_WEBSOCKET_PING_INTERVAL_MS` to configure the interval for Codex WebSocket protocol ping heartbeats
