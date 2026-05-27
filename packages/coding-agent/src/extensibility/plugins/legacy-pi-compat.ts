@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
+import { isCompiledBinary } from "@oh-my-pi/pi-utils";
 
 // Canonical scope for in-process pi packages. Plugins published against any of
 // the aliased scopes below (mariozechner's original publish, earendil-works'
@@ -56,7 +57,19 @@ const resolvedSpecifierFallbacks = new Map<string, string>();
 // relying on them must vendor `@sinclair/typebox` directly.
 const TYPEBOX_SPECIFIER = "@sinclair/typebox";
 const TYPEBOX_SPECIFIER_FILTER = /^@sinclair\/typebox$/;
-const TYPEBOX_SHIM_PATH = path.resolve(import.meta.dir, "../typebox.ts");
+
+// In-process compat shim paths. In dev `import.meta.dir` is the source folder of
+// this file, so the dev branches resolve to the real `.ts` source. In compiled
+// binaries `import.meta.dir` collapses to `/$bunfs/root`, so the runtime cannot
+// recover the source layout that way; instead, each shim file is registered as
+// a `--compile` entrypoint in `scripts/build-binary.ts`, which Bun emits into
+// bunfs at a deterministic `--root`-relative path with a `.js` extension. The
+// literals below must stay in sync with that listing — if either path drifts,
+// every legacy plugin loading the shim fails with a missing-module error in
+// release builds (without affecting `bun test`/dev).
+const TYPEBOX_SHIM_PATH = isCompiledBinary()
+	? "/$bunfs/root/packages/coding-agent/src/extensibility/typebox.js"
+	: path.resolve(import.meta.dir, "../typebox.ts");
 
 // Legacy extensions historically imported `Type` (and `Static`/`TSchema`) from
 // the package root of `@(scope)/pi-ai`. pi-ai 15.1.0 removed the runtime `Type`
@@ -66,7 +79,9 @@ const TYPEBOX_SHIM_PATH = path.resolve(import.meta.dir, "../typebox.ts");
 // plus the borrowed `Type` runtime from the Zod-backed TypeBox shim. Subpath
 // imports such as `@oh-my-pi/pi-ai/utils/oauth` continue to resolve directly
 // against the bundled pi-ai package.
-const LEGACY_PI_AI_SHIM_PATH = path.resolve(import.meta.dir, "../legacy-pi-ai-shim.ts");
+const LEGACY_PI_AI_SHIM_PATH = isCompiledBinary()
+	? "/$bunfs/root/packages/coding-agent/src/extensibility/legacy-pi-ai-shim.js"
+	: path.resolve(import.meta.dir, "../legacy-pi-ai-shim.ts");
 const LEGACY_PI_PACKAGE_ROOT_OVERRIDES: Record<string, string> = {
 	[`${CANONICAL_PI_SCOPE}/pi-ai`]: LEGACY_PI_AI_SHIM_PATH,
 };
