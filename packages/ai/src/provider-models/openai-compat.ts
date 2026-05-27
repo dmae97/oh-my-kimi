@@ -1547,6 +1547,7 @@ export function syntheticModelManagerOptions(
 	);
 	return {
 		providerId: "synthetic",
+		dynamicModelsAuthoritative: true,
 		...(apiKey && {
 			fetchDynamicModels: () =>
 				fetchOpenAICompatibleModels({

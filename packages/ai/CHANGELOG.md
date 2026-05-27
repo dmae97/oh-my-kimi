@@ -49,6 +49,10 @@
 - Fixed Anthropic streaming to suppress hallucinated meta-prompt thinking blocks (the recent "I don't see any current rewritten thinking..." regression). When the marker phrase `rewritten thinking` appears in a streamed thinking summary the block is collapsed to a plain `Thinking...` placeholder and its signature is dropped so subsequent turns can't re-anchor on the garbled chain.
 - Fixed Codex WebSocket silent stalls by adding protocol pings, inbound queue bounding, clearer idle-timeout diagnostics, and SDK retry clamping for first-event timeouts.
 
+### Fixed
+
+- Fixed Synthetic model discovery to treat the provider `/models` response as authoritative so deprecated bundled IDs are pruned from the runtime cache, and changed Synthetic login validation to avoid probing a specific model ([#1417](https://github.com/can1357/oh-my-pi/issues/1417)).
+
 ## [15.5.0] - 2026-05-26
 ### Added
 

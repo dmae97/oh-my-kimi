@@ -67,6 +67,8 @@ export interface ProviderDescriptor {
 	defaultModel: string;
 	/** When true, the runtime creates a model manager even without a valid API key (e.g. ollama). */
 	allowUnauthenticated?: boolean;
+	/** When true, successful runtime discovery replaces bundled provider models instead of merging fallback-only IDs. */
+	dynamicModelsAuthoritative?: boolean;
 	/** Catalog discovery configuration. Only providers with this field participate in generate-models.ts. */
 	catalogDiscovery?: CatalogDiscoveryConfig;
 }
@@ -88,7 +90,7 @@ function descriptor(
 	providerId: KnownProvider,
 	defaultModel: string,
 	createModelManagerOptions: ProviderDescriptor["createModelManagerOptions"],
-	options: Pick<ProviderDescriptor, "allowUnauthenticated"> = {},
+	options: Pick<ProviderDescriptor, "allowUnauthenticated" | "dynamicModelsAuthoritative"> = {},
 ): ProviderDescriptor {
 	return {
 		providerId,
@@ -115,7 +117,7 @@ function catalogDescriptor(
 	defaultModel: string,
 	createModelManagerOptions: ProviderDescriptor["createModelManagerOptions"],
 	catalogDiscovery: CatalogDiscoveryConfig,
-	options: Pick<ProviderDescriptor, "allowUnauthenticated"> = {},
+	options: Pick<ProviderDescriptor, "allowUnauthenticated" | "dynamicModelsAuthoritative"> = {},
 ): ProviderDescriptor {
 	return {
 		...descriptor(providerId, defaultModel, createModelManagerOptions, options),
@@ -248,9 +250,10 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 	),
 	catalogDescriptor(
 		"synthetic",
-		"hf:moonshotai/Kimi-K2.5",
+		"hf:zai-org/GLM-5.1",
 		config => syntheticModelManagerOptions(config),
 		catalog("Synthetic", ["SYNTHETIC_API_KEY"]),
+		{ dynamicModelsAuthoritative: true },
 	),
 	catalogDescriptor(
 		"venice",

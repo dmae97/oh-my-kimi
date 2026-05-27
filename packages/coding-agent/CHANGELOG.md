@@ -75,6 +75,10 @@
 
 - Warned when legacy inline `LINE:TEXT` lines are accepted as payload continuations only when inside a pending multi-line `A-B:` replacement
 
+### Fixed
+
+- Fixed runtime model registry refresh and cache loading so providers with authoritative dynamic catalogs, including Synthetic, do not re-add deprecated bundled model IDs after discovery ([#1417](https://github.com/can1357/oh-my-pi/issues/1417)).
+
 ## [15.5.2] - 2026-05-26
 ### Breaking Changes
 
