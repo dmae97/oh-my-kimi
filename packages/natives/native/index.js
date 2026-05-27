@@ -16,8 +16,6 @@ import { loadNative } from "./loader-state.js";
 const nativeBindings = loadNative();
 // --- generated native exports (do not edit) ---
 // classes
-export const Hashline = nativeBindings.Hashline;
-export const HashlineChunker = nativeBindings.HashlineChunker;
 export const MacAppearanceObserver = nativeBindings.MacAppearanceObserver;
 export const MacOSPowerAssertion = nativeBindings.MacOSPowerAssertion;
 export const Process = nativeBindings.Process;
@@ -67,28 +65,6 @@ export const visibleWidth = nativeBindings.visibleWidth;
 export const wrapTextWithAnsi = nativeBindings.wrapTextWithAnsi;
 
 // string/numeric enums (napi-rs string_enum produces TS-only const enum)
-export const HashlineCursorKind = {
-	Bof: "bof",
-	Eof: "eof",
-	BeforeAnchor: "before_anchor",
-	AfterAnchor: "after_anchor",
-};
-export const HashlineEditKind = {
-	Insert: "insert",
-	Delete: "delete",
-};
-export const HashlineTokenKind = {
-	Blank: "blank",
-	EnvelopeBegin: "envelope-begin",
-	EnvelopeEnd: "envelope-end",
-	Abort: "abort",
-	Header: "header",
-	OpInsert: "op-insert",
-	OpReplace: "op-replace",
-	OpDelete: "op-delete",
-	Payload: "payload",
-	Raw: "raw",
-};
 export const AstMatchStrictness = {
 	Cst: "cst",
 	Smart: "smart",
