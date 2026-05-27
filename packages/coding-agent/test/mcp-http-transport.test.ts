@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Server } from "bun";
 import { connectToServer } from "../src/mcp/client";
+import { resolveSSEConnectTimeoutMs } from "../src/mcp/transports/http";
 import type { MCPServerConnection } from "../src/mcp/types";
 
 let activeServer: Server<undefined> | undefined;
@@ -65,5 +66,35 @@ describe("HTTP MCP transport", () => {
 		} finally {
 			await connection?.transport.close();
 		}
+	});
+
+	describe("resolveSSEConnectTimeoutMs", () => {
+		const originalEnv = process.env.OMP_MCP_TIMEOUT_MS;
+
+		beforeEach(() => {
+			delete process.env.OMP_MCP_TIMEOUT_MS;
+		});
+
+		afterEach(() => {
+			if (originalEnv === undefined) delete process.env.OMP_MCP_TIMEOUT_MS;
+			else process.env.OMP_MCP_TIMEOUT_MS = originalEnv;
+		});
+
+		it("returns 0 when the server config disables the MCP timeout", () => {
+			expect(resolveSSEConnectTimeoutMs(0)).toBe(0);
+		});
+
+		it("returns 0 when OMP_MCP_TIMEOUT_MS disables the MCP timeout", () => {
+			process.env.OMP_MCP_TIMEOUT_MS = "0";
+			expect(resolveSSEConnectTimeoutMs(undefined)).toBe(0);
+		});
+
+		it("caps the startup deadline at one second for the default request budget", () => {
+			expect(resolveSSEConnectTimeoutMs(30_000)).toBe(1_000);
+		});
+
+		it("scales below short request budgets so connect-time never exceeds them", () => {
+			expect(resolveSSEConnectTimeoutMs(200)).toBe(50);
+		});
 	});
 });
