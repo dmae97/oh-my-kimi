@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.5.4] - 2026-05-27
+
 ### Breaking Changes
 
 - Removed the package root `hashline` export so imports from the top-level entrypoint can no longer access `hashline` helpers directly

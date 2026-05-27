@@ -1,8 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
 All notable changes to this package will be documented in this file.
 
-## [Unreleased]
+## [15.5.4] - 2026-05-27
 ### Added
 
 - Added a high-level `Patcher` API with all-or-nothing `apply` and staged `prepare`/`commit` flows for multi-file patch updates
