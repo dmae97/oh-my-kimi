@@ -120,4 +120,48 @@ describe("verifyExpectedFiles", () => {
 			await cleanup();
 		}
 	});
+
+	it("normalizes indent-only diffs even when earlier insertions shift line indices", async () => {
+		const { expectedDir, actualDir, cleanup } = await createTempDirs();
+		try {
+			// Force prettier to bail (intentional syntax error: unbalanced brace) so the
+			// verifier falls back to the whitespace-restore pass on raw content.
+			const expected = [
+				"function broken(",
+				"  // missing close paren on purpose",
+				"  return {",
+				"      a: 1,",
+				"      b: 2,",
+				"  };",
+				"}",
+				"",
+			].join("\n");
+			const actual = [
+				"function broken(",
+				"  // missing close paren on purpose",
+				"  const inserted = true;",
+				"  return {",
+				"    a: 1,",
+				"    b: 2,",
+				"  };",
+				"}",
+				"",
+			].join("\n");
+			await Bun.write(path.join(expectedDir, "index.ts"), expected);
+			await Bun.write(path.join(actualDir, "index.ts"), actual);
+
+			const result = await verifyExpectedFiles(expectedDir, actualDir);
+
+			// The only real change should be the inserted const; the body's indent
+			// drift must not be reported as added/removed lines.
+			expect(result.success).toBe(false);
+			const diff = result.diff ?? "";
+			const changeLines = diff.split("\n").filter(line => line.startsWith("+") || line.startsWith("-"));
+			expect(changeLines.some(line => line.includes("const inserted"))).toBe(true);
+			expect(changeLines.some(line => line.includes("a:"))).toBe(false);
+			expect(changeLines.some(line => line.includes("b:"))).toBe(false);
+		} finally {
+			await cleanup();
+		}
+	});
 });
