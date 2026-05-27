@@ -14,7 +14,7 @@ import {
 	computeFileHash,
 	InMemorySnapshotStore,
 	parsePatch,
-	RECOVERY_SESSION_CHAIN_WARNING,
+	RECOVERY_SESSION_REPLAY_WARNING,
 	Recovery,
 } from "@oh-my-pi/hashline";
 
@@ -73,11 +73,10 @@ describe("Recovery — session-chain replay anchor-content gate", () => {
 		// Prior in-session change must survive — the model's edit lands on
 		// top of current, not on top of the stale snapshot.
 		expect(recovered?.text).toContain("L5-CHANGED");
-		expect(recovered?.warnings).toContain(RECOVERY_SESSION_CHAIN_WARNING);
-		// No hedged "verify the diff" warning leaks through any path — the
-		// anchor-content gate makes that warning class unreachable.
-		for (const warning of recovered?.warnings ?? []) {
-			expect(warning).not.toMatch(/Verify the diff matches your intent/);
-		}
+		// The replay path is the less-certain recovery mode (a coincidental
+		// insert+delete pair earlier in the chain could leave indices
+		// pointing at duplicated rows even with both guards satisfied), so
+		// the dedicated REPLAY warning surfaces a "verify the diff" hedge.
+		expect(recovered?.warnings).toContain(RECOVERY_SESSION_REPLAY_WARNING);
 	});
 });

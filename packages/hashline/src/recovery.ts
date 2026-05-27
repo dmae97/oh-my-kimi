@@ -11,7 +11,7 @@
 import * as Diff from "diff";
 import { applyEdits } from "./apply";
 import { computeFileHash } from "./format";
-import { RECOVERY_EXTERNAL_WARNING, RECOVERY_SESSION_CHAIN_WARNING } from "./messages";
+import { RECOVERY_EXTERNAL_WARNING, RECOVERY_SESSION_CHAIN_WARNING, RECOVERY_SESSION_REPLAY_WARNING } from "./messages";
 import type { Snapshot, SnapshotStore } from "./snapshots";
 import type { Anchor, ApplyOptions, ApplyResult, Edit } from "./types";
 
@@ -105,13 +105,19 @@ function replaySessionChainOnCurrent(
 	edits: readonly Edit[],
 	options: ApplyOptions,
 ): RecoveryResult | null {
-	// Two guards. Both required.
+	// Two guards narrow the corruption window. Neither alone is sufficient,
+	// and even together they don't fully prove correctness — replay is the
+	// less-certain recovery mode and emits RECOVERY_SESSION_REPLAY_WARNING
+	// so the caller can verify the diff.
 	//   - Equal line counts: every line number in `edits` still resolves to
-	//     the same logical row (no insert/delete shifted indices).
-	//   - Anchor-content alignment: the prior in-session edit didn't rewrite
-	//     the very line the model is now re-targeting with a stale hash. If
-	//     it did, replaying onto current would land the new payload on top
-	//     of content the model never saw — corruption, not recovery.
+	//     SOME logical row (no net shift across the prior chain). A
+	//     coincidental insert+delete pair can still leave indices pointing
+	//     at different logical rows than the model anchored against.
+	//   - Anchor-content alignment: the row at each anchor's line index has
+	//     identical content in previous and current. Catches the common
+	//     case of a prior edit rewriting the targeted line; can still be
+	//     coincidentally satisfied by a duplicated row at the shifted
+	//     index.
 	if (previousText.split("\n").length !== currentText.split("\n").length) return null;
 	if (!verifyAnchorContent(previousText, currentText, edits)) return null;
 	let applied: ApplyResult;
@@ -124,7 +130,7 @@ function replaySessionChainOnCurrent(
 	return {
 		text: applied.text,
 		firstChangedLine: applied.firstChangedLine,
-		warnings: [RECOVERY_SESSION_CHAIN_WARNING, ...(applied.warnings ?? [])],
+		warnings: [RECOVERY_SESSION_REPLAY_WARNING, ...(applied.warnings ?? [])],
 	};
 }
 
