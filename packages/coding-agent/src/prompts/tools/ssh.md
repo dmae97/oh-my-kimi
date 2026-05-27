@@ -1,7 +1,7 @@
 Runs commands on remote hosts.
 
 <instruction>
-You MUST build commands from the reference below
+Build commands from the reference below.
 </instruction>
 
 <commands>
@@ -22,7 +22,7 @@ You MUST build commands from the reference below
 </commands>
 
 <critical>
-You MUST verify the shell type from "Available hosts" and use matching commands.
+Check the shell type from "Available hosts" and use matching commands — mismatched syntax will fail on the remote.
 </critical>
 
 <examples>

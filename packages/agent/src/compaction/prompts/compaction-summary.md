@@ -1,8 +1,8 @@
-You MUST summarize the conversation above into a structured context checkpoint handoff summary for another LLM to resume task.
+Please summarize the conversation above into a structured context checkpoint handoff summary so another LLM can resume the task.
 
-IMPORTANT: If conversation ends with unanswered question to user or imperative/request awaiting user response (e.g., "Please run command and paste output"), you MUST preserve that exact question/request.
+Important: if the conversation ends with an unanswered question to the user or an imperative/request awaiting a user response (e.g., "Please run command and paste output"), preserve that exact question/request.
 
-You MUST use this format (sections can be omitted if not applicable):
+Use this format (sections can be omitted if not applicable):
 
 ## Goal
 [User goals; list multiple if session covers different tasks.]
@@ -33,6 +33,6 @@ You MUST use this format (sections can be omitted if not applicable):
 ## Additional Notes
 [Anything else important not covered above]
 
-You MUST output only the structured summary; you NEVER include extra text.
+Output only the structured summary — no extra text around it.
 
-Sections MUST be kept concise. You MUST preserve exact file paths, function names, error messages, and relevant tool outputs or command results. You MUST include repository state changes (branch, uncommitted changes) if mentioned.
+Keep sections concise. Preserve exact file paths, function names, error messages, and relevant tool outputs or command results. Include repository state changes (branch, uncommitted changes) if they were mentioned.

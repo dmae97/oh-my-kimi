@@ -1,10 +1,10 @@
 <critical>
-Plan approved. You MUST execute it now.
+Plan approved — please execute it now.
 </critical>
 
 Finalized plan artifact: `{{finalPlanFilePath}}`
 {{#if contextPreserved}}
-Context preserved. Use conversation history when useful; the finalized plan is the source of truth if it conflicts with earlier exploration.
+Context preserved. Use conversation history when useful; if it conflicts with the finalized plan, the plan is the source of truth.
 {{else}}
 Execution may be in fresh context. Treat the finalized plan as the source of truth.
 {{/if}}
@@ -14,15 +14,15 @@ Execution may be in fresh context. Treat the finalized plan as the source of tru
 {{planContent}}
 
 <instruction>
-You MUST execute this plan step by step from `{{finalPlanFilePath}}`. You have full tool access.
-You MUST verify each step before proceeding to the next.
+Work through this plan step by step from `{{finalPlanFilePath}}`. You have full tool access.
+Verify each step before moving to the next.
 {{#has tools "todo_write"}}
 Before execution, initialize todo tracking with `todo_write`.
-After each completed step, immediately update `todo_write`.
+After each completed step, update `todo_write` right away.
 If `todo_write` fails, fix the payload and retry before continuing.
 {{/has}}
 </instruction>
 
 <critical>
-You MUST keep going until complete. This matters.
+Keep going until the plan is complete.
 </critical>

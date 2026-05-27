@@ -1,15 +1,16 @@
-You MUST incorporate new messages above into the existing handoff summary in <previous-summary> tags, used by another LLM to resume task.
-RULES:
-- MUST preserve all information from previous summary
-- MUST add new progress, decisions, and context from new messages
-- MUST update Progress: move items from "In Progress" to "Done" when completed
-- MUST update "Next Steps" based on what was accomplished
-- MUST preserve exact file paths, function names, and error messages
-- You MAY remove anything no longer relevant
+Please fold the new messages above into the existing handoff summary in the <previous-summary> tags. Another LLM will read the result to resume the task, so the merged summary needs to stand on its own.
 
-IMPORTANT: If new messages end with unanswered question or request to user, you MUST add it to Critical Context (replacing any previous pending question if answered).
+Guidelines:
+- Carry every piece of information from the previous summary forward.
+- Add the new progress, decisions, and context from the new messages.
+- Update Progress: move items from "In Progress" to "Done" once they're finished.
+- Refresh "Next Steps" to reflect what was just accomplished.
+- Keep file paths, function names, and error messages exactly as written.
+- Feel free to drop anything that's no longer relevant.
 
-You MUST use this format (omit sections if not applicable):
+If the new messages end with an unanswered question or a request to the user, add it to Critical Context (replacing any earlier pending question that has since been answered).
+
+Use this format (skip sections that don't apply):
 
 ## Goal
 [Preserve existing goals; add new ones if task expanded]
@@ -40,6 +41,6 @@ You MUST use this format (omit sections if not applicable):
 ## Additional Notes
 [Other important info not fitting above]
 
-You MUST output only the structured summary; you NEVER include extra text.
+Output only the structured summary — no preamble, no commentary around it.
 
-Sections MUST be kept concise. You MUST preserve relevant tool outputs/command results. You MUST include repository state changes (branch, uncommitted changes) if mentioned.
+Keep sections concise. Preserve relevant tool outputs and command results. If repository state changes (branch, uncommitted changes) were mentioned, include them.
