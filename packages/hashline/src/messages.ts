@@ -48,6 +48,14 @@ export const RECOVERY_EXTERNAL_WARNING =
 export const RECOVERY_SESSION_CHAIN_WARNING =
 	"Recovered from a stale file hash using an earlier in-session snapshot (the file hash advanced after a prior edit in this session).";
 
-/** Warning text emitted by `Recovery` when the session-chain fast-path was taken. */
+/**
+ * Warning text emitted by `Recovery` when the session-chain replay
+ * fast-path was taken. Distinct from {@link RECOVERY_SESSION_CHAIN_WARNING}
+ * because replay is the less-certain mode: the structured-patch 3-way
+ * merge refused, the anchor-content gate passed, but a coincidental
+ * insert+delete pair earlier in the chain could still leave an anchor's
+ * line number pointing at a duplicated row. Surface the hedge so the
+ * model verifies before continuing.
+ */
 export const RECOVERY_SESSION_REPLAY_WARNING =
 	"Recovered by replaying your edits onto the current file content — your previous edit in this session changed line(s) you re-targeted with a stale hash. Verify the diff matches your intent before continuing.";

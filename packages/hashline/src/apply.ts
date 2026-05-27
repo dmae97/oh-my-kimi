@@ -39,9 +39,18 @@ function isReplacementInsert(edit: Edit): edit is Extract<Edit, { kind: "insert"
 
 function getEditAnchors(edit: Edit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
-	if (edit.cursor.kind === "before_anchor") return [edit.cursor.anchor];
-	if (edit.cursor.kind === "after_anchor") return [edit.cursor.anchor];
-	return [];
+	switch (edit.cursor.kind) {
+		case "before_anchor":
+		case "after_anchor":
+			return [edit.cursor.anchor];
+		case "bof":
+		case "eof":
+			return [];
+		default: {
+			const _exhaustive: never = edit.cursor;
+			return _exhaustive;
+		}
+	}
 }
 
 /**

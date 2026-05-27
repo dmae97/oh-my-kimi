@@ -13,7 +13,7 @@ import { applyEdits } from "./apply";
 import { computeFileHash } from "./format";
 import { RECOVERY_EXTERNAL_WARNING, RECOVERY_SESSION_CHAIN_WARNING, RECOVERY_SESSION_REPLAY_WARNING } from "./messages";
 import type { Snapshot, SnapshotStore } from "./snapshots";
-import type { ApplyOptions, ApplyResult, Edit } from "./types";
+import type { Anchor, ApplyOptions, ApplyResult, Edit } from "./types";
 
 // Section hashes are line-precise; never let Diff.applyPatch slide a hunk
 // onto a duplicate closer 100+ lines away. If snapshot replay does not
@@ -63,16 +63,72 @@ function applyEditsToSnapshot(
 	return { text: merged, firstChangedLine, warnings };
 }
 
+function collectAnchorLines(edits: readonly Edit[]): number[] {
+	const lines: number[] = [];
+	for (const edit of edits) {
+		for (const anchor of getEditAnchors(edit)) lines.push(anchor.line);
+	}
+	return lines;
+}
+
+function getEditAnchors(edit: Edit): Anchor[] {
+	if (edit.kind === "delete") return [edit.anchor];
+	switch (edit.cursor.kind) {
+		case "before_anchor":
+		case "after_anchor":
+			return [edit.cursor.anchor];
+		case "bof":
+		case "eof":
+			return [];
+		default: {
+			const _exhaustive: never = edit.cursor;
+			return _exhaustive;
+		}
+	}
+}
+
+/**
+ * Returns true when every anchor line in `edits` has identical content in
+ * `previousText` and `currentText`. The session-chain replay fast-path
+ * requires this: if the prior in-session edit rewrote the line the model is
+ * now re-targeting with a stale hash, replaying onto current would silently
+ * overwrite the new content with whatever the model authored against the
+ * old content — a corruption window, not a recovery.
+ */
+function verifyAnchorContent(previousText: string, currentText: string, edits: readonly Edit[]): boolean {
+	const lines = collectAnchorLines(edits);
+	if (lines.length === 0) return true;
+	const prev = previousText.split("\n");
+	const curr = currentText.split("\n");
+	for (const line of lines) {
+		const idx = line - 1;
+		if (idx < 0 || idx >= prev.length || idx >= curr.length) return false;
+		if (prev[idx] !== curr[idx]) return false;
+	}
+	return true;
+}
+
 function replaySessionChainOnCurrent(
 	previousText: string,
 	currentText: string,
 	edits: readonly Edit[],
 	options: ApplyOptions,
 ): RecoveryResult | null {
-	// Only safe when no insert/delete shifted line counts in the prior edit
-	// chain: if total line counts match, every line number in `edits` still
-	// resolves to the same logical row.
+	// Two guards narrow the corruption window. Neither alone is sufficient,
+	// and even together they don't fully prove correctness — replay is the
+	// less-certain recovery mode and emits RECOVERY_SESSION_REPLAY_WARNING
+	// so the caller can verify the diff.
+	//   - Equal line counts: every line number in `edits` still resolves to
+	//     SOME logical row (no net shift across the prior chain). A
+	//     coincidental insert+delete pair can still leave indices pointing
+	//     at different logical rows than the model anchored against.
+	//   - Anchor-content alignment: the row at each anchor's line index has
+	//     identical content in previous and current. Catches the common
+	//     case of a prior edit rewriting the targeted line; can still be
+	//     coincidentally satisfied by a duplicated row at the shifted
+	//     index.
 	if (previousText.split("\n").length !== currentText.split("\n").length) return null;
+	if (!verifyAnchorContent(previousText, currentText, edits)) return null;
 	let applied: ApplyResult;
 	try {
 		applied = applyEdits(currentText, [...edits], options);
@@ -123,8 +179,12 @@ function isHeadSnapshot(head: Snapshot | null, snapshot: Snapshot): boolean {
  *
  * 1. Apply on the cached `fullText` snapshot, then 3-way-merge onto current.
  * 2. (Session chain) If the snapshot wasn't the head, retry on current text
- *    when line counts match — the user's previous edit advanced the hash but
- *    didn't shift line numbers.
+ *    when line counts match AND every edit's anchor line content is unchanged
+ *    between snapshot and current — the previous in-session edit advanced
+ *    the hash and the model's anchors still name the same logical rows. Emits
+ *    a dedicated {@link RECOVERY_SESSION_REPLAY_WARNING} because even with
+ *    both guards a coincidental insert+delete pair on duplicate rows can
+ *    still land the edit on the wrong row; see {@link replaySessionChainOnCurrent}.
  * 3. Reconstruct from a sparse snapshot (lines map only), verify the rebuilt
  *    text hashes to the expected value, then 3-way-merge.
  */
@@ -148,10 +208,10 @@ export class Recovery {
 		if (snapshot.fullText !== undefined) {
 			const merged = applyEditsToSnapshot(snapshot.fullText, currentText, edits, options, recoveryWarning);
 			if (merged !== null) return merged;
-			// Session-chain fast-path: prior in-session edit changed the same
-			// line(s) the user is now re-targeting with the stale hash. When
-			// line counts match, the edits' line numbers still resolve to the
-			// right rows — replay onto the current text directly.
+			// Session-chain fallback: the 3-way merge on the snapshot refused.
+			// Replay onto current is gated by line-count equality AND
+			// anchor-content alignment — see `replaySessionChainOnCurrent`
+			// for why both guards together still don't fully prove correctness.
 			if (isSessionChain) return replaySessionChainOnCurrent(snapshot.fullText, currentText, edits, options);
 			return null;
 		}
