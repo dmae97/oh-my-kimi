@@ -7,6 +7,7 @@ import type { Effort } from "./model-thinking";
 import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
+	modelOmitsReasoningEffort,
 	requireSupportedEffort,
 } from "./model-thinking";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
@@ -567,6 +568,14 @@ function resolveOpenAiReasoningEffort<TApi extends Api>(
 ): Effort | undefined {
 	const reasoning = options?.reasoning;
 	if (!reasoning || !model.reasoning) return undefined;
+	// Models with compat.supportsReasoningEffort: false reason natively but
+	// reject the wire effort param. The wire-side omitReasoningEffort gate
+	// (providers/xai-responses.ts:78) is the actual strip; returning
+	// undefined here avoids a redundant requireSupportedEffort throw that
+	// would defeat the gate and surface a confusing
+	// "Compaction failed: Thinking effort high is not supported by..." to
+	// the user.
+	if (modelOmitsReasoningEffort(model)) return undefined;
 	return requireSupportedEffort(model, reasoning);
 }
 

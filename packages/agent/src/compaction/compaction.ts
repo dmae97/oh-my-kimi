@@ -7,6 +7,7 @@
 
 import {
 	type AssistantMessage,
+	clampThinkingLevelForModel,
 	Effort,
 	type Message,
 	type MessageAttribution,
@@ -16,6 +17,7 @@ import {
 import { countTokens } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
+import { ThinkingLevel } from "../thinking";
 import type { AgentMessage, AgentTool } from "../types";
 import type { CompactionEntry, SessionEntry } from "./entries";
 import { type ConvertToLlm, convertToLlm, createBranchSummaryMessage, createCustomMessage } from "./messages";
@@ -503,6 +505,52 @@ function formatAdditionalContext(context: string[] | undefined): string {
 }
 
 /**
+ * Maps the non-special `ThinkingLevel` values to their `Effort` counterparts.
+ * Exhaustive over the union; throws for `Off`/`Inherit` to surface logic
+ * errors in callers that forgot to filter those out. Never use a TS cast for
+ * this — `ThinkingLevel` is a string-union over distinct concepts (Off /
+ * Inherit are not Efforts), and a cast hides the contract.
+ */
+function effortFromThinkingLevel(level: ThinkingLevel): Effort {
+	switch (level) {
+		case ThinkingLevel.Minimal:
+			return Effort.Minimal;
+		case ThinkingLevel.Low:
+			return Effort.Low;
+		case ThinkingLevel.Medium:
+			return Effort.Medium;
+		case ThinkingLevel.High:
+			return Effort.High;
+		case ThinkingLevel.XHigh:
+			return Effort.XHigh;
+		case ThinkingLevel.Off:
+		case ThinkingLevel.Inherit:
+			throw new Error(`effortFromThinkingLevel: ${level} must be handled by caller`);
+	}
+}
+
+/**
+ * Resolves the reasoning effort to send on a compaction LLM call.
+ *
+ * - Explicit `Off` → `undefined` (omit reasoning entirely; the user said no thinking).
+ * - `undefined` / `Inherit` → historical `Effort.High` default → clamped per model
+ *   (preserves current behavior for users who never touched the dial).
+ * - Explicit effort → respect user choice → clamped per model.
+ *
+ * The clamp routes through `clampThinkingLevelForModel`, which returns
+ * `undefined` for models with `compat.supportsReasoningEffort: false`
+ * (e.g. `xai-oauth/grok-build`). That `undefined` then flows through to the
+ * openai-responses mapper where `modelOmitsReasoningEffort` short-circuits
+ * the wire param — no `requireSupportedEffort` throw.
+ */
+function resolveCompactionEffort(model: Model, level: ThinkingLevel | undefined): Effort | undefined {
+	if (level === ThinkingLevel.Off) return undefined;
+	const requested: Effort =
+		level === undefined || level === ThinkingLevel.Inherit ? Effort.High : effortFromThinkingLevel(level);
+	return clampThinkingLevelForModel(model, requested);
+}
+
+/**
  * Generate a summary of the conversation using the LLM.
  * If previousSummary is provided, uses the update prompt to merge.
  */
@@ -521,6 +569,15 @@ export interface SummaryOptions {
 	 * or `compaction_turn_prefix`). `undefined` keeps the call paths zero-cost.
 	 */
 	telemetry?: AgentTelemetry;
+	/**
+	 * Active session thinking level. Threaded from `agent-session.ts` so
+	 * compaction honors the user's `/model` thinking selection instead of
+	 * silently overriding it with `Effort.High` (the historical default).
+	 * `undefined` / `ThinkingLevel.Inherit` falls back to that historical
+	 * default; `ThinkingLevel.Off` omits reasoning entirely. See
+	 * `resolveCompactionEffort` for the conversion contract.
+	 */
+	thinkingLevel?: ThinkingLevel;
 }
 
 export async function generateSummary(
@@ -584,7 +641,7 @@ export async function generateSummary(
 			maxTokens,
 			signal,
 			apiKey,
-			reasoning: Effort.High,
+			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 		},
@@ -621,6 +678,13 @@ export interface HandoffOptions {
 	 * wrapped in an OTEL chat span tagged with `pi.gen_ai.oneshot.kind = "handoff"`.
 	 */
 	telemetry?: AgentTelemetry;
+	/**
+	 * Active session thinking level. Threaded from `agent-session.ts` so
+	 * handoff generation honors the user's `/model` thinking selection
+	 * instead of silently overriding it with `Effort.High`. See
+	 * `resolveCompactionEffort` for the conversion contract.
+	 */
+	thinkingLevel?: ThinkingLevel;
 }
 
 export function renderHandoffPrompt(customInstructions?: string): string {
@@ -658,7 +722,7 @@ export async function generateHandoff(
 		{
 			apiKey,
 			signal,
-			reasoning: Effort.High,
+			reasoning: resolveCompactionEffort(model, options.thinkingLevel),
 			toolChoice: "none",
 			initiatorOverride: options.initiatorOverride,
 			metadata: options.metadata,
@@ -718,7 +782,7 @@ async function generateShortSummary(
 			maxTokens,
 			signal,
 			apiKey,
-			reasoning: Effort.High,
+			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 		},
@@ -905,6 +969,12 @@ export async function compact(
 		metadata: options?.metadata,
 		convertToLlm: options?.convertToLlm,
 		telemetry: options?.telemetry,
+		// Honor /model thinking selection on every fan-out summarizer.
+		// Without this propagation, generateSummary / generateTurnPrefixSummary
+		// see options?.thinkingLevel === undefined and resolveCompactionEffort
+		// silently falls back to Effort.High — the same defect e07b47ee4 fixed
+		// at the call sites, leaked back in here. See resolveCompactionEffort.
+		thinkingLevel: options?.thinkingLevel,
 	};
 
 	let preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, undefined);
@@ -995,6 +1065,9 @@ export async function compact(
 			initiatorOverride: summaryOptions.initiatorOverride,
 			metadata: summaryOptions.metadata,
 			telemetry: summaryOptions.telemetry,
+			// Same propagation as summaryOptions above — generateShortSummary
+			// resolves its own reasoning via resolveCompactionEffort.
+			thinkingLevel: options?.thinkingLevel,
 		},
 	);
 
@@ -1047,7 +1120,7 @@ async function generateTurnPrefixSummary(
 			maxTokens,
 			signal,
 			apiKey,
-			reasoning: Effort.High,
+			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 		},

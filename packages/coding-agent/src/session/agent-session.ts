@@ -5579,6 +5579,11 @@ export class AgentSession {
 					initiatorOverride: "agent",
 					metadata: this.agent.metadataForProvider(model.provider),
 					telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
+					// Honor the user's /model thinking selection on the handoff
+					// path. Clamped per-model inside generateHandoff via
+					// resolveCompactionEffort so unsupported-effort models don't
+					// trip requireSupportedEffort.
+					thinkingLevel: this.thinkingLevel,
 				},
 				handoffSignal,
 			);
@@ -6349,6 +6354,11 @@ export class AgentSession {
 					metadata: this.agent.metadataForProvider(candidate.provider),
 					convertToLlm,
 					telemetry,
+					// Honor the user's /model thinking selection (incl. `off`) on
+					// the manual `/compact` path. Clamped per-model inside compact()
+					// via resolveCompactionEffort so unsupported-effort models
+					// (xai-oauth/grok-build) don't trip requireSupportedEffort.
+					thinkingLevel: this.thinkingLevel,
 				});
 			} catch (error) {
 				if (!this.#isCompactionAuthFailure(error)) {
@@ -6621,6 +6631,11 @@ export class AgentSession {
 								initiatorOverride: "agent",
 								convertToLlm,
 								telemetry,
+								// Honor the user's /model thinking selection on the
+								// auto-compaction path — the most-fired compaction
+								// site. Clamped per-model inside compact() via
+								// resolveCompactionEffort.
+								thinkingLevel: this.thinkingLevel,
 							});
 							break;
 						} catch (error) {

@@ -199,6 +199,28 @@ export function linkOpenAIPromotionTargets(models: ApiModel<Api>[]): void {
 }
 
 /**
+ * True when the model reasons natively but rejects the wire `reasoning.effort`
+ * param (compat.supportsReasoningEffort: false on openai-responses*). Callers
+ * are expected to omit the effort field; the wire-side omitReasoningEffort
+ * gate (providers/xai-responses.ts:78) is the actual strip, and this
+ * predicate is the upstream check that prevents a redundant
+ * requireSupportedEffort throw from defeating that gate.
+ *
+ * Scoped to openai-responses* because that's the only API surface where
+ * `compat.supportsReasoningEffort: false` is meaningful today. The
+ * `in`-narrowed access is necessary because Model.compat is
+ * `AnthropicCompat | OpenAICompat` and the api gate doesn't narrow the
+ * union for TS.
+ */
+export function modelOmitsReasoningEffort<TApi extends Api>(model: ApiModel<TApi>): boolean {
+	if (model.api !== "openai-responses" && model.api !== "openai-codex-responses") {
+		return false;
+	}
+	const compat = model.compat;
+	return Boolean(compat && "supportsReasoningEffort" in compat && compat.supportsReasoningEffort === false);
+}
+
+/**
  * Returns the supported thinking efforts declared on the model metadata.
  *
  * Catalog enrichment is responsible for normalizing bundled model metadata up front.
@@ -209,6 +231,16 @@ export function linkOpenAIPromotionTargets(models: ApiModel<Api>[]): void {
  */
 export function getSupportedEfforts<TApi extends Api>(model: ApiModel<TApi>): readonly Effort[] {
 	if (!model.reasoning) {
+		return [];
+	}
+	// Models that reason natively but reject the `reasoning.effort` wire param
+	// (xAI Grok off the GROK_EFFORT_CAPABLE_PREFIXES allowlist in
+	// providers/xai-responses.ts: grok-build, grok-4.20-0309-reasoning) hide the
+	// picker's effort dial. Scoped to openai-responses* by
+	// `modelOmitsReasoningEffort` — openai-completions has its own
+	// supportsReasoningEffort consultation at inferFallbackEfforts L536 and
+	// changing that path's semantics is out-of-scope.
+	if (modelOmitsReasoningEffort(model)) {
 		return [];
 	}
 	if (!model.thinking) {
