@@ -140,4 +140,70 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			await session.dispose();
 		}
 	});
+
+	it("keeps the hidden resolve tool registered for plan mode even when no deferrable tool is requested", async () => {
+		// Regression for #1428: plan mode submits its finalized plan via
+		// `resolve { action: "apply" }` dispatched through a standing handler
+		// (interactive-mode.ts: `setStandingResolveHandler`). With an explicit
+		// read-only `toolNames` (e.g. `read`, `search`, `find`, `web_search`)
+		// the registry has no `deferrable` tool, so the previous gate dropped
+		// `resolve` from the registry and plan mode silently activated without
+		// it — leaving the agent stuck after drafting the plan.
+		const tempDir = path.join(os.tmpdir(), `pi-sdk-tool-activation-${Snowflake.next()}`);
+		tempDirs.push(tempDir);
+		fs.mkdirSync(tempDir, { recursive: true });
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated(),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			toolNames: ["read", "search", "find", "web_search"],
+		});
+
+		try {
+			expect(session.getToolByName("resolve")).toBeDefined();
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("drops the hidden resolve tool when neither a deferrable tool nor plan mode can use it", async () => {
+		const tempDir = path.join(os.tmpdir(), `pi-sdk-tool-activation-${Snowflake.next()}`);
+		tempDirs.push(tempDir);
+		fs.mkdirSync(tempDir, { recursive: true });
+
+		const settings = Settings.isolated();
+		settings.set("plan.enabled", false);
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			toolNames: ["read", "search", "find", "web_search"],
+		});
+
+		try {
+			expect(session.getToolByName("resolve")).toBeUndefined();
+		} finally {
+			await session.dispose();
+		}
+	});
 });

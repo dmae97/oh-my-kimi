@@ -1526,8 +1526,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			toolRegistry.delete("edit");
 		}
 
+		// `resolve` is hidden but must stay in the registry whenever any code path can invoke it:
+		// either a deferrable tool stages a preview action, or plan mode installs a standing handler
+		// that consumes `resolve { action: "apply" }` to submit the plan for approval (issue #1428).
+		// Dropping it on read-only sessions (e.g. plan-mode toolset `read`, `search`, `find`,
+		// `web_search`) leaves plan mode unable to exit through the intended path.
 		const hasDeferrableTools = Array.from(toolRegistry.values()).some(tool => tool.deferrable === true);
-		if (!hasDeferrableTools) {
+		const planModeAvailable = settings.get("plan.enabled");
+		const needsResolveTool = hasDeferrableTools || planModeAvailable;
+		if (!needsResolveTool) {
 			toolRegistry.delete("resolve");
 		} else if (!toolRegistry.has("resolve")) {
 			const resolveTool = await logger.time("createTools:resolve:session", HIDDEN_TOOLS.resolve, toolSession);
