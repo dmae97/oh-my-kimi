@@ -89,4 +89,64 @@ describe("imageGenTool", () => {
 		expect(savedPath.endsWith(".webp")).toBe(true);
 		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("fake-webp"));
 	});
+
+	it("routes xAI image generation with xAI-only aspect ratios", async () => {
+		setPreferredImageProvider("xai");
+		let requestUrl: string | undefined;
+		let requestBody: Record<string, unknown> | undefined;
+		let authorization: string | null = null;
+		let userAgent: string | null = null;
+
+		const fetchMock: typeof fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			requestUrl = input.toString();
+			requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			const headers = new Headers(init?.headers);
+			authorization = headers.get("authorization");
+			userAgent = headers.get("user-agent");
+			return new Response(
+				JSON.stringify({
+					data: [{ b64_json: Buffer.from("fake-xai-image").toString("base64") }],
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			);
+		}) as unknown as typeof fetch;
+		fetchMock.preconnect = originalFetch.preconnect;
+		global.fetch = fetchMock;
+
+		const ctx: CustomToolContext = {
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKeyForProvider: async (provider: string) =>
+					provider === "xai-oauth" ? "test-xai-token" : undefined,
+			} as unknown as ModelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-xai", { subject: "a cat", aspect_ratio: "3:2" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrl).toBe("https://api.x.ai/v1/images/generations");
+		expect(authorization).toBe("Bearer test-xai-token");
+		expect(userAgent).toBe("oh-my-pi/xai");
+		expect(requestBody).toMatchObject({
+			model: "grok-imagine-image",
+			prompt: "a cat.",
+			aspect_ratio: "3:2",
+			resolution: "1k",
+			n: 1,
+			response_format: "b64_json",
+		});
+		expect(result.details?.provider).toBe("xai");
+		expect(result.details?.model).toBe("grok-imagine-image");
+		expect(result.details?.imageCount).toBe(1);
+		const savedPath = result.details?.imagePaths[0];
+		if (!savedPath) throw new Error("Expected generated image path");
+		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("fake-xai-image"));
+	});
 });

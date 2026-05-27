@@ -65,6 +65,14 @@ describe("refreshXAIOAuthToken", () => {
 	});
 });
 
+describe("XAIOAuthFlow", () => {
+	it("pins the redirect URI to xAI's allowlisted loopback port", () => {
+		const flow = new XAIOAuthFlow({});
+
+		expect(flow.redirectUri).toBe("http://127.0.0.1:56121/callback");
+	});
+});
+
 describe("XAIOAuthFlow.exchangeToken", () => {
 	it("rejects when the token-exchange response is missing access_token", async () => {
 		const fetchMock = vi.fn(async (input: string | URL) => {

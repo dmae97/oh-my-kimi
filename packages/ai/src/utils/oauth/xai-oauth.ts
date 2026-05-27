@@ -10,7 +10,7 @@
  * rejected on every call site, not just the first.
  */
 
-import { OAuthCallbackFlow } from "./callback-server";
+import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
 import type { OAuthController, OAuthCredentials } from "./types";
 
@@ -174,9 +174,8 @@ function buildXAIAuthorizeUrl(opts: BuildXAIAuthorizeUrlOptions): string {
 /**
  * xAI Grok OAuth loopback flow (Hermes `_xai_oauth_loopback_login` L5315-5469).
  *
- * Uses the options-form constructor so the callback server binds to the
- * explicit `127.0.0.1` host xAI requires (the default `localhost` resolution
- * is rejected by xAI's redirect_uri allowlist).
+ * Uses a fixed redirect URI so the callback server fails fast instead of
+ * falling back to a random port that xAI's redirect_uri allowlist rejects.
  */
 export class XAIOAuthFlow extends OAuthCallbackFlow {
 	#verifier: string = "";
@@ -186,7 +185,8 @@ export class XAIOAuthFlow extends OAuthCallbackFlow {
 			preferredPort: XAI_OAUTH_REDIRECT_PORT,
 			callbackPath: XAI_OAUTH_REDIRECT_PATH,
 			callbackHostname: XAI_OAUTH_REDIRECT_HOST,
-		});
+			redirectUri: `http://${XAI_OAUTH_REDIRECT_HOST}:${XAI_OAUTH_REDIRECT_PORT}${XAI_OAUTH_REDIRECT_PATH}`,
+		} satisfies OAuthCallbackFlowOptions);
 	}
 
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {

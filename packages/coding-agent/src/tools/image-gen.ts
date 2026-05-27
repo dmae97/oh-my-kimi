@@ -40,7 +40,9 @@ const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 const IMAGE_SYSTEM_INSTRUCTION =
 	"You are an AI image generator. Generate images based on user descriptions. Focus on creating high-quality, visually appealing images that match the user's request.";
 
-type ImageProvider = "antigravity" | "gemini" | "openai" | "openai-codex" | "openrouter" | "xai";
+export type ImageProvider = "antigravity" | "gemini" | "openai" | "openai-codex" | "openrouter" | "xai";
+export type ImageProviderPreference = Exclude<ImageProvider, "openai-codex"> | "auto";
+
 interface ImageApiKey {
 	provider: ImageProvider;
 	apiKey: string;
@@ -48,8 +50,13 @@ interface ImageApiKey {
 	model?: Model;
 }
 
+const COMMON_IMAGE_ASPECT_RATIOS = ["1:1", "3:4", "4:3", "9:16", "16:9"] as const;
+const XAI_IMAGE_ASPECT_RATIOS = [...COMMON_IMAGE_ASPECT_RATIOS, "3:2", "2:3"] as const;
+const COMMON_IMAGE_ASPECT_RATIO_SET = new Set<string>(COMMON_IMAGE_ASPECT_RATIOS);
+const IMAGE_PROVIDER_PREFERENCES = new Set<string>(["auto", "antigravity", "gemini", "openai", "openrouter", "xai"]);
+
 const responseModalitySchema = z.enum(["IMAGE", "TEXT"] as const);
-const aspectRatioSchema = z.enum(["1:1", "3:4", "4:3", "9:16", "16:9"] as const).describe("aspect ratio");
+const aspectRatioSchema = z.enum(XAI_IMAGE_ASPECT_RATIOS).describe("aspect ratio");
 const imageSizeSchema = z.enum(["1024x1024", "1536x1024", "1024x1536"] as const).describe("image size");
 
 const inputImageSchema = z
@@ -393,11 +400,23 @@ function extractOpenRouterImageUrls(message: OpenRouterMessage | undefined): str
 }
 
 /** Preferred provider set via settings (default: auto) */
-let preferredImageProvider: ImageProvider | "auto" = "auto";
+let preferredImageProvider: ImageProviderPreference = "auto";
+
+export function isImageProviderPreference(value: unknown): value is ImageProviderPreference {
+	return typeof value === "string" && IMAGE_PROVIDER_PREFERENCES.has(value);
+}
 
 /** Set the preferred image provider from settings */
-export function setPreferredImageProvider(provider: ImageProvider | "auto"): void {
+export function setPreferredImageProvider(provider: ImageProviderPreference): void {
 	preferredImageProvider = provider;
+}
+function assertImageAspectRatioSupported(provider: ImageProvider, aspectRatio: ImageGenParams["aspect_ratio"]): void {
+	if (!aspectRatio || provider === "xai" || COMMON_IMAGE_ASPECT_RATIO_SET.has(aspectRatio)) {
+		return;
+	}
+	throw new Error(
+		`Aspect ratio ${aspectRatio} is only supported by xAI image generation. Set providers.image to xai or use one of ${COMMON_IMAGE_ASPECT_RATIOS.join(", ")}.`,
+	);
 }
 
 interface ParsedAntigravityCredentials {
@@ -930,7 +949,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 			const apiKey = await findImageApiKey(ctx.modelRegistry, ctx.model, sessionId);
 			if (!apiKey) {
 				throw new Error(
-					"No image API credentials found. Use a GPT Responses/Codex model with OpenAI credentials, login with google-antigravity, or set OPENROUTER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY.",
+					"No image API credentials found. Use a GPT Responses/Codex model with OpenAI credentials, login with google-antigravity or xAI Grok OAuth, or set XAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY.",
 				);
 			}
 
@@ -946,6 +965,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 								? DEFAULT_XAI_IMAGE_MODEL
 								: DEFAULT_MODEL;
 			const resolvedModel = provider === "openrouter" ? resolveOpenRouterModel(model) : model;
+			assertImageAspectRatioSupported(provider, params.aspect_ratio);
 			const cwd = ctx.sessionManager.getCwd();
 
 			const resolvedImages: InlineImageData[] = [];

@@ -489,6 +489,10 @@ function buildParams(
 		options?.includeEncryptedReasoning ?? true,
 	);
 
+	if (options?.extraBody) {
+		Object.assign(params, options.extraBody);
+	}
+
 	return { conversationMessages, params };
 }
 

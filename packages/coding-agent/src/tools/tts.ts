@@ -4,6 +4,7 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import * as z from "zod/v4";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import { ohMyPiXAIUserAgent, resolveXAIHttpCredentials } from "../lib/xai-http";
+import { formatPathRelativeToCwd, resolveToCwd } from "./path-utils";
 
 // Hermes tts_tool.py L167-171
 const DEFAULT_XAI_VOICE_ID = "eve" as const;
@@ -40,6 +41,7 @@ export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 	name: "tts",
 	label: "TextToSpeech",
 	strict: false,
+	approval: "write",
 	description:
 		`Synthesize speech from text using xAI Grok Voice. Built-in voices: ${formatVoiceList()}. ` +
 		"Custom voice IDs also accepted. Output codec inferred from output_path suffix (.wav → wav, else mp3). " +
@@ -65,7 +67,10 @@ export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 			};
 		}
 
-		const codec: TtsCodec = params.output_path.endsWith(".wav") ? "wav" : "mp3";
+		const cwd = ctx.sessionManager.getCwd();
+		const outputPath = resolveToCwd(params.output_path, cwd);
+		const displayPath = formatPathRelativeToCwd(outputPath, cwd);
+		const codec: TtsCodec = outputPath.toLowerCase().endsWith(".wav") ? "wav" : "mp3";
 		const voiceId = params.voice_id;
 		const language = params.language;
 		const sampleRate = params.sample_rate ?? DEFAULT_XAI_SAMPLE_RATE;
@@ -114,12 +119,12 @@ export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 			};
 		}
 		const bytes = new Uint8Array(await response.arrayBuffer());
-		await Bun.write(params.output_path, bytes);
+		await Bun.write(outputPath, bytes);
 		return {
 			content: [
 				{
 					type: "text",
-					text: `Saved ${bytes.length} bytes to ${params.output_path} (voice=${voiceId}, codec=${codec}).`,
+					text: `Saved ${bytes.length} bytes to ${displayPath} (voice=${voiceId}, codec=${codec}).`,
 				},
 			],
 			details: { bytes: bytes.length, voiceId, codec },
