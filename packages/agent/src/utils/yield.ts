@@ -34,36 +34,6 @@ import { scheduler } from "node:timers/promises";
 const KEEPALIVE_INTERVAL_MS = 86_400_000; // 24 hours — re-armed each interval
 
 /**
- * Manages a recurring `setInterval` that prevents the Bun event loop
- * from busy-waiting when only unresolved Promises are pending.
- *
- * Uses `setInterval` (not `setTimeout`) so the keepalive automatically
- * re-arms after each firing.  This ensures that even sessions left idle
- * for longer than one interval remain covered until `dispose()` is called.
- *
- * ```ts
- * const ka = new EventLoopKeepalive();
- * await someNeverResolvingPromise;  // Without keepalive: 100% CPU
- * ka.dispose();                      // Clean up when done
- * ```
- */
-export class EventLoopKeepalive {
-	#timer: NodeJS.Timeout | undefined;
-
-	constructor() {
-		this.#timer = setInterval(() => {}, KEEPALIVE_INTERVAL_MS);
-	}
-
-	/** Dispose the keepalive timer. Call when the awaited Promise resolves. */
-	dispose(): void {
-		if (this.#timer !== undefined) {
-			clearInterval(this.#timer);
-			this.#timer = undefined;
-		}
-	}
-}
-
-/**
  * Await a Promise with an event-loop keepalive active.
  *
  * This is the primary fix for Bun's busy-wait on unresolved Promises.
@@ -79,11 +49,12 @@ export class EventLoopKeepalive {
  * ```
  */
 export async function keepaliveWhile<T>(promise: Promise<T>): Promise<T> {
-	const ka = new EventLoopKeepalive();
+	const ka = setInterval(() => {}, KEEPALIVE_INTERVAL_MS);
 	try {
+		ka.unref();
 		return await promise;
 	} finally {
-		ka.dispose();
+		clearInterval(ka);
 	}
 }
 
