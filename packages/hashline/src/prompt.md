@@ -9,10 +9,10 @@ Patch payload is a series of hunks: `¶PATH#HASH` header followed by any number 
 </payload>
 
 <ops>
-LINE↑    insert before (or BOF↑)
-LINE↓    insert after  (or EOF↓)
-A-B:     replace A..B  (or A: == A..A)
-A-B!     delete A..B   (or A! == A..A)
+LINE↑    insert before (or BOF↑)        — anchor SURVIVES
+LINE↓    insert after  (or EOF↓)        — anchor SURVIVES
+A-B:     replace A..B  (or A: == A..A)  — anchor DELETED, then payload written in its place
+A-B!     delete A..B   (or A! == A..A)  — anchor DELETED
 +PAYLOAD payload line for the preceding op
 </ops>
 
@@ -26,6 +26,7 @@ A-B!     delete A..B   (or A! == A..A)
   - Changes in place → `:`
   - Goes away → `!`
   When unsure: you wanted `↓`. `:` is destructive — it deletes the anchor line.
+- **`A-B:` deletes EXACTLY A..B. Payload length never extends the deletion.** `1:` with 10 payload lines still deletes only line 1, then writes 10 lines there. To prepend without deleting, use `1↑` (or `BOF↑`).
 - **Line numbers are frozen references to what you have seen.** Later ops in the same hunk still use original line numbers; they do NOT shift as earlier ops apply.
 </rules>
 
@@ -70,6 +71,12 @@ A-B!     delete A..B   (or A! == A..A)
 1:
 +const Y = X;
 # `1:` replaces line 1 — `const X = "a";` is gone, breaking `f()` which returns X. Use `1↓` to insert after.
+# WRONG — multi-line payload on `:` does NOT mean "insert N lines here"; the anchor is still destroyed.
+# intent: prepend a helper ABOVE `const X = "a";`
+1:
++function helper() { return X; }
++const Y = X;
+# `1:` deletes line 1 and writes the payload there — payload count never extends the deletion range. To prepend: `1↑` (or `BOF↑`).
 # WRONG — echoing read-style lines as context before the real op
 1:const X = "a";
 1-2:

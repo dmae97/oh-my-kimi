@@ -53,6 +53,15 @@ function expandRange(range: ParsedRange): Anchor[] {
 	return anchors;
 }
 
+function isSkippableCommentLine(line: string): boolean {
+	return line.trimStart().startsWith("#");
+}
+
+interface PendingComment {
+	lineNum: number;
+	text: string;
+}
+
 type PendingOp =
 	| { kind: "insert"; cursor: Cursor; lineNum: number }
 	| { kind: "replace"; range: ParsedRange; lineNum: number };
@@ -77,6 +86,18 @@ export class Executor {
 	#editIndex = 0;
 	#pending: Pending | undefined;
 	#terminated = false;
+	#skippableComments: PendingComment[] = [];
+
+	#discardPendingSkippableComments(): void {
+		this.#skippableComments = [];
+	}
+
+	#consumePendingSkippableComments(): void {
+		if (this.#skippableComments.length === 0) return;
+		const comment = this.#skippableComments[0];
+		this.#skippableComments = [];
+		this.#handleRaw(comment.text, comment.lineNum);
+	}
 
 	/** True once an `envelope-end` or `abort` token has been observed. */
 	get terminated(): boolean {
@@ -85,7 +106,7 @@ export class Executor {
 
 	/**
 	 * Consume one token. After `terminated` flips true subsequent feeds are
-	 * silently ignored so callers can keep draining their tokenizer without
+	 * silently ignored so callers can keep draining the tokenizer without
 	 * explicit early-exit guards.
 	 */
 	feed(token: Token): void {
@@ -93,8 +114,10 @@ export class Executor {
 
 		switch (token.kind) {
 			case "envelope-begin":
+				this.#consumePendingSkippableComments();
 				return;
 			case "envelope-end":
+				this.#consumePendingSkippableComments();
 				this.#terminated = true;
 				return;
 			case "abort":
@@ -102,17 +125,26 @@ export class Executor {
 				this.#terminated = true;
 				return;
 			case "header":
+				this.#consumePendingSkippableComments();
 				this.#flushPending();
 				return;
 			case "blank":
+				this.#consumePendingSkippableComments();
 				return;
 			case "payload":
+				this.#consumePendingSkippableComments();
 				this.#handlePayload(token.text, token.lineNum);
 				return;
 			case "raw":
+				if (this.#pending === undefined && isSkippableCommentLine(token.text)) {
+					this.#skippableComments.push({ text: token.text, lineNum: token.lineNum });
+					return;
+				}
+				this.#consumePendingSkippableComments();
 				this.#handleRaw(token.text, token.lineNum);
 				return;
 			case "op-delete":
+				this.#discardPendingSkippableComments();
 				this.#flushPending();
 				if (token.trailingPayload) {
 					throw new Error(
@@ -125,6 +157,7 @@ export class Executor {
 				}
 				return;
 			case "op-insert":
+				this.#discardPendingSkippableComments();
 				this.#flushPending();
 				this.#pending = {
 					op: { kind: "insert", cursor: token.cursor, lineNum: token.lineNum },
@@ -138,6 +171,7 @@ export class Executor {
 				}
 				return;
 			case "op-replace":
+				this.#discardPendingSkippableComments();
 				validateRangeOrder(token.range, token.lineNum);
 				if (this.#pending !== undefined && this.#pending.op.kind === "replace") {
 					const outer = this.#pending.op.range;
@@ -193,17 +227,18 @@ export class Executor {
 	 * warning, so they never reach the validator.
 	 */
 	end(): { edits: Edit[]; warnings: string[] } {
+		this.#consumePendingSkippableComments();
 		this.#flushPending();
 		this.#validateNoOverlappingDeletes();
 		return { edits: this.#edits, warnings: this.#warnings };
 	}
-
 	/** Reset to a fresh state so the same instance can drive another parse. */
 	reset(): void {
 		this.#edits = [];
 		this.#warnings = [];
 		this.#editIndex = 0;
 		this.#pending = undefined;
+		this.#skippableComments = [];
 		this.#terminated = false;
 	}
 

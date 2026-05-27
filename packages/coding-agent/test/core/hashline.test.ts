@@ -519,7 +519,22 @@ describe("hashline parser — suffix-op syntax", () => {
 		expect(applyDiff(content, diff)).toBe("aaa\nfirst\n\n\nafter\nccc");
 	});
 
-	it("ignores raw blank separators between ops", () => {
+	it("skips markdown-comment lines immediately before an operation", () => {
+		const diff = [
+			"# This is a comment line from a model explanation.",
+			"## Another comment line.",
+			`${tag(2, "bbb")}:`,
+			extra("BBB"),
+		].join("\n");
+		expect(applyDiff(content, diff)).toBe("aaa\nBBB\nccc");
+	});
+
+	it("does not skip comment lines when they are not immediately before an operation", () => {
+		const diff = ["# This is a stray comment.", "", `${tag(2, "bbb")}:`, extra("BBB")].join("\n");
+		expect(() => parseHashline(diff)).toThrow(/payload line has no preceding/);
+	});
+
+	it("preserves raw blank separators between ops", () => {
 		const diff = [`${sameLineRange(tag(1, "aaa"))}:AAA`, "", "", `${sameLineRange(tag(3, "ccc"))}:CCC`].join("\n");
 		expect(applyDiff(content, diff)).toBe("AAA\nbbb\nCCC");
 	});
