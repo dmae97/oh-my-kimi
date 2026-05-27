@@ -27,6 +27,7 @@ import {
 	PROVIDER_DESCRIPTORS,
 } from "../src/provider-models/descriptors";
 import {
+	buildXaiOAuthStaticSeed,
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
 	mapModelsDevToModels,
 	UNK_CONTEXT_WINDOW,
@@ -326,6 +327,15 @@ async function generateModels() {
 	if (!allModels.some(model => model.provider === "cloudflare-ai-gateway")) {
 		allModels.push(CLOUDFLARE_FALLBACK_MODEL);
 	}
+
+	// xai-oauth has no upstream catalog source (not in models.dev or
+	// MODELS_DEV_PROVIDER_DESCRIPTORS). The curated chat models live in
+	// XAI_OAUTH_CURATED_MODELS and reach the runtime via
+	// xaiOAuthModelManagerOptions().staticModels. Bundling them here too lets
+	// ModelRegistry.#loadModels() pick them up synchronously at boot, so a
+	// persisted `modelRoles.default = "xai-oauth/<id>"` is honored before the
+	// async refresh fires (interactive boot does not await refresh).
+	allModels.push(...buildXaiOAuthStaticSeed());
 
 	const specialDiscoverySources = [
 		{ label: "Antigravity", fetch: fetchAntigravityModels },
