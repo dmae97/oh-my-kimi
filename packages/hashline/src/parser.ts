@@ -213,6 +213,25 @@ export class Executor {
 		return { edits: this.#edits, warnings: this.#warnings };
 	}
 
+	/**
+	 * Streaming-tolerant variant of {@link end}. Identical, except a pending
+	 * op whose payload has not yet accumulated any rows is treated as still
+	 * in flight and dropped instead of flushed (which would otherwise emit a
+	 * phantom blank-line insert/replace). Callers driving an in-progress
+	 * stream should use this so the trailing op the model is still typing
+	 * does not pollute the partial result.
+	 */
+	endStreaming(): { edits: Edit[]; warnings: string[] } {
+		this.#consumePendingSkippableComments();
+		if (this.#pending && this.#pending.payload.length > 0) {
+			this.#flushPending();
+		} else {
+			this.#pending = undefined;
+		}
+		this.#validateNoOverlappingDeletes();
+		return { edits: this.#edits, warnings: this.#warnings };
+	}
+
 	/** Reset to a fresh state so the same instance can drive another parse. */
 	reset(): void {
 		this.#edits = [];
@@ -356,4 +375,37 @@ export function parsePatch(diff: string): { edits: Edit[]; warnings: string[] } 
 	drain(tokenizer.feed(diff));
 	drain(tokenizer.end());
 	return executor.end();
+}
+
+/**
+ * Streaming-tolerant variant of {@link parsePatch}. Returns whatever edits
+ * parsed successfully when the diff is still being typed:
+ *
+ * - per-token feed errors stop the drain but preserve the edits already
+ *   collected (the trailing op is malformed mid-stream — wait for the next
+ *   chunk),
+ * - the trailing pending op is dropped if it has no payload yet (avoids a
+ *   phantom blank-line insert/replace).
+ *
+ * Throws only on the cross-op overlap validator, which catches conflicting
+ * shapes (two replaces hitting the same anchor). Streaming preview callers
+ * should treat any throw here as "no preview this tick".
+ */
+export function parsePatchStreaming(diff: string): { edits: Edit[]; warnings: string[] } {
+	const tokenizer = new Tokenizer();
+	const executor = new Executor();
+	const drain = (tokens: Token[]): boolean => {
+		for (const token of tokens) {
+			if (executor.terminated) return false;
+			try {
+				executor.feed(token);
+			} catch {
+				return true; // stop on first parse error; keep what's collected
+			}
+		}
+		return false;
+	};
+	if (drain(tokenizer.feed(diff))) return executor.endStreaming();
+	drain(tokenizer.end());
+	return executor.endStreaming();
 }

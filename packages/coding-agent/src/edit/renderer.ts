@@ -235,14 +235,21 @@ function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string)
 
 function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, label = "streaming"): string {
 	if (!diff) return "";
-	const lines = diff.split("\n");
-	const total = lines.length;
-	const displayLines = lines.slice(-EDIT_STREAMING_PREVIEW_LINES);
-	const hidden = total - displayLines.length;
+	// Hunk-aware truncation keeps the change rows themselves visible and
+	// trims surrounding context proportionally so a multi-hunk diff doesn't
+	// turn into just the tail of the last hunk while streaming.
+	const { text: truncatedDiff, hiddenHunks, hiddenLines } = truncateDiffByHunk(
+		diff,
+		PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS,
+		EDIT_STREAMING_PREVIEW_LINES,
+	);
 	let text = "\n\n";
-	text += renderDiffColored(displayLines.join("\n"), { filePath: rawPath });
-	if (hidden > 0) {
-		text += uiTheme.fg("dim", `\n… (${label} +${hidden} lines)`);
+	text += renderDiffColored(truncatedDiff, { filePath: rawPath });
+	if (hiddenHunks > 0 || hiddenLines > 0) {
+		const remainder: string[] = [];
+		if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
+		if (hiddenLines > 0) remainder.push(`${hiddenLines} more lines`);
+		text += uiTheme.fg("dim", `\n… (${label} +${remainder.join(", ")})`);
 	} else {
 		text += uiTheme.fg("dim", `\n(${label})`);
 	}

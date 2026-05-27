@@ -10,7 +10,6 @@
  * and no auto-generated-file refusal — those belong on the write path.
  */
 import {
-	applyEdits,
 	computeFileHash,
 	Patch as HashlinePatch,
 	normalizeToLF,
@@ -24,6 +23,12 @@ import { readEditFileText } from "../read-file";
 
 export interface HashlineDiffOptions {
 	autoDropPureInsertDuplicates?: boolean;
+	/**
+	 * Use the streaming-tolerant applier ({@link PatchSection.applyPartialTo})
+	 * so trailing in-flight ops do not throw or emit phantom edits. Streaming
+	 * preview path only.
+	 */
+	streaming?: boolean;
 }
 
 async function readSectionText(absolutePath: string, sectionPath: string): Promise<string> {
@@ -62,7 +67,9 @@ export async function computeHashlineSectionDiff(
 		const normalized = normalizeToLF(content);
 		const hashError = validateSectionHash(section, normalized);
 		if (hashError) return { error: hashError };
-		const result = applyEdits(normalized, [...section.edits], options);
+		const result = options.streaming
+			? section.applyPartialTo(normalized, options)
+			: section.applyTo(normalized, options);
 		if (normalized === result.text) return { error: `No changes would be made to ${section.path}.` };
 		return generateDiffString(normalized, result.text);
 	} catch (err) {

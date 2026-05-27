@@ -353,74 +353,6 @@ function buildApplyPatchNaturalOrderPreviews(input: string): PerFileDiffPreview[
 	return previews.length > 0 ? previews : null;
 }
 
-/**
- * Hashline equivalent: emit each payload line as a `+added` line in the
- * order the model typed it. We deliberately omit op headers and removal
- * targets from the streaming preview because their content lives in the file
- * and would require a costly re-apply per tick; the complete unified diff is
- * shown once streaming finishes.
- */
-function buildHashlineNaturalOrderPreviews(
-	input: string,
-	defaultPath: string | undefined,
-): PerFileDiffPreview[] | null {
-	const groups = new Map<string, string[]>();
-	let currentPath = defaultPath ?? "";
-	const ensure = (sectionPath: string): string[] => {
-		let bucket = groups.get(sectionPath);
-		if (!bucket) {
-			bucket = [];
-			groups.set(sectionPath, bucket);
-		}
-		return bucket;
-	};
-
-	// Per-call instance: the streaming preview re-runs each tick with the
-	// cumulative input, and we need the line counter to start at 1. A
-	// dedicated tokenizer keeps the shared HASHLINE_TOKENIZER above free
-	// for stateless predicate use elsewhere in this module.
-	const streamer = new HashlineTokenizer();
-	for (const token of streamer.tokenizeAll(input)) {
-		switch (token.kind) {
-			case "envelope-begin":
-			case "envelope-end":
-			case "abort":
-				continue;
-			case "blank":
-			case "raw":
-				continue;
-			case "header":
-				currentPath = token.path;
-				if (currentPath) ensure(currentPath);
-				continue;
-			case "op-insert":
-			case "op-replace":
-				// Inline body on the op line itself (`N↓payload`, `A-B:payload`) is
-				// payload content that just happens to share a line with the op
-				// header — render it the same as a standalone payload token so
-				// the very first character the model types after the sigil shows
-				// up in the streaming preview. Without this, the preview is
-				// empty until a newline arrives, and the renderer falls back to
-				// raw input ("A-B: bla bla bla") instead of "+ bla bla bla".
-				if (!currentPath || token.inlineBody === undefined) continue;
-				ensure(currentPath).push(`+${token.inlineBody}`);
-				continue;
-			case "payload":
-				if (!currentPath) continue;
-				ensure(currentPath).push(`+${token.text}`);
-				continue;
-		}
-	}
-
-	if (groups.size === 0) return null;
-	const previews: PerFileDiffPreview[] = [];
-	for (const [sectionPath, body] of groups) {
-		if (body.length === 0) continue;
-		previews.push({ path: sectionPath, diff: body.join("\n") });
-	}
-	return previews.length > 0 ? previews : null;
-}
-
 const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 	extractCompleteEdits(args) {
 		return args;
@@ -429,19 +361,16 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		if (typeof args.input !== "string" || args.input.length === 0) return null;
 		const input = trimTrailingPartialLine(args.input, ctx.isStreaming);
 		if (input.length === 0) return null;
-		if (ctx.isStreaming) {
-			// Skip the costly per-tick re-apply and avoid `Diff.structuredPatch`
-			// reordering by showing payload lines in input order.
-			return buildHashlineNaturalOrderPreviews(input, args.path);
-		}
 		ctx.signal.throwIfAborted();
 
 		let sections: readonly HashlineInputSection[];
 		try {
 			sections = HashlinePatch.parse(input, { cwd: ctx.cwd, path: args.path }).sections;
 		} catch {
-			// Single-section fallback keeps the original error rendering for the
-			// "haven't typed `¶ PATH` yet" case.
+			// While streaming, the trailing op may still be mid-typed and fail
+			// to parse; suppress until the next chunk arrives. Once args are
+			// complete, surface the error so the model sees what went wrong.
+			if (ctx.isStreaming) return null;
 			const result = await computeHashlineDiff({ input, path: args.path }, ctx.cwd, {
 				autoDropPureInsertDuplicates: ctx.hashlineAutoDropPureInsertDuplicates,
 			});
@@ -466,6 +395,7 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 			const section = sectionsToProcess[i];
 			const result = await computeHashlineSectionDiff(section, ctx.cwd, {
 				autoDropPureInsertDuplicates: ctx.hashlineAutoDropPureInsertDuplicates,
+				streaming: ctx.isStreaming,
 			});
 			ctx.signal.throwIfAborted();
 			// In a multi-section preview, ignore parse/apply errors from the
@@ -478,8 +408,13 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		}
 		return previews.length > 0 ? previews : null;
 	},
-	renderStreamingFallback(args, uiTheme) {
-		return typeof args.input === "string" ? renderHashlineInputFallback(args.input, uiTheme) : "";
+	renderStreamingFallback() {
+		// Never leak raw hashline syntax (`64↓`, `+payload`, `¶path#hash`)
+		// to the user — the streaming preview already projects every
+		// parseable op onto the real file via applyPartialTo, and an
+		// unparseable trailing chunk renders as "no preview yet" rather
+		// than a sigil dump.
+		return "";
 	},
 };
 

@@ -10,7 +10,7 @@
 import * as path from "node:path";
 import { applyEdits } from "./apply";
 import { HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
-import { parsePatch } from "./parser";
+import { parsePatch, parsePatchStreaming } from "./parser";
 import { Tokenizer } from "./tokenizer";
 import type { ApplyOptions, ApplyResult, Edit, SplitOptions } from "./types";
 
@@ -230,6 +230,22 @@ export class PatchSection {
 		const result = applyEdits(text, [...edits], options);
 		// Preserve parse warnings alongside applier warnings so consumers
 		// don't need to call `parse()` separately.
+		const merged = warnings.length === 0 ? result.warnings : [...warnings, ...(result.warnings ?? [])];
+		return merged && merged.length > 0
+			? { ...result, warnings: merged }
+			: { text: result.text, firstChangedLine: result.firstChangedLine };
+	}
+
+	/**
+	 * Streaming-tolerant counterpart to {@link applyTo}. Uses
+	 * {@link parsePatchStreaming} so a trailing in-flight op (no payload yet,
+	 * or a per-token parse error mid-stream) does not throw or emit a phantom
+	 * empty-payload edit. Intended for incremental diff previews; the writer
+	 * path should always use {@link applyTo}.
+	 */
+	applyPartialTo(text: string, options: ApplyOptions = {}): ApplyResult {
+		const { edits, warnings } = parsePatchStreaming(this.diff);
+		const result = applyEdits(text, [...edits], options);
 		const merged = warnings.length === 0 ? result.warnings : [...warnings, ...(result.warnings ?? [])];
 		return merged && merged.length > 0
 			? { ...result, warnings: merged }
