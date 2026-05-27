@@ -63,6 +63,14 @@ export const PAYLOAD_LINE_PREFIX_DEMOTED_WARNING =
 export const INLINE_PAYLOAD_ACCEPTED_WARNING =
 	"Accepted inline payload on the op line (e.g. `LINE:CONTENT`, `LINE↑CONTENT`). Canonical syntax is the bare op followed by `\\`-prefixed payload rows on the next line(s). Prefer the explicit form.";
 
+/**
+ * Warning text appended when a payload row uses an extra `\` before indented
+ * content (`\\    TEXT`). Models often JSON-escape the payload delimiter; the
+ * parser strips the accidental second delimiter so code indentation survives.
+ */
+export const ESCAPED_PAYLOAD_DELIMITER_ACCEPTED_WARNING =
+	"Accepted an extra `\\` before an indented payload row and treated it as the payload delimiter, not file content. Use exactly one `\\` before indented payload lines.";
+
 /** Warning text emitted by `Recovery` when an external write fits a cached snapshot. */
 export const RECOVERY_EXTERNAL_WARNING =
 	"Recovered from a stale file hash using a previous read snapshot (file changed externally between read and edit).";

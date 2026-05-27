@@ -196,12 +196,21 @@ function parseInsertTarget(raw: string, lineNum: number, kind: "before" | "after
 	return { kind: cursorKind, anchor: parseLid(raw, lineNum) };
 }
 
+function startsWithEscapedIndentPayload(text: string): boolean {
+	if (!text.startsWith(HL_PAYLOAD_PREFIX)) return false;
+	const next = text.charCodeAt(HL_PAYLOAD_PREFIX.length);
+	return next === CHAR_SPACE || next === CHAR_TAB;
+}
+
 function scanInlineBody(line: string, index: number): string | undefined {
 	const end = trimEndIndex(line);
 	if (index >= end) return undefined;
 
 	const body = line.slice(index, end);
-	return body.startsWith(HL_PAYLOAD_PREFIX) ? body.slice(HL_PAYLOAD_PREFIX.length) : body;
+	if (!body.startsWith(HL_PAYLOAD_PREFIX)) return body;
+
+	const payload = body.slice(HL_PAYLOAD_PREFIX.length);
+	return startsWithEscapedIndentPayload(payload) ? payload.slice(HL_PAYLOAD_PREFIX.length) : payload;
 }
 
 interface ParsedInsertOp {

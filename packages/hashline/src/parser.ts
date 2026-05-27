@@ -16,6 +16,7 @@
 import { HL_OP_CHARS, HL_OP_INSERT_AFTER, HL_OP_INSERT_BEFORE, HL_OP_REPLACE, HL_PAYLOAD_PREFIX } from "./format";
 import {
 	ABORT_WARNING,
+	ESCAPED_PAYLOAD_DELIMITER_ACCEPTED_WARNING,
 	IMPLICIT_CONTINUATION_WARNING,
 	INLINE_PAYLOAD_ACCEPTED_WARNING,
 	PAYLOAD_LINE_PREFIX_DEMOTED_WARNING,
@@ -28,6 +29,23 @@ function validateRangeOrder(range: ParsedRange, lineNum: number): void {
 	if (range.end.line < range.start.line) {
 		throw new Error(`line ${lineNum}: range ${range.start.line}-${range.end.line} ends before it starts.`);
 	}
+}
+
+function hasEscapedIndentPayloadDelimiter(text: string): boolean {
+	if (!text.startsWith(HL_PAYLOAD_PREFIX)) return false;
+	if (text.length === HL_PAYLOAD_PREFIX.length) return true;
+
+	const next = text.charCodeAt(HL_PAYLOAD_PREFIX.length);
+	return next === 32 || next === 9;
+}
+
+function shouldStripEscapedPayloadDelimiters(payload: readonly string[]): boolean {
+	let sawIndentedPayload = false;
+	for (const text of payload) {
+		if (!hasEscapedIndentPayloadDelimiter(text)) return false;
+		if (text.length > HL_PAYLOAD_PREFIX.length) sawIndentedPayload = true;
+	}
+	return sawIndentedPayload;
 }
 
 function rangesEqual(a: ParsedRange, b: ParsedRange): boolean {
@@ -325,7 +343,13 @@ export class Executor {
 		if (!pending) return;
 
 		const { op, payload } = pending;
-		const linesToInsert = payload.length === 0 ? [""] : payload;
+		let linesToInsert = payload.length === 0 ? [""] : payload;
+		if (payload.length > 0 && shouldStripEscapedPayloadDelimiters(payload)) {
+			linesToInsert = payload.map(text => text.slice(HL_PAYLOAD_PREFIX.length));
+			if (!this.#warnings.includes(ESCAPED_PAYLOAD_DELIMITER_ACCEPTED_WARNING)) {
+				this.#warnings.push(ESCAPED_PAYLOAD_DELIMITER_ACCEPTED_WARNING);
+			}
+		}
 
 		if (op.kind === "insert") {
 			for (const text of linesToInsert) {

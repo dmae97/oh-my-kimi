@@ -258,12 +258,26 @@ describe("hashline parser — suffix-op syntax", () => {
 			[`${anchor}↑\\NEW`, "aaa\nNEW\nbbb\nccc"],
 			[`${anchor}:\\NEW`, "aaa\nNEW\nccc"],
 			[`${anchor}:\\\\NEW`, "aaa\n\\NEW\nccc"],
+			[`${anchor}:\\\\  NEW`, "aaa\n  NEW\nccc"],
 		];
 		for (const [diff, expected] of cases) {
 			const parsed = parseHashline(diff);
 			expect(parsed.warnings.some(w => warning.test(w))).toBe(true);
 			expect(applyDiff(content, diff)).toBe(expected);
 		}
+	});
+
+	it("treats an escaped `\\` before indented payload rows as the delimiter", () => {
+		const anchor = tag(2, "bbb");
+		const diff = [`${anchor}:`, "\\\\  const value = 1;", "\\\\\treturn value;"].join("\n");
+		const parsed = parseHashline(diff);
+		expect(parsed.warnings.some(w => w.includes("extra `\\` before an indented payload row"))).toBe(true);
+		expect(applyDiff(content, diff)).toBe("aaa\n  const value = 1;\n\treturn value;\nccc");
+	});
+
+	it("preserves explicitly escaped literal leading `\\` before non-indented payload", () => {
+		const anchor = tag(2, "bbb");
+		expect(applyDiff(content, `${anchor}:\n\\\\literal`)).toBe("aaa\n\\literal\nccc");
 	});
 
 	it("accepts payload lines on insert ops with `\\` continuation", () => {
@@ -926,6 +940,12 @@ describe("hashlineEditParamsSchema — extra-field tolerance", () => {
 		expect(hashlineEditParamsSchema.safeParse({ path: "x.ts", input: `¶x.ts\nBOF↓\n${extra("x")}` }).success).toBe(
 			true,
 		);
+	});
+
+	it("accepts `_input` as a provider-emitted alias for `input`", () => {
+		const parsed = hashlineEditParamsSchema.safeParse({ path: "x.ts", _input: `¶x.ts\nBOF↓\n${extra("x")}` });
+		expect(parsed.success).toBe(true);
+		if (parsed.success) expect(parsed.data.input).toBe(`¶x.ts\nBOF↓\n${extra("x")}`);
 	});
 
 	it("still requires `input`", () => {

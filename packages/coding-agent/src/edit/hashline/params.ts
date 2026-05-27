@@ -6,6 +6,13 @@
  */
 import * as z from "zod/v4";
 
-export const hashlineEditParamsSchema = z.object({ input: z.string(), path: z.string().optional() }).passthrough();
+export const hashlineEditParamsSchema = z.preprocess(raw => {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+
+	const record = raw as Record<string, unknown>;
+	if (typeof record.input === "string" || typeof record._input !== "string") return raw;
+
+	return { ...record, input: record._input };
+}, z.object({ input: z.string(), path: z.string().optional() }).passthrough());
 
 export type HashlineParams = z.infer<typeof hashlineEditParamsSchema>;
