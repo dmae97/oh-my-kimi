@@ -65,7 +65,10 @@ describe("google-vertex model catalog", () => {
 		);
 
 		const claude = models.find(model => model.id === "claude-sonnet-4@20250514");
-		expect(claude?.api).toBe("google-vertex");
+		expect(claude?.api).toBe("anthropic-messages");
+		expect(claude?.baseUrl).toBe(
+			"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict",
+		);
 		expect(claude?.reasoning).toBe(true);
 	});
 

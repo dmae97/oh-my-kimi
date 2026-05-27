@@ -48,8 +48,7 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 			const location = resolveLocation(options);
 			const accessToken = await getVertexAccessToken({ signal: options?.signal, fetch: options?.fetch });
 			const host = resolveEndpointHost(location);
-			const publisher = resolvePublisher(model.id);
-			const url = `https://${host}/${API_VERSION}/projects/${project}/locations/${location}/publishers/${publisher}/models/${model.id}:streamGenerateContent?alt=sse`;
+			const url = `https://${host}/${API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${model.id}:streamGenerateContent?alt=sse`;
 			return {
 				params,
 				url,
@@ -77,9 +76,6 @@ function resolveProject(options?: GoogleVertexOptions): string {
 	return project;
 }
 
-function resolvePublisher(modelId: string): string {
-	return modelId.startsWith("claude-") ? "anthropic" : "google";
-}
 function resolveEndpointHost(location: string): string {
 	return location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
 }

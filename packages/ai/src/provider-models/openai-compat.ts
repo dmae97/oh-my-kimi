@@ -2363,8 +2363,16 @@ function anthropicMessagesDescriptor(
 const GOOGLE_VERTEX_BASE_URL = "https://{location}-aiplatform.googleapis.com";
 const GOOGLE_VERTEX_OPENAI_BASE_URL =
 	"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/endpoints/openapi";
+const GOOGLE_VERTEX_ANTHROPIC_BASE_URL =
+	"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/{model}:streamRawPredict";
 
 function resolveGoogleVertexApi(modelId: string, raw: ModelsDevModel): { api: Api; baseUrl: string } {
+	if (raw.provider?.npm === "@ai-sdk/google-vertex/anthropic") {
+		return {
+			api: "anthropic-messages",
+			baseUrl: GOOGLE_VERTEX_ANTHROPIC_BASE_URL.replace("{model}", modelId),
+		};
+	}
 	if (modelId.includes("/") || raw.provider?.npm === "@ai-sdk/openai-compatible") {
 		return { api: "openai-completions", baseUrl: GOOGLE_VERTEX_OPENAI_BASE_URL };
 	}

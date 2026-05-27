@@ -7883,9 +7883,9 @@
 		"claude-3-5-haiku@20241022": {
 			"id": "claude-3-5-haiku@20241022",
 			"name": "Claude Haiku 3.5",
-			"api": "google-vertex",
+			"api": "anthropic-messages",
 			"provider": "google-vertex",
-			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-3-5-haiku@20241022:streamRawPredict",
 			"reasoning": false,
 			"input": [
 				"text",
@@ -7903,9 +7903,9 @@
 		"claude-3-5-sonnet@20241022": {
 			"id": "claude-3-5-sonnet@20241022",
 			"name": "Claude Sonnet 3.5 v2",
-			"api": "google-vertex",
+			"api": "anthropic-messages",
 			"provider": "google-vertex",
-			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-3-5-sonnet@20241022:streamRawPredict",
 			"reasoning": false,
 			"input": [
 				"text",
@@ -7923,9 +7923,9 @@
 		"claude-3-7-sonnet@20250219": {
 			"id": "claude-3-7-sonnet@20250219",
 			"name": "Claude Sonnet 3.7",
-			"api": "google-vertex",
+			"api": "anthropic-messages",
 			"provider": "google-vertex",
-			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-3-7-sonnet@20250219:streamRawPredict",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -7942,15 +7942,15 @@
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"claude-haiku-4-5@20251001": {
 			"id": "claude-haiku-4-5@20251001",
 			"name": "Claude Haiku 4.5",
-			"api": "google-vertex",
+			"api": "anthropic-messages",
 			"provider": "google-vertex",
-			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-haiku-4-5@20251001:streamRawPredict",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -7967,15 +7967,15 @@
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"claude-opus-4-1@20250805": {
 			"id": "claude-opus-4-1@20250805",
 			"name": "Claude Opus 4.1",
-			"api": "google-vertex",
+			"api": "anthropic-messages",
 			"provider": "google-vertex",
-			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-opus-4-1@20250805:streamRawPredict",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -7992,15 +7992,15 @@
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"claude-opus-4-5@20251101": {
 			"id": "claude-opus-4-5@20251101",
 			"name": "Claude Opus 4.5",
-			"api": "google-vertex",
+			"api": "anthropic-messages",
 			"provider": "google-vertex",
-			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-opus-4-5@20251101:streamRawPredict",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -8015,17 +8015,17 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-budget-effort",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"claude-opus-4-6@default": {
 			"id": "claude-opus-4-6@default",
 			"name": "Claude Opus 4.6",
-			"api": "google-vertex",
+			"api": "anthropic-messages",
 			"provider": "google-vertex",
-			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-opus-4-6@default:streamRawPredict",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -8040,17 +8040,17 @@
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"claude-opus-4-7@default": {
 			"id": "claude-opus-4-7@default",
 			"name": "Claude Opus 4.7",
-			"api": "google-vertex",
+			"api": "anthropic-messages",
 			"provider": "google-vertex",
-			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-opus-4-7@default:streamRawPredict",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -8065,17 +8065,17 @@
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"claude-opus-4@20250514": {
 			"id": "claude-opus-4@20250514",
 			"name": "Claude Opus 4",
-			"api": "google-vertex",
+			"api": "anthropic-messages",
 			"provider": "google-vertex",
-			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-opus-4@20250514:streamRawPredict",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -8092,15 +8092,15 @@
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"claude-sonnet-4-5@20250929": {
 			"id": "claude-sonnet-4-5@20250929",
 			"name": "Claude Sonnet 4.5",
-			"api": "google-vertex",
+			"api": "anthropic-messages",
 			"provider": "google-vertex",
-			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-sonnet-4-5@20250929:streamRawPredict",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -8115,17 +8115,17 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-budget-effort",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"claude-sonnet-4-6@default": {
 			"id": "claude-sonnet-4-6@default",
 			"name": "Claude Sonnet 4.6",
-			"api": "google-vertex",
+			"api": "anthropic-messages",
 			"provider": "google-vertex",
-			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-sonnet-4-6@default:streamRawPredict",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -8140,7 +8140,7 @@
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"minLevel": "minimal",
 				"maxLevel": "high"
 			}
@@ -8148,9 +8148,9 @@
 		"claude-sonnet-4@20250514": {
 			"id": "claude-sonnet-4@20250514",
 			"name": "Claude Sonnet 4",
-			"api": "google-vertex",
+			"api": "anthropic-messages",
 			"provider": "google-vertex",
-			"baseUrl": "https://{location}-aiplatform.googleapis.com",
+			"baseUrl": "https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -8167,7 +8167,7 @@
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"deepseek-ai/deepseek-v3.1-maas": {
