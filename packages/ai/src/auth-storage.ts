@@ -1613,6 +1613,12 @@ export class AuthStorage {
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
+			case "openrouter": {
+				const { loginOpenRouter } = await import("./utils/oauth/openrouter");
+				const apiKey = await loginOpenRouter(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
 			case "together": {
 				const { loginTogether } = await import("./utils/oauth/together");
 				const apiKey = await loginTogether(ctrl);
