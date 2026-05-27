@@ -73,9 +73,18 @@ function collectAnchorLines(edits: readonly Edit[]): number[] {
 
 function getEditAnchors(edit: Edit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
-	if (edit.cursor.kind === "before_anchor") return [edit.cursor.anchor];
-	if (edit.cursor.kind === "after_anchor") return [edit.cursor.anchor];
-	return [];
+	switch (edit.cursor.kind) {
+		case "before_anchor":
+		case "after_anchor":
+			return [edit.cursor.anchor];
+		case "bof":
+		case "eof":
+			return [];
+		default: {
+			const _exhaustive: never = edit.cursor;
+			return _exhaustive;
+		}
+	}
 }
 
 /**
@@ -170,8 +179,12 @@ function isHeadSnapshot(head: Snapshot | null, snapshot: Snapshot): boolean {
  *
  * 1. Apply on the cached `fullText` snapshot, then 3-way-merge onto current.
  * 2. (Session chain) If the snapshot wasn't the head, retry on current text
- *    when line counts match — the user's previous edit advanced the hash but
- *    didn't shift line numbers.
+ *    when line counts match AND every edit's anchor line content is unchanged
+ *    between snapshot and current — the previous in-session edit advanced
+ *    the hash and the model's anchors still name the same logical rows. Emits
+ *    a dedicated {@link RECOVERY_SESSION_REPLAY_WARNING} because even with
+ *    both guards a coincidental insert+delete pair on duplicate rows can
+ *    still land the edit on the wrong row; see {@link replaySessionChainOnCurrent}.
  * 3. Reconstruct from a sparse snapshot (lines map only), verify the rebuilt
  *    text hashes to the expected value, then 3-way-merge.
  */
@@ -195,10 +208,10 @@ export class Recovery {
 		if (snapshot.fullText !== undefined) {
 			const merged = applyEditsToSnapshot(snapshot.fullText, currentText, edits, options, recoveryWarning);
 			if (merged !== null) return merged;
-			// Session-chain fast-path: prior in-session edit changed the same
-			// line(s) the user is now re-targeting with the stale hash. When
-			// line counts match, the edits' line numbers still resolve to the
-			// right rows — replay onto the current text directly.
+			// Session-chain fallback: the 3-way merge on the snapshot refused.
+			// Replay onto current is gated by line-count equality AND
+			// anchor-content alignment — see `replaySessionChainOnCurrent`
+			// for why both guards together still don't fully prove correctness.
 			if (isSessionChain) return replaySessionChainOnCurrent(snapshot.fullText, currentText, edits, options);
 			return null;
 		}
