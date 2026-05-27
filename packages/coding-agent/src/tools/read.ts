@@ -1488,6 +1488,21 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (!this.session.settings.get("fetch.enabled")) {
 				throw new ToolError("URL reads are disabled by settings.");
 			}
+			if (parsedUrlTarget.ranges !== undefined) {
+				const cached = await loadReadUrlCacheEntry(
+					this.session,
+					{ path: parsedUrlTarget.path, raw: parsedUrlTarget.raw },
+					signal,
+					{ ensureArtifact: true, preferCached: true },
+				);
+				return this.#buildInMemoryMultiRangeResult(cached.output, parsedUrlTarget.ranges, {
+					details: { ...cached.details },
+					sourceUrl: cached.details.finalUrl,
+					entityLabel: "URL output",
+					raw: parsedUrlTarget.raw,
+					immutable: true,
+				});
+			}
 			if (parsedUrlTarget.offset !== undefined || parsedUrlTarget.limit !== undefined) {
 				const cached = await loadReadUrlCacheEntry(
 					this.session,
@@ -1502,6 +1517,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					details: { ...cached.details },
 					sourceUrl: cached.details.finalUrl,
 					entityLabel: "URL output",
+					raw: parsedUrlTarget.raw,
 					immutable: true,
 				});
 			}
@@ -1578,7 +1594,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (isMultiRange(parsed)) {
 				throw new ToolError("Multi-range line selectors are not supported for directory listings.");
 			}
-			const dirResult = await this.#readDirectory(absolutePath, selToOffsetLimit(parsed).limit, signal);
+			const { offset, limit } = selToOffsetLimit(parsed);
+			const dirResult = await this.#readDirectory(absolutePath, offset, limit, signal);
 			if (suffixResolution) {
 				dirResult.details ??= {};
 				dirResult.details.suffixResolution = suffixResolution;
@@ -2136,6 +2153,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	/** Read directory contents as a formatted listing */
 	async #readDirectory(
 		absolutePath: string,
+		offset: number | undefined,
 		limit: number | undefined,
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<ReadToolDetails>> {
@@ -2149,7 +2167,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				maxDepth: READ_DIRECTORY_MAX_DEPTH,
 				perDirLimit: READ_DIRECTORY_CHILD_LIMIT,
 				rootLimit: null,
-				lineCap: limit ?? null,
+				// `lineCap` truncates the rendered tree itself, so apply it only when the caller
+				// did not request an offset — otherwise we'd cap the first N lines before slicing.
+				lineCap: offset === undefined && limit !== undefined ? limit : null,
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -2158,12 +2178,46 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		throwIfAborted(signal);
 
 		const output = tree.totalLines <= 1 ? "(empty directory)" : tree.rendered;
-		const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
 		const details: ReadToolDetails = {
 			isDirectory: true,
 			resolvedPath: tree.rootPath,
 		};
 
+		// Slice the rendered listing when the caller passed an offset/limit. We do this
+		// instead of passing the selector down to `buildDirectoryTree` because the tree
+		// builder lays out entries hierarchically (per-dir caps, recent-then-elided
+		// summaries); line-based slicing operates on the formatted text and matches what
+		// users expect from `:N-M` on long listings.
+		const wantsSlice = offset !== undefined || limit !== undefined;
+		if (wantsSlice) {
+			const allLines = output.split("\n");
+			const start = offset ? Math.max(0, offset - 1) : 0;
+			if (start >= allLines.length) {
+				const suggestion =
+					allLines.length === 0
+						? "The listing is empty."
+						: `Use :1 to read from the start, or :${allLines.length} to read the last line.`;
+				return toolResult(details)
+					.text(`Line ${start + 1} is beyond end of listing (${allLines.length} lines total). ${suggestion}`)
+					.sourcePath(tree.rootPath)
+					.done();
+			}
+			const end = limit !== undefined ? Math.min(start + limit, allLines.length) : allLines.length;
+			const sliced = allLines.slice(start, end).join("\n");
+			const resultBuilder = toolResult(details).sourcePath(tree.rootPath);
+			let text = sliced;
+			if (end < allLines.length) {
+				const remaining = allLines.length - end;
+				text += `\n\n[${remaining} more lines in listing. Use :${end + 1} to continue]`;
+			}
+			resultBuilder.text(text);
+			if (tree.truncated) {
+				resultBuilder.limits({ resultLimit: 1 });
+			}
+			return resultBuilder.done();
+		}
+
+		const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
 		const resultBuilder = toolResult(details).text(truncation.content).sourcePath(tree.rootPath);
 		if (tree.truncated) {
 			resultBuilder.limits({ resultLimit: 1 });

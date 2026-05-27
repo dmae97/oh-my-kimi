@@ -24,6 +24,7 @@ import { finalizeOutput, loadPage, looksLikeHtml, MAX_OUTPUT_CHARS } from "../we
 import { convertWithMarkit, fetchBinary } from "../web/scrapers/utils";
 import { applyListLimit } from "./list-limit";
 import { formatStyledArtifactReference, type OutputMeta } from "./output-meta";
+import { type LineRange, parseLineRanges } from "./path-utils";
 import { formatExpandHint, getDomain, replaceTabs } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -139,16 +140,31 @@ export function isReadableUrlPath(value: string): boolean {
 	return /^https?:\/\//i.test(value) || /^www\./i.test(value);
 }
 
-// URL line selectors mirror the file form: `:50`, `:50-100`, `:50+150`, `:raw`.
-// If a URL would otherwise look like `host:port`, add a trailing slash before the selector
-// (e.g. `https://example.com/:80` to read line 80 of the document at `https://example.com/`).
-const URL_LINE_RANGE_RE = /^(\d+)(?:([-+])(\d+))?$/;
+// URL line selectors mirror the file form: `:50`, `:50-100`, `:50+150`, `:5-10,20-30`, `:raw`,
+// or `:raw:N-M` / `:N-M:raw` to combine raw mode with a range. If a URL would otherwise look
+// like `host:port`, add a trailing slash before the selector (e.g. `https://example.com/:80`
+// to read line 80 of the document at `https://example.com/`).
 
 export interface ParsedReadUrlTarget {
 	path: string;
 	raw: boolean;
 	offset?: number;
 	limit?: number;
+	/** Populated only when the selector carries 2+ ranges. Single-range stays on offset/limit. */
+	ranges?: readonly LineRange[];
+}
+
+/** Recognize a single selector token (`raw` or one/many line ranges). */
+function isUrlSelectorToken(token: string): boolean {
+	if (token === "raw") return true;
+	try {
+		return parseLineRanges(token) !== null;
+	} catch {
+		// `parseLineRanges` throws `ToolError` for malformed ranges (e.g. `5+0`). Only treat the
+		// token as a selector when it parses cleanly so URL ports like `:80` keep flowing
+		// through to the URL path.
+		return false;
+	}
 }
 
 export function parseReadUrlTarget(readPath: string): ParsedReadUrlTarget | null {
@@ -158,62 +174,71 @@ export function parseReadUrlTarget(readPath: string): ParsedReadUrlTarget | null
 		return null;
 	}
 
-	const selector = embedded?.sel;
-	const raw = selector === "raw";
-	const lineMatch = selector && selector !== "raw" ? URL_LINE_RANGE_RE.exec(selector) : null;
-	if (lineMatch) {
-		const startLine = Number.parseInt(lineMatch[1]!, 10);
-		if (startLine < 1) {
-			throw new ToolError("URL line selector 0 is invalid; lines are 1-indexed. Use :1.");
+	let raw = false;
+	let ranges: readonly LineRange[] | undefined;
+	for (const sel of embedded?.sels ?? []) {
+		if (sel === "raw") {
+			raw = true;
+			continue;
 		}
-		const sep = lineMatch[2];
-		const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
-		let endLine: number | undefined;
-		if (sep === "+") {
-			if (rhs === undefined || rhs < 1) {
-				throw new ToolError(`Invalid range ${startLine}+${rhs ?? 0}: count must be >= 1.`);
-			}
-			endLine = startLine + rhs - 1;
-		} else if (sep === "-") {
-			if (rhs === undefined || rhs < startLine) {
-				throw new ToolError(`Invalid range ${startLine}-${rhs ?? 0}: end must be >= start.`);
-			}
-			endLine = rhs;
+		if (ranges !== undefined) {
+			// Two range groups on the same URL (`…:5-10:20-30`) — combine with commas instead.
+			throw new ToolError(
+				`URL selector has multiple range groups; combine them with commas (e.g. \`:5-10,20-30\`).`,
+			);
 		}
+		const parsed = parseLineRanges(sel);
+		if (parsed === null) {
+			// Shouldn't happen — isUrlSelectorToken vetted it. Belt-and-suspenders.
+			throw new ToolError(`Invalid URL line selector: ${sel}`);
+		}
+		ranges = parsed;
+	}
+
+	if (!ranges || ranges.length === 0) return { path: urlPath, raw };
+	if (ranges.length === 1) {
+		const r = ranges[0];
 		return {
 			path: urlPath,
-			raw: false,
-			offset: startLine,
-			limit: endLine !== undefined ? endLine - startLine + 1 : undefined,
+			raw,
+			offset: r.startLine,
+			limit: r.endLine !== undefined ? r.endLine - r.startLine + 1 : undefined,
 		};
 	}
-
-	return { path: urlPath, raw };
+	return { path: urlPath, raw, ranges };
 }
 
-function tryExtractEmbeddedUrlSelector(readPath: string): { path: string; sel?: string } | null {
-	const lastColonIndex = readPath.lastIndexOf(":");
-	if (lastColonIndex <= 0) {
-		return null;
-	}
+/**
+ * Peel one or more selector tokens off the right of a URL string. Walks back through
+ * trailing `:tok` segments while each token (a) looks like a selector and (b) leaves
+ * behind a string that still parses as a URL. Returns selectors left-to-right so callers
+ * can apply them in source order.
+ */
+function tryExtractEmbeddedUrlSelector(readPath: string): { path: string; sels: string[] } | null {
+	let basePath = readPath;
+	const sels: string[] = [];
+	while (true) {
+		const lastColonIndex = basePath.lastIndexOf(":");
+		if (lastColonIndex <= 0) break;
 
-	const candidateSelector = readPath.slice(lastColonIndex + 1);
-	const basePath = readPath.slice(0, lastColonIndex);
-	if (!isReadableUrlPath(basePath)) {
-		return null;
-	}
+		const candidate = basePath.slice(lastColonIndex + 1);
+		const remainder = basePath.slice(0, lastColonIndex);
+		if (!isReadableUrlPath(remainder)) break;
+		if (!isUrlSelectorToken(candidate)) break;
 
-	const isEmbeddedSelector = candidateSelector === "raw" || URL_LINE_RANGE_RE.test(candidateSelector);
-	if (!isEmbeddedSelector) {
-		return null;
-	}
+		try {
+			new URL(
+				remainder.startsWith("http://") || remainder.startsWith("https://") ? remainder : `https://${remainder}`,
+			);
+		} catch {
+			break;
+		}
 
-	try {
-		new URL(basePath.startsWith("http://") || basePath.startsWith("https://") ? basePath : `https://${basePath}`);
-		return { path: basePath, sel: candidateSelector };
-	} catch {
-		return null;
+		sels.unshift(candidate);
+		basePath = remainder;
 	}
+	if (sels.length === 0) return null;
+	return { path: basePath, sels };
 }
 
 /**
@@ -932,6 +957,22 @@ async function renderUrl(
 	const isText = mime.includes("text/plain") || mime.includes("text/markdown");
 	const isFeed = mime.includes("rss") || mime.includes("atom") || mime.includes("feed");
 
+	// Raw mode skips every text-shaping branch below (JSON pretty-print, feed-to-markdown,
+	// HTML extraction) and returns the response body verbatim. The image/markit branches
+	// above already ran because raw isn't useful for binary payloads.
+	if (raw) {
+		const output = finalizeOutput(rawContent);
+		return {
+			url,
+			finalUrl,
+			contentType: mime,
+			method: "raw",
+			content: output.content,
+			fetchedAt,
+			truncated: output.truncated,
+			notes,
+		};
+	}
 	if (isJson) {
 		const output = finalizeOutput(formatJson(rawContent));
 		return {

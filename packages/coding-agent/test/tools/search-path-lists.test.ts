@@ -478,12 +478,21 @@ describe("tool path arrays", () => {
 			paths: ["apps/", "packages/", "phases/"],
 		});
 		const text = getText(result);
-		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
+		const details = result.details as { fileCount?: number; scopePath?: string; files?: string[] } | undefined;
 
-		expect(text).toContain("apps/ast.ts");
-		expect(text).toContain("packages/ast.ts");
-		expect(text).toContain("phases/ast.ts");
-		expect(text).toContain("apps/grep.txt");
+		expect(text).toMatch(/^# apps\/\n(?:ast\.ts|grep\.txt)\n(?:ast\.ts|grep\.txt)$/m);
+		expect(text).toMatch(/^# packages\/\n(?:ast\.ts|grep\.txt)\n(?:ast\.ts|grep\.txt)$/m);
+		expect(text).toMatch(/^# phases\/\n(?:ast\.ts|grep\.txt)\n(?:ast\.ts|grep\.txt)$/m);
+		expect(details?.files).toEqual(
+			expect.arrayContaining([
+				"apps/ast.ts",
+				"packages/ast.ts",
+				"phases/ast.ts",
+				"apps/grep.txt",
+				"packages/grep.txt",
+				"phases/grep.txt",
+			]),
+		);
 		expect(text).not.toContain("other/ast.ts");
 		expect(details?.fileCount).toBe(6);
 		expect(details?.scopePath).toBe("apps/, packages/, phases/");
@@ -522,11 +531,12 @@ describe("tool path arrays", () => {
 			});
 			const text = getText(result);
 			const expectedPath = path.join(outsideDir, "outside.txt").replace(/\\/g, "/");
-			const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
+			const details = result.details as { fileCount?: number; scopePath?: string; files?: string[] } | undefined;
 
-			expect(text).toContain(expectedPath);
+			expect(text).toContain(`# ${outsideDir.replace(/\\/g, "/")}/\noutside.txt`);
 			expect(text).not.toContain("../");
 			expect(details?.fileCount).toBe(1);
+			expect(details?.files).toEqual([expectedPath]);
 			expect(details?.scopePath).toBe(outsideDir.replace(/\\/g, "/"));
 		} finally {
 			await fs.rm(outsideDir, { recursive: true, force: true });

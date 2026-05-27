@@ -1,6 +1,21 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Support for multi-range line selectors on URLs (e.g., `:5-10,20-30`) to fetch and display multiple non-contiguous sections
+- Support for combining `:raw` mode with line range selectors on URLs (e.g., `:raw:1-120` or `:1-120:raw`)
+- Support for line range selectors on directory listings (e.g., `:30-40` to view lines 30–40 of a directory tree)
+- Clear error message when requesting a line offset beyond the end of a directory listing
+
+### Changed
+
+- URL selector parsing now supports multiple trailing selector tokens (e.g., `:raw:N-M`), applying them left-to-right
+
+### Fixed
+
+- Fixed `:raw` selector being ignored for JSON and feed URLs, causing them to be pretty-printed or converted to markdown instead of returning raw content
+- Fixed directory listing line selectors silently dropping the offset parameter and only applying the limit
 
 ## [15.5.5] - 2026-05-27
 
