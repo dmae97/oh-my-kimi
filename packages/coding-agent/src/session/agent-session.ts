@@ -6251,6 +6251,7 @@ export class AgentSession {
 				model: assistantMessage.model,
 				provider: assistantMessage.provider,
 			});
+			this.#resolveRetry();
 			return true;
 		}
 

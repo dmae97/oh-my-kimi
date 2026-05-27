@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { z } from "@oh-my-pi/pi-ai";
-import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
+import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -18,6 +19,7 @@ type Harness = {
 	authStorage: AuthStorage;
 	tempDir: TempDir;
 };
+type SettingsOverrides = Partial<Record<SettingPath, unknown>>;
 
 const activeHarnesses: Harness[] = [];
 
@@ -51,7 +53,8 @@ function emptyStop(): MockResponse {
 
 async function createHarness(
 	responses: MockResponse[],
-): Promise<Harness & { mock: ReturnType<typeof createMockModel> }> {
+	settingsOverrides: SettingsOverrides = {},
+): Promise<Harness & { mock: MockModel }> {
 	const tempDir = TempDir.createSync("@pi-empty-stop-guard-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 	authStorage.setRuntimeApiKey("mock", "test-key");
@@ -64,6 +67,7 @@ async function createHarness(
 		"todo.enabled": false,
 		"todo.eager": false,
 		"todo.reminders": false,
+		...settingsOverrides,
 	});
 	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
 
@@ -126,12 +130,22 @@ function reminderMessages(messages: AgentMessage[]): AgentMessage[] {
 	);
 }
 
+async function expectPromptCompletes(prompt: Promise<void>): Promise<void> {
+	await Promise.race([
+		prompt,
+		Bun.sleep(1_000).then(() => {
+			throw new Error("Expected session prompt to settle after empty-stop retry cap");
+		}),
+	]);
+}
+
 afterEach(async () => {
 	for (const harness of activeHarnesses.splice(0)) {
 		await harness.session.dispose();
 		harness.authStorage.close();
 		harness.tempDir.removeSync();
 	}
+	vi.restoreAllMocks();
 });
 
 describe("AgentSession empty stop guard", () => {
@@ -186,6 +200,26 @@ describe("AgentSession empty stop guard", () => {
 			.filter(entry => entry.type === "message")
 			.map(entry => entry.message as AgentMessage);
 		expect(emptyAssistantStops(activeBranchMessages)).toHaveLength(1);
+	});
+
+	it("resolves outstanding auto-retry wait when empty stop retries hit the cap", async () => {
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const { session, mock } = await createHarness(
+			[{ throw: "503 service unavailable: overloaded_error" }, emptyStop(), emptyStop(), emptyStop(), emptyStop()],
+			{
+				"retry.enabled": true,
+				"retry.baseDelayMs": 5,
+				"retry.maxDelayMs": 5_000,
+			},
+		);
+
+		await expectPromptCompletes(session.prompt("recover from transient error"));
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(5);
+		expect(session.isRetrying).toBe(false);
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(3);
+		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(1);
 	});
 
 	it("does not retry normal stop or tool-use turns", async () => {
