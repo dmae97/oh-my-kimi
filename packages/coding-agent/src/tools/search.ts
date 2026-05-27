@@ -478,8 +478,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						);
 					}
 				} catch (err) {
-					if (err instanceof Error && err.message.startsWith("regex parse error")) {
-						throw new ToolError(err.message);
+					if (err instanceof Error && /^regex(?: parse)? error/i.test(err.message)) {
+						throw new ToolError(err.message.replace(/^regex(?: parse)? error:?\s*/i, "Invalid regex: "));
 					}
 					throw err;
 				}
