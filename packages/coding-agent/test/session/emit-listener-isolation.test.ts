@@ -16,7 +16,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
 function makeEvent(): AgentEvent {
-	return { type: "tool_execution_start", toolCallId: "probe-1", toolName: "probe" };
+	return { type: "tool_execution_start", toolCallId: "probe-1", toolName: "probe", args: {} };
 }
 
 describe("#emit listener isolation", () => {

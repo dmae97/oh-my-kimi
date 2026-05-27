@@ -1311,11 +1311,11 @@ export class AgentSession {
 		const listeners = [...this.#eventListeners];
 		for (const l of listeners) {
 			try {
-				const result = l(event);
+				const result = l(event) as unknown;
 				// Listener may be an async function whose returned Promise we don't await;
 				// attach a catch so a rejection does not become an unhandled rejection.
-				if (result && typeof (result as Promise<unknown>).then === "function") {
-					(result as Promise<unknown>).catch(err => {
+				if (result instanceof Promise) {
+					result.catch(err => {
 						logger.warn("AgentSession listener rejected", {
 							error: err instanceof Error ? err.message : String(err),
 						});
