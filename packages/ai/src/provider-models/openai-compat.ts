@@ -674,6 +674,11 @@ export const XAI_OAUTH_CURATED_MODELS: readonly XAICuratedModel[] = [
 	},
 ] as const;
 
+// xAI /v1/models returns chat, image, voice, and STT entries. Tool surfaces
+// route through dedicated tools (generate_image, tts) with their own model
+// strings; the chat picker MUST exclude these prefixes or selecting them 400s.
+const XAI_NON_CHAT_PREFIXES = ["grok-imagine-", "grok-stt-", "grok-voice-"] as const;
+
 // Hermes-agent parity: only the `minimal -> low` clamp is applied (see
 // hermes-agent/agent/transports/codex.py:92 `_effort_clamp = {"minimal":
 // "low"}`). Hermes sends `xhigh` to xAI verbatim and we match that contract
@@ -683,23 +688,83 @@ export const XAI_OAUTH_CURATED_MODELS: readonly XAICuratedModel[] = [
 const XAI_REASONING_EFFORT_MAP = { minimal: "low" } as const;
 
 // Single source of truth for curated → Model fan-in. Used by the static-seed
-// (and overlay/inject paths in `applyXAIOAuthCuration`) so curated reasoning/
-// effort flags survive an online refresh (xAI's /v1/models lacks reasoning
-// metadata and fetchOpenAICompatibleModels defaults reasoning to false).
-// Caller supplies a `base` Model (either a freshly synthesised seed or a
-// dynamic-fetched entry); the helper layers curated fields on top, preserving
-// any `compat` keys the base already carries.
+// and the dynamic overlay/inject paths (applyXAIOAuthCuration) so curated
+// reasoning/effort flags survive an online refresh (xAI's /v1/models lacks
+// reasoning metadata and fetchOpenAICompatibleModels defaults reasoning to
+// false). Caller supplies a `base` Model (either a freshly synthesised seed
+// or a dynamic-fetched entry); the helper layers curated fields on top.
+// The `minimal -> low` effort clamp (XAI_REASONING_EFFORT_MAP) is always
+// merged in so dynamic-fetched models — which arrive without curated
+// compat keys — still get the clamp applyResponsesReasoningParams expects.
 function mergeCuratedIntoModel(base: Model<"openai-responses">, curated: XAICuratedModel): Model<"openai-responses"> {
 	const effort = curated.supportsReasoningEffort;
-	const compat = effort === undefined ? base.compat : { ...(base.compat ?? {}), supportsReasoningEffort: effort };
+	const compat = {
+		...(base.compat ?? {}),
+		reasoningEffortMap: { ...XAI_REASONING_EFFORT_MAP, ...(base.compat?.reasoningEffortMap ?? {}) },
+		...(effort === undefined ? {} : { supportsReasoningEffort: effort }),
+	};
 	return {
 		...base,
 		contextWindow: curated.contextWindow,
 		name: curated.name ?? base.name,
 		reasoning: curated.reasoning ?? true,
 		input: curated.input ?? base.input,
-		...(compat !== undefined ? { compat } : {}),
+		compat,
 	};
+}
+
+/**
+ * Overlay/inject curated xai-oauth metadata onto dynamic-fetch results so
+ * a successful `online refresh` doesn't regress vision capability, context
+ * window, reasoning flags, or the effort-dial allowlist.
+ *
+ * Three passes:
+ *   1. Filter `XAI_NON_CHAT_PREFIXES` (picker pollution defense for tool
+ *      surfaces routed through dedicated tools — generate_image, tts).
+ *   2. Overlay curated metadata onto dynamic-fetch matches. xAI's /v1/models
+ *      does not return context_window or reasoning metadata, so without
+ *      this overlay the runtime falls back to the bundled-reference default
+ *      (effectively 128k context) and `reasoning: false` (suppressing the
+ *      effort dial and stripping thinking metadata downstream).
+ *   3. Inject curated entries missing from the dynamic fetch. Clones the
+ *      first surviving entry as a template so required Model fields (api,
+ *      provider, baseUrl, cost, etc.) inherit sane defaults. If `filtered`
+ *      is empty (offline / no auth) injection is skipped — the descriptor's
+ *      defaultModel covers the fallback.
+ *
+ * Order: curated models first in declaration order; then dynamic remainder
+ * in original order.
+ */
+function applyXAIOAuthCuration(dynamic: readonly Model<"openai-responses">[]): Model<"openai-responses">[] {
+	const filtered = dynamic.filter(e => !XAI_NON_CHAT_PREFIXES.some(p => e.id.startsWith(p)));
+
+	const byId = new Map<string, Model<"openai-responses">>(filtered.map(e => [e.id, e]));
+	for (const curated of XAI_OAUTH_CURATED_MODELS) {
+		const existing = byId.get(curated.id);
+		if (existing) {
+			byId.set(curated.id, mergeCuratedIntoModel(existing, curated));
+		}
+	}
+
+	const template = filtered[0];
+	if (template) {
+		for (const curated of XAI_OAUTH_CURATED_MODELS) {
+			if (!byId.has(curated.id)) {
+				// Reset id/name on the template before merging so the helper's
+				// `curated.name ?? base.name` clause falls back to curated.id
+				// (the inject contract), not to the unrelated template's label.
+				const base: Model<"openai-responses"> = { ...template, id: curated.id, name: curated.id };
+				byId.set(curated.id, mergeCuratedIntoModel(base, curated));
+			}
+		}
+	}
+
+	const curatedIds = new Set(XAI_OAUTH_CURATED_MODELS.map(c => c.id));
+	const curatedFirst = XAI_OAUTH_CURATED_MODELS.map(c => byId.get(c.id)).filter(
+		(e): e is Model<"openai-responses"> => e !== undefined,
+	);
+	const rest = filtered.filter(e => !curatedIds.has(e.id));
+	return [...curatedFirst, ...rest];
 }
 
 /**
@@ -760,7 +825,22 @@ export function xaiOAuthModelManagerOptions(
 	// carries these entries too — making the synchronous `#loadModels()` boot
 	// path honor `modelRoles.default = "xai-oauth/<id>"` without `await refresh()`.
 	const staticModels = buildXaiOAuthStaticSeed(resolvedBaseUrl);
-	return { ...base, staticModels };
+	if (!base.fetchDynamicModels) {
+		return { ...base, staticModels };
+	}
+	// Wrap fetchDynamicModels so an `online refresh` against xAI's /v1/models
+	// runs through applyXAIOAuthCuration — preserves curated context windows,
+	// vision modality, reasoning flags, and filters tool-only model ids
+	// (grok-imagine-*, grok-stt-*, grok-voice-*) from the chat picker.
+	const inner = base.fetchDynamicModels;
+	return {
+		...base,
+		staticModels,
+		fetchDynamicModels: async () => {
+			const dynamic = await inner();
+			return dynamic == null ? dynamic : applyXAIOAuthCuration(dynamic);
+		},
+	};
 }
 
 // ---------------------------------------------------------------------------
