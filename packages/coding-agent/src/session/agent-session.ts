@@ -163,6 +163,7 @@ import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
 import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
+import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
@@ -6276,13 +6277,10 @@ export class AgentSession {
 	}
 
 	#emptyStopRetryReminder(): string {
-		return [
-			"<system-reminder>",
-			"The previous assistant turn ended with no text, reasoning, or tool call.",
-			"Continue the active task from the current context. If the work is complete, reply with a concise final summary instead of an empty response.",
-			`(Empty response retry ${this.#emptyStopRetryCount}/${EMPTY_STOP_MAX_RETRIES})`,
-			"</system-reminder>",
-		].join("\n");
+		return prompt.render(emptyStopRetryTemplate, {
+			retryCount: this.#emptyStopRetryCount,
+			maxRetries: EMPTY_STOP_MAX_RETRIES,
+		});
 	}
 
 	#removeEmptyStopFromActiveContext(assistantMessage: AssistantMessage): void {
