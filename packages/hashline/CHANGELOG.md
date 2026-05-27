@@ -15,6 +15,7 @@
 
 - Parser now skips markdown-style `# ...` lines when they directly precede a hashline operation, making model-generated explanatory rows in prompt examples non-blocking.
 - Parser now treats a leading `\` on inline payload bodies as the payload delimiter, matching standalone payload rows.
+- Restored the warning emitted when escaped indented payload rows (`\\    TEXT`) are accepted as payload delimiters.
 
 ### Removed
 

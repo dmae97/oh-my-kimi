@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Removed the model-facing `path` property from hashline edit tool parameters; hashline edit targets now come from `¶PATH` headers in `input`.
+
 ## [15.5.4] - 2026-05-27
 
 ### Breaking Changes

@@ -29,6 +29,7 @@ import {
 	getFileSnapshotStore as getFileReadCache,
 	hashlineEditParamsSchema,
 } from "@oh-my-pi/pi-coding-agent/edit";
+import * as z from "zod/v4";
 
 /**
  * The test bodies were written against the legacy hashline API surface. The
@@ -935,15 +936,25 @@ describe("hashline executor", () => {
 	});
 });
 
-describe("hashlineEditParamsSchema — extra-field tolerance", () => {
-	it("accepts extra `path` field alongside `input`", () => {
+describe("hashlineEditParamsSchema — payload shape", () => {
+	it("declares only `input` as the model-facing field", () => {
+		const jsonSchema = z.toJSONSchema(hashlineEditParamsSchema) as {
+			properties?: Record<string, unknown>;
+			required?: string[];
+		};
+
+		expect(Object.keys(jsonSchema.properties ?? {})).toEqual(["input"]);
+		expect(jsonSchema.required).toEqual(["input"]);
+	});
+
+	it("tolerates provider extra fields without declaring `path`", () => {
 		expect(hashlineEditParamsSchema.safeParse({ path: "x.ts", input: `¶x.ts\nBOF↓\n${extra("x")}` }).success).toBe(
 			true,
 		);
 	});
 
 	it("accepts `_input` as a provider-emitted alias for `input`", () => {
-		const parsed = hashlineEditParamsSchema.safeParse({ path: "x.ts", _input: `¶x.ts\nBOF↓\n${extra("x")}` });
+		const parsed = hashlineEditParamsSchema.safeParse({ _input: `¶x.ts\nBOF↓\n${extra("x")}` });
 		expect(parsed.success).toBe(true);
 		if (parsed.success) expect(parsed.data.input).toBe(`¶x.ts\nBOF↓\n${extra("x")}`);
 	});

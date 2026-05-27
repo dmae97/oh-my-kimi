@@ -78,13 +78,13 @@ export async function computeHashlineSectionDiff(
 }
 
 export async function computeHashlineDiff(
-	input: { input: string; path?: string },
+	input: { input: string },
 	cwd: string,
 	options: HashlineDiffOptions = {},
 ): Promise<{ diff: string; firstChangedLine: number | undefined } | { error: string }> {
 	let patch: Patch;
 	try {
-		patch = HashlinePatch.parse(input.input, { cwd, path: input.path });
+		patch = HashlinePatch.parse(input.input, { cwd });
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}

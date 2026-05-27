@@ -228,7 +228,6 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 
 interface HashlineArgs {
 	input?: string;
-	path?: string;
 	__partialJson?: string;
 }
 
@@ -320,18 +319,17 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 
 		let sections: readonly HashlineInputSection[];
 		try {
-			sections = HashlinePatch.parse(input, { cwd: ctx.cwd, path: args.path }).sections;
+			sections = HashlinePatch.parse(input, { cwd: ctx.cwd }).sections;
 		} catch {
 			// While streaming, the trailing op may still be mid-typed and fail
 			// to parse; suppress until the next chunk arrives. Once args are
 			// complete, surface the error so the model sees what went wrong.
 			if (ctx.isStreaming) return null;
-			const result = await computeHashlineDiff({ input, path: args.path }, ctx.cwd, {
+			const result = await computeHashlineDiff({ input }, ctx.cwd, {
 				autoDropPureInsertDuplicates: ctx.hashlineAutoDropPureInsertDuplicates,
 			});
 			ctx.signal.throwIfAborted();
-			if ("error" in result && !args.path) return [{ path: "", error: result.error }];
-			return [toPerFilePreview(args.path ?? "", result)];
+			return [toPerFilePreview("", result)];
 		}
 		if (sections.length === 0) return null;
 
