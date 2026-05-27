@@ -22,7 +22,13 @@
  * Sizes (50/500/5000 lines) × edit batch (1/8 anchors) so the O(N) split cost
  * in `verifyAnchorContent` and the O(K) anchor walk both surface.
  */
-import { computeFileHash, InMemorySnapshotStore, parsePatch, Recovery } from "../src";
+import {
+	computeFileHash,
+	InMemorySnapshotStore,
+	parsePatch,
+	RECOVERY_SESSION_REPLAY_WARNING,
+	Recovery,
+} from "../src";
 
 const ITERATIONS = Number(Bun.env.HASHLINE_BENCH_ITERATIONS ?? "5000");
 const PATH = "/tmp/__hashline-recovery-bench__.ts";
@@ -79,9 +85,15 @@ for (const size of [50, 500, 5000] as const) {
 		Math.max(1, Math.floor(size / 3)),
 		Math.max(2, Math.floor((size * 2) / 3)),
 	];
+	// Accept regime: the rewrite is the immediate neighbour of the first
+	// anchor (≤3 lines), so the patch hunk's context spans the rewrite and
+	// the 3-way merge fails atomically — forcing the replay path. Reject
+	// regime: the rewrite IS the anchor, so verifyAnchorContent refuses.
+	const acceptRewrite = sparse[0] - 1;
+	const acceptRewriteDense = dense[0] - 1;
 	cases.push(
-		{ name: `accept ${size}L ×1 anchor`, lines: size, anchors: sparse, rewrittenLine: rewritten },
-		{ name: `accept ${size}L ×8 anchors`, lines: size, anchors: dense, rewrittenLine: rewritten },
+		{ name: `accept ${size}L ×1 anchor`, lines: size, anchors: sparse, rewrittenLine: acceptRewrite },
+		{ name: `accept ${size}L ×8 anchors`, lines: size, anchors: dense, rewrittenLine: acceptRewriteDense },
 		{ name: `reject ${size}L ×1 anchor`, lines: size, anchors: [rewritten], rewrittenLine: rewritten },
 	);
 }
@@ -113,13 +125,21 @@ for (const c of cases) {
 	const args = { path: PATH, currentText: v1Text, fileHash: h0, edits };
 
 	// Sanity: every iteration must hit the expected branch. Otherwise the
-	// numbers measure the wrong path.
+	// numbers measure the wrong path. Accept cases additionally must surface
+	// RECOVERY_SESSION_REPLAY_WARNING — its only emitter is the replay
+	// fallback past verifyAnchorContent, so its absence proves we never
+	// reached the gate this bench is supposed to pin.
 	const probe = recovery.tryRecover(args);
 	if (isReject) {
 		if (probe !== null) throw new Error(`expected null for ${c.name}, got recovery`);
 		expectedNullVerified++;
 	} else {
 		if (probe === null) throw new Error(`expected recovery for ${c.name}, got null`);
+		if (!probe.warnings.includes(RECOVERY_SESSION_REPLAY_WARNING)) {
+			throw new Error(
+				`expected ${c.name} to surface RECOVERY_SESSION_REPLAY_WARNING (the only signal that the replay path executed); got warnings=${JSON.stringify(probe.warnings)}`,
+			);
+		}
 		expectedNonNullVerified++;
 	}
 
