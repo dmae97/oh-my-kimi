@@ -5,6 +5,7 @@ import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { htmlToMarkdown } from "@oh-my-pi/pi-natives";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { $which, ptree, truncate } from "@oh-my-pi/pi-utils";
+import { LRUCache } from "lru-cache/raw";
 import { parseHTML } from "linkedom";
 import type { Settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -1174,7 +1175,8 @@ interface ReadUrlCacheEntry {
 	output: string;
 }
 
-const readUrlCache = new Map<string, ReadUrlCacheEntry>();
+const READ_URL_CACHE_MAX_ENTRIES = 100;
+const readUrlCache = new LRUCache<string, ReadUrlCacheEntry>({ max: READ_URL_CACHE_MAX_ENTRIES });
 
 function getReadUrlCacheKey(session: ToolSession, requestedUrl: string, raw: boolean): string {
 	const scope = session.getSessionFile() ?? session.cwd;
