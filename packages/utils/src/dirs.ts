@@ -28,6 +28,58 @@ export const VERSION: string = version;
 /** Minimum Bun version */
 export const MIN_BUN_VERSION: string = engines.bun.replace(/[^0-9.]/g, "");
 
+const PROFILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const PROFILE_ENV_KEYS = ["OMP_PROFILE", "PI_PROFILE"] as const;
+
+/**
+ * Names Windows treats as reserved device aliases. Matches the basename
+ * itself as well as any `BASENAME.<anything>` form, because Windows reserves
+ * `CON.foo`/`PRN.txt`/etc. too — using them as a profile name would let
+ * `setProfile` accept the input only for directory creation to fail later
+ * with a confusing `ENOENT`/`EINVAL`. Case-insensitive: NTFS treats `CON`
+ * and `con` identically.
+ */
+const WINDOWS_RESERVED_BASENAME_RE = /^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?$/i;
+
+/**
+ * Normalize and validate a profile name. Returns `undefined` for the implicit
+ * default (empty string, whitespace, or the explicit "default" sentinel) and
+ * throws for syntactically invalid or platform-reserved names.
+ *
+ * Exported so consumers of `@oh-my-pi/pi-utils/dirs` (CLI bootstrap, tests,
+ * downstream tools) can validate user input without re-deriving the rules.
+ */
+export function normalizeProfileName(profile: string | undefined): string | undefined {
+	const normalized = profile?.trim();
+	if (!normalized || normalized === "default") return undefined;
+	if (
+		normalized === "." ||
+		normalized === ".." ||
+		!PROFILE_NAME_RE.test(normalized) ||
+		WINDOWS_RESERVED_BASENAME_RE.test(normalized)
+	) {
+		throw new Error(
+			`Invalid OMP profile "${profile}". Profile names must match ${PROFILE_NAME_RE.source}, ` +
+				`cannot be "." or "..", and cannot be a Windows reserved device name ` +
+				`(CON, PRN, AUX, NUL, COM0-9, LPT0-9, or any of those with an extension).`,
+		);
+	}
+	return normalized;
+}
+
+function getProfileFromEnv(): string | undefined {
+	return normalizeProfileName(process.env.OMP_PROFILE || process.env.PI_PROFILE);
+}
+
+function getBaseConfigRoot(): string {
+	return path.join(os.homedir(), getConfigDirName());
+}
+
+function getProfileConfigRoot(profile: string | undefined): string {
+	const root = getBaseConfigRoot();
+	return profile ? path.join(root, "profiles", profile) : root;
+}
+
 // =============================================================================
 // Project directory
 // =============================================================================
@@ -96,7 +148,8 @@ export function getConfigDirName(): string {
 
 /** Get the config agent directory name relative to home (e.g. ".omp/agent" or PI_CONFIG_DIR + "/agent"). */
 export function getConfigAgentDirName(): string {
-	return `${getConfigDirName()}/agent`;
+	const profile = getActiveProfile();
+	return profile ? path.join(getConfigDirName(), "profiles", profile, "agent") : `${getConfigDirName()}/agent`;
 }
 
 // =============================================================================
@@ -123,29 +176,47 @@ class DirResolver {
 	readonly #rootCache = new Map<string, string>();
 	readonly #agentCache = new Map<string, string>();
 
-	constructor(agentDirOverride?: string) {
-		this.configRoot = path.join(os.homedir(), getConfigDirName());
+	constructor(options: { agentDirOverride?: string; profile?: string } = {}) {
+		const profile = normalizeProfileName(options.profile);
+		this.configRoot = getProfileConfigRoot(profile);
 
 		const defaultAgent = path.join(this.configRoot, "agent");
+		const agentDirOverride = profile ? undefined : options.agentDirOverride;
 		this.agentDir = agentDirOverride ? path.resolve(agentDirOverride) : defaultAgent;
 		const isDefault = this.agentDir === defaultAgent;
 
-		// XDG is a Linux convention. On other platforms, or for non-default
-		// profiles, all categories resolve to the legacy paths.
+		// XDG is a Linux convention. On supported platforms, default profile state
+		// resolves under $XDG_*_HOME/omp once `omp config init-xdg` has migrated
+		// the user's data. Named profiles follow a stricter rule: the XDG choice
+		// is keyed on the profile-specific XDG path, never the base app root.
+		//
+		// Why: if we consulted the base app root for named profiles too, the same
+		// profile could resolve to `~/.omp/profiles/<name>` on first activation
+		// (when no $XDG_*_HOME/omp exists yet) and then silently move to
+		// `$XDG_*_HOME/omp/profiles/<name>` the moment the base appeared, orphaning
+		// the earlier state. Pinning on the profile path means a profile's location
+		// is decided at first activation and stays put until the user explicitly
+		// migrates it (e.g. by mkdir'ing the XDG profile dir).
 		let xdgData: string | undefined;
 		let xdgState: string | undefined;
 		let xdgCache: string | undefined;
 		if ((process.platform === "linux" || process.platform === "darwin") && isDefault) {
 			const resolveIf = (envVar: string) => {
 				const value = process.env[envVar];
-				if (value) {
-					try {
-						const joined = path.join(value, APP_NAME);
-						if (fs.existsSync(joined)) {
-							return joined;
+				if (!value) return undefined;
+				try {
+					const appRoot = path.join(value, APP_NAME);
+					if (profile) {
+						const profilePath = path.join(appRoot, "profiles", profile);
+						if (fs.existsSync(profilePath)) {
+							return profilePath;
 						}
-					} catch {}
-				}
+						return undefined;
+					}
+					if (fs.existsSync(appRoot)) {
+						return appRoot;
+					}
+				} catch {}
 				return undefined;
 			};
 			xdgData = resolveIf("XDG_DATA_HOME");
@@ -190,8 +261,21 @@ class DirResolver {
 	}
 }
 
-let dirs = new DirResolver(process.env.PI_CODING_AGENT_DIR);
-
+let activeProfile = getProfileFromEnv();
+let dirs = new DirResolver({
+	agentDirOverride: activeProfile ? undefined : process.env.PI_CODING_AGENT_DIR,
+	profile: activeProfile,
+});
+/**
+ * Snapshot of `PI_CODING_AGENT_DIR` from before the first named-profile
+ * activation. Reset paths restore this value (or its absence) instead of
+ * unconditionally deleting the env var. Without the snapshot, a process started
+ * with `PI_CODING_AGENT_DIR=/custom` then `setProfile("work")` then
+ * `setProfile(undefined)` would silently lose `/custom` and fall back to
+ * `~/.omp/agent`. Captured at module load and refreshed on `setAgentDir`,
+ * since that call is the user explicitly redefining the baseline.
+ */
+let preProfileAgentDirEnv: string | undefined = process.env.PI_CODING_AGENT_DIR;
 // Anchor home for the resolver. Captured at module load to stay stable across
 // test mocks of `os.homedir()`. `getPluginsDir(home)` compares against this so
 // production callers (`home === RESOLVER_HOME`) hit the XDG-aware resolver while
@@ -209,10 +293,66 @@ export function getConfigRootDir(): string {
 
 /** Set the coding agent directory. Creates a fresh resolver, invalidating all cached paths. */
 export function setAgentDir(dir: string): void {
-	dirs = new DirResolver(dir);
+	activeProfile = undefined;
+	dirs = new DirResolver({ agentDirOverride: dir });
 	process.env.PI_CODING_AGENT_DIR = dir;
+	preProfileAgentDirEnv = dir;
+	for (const key of PROFILE_ENV_KEYS) {
+		delete process.env[key];
+	}
 }
 
+/**
+ * Test-only: reset the pre-profile `PI_CODING_AGENT_DIR` snapshot to whatever
+ * the current environment looks like. Cross-suite test pollution can otherwise
+ * leak a stale snapshot through `setAgentDir` and corrupt `setProfile(undefined)`
+ * restore semantics. Production code MUST NOT call this — the snapshot's
+ * lifecycle is owned by `setAgentDir` / `setProfile` and a runtime caller has
+ * no business clearing it.
+ */
+export function __resetProfileSnapshotForTests(): void {
+	preProfileAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+}
+
+/** Activate a named profile. Passing undefined or "default" returns to the default profile. */
+export function setProfile(profile: string | undefined): void {
+	const next = normalizeProfileName(profile);
+	if (next && !activeProfile) {
+		// First activation of a named profile in this process: snapshot the
+		// current PI_CODING_AGENT_DIR so a later reset can restore the user's
+		// explicit override. Subsequent profile switches keep the original
+		// snapshot — the "pre-profile" baseline is the state before profiles
+		// entered the picture, not the state between two activations.
+		preProfileAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+	}
+	activeProfile = next;
+	if (activeProfile) {
+		dirs = new DirResolver({ profile: activeProfile });
+		process.env.OMP_PROFILE = activeProfile;
+		process.env.PI_PROFILE = activeProfile;
+		process.env.PI_CODING_AGENT_DIR = dirs.agentDir;
+	} else {
+		for (const key of PROFILE_ENV_KEYS) {
+			delete process.env[key];
+		}
+		if (preProfileAgentDirEnv === undefined) {
+			delete process.env.PI_CODING_AGENT_DIR;
+		} else {
+			process.env.PI_CODING_AGENT_DIR = preProfileAgentDirEnv;
+		}
+		dirs = new DirResolver({ agentDirOverride: preProfileAgentDirEnv });
+	}
+}
+
+/** Get the active named profile. Undefined means the default profile. */
+export function getActiveProfile(): string | undefined {
+	return activeProfile;
+}
+
+/** Resolve the config root that backs a profile without activating it. */
+export function getProfileRootDir(profile: string | undefined): string {
+	return getProfileConfigRoot(normalizeProfileName(profile));
+}
 /** Get the agent config directory (~/.omp/agent). */
 export function getAgentDir(): string {
 	return dirs.agentDir;

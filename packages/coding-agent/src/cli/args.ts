@@ -11,6 +11,8 @@ export type Mode = "text" | "json" | "rpc" | "acp" | "rpc-ui";
 
 export interface Args {
 	cwd?: string;
+	profile?: string;
+	alias?: string;
 	allowHome?: boolean;
 	provider?: string;
 	model?: string;
@@ -79,6 +81,14 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.version = true;
 		} else if (arg === "--allow-home") {
 			result.allowHome = true;
+		} else if (arg === "--profile" && i + 1 < args.length) {
+			result.profile = args[++i];
+		} else if (arg.startsWith("--profile=")) {
+			result.profile = arg.slice("--profile=".length);
+		} else if (arg === "--alias" && i + 1 < args.length) {
+			result.alias = args[++i];
+		} else if (arg.startsWith("--alias=")) {
+			result.alias = arg.slice("--alias=".length);
 		} else if (arg === "--mode" && i + 1 < args.length) {
 			const mode = args[++i];
 			if (mode === "text" || mode === "json" || mode === "rpc" || mode === "acp" || mode === "rpc-ui") {
@@ -262,13 +272,14 @@ export function getExtraHelpText(): string {
   ANTHROPIC_SEARCH_API_KEY   - Anthropic search provider
 
   ${chalk.dim("# Configuration")}
+  OMP_PROFILE                 - Named profile for isolated agent state (same as --profile)
+  Use \`omp --profile <name> --alias <command>\` to create a shell shortcut for a profile
   PI_CODING_AGENT_DIR        - Session storage directory (default: ~/${CONFIG_DIR_NAME}/agent)
   PI_PACKAGE_DIR             - Override package directory (for Nix/Guix store paths)
   PI_SMOL_MODEL              - Override smol/fast model (see --smol)
   PI_SLOW_MODEL              - Override slow/reasoning model (see --slow)
   PI_PLAN_MODEL              - Override planning model (see --plan)
   PI_NO_PTY                  - Disable PTY-based interactive bash execution
-
   For complete environment variable reference, see:
   ${chalk.dim("docs/environment-variables.md")}
 ${chalk.bold("Available Tools (default-enabled unless noted):")}

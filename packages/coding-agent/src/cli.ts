@@ -1,16 +1,18 @@
 #!/usr/bin/env bun
-import { APP_NAME, MIN_BUN_VERSION, procmgr, VERSION } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getActiveProfile, MIN_BUN_VERSION, setProfile, VERSION } from "@oh-my-pi/pi-utils/dirs";
 
 // Strip macOS malloc-stack-logging env vars before any subprocess is spawned.
 // Otherwise every child bun process (subagents, plugin installs, ptree spawns,
 // etc.) prints a `MallocStackLogging: can't turn off …` warning to stderr.
-procmgr.scrubProcessEnv();
+delete process.env.MallocStackLogging;
+delete process.env.MallocStackLoggingNoCompact;
 
 /**
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
  */
 import { type CliConfig, type CommandEntry, run } from "@oh-my-pi/pi-utils/cli";
+import { extractProfileFlags } from "./cli/profile-bootstrap";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -61,6 +63,11 @@ function isSubcommand(first: string | undefined): boolean {
 	return commands.some(e => e.name === first || e.aliases?.includes(first));
 }
 
+// Pre-parser lives in ./cli/profile-bootstrap. It strips the global --profile
+// and --alias flags before any module imports modulators that resolve agent
+// paths (notably @oh-my-pi/pi-utils/env, which eagerly loads .env from the
+// agent dir during its own import).
+
 /**
  * Smoke-test entry. Spawns the stats sync worker, pings it, exits.
  *
@@ -81,20 +88,50 @@ async function runSmokeTest(): Promise<void> {
 
 /** Run the CLI with the given argv (no `process.argv` prefix). */
 export async function runCli(argv: string[]): Promise<void> {
-	if (argv[0] === "--smoke-test") {
+	let resolvedArgv = argv;
+	try {
+		const extracted = extractProfileFlags(resolvedArgv);
+		resolvedArgv = extracted.argv;
+		if (extracted.profile !== undefined) {
+			setProfile(extracted.profile);
+		}
+		if (extracted.aliasName !== undefined) {
+			const profile = extracted.profile ?? getActiveProfile();
+			if (!profile) {
+				throw new Error("--alias requires --profile <name> or OMP_PROFILE");
+			}
+			const { installProfileAlias } = await import("./cli/profile-alias");
+			const result = await installProfileAlias({ profile, aliasName: extracted.aliasName });
+			process.stdout.write(
+				`Created ${result.aliasName} for profile ${result.profile} in ${result.configPath}\n` +
+					`Restart your shell or run: ${result.reloadedWith}\n` +
+					`Then use: ${result.aliasName} update, ${result.aliasName} --version, or ${result.aliasName}\n`,
+			);
+			return;
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		process.stderr.write(`Error: ${message}\n`);
+		process.exitCode = 1;
+		return;
+	}
+
+	if (resolvedArgv[0] === "--smoke-test") {
 		await runSmokeTest();
 		return;
 	}
 	// --help and --version are handled by run() directly, don't rewrite those.
 	// Everything else that isn't a known subcommand routes to "launch".
-	const first = argv[0];
+	const first = resolvedArgv[0];
 	const runArgv =
 		first === "--help" || first === "-h" || first === "--version" || first === "-v" || first === "help"
-			? argv
+			? resolvedArgv
 			: isSubcommand(first)
-				? argv
-				: ["launch", ...argv];
+				? resolvedArgv
+				: ["launch", ...resolvedArgv];
 	return run({ bin: APP_NAME, version: VERSION, argv: runArgv, commands, help: showHelp });
 }
 
-await runCli(process.argv.slice(2));
+if (import.meta.main) {
+	await runCli(process.argv.slice(2));
+}
