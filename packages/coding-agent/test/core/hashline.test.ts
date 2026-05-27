@@ -88,7 +88,7 @@ beforeAll(async () => {
 });
 
 const pl = (text: string): string => text;
-const extra = (text: string): string => `+${text}`;
+const extra = (text: string): string => `\\${text}`;
 const outputSep = ":";
 const outputSepRe = ":";
 
@@ -250,13 +250,13 @@ describe("hashline parser — suffix-op syntax", () => {
 		}
 	});
 
-	it("accepts payload lines on insert ops with `+` continuation", () => {
+	it("accepts payload lines on insert ops with `\\` continuation", () => {
 		const anchor = tag(2, "bbb");
 		const diff = [`${anchor}↓`, extra("first line"), extra("second line")].join("\n");
 		expect(applyDiff(content, diff)).toBe("aaa\nbbb\nfirst line\nsecond line\nccc");
 	});
 
-	it("accepts payload lines on the replace op with `+` continuation", () => {
+	it("accepts payload lines on the replace op with `\\` continuation", () => {
 		const anchor = tag(2, "bbb");
 		const diff = [`${anchor}:`, extra("FIRST"), extra("SECOND")].join("\n");
 		expect(applyDiff(content, diff)).toBe("aaa\nFIRST\nSECOND\nccc");
@@ -265,7 +265,7 @@ describe("hashline parser — suffix-op syntax", () => {
 	it("accepts unprefixed payload continuation lines as implicit continuation with a warning", () => {
 		const anchor = tag(2, "bbb");
 		const parsed = parseHashline(`${anchor}:\n${extra("FIRST")}\nSECOND`);
-		expect(parsed.warnings.some(w => w.includes("without the `+` prefix"))).toBe(true);
+		expect(parsed.warnings.some(w => w.includes("without the `\\` prefix"))).toBe(true);
 		expect(applyDiff(content, `${anchor}:\n${extra("FIRST")}\nSECOND`)).toBe("aaa\nFIRST\nSECOND\nccc");
 	});
 
@@ -504,12 +504,13 @@ describe("hashline parser — suffix-op syntax", () => {
 			extra(""),
 			extra("# not a header"),
 			extra("+ not an op"),
+			extra("\\ not an op"),
 			extra("  spaced"),
 		].join("\n");
-		expect(applyDiff(content, diff)).toBe("aaa\n\n# not a header\n+ not an op\n  spaced\nccc");
+		expect(applyDiff(content, diff)).toBe("aaa\n\n# not a header\n+ not an op\n\\ not an op\n  spaced\nccc");
 	});
 
-	it("treats plus-only payload lines as empty payload lines", () => {
+	it("treats backslash-only payload lines as empty payload lines", () => {
 		const diff = [`${sameLineRange(tag(2, "bbb"))}:first`, extra(""), extra(""), extra("after")].join("\n");
 		expect(applyDiff(content, diff)).toBe("aaa\nfirst\n\n\nafter\nccc");
 	});
@@ -603,7 +604,7 @@ describe("hashline parser — suffix-op syntax", () => {
 		expect(applyDiff(content, `${anchor}:bbb↑\n${extra("X")}`)).toBe("aaa\nbbb↑\nX\nccc");
 	});
 
-	it("accepts BOF/EOF inserts with inline payload (with warning) or `+` continuation", () => {
+	it("accepts BOF/EOF inserts with inline payload (with warning) or `\\` continuation", () => {
 		expect(applyDiff(content, `BOF↓\n${extra("HEAD")}`)).toBe("HEAD\naaa\nbbb\nccc");
 		expect(applyDiff(content, `EOF↓\n${extra("TAIL")}`)).toBe("aaa\nbbb\nccc\nTAIL");
 		const inline = parseHashline(`BOF↓HEAD`);
@@ -637,7 +638,7 @@ describe("hashline parser — suffix-op syntax", () => {
 		expect(() => parseHashline(diff).edits).toThrow(/anchor line 3 is already targeted by the .+ op on line 1/);
 	});
 
-	it("uses `+` payload lines inside a multi-line replacement", () => {
+	it("uses `\\` payload lines inside a multi-line replacement", () => {
 		const diff = `${tag(2, "bbb")}-${tag(4, "ddd")}:\n${extra("line one")}\n${extra("line two")}\n${extra("line three")}`;
 		const { edits, warnings } = parseHashline(diff);
 		expect(applyHashlineEdits("aaa\nbbb\nccc\nddd\neee", edits).lines).toBe(
@@ -1252,7 +1253,7 @@ describe("hashline parser — bare ':' replaces with a single blank line", () =>
 	});
 });
 
-describe("hashline parser — plus-prefixed blank payload lines", () => {
+describe("hashline parser — backslash-prefixed blank payload lines", () => {
 	it("raw blank lines between ops are ignored", () => {
 		const text = "a\nb\nc\nd\ne\n";
 		const ops = `${header("a.ts", text)}\n1:A\n\n3:C\n`;
@@ -1260,21 +1261,21 @@ describe("hashline parser — plus-prefixed blank payload lines", () => {
 		expect(applyDiff(text, diff)).toBe("A\nb\nC\nd\ne\n");
 	});
 
-	it("plus-only continuation lines are appended as empty payload lines", () => {
+	it("backslash-only continuation lines are appended as empty payload lines", () => {
 		const text = "a\nb\nc\nd\ne\n";
 		const ops = `${header("a.ts", text)}\n1:A\n${extra("")}\n${extra("")}\n3:C\n`;
 		const { diff } = splitHashlineInput(ops);
 		expect(applyDiff(text, diff)).toBe("A\n\n\nb\nC\nd\ne\n");
 	});
 
-	it("bare A: followed by two plus-only lines replaces the line with two blanks", () => {
+	it("bare A: followed by two backslash-only lines replaces the line with two blanks", () => {
 		const text = "a\nb\nc\nd\ne\n";
 		const ops = `${header("a.ts", text)}\n2:\n${extra("")}\n${extra("")}\n4:D\n`;
 		const { diff } = splitHashlineInput(ops);
 		expect(applyDiff(text, diff)).toBe("a\n\n\nc\nD\ne\n");
 	});
 
-	it("plus-only line inside payload between two content lines is preserved", () => {
+	it("backslash-only line inside payload between two content lines is preserved", () => {
 		const text = "a\nb\nc\n";
 		const ops = `${header("a.ts", text)}\n2:first\n${extra("")}\n${extra("second")}\n`;
 		const { diff } = splitHashlineInput(ops);

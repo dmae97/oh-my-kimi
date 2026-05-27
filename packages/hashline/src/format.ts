@@ -15,7 +15,7 @@ export const HL_OP_REPLACE = ":";
 export const HL_OP_CHARS = `${HL_OP_INSERT_BEFORE}${HL_OP_INSERT_AFTER}${HL_OP_REPLACE}`;
 
 /** Prefix for payload continuation lines. The prefix itself is not written. */
-export const HL_PAYLOAD_PREFIX = "+";
+export const HL_PAYLOAD_PREFIX = "\\";
 
 /** Hashline edit file-section header marker. */
 export const HL_FILE_PREFIX = "¶";

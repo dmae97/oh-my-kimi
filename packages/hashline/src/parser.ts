@@ -197,7 +197,7 @@ export class Executor {
 
 	/**
 	 * Flush any open pending op (with its full accumulated payload, including
-	 * explicit `+` blank lines) and return the accumulated edits and
+	 * explicit `\` blank lines) and return the accumulated edits and
 	 * warnings. The executor is single-use; {@link reset} is required for
 	 * reuse.
 	 *
@@ -273,8 +273,8 @@ export class Executor {
 			// when it does not parse as an op, header, payload, or envelope
 			// marker. A `raw` token while a pending op exists is therefore an
 			// unambiguous continuation row that the author wrote without the
-			// `+` prefix. Accept it as payload and warn so the canonical
-			// `+`-prefixed form remains preferred.
+			// `\` prefix. Accept it as payload and warn so the canonical
+			// `\`-prefixed form remains preferred.
 			this.#pending.payload.push(text);
 			if (!this.#warnings.includes(IMPLICIT_CONTINUATION_WARNING)) {
 				this.#warnings.push(IMPLICIT_CONTINUATION_WARNING);

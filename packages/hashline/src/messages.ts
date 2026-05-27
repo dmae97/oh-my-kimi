@@ -37,12 +37,12 @@ export const REPLACE_PAIR_COALESCED_WARNING =
 /**
  * Warning text appended when un-prefixed continuation lines are accepted as
  * implicit payload (lenient legacy behavior). The author wrote a multi-line
- * replace without `+` prefixes; the parser accepted it because the lines did
- * not classify as ops/headers/payloads, but the canonical syntax requires `+`
+ * replace without `\` prefixes; the parser accepted it because the lines did
+ * not classify as ops/headers/payloads, but the canonical syntax requires `\`
  * on every continuation line after the op.
  */
 export const IMPLICIT_CONTINUATION_WARNING =
-	"Accepted continuation line(s) without the `+` prefix as implicit payload. Canonical syntax is `A-B:` followed by `+` on every continuation row; without `+`, lines that look like ops will be parsed as new ops instead of payload. Prefer the explicit form.";
+	"Accepted continuation line(s) without the `\\` prefix as implicit payload. Canonical syntax is `A-B:` followed by `\\` on every continuation row; without `\\`, lines that look like ops will be parsed as new ops instead of payload. Prefer the explicit form.";
 
 /**
  * Warning text appended when an inner `LINE:TEXT` (or sub-range `A-B:TEXT`)
@@ -50,18 +50,18 @@ export const IMPLICIT_CONTINUATION_WARNING =
  * anchor falls inside the outer range. The author used the read-output
  * `LINE:TEXT` format as if it were a payload-continuation line; we strip the
  * `LINE:` prefix and append the body to the pending payload, but warn so the
- * canonical `+`-continuation form remains preferred.
+ * canonical `\`-continuation form remains preferred.
  */
 export const PAYLOAD_LINE_PREFIX_DEMOTED_WARNING =
-	"Detected one or more `LINE:TEXT` lines whose anchors fell inside a pending replace range; treated them as payload-continuation lines and stripped the `LINE:` prefix. Inside an `A-B:` block, every payload line must be on its own row prefixed with `+` — never reuse the read-output gutter format.";
+	"Detected one or more `LINE:TEXT` lines whose anchors fell inside a pending replace range; treated them as payload-continuation lines and stripped the `LINE:` prefix. Inside an `A-B:` block, every payload line must be on its own row prefixed with `\\` — never reuse the read-output gutter format.";
 
 /**
  * Warning text appended when an op carries an inline payload (`LINE:TEXT`,
  * `LINE↑CONTENT`, `LINE↓CONTENT`). Canonical syntax is the bare op followed
- * by `+`-prefixed payload rows on the next line(s).
+ * by `\`-prefixed payload rows on the next line(s).
  */
 export const INLINE_PAYLOAD_ACCEPTED_WARNING =
-	"Accepted inline payload on the op line (e.g. `LINE:CONTENT`, `LINE↑CONTENT`). Canonical syntax is the bare op followed by `+`-prefixed payload rows on the next line(s). Prefer the explicit form.";
+	"Accepted inline payload on the op line (e.g. `LINE:CONTENT`, `LINE↑CONTENT`). Canonical syntax is the bare op followed by `\\`-prefixed payload rows on the next line(s). Prefer the explicit form.";
 
 /** Warning text emitted by `Recovery` when an external write fits a cached snapshot. */
 export const RECOVERY_EXTERNAL_WARNING =

@@ -2,14 +2,17 @@
 
 ## [Unreleased]
 
-### Removed
+### Breaking Changes
 
-- Removed the `A-B!` / `A!` deletion operator. Use `A-B:` with the desired payload (or empty payload to blank the range) instead.
+- Changed hashline payload continuations from `+TEXT` to `\TEXT`; use `\` for an explicit blank payload line.
 
 ### Fixed
 
 - Parser now skips markdown-style `# ...` lines when they directly precede a hashline operation, making model-generated explanatory rows in prompt examples non-blocking.
 
+### Removed
+
+- Removed the `A-B!` / `A!` deletion operator. Use `A-B:` with the desired payload (or empty payload to blank the range) instead.
 All notable changes to this package will be documented in this file.
 
 ## [15.5.4] - 2026-05-27

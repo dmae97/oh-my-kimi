@@ -12,7 +12,7 @@ line_op: insert_before | insert_after | replace
 insert_before: anchor "↑" LF payload*
 insert_after: anchor "↓" LF payload*
 replace: range ":" LF payload*
-payload: "+" /[^\n]*/ LF
+payload: "\\" /[^\n]*/ LF
 
 anchor: LID | "EOF" | "BOF"
 range: LID ("-" LID)?
