@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { keepaliveWhile } from "@oh-my-pi/pi-agent-core";
 import {
 	$env,
 	getProjectDir,
@@ -62,7 +63,6 @@ import { resolvePromptInput } from "./system-prompt";
 import type { LspStartupServerInfo } from "./tools";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
 import type { EventBus } from "./utils/event-bus";
-import { keepaliveWhile } from "@oh-my-pi/pi-agent-core";
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
 	if (!settings.get("startup.checkUpdate")) {
