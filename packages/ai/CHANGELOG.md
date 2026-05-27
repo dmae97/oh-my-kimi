@@ -1,6 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS` to control how long an idle Codex WebSocket stays eligible for reuse, with `0` disabling the check
+
+### Fixed
+
+- Fixed reused Codex WebSocket connections that had gone silent without activity to be dropped and replaced with a fresh handshake after the idle-reuse threshold, preventing stalled next requests
+- Fixed stale response frames left in the websocket queue from a completed turn so subsequent requests no longer process terminal frames from the previous response
+- Fixed websocket dead-socket detection to fail a stale connection when no inbound traffic or pong is observed after a ping timeout, improving recovery on runtimes that do not emit pong events
 
 ## [15.5.5] - 2026-05-27
 

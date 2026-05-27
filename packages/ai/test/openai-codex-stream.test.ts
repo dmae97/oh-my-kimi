@@ -20,6 +20,7 @@ const originalCodexWebSocketFirstEventTimeoutMs = Bun.env.PI_CODEX_WEBSOCKET_FIR
 const originalCodexWebSocketPingIntervalMs = Bun.env.PI_CODEX_WEBSOCKET_PING_INTERVAL_MS;
 const originalCodexWebSocketPongTimeoutMs = Bun.env.PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS;
 const originalCodexWebSocketMessageQueueCapacity = Bun.env.PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY;
+const originalCodexWebSocketMaxIdleReuseMs = Bun.env.PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS;
 
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -41,6 +42,7 @@ afterEach(() => {
 	restoreEnv("PI_CODEX_WEBSOCKET_PING_INTERVAL_MS", originalCodexWebSocketPingIntervalMs);
 	restoreEnv("PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS", originalCodexWebSocketPongTimeoutMs);
 	restoreEnv("PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY", originalCodexWebSocketMessageQueueCapacity);
+	restoreEnv("PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS", originalCodexWebSocketMaxIdleReuseMs);
 	vi.restoreAllMocks();
 });
 
@@ -2863,5 +2865,184 @@ describe("openai-codex streaming", () => {
 
 		expect(requestTurnStates[0]).toBeNull();
 		expect(requestTurnStates[1]).toBe("turn-state-1");
+	});
+
+	it("forces a fresh websocket when the prior connection has been idle past PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+
+		// Tight reuse window so the test doesn't have to sleep for seconds. Disable
+		// the heartbeat so it doesn't independently kill the idle socket and mask
+		// the reuse-gate behaviour we're trying to verify.
+		Bun.env.PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS = "10";
+		Bun.env.PI_CODEX_WEBSOCKET_PING_INTERVAL_MS = "0";
+		Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET = "0";
+
+		const payload = Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
+			"utf8",
+		).toBase64();
+		const token = `aaa.${payload}.bbb`;
+
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not be called");
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		let constructorCount = 0;
+		let sendCount = 0;
+		class IdleReuseWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				constructorCount += 1;
+				this.scheduleOpen();
+			}
+
+			send(_data: string): void {
+				sendCount += 1;
+				this.emitCodexResponse({
+					messageId: `msg_${sendCount}`,
+					responseId: `resp_${sendCount}`,
+					text: `Hello ${sendCount}`,
+				});
+			}
+		}
+
+		global.WebSocket = IdleReuseWebSocket as unknown as typeof WebSocket;
+
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const firstContext: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [{ role: "user", content: "First", timestamp: Date.now() }],
+		};
+		const secondContext: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [
+				{ role: "user", content: "First", timestamp: Date.now() },
+				{ role: "user", content: "Second", timestamp: Date.now() },
+			],
+		};
+
+		await streamOpenAICodexResponses(model, firstContext, {
+			apiKey: token,
+			sessionId: "ws-idle-reuse-session",
+			providerSessionState,
+		}).result();
+
+		// Simulate the gap between a tool result and the continuation request: the
+		// socket sat quiet long enough that we shouldn't trust it without a fresh
+		// handshake. 30 ms > MAX_IDLE_REUSE_MS (10).
+		await new Promise(resolve => setTimeout(resolve, 30));
+
+		const second = await streamOpenAICodexResponses(model, secondContext, {
+			apiKey: token,
+			sessionId: "ws-idle-reuse-session",
+			providerSessionState,
+		}).result();
+
+		expect(second.stopReason).toBe("stop");
+		expect(constructorCount).toBe(2);
+		expect(sendCount).toBe(2);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("drops stale frames from a prior response before sending the next websocket request", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+
+		// Generous reuse window so the connection is happily reused across turns —
+		// the queue-drain behaviour is the only variable here.
+		Bun.env.PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS = "60000";
+		Bun.env.PI_CODEX_WEBSOCKET_PING_INTERVAL_MS = "0";
+		Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET = "0";
+
+		const payload = Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
+			"utf8",
+		).toBase64();
+		const token = `aaa.${payload}.bbb`;
+
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not be called");
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		let constructorCount = 0;
+		let sendCount = 0;
+		class LateFrameWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				constructorCount += 1;
+				this.scheduleOpen();
+			}
+
+			send(_data: string): void {
+				sendCount += 1;
+				if (sendCount === 1) {
+					this.emitCodexResponse({
+						messageId: "msg_1",
+						responseId: "resp_1",
+						text: "First",
+					});
+					// Stale frame that lands AFTER the consumer breaks on
+					// response.completed. Without the queue-drain at the top of
+					// streamRequest, this becomes the first frame of the next
+					// request: a stale terminal event would resolve the new turn
+					// with empty content, never reaching the model's real response.
+					this.sendJson({
+						type: "response.completed",
+						response: { id: "resp_stale", status: "completed", usage: DEFAULT_USAGE },
+					});
+					return;
+				}
+				this.emitCodexResponse({
+					messageId: "msg_2",
+					responseId: "resp_2",
+					text: "Second",
+				});
+			}
+		}
+
+		global.WebSocket = LateFrameWebSocket as unknown as typeof WebSocket;
+
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const firstContext: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [{ role: "user", content: "First", timestamp: Date.now() }],
+		};
+		const secondContext: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [
+				{ role: "user", content: "First", timestamp: Date.now() },
+				{ role: "user", content: "Second", timestamp: Date.now() },
+			],
+		};
+
+		const first = await streamOpenAICodexResponses(model, firstContext, {
+			apiKey: token,
+			sessionId: "ws-stale-frame-session",
+			providerSessionState,
+		}).result();
+		expect(first.stopReason).toBe("stop");
+
+		const second = await streamOpenAICodexResponses(model, secondContext, {
+			apiKey: token,
+			sessionId: "ws-stale-frame-session",
+			providerSessionState,
+		}).result();
+
+		expect(second.stopReason).toBe("stop");
+		expect(constructorCount).toBe(1);
+		expect(sendCount).toBe(2);
+		// Second turn must reflect the second response, not the stale terminal frame
+		// from the first turn's tail.
+		expect(second.responseId).toBe("resp_2");
+		const text = second.content
+			.filter((c): c is Extract<typeof c, { type: "text" }> => c.type === "text")
+			.map(c => c.text)
+			.join("");
+		expect(text).toBe("Second");
 	});
 });
