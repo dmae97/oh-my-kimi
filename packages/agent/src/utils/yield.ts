@@ -48,7 +48,7 @@ const KEEPALIVE_INTERVAL_MS = 86_400_000; // 24 hours — re-armed each interval
  * ```
  */
 export class EventLoopKeepalive {
-	#timer: ReturnType<typeof setInterval> | undefined;
+	#timer: NodeJS.Timeout | undefined;
 
 	constructor() {
 		this.#timer = setInterval(() => {}, KEEPALIVE_INTERVAL_MS);
