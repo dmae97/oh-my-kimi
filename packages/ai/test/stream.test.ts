@@ -616,10 +616,11 @@ describe("Generate E2E Tests", () => {
 				);
 				expect(request.authorization).toBe("Bearer vertex-token");
 				expect(request.body).toMatchObject({
-					model: "claude-sonnet-4@20250514",
+					anthropic_version: "vertex-2023-10-16",
 					messages: [{ role: "user", content: [{ type: "text", text: "Hello" }] }],
 					stream: true,
 				});
+				expect((request.body as Record<string, unknown>).model).toBeUndefined();
 			} finally {
 				__resetVertexTokenCache();
 				if (originalProject === undefined) delete Bun.env.GOOGLE_CLOUD_PROJECT;

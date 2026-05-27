@@ -90,9 +90,49 @@ function createVertexAuthenticatedFetch(options: StreamOptions | undefined): Fet
 		const token = await getVertexAccessToken({ signal: options?.signal, fetch: baseFetch });
 		const headers = new Headers(init?.headers);
 		headers.set("Authorization", `Bearer ${token}`);
-		return baseFetch(resolveVertexRequest(input), { ...init, headers });
+		const rewritten = resolveVertexRequest(input);
+		const url = rewritten instanceof Request ? rewritten.url : rewritten.toString();
+		if (isVertexAnthropicRawPredict(url)) {
+			const bodyText = await readVertexRequestBody(rewritten, init);
+			const transformed = transformVertexAnthropicBody(bodyText);
+			return baseFetch(url, {
+				...init,
+				method: init?.method ?? (rewritten instanceof Request ? rewritten.method : "POST"),
+				headers,
+				body: transformed,
+			});
+		}
+		return baseFetch(rewritten, { ...init, headers });
 	};
 	return Object.assign(vertexFetch, baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {});
+}
+
+function isVertexAnthropicRawPredict(url: string): boolean {
+	return url.includes(":streamRawPredict") || url.includes(":rawPredict");
+}
+
+async function readVertexRequestBody(input: string | URL | Request, init: RequestInit | undefined): Promise<string> {
+	if (input instanceof Request) return input.clone().text();
+	const body = init?.body;
+	if (typeof body === "string") return body;
+	if (body instanceof Uint8Array) return new TextDecoder().decode(body);
+	if (body instanceof ArrayBuffer) return new TextDecoder().decode(body);
+	return "";
+}
+
+// Vertex Claude rejects the standard Anthropic body shape: the `model` field
+// is encoded in the URL path and `anthropic_version: "vertex-2023-10-16"` is
+// required in the JSON body instead of the `anthropic-version` HTTP header.
+function transformVertexAnthropicBody(bodyText: string): string {
+	if (!bodyText) return bodyText;
+	try {
+		const payload = JSON.parse(bodyText) as Record<string, unknown>;
+		delete payload.model;
+		payload.anthropic_version = "vertex-2023-10-16";
+		return JSON.stringify(payload);
+	} catch {
+		return bodyText;
+	}
 }
 
 function resolveVertexRequest(input: string | URL | Request): string | URL | Request {
