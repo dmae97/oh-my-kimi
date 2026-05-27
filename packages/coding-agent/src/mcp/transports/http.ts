@@ -16,8 +16,16 @@ import type {
 	MCPTransport,
 } from "../../mcp/types";
 import { toJsonRpcError } from "../../mcp/types";
-import { createMCPTimeout, getNeverAbortSignal, resolveMCPTimeoutMs } from "../timeout";
+import { createMCPTimeout, getNeverAbortSignal, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 
+const HTTP_SSE_CONNECT_TIMEOUT_MS = 1_000;
+
+function resolveSSEConnectTimeoutMs(configTimeout?: number): number {
+	const requestTimeout = resolveMCPTimeoutMs(configTimeout);
+	if (!isMCPTimeoutEnabled(requestTimeout)) return HTTP_SSE_CONNECT_TIMEOUT_MS;
+	const boundedTimeout = Math.min(HTTP_SSE_CONNECT_TIMEOUT_MS, Math.floor(requestTimeout / 4));
+	return Math.max(1, boundedTimeout);
+}
 /**
  * HTTP transport for MCP servers.
  * Uses POST for requests, supports SSE responses.
@@ -73,6 +81,11 @@ export class HttpTransport implements MCPTransport {
 		}
 
 		let response: Response;
+		let timedOut = false;
+		const timeoutId = setTimeout(() => {
+			timedOut = true;
+			this.#sseConnection?.abort();
+		}, resolveSSEConnectTimeoutMs(this.config.timeout));
 		try {
 			response = await fetch(this.config.url, {
 				method: "GET",
@@ -81,13 +94,16 @@ export class HttpTransport implements MCPTransport {
 			});
 		} catch (error) {
 			this.#sseConnection = null;
-			if (error instanceof Error && error.name !== "AbortError") {
+			if (error instanceof Error && error.name !== "AbortError" && !timedOut) {
 				this.onError?.(error);
 			}
 			return;
+		} finally {
+			clearTimeout(timeoutId);
 		}
 
 		if (response.status === 405 || !response.ok || !response.body) {
+			await response.body?.cancel();
 			this.#sseConnection = null;
 			return;
 		}
