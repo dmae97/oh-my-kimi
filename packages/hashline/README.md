@@ -50,7 +50,6 @@ Inside a hunk:
 |`LINE↑`|Insert before LINE (or `BOF↑` for the beginning of file)|
 |`LINE↓`|Insert after LINE (or `EOF↓` for the end of file)|
 |`A-B:`|Replace lines A..B (single-anchor `A:` is sugar for `A-A:`)|
-|`A-B!`|Delete lines A..B (single-anchor `A!` is sugar for `A-A!`)|
 |`+TEXT`|Payload continuation. The `+` prefix is stripped|
 
 ## Abstractions

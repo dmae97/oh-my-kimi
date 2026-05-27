@@ -10,11 +10,9 @@ export const HL_OP_INSERT_BEFORE = "↑";
 export const HL_OP_INSERT_AFTER = "↓";
 /** Op sigil used after a range (or single anchor) to replace its lines. */
 export const HL_OP_REPLACE = ":";
-/** Op sigil used after a range (or single anchor) to delete its lines. */
-export const HL_OP_DELETE = "!";
 
 /** All hashline edit op sigils, concatenated for fast membership tests. */
-export const HL_OP_CHARS = `${HL_OP_INSERT_BEFORE}${HL_OP_INSERT_AFTER}${HL_OP_REPLACE}${HL_OP_DELETE}`;
+export const HL_OP_CHARS = `${HL_OP_INSERT_BEFORE}${HL_OP_INSERT_AFTER}${HL_OP_REPLACE}`;
 
 /** Prefix for payload continuation lines. The prefix itself is not written. */
 export const HL_PAYLOAD_PREFIX = "+";

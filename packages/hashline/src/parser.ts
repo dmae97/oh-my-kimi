@@ -13,14 +13,7 @@
  *
  * Convenience entry point: {@link parsePatch}.
  */
-import {
-	HL_OP_CHARS,
-	HL_OP_DELETE,
-	HL_OP_INSERT_AFTER,
-	HL_OP_INSERT_BEFORE,
-	HL_OP_REPLACE,
-	HL_PAYLOAD_PREFIX,
-} from "./format";
+import { HL_OP_CHARS, HL_OP_INSERT_AFTER, HL_OP_INSERT_BEFORE, HL_OP_REPLACE, HL_PAYLOAD_PREFIX } from "./format";
 import {
 	ABORT_WARNING,
 	IMPLICIT_CONTINUATION_WARNING,
@@ -28,7 +21,7 @@ import {
 	PAYLOAD_LINE_PREFIX_DEMOTED_WARNING,
 	REPLACE_PAIR_COALESCED_WARNING,
 } from "./messages";
-import { cloneCursor, isDeleteOpWithPayload, type ParsedRange, type Token, Tokenizer } from "./tokenizer";
+import { cloneCursor, type ParsedRange, type Token, Tokenizer } from "./tokenizer";
 import type { Anchor, Cursor, Edit } from "./types";
 
 function validateRangeOrder(range: ParsedRange, lineNum: number): void {
@@ -143,19 +136,6 @@ export class Executor {
 				this.#consumePendingSkippableComments();
 				this.#handleRaw(token.text, token.lineNum);
 				return;
-			case "op-delete":
-				this.#discardPendingSkippableComments();
-				this.#flushPending();
-				if (token.trailingPayload) {
-					throw new Error(
-						`line ${token.lineNum}: ${HL_OP_DELETE} deletes only. Payload is forbidden after ${HL_OP_DELETE}; use ${HL_OP_REPLACE} to replace.`,
-					);
-				}
-				validateRangeOrder(token.range, token.lineNum);
-				for (const anchor of expandRange(token.range)) {
-					this.#edits.push({ kind: "delete", anchor, lineNum: token.lineNum, index: this.#editIndex++ });
-				}
-				return;
 			case "op-insert":
 				this.#discardPendingSkippableComments();
 				this.#flushPending();
@@ -179,8 +159,8 @@ export class Executor {
 					if (rangesEqual(outer, inner)) {
 						// Identical-range before/after pair. Drop the "before" payload
 						// silently; the second op proceeds as the lone winner. Other
-						// overlap shapes (different ranges, replace+delete, delete+delete)
-						// still hit the post-hoc validator.
+						// overlap shapes (different ranges) still hit the post-hoc
+						// validator.
 						this.#pending = undefined;
 						if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_WARNING)) {
 							this.#warnings.push(REPLACE_PAIR_COALESCED_WARNING);
@@ -221,10 +201,10 @@ export class Executor {
 	 * warnings. The executor is single-use; {@link reset} is required for
 	 * reuse.
 	 *
-	 * Throws if two replace/delete ops target the same line with non-identical
-	 * shapes (different ranges, replace+delete, delete+delete). Identical-range
-	 * `A-B:` pairs in the same hunk are coalesced last-wins by `feed()` with a
-	 * warning, so they never reach the validator.
+	 * Throws if two replace ops target the same line with non-identical
+	 * ranges. Identical-range `A-B:` pairs in the same hunk are coalesced
+	 * last-wins by `feed()` with a warning, so they never reach the
+	 * validator.
 	 */
 	end(): { edits: Edit[]; warnings: string[] } {
 		this.#consumePendingSkippableComments();
@@ -232,6 +212,7 @@ export class Executor {
 		this.#validateNoOverlappingDeletes();
 		return { edits: this.#edits, warnings: this.#warnings };
 	}
+
 	/** Reset to a fresh state so the same instance can drive another parse. */
 	reset(): void {
 		this.#edits = [];
@@ -243,14 +224,14 @@ export class Executor {
 	}
 
 	/**
-	 * Each `:` / `!` op contributes a delete edit per line in its range; if
-	 * any line ends up targeted by deletes originating from two different
-	 * source ops (distinguished by their `lineNum`), the patch is internally
+	 * Each `:` op contributes a delete edit per line in its range; if any
+	 * line ends up targeted by deletes originating from two different source
+	 * ops (distinguished by their `lineNum`), the patch is internally
 	 * inconsistent. Identical-range `A-B:` pairs are already collapsed by
 	 * `feed()`; remaining shapes here are an `A-B:` that overlaps a later
-	 * `N!`/`N:` with a different range, or two `!` deletes on the same line.
-	 * The applier would run both literally and the file would end up with two
-	 * copies of the line, not a chosen winner.
+	 * `N:` with a different range. The applier would run both literally and
+	 * the file would end up with two copies of the line, not a chosen
+	 * winner.
 	 */
 	#validateNoOverlappingDeletes(): void {
 		const sourceLinesByAnchor = new Map<number, number[]>();
@@ -267,7 +248,7 @@ export class Executor {
 			if (sourceLines.length < 2) continue;
 			const [firstOp, secondOp] = [...sourceLines].sort((a, b) => a - b);
 			throw new Error(
-				`line ${secondOp}: anchor line ${anchorLine} is already targeted by the ${HL_OP_REPLACE}/${HL_OP_DELETE} op on line ${firstOp}. ` +
+				`line ${secondOp}: anchor line ${anchorLine} is already targeted by the ${HL_OP_REPLACE} op on line ${firstOp}. ` +
 					`Issue ONE op per range; payload is only the final desired content, never a before/after pair.`,
 			);
 		}
@@ -280,7 +261,7 @@ export class Executor {
 		}
 
 		throw new Error(
-			`line ${lineNum}: payload line has no preceding ${HL_OP_INSERT_BEFORE}, ${HL_OP_INSERT_AFTER}, ${HL_OP_REPLACE}, or ${HL_OP_DELETE} operation. ` +
+			`line ${lineNum}: payload line has no preceding ${HL_OP_INSERT_BEFORE}, ${HL_OP_INSERT_AFTER}, or ${HL_OP_REPLACE} operation. ` +
 				`Got ${JSON.stringify(`${HL_PAYLOAD_PREFIX}${text}`)}.`,
 		);
 	}
@@ -304,25 +285,18 @@ export class Executor {
 		// Whitespace-only raw lines outside any pending op are silently dropped;
 		// fully empty lines arrive as `blank` tokens.
 		if (text.trim().length === 0) return;
-		// Orphan raw text outside any pending op: pick the most specific
-		// diagnostic so the user sees the actionable hint.
-		if (isDeleteOpWithPayload(text)) {
-			throw new Error(
-				`line ${lineNum}: ${HL_OP_DELETE} deletes only. Payload is forbidden after ${HL_OP_DELETE}; use ${HL_OP_REPLACE} to replace.`,
-			);
-		}
 
 		const firstChar = text[0];
 		const startsWithOp = firstChar !== undefined && HL_OP_CHARS.includes(firstChar);
 		if (startsWithOp || firstChar === "-" || firstChar === "@" || firstChar === "«" || firstChar === "»") {
 			throw new Error(
-				`line ${lineNum}: unrecognized op. Use LINE${HL_OP_INSERT_BEFORE} (insert before), LINE${HL_OP_INSERT_AFTER} (insert after), LINE${HL_OP_REPLACE} / A-B${HL_OP_REPLACE} (replace), or LINE${HL_OP_DELETE} / A-B${HL_OP_DELETE} (delete). ` +
+				`line ${lineNum}: unrecognized op. Use LINE${HL_OP_INSERT_BEFORE} (insert before), LINE${HL_OP_INSERT_AFTER} (insert after), or LINE${HL_OP_REPLACE} / A-B${HL_OP_REPLACE} (replace). ` +
 					`Got ${JSON.stringify(text)}.`,
 			);
 		}
 
 		throw new Error(
-			`line ${lineNum}: payload line has no preceding ${HL_OP_INSERT_BEFORE}, ${HL_OP_INSERT_AFTER}, ${HL_OP_REPLACE}, or ${HL_OP_DELETE} operation. ` +
+			`line ${lineNum}: payload line has no preceding ${HL_OP_INSERT_BEFORE}, ${HL_OP_INSERT_AFTER}, or ${HL_OP_REPLACE} operation. ` +
 				`Got ${JSON.stringify(text)}.`,
 		);
 	}

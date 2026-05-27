@@ -320,8 +320,7 @@ function countMatchingSingleStructuralSuffixBoundary(
  * groups. Mirrors the same boundary check the pure-insert absorber uses for
  * `ANCHOR↓` (leading) / `ANCHOR↑` (trailing) inserts, but applied to the
  * top/bottom edges of an `A-B:payload` range. Catches mistakes like
- * `103-138:const X = …` where line 102 already reads `const X = …` and the
- * user really meant `103-138!` (delete only).
+ * `103-138:const X = …` where line 102 already reads `const X = …`.
  *
  * Gated by `options.autoDropPureInsertDuplicates`: the existing 2+-line block
  * absorb already runs unconditionally, and the structural single-line

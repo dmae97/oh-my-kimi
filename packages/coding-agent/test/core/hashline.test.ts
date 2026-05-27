@@ -212,11 +212,6 @@ describe("hashline parser — suffix-op syntax", () => {
 		expect(applyDiff(content, diff)).toBe("aaa\nbbb\nccc\ntail");
 	});
 
-	it("deletes one line or an inclusive range with `!`", () => {
-		expect(applyDiff(content, `${sameLineRange(tag(2, "bbb"))}!`)).toBe("aaa\nccc");
-		expect(applyDiff(content, `${tag(2, "bbb")}-${tag(3, "ccc")}!`)).toBe("aaa");
-	});
-
 	it("blanks a line in place with `A:` when given an explicit empty payload", () => {
 		const explicit = `${sameLineRange(tag(2, "bbb"))}:`;
 		expect(applyDiff(content, explicit)).toBe("aaa\n\nccc");
@@ -569,9 +564,7 @@ describe("hashline parser — suffix-op syntax", () => {
 	});
 
 	it("describes the new sigil shape on unknown-op lines", () => {
-		expect(() => parseHashline(`-${sameLineRange(tag(2, "bbb"))}`).edits).toThrow(
-			/Use LINE↑.*LINE↓.*LINE: \/ A-B:.*LINE! \/ A-B!/,
-		);
+		expect(() => parseHashline(`-${sameLineRange(tag(2, "bbb"))}`).edits).toThrow(/Use LINE↑.*LINE↓.*LINE: \/ A-B:/);
 	});
 
 	it("accepts `LINE:TEXT` copied verbatim from read output with a deprecation warning", () => {
@@ -616,9 +609,6 @@ describe("hashline parser — suffix-op syntax", () => {
 		const inline = parseHashline(`BOF↓HEAD`);
 		expect(inline.warnings.some(w => /Accepted inline payload on the op line/.test(w))).toBe(true);
 		expect(applyDiff(content, `BOF↓HEAD`)).toBe("HEAD\naaa\nbbb\nccc");
-		expect(() => parseHashline(`2!keep`).edits).toThrow(
-			/deletes only\. Payload is forbidden after !; use : to replace/,
-		);
 	});
 
 	it("coalesces two replace ops targeting the same single line (last wins)", () => {
@@ -673,16 +663,6 @@ describe("hashline parser — suffix-op syntax", () => {
 			"aaa\nline one\nddd\nline five\nfff",
 		);
 		expect(warnings).toEqual([]);
-	});
-
-	it("rejects a replace overlapping a later delete", () => {
-		const diff = `${tag(2, "bbb")}-${tag(4, "ddd")}:\n${extra("X")}\n${tag(3, "ccc")}!`;
-		expect(() => parseHashline(diff).edits).toThrow(/anchor line 3 is already targeted by the .+ op on line 1/);
-	});
-
-	it("rejects two deletes on the same line", () => {
-		const diff = `${tag(2, "bbb")}!\n${tag(2, "bbb")}!`;
-		expect(() => parseHashline(diff).edits).toThrow(/anchor line 2 is already targeted by the .+ op on line 1/);
 	});
 
 	it("accepts multiple inserts at the same anchor (sequential, not duplicates)", () => {
@@ -1269,31 +1249,6 @@ describe("hashline parser — bare ':' replaces with a single blank line", () =>
 		const text = "line1\nline2\nline3\n";
 		const { diff } = splitHashlineInput(`${header("a.ts", text)}\n2↓\n`);
 		expect(applyDiff(text, diff)).toBe("line1\nline2\n\nline3\n");
-	});
-});
-
-describe("hashline apply — brace-delete soft warning", () => {
-	it("deleting a line with unbalanced brace emits a warning", () => {
-		const text = "if (x) {\n  doThing();\n} else {\n  doOther();\n}\n";
-		const { diff } = splitHashlineInput(`${header("a.ts", text)}\n3!\n`);
-		const result = applyHashlineEdits(text, parseHashline(diff).edits);
-		expect(result.warnings).toBeDefined();
-		expect(result.warnings![0]).toContain("structural bracket/brace boundary");
-		expect(result.warnings![0]).toContain("} else {");
-	});
-
-	it("deleting a balanced line emits no warning", () => {
-		const text = "line1\nline2\nline3\n";
-		const { diff } = splitHashlineInput(`${header("a.ts", text)}\n2!\n`);
-		const result = applyHashlineEdits(text, parseHashline(diff).edits);
-		expect(result.warnings).toBeUndefined();
-	});
-
-	it("replace operation that includes a brace line does NOT warn", () => {
-		const text = "if (x) {\n  body\n}\n";
-		const { diff } = splitHashlineInput(`${header("a.ts", text)}\n3:}\n`);
-		const result = applyHashlineEdits(text, parseHashline(diff).edits);
-		expect(result.warnings).toBeUndefined();
 	});
 });
 

@@ -8,11 +8,10 @@ update_hunk: "¶" filename ("#" file_hash)? LF line_op*
 filename: /([^\s#]+)/
 file_hash: /[0-9a-f]{4}/
 
-line_op: insert_before | insert_after | replace | delete
+line_op: insert_before | insert_after | replace
 insert_before: anchor "↑" LF payload*
 insert_after: anchor "↓" LF payload*
 replace: range ":" LF payload*
-delete: range "!" LF
 payload: "+" /[^\n]*/ LF
 
 anchor: LID | "EOF" | "BOF"

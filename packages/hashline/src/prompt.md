@@ -12,7 +12,6 @@ Patch payload is a series of hunks: `¶PATH#HASH` header followed by any number 
 LINE↑    insert before (or BOF↑)        — anchor SURVIVES
 LINE↓    insert after  (or EOF↓)        — anchor SURVIVES
 A-B:     replace A..B  (or A: == A..A)  — anchor DELETED, then payload written in its place
-A-B!     delete A..B   (or A! == A..A)  — anchor DELETED
 +PAYLOAD payload line for the preceding op
 </ops>
 
@@ -24,7 +23,6 @@ A-B!     delete A..B   (or A! == A..A)  — anchor DELETED
 - **Pick the op for your intent.** Does the anchor's existing content SURVIVE?
   - Survives + new lines next to it → `↑` / `↓`. Go small: prefer `↑`/`↓` over `:` whenever you can.
   - Changes in place → `:`
-  - Goes away → `!`
   When unsure: you wanted `↓`. `:` is destructive — it deletes the anchor line.
 - **`A-B:` deletes EXACTLY A..B. Payload length never extends the deletion.** `1:` with 10 payload lines still deletes only line 1, then writes 10 lines there. To prepend without deleting, use `1↑` (or `BOF↑`).
 - **Line numbers are frozen references to what you have seen.** Later ops in the same hunk still use original line numbers; they do NOT shift as earlier ops apply.
@@ -45,7 +43,7 @@ A-B!     delete A..B   (or A! == A..A)  — anchor DELETED
 4:f();
 ```
 
-# replace one line, insert after, delete
+# replace one line, insert after
 ```
 ¶a.ts#1a2b
 1:
@@ -53,7 +51,6 @@ A-B!     delete A..B   (or A! == A..A)  — anchor DELETED
 +export const Y = X;
 1↓
 +const Z = Y;
-4!
 ```
 </example>
 
@@ -93,7 +90,7 @@ A-B!     delete A..B   (or A! == A..A)  — anchor DELETED
 
 <critical>
 - One op per range, ever.
-- Pick op precisely. Update: `:`, add: `↑`/`↓`, remove: `!`.
+- Pick op precisely. Update: `:`, add: `↑`/`↓`.
 - Payload always lives on its own `+`-prefixed line — never inline with the op.
 - Payload is only what's NEW; never repeat anchor lines or neighbors.
 - Anchor exactly; don't anchor neighbors.

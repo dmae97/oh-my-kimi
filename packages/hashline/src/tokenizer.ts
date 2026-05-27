@@ -17,7 +17,6 @@ import {
 	describeAnchorExamples,
 	HL_FILE_HASH_SEP,
 	HL_FILE_PREFIX,
-	HL_OP_DELETE,
 	HL_OP_INSERT_AFTER,
 	HL_OP_INSERT_BEFORE,
 	HL_OP_REPLACE,
@@ -214,13 +213,7 @@ interface ParsedReplaceOp {
 	inlineBody: string | undefined;
 }
 
-interface ParsedDeleteOp {
-	kind: "delete";
-	range: ParsedRange;
-	trailingPayload: boolean;
-}
-
-type ParsedOp = ParsedInsertOp | ParsedReplaceOp | ParsedDeleteOp;
+type ParsedOp = ParsedInsertOp | ParsedReplaceOp;
 
 function tryParseInsertOp(line: string, sigil: string, kind: "before" | "after"): ParsedInsertOp | null {
 	const end = trimEndIndex(line);
@@ -264,20 +257,11 @@ function tryParseReplaceOp(line: string): ParsedReplaceOp | null {
 	};
 }
 
-function tryParseDeleteOp(line: string): ParsedDeleteOp | null {
-	const end = trimEndIndex(line);
-	const range = scanRange(line, end);
-	if (range === null || range.nextIndex >= end || line[range.nextIndex] !== HL_OP_DELETE) return null;
-	const afterSigil = range.nextIndex + HL_OP_DELETE.length;
-	return { kind: "delete", range: range.range, trailingPayload: afterSigil !== end };
-}
-
 function tryParseOp(line: string): ParsedOp | null {
 	return (
 		tryParseInsertOp(line, HL_OP_INSERT_BEFORE, "before") ??
 		tryParseInsertOp(line, HL_OP_INSERT_AFTER, "after") ??
-		tryParseReplaceOp(line) ??
-		tryParseDeleteOp(line)
+		tryParseReplaceOp(line)
 	);
 }
 
@@ -323,21 +307,6 @@ function tryParseHeader(line: string): { path: string; fileHash?: string } | nul
 	return fileHash !== undefined ? { path, fileHash } : { path };
 }
 
-/**
- * Returns true when the line scans as `LINE!payload` (delete sigil followed
- * by additional content). The parser uses this for the dedicated "deletes
- * only" diagnostic, separate from the standard "unrecognized op" path.
- */
-export function isDeleteOpWithPayload(line: string): boolean {
-	const range = scanRange(line, line.length);
-	return (
-		range !== null &&
-		range.nextIndex < line.length &&
-		line[range.nextIndex] === HL_OP_DELETE &&
-		range.nextIndex + HL_OP_DELETE.length < line.length
-	);
-}
-
 interface TokenBase {
 	/** 1-indexed line number in the original input stream. */
 	lineNum: number;
@@ -351,7 +320,6 @@ export type Token =
 	| (TokenBase & { kind: "header"; path: string; fileHash?: string })
 	| (TokenBase & { kind: "op-insert"; cursor: Cursor; inlineBody: string | undefined })
 	| (TokenBase & { kind: "op-replace"; range: ParsedRange; inlineBody: string | undefined })
-	| (TokenBase & { kind: "op-delete"; range: ParsedRange; trailingPayload: boolean })
 	| (TokenBase & { kind: "payload"; text: string })
 	| (TokenBase & { kind: "raw"; text: string });
 
@@ -378,10 +346,7 @@ function classifyLine(line: string, lineNum: number): Token {
 		if (op.kind === "insert") {
 			return { kind: "op-insert", lineNum, cursor: op.cursor, inlineBody: op.inlineBody };
 		}
-		if (op.kind === "replace") {
-			return { kind: "op-replace", lineNum, range: op.range, inlineBody: op.inlineBody };
-		}
-		return { kind: "op-delete", lineNum, range: op.range, trailingPayload: op.trailingPayload };
+		return { kind: "op-replace", lineNum, range: op.range, inlineBody: op.inlineBody };
 	}
 
 	return { kind: "raw", lineNum, text: line };

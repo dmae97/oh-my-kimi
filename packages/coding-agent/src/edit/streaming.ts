@@ -385,7 +385,6 @@ function buildHashlineNaturalOrderPreviews(
 			case "envelope-begin":
 			case "envelope-end":
 			case "abort":
-			case "op-delete":
 				continue;
 			case "blank":
 			case "raw":
