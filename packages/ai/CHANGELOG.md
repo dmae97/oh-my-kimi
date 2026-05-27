@@ -1,6 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `CheckCredentialsOptions.completionProbe` (and `completionTimeoutMs`) so `AuthStorage.checkCredentials` can additionally exercise each credential against the provider's chat-completion endpoint after refresh-on-expiry. Result lands on `CredentialHealthResult.completion` ({ok, reason?, modelId?, latencyMs?}) without disturbing the usage `ok` field. Public types: `CompletionProbe`, `CompletionProbeInput`, `CompletionProbeCredential`, `CredentialCompletionResult`. The probe is invoked even when no `UsageProvider` is registered for the row, and is skipped when OAuth refresh fails (the stale bytes would only mask the upstream failure).
+
+### Changed
+
+- Changed `checkCredentials` to skip running `completionProbe` when OAuth refresh fails, so stale bearer tokens are never probed and the refresh failure remains the returned `reason`
+- Changed completion reporting to return `completion: { ok: null, reason: ... }` when a credential has no usable bearer bytes instead of attempting the probe
+- Refactored `AuthStorage.checkCredentials` so OAuth refresh-on-expiry runs up-front and the refreshed credential is shared between the usage probe and the new completion probe; rows without a registered `UsageProvider` no longer short-circuit before the completion probe runs.
+
+### Fixed
+
+- Fixed `checkCredentials` to handle `completionProbe` exceptions by recording the failure in `CredentialHealthResult.completion.reason` while still returning the usage probe result
 
 ## [15.5.7] - 2026-05-27
 ### Added

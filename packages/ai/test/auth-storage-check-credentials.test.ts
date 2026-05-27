@@ -15,12 +15,19 @@
  *   5. Providers with no registered `UsageProvider` report `ok: null` with
  *      "no usage probe configured" — the credential's status is unknown,
  *      not failed.
+ *   6. When a `completionProbe` is supplied, it receives the post-refresh
+ *      bearer for every row, runs independently of the usage probe (i.e. it
+ *      still runs for providers without a `UsageProvider`), but is skipped
+ *      when OAuth refresh fails.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import {
 	type AuthCredential,
 	type AuthCredentialStore,
 	AuthStorage,
+	type CompletionProbe,
+	type CompletionProbeInput,
+	REMOTE_REFRESH_SENTINEL,
 	type StoredAuthCredential,
 } from "../src/auth-storage";
 import * as claudeUsage from "../src/usage/claude";
@@ -246,6 +253,181 @@ describe("AuthStorage.checkCredentials", () => {
 			// failed (the second one) or returned no data (the third one).
 			expect(results[1].email).toBe("beta@example.com");
 			expect(results[2].email).toBe("gamma@example.com");
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("invokes the completionProbe with the post-refresh OAuth bearer", async () => {
+		const refreshed = {
+			access: "oat-refreshed",
+			refresh: "refresh-refreshed",
+			expires: Date.now() + 3_600_000,
+			accountId: "account-3-refreshed",
+			email: "dave@example.com",
+		};
+		const refreshSpy = vi
+			.fn<NonNullable<AuthCredentialStore["refreshOAuthCredential"]>>()
+			.mockResolvedValue(refreshed);
+		const store = makeStore([oauthRow(3, "dave@example.com", { expired: true })], refreshSpy);
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
+		await storage.reload();
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockResolvedValue({
+			provider: "anthropic",
+			fetchedAt: Date.now(),
+			limits: [],
+			metadata: {},
+		});
+
+		const seen: CompletionProbeInput[] = [];
+		const probe: CompletionProbe = async input => {
+			seen.push(input);
+			return { ok: true, modelId: "test-probe-model", latencyMs: 42 };
+		};
+
+		try {
+			const [result] = await storage.checkCredentials({ completionProbe: probe });
+			expect(refreshSpy).toHaveBeenCalledTimes(1);
+			expect(seen).toHaveLength(1);
+			const input = seen[0];
+			expect(input.provider).toBe("anthropic");
+			expect(input.credentialId).toBe(3);
+			// Probe MUST see the refreshed access token, not the stale one stored
+			// on the row — otherwise downstream chat calls send a dead bearer.
+			expect(input.credential.type).toBe("oauth");
+			if (input.credential.type === "oauth") {
+				expect(input.credential.accessToken).toBe("oat-refreshed");
+				expect(input.credential.email).toBe("dave@example.com");
+			}
+			expect(result.completion).toEqual({ ok: true, modelId: "test-probe-model", latencyMs: 42 });
+			expect(result.ok).toBe(true); // usage probe independently succeeded
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("runs the completionProbe even when no usage probe is configured for the provider", async () => {
+		const apiKeyRow: StoredAuthCredential = {
+			id: 11,
+			provider: "made-up-provider",
+			credential: { type: "api_key", key: "sk-test-key" },
+			disabledCause: null,
+		};
+		const store = makeStore([apiKeyRow]);
+		const storage = new AuthStorage(store, { usageProviderResolver: () => undefined });
+		await storage.reload();
+
+		const probe = vi.fn<CompletionProbe>().mockResolvedValue({ ok: false, reason: "401 invalid_api_key" });
+
+		try {
+			const [result] = await storage.checkCredentials({ completionProbe: probe });
+			expect(probe).toHaveBeenCalledTimes(1);
+			const [input] = probe.mock.calls[0];
+			expect(input.credential).toEqual({ type: "api_key", apiKey: "sk-test-key" });
+			// Usage `ok` stays null (no usage probe configured) but the completion
+			// probe surfaces the real failure.
+			expect(result.ok).toBeNull();
+			expect(result.reason).toMatch(/no usage probe configured/);
+			expect(result.completion).toEqual({ ok: false, reason: "401 invalid_api_key" });
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("skips the completionProbe when OAuth refresh fails", async () => {
+		const refreshSpy = vi
+			.fn<NonNullable<AuthCredentialStore["refreshOAuthCredential"]>>()
+			.mockRejectedValue(new Error("invalid_grant: refresh token revoked"));
+		const store = makeStore([oauthRow(5, "eve@example.com", { expired: true })], refreshSpy);
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
+		await storage.reload();
+
+		const probe = vi.fn<CompletionProbe>().mockResolvedValue({ ok: true });
+
+		try {
+			const [result] = await storage.checkCredentials({ completionProbe: probe });
+			expect(result.ok).toBe(false);
+			expect(result.reason).toMatch(/oauth refresh failed/);
+			// A dead refresh means the stored access token is unusable, so the
+			// strict probe MUST NOT be called with stale bytes — that would
+			// either spuriously fail or, worse, succeed against a revoked
+			// credential and mask the upstream failure.
+			expect(probe).not.toHaveBeenCalled();
+			expect(result.completion).toBeUndefined();
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("captures exceptions thrown by the completionProbe into completion.reason", async () => {
+		const store = makeStore([oauthRow(7, "frank@example.com")]);
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
+		await storage.reload();
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockResolvedValue({
+			provider: "anthropic",
+			fetchedAt: Date.now(),
+			limits: [],
+			metadata: {},
+		});
+
+		const probe: CompletionProbe = async () => {
+			throw new Error("network ECONNRESET");
+		};
+
+		try {
+			const [result] = await storage.checkCredentials({ completionProbe: probe });
+			expect(result.ok).toBe(true); // usage probe independently succeeded
+			expect(result.completion?.ok).toBe(false);
+			expect(result.completion?.reason).toContain("ECONNRESET");
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("surfaces REMOTE_REFRESH_SENTINEL on credentials whose refresh token lives behind a broker", async () => {
+		const remoteRow: StoredAuthCredential = {
+			id: 13,
+			provider: "anthropic",
+			credential: {
+				type: "oauth",
+				access: "oat-13",
+				refresh: REMOTE_REFRESH_SENTINEL,
+				expires: Date.now() + 3_600_000,
+				accountId: "account-13",
+				email: "remote@example.com",
+			},
+			disabledCause: null,
+		};
+		const store = makeStore([remoteRow]);
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
+		await storage.reload();
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockResolvedValue({
+			provider: "anthropic",
+			fetchedAt: Date.now(),
+			limits: [],
+			metadata: {},
+		});
+
+		const probe = vi.fn<CompletionProbe>().mockResolvedValue({ ok: true });
+		try {
+			const [result] = await storage.checkCredentials({ completionProbe: probe });
+			expect(result.remoteRefresh).toBe(true);
+			const [input] = probe.mock.calls[0];
+			expect(input.credential.type).toBe("oauth");
+			if (input.credential.type === "oauth") {
+				// Sentinel forwards verbatim so callers composing structured
+				// apiKeys (Copilot, Gemini CLI) don't have to special-case it.
+				expect(input.credential.refreshToken).toBe(REMOTE_REFRESH_SENTINEL);
+				expect(input.credential.accessToken).toBe("oat-13");
+			}
 		} finally {
 			storage.close();
 		}
