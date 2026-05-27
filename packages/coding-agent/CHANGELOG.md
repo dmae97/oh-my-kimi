@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `--profile <name>` / `OMP_PROFILE` support to isolate agent state (auth credentials, sessions, settings, caches, history, memories, and blobs) under a named profile.
+- Added `--alias <command>` support for generating shell shortcuts like `omp-work` that forward to `omp --profile <name>` while preserving subcommands such as `update` and `--version`.
+
 ## [15.5.4] - 2026-05-27
 
 ### Breaking Changes
@@ -12,8 +17,6 @@
 
 - Added `read.summarize.minTotalLines` setting (default 100) to set the minimum file length that triggers read summarization
 - Added `<file>:<lines>` support to `search` `paths`, allowing file-scoped constraints such as `:N-M`, `:N+K`, and comma-separated ranges
-- Added `--profile <name>` / `OMP_PROFILE` support to isolate agent state (auth credentials, sessions, settings, caches, history, memories, and blobs) under a named profile.
-- Added `--alias <command>` support for generating shell shortcuts like `omp-work` that forward to `omp --profile <name>` while preserving subcommands such as `update` and `--version`.
 - Added `OMP_MCP_TIMEOUT_MS` environment variable to override MCP client request timeout for every server (in milliseconds); set to `0` to disable client-side timeouts. Invalid (negative or non-numeric) values are ignored with a warning and fall back to the per-server timeout or default 30s ([#1415](https://github.com/can1357/oh-my-pi/pull/1415)).
 - Added interactive provider selection to `omp auth-broker logout` when no provider argument is supplied
 - Added `--json` flag to `omp auth-broker list` for machine-readable output
