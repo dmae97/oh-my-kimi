@@ -1,10 +1,10 @@
-Please produce a structured summary of this conversation branch so context carries over when we return to it.
+You MUST create a structured summary of the conversation branch for context when returning.
 
-Use this exact format:
+You MUST use EXACT format:
 
 ## Goal
 
-[What is the user trying to accomplish in this branch?]
+[What user trying to accomplish in this branch?]
 
 ## Constraints & Preferences
 - [Constraints, preferences, requirements mentioned]
@@ -27,4 +27,4 @@ Use this exact format:
 ## Next Steps
 1. [What should happen next to continue]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages verbatim — those details are the ones we'll need on return.
+Sections MUST be kept concise. You MUST preserve exact file paths, function names, error messages.

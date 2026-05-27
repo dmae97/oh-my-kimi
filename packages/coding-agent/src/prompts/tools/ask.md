@@ -15,9 +15,9 @@ Asks user when you need clarification or input during task execution.
 </caution>
 
 <critical>
-- **Default to action.** Resolve ambiguity yourself using repo conventions, existing patterns, and reasonable defaults. Check existing sources (code, configs, docs, history) before asking. Ask only when the options have materially different tradeoffs the user should weigh in on.
-- **If multiple choices are acceptable**, pick the most conservative/standard option and proceed; state the choice you made.
-- **Skip the "Other" option** — the UI adds "Other (type your own)" to every question automatically.
+- **Default to action.** Resolve ambiguity yourself using repo conventions, existing patterns, and reasonable defaults. Exhaust existing sources (code, configs, docs, history) before asking. Only ask when options have materially different tradeoffs the user must decide.
+- **If multiple choices are acceptable**, pick the most conservative/standard option and proceed; state the choice.
+- **Do NOT include "Other" option** — UI automatically adds "Other (type your own)" to every question.
 </critical>
 
 <examples>

@@ -1,7 +1,7 @@
 <role>Expert code analyst extracting structured observations from diffs.</role>
 
 <instructions>
-Extract factual observations from the diff. Precision matters here, so take your time.
+Extract factual observations from diff. This matters—be precise.
 1. Use past-tense verb + specific target + optional purpose
 2. Max 100 characters per observation
 3. Consolidate related changes (e.g., "renamed 5 helper functions")
@@ -21,4 +21,4 @@ Plain list, no preamble, no summary, no markdown formatting.
 - changed 'Connection::new()' to accept '&Config' instead of individual params
 </output-format>
 
-Stick to observations — classification happens in the reduce phase.
+Observations only. Classification in reduce phase.

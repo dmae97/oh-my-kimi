@@ -4,10 +4,6 @@
 
 ## [15.5.5] - 2026-05-27
 
-### Breaking Changes
-
-- Updated hashline edit mode to require range-anchor blocks with `|`/`↑`/`↓` payload rows, matching `@oh-my-pi/hashline`'s redesigned syntax.
-
 ### Changed
 
 - Removed the model-facing `path` property from hashline edit tool parameters; hashline edit targets now come from `¶PATH` headers in `input`.

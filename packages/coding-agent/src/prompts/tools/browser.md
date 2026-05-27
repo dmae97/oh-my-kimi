@@ -9,7 +9,7 @@ Drives a real Chromium tab with full puppeteer access via JS execution.
 - Tabs survive across `run` calls and across in-process subagents. Open once, reuse many times.
 - Browser kinds, selected by the `app` field on `open`:
   - default (no `app`) → headless Chromium with stealth patches.
-  - `app.path` → spawn an absolute binary (Electron/CDP). If a running instance already exposes a CDP port, it is reused; otherwise stale instances are killed and a fresh one is spawned. No stealth patches — leave a real desktop app alone.
+  - `app.path` → spawn an absolute binary (Electron/CDP). If a running instance already exposes a CDP port, it is reused; otherwise stale instances are killed and a fresh one is spawned. No stealth patches — never tamper with a real desktop app.
   - `app.cdp_url` → connect to an existing CDP endpoint (e.g. `http://127.0.0.1:9222`).
   - `app.target` (with `path`/`cdp_url`) — substring matched against url+title to pick a BrowserWindow when the app exposes several.
 - Inside `run`, `tab` exposes high-level helpers; reach for `page` (raw puppeteer Page) when you need anything they don't cover.
@@ -20,7 +20,7 @@ Drives a real Chromium tab with full puppeteer access via JS execution.
   - `tab.waitFor(selector)` — waits until the selector is attached, returns the resolved `ElementHandle` for chaining (e.g. `const btn = await tab.waitFor('text/Submit'); await btn.click();`).
   - `tab.drag(from, to)` — drag from one point to another. Each endpoint is either a selector string (drag center-to-center) or a `{ x, y }` viewport-coordinate point (e.g. for canvases, sliders).
   - `tab.scrollIntoView(selector)` — scroll the matching element to the center of the viewport (use before clicking off-screen elements).
-  - `tab.select(selector, …values)` — set the selected option(s) on a `<select>`. Returns the values that ended up selected. `tab.fill` doesn't work for selects — reach for `tab.select` instead.
+  - `tab.select(selector, …values)` — set the selected option(s) on a `<select>`. Returns the values that ended up selected. `tab.fill` NEVER works for selects.
   - `tab.uploadFile(selector, …filePaths)` — attach files to an `<input type="file">`. Paths resolve relative to cwd.
   - `tab.waitForUrl(pattern, { timeout? })` — pattern is a substring or `RegExp`. Polls `location.href` so it works for SPA pushState navigations, not just real navigations. Returns the matched URL.
   - `tab.waitForResponse(pattern, { timeout? })` — pattern is a substring, `RegExp`, or `(response) => boolean`. Returns the raw puppeteer `HTTPResponse` (call `.text()` / `.json()` / `.status()` / `.headers()` on it).
@@ -32,9 +32,9 @@ Drives a real Chromium tab with full puppeteer access via JS execution.
 </instruction>
 
 <critical>
-- Call `open` before `run`. `run` won't implicitly create a tab for you.
-- Skip screenshots when you just want to know what's on the page — `tab.observe()` returns structured data with element ids you can act on right away.
-- After a `tab.goto()` or any navigation, prior element ids from `tab.observe()` are stale. Re-observe before referencing them.
+- You MUST call `open` before `run`. `run` does not implicitly create a tab.
+- You NEVER screenshot just to "see what's on the page" — `tab.observe()` returns structured data with element ids you can act on immediately.
+- After a `tab.goto()` or any navigation, prior element ids from `tab.observe()` are invalidated. Re-observe before referencing them.
 - `code` runs with full Node access. Treat it as your code, not sandboxed code.
 </critical>
 

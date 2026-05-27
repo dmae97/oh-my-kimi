@@ -1,7 +1,7 @@
 Executes bash command in shell session for terminal operations like git, bun, cargo, python.
 
 <instruction>
-- Use `cwd` to set working directory rather than `cd dir && …`
+- Use `cwd` to set working directory, not `cd dir && …`
 - Prefer `env: { NAME: "…" }` for multiline, quote-heavy, or untrusted values; reference as `$NAME`
 - Quote variable expansions like `"$NAME"` to preserve exact content
 - PTY mode is opt-in: set `pty: true` only when the command needs a real terminal (e.g. `sudo`, `ssh` requiring user input); default is `false`
@@ -13,9 +13,9 @@ Executes bash command in shell session for terminal operations like git, bun, ca
 </instruction>
 
 <critical>
-- Reach for the dedicated tools (`read`, `search`, `find`, `edit`, `write`) before coreutils (`cat`, `head`, `tail`, `less`, `more`, `ls`, `grep`, `rg`, `awk`, `sed`, `find`, `fd`). The dedicated tools respect `.gitignore`, return structured output, and save tokens — coreutils via bash usually do the wrong thing here.
-- Skip `| head -n N` and `| tail -n N` — the harness already truncates output and saves the full capture to `artifact://<id>`.
-- Skip `2>&1` and `2>/dev/null` — stdout and stderr are already merged for you.
+- NEVER use Linux coreutils (`cat`, `head`, `tail`, `less`, `more`, `ls`, `grep`, `rg`, `awk`, `sed`, `find`, `fd`, etc.) when a dedicated tool suffices — ALWAYS prefer `read`, `search`, `find`, `edit`, `write`.
+- NEVER pipe through `| head -n N` or `| tail -n N` — output is already truncated with the full result available via `artifact://<id>`.
+- NEVER redirect with `2>&1` or `2>/dev/null` — stdout and stderr are already merged.
 </critical>
 
 <output>
@@ -28,7 +28,7 @@ Executes bash command in shell session for terminal operations like git, bun, ca
 # Timeout and async
 
 - `timeout` (seconds) caps the **wall-clock duration** of the command. When it elapses the process is killed and the call returns with a timeout annotation. Range: `1`–`3600`s; default `300`s (see `clampTimeout("bash", …)` in `tool-timeouts.ts`).
-- `async: true` only defers **reporting** of the result — it does not disable, extend, or detach the timeout. A daemon started with `async: true` is still killed when `timeout` elapses, regardless of how long the agent waits before reading the result.
+- `async: true` only defers **reporting** of the result — it does NOT disable, extend, or detach the timeout. A daemon started with `async: true` is still killed when `timeout` elapses, regardless of how long the agent waits before reading the result.
 - For long-running daemons (dev servers, watchers): either pass an explicit large `timeout` (up to `3600`), or fully detach the process from this shell using `nohup …  &` / `setsid … &` / `disown` so it survives independent of the bash call's lifecycle.
 {{/if}}
 

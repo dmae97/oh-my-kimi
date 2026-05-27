@@ -16,9 +16,9 @@ Cell fields:
 - One logical step per cell (imports, define, test, use).
 - Pass multiple small cells in one call.
 - Define small reusable functions for individual debugging.
-- Keep workflow explanations in the assistant message or `title` rather than inside cell code.
+- Put workflow explanations in the assistant message or `title` — never inside cell code.
 {{#if py}}- Python cells run inside an IPython kernel with a live event loop. Use top-level `await` directly (e.g. `await main()`); `asyncio.run(…)` raises "cannot be called from a running event loop".{{/if}}
-**On failure:** errors identify the failing cell (e.g., "Cell 3 failed"). Resubmit just the fixed cell (or fixed cell + remaining cells).
+**On failure:** errors identify the failing cell (e.g., "Cell 3 failed"). Resubmit only the fixed cell (or fixed cell + remaining cells).
 </instruction>
 
 <prelude>

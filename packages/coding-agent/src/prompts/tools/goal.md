@@ -14,5 +14,5 @@ Examples:
 - `goal({"op":"complete"})`
 - `goal({"op":"drop"})`
 
-Avoid calling `complete` just because a budget is low or a turn is ending — save it for when the goal is actually done and verified against current evidence.
-If `get` shows a paused goal, call `resume` before picking work back up on it.
+Do not call `complete` because a budget is low or a turn is ending. Call it only when the goal is actually done and verified.
+If `get` shows a paused goal, call `resume` before continuing work on it.

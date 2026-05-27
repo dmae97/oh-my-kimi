@@ -2,8 +2,8 @@ Read files, directories, archives, SQLite databases, images, documents, internal
 
 <instruction>
 - One tool for filesystem, archives, SQLite, images, documents (PDF/DOCX/PPTX/XLSX/RTF/EPUB/ipynb), internal URIs, and web URLs (reader-mode by default).
-- Reach for `read` (over a browser/puppeteer tool) when you need web content — it usually does the right thing.
-- Parallelize independent reads when you're exploring related files.
+- You SHOULD parallelize independent reads when exploring related files.
+- You SHOULD reach for `read` — not a browser/puppeteer tool — for fetching web content.
 </instruction>
 
 ## Parameters
@@ -28,7 +28,7 @@ Append `:<sel>` to `path`. The bare path falls back to the default mode.
 
 - Reading a directory path returns a depth-limited dirent listing.
 {{#if IS_HL_MODE}}
-- Reading a file with an explicit selector emits a file-hash header and numbered lines: `¶src/foo.ts#1a2b` then `41:def alpha():`. Copy the `¶PATH#HASH` header for anchored edits; ops use bare line numbers. The hash comes from the tool output — don't reconstruct it from memory.
+- Reading a file with an explicit selector emits a file-hash header and numbered lines: `¶src/foo.ts#1a2b` then `41:def alpha():`. Copy the `¶PATH#HASH` header for anchored edits; ops use bare line numbers. NEVER fabricate the hash.
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - Reading a file with an explicit selector returns lines prefixed with line numbers: `41|def alpha():`.
@@ -38,7 +38,7 @@ Append `:<sel>` to `path`. The bare path falls back to the default mode.
 
   `[NN lines elided; re-read needed ranges, e.g. <path>:5-16,40-80]`
 
-  Re-issue **only the relevant range(s)** using the multi-range selector (e.g. `<path>:5-16,120-200`). The `..` / `…` markers carry no content, so don't guess what's inside them. Skip a whole-file re-read or `:raw` when targeted ranges will do.
+  Re-issue **only the relevant range(s)** using the multi-range selector (e.g. `<path>:5-16,120-200`). NEVER guess what's inside `..` / `…` — those markers carry no content. NEVER re-read the whole file or use `:raw` when targeted ranges suffice.
 
 # Documents & Notebooks
 
@@ -73,10 +73,10 @@ For `.sqlite`, `.sqlite3`, `.db`, `.db3`:
 `skill://<name>`, `agent://<id>`, `artifact://<id>`, `memory://root`, `rule://<name>`, `local://<name>.md`, `mcp://<uri>` resolve transparently and accept the same line selectors as filesystem paths. Use `artifact://<id>` to recover full output that a previous bash/eval/tool result spilled or truncated.
 
 <critical>
-- Use `read` for file, directory, archive, and URL inspection. Bash equivalents (`cat`, `head`, `tail`, `less`, `more`, `ls`, `tar`, `unzip`, `curl`, `wget`) are intercepted by the harness — `read` handles selectors, truncation, and caching for you, so reach for it even on short one-liners.
-- Prefer `read` for URL content; pull in a browser/puppeteer tool only when `read` can't get you something usable.
-- Always include `path`. Calling `read` with `{}` won't work — there's nothing to fetch.
-- For line ranges, append the selector to `path` (`path="src/foo.ts:50-200"`, `path="src/foo.ts:50+150"`). `sed -n`, `awk NR`, and `head`/`tail` pipelines won't substitute — `read` is the path here.
-- When a summary footer says `read <path>:raw …`, re-issue the exact selector it names. The `..` / `…` markers carry no content, so guessing inside them tends to invent code that isn't there.
-- You can combine selectors with URL reads and internal URIs; both paginate the cached resolved output.
+- You MUST use `read` for every file, directory, archive, and URL inspection. `cat`, `head`, `tail`, `less`, `more`, `ls`, `tar`, `unzip`, `curl`, `wget` are FORBIDDEN — any such bash call is a bug, regardless of how short or convenient it looks.
+- You MUST prefer `read` over a browser/puppeteer tool for URL content; only reach for a browser when `read` cannot deliver reasonable content.
+- You MUST always include `path`. NEVER call `read` with `{}`.
+- For line ranges, append the selector to `path` (`path="src/foo.ts:50-200"`, `path="src/foo.ts:50+150"`). NEVER substitute `sed -n`, `awk NR`, or `head`/`tail` pipelines.
+- Summary footer says `read <path>:raw …`? Re-issue the exact selector it names. NEVER guess what's inside `..` / `…` markers — they carry no content.
+- You MAY combine selectors with URL reads and internal URIs; both paginate the cached resolved output.
 </critical>

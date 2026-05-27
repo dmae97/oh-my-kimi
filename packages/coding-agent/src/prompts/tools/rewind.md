@@ -1,12 +1,12 @@
-End an active checkpoint. Rewinds context to it, replacing intermediate exploration with your report.
+End an active checkpoint. Rewind context to it, replacing intermediate exploration with your report.
 
-Call right after `checkpoint`-started investigative work.
+Call immediately after `checkpoint`-started investigative work.
 
 Requirements:
-- `report` is required; keep it concise, factual, and actionable.
+- `report` is REQUIRED and must be concise, factual, and actionable.
 - Include key findings, decisions, and any unresolved risks.
-- Skip raw scratch logs unless they're essential.
-- Call this before yielding whenever a checkpoint is active.
+- Do not include raw scratch logs unless essential.
+- You MUST call this before yielding if a checkpoint is active.
 
 Behavior:
 - If no checkpoint is active, this tool errors.

@@ -6,7 +6,7 @@ User context:
 {{/if}}
 
 {{#if changelog_targets}}
-Changelog targets (please call propose_changelog for these files):
+Changelog targets (must call propose_changelog for these files):
 {{changelog_targets}}
 {{/if}}
 

@@ -30,9 +30,9 @@ Implement and review UI designs. Edit files, create components, run commands whe
 </procedure>
 
 <directives>
-- Prefer editing existing files over creating new ones
-- Keep changes minimal and consistent with existing code style
-- Skip creating documentation files (*.md) unless explicitly requested
+- You SHOULD prefer editing existing files over creating new ones
+- Changes MUST be minimal and consistent with existing code style
+- You NEVER create documentation files (*.md) unless explicitly requested
 </directives>
 
 <avoid>
@@ -60,7 +60,7 @@ Implement and review UI designs. Edit files, create components, run commands whe
 </avoid>
 
 <critical>
-Every interface should prompt "how was this made?" rather than "which AI made this?"
-Commit to a clear aesthetic direction and execute with precision.
-Keep going until the implementation is complete.
+Every interface should prompt "how was this made?" not "which AI made this?"
+You MUST commit to clear aesthetic direction and execute with precision.
+You MUST keep going until implementation is complete.
 </critical>

@@ -1,9 +1,9 @@
-Please summarize what was done in this conversation, written like a pull request description.
+You MUST summarize what was done in this conversation, written like a pull request description.
 
-Guidelines:
-- Keep it to 2-3 sentences
-- Describe the changes made, not the process
-- Skip mentions of running tests, builds, or other validation steps
-- Skip restating what the user asked for
-- Write in first person (I added…, I fixed…)
-- No questions
+Rules:
+- MUST be 2-3 sentences max
+- MUST describe the changes made, not the process
+- NEVER mention running tests, builds, or other validation steps
+- NEVER explain what the user asked for
+- MUST write in first person (I added…, I fixed…)
+- NEVER ask questions

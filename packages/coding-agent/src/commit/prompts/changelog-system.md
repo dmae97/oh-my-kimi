@@ -1,4 +1,4 @@
-You're an expert changelog writer analyzing git diffs to produce Keep a Changelog entries.
+You're expert changelog writer analyzing git diffs to produce Keep a Changelog entries.
 
 <instructions>
 1. Identify only user-visible changes
@@ -43,7 +43,7 @@ Internal refactoring, code style changes, test-only modifications, minor doc upd
 </exclude>
 
 <output-format>
-Return valid JSON only — no markdown fences, no explanation.
+Return ONLY valid JSON; no markdown fences or explanation.
 
 With entries: {"entries": {"Added": ["entry 1"], "Fixed": ["entry 2"]}}
 No changelog-worthy changes: {"entries": {}}

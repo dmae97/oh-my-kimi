@@ -1,14 +1,14 @@
-Creates or overwrites a file at the specified path.
+Creates or overwrites file at specified path.
 
 <conditions>
-- Creating new files when the task calls for them
-- Replacing entire file contents when editing would be more involved
+- Creating new files explicitly required by task
+- Replacing entire file contents when editing would be more complex
 - Supports `.tar`, `.tar.gz`, `.tgz`, and `.zip` archive entries via `archive.ext:path/inside/archive`
 - Supports SQLite row operations via `db.sqlite:table` (insert), `db.sqlite:table:key` (update with JSON content, delete with empty content)
 </conditions>
 
 <critical>
-- Reach for the Edit tool when modifying existing files — it's more precise and preserves formatting.
-- Skip creating documentation files (*.md, README) unless the task explicitly asks for them.
-- Skip emojis unless they were requested.
+- You SHOULD use Edit tool for modifying existing files (more precise, preserves formatting)
+- You NEVER create documentation files (*.md, README) unless explicitly requested
+- You NEVER use emojis unless requested
 </critical>
