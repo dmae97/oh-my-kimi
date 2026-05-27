@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.5.7] - 2026-05-27
 ### Added
 - `SimpleStreamOptions.openrouterVariant` (`"nitro"`, `"floor"`, `"online"`, `"exacto"`, …) — when set, appends `:<variant>` to OpenRouter model IDs at request time, leaving ids that already carry an explicit `:suffix` untouched. Plumbed through `openai-completions` and the pi-native gateway forwarder.
 

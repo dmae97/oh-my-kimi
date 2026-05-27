@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.5.7] - 2026-05-27
 ### Added
 - `providers.openrouterVariant` setting (Settings → Providers → "OpenRouter Routing") to default OpenRouter requests to a routing-variant suffix (`:nitro`, `:floor`, `:online`, `:exacto`). Selectors that already name a variant (e.g. `openrouter/anthropic/claude-haiku:nitro`) keep precedence.
 
