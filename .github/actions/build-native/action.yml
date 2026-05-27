@@ -60,11 +60,17 @@ runs:
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.10
       - name: Enable sccache for cargo
+        # `CARGO_INCREMENTAL=0` is required: sccache silently skips caching
+        # when incremental is enabled, which would turn the wrapper into a
+        # no-op. rust-cache also sets this today, but pin it here so sccache
+        # stays effective if rust-cache is removed or changes defaults. Also
+        # overrides `profile.dev.incremental = true` for `bun run test:rs`.
         shell: bash
         run: |
            {
              echo "SCCACHE_GHA_ENABLED=true"
              echo "RUSTC_WRAPPER=sccache"
+             echo "CARGO_INCREMENTAL=0"
            } >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@v2
         if: inputs.target == ''
