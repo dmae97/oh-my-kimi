@@ -66,7 +66,7 @@ SOURCE_BUN_HOME="$WORK_DIR/bun-source"
 section "Tarball install smoke"
 TARBALL_DIR="$WORK_DIR/tarballs"
 mkdir -p "$TARBALL_DIR"
-for pkg in utils natives ai agent tui stats coding-agent; do
+for pkg in utils natives hashline ai agent tui stats coding-agent; do
 	(
 		cd "$ROOT_DIR/packages/$pkg"
 		bun pm pack --destination "$TARBALL_DIR" --quiet >/dev/null
@@ -75,6 +75,7 @@ done
 
 utils_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-utils-*.tgz)"
 natives_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-natives-*.tgz)"
+hashline_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-hashline-*.tgz)"
 ai_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-ai-*.tgz)"
 agent_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-agent-core-*.tgz)"
 tui_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-tui-*.tgz)"
@@ -94,6 +95,7 @@ mkdir -p "$TARBALL_APP_DIR"
 		pkg.overrides = {
 			'@oh-my-pi/pi-utils': '$utils_tgz',
 			'@oh-my-pi/pi-natives': '$natives_tgz',
+			'@oh-my-pi/hashline': '$hashline_tgz',
 			'@oh-my-pi/pi-ai': '$ai_tgz',
 			'@oh-my-pi/pi-agent-core': '$agent_tgz',
 			'@oh-my-pi/pi-tui': '$tui_tgz',
@@ -103,7 +105,7 @@ mkdir -p "$TARBALL_APP_DIR"
 		require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
 	"
 
-	bun add "$utils_tgz" "$natives_tgz" "$ai_tgz" "$agent_tgz" "$tui_tgz" "$stats_tgz" "$coding_agent_tgz"
+	bun add "$utils_tgz" "$natives_tgz" "$hashline_tgz" "$ai_tgz" "$agent_tgz" "$tui_tgz" "$stats_tgz" "$coding_agent_tgz"
 	smoke_cli ./node_modules/.bin/omp
 )
 
