@@ -1220,8 +1220,7 @@ mod tests {
 		let code = (0..10)
 			.map(|i| {
 				format!(
-					"export function fn{i}(): number {{\n\tconst a = {i};\n\tconst b = {i};\n\tconst c = {i};\n\treturn a + b + c;\n}}",
-					i = i
+					"export function fn{i}(): number {{\n\tconst a = {i};\n\tconst b = {i};\n\tconst c = {i};\n\treturn a + b + c;\n}}"
 				)
 			})
 			.collect::<Vec<_>>()
@@ -1238,7 +1237,7 @@ mod tests {
 		// A single huge body whose unfold would massively overshoot the limit
 		// must stay folded — the BFS should detect overflow and abort.
 		let body = (0..40)
-			.map(|i| format!("\tconst x{i} = {i};", i = i))
+			.map(|i| format!("\tconst x{i} = {i};"))
 			.collect::<Vec<_>>()
 			.join("\n");
 		let code = format!("export function big(): void {{\n{body}\n}}\n");
