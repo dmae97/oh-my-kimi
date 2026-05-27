@@ -6,6 +6,13 @@ import { APP_NAME, CONFIG_DIR_NAME, logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { parseEffort } from "../thinking";
 import { BUILTIN_TOOLS } from "../tools";
+import {
+	OPTIONAL_FLAGS,
+	OPTIONAL_VALUE_FLAGS,
+	type ParseDeps,
+	STRING_SETTERS,
+	STRING_VALUE_FLAGS,
+} from "./flag-tables";
 
 export type Mode = "text" | "json" | "rpc" | "acp" | "rpc-ui";
 
@@ -56,6 +63,19 @@ export interface Args {
 	unknownFlags: Map<string, boolean | string>;
 }
 
+/**
+ * Runtime dependencies the data-driven setters need. Constructed once at
+ * module load and passed to every {@link STRING_SETTERS} call so the
+ * setter table itself can stay free of `@oh-my-pi/pi-utils` runtime imports
+ * (which would otherwise trip the profile bootstrap's env-init ordering).
+ */
+const PARSE_DEPS: ParseDeps = {
+	logger,
+	parseEffort,
+	BUILTIN_TOOLS,
+	THINKING_EFFORTS,
+};
+
 export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
 	const result: Args = {
 		messages: [],
@@ -75,6 +95,23 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			args.splice(i + 1, 0, value);
 		}
 
+		if (STRING_VALUE_FLAGS.has(arg)) {
+			if (i + 1 < args.length) {
+				STRING_SETTERS[arg](result, args[++i], PARSE_DEPS);
+			}
+			continue;
+		}
+		if (OPTIONAL_VALUE_FLAGS.has(arg)) {
+			const config = OPTIONAL_FLAGS[arg];
+			const next = args[i + 1];
+			const consume =
+				next !== undefined &&
+				!next.startsWith("-") &&
+				!(config.rejectAtPrefix === true && next.startsWith("@")) &&
+				!(config.rejectEmpty === true && next.length === 0);
+			config.set(result, consume ? args[++i] : undefined);
+			continue;
+		}
 		if (arg === "--help" || arg === "-h") {
 			result.help = true;
 		} else if (arg === "--version" || arg === "-v") {
@@ -82,6 +119,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 		} else if (arg === "--allow-home") {
 			result.allowHome = true;
 		} else if (arg === "--profile" && i + 1 < args.length) {
+			// Normally stripped by `extractProfileFlags` before parseArgs sees it;
+			// kept here as a fallback for direct parseArgs callers.
 			result.profile = args[++i];
 		} else if (arg.startsWith("--profile=")) {
 			result.profile = arg.slice("--profile=".length);
@@ -89,93 +128,18 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.alias = args[++i];
 		} else if (arg.startsWith("--alias=")) {
 			result.alias = arg.slice("--alias=".length);
-		} else if (arg === "--mode" && i + 1 < args.length) {
-			const mode = args[++i];
-			if (mode === "text" || mode === "json" || mode === "rpc" || mode === "acp" || mode === "rpc-ui") {
-				result.mode = mode;
-			}
 		} else if (arg === "--continue" || arg === "-c") {
 			result.continue = true;
-		} else if (arg === "--resume" || arg === "-r" || arg === "--session") {
-			const next = args[i + 1];
-			if (next && !next.startsWith("-")) {
-				result.resume = args[++i];
-			} else {
-				result.resume = true;
-			}
-		} else if (arg === "--fork" && i + 1 < args.length) {
-			result.fork = args[++i];
-		} else if (arg === "--provider" && i + 1 < args.length) {
-			result.provider = args[++i];
-		} else if (arg === "--model" && i + 1 < args.length) {
-			result.model = args[++i];
-		} else if (arg === "--smol" && i + 1 < args.length) {
-			result.smol = args[++i];
-		} else if (arg === "--slow" && i + 1 < args.length) {
-			result.slow = args[++i];
-		} else if (arg === "--plan" && i + 1 < args.length) {
-			result.plan = args[++i];
-		} else if (arg === "--api-key" && i + 1 < args.length) {
-			result.apiKey = args[++i];
-		} else if (arg === "--system-prompt" && i + 1 < args.length) {
-			result.systemPrompt = args[++i];
-		} else if (arg === "--append-system-prompt" && i + 1 < args.length) {
-			result.appendSystemPrompt = args[++i];
-		} else if (arg === "--provider-session-id" && i + 1 < args.length) {
-			result.providerSessionId = args[++i];
 		} else if (arg === "--no-session") {
 			result.noSession = true;
-		} else if (arg === "--session-dir" && i + 1 < args.length) {
-			result.sessionDir = args[++i];
-		} else if (arg === "--models" && i + 1 < args.length) {
-			result.models = args[++i].split(",").map(s => s.trim());
 		} else if (arg === "--no-tools") {
 			result.noTools = true;
 		} else if (arg === "--no-lsp") {
 			result.noLsp = true;
 		} else if (arg === "--no-pty") {
 			result.noPty = true;
-		} else if (arg === "--tools" && i + 1 < args.length) {
-			const toolNames = args[++i]
-				.split(",")
-				.map(s => s.trim().toLowerCase())
-				.filter(Boolean);
-			const validTools: string[] = [];
-			for (const name of toolNames) {
-				if (name in BUILTIN_TOOLS) {
-					validTools.push(name);
-				} else {
-					logger.warn("Unknown tool passed to --tools", {
-						tool: name,
-						validTools: Object.keys(BUILTIN_TOOLS),
-					});
-				}
-			}
-			result.tools = validTools;
-		} else if (arg === "--thinking" && i + 1 < args.length) {
-			const rawThinking = args[++i];
-			const thinking = parseEffort(rawThinking);
-			if (thinking !== undefined) {
-				result.thinking = thinking;
-			} else {
-				logger.warn("Invalid thinking level passed to --thinking", {
-					level: rawThinking,
-					validThinkingLevels: THINKING_EFFORTS,
-				});
-			}
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
-		} else if (arg === "--export" && i + 1 < args.length) {
-			result.export = args[++i];
-		} else if (arg === "--hook" && i + 1 < args.length) {
-			result.hooks = result.hooks ?? [];
-			result.hooks.push(args[++i]);
-		} else if ((arg === "--extension" || arg === "-e") && i + 1 < args.length) {
-			result.extensions = result.extensions ?? [];
-			result.extensions.push(args[++i]);
-		} else if (arg === "--plugin-dir" && i + 1 < args.length) {
-			result.pluginDirs = result.pluginDirs ?? [];
-			result.pluginDirs.push(args[++i]);
 		} else if (arg === "--no-extensions") {
 			result.noExtensions = true;
 		} else if (arg === "--no-skills") {
@@ -186,30 +150,10 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.noTitle = true;
 		} else if (arg === "--auto-approve" || arg === "--yolo") {
 			result.autoApprove = true;
-		} else if (arg === "--approval-mode" && i + 1 < args.length) {
-			const mode = args[++i];
-			if (mode === "always-ask" || mode === "write" || mode === "yolo") {
-				result.approvalMode = mode;
-			} else {
-				logger.warn("Invalid value passed to --approval-mode", {
-					value: mode,
-					validValues: ["always-ask", "write", "yolo"],
-				});
-			}
-		} else if (arg === "--skills" && i + 1 < args.length) {
-			// Comma-separated glob patterns for skill filtering
-			result.skills = args[++i].split(",").map(s => s.trim());
-		} else if (arg === "--list-models") {
-			// Check if next arg is a search pattern (not a flag or file arg)
-			if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {
-				result.listModels = args[++i];
-			} else {
-				result.listModels = true;
-			}
 		} else if (arg.startsWith("@")) {
-			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
+			result.fileArgs.push(arg.slice(1));
 		} else if (arg.startsWith("--") && extensionFlags) {
-			// Check if it's an extension-registered flag
+			// Extension-registered flags: dispatched dynamically via the runtime map.
 			const flagName = arg.slice(2);
 			const extFlag = extensionFlags.get(flagName);
 			if (extFlag) {
@@ -219,7 +163,7 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 					result.unknownFlags.set(flagName, args[++i]);
 				}
 			}
-			// Unknown flags without extensionFlags are silently ignored (first pass)
+			// Unknown flags without extensionFlags are silently ignored (first pass).
 		} else if (!arg.startsWith("-")) {
 			result.messages.push(arg);
 		}

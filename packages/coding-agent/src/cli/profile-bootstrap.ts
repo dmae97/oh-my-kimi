@@ -16,47 +16,11 @@
  * instead of passing the literal `--profile` to the system prompt and `foo`
  * as a positional message (issue raised by code review).
  *
- * Keep these tables in sync with `packages/coding-agent/src/cli/args.ts`. Any
- * flag added there that consumes a value must be mirrored here, otherwise the
- * preparser can corrupt user-visible CLI interpretation.
+ * The shared classification lives in {@link ./flag-tables}, imported below,
+ * so the bootstrap and `args.ts` reference one source of truth instead of
+ * maintaining parallel constants.
  */
-
-/**
- * Flags that always consume the next argv token, even when that token starts
- * with `-`. Mirrors the `arg === "--xxx" && i + 1 < args.length ? args[++i]`
- * pattern in `args.ts`.
- */
-const STRING_VALUE_FLAGS: ReadonlySet<string> = new Set([
-	"--mode",
-	"--fork",
-	"--provider",
-	"--model",
-	"--smol",
-	"--slow",
-	"--plan",
-	"--api-key",
-	"--system-prompt",
-	"--append-system-prompt",
-	"--provider-session-id",
-	"--session-dir",
-	"--models",
-	"--tools",
-	"--thinking",
-	"--export",
-	"--hook",
-	"--extension",
-	"-e",
-	"--plugin-dir",
-	"--skills",
-	"--approval-mode",
-]);
-
-/**
- * Flags that consume the next argv token only when it does not look like
- * another flag. Mirrors the `if (next && !next.startsWith("-")) args[++i]`
- * pattern in `args.ts`.
- */
-const OPTIONAL_VALUE_FLAGS: ReadonlySet<string> = new Set(["--resume", "-r", "--session", "--list-models"]);
+import { OPTIONAL_FLAGS, OPTIONAL_VALUE_FLAGS, STRING_VALUE_FLAGS } from "./flag-tables";
 
 export interface ProfileBootstrapResult {
 	argv: string[];
@@ -144,9 +108,14 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 
 		if (OPTIONAL_VALUE_FLAGS.has(arg)) {
 			stripped.push(arg);
+			const config = OPTIONAL_FLAGS[arg];
 			const next = argv[index + 1];
-			// `--list-models` also rejects `@` prefixes (treated as file args by args.ts).
-			if (next !== undefined && !next.startsWith("-") && !next.startsWith("@")) {
+			if (
+				next !== undefined &&
+				!next.startsWith("-") &&
+				!(config.rejectAtPrefix === true && next.startsWith("@")) &&
+				!(config.rejectEmpty === true && next.length === 0)
+			) {
 				stripped.push(next);
 				index += 1;
 			}

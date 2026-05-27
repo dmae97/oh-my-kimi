@@ -61,6 +61,15 @@ describe("extractProfileFlags", () => {
 		expect(filePrefixed.profile).toBe("work");
 	});
 
+	it("does not consume empty-string resume values before a trailing profile", () => {
+		// Shared OPTIONAL_FLAGS metadata drives the bootstrap too. Empty string is
+		// "no value" for resume/session aliases, so the bootstrap must release it
+		// and still activate the trailing --profile.
+		const result = extractProfileFlags(["--resume", "", "--profile", "work"]);
+		expect(result.argv).toEqual(["--resume", ""]);
+		expect(result.profile).toBe("work");
+	});
+
 	it("honors `--` and stops scanning for flags", () => {
 		const result = extractProfileFlags(["--", "--profile", "foo", "--alias", "bar"]);
 		expect(result.profile).toBeUndefined();
