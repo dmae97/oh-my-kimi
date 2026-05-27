@@ -91,16 +91,10 @@ function renderSection(result: PatchSectionResult, diagnostics: FileDiagnosticsR
 
 	const warningsBlock = result.warnings.length > 0 ? `\n\nWarnings:\n${result.warnings.join("\n")}` : "";
 	const previewBlock = preview.preview ? `\n${preview.preview}` : "";
-	const headline = preview.preview
-		? `${result.path}:`
-		: result.op === "create"
-			? `Created ${result.path}`
-			: `Updated ${result.path}`;
-
 	const firstChangedLine = result.firstChangedLine ?? diff.firstChangedLine;
 	return {
 		toolResult: {
-			content: [{ type: "text", text: `${headline}\n${result.header}${previewBlock}${warningsBlock}` }],
+			content: [{ type: "text", text: `${result.header}${previewBlock}${warningsBlock}` }],
 			details: {
 				diff: diff.diff,
 				firstChangedLine,

@@ -783,7 +783,7 @@ describe("hashline executor", () => {
 		await withTempDir(async tempDir => {
 			const input = `¶new.ts\nBOF↓${pl("export const x = 1;")}\n`;
 			const result = await executeHashlineSingle(hashlineExecuteOptions(tempDir, input));
-			expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("new.ts:");
+			expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("¶new.ts#");
 			expect(await Bun.file(path.join(tempDir, "new.ts")).text()).toBe("export const x = 1;");
 		});
 	});
