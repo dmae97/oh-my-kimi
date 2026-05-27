@@ -3631,9 +3631,17 @@ export class AgentSession {
 		const sessionOnResponse = this.#onResponse;
 		const sessionMetadata = this.agent.metadataForProvider(provider);
 		const sessionOnSseEvent = this.#onSseEvent;
-		if (!sessionOnPayload && !sessionOnResponse && !sessionMetadata && !sessionOnSseEvent) return options;
+		const openrouterRoutingPreset =
+			provider === "openrouter" ? this.settings.get("providers.openrouterVariant") : "default";
+		const openrouterVariant =
+			openrouterRoutingPreset !== "default" && options.openrouterVariant === undefined
+				? openrouterRoutingPreset
+				: undefined;
+		if (!sessionOnPayload && !sessionOnResponse && !sessionMetadata && !sessionOnSseEvent && !openrouterVariant)
+			return options;
 
-		const preparedOptions: SimpleStreamOptions = { ...options };
+		const preparedOptions: SimpleStreamOptions =
+			openrouterVariant === undefined ? { ...options } : { ...options, openrouterVariant };
 
 		// Stamp session metadata (e.g. user_id={session_id}) onto direct-call requests so
 		// they share the same session bucket as Agent.prompt-routed requests on Anthropic

@@ -429,6 +429,16 @@ export interface SimpleStreamOptions extends StreamOptions {
 	syntheticApiFormat?: "openai" | "anthropic";
 	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
 	preferWebsockets?: boolean;
+	/**
+	 * OpenRouter routing-variant suffix automatically appended to model IDs when
+	 * the request targets OpenRouter (`model.provider === "openrouter"`). Common
+	 * values: `"nitro"` (throughput), `"floor"` (cheapest), `"online"` (web
+	 * search plugin), `"exacto"` (cherry-picked high-quality providers, only
+	 * defined for some models). Ignored when the resolved model id already
+	 * contains a `:<variant>` suffix (e.g. the user typed `:nitro` explicitly
+	 * or the catalog entry already names the variant).
+	 */
+	openrouterVariant?: string;
 }
 
 // Generic StreamFunction with typed options

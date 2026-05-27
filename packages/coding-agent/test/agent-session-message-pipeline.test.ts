@@ -152,6 +152,58 @@ describe("AgentSession message pipeline", () => {
 		expect(capturedOptions?.preferWebsockets).toBe(false);
 	});
 
+	it("applies configured OpenRouter routing variant to ephemeral side-channel options", async () => {
+		const api = "test-ephemeral-openrouter-variant";
+		let capturedOptions: SimpleStreamOptions | undefined;
+		registerCustomApi(api, (_model, _context, options) => {
+			capturedOptions = options;
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("Answer");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Answer", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+
+		const model = {
+			id: "anthropic/claude-sonnet-4",
+			name: "OpenRouter Model",
+			api,
+			provider: "openrouter",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} satisfies Model;
+		const session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["system prompt"],
+					messages: [],
+					tools: [],
+				},
+			}),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"providers.openrouterVariant": "nitro",
+			}),
+			modelRegistry: {
+				getApiKey: vi.fn(async () => "key"),
+			} as never,
+		});
+		sessions.push(session);
+
+		const result = await session.runEphemeralTurn({ promptText: "Question?" });
+
+		expect(result.replyText).toBe("Answer");
+		expect(capturedOptions?.openrouterVariant).toBe("nitro");
+	});
+
 	it("records raw SSE diagnostics into the session buffer before request hooks", async () => {
 		const requestOnSseEvent = vi.fn();
 		const session = new AgentSession({

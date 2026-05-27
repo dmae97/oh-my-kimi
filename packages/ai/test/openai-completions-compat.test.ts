@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { getBundledModel } from "../src/models";
-import { convertMessages, detectCompat, streamOpenAICompletions } from "../src/providers/openai-completions";
+import {
+	applyOpenRouterRoutingVariant,
+	convertMessages,
+	detectCompat,
+	streamOpenAICompletions,
+} from "../src/providers/openai-completions";
 import { resolveOpenAICompat } from "../src/providers/openai-completions-compat";
 import type { AssistantMessage, Context, Model, OpenAICompat } from "../src/types";
 
@@ -897,5 +902,87 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 			.map(b => (b as { text: string }).text)
 			.join("");
 		expect(text).toBe("keep <\uff5cas-is\uff5c> please");
+	});
+});
+
+describe("applyOpenRouterRoutingVariant", () => {
+	it("returns the id untouched when variant is missing", () => {
+		expect(applyOpenRouterRoutingVariant("anthropic/claude-haiku-latest", undefined)).toBe(
+			"anthropic/claude-haiku-latest",
+		);
+		expect(applyOpenRouterRoutingVariant("anthropic/claude-haiku-latest", "")).toBe("anthropic/claude-haiku-latest");
+	});
+
+	it("appends the variant suffix when the id has no colon after the last slash", () => {
+		expect(applyOpenRouterRoutingVariant("anthropic/claude-haiku-latest", "nitro")).toBe(
+			"anthropic/claude-haiku-latest:nitro",
+		);
+		expect(applyOpenRouterRoutingVariant("openai/gpt-4o-mini", "floor")).toBe("openai/gpt-4o-mini:floor");
+	});
+
+	it("preserves an explicit variant already present in the id", () => {
+		// User-typed override
+		expect(applyOpenRouterRoutingVariant("anthropic/claude-haiku-latest:nitro", "exacto")).toBe(
+			"anthropic/claude-haiku-latest:nitro",
+		);
+		// Catalog entry with a baked-in variant
+		expect(applyOpenRouterRoutingVariant("deepseek/deepseek-v3.1-terminus:exacto", "nitro")).toBe(
+			"deepseek/deepseek-v3.1-terminus:exacto",
+		);
+	});
+
+	it("appends the variant when the id has no slash separator", () => {
+		expect(applyOpenRouterRoutingVariant("opaque-id", "nitro")).toBe("opaque-id:nitro");
+	});
+});
+
+describe("openrouterVariant request integration", () => {
+	it("appends the configured variant suffix to params.model for OpenRouter requests", async () => {
+		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		global.fetch = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			signal: createAbortedSignal(),
+			openrouterVariant: "nitro",
+			onPayload: payload => resolve(payload),
+		});
+		const payload = await promise;
+		expect((payload as { model?: string }).model).toBe(`${model.id}:nitro`);
+	});
+
+	it("does not override an explicit variant in the model id", async () => {
+		const base = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
+		const model: Model<"openai-completions"> = {
+			...base,
+			id: `${base.id}:online`,
+		};
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		global.fetch = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			signal: createAbortedSignal(),
+			openrouterVariant: "nitro",
+			onPayload: payload => resolve(payload),
+		});
+		const payload = await promise;
+		expect((payload as { model?: string }).model).toBe(model.id);
+	});
+
+	it("leaves params.model unchanged for non-OpenRouter providers", async () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+		};
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		global.fetch = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			signal: createAbortedSignal(),
+			openrouterVariant: "nitro",
+			onPayload: payload => resolve(payload),
+		});
+		const payload = await promise;
+		expect((payload as { model?: string }).model).toBe(model.id);
 	});
 });

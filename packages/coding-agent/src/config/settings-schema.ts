@@ -2767,6 +2767,28 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"providers.openrouterVariant": {
+		type: "enum",
+		values: ["default", "nitro", "floor", "online", "exacto"] as const,
+		default: "default",
+		ui: {
+			tab: "providers",
+			label: "OpenRouter Routing",
+			description:
+				"Default routing-variant suffix appended to OpenRouter model IDs (overridden when the selector already names a variant)",
+			options: [
+				{ value: "default", label: "Default", description: "No suffix; use OpenRouter's default routing" },
+				{ value: "nitro", label: ":nitro", description: "Prioritize throughput / lowest latency" },
+				{ value: "floor", label: ":floor", description: "Prioritize cheapest available provider" },
+				{ value: "online", label: ":online", description: "Enable OpenRouter's web-search plugin" },
+				{
+					value: "exacto",
+					label: ":exacto",
+					description: "Cherry-picked high-quality providers (only defined for select models)",
+				},
+			],
+		},
+	},
 	"providers.parallelFetch": {
 		type: "boolean",
 		default: true,
