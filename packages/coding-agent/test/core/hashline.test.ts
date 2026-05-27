@@ -1107,7 +1107,7 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			});
 
 			// First edit lands cleanly against v0: line 5 becomes L5-FIRST.
-			const firstInput = `${header("a.ts", v0Text)}\n${sameLineRange(tag(5, "L5"))}:\n${extra(pl("L5-FIRST"))}\n`;
+			const firstInput = `${header("a.ts", v0Text)}\n${sameLineRange(tag(5, "L5"))}:\n${repl("L5-FIRST")}\n`;
 			await executeHashlineSingle(hashlineExecuteOptions(tempDir, firstInput, undefined, session));
 
 			const v1Lines = [...v0Lines];
@@ -1118,7 +1118,7 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			// again targets line 5 — the very line the first edit rewrote.
 			// Recovery must refuse so the model re-reads instead of silently
 			// overwriting L5-FIRST with payload authored against L5.
-			const secondInput = `${header("a.ts", v0Text)}\n${sameLineRange(tag(5, "L5"))}:\n${extra(pl("L5-SECOND"))}\n`;
+			const secondInput = `${header("a.ts", v0Text)}\n${sameLineRange(tag(5, "L5"))}:\n${repl("L5-SECOND")}\n`;
 			await expect(
 				executeHashlineSingle(hashlineExecuteOptions(tempDir, secondInput, undefined, session)),
 			).rejects.toThrow(HashlineMismatchError);

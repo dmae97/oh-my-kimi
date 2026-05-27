@@ -13,7 +13,7 @@ import type { Model } from "../src/types";
 //
 // Failure here means: run `bun run generate-models` and commit the diff.
 describe("xai-oauth bundled catalog (regression)", () => {
-	const bundled = (MODELS_JSON as Record<string, Record<string, Model>>)["xai-oauth"] ?? {};
+	const bundled = (MODELS_JSON as Record<string, Record<string, Model<"openai-responses">>>)["xai-oauth"] ?? {};
 	const seed = buildXaiOAuthStaticSeed();
 
 	it("bundles every curated id", () => {
