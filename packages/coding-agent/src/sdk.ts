@@ -148,7 +148,7 @@ import { ToolContextStore } from "./tools/context";
 import { getImageGenTools } from "./tools/image-gen";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { queueResolveHandler } from "./tools/resolve";
-import { getTtsTools } from "./tools/tts";
+import { ttsTool } from "./tools/tts";
 import { EventBus } from "./utils/event-bus";
 import { buildNamedToolChoice } from "./utils/tool-choice";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
@@ -1320,9 +1320,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			customTools.push(...(imageGenTools as unknown as CustomTool[]));
 		}
 
-		const ttsTools = await logger.time("getTtsTools", () => getTtsTools());
-		if (ttsTools.length > 0) {
-			customTools.push(...(ttsTools as unknown as CustomTool[]));
+		if (settings.get("tts.enabled")) {
+			customTools.push(ttsTool as unknown as CustomTool);
 		}
 
 		// Add web search tools

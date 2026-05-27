@@ -126,7 +126,3 @@ export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 		};
 	},
 };
-
-export async function getTtsTools(): Promise<CustomTool[]> {
-	return [ttsTool as unknown as CustomTool];
-}
