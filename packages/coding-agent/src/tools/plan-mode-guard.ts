@@ -5,6 +5,8 @@ import { normalizeLocalScheme, resolveToCwd } from "./path-utils";
 import { ToolError } from "./tool-errors";
 
 const LOCAL_SCHEME_PREFIX = "local:";
+const PLAN_ALIAS_FILE = "PLAN.md";
+const LOCAL_PLAN_ALIAS = "local://PLAN.md";
 
 function resolveRawPath(session: ToolSession, targetPath: string): string {
 	const normalized = normalizeLocalScheme(targetPath);
@@ -18,15 +20,20 @@ function resolveRawPath(session: ToolSession, targetPath: string): string {
 	return resolveToCwd(normalized, session.cwd);
 }
 
+function isPlanAliasTarget(session: ToolSession, targetPath: string, resolved: string): boolean {
+	const normalized = normalizeLocalScheme(targetPath);
+	if (normalized === LOCAL_PLAN_ALIAS) return true;
+	return resolved === resolveToCwd(PLAN_ALIAS_FILE, session.cwd);
+}
+
 /**
  * Resolve a write/edit target to its absolute filesystem path.
  *
- * In plan mode, transparently redirects targets whose basename matches the
- * plan file's basename (e.g. a bare `PLAN.md` or `./PLAN.md`) to the canonical
- * plan file location at `state.planFilePath`. This lets `write` and `edit`
- * accept the unqualified plan filename and have the change land at the
- * session-scoped `local://PLAN.md` artifact instead of a stray cwd-relative
- * file the plan-mode guard would otherwise reject.
+ * In plan mode, transparently redirects `PLAN.md` aliases and targets whose
+ * basename matches the plan file's basename to the canonical plan file
+ * location at `state.planFilePath`. This lets `write` and `edit` accept the
+ * habitual plan filename after approval even when the active artifact has a
+ * titled path such as `local://APPROVED.md`.
  *
  * Outside plan mode (or when the basename does not match) this is a no-op.
  */
@@ -38,6 +45,7 @@ export function resolvePlanPath(session: ToolSession, targetPath: string): strin
 
 	const planResolved = resolveRawPath(session, state.planFilePath);
 	if (resolved === planResolved) return resolved;
+	if (isPlanAliasTarget(session, targetPath, resolved)) return planResolved;
 	if (path.basename(resolved) !== path.basename(planResolved)) return resolved;
 
 	return planResolved;
