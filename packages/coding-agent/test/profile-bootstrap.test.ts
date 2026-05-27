@@ -24,6 +24,15 @@ describe("extractProfileFlags", () => {
 		expect(result.profile).toBeUndefined();
 		expect(result.argv).toEqual(["--system-prompt", "--profile", "foo", "bar"]);
 	});
+	it("does not eat the value of --approval-mode (regression: PR #1435 review)", () => {
+		// `--approval-mode` is a string-valued flag in args.ts (`args[++i]` with
+		// no `-` check). The pre-parser must mirror that contract or
+		// `omp --approval-mode --profile foo` silently activates profile `foo`
+		// instead of letting the launch parser surface the invalid mode value.
+		const result = extractProfileFlags(["--approval-mode", "--profile", "foo", "bar"]);
+		expect(result.profile).toBeUndefined();
+		expect(result.argv).toEqual(["--approval-mode", "--profile", "foo", "bar"]);
+	});
 
 	it("still extracts --profile after an unrelated string-valued flag", () => {
 		// Mirror image: when the user does mean to activate a profile *after*

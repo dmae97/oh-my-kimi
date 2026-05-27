@@ -48,6 +48,7 @@ const STRING_VALUE_FLAGS: ReadonlySet<string> = new Set([
 	"-e",
 	"--plugin-dir",
 	"--skills",
+	"--approval-mode",
 ]);
 
 /**
