@@ -11,7 +11,9 @@
  * the case-sensitive id pass-through against the wire.
  */
 import { afterEach, describe, expect, it } from "bun:test";
+import { createModelManager } from "../src/model-manager";
 import { getBundledModel } from "../src/models";
+import { waferServerlessModelManagerOptions } from "../src/provider-models/openai-compat";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
 import type { Context, Model } from "../src/types";
 
@@ -99,6 +101,12 @@ describe("Wafer Serverless provider", () => {
 		const kimi = getBundledModel<"openai-completions">("wafer-serverless", "Kimi-K2.6");
 		expect(kimi).toBeDefined();
 		expect(kimi.contextWindow).toBe(262144);
+		// Kimi-K2.6 routes to Moonshot upstream, which uses zai-style binary
+		// `thinking: { type: "enabled" | "disabled" }`. Locked in explicitly so a
+		// future regen with credentials cannot silently strip it (auto-detect
+		// would mis-pick "openai" because the Wafer baseUrl/provider doesn't match
+		// the api.moonshot.ai / api.kimi.com URL patterns in `detectOpenAICompat`).
+		expect(kimi.compat?.thinkingFormat).toBe("zai");
 		// Kimi-K2.6 carries its real cents/M pricing (88 / 384 / 9 → 0.88 / 3.84 / 0.09).
 		expect(kimi.cost).toEqual({ input: 0.88, output: 3.84, cacheRead: 0.09, cacheWrite: 0 });
 
@@ -114,10 +122,17 @@ describe("Wafer Serverless provider", () => {
 		expect(qwen37max.id).toBe("qwen3.7-max");
 		expect(qwen37max.name).toBe("Qwen3.7-Max");
 		expect(qwen37max.reasoning).toBe(true);
-		expect(qwen37max.compat?.thinkingFormat).toBe("zai");
+		// qwen3.7-max routes to Alibaba upstream; native wire format is `enable_thinking`.
+		// The bundled entry leaves `thinkingFormat` unset so `detectOpenAICompat` picks "qwen"
+		// from the lowercase id at request time.
+		expect(qwen37max.compat?.thinkingFormat).toBeUndefined();
 
 		const dsFlash = getBundledModel<"openai-completions">("wafer-serverless", "deepseek-v4-flash");
 		expect(dsFlash).toBeDefined();
+		// DeepSeek V4 family uses `reasoning_effort`, not zai's `thinking: {type}`.
+		// Bundled entry must NOT pin `thinkingFormat: "zai"` — `detectOpenAICompat`
+		// auto-picks "openai" (default) from the deepseek-* id pattern at request time.
+		expect(dsFlash.compat?.thinkingFormat).toBeUndefined();
 		expect(dsFlash.contextWindow).toBe(1000000);
 		expect(dsFlash.reasoning).toBe(true);
 		expect(dsFlash.compat?.reasoningContentField).toBe("reasoning_content");
@@ -126,6 +141,7 @@ describe("Wafer Serverless provider", () => {
 		expect(dsPro).toBeDefined();
 		expect(dsPro.contextWindow).toBe(1000000);
 		expect(dsPro.reasoning).toBe(true);
+		expect(dsPro.compat?.thinkingFormat).toBeUndefined();
 	});
 
 	it("does not expose Serverless-only ids on the Wafer Pass catalog", () => {
@@ -134,5 +150,77 @@ describe("Wafer Serverless provider", () => {
 		expect(getBundledModel("wafer-pass", "qwen3.7-max")).toBeUndefined();
 		expect(getBundledModel("wafer-pass", "deepseek-v4-flash")).toBeUndefined();
 		expect(getBundledModel("wafer-pass", "deepseek-v4-pro")).toBeUndefined();
+	});
+});
+describe("Wafer dynamic discovery mapper", () => {
+	// Synthetic /v1/models response that exercises every upstream provider Wafer
+	// announces, including a deliberately-unknown one. The mapper must:
+	//  - pin `thinkingFormat: "zai"` for upstreams whose native API uses the
+	//    z.ai-style binary thinking parameter (zai, moonshotai),
+	//  - pin `thinkingFormat: "qwen"` for Alibaba qwen models,
+	//  - leave `thinkingFormat` unset for deepseek (uses `reasoning_effort`)
+	//    and unknown upstreams, so `detectOpenAICompat` picks the safe default
+	//    from the id pattern at request time.
+	function mockWaferModelsResponse(entries: Array<Record<string, unknown>>): void {
+		global.fetch = (async () =>
+			new Response(JSON.stringify({ object: "list", data: entries }), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			})) as unknown as typeof global.fetch;
+	}
+
+	function makeWaferEntry(id: string, upstream: string, opts: { reasoning?: boolean; vision?: boolean } = {}) {
+		return {
+			id,
+			object: "model",
+			max_model_len: 100000,
+			wafer: {
+				display_name: id,
+				tier: "serverless_only",
+				provider: upstream,
+				context_length: 100000,
+				capabilities: {
+					vision: opts.vision === true,
+					tools: true,
+					reasoning: opts.reasoning === true,
+				},
+				pricing: {
+					currency: "usd",
+					input_cents_per_million: 100,
+					output_cents_per_million: 300,
+					cache_read_cents_per_million: 10,
+				},
+			},
+		};
+	}
+
+	it("picks thinkingFormat from the wafer.provider envelope per upstream", async () => {
+		mockWaferModelsResponse([
+			makeWaferEntry("GLM-fake", "zai", { reasoning: true }),
+			makeWaferEntry("Kimi-fake", "moonshotai", { reasoning: true }),
+			makeWaferEntry("qwen-fake", "qwen", { reasoning: true }),
+			makeWaferEntry("deepseek-fake", "deepseek", { reasoning: true }),
+			makeWaferEntry("mystery-fake", "future-provider", { reasoning: true }),
+			makeWaferEntry("nothink-fake", "zai", { reasoning: false }),
+		]);
+
+		const manager = createModelManager(waferServerlessModelManagerOptions({ apiKey: "wfr_test" }));
+		const { models } = await manager.refresh("online");
+
+		const byId = new Map(models.map(m => [m.id, m as Model<"openai-completions">]));
+		expect(byId.get("GLM-fake")?.compat?.thinkingFormat).toBe("zai");
+		expect(byId.get("Kimi-fake")?.compat?.thinkingFormat).toBe("zai");
+		expect(byId.get("qwen-fake")?.compat?.thinkingFormat).toBe("qwen");
+		// deepseek and unknown upstreams: thinkingFormat unset so detectOpenAICompat
+		// picks from the id pattern at request time (deepseek → "openai" effort).
+		expect(byId.get("deepseek-fake")?.compat?.thinkingFormat).toBeUndefined();
+		expect(byId.get("mystery-fake")?.compat?.thinkingFormat).toBeUndefined();
+		// Non-reasoning entries never receive a thinkingFormat hint regardless of upstream.
+		expect(byId.get("nothink-fake")?.compat?.thinkingFormat).toBeUndefined();
+		expect(byId.get("nothink-fake")?.reasoning).toBe(false);
+		// All entries keep reasoning_content as the canonical field for reasoning models.
+		for (const id of ["GLM-fake", "Kimi-fake", "qwen-fake", "deepseek-fake", "mystery-fake"]) {
+			expect(byId.get(id)?.compat?.reasoningContentField).toBe("reasoning_content");
+		}
 	});
 });

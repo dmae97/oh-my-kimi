@@ -70731,7 +70731,6 @@
 			"maxTokens": 65536,
 			"compat": {
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -70760,7 +70759,6 @@
 			"maxTokens": 65536,
 			"compat": {
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {
@@ -70894,7 +70892,6 @@
 			"maxTokens": 65536,
 			"compat": {
 				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
 				"reasoningContentField": "reasoning_content"
 			},
 			"thinking": {

@@ -1061,6 +1061,7 @@ const WAFER_MAX_TOKENS_CAP = 65536;
 interface WaferRecord {
 	context_length?: unknown;
 	tier?: unknown;
+	provider?: unknown;
 	capabilities?: { vision?: unknown; reasoning?: unknown; tools?: unknown };
 	pricing?: {
 		input_cents_per_million?: unknown;
@@ -1113,10 +1114,24 @@ function mapWaferModel(
 		maxTokens,
 	};
 	if (reasoning) {
+		// Wafer's `wafer.provider` envelope tells us which upstream backend serves
+		// the model. Each upstream accepts a different thinking-control parameter
+		// on the wire — Wafer passes the body through, so we must mirror the
+		// upstream's native shape:
+		//   - zai (GLM) and moonshotai (Kimi) → `thinking: { type: "enabled" | "disabled" }`
+		//   - qwen (Alibaba) → top-level `enable_thinking: boolean`
+		//   - deepseek → `reasoning_effort` (DeepSeek effort map; the model always
+		//     reasons when invoked, replay of `reasoning_content` is required on
+		//     tool-call turns — both handled by `detectOpenAICompat` from the id).
+		// For unknown upstreams we omit `thinkingFormat` and let the per-id
+		// detection in `detectOpenAICompat` pick a safe default.
+		const upstream = typeof wafer?.provider === "string" ? wafer.provider : undefined;
+		const thinkingFormat: "zai" | "qwen" | undefined =
+			upstream === "zai" || upstream === "moonshotai" ? "zai" : upstream === "qwen" ? "qwen" : undefined;
 		return {
 			...base,
 			compat: {
-				thinkingFormat: "zai",
+				...(thinkingFormat ? { thinkingFormat } : {}),
 				reasoningContentField: "reasoning_content",
 				supportsDeveloperRole: false,
 			},
