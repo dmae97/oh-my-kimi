@@ -236,8 +236,6 @@ export class Container implements Component {
  * - `initial`: first paint after `start()` — clear viewport, emit transcript.
  * - `sessionReplace`: caller asked for `{ clearScrollback: true }` on a forced
  *   render — clear viewport, clear scrollback (outside multiplexers).
- * - `historyRebuild`: width changed and offscreen rows changed — clear viewport
- *   and scrollback so terminal history rewraps at the new width.
  * - `viewportRepaint`: rewrite the visible viewport in place. If `appendFrom`
  *   is set, emit those tail rows as scrollback growth first so streaming
  *   output reaches terminal history before the corrected viewport is drawn.
@@ -248,7 +246,6 @@ type RenderIntent =
 	| { kind: "noop" }
 	| { kind: "initial" }
 	| { kind: "sessionReplace" }
-	| { kind: "historyRebuild" }
 	| { kind: "viewportRepaint"; appendFrom?: number }
 	| { kind: "shrink" }
 	| { kind: "diff"; firstChanged: number; lastChanged: number; appendedLines: boolean };
@@ -290,6 +287,7 @@ export class TUI extends Container {
 	// Set after a clear+full replay so the next insert-above-suffix frame does
 	// not scroll replayed live chrome (status/editor) into fresh history.
 	#suppressNextSuffixScroll = false;
+	#nativeScrollbackDirty = false;
 	#fullRedrawCount = 0;
 	#clearScrollbackOnNextRender = false;
 	#hasEverRendered = false;
@@ -625,6 +623,17 @@ export class TUI extends Container {
 
 		this.terminal.showCursor();
 		this.terminal.stop();
+	}
+
+	/**
+	 * Rebuild native terminal scrollback if live rendering deferred a history rewrite.
+	 * Callers should only invoke this at checkpoints where the user is expected to be
+	 * at the terminal bottom, such as after submitting a new prompt.
+	 */
+	refreshNativeScrollbackIfDirty(): boolean {
+		if (!this.#nativeScrollbackDirty) return false;
+		this.requestRender(true, { clearScrollback: true });
+		return true;
 	}
 
 	requestRender(force = false, options?: RenderRequestOptions): void {
@@ -1111,12 +1120,7 @@ export class TUI extends Container {
 				return;
 			case "sessionReplace":
 				this.#clearScrollbackOnNextRender = false;
-				this.#emitFullPaint(lines, width, height, cursorPos, {
-					clearViewport: true,
-					clearScrollback: !isMultiplexerSession(),
-				});
-				return;
-			case "historyRebuild":
+				this.#nativeScrollbackDirty = false;
 				this.#emitFullPaint(lines, width, height, cursorPos, {
 					clearViewport: true,
 					clearScrollback: !isMultiplexerSession(),
@@ -1149,9 +1153,10 @@ export class TUI extends Container {
 
 	/**
 	 * Map the current frame onto a single render intent. Order matters: forced
-	 * resets and session replacement short-circuit before any diff work, and
-	 * width-changed-with-offscreen edits route to {@link "historyRebuild"} so
-	 * terminal scrollback receives the new geometry.
+	 * resets and session replacement short-circuit before any diff work. Frames
+	 * that would require rewriting native scrollback mark it dirty and repaint
+	 * the viewport instead; the destructive clear+replay is deferred to an
+	 * explicit checkpoint.
 	 */
 	#planRender(
 		newLines: string[],
@@ -1177,9 +1182,9 @@ export class TUI extends Container {
 
 		// Shrink-across-viewport-boundary: if a shrink would place the new
 		// viewport above rows already committed to terminal scrollback, those
-		// rows would appear twice when the user scrolls back. A clear+replay
-		// keeps the current OMP transcript scrollable while dropping stale
-		// terminal history.
+		// rows can become stale or duplicated in native history. Preserve native
+		// scrollback for users reading it now, and defer the destructive
+		// clear+replay to the next checkpoint.
 		const naturalViewportTop = Math.max(0, newLines.length - height);
 		if (
 			diff.firstChanged !== -1 &&
@@ -1187,7 +1192,8 @@ export class TUI extends Container {
 			naturalViewportTop < this.#scrollbackHighWater &&
 			!isMultiplexerSession()
 		) {
-			return { kind: "historyRebuild" };
+			this.#nativeScrollbackDirty = true;
+			return { kind: "viewportRepaint" };
 		}
 
 		const suppressSuffixScroll = this.#suppressNextSuffixScroll;
@@ -1210,12 +1216,16 @@ export class TUI extends Container {
 			return { kind: "noop" };
 		}
 
-		// Width changes alter wrapping for the whole transcript. Offscreen
-		// edits need a history rebuild so terminal scrollback receives the
-		// new geometry; pure appends fall through to the diff path so the
-		// append handler scrolls them into scrollback correctly.
+		// Width changes alter wrapping for the whole transcript. Offscreen edits
+		// make native history stale at the old geometry; mark it dirty and repaint
+		// only the viewport so users scrolled into history are not yanked mid-stream.
+		// Pure appends fall through to the diff path so the append handler scrolls
+		// them into history correctly.
 		if (widthChanged) {
-			if (diff.firstChanged < prevViewportTop) return { kind: "historyRebuild" };
+			if (diff.firstChanged < prevViewportTop) {
+				this.#nativeScrollbackDirty = true;
+				return { kind: "viewportRepaint" };
+			}
 			const pureAppend = diff.appendedLines && diff.firstChanged === this.#previousLines.length;
 			if (!pureAppend) return { kind: "viewportRepaint" };
 		}
@@ -1340,7 +1350,7 @@ export class TUI extends Container {
 
 	/**
 	 * Clear the viewport (optionally scrollback) and emit the full transcript.
-	 * Backs `initial`, `sessionReplace`, and `historyRebuild` intents.
+	 * Backs `initial` and `sessionReplace` intents.
 	 */
 	#emitFullPaint(
 		lines: string[],
