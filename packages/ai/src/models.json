@@ -70711,6 +70711,64 @@
 		}
 	},
 	"wafer-serverless": {
+		"deepseek-v4-flash": {
+			"id": "deepseek-v4-flash",
+			"name": "DeepSeek V4 Flash",
+			"api": "openai-completions",
+			"provider": "wafer-serverless",
+			"baseUrl": "https://pass.wafer.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.14,
+				"output": 0.28,
+				"cacheRead": 0.01,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 65536,
+			"compat": {
+				"supportsDeveloperRole": false,
+				"thinkingFormat": "zai",
+				"reasoningContentField": "reasoning_content"
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"deepseek-v4-pro": {
+			"id": "deepseek-v4-pro",
+			"name": "DeepSeek V4 Pro",
+			"api": "openai-completions",
+			"provider": "wafer-serverless",
+			"baseUrl": "https://pass.wafer.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.74,
+				"output": 3.48,
+				"cacheRead": 0.02,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 65536,
+			"compat": {
+				"supportsDeveloperRole": false,
+				"thinkingFormat": "zai",
+				"reasoningContentField": "reasoning_content"
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
 		"GLM-5.1": {
 			"id": "GLM-5.1",
 			"name": "GLM-5.1",
@@ -70752,9 +70810,9 @@
 				"image"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
+				"input": 0.88,
+				"output": 3.84,
+				"cacheRead": 0.09,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
@@ -70801,18 +70859,48 @@
 			"baseUrl": "https://pass.wafer.ai/v1",
 			"reasoning": false,
 			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.15,
+				"output": 1,
+				"cacheRead": 0.02,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 65536,
+			"compat": {
+				"supportsDeveloperRole": false
+			}
+		},
+		"qwen3.7-max": {
+			"id": "qwen3.7-max",
+			"name": "Qwen3.7-Max",
+			"api": "openai-completions",
+			"provider": "wafer-serverless",
+			"baseUrl": "https://pass.wafer.ai/v1",
+			"reasoning": true,
+			"input": [
 				"text"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
+				"input": 5,
+				"output": 15,
+				"cacheRead": 0.5,
 				"cacheWrite": 0
 			},
-			"contextWindow": 32768,
-			"maxTokens": 32768,
+			"contextWindow": 256000,
+			"maxTokens": 65536,
 			"compat": {
-				"supportsDeveloperRole": false
+				"supportsDeveloperRole": false,
+				"thinkingFormat": "zai",
+				"reasoningContentField": "reasoning_content"
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
 			}
 		}
 	},
