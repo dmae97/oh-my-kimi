@@ -327,14 +327,20 @@ function resolveLegacyPiSpecifier(args: { path: string; importer: string }): { p
 		return { path: resolveCanonicalPiSpecifier(remappedSpecifier) };
 	} catch {
 		// Fallback for compiled binary mode: the bundled packages live inside
-		// /$bunfs/root and aren't reachable by filesystem resolution. Try the
-		// canonical specifier against the importing file's directory, which
-		// resolves to the plugin's installed @oh-my-pi peer dependency.
+		// /$bunfs/root and aren't reachable by filesystem resolution. Prefer the
+		// canonical specifier against the importing file's directory when the
+		// plugin installed @oh-my-pi peer deps, then try the original legacy
+		// specifier for plugins that still vendor only @mariozechner or
+		// @earendil-works peer deps.
 		const importerDir = path.dirname(args.importer);
 		try {
 			return { path: Bun.resolveSync(remappedSpecifier, importerDir) };
 		} catch {
-			return undefined;
+			try {
+				return { path: Bun.resolveSync(args.path, importerDir) };
+			} catch {
+				return undefined;
+			}
 		}
 	}
 }

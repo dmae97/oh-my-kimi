@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as url from "node:url";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "../../src/extensibility/plugins/legacy-pi-compat";
 import { Type as TypeBoxShimType } from "../../src/extensibility/typebox";
 
@@ -117,5 +118,37 @@ describe("legacy pi package root remaps (issue #1474)", () => {
 
 		const loaded = (await loadLegacyPiModule(entry)) as { loadedVersion: string };
 		expect(loaded.loadedVersion).toMatch(/^\d+\.\d+\.\d+/);
+	});
+
+	it("falls back to legacy-scoped subpath peers for direct plugin imports", async () => {
+		const realResolveSync = Bun.resolveSync.bind(Bun);
+		vi.spyOn(Bun, "resolveSync").mockImplementation((specifier: string, from: string) => {
+			if (specifier === "@oh-my-pi/pi-ai/utils/oauth") {
+				throw new Error(`canonical peer unavailable from ${from}`);
+			}
+			return realResolveSync(specifier, from);
+		});
+
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-legacy-direct-subpath-"));
+		tempRoots.push(dir);
+		const packageDir = path.join(dir, "node_modules", "@mariozechner", "pi-ai");
+		await fs.mkdir(packageDir, { recursive: true });
+		await fs.writeFile(
+			path.join(packageDir, "package.json"),
+			JSON.stringify({ type: "module", exports: { "./oauth": "./oauth.js" } }),
+			"utf8",
+		);
+		await fs.writeFile(path.join(packageDir, "oauth.js"), 'export const marker = "legacy-oauth";', "utf8");
+		const entry = path.join(dir, "index.ts");
+		await fs.writeFile(
+			entry,
+			['import { marker } from "@mariozechner/pi-ai/oauth";', "export const loadedMarker = marker;"].join("\n"),
+			"utf8",
+		);
+
+		const loaded = (await import(`${url.pathToFileURL(entry).href}?nonce=${Date.now()}`)) as {
+			loadedMarker: string;
+		};
+		expect(loaded.loadedMarker).toBe("legacy-oauth");
 	});
 });
