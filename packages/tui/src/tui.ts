@@ -631,25 +631,17 @@ export class TUI extends Container {
 	 * at the terminal bottom, such as after submitting a new prompt.
 	 */
 	refreshNativeScrollbackIfDirty(): boolean {
-		if (!this.#nativeScrollbackDirty) return false;
-		this.requestRender(true, { clearScrollback: true });
+		if (!this.#nativeScrollbackDirty || this.#stopped) return false;
+		this.#prepareForcedRender(true);
+		this.#renderRequested = false;
+		this.#lastRenderAt = performance.now();
+		this.#doRender();
 		return true;
 	}
 
 	requestRender(force = false, options?: RenderRequestOptions): void {
 		if (force) {
-			this.#clearScrollbackOnNextRender ||= options?.clearScrollback === true;
-			this.#previousLines = [];
-			this.#previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
-			this.#previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
-			this.#cursorRow = 0;
-			this.#hardwareCursorRow = 0;
-			this.#viewportTopRow = 0;
-			this.#maxLinesRendered = 0;
-			if (this.#renderTimer) {
-				clearTimeout(this.#renderTimer);
-				this.#renderTimer = undefined;
-			}
+			this.#prepareForcedRender(options?.clearScrollback === true);
 			this.#renderRequested = true;
 			process.nextTick(() => {
 				if (this.#stopped || !this.#renderRequested) {
@@ -664,6 +656,21 @@ export class TUI extends Container {
 		if (this.#renderRequested) return;
 		this.#renderRequested = true;
 		process.nextTick(() => this.#scheduleRender());
+	}
+
+	#prepareForcedRender(clearScrollback: boolean): void {
+		this.#clearScrollbackOnNextRender ||= clearScrollback;
+		this.#previousLines = [];
+		this.#previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
+		this.#previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
+		this.#cursorRow = 0;
+		this.#hardwareCursorRow = 0;
+		this.#viewportTopRow = 0;
+		this.#maxLinesRendered = 0;
+		if (this.#renderTimer) {
+			clearTimeout(this.#renderTimer);
+			this.#renderTimer = undefined;
+		}
 	}
 
 	#scheduleRender(): void {

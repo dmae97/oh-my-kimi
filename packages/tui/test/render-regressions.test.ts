@@ -902,6 +902,41 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("refreshes dirty native scrollback before transient checkpoint rows render", async () => {
+			const term = new VirtualTerminal(32, 5);
+			const tui = new TUI(term);
+			const chat = new MutableLinesComponent(rows("line-", 12));
+			const status = new MutableLinesComponent([]);
+			const footer = new MutableLinesComponent(["FOOTER"]);
+			tui.addChild(chat);
+			tui.addChild(status);
+			tui.addChild(footer);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				chat.setLines(rows("line-", 8));
+				tui.requestRender();
+				await settle(term);
+				term.scrollLines(999);
+
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(true);
+				status.setLines(["LOADER"]);
+				tui.requestRender();
+				await settle(term);
+
+				status.setLines([]);
+				tui.requestRender();
+				await settle(term);
+
+				expect(term.getScrollBuffer().join("\n")).not.toContain("LOADER");
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("tail-cell mutation is cleaned up at the next native scrollback checkpoint", async () => {
 			// Repro for the old scrollback-duplication bug: once a header
 			// (e.g. the welcome screen) has scrolled into terminal history, the
