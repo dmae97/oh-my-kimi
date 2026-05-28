@@ -44,6 +44,7 @@ Single-shot result.
   - Archive write: `Successfully wrote <bytes> bytes to <relative-archive-path>:<entry-path>`.
   - SQLite write: one of `Inserted row into <table>`, `Updated row '<key>' in <table>`, `No row updated ...`, `Deleted row ...`, `No row deleted ...`.
 - If hashline prefixes were copied from `read` output and stripped first, the first text block gets an extra note.
+- In hashline display mode, plain file writes (including ACP bridge writes) and conflict resolutions prepend a fresh `¶<relative-path>#TAG` header so the next `edit` has a current snapshot tag without an extra `read`. Bulk conflict resolutions append a `Snapshots:` block listing one header per successfully written file.
 - Plain file writes may also return `details.diagnostics` plus `details.meta.diagnostics` when LSP diagnostics-on-write is enabled.
 - SQLite writes use `toolResult(...).sourcePath(...)`, so `details.meta.sourcePath` points at the database file.
 - Archive writes return empty `details`.
