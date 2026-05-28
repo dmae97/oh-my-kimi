@@ -8,9 +8,9 @@
 
 import { describe, expect, it } from "bun:test";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { SQL } from "bun";
-import { SqlSessionStorage } from "@oh-my-pi/pi-coding-agent/session/sql-session-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { SqlSessionStorage } from "@oh-my-pi/pi-coding-agent/session/sql-session-storage";
+import { SQL } from "bun";
 
 function fakeUsage(input: number, output: number): Usage {
 	return {

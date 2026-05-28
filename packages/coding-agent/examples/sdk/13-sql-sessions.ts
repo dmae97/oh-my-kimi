@@ -17,8 +17,9 @@
  * `BlobStore` keep writing to `~/.omp/agent/...`. Reach for object storage
  * if you need those off-host too.
  */
-import { SQL } from "bun";
+
 import { createAgentSession, SessionManager, SqlSessionStorage } from "@oh-my-pi/pi-coding-agent";
+import { SQL } from "bun";
 
 // Pick one — Bun.SQL auto-detects the dialect from the URL scheme.
 //

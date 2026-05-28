@@ -1063,21 +1063,29 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 
 			const collectedLines = streamResult.lines;
+			// Column truncation is display-only. The snapshot (sparseSnapshotEntries)
+			// MUST hold on-disk content so later edits can verify line content against
+			// the live file. Stamping ellipsis-truncated lines into the snapshot makes
+			// every long-line file uneditable on the next edit attempt.
+			let displayLines: string[] = collectedLines;
 			if (!rawSelector && maxColumns > 0) {
+				let cloned: string[] | undefined;
 				for (let i = 0; i < collectedLines.length; i++) {
 					const { text, wasTruncated } = truncateLine(collectedLines[i], maxColumns);
 					if (wasTruncated) {
-						collectedLines[i] = text;
+						if (!cloned) cloned = collectedLines.slice();
+						cloned[i] = text;
 						columnTruncated = maxColumns;
 					}
 				}
+				if (cloned) displayLines = cloned;
 			}
 
 			for (let index = 0; index < collectedLines.length; index++) {
 				sparseSnapshotEntries.push([range.startLine + index, collectedLines[index]]);
 			}
 
-			const blockText = collectedLines.join("\n");
+			const blockText = displayLines.join("\n");
 			blocks.push(formatTextWithMode(blockText, range.startLine, shouldAddHashLines, shouldAddLineNumbers));
 		}
 
@@ -1854,17 +1862,26 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// view — column truncation surfaces separately via `.limits()`.
 					const rawSelector = isRawSelector(parsed);
 					const maxColumns = resolveOutputMaxColumns(this.session.settings);
+					// Column truncation is display-only. `collectedLines` MUST stay
+					// byte-for-byte with the on-disk content so the snapshot recorded
+					// below can be verified against the live file. Mutating it with
+					// ellipsis-truncated text made every long-line file uneditable on
+					// the next edit attempt.
+					let displayLines: string[] = collectedLines;
 					if (!rawSelector && maxColumns > 0) {
+						let cloned: string[] | undefined;
 						for (let i = 0; i < collectedLines.length; i++) {
 							const { text, wasTruncated } = truncateLine(collectedLines[i], maxColumns);
 							if (wasTruncated) {
-								collectedLines[i] = text;
+								if (!cloned) cloned = collectedLines.slice();
+								cloned[i] = text;
 								columnTruncated = maxColumns;
 							}
 						}
+						if (cloned) displayLines = cloned;
 					}
 
-					const selectedContent = collectedLines.join("\n");
+					const selectedContent = displayLines.join("\n");
 					const userLimitedLines = collectedLines.length;
 
 					const totalSelectedLines = totalFileLines - startLine;
@@ -1890,9 +1907,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					if (shouldAddHashLines && collectedLines.length > 0 && !firstLineExceedsLimit) {
 						const store = getFileSnapshotStore(this.session);
 						const tag =
-							offset === undefined && limit === undefined && !wasTruncated && columnTruncated === 0
+							offset === undefined && limit === undefined && !wasTruncated
 								? (() => {
-										const normalized = normalizeToLF(selectedContent);
+										const normalized = normalizeToLF(collectedLines.join("\n"));
 										return store.recordContiguous(absolutePath, 1, normalized.split("\n"), {
 											fullText: normalized,
 										});
