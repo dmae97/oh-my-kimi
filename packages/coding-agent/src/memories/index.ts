@@ -744,7 +744,12 @@ async function runConsolidationModel(options: {
 		{
 			messages: [{ role: "user", content: [{ type: "text", text: input }], timestamp: Date.now() }],
 		},
-		{ apiKey, metadata: options.metadata, maxTokens: 8192, reasoning: clampThinkingLevelForModel(model, Effort.Medium) },
+		{
+			apiKey,
+			metadata: options.metadata,
+			maxTokens: 8192,
+			reasoning: clampThinkingLevelForModel(model, Effort.Medium),
+		},
 	);
 	if (response.stopReason === "error") {
 		throw new Error(response.errorMessage || "phase2 model error");
