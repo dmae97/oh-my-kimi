@@ -213,9 +213,11 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 				? "zai"
 				: provider === "openrouter" || baseUrl.includes("openrouter.ai")
 					? "openrouter"
-					: isAlibaba || isQwen
-						? "qwen"
-						: "openai",
+					: isKimiModel
+						? "zai"
+						: isAlibaba || isQwen
+							? "qwen"
+							: "openai",
 		reasoningContentField: "reasoning_content",
 		// Backends that 400 follow-up requests when prior assistant tool-call turns lack `reasoning_content`:
 		//   - Kimi: documented invariant on its native API.
