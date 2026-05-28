@@ -997,36 +997,39 @@ function buildParams(
 	toolStrictModeOverride?: ToolStrictModeOverride,
 ): { params: OpenAICompletionsParams; toolStrictMode: AppliedToolStrictMode } {
 	const compat = getCompat(model, resolvedBaseUrl);
-	// Opencode Zen's Kimi gateway gates `reasoning_content` on the request's
-	// thinking state: it 400s with `Extra inputs are not permitted` when
-	// thinking is off but the field is supplied (#1071), and 400s with
-	// `thinking is enabled but reasoning_content is missing in assistant tool
-	// call message at index N` (#1484) when thinking is on and the field is
-	// absent. `detectOpenAICompat` keeps `requiresReasoningContentForToolCalls`
-	// off for opencode kimi so the first case never fires; reactivate it per
-	// request when this turn is in thinking mode so prior tool-call turns
-	// replay reasoning_content. Forced-tool turns are excluded because the
-	// later `disableReasoningOnForcedToolChoice` guard at the bottom of
-	// `buildParams` strips thinking from the wire body for Kimi — keeping the
-	// replay on under those conditions would resurrect the #1071 failure.
+	// Opencode Zen's gateway (https://opencode.ai/zen/go/v1) gates
+	// `reasoning_content` on the request's thinking state for every model it
+	// fronts (Kimi K2.x, DeepSeek V4, GLM-5.x, Qwen3.x, MiMo, MiniMax, …): it
+	// 400s with `Extra inputs are not permitted` when thinking is off but the
+	// field is supplied (#1071), and 400s with `thinking is enabled but
+	// reasoning_content is missing in assistant tool call message at index N`
+	// (#1484) when thinking is on and the field is absent. `detectOpenAICompat`
+	// only set `requiresReasoningContentForToolCalls` for the DeepSeek family
+	// (and previously for Kimi until #1071 carved out opencode); reactivate it
+	// per request for every opencode model whenever this turn is in thinking
+	// mode so prior tool-call turns replay reasoning_content. Forced-tool
+	// turns are excluded because the later `disableReasoningOnForcedToolChoice`
+	// guard at the bottom of `buildParams` strips thinking from the wire body
+	// for Kimi-style models — keeping the replay on under those conditions
+	// would resurrect the #1071 failure.
 	//
 	// `allowsSyntheticReasoningContentForToolCalls` is forced to `false` on
 	// the same path: the gateway specifically requires `reasoning_content`,
 	// and the default synthetic-friendly behavior would echo whichever field
-	// the upstream streamed (e.g. `reasoning` for many opencode Kimi turns),
+	// the upstream streamed (e.g. `reasoning` for many opencode turns),
 	// landing the replay in the wrong key and re-triggering the 400.
-	const isKimiModelId = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
 	const isOpenCodeProvider = model.provider === "opencode-go" || model.provider === "opencode-zen";
 	const thinkingEnabledForRequest =
 		Boolean(options?.reasoning) && !options?.disableReasoning && Boolean(model.reasoning);
 	const forcedToolChoiceSuppressesThinking =
 		compat.disableReasoningOnForcedToolChoice &&
 		isForcedToolChoice(mapToOpenAICompletionsToolChoice(options?.toolChoice));
-	if (isKimiModelId && isOpenCodeProvider && thinkingEnabledForRequest && !forcedToolChoiceSuppressesThinking) {
+	if (isOpenCodeProvider && thinkingEnabledForRequest && !forcedToolChoiceSuppressesThinking) {
 		compat.requiresReasoningContentForToolCalls = true;
 		compat.allowsSyntheticReasoningContentForToolCalls = false;
 		compat.reasoningContentField = "reasoning_content";
 	}
+	const isKimiModelId = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
 	const messages = convertMessages(model, context, compat);
 	maybeAddOpenRouterAnthropicCacheControl(model, messages);
 	const supportsReasoningParams = model.provider !== "github-copilot";

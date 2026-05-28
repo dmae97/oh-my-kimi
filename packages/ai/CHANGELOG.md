@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed OpenCode Zen Kimi `400 thinking is enabled but reasoning_content is missing in assistant tool call message` by reactivating `requiresReasoningContentForToolCalls` for `opencode-go`/`opencode-zen` Kimi requests whose runtime options enable thinking, while the static compat default still omits the field for thinking-disabled turns to preserve the `Extra inputs are not permitted` guard from #1071. The same gateway invariant also affected `opencode-go/deepseek-v4-flash` and `deepseek-v4-pro`, which now coerce the streamed `reasoning` signature onto `reasoning_content` instead of writing both fields. ([#1484](https://github.com/can1357/oh-my-pi/issues/1484))
+- Fixed OpenCode Zen `400 thinking is enabled but reasoning_content is missing in assistant tool call message` for every model behind `opencode-go`/`opencode-zen` (Kimi K2.x, DeepSeek V4 Pro/Flash, GLM-5.x, Qwen3.x, MiMo, MiniMax) by reactivating `requiresReasoningContentForToolCalls` and pinning the wire field to `reasoning_content` for any opencode request in thinking mode. The static compat default still omits the field for thinking-disabled turns to preserve the `Extra inputs are not permitted` guard from #1071; forced-tool turns also stay off because the existing `disableReasoningOnForcedToolChoice` guard strips thinking from the wire body. ([#1484](https://github.com/can1357/oh-my-pi/issues/1484))
 
 ## [15.5.8] - 2026-05-28
 

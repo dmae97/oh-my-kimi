@@ -943,6 +943,97 @@ describe("kimi model detection via detectCompat", () => {
 		expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
 	});
 
+	// #1484 follow-up: the Zen gateway invariant applies to every opencode-go
+	// model (GLM, Qwen, MiMo, MiniMax, Kimi, DeepSeek). Verify a non-Kimi
+	// non-DeepSeek opencode model also replays reasoning_content when thinking
+	// is enabled, and stays silent when thinking is disabled.
+	it.each([
+		{ id: "glm-5.1", reasoning: "high" as const, expectReplay: true },
+		{ id: "glm-5.1", reasoning: undefined, expectReplay: false },
+		{ id: "qwen3.7-max", reasoning: "high" as const, expectReplay: true },
+		{ id: "mimo-v2-pro", reasoning: "high" as const, expectReplay: true },
+	])(
+		"opencode-go/%s reasoning=%s → replay=%s",
+		async ({ id, reasoning, expectReplay }) => {
+			const model: Model<"openai-completions"> = {
+				...getBundledModel("openai", "gpt-4o-mini"),
+				api: "openai-completions",
+				provider: "opencode-go",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+				id,
+				reasoning: true,
+			};
+			const priorAssistant: AssistantMessage = {
+				role: "assistant",
+				content: [
+					{
+						type: "thinking",
+						thinking: "Plan before acting.",
+						thinkingSignature: "reasoning",
+					},
+					{
+						type: "toolCall",
+						id: "call_abc123",
+						name: "read",
+						arguments: { path: "README.md" },
+					},
+				],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			};
+
+			const { promise, resolve } = Promise.withResolvers<unknown>();
+			global.fetch = createMockFetch(["[DONE]"]);
+			streamOpenAICompletions(
+				model,
+				{
+					messages: [
+						{ role: "user", content: "Summarize the README", timestamp: Date.now() },
+						priorAssistant,
+						{
+							role: "toolResult",
+							toolCallId: "call_abc123",
+							toolName: "read",
+							content: [{ type: "text", text: "# Hello\n" }],
+							isError: false,
+							timestamp: Date.now(),
+						},
+					],
+				},
+				{
+					apiKey: "test-key",
+					reasoning,
+					signal: createAbortedSignal(),
+					onPayload: payload => resolve(payload),
+				},
+			);
+
+			const payload = (await promise) as { messages: Array<Record<string, unknown>> };
+			const assistant = payload.messages.find(m => m.role === "assistant");
+			expect(assistant).toBeDefined();
+			if (expectReplay) {
+				expect(Reflect.get(assistant as object, "reasoning_content")).toBe("Plan before acting.");
+				// The stale streamed `reasoning` key must never land in the wire body.
+				expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
+			} else {
+				expect(Reflect.get(assistant as object, "reasoning_content")).toBeUndefined();
+				expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
+				expect(Reflect.get(assistant as object, "reasoning_text")).toBeUndefined();
+			}
+		},
+	);
+
 	it("injects reasoning_content placeholder when kimi-on-moonshot has tool calls without reasoning field", () => {
 		const model = kimiMoonshotModel("kimi-k2.5");
 		const compat = detectCompat(model);
