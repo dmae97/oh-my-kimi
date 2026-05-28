@@ -1038,6 +1038,163 @@ export function firepassModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 7.7 Wafer (Pass + Serverless)
+// ---------------------------------------------------------------------------
+
+export interface WaferModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+const WAFER_DEFAULT_BASE_URL = "https://pass.wafer.ai/v1";
+const WAFER_MAX_TOKENS_CAP = 65536;
+
+/**
+ * Shared mapper for Wafer's `/v1/models` records.
+ *
+ * Wafer wraps each entry with a `wafer` envelope describing tier, capabilities,
+ * and cents-per-million pricing. The mapper folds that metadata into the
+ * canonical `Model<"openai-completions">` shape and applies zai-family thinking
+ * compat when the entry advertises reasoning support (GLM-family on the Pass
+ * SKU). Cents-per-million → dollars-per-million via /100.
+ */
+interface WaferRecord {
+	context_length?: unknown;
+	tier?: unknown;
+	provider?: unknown;
+	capabilities?: { vision?: unknown; reasoning?: unknown; tools?: unknown };
+	pricing?: {
+		input_cents_per_million?: unknown;
+		output_cents_per_million?: unknown;
+		cache_read_cents_per_million?: unknown;
+	};
+	display_name?: unknown;
+}
+
+function readWaferRecord(entry: OpenAICompatibleModelRecord): WaferRecord | undefined {
+	const raw = (entry as { wafer?: unknown }).wafer;
+	return raw && typeof raw === "object" ? (raw as WaferRecord) : undefined;
+}
+
+function mapWaferModel(
+	providerId: "wafer-pass" | "wafer-serverless",
+	baseUrl: string,
+	entry: OpenAICompatibleModelRecord,
+	defaults: Model<"openai-completions">,
+): Model<"openai-completions"> {
+	const wafer = readWaferRecord(entry);
+	const capabilities = wafer?.capabilities ?? {};
+	const reasoning = capabilities.reasoning === true;
+	const vision = capabilities.vision === true;
+	const contextWindow = toPositiveNumber(
+		wafer?.context_length,
+		toPositiveNumber((entry as { max_model_len?: unknown }).max_model_len, defaults.contextWindow),
+	);
+	const maxTokens = Math.min(contextWindow, WAFER_MAX_TOKENS_CAP);
+	const pricing = wafer?.pricing ?? {};
+	// Wafer's `/v1/models` exposes pricing through `*_cents_per_million` fields,
+	// but the values are an internal wholesale unit, not literal cents — across
+	// every published Serverless model on wafer.ai the user-facing rate equals
+	// `cents × 125 / 10000` (i.e. wholesale × 1.25 / 100; GLM-5.1's `120` →
+	// $1.50/M, Kimi-K2.6's `88` → $1.10/M, etc.). The multiply-first form keeps
+	// the result a finite dyadic for every observed value.
+	// For the Pass SKU the per-token rate is bundled in the flat-rate
+	// subscription, so we follow the convention shared with
+	// `kimi-code`/`firepass`/`alibaba-coding-plan` and seed every Pass model with
+	// `cost: 0` regardless of what the upstream envelope says.
+	const isPassSku = providerId === "wafer-pass";
+	const cost = isPassSku
+		? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+		: {
+				input: (toPositiveNumber(pricing.input_cents_per_million, 0) * 125) / 10000,
+				output: (toPositiveNumber(pricing.output_cents_per_million, 0) * 125) / 10000,
+				cacheRead: (toPositiveNumber(pricing.cache_read_cents_per_million, 0) * 125) / 10000,
+				cacheWrite: 0,
+			};
+	const name = toModelName(wafer?.display_name, defaults.name);
+	const base: Model<"openai-completions"> = {
+		...defaults,
+		id: defaults.id,
+		name,
+		api: "openai-completions",
+		provider: providerId,
+		baseUrl,
+		reasoning,
+		input: vision ? (["text", "image"] as const) : ["text"],
+		cost,
+		contextWindow,
+		maxTokens,
+	};
+	if (reasoning) {
+		// Wafer's `wafer.provider` envelope tells us which upstream backend serves
+		// the model. Each upstream accepts a different thinking-control parameter
+		// on the wire — Wafer passes the body through, so we must mirror the
+		// upstream's native shape:
+		//   - zai (GLM) and moonshotai (Kimi) → `thinking: { type: "enabled" | "disabled" }`
+		//   - qwen (Alibaba) → top-level `enable_thinking: boolean`
+		//   - deepseek → `reasoning_effort` (DeepSeek effort map; the model always
+		//     reasons when invoked, replay of `reasoning_content` is required on
+		//     tool-call turns — both handled by `detectOpenAICompat` from the id).
+		// For unknown upstreams we omit `thinkingFormat` and let the per-id
+		// detection in `detectOpenAICompat` pick a safe default.
+		const upstream = typeof wafer?.provider === "string" ? wafer.provider : undefined;
+		const thinkingFormat: "zai" | "qwen" | undefined =
+			upstream === "zai" || upstream === "moonshotai" ? "zai" : upstream === "qwen" ? "qwen" : undefined;
+		return {
+			...base,
+			compat: {
+				...(thinkingFormat ? { thinkingFormat } : {}),
+				reasoningContentField: "reasoning_content",
+				supportsDeveloperRole: false,
+			},
+		};
+	}
+	return {
+		...base,
+		compat: { supportsDeveloperRole: false },
+	};
+}
+
+function createWaferOptions(
+	providerId: "wafer-pass" | "wafer-serverless",
+	config: WaferModelManagerConfig | undefined,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? WAFER_DEFAULT_BASE_URL;
+	const passOnly = providerId === "wafer-pass";
+	return {
+		providerId,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: providerId,
+					baseUrl,
+					apiKey,
+					filterModel: entry => {
+						if (!passOnly) return true;
+						const wafer = readWaferRecord(entry);
+						return wafer?.tier === "pass_included";
+					},
+					mapModel: (entry, defaults) => mapWaferModel(providerId, baseUrl, entry, defaults),
+				}),
+		}),
+	};
+}
+
+export function waferPassModelManagerOptions(
+	config?: WaferModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createWaferOptions("wafer-pass", config);
+}
+
+export function waferServerlessModelManagerOptions(
+	config?: WaferModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createWaferOptions("wafer-serverless", config);
+}
+
+// ---------------------------------------------------------------------------
 // 7. Mistral
 // ---------------------------------------------------------------------------
 

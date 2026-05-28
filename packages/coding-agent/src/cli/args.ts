@@ -247,6 +247,8 @@ export function getExtraHelpText(): string {
   OPENCODE_API_KEY           - OpenCode Zen/OpenCode Go models
   CURSOR_ACCESS_TOKEN        - Cursor AI models
   AI_GATEWAY_API_KEY         - Vercel AI Gateway
+  WAFER_PASS_API_KEY         - Wafer Pass (flat-rate subscription; GLM-5.1, Qwen3.5)
+  WAFER_SERVERLESS_API_KEY   - Wafer Serverless (pay-as-you-go)
 
   ${chalk.dim("# Cloud Providers")}
   AWS_PROFILE                - AWS Bedrock (or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY)

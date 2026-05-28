@@ -39,6 +39,8 @@ import {
 	veniceModelManagerOptions,
 	vercelAiGatewayModelManagerOptions,
 	vllmModelManagerOptions,
+	waferPassModelManagerOptions,
+	waferServerlessModelManagerOptions,
 	xaiModelManagerOptions,
 	xaiOAuthModelManagerOptions,
 	xiaomiModelManagerOptions,
@@ -169,6 +171,18 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 	// models.json would permanently drop the model from the catalog with no
 	// automated mechanism to restore it.
 	descriptor("firepass", "kimi-k2.6-turbo", config => firepassModelManagerOptions(config)),
+	catalogDescriptor(
+		"wafer-pass",
+		"GLM-5.1",
+		config => waferPassModelManagerOptions(config),
+		catalog("Wafer Pass", ["WAFER_PASS_API_KEY"], { oauthProvider: "wafer-pass" }),
+	),
+	catalogDescriptor(
+		"wafer-serverless",
+		"GLM-5.1",
+		config => waferServerlessModelManagerOptions(config),
+		catalog("Wafer Serverless", ["WAFER_SERVERLESS_API_KEY"], { oauthProvider: "wafer-serverless" }),
+	),
 	descriptor("xai", "grok-4-fast-non-reasoning", config => xaiModelManagerOptions(config)),
 	catalogDescriptor(
 		"xai-oauth",

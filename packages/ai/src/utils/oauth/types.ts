@@ -48,6 +48,8 @@ export type OAuthProvider =
 	| "together"
 	| "venice"
 	| "vercel-ai-gateway"
+	| "wafer-pass"
+	| "wafer-serverless"
 	| "vllm"
 	| "xai-oauth"
 	| "xiaomi"
