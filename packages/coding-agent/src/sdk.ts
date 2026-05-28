@@ -10,6 +10,7 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import {
 	type CredentialDisabledEvent,
+	isUsageLimitError,
 	type Message,
 	type Model,
 	type SimpleStreamOptions,
@@ -23,6 +24,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import {
 	$env,
 	$flag,
+	extractRetryHint,
 	getAgentDbPath,
 	getAgentDir,
 	getProjectDir,
@@ -1885,13 +1887,36 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					...streamOptions,
 					openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
 					onAuthError: async (provider, oldKey, error) => {
+						const message = error instanceof Error ? error.message : String(error);
+						// streamSimple invokes this for both 401 auth failures AND
+						// rotatable usage-limit errors (Codex usage_limit_reached,
+						// Anthropic usage_limit_reached, etc.). The two need
+						// different storage actions: a real 401 means the credential
+						// is bad and should be marked suspect; a usage limit just
+						// means this account is parked until reset and should be
+						// temporarily blocked so a sibling can pick the request up.
+						if (isUsageLimitError(message)) {
+							const retryAfterMs = extractRetryHint(undefined, message);
+							const switched = await modelRegistry.authStorage.markUsageLimitReached(provider, agent.sessionId, {
+								retryAfterMs,
+								signal: streamOptions?.signal,
+							});
+							logger.debug("Retrying provider request after usage-limit block", {
+								provider,
+								switched,
+								retryAfterMs,
+								error: message,
+							});
+							if (!switched) return undefined;
+							return modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
+						}
 						await modelRegistry.authStorage.invalidateCredentialMatching(provider, oldKey, {
 							signal: streamOptions?.signal,
 							sessionId: agent.sessionId,
 						});
 						logger.debug("Retrying provider request after credential invalidation", {
 							provider,
-							error: error instanceof Error ? error.message : String(error),
+							error: message,
 						});
 						return modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
 					},

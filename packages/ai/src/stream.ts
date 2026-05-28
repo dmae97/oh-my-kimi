@@ -45,6 +45,7 @@ import {
 } from "./providers/register-builtins";
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
 import { streamXAIResponses } from "./providers/xai-responses";
+import { isUsageLimitError } from "./rate-limit-utils";
 import type {
 	Api,
 	AssistantMessage,
@@ -318,6 +319,18 @@ function extractStatusFromAssistantError(message: AssistantMessage): number | un
 	return extractHttpStatusFromError({ message: message.errorMessage });
 }
 
+function isRetryableUpstreamError(error: unknown, status: number | undefined, message: string | undefined): boolean {
+	// 401 means the credential is bad. Usage-limit phrasing (Codex's
+	// "You have hit your ChatGPT usage limit", Anthropic's "usage_limit_reached",
+	// Google's "resource_exhausted") means this account is parked but a
+	// sibling credential can usually pick the request up. Both are
+	// rotatable via `onAuthError` — the auth-gateway maps the former to
+	// `invalidateCredentialMatching` and the latter to `markUsageLimitReached`.
+	if (status === 401) return true;
+	void error;
+	return !!message && isUsageLimitError(message);
+}
+
 function createAssistantAuthError(message: AssistantMessage): Error & { status?: number } {
 	const error: Error & { status?: number } = new Error(message.errorMessage ?? "Provider authentication failed");
 	const status = extractStatusFromAssistantError(message);
@@ -359,7 +372,11 @@ export function streamSimple<TApi extends Api>(
 						!emittedReplayUnsafeEvent &&
 						captureAuthFailure &&
 						event.type === "error" &&
-						extractStatusFromAssistantError(event.error) === 401
+						isRetryableUpstreamError(
+							event.error,
+							extractStatusFromAssistantError(event.error),
+							event.error.errorMessage,
+						)
 					) {
 						return { error: createAssistantAuthError(event.error), bufferedEvents, terminalEvent: event };
 					}
@@ -371,7 +388,15 @@ export function streamSimple<TApi extends Api>(
 				flushBuffered();
 				if (!outer.done) outer.end(await inner.result());
 			} catch (error) {
-				if (!emittedReplayUnsafeEvent && captureAuthFailure && extractHttpStatusFromError(error) === 401) {
+				if (
+					!emittedReplayUnsafeEvent &&
+					captureAuthFailure &&
+					isRetryableUpstreamError(
+						error,
+						extractHttpStatusFromError(error),
+						error instanceof Error ? error.message : undefined,
+					)
+				) {
 					return { error, bufferedEvents };
 				}
 				flushBuffered();

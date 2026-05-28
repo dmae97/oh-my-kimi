@@ -1,12 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `CheckCredentialsOptions.completionProbe` (and `completionTimeoutMs`) so `AuthStorage.checkCredentials` can additionally exercise each credential against the provider's chat-completion endpoint after refresh-on-expiry. Result lands on `CredentialHealthResult.completion` ({ok, reason?, modelId?, latencyMs?}) without disturbing the usage `ok` field. Public types: `CompletionProbe`, `CompletionProbeInput`, `CompletionProbeCredential`, `CredentialCompletionResult`. The probe is invoked even when no `UsageProvider` is registered for the row, and is skipped when OAuth refresh fails (the stale bytes would only mask the upstream failure).
 
 ### Changed
 
+- Changed auth-gateway credential resolution to use per-conversation `promptCacheKey`/`sessionId` when calling `AuthStorage.getApiKey`, so repeated turns can keep the same credential until it becomes unavailable
+- Changed auth-gateway and pi-native request handling to align `sessionId` with prompt/context identity before credential lookup
 - Changed Anthropic prompt preparation to downscale image blocks over 2000px when a request includes 20+ images, reducing oversized payloads automatically
 - Changed OpenAI chat request parsing to accept `name` on `tool` messages and fall back to the matching assistant `tool_calls` name, so parsed tool results now carry a proper tool name when the wire omits it
 - Changed `checkCredentials` to skip running `completionProbe` when OAuth refresh fails, so stale bearer tokens are never probed and the refresh failure remains the returned `reason`
@@ -15,6 +18,9 @@
 
 ### Fixed
 
+- Fixed auth-gateway to classify usage-limit messages such as `usage_limit_reached`, `resource_exhausted`, and Codex-style `Try again in ~X min` text as 429 `rate_limit_error` responses
+- Fixed auth-gateway usage-limit handling to honor parsed retry hints and switch to a sibling credential via `markUsageLimitReached` instead of invalidating the rate-limited credential
+- Fixed `streamSimple` to retry on usage-limit errors (including message-only error events) before any content is emitted, so `onAuthError` can rotate credentials automatically
 - Fixed auth-gateway error classification to extract embedded status codes and use word-boundary matching, so `GenerateContentRequest` and similar messages are no longer misreported as rate-limit errors
 - Fixed `checkCredentials` to handle `completionProbe` exceptions by recording the failure in `CredentialHealthResult.completion.reason` while still returning the usage probe result
 
