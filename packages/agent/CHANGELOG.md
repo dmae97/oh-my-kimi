@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.5.10] - 2026-05-28
+
 ### Fixed
 
 - Fixed compaction summarizer throws losing the provider's HTTP status. `generateSummary`, `generateHandoff`, `generateShortSummary`, and `generateTurnPrefixSummary` now route their `stopReason === "error"` throws through a `createSummarizationError` helper that copies `AssistantMessage.errorStatus` onto the thrown `Error` as `.status`, letting downstream consumers (e.g. `AgentSession.#isCompactionAuthFailure` in `@oh-my-pi/pi-coding-agent`) branch on real provider 401/403s without regex-scraping the message body.

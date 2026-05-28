@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.5.10] - 2026-05-28
+
 ### Added
 
 - Added `/drop-images` slash command that strips every `ImageContent` block from the current session's branch — `user`/`developer`/`custom`/`hookMessage`/`toolResult` content arrays plus `toolResult.details.images` and `fileMention.files[].image` — rewrites the session JSONL, rebuilds the agent's in-memory message list, tears down Codex Responses provider sessions, and rebuilds the TUI chat container so the change is visible immediately. ACP clients receive the same handler (returns `"Dropped N images …"` / `"No images found …"` through `runtime.output`). Stripping content that would leave a `toolResult` or `user` message with zero blocks inserts a single `[image removed]` placeholder so providers do not reject empty content arrays.
