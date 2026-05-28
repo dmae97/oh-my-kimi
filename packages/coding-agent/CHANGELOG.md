@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.5.8] - 2026-05-28
+
 ### Breaking Changes
 
 - Changed hashline edit parsing to require wrapped hunk headers such as `@@ A..B @@` (including `@@ BOF @@` and `@@ EOF @@`), with empty `@@ A..B @@` blocks deleting the anchored range and legacy inline payload forms treated as malformed
