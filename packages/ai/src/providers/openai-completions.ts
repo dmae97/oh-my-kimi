@@ -1009,6 +1009,12 @@ function buildParams(
 	// later `disableReasoningOnForcedToolChoice` guard at the bottom of
 	// `buildParams` strips thinking from the wire body for Kimi — keeping the
 	// replay on under those conditions would resurrect the #1071 failure.
+	//
+	// `allowsSyntheticReasoningContentForToolCalls` is forced to `false` on
+	// the same path: the gateway specifically requires `reasoning_content`,
+	// and the default synthetic-friendly behavior would echo whichever field
+	// the upstream streamed (e.g. `reasoning` for many opencode Kimi turns),
+	// landing the replay in the wrong key and re-triggering the 400.
 	const isKimiModelId = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
 	const isOpenCodeProvider = model.provider === "opencode-go" || model.provider === "opencode-zen";
 	const thinkingEnabledForRequest =
@@ -1018,6 +1024,8 @@ function buildParams(
 		isForcedToolChoice(mapToOpenAICompletionsToolChoice(options?.toolChoice));
 	if (isKimiModelId && isOpenCodeProvider && thinkingEnabledForRequest && !forcedToolChoiceSuppressesThinking) {
 		compat.requiresReasoningContentForToolCalls = true;
+		compat.allowsSyntheticReasoningContentForToolCalls = false;
+		compat.reasoningContentField = "reasoning_content";
 	}
 	const messages = convertMessages(model, context, compat);
 	maybeAddOpenRouterAnthropicCacheControl(model, messages);
@@ -1486,13 +1494,21 @@ export function convertMessages(
 						assistantMsg.content = [{ type: "text", text: thinkingText }];
 					}
 				} else if (compat.requiresReasoningContentForToolCalls) {
-					// Use the signature from the first thinking block if available, but only for
-					// recognized OpenAI-compat reasoning field names. Opaque signatures from other
-					// providers (Anthropic encrypted, OpenAI Responses JSON) are not valid property names.
+					// Use the streamed signature when the backend accepts whichever
+					// recognized field name was emitted (allowsSynthetic=true). Backends
+					// like opencode-kimi-with-thinking and DeepSeek demand the exact
+					// configured `reasoningContentField` instead, so honor that here
+					// rather than echoing the upstream field name.
 					const signature = nonEmptyThinkingBlocks[0].thinkingSignature;
 					const recognizedFields = ["reasoning_content", "reasoning", "reasoning_text"];
-					if (signature && recognizedFields.includes(signature)) {
-						(assistantMsg as any)[signature] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
+					const wireField =
+						compat.allowsSyntheticReasoningContentForToolCalls && signature && recognizedFields.includes(signature)
+							? signature
+							: signature && recognizedFields.includes(signature)
+								? (compat.reasoningContentField ?? "reasoning_content")
+								: undefined;
+					if (wireField) {
+						(assistantMsg as any)[wireField] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
 					}
 				}
 			}

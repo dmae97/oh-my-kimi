@@ -656,7 +656,10 @@ describe("kimi model detection via detectCompat", () => {
 				{
 					type: "thinking",
 					thinking: "Need to read the file before answering.",
-					thinkingSignature: "reasoning_content",
+					// OpenCode Kimi streams reasoning under the `reasoning` field
+					// name; the override must coerce it into `reasoning_content`
+					// when replaying tool-call history.
+					thinkingSignature: "reasoning",
 				},
 				{
 					type: "toolCall",
@@ -710,6 +713,9 @@ describe("kimi model detection via detectCompat", () => {
 		const assistant = payload.messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
 		expect(Reflect.get(assistant as object, "reasoning_content")).toBe("Need to read the file before answering.");
+		// The streamed `reasoning` key must NOT land in the wire body alongside
+		// `reasoning_content`; opencode's strict schema rejects unknown fields.
+		expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
 	});
 
 	// #1071 regression guard alongside the #1484 fix: with thinking disabled the
