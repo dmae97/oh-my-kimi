@@ -4,6 +4,8 @@ import * as path from "node:path";
 import * as url from "node:url";
 import { isCompiledBinary } from "@oh-my-pi/pi-utils";
 
+const IS_COMPILED_BINARY = isCompiledBinary();
+
 // Canonical scope for in-process pi packages. Plugins published against any of
 // the aliased scopes below (mariozechner's original publish, earendil-works'
 // fork, or the canonical @oh-my-pi scope itself) are remapped to this scope and
@@ -14,10 +16,9 @@ import { isCompiledBinary } from "@oh-my-pi/pi-utils";
 const CANONICAL_PI_SCOPE = "@oh-my-pi";
 
 // Scopes that have historically been used to publish (or alias) the same set
-// of internal pi-* packages. `@oh-my-pi` is intentionally included so that
-// direct imports of the canonical name still flow through `Bun.resolveSync`
-// against the host binary, avoiding a duplicate copy being pulled in from a
-// plugin's own node_modules tree at install time.
+// of internal pi-* packages. `@oh-my-pi` is intentionally included so direct
+// canonical imports still pass through the same host-bundled package resolution
+// path instead of pulling a duplicate copy from plugin node_modules.
 const PI_SCOPE_ALIASES = ["oh-my-pi", "mariozechner", "earendil-works"] as const;
 
 // Internal pi-* package basenames bundled inside the omp binary.
@@ -58,19 +59,33 @@ const resolvedSpecifierFallbacks = new Map<string, string>();
 const TYPEBOX_SPECIFIER = "@sinclair/typebox";
 const TYPEBOX_SPECIFIER_FILTER = /^@sinclair\/typebox$/;
 
-// In-process compat shim paths. In dev `import.meta.dir` is the source folder of
-// this file, so the dev branches resolve to the real `.ts` source. In compiled
+// In-process compat paths. In dev `import.meta.dir` is the source folder of
+// this file, so the dev branches resolve to the real source files. In compiled
 // binaries `import.meta.dir` collapses to `/$bunfs/root`, so the runtime cannot
-// recover the source layout that way; instead, each shim file is registered as
-// a `--compile` entrypoint in `scripts/build-binary.ts`, which Bun emits into
-// bunfs at a deterministic `--root`-relative path with a `.js` extension. The
-// literals below must stay in sync with that listing — if either path drifts,
-// every legacy plugin loading the shim fails with a missing-module error in
-// release builds (without affecting `bun test`/dev).
-const TYPEBOX_SHIM_PATH = isCompiledBinary()
-	? "/$bunfs/root/packages/coding-agent/src/extensibility/typebox.js"
-	: path.resolve(import.meta.dir, "../typebox.ts");
+// recover the source layout that way; instead, each computed entrypoint path
+// below must be registered as a `--compile` entrypoint in
+// `scripts/build-binary.ts`, which Bun emits into bunfs at a deterministic
+// `--root`-relative path with a `.js` extension. If either side drifts, legacy
+// plugins fail with missing-module errors in release builds.
+const BUNFS_PACKAGE_ROOT = "/$bunfs/root/packages";
 
+type SourcePiPackageDir = "agent" | "coding-agent" | "tui" | "utils";
+
+function getBundledPackageIndexPath(packageDir: SourcePiPackageDir): string {
+	return IS_COMPILED_BINARY
+		? `${BUNFS_PACKAGE_ROOT}/${packageDir}/src/index.js`
+		: path.resolve(import.meta.dir, "../../../..", packageDir, "src/index.ts");
+}
+
+function getBundledNativesIndexPath(): string {
+	return IS_COMPILED_BINARY
+		? `${BUNFS_PACKAGE_ROOT}/natives/native/index.js`
+		: path.resolve(import.meta.dir, "../../../../natives/native/index.js");
+}
+
+const TYPEBOX_SHIM_PATH = IS_COMPILED_BINARY
+	? `${BUNFS_PACKAGE_ROOT}/coding-agent/src/extensibility/typebox.js`
+	: path.resolve(import.meta.dir, "../typebox.ts");
 // Legacy extensions historically imported `Type` (and `Static`/`TSchema`) from
 // the package root of `@(scope)/pi-ai`. pi-ai 15.1.0 removed the runtime `Type`
 // export (see `packages/ai/CHANGELOG.md`), so the bare canonical specifier no
@@ -79,11 +94,16 @@ const TYPEBOX_SHIM_PATH = isCompiledBinary()
 // plus the borrowed `Type` runtime from the Zod-backed TypeBox shim. Subpath
 // imports such as `@oh-my-pi/pi-ai/utils/oauth` continue to resolve directly
 // against the bundled pi-ai package.
-const LEGACY_PI_AI_SHIM_PATH = isCompiledBinary()
-	? "/$bunfs/root/packages/coding-agent/src/extensibility/legacy-pi-ai-shim.js"
+const LEGACY_PI_AI_SHIM_PATH = IS_COMPILED_BINARY
+	? `${BUNFS_PACKAGE_ROOT}/coding-agent/src/extensibility/legacy-pi-ai-shim.js`
 	: path.resolve(import.meta.dir, "../legacy-pi-ai-shim.ts");
 const LEGACY_PI_PACKAGE_ROOT_OVERRIDES: Record<string, string> = {
+	[`${CANONICAL_PI_SCOPE}/pi-agent-core`]: getBundledPackageIndexPath("agent"),
 	[`${CANONICAL_PI_SCOPE}/pi-ai`]: LEGACY_PI_AI_SHIM_PATH,
+	[`${CANONICAL_PI_SCOPE}/pi-coding-agent`]: getBundledPackageIndexPath("coding-agent"),
+	[`${CANONICAL_PI_SCOPE}/pi-natives`]: getBundledNativesIndexPath(),
+	[`${CANONICAL_PI_SCOPE}/pi-tui`]: getBundledPackageIndexPath("tui"),
+	[`${CANONICAL_PI_SCOPE}/pi-utils`]: getBundledPackageIndexPath("utils"),
 };
 
 let isLegacyPiSpecifierShimInstalled = false;
@@ -298,11 +318,11 @@ function resolveLegacyPiSpecifier(args: { path: string; importer: string }): { p
 	} catch {
 		// Fallback for compiled binary mode: the bundled packages live inside
 		// /$bunfs/root and aren't reachable by filesystem resolution. Try the
-		// original (pre-remap) specifier against the importing file's directory,
-		// which resolves to the plugin's installed peer dep.
+		// canonical specifier against the importing file's directory, which
+		// resolves to the plugin's installed @oh-my-pi peer dependency.
 		const importerDir = path.dirname(args.importer);
 		try {
-			return { path: Bun.resolveSync(args.path, importerDir) };
+			return { path: Bun.resolveSync(remappedSpecifier, importerDir) };
 		} catch {
 			return undefined;
 		}

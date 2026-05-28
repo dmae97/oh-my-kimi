@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -16,6 +16,10 @@ import { Type as TypeBoxShimType } from "../../src/extensibility/typebox";
 installLegacyPiSpecifierShim();
 
 const tempRoots: string[] = [];
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 afterAll(async () => {
 	for (const dir of tempRoots) {
@@ -93,5 +97,25 @@ describe("legacy-pi @(scope)/pi-ai root `Type` remap (issue #1437)", () => {
 
 		const loaded = (await loadLegacyPiModule(entry)) as { fn: unknown };
 		expect(typeof loaded.fn).toBe("function");
+	});
+});
+
+describe("legacy pi package root remaps (issue #1474)", () => {
+	it("loads @earendil-works/pi-coding-agent root imports when host package resolution is unavailable", async () => {
+		const realResolveSync = Bun.resolveSync.bind(Bun);
+		vi.spyOn(Bun, "resolveSync").mockImplementation((specifier: string, from: string) => {
+			if (specifier === "@oh-my-pi/pi-coding-agent" && from.endsWith(path.join("src", "extensibility", "plugins"))) {
+				throw new Error("compiled binary host package resolution unavailable");
+			}
+			return realResolveSync(specifier, from);
+		});
+		const entry = await writeFixtureExtension(
+			['import { VERSION } from "@earendil-works/pi-coding-agent";', "export const loadedVersion = VERSION;"].join(
+				"\n",
+			),
+		);
+
+		const loaded = (await loadLegacyPiModule(entry)) as { loadedVersion: string };
+		expect(loaded.loadedVersion).toMatch(/^\d+\.\d+\.\d+/);
 	});
 });
