@@ -546,11 +546,33 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			// so users don't see raw `<｜...｜>` tokens.
 			const stripDeepseekChatTemplateTokens =
 				/deepseek/i.test(model.id) && (model.provider === "nvidia" || model.provider === "deepseek");
-			type OpenAIStreamBlock = TextContent | ThinkingContent | (ToolCall & { partialArgs: string });
+			type ToolCallStreamBlock = ToolCall & { partialArgs?: string; streamIndex?: number };
+			type OpenAIStreamBlock = TextContent | ThinkingContent | ToolCallStreamBlock;
+			const pendingToolCallBlocks: ToolCallStreamBlock[] = [];
+			const toolCallBlockByIndex = new Map<number, ToolCallStreamBlock>();
 			let currentBlock: OpenAIStreamBlock | undefined;
 			const blockIndex = (block: OpenAIStreamBlock | undefined): number => {
 				if (!block) return Math.max(0, output.content.length - 1);
 				return output.content.indexOf(block);
+			};
+			const finishToolCallBlock = (block: ToolCallStreamBlock): void => {
+				if (block.partialArgs === undefined) return;
+				const contentIndex = blockIndex(block);
+				if (contentIndex < 0) return;
+				block.arguments = parseStreamingJson(block.partialArgs);
+				delete block.partialArgs;
+				if (block.streamIndex !== undefined) {
+					toolCallBlockByIndex.delete(block.streamIndex);
+					delete block.streamIndex;
+				}
+				const pendingIndex = pendingToolCallBlocks.indexOf(block);
+				if (pendingIndex >= 0) pendingToolCallBlocks.splice(pendingIndex, 1);
+				stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
+			};
+			const finishPendingToolCallBlocks = (): void => {
+				for (const block of [...pendingToolCallBlocks]) {
+					finishToolCallBlock(block);
+				}
 			};
 			const finishCurrentBlock = (block: OpenAIStreamBlock | undefined): void => {
 				if (!block) return;
@@ -564,9 +586,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial: output });
 					return;
 				}
-				block.arguments = parseStreamingJson(block.partialArgs);
-				delete (block as { partialArgs?: string }).partialArgs;
-				stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
+				finishToolCallBlock(block);
 			};
 			const appendText = (
 				message: AssistantMessage,
@@ -788,43 +808,62 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 					if (choice?.delta?.tool_calls && choice.delta.tool_calls.length > 0) {
 						for (const toolCall of choice.delta.tool_calls) {
+							const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
+							let block = streamIndex !== undefined ? toolCallBlockByIndex.get(streamIndex) : undefined;
+							if (!block && toolCall.id) {
+								block = pendingToolCallBlocks.find(candidate => candidate.id === toolCall.id);
+							}
 							if (
-								!currentBlock ||
-								currentBlock.type !== "toolCall" ||
-								(toolCall.id && currentBlock.id !== toolCall.id)
+								!block &&
+								currentBlock?.type === "toolCall" &&
+								(!toolCall.id || currentBlock.id === toolCall.id)
 							) {
-								finishCurrentBlock(currentBlock);
-								currentBlock = {
+								block = currentBlock;
+							}
+
+							if (!block) {
+								if (!currentBlock || currentBlock.type !== "toolCall") {
+									finishCurrentBlock(currentBlock);
+								}
+								block = {
 									type: "toolCall",
 									id: toolCall.id || "",
 									name: toolCall.function?.name || "",
 									arguments: {},
 									partialArgs: "",
+									streamIndex,
 								};
-								output.content.push(currentBlock);
+								if (streamIndex !== undefined) toolCallBlockByIndex.set(streamIndex, block);
+								pendingToolCallBlocks.push(block);
+								currentBlock = block;
+								output.content.push(block);
 								stream.push({
 									type: "toolcall_start",
-									contentIndex: blockIndex(currentBlock),
+									contentIndex: blockIndex(block),
 									partial: output,
 								});
+							} else {
+								currentBlock = block;
+								if (streamIndex !== undefined && block.streamIndex === undefined) {
+									block.streamIndex = streamIndex;
+									toolCallBlockByIndex.set(streamIndex, block);
+								}
 							}
 
-							if (currentBlock.type === "toolCall") {
-								if (toolCall.id) currentBlock.id = toolCall.id;
-								if (toolCall.function?.name) currentBlock.name = toolCall.function.name;
-								let delta = "";
-								if (toolCall.function?.arguments) {
-									delta = toolCall.function.arguments;
-									currentBlock.partialArgs += toolCall.function.arguments;
-									currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
-								}
-								stream.push({
-									type: "toolcall_delta",
-									contentIndex: blockIndex(currentBlock),
-									delta,
-									partial: output,
-								});
+							if (toolCall.id) block.id = toolCall.id;
+							if (toolCall.function?.name) block.name = toolCall.function.name;
+							let delta = "";
+							if (toolCall.function?.arguments) {
+								delta = toolCall.function.arguments;
+								block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
+								block.arguments = parseStreamingJson(block.partialArgs);
 							}
+							stream.push({
+								type: "toolcall_delta",
+								contentIndex: blockIndex(block),
+								delta,
+								partial: output,
+							});
 						}
 					}
 
@@ -862,7 +901,12 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				flushDeepseekStripBuffer(true);
 			}
 
-			finishCurrentBlock(currentBlock);
+			if (currentBlock?.type === "toolCall") {
+				finishPendingToolCallBlocks();
+			} else {
+				finishCurrentBlock(currentBlock);
+				finishPendingToolCallBlocks();
+			}
 
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			if (firstEventTimeoutError) {

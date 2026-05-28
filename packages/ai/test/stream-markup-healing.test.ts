@@ -96,6 +96,18 @@ const bashTool: Tool = {
 	},
 };
 
+const readTool: Tool = {
+	name: "read",
+	description: "Read a file",
+	parameters: {
+		type: "object",
+		properties: {
+			path: { type: "string" },
+		},
+		required: ["path"],
+		additionalProperties: false,
+	},
+};
 const deepseekCloudModel: Model<"ollama-chat"> = {
 	id: "deepseek-v4-pro",
 	name: "DeepSeek V4 Pro",
@@ -705,6 +717,39 @@ describe("OpenAI completions provider DSML envelope healing", () => {
 			_i: "Check Fedora 42 available packages",
 			timeout: 15,
 		});
+		expect(result.stopReason).toBe("toolUse");
+	});
+
+	it("keeps indexed parallel NanoGPT read deltas attached to their own tool calls", async () => {
+		const model = getBundledModel<"openai-completions">("nanogpt", "deepseek/deepseek-v4-pro");
+		global.fetch = mockFetch([
+			chunk(model.id, {
+				tool_calls: [
+					{ index: 0, id: "call_a", type: "function", function: { name: "read", arguments: "" } },
+					{ index: 1, id: "call_b", type: "function", function: { name: "read", arguments: "" } },
+				],
+			}),
+			chunk(model.id, {
+				tool_calls: [
+					{ index: 0, function: { arguments: '{"path":"a.ts"}' } },
+					{ index: 1, function: { arguments: '{"path":"b.ts"}' } },
+				],
+			}),
+			chunk(model.id, {}, "tool_calls"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(
+			model,
+			{ messages: [{ role: "user", content: "Read a.ts and b.ts", timestamp: Date.now() }], tools: [readTool] },
+			{ apiKey: "test-key", reasoning: "high" },
+		).result();
+
+		const toolCalls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
+		expect(toolCalls).toHaveLength(2);
+		expect(toolCalls.map(call => call.id)).toEqual(["call_a", "call_b"]);
+		expect(toolCalls.map(call => call.name)).toEqual(["read", "read"]);
+		expect(toolCalls.map(call => call.arguments)).toEqual([{ path: "a.ts" }, { path: "b.ts" }]);
 		expect(result.stopReason).toBe("toolUse");
 	});
 });
