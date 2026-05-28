@@ -13,7 +13,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createModelManager } from "../src/model-manager";
 import { getBundledModel } from "../src/models";
-import { waferServerlessModelManagerOptions } from "../src/provider-models/openai-compat";
+import { waferPassModelManagerOptions, waferServerlessModelManagerOptions } from "../src/provider-models/openai-compat";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
 import type { Context, Model } from "../src/types";
 
@@ -107,8 +107,9 @@ describe("Wafer Serverless provider", () => {
 		// would mis-pick "openai" because the Wafer baseUrl/provider doesn't match
 		// the api.moonshot.ai / api.kimi.com URL patterns in `detectOpenAICompat`).
 		expect(kimi.compat?.thinkingFormat).toBe("zai");
-		// Kimi-K2.6 carries its real cents/M pricing (88 / 384 / 9 → 0.88 / 3.84 / 0.09).
-		expect(kimi.cost).toEqual({ input: 0.88, output: 3.84, cacheRead: 0.09, cacheWrite: 0 });
+		// Kimi-K2.6's retail Serverless rate per wafer.ai (= API cents × 0.0125):
+		// $1.10 in / $4.80 out / $0.1125 cached.
+		expect(kimi.cost).toEqual({ input: 1.1, output: 4.8, cacheRead: 0.1125, cacheWrite: 0 });
 
 		const qwen36 = getBundledModel<"openai-completions">("wafer-serverless", "Qwen3.6-35B-A3B");
 		expect(qwen36).toBeDefined();
@@ -222,5 +223,47 @@ describe("Wafer dynamic discovery mapper", () => {
 		for (const id of ["GLM-fake", "Kimi-fake", "qwen-fake", "deepseek-fake", "mystery-fake"]) {
 			expect(byId.get(id)?.compat?.reasoningContentField).toBe("reasoning_content");
 		}
+	});
+
+	it("zeros cost for the Pass SKU and applies retail × 0.0125 for Serverless", async () => {
+		// Same upstream record served via both SKUs — `wafer.pricing` in cents/M:
+		// 120/360/12. Pass is a flat-rate subscription (no per-token charge), so
+		// `mapWaferModel` zeros the cost regardless of envelope values. Serverless
+		// is pay-as-you-go and applies the empirical × 0.0125 conversion to match
+		// wafer.ai's published retail rates (120 cents → $1.50/M).
+		const sharedEntry = {
+			id: "Shared-fake",
+			object: "model",
+			max_model_len: 100000,
+			wafer: {
+				display_name: "Shared-fake",
+				tier: "pass_included",
+				provider: "zai",
+				context_length: 100000,
+				capabilities: { vision: false, tools: true, reasoning: true },
+				pricing: {
+					currency: "usd",
+					input_cents_per_million: 120,
+					output_cents_per_million: 360,
+					cache_read_cents_per_million: 12,
+				},
+			},
+		};
+
+		mockWaferModelsResponse([sharedEntry]);
+		const passManager = createModelManager(waferPassModelManagerOptions({ apiKey: "wfr_test" }));
+		const passResult = await passManager.refresh("online");
+		const passModel = passResult.models.find(m => m.id === "Shared-fake");
+		expect(passModel).toBeDefined();
+		expect(passModel?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+
+		mockWaferModelsResponse([sharedEntry]);
+		const srvManager = createModelManager(waferServerlessModelManagerOptions({ apiKey: "wfr_test" }));
+		const srvResult = await srvManager.refresh("online");
+		const srvModel = srvResult.models.find(m => m.id === "Shared-fake");
+		expect(srvModel).toBeDefined();
+		// 120 × 0.0125 = 1.50, 360 × 0.0125 = 4.50, 12 × 0.0125 = 0.15 — matches
+		// the wafer.ai Serverless rate card for GLM-5.1.
+		expect(srvModel?.cost).toEqual({ input: 1.5, output: 4.5, cacheRead: 0.15, cacheWrite: 0 });
 	});
 });

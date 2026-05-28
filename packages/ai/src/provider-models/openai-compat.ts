@@ -1092,13 +1092,25 @@ function mapWaferModel(
 	);
 	const maxTokens = Math.min(contextWindow, WAFER_MAX_TOKENS_CAP);
 	const pricing = wafer?.pricing ?? {};
-	// Wafer publishes cents-per-million; OMP catalog stores dollars-per-million.
-	const cost = {
-		input: toPositiveNumber(pricing.input_cents_per_million, 0) / 100,
-		output: toPositiveNumber(pricing.output_cents_per_million, 0) / 100,
-		cacheRead: toPositiveNumber(pricing.cache_read_cents_per_million, 0) / 100,
-		cacheWrite: 0,
-	};
+	// Wafer's `/v1/models` exposes pricing through `*_cents_per_million` fields,
+	// but the values are an internal wholesale unit, not literal cents — across
+	// every published Serverless model on wafer.ai the user-facing rate equals
+	// `cents × 125 / 10000` (i.e. wholesale × 1.25 / 100; GLM-5.1's `120` →
+	// $1.50/M, Kimi-K2.6's `88` → $1.10/M, etc.). The multiply-first form keeps
+	// the result a finite dyadic for every observed value.
+	// For the Pass SKU the per-token rate is bundled in the flat-rate
+	// subscription, so we follow the convention shared with
+	// `kimi-code`/`firepass`/`alibaba-coding-plan` and seed every Pass model with
+	// `cost: 0` regardless of what the upstream envelope says.
+	const isPassSku = providerId === "wafer-pass";
+	const cost = isPassSku
+		? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+		: {
+				input: (toPositiveNumber(pricing.input_cents_per_million, 0) * 125) / 10000,
+				output: (toPositiveNumber(pricing.output_cents_per_million, 0) * 125) / 10000,
+				cacheRead: (toPositiveNumber(pricing.cache_read_cents_per_million, 0) * 125) / 10000,
+				cacheWrite: 0,
+			};
 	const name = toModelName(wafer?.display_name, defaults.name);
 	const base: Model<"openai-completions"> = {
 		...defaults,
