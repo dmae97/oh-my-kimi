@@ -196,6 +196,7 @@ import {
 	type PythonExecutionMessage,
 	readPendingDisplayTag,
 	SILENT_ABORT_MARKER,
+	stripImagesFromMessage,
 } from "./messages";
 import { formatSessionDumpText } from "./session-dump-format";
 import type {
@@ -5308,6 +5309,55 @@ export class AgentSession {
 		this.#syncTodoPhasesFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 		return result;
+	}
+
+	/**
+	 * Strip image content blocks from every message on the current branch and
+	 * persist the rewrite. Walks `SessionManager.getBranch()` in place — both
+	 * `SessionMessageEntry.message` and `CustomMessageEntry.content` arrays
+	 * are mutated, then `rewriteEntries` durably commits the new shape. The
+	 * agent's runtime view is rebuilt from the freshly-mutated entries so any
+	 * provider sessions caching message identity (Codex Responses) are torn
+	 * down to force a clean replay on the next turn.
+	 *
+	 * No-op when the branch carries no images; returns `{ removed: 0 }` and
+	 * skips the disk rewrite.
+	 */
+	async dropImages(): Promise<{ removed: number }> {
+		const branchEntries = this.sessionManager.getBranch();
+		let removed = 0;
+		for (const entry of branchEntries) {
+			if (entry.type === "message") {
+				removed += stripImagesFromMessage(entry.message);
+				continue;
+			}
+			if (entry.type === "custom_message" && typeof entry.content !== "string") {
+				const kept: typeof entry.content = [];
+				let dropped = 0;
+				for (const part of entry.content) {
+					if (part.type === "image") {
+						dropped++;
+					} else {
+						kept.push(part);
+					}
+				}
+				if (dropped > 0) {
+					if (kept.length === 0) {
+						kept.push({ type: "text", text: "[image removed]" });
+					}
+					entry.content = kept;
+					removed += dropped;
+				}
+			}
+		}
+		if (removed === 0) {
+			return { removed: 0 };
+		}
+		await this.sessionManager.rewriteEntries();
+		const sessionContext = this.buildDisplaySessionContext();
+		this.agent.replaceMessages(sessionContext.messages);
+		this.#closeCodexProviderSessionsForHistoryRewrite();
+		return { removed };
 	}
 
 	/**

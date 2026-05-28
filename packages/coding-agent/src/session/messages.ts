@@ -114,6 +114,98 @@ function getPrunedToolResultContent(message: ToolResultMessage): (TextContent | 
 	return [{ type: "text", text }];
 }
 
+/** Result of filtering image blocks out of a `(TextContent | ImageContent)[]` array. */
+interface StripContentResult {
+	content: (TextContent | ImageContent)[];
+	removed: number;
+}
+
+function stripImagesFromArrayContent(content: (TextContent | ImageContent)[]): StripContentResult {
+	let removed = 0;
+	const kept: (TextContent | ImageContent)[] = [];
+	for (const part of content) {
+		if (part.type === "image") {
+			removed++;
+		} else {
+			kept.push(part);
+		}
+	}
+	if (removed === 0) {
+		return { content, removed };
+	}
+	// Avoid emitting an empty `content` array — providers reject zero-block user/tool
+	// messages and the LLM still needs to see *something* where the image used to be.
+	if (kept.length === 0) {
+		kept.push({ type: "text", text: "[image removed]" });
+	}
+	return { content: kept, removed };
+}
+
+/**
+ * Strip image content blocks from `message` in place. Returns the count of
+ * images removed across `content` (every role that carries `ImageContent`) and
+ * any tool-result `details.images` payload. Callers MUST rewrite session
+ * entries (`SessionManager.rewriteEntries`) and replay them through
+ * `Agent.replaceMessages` afterwards so persisted state and provider-side
+ * caches stay aligned with the mutated tree — `stripImagesFromMessage` is a
+ * pure local mutation and intentionally does neither.
+ */
+export function stripImagesFromMessage(message: AgentMessage): number {
+	switch (message.role) {
+		case "user":
+		case "developer":
+		case "custom":
+		case "hookMessage": {
+			if (typeof message.content === "string") return 0;
+			const { content, removed } = stripImagesFromArrayContent(message.content);
+			if (removed > 0) {
+				// All four roles type `content` as `string | (TextContent | ImageContent)[]`;
+				// TypeScript can't narrow the assignment across the union, so cast once.
+				(message as { content: typeof content }).content = content;
+			}
+			return removed;
+		}
+		case "toolResult": {
+			let removed = 0;
+			const { content, removed: contentRemoved } = stripImagesFromArrayContent(message.content);
+			if (contentRemoved > 0) {
+				message.content = content;
+				removed += contentRemoved;
+			}
+			const details = message.details as { images?: unknown } | null | undefined;
+			if (details && Array.isArray(details.images)) {
+				const original = details.images as unknown[];
+				const kept: unknown[] = [];
+				for (const candidate of original) {
+					const looksLikeImageBlock =
+						!!candidate && typeof candidate === "object" && (candidate as { type?: unknown }).type === "image";
+					if (looksLikeImageBlock) {
+						removed++;
+					} else {
+						kept.push(candidate);
+					}
+				}
+				if (kept.length !== original.length) {
+					details.images = kept;
+				}
+			}
+			return removed;
+		}
+		case "fileMention": {
+			let removed = 0;
+			for (const file of message.files) {
+				if (file.image) {
+					file.image = undefined;
+					removed++;
+				}
+			}
+			return removed;
+		}
+		default:
+			return 0;
+	}
+}
+
 /**
  * Message type for bash executions via the ! command.
  */
