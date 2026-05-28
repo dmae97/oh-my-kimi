@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { getBundledModel } from "../src/models";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
 import { stream } from "../src/stream";
-import type { Context, Model, ToolCall } from "../src/types";
+import type { Context, Model, Tool, ToolCall } from "../src/types";
 import { getStreamMarkupHealingPattern, StreamMarkupHealing } from "../src/utils/stream-markup-healing";
 
 const originalFetch = global.fetch;
@@ -81,6 +81,21 @@ const REPORTED_DSML_LEAK =
 	" </｜DSML｜invoke>\n" +
 	" </｜DSML｜tool_calls>";
 
+const bashTool: Tool = {
+	name: "bash",
+	description: "Run a shell command",
+	parameters: {
+		type: "object",
+		properties: {
+			_i: { type: "string" },
+			command: { type: "string" },
+			timeout: { type: "number" },
+		},
+		required: ["command"],
+		additionalProperties: false,
+	},
+};
+
 const deepseekCloudModel: Model<"ollama-chat"> = {
 	id: "deepseek-v4-pro",
 	name: "DeepSeek V4 Pro",
@@ -122,6 +137,7 @@ describe("StreamMarkupHealing pattern selection", () => {
 		expect(getStreamMarkupHealingPattern("minimax-code", "MiniMax-M2.5", { parseThinkingTags: true })).toBe(
 			"thinking",
 		);
+		expect(getStreamMarkupHealingPattern("nanogpt", "deepseek/deepseek-v4-pro")).toBe("dsml");
 		expect(getStreamMarkupHealingPattern("ollama-cloud", "gpt-oss:120b")).toBeUndefined();
 		expect(getStreamMarkupHealingPattern("openai", "deepseek-v4-pro")).toBeUndefined();
 	});
@@ -637,6 +653,50 @@ describe("OpenAI completions provider DSML envelope healing", () => {
 		expect(prefix.text).toBe("I'll check.\n");
 		expect(healedCall.name).toBe("bash");
 		expect(suffix.text).toBe("\nThat should give us the package list.");
+
+		const toolCalls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
+		expect(toolCalls).toHaveLength(1);
+		expect(toolCalls[0].name).toBe("bash");
+		expect(toolCalls[0].arguments).toMatchObject({
+			_i: "Check Fedora 42 available packages",
+			timeout: 15,
+		});
+		expect(result.stopReason).toBe("toolUse");
+	});
+
+	it("heals NanoGPT-hosted DeepSeek V4 Pro DSML leaks (issue #1488)", async () => {
+		const model = getBundledModel<"openai-completions">("nanogpt", "deepseek/deepseek-v4-pro");
+		expect(model.provider).toBe("nanogpt");
+
+		let payload: Record<string, unknown> | undefined;
+		global.fetch = mockFetch([
+			chunk(model.id, { content: "Checking.\n" }),
+			chunk(model.id, { content: REPORTED_DSML_LEAK }),
+			chunk(model.id, {}, "stop"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(
+			model,
+			{ messages: [{ role: "user", content: "Check Fedora", timestamp: Date.now() }], tools: [bashTool] },
+			{
+				apiKey: "test-key",
+				reasoning: "high",
+				onPayload: value => {
+					payload = value as Record<string, unknown>;
+				},
+			},
+		).result();
+
+		expect(payload?.model).toBe("deepseek/deepseek-v4-pro:tools");
+		expect(payload?.reasoning_effort).toBe("high");
+		expect(payload?.tools).toBeDefined();
+		const text = result.content
+			.filter((b): b is { type: "text"; text: string } => b.type === "text")
+			.map(b => b.text)
+			.join("");
+		expect(text).not.toContain("DSML");
+		expect(text).not.toContain("<｜");
 
 		const toolCalls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
 		expect(toolCalls).toHaveLength(1);

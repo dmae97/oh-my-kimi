@@ -93,9 +93,31 @@ function normalizeMistralToolId(id: string, isMistral: boolean): string {
 	return normalized;
 }
 
+// NanoGPT's default DeepSeek route can attempt server-side tool-call repair and
+// fail before streaming. `:tools` selects its documented tools-capable route.
+function shouldUseNanoGptToolsRoute(model: Model<"openai-completions">, context: Context): boolean {
+	return (
+		model.provider === "nanogpt" &&
+		!!context.tools?.length &&
+		/deepseek/i.test(model.id) &&
+		!model.id.includes(":")
+	);
+}
+
+function resolveOpenAICompletionsModelId(
+	model: Model<"openai-completions">,
+	context: Context,
+	options: OpenAICompletionsOptions | undefined,
+): string {
+	if (model.provider === "firepass") return toFirepassWireModelId(model.id);
+	if (model.provider === "fireworks") return toFireworksWireModelId(model.id);
+	if (model.provider === "openrouter") return applyOpenRouterRoutingVariant(model.id, options?.openrouterVariant);
+	if (shouldUseNanoGptToolsRoute(model, context)) return `${model.id}:tools`;
+	return model.id;
+}
+
 /**
  * Normalize OpenAI-compatible streaming `delta.content` into plain text.
- *
  * Most providers stream `delta.content` as a string, but some (notably Mistral
  * Medium 3.5 / `mistral-medium-2604`) return an array of typed content parts
  * — e.g. `[{ type: "text", text: "Hello" }]`. Without normalization those
@@ -1065,14 +1087,7 @@ function buildParams(
 	// Note: Direct kimi-code provider is handled by the dedicated Kimi provider in kimi.ts.
 	const effectiveMaxTokens = options?.maxTokens ?? (isKimiModelId ? model.maxTokens : undefined);
 
-	const requestModelId =
-		model.provider === "fireworks"
-			? toFireworksWireModelId(model.id)
-			: model.provider === "firepass"
-				? toFirepassWireModelId(model.id)
-				: model.provider === "openrouter"
-					? applyOpenRouterRoutingVariant(model.id, options?.openrouterVariant)
-					: model.id;
+	const requestModelId = resolveOpenAICompletionsModelId(model, context, options);
 	const params: OpenAICompletionsParams = {
 		model: requestModelId,
 		messages,

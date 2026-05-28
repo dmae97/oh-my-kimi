@@ -728,6 +728,7 @@ export function modelMayLeakDsmlToolCalls(provider: string, modelId: string): bo
 		provider === "nvidia" ||
 		provider === "deepseek" ||
 		provider === "fireworks" ||
+		provider === "nanogpt" ||
 		provider === "opencode-go" ||
 		provider === "openrouter"
 	);
