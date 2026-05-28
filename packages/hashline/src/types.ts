@@ -44,18 +44,8 @@ export interface ApplyResult {
 	text: string;
 	/** First line number (1-indexed) that changed, or `undefined` for a no-op apply. */
 	firstChangedLine?: number;
-	/** Diagnostic warnings collected by the applier (auto-absorb, boundary checks, …). */
+	/** Diagnostic warnings collected by the parser, patcher, or recovery. */
 	warnings?: string[];
-}
-
-/** Optional knobs forwarded to {@link Edit} application. */
-export interface ApplyOptions {
-	/**
-	 * When `true`, pure-insert and single-line replacement-boundary duplicates
-	 * are dropped opportunistically. Default `false`: only multi-line block
-	 * duplicates and structural-boundary single lines are absorbed.
-	 */
-	autoDropPureInsertDuplicates?: boolean;
 }
 
 /** A parsed `[A..B]` line range. */

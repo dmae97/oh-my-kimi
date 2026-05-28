@@ -26,7 +26,7 @@ await fs.writeText("hello.ts", before);
 const tag = snapshots.recordContiguous("hello.ts", 1, before.split("\n"), { fullText: before });
 const patcher = new Patcher({ fs, snapshots });
 const patch = Patch.parse(String.raw`¶hello.ts#${tag}
-1-1:
+@@ 1..1 @@
 +const greeting = "hello";`);
 const result = await patcher.apply(patch);
 
@@ -39,19 +39,19 @@ console.log(await fs.readText("hello.ts"));
 See [`src/prompt.md`](./src/prompt.md) for the user-facing description and
 [`src/grammar.lark`](./src/grammar.lark) for the formal grammar.
 
-Each hunk starts with a `¶PATH#TAG` header. The tag is a 3-hex opaque pointer
-into the `SnapshotStore` that minted it; it is not content-derived and is not
-meaningful outside that store. The patcher protects against stale anchors by
-resolving the tag, verifying the recorded snapshot lines against live file
-content, and refusing or attempting session-aware recovery on mismatch.
+Each file section starts with `¶PATH#TAG`. The tag is a 3-hex opaque
+pointer into the `SnapshotStore` that minted it; it is not content-derived
+and is not meaningful outside that store. The patcher protects against
+stale anchors by resolving the tag, verifying the recorded snapshot lines
+against live file content, and refusing or attempting session-aware
+recovery on mismatch.
 
-Inside a hunk:
-- `A-B:` — anchor lines A..B (use `A-A:` for a single line; no shorthand).
-- `A-B:-` — delete lines A..B.
-- `BOF:` / `EOF:` — virtual anchors at the beginning/end of file.
+Inside a section:
+- `@@ A..B @@` — open a hunk on lines A..B (use `@@ A,A @@` for a single line; bare `@@ A @@` is also accepted).
+- `@@ BOF @@` / `@@ EOF @@` — virtual hunks at the beginning/end of file.
 - `+TEXT` — literal body row (use `+` alone for a blank line).
-- `^A-B` — repeat original file lines A..B inline (`^A-A` for one line).
-- Empty body — write one blank line at the anchor/virtual position.
+- `&A..B` — repeat original file lines A..B inline (`&A` for one line).
+- Empty body — delete the selected range.
 
 ## Abstractions
 

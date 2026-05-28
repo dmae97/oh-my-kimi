@@ -145,9 +145,9 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9a-f]{4}/m);
-		expect(text).toMatch(/^# packages\/\n## grep\.txt#[0-9a-f]{4}/m);
-		expect(text).toMatch(/^# phases\/\n## grep\.txt#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{3}/m);
+		expect(text).toMatch(/^# packages\/\n## grep\.txt#[0-9A-F]{3}/m);
+		expect(text).toMatch(/^# phases\/\n## grep\.txt#[0-9A-F]{3}/m);
 		expect(text).toContain("shared-needle");
 		expect(text).not.toContain("# other");
 		expect(details?.fileCount).toBe(3);
@@ -359,7 +359,7 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{3}/m);
 		expect(text).toContain("shared-needle");
 		expect(text).not.toContain(tempDir);
 		expect(details?.fileCount).toBe(1);
@@ -416,9 +416,9 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9a-f]{4}/m);
-		expect(text).toMatch(/^# packages\/\n## ast\.ts#[0-9a-f]{4}/m);
-		expect(text).toMatch(/^# phases\/\n## ast\.ts#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9A-F]{3}/m);
+		expect(text).toMatch(/^# packages\/\n## ast\.ts#[0-9A-F]{3}/m);
+		expect(text).toMatch(/^# phases\/\n## ast\.ts#[0-9A-F]{3}/m);
 		expect(text).not.toContain("# other");
 		expect(details?.fileCount).toBe(3);
 		expect(details?.scopePath).toBe("apps/**/*.ts, packages/**/*.ts, phases/**/*.ts");
@@ -444,9 +444,9 @@ describe("tool path arrays", () => {
 		const text = getText(preview);
 		const details = preview.details as { totalReplacements?: number; scopePath?: string } | undefined;
 
-		expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9a-f]{4} \(\d+ replacement/m);
-		expect(text).toMatch(/^# packages\/\n## ast\.ts#[0-9a-f]{4} \(\d+ replacement/m);
-		expect(text).toMatch(/^# phases\/\n## ast\.ts#[0-9a-f]{4} \(\d+ replacement/m);
+		expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9A-F]{3} \(\d+ replacement/m);
+		expect(text).toMatch(/^# packages\/\n## ast\.ts#[0-9A-F]{3} \(\d+ replacement/m);
+		expect(text).toMatch(/^# phases\/\n## ast\.ts#[0-9A-F]{3} \(\d+ replacement/m);
 		expect(text).not.toContain("# other");
 		expect(details?.totalReplacements).toBe(3);
 		expect(details?.scopePath).toBe("apps/**/*.ts, packages/**/*.ts, phases/**/*.ts");
@@ -556,9 +556,9 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9a-f]{4}/m);
-		expect(text).toMatch(/^# packages\/\n## grep\.txt#[0-9a-f]{4}/m);
-		expect(text).toMatch(/^# phases\/\n## grep\.txt#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{3}/m);
+		expect(text).toMatch(/^# packages\/\n## grep\.txt#[0-9A-F]{3}/m);
+		expect(text).toMatch(/^# phases\/\n## grep\.txt#[0-9A-F]{3}/m);
 		expect(text).not.toContain("# other");
 		expect(details?.fileCount).toBe(3);
 		expect(details?.scopePath).toBe("apps, packages, phases");
@@ -583,8 +583,8 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toMatch(/^# alpha\.txt#[0-9a-f]{4}/m);
-		expect(text).toMatch(/^# beta\.txt#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# alpha\.txt#[0-9A-F]{3}/m);
+		expect(text).toMatch(/^# beta\.txt#[0-9A-F]{3}/m);
 		expect(text).toContain("exact-needle alpha");
 		expect(text).toContain("exact-needle beta");
 		expect(text).not.toContain("nested");

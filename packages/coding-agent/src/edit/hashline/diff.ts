@@ -23,7 +23,6 @@ import { generateDiffString } from "../diff";
 import { readEditFileText } from "../read-file";
 
 export interface HashlineDiffOptions {
-	autoDropPureInsertDuplicates?: boolean;
 	/**
 	 * Use the streaming-tolerant applier ({@link PatchSection.applyPartialTo})
 	 * so trailing in-flight ops do not throw or emit phantom edits. Streaming
@@ -82,9 +81,7 @@ export async function computeHashlineSectionDiff(
 		const normalized = normalizeToLF(content);
 		const hashError = validateSectionHash(section, absolutePath, normalized, snapshots);
 		if (hashError) return { error: hashError };
-		const result = options.streaming
-			? section.applyPartialTo(normalized, options)
-			: section.applyTo(normalized, options);
+		const result = options.streaming ? section.applyPartialTo(normalized) : section.applyTo(normalized);
 		if (normalized === result.text) return { error: `No changes would be made to ${section.path}.` };
 		return generateDiffString(normalized, result.text);
 	} catch (err) {

@@ -14,6 +14,7 @@ import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
 import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
+import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { resolveEvalBackends, type ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
 import {
@@ -403,6 +404,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 
 					const cellStatusEvents: EvalStatusEvent[] = [];
 					const cellDisplayOutputs: EvalDisplayOutput[] = [];
+					const cellImageNotes: string[] = [];
 					let cellHasMarkdown = false;
 					for (const output of result.displayOutputs) {
 						if (output.type === "json") {
@@ -410,8 +412,26 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 							cellDisplayOutputs.push(output);
 						}
 						if (output.type === "image") {
-							images.push({ type: "image", data: output.data, mimeType: output.mimeType });
-							cellDisplayOutputs.push(output);
+							const resized = await resizeImage({
+								type: "image",
+								data: output.data,
+								mimeType: output.mimeType,
+							});
+							const image: ImageContent = {
+								type: "image",
+								data: resized.data,
+								mimeType: resized.mimeType,
+							};
+							images.push(image);
+							cellDisplayOutputs.push({
+								type: "image",
+								data: image.data,
+								mimeType: image.mimeType,
+							});
+							const dimensionNote = formatDimensionNote(resized);
+							if (dimensionNote) {
+								cellImageNotes.push(`display image ${cellImageNotes.length + 1}: ${dimensionNote}`);
+							}
 						}
 						if (output.type === "status") {
 							statusEvents.push(output.event);
@@ -423,9 +443,14 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					}
 
 					const stdoutTrimmed = result.output.trim();
+					const imageText = cellImageNotes.join("\n");
 					const displayText = formatDisplayOutputsForText(cellDisplayOutputs);
+					const visibleDisplayText =
+						displayText && imageText ? `${displayText}\n\n${imageText}` : displayText || imageText;
 					const cellOutput =
-						stdoutTrimmed && displayText ? `${stdoutTrimmed}\n\n${displayText}` : stdoutTrimmed || displayText;
+						stdoutTrimmed && visibleDisplayText
+							? `${stdoutTrimmed}\n\n${visibleDisplayText}`
+							: stdoutTrimmed || visibleDisplayText;
 					cellResult.output = cellOutput;
 					cellResult.exitCode = result.exitCode;
 					cellResult.durationMs = durationMs;

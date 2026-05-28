@@ -147,7 +147,7 @@ describe("SearchTool internal URL resolution", () => {
 		const text = getResultText(result);
 		expect(text).toContain("needle");
 		// No hashline section headers or numbered editable lines for immutable sources.
-		expect(text).not.toMatch(/^¶.*#[0-9a-f]{4}$/m);
+		expect(text).not.toMatch(/^¶.*#[0-9A-F]{3}$/m);
 		expect(text).not.toMatch(/^\*?\s*\d+:/m);
 	});
 
@@ -187,7 +187,7 @@ describe("SearchTool internal URL resolution", () => {
 		const text = getResultText(result);
 		expect(text).toContain("needle");
 		// Mutable local:// sources keep a hashline section header plus numbered match lines.
-		expect(text).toMatch(/^¶.*#[0-9a-f]{4}$/m);
+		expect(text).toMatch(/^¶.*#[0-9A-F]{3}$/m);
 		expect(text).toMatch(/^\*\d+:.*needle/m);
 	});
 
@@ -207,7 +207,7 @@ describe("SearchTool internal URL resolution", () => {
 		const text = getResultText(result);
 		expect(text).toContain("needle");
 		// Mutable mixed.txt keeps hashlines somewhere in the output.
-		expect(text).toMatch(/^# mixed\.txt#[0-9a-f]{4}/m);
+		expect(text).toMatch(/^# mixed\.txt#[0-9A-F]{3}/m);
 		expect(text).toMatch(/^\*\d+:.*mixed needle/m);
 	});
 

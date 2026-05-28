@@ -5,44 +5,41 @@
  *
  * Lifecycle:
  *
- * 1. Construct one {@link Executor} per hunk (or share one with `reset()`).
- * 2. Feed it tokens via {@link Executor.feed}. Block payload rows are
- *    accumulated across tokens until the next anchor block flushes them.
- * 3. Call {@link Executor.end} to flush the trailing pending block and validate
- *    cross-block invariants (no overlapping deletes, etc.).
+ * 1. Construct one {@link Executor} per patch (or share one with `reset()`).
+ * 2. Feed it tokens via {@link Executor.feed}. Hunk body rows accumulate
+ *    until the next hunk header or {@link end} flushes them.
+ * 3. Call {@link Executor.end} to flush the trailing pending hunk and
+ *    validate cross-hunk invariants (no overlapping deletes, etc.).
  *
  * Convenience entry point: {@link parsePatch}.
  */
 import { HL_PAYLOAD_REPEAT, HL_PAYLOAD_REPLACE } from "./format";
 import {
 	BARE_BODY_AUTO_PIPED_WARNING,
-	DASH_PAYLOAD_AUTO_DELETE_WARNING,
-	INLINE_PAYLOAD_REJECTED_PREFIX,
 	PLUS_PREFIXED_REPEAT_WARNING,
 	REPLACE_PAIR_COALESCED_OVERLAP_WARNING,
 	REPLACE_PAIR_COALESCED_WARNING,
-	STACKED_BLANK_REPLACE_WARNING,
-	VIRTUAL_REPLACE_REJECTED_MESSAGE,
+	UNIFIED_DIFF_BODY_AUTO_CONVERT_WARNING,
 } from "./messages";
 import { type BlockTarget, cloneCursor, type ParsedRange, type Token, Tokenizer } from "./tokenizer";
 import type { Anchor, Cursor, Edit } from "./types";
 
 function validateRangeOrder(range: ParsedRange, lineNum: number): void {
 	if (range.end.line < range.start.line) {
-		throw new Error(`line ${lineNum}: range ${range.start.line}-${range.end.line} ends before it starts.`);
+		throw new Error(`line ${lineNum}: range ${range.start.line}..${range.end.line} ends before it starts.`);
 	}
 }
 
 /**
- * If `text` (the slice after a `+` literal sigil) trims to `^A-B` (or `^A`,
- * accepted as `^A-A`), return the parsed range. Otherwise `null`. Used to
- * silently reroute `+^A-B` rows as repeats — models reflexively prefix every
+ * If `text` (the slice after a `+` literal sigil) trims to `&A..B` (or `&A`,
+ * accepted as `&A,A`), return the parsed range. Otherwise `null`. Used to
+ * silently reroute `+&A..B` rows as repeats — models reflexively prefix every
  * body row with `+`, including ones that should be repeats.
  */
 function tryParseLiteralAsRepeat(text: string): ParsedRange | null {
 	const stripped = text.trim();
-	if (stripped.length === 0 || stripped.charCodeAt(0) !== 94 /* ^ */) return null;
-	const match = /^\^([1-9]\d*)(?:-([1-9]\d*))?$/.exec(stripped);
+	if (stripped.length === 0 || stripped.charCodeAt(0) !== 38 /* & */) return null;
+	const match = /^&([1-9]\d*)(?:\.\.([1-9]\d*))?$/.exec(stripped);
 	if (match === null) return null;
 	const start = Number.parseInt(match[1], 10);
 	const end = match[2] !== undefined ? Number.parseInt(match[2], 10) : start;
@@ -69,18 +66,10 @@ function rangesOverlapBetweenTargets(a: BlockTarget, b: BlockTarget): boolean {
  * Detect OpenAI-`apply_patch` / unified-diff contamination in a raw line.
  * Returns the error message to throw, or `null` when the line is clean.
  *
- * We only catch shapes that are unambiguously NOT hashline:
- * - `*** Update File:` / `*** Add File:` / `*** Delete File:` / `*** Move to:` sentinels
- * - unified-diff hunk headers (`@@`, `@@ -1,3 +1,3 @@`)
- * - apply_patch hunk-anchor prefixes `-N:` / `-N-M:` — the bare `-N` form
- *   (no `:` and no `-M`) is intentionally NOT matched so the existing strict
- *   "unrecognized hashline block" diagnostic still fires on the legacy
- *   delete-row shape `-5`.
- *
- * `+`-prefixed shapes are NOT detected here because `+` is hashline's
- * literal payload sigil; `+TEXT` / `+N:` are valid payload rows (or, at
- * top level, orphan payloads that fall through to the standard "no
- * preceding A-B:" error).
+ * Hashline's own file-header prefix (`¶path#hash`) sits next to
+ * apply_patch sentinels (`*** Update File: path`); the latter are caught
+ * here. Any `@@`-bracketed shape is also caught — hashline hunks are bare
+ * `A B` lines, never `@@ ... @@`.
  */
 function detectApplyPatchContamination(text: string, _hasPending: boolean): string | null {
 	const trimmed = text.trimStart();
@@ -95,19 +84,21 @@ function detectApplyPatchContamination(text: string, _hasPending: boolean): stri
 		const preview = trimmed.length > 48 ? `${trimmed.slice(0, 48)}…` : trimmed;
 		return (
 			`apply_patch sentinel ${JSON.stringify(preview)} is not valid in hashline. ` +
-			`Use \`${"\u00b6"}PATH#HASH\` then \`A-B:\` / \`A-B:-\` / \`BOF:\` / \`EOF:\` blocks; do not wrap edits in another format's envelope.`
+			"File sections start with `¶path#HASH` (no `Update File:` / `Add File:` keyword). " +
+			"Hunks are bare `A B` lines with `+TEXT` / `&A..B` body rows."
 		);
 	}
-	if (trimmed === "@@" || trimmed.startsWith("@@ ") || trimmed.startsWith("@@\t")) {
+	if (/^@@\s+[-+]?\d+,\d+\s+[-+]?\d+,\d+\s+@@/.test(trimmed)) {
 		return (
-			"unified-diff hunk header (`@@`) is not valid in hashline. " +
-			"Use a `¶PATH#HASH` header and bare `A-B:` anchor blocks."
+			"unified-diff hunk header (`@@ -N,M +N,M @@`) is not valid in hashline. " +
+			"Hashline hunks are bare `A B` lines (or `BOF` / `EOF` keywords)."
 		);
 	}
-	if (/^-\d+(-\d+)?:/.test(trimmed)) {
+	if (trimmed.startsWith("@@")) {
+		const preview = trimmed.length > 48 ? `${trimmed.slice(0, 48)}…` : trimmed;
 		return (
-			"apply_patch line prefix (`-N:` / `-N-M:`) is not valid in hashline. " +
-			"Drop the `-` prefix; use `A-B:` (replace) or `A-B:-` (delete) on the anchor line itself."
+			`\`@@\`-bracketed hunk header ${JSON.stringify(preview)} is not valid in hashline. ` +
+			"Drop the `@@ ... @@` brackets and write the range directly: `5 7` (or `5` for a single line, `BOF` / `EOF` for virtual positions)."
 		);
 	}
 	return null;
@@ -129,13 +120,6 @@ function isSkippableCommentLine(line: string): boolean {
 	return line.trimStart().startsWith("#");
 }
 
-function describeTarget(target: BlockTarget): string {
-	if (target.kind === "bof") return "BOF:";
-	if (target.kind === "eof") return "EOF:";
-	const { start, end } = target.range;
-	return `${start.line}-${end.line}:`;
-}
-
 interface PendingComment {
 	lineNum: number;
 	text: string;
@@ -150,22 +134,29 @@ interface Pending {
 	lineNum: number;
 	payloads: PayloadRow[];
 	/**
-	 * Bare body rows (no `|`/`^` prefix) buffered while we wait to see
-	 * whether the entire block is uniformly unprefixed. On flush, if every
-	 * row was bare AND no `|`/`^` row was ever observed for this block, we
-	 * auto-pipe the buffered rows and emit a {@link BARE_BODY_AUTO_PIPED_WARNING}.
+	 * Bare body rows (no `+`/`&` prefix) buffered while we wait to see
+	 * whether the entire hunk body is uniformly unprefixed. On flush, if
+	 * every row was bare AND no `+`/`&` row was ever observed for this hunk,
+	 * we auto-prepend `+` and emit a {@link BARE_BODY_AUTO_PIPED_WARNING}.
 	 */
 	pendingRaws: { text: string; lineNum: number }[];
+	/**
+	 * Set true the first time a `-` row arrives inside the hunk body. From
+	 * then on we strip one leading space from raw rows (treating them as
+	 * unified-diff context lines) and retroactively strip the same space
+	 * from prior `pendingRaws`/`payloads` literals that began with a space.
+	 */
+	unifiedDiffMode: boolean;
 }
 
 /**
  * Token-driven state machine that turns a stream of {@link Token}s into a
  * flat list of {@link Edit}s.
  *
- * `feed()` accepts tokens one at a time; block payload rows accumulate until
- * the next anchor block or {@link end} flushes them. After `terminated` flips
- * true (on `envelope-end` or `abort`) subsequent feeds are silently ignored
- * so callers can keep draining their tokenizer.
+ * `feed()` accepts tokens one at a time; hunk body rows accumulate until
+ * the next hunk header or {@link end} flushes them. After `terminated`
+ * flips true (on `envelope-end` or `abort`) subsequent feeds are silently
+ * ignored so callers can keep draining their tokenizer.
  */
 export class Executor {
 	#edits: Edit[] = [];
@@ -174,13 +165,6 @@ export class Executor {
 	#pending: Pending | undefined;
 	#terminated = false;
 	#skippableComments: PendingComment[] = [];
-	/**
-	 * Length of the current run of consecutive single-line empty-body
-	 * replacements (`A-A:` with no payload). Reset on every non-matching
-	 * flush; surfaces {@link STACKED_BLANK_REPLACE_WARNING} when the run
-	 * reaches two.
-	 */
-	#blankSingleRun = 0;
 
 	#discardPendingSkippableComments(): void {
 		this.#skippableComments = [];
@@ -242,44 +226,10 @@ export class Executor {
 				return;
 			case "op-block":
 				this.#discardPendingSkippableComments();
-				if (token.deleteSuffix) {
-					if (token.target.kind !== "range") {
-						throw new Error(`line ${token.lineNum}: ${VIRTUAL_REPLACE_REJECTED_MESSAGE}`);
-					}
-					validateRangeOrder(token.target.range, token.lineNum);
-					// L5 (delete-suffix variant): if pending is a bare anchor that
-					// overlaps the new delete range, drop it silently — the model
-					// expressed `A-B:` then `A-B:-` (the classic before-then-after
-					// shape) and the actual intent is "delete A-B".
-					if (
-						this.#pending !== undefined &&
-						!pendingHasAnyContent(this.#pending) &&
-						rangesOverlapBetweenTargets(this.#pending.target, token.target)
-					) {
-						this.#pending = undefined;
-						this.#blankSingleRun = 0;
-						if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_OVERLAP_WARNING)) {
-							this.#warnings.push(REPLACE_PAIR_COALESCED_OVERLAP_WARNING);
-						}
-					} else {
-						this.#flushPending();
-					}
-					for (const anchor of expandRange(token.target.range)) {
-						this.#pushDelete(anchor, token.lineNum);
-					}
-					this.#blankSingleRun = 0;
-					return;
-				}
-				if (token.inlineBody !== undefined) {
-					throw new Error(
-						`line ${token.lineNum}: ${INLINE_PAYLOAD_REJECTED_PREFIX} ` +
-							`Write the anchor on its own line (e.g. ${describeTarget(token.target)}), then put the body content on the next line prefixed with ` +
-							`${HL_PAYLOAD_REPLACE} (literal) or ${HL_PAYLOAD_REPEAT}A-B (repeat). If you pasted "${describeTarget(token.target).slice(0, -1)}CONTENT" from \`read\` output, strip the leading "${describeTarget(token.target).slice(0, -1)}" and prefix the rest with ${HL_PAYLOAD_REPLACE}.`,
-					);
-				}
 				if (token.target.kind === "range") validateRangeOrder(token.target.range, token.lineNum);
+
 				if (this.#pending !== undefined && targetsEqualConcreteRange(this.#pending.target, token.target)) {
-					// Identical-range coalesce: drop the first block. Last-wins.
+					// Identical-range coalesce: drop the first hunk. Last-wins.
 					this.#pending = undefined;
 					if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_WARNING)) {
 						this.#warnings.push(REPLACE_PAIR_COALESCED_WARNING);
@@ -289,9 +239,7 @@ export class Executor {
 					!pendingHasAnyContent(this.#pending) &&
 					rangesOverlapBetweenTargets(this.#pending.target, token.target)
 				) {
-					// L5 (replace variant): bare pending block overlaps the new
-					// concrete block; treat as before/after pair, drop the bare
-					// one. The new block becomes pending.
+					// Overlapping bare-then-concrete: drop the bare one.
 					this.#pending = undefined;
 					if (!this.#warnings.includes(REPLACE_PAIR_COALESCED_OVERLAP_WARNING)) {
 						this.#warnings.push(REPLACE_PAIR_COALESCED_OVERLAP_WARNING);
@@ -299,19 +247,25 @@ export class Executor {
 				} else {
 					this.#flushPending();
 				}
-				this.#pending = { target: token.target, lineNum: token.lineNum, payloads: [], pendingRaws: [] };
+				this.#pending = {
+					target: token.target,
+					lineNum: token.lineNum,
+					payloads: [],
+					pendingRaws: [],
+					unifiedDiffMode: false,
+				};
 				return;
 		}
 	}
 
 	/**
-	 * Flush any open pending block and return the accumulated edits and
-	 * warnings. The executor is single-use; {@link reset} is required for reuse.
+	 * Flush any open pending hunk and return the accumulated edits and
+	 * warnings. The executor is single-use; {@link reset} is required for
+	 * reuse.
 	 *
-	 * Throws if two replacement/delete blocks target the same line with
-	 * non-identical ranges. Identical-range blocks in the same hunk are
-	 * coalesced last-wins by `feed()` with a warning, so they never reach the
-	 * validator.
+	 * Throws if two hunks target the same line with non-identical ranges.
+	 * Identical-range hunks in the same patch are coalesced last-wins by
+	 * `feed()` with a warning, so they never reach the validator.
 	 */
 	end(): { edits: Edit[]; warnings: string[] } {
 		this.#consumePendingSkippableComments();
@@ -322,9 +276,9 @@ export class Executor {
 
 	/**
 	 * Streaming-tolerant variant of {@link end}. Identical, except a pending
-	 * block whose payload has not yet accumulated any rows is treated as still
-	 * in flight and dropped instead of flushed (which would otherwise preview a
-	 * destructive bare delete while the model may still be typing payload).
+	 * hunk whose body has not yet accumulated any rows is treated as still
+	 * in flight and dropped instead of flushed (which would otherwise commit
+	 * a destructive delete while the model may still be typing payload).
 	 */
 	endStreaming(): { edits: Edit[]; warnings: string[] } {
 		this.#consumePendingSkippableComments();
@@ -345,14 +299,13 @@ export class Executor {
 		this.#pending = undefined;
 		this.#skippableComments = [];
 		this.#terminated = false;
-		this.#blankSingleRun = 0;
 	}
 
 	/**
-	 * Each replacement/delete block contributes a delete edit per line in its
-	 * range; if any line ends up targeted by deletes originating from two
-	 * different source blocks (distinguished by their `lineNum`), the patch is
-	 * internally inconsistent.
+	 * Each hunk contributes a delete edit per line in its range; if any line
+	 * ends up targeted by deletes originating from two different source
+	 * hunks (distinguished by their `lineNum`), the patch is internally
+	 * inconsistent.
 	 */
 	#validateNoOverlappingDeletes(): void {
 		const sourceLinesByAnchor = new Map<number, number[]>();
@@ -369,8 +322,8 @@ export class Executor {
 			if (sourceLines.length < 2) continue;
 			const [firstBlock, secondBlock] = [...sourceLines].sort((a, b) => a - b);
 			throw new Error(
-				`line ${secondBlock}: anchor line ${anchorLine} is already targeted by another op on line ${firstBlock}. ` +
-					`Issue ONE block per range; payload is only the final desired content, never a before/after pair.`,
+				`line ${secondBlock}: anchor line ${anchorLine} is already targeted by another hunk on line ${firstBlock}. ` +
+					`Issue ONE hunk per range; payload is only the final desired content, never a before/after pair.`,
 			);
 		}
 	}
@@ -379,13 +332,13 @@ export class Executor {
 		const pending = this.#pending;
 		if (!pending) {
 			throw new Error(
-				`line ${lineNum}: payload line has no preceding A-B:, BOF:, or EOF: anchor. ` +
+				`line ${lineNum}: payload line has no preceding hunk header. ` +
 					`Got ${JSON.stringify(`${HL_PAYLOAD_REPLACE}${text}`)}.`,
 			);
 		}
-		// Silent recovery: a body row of `+^A-B` (or `+^A` after L2 shorthand)
-		// is a repeat row the model mistakenly prefixed with `+`. Reroute as
-		// a repeat and surface a warning so the model sees the mistake.
+		// Silent recovery: a body row of `+&A..B` (or `+&A` shorthand) is a
+		// repeat row the model mistakenly prefixed with `+`. Reroute as a
+		// repeat and surface a warning so the model sees the mistake.
 		const repeatRange = tryParseLiteralAsRepeat(text);
 		if (repeatRange !== null) {
 			if (!this.#warnings.includes(PLUS_PREFIXED_REPEAT_WARNING)) {
@@ -394,11 +347,6 @@ export class Executor {
 			this.#handleRepeatPayload(repeatRange, lineNum);
 			return;
 		}
-		// L3: a `+literal` row after buffered bare raws means the block is
-		// NOT uniformly unprefixed — the bare rows were typos. Reject at the
-		// FIRST bare row's source line so the message points the model at
-		// what to fix.
-		this.#rejectBufferedRawsOnMixedBlock(pending);
 		pending.payloads.push({ kind: "literal", text, lineNum });
 	}
 
@@ -406,91 +354,75 @@ export class Executor {
 		const pending = this.#pending;
 		if (!pending) {
 			throw new Error(
-				`line ${lineNum}: payload line has no preceding A-B:, BOF:, or EOF: anchor. ` +
-					`Got ${JSON.stringify(`${HL_PAYLOAD_REPEAT}${range.start.line}-${range.end.line}`)}.`,
+				`line ${lineNum}: payload line has no preceding hunk header. ` +
+					`Got ${JSON.stringify(`${HL_PAYLOAD_REPEAT}${range.start.line}..${range.end.line}`)}.`,
 			);
 		}
-		// L3: same mixed-block guard as the literal path — see above.
-		this.#rejectBufferedRawsOnMixedBlock(pending);
 		validateRangeOrder(range, lineNum);
 		pending.payloads.push({ kind: "repeat", range, lineNum });
 	}
 
-	#rejectBufferedRawsOnMixedBlock(pending: Pending): void {
-		if (pending.pendingRaws.length === 0) return;
-		const first = pending.pendingRaws[0];
-		throw new Error(
-			`line ${first.lineNum}: payload row in a hashline block must start with ` +
-				`${HL_PAYLOAD_REPLACE} or ${HL_PAYLOAD_REPEAT}A-B. Got ${JSON.stringify(first.text)}.`,
-		);
+	/**
+	 * Switch the pending hunk into unified-diff mode and retroactively
+	 * strip the leading metadata-space from any literal payloads or
+	 * buffered raws that already arrived. Idempotent.
+	 */
+	#enterUnifiedDiffMode(pending: Pending): void {
+		if (pending.unifiedDiffMode) return;
+		pending.unifiedDiffMode = true;
+		for (const row of pending.pendingRaws) {
+			if (row.text.length > 0 && row.text.charCodeAt(0) === 32) {
+				row.text = row.text.slice(1);
+			}
+		}
+		for (const payload of pending.payloads) {
+			if (payload.kind === "literal" && payload.text.length > 0 && payload.text.charCodeAt(0) === 32) {
+				payload.text = payload.text.slice(1);
+			}
+		}
 	}
 
 	#handleRaw(text: string, lineNum: number): void {
-		// L8: detect OpenAI-apply_patch / unified-diff contamination first so
-		// the error message tells the model what format they shipped instead
-		// of the generic "payload row must start with …" diagnostic.
+		// Detect OpenAI-apply_patch / unified-diff contamination first so the
+		// error message names the offending shape instead of the generic
+		// "payload row must start with …" diagnostic.
 		const contamination = detectApplyPatchContamination(text, this.#pending !== undefined);
 		if (contamination !== null) throw new Error(`line ${lineNum}: ${contamination}`);
 
 		if (this.#pending) {
 			if (text.trim().length === 0) return;
 
-			// L4: a lone `-` row inside a bare pending block is the classic
-			// "I meant `A-B:-` but typed it on the next line" shape. Convert
-			// retroactively, emit a warning, and clear pending.
-			if (
-				text.trim() === "-" &&
-				this.#pending.payloads.length === 0 &&
-				this.#pending.pendingRaws.length === 0 &&
-				this.#pending.target.kind === "range"
-			) {
-				const pendingRange = this.#pending.target.range;
-				const sourceLine = this.#pending.lineNum;
-				validateRangeOrder(pendingRange, sourceLine);
-				for (const anchor of expandRange(pendingRange)) {
-					this.#pushDelete(anchor, sourceLine);
+			// L9: `-`-prefixed body rows are unified-diff "removed" markers.
+			// The hunk header's range already deletes those lines, so we
+			// silently drop them and enter unified-diff mode for subsequent
+			// rows (which causes leading-space stripping on context lines).
+			if (text.charCodeAt(0) === 45 /* - */) {
+				this.#enterUnifiedDiffMode(this.#pending);
+				if (!this.#warnings.includes(UNIFIED_DIFF_BODY_AUTO_CONVERT_WARNING)) {
+					this.#warnings.push(UNIFIED_DIFF_BODY_AUTO_CONVERT_WARNING);
 				}
-				if (!this.#warnings.includes(DASH_PAYLOAD_AUTO_DELETE_WARNING)) {
-					this.#warnings.push(DASH_PAYLOAD_AUTO_DELETE_WARNING);
-				}
-				this.#pending = undefined;
-				this.#blankSingleRun = 0;
 				return;
 			}
 
-			// L3: buffer the bare row. Mixing this with later `|`/`^` rows
-			// throws via `#rejectBufferedRawsOnMixedBlock`; reject IMMEDIATELY
-			// when the block already has `|`/`^` rows so the error points at
-			// the offending bare row, not the (innocent) first `|` row.
-			if (this.#pending.payloads.length > 0) {
-				throw new Error(
-					`line ${lineNum}: payload row in a hashline block must start with ` +
-						`${HL_PAYLOAD_REPLACE} or ${HL_PAYLOAD_REPEAT}A-B. Got ${JSON.stringify(text)}.`,
-				);
+			// Treat any non-`+`/`&` body row as a literal. When the hunk is
+			// in unified-diff mode and the row carries the metadata leading
+			// space, strip ONE space so the actual content lands cleanly.
+			const literalText =
+				this.#pending.unifiedDiffMode && text.charCodeAt(0) === 32 /* space */ ? text.slice(1) : text;
+			if (!this.#warnings.includes(BARE_BODY_AUTO_PIPED_WARNING)) {
+				this.#warnings.push(BARE_BODY_AUTO_PIPED_WARNING);
 			}
-			this.#pending.pendingRaws.push({ text, lineNum });
+			this.#pending.payloads.push({ kind: "literal", text: literalText, lineNum });
 			return;
 		}
 
-		// Whitespace-only raw lines outside any pending block are silently dropped;
-		// fully empty lines arrive as `blank` tokens.
+		// Whitespace-only raw lines outside any pending block are silently
+		// dropped; fully empty lines arrive as `blank` tokens.
 		if (text.trim().length === 0) return;
 
-		const firstChar = text[0];
-		if (firstChar === "-" || firstChar === "@" || firstChar === "«" || firstChar === "»") {
-			if (text.trim() === "-") {
-				throw new Error(
-					`line ${lineNum}: a lone "-" is not a valid hashline op. To delete a range, write \`A-B:-\` on the anchor line itself (e.g. \`5-7:-\`).`,
-				);
-			}
-			throw new Error(
-				`line ${lineNum}: unrecognized hashline block. Use A-B:, A-B:-, BOF:, or EOF: anchors followed by ` +
-					`${HL_PAYLOAD_REPLACE}TEXT or ${HL_PAYLOAD_REPEAT}A-B body rows. Got ${JSON.stringify(text)}.`,
-			);
-		}
-
 		throw new Error(
-			`line ${lineNum}: payload line has no preceding A-B:, BOF:, or EOF: anchor. Got ${JSON.stringify(text)}.`,
+			`line ${lineNum}: payload line has no preceding hunk header. ` +
+				`Use an \`A B\` (or \`BOF\` / \`EOF\`) line above the body. Got ${JSON.stringify(text)}.`,
 		);
 	}
 
@@ -532,67 +464,31 @@ export class Executor {
 		const pending = this.#pending;
 		if (!pending) return;
 
-		// L3: convert any buffered bare body rows to literal payloads. Mixed
+		// Convert any buffered bare body rows to literal payloads. Mixed
 		// blocks have already been rejected; we only get here when payloads
-		// is empty AND pendingRaws holds rows, or when both are empty.
-		const hadBareBody = pending.pendingRaws.length > 0;
-		if (hadBareBody) {
-			for (const raw of pending.pendingRaws) {
-				pending.payloads.push({ kind: "literal", text: raw.text, lineNum: raw.lineNum });
-			}
-			pending.pendingRaws = [];
-			if (!this.#warnings.includes(BARE_BODY_AUTO_PIPED_WARNING)) {
-				this.#warnings.push(BARE_BODY_AUTO_PIPED_WARNING);
-			}
-		}
-
+		// `pendingRaws` is kept for type compatibility but no longer used —
+		// bare rows are now pushed directly into `payloads` as literals at
+		// arrival time (preserving body-row order).
 		const { target, lineNum, payloads } = pending;
 		if (target.kind === "bof" || target.kind === "eof") {
 			const cursor: Cursor = target.kind === "bof" ? { kind: "bof" } : { kind: "eof" };
-			if (payloads.length === 0) {
-				this.#pushInsert(cursor, "", lineNum);
-			} else {
-				for (const payload of payloads) {
-					this.#emitPayloadRow(cursor, payload, lineNum);
-				}
+			for (const payload of payloads) {
+				this.#emitPayloadRow(cursor, payload, lineNum);
 			}
+			// Empty body at BOF/EOF is a no-op (nothing to insert).
 			this.#pending = undefined;
-			this.#blankSingleRun = 0;
 			return;
 		}
 
-		// L7 was considered (`^A-B` covering target + literal payload) but
-		// dropped: the same shape is the canonical "keep line A unchanged,
-		// insert new content above/below" idiom (e.g. `2-2:\n^2-2\n|NEW`).
-		// We can't distinguish duplication from intentional pass-through
-		// from the parse tree alone.
-
 		const cursor: Cursor = { kind: "before_anchor", anchor: { ...target.range.start } };
-		if (payloads.length === 0) {
-			this.#pushInsert(cursor, "", lineNum, "replacement");
-		} else {
-			for (const payload of payloads) {
-				this.#emitPayloadRow(cursor, payload, lineNum, "replacement");
-			}
+		// Empty body = pure delete. Otherwise, emit the body rows as
+		// replacement payload and delete the original range.
+		for (const payload of payloads) {
+			this.#emitPayloadRow(cursor, payload, lineNum, "replacement");
 		}
 		for (const anchor of expandRange(target.range)) {
 			this.#pushDelete(anchor, lineNum);
 		}
-
-		// L6: track contiguous runs of single-line blank-body replaces. A
-		// run of two or more is almost always the model mis-using `A-A:` to
-		// mean "delete this line" (it actually replaces with one blank line).
-		const isBlankSingleReplace =
-			target.range.start.line === target.range.end.line && payloads.length === 0 && !hadBareBody;
-		if (isBlankSingleReplace) {
-			this.#blankSingleRun++;
-			if (this.#blankSingleRun >= 2 && !this.#warnings.includes(STACKED_BLANK_REPLACE_WARNING)) {
-				this.#warnings.push(STACKED_BLANK_REPLACE_WARNING);
-			}
-		} else {
-			this.#blankSingleRun = 0;
-		}
-
 		this.#pending = undefined;
 	}
 }
@@ -623,14 +519,14 @@ export function parsePatch(diff: string): { edits: Edit[]; warnings: string[] } 
  * parsed successfully when the diff is still being typed:
  *
  * - per-token feed errors stop the drain but preserve the edits already
- *   collected (the trailing block is malformed mid-stream — wait for the next
- *   chunk),
- * - the trailing pending block is dropped if it has no payload yet (avoids a
- *   destructive bare-delete preview while payload may still be coming).
+ *   collected (the trailing hunk is malformed mid-stream — wait for the
+ *   next chunk),
+ * - the trailing pending hunk is dropped if it has no payload yet (avoids
+ *   a destructive bare-delete preview while payload may still be coming).
  *
- * Throws only on the cross-block overlap validator, which catches conflicting
- * shapes (two replacements/deletes hitting the same anchor). Streaming preview
- * callers should treat any throw here as "no preview this tick".
+ * Throws only on the cross-hunk overlap validator, which catches conflicting
+ * shapes (two hunks hitting the same anchor). Streaming preview callers
+ * should treat any throw here as "no preview this tick".
  */
 export function parsePatchStreaming(diff: string): { edits: Edit[]; warnings: string[] } {
 	const tokenizer = new Tokenizer();

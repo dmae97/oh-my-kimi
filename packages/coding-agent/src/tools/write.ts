@@ -1,12 +1,14 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+
 import { stripHashlinePrefixes } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import { parseInternalUrl } from "../internal-urls/parse";
@@ -53,6 +55,8 @@ import {
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
+const LOOSE_HASHLINE_HEADER_RE = /^\s*¶\S+#[^ \t\r\n]*\s*$/;
+
 let fflateModulePromise: Promise<typeof import("fflate")> | undefined;
 async function loadFflate(): Promise<typeof import("fflate")> {
 	if (!fflateModulePromise) fflateModulePromise = import("fflate");
@@ -77,6 +81,31 @@ export interface WriteToolDetails {
 /**
  * Strip hashline display prefixes from write content.
  *
+ * Includes a fallback for loosely-formed section headers that still carry
+ * line-number prefixes (for example legacy or malformed hashline echoes).
+ */
+function stripWriteContentWithPotentialLooseHeader(lines: string[]): { text: string; stripped: boolean } {
+	const cleaned = stripHashlinePrefixes(lines);
+	if (cleaned !== lines) {
+		return { text: cleaned.join("\n"), stripped: true };
+	}
+
+	const headerIndex = lines.findIndex(line => line.trim().length > 0);
+	if (headerIndex === -1 || !LOOSE_HASHLINE_HEADER_RE.test(lines[headerIndex])) {
+		return { text: lines.join("\n"), stripped: false };
+	}
+
+	const linesWithoutHeader = lines.slice(0, headerIndex).concat(lines.slice(headerIndex + 1));
+	const cleanedWithoutHeader = stripHashlinePrefixes(linesWithoutHeader);
+	if (cleanedWithoutHeader === linesWithoutHeader) {
+		return { text: lines.join("\n"), stripped: false };
+	}
+	return { text: cleanedWithoutHeader.join("\n"), stripped: true };
+}
+
+/**
+ * Strip hashline display prefixes from write content.
+ *
  * Only active when hashline edit mode is enabled — the model sees `¶PATH#HASH`
  * headers plus `LINE:` prefixes in read output and sometimes copies them into write content.
  */
@@ -84,10 +113,7 @@ function stripWriteContent(session: ToolSession, content: string): { text: strin
 	if (!resolveFileDisplayMode(session).hashLines) {
 		return { text: content, stripped: false };
 	}
-	const lines = content.split("\n");
-	const cleaned = stripHashlinePrefixes(lines);
-	if (cleaned === lines) return { text: content, stripped: false };
-	return { text: cleaned.join("\n"), stripped: true };
+	return stripWriteContentWithPotentialLooseHeader(content.split("\n"));
 }
 
 /**

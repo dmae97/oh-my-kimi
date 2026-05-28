@@ -12,7 +12,7 @@ import * as Diff from "diff";
 import { applyEdits } from "./apply";
 import { RECOVERY_EXTERNAL_WARNING, RECOVERY_SESSION_CHAIN_WARNING, RECOVERY_SESSION_REPLAY_WARNING } from "./messages";
 import type { Snapshot, SnapshotStore } from "./snapshots";
-import type { Anchor, ApplyOptions, ApplyResult, Edit } from "./types";
+import type { Anchor, ApplyResult, Edit } from "./types";
 
 // Section tags are line-precise; never let Diff.applyPatch slide a hunk
 // onto a duplicate closer 100+ lines away. If snapshot replay does not
@@ -24,7 +24,6 @@ export interface RecoveryArgs {
 	currentText: string;
 	fileHash: string;
 	edits: readonly Edit[];
-	options?: ApplyOptions;
 }
 
 export interface RecoveryResult {
@@ -40,12 +39,11 @@ function applyEditsToSnapshot(
 	previousText: string,
 	currentText: string,
 	edits: readonly Edit[],
-	options: ApplyOptions,
 	recoveryWarning: string,
 ): RecoveryResult | null {
 	let applied: ApplyResult;
 	try {
-		applied = applyEdits(previousText, [...edits], options);
+		applied = applyEdits(previousText, [...edits]);
 	} catch {
 		return null;
 	}
@@ -107,7 +105,6 @@ function replaySessionChainOnCurrent(
 	previousText: string,
 	currentText: string,
 	edits: readonly Edit[],
-	options: ApplyOptions,
 ): RecoveryResult | null {
 	// Two guards narrow the corruption window. Neither alone is sufficient,
 	// and even together they don't fully prove correctness — replay is the
@@ -126,7 +123,7 @@ function replaySessionChainOnCurrent(
 	if (!verifyAnchorContent(previousText, currentText, edits)) return null;
 	let applied: ApplyResult;
 	try {
-		applied = applyEdits(currentText, [...edits], options);
+		applied = applyEdits(currentText, [...edits]);
 	} catch {
 		return null;
 	}
@@ -208,7 +205,7 @@ export class Recovery {
 	 * caller should then surface a {@link MismatchError}.
 	 */
 	tryRecover(args: RecoveryArgs): RecoveryResult | null {
-		const { path, currentText, fileHash, edits, options = {} } = args;
+		const { path, currentText, fileHash, edits } = args;
 		const head = this.store.head(path);
 		const snapshot = this.store.byHash(path, fileHash);
 		if (!snapshot || !snapshotHasEntries(snapshot)) return null;
@@ -218,19 +215,19 @@ export class Recovery {
 		const isSessionChain = !isHead;
 
 		if (snapshot.fullText !== undefined) {
-			const merged = applyEditsToSnapshot(snapshot.fullText, currentText, edits, options, recoveryWarning);
+			const merged = applyEditsToSnapshot(snapshot.fullText, currentText, edits, recoveryWarning);
 			if (merged !== null) return merged;
 			// Session-chain fallback: the 3-way merge on the snapshot refused.
 			// Replay onto current is gated by line-count equality AND
 			// anchor-content alignment — see `replaySessionChainOnCurrent`
 			// for why both guards together still don't fully prove correctness.
-			if (isSessionChain) return replaySessionChainOnCurrent(snapshot.fullText, currentText, edits, options);
+			if (isSessionChain) return replaySessionChainOnCurrent(snapshot.fullText, currentText, edits);
 			return null;
 		}
 
 		if (!sparseSnapshotCoversAnchors(snapshot, edits)) return null;
 		if (sparseSnapshotMatchesCurrent(currentText, snapshot)) return null;
 		const overlayText = buildSparseOverlayText(currentText, snapshot);
-		return applyEditsToSnapshot(overlayText, currentText, edits, options, recoveryWarning);
+		return applyEditsToSnapshot(overlayText, currentText, edits, recoveryWarning);
 	}
 }

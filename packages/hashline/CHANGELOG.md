@@ -3,6 +3,13 @@
 ## [Unreleased]
 ### Breaking Changes
 
+- Changed hunk header syntax from `A-B:` to `@@ A..B @@` with `@@ A @@` shorthand for single lines
+- Changed repeat payload sigil from `^A-B` to `&A..B` with `&A` shorthand for single lines
+- Changed range separator from `-` to `..` in all contexts (anchors and repeats)
+- Changed empty hunk behavior: concrete ranges now delete (no blank-line insertion); BOF/EOF empty hunks are now no-ops
+- Removed `ApplyOptions` parameter from `applyEdits()` and related APIs; auto-absorb behavior is no longer configurable
+- Removed diagnostic warnings for auto-absorbed duplicates from `ApplyResult`; warnings now come only from parser, patcher, or recovery
+- Removed legacy hashline block syntax `A-B:`, `A-B:-`, and `^A-B` and replaced edits with `@@ A..B @@` hunks using `+` and `&` body rows
 - Removed `A:` shorthand syntax; use explicit `A-A:` for single-line anchors
 - Removed `↑` and `↓` payload sigils; use `|TEXT` for literal rows and `^A-B` for repeating original lines
 - Removed standalone delete rows; use inline `A-B:-` syntax instead
@@ -13,12 +20,18 @@
 
 ### Added
 
+- Added compatibility parsing for apply_patch-style and unified-diff row noise by stripping path noise and converting context/delete body rows into hashline-compatible operations with warnings
 - Added `A-B:-` inline delete syntax for concrete range anchors
 - Added `^A-B` repeat payload syntax to emit original file lines inline
 - Added support for empty anchor blocks to write one blank line at the anchor position
 
 ### Changed
 
+- Changed unified-diff compatibility mode to silently drop `-old` rows and convert context rows to `+TEXT` literals with a warning instead of rejecting them
+- Changed `ABORT_MARKER` behavior to terminate parsing without surfacing a warning
+- Changed numeric ranges to `A..B` form and accepted `@@ A @@` as shorthand for `@@ A..A @@`
+- Changed empty hunk behavior so a concrete empty hunk deletes the selected range and `BOF`/`EOF` empty hunks no longer insert a blank line
+- Changed parse behavior for `*** Abort` to stop processing without returning a speculative truncation warning
 - Changed payload row format from three sigils (`|`, `↑`, `↓`) to two (`|`, `^`)
 - Changed range anchor syntax to require explicit `A-B` form (no single-line shorthand)
 - Changed error messages to reference new syntax and remove references to removed sigils

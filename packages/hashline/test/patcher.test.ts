@@ -17,7 +17,7 @@ describe("Patcher snapshot tag integrity", () => {
 		const tag = snapshots.recordContiguous(PATH, 1, ["before", ""], { fullText: "before\n" });
 		const patcher = new Patcher({ fs, snapshots });
 
-		const result = await patcher.apply(Patch.parse(`¶${PATH}#${tag}\n1-1:\n+after`));
+		const result = await patcher.apply(Patch.parse(`¶${PATH}#${tag}\n1 1\n+after`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(result.sections[0]?.fileHash).toMatch(/^[0-9A-F]{3}$/);
@@ -26,7 +26,7 @@ describe("Patcher snapshot tag integrity", () => {
 	});
 
 	it("normalizes lowercase section tags while parsing", () => {
-		const section = Patch.parseSingle(`¶${PATH}#0a3\n1-1:\n+after`);
+		const section = Patch.parseSingle(`¶${PATH}#0a3\n1 1\n+after`);
 
 		expect(section.fileHash).toBe("0A3");
 	});
@@ -42,7 +42,7 @@ describe("Patcher snapshot tag integrity", () => {
 			snapshots.recordContiguous(PATH, 1, [`unrelated ${index}`]);
 		}
 		const patcher = new Patcher({ fs, snapshots });
-		const patch = Patch.parse(`¶${PATH}#${staleTag}\n1-1:\n|changed`);
+		const patch = Patch.parse(`¶${PATH}#${staleTag}\n1 1\n|changed`);
 
 		await expect(patcher.apply(patch)).rejects.toBeInstanceOf(MismatchError);
 		expect(fs.get(PATH)).toBe("target\n");

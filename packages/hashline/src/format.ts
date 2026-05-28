@@ -4,25 +4,22 @@
  * tokenizer, the prompt, and the formal grammar.
  */
 
-/** Anchor terminator for every hashline operation block. */
-export const HL_OP_REPLACE = ":";
-
-/** Inline-delete suffix for concrete range anchors (`A-B:-`). */
-export const HL_OP_DELETE_SUFFIX = ":-";
+/** File-section header prefix: `¶path#hash`. */
+export const HL_FILE_PREFIX = "¶";
 
 /** Payload sigil for literal body rows. */
 export const HL_PAYLOAD_REPLACE = "+";
 /** Payload sigil for body rows that repeat original file lines. */
-export const HL_PAYLOAD_REPEAT = "^";
+export const HL_PAYLOAD_REPEAT = "&";
 
 /** All hashline payload sigils, concatenated for fast membership tests. */
 export const HL_PAYLOAD_CHARS = `${HL_PAYLOAD_REPLACE}${HL_PAYLOAD_REPEAT}`;
 
-/** Hashline edit file-section header marker. */
-export const HL_FILE_PREFIX = "¶";
-
 /** Separator between a hashline file path and its opaque snapshot tag. */
 export const HL_FILE_HASH_SEP = "#";
+
+/** Separator between two line numbers in a range, e.g. `5..10`. */
+export const HL_RANGE_SEP = "..";
 
 /** Separator between a line number and displayed line content in hashline mode. */
 export const HL_LINE_BODY_SEP = ":";
@@ -33,12 +30,12 @@ function regexEscape(str: string): string {
 
 /**
  * Decoration prefix that may precede a line number in tool output:
- * `>` (context line in grep), `-` (removed line), `*` (match line).
- * Any combination, in any order, surrounded by optional whitespace. Output
- * formatters emit at most one decoration per line; the parser stays liberal
- * because it accepts whatever the model echoes back.
+ * `*` (match line), `>` (context line in grep). Any combination, in any
+ * order, surrounded by optional whitespace. Output formatters emit at most
+ * one decoration per line; the parser stays liberal because it accepts
+ * whatever the model echoes back.
  */
-export const HL_ANCHOR_DECORATION_RE_RAW = `\\s*[>\\-*]*\\s*`;
+export const HL_ANCHOR_DECORATION_RE_RAW = `\\s*[>*]*\\s*`;
 
 /** Capture-group regex source for a decorated bare line-number anchor. */
 export const HL_ANCHOR_RE_RAW = `${HL_ANCHOR_DECORATION_RE_RAW}(\\d+)`;
@@ -49,9 +46,9 @@ export const HL_LINE_RE_RAW = `[1-9]\\d*`;
 /** Capture-group form of {@link HL_LINE_RE_RAW}. */
 export const HL_LINE_CAPTURE_RE_RAW = `(${HL_LINE_RE_RAW})`;
 
-/** Regex for repeat payload rows (`^A-B`). */
+/** Regex for repeat payload rows (`&A..B`). */
 export const HL_PAYLOAD_REPEAT_RE = new RegExp(
-	`^\\${HL_PAYLOAD_REPEAT}${HL_LINE_CAPTURE_RE_RAW}-${HL_LINE_CAPTURE_RE_RAW}$`,
+	`^\\${HL_PAYLOAD_REPEAT}${HL_LINE_CAPTURE_RE_RAW},${HL_LINE_CAPTURE_RE_RAW}$`,
 );
 
 /** Number of hex characters in an opaque snapshot tag. */
