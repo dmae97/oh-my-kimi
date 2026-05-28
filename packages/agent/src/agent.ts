@@ -21,7 +21,6 @@ import {
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import { agentLoop, agentLoopContinue } from "./agent-loop";
-import { EventLoopKeepalive } from "./utils/yield";
 import type { AppendOnlyContextManager } from "./append-only-context";
 import type { HarmonyAuditEvent } from "./harmony-leak";
 import type {
@@ -35,6 +34,7 @@ import type {
 	StreamFn,
 	ToolCallContext,
 } from "./types";
+import { EventLoopKeepalive } from "./utils/yield";
 
 /**
  * Default convertToLlm: Keep only LLM-compatible messages, convert attachments.
