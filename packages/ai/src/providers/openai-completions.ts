@@ -1502,7 +1502,9 @@ export function convertMessages(
 					const signature = nonEmptyThinkingBlocks[0].thinkingSignature;
 					const recognizedFields = ["reasoning_content", "reasoning", "reasoning_text"];
 					const wireField =
-						compat.allowsSyntheticReasoningContentForToolCalls && signature && recognizedFields.includes(signature)
+						compat.allowsSyntheticReasoningContentForToolCalls &&
+						signature &&
+						recognizedFields.includes(signature)
 							? signature
 							: signature && recognizedFields.includes(signature)
 								? (compat.reasoningContentField ?? "reasoning_content")
