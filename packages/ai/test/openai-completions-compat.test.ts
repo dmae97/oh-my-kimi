@@ -937,9 +937,7 @@ describe("kimi model detection via detectCompat", () => {
 		const payload = (await promise) as { messages: Array<Record<string, unknown>> };
 		const assistant = payload.messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
-		expect(Reflect.get(assistant as object, "reasoning_content")).toBe(
-			"Need to read the file before answering.",
-		);
+		expect(Reflect.get(assistant as object, "reasoning_content")).toBe("Need to read the file before answering.");
 		// DeepSeek's allowsSynthetic=false must keep the stale `reasoning` key
 		// off the wire body so opencode's schema validation does not flag it.
 		expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
