@@ -1005,12 +1005,23 @@ function buildParams(
 	// absent. `detectOpenAICompat` keeps `requiresReasoningContentForToolCalls`
 	// off for opencode kimi so the first case never fires; reactivate it per
 	// request when this turn is in thinking mode so prior tool-call turns
-	// replay reasoning_content.
+	// replay reasoning_content. Forced-tool turns are excluded because the
+	// later `disableReasoningOnForcedToolChoice` guard at the bottom of
+	// `buildParams` strips thinking from the wire body for Kimi — keeping the
+	// replay on under those conditions would resurrect the #1071 failure.
 	const isKimiModelId = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
 	const isOpenCodeProvider = model.provider === "opencode-go" || model.provider === "opencode-zen";
 	const thinkingEnabledForRequest =
 		Boolean(options?.reasoning) && !options?.disableReasoning && Boolean(model.reasoning);
-	if (isKimiModelId && isOpenCodeProvider && thinkingEnabledForRequest) {
+	const forcedToolChoiceSuppressesThinking =
+		compat.disableReasoningOnForcedToolChoice &&
+		isForcedToolChoice(mapToOpenAICompletionsToolChoice(options?.toolChoice));
+	if (
+		isKimiModelId &&
+		isOpenCodeProvider &&
+		thinkingEnabledForRequest &&
+		!forcedToolChoiceSuppressesThinking
+	) {
 		compat.requiresReasoningContentForToolCalls = true;
 	}
 	const messages = convertMessages(model, context, compat);
