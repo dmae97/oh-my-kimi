@@ -16,8 +16,23 @@ import type {
 	MCPTransport,
 } from "../../mcp/types";
 import { toJsonRpcError } from "../../mcp/types";
-import { createMCPTimeout, getNeverAbortSignal, resolveMCPTimeoutMs } from "../timeout";
+import { createMCPTimeout, getNeverAbortSignal, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 
+const HTTP_SSE_CONNECT_TIMEOUT_MS = 1_000;
+/**
+ * Best-effort startup deadline for the optional Streamable HTTP GET SSE listener.
+ *
+ * Returns `0` (disabled) when the operator has explicitly disabled MCP client-side
+ * timeouts via `timeout: 0` or `OMP_MCP_TIMEOUT_MS=0`, mirroring the rest of the
+ * MCP timeout surface. Otherwise caps the wait at one second and scales below
+ * short request timeouts so connect-time never exceeds the request budget.
+ */
+export function resolveSSEConnectTimeoutMs(configTimeout?: number): number {
+	const requestTimeout = resolveMCPTimeoutMs(configTimeout);
+	if (!isMCPTimeoutEnabled(requestTimeout)) return 0;
+	const boundedTimeout = Math.min(HTTP_SSE_CONNECT_TIMEOUT_MS, Math.floor(requestTimeout / 4));
+	return Math.max(1, boundedTimeout);
+}
 /**
  * HTTP transport for MCP servers.
  * Uses POST for requests, supports SSE responses.
@@ -73,6 +88,15 @@ export class HttpTransport implements MCPTransport {
 		}
 
 		let response: Response;
+		let timedOut = false;
+		const startupTimeoutMs = resolveSSEConnectTimeoutMs(this.config.timeout);
+		const timeoutId =
+			startupTimeoutMs > 0
+				? setTimeout(() => {
+						timedOut = true;
+						this.#sseConnection?.abort();
+					}, startupTimeoutMs)
+				: null;
 		try {
 			response = await fetch(this.config.url, {
 				method: "GET",
@@ -81,13 +105,16 @@ export class HttpTransport implements MCPTransport {
 			});
 		} catch (error) {
 			this.#sseConnection = null;
-			if (error instanceof Error && error.name !== "AbortError") {
+			if (error instanceof Error && error.name !== "AbortError" && !timedOut) {
 				this.onError?.(error);
 			}
 			return;
+		} finally {
+			if (timeoutId !== null) clearTimeout(timeoutId);
 		}
 
 		if (response.status === 405 || !response.ok || !response.body) {
+			await response.body?.cancel();
 			this.#sseConnection = null;
 			return;
 		}
