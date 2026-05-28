@@ -1,6 +1,7 @@
 /** Agent class that uses the agent-loop directly.
  * No transport abstraction - calls streamSimple via the loop.
  */
+import { isPromise } from "node:util/types";
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
@@ -1076,7 +1077,16 @@ export class Agent {
 
 	#emit(e: AgentEvent) {
 		for (const listener of this.#listeners) {
-			listener(e);
+			try {
+				const result = listener(e) as unknown;
+				if (isPromise(result)) {
+					result.catch(err => {
+						console.error("Agent listener rejected:", err instanceof Error ? err.message : err);
+					});
+				}
+			} catch (err) {
+				console.error("Agent listener threw:", err instanceof Error ? err.message : err);
+			}
 		}
 	}
 
