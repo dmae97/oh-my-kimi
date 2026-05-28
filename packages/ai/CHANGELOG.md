@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenCode Zen Kimi `400 thinking is enabled but reasoning_content is missing in assistant tool call message` by reactivating `requiresReasoningContentForToolCalls` for `opencode-go`/`opencode-zen` Kimi requests whose runtime options enable thinking, while the static compat default still omits the field for thinking-disabled turns to preserve the `Extra inputs are not permitted` guard from #1071. ([#1484](https://github.com/can1357/oh-my-pi/issues/1484))
+
 ## [15.5.8] - 2026-05-28
 
 ### Added

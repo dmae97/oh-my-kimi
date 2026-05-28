@@ -997,6 +997,22 @@ function buildParams(
 	toolStrictModeOverride?: ToolStrictModeOverride,
 ): { params: OpenAICompletionsParams; toolStrictMode: AppliedToolStrictMode } {
 	const compat = getCompat(model, resolvedBaseUrl);
+	// Opencode Zen's Kimi gateway gates `reasoning_content` on the request's
+	// thinking state: it 400s with `Extra inputs are not permitted` when
+	// thinking is off but the field is supplied (#1071), and 400s with
+	// `thinking is enabled but reasoning_content is missing in assistant tool
+	// call message at index N` (#1484) when thinking is on and the field is
+	// absent. `detectOpenAICompat` keeps `requiresReasoningContentForToolCalls`
+	// off for opencode kimi so the first case never fires; reactivate it per
+	// request when this turn is in thinking mode so prior tool-call turns
+	// replay reasoning_content.
+	const isKimiModelId = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
+	const isOpenCodeProvider = model.provider === "opencode-go" || model.provider === "opencode-zen";
+	const thinkingEnabledForRequest =
+		Boolean(options?.reasoning) && !options?.disableReasoning && Boolean(model.reasoning);
+	if (isKimiModelId && isOpenCodeProvider && thinkingEnabledForRequest) {
+		compat.requiresReasoningContentForToolCalls = true;
+	}
 	const messages = convertMessages(model, context, compat);
 	maybeAddOpenRouterAnthropicCacheControl(model, messages);
 	const supportsReasoningParams = model.provider !== "github-copilot";
@@ -1009,8 +1025,7 @@ function buildParams(
 	// before the final answer. Always send max_tokens — match the same
 	// Kimi-family regex used by the compat detector.
 	// Note: Direct kimi-code provider is handled by the dedicated Kimi provider in kimi.ts.
-	const isKimi = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
-	const effectiveMaxTokens = options?.maxTokens ?? (isKimi ? model.maxTokens : undefined);
+	const effectiveMaxTokens = options?.maxTokens ?? (isKimiModelId ? model.maxTokens : undefined);
 
 	const requestModelId =
 		model.provider === "fireworks"
