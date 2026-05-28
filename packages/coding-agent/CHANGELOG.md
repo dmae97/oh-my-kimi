@@ -46,6 +46,7 @@
 - Fixed `eval` tool image rendering to resize displayed images before returning them and append image-dimension notes to text output
 - Fixed `write` tool output sanitation to strip malformed or loose hashline section headers before writing file content
 - Fixed `omp auth-broker serve` crashing at startup with `logger.setTransports is not a function` — switched the call site to `import { setTransports } from "@oh-my-pi/pi-utils/logger"`, bypassing the `logger` namespace re-export that some Bun versions failed to expose at runtime
+- Fixed user shortcut Python execution to namespace session IDs like eval, so both paths share one kernel
 
 ## [15.5.7] - 2026-05-27
 ### Added
