@@ -27,7 +27,7 @@ Both eventually use `executeBash()` in `src/exec/bash-executor.ts` for non-PTY e
 - rejects `async: true` when `async.enabled` is false,
 - uses only explicit `head`/`tail` tool args for post-run filtering.
 
-`normalizeBashCommand()` still exists in `src/tools/bash-normalize.ts`, but `BashTool.execute()` does not call it in the current source. Trailing shell pipes such as `| head -n 50` remain part of the shell command unless the caller uses the structured `head`/`tail` args.
+`normalizeBashCommand()` was previously in `src/tools/bash-normalize.ts` but has been removed. Trailing shell pipes such as `| head -n 50` remain part of the shell command unless the caller uses the structured `head`/`tail` args.
 
 ## 2) Optional interception (blocked-command path)
 
@@ -256,7 +256,7 @@ This component is wired by `CommandController.handleBashCommand()` and fed from 
 ## Implementation files
 
 - [`src/tools/bash.ts`](../packages/coding-agent/src/tools/bash.ts) — tool entrypoint, input handling/interception, async and PTY/non-PTY selection, result/error mapping, bash tool renderer.
-- [`src/tools/bash-normalize.ts`](../packages/coding-agent/src/tools/bash-normalize.ts) — post-run head/tail filtering; also contains an unused command-normalization helper.
+- ~~`src/tools/bash-normalize.ts`~~ — removed (post-run head/tail filtering is now handled inline).
 - [`src/tools/bash-interceptor.ts`](../packages/coding-agent/src/tools/bash-interceptor.ts) — interceptor rule matching and blocked-command messages.
 - [`src/exec/bash-executor.ts`](../packages/coding-agent/src/exec/bash-executor.ts) — non-PTY executor, shell session reuse, cancellation wiring, output sink integration.
 - [`src/tools/bash-interactive.ts`](../packages/coding-agent/src/tools/bash-interactive.ts) — PTY runtime, overlay UI, input normalization, non-interactive env defaults.

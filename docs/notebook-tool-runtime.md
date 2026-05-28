@@ -6,7 +6,7 @@ The critical distinction: **`notebook` is a JSON notebook editor, not a notebook
 
 ## Implementation files
 
-- [`src/tools/notebook.ts`](../packages/coding-agent/src/tools/notebook.ts)
+- [`src/edit/notebook.ts`](../packages/coding-agent/src/edit/notebook.ts)
 - [`src/eval/py/executor.ts`](../packages/coding-agent/src/eval/py/executor.ts)
 - [`src/eval/py/kernel.ts`](../packages/coding-agent/src/eval/py/kernel.ts)
 - [`src/session/streaming-output.ts`](../packages/coding-agent/src/session/streaming-output.ts)
@@ -14,7 +14,7 @@ The critical distinction: **`notebook` is a JSON notebook editor, not a notebook
 
 ## 1) Runtime boundary: editing vs executing
 
-## `notebook` tool (`src/tools/notebook.ts`)
+## `notebook` tool (`src/edit/notebook.ts`)
 
 - Supports `action: edit | insert | delete` on a `.ipynb` file.
 - Resolves path relative to session CWD (`resolveToCwd`).
