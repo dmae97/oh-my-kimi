@@ -36,6 +36,10 @@ describe("VaultProtocolHandler", () => {
 		vi.restoreAllMocks();
 		VaultProtocolHandler.resetForTests();
 		InternalUrlRouter.resetForTests();
+		// vault.enabled defaults to false (opt-in); existing tests pre-date the gate and
+		// assume the handler is active. Force-enable per-test; the dedicated "disabled"
+		// case toggles this off via its own spy.
+		vi.spyOn(vaultProtocol, "isVaultEnabled").mockReturnValue(true);
 	});
 
 	afterEach(() => {
@@ -157,6 +161,27 @@ describe("VaultProtocolHandler", () => {
 		});
 	});
 
+	it("resolves active-vault filesystem paths from obsidian vault info output", async () => {
+		await withTempDir(async tempDir => {
+			const root = path.join(tempDir, "active-vault");
+			await fs.mkdir(root, { recursive: true });
+			await Bun.write(path.join(root, "note.md"), "active note");
+			const spawnSpy = vi.spyOn(vaultProtocol, "spawnObsidian").mockResolvedValue({
+				stdout: `name\tObsidian\npath\t${root}\nfiles\t1\n`,
+				stderr: "",
+				exitCode: 0,
+			});
+			const handler = testHandler(vaultProtocol.spawnObsidian);
+
+			const resource = await handler.resolve(resourceUrl("vault://_/note.md"));
+			const second = await handler.resolve(resourceUrl("vault://_/note.md"));
+
+			expect(resource.content).toBe("active note");
+			expect(second.content).toBe("active note");
+			expect(spawnSpy).toHaveBeenCalledTimes(1);
+			expect(spawnSpy.mock.calls[0][1]).toEqual(["vault", "info", "path"]);
+		});
+	});
 	it("writes files through the protocol hook and resolves cached vault paths for edit plumbing", async () => {
 		await withTempDir(async tempDir => {
 			const root = path.join(tempDir, "vault");
@@ -275,6 +300,20 @@ describe("VaultProtocolHandler", () => {
 		});
 	});
 
+	it("surfaces obsidian stdout error text even when the CLI exits zero", async () => {
+		const spawnSpy = vi.spyOn(vaultProtocol, "spawnObsidian").mockResolvedValue({
+			stdout: 'Error: File "NOPE" not found.\n',
+			stderr: "",
+			exitCode: 0,
+		});
+		const handler = testHandler(vaultProtocol.spawnObsidian);
+
+		await expect(handler.resolve(resourceUrl("vault://Work/NOPE.md?op=outline"))).rejects.toThrow(
+			'vault://outline failed: Error: File "NOPE" not found.',
+		);
+		expect(spawnSpy).toHaveBeenCalledTimes(1);
+	});
+
 	it("surfaces obsidian stderr on non-zero exit", async () => {
 		const spawnSpy = vi.spyOn(vaultProtocol, "spawnObsidian").mockResolvedValue({
 			stdout: "",
@@ -290,13 +329,9 @@ describe("VaultProtocolHandler", () => {
 	});
 
 	it("aborts an in-flight spawn when the AbortSignal is cancelled", async () => {
+		if (!(await Bun.file("/bin/sleep").exists())) return;
 		const controller = new AbortController();
-		const promise = vaultProtocol.spawnObsidian(
-			process.execPath,
-			["-e", "setTimeout(() => {}, 10000)"],
-			controller.signal,
-			30_000,
-		);
+		const promise = vaultProtocol.spawnObsidian("/bin/sleep", ["10"], controller.signal, 30_000);
 
 		await Bun.sleep(20);
 		controller.abort();
@@ -334,5 +369,36 @@ describe("VaultProtocolHandler", () => {
 			expect(resource.content).toBe("body");
 			expect(resource.immutable).toBe(false);
 		});
+	});
+
+	it("refuses resolve, write, and path resolution when vault.enabled is false", async () => {
+		vi.spyOn(vaultProtocol, "isVaultEnabled").mockReturnValue(false);
+		const handler = testHandler(vaultProtocol.spawnObsidian);
+
+		await expect(handler.resolve(resourceUrl("vault://Work/foo.md"))).rejects.toThrow(
+			vaultProtocol.VaultDisabledError,
+		);
+		await expect(handler.write(resourceUrl("vault://Work/foo.md"), "body")).rejects.toThrow(
+			vaultProtocol.VaultDisabledError,
+		);
+		expect(() => resolveVaultUrlToPath("vault://Work/foo.md")).toThrow(vaultProtocol.VaultDisabledError);
+	});
+
+	it("reports hasObsidian() as false when the gate is off, even if the binary is on disk", () => {
+		// hasObsidian feeds Handlebars `{{#if hasObsidian}}` in the system prompt.
+		// Disabling the gate MUST hide vault:// from the prompt regardless of binary presence.
+		vi.spyOn(vaultProtocol, "isVaultEnabled").mockReturnValue(false);
+		vi.spyOn(vaultProtocol, "resolveObsidianBinary").mockReturnValue("/test/obsidian");
+
+		expect(vaultProtocol.hasObsidian()).toBe(false);
+	});
+
+	it("reports hasObsidian() as true only when both the gate is on and the binary exists", () => {
+		vi.spyOn(vaultProtocol, "isVaultEnabled").mockReturnValue(true);
+		vi.spyOn(vaultProtocol, "resolveObsidianBinary").mockReturnValue("/test/obsidian");
+		expect(vaultProtocol.hasObsidian()).toBe(true);
+
+		vi.spyOn(vaultProtocol, "resolveObsidianBinary").mockReturnValue(null);
+		expect(vaultProtocol.hasObsidian()).toBe(false);
 	});
 });

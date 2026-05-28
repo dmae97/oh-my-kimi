@@ -2073,6 +2073,17 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "tools", label: "Read URLs", description: "Allow the read tool to fetch and process URLs" },
 	},
 
+	"vault.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			label: "Obsidian Vault",
+			description:
+				"Enable the vault:// internal URL for reading and editing Obsidian vault content via the Obsidian CLI. When disabled, vault:// resolution is refused and the vault:// entry is omitted from the system prompt.",
+		},
+	},
+
 	"github.enabled": {
 		type: "boolean",
 		default: false,

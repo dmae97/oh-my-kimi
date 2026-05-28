@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { $which, isEnoent } from "@oh-my-pi/pi-utils";
+import { isSettingsInitialized, settings } from "../config/settings";
+import { getDefault } from "../config/settings-schema";
 import { parseInternalUrl } from "./parse";
 import { validateRelativePath } from "./skill-protocol";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, WriteContext } from "./types";
@@ -302,8 +304,35 @@ export function resolveObsidianBinary(): string | null {
 	return cachedObsidianBinary;
 }
 
+/**
+ * Whether the `vault://` protocol is enabled in the active settings profile.
+ *
+ * Reads `vault.enabled` from the global settings singleton. Falls back to the
+ * schema default when settings are not yet initialized (e.g. during isolated
+ * unit tests that exercise the handler before the host calls `Settings.init`).
+ */
+export function isVaultEnabled(): boolean {
+	if (!isSettingsInitialized()) return getDefault("vault.enabled");
+	try {
+		return settings.get("vault.enabled");
+	} catch {
+		// Defensive: if the settings proxy throws (e.g. shutdown race), fall back to default.
+		return getDefault("vault.enabled");
+	}
+}
+
 export function hasObsidian(): boolean {
-	return resolveObsidianBinary() !== null;
+	return isVaultEnabled() && resolveObsidianBinary() !== null;
+}
+
+const VAULT_DISABLED_MESSAGE =
+	"vault:// is disabled. Enable it by setting `vault.enabled = true` (Settings → Tools → Obsidian Vault).";
+
+export class VaultDisabledError extends Error {
+	constructor() {
+		super(VAULT_DISABLED_MESSAGE);
+		this.name = "VaultDisabledError";
+	}
 }
 
 function missingBinaryError(): Error {
@@ -319,9 +348,20 @@ function requireObsidianBinary(resolveBinary: () => string | null): string {
 	throw missingBinaryError();
 }
 
-function throwCliFailure(opLabel: string, result: ObsidianSpawnResult): never {
+function cliReportedError(result: ObsidianSpawnResult): string | undefined {
 	const stderr = result.stderr.trim();
-	const detail = stderr || `obsidian exited with code ${result.exitCode}`;
+	if (stderr.startsWith("Error:")) return stderr;
+	const stdout = result.stdout.trim();
+	if (stdout.startsWith("Error:")) return stdout;
+	return undefined;
+}
+
+function assertCliSuccess(opLabel: string, result: ObsidianSpawnResult): void {
+	const reportedError = cliReportedError(result);
+	if (result.exitCode === 0 && !reportedError) return;
+	const stderr = result.stderr.trim();
+	const stdout = result.stdout.trim();
+	const detail = reportedError || stderr || stdout || `obsidian exited with code ${result.exitCode}`;
 	throw new Error(`vault://${opLabel} failed: ${detail}`);
 }
 
@@ -338,6 +378,23 @@ function parseVaultDirectory(stdout: string): Map<string, string> {
 		vaults.set(name, path.resolve(vaultPath));
 	}
 	return vaults;
+}
+
+function parseActiveVaultPath(stdout: string): string {
+	for (const line of stdout.split(/\r?\n/)) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		const tab = trimmed.indexOf("\t");
+		if (tab > 0 && trimmed.slice(0, tab).toLowerCase() === "path") {
+			return trimmed.slice(tab + 1).trim();
+		}
+		const colon = trimmed.indexOf(":");
+		if (colon > 0 && trimmed.slice(0, colon).toLowerCase() === "path") {
+			return trimmed.slice(colon + 1).trim();
+		}
+	}
+	const trimmed = stdout.trim();
+	return trimmed.includes("\n") ? "" : trimmed;
 }
 
 function getCachedVaultRoot(ref: VaultReference): string | undefined {
@@ -363,6 +420,7 @@ function findExistingAncestorSync(targetPath: string, rootPath: string): string 
 }
 
 export function resolveVaultUrlToPath(input: string | InternalUrl): string {
+	if (!isVaultEnabled()) throw new VaultDisabledError();
 	const parsed = parseVaultUrl(input);
 	if (parsed.kind !== "fs-file" && parsed.kind !== "fs-dir") {
 		throw new Error("vault:// path resolution only supports plain filesystem paths");
@@ -630,6 +688,7 @@ export class VaultProtocolHandler implements ProtocolHandler {
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
+		if (!isVaultEnabled()) throw new VaultDisabledError();
 		const parsed = parseVaultUrl(url);
 		switch (parsed.kind) {
 			case "list-vaults":
@@ -647,6 +706,7 @@ export class VaultProtocolHandler implements ProtocolHandler {
 	}
 
 	async write(url: InternalUrl, content: string, context?: WriteContext): Promise<void> {
+		if (!isVaultEnabled()) throw new VaultDisabledError();
 		const parsed = parseVaultUrl(url);
 		if (parsed.kind !== "fs-file") {
 			throw new Error("vault:// write only supports plain file paths");
@@ -662,7 +722,7 @@ export class VaultProtocolHandler implements ProtocolHandler {
 	async #loadVaultDirectory(context?: ResolveContext | WriteContext): Promise<Map<string, string>> {
 		if (cachedVaultDirectory) return cachedVaultDirectory;
 		const result = await this.#spawn(["vaults", "verbose"], context);
-		if (result.exitCode !== 0) throwCliFailure("vaults", result);
+		assertCliSuccess("vaults", result);
 		cachedVaultDirectory = parseVaultDirectory(result.stdout);
 		return cachedVaultDirectory;
 	}
@@ -673,8 +733,8 @@ export class VaultProtocolHandler implements ProtocolHandler {
 
 		if (ref.active) {
 			const result = await this.#spawn(["vault", "info", "path"], context);
-			if (result.exitCode !== 0) throwCliFailure("vault info path", result);
-			const activePath = result.stdout.trim();
+			assertCliSuccess("vault info path", result);
+			const activePath = parseActiveVaultPath(result.stdout);
 			if (!activePath) {
 				throw new Error("vault:// active vault path was empty");
 			}
@@ -727,7 +787,7 @@ export class VaultProtocolHandler implements ProtocolHandler {
 		let cliInfo = cachedVaultInfo.get(cacheKey);
 		if (cliInfo === undefined) {
 			const result = await this.#spawn(["vault", "info", ...this.#vaultCliArg(parsed.ref)], context);
-			if (result.exitCode !== 0) throwCliFailure("vault info", result);
+			assertCliSuccess("vault info", result);
 			cliInfo = result.stdout.trim();
 			cachedVaultInfo.set(cacheKey, cliInfo);
 		}
@@ -864,7 +924,7 @@ export class VaultProtocolHandler implements ProtocolHandler {
 		const invocation = buildObsidianCliInvocation(parsed);
 		const args = [...invocation.args, ...this.#vaultCliArg(parsed.ref)];
 		const result = await this.#spawn(args, context);
-		if (result.exitCode !== 0) throwCliFailure(invocation.opLabel, result);
+		assertCliSuccess(invocation.opLabel, result);
 		return {
 			url: parsed.url,
 			content: result.stdout,
