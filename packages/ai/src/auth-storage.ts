@@ -1619,6 +1619,18 @@ export class AuthStorage {
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
+			case "wafer-pass": {
+				const { loginWaferPass } = await import("./utils/oauth/wafer");
+				const apiKey = await loginWaferPass(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "wafer-serverless": {
+				const { loginWaferServerless } = await import("./utils/oauth/wafer");
+				const apiKey = await loginWaferServerless(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
 			case "zai": {
 				const { loginZai } = await import("./utils/oauth/zai");
 				const apiKey = await loginZai(ctrl);

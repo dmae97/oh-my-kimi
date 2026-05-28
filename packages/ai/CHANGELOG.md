@@ -5,6 +5,7 @@
 ### Added
 
 - Added `CheckCredentialsOptions.completionProbe` (and `completionTimeoutMs`) so `AuthStorage.checkCredentials` can additionally exercise each credential against the provider's chat-completion endpoint after refresh-on-expiry. Result lands on `CredentialHealthResult.completion` ({ok, reason?, modelId?, latencyMs?}) without disturbing the usage `ok` field. Public types: `CompletionProbe`, `CompletionProbeInput`, `CompletionProbeCredential`, `CredentialCompletionResult`. The probe is invoked even when no `UsageProvider` is registered for the row, and is skipped when OAuth refresh fails (the stale bytes would only mask the upstream failure).
+- Added Wafer Pass and Wafer Serverless providers (`wafer-pass`, `wafer-serverless`). OpenAI-compatible (`https://pass.wafer.ai/v1`), bearer auth, `wfr_…` keys. `/login wafer-pass` and `/login wafer-serverless` paste-and-validate the key against `/v1/models`. `WAFER_PASS_API_KEY` and `WAFER_SERVERLESS_API_KEY` environment variables wired into `getEnvApiKey`. Bundled catalog seeds `wafer-pass/{GLM-5.1, Qwen3.5-397B-A17B}` and `wafer-serverless/{GLM-5.1, Qwen3.5-397B-A17B, Kimi-K2.6, Qwen3.6-35B-A3B}`; dynamic discovery via `/v1/models` overlays additional models at runtime. Pass-tier discovery filters `wafer.tier === "pass_included"`. GLM-family entries carry the zai-style thinking compat (`thinkingFormat: "zai"`, `reasoningContentField: "reasoning_content"`).
 
 ### Changed
 

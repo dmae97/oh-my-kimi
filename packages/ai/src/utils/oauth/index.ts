@@ -235,6 +235,16 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		name: "xAI Grok OAuth (SuperGrok Subscription)",
 		available: true,
 	},
+	{
+		id: "wafer-pass",
+		name: "Wafer Pass (flat-rate subscription)",
+		available: true,
+	},
+	{
+		id: "wafer-serverless",
+		name: "Wafer Serverless (pay-as-you-go)",
+		available: true,
+	},
 ];
 
 const customOAuthProviders = new Map<string, OAuthProviderInterface>();
@@ -359,6 +369,8 @@ export async function refreshOAuthToken(
 		case "cloudflare-ai-gateway":
 		case "vercel-ai-gateway":
 		case "qwen-portal":
+		case "wafer-pass":
+		case "wafer-serverless":
 		case "zenmux":
 		case "vllm":
 			// API keys / static bearer tokens don't expire, return as-is

@@ -1038,6 +1038,136 @@ export function firepassModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 7.7 Wafer (Pass + Serverless)
+// ---------------------------------------------------------------------------
+
+export interface WaferModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+const WAFER_DEFAULT_BASE_URL = "https://pass.wafer.ai/v1";
+const WAFER_MAX_TOKENS_CAP = 65536;
+
+/**
+ * Shared mapper for Wafer's `/v1/models` records.
+ *
+ * Wafer wraps each entry with a `wafer` envelope describing tier, capabilities,
+ * and cents-per-million pricing. The mapper folds that metadata into the
+ * canonical `Model<"openai-completions">` shape and applies zai-family thinking
+ * compat when the entry advertises reasoning support (GLM-family on the Pass
+ * SKU). Cents-per-million → dollars-per-million via /100.
+ */
+interface WaferRecord {
+	context_length?: unknown;
+	tier?: unknown;
+	capabilities?: { vision?: unknown; reasoning?: unknown; tools?: unknown };
+	pricing?: {
+		input_cents_per_million?: unknown;
+		output_cents_per_million?: unknown;
+		cache_read_cents_per_million?: unknown;
+	};
+	display_name?: unknown;
+}
+
+function readWaferRecord(entry: OpenAICompatibleModelRecord): WaferRecord | undefined {
+	const raw = (entry as { wafer?: unknown }).wafer;
+	return raw && typeof raw === "object" ? (raw as WaferRecord) : undefined;
+}
+
+function mapWaferModel(
+	providerId: "wafer-pass" | "wafer-serverless",
+	baseUrl: string,
+	entry: OpenAICompatibleModelRecord,
+	defaults: Model<"openai-completions">,
+): Model<"openai-completions"> {
+	const wafer = readWaferRecord(entry);
+	const capabilities = wafer?.capabilities ?? {};
+	const reasoning = capabilities.reasoning === true;
+	const vision = capabilities.vision === true;
+	const contextWindow = toPositiveNumber(
+		wafer?.context_length,
+		toPositiveNumber((entry as { max_model_len?: unknown }).max_model_len, defaults.contextWindow),
+	);
+	const maxTokens = Math.min(contextWindow, WAFER_MAX_TOKENS_CAP);
+	const pricing = wafer?.pricing ?? {};
+	// Wafer publishes cents-per-million; OMP catalog stores dollars-per-million.
+	const cost = {
+		input: toPositiveNumber(pricing.input_cents_per_million, 0) / 100,
+		output: toPositiveNumber(pricing.output_cents_per_million, 0) / 100,
+		cacheRead: toPositiveNumber(pricing.cache_read_cents_per_million, 0) / 100,
+		cacheWrite: 0,
+	};
+	const name = toModelName(wafer?.display_name, defaults.name);
+	const base: Model<"openai-completions"> = {
+		...defaults,
+		id: defaults.id,
+		name,
+		api: "openai-completions",
+		provider: providerId,
+		baseUrl,
+		reasoning,
+		input: vision ? (["text", "image"] as const) : ["text"],
+		cost,
+		contextWindow,
+		maxTokens,
+	};
+	if (reasoning) {
+		return {
+			...base,
+			compat: {
+				thinkingFormat: "zai",
+				reasoningContentField: "reasoning_content",
+				supportsDeveloperRole: false,
+			},
+		};
+	}
+	return {
+		...base,
+		compat: { supportsDeveloperRole: false },
+	};
+}
+
+function createWaferOptions(
+	providerId: "wafer-pass" | "wafer-serverless",
+	config: WaferModelManagerConfig | undefined,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? WAFER_DEFAULT_BASE_URL;
+	const passOnly = providerId === "wafer-pass";
+	return {
+		providerId,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: providerId,
+					baseUrl,
+					apiKey,
+					filterModel: entry => {
+						if (!passOnly) return true;
+						const wafer = readWaferRecord(entry);
+						return wafer?.tier === "pass_included";
+					},
+					mapModel: (entry, defaults) => mapWaferModel(providerId, baseUrl, entry, defaults),
+				}),
+		}),
+	};
+}
+
+export function waferPassModelManagerOptions(
+	config?: WaferModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createWaferOptions("wafer-pass", config);
+}
+
+export function waferServerlessModelManagerOptions(
+	config?: WaferModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createWaferOptions("wafer-serverless", config);
+}
+
+// ---------------------------------------------------------------------------
 // 7. Mistral
 // ---------------------------------------------------------------------------
 

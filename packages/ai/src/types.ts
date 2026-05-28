@@ -142,6 +142,8 @@ export type KnownProvider =
 	| "venice"
 	| "vllm"
 	| "xiaomi"
+	| "wafer-pass"
+	| "wafer-serverless"
 	| "zenmux"
 	| "lm-studio";
 export type Provider = KnownProvider | string;
