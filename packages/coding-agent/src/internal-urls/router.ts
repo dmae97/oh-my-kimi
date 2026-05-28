@@ -15,6 +15,7 @@ import { OmpProtocolHandler } from "./omp-protocol";
 import { parseInternalUrl } from "./parse";
 import { RuleProtocolHandler } from "./rule-protocol";
 import { SkillProtocolHandler } from "./skill-protocol";
+import { VaultProtocolHandler } from "./vault-protocol";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext } from "./types";
 
 export class InternalUrlRouter {
@@ -28,6 +29,7 @@ export class InternalUrlRouter {
 		this.register(new ArtifactProtocolHandler());
 		this.register(new MemoryProtocolHandler());
 		this.register(new LocalProtocolHandler());
+		this.register(new VaultProtocolHandler());
 		this.register(new SkillProtocolHandler());
 		this.register(new RuleProtocolHandler());
 		this.register(new McpProtocolHandler());

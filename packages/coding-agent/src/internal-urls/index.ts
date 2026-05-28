@@ -13,6 +13,7 @@ export * from "./artifact-protocol";
 export * from "./issue-pr-protocol";
 export * from "./json-query";
 export * from "./local-protocol";
+export * from "./vault-protocol";
 export * from "./mcp-protocol";
 export * from "./memory-protocol";
 export * from "./omp-protocol";

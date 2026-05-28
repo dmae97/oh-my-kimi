@@ -1,12 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Changed hashline edit parsing to require wrapped hunk headers such as `@@ A..B @@` (including `@@ BOF @@` and `@@ EOF @@`), with empty `@@ A..B @@` blocks deleting the anchored range and legacy inline payload forms treated as malformed
 
 ### Added
 
+- Added support for `vault://` URLs in path resolution utilities, including plan mode and internal selector parsing so `read` and edit paths can target Obsidian vault files directly
+- Added `vault://` internal URLs for editable Obsidian vault files, with filesystem-backed read/write/listing and CLI-backed vault index operations.
 - Added strict-mode indicators to `omp auth-gateway check` output by appending `[strict]` to strict-mode text headers and adding a top-level `strict` field in `--json` output
 - `omp auth-gateway check --strict` exercises each broker-supplied credential against its provider's chat-completion endpoint (cheapest bundled chat model per provider, with 15s/attempt timeout and up to 4 catalog fall-throughs on "model not found / invalid model" errors). Surfaces failures where the usage endpoint reports 200 but the chat endpoint 401s the same bearer (revoked OAuth scope, mislabeled provider row, …). Output gains a `[chat: ok|FAIL|skip]` column in text mode and a `completion` field on each credential in `--json` mode; the chat-failed count contributes to the non-zero exit code.
 
@@ -22,9 +25,12 @@
 
 - Removed the `edit.hashlineAutoDropPureInsertDuplicates` setting
 - Removed the `edit.hashlineAutoDropPureInsertDuplicates` setting from configuration and execution paths
+- Removed the `edit.hashlineAutoDropPureInsertDuplicates` setting
+- Removed the `edit.hashlineAutoDropPureInsertDuplicates` setting from configuration and execution paths
 
 ### Fixed
 
+- Fixed agent yielding silently on `response.incomplete` (OpenAI Responses / Codex `stopReason: "length"`). The agent now treats output-side incompletion as a recovery case: drops the truncated/reasoning-only assistant turn, attempts context promotion to a larger model, and falls back to compaction or handoff. `AutoCompactionStartEvent.reason` and the custom-tool `auto_compaction_start.trigger` discriminator gain an `"incomplete"` value. The handoff strategy is honored for `"incomplete"` (unlike `"overflow"`, where the input is broken and handoff would hit the same wall).
 - Fixed `eval` tool to resize large displayed images and append dimension notes to text output
 - Fixed `write` tool to strip malformed or loose hashline section headers before writing file content
 - Fixed `eval` tool image rendering to resize displayed images before returning them and append image-dimension notes to text output
@@ -33,20 +39,16 @@
 - Fixed `omp auth-gateway` returning `502 upstream_error` and refusing to rotate credentials when a provider responded with a non-401 usage-limit error (Codex `usage_limit_reached`, Anthropic `usage_limit_reached`, Google `resource_exhausted`). `classifyGatewayError` now reuses `pi-ai`'s central `isUsageLimitError` heuristic and reports those failures as `429 rate_limit_error`. `streamSimple`'s pre-emit retry hook fires on usage-limit phrasing in addition to HTTP 401; the gateway's refresh callback branches on the error type and calls `AuthStorage.markUsageLimitReached(provider, sessionId, { retryAfterMs })` — temporarily blocking just the exhausted credential and surfacing the next sibling — instead of `invalidateCredentialMatching`, which would have suspect/deleted the row. The same branching is wired into the coding-agent `streamFn` callback so subscription multi-account rotation works the same on both surfaces.
 - Fixed `extractRetryHint` not recognising Codex's `Try again in ~N min.` / `… hour` / `… hours` phrasing, which left the gateway and TUI without a server-suggested retry window when an upstream account hit its usage cap. The shared `try again in` pattern now accepts `min`, `minutes`, `mins`, `h`, `hr`, `hour`, `hours` units in addition to `ms` / `s` / `sec`, and tolerates a leading `~` and embedded whitespace.
 - Fixed the auth-gateway threading `sessionId: undefined` into `AuthStorage.getApiKey`, which left `#sessionLastCredential` empty and made `markUsageLimitReached` a no-op for gateway-mediated requests. Both `/v1/chat/completions`-style endpoints and the `/v1/pi/stream` fast path now derive a stable `sessionId` from the client's `prompt_cache_key` (or the existing model+system+tools+first-message hash when absent) and reuse the same identity for credential-stickiness and prefix-cache routing.
-
-### Removed
-
-- Removed the `edit.hashlineAutoDropPureInsertDuplicates` setting
-- Removed the `edit.hashlineAutoDropPureInsertDuplicates` setting from configuration and execution paths
-
-### Fixed
-
 - Fixed `eval` tool to resize large displayed images and append dimension notes to text output
 - Fixed `write` tool to strip malformed or loose hashline section headers before writing file content
 - Fixed `eval` tool image rendering to resize displayed images before returning them and append image-dimension notes to text output
 - Fixed `write` tool output sanitation to strip malformed or loose hashline section headers before writing file content
 - Fixed `omp auth-broker serve` crashing at startup with `logger.setTransports is not a function` — switched the call site to `import { setTransports } from "@oh-my-pi/pi-utils/logger"`, bypassing the `logger` namespace re-export that some Bun versions failed to expose at runtime
 - Fixed user shortcut Python execution to namespace session IDs like eval, so both paths share one kernel
+
+### Security
+
+- Secured `vault://` reads and writes by validating URL paths and blocking traversal, absolute paths, and symlink escapes outside the selected vault root
 
 ## [15.5.7] - 2026-05-27
 ### Added

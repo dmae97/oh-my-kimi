@@ -1,9 +1,10 @@
 import * as path from "node:path";
-import { resolveLocalUrlToPath } from "../internal-urls";
+import { resolveLocalUrlToPath, resolveVaultUrlToPath } from "../internal-urls";
 import type { ToolSession } from ".";
 import { normalizeLocalScheme, resolveToCwd } from "./path-utils";
 import { ToolError } from "./tool-errors";
 
+const VAULT_SCHEME_PREFIX = "vault:";
 const LOCAL_SCHEME_PREFIX = "local:";
 const PLAN_ALIAS_FILE = "PLAN.md";
 const LOCAL_PLAN_ALIAS = "local://PLAN.md";
@@ -15,6 +16,10 @@ function resolveRawPath(session: ToolSession, targetPath: string): string {
 			getArtifactsDir: session.getArtifactsDir,
 			getSessionId: session.getSessionId,
 		});
+	}
+
+	if (normalized.startsWith(VAULT_SCHEME_PREFIX)) {
+		return resolveVaultUrlToPath(normalized);
 	}
 
 	return resolveToCwd(normalized, session.cwd);
