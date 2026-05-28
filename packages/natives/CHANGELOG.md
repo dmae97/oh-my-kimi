@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.5.9] - 2026-05-28
 ### Changed
 
 - Changed native addon extraction to skip re-extracting cached `.node` files when their size already matches embedded archive metadata
