@@ -15,8 +15,8 @@ import { OmpProtocolHandler } from "./omp-protocol";
 import { parseInternalUrl } from "./parse";
 import { RuleProtocolHandler } from "./rule-protocol";
 import { SkillProtocolHandler } from "./skill-protocol";
-import { VaultProtocolHandler } from "./vault-protocol";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext } from "./types";
+import { VaultProtocolHandler } from "./vault-protocol";
 
 export class InternalUrlRouter {
 	static #instance: InternalUrlRouter | undefined;

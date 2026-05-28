@@ -60,7 +60,7 @@ With most FS/bash-like tools, static references to them will automatically resol
 - `artifact://<id>`: Artifact content
 - `local://<name>.md`: Plan artifacts and shared content with subagents
 {{#if hasObsidian}}
-- `vault://<vault>/<path>`: Obsidian vault content (read/edit). `vault://` lists vaults; `vault://_/…` targets the active vault. File-scoped `?op=outline|backlinks|links|tags|properties|tasks|base|...`; vault-scoped `?op=search&q=…|daily|tasks|orphans|unresolved|bases|...`.
+- `vault://<vault>/<path>`: Obsidian vault content (read/edit). `vault://` lists vaults; `vault://_/…` targets the active vault. File-scoped `?op=outline|backlinks|links|tags|properties|tasks|base|…`; vault-scoped `?op=search&q=…|daily|tasks|orphans|unresolved|bases|…`.
 {{/if}}
 - `mcp://<uri>`: MCP resource
 - `issue://<N>` (or `issue://<owner>/<repo>/<N>`): GitHub issue view; cached on disk so re-reads are free. Bare `issue://` (or `issue://<owner>/<repo>`) lists recent issues; supports `?state=open|closed|all&limit=&author=&label=`.

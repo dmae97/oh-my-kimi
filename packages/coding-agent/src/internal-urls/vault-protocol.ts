@@ -12,16 +12,7 @@ type ContentType = InternalResource["contentType"];
 type VaultParamValue = string | true;
 type VaultParams = Record<string, VaultParamValue>;
 
-type FileOp =
-	| "outline"
-	| "backlinks"
-	| "links"
-	| "tags"
-	| "properties"
-	| "tasks"
-	| "wordcount"
-	| "history"
-	| "base";
+type FileOp = "outline" | "backlinks" | "links" | "tags" | "properties" | "tasks" | "wordcount" | "history" | "base";
 
 type VaultOp =
 	| "search"
@@ -145,7 +136,12 @@ function encodeRelativePath(relativePath: string): string {
 		.join("/");
 }
 
-function decodeVaultPath(url: InternalUrl): { rawPathname: string; relativePath: string; hasPath: boolean; isDirectory: boolean } {
+function decodeVaultPath(url: InternalUrl): {
+	rawPathname: string;
+	relativePath: string;
+	hasPath: boolean;
+	isDirectory: boolean;
+} {
 	const rawPathname = url.rawPathname ?? url.pathname;
 	const hasPath = rawPathname !== undefined && rawPathname !== "" && rawPathname !== "/";
 	const isDirectory = rawPathname === "/" || rawPathname.endsWith("/");
@@ -374,7 +370,9 @@ export function resolveVaultUrlToPath(input: string | InternalUrl): string {
 
 	const cachedRoot = getCachedVaultRoot(parsed.ref);
 	if (!cachedRoot) {
-		throw new Error("vault:// path resolution requires a cached vault root; read vault:// first or use the write tool");
+		throw new Error(
+			"vault:// path resolution requires a cached vault root; read vault:// first or use the write tool",
+		);
 	}
 
 	const resolvedRoot = fs.realpathSync(cachedRoot);
@@ -458,7 +456,9 @@ function validateQueryPath(params: VaultParams, name: string): string | undefine
 	return value;
 }
 
-export function buildObsidianCliInvocation(parsed: Extract<ParsedVaultUrl, { kind: "file-op" | "vault-op" }>): CliInvocation {
+export function buildObsidianCliInvocation(
+	parsed: Extract<ParsedVaultUrl, { kind: "file-op" | "vault-op" }>,
+): CliInvocation {
 	if (parsed.kind === "file-op") {
 		const pathArg = `path=${parsed.relativePath}`;
 		switch (parsed.op) {
@@ -618,9 +618,10 @@ export class VaultProtocolHandler implements ProtocolHandler {
 			cachedVaultDirectory = new Map(entries);
 			return;
 		}
+		const record = entries as Record<string, string>;
 		cachedVaultDirectory = new Map<string, string>();
-		for (const name in entries) {
-			cachedVaultDirectory.set(name, entries[name]);
+		for (const name in record) {
+			cachedVaultDirectory.set(name, record[name]);
 		}
 	}
 
@@ -697,7 +698,10 @@ export class VaultProtocolHandler implements ProtocolHandler {
 		return ref.forwardVault && ref.vault ? [`vault=${ref.vault}`] : [];
 	}
 
-	async #listVaults(parsed: Extract<ParsedVaultUrl, { kind: "list-vaults" }>, context?: ResolveContext): Promise<InternalResource> {
+	async #listVaults(
+		parsed: Extract<ParsedVaultUrl, { kind: "list-vaults" }>,
+		context?: ResolveContext,
+	): Promise<InternalResource> {
 		const vaults = await this.#loadVaultDirectory(context);
 		const entries = Array.from(vaults.keys()).sort((a, b) => a.localeCompare(b));
 		const listing =
@@ -714,7 +718,10 @@ export class VaultProtocolHandler implements ProtocolHandler {
 		};
 	}
 
-	async #vaultInfo(parsed: Extract<ParsedVaultUrl, { kind: "vault-info" }>, context?: ResolveContext): Promise<InternalResource> {
+	async #vaultInfo(
+		parsed: Extract<ParsedVaultUrl, { kind: "vault-info" }>,
+		context?: ResolveContext,
+	): Promise<InternalResource> {
 		const root = await this.#resolveVaultRoot(parsed.ref, context);
 		const cacheKey = parsed.ref.active ? "_" : (parsed.ref.vault ?? "_");
 		let cliInfo = cachedVaultInfo.get(cacheKey);
@@ -754,7 +761,10 @@ export class VaultProtocolHandler implements ProtocolHandler {
 		return { root: resolvedRoot, targetPath };
 	}
 
-	async #listDir(parsed: Extract<ParsedVaultUrl, { kind: "fs-dir" }>, context?: ResolveContext): Promise<InternalResource> {
+	async #listDir(
+		parsed: Extract<ParsedVaultUrl, { kind: "fs-dir" }>,
+		context?: ResolveContext,
+	): Promise<InternalResource> {
 		const { root, targetPath } = await this.#resolveFsTarget(parsed, context);
 		const realTargetPath = await fs.promises.realpath(targetPath);
 		ensureWithinRoot(realTargetPath, root);
@@ -784,7 +794,10 @@ export class VaultProtocolHandler implements ProtocolHandler {
 		};
 	}
 
-	async #readFile(parsed: Extract<ParsedVaultUrl, { kind: "fs-file" }>, context?: ResolveContext): Promise<InternalResource> {
+	async #readFile(
+		parsed: Extract<ParsedVaultUrl, { kind: "fs-file" }>,
+		context?: ResolveContext,
+	): Promise<InternalResource> {
 		const { root, targetPath } = await this.#resolveFsTarget(parsed, context);
 		const parentDir = path.dirname(targetPath);
 		try {
@@ -819,7 +832,11 @@ export class VaultProtocolHandler implements ProtocolHandler {
 		};
 	}
 
-	async #writeFile(parsed: Extract<ParsedVaultUrl, { kind: "fs-file" }>, content: string, context?: WriteContext): Promise<void> {
+	async #writeFile(
+		parsed: Extract<ParsedVaultUrl, { kind: "fs-file" }>,
+		content: string,
+		context?: WriteContext,
+	): Promise<void> {
 		const { root, targetPath } = await this.#resolveFsTarget(parsed, context);
 		try {
 			const realTargetPath = await fs.promises.realpath(targetPath);

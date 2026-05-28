@@ -45,7 +45,7 @@ describe("VaultProtocolHandler", () => {
 	});
 
 	it("parses every supported vault:// URL shape", () => {
-		const cases = {
+		const cases: Record<string, string> = {
 			list: "vault://",
 			info: "vault://Work",
 			activeFile: "vault://_/foo.md",
@@ -53,7 +53,6 @@ describe("VaultProtocolHandler", () => {
 			fileOp: "vault://Work/foo.md?op=outline",
 			vaultOp: "vault://Work?op=search&q=x",
 		};
-
 		const parsed: Record<string, vaultProtocol.ParsedVaultUrl> = {};
 		for (const name in cases) {
 			parsed[name] = parseVaultUrl(cases[name]);
@@ -279,7 +278,7 @@ describe("VaultProtocolHandler", () => {
 	it("surfaces obsidian stderr on non-zero exit", async () => {
 		const spawnSpy = vi.spyOn(vaultProtocol, "spawnObsidian").mockResolvedValue({
 			stdout: "",
-			stderr: "Error: File \"NOPE\" not found.\n",
+			stderr: 'Error: File "NOPE" not found.\n',
 			exitCode: 1,
 		});
 		const handler = testHandler(vaultProtocol.spawnObsidian);

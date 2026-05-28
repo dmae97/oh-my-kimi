@@ -100,7 +100,7 @@ export type CustomToolSessionEvent =
 	  }
 	| {
 			reason: "auto_compaction_start";
-			trigger: "threshold" | "overflow" | "idle";
+			trigger: "threshold" | "overflow" | "idle" | "incomplete";
 			action: "context-full" | "handoff";
 	  }
 	| {

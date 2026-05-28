@@ -203,7 +203,7 @@ export interface TurnEndEvent {
 /** Fired when auto-compaction starts */
 export interface AutoCompactionStartEvent {
 	type: "auto_compaction_start";
-	reason: "threshold" | "overflow" | "idle";
+	reason: "threshold" | "overflow" | "idle" | "incomplete";
 	action: "context-full" | "handoff";
 }
 
