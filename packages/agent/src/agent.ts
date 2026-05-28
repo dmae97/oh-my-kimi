@@ -1,7 +1,6 @@
 /** Agent class that uses the agent-loop directly.
  * No transport abstraction - calls streamSimple via the loop.
  */
-
 import { isPromise } from "node:util/types";
 import {
 	type AssistantMessage,
@@ -859,7 +858,8 @@ export class Agent {
 		if (!model) throw new Error("No model configured");
 
 		let skipInitialSteeringPoll = options?.skipInitialSteeringPoll === true;
-
+		const keepalive = setInterval(() => {}, 86_400_000);
+		keepalive.unref();
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#runningPrompt = promise;
 		this.#resolveRunningPrompt = resolve;
@@ -1064,6 +1064,7 @@ export class Agent {
 			this.#state.error = err?.message || String(err);
 			this.#emit({ type: "agent_end", messages: [errorMsg] });
 		} finally {
+			clearInterval(keepalive);
 			this.#state.isStreaming = false;
 			this.#state.streamMessage = null;
 			this.#state.pendingToolCalls = new Set<string>();
