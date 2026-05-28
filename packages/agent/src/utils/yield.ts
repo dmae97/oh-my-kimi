@@ -31,30 +31,10 @@ import { scheduler } from "node:timers/promises";
 // EventLoopKeepalive — the primary fix for idle-state busy-wait
 // ---------------------------------------------------------------------------
 
-const KEEPALIVE_INTERVAL_MS = 86_400_000; // 24 hours — re-armed each interval
-
-/**
- * Await a Promise with an event-loop keepalive active.
- *
- * This is the primary fix for Bun's busy-wait on unresolved Promises.
- * Use it wherever you `await` a Promise that may remain unresolved for
- * an extended period (user input, long-running subprocess, etc.).
- *
- * ```ts
- * // Before (100% CPU while waiting):
- * const input = await mode.getUserInput();
- *
- * // After (proper epoll_wait sleep):
- * const input = await keepaliveWhile(mode.getUserInput());
- * ```
- */
-export async function keepaliveWhile<T>(promise: Promise<T>): Promise<T> {
-	const ka = setInterval(() => {}, KEEPALIVE_INTERVAL_MS);
-	try {
-		ka.unref();
-		return await promise;
-	} finally {
-		clearInterval(ka);
+export class EventLoopKeepalive {
+	#tmr = setInterval(() => {}, 86_400_000).unref();
+	[Symbol.dispose](): void {
+		clearInterval(this.#tmr);
 	}
 }
 

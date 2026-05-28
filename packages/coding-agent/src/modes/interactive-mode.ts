@@ -4,7 +4,13 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type Agent, type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import {
+	type Agent,
+	type AgentMessage,
+	type AgentToolResult,
+	EventLoopKeepalive,
+	ThinkingLevel,
+} from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import {
 	type AssistantMessage,
@@ -619,7 +625,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 		this.#scheduleLoopAutoSubmit();
 		this.#scheduleGoalContinuation();
-		return promise;
+
+		using _ = new EventLoopKeepalive();
+		return await promise;
 	}
 
 	#scheduleLoopAutoSubmit(): void {

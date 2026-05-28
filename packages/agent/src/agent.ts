@@ -35,6 +35,7 @@ import type {
 	StreamFn,
 	ToolCallContext,
 } from "./types";
+import { EventLoopKeepalive } from "./utils/yield";
 
 /**
  * Default convertToLlm: Keep only LLM-compatible messages, convert attachments.
@@ -858,8 +859,7 @@ export class Agent {
 		if (!model) throw new Error("No model configured");
 
 		let skipInitialSteeringPoll = options?.skipInitialSteeringPoll === true;
-		const keepalive = setInterval(() => {}, 86_400_000);
-		keepalive.unref();
+		using _ = new EventLoopKeepalive();
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#runningPrompt = promise;
 		this.#resolveRunningPrompt = resolve;
@@ -1064,7 +1064,6 @@ export class Agent {
 			this.#state.error = err?.message || String(err);
 			this.#emit({ type: "agent_end", messages: [errorMsg] });
 		} finally {
-			clearInterval(keepalive);
 			this.#state.isStreaming = false;
 			this.#state.streamMessage = null;
 			this.#state.pendingToolCalls = new Set<string>();
