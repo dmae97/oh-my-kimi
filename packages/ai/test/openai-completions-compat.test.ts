@@ -862,6 +862,89 @@ describe("kimi model detection via detectCompat", () => {
 		expect(payload.reasoning_effort).toBeUndefined();
 	});
 
+	// #1484 follow-up: DeepSeek V4 on opencode-go exhibits the same gateway
+	// invariant as Kimi (same Zen gateway). DeepSeek emits reasoning under the
+	// `reasoning` signature, so the pre-fix code wrote both `reasoning` and
+	// `reasoning_content` to the wire body. The line-1488 fix in convertMessages
+	// now coerces the replay onto `reasoningContentField` whenever
+	// `allowsSyntheticReasoningContentForToolCalls=false`, so DeepSeek V4
+	// payloads carry only `reasoning_content`.
+	it("emits only reasoning_content on deepseek-v4-flash opencode-go tool-call replays", async () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+			id: "deepseek-v4-flash",
+			reasoning: true,
+		};
+		const priorAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "Need to read the file before answering.",
+					thinkingSignature: "reasoning",
+				},
+				{
+					type: "toolCall",
+					id: "call_abc123",
+					name: "read",
+					arguments: { path: "README.md" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		global.fetch = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "Summarize the README", timestamp: Date.now() },
+					priorAssistant,
+					{
+						role: "toolResult",
+						toolCallId: "call_abc123",
+						toolName: "read",
+						content: [{ type: "text", text: "# Hello\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey: "test-key",
+				reasoning: "high",
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+			},
+		);
+
+		const payload = (await promise) as { messages: Array<Record<string, unknown>> };
+		const assistant = payload.messages.find(m => m.role === "assistant");
+		expect(assistant).toBeDefined();
+		expect(Reflect.get(assistant as object, "reasoning_content")).toBe(
+			"Need to read the file before answering.",
+		);
+		// DeepSeek's allowsSynthetic=false must keep the stale `reasoning` key
+		// off the wire body so opencode's schema validation does not flag it.
+		expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
+	});
+
 	it("injects reasoning_content placeholder when kimi-on-moonshot has tool calls without reasoning field", () => {
 		const model = kimiMoonshotModel("kimi-k2.5");
 		const compat = detectCompat(model);
