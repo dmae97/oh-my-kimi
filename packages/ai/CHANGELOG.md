@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- Fixed DeepSeek DSML tool-call envelope leaks on Ollama Cloud and OpenAI-compatible streams by healing leaked envelopes into structured tool calls without displaying raw DSML markers. ([#1462](https://github.com/can1357/oh-my-pi/issues/1462))
 - Fixed auth-gateway to classify usage-limit messages such as `usage_limit_reached`, `resource_exhausted`, and Codex-style `Try again in ~X min` text as 429 `rate_limit_error` responses
 - Fixed auth-gateway usage-limit handling to honor parsed retry hints and switch to a sibling credential via `markUsageLimitReached` instead of invalidating the rate-limited credential
 - Fixed `streamSimple` to retry on usage-limit errors (including message-only error events) before any content is emitted, so `onAuthError` can rotate credentials automatically

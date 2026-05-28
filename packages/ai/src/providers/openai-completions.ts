@@ -57,7 +57,12 @@ import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { wrapFetchForSseDebug } from "../utils/sse-debug";
-import { type HealedToolCall, modelMayLeakKimiToolCalls, ToolCallHealer } from "../utils/tool-call-healing";
+import {
+	getStreamMarkupHealingPattern,
+	type HealedToolCall,
+	StreamMarkupHealing,
+	type StreamMarkupHealingEvent,
+} from "../utils/stream-markup-healing";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
@@ -319,44 +324,6 @@ function isCompiledGrammarTooLargeStrictError(
 	);
 }
 
-// LIMITATION: The think tag parser uses naive string matching for <think>/<thinking> tags.
-// If MiniMax models output these literal strings in code blocks, XML examples, or explanations,
-// they will be incorrectly consumed as thinking delimiters, truncating visible output.
-// A streaming parser with arbitrary chunk boundaries cannot reliably detect code block context.
-// This is acceptable because: (1) only enabled for minimax-code providers, (2) MiniMax models
-// use these tags as their actual thinking format, and (3) false positives are rare in practice.
-const MINIMAX_THINK_OPEN_TAGS = ["<think>", "<thinking>"] as const;
-const MINIMAX_THINK_CLOSE_TAGS = ["</think>", "</thinking>"] as const;
-
-function findFirstTag(text: string, tags: readonly string[]): { index: number; tag: string } | undefined {
-	let earliestIndex = Number.POSITIVE_INFINITY;
-	let earliestTag: string | undefined;
-	for (const tag of tags) {
-		const index = text.indexOf(tag);
-		if (index !== -1 && index < earliestIndex) {
-			earliestIndex = index;
-			earliestTag = tag;
-		}
-	}
-	if (!earliestTag) return undefined;
-	return { index: earliestIndex, tag: earliestTag };
-}
-
-function getTrailingPartialTag(text: string, tags: readonly string[]): string {
-	let maxLength = 0;
-	for (const tag of tags) {
-		const maxCandidateLength = Math.min(tag.length - 1, text.length);
-		for (let length = maxCandidateLength; length > 0; length--) {
-			if (text.endsWith(tag.slice(0, length))) {
-				if (length > maxLength) maxLength = length;
-				break;
-			}
-		}
-	}
-	if (maxLength === 0) return "";
-	return text.slice(-maxLength);
-}
-
 // DeepSeek models leak chat-template special tokens (e.g. `<｜tool_calls_begin｜>`,
 // `<｜DSML｜tool_calls｜>`) into visible `content` deltas when hosted behind providers
 // (such as NVIDIA NIM) that don't strip them server-side. The structured `tool_calls`
@@ -609,51 +576,15 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				});
 			};
 
-			let taggedTextBuffer = "";
-			let insideTaggedThinking = false;
-			const appendTextDelta = (text: string) => {
+			const appendTextDelta = (text: string): void => {
 				if (!text) return;
 				if (!firstTokenTime) firstTokenTime = Date.now();
 				appendText(output, stream, text);
 			};
-			const appendThinkingDelta = (thinking: string, signature?: string) => {
+			const appendThinkingDelta = (thinking: string, signature?: string): void => {
 				if (!thinking) return;
 				if (!firstTokenTime) firstTokenTime = Date.now();
 				appendThinking(output, stream, thinking, signature);
-			};
-
-			const flushTaggedTextBuffer = () => {
-				while (taggedTextBuffer.length > 0) {
-					if (insideTaggedThinking) {
-						const closingTag = findFirstTag(taggedTextBuffer, MINIMAX_THINK_CLOSE_TAGS);
-						if (closingTag) {
-							appendThinkingDelta(taggedTextBuffer.slice(0, closingTag.index));
-							taggedTextBuffer = taggedTextBuffer.slice(closingTag.index + closingTag.tag.length);
-							insideTaggedThinking = false;
-							continue;
-						}
-
-						const trailingPartialTag = getTrailingPartialTag(taggedTextBuffer, MINIMAX_THINK_CLOSE_TAGS);
-						const flushLength = taggedTextBuffer.length - trailingPartialTag.length;
-						appendThinkingDelta(taggedTextBuffer.slice(0, flushLength));
-						taggedTextBuffer = trailingPartialTag;
-						break;
-					}
-
-					const openingTag = findFirstTag(taggedTextBuffer, MINIMAX_THINK_OPEN_TAGS);
-					if (openingTag) {
-						appendTextDelta(taggedTextBuffer.slice(0, openingTag.index));
-						taggedTextBuffer = taggedTextBuffer.slice(openingTag.index + openingTag.tag.length);
-						insideTaggedThinking = true;
-						continue;
-					}
-
-					const trailingPartialTag = getTrailingPartialTag(taggedTextBuffer, MINIMAX_THINK_OPEN_TAGS);
-					const flushLength = taggedTextBuffer.length - trailingPartialTag.length;
-					appendTextDelta(taggedTextBuffer.slice(0, flushLength));
-					taggedTextBuffer = trailingPartialTag;
-					break;
-				}
 			};
 
 			let deepseekStripBuffer = "";
@@ -671,8 +602,22 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				const stripped = stripDeepseekSpecialTokens(flushable);
 				if (stripped && (stripped === flushable || stripped.trim().length > 0)) appendTextDelta(stripped);
 			};
+			const appendProcessedText = (processedText: string): void => {
+				if (processedText.length === 0) return;
+				if (stripDeepseekChatTemplateTokens) {
+					deepseekStripBuffer += processedText;
+					flushDeepseekStripBuffer(false);
+				} else {
+					appendTextDelta(processedText);
+				}
+			};
 
-			const kimiHealer = modelMayLeakKimiToolCalls(model.provider, model.id) ? new ToolCallHealer() : undefined;
+			const streamMarkupHealingPattern = getStreamMarkupHealingPattern(model.provider, model.id, {
+				parseThinkingTags: parseMiniMaxThinkTags,
+			});
+			const streamMarkupHealing = streamMarkupHealingPattern
+				? new StreamMarkupHealing({ pattern: streamMarkupHealingPattern })
+				: undefined;
 			let healedToolCallEmitted = false;
 			const emitHealedToolCall = (call: HealedToolCall): void => {
 				finishCurrentBlock(currentBlock);
@@ -697,9 +642,18 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				currentBlock = undefined;
 				healedToolCallEmitted = true;
 			};
+			const emitHealingEvent = (event: StreamMarkupHealingEvent): void => {
+				if (event.type === "text") {
+					appendProcessedText(event.text);
+				} else if (event.type === "thinking") {
+					appendThinkingDelta(event.thinking);
+				} else {
+					emitHealedToolCall(event.call);
+				}
+			};
 			const flushHealedToolCalls = (): void => {
-				if (!kimiHealer) return;
-				const calls = kimiHealer.drainCompleted();
+				if (!streamMarkupHealing) return;
+				const calls = streamMarkupHealing.drainCompleted();
 				for (const call of calls) emitHealedToolCall(call);
 			};
 
@@ -745,29 +699,23 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					const normalizedDeltaText = normalizeStreamingContentText(choice.delta.content);
 					if (normalizedDeltaText.length > 0) {
 						if (!firstTokenTime) firstTokenTime = Date.now();
-						if (parseMiniMaxThinkTags) {
-							taggedTextBuffer += normalizedDeltaText;
-							flushTaggedTextBuffer();
-						} else if (stripDeepseekChatTemplateTokens) {
-							deepseekStripBuffer += normalizedDeltaText;
-							flushDeepseekStripBuffer(false);
-						} else if (kimiHealer) {
-							const hasStructuredToolCalls =
-								Array.isArray(choice.delta.tool_calls) && choice.delta.tool_calls.length > 0;
+						const hasStructuredToolCalls =
+							Array.isArray(choice.delta.tool_calls) && choice.delta.tool_calls.length > 0;
+
+						if (streamMarkupHealing) {
 							if (hasStructuredToolCalls) {
 								// Same chunk leaks markers AND carries structured tool_calls.
 								// Strip the marker text from visible output, but drop any
 								// synthesized calls so the structured payload stays the
 								// single source of truth (avoids double-dispatch).
-								const clean = kimiHealer.consumeWithoutCalls(normalizedDeltaText);
-								if (clean.length > 0) appendTextDelta(clean);
+								appendProcessedText(streamMarkupHealing.consumeWithoutCalls(normalizedDeltaText));
 							} else {
-								const clean = kimiHealer.feed(normalizedDeltaText);
-								if (clean.length > 0) appendTextDelta(clean);
-								flushHealedToolCalls();
+								for (const event of streamMarkupHealing.feedEvents(normalizedDeltaText)) {
+									emitHealingEvent(event);
+								}
 							}
 						} else {
-							appendTextDelta(normalizedDeltaText);
+							appendProcessedText(normalizedDeltaText);
 						}
 					}
 
@@ -853,30 +801,22 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				}
 			}
 
-			if (parseMiniMaxThinkTags && taggedTextBuffer.length > 0) {
-				if (insideTaggedThinking) {
-					appendThinkingDelta(taggedTextBuffer);
-				} else {
-					appendTextDelta(taggedTextBuffer);
+			if (streamMarkupHealing) {
+				for (const event of streamMarkupHealing.flushEvents()) {
+					emitHealingEvent(event);
 				}
-				taggedTextBuffer = "";
-			}
-
-			if (stripDeepseekChatTemplateTokens) {
-				flushDeepseekStripBuffer(true);
-			}
-
-			if (kimiHealer) {
-				const trailing = kimiHealer.flushPending();
-				if (trailing.length > 0) appendTextDelta(trailing);
 				flushHealedToolCalls();
 				if (healedToolCallEmitted && output.stopReason === "stop") {
-					// Hosts that leak Kimi tool tokens often still report
+					// Hosts that leak tool-call templates often still report
 					// `finish_reason: stop` for the surrounding turn. Promote
 					// only that natural-completion finish — leave `error`,
 					// `length`, `aborted`, etc. untouched.
 					output.stopReason = "toolUse";
 				}
+			}
+
+			if (stripDeepseekChatTemplateTokens) {
+				flushDeepseekStripBuffer(true);
 			}
 
 			finishCurrentBlock(currentBlock);
