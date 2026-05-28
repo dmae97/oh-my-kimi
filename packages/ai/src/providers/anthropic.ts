@@ -491,6 +491,108 @@ export const stripClaudeToolPrefix = (name: string, prefixOverride: string = cla
 	return name.slice(prefixOverride.length);
 };
 
+const ANTHROPIC_MANY_IMAGE_THRESHOLD = 20;
+const ANTHROPIC_MANY_IMAGE_MAX_DIMENSION = 2000;
+
+function countAnthropicImageBlocks(messages: Message[]): number {
+	let count = 0;
+	for (const message of messages) {
+		if (message.role !== "user" && message.role !== "developer" && message.role !== "toolResult") continue;
+		if (!Array.isArray(message.content)) continue;
+		for (const block of message.content) {
+			if (block.type === "image") count++;
+		}
+	}
+	return count;
+}
+
+async function resizeAnthropicManyImageBlock(block: ImageContent): Promise<ImageContent> {
+	try {
+		const inputBuffer = Buffer.from(block.data, "base64");
+		const { width, height } = await new Bun.Image(inputBuffer).metadata();
+		if (!width || !height) return block;
+		if (width <= ANTHROPIC_MANY_IMAGE_MAX_DIMENSION && height <= ANTHROPIC_MANY_IMAGE_MAX_DIMENSION) return block;
+
+		const scale = Math.min(ANTHROPIC_MANY_IMAGE_MAX_DIMENSION / width, ANTHROPIC_MANY_IMAGE_MAX_DIMENSION / height);
+		const targetWidth = Math.max(1, Math.min(ANTHROPIC_MANY_IMAGE_MAX_DIMENSION, Math.round(width * scale)));
+		const targetHeight = Math.max(1, Math.min(ANTHROPIC_MANY_IMAGE_MAX_DIMENSION, Math.round(height * scale)));
+
+		const [png, jpeg] = await Promise.all([
+			new Bun.Image(inputBuffer).resize(targetWidth, targetHeight).png().bytes(),
+			new Bun.Image(inputBuffer).resize(targetWidth, targetHeight).jpeg({ quality: 85 }).bytes(),
+		]);
+		const best =
+			png.length <= jpeg.length ? { buffer: png, mimeType: "image/png" } : { buffer: jpeg, mimeType: "image/jpeg" };
+
+		return {
+			type: "image",
+			data: Buffer.from(best.buffer).toString("base64"),
+			mimeType: best.mimeType,
+		};
+	} catch (error) {
+		logger.warn("anthropic: failed to resize oversized image for many-image request", {
+			mimeType: block.mimeType,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return block;
+	}
+}
+
+async function resizeAnthropicManyImageContent(
+	content: (TextContent | ImageContent)[],
+	state: { resized: number },
+): Promise<(TextContent | ImageContent)[]> {
+	let changed = false;
+	const next = await Promise.all(
+		content.map(async block => {
+			if (block.type !== "image") return block;
+			const resized = await resizeAnthropicManyImageBlock(block);
+			if (resized !== block) {
+				changed = true;
+				state.resized++;
+			}
+			return resized;
+		}),
+	);
+	return changed ? next : content;
+}
+
+async function resizeAnthropicManyImageMessage(message: Message, state: { resized: number }): Promise<Message> {
+	if (message.role === "user" || message.role === "developer") {
+		if (!Array.isArray(message.content)) return message;
+		const content = await resizeAnthropicManyImageContent(message.content, state);
+		return content === message.content ? message : { ...message, content };
+	}
+	if (message.role === "toolResult") {
+		const content = await resizeAnthropicManyImageContent(message.content, state);
+		return content === message.content ? message : { ...message, content };
+	}
+	return message;
+}
+
+async function prepareAnthropicManyImageContext(context: Context, supportsImages: boolean): Promise<Context> {
+	if (!supportsImages) return context;
+	const imageCount = countAnthropicImageBlocks(context.messages);
+	if (imageCount <= ANTHROPIC_MANY_IMAGE_THRESHOLD) return context;
+
+	let changed = false;
+	const state = { resized: 0 };
+	const messages = await Promise.all(
+		context.messages.map(async message => {
+			const next = await resizeAnthropicManyImageMessage(message, state);
+			if (next !== message) changed = true;
+			return next;
+		}),
+	);
+	if (!changed) return context;
+	logger.debug("anthropic: resized oversized images for many-image request", {
+		imageCount,
+		resized: state.resized,
+		maxDimension: ANTHROPIC_MANY_IMAGE_MAX_DIMENSION,
+	});
+	return { ...context, messages };
+}
+
 /**
  * Convert content blocks to Anthropic API format
  */
@@ -1073,8 +1175,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
 			let strictFallbackErrorMessage: string | undefined;
 			let dropFastMode = providerSessionState?.fastModeDisabled ?? false;
+			const preparedContext = await prepareAnthropicManyImageContext(context, model.input.includes("image"));
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
-				let nextParams = buildParams(model, baseUrl, context, isOAuthToken, options, disableStrictTools);
+				let nextParams = buildParams(model, baseUrl, preparedContext, isOAuthToken, options, disableStrictTools);
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
 				}

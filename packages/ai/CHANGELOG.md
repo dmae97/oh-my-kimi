@@ -1,13 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `CheckCredentialsOptions.completionProbe` (and `completionTimeoutMs`) so `AuthStorage.checkCredentials` can additionally exercise each credential against the provider's chat-completion endpoint after refresh-on-expiry. Result lands on `CredentialHealthResult.completion` ({ok, reason?, modelId?, latencyMs?}) without disturbing the usage `ok` field. Public types: `CompletionProbe`, `CompletionProbeInput`, `CompletionProbeCredential`, `CredentialCompletionResult`. The probe is invoked even when no `UsageProvider` is registered for the row, and is skipped when OAuth refresh fails (the stale bytes would only mask the upstream failure).
 
 ### Changed
 
+- Changed Anthropic prompt preparation to downscale image blocks over 2000px when a request includes 20+ images, reducing oversized payloads automatically
 - Changed OpenAI chat request parsing to accept `name` on `tool` messages and fall back to the matching assistant `tool_calls` name, so parsed tool results now carry a proper tool name when the wire omits it
 - Changed `checkCredentials` to skip running `completionProbe` when OAuth refresh fails, so stale bearer tokens are never probed and the refresh failure remains the returned `reason`
 - Changed completion reporting to return `completion: { ok: null, reason: ... }` when a credential has no usable bearer bytes instead of attempting the probe
