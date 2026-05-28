@@ -77,23 +77,98 @@ function hasVertexAdcCredentials(): boolean {
 	}
 	return cachedVertexAdcCredentialsExists;
 }
-function isGoogleVertexOpenAIModel(model: Model<Api>): boolean {
+function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
 	return (
 		model.provider === "google-vertex" &&
-		model.api === "openai-completions" &&
-		model.baseUrl.includes("/endpoints/openapi")
+		((model.api === "openai-completions" && model.baseUrl.includes("/endpoints/openapi")) ||
+			(model.api === "anthropic-messages" && model.baseUrl.includes(":streamRawPredict")))
 	);
 }
 
-function createVertexOpenAIFetch(options: StreamOptions | undefined): FetchImpl {
+function createVertexAuthenticatedFetch(options: StreamOptions | undefined): FetchImpl {
 	const baseFetch = options?.fetch ?? fetch;
 	const vertexFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 		const token = await getVertexAccessToken({ signal: options?.signal, fetch: baseFetch });
 		const headers = new Headers(init?.headers);
 		headers.set("Authorization", `Bearer ${token}`);
-		return baseFetch(input, { ...init, headers });
+		const rewritten = resolveVertexRequest(input);
+		const url = rewritten instanceof Request ? rewritten.url : rewritten.toString();
+		if (isVertexAnthropicRawPredict(url)) {
+			const bodyText = await readVertexRequestBody(rewritten, init);
+			const transformed = transformVertexAnthropicBody(bodyText);
+			return baseFetch(url, {
+				...init,
+				method: init?.method ?? (rewritten instanceof Request ? rewritten.method : "POST"),
+				headers,
+				body: transformed,
+			});
+		}
+		return baseFetch(rewritten, { ...init, headers });
 	};
 	return Object.assign(vertexFetch, baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {});
+}
+
+function isVertexAnthropicRawPredict(url: string): boolean {
+	return url.includes(":streamRawPredict") || url.includes(":rawPredict");
+}
+
+async function readVertexRequestBody(input: string | URL | Request, init: RequestInit | undefined): Promise<string> {
+	if (input instanceof Request) return input.clone().text();
+	const body = init?.body;
+	if (typeof body === "string") return body;
+	if (body instanceof Uint8Array) return new TextDecoder().decode(body);
+	if (body instanceof ArrayBuffer) return new TextDecoder().decode(body);
+	return "";
+}
+
+// Vertex Claude rejects the standard Anthropic body shape: the `model` field
+// is encoded in the URL path and `anthropic_version: "vertex-2023-10-16"` is
+// required in the JSON body instead of the `anthropic-version` HTTP header.
+function transformVertexAnthropicBody(bodyText: string): string {
+	if (!bodyText) return bodyText;
+	try {
+		const payload = JSON.parse(bodyText) as Record<string, unknown>;
+		delete payload.model;
+		payload.anthropic_version = "vertex-2023-10-16";
+		return JSON.stringify(payload);
+	} catch {
+		return bodyText;
+	}
+}
+
+function resolveVertexRequest(input: string | URL | Request): string | URL | Request {
+	const project = $env.GOOGLE_CLOUD_PROJECT || $env.GCP_PROJECT || $env.GCLOUD_PROJECT;
+	const location = $env.GOOGLE_VERTEX_LOCATION || $env.GOOGLE_CLOUD_LOCATION || $env.VERTEX_LOCATION;
+	if (!project || !location) return input;
+
+	const rewriteUrl = (url: string): string => {
+		const hasPlaceholder =
+			url.includes("{project}") ||
+			url.includes("{location}") ||
+			url.includes("%7Bproject%7D") ||
+			url.includes("%7Blocation%7D");
+		const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
+		const rewritten = hasPlaceholder
+			? url
+					.replace("https://{location}-aiplatform.googleapis.com", `https://${host}`)
+					.replace("https://%7Blocation%7D-aiplatform.googleapis.com", `https://${host}`)
+					.replaceAll("{project}", encodeURIComponent(project))
+					.replaceAll("%7Bproject%7D", encodeURIComponent(project))
+					.replaceAll("{location}", encodeURIComponent(location))
+					.replaceAll("%7Blocation%7D", encodeURIComponent(location))
+			: url;
+		return rewritten.replace(":streamRawPredict/v1/messages", ":streamRawPredict");
+	};
+
+	if (input instanceof Request) {
+		const rewrittenUrl = rewriteUrl(input.url);
+		return rewrittenUrl === input.url ? input : new Request(rewrittenUrl, input);
+	}
+	if (input instanceof URL) {
+		const rewrittenUrl = rewriteUrl(input.toString());
+		return rewrittenUrl === input.toString() ? input : new URL(rewrittenUrl);
+	}
+	return rewriteUrl(input);
 }
 
 type KeyResolver = string | (() => string | undefined);
@@ -247,8 +322,12 @@ export function stream<TApi extends Api>(
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
-	const providerOptions = isGoogleVertexOpenAIModel(model)
-		? { ...options, apiKey: "vertex-adc", fetch: createVertexOpenAIFetch(options as StreamOptions | undefined) }
+	const providerOptions = isGoogleVertexAuthenticatedModel(model)
+		? {
+				...options,
+				apiKey: "vertex-adc",
+				fetch: createVertexAuthenticatedFetch(options as StreamOptions | undefined),
+			}
 		: { ...options, apiKey };
 
 	const api: Api = model.api;

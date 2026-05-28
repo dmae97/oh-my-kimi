@@ -2360,6 +2360,25 @@ function anthropicMessagesDescriptor(
 	return simpleModelsDevDescriptor(modelsDevKey, providerId, "anthropic-messages", baseUrl, options);
 }
 
+const GOOGLE_VERTEX_BASE_URL = "https://{location}-aiplatform.googleapis.com";
+const GOOGLE_VERTEX_OPENAI_BASE_URL =
+	"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/endpoints/openapi";
+const GOOGLE_VERTEX_ANTHROPIC_BASE_URL =
+	"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/{model}:streamRawPredict";
+
+function resolveGoogleVertexApi(modelId: string, raw: ModelsDevModel): { api: Api; baseUrl: string } {
+	if (raw.provider?.npm === "@ai-sdk/google-vertex/anthropic") {
+		return {
+			api: "anthropic-messages",
+			baseUrl: GOOGLE_VERTEX_ANTHROPIC_BASE_URL.replace("{model}", modelId),
+		};
+	}
+	if (modelId.includes("/") || raw.provider?.npm === "@ai-sdk/openai-compatible") {
+		return { api: "openai-completions", baseUrl: GOOGLE_VERTEX_OPENAI_BASE_URL };
+	}
+	return { api: "google-vertex", baseUrl: GOOGLE_VERTEX_BASE_URL };
+}
+
 const MODELS_DEV_PROVIDER_DESCRIPTORS_BEDROCK: readonly ModelsDevProviderDescriptor[] = [
 	// --- Amazon Bedrock ---
 	{
@@ -2515,6 +2534,13 @@ const filterActiveToolCallModels = (_id: string, m: ModelsDevModel): boolean => 
 	return true;
 };
 
+const MODELS_DEV_PROVIDER_DESCRIPTORS_GOOGLE_VERTEX: readonly ModelsDevProviderDescriptor[] = [
+	simpleModelsDevDescriptor("google-vertex", "google-vertex", "google-vertex", GOOGLE_VERTEX_BASE_URL, {
+		filterModel: filterActiveToolCallModels,
+		resolveApi: resolveGoogleVertexApi,
+	}),
+];
+
 const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDescriptor[] = [
 	// --- Cloudflare AI Gateway ---
 	anthropicMessagesDescriptor(
@@ -2592,6 +2618,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDes
 /** All provider descriptors for models.dev data mapping in generate-models.ts. */
 export const MODELS_DEV_PROVIDER_DESCRIPTORS: readonly ModelsDevProviderDescriptor[] = [
 	...MODELS_DEV_PROVIDER_DESCRIPTORS_BEDROCK,
+	...MODELS_DEV_PROVIDER_DESCRIPTORS_GOOGLE_VERTEX,
 	...MODELS_DEV_PROVIDER_DESCRIPTORS_CORE,
 	...MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS,
 	...MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED,

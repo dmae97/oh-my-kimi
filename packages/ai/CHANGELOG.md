@@ -25,6 +25,10 @@
 - Fixed auth-gateway error classification to extract embedded status codes and use word-boundary matching, so `GenerateContentRequest` and similar messages are no longer misreported as rate-limit errors
 - Fixed `checkCredentials` to handle `completionProbe` exceptions by recording the failure in `CredentialHealthResult.completion.reason` while still returning the usage probe result
 
+### Fixed
+
+- Fixed Google Vertex's bundled model list to use the authoritative models.dev catalog, including MaaS entries such as `deepseek-ai/deepseek-v3.2-maas` and removing retired Gemini 1.5 fallbacks. ([#1456](https://github.com/can1357/oh-my-pi/issues/1456))
+
 ## [15.5.7] - 2026-05-27
 ### Added
 - `SimpleStreamOptions.openrouterVariant` (`"nitro"`, `"floor"`, `"online"`, `"exacto"`, …) — when set, appends `:<variant>` to OpenRouter model IDs at request time, leaving ids that already carry an explicit `:suffix` untouched. Plumbed through `openai-completions` and the pi-native gateway forwarder.

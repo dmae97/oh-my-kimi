@@ -1,131 +1,91 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
+import { describe, expect, it } from "bun:test";
 import { resolveProviderModels } from "../src/model-manager";
 import { googleVertexModelManagerOptions } from "../src/provider-models/google";
-import { __resetVertexTokenCache } from "../src/providers/google-auth";
+import { MODELS_DEV_PROVIDER_DESCRIPTORS, mapModelsDevToModels } from "../src/provider-models/openai-compat";
 
-const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
-const METADATA_TOKEN_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
-
-describe("google-vertex model discovery", () => {
-	let tempDir = "";
-	let dbPath = "";
-
-	beforeEach(async () => {
-		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-vertex-models-"));
-		dbPath = path.join(tempDir, "models.db");
-	});
-
-	afterEach(async () => {
-		__resetVertexTokenCache();
-		if (tempDir) {
-			await fs.rm(tempDir, { recursive: true, force: true });
-			tempDir = "";
-			dbPath = "";
-		}
-	});
-
-	it("uses the Vertex OpenAI-compatible model list as the authoritative project catalog", async () => {
-		const urls: string[] = [];
-		const options = googleVertexModelManagerOptions({
-			project: "vertex-project",
-			location: "global",
-			fetch: async input => {
-				const url = input instanceof Request ? input.url : input.toString();
-				urls.push(url);
-				if (url === METADATA_TOKEN_URL || url === OAUTH_TOKEN_URL) {
-					return new Response(JSON.stringify({ access_token: "vertex-token", expires_in: 3600 }));
-				}
-				if (
-					url.startsWith(
-						"https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/endpoints/openapi/models",
-					)
-				) {
-					return new Response(
-						JSON.stringify({
-							data: [
-								{ id: "zai-org/glm-4.7-maas", displayName: "GLM-4.7" },
-								{
-									name: "projects/vertex-project/locations/global/publishers/anthropic/models/claude-sonnet-4-5",
-									displayName: "Claude Sonnet 4.5",
-								},
-							],
-						}),
-					);
-				}
-				return new Response("not found", { status: 404 });
+const googleVertexModelsDevPayload = {
+	"google-vertex": {
+		models: {
+			"gemini-3.5-flash": {
+				name: "Gemini 3.5 Flash",
+				tool_call: true,
+				reasoning: true,
+				modalities: { input: ["text", "image", "pdf"] },
+				limit: { context: 1_048_576, output: 65_536 },
+				cost: { input: 0.3, output: 2.5, cache_read: 0.03, cache_write: 0.75 },
+				provider: { npm: "@ai-sdk/google-vertex" },
 			},
-		});
+			"deepseek-ai/deepseek-v3.2-maas": {
+				name: "DeepSeek V3.2",
+				tool_call: true,
+				reasoning: true,
+				modalities: { input: ["text", "pdf"] },
+				limit: { context: 163_840, output: 65_536 },
+				provider: { npm: "@ai-sdk/openai-compatible" },
+			},
+			"claude-sonnet-4@20250514": {
+				name: "Claude Sonnet 4",
+				tool_call: true,
+				reasoning: true,
+				modalities: { input: ["text", "image", "pdf"] },
+				limit: { context: 200_000, output: 64_000 },
+				provider: { npm: "@ai-sdk/google-vertex/anthropic" },
+			},
+			"gemini-embedding-001": {
+				name: "Gemini Embedding 001",
+				tool_call: false,
+				provider: { npm: "@ai-sdk/google-vertex" },
+			},
+		},
+	},
+} satisfies Record<string, unknown>;
 
-		const result = await resolveProviderModels({ ...options, cacheDbPath: dbPath }, "online");
-
-		expect(result.stale).toBe(false);
-		expect(result.models.map(model => model.id)).toEqual(["anthropic/claude-sonnet-4-5", "zai-org/glm-4.7-maas"]);
-		expect(result.models.every(model => model.provider === "google-vertex")).toBe(true);
-		expect(result.models.every(model => model.api === "openai-completions")).toBe(true);
-		expect(
-			result.models.every(
-				model =>
-					model.baseUrl ===
-					"https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/endpoints/openapi",
-			),
-		).toBe(true);
-		expect(result.models.some(model => model.id === "gemini-1.5-pro")).toBe(false);
-		expect(urls).toContain(
-			"https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/endpoints/openapi/models?pageSize=100",
+describe("google-vertex model catalog", () => {
+	it("maps the models.dev Vertex catalog instead of the project discovery endpoint", () => {
+		const models = mapModelsDevToModels(googleVertexModelsDevPayload, MODELS_DEV_PROVIDER_DESCRIPTORS).filter(
+			model => model.provider === "google-vertex",
 		);
+
+		expect(models.map(model => model.id)).toEqual([
+			"gemini-3.5-flash",
+			"deepseek-ai/deepseek-v3.2-maas",
+			"claude-sonnet-4@20250514",
+		]);
+
+		const gemini = models.find(model => model.id === "gemini-3.5-flash");
+		expect(gemini?.api).toBe("google-vertex");
+		expect(gemini?.baseUrl).toBe("https://{location}-aiplatform.googleapis.com");
+		expect(gemini?.input).toEqual(["text", "image"]);
+		expect(gemini?.contextWindow).toBe(1_048_576);
+
+		const deepseek = models.find(model => model.id === "deepseek-ai/deepseek-v3.2-maas");
+		expect(deepseek?.api).toBe("openai-completions");
+		expect(deepseek?.baseUrl).toBe(
+			"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/endpoints/openapi",
+		);
+
+		const claude = models.find(model => model.id === "claude-sonnet-4@20250514");
+		expect(claude?.api).toBe("anthropic-messages");
+		expect(claude?.baseUrl).toBe(
+			"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict",
+		);
+		expect(claude?.reasoning).toBe(true);
 	});
 
-	it("keeps the API-key Vertex Gemini catalog when project and location are also configured", async () => {
+	it("uses the bundled Vertex catalog without ADC project discovery", async () => {
 		const options = googleVertexModelManagerOptions({
-			apiKey: "vertex-api-key",
 			project: "vertex-project",
 			location: "global",
+			fetch: async () => new Response("unexpected", { status: 500 }),
 		});
 
-		const result = await resolveProviderModels({ ...options, cacheDbPath: dbPath }, "offline");
+		expect(options.fetchDynamicModels).toBeUndefined();
+		expect(options.staticModels).toBeUndefined();
 
-		expect(result.models.some(model => model.id === "gemini-2.5-pro")).toBe(true);
-		expect(result.models.every(model => model.provider === "google-vertex")).toBe(true);
-		expect(result.models.every(model => model.api === "google-vertex")).toBe(true);
-	});
-
-	it("omits the bundled Vertex Gemini static fallback when neither ADC project nor API key are configured", async () => {
-		const previousProject = Bun.env.GOOGLE_CLOUD_PROJECT;
-		const previousGcpProject = Bun.env.GCP_PROJECT;
-		const previousGcloudProject = Bun.env.GCLOUD_PROJECT;
-		const previousVertexLocation = Bun.env.GOOGLE_VERTEX_LOCATION;
-		const previousCloudLocation = Bun.env.GOOGLE_CLOUD_LOCATION;
-		const previousLocation = Bun.env.VERTEX_LOCATION;
-		const previousApiKey = Bun.env.GOOGLE_CLOUD_API_KEY;
-		delete Bun.env.GOOGLE_CLOUD_PROJECT;
-		delete Bun.env.GCP_PROJECT;
-		delete Bun.env.GCLOUD_PROJECT;
-		delete Bun.env.GOOGLE_VERTEX_LOCATION;
-		delete Bun.env.GOOGLE_CLOUD_LOCATION;
-		delete Bun.env.VERTEX_LOCATION;
-		delete Bun.env.GOOGLE_CLOUD_API_KEY;
-		try {
-			const options = googleVertexModelManagerOptions();
-			const result = await resolveProviderModels({ ...options, cacheDbPath: dbPath }, "offline");
-			expect(result.models).toEqual([]);
-		} finally {
-			if (previousProject === undefined) delete Bun.env.GOOGLE_CLOUD_PROJECT;
-			else Bun.env.GOOGLE_CLOUD_PROJECT = previousProject;
-			if (previousGcpProject === undefined) delete Bun.env.GCP_PROJECT;
-			else Bun.env.GCP_PROJECT = previousGcpProject;
-			if (previousGcloudProject === undefined) delete Bun.env.GCLOUD_PROJECT;
-			else Bun.env.GCLOUD_PROJECT = previousGcloudProject;
-			if (previousVertexLocation === undefined) delete Bun.env.GOOGLE_VERTEX_LOCATION;
-			else Bun.env.GOOGLE_VERTEX_LOCATION = previousVertexLocation;
-			if (previousCloudLocation === undefined) delete Bun.env.GOOGLE_CLOUD_LOCATION;
-			else Bun.env.GOOGLE_CLOUD_LOCATION = previousCloudLocation;
-			if (previousLocation === undefined) delete Bun.env.VERTEX_LOCATION;
-			else Bun.env.VERTEX_LOCATION = previousLocation;
-			if (previousApiKey === undefined) delete Bun.env.GOOGLE_CLOUD_API_KEY;
-			else Bun.env.GOOGLE_CLOUD_API_KEY = previousApiKey;
-		}
+		const result = await resolveProviderModels(options, "offline");
+		expect(result.stale).toBe(false);
+		expect(result.models.some(model => model.id === "deepseek-ai/deepseek-v3.2-maas")).toBe(true);
+		expect(result.models.some(model => model.id === "gemini-3.5-flash")).toBe(true);
+		expect(result.models.some(model => model.id === "gemini-1.5-pro")).toBe(false);
 	});
 });

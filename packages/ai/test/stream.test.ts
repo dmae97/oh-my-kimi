@@ -8,6 +8,7 @@ import { complete, getEnvApiKey, stream } from "@oh-my-pi/pi-ai/stream";
 import type { Api, Context, ImageContent, Model, OptionsForApi, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { $which } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+import { __resetVertexTokenCache } from "../src/providers/google-auth";
 import { e2eApiKey, resolveApiKey } from "./oauth";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -545,6 +546,97 @@ describe("Generate E2E Tests", () => {
 				else Bun.env.GCLOUD_PROJECT = originalGcloudProject;
 				if (originalLocation === undefined) delete Bun.env.GOOGLE_CLOUD_LOCATION;
 				else Bun.env.GOOGLE_CLOUD_LOCATION = originalLocation;
+			}
+		});
+
+		it("routes Vertex Claude models through Anthropic rawPredict with ADC auth", async () => {
+			const originalProject = Bun.env.GOOGLE_CLOUD_PROJECT;
+			const originalGcpProject = Bun.env.GCP_PROJECT;
+			const originalGcloudProject = Bun.env.GCLOUD_PROJECT;
+			const originalVertexLocation = Bun.env.GOOGLE_VERTEX_LOCATION;
+			const originalCloudLocation = Bun.env.GOOGLE_CLOUD_LOCATION;
+			const originalLocation = Bun.env.VERTEX_LOCATION;
+			const originalApiKey = Bun.env.GOOGLE_CLOUD_API_KEY;
+			const model: Model<"anthropic-messages"> = {
+				id: "claude-sonnet-4@20250514",
+				name: "Claude Sonnet 4",
+				api: "anthropic-messages",
+				provider: "google-vertex",
+				baseUrl:
+					"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict",
+				reasoning: true,
+				input: ["text", "image"],
+				cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+				contextWindow: 200_000,
+				maxTokens: 64_000,
+			};
+			const captured = Promise.withResolvers<{ url: string; authorization: string | null; body: unknown }>();
+
+			try {
+				__resetVertexTokenCache();
+				Bun.env.GOOGLE_CLOUD_PROJECT = "vertex-project";
+				Bun.env.GOOGLE_VERTEX_LOCATION = "global";
+				delete Bun.env.GCP_PROJECT;
+				delete Bun.env.GCLOUD_PROJECT;
+				delete Bun.env.GOOGLE_CLOUD_LOCATION;
+				delete Bun.env.VERTEX_LOCATION;
+				delete Bun.env.GOOGLE_CLOUD_API_KEY;
+
+				const events = stream(
+					model,
+					{ messages: [{ role: "user", content: "Hello", timestamp: Date.now() }] },
+					{
+						apiKey: "<authenticated>",
+						fetch: async (input, init) => {
+							const url = input instanceof Request ? input.url : input.toString();
+							if (
+								url ===
+								"http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+							) {
+								return new Response(JSON.stringify({ access_token: "vertex-token", expires_in: 3600 }));
+							}
+							const headers = input instanceof Request ? input.headers : new Headers(init?.headers);
+							const bodyText = input instanceof Request ? await input.clone().text() : String(init?.body ?? "");
+							captured.resolve({
+								url,
+								authorization: headers.get("authorization"),
+								body: JSON.parse(bodyText),
+							});
+							return new Response(JSON.stringify({ error: { message: "stop after capture" } }), { status: 400 });
+						},
+					},
+				);
+
+				for await (const _event of events) {
+				}
+
+				const request = await captured.promise;
+				expect(request.url).toBe(
+					"https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict",
+				);
+				expect(request.authorization).toBe("Bearer vertex-token");
+				expect(request.body).toMatchObject({
+					anthropic_version: "vertex-2023-10-16",
+					messages: [{ role: "user", content: [{ type: "text", text: "Hello" }] }],
+					stream: true,
+				});
+				expect((request.body as Record<string, unknown>).model).toBeUndefined();
+			} finally {
+				__resetVertexTokenCache();
+				if (originalProject === undefined) delete Bun.env.GOOGLE_CLOUD_PROJECT;
+				else Bun.env.GOOGLE_CLOUD_PROJECT = originalProject;
+				if (originalGcpProject === undefined) delete Bun.env.GCP_PROJECT;
+				else Bun.env.GCP_PROJECT = originalGcpProject;
+				if (originalGcloudProject === undefined) delete Bun.env.GCLOUD_PROJECT;
+				else Bun.env.GCLOUD_PROJECT = originalGcloudProject;
+				if (originalVertexLocation === undefined) delete Bun.env.GOOGLE_VERTEX_LOCATION;
+				else Bun.env.GOOGLE_VERTEX_LOCATION = originalVertexLocation;
+				if (originalCloudLocation === undefined) delete Bun.env.GOOGLE_CLOUD_LOCATION;
+				else Bun.env.GOOGLE_CLOUD_LOCATION = originalCloudLocation;
+				if (originalLocation === undefined) delete Bun.env.VERTEX_LOCATION;
+				else Bun.env.VERTEX_LOCATION = originalLocation;
+				if (originalApiKey === undefined) delete Bun.env.GOOGLE_CLOUD_API_KEY;
+				else Bun.env.GOOGLE_CLOUD_API_KEY = originalApiKey;
 			}
 		});
 	});
