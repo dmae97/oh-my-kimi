@@ -14,7 +14,7 @@ emit_op:   "+" /(.*)/ LF
 repeat_op: "&" body_range LF
 
 anchor: header_range | "BOF" | "EOF"
-header_range: LID (WS LID)?
+header_range: LID WS LID
 body_range: LID (".." LID)?
 LID: /[1-9]\d*/
 WS: /[ \t]+/

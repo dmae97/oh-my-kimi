@@ -233,12 +233,9 @@ describe("hashline parser — range-anchor syntax", () => {
 		expect(applyDiff(content, range)).toBe("aaa\nBBB\nCCC");
 	});
 
-	it("accepts bare `A=` as a shorthand for `A..A=`", () => {
+	it("rejects bare single-number hunk headers (shorthand removed)", () => {
 		const anchor = tag(2, "bbb");
-		// `LINE:` is the exact shape `read` renders each file row as, so the
-		// parser leniently treats it as `LINE-LINE:` for models that
-		// reproduce the read-output shape as an anchor.
-		expect(applyDiff(content, `${anchor}\n${repl("BBB")}`)).toBe("aaa\nBBB\nccc");
+		expect(() => parseHashline(`${anchor}\n${repl("BBB")}`)).toThrow(/single-number hunk header/);
 	});
 
 	it("empty anchor body deletes the range entirely", () => {

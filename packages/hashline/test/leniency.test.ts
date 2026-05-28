@@ -7,12 +7,12 @@ function applyPatch(text: string, diff: string): string {
 
 const FILE = "a\nb\nc\nd\ne";
 
-describe("hashline core — hunk header shorthand", () => {
-	it("accepts `A` as `A..A` (single-line shorthand)", () => {
-		expect(applyPatch(FILE, "2\n+B")).toBe("a\nB\nc\nd\ne");
+describe("hashline core — hunk header forms", () => {
+	it("rejects a bare single-number hunk header (single-line shorthand removed)", () => {
+		expect(() => parsePatch("2\n+B")).toThrow(/single-number hunk header/);
 	});
 
-	it("an empty `A..A` deletes the line", () => {
+	it("an empty `A A` deletes the line", () => {
 		expect(applyPatch(FILE, "2 2")).toBe("a\nc\nd\ne");
 	});
 

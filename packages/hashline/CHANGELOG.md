@@ -3,6 +3,7 @@
 ## [Unreleased]
 ### Breaking Changes
 
+- Removed the single-number hunk header shorthand. A hunk header now REQUIRES two line numbers (`A A` for a single line, `A B` for a range); a bare `A` row throws `single-number hunk header "A" is no longer accepted`. The `&A` body-row shorthand for `&A..A` is unchanged.
 - Changed hunk header syntax from `A-B:` to `@@ A..B @@` with `@@ A @@` shorthand for single lines
 - Changed repeat payload sigil from `^A-B` to `&A..B` with `&A` shorthand for single lines
 - Changed range separator from `-` to `..` in all contexts (anchors and repeats)

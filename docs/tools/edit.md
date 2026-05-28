@@ -27,7 +27,7 @@
 Patch language inside `input`:
 
 - **File header**: `¶PATH#TAG` (or `¶PATH` for new-file / virtual-only hunks). `TAG` is three uppercase-hex chars minted by the session snapshot store.
-- **Hunk header**: bare `A B` selects original lines A..B. The range separator is normally whitespace; the parser also silently accepts `A-B`, `A..B`, and `A…B` (unicode ellipsis). Virtual variants `BOF` and `EOF` target positions before line 1 / after the last line. The bare single-line shorthand `A` is accepted as `A A`.
+- **Hunk header**: bare `A B` selects original lines A..B. Two numbers are REQUIRED — single-line ranges are written `A A` (`5 5`), not `5`. The range separator is normally whitespace; the parser also silently accepts `A-B`, `A..B`, and `A…B` (unicode ellipsis). Virtual variants `BOF` and `EOF` target positions before line 1 / after the last line.
 - **Body rows** (one per line, immediately under the hunk header):
   - `+TEXT` — add the literal line `TEXT` verbatim, including all leading whitespace.
   - `+` alone — add one blank line.
@@ -43,7 +43,7 @@ Anchors come from `read`/`search` output. `read` emits a `¶PATH#TAG` header fro
 
 Because models reproduce nearby shapes (`read` output, `apply_patch` envelopes, unified-diff hunks), the parser is liberal about a handful of harmless variants:
 
-- `A` — accepted as `A A` (single-line shorthand).
+- `A` (bare single number) — REJECTED. The parser throws `single-number hunk header "A" is no longer accepted`. Spell single-line ranges as `A A`.
 - `A-B`, `A..B`, `A…B` — accepted as `A B` (any of hyphen, double-dot, or unicode ellipsis works as a silent separator).
 - `&A` — accepted as `&A..A`.
 - Bare body rows with no `+`/`&` prefix are auto-prepended with `+` and a `BARE_BODY_AUTO_PIPED_WARNING` is appended, BUT only when every row in that block is uniformly bare. Mixed `+`/raw blocks still throw.
@@ -165,7 +165,8 @@ Multi-file:
 - apply_patch / unified-diff contamination:
   - `line N: apply_patch sentinel "*** …" is not valid in hashline. File sections start with \`¶path#HASH\` (no \`Update File:\` / \`Add File:\` keyword). Hunks are bare \`A B\` lines with \`+TEXT\` / \`&A..B\` body rows.`
   - `line N: unified-diff hunk header (\`@@ -N,M +N,M @@\`) is not valid in hashline. Hashline hunks are bare \`A B\` lines (or \`BOF\` / \`EOF\` keywords).`
-  - `line N: \`@@\`-bracketed hunk header "@@ …" is not valid in hashline. Drop the \`@@ ... @@\` brackets and write the range directly: \`5 7\` (or \`5\` for a single line, \`BOF\` / \`EOF\` for virtual positions).`
+  - `line N: \`@@\`-bracketed hunk header "@@ …" is not valid in hashline. Drop the \`@@ ... @@\` brackets and write the range directly: \`5 7\` (\`BOF\` / \`EOF\` for virtual positions).`
+  - `line N: single-number hunk header "N" is no longer accepted. Spell single-line ranges as \`N N\` (two numbers); hashline hunks are bare \`A B\` lines (or \`BOF\` / \`EOF\`).`
 - Out-of-range anchor:
   - `Line N does not exist (file has M lines)`
 - Stale snapshot tag throws `MismatchError`. The error contains re-read guidance and nearby current file lines as `*LINE:TEXT` / ` LINE:TEXT`.

@@ -164,8 +164,9 @@ interface RangeScan {
  * Scan a numeric range for a hunk header. Canonical form is `A B` (two
  * numbers separated by whitespace); models also reflexively emit `A-B`,
  * `A..B`, and `A…B` (unicode ellipsis), so we accept any of those as the
- * range separator. Bare `A` is the single-line shorthand for `A A`.
- * Repeat-row bodies (`&A..B`) keep their own parser; see
+ * range separator. A second number is REQUIRED — bare `A` is not a valid
+ * hunk header in this grammar. Repeat-row bodies (`&A..B`) keep their own
+ * parser and still accept the `&A` single-line shorthand; see
  * {@link tryParseRepeatPayload}.
  */
 function scanHeaderRange(line: string, index = 0, end = trimEndIndex(line)): RangeScan | null {
@@ -174,27 +175,20 @@ function scanHeaderRange(line: string, index = 0, end = trimEndIndex(line)): Ran
 	if (start === null) return null;
 
 	const afterFirst = scanRangeSeparator(line, start.nextIndex, end);
-	if (afterFirst !== null) {
-		const endNumber = scanLineNumber(line, afterFirst, end);
-		if (endNumber === null) return null;
-		return {
-			range: { start: { line: start.line }, end: { line: endNumber.line } },
-			nextIndex: skipWhitespace(line, endNumber.nextIndex, end),
-		};
-	}
-	// Shorthand: bare `A` treated as `A..A`. Trailing non-whitespace past
-	// `cursor` signals a malformed header (caller verifies).
+	if (afterFirst === null) return null;
+	const endNumber = scanLineNumber(line, afterFirst, end);
+	if (endNumber === null) return null;
 	return {
-		range: { start: { line: start.line }, end: { line: start.line } },
-		nextIndex: skipWhitespace(line, start.nextIndex, end),
+		range: { start: { line: start.line }, end: { line: endNumber.line } },
+		nextIndex: skipWhitespace(line, endNumber.nextIndex, end),
 	};
 }
 
 /**
- * Consume an optional range separator (whitespace, `-`, `..`, or `…`)
- * after the first number in a header. Returns the index of the second
- * number, or `null` when the next non-whitespace char isn't a digit
- * (i.e. we're looking at a single-line shorthand).
+ * Consume the mandatory range separator (whitespace, `-`, `..`, or `…`)
+ * between the two numbers of a hunk-header range. Returns the index of
+ * the second number, or `null` when the separator is missing or no digit
+ * follows it.
  */
 function scanRangeSeparator(line: string, index: number, end: number): number | null {
 	let cursor = index;
@@ -231,8 +225,9 @@ interface TargetScan {
 }
 
 /**
- * Scan the anchor portion of a hunk header. Accepts `BOF`, `EOF`, `A B`
- * (range), or `A` (single-line shorthand for `A A`).
+ * Scan the anchor portion of a hunk header. Accepts `BOF`, `EOF`, or
+ * `A B` (range). Single-number anchors are NOT accepted; callers must
+ * spell single-line ranges as `A A`.
  */
 function scanHunkAnchor(line: string, start: number, end: number): TargetScan | null {
 	const cursor = skipWhitespace(line, start, end);
@@ -252,9 +247,8 @@ interface ParsedHunkHeader {
 }
 
 /**
- * Parse a bare hunk-header line: `A B` (range), `A` (single-line shorthand
- * for `A A`), or the keywords `BOF` / `EOF`. Returns `null` for lines that
- * do not match the shape.
+ * Parse a bare hunk-header line: `A B` (range) or the keywords
+ * `BOF` / `EOF`. Returns `null` for lines that do not match the shape.
  */
 function tryParseHunkHeader(line: string): ParsedHunkHeader | null {
 	const end = trimEndIndex(line);
@@ -366,10 +360,10 @@ function classifyLine(line: string, lineNum: number): Token {
 		}
 	}
 
-	// Hunk header lines start with a digit (range / single-line) or the
-	// keyword `BOF` / `EOF`. `@@`-bracketed forms are intentionally NOT
-	// accepted here — they fall through to `raw` and the parser rejects
-	// them as apply_patch contamination.
+	// Hunk header lines are `A B` (two numbers) or the keyword `BOF` /
+	// `EOF`. `@@`-bracketed forms are intentionally NOT accepted here —
+	// they fall through to `raw` and the parser rejects them as
+	// apply_patch contamination.
 	const isHunkLead = isNonZeroDigitCode(firstCode) || line.startsWith(BOF_ANCHOR) || line.startsWith(EOF_ANCHOR);
 	if (isHunkLead) {
 		const hunk = tryParseHunkHeader(line);

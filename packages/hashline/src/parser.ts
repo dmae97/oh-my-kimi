@@ -98,7 +98,14 @@ function detectApplyPatchContamination(text: string, _hasPending: boolean): stri
 		const preview = trimmed.length > 48 ? `${trimmed.slice(0, 48)}…` : trimmed;
 		return (
 			`\`@@\`-bracketed hunk header ${JSON.stringify(preview)} is not valid in hashline. ` +
-			"Drop the `@@ ... @@` brackets and write the range directly: `5 7` (or `5` for a single line, `BOF` / `EOF` for virtual positions)."
+			"Drop the `@@ ... @@` brackets and write the range directly: `5 7` (`BOF` / `EOF` for virtual positions)."
+		);
+	}
+	if (/^[1-9]\d*\s*$/.test(trimmed)) {
+		return (
+			`single-number hunk header ${JSON.stringify(trimmed)} is no longer accepted. ` +
+			`Spell single-line ranges as \`${trimmed} ${trimmed}\` (two numbers); ` +
+			"hashline hunks are bare `A B` lines (or `BOF` / `EOF`)."
 		);
 	}
 	return null;
