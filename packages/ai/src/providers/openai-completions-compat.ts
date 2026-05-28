@@ -209,7 +209,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		requiresThinkingAsText: isMistral,
 		requiresMistralToolIds: isMistral,
 		thinkingFormat:
-			isZai || isZhipu || isMoonshotKimi
+			isZai || isZhipu || isMoonshotKimi || isKimiModel
 				? "zai"
 				: provider === "openrouter" || baseUrl.includes("openrouter.ai")
 					? "openrouter"
