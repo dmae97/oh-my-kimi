@@ -59,29 +59,17 @@ const resolvedSpecifierFallbacks = new Map<string, string>();
 const TYPEBOX_SPECIFIER = "@sinclair/typebox";
 const TYPEBOX_SPECIFIER_FILTER = /^@sinclair\/typebox$/;
 
-// In-process compat paths. In dev `import.meta.dir` is the source folder of
-// this file, so the dev branches resolve to the real source files. In compiled
-// binaries `import.meta.dir` collapses to `/$bunfs/root`, so the runtime cannot
-// recover the source layout that way; instead, each computed entrypoint path
-// below must be registered as a `--compile` entrypoint in
-// `scripts/build-binary.ts`, which Bun emits into bunfs at a deterministic
-// `--root`-relative path with a `.js` extension. If either side drifts, legacy
-// plugins fail with missing-module errors in release builds.
+// Compat shim paths owned by this package. The dev branch resolves the sibling
+// source file via `import.meta.dir` (works in monorepo, source-link, and
+// node_modules installs alike, since each install layout ships the shim next
+// to this file). The compiled-binary branch points at the `--root`-relative
+// bunfs path produced by `scripts/build-binary.ts`; every shim listed below
+// must be registered there as an explicit `--compile` entrypoint or release
+// builds fail with missing-module errors. Non-shim bundled packages are
+// resolved via `Bun.resolveSync` (see `resolveCanonicalPiSpecifier`), so they
+// keep working in installed-package mode where the on-disk layout differs from
+// the monorepo source tree.
 const BUNFS_PACKAGE_ROOT = "/$bunfs/root/packages";
-
-type SourcePiPackageDir = "agent" | "tui" | "utils";
-
-function getBundledPackageIndexPath(packageDir: SourcePiPackageDir): string {
-	return IS_COMPILED_BINARY
-		? `${BUNFS_PACKAGE_ROOT}/${packageDir}/src/index.js`
-		: path.resolve(import.meta.dir, "../../../..", packageDir, "src/index.ts");
-}
-
-function getBundledNativesIndexPath(): string {
-	return IS_COMPILED_BINARY
-		? `${BUNFS_PACKAGE_ROOT}/natives/native/index.js`
-		: path.resolve(import.meta.dir, "../../../../natives/native/index.js");
-}
 
 const TYPEBOX_SHIM_PATH = IS_COMPILED_BINARY
 	? `${BUNFS_PACKAGE_ROOT}/coding-agent/src/extensibility/typebox.js`
@@ -107,13 +95,25 @@ const LEGACY_PI_AI_SHIM_PATH = IS_COMPILED_BINARY
 const LEGACY_PI_CODING_AGENT_SHIM_PATH = IS_COMPILED_BINARY
 	? `${BUNFS_PACKAGE_ROOT}/coding-agent/src/extensibility/legacy-pi-coding-agent-shim.js`
 	: path.resolve(import.meta.dir, "../legacy-pi-coding-agent-shim.ts");
+
+// Package-root overrides. Shim entries are always applied because they replace
+// (or augment) the canonical surface even in non-compiled installs. The bunfs
+// entries are added only in compiled-binary mode — in dev / source-link /
+// installed-package mode the canonical specifier resolves cleanly through
+// `Bun.resolveSync`, and hardcoding a relative source-tree path would break
+// installs where the bundled packages live at `node_modules/@oh-my-pi/pi-*`
+// rather than `packages/*`.
 const LEGACY_PI_PACKAGE_ROOT_OVERRIDES: Record<string, string> = {
-	[`${CANONICAL_PI_SCOPE}/pi-agent-core`]: getBundledPackageIndexPath("agent"),
 	[`${CANONICAL_PI_SCOPE}/pi-ai`]: LEGACY_PI_AI_SHIM_PATH,
 	[`${CANONICAL_PI_SCOPE}/pi-coding-agent`]: LEGACY_PI_CODING_AGENT_SHIM_PATH,
-	[`${CANONICAL_PI_SCOPE}/pi-natives`]: getBundledNativesIndexPath(),
-	[`${CANONICAL_PI_SCOPE}/pi-tui`]: getBundledPackageIndexPath("tui"),
-	[`${CANONICAL_PI_SCOPE}/pi-utils`]: getBundledPackageIndexPath("utils"),
+	...(IS_COMPILED_BINARY
+		? {
+				[`${CANONICAL_PI_SCOPE}/pi-agent-core`]: `${BUNFS_PACKAGE_ROOT}/agent/src/index.js`,
+				[`${CANONICAL_PI_SCOPE}/pi-natives`]: `${BUNFS_PACKAGE_ROOT}/natives/native/index.js`,
+				[`${CANONICAL_PI_SCOPE}/pi-tui`]: `${BUNFS_PACKAGE_ROOT}/tui/src/index.js`,
+				[`${CANONICAL_PI_SCOPE}/pi-utils`]: `${BUNFS_PACKAGE_ROOT}/utils/src/index.js`,
+			}
+		: {}),
 };
 
 let isLegacyPiSpecifierShimInstalled = false;

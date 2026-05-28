@@ -151,4 +151,31 @@ describe("legacy pi package root remaps (issue #1474)", () => {
 		};
 		expect(loaded.loadedMarker).toBe("legacy-oauth");
 	});
+
+	it("routes @earendil-works/pi-utils through canonical Bun.resolveSync in non-compiled mode", async () => {
+		// Regression: when omp runs from a node_modules install (not the monorepo
+		// and not a compiled binary), the bundled packages live at
+		// `node_modules/@oh-my-pi/pi-*`, not next to the source tree. Hardcoding
+		// a sibling `packages/<pkg>/src/index.ts` path would miss them, so the
+		// non-compiled branch must delegate to `Bun.resolveSync` against the
+		// canonical specifier.
+		const realResolveSync = Bun.resolveSync.bind(Bun);
+		let canonicalLookupSeen = false;
+		vi.spyOn(Bun, "resolveSync").mockImplementation((specifier: string, from: string) => {
+			if (specifier === "@oh-my-pi/pi-utils") {
+				canonicalLookupSeen = true;
+			}
+			return realResolveSync(specifier, from);
+		});
+		const entry = await writeFixtureExtension(
+			[
+				'import { isCompiledBinary } from "@earendil-works/pi-utils";',
+				"export const probe = isCompiledBinary;",
+			].join("\n"),
+		);
+
+		const loaded = (await loadLegacyPiModule(entry)) as { probe: () => boolean };
+		expect(typeof loaded.probe).toBe("function");
+		expect(canonicalLookupSeen).toBe(true);
+	});
 });
