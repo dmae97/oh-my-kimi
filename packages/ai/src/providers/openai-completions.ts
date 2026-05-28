@@ -1016,12 +1016,7 @@ function buildParams(
 	const forcedToolChoiceSuppressesThinking =
 		compat.disableReasoningOnForcedToolChoice &&
 		isForcedToolChoice(mapToOpenAICompletionsToolChoice(options?.toolChoice));
-	if (
-		isKimiModelId &&
-		isOpenCodeProvider &&
-		thinkingEnabledForRequest &&
-		!forcedToolChoiceSuppressesThinking
-	) {
+	if (isKimiModelId && isOpenCodeProvider && thinkingEnabledForRequest && !forcedToolChoiceSuppressesThinking) {
 		compat.requiresReasoningContentForToolCalls = true;
 	}
 	const messages = convertMessages(model, context, compat);
