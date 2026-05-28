@@ -551,6 +551,23 @@ function resolveCompactionEffort(model: Model, level: ThinkingLevel | undefined)
 }
 
 /**
+ * Build the error thrown when an LLM summarization call ends with
+ * `stopReason === "error"`. Carries the provider's HTTP `errorStatus`
+ * onto a top-level `.status` field so callers (notably
+ * `AgentSession.#isCompactionAuthFailure`) can branch on 401/403 without
+ * regex-scraping `error.message`. The `auth_unavailable` synthetic
+ * (pi-native gateway) does not populate `errorStatus`, hence the legacy
+ * message-based check is still required upstream — see issue #986.
+ */
+function createSummarizationError(prefix: string, response: AssistantMessage): Error {
+	const error: Error & { status?: number } = new Error(`${prefix}: ${response.errorMessage || "Unknown error"}`);
+	if (response.errorStatus !== undefined) {
+		error.status = response.errorStatus;
+	}
+	return error;
+}
+
+/**
  * Generate a summary of the conversation using the LLM.
  * If previousSummary is provided, uses the update prompt to merge.
  */
@@ -649,7 +666,7 @@ export async function generateSummary(
 	);
 
 	if (response.stopReason === "error") {
-		throw new Error(`Summarization failed: ${response.errorMessage || "Unknown error"}`);
+		throw createSummarizationError("Summarization failed", response);
 	}
 
 	const textContent = response.content
@@ -731,7 +748,7 @@ export async function generateHandoff(
 	);
 
 	if (response.stopReason === "error") {
-		throw new Error(`Handoff generation failed: ${response.errorMessage || "Unknown error"}`);
+		throw createSummarizationError("Handoff generation failed", response);
 	}
 
 	return response.content
@@ -790,7 +807,7 @@ async function generateShortSummary(
 	);
 
 	if (response.stopReason === "error") {
-		throw new Error(`Short summary failed: ${response.errorMessage || "Unknown error"}`);
+		throw createSummarizationError("Short summary failed", response);
 	}
 
 	return response.content
@@ -1128,7 +1145,7 @@ async function generateTurnPrefixSummary(
 	);
 
 	if (response.stopReason === "error") {
-		throw new Error(`Turn prefix summarization failed: ${response.errorMessage || "Unknown error"}`);
+		throw createSummarizationError("Turn prefix summarization failed", response);
 	}
 
 	return response.content
