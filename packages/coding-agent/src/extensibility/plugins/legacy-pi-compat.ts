@@ -69,7 +69,7 @@ const TYPEBOX_SPECIFIER_FILTER = /^@sinclair\/typebox$/;
 // plugins fail with missing-module errors in release builds.
 const BUNFS_PACKAGE_ROOT = "/$bunfs/root/packages";
 
-type SourcePiPackageDir = "agent" | "coding-agent" | "tui" | "utils";
+type SourcePiPackageDir = "agent" | "tui" | "utils";
 
 function getBundledPackageIndexPath(packageDir: SourcePiPackageDir): string {
 	return IS_COMPILED_BINARY
@@ -86,6 +86,7 @@ function getBundledNativesIndexPath(): string {
 const TYPEBOX_SHIM_PATH = IS_COMPILED_BINARY
 	? `${BUNFS_PACKAGE_ROOT}/coding-agent/src/extensibility/typebox.js`
 	: path.resolve(import.meta.dir, "../typebox.ts");
+
 // Legacy extensions historically imported `Type` (and `Static`/`TSchema`) from
 // the package root of `@(scope)/pi-ai`. pi-ai 15.1.0 removed the runtime `Type`
 // export (see `packages/ai/CHANGELOG.md`), so the bare canonical specifier no
@@ -97,10 +98,19 @@ const TYPEBOX_SHIM_PATH = IS_COMPILED_BINARY
 const LEGACY_PI_AI_SHIM_PATH = IS_COMPILED_BINARY
 	? `${BUNFS_PACKAGE_ROOT}/coding-agent/src/extensibility/legacy-pi-ai-shim.js`
 	: path.resolve(import.meta.dir, "../legacy-pi-ai-shim.ts");
+
+// The coding-agent's own `./src/index.ts` cannot be listed as an extra
+// `bun --compile` entrypoint alongside the CLI entry without breaking binary
+// startup (issue #1474 follow-up). Legacy `@(scope)/pi-coding-agent` root
+// imports therefore resolve through a sibling shim whose distinct file path
+// avoids that collision while re-exporting the canonical package surface.
+const LEGACY_PI_CODING_AGENT_SHIM_PATH = IS_COMPILED_BINARY
+	? `${BUNFS_PACKAGE_ROOT}/coding-agent/src/extensibility/legacy-pi-coding-agent-shim.js`
+	: path.resolve(import.meta.dir, "../legacy-pi-coding-agent-shim.ts");
 const LEGACY_PI_PACKAGE_ROOT_OVERRIDES: Record<string, string> = {
 	[`${CANONICAL_PI_SCOPE}/pi-agent-core`]: getBundledPackageIndexPath("agent"),
 	[`${CANONICAL_PI_SCOPE}/pi-ai`]: LEGACY_PI_AI_SHIM_PATH,
-	[`${CANONICAL_PI_SCOPE}/pi-coding-agent`]: getBundledPackageIndexPath("coding-agent"),
+	[`${CANONICAL_PI_SCOPE}/pi-coding-agent`]: LEGACY_PI_CODING_AGENT_SHIM_PATH,
 	[`${CANONICAL_PI_SCOPE}/pi-natives`]: getBundledNativesIndexPath(),
 	[`${CANONICAL_PI_SCOPE}/pi-tui`]: getBundledPackageIndexPath("tui"),
 	[`${CANONICAL_PI_SCOPE}/pi-utils`]: getBundledPackageIndexPath("utils"),

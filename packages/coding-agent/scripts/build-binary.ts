@@ -60,14 +60,18 @@ async function main(): Promise<void> {
 					// `legacy-pi-compat.ts`. These are reached via computed bunfs paths
 					// (which `--compile`'s static analyzer cannot trace), so each must be
 					// listed here to land in bunfs at
-					// `/$bunfs/root/packages/<pkg>/<entry>.js`.
+					// `/$bunfs/root/packages/<pkg>/<entry>.js`. The coding-agent's own
+					// `./src/index.ts` is intentionally NOT listed: bun --compile silently
+					// breaks the CLI entry when the same package's barrel appears as an
+					// extra entrypoint (issue #1474), so legacy `pi-coding-agent` imports
+					// resolve through `legacy-pi-coding-agent-shim.ts` instead.
 					"../agent/src/index.ts",
 					"../natives/native/index.js",
 					"../tui/src/index.ts",
 					"../utils/src/index.ts",
-					"./src/index.ts",
 					"./src/extensibility/typebox.ts",
 					"./src/extensibility/legacy-pi-ai-shim.ts",
+					"./src/extensibility/legacy-pi-coding-agent-shim.ts",
 					"--outfile",
 					"dist/omp",
 				],
