@@ -26,8 +26,16 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { detectCompiledBinary, getAddonFilenames, resolveLoaderCandidates } from "../native/loader-state.js";
+import {
+	detectCompiledBinary,
+	type EmbeddedAddonFile,
+	extractEmbeddedAddonArchive,
+	getAddonFilenames,
+	resolveLoaderCandidates,
+} from "../native/loader-state.js";
 
 describe("issue 823: standalone-binary native loader path resolution", () => {
 	it("detects compiled-binary mode from embedded-addon presence when env and url markers are absent", () => {
@@ -128,5 +136,43 @@ describe("issue 823: standalone-binary native loader path resolution", () => {
 		});
 		expect(candidates).not.toContain(path.join(versionedDir, "pi_natives.linux-x64-baseline.node"));
 		expect(candidates).not.toContain(path.join(userDataDir, "pi_natives.linux-x64-baseline.node"));
+	});
+
+	it("extracts all bundled native variants from one gzip archive and skips current files", async () => {
+		const testDir = await fs.mkdtemp(path.join(os.tmpdir(), "natives-embedded-archive-"));
+		try {
+			const archivePath = path.join(testDir, "embedded-addons.linux-x64.tar.gz");
+			const targetDir = path.join(testDir, "cache");
+			await fs.mkdir(targetDir);
+
+			const modern = Buffer.from("modern native addon");
+			const baseline = Buffer.from("baseline native addon");
+			const modernFilename = "pi_natives.linux-x64-modern.node";
+			const baselineFilename = "pi_natives.linux-x64-baseline.node";
+			await Bun.write(
+				archivePath,
+				await new Bun.Archive(
+					{
+						[modernFilename]: modern,
+						[baselineFilename]: baseline,
+					},
+					{ compress: "gzip", level: 9 },
+				).bytes(),
+			);
+
+			const files: EmbeddedAddonFile[] = [
+				{ variant: "modern", filename: modernFilename, size: modern.length },
+				{ variant: "baseline", filename: baselineFilename, size: baseline.length },
+			];
+
+			const written = extractEmbeddedAddonArchive({ archivePath, files, targetDir });
+			expect(written.map(filePath => path.basename(filePath)).sort()).toEqual([baselineFilename, modernFilename]);
+			expect(await fs.readFile(path.join(targetDir, modernFilename), "utf8")).toBe("modern native addon");
+			expect(await fs.readFile(path.join(targetDir, baselineFilename), "utf8")).toBe("baseline native addon");
+
+			expect(extractEmbeddedAddonArchive({ archivePath, files, targetDir })).toEqual([]);
+		} finally {
+			await fs.rm(testDir, { recursive: true, force: true });
+		}
 	});
 });

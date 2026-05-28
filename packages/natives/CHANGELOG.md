@@ -1,6 +1,18 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Changed native addon extraction to skip re-extracting cached `.node` files when their size already matches embedded archive metadata
+- Changed standalone binaries to embed native addons as a compressed tarball and unpack them into the versioned native cache on first run instead of embedding each `.node` file uncompressed.
+
+### Fixed
+
+- Fixed CI native addon builds retaining ELF debug and symbol sections in release artifacts; stripped builds are now verified to reject `.debug_*`, `.zdebug_*`, `.symtab`, and `.strtab` sections.
+
+### Security
+
+- Hardened embedded addon archive extraction by rejecting unsafe entry names and non-file archive entries before writing binaries to disk
 
 ## [15.5.4] - 2026-05-27
 ### Added

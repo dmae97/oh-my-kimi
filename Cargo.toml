@@ -26,8 +26,8 @@ panic = "abort"
 inherits = "release"
 lto = "thin"
 codegen-units = 16
-debug = "line-tables-only"
-strip = "none"
+debug = false
+strip = "symbols"
 split-debuginfo = "off"
 
 [profile.local]
