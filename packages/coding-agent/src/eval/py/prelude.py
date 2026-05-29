@@ -385,6 +385,40 @@ if "__omp_prelude_loaded__" not in globals():
             raise RuntimeError("tool bridge is unavailable in this kernel")
         return (base.rstrip("/"), token, session)
 
+    def _bridge_call(name: str, args: dict):
+        """POST one request to the host tool bridge and return its `value`."""
+        import urllib.request, urllib.error
+        base, token, session = _tool_proxy_from_env()
+        _run_id_getter = globals().get("__omp_current_run_id__")
+        _run_id = _run_id_getter() if callable(_run_id_getter) else globals().get("__omp_run_id__")
+        payload = json.dumps(
+            {"session": session, "run": _run_id, "name": name, "args": args}
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            f"{base}/v1/tool",
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                body = resp.read()
+        except urllib.error.HTTPError as exc:
+            body = exc.read()
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            raise RuntimeError(
+                f"bridge call {name!r}: non-JSON response: {body[:200]!r}"
+            ) from None
+        if not isinstance(data, dict) or not data.get("ok"):
+            msg = (data or {}).get("error") if isinstance(data, dict) else None
+            raise RuntimeError(msg or f"bridge call {name!r} failed")
+        return data.get("value")
+
     class _ToolCallable:
         """Invokes one host-side tool via the loopback HTTP bridge."""
 
@@ -397,7 +431,6 @@ if "__omp_prelude_loaded__" not in globals():
             return f"<tool.{self._name}>"
 
         def __call__(self, args=None, /, **kwargs):
-            import urllib.request, urllib.error
             if args is None:
                 merged: dict = {}
             elif isinstance(args, dict):
@@ -409,36 +442,7 @@ if "__omp_prelude_loaded__" not in globals():
             merged.update(kwargs)
             if "_i" not in merged:
                 merged["_i"] = "py prelude"
-            base, token, session = _tool_proxy_from_env()
-            _run_id_getter = globals().get("__omp_current_run_id__")
-            _run_id = _run_id_getter() if callable(_run_id_getter) else globals().get("__omp_run_id__")
-            payload = json.dumps(
-                {"session": session, "run": _run_id, "name": self._name, "args": merged}
-            ).encode("utf-8")
-            req = urllib.request.Request(
-                f"{base}/v1/tool",
-                data=payload,
-                method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {token}",
-                },
-            )
-            try:
-                with urllib.request.urlopen(req) as resp:
-                    body = resp.read()
-            except urllib.error.HTTPError as exc:
-                body = exc.read()
-            try:
-                data = json.loads(body)
-            except json.JSONDecodeError:
-                raise RuntimeError(
-                    f"tool.{self._name}: bridge returned non-JSON response: {body[:200]!r}"
-                ) from None
-            if not isinstance(data, dict) or not data.get("ok"):
-                msg = (data or {}).get("error") if isinstance(data, dict) else None
-                raise RuntimeError(msg or f"tool.{self._name} failed")
-            return data.get("value")
+            return _bridge_call(self._name, merged)
 
     class _ToolProxy:
         """`tool.<name>(args)` proxy mirroring the JS runtime bridge."""
@@ -458,3 +462,20 @@ if "__omp_prelude_loaded__" not in globals():
             return f"<tool proxy session={session}>" if session else "<tool proxy unavailable>"
 
     tool = _ToolProxy()
+
+    def llm(prompt, *, model="default", system=None, schema=None):
+        """Oneshot, stateless LLM call against a model tier.
+
+        `model` selects a tier: "smol", "default" (the session's active model),
+        or "slow". Pass `system` for a system prompt. Pass a JSON-Schema dict
+        as `schema` to force a structured response; the parsed object is then
+        returned instead of the completion text.
+        """
+        args = {"prompt": prompt, "model": model}
+        if system is not None:
+            args["system"] = system
+        if schema is not None:
+            args["schema"] = schema
+        res = _bridge_call("__llm__", args)
+        text = res.get("text") if isinstance(res, dict) else res
+        return json.loads(text) if schema is not None else text

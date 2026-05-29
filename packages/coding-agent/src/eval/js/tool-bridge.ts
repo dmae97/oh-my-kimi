@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { ToolSession } from "../../tools";
 import { ToolError } from "../../tools/tool-errors";
+import { EVAL_LLM_BRIDGE_NAME, runEvalLlm } from "../llm-bridge";
 import type { JsStatusEvent } from "./shared/types";
 
 export type { JsStatusEvent } from "./shared/types";
@@ -101,6 +102,9 @@ function summarizeToolResult(
 }
 
 export async function callSessionTool(name: string, args: unknown, options: ToolBridgeOptions): Promise<ToolValue> {
+	if (name === EVAL_LLM_BRIDGE_NAME) {
+		return await runEvalLlm(args, options);
+	}
 	const tool = getTool(options.session, name);
 	const normalizedArgs = normalizeArgs(args);
 	const toolCallId = `js-${name}-${crypto.randomUUID()}`;

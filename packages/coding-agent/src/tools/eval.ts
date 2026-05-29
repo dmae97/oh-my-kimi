@@ -634,6 +634,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		sh: "icon.package",
 		env: "icon.package",
 		batch: "icon.package",
+		llm: "icon.package",
 	};
 
 	const iconKey = opIcons[op] ?? "icon.file";
@@ -699,6 +700,11 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 			break;
 		case "batch":
 			parts.push(`${data.files} file${(data.files as number) !== 1 ? "s" : ""} processed`);
+			break;
+		case "llm":
+			if (data.model) parts.push(String(data.model));
+			if (data.tier && data.tier !== data.model) parts.push(`(${data.tier})`);
+			parts.push(`${data.chars ?? 0} chars`);
 			break;
 		case "wc":
 			parts.push(`${data.lines}L ${data.words}W ${data.chars}C`);

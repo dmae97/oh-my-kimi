@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added progress status output for `llm()` calls in `eval`, including the resolved model, tier, and returned character count
+- Added an `llm(prompt, opts)` helper to both `eval` runtimes (JavaScript and Python) for oneshot, stateless LLM calls. `opts.model` selects a tier — `"smol"` (`pi/smol`), `"default"` (the session's active model, falling back to `pi/default`), or `"slow"` (`pi/slow`, with high reasoning effort on reasoning-capable models). Pass `system` for a system prompt and a plain JSON-Schema `schema` to force a structured response (the helper returns the parsed object instead of the completion string). Calls carry no conversation history and expose no agent-visible tools; they route host-side through the existing tool bridge under the reserved name `__llm__` (`packages/coding-agent/src/eval/llm-bridge.ts`).
 
 ### Fixed
 

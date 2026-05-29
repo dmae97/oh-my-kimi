@@ -44,6 +44,8 @@ output(*ids, format?="raw", query?=None, offset?=None, limit?=None) → str | di
     Read task/agent output by ID. Single id returns text/dict; multiple ids return a list.
 tool.<name>(args) → unknown
     Invoke any session tool by name. `args` is the tool's parameter object.
+llm(prompt, model?="default", system?=None, schema?=None) → str | dict
+    Oneshot, stateless LLM call (no history, no tools). `model` picks a tier: "smol" (fast), "default" (this session's model), "slow" (most capable). Pass `system` for a system prompt. Pass a JSON-Schema `schema` to force structured output and get the parsed object back; otherwise returns the completion text.
 ```
 </prelude>
 
