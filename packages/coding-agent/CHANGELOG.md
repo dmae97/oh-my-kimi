@@ -16,6 +16,7 @@
 ### Changed
 
 - Changed the `eval` tool's `display()` JSON tree in the transcript to use the shared `renderJsonTreeLines` renderer (the same one behind tool args, MCP results, and subagent output) instead of its own format. This drops the redundant `Object(N)` / `Array(N)` type labels and the per-output `JSON output N` header in favor of type icons plus bare keys; the `display[N]` header is now shown only when a cell emits more than one `display()` value.
+- Removed the animated spinner from the sticky `Todos` panel. In-progress tasks and pending tasks with a matching in-flight subagent still highlight (accent colour + the static `theme.status.running` glyph), but no longer tick through `theme.spinnerFrames`, so the panel paints once per state change instead of on an 80 ms timer. Subagent auto-checkmarking, the advancing window (`selectStickyTodoWindow`), `todoMatchesAnyDescription` highlighting, and the all-done close animation are unchanged.
 
 ## [15.5.13] - 2026-05-29
 ### Breaking Changes

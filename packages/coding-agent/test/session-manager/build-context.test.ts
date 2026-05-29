@@ -341,5 +341,77 @@ describe("buildSessionContext", () => {
 			// Should only get the orphan since parent chain is broken
 			expect(ctx.messages).toHaveLength(1);
 		});
+
+		it("strips dangling tool_use when the leaf lands on a mid-batch assistant turn", () => {
+			// Reproduces the rewind/restore loop: leaf = an assistant turn that emitted
+			// tool calls. Its results are off-path children, so without normalization the
+			// turn ends on unpaired tool_use and transformMessages fabricates phantom
+			// "aborted" results + a <turn-aborted> note, re-injecting the failed batch.
+			const assistantWithCalls: SessionMessageEntry = {
+				type: "message",
+				id: "a1",
+				parentId: "u1",
+				timestamp: "2025-01-01T00:00:00Z",
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "text", text: "Let me finish duel.py now" },
+						{ type: "toolCall", id: "call_1", name: "write", arguments: { path: "duel.py" } },
+						{ type: "toolCall", id: "call_2", name: "bash", arguments: { command: "pytest" } },
+					],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude-test",
+					usage: {
+						input: 1,
+						output: 1,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 2,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "aborted",
+					timestamp: 1,
+				},
+			};
+			const entries: SessionEntry[] = [msg("u1", null, "user", "do it"), assistantWithCalls];
+			const ctx = buildSessionContext(entries, "a1");
+			expect(ctx.messages).toHaveLength(2);
+			const last = ctx.messages[1];
+			expect(last.role).toBe("assistant");
+			const content = (last as { content: Array<{ type: string }> }).content;
+			expect(content.some(block => block.type === "toolCall")).toBe(false);
+			expect(content.some(block => block.type === "text")).toBe(true);
+		});
+
+		it("drops a trailing assistant turn that is only dangling tool_use", () => {
+			const toolCallOnly: SessionMessageEntry = {
+				type: "message",
+				id: "a1",
+				parentId: "u1",
+				timestamp: "2025-01-01T00:00:00Z",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } }],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude-test",
+					usage: {
+						input: 1,
+						output: 1,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 2,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "aborted",
+					timestamp: 1,
+				},
+			};
+			const entries: SessionEntry[] = [msg("u1", null, "user", "do it"), toolCallOnly];
+			const ctx = buildSessionContext(entries, "a1");
+			expect(ctx.messages).toHaveLength(1);
+			expect(ctx.messages[0].role).toBe("user");
+		});
 	});
 });

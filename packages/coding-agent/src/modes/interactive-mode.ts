@@ -324,8 +324,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
 	#welcomeComponent?: WelcomeComponent;
-	#todoSpinnerInterval?: NodeJS.Timeout;
-	#todoSpinnerFrame = 0;
 	#todoClosingTimeout?: NodeJS.Timeout;
 	#todoClosingState: "idle" | "playing" | "done" = "idle";
 
@@ -534,9 +532,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#observerRegistry.onChange(() => {
 			this.statusLine.setSubagentCount(this.#observerRegistry.getActiveSubagentCount());
 			// Auto-checkmark todos whose matching subagent just succeeded, then
-			// re-render so the running override (animated row when a subagent
-			// is doing the work for a still-pending todo) updates as subagents
-			// start, finish, or fail. Also handles spinner start/stop.
+			// re-render so the running override (the static "live" glyph when a
+			// subagent is doing the work for a still-pending todo) updates as
+			// subagents start, finish, or fail.
 			this.#reconcileTodosWithSubagents();
 			this.#renderTodoList();
 			this.ui.requestRender();
@@ -960,29 +958,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.renderSessionContext(context);
 	}
 
-	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean, spinnerOn: boolean): string {
+	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {
 		const checkbox = theme.checkbox;
 		const marker = formatHudNoteMarker(todo.notes?.length ?? 0);
-		const frames = theme.spinnerFrames;
-		// When the spinner is ticking, use the current animated frame; otherwise
-		// fall back to the static "running" glyph so in_progress rows still look
-		// distinct from pending rows.
-		const runningGlyph =
-			spinnerOn && frames.length > 0
-				? (frames[this.#todoSpinnerFrame % frames.length] ?? theme.status.running)
-				: theme.status.running;
 		switch (todo.status) {
 			case "completed":
 				return (
 					theme.fg("success", `${prefix}${theme.status.success} ${chalk.strikethrough(todo.content)}`) + marker
 				);
 			case "in_progress":
-				return theme.fg("accent", `${prefix}${runningGlyph} ${todo.content}`) + marker;
+				return theme.fg("accent", `${prefix}${theme.status.running} ${todo.content}`) + marker;
 			case "abandoned":
 				return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`) + marker;
 			default:
 				if (matched) {
-					return theme.fg("accent", `${prefix}${runningGlyph} ${todo.content}`) + marker;
+					return theme.fg("accent", `${prefix}${theme.status.running} ${todo.content}`) + marker;
 				}
 				return theme.fg("dim", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 		}
@@ -1036,25 +1026,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setTodoPhases(next);
 	}
 
-	#updateTodoSpinnerAnimation(needSpinner: boolean): void {
-		if (needSpinner) {
-			if (this.#todoSpinnerInterval) return;
-			this.#todoSpinnerInterval = setInterval(() => {
-				const frames = theme.spinnerFrames;
-				if (frames.length === 0) return;
-				this.#todoSpinnerFrame = (this.#todoSpinnerFrame + 1) % frames.length;
-				// Rebuild the todo container so the new frame appears, then schedule
-				// a paint. The renderer self-stops the interval once no row needs it.
-				this.#renderTodoList();
-				this.ui.requestRender();
-			}, 80);
-		} else if (this.#todoSpinnerInterval) {
-			clearInterval(this.#todoSpinnerInterval);
-			this.#todoSpinnerInterval = undefined;
-			this.#todoSpinnerFrame = 0;
-		}
-	}
-
 	#getActivePhase(phases: TodoPhase[]): TodoPhase | undefined {
 		const nonEmpty = phases.filter(phase => phase.tasks.length > 0);
 		const active = nonEmpty.find(phase =>
@@ -1067,7 +1038,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.todoContainer.clear();
 		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) {
-			this.#updateTodoSpinnerAnimation(false);
 			this.#stopTodoClosingAnimation();
 			this.#todoClosingState = "idle";
 			return;
@@ -1081,7 +1051,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			phase.tasks.every(t => t.status === "completed" || t.status === "abandoned"),
 		);
 		if (allClosed) {
-			this.#updateTodoSpinnerAnimation(false);
 			if (this.#todoClosingState === "done") return;
 			if (this.#todoClosingState === "idle") this.#startTodoClosingAnimation(phases);
 			return;
@@ -1095,52 +1064,23 @@ export class InteractiveMode implements InteractiveModeContext {
 		const lines = ["", indent + theme.bold(theme.fg("accent", "Todos"))];
 
 		const activeDescs = this.#getActiveSubagentDescriptions();
-		// Cache matcher results so we don't re-scan the description list per row
-		// twice (once for the spinner decision, once for the render).
-		const matchedSet = new Set<TodoItem>();
-		const isMatched = (todo: TodoItem): boolean => {
-			if (activeDescs.length === 0) return false;
-			if (matchedSet.has(todo)) return true;
-			if (todoMatchesAnyDescription(todo.content, activeDescs)) {
-				matchedSet.add(todo);
-				return true;
-			}
-			return false;
-		};
-
-		// The cube animates whenever any visible open todo is "live":
-		// (a) status is in_progress (the agent itself is working it), or
-		// (b) a still-pending todo has a matching in-flight subagent doing
-		// the work for it. The renderer self-stops the interval once no row
-		// qualifies, so an orphan in_progress row at end-of-session keeps
-		// ticking — that's the intentional "this todo is still open" signal.
-		let needsSpinner = false;
-		const considerForSpinner = (todo: TodoItem): void => {
-			if (todo.status === "in_progress") {
-				needsSpinner = true;
-				return;
-			}
-			if (todo.status !== "pending") return;
-			if (isMatched(todo)) needsSpinner = true;
-		};
+		// A pending todo "lights up" (accent + running glyph) when an in-flight
+		// subagent is doing its work, matched by normalized content overlap.
+		const isMatched = (todo: TodoItem): boolean =>
+			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
 
 		if (!this.todoExpanded) {
 			const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
 			const activePhase = phases[activeIdx];
-			if (!activePhase) {
-				this.#updateTodoSpinnerAnimation(false);
-				return;
-			}
+			if (!activePhase) return;
 			const { visible, hiddenOpenCount } = selectStickyTodoWindow(activePhase.tasks, 5);
-			for (const todo of visible) considerForSpinner(todo);
-			this.#updateTodoSpinnerAnimation(needsSpinner);
 
 			lines.push(
 				`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(activePhase.name, activeIdx + 1)}`)}`,
 			);
 			visible.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
-				lines.push(this.#formatTodoLine(todo, prefix, matchedSet.has(todo), needsSpinner));
+				lines.push(this.#formatTodoLine(todo, prefix, isMatched(todo)));
 			});
 			if (hiddenOpenCount > 0) {
 				lines.push(theme.fg("muted", `${indent}  ${hook} +${hiddenOpenCount} more`));
@@ -1149,14 +1089,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		for (const phase of phases) for (const todo of phase.tasks) considerForSpinner(todo);
-		this.#updateTodoSpinnerAnimation(needsSpinner);
-
 		phases.forEach((phase, phaseIndex) => {
 			lines.push(`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(phase.name, phaseIndex + 1)}`)}`);
 			phase.tasks.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
-				lines.push(this.#formatTodoLine(todo, prefix, matchedSet.has(todo), needsSpinner));
+				lines.push(this.#formatTodoLine(todo, prefix, isMatched(todo)));
 			});
 		});
 
@@ -2266,7 +2203,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.loadingAnimation = undefined;
 		}
 		this.#cleanupMicAnimation();
-		this.#updateTodoSpinnerAnimation(false);
 		this.#cancelGoalContinuation();
 		if (this.#sttController) {
 			this.#sttController.dispose();
