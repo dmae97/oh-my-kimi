@@ -7,6 +7,7 @@ import {
 	type TodoPhase,
 	type TodoStatus,
 	TodoWriteTool,
+	todoMatchesAnyDescription,
 } from "@oh-my-pi/pi-coding-agent/tools";
 
 function createSession(initialPhases: TodoPhase[] = []): ToolSession {
@@ -260,5 +261,61 @@ describe("selectStickyTodoWindow", () => {
 		const { visible, hiddenOpenCount } = selectStickyTodoWindow(tasks, 3);
 		expect(visible.map(t => t.content)).toEqual(["task-1", "task-2", "task-3"]);
 		expect(hiddenOpenCount).toBe(4);
+	});
+});
+
+describe("todoMatchesAnyDescription", () => {
+	it("matches identical strings", () => {
+		expect(todoMatchesAnyDescription("Sonnet #1: AGENTS audit", ["Sonnet #1: AGENTS audit"])).toBe(true);
+	});
+
+	it("matches case- and whitespace-insensitively", () => {
+		expect(todoMatchesAnyDescription("  Sonnet  #1: AGENTS Audit  ", ["sonnet #1: agents audit"])).toBe(true);
+	});
+
+	it("matches when description is a long-enough substring of the todo", () => {
+		expect(todoMatchesAnyDescription("Sonnet #2: shallow bug scan of diff", ["Sonnet #2"])).toBe(true);
+	});
+
+	it("matches when the todo is a long-enough substring of a description", () => {
+		expect(todoMatchesAnyDescription("Sonnet #3", ["Sonnet #3: git blame / history check"])).toBe(true);
+	});
+
+	it("rejects substring matches below the minimum overlap", () => {
+		// "Fix" is 3 chars — too short to qualify on either side.
+		expect(todoMatchesAnyDescription("Fix", ["Fix the auth module bug"])).toBe(false);
+		expect(todoMatchesAnyDescription("Fix the auth module bug", ["Fix"])).toBe(false);
+	});
+
+	it("ignores empty inputs without throwing", () => {
+		expect(todoMatchesAnyDescription("", ["Sonnet #1"])).toBe(false);
+		expect(todoMatchesAnyDescription("Sonnet #1", [""])).toBe(false);
+		expect(todoMatchesAnyDescription("Sonnet #1", [])).toBe(false);
+	});
+
+	it("returns true on the first match without scanning further descriptions", () => {
+		expect(
+			todoMatchesAnyDescription("Sonnet #2: shallow bug scan", ["unrelated agent task", "Sonnet #2", "Sonnet #3"]),
+		).toBe(true);
+	});
+
+	it("returns false when no description overlaps the todo", () => {
+		expect(todoMatchesAnyDescription("Sonnet #2: shallow bug scan", ["Reviewer1AgentsAdherence", "git blame"])).toBe(
+			false,
+		);
+	});
+
+	it("ignores punctuation differences in identifiers", () => {
+		// One side has a method-prefix '#', the other doesn't. Reproduced
+		// from a real run where 3 subagents were spawned but only 2 of 3
+		// matched todos lit up because the matcher's normalizer collapsed
+		// whitespace but left punctuation intact.
+		expect(
+			todoMatchesAnyDescription("Audit integration site in renderTodoList", [
+				"Audit integration site in #renderTodoList",
+			]),
+		).toBe(true);
+		// Dotted abbreviations like AGENTS.md collapse to a space too.
+		expect(todoMatchesAnyDescription("Audit AGENTS.md compliance", ["Audit AGENTS md compliance"])).toBe(true);
 	});
 });

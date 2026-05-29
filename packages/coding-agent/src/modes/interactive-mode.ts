@@ -67,7 +67,7 @@ import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
-import { formatPhaseDisplayName, selectStickyTodoWindow } from "../tools/todo-write";
+import { formatPhaseDisplayName, selectStickyTodoWindow, todoMatchesAnyDescription } from "../tools/todo-write";
 import { ToolError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
@@ -324,6 +324,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
 	#welcomeComponent?: WelcomeComponent;
+	#todoSpinnerInterval?: NodeJS.Timeout;
+	#todoSpinnerFrame = 0;
+	#todoClosingTimeout?: NodeJS.Timeout;
+	#todoClosingState: "idle" | "playing" | "done" = "idle";
 
 	constructor(
 		session: AgentSession,
@@ -529,6 +533,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#observerRegistry.setMainSession(this.sessionManager.getSessionFile() ?? undefined);
 		this.#observerRegistry.onChange(() => {
 			this.statusLine.setSubagentCount(this.#observerRegistry.getActiveSubagentCount());
+			// Auto-checkmark todos whose matching subagent just succeeded, then
+			// re-render so the running override (animated row when a subagent
+			// is doing the work for a still-pending todo) updates as subagents
+			// start, finish, or fail. Also handles spinner start/stop.
+			this.#reconcileTodosWithSubagents();
+			this.#renderTodoList();
 			this.ui.requestRender();
 		});
 
@@ -949,18 +959,98 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.renderSessionContext(context);
 	}
 
-	#formatTodoLine(todo: TodoItem, prefix: string): string {
+	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean, spinnerOn: boolean): string {
 		const checkbox = theme.checkbox;
 		const marker = formatHudNoteMarker(todo.notes?.length ?? 0);
+		const frames = theme.spinnerFrames;
+		// When the spinner is ticking, use the current animated frame; otherwise
+		// fall back to the static "running" glyph so in_progress rows still look
+		// distinct from pending rows.
+		const runningGlyph =
+			spinnerOn && frames.length > 0
+				? (frames[this.#todoSpinnerFrame % frames.length] ?? theme.status.running)
+				: theme.status.running;
 		switch (todo.status) {
 			case "completed":
-				return theme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(todo.content)}`) + marker;
+				return (
+					theme.fg("success", `${prefix}${theme.status.success} ${chalk.strikethrough(todo.content)}`) + marker
+				);
 			case "in_progress":
-				return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
+				return theme.fg("accent", `${prefix}${runningGlyph} ${todo.content}`) + marker;
 			case "abandoned":
 				return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`) + marker;
 			default:
+				if (matched) {
+					return theme.fg("accent", `${prefix}${runningGlyph} ${todo.content}`) + marker;
+				}
 				return theme.fg("dim", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
+		}
+	}
+
+	#getActiveSubagentDescriptions(): string[] {
+		const out: string[] = [];
+		for (const session of this.#observerRegistry.getSessions()) {
+			if (session.kind !== "subagent") continue;
+			if (session.status !== "active") continue;
+			const candidate =
+				session.description?.trim() || session.progress?.description?.trim() || session.label?.trim();
+			if (candidate) out.push(candidate);
+		}
+		return out;
+	}
+
+	/**
+	 * Auto-complete any pending/in_progress todo whose content matches a
+	 * subagent that has finished successfully. Fires on every observer
+	 * `onChange` so the visual state stays in sync with subagent lifecycle
+	 * without requiring the agent to issue a follow-up `todo_write`. Failed
+	 * and aborted subagents are intentionally NOT auto-completed — those
+	 * stay open so the user (or the next agent turn) can decide what to do.
+	 *
+	 * Idempotent: only flips open tasks, never re-touches completed ones.
+	 */
+	#reconcileTodosWithSubagents(): void {
+		const completedDescs: string[] = [];
+		for (const session of this.#observerRegistry.getSessions()) {
+			if (session.kind !== "subagent") continue;
+			if (session.status !== "completed") continue;
+			const candidate =
+				session.description?.trim() || session.progress?.description?.trim() || session.label?.trim();
+			if (candidate) completedDescs.push(candidate);
+		}
+		if (completedDescs.length === 0) return;
+
+		let mutated = false;
+		const next: TodoPhase[] = this.todoPhases.map(phase => ({
+			name: phase.name,
+			tasks: phase.tasks.map(task => {
+				if (task.status !== "pending" && task.status !== "in_progress") return task;
+				if (!todoMatchesAnyDescription(task.content, completedDescs)) return task;
+				mutated = true;
+				return { ...task, status: "completed" as const };
+			}),
+		}));
+		if (!mutated) return;
+		this.todoPhases = next;
+		this.session.setTodoPhases(next);
+	}
+
+	#updateTodoSpinnerAnimation(needSpinner: boolean): void {
+		if (needSpinner) {
+			if (this.#todoSpinnerInterval) return;
+			this.#todoSpinnerInterval = setInterval(() => {
+				const frames = theme.spinnerFrames;
+				if (frames.length === 0) return;
+				this.#todoSpinnerFrame = (this.#todoSpinnerFrame + 1) % frames.length;
+				// Rebuild the todo container so the new frame appears, then schedule
+				// a paint. The renderer self-stops the interval once no row needs it.
+				this.#renderTodoList();
+				this.ui.requestRender();
+			}, 80);
+		} else if (this.#todoSpinnerInterval) {
+			clearInterval(this.#todoSpinnerInterval);
+			this.#todoSpinnerInterval = undefined;
+			this.#todoSpinnerFrame = 0;
 		}
 	}
 
@@ -976,24 +1066,80 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.todoContainer.clear();
 		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) {
+			this.#updateTodoSpinnerAnimation(false);
+			this.#stopTodoClosingAnimation();
+			this.#todoClosingState = "idle";
 			return;
 		}
+
+		// When every visible task is completed or abandoned, fold the panel
+		// away with a brief celebratory animation (see
+		// #startTodoClosingAnimation). State machine guards against replaying
+		// on every re-render once the animation has finished.
+		const allClosed = phases.every(phase =>
+			phase.tasks.every(t => t.status === "completed" || t.status === "abandoned"),
+		);
+		if (allClosed) {
+			this.#updateTodoSpinnerAnimation(false);
+			if (this.#todoClosingState === "done") return;
+			if (this.#todoClosingState === "idle") this.#startTodoClosingAnimation(phases);
+			return;
+		}
+		// Any open task here means the close animation is no longer applicable.
+		this.#stopTodoClosingAnimation();
+		this.#todoClosingState = "idle";
 
 		const indent = "  ";
 		const hook = theme.tree.hook;
 		const lines = ["", indent + theme.bold(theme.fg("accent", "Todos"))];
 
+		const activeDescs = this.#getActiveSubagentDescriptions();
+		// Cache matcher results so we don't re-scan the description list per row
+		// twice (once for the spinner decision, once for the render).
+		const matchedSet = new Set<TodoItem>();
+		const isMatched = (todo: TodoItem): boolean => {
+			if (activeDescs.length === 0) return false;
+			if (matchedSet.has(todo)) return true;
+			if (todoMatchesAnyDescription(todo.content, activeDescs)) {
+				matchedSet.add(todo);
+				return true;
+			}
+			return false;
+		};
+
+		// The cube animates whenever any visible open todo is "live":
+		// (a) status is in_progress (the agent itself is working it), or
+		// (b) a still-pending todo has a matching in-flight subagent doing
+		// the work for it. The renderer self-stops the interval once no row
+		// qualifies, so an orphan in_progress row at end-of-session keeps
+		// ticking — that's the intentional "this todo is still open" signal.
+		let needsSpinner = false;
+		const considerForSpinner = (todo: TodoItem): void => {
+			if (todo.status === "in_progress") {
+				needsSpinner = true;
+				return;
+			}
+			if (todo.status !== "pending") return;
+			if (isMatched(todo)) needsSpinner = true;
+		};
+
 		if (!this.todoExpanded) {
 			const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
 			const activePhase = phases[activeIdx];
-			if (!activePhase) return;
+			if (!activePhase) {
+				this.#updateTodoSpinnerAnimation(false);
+				return;
+			}
+			const { visible, hiddenOpenCount } = selectStickyTodoWindow(activePhase.tasks, 5);
+			for (const todo of visible) considerForSpinner(todo);
+			this.#updateTodoSpinnerAnimation(needsSpinner);
+
 			lines.push(
 				`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(activePhase.name, activeIdx + 1)}`)}`,
 			);
-			const { visible, hiddenOpenCount } = selectStickyTodoWindow(activePhase.tasks, 5);
 			visible.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
-				lines.push(this.#formatTodoLine(todo, prefix));
+				lines.push(this.#formatTodoLine(todo, prefix, matchedSet.has(todo), needsSpinner));
 			});
 			if (hiddenOpenCount > 0) {
 				lines.push(theme.fg("muted", `${indent}  ${hook} +${hiddenOpenCount} more`));
@@ -1002,15 +1148,99 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
+		for (const phase of phases) for (const todo of phase.tasks) considerForSpinner(todo);
+		this.#updateTodoSpinnerAnimation(needsSpinner);
+
 		phases.forEach((phase, phaseIndex) => {
 			lines.push(`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(phase.name, phaseIndex + 1)}`)}`);
 			phase.tasks.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
-				lines.push(this.#formatTodoLine(todo, prefix));
+				lines.push(this.#formatTodoLine(todo, prefix, matchedSet.has(todo), needsSpinner));
 			});
 		});
 
 		this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
+	}
+
+	/**
+	 * Play a short "all done" close animation: a celebratory bright frame,
+	 * a brief dim transition, then a row-by-row vertical collapse until the
+	 * panel is empty. Triggered from #renderTodoList exactly once per
+	 * open-to-all-closed transition; #todoClosingState gates re-entry.
+	 *
+	 * While playing, the animator owns the panel container; #renderTodoList
+	 * returns early. Subsequent renders with state === "done" keep the
+	 * panel hidden until a fresh open task flips state back to "idle".
+	 */
+	#startTodoClosingAnimation(phases: TodoPhase[]): void {
+		this.#stopTodoClosingAnimation();
+		this.#todoClosingState = "playing";
+
+		const indent = "  ";
+		const hook = theme.tree.hook;
+		const snapshot: string[] = ["", `${indent}Todos ${theme.status.success}`];
+		for (let i = 0; i < phases.length; i++) {
+			const phase = phases[i];
+			snapshot.push(`${indent}${hook} ${formatPhaseDisplayName(phase.name, i + 1)}`);
+			for (let j = 0; j < phase.tasks.length; j++) {
+				const task = phase.tasks[j];
+				const mark = task.status === "abandoned" ? theme.status.aborted : theme.status.success;
+				const prefix = `${indent}${j === 0 ? hook : " "} `;
+				snapshot.push(`${prefix}${mark} ${task.content}`);
+			}
+		}
+
+		// Frame schedule (tint, drop-from-bottom, hold-ms). Frame 0 holds long
+		// enough for the user to actually read the final checkmarks before the
+		// fade starts; later frames fade and progressively drop rows from the
+		// bottom for the collapse effect. Total runtime ≈ 1.4s.
+		const frames = [
+			{ tint: "success" as const, drop: 0, holdMs: 900 },
+			{ tint: "success" as const, drop: 0, holdMs: 150 },
+			{ tint: "muted" as const, drop: 1, holdMs: 90 },
+			{ tint: "muted" as const, drop: 2, holdMs: 90 },
+			{ tint: "dim" as const, drop: 3, holdMs: 80 },
+			{ tint: "dim" as const, drop: 4, holdMs: 80 },
+		];
+
+		let frameIdx = 0;
+		const tick = (): void => {
+			if (this.#todoClosingState !== "playing") return;
+			if (frameIdx >= frames.length) {
+				this.todoContainer.clear();
+				this.#stopTodoClosingAnimation();
+				this.#todoClosingState = "done";
+				this.ui.requestRender();
+				return;
+			}
+			const { tint, drop, holdMs } = frames[frameIdx];
+			const visibleCount = Math.max(0, snapshot.length - drop);
+			this.todoContainer.clear();
+			if (visibleCount > 0) {
+				const visible = snapshot.slice(0, visibleCount);
+				const painted = visible.map((line, idx) => {
+					if (idx === 1) {
+						// Header row gets a bold flourish on the opening tick.
+						const colored = theme.fg(tint, line);
+						return frameIdx === 0 ? theme.bold(colored) : colored;
+					}
+					return theme.fg(tint, line);
+				});
+				this.todoContainer.addChild(new Text(painted.join("\n"), 1, 0));
+			}
+			this.ui.requestRender();
+			frameIdx++;
+			this.#todoClosingTimeout = setTimeout(tick, holdMs);
+		};
+
+		tick();
+	}
+
+	#stopTodoClosingAnimation(): void {
+		if (this.#todoClosingTimeout) {
+			clearTimeout(this.#todoClosingTimeout);
+			this.#todoClosingTimeout = undefined;
+		}
 	}
 
 	async #loadTodoList(): Promise<void> {
@@ -2034,6 +2264,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.loadingAnimation = undefined;
 		}
 		this.#cleanupMicAnimation();
+		this.#updateTodoSpinnerAnimation(false);
 		this.#cancelGoalContinuation();
 		if (this.#sttController) {
 			this.#sttController.dispose();
