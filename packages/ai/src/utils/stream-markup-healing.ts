@@ -7,7 +7,6 @@
  *
  * - `kimi`: Kimi K2 `<|tool_calls_section_begin|>` sections.
  * - `dsml`: DeepSeek `<｜DSML｜tool_calls>` envelopes.
- * - `antml`: Anthropic `<antml:function_calls>` envelopes (`function_calls`, `invoke`, `parameter`).
  * - `thinking`: plain `<think>` / `<thinking>` blocks used by MiniMax-style streams.
  *
  * The parser strips marker bytes, reconstructs embedded calls, emits thinking
@@ -38,35 +37,15 @@ const DSML_PARAMETER_OPEN_RE = new RegExp(
 );
 const DSML_PARAMETER_CLOSE_RE = new RegExp(`</${DSML_PIPE}DSML${DSML_PIPE}parameter>`, "y");
 
-const ANTML_FUNCTION_CALLS_OPEN = "<antml:function_calls>";
-const ANTML_FUNCTION_CALLS_OPEN_RE = /<antml:function_calls>/y;
-const ANTML_FUNCTION_CALLS_CLOSE_RE = /<\/antml:function_calls>/y;
-const ANTML_INVOKE_OPEN_RE = /<antml:invoke\s+name="([^"]*)"\s*>/y;
-const ANTML_INVOKE_CLOSE_RE = /<\/antml:invoke>/y;
-const ANTML_PARAMETER_OPEN_RE = /<antml:parameter\s+name="([^"]*)"\s*>/y;
-const ANTML_PARAMETER_CLOSE_RE = /<\/antml:parameter>/y;
-
 const THINK_OPEN = "<think>";
 const THINK_CLOSE = "</think>";
 const THINKING_OPEN = "<thinking>";
 const THINKING_CLOSE = "</thinking>";
-const ANTML_THINKING_OPEN = "<antml:thinking>";
-const ANTML_THINKING_CLOSE = "</antml:thinking>";
 
 const PLAIN_THINKING_TAGS = [
 	{ open: THINK_OPEN, close: THINK_CLOSE },
 	{ open: THINKING_OPEN, close: THINKING_CLOSE },
 ] as const;
-
-const ANTML_THINKING_TAGS = [
-	{ open: ANTML_THINKING_OPEN, close: ANTML_THINKING_CLOSE },
-	// Anthropic-compatible hosts have been observed stripping the `antml:`
-	// namespace before visible output. Treat that prefix-stripped shape as the
-	// same hidden thinking channel while the ANTML grammar is enabled.
-	{ open: THINKING_OPEN, close: THINKING_CLOSE },
-] as const;
-
-const ANTML_IDLE_TOKENS = [ANTML_FUNCTION_CALLS_OPEN, ANTML_THINKING_OPEN, THINKING_OPEN] as const;
 
 /** Cap held-back XML tag bytes so a stray `<` in prose cannot grow unboundedly. */
 const MAX_XML_PARTIAL_HOLD = 256;
@@ -80,7 +59,7 @@ export interface HealedToolCall {
 	readonly arguments: string;
 }
 
-export type StreamMarkupHealingPattern = "kimi" | "dsml" | "antml" | "thinking";
+export type StreamMarkupHealingPattern = "kimi" | "dsml" | "thinking";
 
 export interface StreamMarkupHealingOptions {
 	readonly pattern: StreamMarkupHealingPattern;
@@ -104,8 +83,6 @@ type XmlToolState =
 			value: string;
 	  };
 
-type AntmlState = XmlToolState | { readonly kind: "thinking"; readonly closeTag: string };
-
 type ThinkingTag = { readonly open: string; readonly close: string };
 
 /**
@@ -128,7 +105,6 @@ export class StreamMarkupHealing {
 	#kimiPendingArgs = "";
 
 	#xmlState: XmlToolState = { kind: "idle" };
-	#antmlState: AntmlState = { kind: "idle" };
 	#thinkingCloseTag = "";
 	#sectionTerminated = false;
 	readonly #completed: HealedToolCall[] = [];
@@ -169,8 +145,6 @@ export class StreamMarkupHealing {
 				return this.#consumeKimiEvents();
 			case "dsml":
 				return this.#consumeDsmlEvents();
-			case "antml":
-				return this.#consumeAntmlEvents();
 			case "thinking":
 				return this.#consumePlainThinkingEvents();
 		}
@@ -215,13 +189,6 @@ export class StreamMarkupHealing {
 				const state = this.#xmlState;
 				this.#xmlState = { kind: "idle" };
 				return state.kind !== "idle" || tail.length === 0 ? [] : [{ type: "text", text: tail }];
-			}
-			case "antml": {
-				const state = this.#antmlState;
-				this.#antmlState = { kind: "idle" };
-				if (tail.length === 0) return [];
-				if (state.kind === "thinking") return [{ type: "thinking", thinking: tail }];
-				return state.kind === "idle" ? [{ type: "text", text: tail }] : [];
 			}
 			case "thinking": {
 				const closeTag = this.#thinkingCloseTag;
@@ -352,107 +319,6 @@ export class StreamMarkupHealing {
 			parameterClose: DSML_PARAMETER_CLOSE_RE,
 			coerceStringByDefault: true,
 		});
-	}
-
-	#consumeAntmlEvents(): StreamMarkupHealingEvent[] {
-		const events: StreamMarkupHealingEvent[] = [];
-		let clean = "";
-		let thinking = "";
-		const flushClean = (): void => {
-			if (clean.length === 0) return;
-			events.push({ type: "text", text: clean });
-			clean = "";
-		};
-		const flushThinking = (): void => {
-			if (thinking.length === 0) return;
-			events.push({ type: "thinking", thinking });
-			thinking = "";
-		};
-
-		while (this.#offset < this.#buffer.length) {
-			const state = this.#antmlState;
-
-			if (state.kind === "idle") {
-				const thinkingTag = this.#tryMatchThinkingOpen(ANTML_THINKING_TAGS);
-				if (thinkingTag) {
-					flushClean();
-					this.#antmlState = { kind: "thinking", closeTag: thinkingTag.close };
-					continue;
-				}
-				if (this.#tryMatch(ANTML_FUNCTION_CALLS_OPEN_RE)) {
-					this.#antmlState = { kind: "section" };
-					continue;
-				}
-				if (this.#startsWithPartialToken(ANTML_IDLE_TOKENS, MAX_XML_PARTIAL_HOLD)) break;
-			} else if (state.kind === "thinking") {
-				if (this.#matchesToken(state.closeTag)) {
-					flushThinking();
-					this.#offset += state.closeTag.length;
-					this.#antmlState = { kind: "idle" };
-					continue;
-				}
-				if (this.#startsWithPartialToken([state.closeTag], MAX_XML_PARTIAL_HOLD)) break;
-				const ch = this.#buffer[this.#offset]!;
-				this.#offset += 1;
-				thinking += ch;
-				continue;
-			} else if (state.kind === "section") {
-				if (this.#tryMatch(ANTML_FUNCTION_CALLS_CLOSE_RE)) {
-					this.#antmlState = { kind: "idle" };
-					this.#sectionTerminated = true;
-					continue;
-				}
-				const invokeMatch = this.#tryMatchCapture(ANTML_INVOKE_OPEN_RE);
-				if (invokeMatch) {
-					this.#antmlState = { kind: "invoke", name: invokeMatch[1] ?? "", args: {} };
-					continue;
-				}
-			} else if (state.kind === "invoke") {
-				if (this.#tryMatch(ANTML_INVOKE_CLOSE_RE)) {
-					const call = finalizeXmlToolCall(state.name, state.args);
-					flushClean();
-					events.push({ type: "toolCall", call });
-					this.#antmlState = { kind: "section" };
-					continue;
-				}
-				const paramMatch = this.#tryMatchCapture(ANTML_PARAMETER_OPEN_RE);
-				if (paramMatch) {
-					this.#antmlState = {
-						kind: "parameter",
-						invokeName: state.name,
-						args: state.args,
-						paramName: paramMatch[1] ?? "",
-						isString: false,
-						value: "",
-					};
-					continue;
-				}
-			} else if (this.#tryMatch(ANTML_PARAMETER_CLOSE_RE)) {
-				state.args[state.paramName] = coerceXmlParamValue(state.value, state.isString);
-				this.#antmlState = { kind: "invoke", name: state.invokeName, args: state.args };
-				continue;
-			}
-
-			if (state.kind !== "idle" && this.#startsWithPartialXmlTag()) break;
-
-			const ch = this.#buffer[this.#offset]!;
-			this.#offset += 1;
-			if (state.kind === "idle") {
-				clean += ch;
-				continue;
-			}
-			if (state.kind === "parameter") {
-				if (state.value.length >= MAX_XML_PARAM_VALUE_LENGTH) {
-					this.#antmlState = { kind: "idle" };
-					continue;
-				}
-				state.value += ch;
-			}
-		}
-
-		flushClean();
-		flushThinking();
-		return events;
 	}
 
 	#consumePlainThinkingEvents(): StreamMarkupHealingEvent[] {
@@ -734,19 +600,6 @@ export function modelMayLeakDsmlToolCalls(provider: string, modelId: string): bo
 	);
 }
 
-/** Cheap model/provider gate for Anthropic ANTML function-call envelope leaks. */
-export function modelMayLeakAntmlToolCalls(provider: string, modelId: string): boolean {
-	if (!/(?:claude|anthropic)/i.test(`${provider}/${modelId}`)) return false;
-	return (
-		provider === "anthropic" ||
-		provider === "amazon-bedrock" ||
-		provider === "bedrock" ||
-		provider === "openrouter" ||
-		provider === "opencode-go" ||
-		provider === "fireworks"
-	);
-}
-
 export function getStreamMarkupHealingPattern(
 	provider: string,
 	modelId: string,
@@ -755,6 +608,5 @@ export function getStreamMarkupHealingPattern(
 	if (options?.parseThinkingTags) return "thinking";
 	if (modelMayLeakKimiToolCalls(provider, modelId)) return "kimi";
 	if (modelMayLeakDsmlToolCalls(provider, modelId)) return "dsml";
-	if (modelMayLeakAntmlToolCalls(provider, modelId)) return "antml";
 	return undefined;
 }

@@ -145,7 +145,6 @@ describe("StreamMarkupHealing pattern selection", () => {
 	it("selects the requested grammar without creating provider-specific collectors", () => {
 		expect(getStreamMarkupHealingPattern("openrouter", "moonshotai/kimi-k2")).toBe("kimi");
 		expect(getStreamMarkupHealingPattern("ollama-cloud", "deepseek-v4-pro")).toBe("dsml");
-		expect(getStreamMarkupHealingPattern("openrouter", "anthropic/claude-sonnet-4.5")).toBe("antml");
 		expect(getStreamMarkupHealingPattern("minimax-code", "MiniMax-M2.5", { parseThinkingTags: true })).toBe(
 			"thinking",
 		);
@@ -223,46 +222,6 @@ describe("StreamMarkupHealing DSML envelope pattern", () => {
 		expect(calls).toHaveLength(1);
 		expect(calls[0].name).toBe("bash");
 		expect(JSON.parse(calls[0].arguments)).toEqual({ cmd: "ls -la" });
-	});
-});
-
-describe("StreamMarkupHealing ANTML pattern", () => {
-	it("parses function_calls/invoke/parameter into a structured tool call", () => {
-		const healing = new StreamMarkupHealing({ pattern: "antml" });
-		const leaked =
-			"Before\n" +
-			"<antml:function_calls>" +
-			'<antml:invoke name="Read">' +
-			'<antml:parameter name="file_path">C:\\Users\\karashiiro\\Documents\\ANTML.md</antml:parameter>' +
-			'<antml:parameter name="options">{"offset":1,"limit":20}</antml:parameter>' +
-			"</antml:invoke>" +
-			"</antml:function_calls>" +
-			"\nAfter";
-
-		const events = healing.feedEvents(leaked);
-		expect(events.map(event => event.type)).toEqual(["text", "toolCall", "text"]);
-
-		const [before, call, after] = events;
-		if (before?.type !== "text" || call?.type !== "toolCall" || after?.type !== "text") {
-			throw new Error("ANTML healing emitted unexpected event order");
-		}
-		expect(before.text).toBe("Before\n");
-		expect(call.call.name).toBe("Read");
-		expect(JSON.parse(call.call.arguments)).toEqual({
-			file_path: "C:\\Users\\karashiiro\\Documents\\ANTML.md",
-			options: { offset: 1, limit: 20 },
-		});
-		expect(after.text).toBe("\nAfter");
-	});
-
-	it("parses ANTML thinking blocks as thinking events", () => {
-		const healing = new StreamMarkupHealing({ pattern: "antml" });
-		const events = healing.feedEvents("visible<antml:thinking>hidden</antml:thinking>answer");
-		expect(events).toEqual([
-			{ type: "text", text: "visible" },
-			{ type: "thinking", thinking: "hidden" },
-			{ type: "text", text: "answer" },
-		]);
 	});
 });
 
@@ -750,46 +709,6 @@ describe("OpenAI completions provider DSML envelope healing", () => {
 		expect(toolCalls.map(call => call.id)).toEqual(["call_a", "call_b"]);
 		expect(toolCalls.map(call => call.name)).toEqual(["read", "read"]);
 		expect(toolCalls.map(call => call.arguments)).toEqual([{ path: "a.ts" }, { path: "b.ts" }]);
-		expect(result.stopReason).toBe("toolUse");
-	});
-});
-
-describe("OpenAI completions provider ANTML function-call healing", () => {
-	it("heals ANTML function_calls into structured tool calls", async () => {
-		const model: Model<"openai-completions"> = {
-			id: "anthropic/claude-sonnet-4.5",
-			name: "Claude Sonnet 4.5",
-			api: "openai-completions",
-			provider: "openrouter",
-			baseUrl: "https://openrouter.ai/api/v1",
-			reasoning: true,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 200_000,
-			maxTokens: 8_192,
-		};
-		const leaked =
-			"I'll read it.\n" +
-			"<antml:function_calls>" +
-			'<antml:invoke name="Read">' +
-			'<antml:parameter name="file_path">docs/ANTML.md</antml:parameter>' +
-			"</antml:invoke>" +
-			"</antml:function_calls>";
-		global.fetch = mockFetch([chunk(model.id, { content: leaked }), chunk(model.id, {}, "stop"), "[DONE]"]);
-
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
-
-		const text = result.content
-			.filter((b): b is { type: "text"; text: string } => b.type === "text")
-			.map(b => b.text)
-			.join("");
-		expect(text).toBe("I'll read it.\n");
-		expect(text).not.toContain("antml");
-
-		const toolCalls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
-		expect(toolCalls).toHaveLength(1);
-		expect(toolCalls[0].name).toBe("Read");
-		expect(toolCalls[0].arguments).toEqual({ file_path: "docs/ANTML.md" });
 		expect(result.stopReason).toBe("toolUse");
 	});
 });

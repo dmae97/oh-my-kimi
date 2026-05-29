@@ -745,9 +745,7 @@ describe("TUI terminal-state regressions", () => {
 			// Rows wider than the post-resize width so the committed scrollback
 			// reflows (wraps) at the narrower size; short rows would not regress.
 			const filler = "x".repeat(24);
-			const component = new MutableLinesComponent(
-				Array.from({ length: 12 }, (_v, i) => `line-${i}-${filler}`),
-			);
+			const component = new MutableLinesComponent(Array.from({ length: 12 }, (_v, i) => `line-${i}-${filler}`));
 			tui.addChild(component);
 
 			try {
