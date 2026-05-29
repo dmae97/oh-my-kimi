@@ -68,10 +68,9 @@ const TYPEBOX_SPECIFIER_FILTER = /^@sinclair\/typebox$/;
 // as `/$bunfs/root/packages` so the prefix stays platform-native: on Windows
 // the bunfs mount appears as `<drive>:\~BUN\root\…` (see oven-sh/bun#15766),
 // and a hardcoded POSIX literal would normalize to `\$bunfs\root\…` and fail
-// to resolve. This file lives at
-// `<bunfs>/packages/coding-agent/src/extensibility/plugins/legacy-pi-compat.js`
-// inside the binary, so going up four directories lands on
-// `<bunfs>/packages` regardless of host OS.
+// to resolve. Compiled Bun modules currently report the bunfs root itself from
+// `import.meta.dir`, so appending `packages` lands on the `--root ../..`
+// package directory used by `scripts/build-binary.ts`.
 //
 // Every shim listed below must also be registered as an explicit `--compile`
 // entrypoint in `scripts/build-binary.ts` or release builds fail with
@@ -79,17 +78,25 @@ const TYPEBOX_SPECIFIER_FILTER = /^@sinclair\/typebox$/;
 // `Bun.resolveSync` (see `resolveCanonicalPiSpecifier`) outside compiled mode,
 // so they keep working when on-disk layout differs from the monorepo tree.
 /**
- * Compute the bunfs package root from this file's `import.meta.dir` (or any
- * stand-in supplied by tests). Going up four directories from
- * `<bunfs>/packages/coding-agent/src/extensibility/plugins` lands on
- * `<bunfs>/packages` and preserves the host OS's separators so the result
- * remains valid on Windows (`<drive>:\~BUN\root\packages`) as well as Linux
- * and macOS (`/$bunfs/root/packages`).
+ * Compute the bunfs package root from the compiled binary's `import.meta.dir`
+ * (or any stand-in supplied by tests). Bun 1.3 reports the bunfs mount root
+ * (`/$bunfs/root` or `<drive>:\~BUN\root`) for imported modules as well as the
+ * entrypoint, so the normal path is `<root>/packages`.
+ *
+ * The suffix branch preserves correctness if a future Bun release switches to
+ * module-specific `import.meta.dir` values inside compiled binaries, matching
+ * the source layout:
+ * `<bunfs>/packages/coding-agent/src/extensibility/plugins`.
  *
  * Exported for tests; production callers use `BUNFS_PACKAGE_ROOT` below.
  */
 export function __computeBunfsPackageRoot(metaDir: string, pathImpl: typeof path = path): string {
-	return pathImpl.resolve(metaDir, "..", "..", "..", "..");
+	const pluginsDirSuffix = pathImpl.join("packages", "coding-agent", "src", "extensibility", "plugins");
+	const normalizedMetaDir = pathImpl.normalize(metaDir);
+	if (normalizedMetaDir.endsWith(pluginsDirSuffix)) {
+		return pathImpl.resolve(metaDir, "..", "..", "..", "..");
+	}
+	return pathImpl.join(metaDir, "packages");
 }
 
 const BUNFS_PACKAGE_ROOT = IS_COMPILED_BINARY ? __computeBunfsPackageRoot(import.meta.dir) : null;
