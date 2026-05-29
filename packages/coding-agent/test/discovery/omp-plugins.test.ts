@@ -215,3 +215,31 @@ test("disabled installed plugins do not contribute sub-discovery", async () => {
 	const skills = await loadFromPlugin<{ name: string; path: string }>(skillCapability.id, ctx());
 	expect(skills.find(s => s.path.includes("my-disabled-ext"))).toBeUndefined();
 });
+
+test("linked plugins (only in lockfile, not in package.json#dependencies) are surfaced", async () => {
+	// `omp plugin link ./local-ext` creates a symlink under
+	// `<plugins>/node_modules/<pkg>` plus a lockfile entry, but it never
+	// touches `<plugins>/package.json#dependencies`. The discovery path must
+	// still find the package — otherwise the documented `omp install
+	// ./local-extension` workflow leaves the sibling skills/hooks/tools
+	// invisible (see PR #1498 review).
+	const pluginsDir = path.join(home, ".omp", "plugins");
+	const nodeModules = path.join(pluginsDir, "node_modules");
+	fs.mkdirSync(nodeModules, { recursive: true });
+	const linkTarget = path.join(nodeModules, "my-linked-ext");
+	fs.symlinkSync(ext, linkTarget);
+	// Intentionally NO `<plugins>/package.json` — matches a fresh `plugin link`
+	// against a setup that has never run `plugin install`.
+	writeFile(
+		path.join(pluginsDir, "omp-plugins.lock.json"),
+		JSON.stringify({
+			plugins: { "my-linked-ext": { version: "1.0.0", enabled: true, enabledFeatures: null } },
+			settings: {},
+		}),
+	);
+
+	const skills = await loadFromPlugin<{ name: string; path: string }>(skillCapability.id, ctx());
+	const tools = await loadFromPlugin<{ name: string; path: string }>(toolCapability.id, ctx());
+	expect(skills.find(s => s.name === "my-skill" && s.path.includes("my-linked-ext"))).toBeDefined();
+	expect(tools.find(t => t.name === "wcount" && t.path.includes("my-linked-ext"))).toBeDefined();
+});
