@@ -67,7 +67,7 @@ import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
-import { formatPhaseDisplayName } from "../tools/todo-write";
+import { formatPhaseDisplayName, selectStickyTodoWindow } from "../tools/todo-write";
 import { ToolError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
@@ -990,14 +990,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			lines.push(
 				`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(activePhase.name, activeIdx + 1)}`)}`,
 			);
-			const visibleTasks = activePhase.tasks.slice(0, 5);
-			visibleTasks.forEach((todo, index) => {
+			const { visible, hiddenOpenCount } = selectStickyTodoWindow(activePhase.tasks, 5);
+			visible.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
 				lines.push(this.#formatTodoLine(todo, prefix));
 			});
-			if (visibleTasks.length < activePhase.tasks.length) {
-				const remaining = activePhase.tasks.length - visibleTasks.length;
-				lines.push(theme.fg("muted", `${indent}  ${hook} +${remaining} more`));
+			if (hiddenOpenCount > 0) {
+				lines.push(theme.fg("muted", `${indent}  ${hook} +${hiddenOpenCount} more`));
 			}
 			this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
 			return;
