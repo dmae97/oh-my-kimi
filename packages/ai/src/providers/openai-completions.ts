@@ -367,6 +367,25 @@ function getTrailingPartialDeepseekToken(text: string): string {
 const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"OpenAI completions stream timed out while waiting for the first event";
 
+const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
+const GLM_CODING_PLAN_MODEL_PATTERN = /^glm-5(?:[.-]|$)/i;
+
+/** Returns the widened OpenAI stream watchdog floor for slow GLM coding-plan reasoning models. */
+export function getOpenAICompletionsStreamIdleTimeoutFallbackMs(
+	model: Model<"openai-completions">,
+): number | undefined {
+	if (!GLM_CODING_PLAN_MODEL_PATTERN.test(model.id)) return undefined;
+	if (model.provider === "zhipu-coding-plan" || model.provider === "zai")
+		return GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS;
+
+	const baseUrl = model.baseUrl.toLowerCase();
+	if (baseUrl.includes("open.bigmodel.cn") || baseUrl.includes("api.z.ai")) {
+		return GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS;
+	}
+
+	return undefined;
+}
+
 export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 	model: Model<"openai-completions">,
 	context: Context,
@@ -387,7 +406,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
+			const idleTimeoutMs =
+				options?.streamIdleTimeoutMs ??
+				getOpenAIStreamIdleTimeoutMs(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model));
 			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
