@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `omp-plugins` discovery provider, which scans every extension package directory configured via `extensions:` (in `~/.omp/agent/settings.json` or `<cwd>/.omp/settings.json`) or `--extension`/`-e` on the CLI for `skills/`, `hooks/pre|post/`, `tools/`, `commands/`, `rules/`, `prompts/`, and `.mcp.json`. Prior to this, only the extension's TypeScript factory module ran; every sibling capability the docs (https://omp.sh/docs/extension-authoring) advertised was silently ignored ([#1496](https://github.com/can1357/oh-my-pi/issues/1496)).
+- Added the top-level `omp install <target>` subcommand documented at https://omp.sh/docs/extension-authoring. Local paths route to `omp plugin link` (so the directory is symlinked into the plugin set), and npm/marketplace specs route to `omp plugin install`. Before this, `install` was not a registered subcommand and the CLI runner silently forwarded `install ./my-extension` to `launch` as an initial LLM prompt ([#1496](https://github.com/can1357/oh-my-pi/issues/1496)).
+
+### Changed
+
+- Extracted the top-level CLI command table from `src/cli.ts` into a side-effect-free `src/cli-commands.ts` so test code can introspect the registered subcommands without triggering the entrypoint's top-level await.
+
 ## [15.5.11] - 2026-05-29
 
 ### Added

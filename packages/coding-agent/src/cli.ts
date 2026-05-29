@@ -10,7 +10,8 @@ procmgr.scrubProcessEnv();
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
  */
-import { type CliConfig, type CommandEntry, run } from "@oh-my-pi/pi-utils/cli";
+import { type CliConfig, run } from "@oh-my-pi/pi-utils/cli";
+import { commands, isSubcommand } from "./cli-commands";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -21,27 +22,6 @@ if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 
 process.title = APP_NAME;
 
-const commands: CommandEntry[] = [
-	{ name: "launch", load: () => import("./commands/launch").then(m => m.default) },
-	{ name: "acp", load: () => import("./commands/acp").then(m => m.default) },
-	{ name: "auth-broker", load: () => import("./commands/auth-broker").then(m => m.default) },
-	{ name: "auth-gateway", load: () => import("./commands/auth-gateway").then(m => m.default) },
-	{ name: "agents", load: () => import("./commands/agents").then(m => m.default) },
-	{ name: "commit", load: () => import("./commands/commit").then(m => m.default) },
-	{ name: "config", load: () => import("./commands/config").then(m => m.default) },
-	{ name: "grep", load: () => import("./commands/grep").then(m => m.default) },
-	{ name: "grievances", load: () => import("./commands/grievances").then(m => m.default) },
-	{ name: "plugin", load: () => import("./commands/plugin").then(m => m.default) },
-	{ name: "setup", load: () => import("./commands/setup").then(m => m.default) },
-	{ name: "shell", load: () => import("./commands/shell").then(m => m.default) },
-	{ name: "read", load: () => import("./commands/read").then(m => m.default) },
-	{ name: "ssh", load: () => import("./commands/ssh").then(m => m.default) },
-	{ name: "stats", load: () => import("./commands/stats").then(m => m.default) },
-	{ name: "update", load: () => import("./commands/update").then(m => m.default) },
-	{ name: "worktree", load: () => import("./commands/worktree").then(m => m.default), aliases: ["wt"] },
-	{ name: "search", load: () => import("./commands/web-search").then(m => m.default), aliases: ["q"] },
-];
-
 async function showHelp(config: CliConfig): Promise<void> {
 	const { renderRootHelp } = await import("@oh-my-pi/pi-utils/cli");
 	const { getExtraHelpText } = await import("./cli/args");
@@ -51,16 +31,6 @@ async function showHelp(config: CliConfig): Promise<void> {
 		process.stdout.write(`\n${extra}\n`);
 	}
 }
-
-/**
- * Determine whether argv[0] is a known subcommand name.
- * If not, the entire argv is treated as args to the default "launch" command.
- */
-function isSubcommand(first: string | undefined): boolean {
-	if (!first || first.startsWith("-") || first.startsWith("@")) return false;
-	return commands.some(e => e.name === first || e.aliases?.includes(first));
-}
-
 /**
  * Smoke-test entry. Spawns the stats sync worker, pings it, exits.
  *
