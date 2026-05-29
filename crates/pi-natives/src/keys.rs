@@ -799,7 +799,7 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 
 	if key.eq_ignore_ascii_case("up") {
 		if modifier == MOD_ALT {
-			return bytes == b"\x1bp" || kitty_matches(ARROW_UP, MOD_ALT);
+			return (!kitty_protocol_active && bytes == b"\x1bp") || kitty_matches(ARROW_UP, MOD_ALT);
 		}
 		if modifier == 0 {
 			return matches_legacy_key(bytes, "up") || kitty_matches(ARROW_UP, 0);
@@ -810,7 +810,8 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 
 	if key.eq_ignore_ascii_case("down") {
 		if modifier == MOD_ALT {
-			return bytes == b"\x1bn" || kitty_matches(ARROW_DOWN, MOD_ALT);
+			return (!kitty_protocol_active && bytes == b"\x1bn")
+				|| kitty_matches(ARROW_DOWN, MOD_ALT);
 		}
 		if modifier == 0 {
 			return matches_legacy_key(bytes, "down") || kitty_matches(ARROW_DOWN, 0);
@@ -822,8 +823,7 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 	if key.eq_ignore_ascii_case("left") {
 		if modifier == MOD_ALT {
 			return bytes == b"\x1b[1;3D"
-				|| (!kitty_protocol_active && bytes == b"\x1bB")
-				|| bytes == b"\x1bb"
+				|| (!kitty_protocol_active && (bytes == b"\x1bB" || bytes == b"\x1bb"))
 				|| kitty_matches(ARROW_LEFT, MOD_ALT);
 		}
 		if modifier == MOD_CTRL {
@@ -841,8 +841,7 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 	if key.eq_ignore_ascii_case("right") {
 		if modifier == MOD_ALT {
 			return bytes == b"\x1b[1;3C"
-				|| (!kitty_protocol_active && bytes == b"\x1bF")
-				|| bytes == b"\x1bf"
+				|| (!kitty_protocol_active && (bytes == b"\x1bF" || bytes == b"\x1bf"))
 				|| kitty_matches(ARROW_RIGHT, MOD_ALT);
 		}
 		if modifier == MOD_CTRL {
@@ -883,14 +882,15 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 		let codepoint = ch as i32;
 		let is_letter = ch.is_ascii_lowercase();
 
-		// ctrl+alt+letter in legacy mode
-		// Legacy: ctrl+alt+letter is ESC followed by the control character.
-		// If that legacy form does not match, continue so CSI-u and
+		// Legacy ctrl+alt+letter is ESC followed by the control character.
+		// tmux extkeys/CSI-u and Kitty mixed modes can still pass these legacy Meta
+		// pairs through, so accept them even when enhanced keyboard reporting is
+		// active. If that legacy form does not match, continue so CSI-u and
 		// modifyOtherKeys sequences from tmux can still be recognized.
 		// Legacy ESC+ctrl-char would also match Alt+Enter/Alt+Backspace/etc;
 		// skip the legacy fast-path for those bytes and let kitty/modifyOtherKeys
 		// disambiguate.
-		if modifier == (MOD_CTRL | MOD_ALT) && !kitty_protocol_active && is_letter {
+		if modifier == (MOD_CTRL | MOD_ALT) && is_letter {
 			let ctrl_char = raw_ctrl_char(ch);
 			if bytes.len() == 2
 				&& bytes[0] == 0x1b
@@ -901,13 +901,13 @@ fn matches_key_inner(bytes: &[u8], key_id: &str, kitty_protocol_active: bool) ->
 			}
 		}
 
-		// alt+letter in legacy mode
-		if modifier == MOD_ALT && !kitty_protocol_active && is_letter {
+		// alt+letter can remain ESC+letter inside tmux/Kitty mixed modes.
+		if modifier == MOD_ALT && is_letter {
 			return bytes.len() == 2 && bytes[0] == 0x1b && bytes[1] == ch;
 		}
 
-		// alt+shift+letter in legacy mode (ESC + UPPERCASE letter)
-		if modifier == (MOD_ALT | MOD_SHIFT) && !kitty_protocol_active && is_letter {
+		// alt+shift+letter can remain ESC+UPPERCASE inside tmux/Kitty mixed modes.
+		if modifier == (MOD_ALT | MOD_SHIFT) && is_letter {
 			return bytes.len() == 2 && bytes[0] == 0x1b && bytes[1] == ch.to_ascii_uppercase();
 		}
 
@@ -1031,6 +1031,15 @@ fn parse_key_inner(bytes: &[u8], kitty_protocol_active: bool) -> Option<Cow<'sta
 		return None;
 	}
 
+	// Two-byte ESC sequences are legacy Meta/Alt keypresses. Handle them before
+	// the legacy table so ESC+p from Ghostty/tmux is parsed as Alt+P rather than
+	// the historical ESC+p Alt+Up compatibility alias.
+	if bytes.len() == 2
+		&& let Some(key) = parse_esc_pair(bytes[1], kitty_protocol_active)
+	{
+		return Some(key);
+	}
+
 	// O(1) lookup in perfect hash map for legacy sequences
 	if let Some(&key_id) = LEGACY_SEQUENCES.get(bytes) {
 		return Some(Cow::Borrowed(key_id));
@@ -1066,12 +1075,6 @@ fn parse_key_inner(bytes: &[u8], kitty_protocol_active: bool) -> Option<Cow<'sta
 		&& let Some(inner_key) = parse_key_inner(&bytes[1..], true)
 	{
 		return Some(Cow::Owned(format!("alt+{inner_key}")));
-	}
-
-	// Two-byte ESC sequences (legacy ALT prefix, with exceptions even in kitty
-	// mode)
-	if bytes.len() == 2 {
-		return parse_esc_pair(bytes[1], kitty_protocol_active);
 	}
 
 	// Fixed CSI / SS3 sequences not covered by LEGACY_SEQUENCES
@@ -1113,21 +1116,24 @@ fn parse_esc_pair(code: u8, kitty_protocol_active: bool) -> Option<Cow<'static, 
 		_ => {},
 	}
 
-	// Legacy ALT-prefix parsing only when kitty protocol isn't expected to
-	// disambiguate.
+	// Historical cursor-key aliases used by some legacy terminals. Keep them in
+	// legacy mode only; in mixed modes (tmux extkeys/CSI-u, Kitty, etc.) ESC+B/F
+	// are real Alt+Shift+B/F keypresses.
 	if !kitty_protocol_active {
 		match code {
 			b' ' => return Some(Cow::Borrowed("alt+space")),
 			b'B' => return Some(Cow::Borrowed("alt+left")),
 			b'F' => return Some(Cow::Borrowed("alt+right")),
-			1..=26 => return Some(Cow::Borrowed(CTRL_ALT_LETTERS[(code - 1) as usize])),
-			b'a'..=b'z' => return Some(Cow::Borrowed(ALT_LETTERS[(code - b'a') as usize])),
-			b'A'..=b'Z' => return Some(Cow::Borrowed(ALT_SHIFT_LETTERS[(code - b'A') as usize])),
 			_ => {},
 		}
 	}
 
-	None
+	match code {
+		1..=26 => Some(Cow::Borrowed(CTRL_ALT_LETTERS[(code - 1) as usize])),
+		b'a'..=b'z' => Some(Cow::Borrowed(ALT_LETTERS[(code - b'a') as usize])),
+		b'A'..=b'Z' => Some(Cow::Borrowed(ALT_SHIFT_LETTERS[(code - b'A') as usize])),
+		_ => None,
+	}
 }
 
 // =============================================================================
@@ -1517,6 +1523,25 @@ mod tests {
 		assert_eq!(parse_key_inner(b"\x1b\x1b[B", true).as_deref(), Some("alt+down"));
 		// Bare double ESC should NOT be parsed as alt
 		assert_eq!(parse_key_inner(b"\x1b\x1b", true).as_deref(), None);
+	}
+
+	#[test]
+	fn esc_pair_alt_letters_mixed_mode() {
+		// Ghostty inside tmux extkeys/CSI-u still sends legacy Meta letters as
+		// ESC+letter while sending modified arrows as CSI 1;mod <letter>.
+		assert!(matches_key_inner(b"\x1bp", "alt+p", true));
+		assert!(matches_key_inner(b"\x1bh", "alt+h", true));
+		assert!(matches_key_inner(b"\x1bP", "alt+shift+p", true));
+		assert!(!matches_key_inner(b"\x1bp", "alt+shift+p", true));
+		assert_eq!(parse_key_inner(b"\x1bp", true).as_deref(), Some("alt+p"));
+		assert_eq!(parse_key_inner(b"\x1bh", true).as_deref(), Some("alt+h"));
+		assert_eq!(parse_key_inner(b"\x1bP", true).as_deref(), Some("alt+shift+p"));
+		assert!(matches_key_inner(b"\x1b[1;3A", "alt+up", true));
+		assert!(!matches_key_inner(b"\x1bp", "alt+up", true));
+		assert!(!matches_key_inner(b"\x1bn", "alt+down", true));
+		assert!(!matches_key_inner(b"\x1bb", "alt+left", true));
+		assert!(!matches_key_inner(b"\x1bf", "alt+right", true));
+		assert!(matches_key_inner(b"\x1bp", "alt+up", false));
 	}
 
 	#[test]

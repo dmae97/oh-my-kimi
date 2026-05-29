@@ -605,7 +605,7 @@ function buildGuidedHashlinePatch(file: string, actual: string, expected: string
 	if (ops.length === 0) return null;
 	const normalizedActual = actual.replace(/\r\n?/g, "\n");
 	const snapshots = new InMemorySnapshotStore();
-	const tag = snapshots.recordContiguous(file, 1, normalizedActual.split("\n"), { fullText: normalizedActual });
+	const tag = snapshots.record(file, normalizedActual);
 	const header = formatHashlineHeader(file, tag);
 	return `${header}\n${ops.join("\n")}`;
 }
