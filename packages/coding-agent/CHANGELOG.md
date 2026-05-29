@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.5.14] - 2026-05-29
 ### Added
 
 - Added progress status output for `llm()` calls in `eval`, including the resolved model, tier, and returned character count
