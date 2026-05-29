@@ -851,6 +851,12 @@ export class ModelRegistry {
 
 	/**
 	 * @param authStorage - Auth storage for API key resolution
+	 *
+	 * Sync constructor — eagerly loads bundled + cached models so tests and
+	 * synchronous callers see a fully-populated registry immediately. Production
+	 * boot paths SHOULD prefer {@link ModelRegistry.create} so the YAML/JSONC
+	 * migration step lands off the event loop's hot path before the first
+	 * `tryLoad()` runs.
 	 */
 	constructor(
 		readonly authStorage: AuthStorage,
@@ -866,8 +872,25 @@ export class ModelRegistry {
 			}
 			return undefined;
 		});
-		// Load models synchronously in constructor
+		// Load models synchronously in constructor.
 		this.#loadModels();
+	}
+
+	/**
+	 * Async factory used by the production boot path. Runs the JSON → YAML
+	 * migration on `models.{yml,yaml}` ahead of any sync I/O the constructor
+	 * still performs, so the registry's first `tryLoad()` is a pure read of
+	 * an already-migrated file. The constructor's bundled + cached-snapshot
+	 * load is unchanged — this factory only adds an awaited warmup step.
+	 */
+	static async create(authStorage: AuthStorage, modelsPath?: string): Promise<ModelRegistry> {
+		// Warm the migration before the constructor's sync tryLoad fires. We
+		// reach the underlying ConfigFile via a temporary relocate so the
+		// shared static registry stays untouched until the real instance is
+		// constructed below.
+		const warmupFile = ModelsConfigFile.relocate(modelsPath);
+		await ConfigFile.warmup(warmupFile);
+		return new ModelRegistry(authStorage, modelsPath);
 	}
 
 	/**

@@ -10,20 +10,82 @@ interface ConfigSchemaError {
 	message: string | undefined;
 }
 
+/**
+ * Module-private cache of (jsonPath, ymlPath) pairs we already migrated this
+ * process. Prevents `ConfigFile.relocate()` / repeated `tryLoad()` calls from
+ * re-running the migration over and over on the boot path.
+ */
+const migratedPaths = new Set<string>();
+
+function migrationKey(jsonPath: string, ymlPath: string): string {
+	return `${jsonPath}\u0000${ymlPath}`;
+}
+
+/**
+ * Synchronous JSON → YAML migration kept for callers that still want the
+ * eager path (settings init, tests that observe migration completion).
+ * Idempotent — re-running is a no-op.
+ */
 function migrateJsonToYml(jsonPath: string, ymlPath: string) {
+	const key = migrationKey(jsonPath, ymlPath);
+	if (migratedPaths.has(key)) return;
 	try {
-		if (fs.existsSync(ymlPath)) return;
-		if (!fs.existsSync(jsonPath)) return;
+		if (fs.existsSync(ymlPath)) {
+			migratedPaths.add(key);
+			return;
+		}
+		if (!fs.existsSync(jsonPath)) {
+			migratedPaths.add(key);
+			return;
+		}
 
 		const content = fs.readFileSync(jsonPath, "utf-8");
 		const parsed = JSON.parse(content);
 		if (!parsed) {
 			logger.warn("migrateJsonToYml: invalid json structure", { path: jsonPath });
+			migratedPaths.add(key);
 			return;
 		}
 		fs.writeFileSync(ymlPath, YAML.stringify(parsed, null, 2));
+		migratedPaths.add(key);
 	} catch (error) {
 		logger.warn("migrateJsonToYml: migration failed", { error: String(error) });
+	}
+}
+
+/**
+ * Async sibling of `migrateJsonToYml`. Uses Bun.file so the boot path no
+ * longer blocks on a sync FS read before the first await. Idempotent and
+ * shares the process-wide `migratedPaths` cache with the sync path.
+ */
+async function migrateJsonToYmlAsync(jsonPath: string, ymlPath: string) {
+	const key = migrationKey(jsonPath, ymlPath);
+	if (migratedPaths.has(key)) return;
+	try {
+		if (await Bun.file(ymlPath).exists()) {
+			migratedPaths.add(key);
+			return;
+		}
+		let content: string;
+		try {
+			content = await Bun.file(jsonPath).text();
+		} catch (err) {
+			if (isEnoent(err)) {
+				migratedPaths.add(key);
+				return;
+			}
+			throw err;
+		}
+		const parsed = JSON.parse(content);
+		if (!parsed) {
+			logger.warn("migrateJsonToYmlAsync: invalid json structure", { path: jsonPath });
+			migratedPaths.add(key);
+			return;
+		}
+		await Bun.write(ymlPath, YAML.stringify(parsed, null, 2));
+		migratedPaths.add(key);
+	} catch (error) {
+		logger.warn("migrateJsonToYmlAsync: migration failed", { error: String(error) });
 	}
 }
 
@@ -97,6 +159,7 @@ export type LoadResult<T> =
 
 export class ConfigFile<T> implements IConfigFile<T> {
 	readonly #basePath: string;
+	readonly #jsonMigrationPath: string | null;
 	#cache?: LoadResult<T>;
 	#auxValidate?: (value: T) => void;
 
@@ -107,16 +170,45 @@ export class ConfigFile<T> implements IConfigFile<T> {
 	) {
 		this.#basePath = configPath;
 		if (configPath.endsWith(".yml")) {
-			const jsonPath = `${configPath.slice(0, -4)}.json`;
-			migrateJsonToYml(jsonPath, configPath);
+			this.#jsonMigrationPath = `${configPath.slice(0, -4)}.json`;
 		} else if (configPath.endsWith(".yaml")) {
-			const jsonPath = `${configPath.slice(0, -5)}.json`;
-			migrateJsonToYml(jsonPath, configPath);
+			this.#jsonMigrationPath = `${configPath.slice(0, -5)}.json`;
 		} else if (configPath.endsWith(".json") || configPath.endsWith(".jsonc")) {
 			// JSON configs are still supported without migration.
+			this.#jsonMigrationPath = null;
 		} else {
 			throw new Error(`Invalid config file path: ${configPath}`);
 		}
+	}
+
+	/**
+	 * Run the JSON → YAML migration synchronously, if applicable. Idempotent.
+	 * Sync callers (tests, settings init) hit this implicitly via {@link tryLoad}.
+	 */
+	#ensureMigratedSync(): void {
+		if (this.#jsonMigrationPath) {
+			migrateJsonToYml(this.#jsonMigrationPath, this.#basePath);
+		}
+	}
+
+	/**
+	 * Async sibling of {@link #ensureMigratedSync}. Boot-path callers should
+	 * `await ConfigFile.warmup(file)` before doing any sync `tryLoad`/`load`
+	 * so the migration's I/O happens off the event-loop's hot path.
+	 */
+	async #ensureMigratedAsync(): Promise<void> {
+		if (this.#jsonMigrationPath) {
+			await migrateJsonToYmlAsync(this.#jsonMigrationPath, this.#basePath);
+		}
+	}
+
+	/**
+	 * Run any pending JSON → YAML migration asynchronously, ahead of a sync
+	 * `tryLoad()` on the boot path. Safe to call multiple times; subsequent
+	 * calls are O(1) thanks to the module-level migration cache.
+	 */
+	static warmup<U>(file: ConfigFile<U>): Promise<void> {
+		return file.#ensureMigratedAsync();
 	}
 
 	relocate(configPath?: string): ConfigFile<T> {
@@ -133,6 +225,13 @@ export class ConfigFile<T> implements IConfigFile<T> {
 			if (isEnoent(err)) return null;
 			throw err;
 		}
+	}
+
+	async getMtimeMsAsync(): Promise<number | null> {
+		const file = Bun.file(this.path());
+		if (!(await file.exists())) return null;
+		const lm = file.lastModified;
+		return typeof lm === "number" && Number.isFinite(lm) ? lm : null;
 	}
 
 	withValidation(name: string, validate: (value: T) => void): this {
@@ -164,12 +263,8 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		return result;
 	}
 
-	tryLoad(): LoadResult<T> {
-		if (this.#cache) return this.#cache;
-
+	#parseContent(content: string): LoadResult<T> {
 		try {
-			const content = fs.readFileSync(this.path(), "utf-8").trim();
-
 			let parsed: unknown;
 			if (this.#basePath.endsWith(".json") || this.#basePath.endsWith(".jsonc")) {
 				parsed = JSONC.parse(content);
@@ -203,9 +298,6 @@ export class ConfigFile<T> implements IConfigFile<T> {
 			}
 			return this.#storeCache({ value, status: "ok" });
 		} catch (error) {
-			if (isEnoent(error)) {
-				return this.#storeCache({ status: "not-found" });
-			}
 			logger.warn("Failed to parse config file", { path: this.path(), error });
 			return this.#storeCache({
 				error: new ConfigError(this.id, undefined, { err: error, stage: "Unexpected" }),
@@ -214,12 +306,60 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		}
 	}
 
+	tryLoad(): LoadResult<T> {
+		if (this.#cache) return this.#cache;
+		this.#ensureMigratedSync();
+
+		let content: string;
+		try {
+			content = fs.readFileSync(this.path(), "utf-8").trim();
+		} catch (error) {
+			if (isEnoent(error)) {
+				return this.#storeCache({ status: "not-found" });
+			}
+			logger.warn("Failed to read config file", { path: this.path(), error });
+			return this.#storeCache({
+				error: new ConfigError(this.id, undefined, { err: error, stage: "Read" }),
+				status: "error",
+			});
+		}
+		return this.#parseContent(content);
+	}
+
+	async tryLoadAsync(): Promise<LoadResult<T>> {
+		if (this.#cache) return this.#cache;
+		await this.#ensureMigratedAsync();
+
+		let content: string;
+		try {
+			content = (await Bun.file(this.path()).text()).trim();
+		} catch (error) {
+			if (isEnoent(error)) {
+				return this.#storeCache({ status: "not-found" });
+			}
+			logger.warn("Failed to read config file", { path: this.path(), error });
+			return this.#storeCache({
+				error: new ConfigError(this.id, undefined, { err: error, stage: "Read" }),
+				status: "error",
+			});
+		}
+		return this.#parseContent(content);
+	}
+
 	load(): T | null {
 		return this.tryLoad().value ?? null;
 	}
 
+	async loadAsync(): Promise<T | null> {
+		return (await this.tryLoadAsync()).value ?? null;
+	}
+
 	loadOrDefault(): T {
 		return this.tryLoad().value ?? this.createDefault();
+	}
+
+	async loadOrDefaultAsync(): Promise<T> {
+		return (await this.tryLoadAsync()).value ?? this.createDefault();
 	}
 
 	path(): string {

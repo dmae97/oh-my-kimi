@@ -733,7 +733,7 @@ export async function runRootCommand(
 
 	// Create AuthStorage and ModelRegistry upfront
 	const authStorage = await logger.time("discoverModels", deps.discoverAuthStorage ?? discoverAuthStorage);
-	const modelRegistry = new ModelRegistry(authStorage);
+	const modelRegistry = await ModelRegistry.create(authStorage);
 
 	if (parsedArgs.version) {
 		process.stdout.write(`${VERSION}\n`);
