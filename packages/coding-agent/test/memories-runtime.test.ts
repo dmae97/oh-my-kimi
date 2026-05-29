@@ -223,7 +223,9 @@ describe("memories runtime", () => {
 			).toBe("# Deploy\nUse blue/green.");
 		});
 
-		expect(fx.session.refreshBaseSystemPrompt).toHaveBeenCalledTimes(1);
+		await waitFor(() => {
+			expect(fx.session.refreshBaseSystemPrompt).toHaveBeenCalledTimes(1);
+		});
 		expect(ai.completeSimple).toHaveBeenCalled();
 		expect(ai.completeSimple).toHaveBeenCalledTimes(2);
 	});
