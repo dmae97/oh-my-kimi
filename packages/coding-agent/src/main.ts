@@ -995,7 +995,7 @@ export async function runRootCommand(
 
 		const extensionFlags = applyExtensionFlagValues(session, rawArgs);
 		const initialArgs =
-			extensionFlags.size > 0 ? parseArgs([...rawArgs], session.extensionRunner?.getFlags()) : parsedArgs;
+			extensionFlags.size > 0 ? parseArgs(rawArgs, session.extensionRunner?.getFlags()) : parsedArgs;
 		const { initialMessage, initialImages } = buildInitialMessage({
 			parsed: initialArgs,
 			fileText,

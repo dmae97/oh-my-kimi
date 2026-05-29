@@ -54,7 +54,12 @@ export interface Args {
 	unknownFlags: Map<string, boolean | string>;
 }
 
-export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
+export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
+	// Work on a copy: the `--option=value` handling below splices the value
+	// into the array, and callers reuse the same argv (the post-extension
+	// reparse in `runRootCommand` parses it a second time). Mutating the input
+	// would corrupt that later parse, so never touch the caller's array.
+	const args = [...inputArgs];
 	const result: Args = {
 		messages: [],
 		fileArgs: [],

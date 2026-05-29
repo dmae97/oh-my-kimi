@@ -46,4 +46,21 @@ describe("extension flags vs initial message", () => {
 		const { initialMessage } = buildInitialMessage({ parsed, stdinContent: "diff-context" });
 		expect(initialMessage).toBe("diff-context\nreviewer");
 	});
+	it("does not mutate the input argv, so the same array survives the two-pass parse (PR #1503 review)", () => {
+		// Reproduces the --option=value + extension flag combo: parseArgs splices
+		// the `=` value into its argv to reuse the `args[++i]` path. If it mutated
+		// the caller's array, the second (extension-aware) parse would re-splice
+		// and `sonnet` would leak into the prompt before "review the diff".
+		const argv = ["--model=sonnet", "--spawn-peer", "reviewer", "review the diff"];
+		const snapshot = [...argv];
+		// First pass: startup parse, before extensions load.
+		parseArgs(argv);
+		expect(argv).toEqual(snapshot);
+		// Second pass: extension-aware reparse on the same array.
+		const reparsed = parseArgs(argv, extFlags);
+		expect(reparsed.model).toBe("sonnet");
+		expect(reparsed.unknownFlags.get("spawn-peer")).toBe("reviewer");
+		expect(reparsed.messages).toEqual(["review the diff"]);
+		expect(argv).toEqual(snapshot);
+	});
 });
