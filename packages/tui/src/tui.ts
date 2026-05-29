@@ -236,6 +236,9 @@ export class Container implements Component {
  * - `initial`: first paint after `start()` — clear viewport, emit transcript.
  * - `sessionReplace`: caller asked for `{ clearScrollback: true }` on a forced
  *   render — clear viewport, clear scrollback (outside multiplexers).
+ * - `historyRebuild`: a geometry change (terminal resize) left native history
+ *   wrapped at the old size — clear viewport and scrollback so it rewraps at the
+ *   new geometry. Also flushes deferred content-only rewrites.
  * - `viewportRepaint`: rewrite the visible viewport in place. If `appendFrom`
  *   is set, emit those tail rows as scrollback growth first so streaming
  *   output reaches terminal history before the corrected viewport is drawn.
@@ -246,6 +249,7 @@ type RenderIntent =
 	| { kind: "noop" }
 	| { kind: "initial" }
 	| { kind: "sessionReplace" }
+	| { kind: "historyRebuild" }
 	| { kind: "viewportRepaint"; appendFrom?: number }
 	| { kind: "shrink" }
 	| { kind: "diff"; firstChanged: number; lastChanged: number; appendedLines: boolean };
@@ -1133,6 +1137,13 @@ export class TUI extends Container {
 					clearScrollback: !isMultiplexerSession(),
 				});
 				return;
+			case "historyRebuild":
+				this.#nativeScrollbackDirty = false;
+				this.#emitFullPaint(lines, width, height, cursorPos, {
+					clearViewport: true,
+					clearScrollback: !isMultiplexerSession(),
+				});
+				return;
 			case "viewportRepaint":
 				if (intent.appendFrom !== undefined) {
 					this.#emitAppendTail(lines, intent.appendFrom, height, prevViewportTop, prevHardwareCursorRow);
@@ -1160,10 +1171,11 @@ export class TUI extends Container {
 
 	/**
 	 * Map the current frame onto a single render intent. Order matters: forced
-	 * resets and session replacement short-circuit before any diff work. Frames
-	 * that would require rewriting native scrollback mark it dirty and repaint
-	 * the viewport instead; the destructive clear+replay is deferred to an
-	 * explicit checkpoint.
+	 * resets and session replacement short-circuit before any diff work. A real
+	 * resize (geometry change) that invalidates native scrollback rebuilds it now;
+	 * a pure content mutation that does the same marks scrollback dirty and
+	 * repaints only the viewport, deferring the destructive clear+replay to an
+	 * explicit checkpoint so users scrolled into history are not yanked.
 	 */
 	#planRender(
 		newLines: string[],
@@ -1187,11 +1199,11 @@ export class TUI extends Container {
 
 		const diff = this.#diffLines(newLines);
 
-		// Shrink-across-viewport-boundary: if a shrink would place the new
-		// viewport above rows already committed to terminal scrollback, those
-		// rows can become stale or duplicated in native history. Preserve native
-		// scrollback for users reading it now, and defer the destructive
-		// clear+replay to the next checkpoint.
+		// Shrink across the viewport boundary: the new transcript would re-expose
+		// rows already committed to native scrollback. A real resize already
+		// reflowed history, so rebuild it now; a pure content shrink (e.g. a
+		// streaming tail cell collapsing) defers the clear+replay so a user
+		// scrolled into history is not yanked to the bottom mid-stream.
 		const naturalViewportTop = Math.max(0, newLines.length - height);
 		if (
 			diff.firstChanged !== -1 &&
@@ -1199,6 +1211,7 @@ export class TUI extends Container {
 			naturalViewportTop < this.#scrollbackHighWater &&
 			!isMultiplexerSession()
 		) {
+			if (widthChanged || heightChanged) return { kind: "historyRebuild" };
 			this.#nativeScrollbackDirty = true;
 			return { kind: "viewportRepaint" };
 		}
@@ -1223,16 +1236,12 @@ export class TUI extends Container {
 			return { kind: "noop" };
 		}
 
-		// Width changes alter wrapping for the whole transcript. Offscreen edits
-		// make native history stale at the old geometry; mark it dirty and repaint
-		// only the viewport so users scrolled into history are not yanked mid-stream.
-		// Pure appends fall through to the diff path so the append handler scrolls
-		// them into history correctly.
+		// Width changes rewrap the whole transcript. An offscreen edit leaves
+		// native history at the old width, so rebuild it now — the terminal already
+		// reflowed and the user is at the terminal to resize. Pure appends fall
+		// through to the diff path so the append handler scrolls them into history.
 		if (widthChanged) {
-			if (diff.firstChanged < prevViewportTop) {
-				this.#nativeScrollbackDirty = true;
-				return { kind: "viewportRepaint" };
-			}
+			if (diff.firstChanged < prevViewportTop) return { kind: "historyRebuild" };
 			const pureAppend = diff.appendedLines && diff.firstChanged === this.#previousLines.length;
 			if (!pureAppend) return { kind: "viewportRepaint" };
 		}
@@ -1357,7 +1366,7 @@ export class TUI extends Container {
 
 	/**
 	 * Clear the viewport (optionally scrollback) and emit the full transcript.
-	 * Backs `initial` and `sessionReplace` intents.
+	 * Backs `initial`, `sessionReplace`, and `historyRebuild` intents.
 	 */
 	#emitFullPaint(
 		lines: string[],

@@ -733,6 +733,43 @@ describe("TUI terminal-state regressions", () => {
 			}
 		}, 15_000);
 
+		it("rebuilds native scrollback on a width resize without duplicating rows", async () => {
+			// A width resize makes the terminal reflow its own committed scrollback
+			// at the new size. Repainting only the viewport leaves those stale
+			// old-width rows in history, so overflowed rows show up twice (old-width
+			// wrap + new-width copy) when the user scrolls back. A real resize must
+			// rebuild history synchronously, unlike a pure content mutation which is
+			// deferred to the next checkpoint.
+			const term = new VirtualTerminal(32, 5);
+			const tui = new TUI(term);
+			// Rows wider than the post-resize width so the committed scrollback
+			// reflows (wraps) at the narrower size; short rows would not regress.
+			const filler = "x".repeat(24);
+			const component = new MutableLinesComponent(
+				Array.from({ length: 12 }, (_v, i) => `line-${i}-${filler}`),
+			);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				// User sits at the bottom (not scrolled) and narrows the terminal.
+				term.resize(28, 5);
+				await settle(term);
+
+				const scrollback = term.getScrollBuffer();
+				for (let i = 0; i < 12; i++) {
+					const pattern = new RegExp(`\\bline-${i}\\b`);
+					expect(countMatches(scrollback, pattern), `line-${i} should appear once after resize`).toBe(1);
+				}
+				// The resize rebuilt history in place; nothing is left deferred.
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("keeps viewport aligned when offscreen header changes during overflow growth", async () => {
 			const term = new VirtualTerminal(32, 6);
 			const tui = new TUI(term);

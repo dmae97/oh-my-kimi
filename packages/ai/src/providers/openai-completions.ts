@@ -97,10 +97,7 @@ function normalizeMistralToolId(id: string, isMistral: boolean): string {
 // fail before streaming. `:tools` selects its documented tools-capable route.
 function shouldUseNanoGptToolsRoute(model: Model<"openai-completions">, context: Context): boolean {
 	return (
-		model.provider === "nanogpt" &&
-		!!context.tools?.length &&
-		/deepseek/i.test(model.id) &&
-		!model.id.includes(":")
+		model.provider === "nanogpt" && !!context.tools?.length && /deepseek/i.test(model.id) && !model.id.includes(":")
 	);
 }
 
