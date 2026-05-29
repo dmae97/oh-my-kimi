@@ -392,3 +392,8 @@ export function installLegacyPiSpecifierShim(): void {
 		},
 	});
 }
+
+/** Test seam: clears the memoized canonical specifier resolutions. */
+export function __resetLegacyPiResolutionCache(): void {
+	resolvedSpecifierFallbacks.clear();
+}

@@ -1,6 +1,7 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { type ChildProcess, execSync, spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
@@ -557,6 +558,14 @@ describe("Generate E2E Tests", () => {
 			const originalCloudLocation = Bun.env.GOOGLE_CLOUD_LOCATION;
 			const originalLocation = Bun.env.VERTEX_LOCATION;
 			const originalApiKey = Bun.env.GOOGLE_CLOUD_API_KEY;
+			const originalGac = Bun.env.GOOGLE_APPLICATION_CREDENTIALS;
+			// Force the GCE/Cloud Run metadata-server token path: neutralize any host
+			// ADC so resolveAccessTokenUncached() falls through to fetchMetadataToken().
+			// Without this the test reads ~/.config/gcloud/application_default_credentials.json
+			// when present and hangs on the OAuth exchange (form body, not JSON).
+			const homedirSpy = spyOn(os, "homedir").mockReturnValue(
+				path.join(os.tmpdir(), `vertex-adc-absent-${Date.now()}`),
+			);
 			const model: Model<"anthropic-messages"> = {
 				id: "claude-sonnet-4@20250514",
 				name: "Claude Sonnet 4",
@@ -581,6 +590,7 @@ describe("Generate E2E Tests", () => {
 				delete Bun.env.GOOGLE_CLOUD_LOCATION;
 				delete Bun.env.VERTEX_LOCATION;
 				delete Bun.env.GOOGLE_CLOUD_API_KEY;
+				delete Bun.env.GOOGLE_APPLICATION_CREDENTIALS;
 
 				const events = stream(
 					model,
@@ -623,6 +633,7 @@ describe("Generate E2E Tests", () => {
 				expect((request.body as Record<string, unknown>).model).toBeUndefined();
 			} finally {
 				__resetVertexTokenCache();
+				homedirSpy.mockRestore();
 				if (originalProject === undefined) delete Bun.env.GOOGLE_CLOUD_PROJECT;
 				else Bun.env.GOOGLE_CLOUD_PROJECT = originalProject;
 				if (originalGcpProject === undefined) delete Bun.env.GCP_PROJECT;
@@ -637,6 +648,8 @@ describe("Generate E2E Tests", () => {
 				else Bun.env.VERTEX_LOCATION = originalLocation;
 				if (originalApiKey === undefined) delete Bun.env.GOOGLE_CLOUD_API_KEY;
 				else Bun.env.GOOGLE_CLOUD_API_KEY = originalApiKey;
+				if (originalGac === undefined) delete Bun.env.GOOGLE_APPLICATION_CREDENTIALS;
+				else Bun.env.GOOGLE_APPLICATION_CREDENTIALS = originalGac;
 			}
 		});
 	});

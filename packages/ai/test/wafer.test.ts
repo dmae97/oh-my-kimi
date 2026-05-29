@@ -121,7 +121,7 @@ describe("Wafer Serverless provider", () => {
 		expect(qwen37max).toBeDefined();
 		// Wafer's canonical id is lowercase `qwen3.7-max` — must round-trip verbatim.
 		expect(qwen37max.id).toBe("qwen3.7-max");
-		expect(qwen37max.name).toBe("Qwen3.7-Max");
+		expect(qwen37max.name).toBe("Qwen3.7 Max");
 		expect(qwen37max.reasoning).toBe(true);
 		// qwen3.7-max routes to Alibaba upstream; native wire format is `enable_thinking`.
 		// The bundled entry leaves `thinkingFormat` unset so `detectOpenAICompat` picks "qwen"

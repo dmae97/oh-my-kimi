@@ -3,7 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
-import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "../../src/extensibility/plugins/legacy-pi-compat";
+import {
+	__resetLegacyPiResolutionCache,
+	installLegacyPiSpecifierShim,
+	loadLegacyPiModule,
+} from "../../src/extensibility/plugins/legacy-pi-compat";
 import { Type as TypeBoxShimType } from "../../src/extensibility/typebox";
 
 // pi-ai 15.1.0 removed the runtime `Type` export from `@oh-my-pi/pi-ai`'s
@@ -159,6 +163,10 @@ describe("legacy pi package root remaps (issue #1474)", () => {
 		// a sibling `packages/<pkg>/src/index.ts` path would miss them, so the
 		// non-compiled branch must delegate to `Bun.resolveSync` against the
 		// canonical specifier.
+		// The resolver memoizes canonical lookups process-wide; clear it so this
+		// assertion observes the Bun.resolveSync delegation rather than a warm
+		// cache populated by an earlier test in the full suite.
+		__resetLegacyPiResolutionCache();
 		const realResolveSync = Bun.resolveSync.bind(Bun);
 		let canonicalLookupSeen = false;
 		vi.spyOn(Bun, "resolveSync").mockImplementation((specifier: string, from: string) => {
