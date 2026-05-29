@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.5.12] - 2026-05-29
 ### Removed
 
 - Removed ANTML stream markup healing for `antml:function_calls` and `antml:thinking` envelopes, so Anthropic-compatible providers no longer parse those tags into `toolCall`/`thinking` events
