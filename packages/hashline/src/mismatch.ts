@@ -37,6 +37,14 @@ export interface MismatchDetails {
 	actualFileHash: string;
 	fileLines: string[];
 	anchorLines?: readonly number[];
+	/**
+	 * `true` when the section's expected hash resolved to a recorded snapshot
+	 * (file content drifted since that snapshot), `false` when no snapshot
+	 * was ever recorded for the hash (likely fabricated or carried over from
+	 * a prior session). Drives a more actionable rejection message; defaults
+	 * to `true` for backward compatibility with direct callers.
+	 */
+	hashRecognized?: boolean;
 }
 
 function getMismatchDisplayLines(anchorLines: readonly number[], fileLines: string[]): number[] {
@@ -62,6 +70,7 @@ export class MismatchError extends Error {
 	readonly actualFileHash: string;
 	readonly fileLines: string[];
 	readonly anchorLines: readonly number[];
+	readonly hashRecognized: boolean;
 
 	constructor(details: MismatchDetails) {
 		super(MismatchError.formatMessage(details));
@@ -71,6 +80,7 @@ export class MismatchError extends Error {
 		this.actualFileHash = details.actualFileHash;
 		this.fileLines = details.fileLines;
 		this.anchorLines = details.anchorLines ?? [];
+		this.hashRecognized = details.hashRecognized ?? true;
 	}
 
 	get displayMessage(): string {
@@ -80,14 +90,22 @@ export class MismatchError extends Error {
 			actualFileHash: this.actualFileHash,
 			fileLines: this.fileLines,
 			anchorLines: this.anchorLines,
+			hashRecognized: this.hashRecognized,
 		});
 	}
 
 	static rejectionHeader(details: MismatchDetails): string[] {
 		const pathText = details.path ? ` for ${details.path}` : "";
+		const hashRecognized = details.hashRecognized ?? true;
+		if (!hashRecognized) {
+			return [
+				`Edit rejected${pathText}: hash ${HL_FILE_HASH_SEP}${details.expectedFileHash} is not from this session.`,
+				`The current file hashes to ${HL_FILE_HASH_SEP}${details.actualFileHash}. Re-read the file with \`read\` to copy a current ${HL_FILE_PREFIX}path${HL_FILE_HASH_SEP}tag header — never invent the tag and never reuse one from a prior session.`,
+			];
+		}
 		return [
 			`Edit rejected${pathText}: file changed between read and edit.`,
-			`Section is bound to ${HL_FILE_HASH_SEP}${details.expectedFileHash}, but the current file hashes to ${HL_FILE_HASH_SEP}${details.actualFileHash}. If your previous edit in this session modified this file, copy the ${HL_FILE_PREFIX}path${HL_FILE_HASH_SEP}newhash from that edit's response. Otherwise re-read the file before retrying.`,
+			`Section is bound to ${HL_FILE_HASH_SEP}${details.expectedFileHash}, but the current file hashes to ${HL_FILE_HASH_SEP}${details.actualFileHash}. If a prior edit in this session modified this file, copy the ${HL_FILE_PREFIX}path${HL_FILE_HASH_SEP}newhash header from that edit's response; otherwise re-read the file with \`read\` to refresh the tag before retrying.`,
 		];
 	}
 

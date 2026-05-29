@@ -9,6 +9,10 @@
 - Exported the `SessionStorage` / `SessionStorageWriter` / `FileSessionStorage` / `MemorySessionStorage` symbols (already reachable via the `./session/session-storage` subpath) from the package root so SDK consumers can construct alternative storage backends without deep-importing.
 - Added a fresh `¶<relative-path>#TAG` snapshot header to the `write` tool's success text in hashline display mode, covering plain disk writes, ACP-bridge writes, and conflict resolutions (bulk resolutions emit a trailing `Snapshots:` block with one header per successfully written file). The header records a current snapshot in the file-snapshot store so the next `edit` can land without an extra `read` round-trip. Suppressed when the session is not in hashline mode and skipped for archive/SQLite writes and host-managed internal URL targets where hashline anchors do not apply.
 
+### Changed
+
+- The `edit` tool's stale-snapshot rejection message now distinguishes "file changed between read and edit" (the section's hash was recorded in this session but the file has since drifted — a prior in-session edit advanced it, or an external write changed it) from "hash #X is not from this session" (a fabricated or carried-over cross-session tag), the latter carrying explicit "never invent the tag" guidance. Both messages include the current file hash plus 2 lines of context around each anchor so the next attempt has everything it needs. Snapshot-based recovery still runs first; the sharper diagnostics only surface when recovery cannot reconcile the edit.
+
 ### Fixed
 
 - Fixed Autonomous Memory phase 1/phase 2 failing with `Thinking effort low is not supported by <provider>/<model>` on models whose supported reasoning efforts exclude `low`/`medium` (e.g. `deepseek/deepseek-v4-pro`). Both stage1 (`Effort.Low`) and consolidation (`Effort.Medium`) call sites in `packages/coding-agent/src/memories/index.ts` now route through `clampThinkingLevelForModel`, lifting the requested effort to the model's lowest supported level instead of letting `requireSupportedEffort` throw ([#1480](https://github.com/can1357/oh-my-pi/issues/1480)).

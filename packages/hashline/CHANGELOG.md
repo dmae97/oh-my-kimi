@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `MismatchError` now distinguishes "hash recognized but file content drifted" from "hash never recorded for this path". The latter (likely fabricated or carried over from a prior session) emits a dedicated `hash #X is not from this session` rejection message with explicit "never invent the tag" guidance. The `MismatchDetails` interface gains an optional `hashRecognized?: boolean` (defaults to `true` for backward compatibility); `MismatchError` exposes it as a readonly field so callers can branch on the cause.
+
 ## [15.5.8] - 2026-05-28
 ### Breaking Changes
 

@@ -359,6 +359,7 @@ export class Patcher {
 			actualFileHash: currentHash,
 			fileLines: normalized.split("\n"),
 			anchorLines: section.collectAnchorLines(),
+			hashRecognized: snapshot !== null,
 		});
 	}
 }

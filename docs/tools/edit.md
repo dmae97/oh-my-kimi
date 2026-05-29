@@ -12,7 +12,7 @@
   - `packages/hashline/src/input.ts` — parses `¶PATH#TAG` sections
   - `packages/hashline/src/tokenizer.ts` / `packages/hashline/src/parser.ts` — tokenizes and parses ops
   - `packages/hashline/src/apply.ts` — applies parsed edits to file text
-  - `packages/hashline/src/mismatch.ts` — stale-anchor mismatch formatting
+  - `packages/hashline/src/mismatch.ts` — stale-anchor mismatch formatting (distinguishes recognized-but-drifted from never-recorded hashes)
   - `packages/hashline/src/recovery.ts` — snapshot-based stale-anchor recovery
   - `packages/hashline/src/snapshots.ts` — mints and resolves per-path opaque snapshot tags
 
@@ -169,7 +169,10 @@ Multi-file:
   - `line N: single-number hunk header "N" is no longer accepted. Spell single-line ranges as \`N N\` (two numbers); hashline hunks are bare \`A B\` lines (or \`BOF\` / \`EOF\`).`
 - Out-of-range anchor:
   - `Line N does not exist (file has M lines)`
-- Stale snapshot tag throws `MismatchError`. The error contains re-read guidance and nearby current file lines as `*LINE:TEXT` / ` LINE:TEXT`.
+- Stale snapshot tag: the `Patcher` first attempts snapshot-based recovery (3-way-merge of the model’s edits onto the current file via `packages/hashline/src/recovery.ts`, `fuzzFactor: 0`). When recovery cannot prove a valid result it throws `MismatchError`, which distinguishes two cases:
+  - **Hash recognized but file content drifted** (an in-session edit advanced the hash, or an external write changed the file): "file changed between read and edit" / "Section is bound to #X, but the current file hashes to #Y". Copy the post-edit hash from the prior edit response, or re-read.
+  - **Hash never recorded for this path** (likely fabricated or carried over from a prior session): "hash #X is not from this session". Re-read; never invent the tag.
+  In both cases the error includes the current file hash plus 2 lines of context around each anchor (`*LINE:TEXT` / ` LINE:TEXT`).
 - No-op edit:
   - `Edits to <path> parsed and applied cleanly, but produced no change: your body row(s) are byte-identical to the file at the targeted lines. The bug is somewhere else — re-read the file before issuing another edit. Do NOT widen the payload or add lines; verify the anchor first.`
 - Recovery failure is silent internally: if cache-based merge cannot prove a valid result, the mismatch error is surfaced unchanged.
