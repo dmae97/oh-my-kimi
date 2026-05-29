@@ -59,20 +59,50 @@ const resolvedSpecifierFallbacks = new Map<string, string>();
 const TYPEBOX_SPECIFIER = "@sinclair/typebox";
 const TYPEBOX_SPECIFIER_FILTER = /^@sinclair\/typebox$/;
 
-// Compat shim paths owned by this package. The dev branch resolves the sibling
-// source file via `import.meta.dir` (works in monorepo, source-link, and
-// node_modules installs alike, since each install layout ships the shim next
-// to this file). The compiled-binary branch points at the `--root`-relative
-// bunfs path produced by `scripts/build-binary.ts`; every shim listed below
-// must be registered there as an explicit `--compile` entrypoint or release
-// builds fail with missing-module errors. Non-shim bundled packages are
-// resolved via `Bun.resolveSync` (see `resolveCanonicalPiSpecifier`), so they
-// keep working in installed-package mode where the on-disk layout differs from
-// the monorepo source tree.
-const BUNFS_PACKAGE_ROOT = "/$bunfs/root/packages";
+// Compat shim and bundled-package paths used in compiled-binary mode. The shim
+// paths must point at files that ship inside the bunfs root; in dev /
+// source-link / installed-package mode the canonical specifier resolves via
+// `Bun.resolveSync` so only the shim files need explicit paths there.
+//
+// `BUNFS_PACKAGE_ROOT` is derived from `import.meta.dir` rather than hardcoded
+// as `/$bunfs/root/packages` so the prefix stays platform-native: on Windows
+// the bunfs mount appears as `<drive>:\~BUN\root\…` (see oven-sh/bun#15766),
+// and a hardcoded POSIX literal would normalize to `\$bunfs\root\…` and fail
+// to resolve. This file lives at
+// `<bunfs>/packages/coding-agent/src/extensibility/plugins/legacy-pi-compat.js`
+// inside the binary, so going up four directories lands on
+// `<bunfs>/packages` regardless of host OS.
+//
+// Every shim listed below must also be registered as an explicit `--compile`
+// entrypoint in `scripts/build-binary.ts` or release builds fail with
+// missing-module errors. Non-shim bundled packages are resolved via
+// `Bun.resolveSync` (see `resolveCanonicalPiSpecifier`) outside compiled mode,
+// so they keep working when on-disk layout differs from the monorepo tree.
+/**
+ * Compute the bunfs package root from this file's `import.meta.dir` (or any
+ * stand-in supplied by tests). Going up four directories from
+ * `<bunfs>/packages/coding-agent/src/extensibility/plugins` lands on
+ * `<bunfs>/packages` and preserves the host OS's separators so the result
+ * remains valid on Windows (`<drive>:\~BUN\root\packages`) as well as Linux
+ * and macOS (`/$bunfs/root/packages`).
+ *
+ * Exported for tests; production callers use `BUNFS_PACKAGE_ROOT` below.
+ */
+export function __computeBunfsPackageRoot(metaDir: string, pathImpl: typeof path = path): string {
+	return pathImpl.resolve(metaDir, "..", "..", "..", "..");
+}
 
-const TYPEBOX_SHIM_PATH = IS_COMPILED_BINARY
-	? `${BUNFS_PACKAGE_ROOT}/coding-agent/src/extensibility/typebox.js`
+const BUNFS_PACKAGE_ROOT = IS_COMPILED_BINARY ? __computeBunfsPackageRoot(import.meta.dir) : null;
+
+function bunfsPath(...segments: string[]): string {
+	if (!BUNFS_PACKAGE_ROOT) {
+		throw new Error("bunfsPath is only valid in compiled-binary mode");
+	}
+	return path.join(BUNFS_PACKAGE_ROOT, ...segments);
+}
+
+const TYPEBOX_SHIM_PATH = BUNFS_PACKAGE_ROOT
+	? bunfsPath("coding-agent", "src", "extensibility", "typebox.js")
 	: path.resolve(import.meta.dir, "../typebox.ts");
 
 // Legacy extensions historically imported `Type` (and `Static`/`TSchema`) from
@@ -83,8 +113,8 @@ const TYPEBOX_SHIM_PATH = IS_COMPILED_BINARY
 // plus the borrowed `Type` runtime from the Zod-backed TypeBox shim. Subpath
 // imports such as `@oh-my-pi/pi-ai/utils/oauth` continue to resolve directly
 // against the bundled pi-ai package.
-const LEGACY_PI_AI_SHIM_PATH = IS_COMPILED_BINARY
-	? `${BUNFS_PACKAGE_ROOT}/coding-agent/src/extensibility/legacy-pi-ai-shim.js`
+const LEGACY_PI_AI_SHIM_PATH = BUNFS_PACKAGE_ROOT
+	? bunfsPath("coding-agent", "src", "extensibility", "legacy-pi-ai-shim.js")
 	: path.resolve(import.meta.dir, "../legacy-pi-ai-shim.ts");
 
 // The coding-agent's own `./src/index.ts` cannot be listed as an extra
@@ -92,8 +122,8 @@ const LEGACY_PI_AI_SHIM_PATH = IS_COMPILED_BINARY
 // startup (issue #1474 follow-up). Legacy `@(scope)/pi-coding-agent` root
 // imports therefore resolve through a sibling shim whose distinct file path
 // avoids that collision while re-exporting the canonical package surface.
-const LEGACY_PI_CODING_AGENT_SHIM_PATH = IS_COMPILED_BINARY
-	? `${BUNFS_PACKAGE_ROOT}/coding-agent/src/extensibility/legacy-pi-coding-agent-shim.js`
+const LEGACY_PI_CODING_AGENT_SHIM_PATH = BUNFS_PACKAGE_ROOT
+	? bunfsPath("coding-agent", "src", "extensibility", "legacy-pi-coding-agent-shim.js")
 	: path.resolve(import.meta.dir, "../legacy-pi-coding-agent-shim.ts");
 
 // Package-root overrides. Shim entries are always applied because they replace
@@ -106,12 +136,12 @@ const LEGACY_PI_CODING_AGENT_SHIM_PATH = IS_COMPILED_BINARY
 const LEGACY_PI_PACKAGE_ROOT_OVERRIDES: Record<string, string> = {
 	[`${CANONICAL_PI_SCOPE}/pi-ai`]: LEGACY_PI_AI_SHIM_PATH,
 	[`${CANONICAL_PI_SCOPE}/pi-coding-agent`]: LEGACY_PI_CODING_AGENT_SHIM_PATH,
-	...(IS_COMPILED_BINARY
+	...(BUNFS_PACKAGE_ROOT
 		? {
-				[`${CANONICAL_PI_SCOPE}/pi-agent-core`]: `${BUNFS_PACKAGE_ROOT}/agent/src/index.js`,
-				[`${CANONICAL_PI_SCOPE}/pi-natives`]: `${BUNFS_PACKAGE_ROOT}/natives/native/index.js`,
-				[`${CANONICAL_PI_SCOPE}/pi-tui`]: `${BUNFS_PACKAGE_ROOT}/tui/src/index.js`,
-				[`${CANONICAL_PI_SCOPE}/pi-utils`]: `${BUNFS_PACKAGE_ROOT}/utils/src/index.js`,
+				[`${CANONICAL_PI_SCOPE}/pi-agent-core`]: bunfsPath("agent", "src", "index.js"),
+				[`${CANONICAL_PI_SCOPE}/pi-natives`]: bunfsPath("natives", "native", "index.js"),
+				[`${CANONICAL_PI_SCOPE}/pi-tui`]: bunfsPath("tui", "src", "index.js"),
+				[`${CANONICAL_PI_SCOPE}/pi-utils`]: bunfsPath("utils", "src", "index.js"),
 			}
 		: {}),
 };
