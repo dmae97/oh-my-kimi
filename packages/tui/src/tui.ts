@@ -287,6 +287,8 @@ export class Container implements Component {
  * - `deferredShrink`: pure content shrink would re-expose rows already in
  *   native history. Keep row indices stable with blank tail padding, repaint
  *   only the viewport, and defer the real shorter replay to a checkpoint.
+ * - `deferredMutation`: a row-inserting edit would reindex native scrollback
+ *   while the user is scrolled. Defer all bytes until a safe rebuild checkpoint.
  * - `shrink`: trailing rows were dropped — clear extras inline.
  * - `diff`: differential repaint of visible rows / append new rows below.
  */
@@ -297,6 +299,7 @@ type RenderIntent =
 	| { kind: "historyRebuild" }
 	| { kind: "viewportRepaint"; appendFrom?: number }
 	| { kind: "deferredShrink"; paddedLength: number }
+	| { kind: "deferredMutation" }
 	| { kind: "shrink" }
 	| { kind: "diff"; firstChanged: number; lastChanged: number; appendedLines: boolean };
 
@@ -1210,6 +1213,8 @@ export class TUI extends Container {
 				}
 				this.#emitViewportRepaint(lines, width, height, cursorPos);
 				return;
+			case "deferredMutation":
+				return;
 			case "deferredShrink":
 				this.#emitViewportRepaint(
 					this.#padDeferredShrinkLines(lines, intent.paddedLength),
@@ -1335,6 +1340,12 @@ export class TUI extends Container {
 		}
 
 		const contentGrew = newLines.length > this.#previousLines.length;
+		if (contentGrew && diff.firstChanged < this.#previousLines.length && !isMultiplexerSession()) {
+			if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom())) {
+				this.#markNativeScrollbackDirty();
+				return { kind: "deferredMutation" };
+			}
+		}
 
 		// Height changes shift the visible window. Repaint when content didn't
 		// grow, but skip in Termux (software keyboard toggles height) and inside
