@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `anthropic.claude-opus-4-8` model metadata in the model registry for Bedrock Converse streaming with effort-based thinking support through `xhigh`
+
+### Changed
+
+- Changed Anthropic adaptive-thinking effort mapping for Opus 4.7+ on the Messages API to use the model's full five-tier scale: user-facing efforts now shift up one notch (`minimal→low`, `low→medium`, `medium→high`, `high→xhigh`, `xhigh→max`) so the top tier reaches the genuine `max` level and `high` lands on Anthropic's recommended `xhigh` coding/agentic default. Older adaptive models (Opus 4.6) and Bedrock Converse keep the four-tier legacy mapping where `xhigh` aliases to `max`.
 
 ### Fixed
 

@@ -322,7 +322,28 @@ export function mapEffortToAnthropicAdaptiveEffort<TApi extends Api>(
 	model: ApiModel<TApi>,
 	effort: Effort,
 ): "low" | "medium" | "high" | "xhigh" | "max" {
-	switch (requireSupportedEffort(model, effort)) {
+	const supported = requireSupportedEffort(model, effort);
+	if (anthropicModelHasRealXHighEffort(model)) {
+		// Opus 4.7+ on the Messages API exposes the full five-tier adaptive scale
+		// (low/medium/high/xhigh/max). Shift our user-facing efforts up one notch so
+		// the top tier reaches the genuine "max" and "high" lands on Anthropic's
+		// recommended "xhigh" coding/agentic default.
+		switch (supported) {
+			case Effort.Minimal:
+				return "low";
+			case Effort.Low:
+				return "medium";
+			case Effort.Medium:
+				return "high";
+			case Effort.High:
+				return "xhigh";
+			case Effort.XHigh:
+				return "max";
+		}
+	}
+	// Older adaptive models (Opus 4.6) and Bedrock Converse expose only four tiers
+	// with no real "xhigh"; XHigh is a legacy alias for the top "max" tier there.
+	switch (supported) {
 		case Effort.Minimal:
 		case Effort.Low:
 			return "low";
@@ -331,10 +352,7 @@ export function mapEffortToAnthropicAdaptiveEffort<TApi extends Api>(
 		case Effort.High:
 			return "high";
 		case Effort.XHigh:
-			// Opus 4.7+ introduced a distinct "xhigh" effort level (between "high" and "max").
-			// The Anthropic docs scope this to the Messages API only, so Bedrock Converse and
-			// older adaptive-thinking Opus 4.6 models keep the legacy "max" alias.
-			return anthropicModelHasRealXHighEffort(model) ? "xhigh" : "max";
+			return "max";
 	}
 }
 
