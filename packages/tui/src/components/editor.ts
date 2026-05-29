@@ -596,7 +596,9 @@ export class Editor implements Component, Focusable {
 
 	#getStyledInputCursor(): { text: string; width: number } {
 		const cursorChar = this.#theme.symbols.inputCursor;
-		return { text: `\x1b[5m${cursorChar}\x1b[0m`, width: visibleWidth(cursorChar) };
+		// Keep the software cursor steady. Ghostty/cmux can leave visual
+		// afterimages for SGR blink cells during rapid input-row repaints.
+		return { text: cursorChar, width: visibleWidth(cursorChar) };
 	}
 
 	#renderEndOfLineCursorAtWidthLimit(
@@ -1484,6 +1486,7 @@ export class Editor implements Component, Focusable {
 
 	/** Insert text at the current cursor position */
 	insertText(text: string): void {
+		this.#exitHistoryForEditing();
 		this.#insertTextAtCursor(text);
 	}
 

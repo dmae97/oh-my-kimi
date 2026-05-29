@@ -1083,7 +1083,7 @@ describe("TUI terminal-state regressions", () => {
 		});
 	});
 	describe("hardware cursor terminal fallback", () => {
-		it("falls back to the software cursor on Ghostty even when hardware cursor was requested", async () => {
+		it("uses cursor markers but hides the hardware cursor on Ghostty when hardware cursor was requested", async () => {
 			await withEnvPatch(
 				{
 					TERM_PROGRAM: "ghostty",
@@ -1095,6 +1095,7 @@ describe("TUI terminal-state regressions", () => {
 				() => {
 					const tui = new TUI(new VirtualTerminal(20, 4), true);
 					expect(tui.getShowHardwareCursor()).toBe(false);
+					expect(tui.getUseTerminalCursorMarker()).toBe(true);
 				},
 			);
 		});
@@ -1111,6 +1112,7 @@ describe("TUI terminal-state regressions", () => {
 				() => {
 					const tui = new TUI(new VirtualTerminal(20, 4), true);
 					expect(tui.getShowHardwareCursor()).toBe(true);
+					expect(tui.getUseTerminalCursorMarker()).toBe(true);
 				},
 			);
 		});
@@ -1127,6 +1129,24 @@ describe("TUI terminal-state regressions", () => {
 				() => {
 					const tui = new TUI(new VirtualTerminal(20, 4), true);
 					expect(tui.getShowHardwareCursor()).toBe(true);
+					expect(tui.getUseTerminalCursorMarker()).toBe(true);
+				},
+			);
+		});
+
+		it("keeps software cursor mode when hardware cursor is explicitly disabled", async () => {
+			await withEnvPatch(
+				{
+					TERM_PROGRAM: "ghostty",
+					TERM: "xterm-ghostty",
+					GHOSTTY_RESOURCES_DIR: "/tmp/ghostty",
+					GHOSTTY_SURFACE_ID: "0x1",
+					PI_FORCE_HARDWARE_CURSOR: undefined,
+				},
+				() => {
+					const tui = new TUI(new VirtualTerminal(20, 4), false);
+					expect(tui.getShowHardwareCursor()).toBe(false);
+					expect(tui.getUseTerminalCursorMarker()).toBe(false);
 				},
 			);
 		});

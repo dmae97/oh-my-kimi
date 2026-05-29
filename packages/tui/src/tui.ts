@@ -152,12 +152,12 @@ function isGhosttySession(): boolean {
 	);
 }
 
-function resolveHardwareCursorPreference(enabled: boolean): boolean {
-	if (!enabled) return false;
+function resolveHardwareCursorPreference(requested: boolean): boolean {
+	if (!requested) return false;
 	// Ghostty currently leaves bar-cursor afterimages when a TUI repeatedly
-	// repaints the row under a visible hardware cursor. Fall back to the
-	// software cursor there unless a developer explicitly opts back in while
-	// testing a terminal-side fix.
+	// repaints the row under a visible hardware cursor. Keep the editor in
+	// terminal-cursor-marker mode, but hide the actual terminal cursor unless a
+	// developer explicitly opts back in while testing a terminal-side fix.
 	if (isGhosttySession() && !$flag("PI_FORCE_HARDWARE_CURSOR")) return false;
 	return true;
 }
@@ -307,6 +307,7 @@ export class TUI extends Container {
 	#sixelProbeTimeout?: NodeJS.Timeout;
 	#sixelProbeUnsubscribe?: () => void;
 	#showHardwareCursor = $flag("PI_HARDWARE_CURSOR");
+	#useTerminalCursorMarker = this.#showHardwareCursor;
 	#clearOnShrink = $flag("PI_CLEAR_ON_SHRINK"); // Clear empty rows when content shrinks (default: off)
 	#maxLinesRendered = 0; // Line count from last render, used for viewport calculation
 	// Highest count of content rows currently sitting in terminal scrollback
@@ -334,9 +335,9 @@ export class TUI extends Container {
 	constructor(terminal: Terminal, showHardwareCursor?: boolean) {
 		super();
 		this.terminal = terminal;
-		this.#showHardwareCursor = resolveHardwareCursorPreference(
-			showHardwareCursor === undefined ? this.#showHardwareCursor : showHardwareCursor,
-		);
+		const requested = showHardwareCursor === undefined ? this.#showHardwareCursor : showHardwareCursor;
+		this.#showHardwareCursor = resolveHardwareCursorPreference(requested);
+		this.#useTerminalCursorMarker = requested;
 	}
 
 	get fullRedraws(): number {
@@ -347,11 +348,17 @@ export class TUI extends Container {
 		return this.#showHardwareCursor;
 	}
 
+	getUseTerminalCursorMarker(): boolean {
+		return this.#useTerminalCursorMarker;
+	}
+
 	setShowHardwareCursor(enabled: boolean): void {
-		const next = resolveHardwareCursorPreference(enabled);
-		if (this.#showHardwareCursor === next) return;
-		this.#showHardwareCursor = next;
-		if (!next) {
+		const nextShow = resolveHardwareCursorPreference(enabled);
+		const nextMarker = enabled;
+		if (this.#showHardwareCursor === nextShow && this.#useTerminalCursorMarker === nextMarker) return;
+		this.#showHardwareCursor = nextShow;
+		this.#useTerminalCursorMarker = nextMarker;
+		if (!nextShow) {
 			this.terminal.hideCursor();
 		}
 		this.requestRender();
