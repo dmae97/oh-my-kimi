@@ -158,21 +158,30 @@ describe("applyExtensionFlags (single-parser flag resolution)", () => {
 		expect(args?.messages).toEqual(["just a prompt"]);
 		expect(runner.values.size).toBe(0);
 	});
-});
-describe("registerFlag built-in collision guard (P2#3)", () => {
-	it("rejects an extension flag that shadows a built-in CLI flag", async () => {
-		await expect(
-			loadExtensionFromFactory(
-				api => {
-					api.registerFlag("model", { type: "string" });
-				},
-				process.cwd(),
-				new EventBus(),
-				new ExtensionRuntime(),
-			),
-		).rejects.toThrow(/collides with a built-in/);
+	it("delivers a built-in-colliding flag's value to the runner (preserves plan-mode --plan)", () => {
+		const runner = fakeRunner({ plan: "boolean" });
+		applyExtensionFlags(runner, ["--plan", "do the task"]);
+		expect(runner.values.get("plan")).toBe(true);
 	});
-	it("allows a non-colliding extension flag", async () => {
+	it("does not deliver a colliding flag that was not passed", () => {
+		const runner = fakeRunner({ plan: "boolean" });
+		applyExtensionFlags(runner, ["just a prompt"]);
+		expect(runner.values.has("plan")).toBe(false);
+	});
+});
+describe("registerFlag with built-in-named flags (r3323473227)", () => {
+	it("loads an extension that registers a built-in-named flag without throwing", async () => {
+		const ext = await loadExtensionFromFactory(
+			api => {
+				api.registerFlag("plan", { type: "boolean", default: false });
+			},
+			process.cwd(),
+			new EventBus(),
+			new ExtensionRuntime(),
+		);
+		expect(ext.flags.has("plan")).toBe(true);
+	});
+	it("loads a non-colliding extension flag", async () => {
 		const ext = await loadExtensionFromFactory(
 			api => {
 				api.registerFlag("spawn-peer", { type: "string" });

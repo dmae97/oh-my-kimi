@@ -10,7 +10,6 @@ import type { KeyId } from "@oh-my-pi/pi-tui";
 import { hasFsCode, isEacces, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import * as Zod from "zod/v4";
 import { type ExtensionModule, extensionModuleCapability } from "../../capability/extension-module";
-import { BUILTIN_FLAG_NAMES } from "../../cli/args";
 import { loadCapability } from "../../discovery";
 import { getExtensionNameFromPath } from "../../discovery/helpers";
 import type { ExecOptions } from "../../exec/exec";
@@ -181,11 +180,6 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		name: string,
 		options: { description?: string; type: "boolean" | "string"; default?: boolean | string },
 	): void {
-		if (BUILTIN_FLAG_NAMES.has(name)) {
-			throw new Error(
-				`Extension flag "--${name}" collides with a built-in CLI flag and cannot be registered; choose a different name.`,
-			);
-		}
 		this.extension.flags.set(name, { name, extensionPath: this.extension.path, ...options });
 		if (options.default !== undefined) {
 			this.runtime.flagValues.set(name, options.default);
