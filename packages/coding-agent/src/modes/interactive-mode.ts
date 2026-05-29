@@ -2166,9 +2166,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		this.#renderPlanPreview(planContent, { append: true });
+		const contextUsage = this.session.getContextUsage();
+		const keepContextLabel =
+			contextUsage?.percent != null
+				? `Approve and keep context (${contextUsage.percent.toFixed(1)}%)`
+				: "Approve and keep context";
 		const choice = await this.showHookSelector(
 			"Plan mode - next step",
-			["Approve and execute", "Approve and compact context", "Approve and keep context", "Refine plan"],
+			["Approve and execute", "Approve and compact context", keepContextLabel, "Refine plan"],
 			{
 				helpText: this.#getPlanReviewHelpText(),
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
@@ -2178,7 +2183,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (
 			choice === "Approve and execute" ||
 			choice === "Approve and compact context" ||
-			choice === "Approve and keep context"
+			choice === keepContextLabel
 		) {
 			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
 			try {
