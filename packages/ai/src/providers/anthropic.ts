@@ -21,7 +21,11 @@ import {
 	logger,
 	readSseEvents,
 } from "@oh-my-pi/pi-utils";
-import { hasOpus47ApiRestrictions, mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
+import {
+	hasOpus47ApiRestrictions,
+	mapEffortToAnthropicAdaptiveEffort,
+	supportsMidConversationSystemMessages,
+} from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
 import type {
@@ -983,6 +987,12 @@ function getAnthropicCompat(
 		disableAdaptiveThinking: model.compat?.disableAdaptiveThinking ?? false,
 		supportsEagerToolInputStreaming: model.compat?.supportsEagerToolInputStreaming ?? true,
 		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
+		supportsMidConversationSystem:
+			model.compat?.supportsMidConversationSystem ??
+			// First-party Claude API only. Bedrock/Vertex/Foundry and other
+			// Anthropic-compatible proxies reject the role; gate auto-detection on
+			// the canonical api.anthropic.com host plus an Opus 4.8+ model id.
+			(isAnthropicApiBaseUrl(model.baseUrl) && supportsMidConversationSystemMessages(model.id)),
 	};
 }
 
@@ -2050,7 +2060,9 @@ function buildParams(
 	const { cacheControl } = getCacheControl(model, baseUrl, options?.cacheRetention);
 	const params: AnthropicSamplingParams = {
 		model: model.id,
-		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
+		// `system`-role params (Opus 4.8 mid-conversation system messages) are not
+		// yet in the SDK's `MessageParam` union; cast until it widens.
+		messages: convertAnthropicMessages(context.messages, model, isOAuthToken) as MessageParam[],
 		max_tokens: options?.maxTokens || (model.maxTokens / 3) | 0,
 		stream: true,
 	};
@@ -2229,12 +2241,24 @@ function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResul
 	return block;
 }
 
+/**
+ * Anthropic message param extended with the mid-conversation `system` role
+ * (Opus 4.8+). The SDK's `MessageParam` predates the feature and only allows
+ * `user`/`assistant`, so the system variant is modeled locally and cast back
+ * to `MessageParam[]` at the call site.
+ */
+export type AnthropicMessageParam = MessageParam | { role: "system"; content: MessageParam["content"] };
+
 export function convertAnthropicMessages(
 	messages: Message[],
 	model: Model<"anthropic-messages">,
 	isOAuthToken: boolean,
-): MessageParam[] {
-	const params: MessageParam[] = [];
+): AnthropicMessageParam[] {
+	const params: AnthropicMessageParam[] = [];
+	// Indices of params emitted from `developer` messages. After the main pass,
+	// the ones whose placement satisfies Anthropic's mid-conversation rules are
+	// upgraded from the `user` role to the authoritative `system` role.
+	const developerParamIndices: number[] = [];
 
 	const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
 
@@ -2244,29 +2268,22 @@ export function convertAnthropicMessages(
 		if (msg.role === "user" || msg.role === "developer") {
 			if (!msg.content) continue;
 
+			let content: string | ContentBlockParam[];
 			if (typeof msg.content === "string") {
-				if (msg.content.trim().length > 0) {
-					params.push({
-						role: "user",
-						content: msg.content.toWellFormed(),
-					});
-				}
+				if (msg.content.trim().length === 0) continue;
+				content = msg.content.toWellFormed();
 			} else {
 				const contentBlocks = convertContentBlocks(msg.content, model.input.includes("image"));
 				if (typeof contentBlocks === "string") {
 					if (contentBlocks.trim().length === 0) continue;
-					params.push({
-						role: "user",
-						content: contentBlocks,
-					});
-					continue;
+					content = contentBlocks;
+				} else {
+					if (contentBlocks.length === 0) continue;
+					content = contentBlocks;
 				}
-				if (contentBlocks.length === 0) continue;
-				params.push({
-					role: "user",
-					content: contentBlocks,
-				});
 			}
+			if (msg.role === "developer") developerParamIndices.push(params.length);
+			params.push({ role: "user", content });
 		} else if (msg.role === "assistant") {
 			const blocks: ContentBlockParam[] = [];
 			const hasSignedThinking = msg.content.some(
@@ -2365,6 +2382,23 @@ export function convertAnthropicMessages(
 		}
 	}
 
+	// Upgrade developer-origin params to mid-conversation `system` messages where
+	// Anthropic's placement rules allow it (Opus 4.8+ on the first-party API).
+	// Rules: a system message must immediately follow a `user` turn and must be
+	// the last entry or be followed by an `assistant` turn — never first, and
+	// never consecutive. Requiring the next param to be `assistant` (or absent)
+	// covers both the "followed by assistant / last" and "no consecutive system"
+	// constraints. Anything that does not qualify stays a `user` message.
+	if (developerParamIndices.length > 0 && getAnthropicCompat(model).supportsMidConversationSystem) {
+		for (const idx of developerParamIndices) {
+			const followsUser = idx > 0 && params[idx - 1]?.role === "user";
+			const next = params[idx + 1];
+			const lastOrBeforeAssistant = idx === params.length - 1 || next?.role === "assistant";
+			if (followsUser && lastOrBeforeAssistant) {
+				params[idx] = { role: "system", content: params[idx].content };
+			}
+		}
+	}
 	if (params.length > 0 && params[params.length - 1]?.role === "assistant") {
 		params.push({ role: "user", content: "Continue." });
 	}

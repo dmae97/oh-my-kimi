@@ -1,8 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added mid-conversation `system` message support for Anthropic Messages by upgrading eligible `developer` turns to `role: "system"` on first-party Claude API with Claude Opus 4.8+ and newer
+- Added `supportsMidConversationSystem` to Anthropic compatibility settings so consumers can opt in to or disable mid-conversation `system` role handling per model
 - Added `anthropic.claude-opus-4-8` model metadata in the model registry for Bedrock Converse streaming with effort-based thinking support through `xhigh`
 
 ### Changed

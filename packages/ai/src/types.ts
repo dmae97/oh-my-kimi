@@ -828,6 +828,13 @@ export interface AnthropicCompat {
 	supportsEagerToolInputStreaming?: boolean;
 	/** Whether long prompt-cache retention (`ttl: "1h"`) is supported. Default: true for canonical Anthropic API. */
 	supportsLongCacheRetention?: boolean;
+	/**
+	 * Whether mid-conversation `role: "system"` messages are accepted in the
+	 * `messages` array (Claude Opus 4.8+ on the first-party Claude API and
+	 * Claude Platform on AWS). When unset, auto-detected from the model id and
+	 * base URL. Not available on Bedrock, Vertex AI, or Microsoft Foundry.
+	 */
+	supportsMidConversationSystem?: boolean;
 }
 
 /**

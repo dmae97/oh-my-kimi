@@ -367,6 +367,18 @@ export function hasOpus47ApiRestrictions(modelId: string): boolean {
 	return semverGte(parsed.version, "4.7") && parsed.kind === "opus";
 }
 
+/**
+ * Mid-conversation `role: "system"` messages (system instructions appended at
+ * non-first positions in the `messages` array) are supported starting with
+ * Claude Opus 4.8. Earlier Claude models reject the role.
+ * @see https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
+ */
+export function supportsMidConversationSystemMessages(modelId: string): boolean {
+	const parsed = parseAnthropicModel(getCanonicalModelId(modelId));
+	if (!parsed) return false;
+	return parsed.kind === "opus" && semverGte(parsed.version, "4.8");
+}
+
 function anthropicModelHasRealXHighEffort<TApi extends Api>(model: ApiModel<TApi>): boolean {
 	if (model.api !== "anthropic-messages") return false;
 	const parsedModel = parseKnownModel(model.id);
