@@ -549,6 +549,44 @@ describe("kimi model detection via detectCompat", () => {
 			reasoning: true,
 		};
 	}
+	// The z.ai binary `thinking: { type }` field is Kimi's *native* surface
+	// (Moonshot / Kimi-code, matched by isMoonshotKimi). Kimi reached through an
+	// OpenAI-compatible proxy talks to the proxy's API shape, not Moonshot's
+	// backend directly, and those proxies expect the OpenAI-standard
+	// `reasoning_effort`. The generic Kimi model-id match MUST NOT default
+	// proxies to "zai": doing so regressed #827 (opencode-go strips
+	// reasoning_effort under forced tool_choice) and the Fire Pass xhigh capture
+	// (#1199), and would mis-shape 14+ gateways (Fireworks, OpenCode, Kilo,
+	// NVIDIA, Together, Vercel, …). Hosts that genuinely speak zai pin
+	// `compat.thinkingFormat` per catalog entry (e.g. kimi-code, wafer-serverless).
+	it("reserves zai for native Kimi hosts and defaults proxies to OpenAI reasoning_effort", () => {
+		// Native Moonshot surface → z.ai binary thinking.
+		expect(detectCompat(kimiMoonshotModel("kimi-k2.5")).thinkingFormat).toBe("zai");
+
+		// OpenAI-compatible proxies → reasoning_effort ("openai").
+		expect(detectCompat(kimiOpenCodeModel("kimi-k2.6")).thinkingFormat).toBe("openai");
+		const kiloKimi: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "kilo",
+			baseUrl: "https://api.kilo.ai/api/gateway",
+			id: "moonshotai/kimi-k2.6",
+			reasoning: true,
+		};
+		expect(detectCompat(kiloKimi).thinkingFormat).toBe("openai");
+
+		// OpenRouter normalizes reasoning via its own object and keeps precedence
+		// over the generic Kimi id match.
+		const openRouterKimi: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			id: "moonshotai/kimi-k2.6",
+			reasoning: true,
+		};
+		expect(detectCompat(openRouterKimi).thinkingFormat).toBe("openrouter");
+	});
 
 	// Regression for #1071: OpenCode-Go/Zen handle reasoning content server-side
 	// and reject client-supplied `reasoning_content` ("Extra inputs are not
