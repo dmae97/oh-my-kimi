@@ -508,6 +508,18 @@ describe("Editor component", () => {
 			expect(text).toBe("äöü\nÄÖÜ");
 		});
 
+		it("splits public insertText newlines into logical editor rows", () => {
+			const editor = new Editor(defaultEditorTheme);
+
+			editor.insertText("a\nb");
+
+			expect(editor.getText()).toBe("a\nb");
+			expect(editor.getCursor()).toEqual({ line: 1, col: 1 });
+			for (const renderedLine of editor.render(80)) {
+				expect(renderedLine).not.toContain("\n");
+			}
+		});
+
 		it("replaces the entire document with unicode text via setText (paste simulation)", () => {
 			const editor = new Editor(defaultEditorTheme);
 

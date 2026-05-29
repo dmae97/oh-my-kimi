@@ -1484,20 +1484,7 @@ export class Editor implements Component, Focusable {
 
 	/** Insert text at the current cursor position */
 	insertText(text: string): void {
-		this.#exitHistoryForEditing();
-		this.#resetKillSequence();
-		this.#recordUndoState();
-
-		const line = this.#state.lines[this.#state.cursorLine] || "";
-		const before = line.slice(0, this.#state.cursorCol);
-		const after = line.slice(this.#state.cursorCol);
-
-		this.#state.lines[this.#state.cursorLine] = before + text + after;
-		this.#setCursorCol(this.#state.cursorCol + text.length);
-
-		if (this.onChange) {
-			this.onChange(this.getText());
-		}
+		this.#insertTextAtCursor(text);
 	}
 
 	// All the editor methods from before...
