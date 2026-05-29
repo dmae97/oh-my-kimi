@@ -81,6 +81,7 @@ export type StatusLineSegmentId =
 	| "hostname"
 	| "cache_read"
 	| "cache_write"
+	| "cache_hit"
 	| "session_name"
 	| "usage";
 
