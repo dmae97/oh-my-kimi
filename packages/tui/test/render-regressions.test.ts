@@ -1063,6 +1063,8 @@ describe("TUI terminal-state regressions", () => {
 		const CURSOR_SEQ = /\x1b\[\?(?:25[hl]|\d+[A-G])/g;
 		const BSU = "\x1b[?2026h";
 		const ESU = "\x1b[?2026l";
+		const DISABLE_AUTOWRAP = "\x1b[?7l";
+		const ENABLE_AUTOWRAP = "\x1b[?7h";
 
 		function getWrites(term: VirtualTerminal): string[] {
 			const writes: string[] = [];
@@ -1110,6 +1112,37 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settle(term);
 				assertCursorSequencesInsideSyncBlocks(writes);
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("disables terminal autowrap inside paint writes", async () => {
+			const term = new VirtualTerminal(12, 6);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(["ABCDEFGHIJKL", "tail"]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const writes = getWrites(term);
+				component.setLines(["XXXXEFGHIJKL", "tail"]);
+				tui.requestRender();
+				await settle(term);
+
+				const paintWrites = writes.filter(write => write.includes(BSU));
+				expect(paintWrites.length).toBeGreaterThan(0);
+				for (const write of paintWrites) {
+					const begin = write.indexOf(BSU);
+					const disable = write.indexOf(DISABLE_AUTOWRAP, begin + BSU.length);
+					const enable = write.lastIndexOf(ENABLE_AUTOWRAP);
+					const end = write.lastIndexOf(ESU);
+					expect(disable).toBe(begin + BSU.length);
+					expect(enable).toBeGreaterThan(disable);
+					expect(end).toBeGreaterThan(enable);
+				}
 			} finally {
 				tui.stop();
 			}
