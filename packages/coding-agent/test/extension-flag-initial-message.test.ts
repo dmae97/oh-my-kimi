@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { parseArgs } from "../src/cli/args";
 import { applyExtensionFlags, type ExtensionFlagSink } from "../src/cli/extension-flags";
 import { buildInitialMessage } from "../src/cli/initial-message";
+import { ExtensionRuntime, loadExtensionFromFactory } from "../src/extensibility/extensions/loader";
+import { EventBus } from "../src/utils/event-bus";
 
 // Regression coverage for extension-registered flags leaking into the initial
 // prompt. The CLI parses argv twice: once at startup (before extensions load,
@@ -35,6 +37,34 @@ describe("extension flags vs initial message", () => {
 		const parsed = parseArgs(["--no-tools=true", "do the task"]);
 		expect(parsed.noTools).toBe(true);
 		expect(parsed.messages).toEqual(["do the task"]);
+	});
+	it("does not consume a flag-looking string value in space form, keeping command shape (P1#2)", () => {
+		// `--print` after an extension flag (unknown at startup) must stay the
+		// built-in print flag in BOTH parses, so the reparse cannot silently flip
+		// command behavior. Flag-looking values must be passed as `--flag=value`.
+		const parsed = parseArgs(["--spawn-peer", "--print", "hello"], extFlags);
+		expect(parsed.unknownFlags.has("spawn-peer")).toBe(false);
+		expect(parsed.print).toBe(true);
+		expect(parsed.messages).toEqual(["hello"]);
+	});
+	it("consumes a flag-looking string value in equals form", () => {
+		const parsed = parseArgs(["--spawn-peer=--print", "hello"], extFlags);
+		expect(parsed.unknownFlags.get("spawn-peer")).toBe("--print");
+		expect(parsed.print).toBeUndefined();
+		expect(parsed.messages).toEqual(["hello"]);
+	});
+	it("treats an @-prefixed string value as the flag's value, not a file arg (P1#1)", () => {
+		const parsed = parseArgs(["--spawn-peer", "@notes.md", "hello"], extFlags);
+		expect(parsed.unknownFlags.get("spawn-peer")).toBe("@notes.md");
+		expect(parsed.fileArgs).toEqual([]);
+		expect(parsed.messages).toEqual(["hello"]);
+	});
+	it("documents the P1#1 startup-parse leak: without flags, an @-value is misread as a file arg", () => {
+		// This is the startup parse (extensions not loaded). `runRootCommand` must
+		// run processFileArguments on the extension-aware parse, not this one, or
+		// `@notes.md` gets read into the prompt as a file.
+		const parsed = parseArgs(["--spawn-peer", "@notes.md", "hello"]);
+		expect(parsed.fileArgs).toEqual(["notes.md"]);
 	});
 
 	it("builds the initial prompt from the real message, not the flag value, when flags are known", () => {
@@ -127,5 +157,30 @@ describe("applyExtensionFlags (single-parser flag resolution)", () => {
 		const args = applyExtensionFlags(runner, ["just a prompt"]);
 		expect(args?.messages).toEqual(["just a prompt"]);
 		expect(runner.values.size).toBe(0);
+	});
+});
+describe("registerFlag built-in collision guard (P2#3)", () => {
+	it("rejects an extension flag that shadows a built-in CLI flag", async () => {
+		await expect(
+			loadExtensionFromFactory(
+				api => {
+					api.registerFlag("model", { type: "string" });
+				},
+				process.cwd(),
+				new EventBus(),
+				new ExtensionRuntime(),
+			),
+		).rejects.toThrow(/collides with a built-in/);
+	});
+	it("allows a non-colliding extension flag", async () => {
+		const ext = await loadExtensionFromFactory(
+			api => {
+				api.registerFlag("spawn-peer", { type: "string" });
+			},
+			process.cwd(),
+			new EventBus(),
+			new ExtensionRuntime(),
+		);
+		expect(ext.flags.has("spawn-peer")).toBe(true);
 	});
 });

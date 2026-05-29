@@ -790,16 +790,7 @@ export async function runRootCommand(
 	if (parsedArgs.noTitle || parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") {
 		Bun.env.PI_NO_TITLE = "1";
 	}
-	const { pipedInput, fileText, fileImages } = await logger.time("prepareInitialMessage", async () => {
-		const pipedInput = await readPipedInput();
-		if (parsedArgs.fileArgs.length === 0) {
-			return { pipedInput, fileText: undefined, fileImages: undefined };
-		}
-		const processed = await processFileArguments(parsedArgs.fileArgs, {
-			autoResizeImages: settingsInstance.get("images.autoResize"),
-		});
-		return { pipedInput, fileText: processed.text, fileImages: processed.images };
-	});
+	const pipedInput = await logger.time("readPipedInput", readPipedInput);
 	const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 	const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
 	const mode = parsedArgs.mode || "text";
@@ -964,10 +955,22 @@ export async function runRootCommand(
 		}
 
 		const initialArgs = applyExtensionFlags(session.extensionRunner, rawArgs) ?? parsedArgs;
+		// Process @file args from the extension-aware parse, so an extension
+		// string-flag value such as `--target @notes.md` is consumed as the flag's
+		// value rather than read as a file into the prompt. File args are not
+		// needed earlier (session setup depends only on pipedInput/mode).
+		const processedFiles =
+			initialArgs.fileArgs.length > 0
+				? await logger.time("processFileArguments", () =>
+						processFileArguments(initialArgs.fileArgs, {
+							autoResizeImages: settingsInstance.get("images.autoResize"),
+						}),
+					)
+				: undefined;
 		const { initialMessage, initialImages } = buildInitialMessage({
 			parsed: initialArgs,
-			fileText,
-			fileImages,
+			fileText: processedFiles?.text,
+			fileImages: processedFiles?.images,
 			stdinContent: pipedInput,
 		});
 
