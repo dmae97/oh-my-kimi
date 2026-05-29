@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed GLM-5.x coding-plan OpenAI-compatible streams to use a longer default watchdog window, avoiding spurious `OpenAI completions stream stalled while waiting for the next event` errors during slow `glm-5.1` thinking/output phases. ([#1494](https://github.com/can1357/oh-my-pi/issues/1494))
+- Fixed `zhipu-coding-plan` model discovery and credential validation to use the dedicated GLM Coding Plan endpoint (`https://open.bigmodel.cn/api/coding/paas/v4`) instead of the general BigModel endpoint, preventing requests from consuming ordinary account balance. ([#1494](https://github.com/can1357/oh-my-pi/issues/1494))
+
 ## [15.5.11] - 2026-05-29
 
 ### Added

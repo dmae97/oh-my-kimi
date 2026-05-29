@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
+	getOpenAIStreamIdleTimeoutMs,
 	getStreamFirstEventTimeoutMs,
 	getStreamIdleTimeoutMs,
 	iterateWithIdleTimeout,
@@ -53,6 +54,23 @@ describe("getStreamIdleTimeoutMs(fallbackMs)", () => {
 	it("treats PI_STREAM_IDLE_TIMEOUT_MS=0 as a watchdog disable", () => {
 		Bun.env.PI_STREAM_IDLE_TIMEOUT_MS = "0";
 		expect(getStreamIdleTimeoutMs(300_000)).toBeUndefined();
+	});
+});
+
+describe("getOpenAIStreamIdleTimeoutMs(fallbackMs)", () => {
+	it("returns the per-provider fallback when OpenAI env vars are unset", () => {
+		expect(getOpenAIStreamIdleTimeoutMs(600_000)).toBe(600_000);
+	});
+
+	it("lets PI_OPENAI_STREAM_IDLE_TIMEOUT_MS override the fallback before the generic env var", () => {
+		Bun.env.PI_STREAM_IDLE_TIMEOUT_MS = "42";
+		Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = "84";
+		expect(getOpenAIStreamIdleTimeoutMs(600_000)).toBe(84);
+	});
+
+	it("treats PI_OPENAI_STREAM_IDLE_TIMEOUT_MS=0 as a watchdog disable", () => {
+		Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = "0";
+		expect(getOpenAIStreamIdleTimeoutMs(600_000)).toBeUndefined();
 	});
 });
 
