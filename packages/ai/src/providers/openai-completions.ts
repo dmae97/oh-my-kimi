@@ -905,6 +905,18 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				finishPendingToolCallBlocks();
 			}
 
+			// Some OpenAI-compatible hosts stream structured `tool_calls` but report
+			// `finish_reason: "stop"` instead of `"tool_calls"`. In the OpenAI contract a
+			// tool call always means "execute and continue", so promote that
+			// natural-completion finish to `toolUse` whenever the turn produced tool-call
+			// blocks — the agent loop gates execution on the stop reason. `error`,
+			// `length`, and `aborted` are intentionally left untouched. (Anthropic's
+			// distinct `end_turn`-with-tool-calls "abandon" semantics live in its own
+			// provider and correctly keep `stop`.)
+			if (output.stopReason === "stop" && output.content.some(b => b.type === "toolCall")) {
+				output.stopReason = "toolUse";
+			}
+
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			if (firstEventTimeoutError) {
 				throw firstEventTimeoutError;

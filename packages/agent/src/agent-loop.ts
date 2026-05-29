@@ -562,9 +562,19 @@ async function runLoopBody(
 				return;
 			}
 
-			// Check for tool calls
-			const toolCalls = message.content.filter(c => c.type === "toolCall");
-			hasMoreToolCalls = toolCalls.length > 0;
+			// Tool execution is gated on the model's *stop reason* (`toolUse`), not the
+			// mere presence of toolCall blocks. Anthropic's documented agentic loop runs
+			// tools "while stop_reason == tool_use" and exits on any other reason. With
+			// adaptive/interleaved thinking a turn can emit tool calls and then end
+			// naturally (`end_turn` → `stop`) when the model decides to wrap up — those
+			// calls are abandoned. Executing them and appending tool_results yields an
+			// invalid continuation (Anthropic rejects continuing an ended turn), which is
+			// what broke interleaved tool use. Providers set `toolUse` whenever they
+			// genuinely want tools run (Anthropic on `tool_use`; OpenAI-style providers
+			// promote `stop`→`toolUse` whenever tool-call blocks are emitted).
+			type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
+			const toolCalls = message.content.filter((c): c is ToolCallContent => c.type === "toolCall");
+			hasMoreToolCalls = message.stopReason === "toolUse" && toolCalls.length > 0;
 
 			const toolResults: ToolResultMessage[] = [];
 			if (hasMoreToolCalls) {
@@ -584,6 +594,22 @@ async function runLoopBody(
 				for (const result of toolResults) {
 					currentContext.messages.push(result);
 					newMessages.push(result);
+				}
+			} else if (toolCalls.length > 0) {
+				// Model ended the turn (stopReason !== "toolUse") but left toolCall blocks
+				// behind. They were abandoned, so don't execute or continue — but pair each
+				// with a placeholder result to keep the tool_use/tool_result contract valid
+				// for any later request that replays this turn.
+				for (const toolCall of toolCalls) {
+					const result = createAbortedToolResult(toolCall, stream, "skipped");
+					currentContext.messages.push(result);
+					newMessages.push(result);
+					toolResults.push(result);
+					recordSkippedTool(telemetry, {
+						toolCallId: toolCall.id,
+						toolName: toolCall.name,
+						status: "skipped",
+					});
 				}
 			}
 
@@ -1241,10 +1267,15 @@ async function executeToolCalls(
 function createAbortedToolResult(
 	toolCall: Extract<AssistantMessage["content"][number], { type: "toolCall" }>,
 	stream: EventStream<AgentEvent, AgentMessage[]>,
-	reason: "aborted" | "error",
+	reason: "aborted" | "error" | "skipped",
 	errorMessage?: string,
 ): ToolResultMessage {
-	const message = reason === "aborted" ? "Tool execution was aborted" : "Tool execution failed due to an error";
+	const message =
+		reason === "aborted"
+			? "Tool execution was aborted"
+			: reason === "skipped"
+				? "Tool call was not executed because the assistant ended its turn"
+				: "Tool execution failed due to an error";
 	const result: AgentToolResult<any> = {
 		content: [{ type: "text", text: errorMessage ? `${message}: ${errorMessage}` : `${message}.` }],
 		details: {},
