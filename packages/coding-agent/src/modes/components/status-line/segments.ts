@@ -448,6 +448,27 @@ const cacheWriteSegment: StatusLineSegment = {
 	},
 };
 
+const cacheHitSegment: StatusLineSegment = {
+	id: "cache_hit",
+	render(ctx) {
+		const { cacheRead, cacheWrite, input } = ctx.usageStats;
+		if (!cacheRead) return { content: "", visible: false };
+
+		// DeepSeek doesn't expose cacheWrite; cache miss tokens = input.
+		// For other providers, cacheWrite tracks cache creation separately.
+		const denominator = cacheWrite > 0 ? cacheWrite : input;
+		const total = cacheRead + denominator;
+		if (!total) return { content: "", visible: false };
+
+		const rate = (cacheRead / total) * 100;
+		const rateStr = rate.toFixed(2);
+
+		const parts: string[] = [theme.icon.cache];
+		parts.push(theme.fg("statusLineSpend", `${rateStr}%`));
+		return { content: parts.join(" "), visible: true };
+	},
+};
+
 const sessionNameSegment: StatusLineSegment = {
 	id: "session_name",
 	render(ctx) {
@@ -537,6 +558,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	hostname: hostnameSegment,
 	cache_read: cacheReadSegment,
 	cache_write: cacheWriteSegment,
+	cache_hit: cacheHitSegment,
 	session_name: sessionNameSegment,
 	usage: usageSegment,
 };
