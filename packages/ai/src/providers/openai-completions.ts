@@ -92,24 +92,20 @@ function normalizeMistralToolId(id: string, isMistral: boolean): string {
 	}
 	return normalized;
 }
-
-// NanoGPT's default DeepSeek route can attempt server-side tool-call repair and
-// fail before streaming. `:tools` selects its documented tools-capable route.
-function shouldUseNanoGptToolsRoute(model: Model<"openai-completions">, context: Context): boolean {
-	return (
-		model.provider === "nanogpt" && !!context.tools?.length && /deepseek/i.test(model.id) && !model.id.includes(":")
-	);
-}
-
+// Direct DeepSeek model ids on NanoGPT are routed via the default tools-capable
+// path. We deliberately do NOT append `:tools` here: with `:tools`, NanoGPT
+// performs server-side tool-call parsing on the upstream DeepSeek stream and
+// 502s with `code: "malformed_tool_call"` on more complex tool schemas (issue
+// #1488). The default route forwards `delta.content` (including any DSML
+// envelope leaks) which `StreamMarkupHealing` heals into a structured call
+// client-side.
 function resolveOpenAICompletionsModelId(
 	model: Model<"openai-completions">,
-	context: Context,
 	options: OpenAICompletionsOptions | undefined,
 ): string {
 	if (model.provider === "firepass") return toFirepassWireModelId(model.id);
 	if (model.provider === "fireworks") return toFireworksWireModelId(model.id);
 	if (model.provider === "openrouter") return applyOpenRouterRoutingVariant(model.id, options?.openrouterVariant);
-	if (shouldUseNanoGptToolsRoute(model, context)) return `${model.id}:tools`;
 	return model.id;
 }
 
@@ -1140,7 +1136,7 @@ function buildParams(
 	// Note: Direct kimi-code provider is handled by the dedicated Kimi provider in kimi.ts.
 	const effectiveMaxTokens = options?.maxTokens ?? (isKimiModelId ? model.maxTokens : undefined);
 
-	const requestModelId = resolveOpenAICompletionsModelId(model, context, options);
+	const requestModelId = resolveOpenAICompletionsModelId(model, options);
 	const params: OpenAICompletionsParams = {
 		model: requestModelId,
 		messages,

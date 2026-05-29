@@ -659,7 +659,10 @@ describe("OpenAI completions provider DSML envelope healing", () => {
 			},
 		).result();
 
-		expect(payload?.model).toBe("deepseek/deepseek-v4-pro:tools");
+		// Issue #1488: `:tools` triggers NanoGPT's server-side tool-call parser
+		// which 502s on complex DeepSeek payloads. We route via the default
+		// path and rely on DSML healing instead.
+		expect(payload?.model).toBe("deepseek/deepseek-v4-pro");
 		expect(payload?.reasoning_effort).toBe("high");
 		expect(payload?.tools).toBeDefined();
 		const text = result.content
