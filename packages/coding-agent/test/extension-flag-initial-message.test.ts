@@ -26,6 +26,16 @@ describe("extension flags vs initial message", () => {
 		expect(parsed.unknownFlags.get("headless")).toBe(true);
 		expect(parsed.messages).toEqual(["do the task"]);
 	});
+	it("drops a boolean extension flag's value in equals form (no leak into messages)", () => {
+		const parsed = parseArgs(["--headless=true", "do the task"], extFlags);
+		expect(parsed.unknownFlags.get("headless")).toBe(true);
+		expect(parsed.messages).toEqual(["do the task"]);
+	});
+	it("drops a built-in boolean flag's value in equals form too", () => {
+		const parsed = parseArgs(["--no-tools=true", "do the task"]);
+		expect(parsed.noTools).toBe(true);
+		expect(parsed.messages).toEqual(["do the task"]);
+	});
 
 	it("builds the initial prompt from the real message, not the flag value, when flags are known", () => {
 		const parsed = parseArgs(["--spawn-peer", "reviewer", "review the diff"], extFlags);
@@ -103,6 +113,12 @@ describe("applyExtensionFlags (single-parser flag resolution)", () => {
 	it("applies a boolean flag without consuming the following message", () => {
 		const runner = fakeRunner({ headless: "boolean" });
 		const args = applyExtensionFlags(runner, ["--headless", "do the task"]);
+		expect(runner.values.get("headless")).toBe(true);
+		expect(args?.messages).toEqual(["do the task"]);
+	});
+	it("drops a boolean flag's value in equals form (regression for r3323200058)", () => {
+		const runner = fakeRunner({ headless: "boolean" });
+		const args = applyExtensionFlags(runner, ["--headless=true", "do the task"]);
 		expect(runner.values.get("headless")).toBe(true);
 		expect(args?.messages).toEqual(["do the task"]);
 	});

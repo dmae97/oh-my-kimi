@@ -68,14 +68,19 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 
 	for (let i = 0; i < args.length; i++) {
 		let arg = args[i];
+		const flagIndex = i;
 
-		// Support --flag=value syntax (e.g. --tools=ask,read)
+		// Support --flag=value syntax (e.g. --tools=ask,read). The value is
+		// spliced in as the next token so value-consuming flags pick it up via
+		// `args[++i]`; a non-consuming flag (e.g. a boolean) leaves it behind and
+		// the post-loop guard drops it so it is not mistaken for a message.
+		let equalsValueIndex = -1;
 		if (arg.startsWith("--") && arg.includes("=")) {
 			const eqIdx = arg.indexOf("=");
 			const value = arg.slice(eqIdx + 1);
 			arg = arg.slice(0, eqIdx);
-			// Insert the value so the existing "args[++i]" logic picks it up
 			args.splice(i + 1, 0, value);
+			equalsValueIndex = i + 1;
 		}
 
 		if (arg === "--help" || arg === "-h") {
@@ -217,6 +222,12 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			// Unknown flags without extensionFlags are silently ignored (first pass)
 		} else if (!arg.startsWith("-")) {
 			result.messages.push(arg);
+		}
+		// Drop an unconsumed `--flag=value` value (e.g. a boolean flag): when no
+		// branch advanced past the spliced token, remove it so it does not fall
+		// through to a later iteration and become a positional message.
+		if (equalsValueIndex !== -1 && i === flagIndex) {
+			args.splice(equalsValueIndex, 1);
 		}
 	}
 
