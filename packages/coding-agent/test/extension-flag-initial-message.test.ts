@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { parseArgs } from "../src/cli/args";
+import { applyExtensionFlags, type ExtensionFlagSink } from "../src/cli/extension-flags";
 import { buildInitialMessage } from "../src/cli/initial-message";
 
 // Regression coverage for extension-registered flags leaking into the initial
@@ -62,5 +63,53 @@ describe("extension flags vs initial message", () => {
 		expect(reparsed.unknownFlags.get("spawn-peer")).toBe("reviewer");
 		expect(reparsed.messages).toEqual(["review the diff"]);
 		expect(argv).toEqual(snapshot);
+	});
+});
+
+describe("applyExtensionFlags (single-parser flag resolution)", () => {
+	function fakeRunner(
+		flags: Record<string, "boolean" | "string">,
+	): ExtensionFlagSink & { values: Map<string, boolean | string> } {
+		const flagMap = new Map(
+			Object.entries(flags).map(([name, type]) => [name, { type }] as [string, { type: "boolean" | "string" }]),
+		);
+		const values = new Map<string, boolean | string>();
+		return {
+			values,
+			getFlags: () => flagMap,
+			setFlagValue: (name, value) => {
+				values.set(name, value);
+			},
+		};
+	}
+	it("returns null when there is no runner", () => {
+		expect(applyExtensionFlags(undefined, ["--spawn-peer", "x", "task"])).toBeNull();
+	});
+	it("returns null when the runner registered no flags", () => {
+		expect(applyExtensionFlags(fakeRunner({}), ["--whatever", "task"])).toBeNull();
+	});
+	it("applies and strips a string flag in space form", () => {
+		const runner = fakeRunner({ "spawn-peer": "string" });
+		const args = applyExtensionFlags(runner, ["--spawn-peer", "reviewer", "review the diff"]);
+		expect(runner.values.get("spawn-peer")).toBe("reviewer");
+		expect(args?.messages).toEqual(["review the diff"]);
+	});
+	it("applies and strips a string flag in equals form (regression for r3323133381)", () => {
+		const runner = fakeRunner({ "spawn-peer": "string" });
+		const args = applyExtensionFlags(runner, ["--spawn-peer=reviewer", "review the diff"]);
+		expect(runner.values.get("spawn-peer")).toBe("reviewer");
+		expect(args?.messages).toEqual(["review the diff"]);
+	});
+	it("applies a boolean flag without consuming the following message", () => {
+		const runner = fakeRunner({ headless: "boolean" });
+		const args = applyExtensionFlags(runner, ["--headless", "do the task"]);
+		expect(runner.values.get("headless")).toBe(true);
+		expect(args?.messages).toEqual(["do the task"]);
+	});
+	it("re-parses whenever flags are registered, even if none were passed (gate = registered presence)", () => {
+		const runner = fakeRunner({ "spawn-peer": "string" });
+		const args = applyExtensionFlags(runner, ["just a prompt"]);
+		expect(args?.messages).toEqual(["just a prompt"]);
+		expect(runner.values.size).toBe(0);
 	});
 });

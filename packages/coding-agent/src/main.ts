@@ -21,7 +21,8 @@ import {
 	VERSION,
 } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
-import { type Args, parseArgs } from "./cli/args";
+import type { Args } from "./cli/args";
+import { applyExtensionFlags } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { runListModelsCommand } from "./cli/list-models";
@@ -171,37 +172,6 @@ export async function submitInteractiveInput(
 	}
 }
 
-function applyExtensionFlagValues(session: AgentSession, rawArgs: string[]): Map<string, boolean | string> {
-	const extensionRunner = session.extensionRunner;
-	if (!extensionRunner) {
-		return new Map();
-	}
-
-	const extFlags = extensionRunner.getFlags();
-	if (extFlags.size > 0) {
-		for (let i = 0; i < rawArgs.length; i++) {
-			const arg = rawArgs[i];
-			if (!arg.startsWith("--")) {
-				continue;
-			}
-			const flagName = arg.slice(2);
-			const extFlag = extFlags.get(flagName);
-			if (!extFlag) {
-				continue;
-			}
-			if (extFlag.type === "boolean") {
-				extensionRunner.setFlagValue(flagName, true);
-				continue;
-			}
-			if (i + 1 < rawArgs.length) {
-				extensionRunner.setFlagValue(flagName, rawArgs[++i]);
-			}
-		}
-	}
-
-	return extensionRunner.getFlagValues();
-}
-
 type AcpSessionFactory = (cwd: string) => Promise<AgentSession>;
 
 export interface AcpSessionFactoryOptions {
@@ -244,7 +214,7 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 		if (args.parsedArgs.apiKey && !args.baseOptions.model && nextSession.model) {
 			args.authStorage.setRuntimeApiKey(nextSession.model.provider, args.parsedArgs.apiKey);
 		}
-		applyExtensionFlagValues(nextSession, args.rawArgs);
+		applyExtensionFlags(nextSession.extensionRunner, args.rawArgs);
 		return nextSession;
 	};
 }
@@ -993,9 +963,7 @@ export async function runRootCommand(
 			notifs.push({ kind: "error", message: modelRegistryError.message });
 		}
 
-		const extensionFlags = applyExtensionFlagValues(session, rawArgs);
-		const initialArgs =
-			extensionFlags.size > 0 ? parseArgs(rawArgs, session.extensionRunner?.getFlags()) : parsedArgs;
+		const initialArgs = applyExtensionFlags(session.extensionRunner, rawArgs) ?? parsedArgs;
 		const { initialMessage, initialImages } = buildInitialMessage({
 			parsed: initialArgs,
 			fileText,
