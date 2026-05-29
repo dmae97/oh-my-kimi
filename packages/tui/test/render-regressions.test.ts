@@ -67,6 +67,30 @@ function countMatches(lines: string[], pattern: RegExp): number {
 	return count;
 }
 
+async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
+	const saved = new Map<string, string | undefined>();
+	for (const key of Object.keys(patch)) {
+		saved.set(key, Bun.env[key]);
+		const value = patch[key];
+		if (value === undefined) {
+			delete Bun.env[key];
+		} else {
+			Bun.env[key] = value;
+		}
+	}
+	try {
+		return await run();
+	} finally {
+		for (const [key, value] of saved) {
+			if (value === undefined) {
+				delete Bun.env[key];
+			} else {
+				Bun.env[key] = value;
+			}
+		}
+	}
+}
+
 describe("TUI terminal-state regressions", () => {
 	let monotonicNow = 0;
 	// Keep TUI's 16ms render throttle deterministic without sleeping a real frame per render.
@@ -1058,6 +1082,56 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 	});
+	describe("hardware cursor terminal fallback", () => {
+		it("falls back to the software cursor on Ghostty even when hardware cursor was requested", async () => {
+			await withEnvPatch(
+				{
+					TERM_PROGRAM: "ghostty",
+					TERM: "xterm-ghostty",
+					GHOSTTY_RESOURCES_DIR: "/tmp/ghostty",
+					GHOSTTY_SURFACE_ID: "0x1",
+					PI_FORCE_HARDWARE_CURSOR: undefined,
+				},
+				() => {
+					const tui = new TUI(new VirtualTerminal(20, 4), true);
+					expect(tui.getShowHardwareCursor()).toBe(false);
+				},
+			);
+		});
+
+		it("keeps the hardware cursor available outside Ghostty", async () => {
+			await withEnvPatch(
+				{
+					TERM_PROGRAM: "Apple_Terminal",
+					TERM: "xterm-256color",
+					GHOSTTY_RESOURCES_DIR: undefined,
+					GHOSTTY_SURFACE_ID: undefined,
+					PI_FORCE_HARDWARE_CURSOR: undefined,
+				},
+				() => {
+					const tui = new TUI(new VirtualTerminal(20, 4), true);
+					expect(tui.getShowHardwareCursor()).toBe(true);
+				},
+			);
+		});
+
+		it("allows explicit Ghostty hardware cursor opt-in for terminal-side testing", async () => {
+			await withEnvPatch(
+				{
+					TERM_PROGRAM: "ghostty",
+					TERM: "xterm-ghostty",
+					GHOSTTY_RESOURCES_DIR: "/tmp/ghostty",
+					GHOSTTY_SURFACE_ID: "0x1",
+					PI_FORCE_HARDWARE_CURSOR: "1",
+				},
+				() => {
+					const tui = new TUI(new VirtualTerminal(20, 4), true);
+					expect(tui.getShowHardwareCursor()).toBe(true);
+				},
+			);
+		});
+	});
+
 	describe("cursor escape sequences stay inside synchronized output blocks", () => {
 		// Cursor placement sequences that must not leak outside \x1b[?2026h…\x1b[?2026l
 		const CURSOR_SEQ = /\x1b\[\?(?:25[hl]|\d+[A-G])/g;

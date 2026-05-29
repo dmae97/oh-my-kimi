@@ -144,6 +144,24 @@ function isTermuxSession(): boolean {
 	return Boolean(process.env.TERMUX_VERSION);
 }
 
+function isGhosttySession(): boolean {
+	return (
+		Bun.env.TERM_PROGRAM?.toLowerCase() === "ghostty" ||
+		Bun.env.TERM?.toLowerCase() === "xterm-ghostty" ||
+		Boolean(Bun.env.GHOSTTY_RESOURCES_DIR || Bun.env.GHOSTTY_SURFACE_ID)
+	);
+}
+
+function resolveHardwareCursorPreference(enabled: boolean): boolean {
+	if (!enabled) return false;
+	// Ghostty currently leaves bar-cursor afterimages when a TUI repeatedly
+	// repaints the row under a visible hardware cursor. Fall back to the
+	// software cursor there unless a developer explicitly opts back in while
+	// testing a terminal-side fix.
+	if (isGhosttySession() && !$flag("PI_FORCE_HARDWARE_CURSOR")) return false;
+	return true;
+}
+
 /** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
 function isMultiplexerSession(): boolean {
 	return Boolean(Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ);
@@ -316,9 +334,9 @@ export class TUI extends Container {
 	constructor(terminal: Terminal, showHardwareCursor?: boolean) {
 		super();
 		this.terminal = terminal;
-		if (showHardwareCursor !== undefined) {
-			this.#showHardwareCursor = showHardwareCursor;
-		}
+		this.#showHardwareCursor = resolveHardwareCursorPreference(
+			showHardwareCursor === undefined ? this.#showHardwareCursor : showHardwareCursor,
+		);
 	}
 
 	get fullRedraws(): number {
@@ -330,9 +348,10 @@ export class TUI extends Container {
 	}
 
 	setShowHardwareCursor(enabled: boolean): void {
-		if (this.#showHardwareCursor === enabled) return;
-		this.#showHardwareCursor = enabled;
-		if (!enabled) {
+		const next = resolveHardwareCursorPreference(enabled);
+		if (this.#showHardwareCursor === next) return;
+		this.#showHardwareCursor = next;
+		if (!next) {
 			this.terminal.hideCursor();
 		}
 		this.requestRender();
