@@ -17,9 +17,10 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, tryParseJson } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger, tryParseJson } from "@oh-my-pi/pi-utils";
 import { readDirEntries, readFile } from "../capability/fs";
 import type { LoadContext } from "../capability/types";
+import { getEnabledPlugins } from "../extensibility/plugins/loader";
 import { expandTilde } from "../tools/path-utils";
 
 /** A resolved extension package directory wired into the discovery surfaces. */
@@ -122,24 +123,31 @@ async function isDirectory(p: string): Promise<boolean> {
  * 1. CLI roots injected via {@link injectOmpExtensionCliRoots}
  * 2. Project `<cwd>/.omp/settings.json#extensions`
  * 3. User `~/.omp/agent/settings.json#extensions`
+ * 4. Enabled plugins installed under `<plugins>/node_modules/` (e.g. via
+ *    `omp install <pkg>` / `omp plugin install` / `omp plugin link`)
  *
  * Only entries that resolve to a directory on disk are returned; file
  * entrypoints contribute zero sub-discovery surface and are filtered out.
+ * Installed-plugin enumeration failures (missing lockfile, unreadable
+ * `package.json`, etc.) are logged at `debug` and degrade gracefully — the
+ * other sources still surface.
  */
 export async function listOmpExtensionRoots(ctx: LoadContext): Promise<OmpExtensionRoot[]> {
 	const { project, user } = scopeDirs(ctx);
-	const [projectExtensions, userExtensions] = await Promise.all([
+	const [projectExtensions, userExtensions, installedPlugins] = await Promise.all([
 		readSettingsExtensions(path.join(project, "settings.json")),
 		readSettingsExtensions(path.join(user, "settings.json")),
+		listInstalledPluginRoots(ctx),
 	]);
 
 	const candidates: InjectedRoot[] = [
 		...injectedCliRoots,
 		...projectExtensions.map((raw): InjectedRoot => ({ path: resolveAgainst(raw, ctx), level: "project" })),
 		...userExtensions.map((raw): InjectedRoot => ({ path: resolveAgainst(raw, ctx), level: "user" })),
+		...installedPlugins,
 	];
 
-	// First-seen-wins dedup preserves CLI > project > user precedence.
+	// First-seen-wins dedup preserves CLI > project-settings > user-settings > installed precedence.
 	const seen = new Set<string>();
 	const unique: InjectedRoot[] = [];
 	for (const candidate of candidates) {
@@ -156,4 +164,27 @@ export async function listOmpExtensionRoots(ctx: LoadContext): Promise<OmpExtens
 		roots.push({ path: p, level, name: path.basename(p) });
 	}
 	return roots;
+}
+
+/**
+ * Enumerate every enabled installed plugin's package directory so its
+ * conventional `skills/`, `hooks/`, `tools/`, `commands/`, `rules/`,
+ * `prompts/`, and `.mcp.json` are wired into discovery — mirrors how
+ * `getAllPluginExtensionPaths` already feeds the extension factory loader.
+ *
+ * Marketplace and `omp plugin link` installs write to the plugin manager's
+ * `node_modules` (or symlink into it) rather than to `extensions:` in
+ * settings; without this branch the sub-discovery provider would still miss
+ * everything those install paths produce.
+ */
+async function listInstalledPluginRoots(ctx: LoadContext): Promise<InjectedRoot[]> {
+	try {
+		const plugins = await getEnabledPlugins(ctx.cwd, { home: ctx.home });
+		// Installed plugins are always user-scope; project disablement is already
+		// honored by `getEnabledPlugins` via `loadProjectOverrides`.
+		return plugins.map(({ path: p }) => ({ path: p, level: "user" }));
+	} catch (err) {
+		logger.debug("listInstalledPluginRoots: enumeration failed", { error: String(err) });
+		return [];
+	}
 }

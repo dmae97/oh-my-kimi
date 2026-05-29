@@ -176,3 +176,42 @@ test(".mcp.json with bare entries (no command/url) records a warning and is skip
 	expect(result.items.map(s => (s as { name: string }).name)).toEqual(["ok"]);
 	expect((result.warnings ?? []).some(w => w.includes('"broken"'))).toBe(true);
 });
+
+test("installed plugins under `<plugins>/node_modules/` are surfaced (e.g. via `omp plugin link`/`install`)", async () => {
+	// Simulate what `plugin install` / `plugin link` produces: a plugins root
+	// with `package.json#dependencies` and a populated `node_modules/<pkg>/`.
+	const pluginsDir = path.join(home, ".omp", "plugins");
+	const nodeModules = path.join(pluginsDir, "node_modules");
+	const installed = path.join(nodeModules, "my-installed-ext");
+	fs.mkdirSync(installed, { recursive: true });
+	fs.cpSync(ext, installed, { recursive: true });
+	writeFile(
+		path.join(pluginsDir, "package.json"),
+		JSON.stringify({ name: "omp-plugins", dependencies: { "my-installed-ext": "1.0.0" } }),
+	);
+	// Plugin's own package.json must carry an `omp`/`pi` manifest for the
+	// loader to recognise it; the buildExtensionPackage fixture already wrote
+	// one with `omp.extensions`, which is sufficient.
+
+	const skills = await loadFromPlugin<{ name: string; path: string }>(skillCapability.id, ctx());
+	const found = skills.find(s => s.name === "my-skill" && s.path.includes("my-installed-ext"));
+	expect(found).toBeDefined();
+});
+
+test("disabled installed plugins do not contribute sub-discovery", async () => {
+	const pluginsDir = path.join(home, ".omp", "plugins");
+	const installed = path.join(pluginsDir, "node_modules", "my-disabled-ext");
+	fs.mkdirSync(installed, { recursive: true });
+	fs.cpSync(ext, installed, { recursive: true });
+	writeFile(
+		path.join(pluginsDir, "package.json"),
+		JSON.stringify({ name: "omp-plugins", dependencies: { "my-disabled-ext": "1.0.0" } }),
+	);
+	writeFile(
+		path.join(pluginsDir, "omp-plugins.lock.json"),
+		JSON.stringify({ plugins: { "my-disabled-ext": { enabled: false } }, settings: {} }),
+	);
+
+	const skills = await loadFromPlugin<{ name: string; path: string }>(skillCapability.id, ctx());
+	expect(skills.find(s => s.path.includes("my-disabled-ext"))).toBeUndefined();
+});

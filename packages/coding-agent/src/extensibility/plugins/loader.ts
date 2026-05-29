@@ -19,9 +19,14 @@ installLegacyPiSpecifierShim();
 
 /**
  * Load plugin runtime config from lock file.
+ *
+ * `home` controls which `<plugins>/omp-plugins.lock.json` is read — pass it
+ * through whenever the caller is loading plugins for a tempdir-rooted
+ * scenario (tests, discovery sub-surfaces that need to mirror an alternate
+ * `LoadContext.home`).
  */
-async function loadRuntimeConfig(): Promise<PluginRuntimeConfig> {
-	const lockPath = getPluginsLockfile();
+async function loadRuntimeConfig(home?: string): Promise<PluginRuntimeConfig> {
+	const lockPath = getPluginsLockfile(home);
 	try {
 		return await Bun.file(lockPath).json();
 	} catch (err) {
@@ -46,10 +51,15 @@ async function loadProjectOverrides(cwd: string): Promise<ProjectPluginOverrides
 }
 /**
  * Get list of enabled plugins with their resolved configurations.
- * Respects both global runtime config and project overrides.
+ *
+ * Respects both global runtime config and project overrides. The optional
+ * `home` parameter pins the plugins root for callers that need to enumerate
+ * plugins relative to a non-default home (tests with a tempdir, discovery
+ * loaders threaded with `LoadContext.home`).
  */
-export async function getEnabledPlugins(cwd: string): Promise<InstalledPlugin[]> {
-	const pkgJsonPath = getPluginsPackageJson();
+export async function getEnabledPlugins(cwd: string, opts: { home?: string } = {}): Promise<InstalledPlugin[]> {
+	const { home } = opts;
+	const pkgJsonPath = getPluginsPackageJson(home);
 	let pkg: { dependencies?: Record<string, string> };
 	try {
 		pkg = await Bun.file(pkgJsonPath).json();
@@ -58,13 +68,13 @@ export async function getEnabledPlugins(cwd: string): Promise<InstalledPlugin[]>
 		throw err;
 	}
 
-	const nodeModulesPath = getPluginsNodeModules();
+	const nodeModulesPath = getPluginsNodeModules(home);
 	if (!fs.existsSync(nodeModulesPath)) {
 		return [];
 	}
 
 	const deps = pkg.dependencies || {};
-	const runtimeConfig = await loadRuntimeConfig();
+	const runtimeConfig = await loadRuntimeConfig(home);
 	const projectOverrides = await loadProjectOverrides(cwd);
 	const plugins: InstalledPlugin[] = [];
 	for (const [name] of Object.entries(deps)) {
