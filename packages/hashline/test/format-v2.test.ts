@@ -5,79 +5,59 @@ function applyPatch(text: string, diff: string): string {
 	return applyEdits(text, parsePatch(diff).edits).text;
 }
 
-describe("hashline format v2", () => {
-	it("emits literal and repeat body rows in textual order", () => {
+describe("hashline format v4", () => {
+	it("replaces a concrete range with literal body rows in textual order", () => {
 		const text = "a\nb\nc";
-		const diff = ["2 2", "+before", "&1..2", "+after"].join("\n");
+		const diff = ["replace 2..2:", "+before", "+after"].join("\n");
 
-		expect(applyPatch(text, diff)).toBe("a\nbefore\na\nb\nafter\nc");
+		expect(applyPatch(text, diff)).toBe("a\nbefore\nafter\nc");
 	});
 
-	it("repeats a single source line with explicit A-A syntax", () => {
+	it("deletes a single source line", () => {
 		const text = "a\nb\nc";
-		const diff = ["2 2", "&3..3"].join("\n");
-
-		expect(applyPatch(text, diff)).toBe("a\nc\nc");
+		expect(applyPatch(text, "delete 2")).toBe("a\nc");
 	});
 
-	it("keeps the file unchanged when a repeat covers the anchored range", () => {
+	it("deletes a concrete range", () => {
 		const text = "a\nb\nc\nd";
-		const diff = ["2 3", "&2..3"].join("\n");
-
-		expect(applyPatch(text, diff)).toBe(text);
+		expect(applyPatch(text, "delete 2..3")).toBe("a\nd");
 	});
 
-	it("deletes a concrete range via an empty hunk body", () => {
-		const text = "a\nb\nc\nd";
-		expect(applyPatch(text, "2 3")).toBe("a\nd");
-	});
-
-	it("empty body at a concrete range deletes the range (no blank-line insertion)", () => {
+	it("inserts before and after concrete anchors", () => {
 		const text = "a\nb\nc";
-		expect(applyPatch(text, "2 2")).toBe("a\nc");
+		const diff = ["insert before 2:", "+before", "insert after 2:", "+after"].join("\n");
+		expect(applyPatch(text, diff)).toBe("a\nbefore\nb\nafter\nc");
 	});
 
-	it("empty body at BOF/EOF is a no-op (nothing inserted)", () => {
+	it("inserts at head and tail", () => {
 		const text = "a\nb";
-		expect(applyPatch(text, "BOF")).toBe(text);
-		expect(applyPatch(text, "EOF")).toBe(text);
+		expect(applyPatch(text, "insert head:\n+HEAD")).toBe("HEAD\na\nb");
+		expect(applyPatch(text, "insert tail:\n+TAIL")).toBe("a\nb\nTAIL");
 	});
 
-	it("accepts `^A` repeat shorthand as `^A-A`", () => {
-		const text = "a\nb\nc";
-		// `^A` mirrors `^A-A`; we use it to keep line 2 unchanged while
-		// also targeting it.
-		expect(applyPatch(text, "2 2\n&2")).toBe(text);
+	it("rejects empty body-bearing hunks", () => {
+		expect(() => parsePatch("replace 2..2:")).toThrow(/needs at least one/);
+		expect(() => parsePatch("insert head:")).toThrow(/needs at least one/);
 	});
 
-	it("auto-pipes bare body rows (legacy sigils flow through as literal text)", () => {
-		// `↑`/`↓` are no longer reserved sigils; bare body rows are
-		// auto-prefixed with `|` as plain literal text.
+	it("rejects body rows under delete", () => {
+		expect(() => parsePatch("delete 2\n+replacement")).toThrow(/does not take body rows/);
+	});
+
+	it("auto-pipes bare body rows as literal text", () => {
 		const text = "a\nb\nc";
-		expect(applyPatch(text, "2 2\n↑x")).toBe("a\n↑x\nc");
-		expect(applyPatch(text, "2 2\n↓x")).toBe("a\n↓x\nc");
-		// And the warning is surfaced.
-		const { warnings } = parsePatch("2 2\n↑x");
+		expect(applyPatch(text, "replace 2..2:\nraw")).toBe("a\nraw\nc");
+		const { warnings } = parsePatch("replace 2..2:\nraw");
 		expect(warnings.some(w => /Auto-prefixed bare body row/.test(w))).toBe(true);
 	});
 
-	it("accepts `-A` and `-A..B` as standalone delete ops", () => {
-		// `-A..B` (and `-A` shorthand) on its own line is the canonical
-		// delete op in the new grammar.
-		const text = "a\nb\nc\nd\ne\nf\ng";
-		expect(applyPatch(text, "5 5")).toBe("a\nb\nc\nd\nf\ng");
-		expect(applyPatch(text, "5 7")).toBe("a\nb\nc\nd");
-	});
-
-	it("validates repeat ranges against file bounds", () => {
-		const edits = parsePatch("1 1\n&4..4").edits;
-
+	it("validates insert anchors against file bounds", () => {
+		const edits = parsePatch("insert before 4:\n+x").edits;
 		expect(() => applyEdits("a\nb", edits)).toThrow(/Line 4 does not exist/);
 	});
 
-	it("does not flush a streaming pending empty block", () => {
-		const result = parsePatchStreaming("5 5\n");
-
+	it("does not flush a streaming pending empty replace block", () => {
+		const result = parsePatchStreaming("replace 5..5:\n");
 		expect(result.edits).toEqual([]);
 	});
 });

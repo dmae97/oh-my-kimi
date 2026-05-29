@@ -2,9 +2,13 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Changed hashline syntax to verb-based v4: body-bearing ops are `replace N..M:`, `insert before N:`, `insert after N:`, `insert head:`, and `insert tail:`, while bodyless `delete N..M` handles deletion. Removed `>A..B` repeat rows and the old `prepend:` / `append:` virtual insert headers; `-` rows remain rejected with a teaching error.
+
 ### Added
 
-- Re-introduced balance-validated boundary repair in `applyEdits`. A replacement hunk (`A B` + body) is normalized so its payload preserves the deleted region's delimiter balance: when the body restates a closing delimiter that survives just outside the range (duplicate `}` / `);` / `]`) the echo is dropped, and when the range deletes a structural closer the body never restates (missing closer) the closer is spared instead of deleted. A repair fires only when one boundary operation drives the per-channel `()` / `[]` / `{}` imbalance to exactly zero while leaving surrounding text byte-identical (single-line ops are limited to pure structural-closer lines), so balance-preserving edits and intentional balanced duplicates are never touched. Bracket counting skips strings, template literals, and comments. Each repair surfaces a `delimiter-balance` warning through `ApplyResult.warnings`.
+- Re-introduced balance-validated boundary repair in `applyEdits`. A replacement hunk (`replace N..M:` + body) is normalized so its payload preserves the deleted region's delimiter balance: when the body restates a closing delimiter that survives just outside the range (duplicate `}` / `);` / `]`) the echo is dropped, and when the range deletes a structural closer the body never restates (missing closer) the closer is spared instead of deleted. A repair fires only when one boundary operation drives the per-channel `()` / `[]` / `{}` imbalance to exactly zero while leaving surrounding text byte-identical (single-line ops are limited to pure structural-closer lines), so balance-preserving edits and intentional balanced duplicates are never touched. Bracket counting skips strings, template literals, and comments. Each repair surfaces a `delimiter-balance` warning through `ApplyResult.warnings`.
 
 ## [15.5.12] - 2026-05-29
 

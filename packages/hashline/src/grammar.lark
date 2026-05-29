@@ -7,16 +7,16 @@ file_header: "¶" filename ("#" file_hash)? LF
 file_hash: /[0-9A-F]{3}/
 filename: /[^\s#]+/
 
-hunk: hunk_header op*
-hunk_header: anchor LF
-op: emit_op | repeat_op
-emit_op:   "+" /(.*)/ LF
-repeat_op: "&" body_range LF
+hunk: body_hunk | delete_hunk
+body_hunk:   body_header emit_op+
+delete_hunk: "delete " header_range LF
+body_header: (replace_anchor | insert_anchor) LF
+replace_anchor: "replace " header_range ":"
+insert_anchor:  "insert " insert_pos ":"
+insert_pos: "before " LID | "after " LID | "head" | "tail"
+emit_op: "+" /(.*)/ LF
 
-anchor: header_range | "BOF" | "EOF"
-header_range: LID WS LID
-body_range: LID (".." LID)?
+header_range: LID ".." LID
 LID: /[1-9]\d*/
-WS: /[ \t]+/
 
 %import common.LF

@@ -25,20 +25,12 @@ function isReplacementInsert(edit: Edit): edit is InsertEdit & { mode: "replacem
 	return edit.kind === "insert" && edit.mode === "replacement";
 }
 
-function rangeAnchors(start: Anchor, end: Anchor): Anchor[] {
-	const anchors: Anchor[] = [];
-	for (let line = start.line; line <= end.line; line++) anchors.push({ line });
-	return anchors;
-}
-
 function getCursorAnchors(cursor: Cursor): Anchor[] {
-	return cursor.kind === "before_anchor" ? [cursor.anchor] : [];
+	return cursor.kind === "before_anchor" || cursor.kind === "after_anchor" ? [cursor.anchor] : [];
 }
 
 function getEditAnchors(edit: Edit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
-	if (edit.kind === "repeat")
-		return [...getCursorAnchors(edit.cursor), ...rangeAnchors(edit.range.start, edit.range.end)];
 	return getCursorAnchors(edit.cursor);
 }
 
@@ -56,42 +48,9 @@ function validateLineBounds(edits: AppliedEdit[], fileLines: string[]): void {
 	}
 }
 
-function assertLineExists(line: number, fileLines: string[]): void {
-	if (line < 1 || line > fileLines.length) {
-		throw new Error(`Line ${line} does not exist (file has ${fileLines.length} lines)`);
-	}
-}
-
 function cloneAppliedEdit(edit: AppliedEdit, index: number): AppliedEdit {
 	if (edit.kind === "delete") return { ...edit, anchor: { ...edit.anchor }, index };
 	return { ...edit, cursor: cloneCursor(edit.cursor), index };
-}
-
-function expandRepeatEdits(edits: Edit[], fileLines: string[]): AppliedEdit[] {
-	const expanded: AppliedEdit[] = [];
-	for (const edit of edits) {
-		if (edit.kind !== "repeat") {
-			expanded.push(cloneAppliedEdit(edit, expanded.length));
-			continue;
-		}
-		if (edit.range.end.line < edit.range.start.line) {
-			throw new Error(
-				`line ${edit.lineNum}: range ${edit.range.start.line}-${edit.range.end.line} ends before it starts.`,
-			);
-		}
-		for (let line = edit.range.start.line; line <= edit.range.end.line; line++) {
-			assertLineExists(line, fileLines);
-			expanded.push({
-				kind: "insert",
-				cursor: cloneCursor(edit.cursor),
-				text: fileLines[line - 1] ?? "",
-				lineNum: edit.lineNum,
-				index: expanded.length,
-				...(edit.mode === undefined ? {} : { mode: edit.mode }),
-			});
-		}
-	}
-	return expanded;
 }
 
 function insertAtStart(fileLines: string[], lineOrigins: LineOrigin[], lines: string[]): void {
@@ -127,7 +86,7 @@ function bucketAnchorEditsByLine(edits: IndexedEdit[]): Map<number, IndexedEdit[
 		const line =
 			entry.edit.kind === "delete"
 				? entry.edit.anchor.line
-				: entry.edit.cursor.kind === "before_anchor"
+				: entry.edit.cursor.kind === "before_anchor" || entry.edit.cursor.kind === "after_anchor"
 					? entry.edit.cursor.anchor.line
 					: 0;
 		const bucket = byLine.get(line);
@@ -260,7 +219,7 @@ interface ReplacementGroup {
  * Detect a replacement group starting at `start`: a run of `before_anchor`
  * replacement inserts sharing one source op line, immediately followed by the
  * contiguous range deletes for that same op. Mirrors how the parser lowers an
- * `A B` hunk with a body.
+ * `replace N..M:` hunk with a body.
  */
 function findReplacementGroup(edits: readonly AppliedEdit[], start: number): ReplacementGroup | undefined {
 	const first = edits[start];
@@ -459,11 +418,11 @@ export function applyEdits(text: string, edits: Edit[]): ApplyResult {
 		if (firstChangedLine === undefined || line < firstChangedLine) firstChangedLine = line;
 	};
 
-	const targetEdits = expandRepeatEdits(edits, fileLines);
+	const targetEdits = edits.map((edit, index) => cloneAppliedEdit(edit, index));
 	validateLineBounds(targetEdits, fileLines);
 	const { edits: repaired, warnings } = repairBoundaryBalance(targetEdits, fileLines);
 
-	// Partition edits into BOF, EOF, and anchor-targeted buckets.
+	// Partition edits into bof, eof, and anchor-targeted buckets.
 	const bofLines: string[] = [];
 	const eofLines: string[] = [];
 	const anchorEdits: IndexedEdit[] = [];
@@ -486,28 +445,38 @@ export function applyEdits(text: string, edits: Edit[]): ApplyResult {
 
 		const idx = line - 1;
 		const currentLine = fileLines[idx] ?? "";
-		const insertLines: string[] = [];
+		const beforeInsertLines: string[] = [];
+		const afterInsertLines: string[] = [];
 		const replacementLines: string[] = [];
 		let deleteLine = false;
 
 		for (const { edit } of bucket) {
 			if (isReplacementInsert(edit)) {
 				replacementLines.push(edit.text);
+			} else if (edit.kind === "insert" && edit.cursor.kind === "after_anchor") {
+				afterInsertLines.push(edit.text);
 			} else if (edit.kind === "insert") {
-				insertLines.push(edit.text);
+				beforeInsertLines.push(edit.text);
 			} else if (edit.kind === "delete") {
 				deleteLine = true;
 			}
 		}
-		if (insertLines.length === 0 && replacementLines.length === 0 && !deleteLine) continue;
+		if (
+			beforeInsertLines.length === 0 &&
+			replacementLines.length === 0 &&
+			afterInsertLines.length === 0 &&
+			!deleteLine
+		)
+			continue;
 
 		const replacement = deleteLine
-			? [...insertLines, ...replacementLines]
-			: [...insertLines, ...replacementLines, currentLine];
+			? [...beforeInsertLines, ...replacementLines, ...afterInsertLines]
+			: [...beforeInsertLines, ...replacementLines, currentLine, ...afterInsertLines];
 		const origins: LineOrigin[] = [];
-		for (let i = 0; i < insertLines.length; i++) origins.push("insert");
+		for (let i = 0; i < beforeInsertLines.length; i++) origins.push("insert");
 		for (let i = 0; i < replacementLines.length; i++) origins.push(deleteLine ? "replacement" : "insert");
 		if (!deleteLine) origins.push(lineOrigins[idx] ?? "original");
+		for (let i = 0; i < afterInsertLines.length; i++) origins.push("insert");
 
 		fileLines.splice(idx, 1, ...replacement);
 		lineOrigins.splice(idx, 1, ...origins);

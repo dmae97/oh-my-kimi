@@ -47,7 +47,7 @@ describe("write tool hashline header", () => {
 		await fs.rm(tmpDir, { recursive: true, force: true });
 	});
 
-	it("prepends a fresh ¶path#TAG header that maps to the written content", async () => {
+	it("insert heads a fresh ¶path#TAG header that maps to the written content", async () => {
 		const filePath = path.join(tmpDir, "module.ts");
 		const session = createSession(tmpDir);
 		const tool = new WriteTool(session);
@@ -82,7 +82,7 @@ describe("write tool hashline header", () => {
 
 		// Apply a hashline patch immediately, using only the tag the write tool
 		// returned — no intervening `read`.
-		const patchInput = `${headerLine}\n1 1\n+export const enabled = true;\n`;
+		const patchInput = `${headerLine}\nreplace 1..1:\n+export const enabled = true;\n`;
 		const patch = Patch.parse(patchInput, { cwd: tmpDir });
 		expect(patch.sections).toHaveLength(1);
 

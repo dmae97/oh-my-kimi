@@ -4,16 +4,30 @@
  * tokenizer, the prompt, and the formal grammar.
  */
 
+import type { Cursor } from "./types";
+
 /** File-section header prefix: `¶path#hash`. */
 export const HL_FILE_PREFIX = "¶";
 
 /** Payload sigil for literal body rows. */
 export const HL_PAYLOAD_REPLACE = "+";
-/** Payload sigil for body rows that repeat original file lines. */
-export const HL_PAYLOAD_REPEAT = "&";
 
-/** All hashline payload sigils, concatenated for fast membership tests. */
-export const HL_PAYLOAD_CHARS = `${HL_PAYLOAD_REPLACE}${HL_PAYLOAD_REPEAT}`;
+/** Hunk-header keyword for concrete line replacement. */
+export const HL_REPLACE_KEYWORD = "replace";
+/** Hunk-header keyword for concrete line deletion. */
+export const HL_DELETE_KEYWORD = "delete";
+/** Hunk-header keyword for insertion operations. */
+export const HL_INSERT_KEYWORD = "insert";
+/** Insert position keyword for inserting before a concrete line. */
+export const HL_INSERT_BEFORE = "before";
+/** Insert position keyword for inserting after a concrete line. */
+export const HL_INSERT_AFTER = "after";
+/** Insert position keyword for inserting at the start of the file. */
+export const HL_INSERT_HEAD = "head";
+/** Insert position keyword for inserting at the end of the file. */
+export const HL_INSERT_TAIL = "tail";
+/** Hunk-header terminator for body-bearing operations. */
+export const HL_HEADER_COLON = ":";
 
 /** Separator between a hashline file path and its opaque snapshot tag. */
 export const HL_FILE_HASH_SEP = "#";
@@ -28,28 +42,35 @@ function regexEscape(str: string): string {
 	return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Decoration prefix that may precede a line number in tool output:
- * `*` (match line), `>` (context line in grep). Any combination, in any
- * order, surrounded by optional whitespace. Output formatters emit at most
- * one decoration per line; the parser stays liberal because it accepts
- * whatever the model echoes back.
- */
-export const HL_ANCHOR_DECORATION_RE_RAW = `\\s*[>*]*\\s*`;
-
-/** Capture-group regex source for a decorated bare line-number anchor. */
-export const HL_ANCHOR_RE_RAW = `${HL_ANCHOR_DECORATION_RE_RAW}(\\d+)`;
-
 /** Bare positive line-number Lid (no decorations, no captures, no anchors). */
 export const HL_LINE_RE_RAW = `[1-9]\\d*`;
 
 /** Capture-group form of {@link HL_LINE_RE_RAW}. */
 export const HL_LINE_CAPTURE_RE_RAW = `(${HL_LINE_RE_RAW})`;
 
-/** Regex for repeat payload rows (`&A..B`). */
-export const HL_PAYLOAD_REPEAT_RE = new RegExp(
-	`^\\${HL_PAYLOAD_REPEAT}${HL_LINE_CAPTURE_RE_RAW},${HL_LINE_CAPTURE_RE_RAW}$`,
-);
+/** Format a concrete replacement hunk header. */
+export function formatReplaceHeader(start: number, end: number): string {
+	return `${HL_REPLACE_KEYWORD} ${start}${HL_RANGE_SEP}${end}${HL_HEADER_COLON}`;
+}
+
+/** Format a concrete deletion hunk header. */
+export function formatDeleteHeader(start: number, end = start): string {
+	return start === end ? `${HL_DELETE_KEYWORD} ${start}` : `${HL_DELETE_KEYWORD} ${start}${HL_RANGE_SEP}${end}`;
+}
+
+/** Format an insertion hunk header for a cursor position. */
+export function formatInsertHeader(cursor: Cursor): string {
+	switch (cursor.kind) {
+		case "before_anchor":
+			return `${HL_INSERT_KEYWORD} ${HL_INSERT_BEFORE} ${cursor.anchor.line}${HL_HEADER_COLON}`;
+		case "after_anchor":
+			return `${HL_INSERT_KEYWORD} ${HL_INSERT_AFTER} ${cursor.anchor.line}${HL_HEADER_COLON}`;
+		case "bof":
+			return `${HL_INSERT_KEYWORD} ${HL_INSERT_HEAD}${HL_HEADER_COLON}`;
+		case "eof":
+			return `${HL_INSERT_KEYWORD} ${HL_INSERT_TAIL}${HL_HEADER_COLON}`;
+	}
+}
 
 /** Number of hex characters in an opaque snapshot tag. */
 export const HL_FILE_HASH_LENGTH = 3;

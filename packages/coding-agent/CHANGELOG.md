@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Changed hashline edit syntax to verb-based v4: body-bearing ops are `replace N..M:`, `insert before N:`, `insert after N:`, `insert head:`, and `insert tail:`, while bodyless `delete N..M` handles deletion. Removed `>A..B` repeat rows and the old `prepend:` / `append:` virtual insert headers; `-` rows remain rejected with a teaching error.
+
 ### Fixed
 
 - Restored automatic repair of `edit` range hunks that break bracket balance — the failure class that previously left a duplicated closing line (a `</>` / `);` / `}` echoed just below the range) or dropped one (the range swallowed a `});` the payload never restated), leaving the file syntactically broken until a follow-up edit. The hashline applier now normalizes each replacement so its payload preserves the deleted region's delimiter balance, dropping a duplicated bordering closer or sparing a deleted one, and surfaces a warning on the tool result. Always on and balance-validated (no `edit.hashlineAutoDropPureInsertDuplicates` setting); see `@oh-my-pi/hashline` for the contract.

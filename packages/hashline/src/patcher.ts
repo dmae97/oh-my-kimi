@@ -97,8 +97,8 @@ export class PreparedSection {
 
 function hasAnchorScopedEdit(edits: readonly Edit[]): boolean {
 	return edits.some(edit => {
-		if (edit.kind === "delete" || edit.kind === "repeat") return true;
-		return edit.cursor.kind === "before_anchor";
+		if (edit.kind === "delete") return true;
+		return edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor";
 	});
 }
 

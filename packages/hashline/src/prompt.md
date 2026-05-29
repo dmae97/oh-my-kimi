@@ -1,41 +1,34 @@
-Your patch language selects ranges of file lines and rewrites them. Each hunk picks a range and lists its new content; an empty body deletes the range.
+Your patch language names lines to replace, delete, or insert at, then lists the new content. Rule of thumb: a header ending in `:` is followed by `+` body rows; `delete` has no body.
+
+<headers>
+Every file section starts with `¶PATH#TAG`. `TAG` is the 3-char snapshot tag from your latest `read`/`search`. REQUIRED for any hunk that names line numbers. Hashless `¶PATH` is allowed only for new-file creation or a patch that is purely `insert head:` / `insert tail:`.
+</headers>
+
+<ops>
+replace N..M:      replace original lines N..M with the body rows below.
+delete N..M        delete original lines N..M. No body.
+insert before N:   insert the body rows immediately before line N.
+insert after N:    insert the body rows immediately after line N.
+insert head:       insert the body rows at the very start of the file.
+insert tail:       insert the body rows at the very end of the file.
+Single line: `replace N..N:` / `delete N`. The range is the ORIGINAL lines you touch; body length is irrelevant (replacing 1 line with 10 is still `replace N..N:`).
+</ops>
 
 <body-rows>
-Every body row is **exactly one** of two kinds:
-  +TEXT     add a new literal line `TEXT` (verbatim, leading whitespace included)
-  &A..B     copy lines A..B from snapshot
+Body rows appear only under a `:` header. Every body row is:
+  +TEXT     add a new literal line `TEXT`, verbatim (leading whitespace kept). `+` alone adds a blank line.
+There is NO other body row kind. NEVER write `-old` or a bare/context line. To keep a line, leave it out of every range. To insert a literal line starting with `-` or `+`, prefix it: `+-x`, `++x`.
 </body-rows>
 
-<anchors>
-```
-A B             select lines A..B; the body rows below describe their new content
-                (empty body = delete the range). Always TWO numbers — single
-                lines are spelled `A A`.
-BOF             virtual position before line 1; body rows insert there
-EOF             virtual position after the last line; body rows insert there
-```
-
-A hunk header is **just the anchor on its own line** — no `@@`, no brackets, no prefix.
-</anchors>
-
-<header>
-Every file section starts with `¶PATH#HASH`. `HASH` is the snapshot tag from your latest `read`/`search` of that file. It is required whenever a hunk uses a numeric anchor. Hashless `¶PATH` is only valid for new-file creation or BOF/EOF-only patches.
-</header>
-
 <rules>
-- Anchors are line **numbers**, never line **content**, and always come in PAIRS. `read` shows each file row as `LINE:TEXT`; for a patch the hunk header is `4 4` (single line) or `4 7` (range), and the body is `+TEXT` (or `&4` to keep it).
-- A bare single number (`4`) is REJECTED — always write two numbers.
-- `A B` describes the **original** lines you are replacing. Replacing one line with ten new lines is still `4 4`, NOT `4 13`.
-- Each range may appear in only ONE hunk per patch.
-- Line numbers refer to the ORIGINAL file and stay valid for the whole patch — they do not shift as your hunks land.
-- An empty body **deletes** the selected range entirely. To replace lines A..B with completely new content, list the new content under the hunk header (do not write `&A..B` for the lines you are replacing).
-- `@@` is NOT a hashline construct. Do not wrap headers in `@@ ... @@` — write the anchor bare.
-- Keep `A B` aligned to your body: select exactly the lines the body replaces. Never restate a bordering closer (`}`, `);`, `]`) that survives just outside the range, and never let `A B` swallow a closer your body omits — either unbalances the file. (An obvious off-by-one closer is auto-repaired with a warning; still aim to get the range right.)
+- Line numbers come from `read`/`search` (`LINE:TEXT`). Copy the `¶PATH#TAG` header; use the bare LINE numbers.
+- Numbers refer to the ORIGINAL file and stay valid for the whole patch — they do not shift as hunks apply.
+- One hunk per range; the body is the final content, never an old/new pair.
+- To change lines 2 and 5 while keeping 3–4, issue two hunks (`replace 2..2:` and `replace 5..5:`). Untouched lines are simply absent from every range.
 </rules>
 
-
 <example>
-This is the original file (the exact shape `read` returns):
+Original (the exact shape `read` returns):
 ```
 ¶greet.py#A1
 1:def greet(name):
@@ -44,46 +37,51 @@ This is the original file (the exact shape `read` returns):
 4:greet("world")
 ```
 
-# To insert a guard as the first line of greet:
+Insert a guard after line 1:
 ```
 ¶greet.py#A1
-1 1
-&1
+insert after 1:
 +    if not name: name = "stranger"
 ```
 
-# Replace line 2 with two new lines.
+Replace line 2 with two lines:
 ```
-2 2
+¶greet.py#A1
+replace 2..2:
 +    greeting = "Hi"
 +    msg = f"{greeting}, {name}"
 ```
 
-# Delete line 4.
+Delete line 3:
 ```
 ¶greet.py#A1
-4 4
+delete 3
 ```
 
-# Add header & trailer.
+Add a header and trailer:
 ```
 ¶greet.py#A1
-BOF
+insert head:
 +# generated header
-EOF
+insert tail:
 +greet("everyone")
 ```
 </example>
 
 <anti-patterns>
-# WRONG — range set based on what it will be (RIGHT: 1 1, inserted line count doesn't matter)
-1 2
-+def greet(name):
-+    """Greet a user by name."""
+# WRONG — empty `replace` to delete. RIGHT: delete 4
+replace 4..4:
 
-# WRONG — do not include context lines, nor delete old lines, the selector `2 2` itself deletes the entire range
-3 3
+# WRONG — range describes post-edit size. RIGHT: replace 1..1: (body length is irrelevant)
+replace 1..2:
++def greet(name):
+
+# WRONG — `-` rows / bare context lines do not exist. The range deletes; the body is only the new content.
+replace 3..3:
     msg = "Hello, " + name
 -   print(msg)
++   return msg
+# RIGHT
+replace 3..3:
 +   return msg
 </anti-patterns>

@@ -21,49 +21,30 @@ export const END_PATCH_MARKER = "*** End Patch";
  */
 export const ABORT_MARKER = "*** Abort";
 
-/**
- * Warning text appended when two consecutive hunks target the exact same
- * concrete range. The second hunk wins; the first is discarded.
- */
+/** Warning text appended when two consecutive hunks target the exact same concrete range. */
 export const REPLACE_PAIR_COALESCED_WARNING =
-	"Detected two identical-range hashline hunks; kept only the second hunk. Issue ONE hunk per range — payload is the final desired content, never both old and new.";
+	"Detected two identical-range hashline hunks; kept only the second hunk. Issue ONE `replace N..M:` hunk per range — payload is the final desired content, never both old and new.";
 
-/**
- * Warning text appended when a bare hunk header (`A B` with no body)
- * is followed by an overlapping concrete hunk. The earlier bare hunk is
- * dropped on the assumption that the model expressed an old/new pair across
- * two hunks; only the second hunk's payload is applied.
- */
+/** Warning text appended when an empty bodyless hunk is followed by an overlapping concrete hunk. */
 export const REPLACE_PAIR_COALESCED_OVERLAP_WARNING =
-	"Detected an overlapping bare hashline hunk immediately followed by a concrete hunk; dropped the earlier bare hunk. Issue ONE hunk per range — payload is the final desired content, never both old and new.";
+	"Detected an overlapping bare hashline hunk immediately followed by a concrete hunk; dropped the earlier bare hunk. Issue ONE `replace N..M:` hunk per range — payload is the final desired content, never both old and new.";
 
-/**
- * Warning text appended when bare body rows (no `+` / `&` prefix) follow a
- * hunk header and the parser auto-converts them to `+literal` rows because
- * no `+`/`&` row was present in the hunk. Helps the model learn the
- * canonical body-row syntax while keeping the patch applying.
- */
+/** Warning text appended when bare body rows are auto-converted to literal rows. */
 export const BARE_BODY_AUTO_PIPED_WARNING =
-	"Auto-prefixed bare body row(s) with `+`. Always start payload rows with `+TEXT` (literal) or `&A..B` (repeat) — pasting raw code as payload is not a portable shape.";
+	"Auto-prefixed bare body row(s) with `+`. Body rows must be `+TEXT` literal lines; pasting raw code as payload is not a portable shape.";
 
-/**
- * Warning text emitted when a body row begins with `+&A..B` — the model
- * mistakenly prefixed a repeat row with the `+` literal sigil. We reroute
- * the row as a `&A..B` repeat so the patch still applies, then surface this
- * warning so the model sees the mistake on the next turn.
- */
-export const PLUS_PREFIXED_REPEAT_WARNING =
-	"A body row started with `+&A..B`. `+` (literal text) and `&A..B` (repeat) are sibling row kinds — a row uses exactly one of them. Treated as `&A..B`; remove the leading `+` next time.";
+/** Error text emitted when a hunk body contains a unified-diff-style `-` row. */
+export const MINUS_ROW_REJECTED =
+	"`-` rows are not valid; hashline ranges already name the lines being changed. To insert a literal line starting with `-`, write `+-…`.";
 
-/**
- * Warning text emitted when a hunk body contains unified-diff-style rows
- * (`-old`, ` context`) and the parser silently converts them: `-` rows are
- * dropped (the hunk header's range already deletes those lines), and the
- * leading metadata-space on context rows is stripped once unified-diff
- * mode is detected. Bare body rows are auto-prefixed with `+` regardless.
- */
-export const UNIFIED_DIFF_BODY_AUTO_CONVERT_WARNING =
-	"Hunk body contained unified-diff-style rows (`-old`, ` context`). The `-` rows were dropped (the hunk header's range already deletes those lines); context rows were treated as `+TEXT` literals. Use `+TEXT` (literal) or `&A..B` (repeat) directly next time.";
+/** Error text emitted when a replace hunk has no body. */
+export const EMPTY_REPLACE = "`replace N..M:` needs at least one `+TEXT` body row. To delete lines, use `delete N..M`.";
+
+/** Error text emitted when a delete hunk receives a body row. */
+export const DELETE_TAKES_NO_BODY = "`delete N..M` does not take body rows. Remove the body, or use `replace N..M:`.";
+
+/** Error text emitted when an insert hunk has no body. */
+export const EMPTY_INSERT = "`insert` needs at least one `+TEXT` body row.";
 
 /** Warning text emitted by `Recovery` when an external write fits a cached snapshot. */
 export const RECOVERY_EXTERNAL_WARNING =
