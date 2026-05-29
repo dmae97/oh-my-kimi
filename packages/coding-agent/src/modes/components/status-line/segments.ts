@@ -454,11 +454,12 @@ const cacheHitSegment: StatusLineSegment = {
 		const { cacheRead, cacheWrite, input } = ctx.usageStats;
 		if (!cacheRead) return { content: "", visible: false };
 
-		// DeepSeek doesn't expose cacheWrite; cache miss tokens = input.
-		// For other providers, cacheWrite tracks cache creation separately.
-		const denominator = cacheWrite > 0 ? cacheWrite : input;
-		const total = cacheRead + denominator;
-		if (!total) return { content: "", visible: false };
+		// Hit rate = cacheRead / total prompt tokens. The prompt is the sum of
+		// cacheRead (served from cache), cacheWrite (newly cached this turn) and
+		// input (uncached). Including uncached input keeps the denominator honest
+		// for Anthropic/OpenRouter; DeepSeek reports its miss as input with
+		// cacheWrite 0, so this still yields hit/(hit+miss).
+		const total = cacheRead + cacheWrite + input;
 
 		const rate = (cacheRead / total) * 100;
 		const rateStr = rate.toFixed(2);
