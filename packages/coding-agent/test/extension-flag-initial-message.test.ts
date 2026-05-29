@@ -1,0 +1,49 @@
+import { describe, expect, it } from "bun:test";
+import { parseArgs } from "../src/cli/args";
+import { buildInitialMessage } from "../src/cli/initial-message";
+
+// Regression coverage for extension-registered flags leaking into the initial
+// prompt. The CLI parses argv twice: once at startup (before extensions load,
+// so their flag set is unknown) and once after the extension runner is ready.
+// `buildInitialMessage` must run on the second, extension-aware parse.
+describe("extension flags vs initial message", () => {
+	const extFlags = new Map<string, { type: "boolean" | "string" }>([
+		["spawn-peer", { type: "string" }],
+		["headless", { type: "boolean" }],
+	]);
+
+	it("consumes a string extension flag's value instead of leaking it into messages", () => {
+		const parsed = parseArgs(["--spawn-peer", "reviewer", "review the diff"], extFlags);
+
+		expect(parsed.unknownFlags.get("spawn-peer")).toBe("reviewer");
+		expect(parsed.messages).toEqual(["review the diff"]);
+	});
+
+	it("consumes a boolean extension flag without eating the following message", () => {
+		const parsed = parseArgs(["--headless", "do the task"], extFlags);
+
+		expect(parsed.unknownFlags.get("headless")).toBe(true);
+		expect(parsed.messages).toEqual(["do the task"]);
+	});
+
+	it("builds the initial prompt from the real message, not the flag value, when flags are known", () => {
+		const parsed = parseArgs(["--spawn-peer", "reviewer", "review the diff"], extFlags);
+
+		const { initialMessage } = buildInitialMessage({ parsed, stdinContent: "diff-context" });
+
+		expect(initialMessage).toBe("diff-context\nreview the diff");
+	});
+
+	it("documents the pre-fix leak: without the flag map the value becomes the first prompt", () => {
+		// This is exactly the startup parse: extensions have not loaded, so the
+		// flag map is absent. `--spawn-peer` is dropped (it starts with `-`) but
+		// its bare value `reviewer` is mis-read as the first positional message.
+		// Re-parsing with the extension flag map is what corrects this.
+		const parsed = parseArgs(["--spawn-peer", "reviewer", "review the diff"]);
+
+		expect(parsed.messages).toEqual(["reviewer", "review the diff"]);
+
+		const { initialMessage } = buildInitialMessage({ parsed, stdinContent: "diff-context" });
+		expect(initialMessage).toBe("diff-context\nreviewer");
+	});
+});
