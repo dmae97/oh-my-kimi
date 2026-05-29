@@ -365,7 +365,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.todoContainer = new Container();
 		this.btwContainer = new Container();
 		this.editor = new CustomEditor(getEditorTheme());
-		this.editor.setUseTerminalCursor(this.ui.getUseTerminalCursorMarker());
+		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setAutocompleteMaxVisible(settings.get("autocompleteMaxVisible"));
 		this.editor.onAutocompleteCancel = () => {
 			this.ui.requestRender(true);
@@ -2180,11 +2180,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			},
 		);
 
-		if (
-			choice === "Approve and execute" ||
-			choice === "Approve and compact context" ||
-			choice === keepContextLabel
-		) {
+		if (choice === "Approve and execute" || choice === "Approve and compact context" || choice === keepContextLabel) {
 			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
 			try {
 				const latestPlanContent = await this.#readPlanFile(planFilePath);
@@ -2375,7 +2371,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			? factory(this.ui, getEditorTheme(), this.keybindings)
 			: new CustomEditor(getEditorTheme());
 
-		nextEditor.setUseTerminalCursor(this.ui.getUseTerminalCursorMarker());
+		nextEditor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		nextEditor.setAutocompleteMaxVisible(this.settings.get("autocompleteMaxVisible"));
 		nextEditor.onAutocompleteCancel = () => {
 			this.ui.requestRender(true);

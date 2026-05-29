@@ -149,24 +149,6 @@ function isTermuxSession(): boolean {
 	return Boolean(process.env.TERMUX_VERSION);
 }
 
-function isGhosttySession(): boolean {
-	return (
-		Bun.env.TERM_PROGRAM?.toLowerCase() === "ghostty" ||
-		Bun.env.TERM?.toLowerCase() === "xterm-ghostty" ||
-		Boolean(Bun.env.GHOSTTY_RESOURCES_DIR || Bun.env.GHOSTTY_SURFACE_ID)
-	);
-}
-
-function resolveHardwareCursorPreference(requested: boolean): boolean {
-	if (!requested) return false;
-	// Ghostty currently leaves bar-cursor afterimages when a TUI repeatedly
-	// repaints the row under a visible hardware cursor. Keep the editor in
-	// terminal-cursor-marker mode, but hide the actual terminal cursor unless a
-	// developer explicitly opts back in while testing a terminal-side fix.
-	if (isGhosttySession() && !$flag("PI_FORCE_HARDWARE_CURSOR")) return false;
-	return true;
-}
-
 /** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
 function isMultiplexerSession(): boolean {
 	return Boolean(Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ);
@@ -329,7 +311,6 @@ export class TUI extends Container {
 	#sixelProbeTimeout?: NodeJS.Timeout;
 	#sixelProbeUnsubscribe?: () => void;
 	#showHardwareCursor = $flag("PI_HARDWARE_CURSOR");
-	#useTerminalCursorMarker = this.#showHardwareCursor;
 	#clearOnShrink = $flag("PI_CLEAR_ON_SHRINK"); // Clear empty rows when content shrinks (default: off)
 	#maxLinesRendered = 0; // Line count from last render, used for viewport calculation
 	// Highest count of content rows currently sitting in terminal scrollback
@@ -358,9 +339,7 @@ export class TUI extends Container {
 	constructor(terminal: Terminal, showHardwareCursor?: boolean) {
 		super();
 		this.terminal = terminal;
-		const requested = showHardwareCursor === undefined ? this.#showHardwareCursor : showHardwareCursor;
-		this.#showHardwareCursor = resolveHardwareCursorPreference(requested);
-		this.#useTerminalCursorMarker = requested;
+		this.#showHardwareCursor = showHardwareCursor === undefined ? this.#showHardwareCursor : showHardwareCursor;
 	}
 
 	get fullRedraws(): number {
@@ -371,17 +350,10 @@ export class TUI extends Container {
 		return this.#showHardwareCursor;
 	}
 
-	getUseTerminalCursorMarker(): boolean {
-		return this.#useTerminalCursorMarker;
-	}
-
 	setShowHardwareCursor(enabled: boolean): void {
-		const nextShow = resolveHardwareCursorPreference(enabled);
-		const nextMarker = enabled;
-		if (this.#showHardwareCursor === nextShow && this.#useTerminalCursorMarker === nextMarker) return;
-		this.#showHardwareCursor = nextShow;
-		this.#useTerminalCursorMarker = nextMarker;
-		if (!nextShow) {
+		if (this.#showHardwareCursor === enabled) return;
+		this.#showHardwareCursor = enabled;
+		if (!enabled) {
 			this.terminal.hideCursor();
 		}
 		this.requestRender();

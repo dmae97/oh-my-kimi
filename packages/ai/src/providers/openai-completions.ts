@@ -1368,8 +1368,7 @@ export function parseChunkUsage(
 	const promptTokens = getOptionalNumberProperty(rawUsage, "prompt_tokens") ?? 0;
 
 	const isDeepSeekNative =
-		getOptionalNumberProperty(rawUsage, "prompt_cache_hit_tokens") !== undefined &&
-		cacheWriteDeepSeek !== undefined;
+		getOptionalNumberProperty(rawUsage, "prompt_cache_hit_tokens") !== undefined && cacheWriteDeepSeek !== undefined;
 	// Only use the DeepSeek input path when cacheWrite came from DeepSeek's
 	// miss field, not from prompt_tokens_details. Avoids false positives when
 	// DeepSeek models route through OpenRouter (which may pass through native

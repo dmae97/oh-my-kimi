@@ -1460,73 +1460,63 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 	});
-	describe("hardware cursor terminal fallback", () => {
-		it("uses cursor markers but hides the hardware cursor on Ghostty when hardware cursor was requested", async () => {
+	describe("hardware cursor preference", () => {
+		const SHOW_CURSOR = "\x1b[?25h";
+
+		class FocusedCursor implements Component, Focusable {
+			focused = false;
+			invalidate(): void {}
+			render(_width: number): string[] {
+				return [`prompt>${CURSOR_MARKER}`];
+			}
+		}
+
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		it("honors the requested hardware cursor preference under Ghostty (no terminal override)", async () => {
+			// Regression: a Ghostty-specific override used to force the hardware
+			// cursor off while the editor stayed in terminal-cursor mode (marker
+			// only, no software glyph), leaving Ghostty users with no visible
+			// caret at all. The preference must follow the constructor arg only.
 			await withEnvPatch(
 				{
 					TERM_PROGRAM: "ghostty",
 					TERM: "xterm-ghostty",
 					GHOSTTY_RESOURCES_DIR: "/tmp/ghostty",
 					GHOSTTY_SURFACE_ID: "0x1",
-					PI_FORCE_HARDWARE_CURSOR: undefined,
 				},
 				() => {
-					const tui = new TUI(new VirtualTerminal(20, 4), true);
-					expect(tui.getShowHardwareCursor()).toBe(false);
-					expect(tui.getUseTerminalCursorMarker()).toBe(true);
+					expect(new TUI(new VirtualTerminal(20, 4), true).getShowHardwareCursor()).toBe(true);
+					expect(new TUI(new VirtualTerminal(20, 4), false).getShowHardwareCursor()).toBe(false);
 				},
 			);
 		});
 
-		it("keeps the hardware cursor available outside Ghostty", async () => {
-			await withEnvPatch(
-				{
-					TERM_PROGRAM: "Apple_Terminal",
-					TERM: "xterm-256color",
-					GHOSTTY_RESOURCES_DIR: undefined,
-					GHOSTTY_SURFACE_ID: undefined,
-					PI_FORCE_HARDWARE_CURSOR: undefined,
-				},
-				() => {
-					const tui = new TUI(new VirtualTerminal(20, 4), true);
-					expect(tui.getShowHardwareCursor()).toBe(true);
-					expect(tui.getUseTerminalCursorMarker()).toBe(true);
-				},
-			);
-		});
+		it("emits the show-cursor sequence for the focused marker only when enabled", async () => {
+			for (const enabled of [true, false]) {
+				const term = new VirtualTerminal(20, 4);
+				const tui = new TUI(term, enabled);
+				const writes: string[] = [];
+				vi.spyOn(term, "write").mockImplementation((data: string) => {
+					writes.push(data);
+				});
+				const anchor = new FocusedCursor();
+				tui.addChild(anchor);
+				tui.setFocus(anchor);
 
-		it("allows explicit Ghostty hardware cursor opt-in for terminal-side testing", async () => {
-			await withEnvPatch(
-				{
-					TERM_PROGRAM: "ghostty",
-					TERM: "xterm-ghostty",
-					GHOSTTY_RESOURCES_DIR: "/tmp/ghostty",
-					GHOSTTY_SURFACE_ID: "0x1",
-					PI_FORCE_HARDWARE_CURSOR: "1",
-				},
-				() => {
-					const tui = new TUI(new VirtualTerminal(20, 4), true);
-					expect(tui.getShowHardwareCursor()).toBe(true);
-					expect(tui.getUseTerminalCursorMarker()).toBe(true);
-				},
-			);
-		});
-
-		it("keeps software cursor mode when hardware cursor is explicitly disabled", async () => {
-			await withEnvPatch(
-				{
-					TERM_PROGRAM: "ghostty",
-					TERM: "xterm-ghostty",
-					GHOSTTY_RESOURCES_DIR: "/tmp/ghostty",
-					GHOSTTY_SURFACE_ID: "0x1",
-					PI_FORCE_HARDWARE_CURSOR: undefined,
-				},
-				() => {
-					const tui = new TUI(new VirtualTerminal(20, 4), false);
-					expect(tui.getShowHardwareCursor()).toBe(false);
-					expect(tui.getUseTerminalCursorMarker()).toBe(false);
-				},
-			);
+				try {
+					tui.start();
+					await settle(term);
+					// Disabled keeps the caret hidden (\x1b[?25l only); enabled re-shows
+					// it at the marker after positioning inside the synchronized paint.
+					expect(writes.join("").includes(SHOW_CURSOR)).toBe(enabled);
+				} finally {
+					tui.stop();
+					vi.restoreAllMocks();
+				}
+			}
 		});
 	});
 
