@@ -1034,6 +1034,41 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+
+		it("defers height-changing tail preview while native scrollback is scrolled", async () => {
+			const term = new VirtualTerminal(32, 5);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("line-", 12));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				term.scrollLines(-2);
+				const before = term.getBufferPosition();
+				expect(before.viewportY).toBeGreaterThan(0);
+				expect(visible(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "line-8", "line-9"]);
+
+				component.setLines([...rows("line-", 9), "preview-appeared", ...rows("line-", 12).slice(9)]);
+				tui.requestRender();
+				await settle(term);
+
+				const after = term.getBufferPosition();
+				expect(after.viewportY).toBe(before.viewportY);
+				expect(visible(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "line-8", "line-9"]);
+				expect(term.getScrollBuffer().join("\n")).not.toContain("preview-appeared");
+
+				term.scrollLines(999);
+				tui.requestRender();
+				await settle(term);
+
+				const finalPosition = term.getBufferPosition();
+				expect(finalPosition.viewportY).toBe(finalPosition.baseY);
+				expect(term.getScrollBuffer().join("\n")).toContain("preview-appeared");
+			} finally {
+				tui.stop();
+			}
+		});
 		it("treats unknown Windows viewport state as scrolled", async () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });

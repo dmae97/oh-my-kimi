@@ -1340,7 +1340,9 @@ export class TUI extends Container {
 		}
 
 		const contentGrew = newLines.length > this.#previousLines.length;
-		if (contentGrew && diff.firstChanged < this.#previousLines.length && !isMultiplexerSession()) {
+		const pureAppend = diff.appendedLines && diff.firstChanged === this.#previousLines.length;
+		const structuralMutation = newLines.length !== this.#previousLines.length || diff.firstChanged < prevViewportTop;
+		if (!pureAppend && structuralMutation && !isMultiplexerSession()) {
 			if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom())) {
 				this.#markNativeScrollbackDirty();
 				return { kind: "deferredMutation" };
@@ -1365,9 +1367,8 @@ export class TUI extends Container {
 			return { kind: "shrink" };
 		}
 
-		// Offscreen edit: viewport repaint corrects the shifted rows. If new
-		// rows also appended in the same frame, emit them as scrollback growth
-		// first so streaming output is not lost from terminal history.
+		// Offscreen edit: viewport repaint corrects shifted rows when the native
+		// viewport is at the tail. Scrolled native-history cases are deferred above.
 		if (diff.firstChanged < prevViewportTop) {
 			const appendFrom = diff.appendedLines ? this.#findAppendedTailStart(newLines) : undefined;
 			return { kind: "viewportRepaint", appendFrom };
