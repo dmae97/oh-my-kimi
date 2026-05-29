@@ -870,7 +870,7 @@ export function zhipuCodingPlanModelManagerOptions(
 	config?: ZhipuCodingPlanModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://open.bigmodel.cn/api/paas/v4";
+	const baseUrl = config?.baseUrl ?? "https://open.bigmodel.cn/api/coding/paas/v4";
 	return {
 		providerId: "zhipu-coding-plan",
 		...(apiKey && {
@@ -2676,13 +2676,18 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 		},
 	),
 	// --- Zhipu Coding Plan ---
-	openAiCompletionsDescriptor("zhipu-coding-plan", "zhipu-coding-plan", "https://open.bigmodel.cn/api/paas/v4", {
-		compat: {
-			thinkingFormat: "zai",
-			reasoningContentField: "reasoning_content",
-			supportsDeveloperRole: false,
+	openAiCompletionsDescriptor(
+		"zhipu-coding-plan",
+		"zhipu-coding-plan",
+		"https://open.bigmodel.cn/api/coding/paas/v4",
+		{
+			compat: {
+				thinkingFormat: "zai",
+				reasoningContentField: "reasoning_content",
+				supportsDeveloperRole: false,
+			},
 		},
-	}),
+	),
 ];
 
 const filterActiveToolCallModels = (_id: string, m: ModelsDevModel): boolean => {

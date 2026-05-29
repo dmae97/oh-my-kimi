@@ -90,7 +90,7 @@ describe("getOpenAICompletionsStreamIdleTimeoutFallbackMs", () => {
 			id: "glm-5.1",
 			name: "GLM-5.1",
 			provider: "zhipu-coding-plan",
-			baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+			baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
 		} satisfies Model<"openai-completions">;
 
 		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBe(600_000);
