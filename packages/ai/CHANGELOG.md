@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.5.11] - 2026-05-29
+
 ### Added
 
 - Added mid-conversation `system` message support for Anthropic Messages by upgrading eligible `developer` turns to `role: "system"` on first-party Claude API with Claude Opus 4.8+ and newer

@@ -769,9 +769,9 @@ dependencies = [
 
 [[package]]
 name = "ctor"
-version = "1.0.6"
+version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d765eb1c0bda10d31e0ea185f5ee15da532d60b0912d2bd1441783439e749c5"
+checksum = "01334b89b69ff726750c5ce5073fc8bd860e99aa9a8fc5ca11b04730e3aee97a"
 
 [[package]]
 name = "darling"
@@ -1805,9 +1805,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.2.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50b7e5b27aa02a74bac8c3f23f448f8d87ff11f92d3aac1a6ed369ee08cc56c1"
+checksum = "02bd0af71c67b473010cbbc60715ee815645a4dc942899111f494b4b737d6fda"
 dependencies = [
  "libc",
  "wasi 0.11.1+wasi-snapshot-preview1",
@@ -2331,7 +2331,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "15.5.10"
+version = "15.5.11"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -2399,7 +2399,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "15.5.10"
+version = "15.5.11"
 dependencies = [
  "async-trait",
  "libc",
@@ -2411,7 +2411,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "15.5.10"
+version = "15.5.11"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2457,7 +2457,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "15.5.10"
+version = "15.5.11"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -3033,9 +3033,9 @@ dependencies = [
 
 [[package]]
 name = "socket2"
-version = "0.6.3"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
+checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
