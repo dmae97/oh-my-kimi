@@ -236,10 +236,17 @@ function buildHexTables(): { FORWARD: readonly string[]; INVERSE: ReadonlyMap<st
  * In-memory {@link SnapshotStore} backed by a flat 4096-slot ring shared across
  * all paths. Slot allocation is a simple `counter & 0xfff`; the tag the model
  * sees is `FORWARD[slot]` from the module-level permutation, so consecutive
- * pushes hand out unrelated tags. Slot reuse on wrap is intentional: stale tags
- * may alias after 4096 distinct pushes, and the patcher catches misuse by
- * verifying the resolved snapshot's content (and path) against the live file
- * before applying edits.
+ * pushes hand out unrelated tags. Before allocating, {@link InMemorySnapshotStore}
+ * folds a new view into an existing same-path slot when the two agree on every
+ * shared line: one covering the other reuses it verbatim (dedup), overlapping
+ * or abutting runs extend in place, and gapped runs union into a sparse view
+ * (coalesce). All reuse the original tag, so sequential reads of an unchanged
+ * file collapse onto one anchor instead of fragmenting. A disagreeing shared
+ * line means the file changed on disk, so a fresh slot (new tag) is minted.
+ * Slot reuse on wrap is intentional: stale tags may
+ * alias after 4096 distinct pushes, and the patcher catches misuse by verifying
+ * the resolved snapshot's content (and path) against the live file before
+ * applying edits.
  */
 export class InMemorySnapshotStore extends SnapshotStore {
 	readonly #slots: Array<Snapshot | null> = new Array<Snapshot | null>(RING_SIZE).fill(null);
@@ -288,8 +295,20 @@ export class InMemorySnapshotStore extends SnapshotStore {
 	}
 
 	#record(incoming: Snapshot): string {
-		const dedup = this.#dedup(incoming);
-		if (dedup !== null) return dedup;
+		// Walk newest→oldest for a same-path snapshot we can fold `incoming`
+		// into: either it already covers `incoming` (dedup) or the two agree on
+		// every shared line and merge into one run/sparse view (coalesce).
+		// Folding keeps the original slot, so the tag the model already saw for
+		// an earlier read also anchors this one.
+		for (let offset = 1; offset <= this.#filled; offset++) {
+			const slot = (this.#nextCounter - offset) & RING_MASK;
+			const existing = this.#slots[slot];
+			if (!existing || existing.path !== incoming.path) continue;
+			const folded = coalesceSnapshots(existing, incoming);
+			if (folded === null) continue;
+			if (folded !== existing) this.#slots[slot] = folded;
+			return FORWARD[slot] ?? FALLBACK_TAG;
+		}
 
 		const slot = this.#nextCounter & RING_MASK;
 		this.#slots[slot] = incoming;
@@ -297,14 +316,119 @@ export class InMemorySnapshotStore extends SnapshotStore {
 		if (this.#filled < RING_SIZE) this.#filled++;
 		return FORWARD[slot] ?? FALLBACK_TAG;
 	}
+}
 
-	#dedup(incoming: Snapshot): string | null {
-		for (let offset = 1; offset <= this.#filled; offset++) {
-			const slot = (this.#nextCounter - offset) & RING_MASK;
-			const existing = this.#slots[slot];
-			if (!existing || existing.path !== incoming.path) continue;
-			if (existing.isSuperset(incoming)) return FORWARD[slot] ?? FALLBACK_TAG;
-		}
-		return null;
+/**
+ * Fold `incoming` into `existing` (callers guarantee same path). Returns:
+ *   - `existing` when it already covers every line `incoming` asserts — pure
+ *     dedup, no new storage required;
+ *   - a fresh merged snapshot when the two agree on every shared line — a
+ *     {@link ContiguousSnapshot} when the union is a single run (overlapping or
+ *     abutting reads), otherwise a {@link SparseSnapshot} spanning the gap(s).
+ *     Agreement is the "file unchanged" proof, so one tag can anchor both;
+ *   - `null` when a shared line disagrees: the file changed on disk between the
+ *     reads, so the views describe different states and MUST keep distinct tags.
+ *
+ * Disjoint reads share no lines and so never conflict — they union optimistically
+ * (the patcher re-verifies recorded lines against live content before applying,
+ * so a stale union degrades to a re-read prompt, never a corrupt edit).
+ */
+function coalesceSnapshots(existing: Snapshot, incoming: Snapshot): Snapshot | null {
+	// Contiguous∩contiguous is the hot path (sequential range reads); settle it
+	// with range arithmetic so dedup and in-run extension allocate nothing.
+	if (
+		existing instanceof ContiguousSnapshot &&
+		incoming instanceof ContiguousSnapshot &&
+		existing.lines.length > 0 &&
+		incoming.lines.length > 0
+	) {
+		return coalesceContiguous(existing, incoming);
 	}
+	return coalesceGeneral(existing, incoming);
+}
+
+/** Range-arithmetic coalesce for two non-empty contiguous runs. */
+function coalesceContiguous(a: ContiguousSnapshot, b: ContiguousSnapshot): Snapshot | null {
+	const aEnd = a.offset + a.lines.length - 1;
+	const bEnd = b.offset + b.lines.length - 1;
+
+	// Every shared line must agree, else the file changed between the reads.
+	const lo = Math.max(a.offset, b.offset);
+	const hi = Math.min(aEnd, bEnd);
+	for (let line = lo; line <= hi; line++) {
+		if (a.lines[line - a.offset] !== b.lines[line - b.offset]) return null;
+	}
+
+	// `a` already covers `b` verbatim → reuse the slot untouched.
+	if (b.offset >= a.offset && bEnd <= aEnd) return a;
+
+	// Overlapping or directly abutting → a single, larger contiguous run.
+	if (b.offset <= aEnd + 1 && a.offset <= bEnd + 1) {
+		const start = Math.min(a.offset, b.offset);
+		const end = Math.max(aEnd, bEnd);
+		const lines = new Array<string>(end - start + 1);
+		for (let i = 0; i < a.lines.length; i++) lines[a.offset - start + i] = a.lines[i] ?? "";
+		// `b` is the fresher read; overlay it last (shared lines are equal anyway).
+		for (let i = 0; i < b.lines.length; i++) lines[b.offset - start + i] = b.lines[i] ?? "";
+		return new ContiguousSnapshot(a.path, start, lines, pickFullText(a, b, start, lines));
+	}
+
+	// A gap separates the runs → fold into a sparse view that preserves it.
+	return unionSnapshots(a, b);
+}
+
+/** Entry-based coalesce covering any snapshot shape (sparse, or mixed runs). */
+function coalesceGeneral(existing: Snapshot, incoming: Snapshot): Snapshot | null {
+	let covered = 0;
+	let total = 0;
+	for (const [line, content] of incoming.entries()) {
+		total++;
+		const seen = existing.get(line);
+		if (seen === undefined) continue;
+		if (seen !== content) return null;
+		covered++;
+	}
+	if (covered === total) return existing;
+	return unionSnapshots(existing, incoming);
+}
+
+/**
+ * Union two compatible views (callers guarantee agreement on shared lines).
+ * Collapses back to a {@link ContiguousSnapshot} when the merged line numbers
+ * form a gap-free run, otherwise yields a {@link SparseSnapshot}.
+ */
+function unionSnapshots(a: Snapshot, b: Snapshot): Snapshot {
+	const merged = new Map<number, string>();
+	for (const [line, content] of a.entries()) merged.set(line, content);
+	// `b` is the fresher read; it wins ties (shared lines are equal anyway).
+	for (const [line, content] of b.entries()) merged.set(line, content);
+
+	let min = Number.POSITIVE_INFINITY;
+	let max = Number.NEGATIVE_INFINITY;
+	for (const line of merged.keys()) {
+		if (line < min) min = line;
+		if (line > max) max = line;
+	}
+
+	if (max - min + 1 === merged.size) {
+		const lines = new Array<string>(merged.size);
+		for (const [line, content] of merged) lines[line - min] = content;
+		return new ContiguousSnapshot(a.path, min, lines, pickFullText(a, b, min, lines));
+	}
+
+	const ordered = [...merged].sort((x, y) => x[0] - y[0]);
+	return new SparseSnapshot(a.path, new Map(ordered));
+}
+
+/**
+ * Carry a whole-file `fullText` onto a merged run only when it is provably
+ * still accurate: the run must start at line 1 and reconstruct the candidate
+ * byte-for-byte. Otherwise the text is stale (the file grew past it) and the
+ * snapshot falls back to line-by-line verification.
+ */
+function pickFullText(a: Snapshot, b: Snapshot, start: number, lines: readonly string[]): string | undefined {
+	if (start !== 1) return undefined;
+	const candidate = b.fullText ?? a.fullText;
+	if (candidate === undefined) return undefined;
+	return candidate === lines.join("\n") ? candidate : undefined;
 }

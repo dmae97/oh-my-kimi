@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `InMemorySnapshotStore` now coalesces consecutive same-path reads into one tag whenever their views agree on every shared line. Overlapping or directly abutting range reads extend the existing snapshot's contiguous run in place; reads separated by a gap union into a `SparseSnapshot` spanning both ranges. A disagreeing shared line is treated as "the file changed on disk" and mints a fresh tag, preserving the prior superset-dedup behavior. This stops sequential range reads of an unchanged file (e.g. `:50-100` then `:100-200`, or `:1-100` then `:150-200`) from fragmenting into separate anchors.
+
 ## [15.5.11] - 2026-05-29
 
 ### Added
