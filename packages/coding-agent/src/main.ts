@@ -9,6 +9,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
+import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	$env,
@@ -143,6 +144,7 @@ export async function submitInteractiveInput(
 	}
 
 	try {
+		using _keepalive = new EventLoopKeepalive();
 		// Continue shortcuts submit an already-started empty prompt with no optimistic user message.
 		if (!input.started && !mode.markPendingSubmissionStarted(input)) {
 			return;
@@ -298,6 +300,7 @@ async function runInteractiveMode(
 
 	if (initialMessage !== undefined) {
 		try {
+			using _keepalive = new EventLoopKeepalive();
 			await session.prompt(initialMessage, { images: initialImages });
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
@@ -307,6 +310,7 @@ async function runInteractiveMode(
 
 	for (const message of initialMessages) {
 		try {
+			using _keepalive = new EventLoopKeepalive();
 			await session.prompt(message);
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
