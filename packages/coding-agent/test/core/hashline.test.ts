@@ -313,14 +313,20 @@ describe("hashline parser — range-anchor syntax", () => {
 		expect(applyDiff(suffixSource, suffixDiff)).toBe(["new();", "// one", "// two", "// one", "// two"].join("\n"));
 	});
 
-	it("keeps duplicated structural replacement boundaries literal", () => {
+	it("de-duplicates structural replacement boundaries (balance-validated)", () => {
+		// `1 1` replaces `old();` but the payload also restates the `};` that
+		// survives at line 2 — a duplicate close that would unbalance braces.
 		const suffixSource = ["old();", "};"].join("\n");
 		const suffixDiff = [`${sameLineRange(tag(1, "old();"))}`, repl("new();"), repl("};")].join("\n");
-		expect(applyDiff(suffixSource, suffixDiff)).toBe(["new();", "};", "};"].join("\n"));
+		expect(applyDiff(suffixSource, suffixDiff)).toBe(["new();", "};"].join("\n"));
 
+		// Mirror case at the leading edge.
 		const prefixSource = ["};", "old();"].join("\n");
 		const prefixDiff = [`${sameLineRange(tag(2, "old();"))}`, repl("};"), repl("new();")].join("\n");
-		expect(applyDiff(prefixSource, prefixDiff)).toBe(["};", "};", "new();"].join("\n"));
+		expect(applyDiff(prefixSource, prefixDiff)).toBe(["};", "new();"].join("\n"));
+
+		const result = applyHashlineEdits(suffixSource, parseHashline(suffixDiff).edits);
+		expect(result.warnings?.some(w => /delimiter-balance/.test(w))).toBe(true);
 	});
 
 	it("keeps duplicated single non-structural replacement boundaries literal", () => {

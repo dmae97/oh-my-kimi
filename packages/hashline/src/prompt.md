@@ -30,6 +30,7 @@ Every file section starts with `¶PATH#HASH`. `HASH` is the snapshot tag from yo
 - Line numbers refer to the ORIGINAL file and stay valid for the whole patch — they do not shift as your hunks land.
 - An empty body **deletes** the selected range entirely. To replace lines A..B with completely new content, list the new content under the hunk header (do not write `&A..B` for the lines you are replacing).
 - `@@` is NOT a hashline construct. Do not wrap headers in `@@ ... @@` — write the anchor bare.
+- Keep `A B` aligned to your body: select exactly the lines the body replaces. Never restate a bordering closer (`}`, `);`, `]`) that survives just outside the range, and never let `A B` swallow a closer your body omits — either unbalances the file. (An obvious off-by-one closer is auto-repaired with a warning; still aim to get the range right.)
 </rules>
 
 
