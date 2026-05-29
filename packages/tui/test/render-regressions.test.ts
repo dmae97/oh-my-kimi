@@ -67,6 +67,30 @@ function countMatches(lines: string[], pattern: RegExp): number {
 	return count;
 }
 
+async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
+	const saved = new Map<string, string | undefined>();
+	for (const key of Object.keys(patch)) {
+		saved.set(key, Bun.env[key]);
+		const value = patch[key];
+		if (value === undefined) {
+			delete Bun.env[key];
+		} else {
+			Bun.env[key] = value;
+		}
+	}
+	try {
+		return await run();
+	} finally {
+		for (const [key, value] of saved) {
+			if (value === undefined) {
+				delete Bun.env[key];
+			} else {
+				Bun.env[key] = value;
+			}
+		}
+	}
+}
+
 describe("TUI terminal-state regressions", () => {
 	let monotonicNow = 0;
 	// Keep TUI's 16ms render throttle deterministic without sleeping a real frame per render.
@@ -1185,11 +1209,84 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 	});
+	describe("hardware cursor terminal fallback", () => {
+		it("uses cursor markers but hides the hardware cursor on Ghostty when hardware cursor was requested", async () => {
+			await withEnvPatch(
+				{
+					TERM_PROGRAM: "ghostty",
+					TERM: "xterm-ghostty",
+					GHOSTTY_RESOURCES_DIR: "/tmp/ghostty",
+					GHOSTTY_SURFACE_ID: "0x1",
+					PI_FORCE_HARDWARE_CURSOR: undefined,
+				},
+				() => {
+					const tui = new TUI(new VirtualTerminal(20, 4), true);
+					expect(tui.getShowHardwareCursor()).toBe(false);
+					expect(tui.getUseTerminalCursorMarker()).toBe(true);
+				},
+			);
+		});
+
+		it("keeps the hardware cursor available outside Ghostty", async () => {
+			await withEnvPatch(
+				{
+					TERM_PROGRAM: "Apple_Terminal",
+					TERM: "xterm-256color",
+					GHOSTTY_RESOURCES_DIR: undefined,
+					GHOSTTY_SURFACE_ID: undefined,
+					PI_FORCE_HARDWARE_CURSOR: undefined,
+				},
+				() => {
+					const tui = new TUI(new VirtualTerminal(20, 4), true);
+					expect(tui.getShowHardwareCursor()).toBe(true);
+					expect(tui.getUseTerminalCursorMarker()).toBe(true);
+				},
+			);
+		});
+
+		it("allows explicit Ghostty hardware cursor opt-in for terminal-side testing", async () => {
+			await withEnvPatch(
+				{
+					TERM_PROGRAM: "ghostty",
+					TERM: "xterm-ghostty",
+					GHOSTTY_RESOURCES_DIR: "/tmp/ghostty",
+					GHOSTTY_SURFACE_ID: "0x1",
+					PI_FORCE_HARDWARE_CURSOR: "1",
+				},
+				() => {
+					const tui = new TUI(new VirtualTerminal(20, 4), true);
+					expect(tui.getShowHardwareCursor()).toBe(true);
+					expect(tui.getUseTerminalCursorMarker()).toBe(true);
+				},
+			);
+		});
+
+		it("keeps software cursor mode when hardware cursor is explicitly disabled", async () => {
+			await withEnvPatch(
+				{
+					TERM_PROGRAM: "ghostty",
+					TERM: "xterm-ghostty",
+					GHOSTTY_RESOURCES_DIR: "/tmp/ghostty",
+					GHOSTTY_SURFACE_ID: "0x1",
+					PI_FORCE_HARDWARE_CURSOR: undefined,
+				},
+				() => {
+					const tui = new TUI(new VirtualTerminal(20, 4), false);
+					expect(tui.getShowHardwareCursor()).toBe(false);
+					expect(tui.getUseTerminalCursorMarker()).toBe(false);
+				},
+			);
+		});
+	});
+
 	describe("cursor escape sequences stay inside synchronized output blocks", () => {
 		// Cursor placement sequences that must not leak outside \x1b[?2026h…\x1b[?2026l
 		const CURSOR_SEQ = /\x1b\[\?(?:25[hl]|\d+[A-G])/g;
 		const BSU = "\x1b[?2026h";
 		const ESU = "\x1b[?2026l";
+		const HIDE_CURSOR = "\x1b[?25l";
+		const DISABLE_AUTOWRAP = "\x1b[?7l";
+		const ENABLE_AUTOWRAP = "\x1b[?7h";
 
 		function getWrites(term: VirtualTerminal): string[] {
 			const writes: string[] = [];
@@ -1242,6 +1339,39 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("disables terminal autowrap inside paint writes", async () => {
+			const term = new VirtualTerminal(12, 6);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(["ABCDEFGHIJKL", "tail"]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const writes = getWrites(term);
+				component.setLines(["XXXXEFGHIJKL", "tail"]);
+				tui.requestRender();
+				await settle(term);
+
+				const paintWrites = writes.filter(write => write.includes(BSU));
+				expect(paintWrites.length).toBeGreaterThan(0);
+				for (const write of paintWrites) {
+					const begin = write.indexOf(BSU);
+					expect(write.startsWith(HIDE_CURSOR)).toBe(true);
+					expect(begin).toBe(HIDE_CURSOR.length);
+					const disable = write.indexOf(DISABLE_AUTOWRAP, begin + BSU.length);
+					const enable = write.lastIndexOf(ENABLE_AUTOWRAP);
+					const end = write.lastIndexOf(ESU);
+					expect(disable).toBe(begin + BSU.length);
+					expect(enable).toBeGreaterThan(disable);
+					expect(end).toBeGreaterThan(enable);
+				}
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("all cursor sequences fall inside BSU/ESU brackets on deleted-lines render", async () => {
 			const term = new VirtualTerminal(40, 10);
 			const tui = new TUI(term);
@@ -1288,13 +1418,14 @@ describe("TUI terminal-state regressions", () => {
 
 		/**
 		 * Assert that every cursor escape sequence in every write call appears
-		 * strictly between a matched BSU/ESU pair, or is the sole payload of a
-		 * standalone hideCursor call (from a no-change path).
+		 * strictly between a matched BSU/ESU pair, is the leading hideCursor that
+		 * intentionally happens just before BSU, or is the sole payload of a
+		 * standalone hideCursor call (from a no-change/no-cursor path).
 		 */
 		function assertCursorSequencesInsideSyncBlocks(writes: string[]): void {
 			for (const write of writes) {
-				if (write === "\x1b[?25l") {
-					// Standalone hideCursor — allowed (no-change path)
+				if (write === HIDE_CURSOR) {
+					// Standalone hideCursor — allowed (no-change/no-cursor path)
 					continue;
 				}
 				// Walk through the write, tracking BSU/ESU nesting
@@ -1320,6 +1451,10 @@ describe("TUI terminal-state regressions", () => {
 						}
 					}
 
+					if (match[0] === HIDE_CURSOR && write.startsWith(HIDE_CURSOR + BSU) && matchIdx === 0) {
+						idx = matchIdx + match[0].length;
+						continue;
+					}
 					expect(depth).toBeGreaterThan(0);
 
 					idx = matchIdx + match[0].length;

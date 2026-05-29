@@ -26,6 +26,16 @@ const SEGMENT_RESET = "\x1b[0m";
  * diffing so `#previousLines` mirrors what was actually written.
  */
 const LINE_TERMINATOR = "\x1b[0m\x1b]8;;\x07";
+// Hide the hardware cursor before each paint/move write. Ghostty-style bar
+// cursors can otherwise leave visual afterimages while the TUI repaints the
+// row under a visible cursor. Paint writes also disable terminal autowrap:
+// several terminals keep a "pending wrap" flag after an exact-width row, so a
+// following cursor move can first wrap to the next row and produce staircase
+// trails. The TUI emits explicit CRLFs and restores autowrap before leaving
+// synchronized output mode.
+const HIDE_CURSOR = "\x1b[?25l";
+const PAINT_BEGIN = `${HIDE_CURSOR}\x1b[?2026h\x1b[?7l`;
+const PAINT_END = "\x1b[?7h\x1b[?2026l";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
@@ -132,6 +142,24 @@ function parseSizeValue(value: SizeValue | undefined, referenceSize: number): nu
 
 function isTermuxSession(): boolean {
 	return Boolean(process.env.TERMUX_VERSION);
+}
+
+function isGhosttySession(): boolean {
+	return (
+		Bun.env.TERM_PROGRAM?.toLowerCase() === "ghostty" ||
+		Bun.env.TERM?.toLowerCase() === "xterm-ghostty" ||
+		Boolean(Bun.env.GHOSTTY_RESOURCES_DIR || Bun.env.GHOSTTY_SURFACE_ID)
+	);
+}
+
+function resolveHardwareCursorPreference(requested: boolean): boolean {
+	if (!requested) return false;
+	// Ghostty currently leaves bar-cursor afterimages when a TUI repeatedly
+	// repaints the row under a visible hardware cursor. Keep the editor in
+	// terminal-cursor-marker mode, but hide the actual terminal cursor unless a
+	// developer explicitly opts back in while testing a terminal-side fix.
+	if (isGhosttySession() && !$flag("PI_FORCE_HARDWARE_CURSOR")) return false;
+	return true;
 }
 
 /** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
@@ -280,6 +308,7 @@ export class TUI extends Container {
 	#sixelProbeTimeout?: NodeJS.Timeout;
 	#sixelProbeUnsubscribe?: () => void;
 	#showHardwareCursor = $flag("PI_HARDWARE_CURSOR");
+	#useTerminalCursorMarker = this.#showHardwareCursor;
 	#clearOnShrink = $flag("PI_CLEAR_ON_SHRINK"); // Clear empty rows when content shrinks (default: off)
 	#maxLinesRendered = 0; // Line count from last render, used for viewport calculation
 	// Highest count of content rows currently sitting in terminal scrollback
@@ -308,9 +337,9 @@ export class TUI extends Container {
 	constructor(terminal: Terminal, showHardwareCursor?: boolean) {
 		super();
 		this.terminal = terminal;
-		if (showHardwareCursor !== undefined) {
-			this.#showHardwareCursor = showHardwareCursor;
-		}
+		const requested = showHardwareCursor === undefined ? this.#showHardwareCursor : showHardwareCursor;
+		this.#showHardwareCursor = resolveHardwareCursorPreference(requested);
+		this.#useTerminalCursorMarker = requested;
 	}
 
 	get fullRedraws(): number {
@@ -321,10 +350,17 @@ export class TUI extends Container {
 		return this.#showHardwareCursor;
 	}
 
+	getUseTerminalCursorMarker(): boolean {
+		return this.#useTerminalCursorMarker;
+	}
+
 	setShowHardwareCursor(enabled: boolean): void {
-		if (this.#showHardwareCursor === enabled) return;
-		this.#showHardwareCursor = enabled;
-		if (!enabled) {
+		const nextShow = resolveHardwareCursorPreference(enabled);
+		const nextMarker = enabled;
+		if (this.#showHardwareCursor === nextShow && this.#useTerminalCursorMarker === nextMarker) return;
+		this.#showHardwareCursor = nextShow;
+		this.#useTerminalCursorMarker = nextMarker;
+		if (!nextShow) {
 			this.terminal.hideCursor();
 		}
 		this.requestRender();
@@ -1376,7 +1412,7 @@ export class TUI extends Container {
 		options: { clearViewport: boolean; clearScrollback: boolean },
 	): void {
 		this.#fullRedrawCount += 1;
-		let buffer = "\x1b[?2026h";
+		let buffer = PAINT_BEGIN;
 		if (options.clearViewport) {
 			buffer += options.clearScrollback ? "\x1b[2J\x1b[H\x1b[3J" : "\x1b[2J\x1b[H";
 		}
@@ -1387,7 +1423,7 @@ export class TUI extends Container {
 		const finalRow = Math.max(0, lines.length - 1);
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
 		buffer += seq;
-		buffer += "\x1b[?2026l";
+		buffer += PAINT_END;
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = options.clearViewport ? lines.length : Math.max(this.#maxLinesRendered, lines.length);
@@ -1414,7 +1450,7 @@ export class TUI extends Container {
 	): void {
 		this.#fullRedrawCount += 1;
 		const viewportTop = Math.max(0, lines.length - height);
-		let buffer = "\x1b[?2026h\x1b[H";
+		let buffer = `${PAINT_BEGIN}\x1b[H`;
 		for (let screenRow = 0; screenRow < height; screenRow++) {
 			if (screenRow > 0) buffer += "\r\n";
 			buffer += "\x1b[2K";
@@ -1431,7 +1467,7 @@ export class TUI extends Container {
 		const finalRow = viewportTop + height - 1;
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
 		buffer += seq;
-		buffer += "\x1b[?2026l";
+		buffer += PAINT_END;
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = lines.length;
@@ -1452,7 +1488,7 @@ export class TUI extends Container {
 		prevHardwareCursorRow: number,
 	): void {
 		if (start >= lines.length) return;
-		let buffer = "\x1b[?2026h";
+		let buffer = PAINT_BEGIN;
 		// Clamp tracked cursor to the visible viewport bottom — terminals clamp
 		// on resize, so a prior frame may have committed a row that no longer
 		// exists. Without this the scroll math points outside the viewport.
@@ -1464,7 +1500,7 @@ export class TUI extends Container {
 			buffer += "\r\n";
 			buffer += lines[i];
 		}
-		buffer += "\x1b[?2026l";
+		buffer += PAINT_END;
 		this.terminal.write(buffer);
 		const pushedNow = Math.max(0, lines.length - height);
 		if (pushedNow > this.#scrollbackHighWater) {
@@ -1500,7 +1536,7 @@ export class TUI extends Container {
 		const viewportTop = Math.max(0, this.#maxLinesRendered - height);
 		const targetRow = Math.max(0, lines.length - 1);
 
-		let buffer = "\x1b[?2026h";
+		let buffer = PAINT_BEGIN;
 
 		const clampedCursor = Math.min(prevHardwareCursorRow, prevViewportTop + height - 1);
 		const currentScreenRow = clampedCursor - prevViewportTop;
@@ -1525,7 +1561,7 @@ export class TUI extends Container {
 
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, targetRow);
 		buffer += seq;
-		buffer += "\x1b[?2026l";
+		buffer += PAINT_END;
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = lines.length;
@@ -1559,7 +1595,7 @@ export class TUI extends Container {
 		const appendStart = appendedLines && firstChanged === this.#previousLines.length && firstChanged > 0;
 		const moveTargetRow = appendStart ? firstChanged - 1 : firstChanged;
 
-		let buffer = "\x1b[?2026h";
+		let buffer = PAINT_BEGIN;
 
 		// Scroll-down branch: target row is past the bottom of the previous
 		// viewport (a pure append). Emit `\r\n`s so the terminal pushes the
@@ -1610,7 +1646,7 @@ export class TUI extends Container {
 
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalCursorRow);
 		buffer += seq;
-		buffer += "\x1b[?2026l";
+		buffer += PAINT_END;
 
 		this.#writeDiffDebug(
 			lines,
@@ -1740,6 +1776,6 @@ export class TUI extends Container {
 		}
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, totalLines, this.#hardwareCursorRow);
 		this.#hardwareCursorRow = toRow;
-		this.terminal.write(`\x1b[?2026h${seq}\x1b[?2026l`);
+		this.terminal.write(`${HIDE_CURSOR}\x1b[?2026h${seq}\x1b[?2026l`);
 	}
 }
