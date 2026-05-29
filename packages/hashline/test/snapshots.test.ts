@@ -18,21 +18,50 @@ describe("InMemorySnapshotStore", () => {
 		expect(store.recordSparse(PATH, [[3, "L3"]])).toBe(tag);
 	});
 
-	it("picks the newest matching superset", () => {
+	it("coalesces overlapping consistent reads into one tag spanning the union", () => {
 		const store = new InMemorySnapshotStore();
-		const older = store.recordSparse(PATH, [
-			[1, "L1"],
-			[2, "L2"],
-		]);
-		const newer = store.recordSparse(PATH, [
-			[2, "L2"],
-			[3, "L3"],
-		]);
+		const file = Array.from({ length: 200 }, (_, index) => `L${index + 1}`);
+		// read a.ts:50-100 then a.ts:100-200 — share line 100, file unchanged.
+		const first = store.recordContiguous(PATH, 50, file.slice(49, 100));
+		const second = store.recordContiguous(PATH, 100, file.slice(99, 200));
 
-		expect(older).toMatch(TAG_RE);
-		expect(newer).toMatch(TAG_RE);
-		expect(newer).not.toBe(older);
-		expect(store.recordSparse(PATH, [[2, "L2"]])).toBe(newer);
+		expect(first).toMatch(TAG_RE);
+		expect(second).toBe(first);
+		const snap = store.byHash(PATH, first);
+		expect(snap?.get(50)).toBe("L50");
+		expect(snap?.get(100)).toBe("L100");
+		expect(snap?.get(150)).toBe("L150");
+		expect(snap?.get(200)).toBe("L200");
+		expect(snap?.get(201)).toBeUndefined();
+	});
+
+	it("coalesces non-contiguous reads into a sparse snapshot under one tag", () => {
+		const store = new InMemorySnapshotStore();
+		const file = Array.from({ length: 200 }, (_, index) => `L${index + 1}`);
+		// read a.ts:1-100 then a.ts:150-200 — disjoint, gap 101..149.
+		const first = store.recordContiguous(PATH, 1, file.slice(0, 100));
+		const second = store.recordContiguous(PATH, 150, file.slice(149, 200));
+
+		expect(second).toBe(first);
+		const snap = store.byHash(PATH, first);
+		expect(snap?.get(1)).toBe("L1");
+		expect(snap?.get(100)).toBe("L100");
+		expect(snap?.get(125)).toBeUndefined();
+		expect(snap?.get(150)).toBe("L150");
+		expect(snap?.get(200)).toBe("L200");
+	});
+
+	it("mints a new tag when a shared line disagrees, then dedups against it", () => {
+		const store = new InMemorySnapshotStore();
+		const first = store.recordContiguous(PATH, 50, ["L50", "L51", "L52"]);
+		// re-read 52-54 but line 52 drifted — the file changed on disk.
+		const second = store.recordContiguous(PATH, 52, ["CHANGED", "L53", "L54"]);
+
+		expect(second).not.toBe(first);
+		expect(store.byHash(PATH, first)?.get(52)).toBe("L52");
+		expect(store.byHash(PATH, second)?.get(52)).toBe("CHANGED");
+		// A follow-up read consistent with the newer view dedups onto its tag.
+		expect(store.recordContiguous(PATH, 53, ["L53"])).toBe(second);
 	});
 
 	it("scrambles slot tags so the first and next tags are not predictable counters", () => {

@@ -92,10 +92,25 @@ function normalizeMistralToolId(id: string, isMistral: boolean): string {
 	}
 	return normalized;
 }
+// Direct DeepSeek model ids on NanoGPT are routed via the default tools-capable
+// path. We deliberately do NOT append `:tools` here: with `:tools`, NanoGPT
+// performs server-side tool-call parsing on the upstream DeepSeek stream and
+// 502s with `code: "malformed_tool_call"` on more complex tool schemas (issue
+// #1488). The default route forwards `delta.content` (including any DSML
+// envelope leaks) which `StreamMarkupHealing` heals into a structured call
+// client-side.
+function resolveOpenAICompletionsModelId(
+	model: Model<"openai-completions">,
+	options: OpenAICompletionsOptions | undefined,
+): string {
+	if (model.provider === "firepass") return toFirepassWireModelId(model.id);
+	if (model.provider === "fireworks") return toFireworksWireModelId(model.id);
+	if (model.provider === "openrouter") return applyOpenRouterRoutingVariant(model.id, options?.openrouterVariant);
+	return model.id;
+}
 
 /**
  * Normalize OpenAI-compatible streaming `delta.content` into plain text.
- *
  * Most providers stream `delta.content` as a string, but some (notably Mistral
  * Medium 3.5 / `mistral-medium-2604`) return an array of typed content parts
  * — e.g. `[{ type: "text", text: "Hello" }]`. Without normalization those
@@ -367,6 +382,25 @@ function getTrailingPartialDeepseekToken(text: string): string {
 const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"OpenAI completions stream timed out while waiting for the first event";
 
+const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
+const GLM_CODING_PLAN_MODEL_PATTERN = /^glm-5(?:[.-]|$)/i;
+
+/** Returns the widened OpenAI stream watchdog floor for slow GLM coding-plan reasoning models. */
+export function getOpenAICompletionsStreamIdleTimeoutFallbackMs(
+	model: Model<"openai-completions">,
+): number | undefined {
+	if (!GLM_CODING_PLAN_MODEL_PATTERN.test(model.id)) return undefined;
+	if (model.provider === "zhipu-coding-plan" || model.provider === "zai")
+		return GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS;
+
+	const baseUrl = model.baseUrl.toLowerCase();
+	if (baseUrl.includes("open.bigmodel.cn") || baseUrl.includes("api.z.ai")) {
+		return GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS;
+	}
+
+	return undefined;
+}
+
 export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 	model: Model<"openai-completions">,
 	context: Context,
@@ -387,7 +421,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
+			const idleTimeoutMs =
+				options?.streamIdleTimeoutMs ??
+				getOpenAIStreamIdleTimeoutMs(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model));
 			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
@@ -503,11 +539,33 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			// so users don't see raw `<｜...｜>` tokens.
 			const stripDeepseekChatTemplateTokens =
 				/deepseek/i.test(model.id) && (model.provider === "nvidia" || model.provider === "deepseek");
-			type OpenAIStreamBlock = TextContent | ThinkingContent | (ToolCall & { partialArgs: string });
+			type ToolCallStreamBlock = ToolCall & { partialArgs?: string; streamIndex?: number };
+			type OpenAIStreamBlock = TextContent | ThinkingContent | ToolCallStreamBlock;
+			const pendingToolCallBlocks: ToolCallStreamBlock[] = [];
+			const toolCallBlockByIndex = new Map<number, ToolCallStreamBlock>();
 			let currentBlock: OpenAIStreamBlock | undefined;
 			const blockIndex = (block: OpenAIStreamBlock | undefined): number => {
 				if (!block) return Math.max(0, output.content.length - 1);
 				return output.content.indexOf(block);
+			};
+			const finishToolCallBlock = (block: ToolCallStreamBlock): void => {
+				if (block.partialArgs === undefined) return;
+				const contentIndex = blockIndex(block);
+				if (contentIndex < 0) return;
+				block.arguments = parseStreamingJson(block.partialArgs);
+				delete block.partialArgs;
+				if (block.streamIndex !== undefined) {
+					toolCallBlockByIndex.delete(block.streamIndex);
+					delete block.streamIndex;
+				}
+				const pendingIndex = pendingToolCallBlocks.indexOf(block);
+				if (pendingIndex >= 0) pendingToolCallBlocks.splice(pendingIndex, 1);
+				stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
+			};
+			const finishPendingToolCallBlocks = (): void => {
+				for (const block of [...pendingToolCallBlocks]) {
+					finishToolCallBlock(block);
+				}
 			};
 			const finishCurrentBlock = (block: OpenAIStreamBlock | undefined): void => {
 				if (!block) return;
@@ -521,9 +579,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial: output });
 					return;
 				}
-				block.arguments = parseStreamingJson(block.partialArgs);
-				delete (block as { partialArgs?: string }).partialArgs;
-				stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
+				finishToolCallBlock(block);
 			};
 			const appendText = (
 				message: AssistantMessage,
@@ -745,43 +801,62 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 					if (choice?.delta?.tool_calls && choice.delta.tool_calls.length > 0) {
 						for (const toolCall of choice.delta.tool_calls) {
+							const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
+							let block = streamIndex !== undefined ? toolCallBlockByIndex.get(streamIndex) : undefined;
+							if (!block && toolCall.id) {
+								block = pendingToolCallBlocks.find(candidate => candidate.id === toolCall.id);
+							}
 							if (
-								!currentBlock ||
-								currentBlock.type !== "toolCall" ||
-								(toolCall.id && currentBlock.id !== toolCall.id)
+								!block &&
+								currentBlock?.type === "toolCall" &&
+								(!toolCall.id || currentBlock.id === toolCall.id)
 							) {
-								finishCurrentBlock(currentBlock);
-								currentBlock = {
+								block = currentBlock;
+							}
+
+							if (!block) {
+								if (!currentBlock || currentBlock.type !== "toolCall") {
+									finishCurrentBlock(currentBlock);
+								}
+								block = {
 									type: "toolCall",
 									id: toolCall.id || "",
 									name: toolCall.function?.name || "",
 									arguments: {},
 									partialArgs: "",
+									streamIndex,
 								};
-								output.content.push(currentBlock);
+								if (streamIndex !== undefined) toolCallBlockByIndex.set(streamIndex, block);
+								pendingToolCallBlocks.push(block);
+								currentBlock = block;
+								output.content.push(block);
 								stream.push({
 									type: "toolcall_start",
-									contentIndex: blockIndex(currentBlock),
+									contentIndex: blockIndex(block),
 									partial: output,
 								});
+							} else {
+								currentBlock = block;
+								if (streamIndex !== undefined && block.streamIndex === undefined) {
+									block.streamIndex = streamIndex;
+									toolCallBlockByIndex.set(streamIndex, block);
+								}
 							}
 
-							if (currentBlock.type === "toolCall") {
-								if (toolCall.id) currentBlock.id = toolCall.id;
-								if (toolCall.function?.name) currentBlock.name = toolCall.function.name;
-								let delta = "";
-								if (toolCall.function?.arguments) {
-									delta = toolCall.function.arguments;
-									currentBlock.partialArgs += toolCall.function.arguments;
-									currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
-								}
-								stream.push({
-									type: "toolcall_delta",
-									contentIndex: blockIndex(currentBlock),
-									delta,
-									partial: output,
-								});
+							if (toolCall.id) block.id = toolCall.id;
+							if (toolCall.function?.name) block.name = toolCall.function.name;
+							let delta = "";
+							if (toolCall.function?.arguments) {
+								delta = toolCall.function.arguments;
+								block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
+								block.arguments = parseStreamingJson(block.partialArgs);
 							}
+							stream.push({
+								type: "toolcall_delta",
+								contentIndex: blockIndex(block),
+								delta,
+								partial: output,
+							});
 						}
 					}
 
@@ -819,7 +894,24 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				flushDeepseekStripBuffer(true);
 			}
 
-			finishCurrentBlock(currentBlock);
+			if (currentBlock?.type === "toolCall") {
+				finishPendingToolCallBlocks();
+			} else {
+				finishCurrentBlock(currentBlock);
+				finishPendingToolCallBlocks();
+			}
+
+			// Some OpenAI-compatible hosts stream structured `tool_calls` but report
+			// `finish_reason: "stop"` instead of `"tool_calls"`. In the OpenAI contract a
+			// tool call always means "execute and continue", so promote that
+			// natural-completion finish to `toolUse` whenever the turn produced tool-call
+			// blocks — the agent loop gates execution on the stop reason. `error`,
+			// `length`, and `aborted` are intentionally left untouched. (Anthropic's
+			// distinct `end_turn`-with-tool-calls "abandon" semantics live in its own
+			// provider and correctly keep `stop`.)
+			if (output.stopReason === "stop" && output.content.some(b => b.type === "toolCall")) {
+				output.stopReason = "toolUse";
+			}
 
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			if (firstEventTimeoutError) {
@@ -1044,14 +1136,7 @@ function buildParams(
 	// Note: Direct kimi-code provider is handled by the dedicated Kimi provider in kimi.ts.
 	const effectiveMaxTokens = options?.maxTokens ?? (isKimiModelId ? model.maxTokens : undefined);
 
-	const requestModelId =
-		model.provider === "fireworks"
-			? toFireworksWireModelId(model.id)
-			: model.provider === "firepass"
-				? toFirepassWireModelId(model.id)
-				: model.provider === "openrouter"
-					? applyOpenRouterRoutingVariant(model.id, options?.openrouterVariant)
-					: model.id;
+	const requestModelId = resolveOpenAICompletionsModelId(model, options);
 	const params: OpenAICompletionsParams = {
 		model: requestModelId,
 		messages,

@@ -545,7 +545,7 @@ describe("TUI terminal-state regressions", () => {
 			} finally {
 				tui.stop();
 			}
-		});
+		}, 15_000);
 		it("forced renders during resize storm stay stable under cursor relocation", async () => {
 			const term = new VirtualTerminal(80, 18);
 			const tui = new TUI(term);
@@ -731,6 +731,41 @@ describe("TUI terminal-state regressions", () => {
 			} finally {
 				tui.stop();
 			}
+		}, 15_000);
+
+		it("rebuilds native scrollback on a width resize without duplicating rows", async () => {
+			// A width resize makes the terminal reflow its own committed scrollback
+			// at the new size. Repainting only the viewport leaves those stale
+			// old-width rows in history, so overflowed rows show up twice (old-width
+			// wrap + new-width copy) when the user scrolls back. A real resize must
+			// rebuild history synchronously, unlike a pure content mutation which is
+			// deferred to the next checkpoint.
+			const term = new VirtualTerminal(32, 5);
+			const tui = new TUI(term);
+			// Rows wider than the post-resize width so the committed scrollback
+			// reflows (wraps) at the narrower size; short rows would not regress.
+			const filler = "x".repeat(24);
+			const component = new MutableLinesComponent(Array.from({ length: 12 }, (_v, i) => `line-${i}-${filler}`));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				// User sits at the bottom (not scrolled) and narrows the terminal.
+				term.resize(28, 5);
+				await settle(term);
+
+				const scrollback = term.getScrollBuffer();
+				for (let i = 0; i < 12; i++) {
+					const pattern = new RegExp(`\\bline-${i}\\b`);
+					expect(countMatches(scrollback, pattern), `line-${i} should appear once after resize`).toBe(1);
+				}
+				// The resize rebuilt history in place; nothing is left deferred.
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
+			} finally {
+				tui.stop();
+			}
 		});
 
 		it("keeps viewport aligned when offscreen header changes during overflow growth", async () => {
@@ -849,12 +884,101 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
-		it("tail-cell mutation after the transcript overflowed does not re-deposit header rows", async () => {
-			// Repro for the reported scrollback-duplication bug: once a header
+		it("defers stale-history rebuild while native scrollback is scrolled", async () => {
+			const term = new VirtualTerminal(32, 5);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("line-", 12));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				term.scrollLines(-2);
+				const before = term.getBufferPosition();
+				expect(before.viewportY).toBeGreaterThan(0);
+
+				component.setLines(rows("line-", 8));
+				tui.requestRender();
+				await settle(term);
+
+				const after = term.getBufferPosition();
+				expect(after.viewportY).toBe(before.viewportY);
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(true);
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("refreshes deferred native scrollback at an explicit bottom checkpoint", async () => {
+			const term = new VirtualTerminal(32, 5);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("line-", 12));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				term.scrollLines(-2);
+
+				component.setLines(rows("line-", 8));
+				tui.requestRender();
+				await settle(term);
+
+				term.scrollLines(999);
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(true);
+				await settle(term);
+
+				const position = term.getBufferPosition();
+				expect(position.viewportY).toBe(position.baseY);
+				expect(visible(term).map(line => line.trim())).toEqual(["line-3", "line-4", "line-5", "line-6", "line-7"]);
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("refreshes dirty native scrollback before transient checkpoint rows render", async () => {
+			const term = new VirtualTerminal(32, 5);
+			const tui = new TUI(term);
+			const chat = new MutableLinesComponent(rows("line-", 12));
+			const status = new MutableLinesComponent([]);
+			const footer = new MutableLinesComponent(["FOOTER"]);
+			tui.addChild(chat);
+			tui.addChild(status);
+			tui.addChild(footer);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				chat.setLines(rows("line-", 8));
+				tui.requestRender();
+				await settle(term);
+				term.scrollLines(999);
+
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(true);
+				status.setLines(["LOADER"]);
+				tui.requestRender();
+				await settle(term);
+
+				status.setLines([]);
+				tui.requestRender();
+				await settle(term);
+
+				expect(term.getScrollBuffer().join("\n")).not.toContain("LOADER");
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("tail-cell mutation is cleaned up at the next native scrollback checkpoint", async () => {
+			// Repro for the old scrollback-duplication bug: once a header
 			// (e.g. the welcome screen) has scrolled into terminal history, the
 			// last tool cell mutating (grow/shrink cycles, completion collapse)
-			// must not re-emit those header rows in a way that visibly
-			// duplicates them when the user scrolls back.
+			// makes native scrollback stale. Live frames now defer the destructive
+			// clear+replay until a user-run checkpoint rather than yanking users who
+			// are reading scrollback mid-stream.
 			const term = new VirtualTerminal(40, 10);
 			const tui = new TUI(term);
 			const header = new MutableLinesComponent(["HEADER-0", "HEADER-1", "HEADER-2", "HEADER-3", "HEADER-4"]);
@@ -892,11 +1016,14 @@ describe("TUI terminal-state regressions", () => {
 
 				// Final completion-style collapse: full transcript fits in the
 				// viewport again, even though scrollback already holds an
-				// earlier copy of HEADER.
+				// earlier copy of HEADER. Rebuild at the next checkpoint to clean the
+				// stale native history.
 				tail.setLines(["[completed: many lines]", "[footer]"]);
 				tui.requestRender();
 				await settle(term);
-
+				term.scrollLines(999);
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(true);
+				await settle(term);
 				const scrollback = term.getScrollBuffer();
 				for (let i = 0; i < 5; i++) {
 					const pattern = new RegExp(`\\bHEADER-${i}\\b`);

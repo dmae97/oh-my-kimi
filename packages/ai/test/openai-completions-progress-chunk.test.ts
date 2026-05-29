@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { getBundledModel } from "../src/models";
-import { isOpenAICompletionsProgressChunk, streamOpenAICompletions } from "../src/providers/openai-completions";
+import {
+	getOpenAICompletionsStreamIdleTimeoutFallbackMs,
+	isOpenAICompletionsProgressChunk,
+	streamOpenAICompletions,
+} from "../src/providers/openai-completions";
 import type { Context, Model } from "../src/types";
 
 const originalFetch = global.fetch;
@@ -79,6 +83,36 @@ function createKeepaliveOnlyCompletionsResponse(modelId: string, signal: AbortSi
 afterEach(() => {
 	global.fetch = originalFetch;
 });
+describe("getOpenAICompletionsStreamIdleTimeoutFallbackMs", () => {
+	it("widens GLM 5.1 coding-plan stream watchdogs", () => {
+		const model = {
+			...openAICompletionsModel,
+			id: "glm-5.1",
+			name: "GLM-5.1",
+			provider: "zhipu-coding-plan",
+			baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+		} satisfies Model<"openai-completions">;
+
+		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBe(600_000);
+	});
+
+	it("also widens custom Z.AI OpenAI-compatible GLM 5.1 endpoints", () => {
+		const model = {
+			...openAICompletionsModel,
+			id: "glm-5.1",
+			name: "GLM-5.1",
+			provider: "openai",
+			baseUrl: "https://api.z.ai/api/coding/paas/v4",
+		} satisfies Model<"openai-completions">;
+
+		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBe(600_000);
+	});
+
+	it("keeps ordinary OpenAI-compatible models on the global timeout", () => {
+		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(openAICompletionsModel)).toBeUndefined();
+	});
+});
+
 /**
  * Contract: `isOpenAICompletionsProgressChunk` decides whether a streamed chunk
  * resets the idle-watchdog deadline in `iterateWithIdleTimeout`. A false

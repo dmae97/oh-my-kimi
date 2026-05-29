@@ -260,18 +260,18 @@ export function getPluginsDir(home?: string): string {
 }
 
 /** Where npm installs packages (~/.omp/plugins/node_modules). */
-export function getPluginsNodeModules(): string {
-	return path.join(getPluginsDir(), "node_modules");
+export function getPluginsNodeModules(home?: string): string {
+	return path.join(getPluginsDir(home), "node_modules");
 }
 
 /** Plugin manifest (~/.omp/plugins/package.json). */
-export function getPluginsPackageJson(): string {
-	return path.join(getPluginsDir(), "package.json");
+export function getPluginsPackageJson(home?: string): string {
+	return path.join(getPluginsDir(home), "package.json");
 }
 
 /** Plugin lock file (~/.omp/plugins/omp-plugins.lock.json). */
-export function getPluginsLockfile(): string {
-	return path.join(getPluginsDir(), "omp-plugins.lock.json");
+export function getPluginsLockfile(home?: string): string {
+	return path.join(getPluginsDir(home), "omp-plugins.lock.json");
 }
 
 /** Get the remote mount directory (~/.omp/remote). */

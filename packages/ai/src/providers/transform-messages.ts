@@ -67,7 +67,21 @@ export function transformMessages<TApi extends Api>(
 			// Aborted/errored messages may have partially-streamed thinking signatures.
 			// A partial signature is invalid and will be rejected by the API, so we must
 			// strip signatures from thinking blocks in these messages.
-			const hasInvalidSignatures = assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error";
+			//
+			// Abandoned tool-use turns get the same treatment. When a turn carries
+			// toolCall blocks but did NOT request tool execution (stopReason !== "toolUse"
+			// — e.g. adaptive-thinking Opus emitting tool calls and then ending the turn
+			// on `end_turn`/`stop`), the agent loop pairs those calls with placeholder
+			// tool_results to keep the tool_use/tool_result contract valid. Replaying the
+			// turn's *signed* thinking in that tool_result continuation trips Anthropic's
+			// "`thinking` blocks in the latest assistant message cannot be modified" — the
+			// signature was bound to an end_turn context, not a tool-use one. Stripping it
+			// downgrades the thinking to plain text downstream, which the API accepts.
+			// Normal tool-use turns (stopReason "toolUse") never match this guard.
+			const abandonedToolUse =
+				assistantMsg.stopReason !== "toolUse" && assistantMsg.content.some(b => b.type === "toolCall");
+			const hasInvalidSignatures =
+				assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error" || abandonedToolUse;
 
 			const transformedContent = assistantMsg.content.flatMap(block => {
 				if (block.type === "thinking") {

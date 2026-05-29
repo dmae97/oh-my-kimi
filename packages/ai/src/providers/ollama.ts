@@ -608,6 +608,13 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 			}
 			endActiveThinkingBlock();
 			endActiveTextBlock();
+			// Tool calls always mean "execute and continue" in the OpenAI/Ollama contract.
+			// If the turn produced tool-call blocks but reported a natural `stop`, promote
+			// to `toolUse` so the agent loop runs them (it gates execution on the stop
+			// reason). `length`/`aborted`/`error` are intentionally left untouched.
+			if (output.stopReason === "stop" && output.content.some(block => block.type === "toolCall")) {
+				output.stopReason = "toolUse";
+			}
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) {
 				output.ttft = firstTokenTime - startTime;

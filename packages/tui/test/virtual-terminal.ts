@@ -130,6 +130,19 @@ export class VirtualTerminal implements Terminal {
 			this.inputHandler(data);
 		}
 	}
+	/**
+	 * Simulate the user scrolling through native terminal scrollback.
+	 * Negative values scroll up; positive values scroll down.
+	 */
+	scrollLines(lines: number): void {
+		this.xterm.scrollLines(lines);
+	}
+
+	/** Get the terminal buffer's scrollback and viewport offsets. */
+	getBufferPosition(): { baseY: number; viewportY: number } {
+		const buffer = this.xterm.buffer.active;
+		return { baseY: buffer.baseY, viewportY: buffer.viewportY };
+	}
 
 	/**
 	 * Resize the terminal

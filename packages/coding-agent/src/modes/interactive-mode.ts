@@ -849,6 +849,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#pendingSubmissionDispose = undefined;
 		}
 		this.editor.setText("");
+		this.ui.refreshNativeScrollbackIfDirty();
 		this.ensureLoadingAnimation();
 		this.ui.requestRender();
 		return submission;

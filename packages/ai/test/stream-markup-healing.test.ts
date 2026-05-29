@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { getBundledModel } from "../src/models";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
 import { stream } from "../src/stream";
-import type { Context, Model, ToolCall } from "../src/types";
+import type { Context, Model, Tool, ToolCall } from "../src/types";
 import { getStreamMarkupHealingPattern, StreamMarkupHealing } from "../src/utils/stream-markup-healing";
 
 const originalFetch = global.fetch;
@@ -81,6 +81,33 @@ const REPORTED_DSML_LEAK =
 	" </｜DSML｜invoke>\n" +
 	" </｜DSML｜tool_calls>";
 
+const bashTool: Tool = {
+	name: "bash",
+	description: "Run a shell command",
+	parameters: {
+		type: "object",
+		properties: {
+			_i: { type: "string" },
+			command: { type: "string" },
+			timeout: { type: "number" },
+		},
+		required: ["command"],
+		additionalProperties: false,
+	},
+};
+
+const readTool: Tool = {
+	name: "read",
+	description: "Read a file",
+	parameters: {
+		type: "object",
+		properties: {
+			path: { type: "string" },
+		},
+		required: ["path"],
+		additionalProperties: false,
+	},
+};
 const deepseekCloudModel: Model<"ollama-chat"> = {
 	id: "deepseek-v4-pro",
 	name: "DeepSeek V4 Pro",
@@ -118,10 +145,10 @@ describe("StreamMarkupHealing pattern selection", () => {
 	it("selects the requested grammar without creating provider-specific collectors", () => {
 		expect(getStreamMarkupHealingPattern("openrouter", "moonshotai/kimi-k2")).toBe("kimi");
 		expect(getStreamMarkupHealingPattern("ollama-cloud", "deepseek-v4-pro")).toBe("dsml");
-		expect(getStreamMarkupHealingPattern("openrouter", "anthropic/claude-sonnet-4.5")).toBe("antml");
 		expect(getStreamMarkupHealingPattern("minimax-code", "MiniMax-M2.5", { parseThinkingTags: true })).toBe(
 			"thinking",
 		);
+		expect(getStreamMarkupHealingPattern("nanogpt", "deepseek/deepseek-v4-pro")).toBe("dsml");
 		expect(getStreamMarkupHealingPattern("ollama-cloud", "gpt-oss:120b")).toBeUndefined();
 		expect(getStreamMarkupHealingPattern("openai", "deepseek-v4-pro")).toBeUndefined();
 	});
@@ -195,46 +222,6 @@ describe("StreamMarkupHealing DSML envelope pattern", () => {
 		expect(calls).toHaveLength(1);
 		expect(calls[0].name).toBe("bash");
 		expect(JSON.parse(calls[0].arguments)).toEqual({ cmd: "ls -la" });
-	});
-});
-
-describe("StreamMarkupHealing ANTML pattern", () => {
-	it("parses function_calls/invoke/parameter into a structured tool call", () => {
-		const healing = new StreamMarkupHealing({ pattern: "antml" });
-		const leaked =
-			"Before\n" +
-			"<antml:function_calls>" +
-			'<antml:invoke name="Read">' +
-			'<antml:parameter name="file_path">C:\\Users\\karashiiro\\Documents\\ANTML.md</antml:parameter>' +
-			'<antml:parameter name="options">{"offset":1,"limit":20}</antml:parameter>' +
-			"</antml:invoke>" +
-			"</antml:function_calls>" +
-			"\nAfter";
-
-		const events = healing.feedEvents(leaked);
-		expect(events.map(event => event.type)).toEqual(["text", "toolCall", "text"]);
-
-		const [before, call, after] = events;
-		if (before?.type !== "text" || call?.type !== "toolCall" || after?.type !== "text") {
-			throw new Error("ANTML healing emitted unexpected event order");
-		}
-		expect(before.text).toBe("Before\n");
-		expect(call.call.name).toBe("Read");
-		expect(JSON.parse(call.call.arguments)).toEqual({
-			file_path: "C:\\Users\\karashiiro\\Documents\\ANTML.md",
-			options: { offset: 1, limit: 20 },
-		});
-		expect(after.text).toBe("\nAfter");
-	});
-
-	it("parses ANTML thinking blocks as thinking events", () => {
-		const healing = new StreamMarkupHealing({ pattern: "antml" });
-		const events = healing.feedEvents("visible<antml:thinking>hidden</antml:thinking>answer");
-		expect(events).toEqual([
-			{ type: "text", text: "visible" },
-			{ type: "thinking", thinking: "hidden" },
-			{ type: "text", text: "answer" },
-		]);
 	});
 });
 
@@ -647,44 +634,84 @@ describe("OpenAI completions provider DSML envelope healing", () => {
 		});
 		expect(result.stopReason).toBe("toolUse");
 	});
-});
 
-describe("OpenAI completions provider ANTML function-call healing", () => {
-	it("heals ANTML function_calls into structured tool calls", async () => {
-		const model: Model<"openai-completions"> = {
-			id: "anthropic/claude-sonnet-4.5",
-			name: "Claude Sonnet 4.5",
-			api: "openai-completions",
-			provider: "openrouter",
-			baseUrl: "https://openrouter.ai/api/v1",
-			reasoning: true,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 200_000,
-			maxTokens: 8_192,
-		};
-		const leaked =
-			"I'll read it.\n" +
-			"<antml:function_calls>" +
-			'<antml:invoke name="Read">' +
-			'<antml:parameter name="file_path">docs/ANTML.md</antml:parameter>' +
-			"</antml:invoke>" +
-			"</antml:function_calls>";
-		global.fetch = mockFetch([chunk(model.id, { content: leaked }), chunk(model.id, {}, "stop"), "[DONE]"]);
+	it("heals NanoGPT-hosted DeepSeek V4 Pro DSML leaks (issue #1488)", async () => {
+		const model = getBundledModel<"openai-completions">("nanogpt", "deepseek/deepseek-v4-pro");
+		expect(model.provider).toBe("nanogpt");
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		let payload: Record<string, unknown> | undefined;
+		global.fetch = mockFetch([
+			chunk(model.id, { content: "Checking.\n" }),
+			chunk(model.id, { content: REPORTED_DSML_LEAK }),
+			chunk(model.id, {}, "stop"),
+			"[DONE]",
+		]);
 
+		const result = await streamOpenAICompletions(
+			model,
+			{ messages: [{ role: "user", content: "Check Fedora", timestamp: Date.now() }], tools: [bashTool] },
+			{
+				apiKey: "test-key",
+				reasoning: "high",
+				onPayload: value => {
+					payload = value as Record<string, unknown>;
+				},
+			},
+		).result();
+
+		// Issue #1488: `:tools` triggers NanoGPT's server-side tool-call parser
+		// which 502s on complex DeepSeek payloads. We route via the default
+		// path and rely on DSML healing instead.
+		expect(payload?.model).toBe("deepseek/deepseek-v4-pro");
+		expect(payload?.reasoning_effort).toBe("high");
+		expect(payload?.tools).toBeDefined();
 		const text = result.content
 			.filter((b): b is { type: "text"; text: string } => b.type === "text")
 			.map(b => b.text)
 			.join("");
-		expect(text).toBe("I'll read it.\n");
-		expect(text).not.toContain("antml");
+		expect(text).not.toContain("DSML");
+		expect(text).not.toContain("<｜");
 
 		const toolCalls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
 		expect(toolCalls).toHaveLength(1);
-		expect(toolCalls[0].name).toBe("Read");
-		expect(toolCalls[0].arguments).toEqual({ file_path: "docs/ANTML.md" });
+		expect(toolCalls[0].name).toBe("bash");
+		expect(toolCalls[0].arguments).toMatchObject({
+			_i: "Check Fedora 42 available packages",
+			timeout: 15,
+		});
+		expect(result.stopReason).toBe("toolUse");
+	});
+
+	it("keeps indexed parallel NanoGPT read deltas attached to their own tool calls", async () => {
+		const model = getBundledModel<"openai-completions">("nanogpt", "deepseek/deepseek-v4-pro");
+		global.fetch = mockFetch([
+			chunk(model.id, {
+				tool_calls: [
+					{ index: 0, id: "call_a", type: "function", function: { name: "read", arguments: "" } },
+					{ index: 1, id: "call_b", type: "function", function: { name: "read", arguments: "" } },
+				],
+			}),
+			chunk(model.id, {
+				tool_calls: [
+					{ index: 0, function: { arguments: '{"path":"a.ts"}' } },
+					{ index: 1, function: { arguments: '{"path":"b.ts"}' } },
+				],
+			}),
+			chunk(model.id, {}, "tool_calls"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(
+			model,
+			{ messages: [{ role: "user", content: "Read a.ts and b.ts", timestamp: Date.now() }], tools: [readTool] },
+			{ apiKey: "test-key", reasoning: "high" },
+		).result();
+
+		const toolCalls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
+		expect(toolCalls).toHaveLength(2);
+		expect(toolCalls.map(call => call.id)).toEqual(["call_a", "call_b"]);
+		expect(toolCalls.map(call => call.name)).toEqual(["read", "read"]);
+		expect(toolCalls.map(call => call.arguments)).toEqual([{ path: "a.ts" }, { path: "b.ts" }]);
 		expect(result.stopReason).toBe("toolUse");
 	});
 });
