@@ -21,8 +21,8 @@ function seedTwoSnapshots(): { store: InMemorySnapshotStore; v0Text: string; v1T
 	v1Lines[4] = "L5-CHANGED";
 	const v0Text = `${v0Lines.join("\n")}\n`;
 	const v1Text = `${v1Lines.join("\n")}\n`;
-	const h0 = store.recordContiguous(PATH, 1, v0Text.split("\n"), { fullText: v0Text });
-	const h1 = store.recordContiguous(PATH, 1, v1Text.split("\n"), { fullText: v1Text });
+	const h0 = store.record(PATH, v0Text);
+	const h1 = store.record(PATH, v1Text);
 	return { store, v0Text, v1Text, h0, h1 };
 }
 

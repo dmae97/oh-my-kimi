@@ -23,7 +23,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { ReadToolDetails } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 
-const HASHLINE_HEADER_LINE = /^¶(\S+)#([0-9A-F]{3})$/m;
+const HASHLINE_HEADER_LINE = /^¶(\S+)#([0-9A-F]{4})$/m;
 const COLUMN_CAP = 64;
 const LONG_LINE_LEN = COLUMN_CAP * 3;
 
@@ -115,8 +115,8 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		expect(snapshot).not.toBeNull();
 
 		// The snapshot MUST hold the on-disk text, not the display-truncated version.
-		expect(snapshot?.fullText).toBe(fullText);
-		expect(snapshot?.get(2)).toBe(longLine);
+		expect(snapshot?.text).toBe(fullText);
+		expect(snapshot?.text.split("\n")[1]).toBe(longLine);
 	});
 
 	it("range read snapshot keeps untruncated content for long lines", async () => {
@@ -133,7 +133,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 
 		const { tag } = extractHeader(text);
 		const snapshot = getFileSnapshotStore(session).byHash(filePath, tag);
-		expect(snapshot?.get(2)).toBe(longLine);
+		expect(snapshot?.text.split("\n")[1]).toBe(longLine);
 	});
 
 	it("multi-range read snapshot keeps untruncated content for long lines", async () => {
@@ -150,8 +150,8 @@ describe("read tool column truncation vs hashline snapshot", () => {
 
 		const { tag } = extractHeader(text);
 		const snapshot = getFileSnapshotStore(session).byHash(filePath, tag);
-		expect(snapshot?.get(2)).toBe(longLine);
-		expect(snapshot?.get(6)).toBe(longLine);
+		expect(snapshot?.text.split("\n")[1]).toBe(longLine);
+		expect(snapshot?.text.split("\n")[5]).toBe(longLine);
 	});
 
 	it("edit can apply against a file with long lines without re-reading", async () => {

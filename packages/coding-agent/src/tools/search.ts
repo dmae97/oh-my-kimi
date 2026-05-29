@@ -1,5 +1,4 @@
-import { constants } from "node:fs";
-import { access, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { formatHashlineHeader } from "@oh-my-pi/hashline";
@@ -9,7 +8,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { getFileSnapshotStore } from "../edit/file-snapshot-store";
+import { recordFileSnapshot } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
@@ -610,19 +609,17 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					matchesByFile.get(relativePath)!.push(match);
 				}
 				const displayLines: string[] = [];
-				const hashContexts = new Map<string, { absolutePath: string; tag?: string }>();
-				const snapshotStore = baseDisplayMode.hashLines ? getFileSnapshotStore(this.session) : undefined;
+				const hashContexts = new Map<string, { tag: string }>();
 				if (baseDisplayMode.hashLines) {
 					for (const relativePath of fileList) {
 						if (archiveDisplaySet.has(relativePath)) continue;
 						const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
 						if (immutableSourcePaths.has(absoluteFilePath)) continue;
-						try {
-							await access(absoluteFilePath, constants.R_OK);
-							hashContexts.set(relativePath, { absolutePath: absoluteFilePath });
-						} catch {
-							// Best-effort: if the file disappeared between grep and render, fall back to plain line output.
-						}
+						// Mint a whole-file content tag so any anchor validates while the
+						// file is unchanged; over-cap / unreadable files get no tag (and
+						// therefore plain, non-editable line output).
+						const tag = await recordFileSnapshot(this.session, absoluteFilePath);
+						if (tag) hashContexts.set(relativePath, { tag });
 					}
 				}
 				const renderMatchesForFile = (relativePath: string): { model: string[]; display: string[] } => {
@@ -641,39 +638,33 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						}
 						return nextWidth;
 					}, 0);
-					const cacheEntries: Array<readonly [number, string]> = [];
 					let lastEmittedLine: number | undefined;
 					const gutterPad = " ".repeat(lineNumberWidth + 1);
 					for (const match of fileMatches) {
-						const pushLine = (lineNumber: number, line: string, isMatch: boolean, recordable: boolean) => {
+						const pushLine = (lineNumber: number, line: string, isMatch: boolean) => {
 							if (lastEmittedLine !== undefined && lineNumber > lastEmittedLine + 1) {
 								modelOut.push("...");
 								displayOut.push(`${gutterPad}│...`);
 							}
 							modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
 							displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
-							if (recordable) cacheEntries.push([lineNumber, line] as const);
 							lastEmittedLine = lineNumber;
 						};
 						if (match.contextBefore) {
 							for (const ctx of match.contextBefore) {
-								pushLine(ctx.lineNumber, ctx.line, false, true);
+								pushLine(ctx.lineNumber, ctx.line, false);
 							}
 						}
-						pushLine(match.lineNumber, match.line, true, !match.truncated);
+						pushLine(match.lineNumber, match.line, true);
 						if (match.truncated) {
 							linesTruncated = true;
 						}
 						if (match.contextAfter) {
 							for (const ctx of match.contextAfter) {
-								pushLine(ctx.lineNumber, ctx.line, false, true);
+								pushLine(ctx.lineNumber, ctx.line, false);
 							}
 						}
 						fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
-					}
-					if (cacheEntries.length > 0 && hashContext) {
-						const tag = snapshotStore?.recordSparse(hashContext.absolutePath, cacheEntries);
-						if (tag) hashContext.tag = tag;
 					}
 					return { model: modelOut, display: displayOut };
 				};

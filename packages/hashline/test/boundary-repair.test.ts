@@ -146,7 +146,7 @@ describe("boundary-balance repair through stale-snapshot recovery", () => {
 		const currentText = snapshotText.replace("const tail = 0;", "const tail = 99;");
 
 		const store = new InMemorySnapshotStore();
-		const fileHash = store.recordContiguous(PATH, 1, snapshotText.split("\n"), { fullText: snapshotText });
+		const fileHash = store.record(PATH, snapshotText);
 
 		// `replace 4..5:` replaces the body lines but the payload also restates the `});`
 		// that survives at line 6 — the duplicate-closer mistake.

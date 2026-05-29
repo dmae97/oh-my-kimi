@@ -240,7 +240,7 @@ describe("computeHashlineDiff", () => {
 		// fires through computeHashlineDiff but produces identical content.
 		const text = `${line}\n`;
 		const snapshotStore = new InMemorySnapshotStore();
-		const tag = snapshotStore.recordContiguous(sourcePath, 1, text.split("\n"), { fullText: text });
+		const tag = snapshotStore.record(sourcePath, text);
 		const input = `${formatHashlineHeader(sourcePath, tag)}\nreplace 1..1:\n+${line}\n`;
 		const result = await computeHashlineDiff({ input }, tempDir, snapshotStore);
 		expect("error" in result).toBe(true);

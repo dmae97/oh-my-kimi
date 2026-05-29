@@ -1,10 +1,15 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Changed hashline edit syntax to verb-based v4: body-bearing ops are `replace N..M:`, `insert before N:`, `insert after N:`, `insert head:`, and `insert tail:`, while bodyless `delete N..M` handles deletion. Removed `>A..B` repeat rows and the old `prepend:` / `append:` virtual insert headers; `-` rows remain rejected with a teaching error.
+
+### Changed
+
+- Changed hashline tag generation to use full-file snapshots for read/search/ast-grep and related outputs, so hashline anchors now validate only when the complete file matches
+- Changed hashline tagging to omit file headers for files over 4 MiB or that cannot be snapshotted, so those files are returned without editable hashline anchors
+- Changed hashline context generation for line edits from partial/sparse snippets to complete-file fingerprints, reducing stale anchors for partially read files
 
 ### Fixed
 

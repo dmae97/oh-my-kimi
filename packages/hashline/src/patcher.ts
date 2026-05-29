@@ -23,14 +23,14 @@
  * filesystem configuration.
  */
 import { applyEdits } from "./apply";
-import { formatHashlineHeader, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
+import { computeFileHash, formatHashlineHeader, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
 import type { Filesystem, WriteResult } from "./fs";
 import { isNotFound } from "./fs";
 import type { Patch, PatchSection } from "./input";
 import { MismatchError } from "./mismatch";
 import { detectLineEnding, type LineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./normalize";
 import { Recovery, type RecoveryResult } from "./recovery";
-import type { Snapshot, SnapshotStore } from "./snapshots";
+import type { SnapshotStore } from "./snapshots";
 import type { ApplyResult, Edit } from "./types";
 
 export interface PatcherOptions {
@@ -116,25 +116,6 @@ function recoveryToApplyResult(result: RecoveryResult): ApplyResult {
 		warnings: result.warnings,
 	};
 }
-
-/**
- * Decide whether `snapshot` proves the live file is byte-for-byte the read
- * the model authored against. Two shapes:
- *   - Full-text snapshot: cheap string equality.
- *   - Sparse snapshot (e.g. selector reads, search hits): every anchor line
- *     must be in the snapshot AND every recorded line must match the live
- *     file. Without this branch, sparse reads can't short-circuit and fall
- *     through to recovery, which declines them as "patcher-owned direct
- *     apply" — yielding a spurious MismatchError on unchanged files.
- */
-function snapshotProvesUnchanged(snapshot: Snapshot, currentText: string, section: PatchSection): boolean {
-	if (snapshot.fullText !== undefined) return snapshot.fullText === currentText;
-	for (const lineNumber of section.collectAnchorLines()) {
-		if (snapshot.get(lineNumber) === undefined) return false;
-	}
-	return snapshot.matchesLiveFile(currentText.split("\n"));
-}
-
 function mergeWarnings(...sources: ReadonlyArray<readonly string[] | undefined>): string[] {
 	const out: string[] = [];
 	for (const source of sources) {
@@ -324,9 +305,8 @@ export class Patcher {
 	}
 
 	#recordFullSnapshot(canonicalPath: string, normalized: string): string {
-		return this.snapshots.recordContiguous(canonicalPath, 1, normalized.split("\n"), { fullText: normalized });
+		return this.snapshots.record(canonicalPath, normalized);
 	}
-
 	#applyWithRecovery(args: {
 		section: PatchSection;
 		canonicalPath: string;
@@ -337,29 +317,27 @@ export class Patcher {
 		const { section, canonicalPath, exists, normalized, edits } = args;
 		const expected = exists ? section.fileHash : undefined;
 		if (expected === undefined) return applyEdits(normalized, [...edits]);
-
-		const snapshot = this.snapshots.byHash(canonicalPath, expected);
-		if (snapshot && snapshotProvesUnchanged(snapshot, normalized, section)) {
-			return applyEdits(normalized, [...edits]);
-		}
-		if (snapshot) {
-			const recovered = this.recovery.tryRecover({
-				path: canonicalPath,
-				currentText: normalized,
-				fileHash: expected,
-				edits,
-			});
-			if (recovered) return recoveryToApplyResult(recovered);
-		}
-
-		const currentHash = this.#recordFullSnapshot(canonicalPath, normalized);
+		// Whole-file unchanged → the tag still names the live content, so an
+		// edit anchored at ANY line (displayed or not) is safe to apply.
+		if (computeFileHash(normalized) === expected) return applyEdits(normalized, [...edits]);
+		// File drifted: try to replay the edit against the version the tag
+		// names and 3-way-merge it onto the live content.
+		const recovered = this.recovery.tryRecover({
+			path: canonicalPath,
+			currentText: normalized,
+			fileHash: expected,
+			edits,
+		});
+		if (recovered) return recoveryToApplyResult(recovered);
+		const hashRecognized = this.snapshots.byHash(canonicalPath, expected) !== null;
+		const actualFileHash = this.#recordFullSnapshot(canonicalPath, normalized);
 		throw new MismatchError({
 			path: section.path,
 			expectedFileHash: expected,
-			actualFileHash: currentHash,
+			actualFileHash,
 			fileLines: normalized.split("\n"),
 			anchorLines: section.collectAnchorLines(),
-			hashRecognized: snapshot !== null,
+			hashRecognized,
 		});
 	}
 }

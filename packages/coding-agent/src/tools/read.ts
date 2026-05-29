@@ -9,7 +9,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { getFileSnapshotStore } from "../edit/file-snapshot-store";
+import { getFileSnapshotStore, recordFileSnapshot } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -130,9 +130,7 @@ function recordFullHashlineContext(
 ): HashlineHeaderContext | undefined {
 	if (!absolutePath || !path.isAbsolute(absolutePath)) return undefined;
 	const normalized = normalizeToLF(fullText);
-	const tag = getFileSnapshotStore(session).recordContiguous(absolutePath, 1, normalized.split("\n"), {
-		fullText: normalized,
-	});
+	const tag = getFileSnapshotStore(session).record(absolutePath, normalized);
 	return {
 		header: formatHashlineHeader(displayPath, tag),
 		tag,
@@ -1033,7 +1031,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const shouldAddHashLines = !rawSelector && displayMode.hashLines;
 		const shouldAddLineNumbers = rawSelector ? false : shouldAddHashLines ? false : displayMode.lineNumbers;
-		const sparseSnapshotEntries: Array<readonly [number, string]> = [];
 		const maxColumns = resolveOutputMaxColumns(this.session.settings);
 
 		const blocks: string[] = [];
@@ -1063,10 +1060,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 
 			const collectedLines = streamResult.lines;
-			// Column truncation is display-only. The snapshot (sparseSnapshotEntries)
-			// MUST hold on-disk content so later edits can verify line content against
-			// the live file. Stamping ellipsis-truncated lines into the snapshot makes
-			// every long-line file uneditable on the next edit attempt.
+			// Column truncation is display-only; clone before stamping ellipsis so
+			// the original on-disk lines stay intact for display reconstruction.
 			let displayLines: string[] = collectedLines;
 			if (!rawSelector && maxColumns > 0) {
 				let cloned: string[] | undefined;
@@ -1080,19 +1075,16 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				}
 				if (cloned) displayLines = cloned;
 			}
-
-			for (let index = 0; index < collectedLines.length; index++) {
-				sparseSnapshotEntries.push([range.startLine + index, collectedLines[index]]);
-			}
-
 			const blockText = displayLines.join("\n");
 			blocks.push(formatTextWithMode(blockText, range.startLine, shouldAddHashLines, shouldAddLineNumbers));
 		}
 
 		let outputText = blocks.join("\n\n…\n\n");
-		if (shouldAddHashLines && sparseSnapshotEntries.length > 0 && outputText) {
-			const tag = getFileSnapshotStore(this.session).recordSparse(absolutePath, sparseSnapshotEntries);
-			outputText = `${formatHashlineHeader(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag)}\n${outputText}`;
+		if (shouldAddHashLines && outputText) {
+			const tag = await recordFileSnapshot(this.session, absolutePath);
+			if (tag) {
+				outputText = `${formatHashlineHeader(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag)}\n${outputText}`;
+			}
 		}
 		if (notices.length > 0) {
 			outputText = outputText ? `${outputText}\n${notices.join("\n")}` : notices.join("\n");
@@ -1905,17 +1897,17 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					const shouldAddLineNumbers = rawSelector ? false : shouldAddHashLines ? false : displayMode.lineNumbers;
 					let hashContext: HashlineHeaderContext | undefined;
 					if (shouldAddHashLines && collectedLines.length > 0 && !firstLineExceedsLimit) {
-						const store = getFileSnapshotStore(this.session);
-						const tag =
-							offset === undefined && limit === undefined && !wasTruncated
-								? (() => {
-										const normalized = normalizeToLF(collectedLines.join("\n"));
-										return store.recordContiguous(absolutePath, 1, normalized.split("\n"), {
-											fullText: normalized,
-										});
-									})()
-								: store.recordContiguous(absolutePath, startLineDisplay, collectedLines);
-						hashContext = hashlineHeaderContext(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag);
+						// The tag is a content hash of the WHOLE file. A whole-file read
+						// already holds every line in memory; a range read re-reads the
+						// file (bounded by SNAPSHOT_MAX_BYTES) so the tag fingerprints the
+						// full file and any anchor validates while the file is unchanged.
+						const isWholeFile = offset === undefined && limit === undefined && !wasTruncated;
+						const tag = isWholeFile
+							? getFileSnapshotStore(this.session).record(absolutePath, normalizeToLF(collectedLines.join("\n")))
+							: await recordFileSnapshot(this.session, absolutePath);
+						if (tag) {
+							hashContext = hashlineHeaderContext(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag);
+						}
 					}
 
 					let capturedDisplayContent: { text: string; startLine: number } | undefined;
@@ -2060,11 +2052,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
 
 		const rawText = region.lines.join("\n");
-		const hashContext = shouldAddHashLines
-			? hashlineHeaderContext(
-					formatPathRelativeToCwd(entry.absolutePath, this.session.cwd),
-					getFileSnapshotStore(this.session).recordContiguous(entry.absolutePath, region.startLine, region.lines),
-				)
+		const tag = shouldAddHashLines ? await recordFileSnapshot(this.session, entry.absolutePath) : undefined;
+		const hashContext = tag
+			? hashlineHeaderContext(formatPathRelativeToCwd(entry.absolutePath, this.session.cwd), tag)
 			: undefined;
 		const formattedBody = formatTextWithMode(rawText, region.startLine, shouldAddHashLines, shouldAddLineNumbers);
 		const formattedText = prependHashlineHeader(formattedBody, hashContext);

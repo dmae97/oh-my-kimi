@@ -9,7 +9,7 @@
  */
 import * as path from "node:path";
 import { applyEdits } from "./apply";
-import { HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
+import { HL_FILE_HASH_LENGTH, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
 import { parsePatch, parsePatchStreaming } from "./parser";
 import { Tokenizer } from "./tokenizer";
 import type { ApplyResult, Edit, SplitOptions } from "./types";
@@ -56,7 +56,7 @@ function tryParseRecoveryHeader(line: string, cwd?: string): RawSection | null {
 	if (!line.startsWith(HL_FILE_PREFIX)) return null;
 	const body = stripApplyPatchPathNoise(line.slice(HL_FILE_PREFIX.length).trim());
 	if (body.length === 0) return null;
-	const match = /^(\S+?)(?:#([0-9A-Fa-f]{3}))?\s*$/.exec(body);
+	const match = new RegExp(`^(\\S+?)(?:#([0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}}))?\\s*$`).exec(body);
 	if (match === null) return null;
 	const path = normalizeHashlinePath(match[1], cwd);
 	if (path.length === 0) return null;
@@ -95,7 +95,7 @@ function parseHashlineHeaderLine(line: string, cwd?: string): RawSection | null 
 		const recovered = tryParseRecoveryHeader(trimmed, cwd);
 		if (recovered !== null) return recovered;
 		throw new Error(
-			`Input header must be ${HL_FILE_PREFIX}PATH or ${HL_FILE_PREFIX}PATH${HL_FILE_HASH_SEP}TAG with a 3-hex snapshot tag; got ${JSON.stringify(trimmed)}.`,
+			`Input header must be ${HL_FILE_PREFIX}PATH or ${HL_FILE_PREFIX}PATH${HL_FILE_HASH_SEP}TAG with a ${HL_FILE_HASH_LENGTH}-hex content-hash tag; got ${JSON.stringify(trimmed)}.`,
 		);
 	}
 

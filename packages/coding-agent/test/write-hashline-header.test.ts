@@ -30,7 +30,7 @@ function resultText(result: { content: { type: string; text?: string }[] }): str
 		.join("\n");
 }
 
-const HASHLINE_HEADER_LINE = /^¶(\S+)#([0-9A-F]{3})$/;
+const HASHLINE_HEADER_LINE = /^¶(\S+)#([0-9A-F]{4})$/;
 
 describe("write tool hashline header", () => {
 	let tmpDir: string;
@@ -67,7 +67,7 @@ describe("write tool hashline header", () => {
 		// follow-up edit can land without an extra `read` round-trip.
 		const snapshot = getFileSnapshotStore(session).byHash(filePath, tag!);
 		expect(snapshot).not.toBeNull();
-		expect(snapshot?.fullText).toBe(content);
+		expect(snapshot?.text).toBe(content);
 	});
 
 	it("makes the post-write tag usable by the hashline patcher", async () => {

@@ -6,17 +6,16 @@
  * plus a couple of lines of surrounding context. The {@link MismatchError}
  * formats this into a message at construction time.
  */
-import { formatNumberedLine, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
+import { formatNumberedLine, HL_FILE_HASH_EXAMPLES, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
 import { MISMATCH_CONTEXT } from "./messages";
 
 const LINE_REF_RE = /^\s*[>+\-*]*\s*(\d+)(?::.*)?\s*$/;
-
 /** Format the required-shape diagnostic shown when a line reference is malformed. */
 export function formatFullAnchorRequirement(raw?: string): string {
 	const received = raw === undefined ? "" : ` Received ${JSON.stringify(raw)}.`;
 	return (
-		`a bare line number from read/search output plus the section header snapshot tag ` +
-		`(for example ${HL_FILE_PREFIX}src/foo.ts${HL_FILE_HASH_SEP}0A3 and line "160")${received}`
+		`a bare line number from read/search output plus the section header content-hash tag ` +
+		`(for example ${HL_FILE_PREFIX}src/foo.ts${HL_FILE_HASH_SEP}${HL_FILE_HASH_EXAMPLES[0]} and line "160")${received}`
 	);
 }
 

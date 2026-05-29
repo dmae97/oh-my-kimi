@@ -72,23 +72,38 @@ export function formatInsertHeader(cursor: Cursor): string {
 	}
 }
 
-/** Number of hex characters in an opaque snapshot tag. */
-export const HL_FILE_HASH_LENGTH = 3;
-
-/** Canonical uppercase hexadecimal opaque snapshot tag carried by a hashline section header. */
+/** Number of hex characters in a content-derived file-hash tag. */
+export const HL_FILE_HASH_LENGTH = 4;
+/** Canonical uppercase hexadecimal content-hash tag carried by a hashline section header. */
 export const HL_FILE_HASH_RE_RAW = `[0-9A-F]{${HL_FILE_HASH_LENGTH}}`;
-
 /** Capture-group form of {@link HL_FILE_HASH_RE_RAW}. */
 export const HL_FILE_HASH_CAPTURE_RE_RAW = `(${HL_FILE_HASH_RE_RAW})`;
-
 /** Regex-escaped form of {@link HL_LINE_BODY_SEP}, safe for embedding inside a regex. */
 export const HL_LINE_BODY_SEP_RE_RAW = regexEscape(HL_LINE_BODY_SEP);
-
 /**
- * Representative snapshot tags for use in user-facing error messages and
+ * Representative file-hash tags for use in user-facing error messages and
  * prompt examples.
  */
-export const HL_FILE_HASH_EXAMPLES = ["0A3", "1F7", "3C9"] as const;
+export const HL_FILE_HASH_EXAMPLES = ["1A2B", "3C4D", "9F3E"] as const;
+/**
+ * Normalize text before hashing: trim trailing `[ \t\r]` from every line (and
+ * the final line) in a single pass so CRLF endings and display-trimmed lines
+ * do not invalidate a tag.
+ */
+function normalizeFileHashText(text: string): string {
+	return text.replace(/[ \t\r]+(?=\n|$)/g, "");
+}
+/**
+ * Compute the content-derived hash tag carried by a hashline section header.
+ * The tag is a 4-hex fingerprint of the whole file's normalized text: any read
+ * of byte-identical content mints the same tag, and a follow-up edit anchored
+ * at any line validates whenever the live file still hashes to it.
+ */
+export function computeFileHash(text: string): string {
+	const normalized = normalizeFileHashText(text);
+	const low16 = Bun.hash.xxHash32(normalized, 0) & 0xffff;
+	return low16.toString(16).padStart(HL_FILE_HASH_LENGTH, "0").toUpperCase();
+}
 
 /**
  * Format a comma-separated list of example anchors with an optional line-number

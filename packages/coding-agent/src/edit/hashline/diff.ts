@@ -44,14 +44,9 @@ function hasAnchorScoped(section: PatchSection): boolean {
 	return section.hasAnchorScopedEdit;
 }
 
-function snapshotMatchesCurrent(snapshot: Snapshot, currentText: string, anchorLines: readonly number[]): boolean {
-	if (snapshot.fullText !== undefined) return snapshot.fullText === currentText;
-	for (const lineNumber of anchorLines) {
-		if (snapshot.get(lineNumber) === undefined) return false;
-	}
-	return snapshot.matchesLiveFile(currentText.split("\n"));
+function snapshotMatchesCurrent(snapshot: Snapshot, currentText: string): boolean {
+	return snapshot.text === currentText;
 }
-
 function validateSectionHash(
 	section: PatchSection,
 	absolutePath: string,
@@ -64,7 +59,7 @@ function validateSectionHash(
 			: null;
 	}
 	const snapshot = snapshots.byHash(absolutePath, section.fileHash);
-	if (snapshot && snapshotMatchesCurrent(snapshot, text, section.collectAnchorLines())) return null;
+	if (snapshot && snapshotMatchesCurrent(snapshot, text)) return null;
 	return `Hashline snapshot tag mismatch for ${section.path}: section is bound to #${section.fileHash}, but current file does not match that snapshot; re-read and try again.`;
 }
 

@@ -96,7 +96,7 @@ function tag(line: number, _content: string): string {
 }
 
 function recordFullSnapshot(cache: FileReadCache, filePath: string, fullText: string): string {
-	return cache.recordContiguous(filePath, 1, fullText.split("\n"), { fullText });
+	return cache.record(filePath, fullText);
 }
 
 function header(filePath: string, tag: string): string {
@@ -546,10 +546,10 @@ describe("hashline — snapshot tag binding", () => {
 
 describe("splitHashlineInput — @ headers", () => {
 	it("extracts path, snapshot tag, and diff body from @path#tag header", () => {
-		const input = [`¶src/foo.ts#0A3`, `${sameLineRange(tag(2, "bbb"))}`, repl("BBB")].join("\n");
+		const input = [`¶src/foo.ts#1A2B`, `${sameLineRange(tag(2, "bbb"))}`, repl("BBB")].join("\n");
 		expect(splitHashlineInput(input)).toEqual({
 			path: "src/foo.ts",
-			fileHash: "0A3",
+			fileHash: "1A2B",
 			diff: `${sameLineRange(tag(2, "bbb"))}\n${repl("BBB")}`,
 		});
 	});
@@ -679,7 +679,7 @@ describe("hashline executor", () => {
 			await Bun.write(bPath, "bbb\n");
 			const session = makeHashlineSession(tempDir);
 			const aTag = recordFullSnapshot(getFileReadCache(session), aPath, "aaa\n");
-			const bHeader = "¶b.ts#fff";
+			const bHeader = "¶b.ts#FFFF";
 			const input = [
 				header("a.ts", aTag),
 				`${sameLineRange(tag(1, "aaa"))}`,
@@ -890,9 +890,10 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			await Bun.write(filePath, v0Text);
 
 			const session = makeHashlineSession(tempDir);
-			// Cache only covers the first three lines — enough to retain the snapshot tag
-			// but not enough to synthesize the requested pre-edit snapshot.
-			const v0Tag = getFileReadCache(session).recordContiguous(filePath, 1, v0Lines.slice(0, 3));
+			// Record the full V0 snapshot. The external change below rewrites the
+			// exact line the model anchors against, so neither the 3-way merge nor
+			// session replay can land — recovery must decline.
+			const v0Tag = recordFullSnapshot(getFileReadCache(session), filePath, v0Text);
 
 			const v1Lines = [...v0Lines];
 			v1Lines[5] = "L6-CHANGED";
@@ -932,7 +933,7 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 		const a = new FileReadCache();
 		const b = new FileReadCache();
 		const fakePath = "/tmp/__hashline-cache-isolation__.ts";
-		a.recordContiguous(fakePath, 1, ["x", "y", "z"]);
+		a.record(fakePath, "x\ny\nz\n");
 		expect(a.head(fakePath)).not.toBeNull();
 		expect(b.head(fakePath)).toBeNull();
 	});
@@ -957,9 +958,7 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			expect(await Bun.file(filePath).text()).toBe(v1Text);
 			const v1Tag = recordFullSnapshot(getFileReadCache(session), filePath, v1Text);
 			const snap = getFileReadCache(session).head(filePath);
-			expect(snap?.get(1)).toBe("alpha");
-			expect(snap?.get(2)).toBe("BETA");
-			expect(snap?.get(3)).toBe("gamma");
+			expect(snap?.text).toBe(v1Text);
 
 			// External actor insert heads 7 lines after the edit. Anchors authored
 			// against V1 (the post-edit state the model just observed) no longer
@@ -1033,47 +1032,26 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 		expect(recovered?.lines).toContain("L10-EDITED");
 	});
 
-	it("retains older snapshot tags in the per-path snapshot ring", () => {
+	it("retains older versions per path so stale tags still resolve", () => {
 		const cache = new FileReadCache();
-		const fakePath = "/tmp/__hashline-cache-ring__.ts";
+		const fakePath = "/tmp/__hashline-cache-history__.ts";
 		const oneTag = recordFullSnapshot(cache, fakePath, "one\n");
 		const twoTag = recordFullSnapshot(cache, fakePath, "two\n");
 		recordFullSnapshot(cache, fakePath, "three\n");
-		expect(cache.head(fakePath)?.fullText).toBe("three\n");
-		expect(cache.byHash(fakePath, oneTag)?.fullText).toBe("one\n");
-		expect(cache.byHash(fakePath, twoTag)?.fullText).toBe("two\n");
+		expect(cache.head(fakePath)?.text).toBe("three\n");
+		expect(cache.byHash(fakePath, oneTag)?.text).toBe("one\n");
+		expect(cache.byHash(fakePath, twoTag)?.text).toBe("two\n");
 	});
-
-	it("pushes a fresh snapshot when newly recorded lines disagree on overlap", () => {
-		const cache = new FileReadCache();
-		const fakePath = "/tmp/__hashline-cache-conflict__.ts";
-		cache.recordContiguous(fakePath, 1, ["a", "b", "c", "d", "e"]);
-		cache.recordSparse(fakePath, [
-			[3, "c"],
-			[4, "D-CHANGED"],
-			[5, "e"],
-			[6, "f"],
-			[7, "g"],
-		]);
-
-		const snap = cache.head(fakePath);
-		expect(snap).not.toBeNull();
-		// Old entries dropped; only the divergent record's entries remain.
-		expect(snap?.get(1)).toBeUndefined();
-		expect(snap?.get(2)).toBeUndefined();
-		expect(snap?.get(4)).toBe("D-CHANGED");
-		expect(snap?.get(7)).toBe("g");
-	});
-
-	it("keeps independently tracked path rings without an LRU cap", () => {
-		const cache = new FileReadCache();
-		for (let i = 0; i < 32; i++) {
-			cache.recordContiguous(`/tmp/file-${i}.ts`, 1, [`x${i}`]);
+	it("evicts the least-recently-used path beyond the LRU cap", () => {
+		const cache = new FileReadCache({ maxPaths: 4 });
+		for (let i = 0; i < 6; i++) {
+			recordFullSnapshot(cache, `/tmp/file-${i}.ts`, `x${i}\n`);
 		}
-		expect(cache.head("/tmp/file-0.ts")?.get(1)).toBe("x0");
-		expect(cache.head("/tmp/file-1.ts")?.get(1)).toBe("x1");
-		expect(cache.head("/tmp/file-2.ts")?.get(1)).toBe("x2");
-		expect(cache.head("/tmp/file-31.ts")?.get(1)).toBe("x31");
+		// The two oldest paths aged out; the four most-recent survive.
+		expect(cache.head("/tmp/file-0.ts")).toBeNull();
+		expect(cache.head("/tmp/file-1.ts")).toBeNull();
+		expect(cache.head("/tmp/file-2.ts")?.text).toBe("x2\n");
+		expect(cache.head("/tmp/file-5.ts")?.text).toBe("x5\n");
 	});
 });
 
