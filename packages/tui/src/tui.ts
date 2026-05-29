@@ -86,6 +86,11 @@ export interface RenderRequestOptions {
 	clearScrollback?: boolean;
 }
 
+/** Options for deferred native scrollback rebuild checkpoints. */
+export interface NativeScrollbackRefreshOptions {
+	/** Allow replay when the terminal cannot report viewport state. Use only for explicit user submit checkpoints. */
+	allowUnknownViewport?: boolean;
+}
 /** Type guard to check if a component implements Focusable */
 export function isFocusable(component: Component | null): component is Component & Focusable {
 	return component !== null && "focused" in component;
@@ -683,10 +688,14 @@ export class TUI extends Container {
 	 * Callers should only invoke this at checkpoints where the user is expected to be
 	 * at the terminal bottom, such as after submitting a new prompt.
 	 */
-	refreshNativeScrollbackIfDirty(): boolean {
+	refreshNativeScrollbackIfDirty(options?: NativeScrollbackRefreshOptions): boolean {
 		if (!this.#nativeScrollbackDirty || this.#stopped) return false;
 		const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
-		if (!this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom)) return false;
+		if (
+			!this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, options?.allowUnknownViewport === true)
+		) {
+			return false;
+		}
 		this.#prepareForcedRender(true);
 		this.#renderRequested = false;
 		this.#lastRenderAt = performance.now();
@@ -1448,10 +1457,13 @@ export class TUI extends Container {
 		return nativeViewportAtBottom === true;
 	}
 
-	#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom: boolean | undefined): boolean {
+	#canReplayNativeScrollbackAtCheckpoint(
+		nativeViewportAtBottom: boolean | undefined,
+		allowUnknownViewport: boolean,
+	): boolean {
 		return (
 			nativeViewportAtBottom === true ||
-			(nativeViewportAtBottom === undefined && !requiresNativeViewportProofForReplay())
+			(nativeViewportAtBottom === undefined && (allowUnknownViewport || !requiresNativeViewportProofForReplay()))
 		);
 	}
 

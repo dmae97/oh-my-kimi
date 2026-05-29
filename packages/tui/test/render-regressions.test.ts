@@ -1038,6 +1038,49 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+
+		it("refreshes unknown WSL Windows Terminal scrollback at a submit checkpoint", async () => {
+			const originalPlatform = process.platform;
+			const originalWtSession = Bun.env.WT_SESSION;
+			const originalWslDistroName = Bun.env.WSL_DISTRO_NAME;
+			const originalWslInterop = Bun.env.WSL_INTEROP;
+			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			Bun.env.WT_SESSION = "wt-test";
+			Bun.env.WSL_DISTRO_NAME = "Ubuntu";
+			delete Bun.env.WSL_INTEROP;
+
+			const term = new UnknownViewportTerminal(32, 5);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("line-", 12));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				term.scrollLines(-2);
+
+				component.setLines(rows("line-", 8));
+				tui.requestRender();
+				await settle(term);
+				term.scrollLines(999);
+
+				expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+				await settle(term);
+
+				const position = term.getBufferPosition();
+				expect(position.viewportY).toBe(position.baseY);
+				expect(visible(term).map(line => line.trim())).toEqual(["line-3", "line-4", "line-5", "line-6", "line-7"]);
+			} finally {
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				if (originalWtSession === undefined) delete Bun.env.WT_SESSION;
+				else Bun.env.WT_SESSION = originalWtSession;
+				if (originalWslDistroName === undefined) delete Bun.env.WSL_DISTRO_NAME;
+				else Bun.env.WSL_DISTRO_NAME = originalWslDistroName;
+				if (originalWslInterop === undefined) delete Bun.env.WSL_INTEROP;
+				else Bun.env.WSL_INTEROP = originalWslInterop;
+				tui.stop();
+			}
+		});
 		it("refreshes deferred native scrollback when the native viewport reaches bottom", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);
