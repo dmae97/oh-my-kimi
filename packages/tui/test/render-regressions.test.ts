@@ -45,6 +45,11 @@ class WrappingLinesComponent implements Component {
 	}
 }
 
+class UnknownViewportTerminal extends VirtualTerminal {
+	isNativeViewportAtBottom(): undefined {
+		return undefined;
+	}
+}
 function rows(prefix: string, count: number): string[] {
 	return Array.from({ length: count }, (_v, i) => `${prefix}${i}`);
 }
@@ -792,6 +797,32 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("defers resize rebuild while native scrollback is scrolled", async () => {
+			const term = new VirtualTerminal(32, 5);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("line-", 12));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				term.scrollLines(-2);
+				const before = term.getBufferPosition();
+				expect(before.viewportY).toBeGreaterThan(0);
+
+				component.setLines(rows("line-", 8));
+				term.resize(28, 5);
+				await settle(term);
+
+				const after = term.getBufferPosition();
+				expect(after.viewportY).toBe(before.viewportY);
+				expect(visible(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "", ""]);
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("keeps viewport aligned when offscreen header changes during overflow growth", async () => {
 			const term = new VirtualTerminal(32, 6);
 			const tui = new TUI(term);
@@ -920,6 +951,7 @@ describe("TUI terminal-state regressions", () => {
 				term.scrollLines(-2);
 				const before = term.getBufferPosition();
 				expect(before.viewportY).toBeGreaterThan(0);
+				expect(visible(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "line-8", "line-9"]);
 
 				component.setLines(rows("line-", 8));
 				tui.requestRender();
@@ -927,13 +959,43 @@ describe("TUI terminal-state regressions", () => {
 
 				const after = term.getBufferPosition();
 				expect(after.viewportY).toBe(before.viewportY);
-				expect(tui.refreshNativeScrollbackIfDirty()).toBe(true);
+				expect(visible(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "", ""]);
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
 			} finally {
 				tui.stop();
 			}
 		});
 
-		it("refreshes deferred native scrollback at an explicit bottom checkpoint", async () => {
+		it("treats unknown Windows viewport state as scrolled", async () => {
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			const term = new UnknownViewportTerminal(32, 5);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("line-", 12));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				term.scrollLines(-2);
+				const before = term.getBufferPosition();
+				expect(before.viewportY).toBeGreaterThan(0);
+
+				component.setLines(rows("line-", 8));
+				tui.requestRender();
+				await settle(term);
+
+				const after = term.getBufferPosition();
+				expect(after.viewportY).toBe(before.viewportY);
+				expect(visible(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "", ""]);
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
+				expect(term.getBufferPosition().viewportY).toBe(before.viewportY);
+			} finally {
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				tui.stop();
+			}
+		});
+		it("refreshes deferred native scrollback when the native viewport reaches bottom", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent(rows("line-", 12));
@@ -949,7 +1011,7 @@ describe("TUI terminal-state regressions", () => {
 				await settle(term);
 
 				term.scrollLines(999);
-				expect(tui.refreshNativeScrollbackIfDirty()).toBe(true);
+				tui.requestRender();
 				await settle(term);
 
 				const position = term.getBufferPosition();

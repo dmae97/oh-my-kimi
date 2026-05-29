@@ -138,6 +138,12 @@ export class VirtualTerminal implements Terminal {
 		this.xterm.scrollLines(lines);
 	}
 
+	/** Return whether the virtual viewport is at the scrollback tail. */
+	isNativeViewportAtBottom(): boolean | undefined {
+		const buffer = this.xterm.buffer.active;
+		return buffer.viewportY >= buffer.baseY;
+	}
+
 	/** Get the terminal buffer's scrollback and viewport offsets. */
 	getBufferPosition(): { baseY: number; viewportY: number } {
 		const buffer = this.xterm.buffer.active;
