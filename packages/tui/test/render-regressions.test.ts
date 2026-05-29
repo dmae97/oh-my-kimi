@@ -50,6 +50,15 @@ class UnknownViewportTerminal extends VirtualTerminal {
 		return undefined;
 	}
 }
+
+class CountingViewportTerminal extends VirtualTerminal {
+	viewportProbeCount = 0;
+
+	isNativeViewportAtBottom(): boolean | undefined {
+		this.viewportProbeCount += 1;
+		return super.isNativeViewportAtBottom();
+	}
+}
 function rows(prefix: string, count: number): string[] {
 	return Array.from({ length: count }, (_v, i) => `${prefix}${i}`);
 }
@@ -707,6 +716,30 @@ describe("TUI terminal-state regressions", () => {
 	});
 
 	describe("scrollback integrity", () => {
+		it("does not probe native viewport state during pure appends", async () => {
+			const term = new CountingViewportTerminal(32, 5);
+			const tui = new TUI(term);
+			const lines = rows("line-", 3);
+			const component = new MutableLinesComponent(lines);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				for (let i = 3; i < 20; i++) {
+					lines.push(`line-${i}`);
+					component.setLines(lines);
+					tui.requestRender();
+					await settle(term);
+				}
+
+				expect(term.viewportProbeCount).toBe(0);
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("overflow content appears once across buffer without duplicate row IDs", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);

@@ -1174,15 +1174,7 @@ export class TUI extends Container {
 		const heightChanged = this.#previousHeight > 0 && this.#previousHeight !== height;
 
 		// 3. Classify intent.
-		const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
-		const intent = this.#planRender(
-			lines,
-			widthChanged,
-			heightChanged,
-			prevViewportTop,
-			height,
-			nativeViewportAtBottom,
-		);
+		const intent = this.#planRender(lines, widthChanged, heightChanged, prevViewportTop, height);
 		this.#logRedraw(intent, lines.length, height);
 
 		// 4. Execute.
@@ -1259,7 +1251,6 @@ export class TUI extends Container {
 		heightChanged: boolean,
 		prevViewportTop: number,
 		height: number,
-		nativeViewportAtBottom: boolean | undefined,
 	): RenderIntent {
 		// Initial paint after start(): scrollback must keep its prior shell
 		// content, but the viewport must be cleared so stale rows do not bleed
@@ -1273,7 +1264,7 @@ export class TUI extends Container {
 		// lines were dropped, so no diff is possible. Repaint visible rows only
 		// — emitting the transcript here would duplicate it into scrollback.
 		if (this.#previousLines.length === 0) return { kind: "viewportRepaint" };
-		if (this.#nativeScrollbackDirty && this.#nativeViewportIsAtBottom(nativeViewportAtBottom)) {
+		if (this.#nativeScrollbackDirty && this.#nativeViewportIsAtBottom(this.#readNativeViewportAtBottom())) {
 			return { kind: "historyRebuild" };
 		}
 
@@ -1294,14 +1285,14 @@ export class TUI extends Container {
 			!isMultiplexerSession()
 		) {
 			if (widthChanged || heightChanged) {
-				if (this.#nativeViewportIsScrolled(nativeViewportAtBottom)) {
+				if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom())) {
 					this.#markNativeScrollbackDirty();
 					return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 				}
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();
-			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom)) {
+			if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom())) {
 				return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 			}
 			return { kind: "viewportRepaint" };
@@ -1333,7 +1324,7 @@ export class TUI extends Container {
 		// through to the diff path so the append handler scrolls them into history.
 		if (widthChanged) {
 			if (diff.firstChanged < prevViewportTop) {
-				if (this.#nativeViewportIsScrolled(nativeViewportAtBottom)) {
+				if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom())) {
 					this.#markNativeScrollbackDirty();
 					return { kind: "viewportRepaint" };
 				}
