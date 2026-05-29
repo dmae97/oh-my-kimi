@@ -30,7 +30,7 @@ import type {
 import { normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
-import { parseStreamingJson } from "../utils/json-parse";
+import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { toolWireSchema } from "../utils/schema/wire";
 import { resolveAwsCredentials } from "./aws-credentials";
 import { decodeEventStream } from "./aws-eventstream";
@@ -72,7 +72,11 @@ function resolveBearerToken(options: BedrockOptions): string | undefined {
 	return options.bearerToken || apiKey || $env.AWS_BEARER_TOKEN_BEDROCK;
 }
 
-type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
+type Block = (TextContent | ThinkingContent | ToolCall) & {
+	index?: number;
+	partialJson?: string;
+	lastParseLen?: number;
+};
 
 // ---------- Bedrock wire-format types ----------
 // Mirrors only what we actually consume from `ConverseStreamRequest` /
@@ -454,7 +458,11 @@ function handleContentBlockDelta(
 		}
 	} else if (delta?.toolUse && block?.type === "toolCall") {
 		block.partialJson = (block.partialJson || "") + (delta.toolUse.input || "");
-		block.arguments = parseStreamingJson(block.partialJson);
+		const throttled = parseStreamingJsonThrottled(block.partialJson, block.lastParseLen ?? 0);
+		if (throttled) {
+			block.arguments = throttled.value;
+			block.lastParseLen = throttled.parsedLen;
+		}
 		stream.push({ type: "toolcall_delta", contentIndex: index, delta: delta.toolUse.input || "", partial: output });
 	} else if (delta?.reasoningContent) {
 		let thinkingBlock = block;
@@ -518,6 +526,7 @@ function handleContentBlockStop(
 		case "toolCall":
 			block.arguments = parseStreamingJson(block.partialJson);
 			delete (block as Block).partialJson;
+			delete (block as Block).lastParseLen;
 			stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
 			break;
 	}

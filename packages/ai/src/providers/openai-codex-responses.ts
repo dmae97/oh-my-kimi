@@ -53,7 +53,7 @@ import {
 	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
-import { parseStreamingJson } from "../utils/json-parse";
+import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
@@ -170,7 +170,7 @@ function createCodexWebSocketTimeoutMessage(reason: string, details: CodexWebSoc
 
 type CodexTransport = "sse" | "websocket";
 type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
-type CodexOutputBlock = ThinkingContent | TextContent | (ToolCall & { partialJson: string });
+type CodexOutputBlock = ThinkingContent | TextContent | (ToolCall & { partialJson: string; lastParseLen?: number });
 
 export interface OpenAICodexWebSocketDebugStats {
 	fullContextRequests: number;
@@ -1216,7 +1216,11 @@ function handleToolCallArgumentsDelta(
 	if (currentItem?.type !== "function_call" || currentBlock?.type !== "toolCall") return;
 	const delta = (rawEvent as { delta?: string }).delta || "";
 	currentBlock.partialJson += delta;
-	currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+	const throttled = parseStreamingJsonThrottled(currentBlock.partialJson, currentBlock.lastParseLen ?? 0);
+	if (throttled) {
+		currentBlock.arguments = throttled.value;
+		currentBlock.lastParseLen = throttled.parsedLen;
+	}
 	stream.push({ type: "toolcall_delta", contentIndex: blockIndex(), delta, partial: output });
 }
 

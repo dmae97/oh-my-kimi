@@ -30,7 +30,7 @@ import {
 } from "../types";
 import { normalizeResponsesToolCallId } from "../utils";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
-import { parseStreamingJson } from "../utils/json-parse";
+import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER, partitionVisionContent } from "./vision-guard";
 export const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES: ReadonlySet<string> = new Set([
 	"response.created",
@@ -401,7 +401,11 @@ export async function processResponsesStream<TApi extends Api>(
 		| ResponseFunctionToolCall
 		| ResponseCustomToolCall
 		| null = null;
-	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
+	let currentBlock:
+		| ThinkingContent
+		| TextContent
+		| (ToolCall & { partialJson: string; lastParseLen?: number })
+		| null = null;
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
 	let sawFirstToken = false;
@@ -540,7 +544,11 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.function_call_arguments.delta") {
 			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
 				currentBlock.partialJson += event.delta;
-				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+				const throttled = parseStreamingJsonThrottled(currentBlock.partialJson, currentBlock.lastParseLen ?? 0);
+				if (throttled) {
+					currentBlock.arguments = throttled.value;
+					currentBlock.lastParseLen = throttled.parsedLen;
+				}
 				stream.push({
 					type: "toolcall_delta",
 					contentIndex: blockIndex(),

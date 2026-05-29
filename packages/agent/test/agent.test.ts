@@ -299,3 +299,57 @@ describe("Agent", () => {
 		expect(agent.metadata).toEqual({ user_id: "static" });
 	});
 });
+
+describe("Agent — F3 in-place state mutation", () => {
+	it("appendMessage mutates the existing messages array in place", () => {
+		const agent = new Agent();
+		const arr = agent.state.messages;
+
+		agent.appendMessage({ role: "user", content: "a", timestamp: 1 });
+		agent.appendMessage({ role: "user", content: "b", timestamp: 2 });
+
+		expect(agent.state.messages).toBe(arr);
+		expect(arr.length).toBe(2);
+	});
+
+	it("popMessage mutates in place and clears streamMessage when popping it", () => {
+		const agent = new Agent();
+		const arr = agent.state.messages;
+
+		const m1 = { role: "user" as const, content: "x", timestamp: 1 };
+		const m2 = { role: "user" as const, content: "y", timestamp: 2 };
+		agent.appendMessage(m1);
+		agent.appendMessage(m2);
+
+		const removed = agent.popMessage();
+		expect(removed).toBe(m2);
+		expect(agent.state.messages).toBe(arr);
+		expect(agent.state.messages).toEqual([m1]);
+	});
+
+	it("clearMessages and reset preserve array/Set identity", () => {
+		const agent = new Agent();
+		const msgs = agent.state.messages;
+		const pending = agent.state.pendingToolCalls;
+
+		agent.appendMessage({ role: "user", content: "x", timestamp: 1 });
+		agent.clearMessages();
+		expect(agent.state.messages).toBe(msgs);
+		expect(agent.state.messages.length).toBe(0);
+
+		agent.appendMessage({ role: "user", content: "y", timestamp: 2 });
+		agent.reset();
+		expect(agent.state.messages).toBe(msgs);
+		expect(agent.state.pendingToolCalls).toBe(pending);
+		expect(agent.state.messages.length).toBe(0);
+		expect(agent.state.pendingToolCalls.size).toBe(0);
+	});
+
+	it("replaceMessages still snapshots the input (callers may keep mutating their array)", () => {
+		const agent = new Agent();
+		const external = [{ role: "user" as const, content: "x", timestamp: 1 }];
+		agent.replaceMessages(external);
+		external.push({ role: "user", content: "leaked", timestamp: 2 });
+		expect(agent.state.messages.length).toBe(1);
+	});
+});
