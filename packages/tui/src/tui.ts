@@ -26,12 +26,15 @@ const SEGMENT_RESET = "\x1b[0m";
  * diffing so `#previousLines` mirrors what was actually written.
  */
 const LINE_TERMINATOR = "\x1b[0m\x1b]8;;\x07";
-// Paint with terminal autowrap disabled. Several terminals keep a "pending
-// wrap" flag after an exact-width row; a following cursor move can first wrap
-// to the next row, producing staircase trails during animated/differential
-// repaints. The TUI emits explicit CRLFs, so autowrap is not needed while
-// painting and is restored before leaving synchronized output mode.
-const PAINT_BEGIN = "\x1b[?2026h\x1b[?7l";
+// Hide the hardware cursor before each paint/move write. Ghostty-style bar
+// cursors can otherwise leave visual afterimages while the TUI repaints the
+// row under a visible cursor. Paint writes also disable terminal autowrap:
+// several terminals keep a "pending wrap" flag after an exact-width row, so a
+// following cursor move can first wrap to the next row and produce staircase
+// trails. The TUI emits explicit CRLFs and restores autowrap before leaving
+// synchronized output mode.
+const HIDE_CURSOR = "\x1b[?25l";
+const PAINT_BEGIN = `${HIDE_CURSOR}\x1b[?2026h\x1b[?7l`;
 const PAINT_END = "\x1b[?7h\x1b[?2026l";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
@@ -1721,6 +1724,6 @@ export class TUI extends Container {
 		}
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, totalLines, this.#hardwareCursorRow);
 		this.#hardwareCursorRow = toRow;
-		this.terminal.write(`\x1b[?2026h${seq}\x1b[?2026l`);
+		this.terminal.write(`${HIDE_CURSOR}\x1b[?2026h${seq}\x1b[?2026l`);
 	}
 }

@@ -1063,6 +1063,7 @@ describe("TUI terminal-state regressions", () => {
 		const CURSOR_SEQ = /\x1b\[\?(?:25[hl]|\d+[A-G])/g;
 		const BSU = "\x1b[?2026h";
 		const ESU = "\x1b[?2026l";
+		const HIDE_CURSOR = "\x1b[?25l";
 		const DISABLE_AUTOWRAP = "\x1b[?7l";
 		const ENABLE_AUTOWRAP = "\x1b[?7h";
 
@@ -1136,6 +1137,8 @@ describe("TUI terminal-state regressions", () => {
 				expect(paintWrites.length).toBeGreaterThan(0);
 				for (const write of paintWrites) {
 					const begin = write.indexOf(BSU);
+					expect(write.startsWith(HIDE_CURSOR)).toBe(true);
+					expect(begin).toBe(HIDE_CURSOR.length);
 					const disable = write.indexOf(DISABLE_AUTOWRAP, begin + BSU.length);
 					const enable = write.lastIndexOf(ENABLE_AUTOWRAP);
 					const end = write.lastIndexOf(ESU);
@@ -1194,13 +1197,14 @@ describe("TUI terminal-state regressions", () => {
 
 		/**
 		 * Assert that every cursor escape sequence in every write call appears
-		 * strictly between a matched BSU/ESU pair, or is the sole payload of a
-		 * standalone hideCursor call (from a no-change path).
+		 * strictly between a matched BSU/ESU pair, is the leading hideCursor that
+		 * intentionally happens just before BSU, or is the sole payload of a
+		 * standalone hideCursor call (from a no-change/no-cursor path).
 		 */
 		function assertCursorSequencesInsideSyncBlocks(writes: string[]): void {
 			for (const write of writes) {
-				if (write === "\x1b[?25l") {
-					// Standalone hideCursor — allowed (no-change path)
+				if (write === HIDE_CURSOR) {
+					// Standalone hideCursor — allowed (no-change/no-cursor path)
 					continue;
 				}
 				// Walk through the write, tracking BSU/ESU nesting
@@ -1226,6 +1230,10 @@ describe("TUI terminal-state regressions", () => {
 						}
 					}
 
+					if (match[0] === HIDE_CURSOR && write.startsWith(HIDE_CURSOR + BSU) && matchIdx === 0) {
+						idx = matchIdx + match[0].length;
+						continue;
+					}
 					expect(depth).toBeGreaterThan(0);
 
 					idx = matchIdx + match[0].length;
