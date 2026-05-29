@@ -148,6 +148,7 @@ import type { HindsightSessionState } from "../hindsight/state";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import { resolveMemoryBackend } from "../memory-backend";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
+import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
@@ -3997,6 +3998,21 @@ export class AgentSession {
 		// Expand file-based prompt templates if requested
 		const expandedText = expandPromptTemplates ? expandPromptTemplate(text, [...this.#promptTemplates]) : text;
 
+		// "ultrathink" keyword: nudge the model toward careful multi-step reasoning by
+		// appending a hidden notice after the user's message. User-authored prompts only —
+		// synthetic/agent-initiated turns never trigger it.
+		const ultrathinkNotice: CustomMessage | undefined =
+			!options?.synthetic && containsUltrathink(expandedText)
+				? {
+						role: "custom",
+						customType: "ultrathink-notice",
+						content: ULTRATHINK_NOTICE,
+						display: false,
+						attribution: "user",
+						timestamp: Date.now(),
+					}
+				: undefined;
+
 		// If streaming, queue via steer() or followUp() based on option
 		if (this.isStreaming) {
 			if (!options?.streamingBehavior) {
@@ -4006,6 +4022,10 @@ export class AgentSession {
 				await this.#queueFollowUp(expandedText, options?.images);
 			} else {
 				await this.#queueSteer(expandedText, options?.images);
+			}
+			// Steer/follow-up the ultrathink notice alongside the queued user message.
+			if (ultrathinkNotice) {
+				await this.sendCustomMessage(ultrathinkNotice, { deliverAs: options.streamingBehavior });
 			}
 			return;
 		}
@@ -4035,6 +4055,7 @@ export class AgentSession {
 			await this.#promptWithMessage(message, expandedText, {
 				...options,
 				prependMessages: eagerTodoPrelude ? [eagerTodoPrelude.message] : undefined,
+				appendMessages: ultrathinkNotice ? [ultrathinkNotice] : undefined,
 			});
 		} finally {
 			// Clean up residual eager-todo directive if the prompt never consumed it
@@ -4084,6 +4105,7 @@ export class AgentSession {
 		expandedText: string,
 		options?: Pick<PromptOptions, "toolChoice" | "images" | "skipCompactionCheck"> & {
 			prependMessages?: AgentMessage[];
+			appendMessages?: AgentMessage[];
 			skipPostPromptRecoveryWait?: boolean;
 		},
 	): Promise<void> {
@@ -4146,6 +4168,12 @@ export class AgentSession {
 			}
 
 			messages.push(message);
+
+			// Inject the ultrathink notice (and any other per-turn appends) right after the
+			// user message so the model reads it as part of the same turn.
+			if (options?.appendMessages) {
+				messages.push(...options.appendMessages);
+			}
 
 			// Early bail-out: if a newer abort/prompt cycle started during setup,
 			// return before mutating shared state (nextTurn messages, system prompt).
