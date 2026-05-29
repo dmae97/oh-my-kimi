@@ -36,6 +36,7 @@ import {
 	preloadPluginRoots,
 	resolveActiveProjectRegistryPath,
 } from "./discovery/helpers";
+import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
 import { exportFromFile } from "./export/html";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import {
@@ -767,6 +768,17 @@ export async function runRootCommand(
 	// Mark the promise as handled so a synchronous failure does not surface as an unhandled-rejection
 	// warning before we reach the await site below.
 	pluginPreloadPromise.catch(() => {});
+
+	// Register CLI-provided extension package paths (`--extension`, `--hook`) so
+	// the `omp-plugins` discovery provider can surface their `skills/`, `hooks/`,
+	// `tools/`, `commands/`, `rules/`, `prompts/`, and `.mcp.json` sub-trees.
+	// `--no-extensions` short-circuits both the factory load and the sub-discovery.
+	if (!parsedArgs.noExtensions) {
+		const cliExtensions = [...(parsedArgs.extensions ?? []), ...(parsedArgs.hooks ?? [])];
+		if (cliExtensions.length > 0) {
+			injectOmpExtensionCliRoots(cliExtensions, home, getProjectDir());
+		}
+	}
 
 	const cwd = getProjectDir();
 	const settingsInstance = deps.settings ?? (await logger.time("settings:init", Settings.init, { cwd }));
