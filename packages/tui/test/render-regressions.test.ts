@@ -887,7 +887,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
-		it("repaints viewport when offscreen expansion and append land together", async () => {
+		it("rebuilds history when offscreen expansion and append land together", async () => {
 			const term = new VirtualTerminal(32, 6);
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent(["status-0", ...rows("line-", 11)]);
@@ -904,7 +904,6 @@ describe("TUI terminal-state regressions", () => {
 					"line-9",
 					"line-10",
 				]);
-				const beforeBufferLength = term.getScrollBuffer().length;
 
 				component.setLines(["status-1", "expanded-details", ...rows("line-", 12)]);
 				tui.requestRender();
@@ -918,7 +917,58 @@ describe("TUI terminal-state regressions", () => {
 					"line-10",
 					"line-11",
 				]);
-				expect(term.getScrollBuffer().length - beforeBufferLength).toBe(1);
+				const scrollback = term.getScrollBuffer();
+				expect(scrollback.join("\n")).toContain("expanded-details");
+				for (let i = 0; i < 12; i++) {
+					const pattern = new RegExp(`\\bline-${i}\\b`);
+					expect(countMatches(scrollback, pattern), `line-${i} should appear exactly once`).toBe(1);
+				}
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("removes collapsed ctrl-o markers from scrollback after offscreen expansion", async () => {
+			const term = new VirtualTerminal(48, 6);
+			const tui = new TUI(term);
+			const collapsedLines = [
+				"frame-top",
+				"code preview … 16 more lines ⟨(Ctrl+O for more)⟩",
+				"output preview … 106 more lines (ctrl+o to expand)",
+				...rows("json-", 10),
+				"status",
+				"editor",
+			];
+			const component = new MutableLinesComponent(collapsedLines);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(term.getScrollBuffer().join("\n")).toContain("ctrl+o");
+
+				component.setLines([
+					"frame-top",
+					"code line 0",
+					"code line 1",
+					"output line 0",
+					"output line 1",
+					...rows("json-", 10),
+					"status",
+					"editor",
+				]);
+				tui.requestRender();
+				await settle(term);
+
+				const scrollback = term.getScrollBuffer();
+				const scrollbackText = scrollback.join("\n");
+				expect(scrollbackText).not.toContain("ctrl+o");
+				expect(scrollbackText).toContain("code line 1");
+				expect(scrollbackText).toContain("output line 1");
+				for (let i = 0; i < 10; i++) {
+					const pattern = new RegExp(`\\bjson-${i}\\b`);
+					expect(countMatches(scrollback, pattern), `json-${i} should appear exactly once`).toBe(1);
+				}
 			} finally {
 				tui.stop();
 			}

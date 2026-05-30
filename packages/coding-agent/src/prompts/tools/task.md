@@ -35,7 +35,7 @@ Subagents have no conversation history. Every fact, file path, and direction the
 - **Subagents do not verify, lint, or format.** Every assignment MUST instruct the subagent to skip all gates and formatters. You run them once at the end across the union of changed files — avoids redundant runs and racing formatter passes.
 - No globs, no "update all", no package-wide scope. Fan out.
 - Do not concern yourself with how agents might overlap on certain actions. Never use it as an excuse to go slower: they can resolve collisions in real-time with the harness facilities.
-- Pass large payloads via `local://<path>` URIs, not inline. {{#if contextEnabled}} (other than the context){{/if}} 
+- Pass large payloads via `local://<path>` URIs, not inline. {{#if contextEnabled}} (other than the context){{/if}}
 {{#if contextEnabled}}- Put shared constraints in `context` once; do not duplicate across assignments.{{/if}}
 - Prefer agents that investigate **and** edit in one pass; only spin a read-only discovery step when affected files are genuinely unknown.
 </rules>
