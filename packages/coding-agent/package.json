@@ -46,7 +46,6 @@
 	"dependencies": {
 		"@agentclientprotocol/sdk": "catalog:",
 		"@babel/parser": "catalog:",
-		"@huggingface/transformers": "catalog:",
 		"@mozilla/readability": "catalog:",
 		"@oh-my-pi/hashline": "catalog:",
 		"@oh-my-pi/omp-stats": "catalog:",
@@ -70,6 +69,9 @@
 		"turndown": "catalog:",
 		"turndown-plugin-gfm": "catalog:",
 		"zod": "catalog:"
+	},
+	"optionalDependencies": {
+		"@huggingface/transformers": "catalog:"
 	},
 	"devDependencies": {
 		"@types/bun": "catalog:"

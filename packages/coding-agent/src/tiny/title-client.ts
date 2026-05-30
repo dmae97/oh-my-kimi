@@ -1,30 +1,34 @@
 import { isCompiledBinary, logger } from "@oh-my-pi/pi-utils";
-import { isTinyTitleLocalModelKey } from "./tiny-models";
-import type { TinyTitleWorkerInbound, TinyTitleWorkerOutbound } from "./tiny-title-protocol";
+import { isTinyTitleLocalModelKey, type TinyTitleLocalModelKey } from "./models";
+import type { TinyTitleProgressEvent, TinyTitleWorkerInbound, TinyTitleWorkerOutbound } from "./title-protocol";
 
 interface WorkerHandle {
-	mode: "worker" | "inline";
 	send(message: TinyTitleWorkerInbound): void;
 	onMessage(handler: (message: TinyTitleWorkerOutbound) => void): () => void;
 	onError(handler: (error: Error) => void): () => void;
 	terminate(): Promise<void>;
 }
 
-interface PendingRequest {
-	resolve(title: string | null): void;
+type PendingRequest =
+	| { kind: "generate"; modelKey: TinyTitleLocalModelKey; resolve: (title: string | null) => void }
+	| { kind: "download"; modelKey: TinyTitleLocalModelKey; resolve: (ok: boolean) => void };
+
+export interface TinyTitleDownloadOptions {
+	signal?: AbortSignal;
+	onProgress?: (event: TinyTitleProgressEvent) => void;
 }
 
 const SMOKE_TEST_TIMEOUT_MS = 5_000;
 
 export function createTinyTitleWorker(): Worker {
 	return isCompiledBinary()
-		? new Worker("./packages/coding-agent/src/title/tiny-title-worker.ts", { type: "module" })
-		: new Worker(new URL("./tiny-title-worker.ts", import.meta.url).href, { type: "module" });
+		? new Worker("./packages/coding-agent/src/tiny/worker.ts", { type: "module" })
+		: new Worker(new URL("./worker.ts", import.meta.url).href, { type: "module" });
 }
 
 function wrapBunWorker(worker: Worker): WorkerHandle {
+	(worker as Worker & { unref?: () => void }).unref?.();
 	return {
-		mode: "worker",
 		send(message) {
 			worker.postMessage(message);
 		},
@@ -53,7 +57,6 @@ function spawnInlineUnavailableWorker(error: unknown): WorkerHandle {
 		for (const listener of listeners) listener(message);
 	};
 	return {
-		mode: "inline",
 		send(message) {
 			queueMicrotask(() => {
 				if (message.type === "ping") {
@@ -102,7 +105,13 @@ export class TinyTitleClient {
 	#unsubscribeMessage: (() => void) | null = null;
 	#unsubscribeError: (() => void) | null = null;
 	#pending = new Map<string, PendingRequest>();
+	#progressListeners = new Set<(event: TinyTitleProgressEvent) => void>();
 	#nextRequestId = 0;
+
+	onProgress(listener: (event: TinyTitleProgressEvent) => void): () => void {
+		this.#progressListeners.add(listener);
+		return () => this.#progressListeners.delete(listener);
+	}
 
 	async generate(modelKey: string, message: string, signal?: AbortSignal): Promise<string | null> {
 		if (!isTinyTitleLocalModelKey(modelKey)) return null;
@@ -112,11 +121,12 @@ export class TinyTitleClient {
 			const worker = this.#ensureWorker();
 			const id = String(++this.#nextRequestId);
 			const { promise, resolve } = Promise.withResolvers<string | null>();
-			const pending: PendingRequest = { resolve };
-			this.#pending.set(id, pending);
+			this.#pending.set(id, { kind: "generate", modelKey, resolve });
 			const abort = (): void => {
-				if (!this.#pending.delete(id)) return;
-				resolve(null);
+				const pending = this.#pending.get(id);
+				if (pending?.kind !== "generate") return;
+				this.#pending.delete(id);
+				pending.resolve(null);
 			};
 			signal?.addEventListener("abort", abort, { once: true });
 			try {
@@ -135,6 +145,41 @@ export class TinyTitleClient {
 		}
 	}
 
+	async downloadModel(modelKey: string, options: TinyTitleDownloadOptions = {}): Promise<boolean> {
+		if (!isTinyTitleLocalModelKey(modelKey)) return false;
+		if (options.signal?.aborted) return false;
+
+		const unsubscribe = options.onProgress ? this.onProgress(options.onProgress) : undefined;
+		try {
+			const worker = this.#ensureWorker();
+			const id = String(++this.#nextRequestId);
+			const { promise, resolve } = Promise.withResolvers<boolean>();
+			this.#pending.set(id, { kind: "download", modelKey, resolve });
+			const abort = (): void => {
+				const pending = this.#pending.get(id);
+				if (pending?.kind !== "download") return;
+				this.#pending.delete(id);
+				pending.resolve(false);
+			};
+			options.signal?.addEventListener("abort", abort, { once: true });
+			try {
+				worker.send({ type: "download", id, modelKey });
+				return await promise;
+			} finally {
+				options.signal?.removeEventListener("abort", abort);
+				this.#pending.delete(id);
+			}
+		} catch (error) {
+			logger.debug("tiny-title: local model download failed", {
+				modelKey,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
+		} finally {
+			unsubscribe?.();
+		}
+	}
+
 	async terminate(): Promise<void> {
 		const worker = this.#worker;
 		this.#worker = null;
@@ -142,15 +187,17 @@ export class TinyTitleClient {
 		this.#unsubscribeMessage = null;
 		this.#unsubscribeError?.();
 		this.#unsubscribeError = null;
-		for (const pending of this.#pending.values()) pending.resolve(null);
+		for (const pending of this.#pending.values()) {
+			this.#emitProgress({ modelKey: pending.modelKey, status: "error" });
+			if (pending.kind === "generate") pending.resolve(null);
+			else pending.resolve(false);
+		}
 		this.#pending.clear();
-		if (!worker) return;
 		try {
-			worker.send({ type: "close" });
+			worker?.send({ type: "close" });
 		} catch {
 			// Worker may already be gone.
 		}
-		await worker.terminate().catch(() => undefined);
 	}
 
 	#ensureWorker(): WorkerHandle {
@@ -167,26 +214,41 @@ export class TinyTitleClient {
 			logWorkerMessage(message);
 			return;
 		}
-		if (message.type === "closed") {
-			void this.terminate();
+		if (message.type === "progress") {
+			this.#emitProgress(message.event);
 			return;
 		}
+		if (message.type === "closed") return;
 		if (message.type === "pong") return;
 
 		const pending = this.#pending.get(message.id);
 		if (!pending) return;
 		this.#pending.delete(message.id);
 		if (message.type === "title") {
-			pending.resolve(message.title);
+			if (pending.kind === "generate") pending.resolve(message.title);
+			return;
+		}
+		if (message.type === "downloaded") {
+			if (pending.kind === "download") pending.resolve(true);
 			return;
 		}
 		logger.debug("tiny-title: worker returned error", { error: message.error });
-		pending.resolve(null);
+		this.#emitProgress({ modelKey: pending.modelKey, status: "error" });
+		if (pending.kind === "generate") pending.resolve(null);
+		else pending.resolve(false);
+	}
+
+	#emitProgress(event: TinyTitleProgressEvent): void {
+		for (const listener of this.#progressListeners) listener(event);
 	}
 
 	#handleWorkerError(error: Error): void {
 		logger.warn("tiny-title: worker error", { error: error.message });
-		for (const pending of this.#pending.values()) pending.resolve(null);
+		for (const pending of this.#pending.values()) {
+			this.#emitProgress({ modelKey: pending.modelKey, status: "error" });
+			if (pending.kind === "generate") pending.resolve(null);
+			else pending.resolve(false);
+		}
 		this.#pending.clear();
 		void this.terminate();
 	}

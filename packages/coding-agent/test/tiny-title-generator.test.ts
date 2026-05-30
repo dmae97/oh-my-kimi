@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as ai from "@oh-my-pi/pi-ai";
 import { type Api, type AssistantMessage, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
-import { getEnumValues, getUi } from "../src/config/settings-schema";
-import { TINY_TITLE_MODEL_OPTIONS, TINY_TITLE_MODEL_VALUES } from "../src/title/tiny-models";
-import { tinyTitleClient } from "../src/title/tiny-title-client";
+import { isSubcommand } from "../src/cli-commands";
+import { getDefault, getEnumValues, getUi } from "../src/config/settings-schema";
+import { TinyTitleDownloadProgressComponent } from "../src/modes/components/tiny-title-download-progress";
+import { initTheme } from "../src/modes/theme/theme";
+import { DEFAULT_TINY_TITLE_MODEL_KEY, TINY_TITLE_MODEL_OPTIONS, TINY_TITLE_MODEL_VALUES } from "../src/tiny/models";
+import { tinyTitleClient } from "../src/tiny/title-client";
 import { generateSessionTitle, raceFirstNonNull, TITLE_LOCAL_FALLBACK_DELAY_MS } from "../src/utils/title-generator";
 
 async function flushMicrotasks(turns = 4): Promise<void> {
@@ -53,6 +56,10 @@ function mockOnlineTitle(title: string | null) {
 			: [{ type: "text", text: "" }],
 	} as never);
 }
+
+beforeAll(() => {
+	initTheme();
+});
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -230,11 +237,64 @@ describe("tiny title generator routing", () => {
 		expect(onlineSignal?.aborted).toBe(true);
 		onlineHold.resolve({ stopReason: "abort", content: [] } as never);
 	});
+
+	it("keeps local generation alive when the delayed online fallback wins", async () => {
+		vi.useFakeTimers();
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const local = Promise.withResolvers<string | null>();
+		let localSettled = false;
+		void local.promise.then(() => {
+			localSettled = true;
+		});
+		vi.spyOn(tinyTitleClient, "generate").mockReturnValue(local.promise);
+		mockOnlineTitle("Online Title");
+
+		const result = generateSessionTitle(
+			"Investigate background download",
+			createRegistry(model),
+			createSettings(model, "lfm2-700m"),
+		);
+
+		vi.advanceTimersByTime(TITLE_LOCAL_FALLBACK_DELAY_MS);
+		await flushMicrotasks();
+		await expect(result).resolves.toBe("Online Title");
+		expect(localSettled).toBe(false);
+
+		local.resolve("Late Local Title");
+		await flushMicrotasks();
+		expect(localSettled).toBe(true);
+	});
 });
 
 describe("providers.tinyModel schema", () => {
 	it("keeps enum values and UI options in sync with the tiny model registry", () => {
 		expect(getEnumValues("providers.tinyModel")).toEqual([...TINY_TITLE_MODEL_VALUES]);
 		expect(getUi("providers.tinyModel")?.options).toEqual(TINY_TITLE_MODEL_OPTIONS);
+		expect(getDefault("providers.tinyModel")).toBe(DEFAULT_TINY_TITLE_MODEL_KEY);
+	});
+});
+
+describe("tiny title download progress UI", () => {
+	it("renders progress updates and completion state", () => {
+		const component = new TinyTitleDownloadProgressComponent("lfm2-700m");
+		component.update({
+			modelKey: "lfm2-700m",
+			status: "progress_total",
+			name: "onnx-community/LFM2-700M-ONNX",
+			progress: 50,
+			loaded: 50,
+			total: 100,
+			files: {},
+		});
+		expect(component.render(80).join("\n")).toContain("LFM2 700M");
+		expect(component.isComplete()).toBe(false);
+		component.update({ modelKey: "lfm2-700m", status: "ready", task: "text-generation", model: "repo" });
+		expect(component.isComplete()).toBe(true);
+	});
+});
+
+describe("tiny-models CLI", () => {
+	it("registers tiny-models as a top-level subcommand", () => {
+		expect(isSubcommand("tiny-models")).toBe(true);
 	});
 });

@@ -1,4 +1,5 @@
 export const ONLINE_TINY_TITLE_MODEL_KEY = "online";
+export const DEFAULT_TINY_TITLE_MODEL_KEY = "lfm2-700m";
 
 export interface TinyTitleLocalModelSpec {
 	key: string;

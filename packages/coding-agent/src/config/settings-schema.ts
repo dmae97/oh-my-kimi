@@ -1,7 +1,7 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { TASK_SIMPLE_MODES } from "../task/simple-mode";
 import { getThinkingLevelMetadata } from "../thinking";
-import { TINY_TITLE_MODEL_OPTIONS, TINY_TITLE_MODEL_VALUES } from "../title/tiny-models";
+import { DEFAULT_TINY_TITLE_MODEL_KEY, TINY_TITLE_MODEL_OPTIONS, TINY_TITLE_MODEL_VALUES } from "../tiny/models";
 import { EDIT_MODES } from "../utils/edit-mode";
 
 /** Unified settings schema - single source of truth for all settings.
@@ -2900,11 +2900,11 @@ export const SETTINGS_SCHEMA = {
 	"providers.tinyModel": {
 		type: "enum",
 		values: TINY_TITLE_MODEL_VALUES,
-		default: "online",
+		default: DEFAULT_TINY_TITLE_MODEL_KEY,
 		ui: {
 			tab: "providers",
 			label: "Tiny Model",
-			description: "Session-title model: online pi/smol or an opt-in local CPU model",
+			description: "Session-title model: local LFM2 700M by default, or online pi/smol",
 			options: TINY_TITLE_MODEL_OPTIONS,
 		},
 	},

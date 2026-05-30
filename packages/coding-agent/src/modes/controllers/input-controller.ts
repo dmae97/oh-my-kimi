@@ -3,6 +3,7 @@ import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, sanitizeText } from "@oh-my-pi/pi-utils";
 import { isSettingsInitialized, settings } from "../../config/settings";
+import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import { theme } from "../../modes/theme/theme";
@@ -10,6 +11,9 @@ import type { InteractiveModeContext } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
+import { isTinyTitleLocalModelKey } from "../../tiny/models";
+import { tinyTitleClient } from "../../tiny/title-client";
+import type { TinyTitleProgressEvent } from "../../tiny/title-protocol";
 import { copyToClipboard, readImageFromClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { ensureSupportedImageInput } from "../../utils/image-loading";
@@ -24,8 +28,60 @@ function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
 }
 
+const TINY_TITLE_PROGRESS_DONE_TTL_MS = 3_000;
+// A cached model fires its file-load events in a short burst and then goes silent
+// while onnxruntime builds the session; a genuine download keeps streaming progress
+// events for seconds. Only reveal the bar once a still-incomplete event arrives after
+// this grace window, so an already-downloaded model never flashes the bar.
+const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
+
 export class InputController {
 	constructor(private ctx: InteractiveModeContext) {}
+
+	#showTinyTitleDownloadProgress(modelKey: string): void {
+		if (!isTinyTitleLocalModelKey(modelKey) || this.ctx.isBackgrounded) return;
+		const component = new TinyTitleDownloadProgressComponent(modelKey);
+		let added = false;
+		let disposed = false;
+		let removeTimer: NodeJS.Timeout | undefined;
+		const remove = (): void => {
+			if (disposed) return;
+			disposed = true;
+			unsubscribe();
+			if (removeTimer) {
+				clearTimeout(removeTimer);
+				removeTimer = undefined;
+			}
+			if (added) {
+				this.ctx.chatContainer.removeChild(component);
+				this.ctx.ui.requestRender();
+			}
+		};
+		const scheduleRemove = (): void => {
+			if (removeTimer) clearTimeout(removeTimer);
+			removeTimer = setTimeout(remove, TINY_TITLE_PROGRESS_DONE_TTL_MS);
+			removeTimer.unref?.();
+		};
+		let revealAt = 0;
+		const update = (event: TinyTitleProgressEvent): void => {
+			if (disposed || event.modelKey !== modelKey) return;
+			component.update(event);
+			if (revealAt === 0) revealAt = performance.now() + TINY_TITLE_PROGRESS_REVEAL_DELAY_MS;
+			const complete = component.isComplete();
+			// Reveal only for a download still in flight past the grace window. Cache hits
+			// either complete or fall silent (onnx init emits no events) before this fires.
+			if (!added && !complete && performance.now() >= revealAt) {
+				this.ctx.chatContainer.addChild(component);
+				added = true;
+			}
+			if (added) this.ctx.ui.requestRender();
+			if (complete) {
+				if (added) scheduleRemove();
+				else remove();
+			}
+		};
+		const unsubscribe = tinyTitleClient.onProgress(update);
+	}
 
 	setupKeyHandlers(): void {
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
@@ -329,6 +385,7 @@ export class InputController {
 			// Generate session title on first message
 			const hasUserMessages = this.ctx.session.messages.some((m: AgentMessage) => m.role === "user");
 			if (!hasUserMessages && !this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
+				this.#showTinyTitleDownloadProgress(this.ctx.settings.get("providers.tinyModel"));
 				const registry = this.ctx.session.modelRegistry;
 				generateSessionTitle(
 					text,

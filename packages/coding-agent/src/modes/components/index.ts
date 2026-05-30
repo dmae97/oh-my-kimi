@@ -26,6 +26,7 @@ export * from "./show-images-selector";
 export * from "./status-line";
 export * from "./theme-selector";
 export * from "./thinking-selector";
+export * from "./tiny-title-download-progress";
 export * from "./todo-reminder";
 export * from "./tool-execution";
 export * from "./tree-selector";

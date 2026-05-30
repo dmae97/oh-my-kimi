@@ -43,7 +43,7 @@ async function showHelp(config: CliConfig): Promise<void> {
  */
 async function runSmokeTest(): Promise<void> {
 	const { smokeTestSyncWorker } = await import("@oh-my-pi/omp-stats");
-	const { smokeTestTinyTitleWorker } = await import("./title/tiny-title-client");
+	const { smokeTestTinyTitleWorker } = await import("./tiny/title-client");
 	await smokeTestSyncWorker();
 	await smokeTestTinyTitleWorker();
 	process.stdout.write("smoke-test: ok\n");

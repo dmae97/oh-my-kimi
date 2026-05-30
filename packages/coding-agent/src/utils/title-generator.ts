@@ -9,9 +9,9 @@ import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
-import { ONLINE_TINY_TITLE_MODEL_KEY } from "../title/tiny-models";
-import { tinyTitleClient } from "../title/tiny-title-client";
-import { formatTitleUserMessage, normalizeGeneratedTitle } from "../title/title-text";
+import { ONLINE_TINY_TITLE_MODEL_KEY } from "../tiny/models";
+import { formatTitleUserMessage, normalizeGeneratedTitle } from "../tiny/text";
+import { tinyTitleClient } from "../tiny/title-client";
 
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
 
