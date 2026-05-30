@@ -620,7 +620,6 @@ export class CommandController {
 			return;
 		}
 
-
 		if (action === "stats" || action === "diagnose") {
 			const hook = action === "stats" ? backend.stats : backend.diagnose;
 			try {

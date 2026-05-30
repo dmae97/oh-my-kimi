@@ -53,7 +53,6 @@ export interface MemoryBackend {
 	/** Force consolidation/retain to happen now (slash `/memory enqueue`). */
 	enqueue(agentDir: string, cwd: string, session?: AgentSession): Promise<void>;
 
-
 	/** Render backend-specific memory statistics as markdown (`/memory stats`). */
 	stats?(agentDir: string, cwd: string, session?: AgentSession): Promise<string | undefined>;
 

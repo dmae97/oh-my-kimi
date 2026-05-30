@@ -1,14 +1,15 @@
 import { rm } from "node:fs/promises";
 import * as path from "node:path";
-import { inspectDatabase, type DiagnosticSummary } from "@oh-my-pi/pi-mnemosyne/diagnose";
-import { BankManager } from "@oh-my-pi/pi-mnemosyne/core";
-import { Mnemosyne } from "@oh-my-pi/pi-mnemosyne";
 import { completeSimple } from "@oh-my-pi/pi-ai";
+import { Mnemosyne } from "@oh-my-pi/pi-mnemosyne";
+import { BankManager } from "@oh-my-pi/pi-mnemosyne/core";
+import { type DiagnosticSummary, inspectDatabase } from "@oh-my-pi/pi-mnemosyne/diagnose";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { MemoryBackend, MemoryBackendStartOptions } from "../memory-backend/types";
 import type { AgentSession } from "../session/agent-session";
+import { shortenPath } from "../tools/render-utils";
 import {
 	loadMnemosyneConfig,
 	type MnemosyneBackendConfig,
@@ -22,7 +23,6 @@ import {
 	MnemosyneSessionState,
 	setMnemosyneSessionState,
 } from "./state";
-import { shortenPath } from "../tools/render-utils";
 
 const STATIC_INSTRUCTIONS = [
 	"# Memory",

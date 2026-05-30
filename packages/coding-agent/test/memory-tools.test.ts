@@ -165,6 +165,7 @@ function registerMnemosyneState(
 			getHindsightSessionState: () => undefined,
 		} as never,
 	});
+	setMnemosyneSessionState(registeredMnemosyneState.session as never, registeredMnemosyneState);
 	return registeredMnemosyneState;
 }
 
@@ -848,7 +849,6 @@ describe("memory_edit.execute (Mnemosyne backend)", () => {
 		expect(diagnose).toContain("test-bank");
 	});
 });
-
 
 describe("reflect.execute", () => {
 	beforeEach(() => {

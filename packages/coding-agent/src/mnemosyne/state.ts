@@ -53,7 +53,6 @@ interface MnemosyneStoredMemoryRow {
 	session_id?: unknown;
 }
 
-
 export function getMnemosyneSessionState(session: AgentSession | undefined): MnemosyneSessionState | undefined {
 	return session ? (session as AgentSessionWithMnemosyneState)[kMnemosyneSessionState] : undefined;
 }
@@ -135,8 +134,8 @@ export class MnemosyneSessionState {
 		for (const target of targets) {
 			const row = target.memory.get(id) as MnemosyneStoredMemoryRow | null;
 			if (!row) continue;
-			const store = row.memory_store === "episodic" ? "episodic" : "working";
-			const resultContext = { bank: target.bank, store };
+			const store: MnemosyneMemoryEditResult["store"] = row.memory_store === "episodic" ? "episodic" : "working";
+			const resultContext: Pick<MnemosyneMemoryEditResult, "bank" | "store"> = { bank: target.bank, store };
 			if ((op === "update" || op === "forget") && store !== "working") {
 				ineligible ??= { status: "not_found", ...resultContext };
 				continue;
@@ -173,7 +172,6 @@ export class MnemosyneSessionState {
 		});
 		return lines.join("\n\n");
 	}
-
 
 	collectScopedRecallResults(query: string): RecallResult[] {
 		const merged: RecallResult[] = [];
