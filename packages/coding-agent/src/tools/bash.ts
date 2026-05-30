@@ -1146,7 +1146,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						);
 					}
 					if (isError && typeof details?.exitCode === "number") {
-						statsParts.push(`Status: exit ${details.exitCode}`);
+						statsParts.push(`Exit: ${details.exitCode}`);
 					}
 					const timeoutLine =
 						statsParts.length > 0

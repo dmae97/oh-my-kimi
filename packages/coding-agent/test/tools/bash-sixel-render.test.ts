@@ -123,7 +123,7 @@ describe("bashToolRenderer", () => {
 		// The footer carries the styled stats including the non-zero exit status.
 		expect(rendered).toContain("Wall: 0.02s");
 		expect(rendered).toContain("Timeout: 300s");
-		expect(rendered).toContain("Status: exit 1");
+		expect(rendered).toContain("Exit: 1");
 		// Both the exit-code and wall-time notices are folded into the footer, not
 		// echoed verbatim in the output region.
 		expect(rendered).not.toContain("Command exited with code 1");
@@ -149,7 +149,7 @@ describe("bashToolRenderer", () => {
 		const rendered = sanitizeText(component.render(120).join("\n"));
 		expect(rendered).toContain("Wall: 0.02s");
 		expect(rendered).toContain("Timeout: 300s");
-		expect(rendered).not.toContain("Status:");
+		expect(rendered).not.toContain("Exit:");
 	});
 
 	it("bypasses truncation/styling for SIXEL lines", async () => {
