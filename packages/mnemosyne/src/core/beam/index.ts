@@ -117,6 +117,7 @@ export class BeamMemory implements BeamMemoryState {
 	readonly veracityConsolidator: unknown | null;
 	readonly caches: BeamCaches;
 	readonly config: BeamConfig;
+	readonly pendingExtractions: Set<Promise<void>> = new Set();
 	#closed = false;
 
 	constructor(options?: BeamMemoryOptions);
@@ -191,6 +192,12 @@ export class BeamMemory implements BeamMemoryState {
 		}
 		this.#closed = true;
 		closeQuietly(this.db);
+	}
+
+	async flushExtractions(): Promise<void> {
+		while (this.pendingExtractions.size > 0) {
+			await Promise.allSettled([...this.pendingExtractions]);
+		}
 	}
 
 	remember(content: string, options: RememberOptions = {}): string {

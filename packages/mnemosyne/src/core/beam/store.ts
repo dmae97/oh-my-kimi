@@ -3,6 +3,9 @@ import { transaction } from "../../db";
 import { toUtcIso } from "../../util/datetime";
 import { generateId } from "../../util/ids";
 import { EpisodicGraph } from "../episodic-graph";
+import { extractFactsSafe } from "../extraction";
+import { getMnemosyneRuntimeOptions, withMnemosyneRuntimeOptions } from "../runtime-options";
+import { storeFactStrings } from "./consolidate";
 import { vecAvailable, vecInsert } from "./helpers";
 import type {
 	BeamEvent,
@@ -204,6 +207,43 @@ function proactiveLinkIfEnabled(
 	}
 }
 
+/**
+ * Run the LLM fact extractor over freshly stored content and persist the
+ * resulting facts. Best-effort: failures (no LLM, closed DB, malformed output)
+ * are swallowed so they can never disrupt the synchronous `remember` that
+ * scheduled them.
+ */
+async function runFactExtraction(beam: BeamMemoryState, memoryId: string, content: string): Promise<void> {
+	try {
+		const facts = await extractFactsSafe(content);
+		if (facts.length === 0) return;
+		storeFactStrings(beam, facts, 0, memoryId);
+		invalidateCaches(beam);
+	} catch {
+		// Background fact extraction is best-effort and never surfaces to the caller.
+	}
+}
+
+/**
+ * Schedule background fact extraction for a stored memory. `remember` is
+ * synchronous, so the async extractor is fired-and-forgotten; the promise is
+ * tracked on `beam.pendingExtractions` so callers can drain it via
+ * `flushExtractions()` (tests, graceful shutdown). The active runtime options
+ * (host LLM `complete`, model, prompt overrides) are captured here and
+ * re-entered inside the task because the AsyncLocalStorage scope set by
+ * `Mnemosyne.#withRuntimeOptions` has already exited by the time the task runs.
+ */
+function scheduleFactExtraction(beam: BeamMemoryState, memoryId: string, content: string): void {
+	if (content.trim() === "") return;
+	const runtimeOptions = getMnemosyneRuntimeOptions();
+	const task = withMnemosyneRuntimeOptions(runtimeOptions, () => runFactExtraction(beam, memoryId, content));
+	const pending = beam.pendingExtractions;
+	if (pending !== undefined) {
+		pending.add(task);
+		void task.finally(() => pending.delete(task));
+	}
+}
+
 function rowToDict(row: Row): Row {
 	return { ...row };
 }
@@ -301,6 +341,7 @@ export function remember(beam: BeamMemoryState, content: string, options: StoreR
 		importance,
 		metadata: metadata ?? undefined,
 	});
+	if (options.extract === true) scheduleFactExtraction(beam, memoryId, content);
 	invalidateCaches(beam);
 	return memoryId;
 }
@@ -363,6 +404,12 @@ export function rememberBatch(
 		trimWorkingMemory(beam);
 	});
 	invalidateCaches(beam);
+	items.forEach((item, index) => {
+		const id = ids[index];
+		if (id !== undefined && (item.extract === true || options.extract === true)) {
+			scheduleFactExtraction(beam, id, item.content);
+		}
+	});
 	return ids;
 }
 

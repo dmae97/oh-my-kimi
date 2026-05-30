@@ -4,6 +4,7 @@ export * from "./core/llm-backends";
 export * from "./core/memory";
 export {
 	addMemory,
+	flushExtractions,
 	forget,
 	get,
 	getBank,

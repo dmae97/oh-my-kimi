@@ -85,6 +85,8 @@ export interface BeamMemoryState {
 	veracityConsolidator: unknown | null;
 	caches: BeamCaches;
 	config: BeamConfig;
+	/** Tracks in-flight background fact-extraction tasks scheduled by `remember(..., { extract: true })`. */
+	pendingExtractions?: Set<Promise<void>>;
 }
 
 export interface AnnotationWriteOptions {

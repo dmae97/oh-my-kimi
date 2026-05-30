@@ -388,6 +388,10 @@ export class Mnemosyne {
 		if (this.#ownsDb) this.beam.close();
 	}
 
+	async flushExtractions(): Promise<void> {
+		await this.beam.flushExtractions();
+	}
+
 	remember(memory: string | RememberInput, options: RememberFacadeOptions = {}): string {
 		const content = typeof memory === "string" ? memory : memory.content;
 		return this.#withRuntimeOptions(() => this.beam.remember(content, toRememberOptions(memory, options)));
@@ -558,6 +562,10 @@ export function sleep(dryRun = false, bank: string | null = null): SleepResult {
 
 export function sleepAllSessions(dryRun = false, bank: string | null = null): SleepResult {
 	return defaultFor(bank).sleepAllSessions(dryRun);
+}
+
+export function flushExtractions(bank: string | null = null): Promise<void> {
+	return defaultFor(bank).flushExtractions();
 }
 
 export function scratchpadWrite(content: string, bank: string | null = null): string {

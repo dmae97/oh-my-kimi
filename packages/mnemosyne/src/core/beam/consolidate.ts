@@ -362,6 +362,36 @@ export function detectLanguage(_beam: BeamMemoryState, text: string): string {
 	}
 	return spanish >= 3 ? "es" : "en";
 }
+export function storeFactStrings(
+	beam: BeamMemoryState,
+	facts: readonly string[],
+	messageIdx = 0,
+	sourceMemoryId: string | null = null,
+	importance = 0.7,
+): number {
+	let stored = 0;
+	for (const fact of facts) {
+		insertFactRows(beam, messageIdx, "entity", "fact", fact, fact, importance, sourceMemoryId);
+		stored++;
+		const pref = /^The user (prefers|dislikes) (.+)$/i.exec(fact);
+		if (pref?.[2]) {
+			beam.db.run(
+				`INSERT INTO memoria_preferences (session_id, message_idx, preference, topic, evolution, context_snippet, source_memory_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				[sourceSession(beam), messageIdx, fact, pref[2], null, fact, sourceMemoryId],
+			);
+		}
+		const instruction = /^Instruction: (.+)$/i.exec(fact);
+		if (instruction?.[1]) {
+			beam.db.run(
+				`INSERT INTO memoria_instructions (session_id, message_idx, instruction, active, topic, context_snippet, source_memory_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				[sourceSession(beam), messageIdx, instruction[1], 1, null, fact, sourceMemoryId],
+			);
+		}
+	}
+	return stored;
+}
 export function extractAndStoreFacts(
 	beam: BeamMemoryState,
 	content: string,
@@ -437,26 +467,7 @@ export function extractAndStoreFacts(
 		counts.version++;
 	}
 
-	for (const fact of heuristicExtractFacts(text)) {
-		insertFactRows(beam, messageIdx, "entity", "fact", fact, fact, 0.7, sourceMemoryId);
-		counts.entity++;
-		const pref = /^The user (prefers|dislikes) (.+)$/i.exec(fact);
-		if (pref?.[2]) {
-			beam.db.run(
-				`INSERT INTO memoria_preferences (session_id, message_idx, preference, topic, evolution, context_snippet, source_memory_id)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				[sourceSession(beam), messageIdx, fact, pref[2], null, fact, sourceMemoryId],
-			);
-		}
-		const instruction = /^Instruction: (.+)$/i.exec(fact);
-		if (instruction?.[1]) {
-			beam.db.run(
-				`INSERT INTO memoria_instructions (session_id, message_idx, instruction, active, topic, context_snippet, source_memory_id)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				[sourceSession(beam), messageIdx, instruction[1], 1, null, fact, sourceMemoryId],
-			);
-		}
-	}
+	counts.entity += storeFactStrings(beam, heuristicExtractFacts(text), messageIdx, sourceMemoryId);
 
 	for (const match of text.matchAll(
 		/\b([A-Z][A-Za-z0-9_-]{2,})\s+(?:is|uses|runs|owns|depends on)\s+([^.!?;]{2,80})/g,

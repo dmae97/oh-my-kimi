@@ -113,6 +113,9 @@ export const mnemosyneBackend: MemoryBackend = {
 				setMnemosyneSessionState(session, state);
 			}
 			await state?.forceRetainCurrentSession();
+			// Drain the background fact extraction scheduled by the final retain
+			// before the process can exit, otherwise the last turn's facts are lost.
+			await state?.memory.flushExtractions();
 			state?.memory.sleepAllSessions(false);
 		} catch (error) {
 			logger.warn("Mnemosyne: enqueue failed.", { error: String(error) });
