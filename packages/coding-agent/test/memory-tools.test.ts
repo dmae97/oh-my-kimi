@@ -8,15 +8,21 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
 import { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
-import type { MnemosyneBackendConfig } from "@oh-my-pi/pi-coding-agent/mnemosyne/config";
-import { MnemosyneSessionState } from "@oh-my-pi/pi-coding-agent/mnemosyne/state";
+import { mnemosyneBackend } from "@oh-my-pi/pi-coding-agent/mnemosyne/backend";
+import { loadMnemosyneConfig, type MnemosyneBackendConfig } from "@oh-my-pi/pi-coding-agent/mnemosyne/config";
+import {
+	getMnemosyneScopedDbPaths,
+	getMnemosyneSessionState,
+	MnemosyneSessionState,
+	setMnemosyneSessionState,
+} from "@oh-my-pi/pi-coding-agent/mnemosyne/state";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { MemoryRecallTool } from "@oh-my-pi/pi-coding-agent/tools/memory-recall";
 import { MemoryReflectTool } from "@oh-my-pi/pi-coding-agent/tools/memory-reflect";
@@ -411,6 +417,132 @@ describe("retain.execute (Mnemosyne backend)", () => {
 	});
 });
 
+describe("Mnemosyne backend lifecycle", () => {
+	beforeEach(() => {
+		resetSettingsForTest();
+		registeredMnemosyneState = undefined;
+		tempDbPath = undefined;
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		registeredMnemosyneState?.dispose();
+		registeredMnemosyneState = undefined;
+		if (tempDbPath) {
+			try {
+				rmSync(path.dirname(tempDbPath), { recursive: true, force: true });
+			} catch {}
+			tempDbPath = undefined;
+		}
+	});
+
+	it("auto-retain uses the cumulative transcript turn count", async () => {
+		const entries = Array.from({ length: 4 }, (_, index) => ({
+			type: "message",
+			message: { role: "user", content: `turn ${index + 1}` },
+		}));
+		const state = registerMnemosyneState(makeMnemosyneConfig({ retainEveryNTurns: 4 }), {
+			cwd: "/work/project-alpha",
+		});
+		(state.session.sessionManager as { getEntries: () => unknown[] }).getEntries = () => entries;
+		const retainSpy = vi.spyOn(state, "retainMessages").mockResolvedValue();
+
+		await state.maybeRetainOnAgentEnd([{ role: "user", content: [{ type: "text", text: "turn 4" }] }] as never);
+
+		expect(retainSpy).toHaveBeenCalledTimes(1);
+		expect(retainSpy.mock.calls[0][0]).toEqual([
+			{ role: "user", content: "turn 1" },
+			{ role: "user", content: "turn 2" },
+			{ role: "user", content: "turn 3" },
+			{ role: "user", content: "turn 4" },
+		]);
+		expect(state.lastRetainedTurn).toBe(4);
+	});
+
+	it("registers subagent aliases from parent Mnemosyne state without Hindsight", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		const parentState = registerMnemosyneState();
+		const childSession = {
+			sessionId: "child-session-id",
+			settings,
+			sessionManager: {
+				getEntries: () => [],
+				getCwd: () => "/tmp",
+			},
+			emitNotice: () => {},
+		} as never;
+
+		await mnemosyneBackend.start({
+			session: childSession,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: path.dirname(tempDbPath!),
+			taskDepth: 1,
+			parentMnemosyneSessionState: parentState,
+		});
+
+		const childState = getMnemosyneSessionState(childSession);
+		expect(childState?.aliasOf).toBe(parentState);
+		expect(childState?.getScopedRetainTarget().bank).toBe(parentState.getScopedRetainTarget().bank);
+		childState?.dispose();
+	});
+
+	it("clears every scoped Mnemosyne database for per-project-tagged mode", async () => {
+		const config = makeMnemosyneConfig({
+			scoping: "per-project-tagged",
+			bank: "project-alpha",
+			globalBank: "default",
+			retainBank: "project-alpha",
+			recallBanks: ["project-alpha", "default"],
+		});
+		const state = registerMnemosyneState(config, { cwd: "/work/project-alpha" });
+		state.rememberInScope("project clear marker", { scope: "bank", extract: false, source: "test" });
+		state.globalMemory?.remember("global clear marker", { scope: "bank", extract: false, source: "test" });
+		const dbPaths = getMnemosyneScopedDbPaths(config);
+		for (const dbPath of dbPaths) expect(existsSync(dbPath)).toBe(true);
+		const session = state.session;
+		setMnemosyneSessionState(session, state);
+
+		await mnemosyneBackend.clear(path.dirname(config.dbPath), "/work/project-alpha", session);
+
+		for (const dbPath of dbPaths) {
+			expect(existsSync(dbPath)).toBe(false);
+			expect(existsSync(`${dbPath}-wal`)).toBe(false);
+			expect(existsSync(`${dbPath}-shm`)).toBe(false);
+		}
+		expect(getMnemosyneSessionState(session)).toBeUndefined();
+		registeredMnemosyneState = undefined;
+	});
+
+	it("derives valid project banks from the absolute project root", async () => {
+		const root = path.join(tmpdir(), `mnemosyne-bank-${Date.now()}`);
+		const alphaCwd = path.join(root, "a", "api");
+		const betaCwd = path.join(root, "b", "api");
+		mkdirSync(alphaCwd, { recursive: true });
+		mkdirSync(betaCwd, { recursive: true });
+		try {
+			const base = Settings.isolated({
+				"memory.backend": "mnemosyne",
+				"mnemosyne.scoping": "per-project",
+				"mnemosyne.bank": "../../bad bank name with spaces and punctuation!",
+			});
+			const alpha = loadMnemosyneConfig(await base.cloneForCwd(alphaCwd), root);
+			const beta = loadMnemosyneConfig(await base.cloneForCwd(betaCwd), root);
+
+			expect(alpha.bank).not.toBe(beta.bank);
+			const banks = [alpha.bank, beta.bank, alpha.globalBank, beta.globalBank].filter(
+				(bank): bank is string => typeof bank === "string",
+			);
+			for (const bank of banks) {
+				expect(bank).toMatch(/^[A-Za-z0-9_-]+$/);
+				expect(bank.length).toBeLessThanOrEqual(64);
+			}
+			expect(alpha.globalBank).toBe("bad-bank-name-with-spaces-and-punctuation");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
 describe("recall.execute", () => {
 	beforeEach(() => {
 		resetSettingsForTest();

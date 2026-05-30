@@ -98,4 +98,28 @@ describe("task renderer: streaming call preview", () => {
 		// Isolation flag is rendered last, after every task entry.
 		expect(lines.at(-1)).toContain("Isolated");
 	});
+
+	// Once the tool produces a result, `renderResult` draws each agent as a
+	// progress/result line. The call preview must drop its own per-agent list
+	// so the non-streaming path doesn't render every task twice.
+	it("suppresses the per-task preview list once a result snapshot exists", () => {
+		const args: TaskParams = {
+			agent: "reviewer",
+			tasks: [
+				{ id: "ReviewAuth", description: "Audit the auth module", assignment: "..." },
+				{ id: "ReviewDb", description: "Audit the db layer", assignment: "..." },
+			],
+		};
+		const component = taskToolRenderer.renderCall(
+			args,
+			{ expanded: false, isPartial: true, renderContext: { hasResult: true } },
+			theme,
+		);
+		const out = Bun.stripANSI(component.render(160).join("\n"));
+
+		// Header stays as a section label, but the duplicated agent rows are gone.
+		expect(out).toContain("Tasks (2)");
+		expect(out).not.toContain("Audit the auth module");
+		expect(out).not.toContain("Audit the db layer");
+	});
 });
