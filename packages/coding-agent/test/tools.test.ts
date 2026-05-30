@@ -711,6 +711,19 @@ describe("Coding Agent Tools", () => {
 			expect(result.content.some(c => c.type === "image")).toBe(false);
 		});
 
+		it("omits inspect_image from the description when the tool is disabled", () => {
+			const enabled = new ReadTool(
+				createTestToolSession(testDir, Settings.isolated({ "inspect_image.enabled": true })),
+			);
+			const disabled = new ReadTool(
+				createTestToolSession(testDir, Settings.isolated({ "inspect_image.enabled": false })),
+			);
+
+			expect(enabled.description).toContain("inspect_image");
+			expect(disabled.description).not.toContain("inspect_image");
+			expect(disabled.description).toContain("inline");
+		});
+
 		it("should treat files with image extension but non-image content as text", async () => {
 			const testFile = path.join(testDir, "not-an-image.png");
 			fs.writeFileSync(testFile, "definitely not a png");
