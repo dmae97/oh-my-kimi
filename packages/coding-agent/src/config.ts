@@ -80,12 +80,6 @@ export function getChangelogPath(): string | undefined {
  * User-level: ~/.omp/agent, ~/.claude, ~/.codex, ~/.gemini
  * Project-level: .omp, .claude, .codex, .gemini
  */
-// `globalAgentDir` returns a *home-relative* config-agent path (e.g. `.omp/agent`
-// or `.omp/profiles/work/agent` when a profile is active). It MUST stay home-
-// relative and read at call time: it absorbs both `PI_CONFIG_DIR` changes and
-// the active profile every time we resolve a user-level config dir. Swapping it
-// for `getAgentDir()` would freeze the path at module load and bypass XDG-
-// independent reactivity that downstream tests and runtime config flips rely on.
 const USER_CONFIG_BASES = priorityList.map(({ dir, globalAgentDir }) => ({
 	base: () => path.join(os.homedir(), globalAgentDir ? globalAgentDir() : dir),
 	name: dir,
