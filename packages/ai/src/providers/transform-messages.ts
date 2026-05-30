@@ -68,27 +68,29 @@ export function transformMessages<TApi extends Api>(
 			// A partial signature is invalid and will be rejected by the API, so we must
 			// strip signatures from thinking blocks in these messages.
 			//
-			// Abandoned tool-use turns get the same treatment. When a turn carries
-			// toolCall blocks but did NOT request tool execution (stopReason !== "toolUse"
-			// — e.g. adaptive-thinking Opus emitting tool calls and then ending the turn
-			// on `end_turn`/`stop`), the agent loop pairs those calls with placeholder
-			// tool_results to keep the tool_use/tool_result contract valid. Replaying the
-			// turn's *signed* thinking in that tool_result continuation trips Anthropic's
-			// "`thinking` blocks in the latest assistant message cannot be modified" — the
-			// signature was bound to an end_turn context, not a tool-use one. Stripping it
-			// downgrades the thinking to plain text downstream, which the API accepts.
-			// Normal tool-use turns (stopReason "toolUse") never match this guard.
+			// Abandoned tool-use turns get the same treatment once they are no longer
+			// the latest assistant message. When a turn carries toolCall blocks but did
+			// NOT request tool execution (stopReason !== "toolUse" — e.g.
+			// adaptive-thinking Opus emitting tool calls and then ending the turn on
+			// `end_turn`/`stop`), the agent loop pairs those calls with placeholder
+			// tool_results to keep the tool_use/tool_result contract valid. Historical
+			// abandoned turns cannot safely replay their end_turn-bound signatures in
+			// that continuation, so stripping downgrades them to plain text downstream.
+			// Latest abandoned turns are exempt because Anthropic requires thinking
+			// blocks from its most recent response to remain byte-for-byte unmodified.
+			const invalidStopReason = assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error";
 			const abandonedToolUse =
-				assistantMsg.stopReason !== "toolUse" && assistantMsg.content.some(b => b.type === "toolCall");
-			const hasInvalidSignatures =
-				assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error" || abandonedToolUse;
+				!invalidStopReason &&
+				assistantMsg.stopReason !== "toolUse" &&
+				assistantMsg.content.some(b => b.type === "toolCall");
+			const hasInvalidSignatures = invalidStopReason || abandonedToolUse;
 
 			const transformedContent = assistantMsg.content.flatMap(block => {
 				if (block.type === "thinking") {
-					// Strip signature from aborted/errored messages — it's likely incomplete
+					// Strip untrustworthy signatures so the encoder can downgrade to text.
 					const sanitized =
 						hasInvalidSignatures && block.thinkingSignature ? { ...block, thinkingSignature: undefined } : block;
-					if (mustPreserveLatestAnthropicThinking) return sanitized;
+					if (mustPreserveLatestAnthropicThinking) return abandonedToolUse ? block : sanitized;
 					// For same model: keep thinking blocks with signatures (needed for replay)
 					// even if the thinking text is empty (OpenAI encrypted reasoning)
 					if (isSameModel && sanitized.thinkingSignature) return sanitized;

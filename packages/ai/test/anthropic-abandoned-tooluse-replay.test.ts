@@ -11,13 +11,16 @@ import type { AssistantMessage, Message, Model, ToolResultMessage, UserMessage }
 //   * `stop_reason` is never replayed on the wire, so it does NOT constrain whether a
 //     continuation is valid — a tool_use turn replays fine with tool_results appended
 //     whether it ended on `tool_use` or `end_turn`.
-//   * Therefore the safe recovery for a turn whose signature is untrustworthy (abandoned
-//     `end_turn`+tool_use, or a half-streamed `aborted` turn) is to strip the signature
-//     and let the encoder downgrade the block to text — which the API accepts.
+//   * Therefore the safe recovery for a historical turn whose signature is untrustworthy
+//     (abandoned `end_turn`+tool_use, or a half-streamed `aborted` turn) is to strip the
+//     signature and let the encoder downgrade the block to text — which the API accepts.
+//   * The latest assistant message is different: Anthropic requires thinking blocks from
+//     its most recent response to remain unmodified, so valid signatures must be preserved
+//     even when the turn is abandoned.
 //
 // The agent loop relies on this: it now runs tool_use blocks under `stop`/`end_turn` and
-// continues. That continuation is only valid because the transform below keeps every
-// emitted `thinking` block signed and downgrades the rest.
+// continues. That continuation is valid only when the transform preserves latest signed
+// thinking and downgrades historical/invalid signed thinking.
 
 const model: Model<"anthropic-messages"> = {
 	api: "anthropic-messages",
@@ -94,10 +97,17 @@ describe("Anthropic abandoned/aborted tool-use replay", () => {
 		expect(blocks.some(b => b.type === "tool_use")).toBe(true);
 	});
 
-	it("downgrades thinking to text on an end_turn(stop) tool-use turn so the continuation stays wire-valid", () => {
+	it("preserves signed thinking on the latest end_turn(stop) tool-use turn", () => {
 		const blocks = assistantBlocks(buildHistory("stop", "sig_valid"));
 		expectNoUnsignedThinking(blocks);
-		// Signature stripped (abandoned tool-use) -> encoder downgrades to text; no thinking block survives.
+		expect(blocks.some(b => b.type === "thinking" && b.signature === "sig_valid")).toBe(true);
+		expect(blocks.some(b => b.type === "tool_use")).toBe(true);
+	});
+
+	it("downgrades historical end_turn(stop) tool-use thinking to text so the continuation stays wire-valid", () => {
+		const blocks = assistantBlocks(buildHistoryWithLaterAssistant("stop", "sig_valid"));
+		expectNoUnsignedThinking(blocks);
+		// Signature stripped (historical abandoned tool-use) -> encoder downgrades to text.
 		expect(blocks.some(b => b.type === "thinking")).toBe(false);
 		expect(blocks.some(b => b.type === "text" && b.text?.includes("deliberating"))).toBe(true);
 		// tool_use is preserved so it still pairs with the appended tool_result.
@@ -111,3 +121,23 @@ describe("Anthropic abandoned/aborted tool-use replay", () => {
 		expect(blocks.some(b => b.type === "tool_use")).toBe(true);
 	});
 });
+
+function buildHistoryWithLaterAssistant(
+	stopReason: AssistantMessage["stopReason"],
+	signature: string | undefined,
+): Message[] {
+	return [
+		...buildHistory(stopReason, signature),
+		{ role: "user", content: "continue after tool result", timestamp: 4 } satisfies UserMessage,
+		{
+			role: "assistant",
+			content: [{ type: "text", text: "done" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: model.id,
+			usage: emptyUsage,
+			stopReason: "stop",
+			timestamp: 5,
+		} satisfies AssistantMessage,
+	];
+}
