@@ -25,6 +25,7 @@ import { PREVIEW_LIMITS, replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "
 import { toPathList } from "../../tools/search";
 import type { ObservableSession, SessionObserverRegistry } from "../session-observer-registry";
 import { getMarkdownTheme, theme } from "../theme/theme";
+import { matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
 
 /** Max thinking characters in collapsed state */
@@ -660,7 +661,7 @@ export class SessionObserverOverlayComponent extends Container {
 		}
 
 		// j / down — move selection down
-		if (keyData === "j" || matchesKey(keyData, "down")) {
+		if (keyData === "j" || matchesSelectDown(keyData)) {
 			if (entryCount > 0) {
 				this.#selectedEntryIndex = Math.min(this.#selectedEntryIndex + 1, entryCount - 1);
 			}
@@ -669,7 +670,7 @@ export class SessionObserverOverlayComponent extends Container {
 		}
 
 		// k / up — move selection up
-		if (keyData === "k" || matchesKey(keyData, "up")) {
+		if (keyData === "k" || matchesSelectUp(keyData)) {
 			if (entryCount > 0) {
 				this.#selectedEntryIndex = Math.max(this.#selectedEntryIndex - 1, 0);
 			}

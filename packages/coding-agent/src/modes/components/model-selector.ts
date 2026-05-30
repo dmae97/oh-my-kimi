@@ -18,6 +18,7 @@ import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS, MODEL_ROLES } from "../..
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import { type ThemeColor, theme } from "../../modes/theme/theme";
+import { matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
 import { getThinkingLevelMetadata } from "../../thinking";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
@@ -971,7 +972,7 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		// Up arrow - navigate list (wrap to bottom when at top)
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			const itemCount = this.#isCanonicalTab() ? this.#filteredCanonicalModels.length : this.#filteredModels.length;
 			if (itemCount === 0) return;
 			this.#selectedIndex = this.#selectedIndex === 0 ? itemCount - 1 : this.#selectedIndex - 1;
@@ -980,7 +981,7 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		// Down arrow - navigate list (wrap to top when at bottom)
-		if (matchesKey(keyData, "down")) {
+		if (matchesSelectDown(keyData)) {
 			const itemCount = this.#isCanonicalTab() ? this.#filteredCanonicalModels.length : this.#filteredModels.length;
 			if (itemCount === 0) return;
 			this.#selectedIndex = this.#selectedIndex === itemCount - 1 ? 0 : this.#selectedIndex + 1;
@@ -1022,13 +1023,13 @@ export class ModelSelectorComponent extends Container {
 				: this.#menuRoleActions.length;
 		if (optionCount === 0) return;
 
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			this.#menuSelectedIndex = (this.#menuSelectedIndex - 1 + optionCount) % optionCount;
 			this.#updateMenu();
 			return;
 		}
 
-		if (matchesKey(keyData, "down")) {
+		if (matchesSelectDown(keyData)) {
 			this.#menuSelectedIndex = (this.#menuSelectedIndex + 1) % optionCount;
 			this.#updateMenu();
 			return;
