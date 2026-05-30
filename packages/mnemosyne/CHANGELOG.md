@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.6.0] - 2026-05-30
+
 ### Added
 
 - Added `llm.extractionPrompt` runtime option to override the fact-extraction prompt template using `{text}` and `{lang}` placeholders

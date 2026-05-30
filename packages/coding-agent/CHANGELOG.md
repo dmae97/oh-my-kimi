@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.6.0] - 2026-05-30
 ### Added
 
 - Added prompt-mode autocomplete for supported internal URL schemes (`skill://`, `rule://`, `agent://`, `artifact://`, `local://`, `memory://`, and `omp://`) so typing those tokens now suggests existing resources as completion candidates
