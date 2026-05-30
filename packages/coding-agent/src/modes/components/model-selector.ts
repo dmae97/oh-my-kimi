@@ -377,10 +377,8 @@ export class ModelSelectorComponent extends Container {
 		});
 	}
 
-	async #loadModels(): Promise<void> {
+	#loadModelsFromCurrentRegistryState(): void {
 		let models: ModelItem[];
-
-		// Use scoped models if provided via --models flag
 		if (this.#scopedModels.length > 0) {
 			models = this.#scopedModels.map(scoped => ({
 				kind: "provider",
@@ -390,10 +388,6 @@ export class ModelSelectorComponent extends Container {
 				selector: `${scoped.model.provider}/${scoped.model.id}`,
 			}));
 		} else {
-			// Reload config and cached discovery state without blocking on live provider refresh
-			await this.#modelRegistry.refresh("offline");
-
-			// Check for models.json errors
 			const loadError = this.#modelRegistry.getError();
 			if (loadError) {
 				this.#errorMessage = loadError;
@@ -401,7 +395,6 @@ export class ModelSelectorComponent extends Container {
 				this.#errorMessage = undefined;
 			}
 
-			// Load available models (built-in models still work even if models.json failed)
 			try {
 				const availableModels = this.#modelRegistry.getAvailable();
 				models = availableModels.map((model: Model) => ({
@@ -421,15 +414,16 @@ export class ModelSelectorComponent extends Container {
 			}
 		}
 
+		const candidates = models.map(item => item.model);
 		const canonicalRecords = this.#modelRegistry.getCanonicalModels({
 			availableOnly: this.#scopedModels.length === 0,
-			candidates: models.map(item => item.model),
+			candidates,
 		});
 		const canonicalModels = canonicalRecords
 			.map(record => {
 				const selectedModel = this.#modelRegistry.resolveCanonicalModel(record.id, {
 					availableOnly: this.#scopedModels.length === 0,
-					candidates: models.map(item => item.model),
+					candidates,
 				});
 				if (!selectedModel) return undefined;
 				const searchText = [
@@ -461,6 +455,14 @@ export class ModelSelectorComponent extends Container {
 		this.#canonicalModels = canonicalModels;
 		this.#filteredCanonicalModels = canonicalModels;
 		this.#selectedIndex = Math.min(this.#selectedIndex, Math.max(0, models.length - 1));
+	}
+
+	async #loadModels(): Promise<void> {
+		if (this.#scopedModels.length === 0) {
+			// Reload config and cached discovery state without blocking on live provider refresh
+			await this.#modelRegistry.refresh("offline");
+		}
+		this.#loadModelsFromCurrentRegistryState();
 	}
 
 	#buildProviderTabs(): void {
@@ -559,7 +561,11 @@ export class ModelSelectorComponent extends Container {
 	async #refreshProviderInBackground(providerId: string): Promise<void> {
 		try {
 			await this.#modelRegistry.refreshProvider(providerId, "online");
-			await this.#loadModels();
+			// Provider refresh already updated the registry snapshot. Re-reading it
+			// here must stay purely in-memory — do not call modelRegistry.refresh()
+			// again or tab switches will pay an extra whole-registry reload after the
+			// network round-trip completes.
+			this.#loadModelsFromCurrentRegistryState();
 			this.#buildProviderTabs();
 			this.#updateTabBar();
 			this.#applyTabFilter();

@@ -154,6 +154,7 @@ describe("ModelSelector role badge thinking display", () => {
 		installTestTheme();
 
 		expect(refreshProvider).toHaveBeenCalledWith("ollama-cloud", "online");
+		expect(modelRegistry.refresh).toHaveBeenCalledTimes(1);
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(rendered).toContain("deepseek-v4-pro");
 		expect(rendered).not.toContain("Provider has not been refreshed yet");
@@ -232,6 +233,7 @@ describe("ModelSelector role badge thinking display", () => {
 		await Bun.sleep(10);
 		installTestTheme();
 
+		expect(modelRegistry.refresh).toHaveBeenCalledTimes(1);
 		const finalRendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(finalRendered).toContain("deepseek-v4-pro");
 		expect(finalRendered).not.toContain("Refreshing OLLAMA CLOUD in background");
