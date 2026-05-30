@@ -7,6 +7,10 @@
 - Added `--profile <name>` / `OMP_PROFILE` support to isolate agent state (auth credentials, sessions, settings, caches, history, memories, and blobs) under a named profile.
 - Added `--alias <command>` support for generating shell shortcuts like `omp-work` that forward to `omp --profile <name>` while preserving subcommands such as `update` and `--version`.
 
+### Fixed
+
+- Fixed profile bootstrap and alias installation edge cases: `--profile` is now still honored for `launch` argv that merely contain subcommand-shaped words, extension flags no longer parse literal text after `--`, alias installation preserves non-ENOENT shell config read failures, `/bin/sh` is rejected instead of being treated as bash, and aliases cannot shadow `omp` case-insensitively.
+
 ## [15.5.14] - 2026-05-29
 ### Added
 
