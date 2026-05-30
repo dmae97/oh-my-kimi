@@ -49,6 +49,7 @@ import {
 } from "./extensibility/plugins/marketplace";
 import type { MCPManager } from "./mcp";
 import { InteractiveMode, runAcpMode, runPrintMode, runRpcMode } from "./modes";
+import { ALL_SCENES, runSetupWizard, selectSetupScenes } from "./modes/setup-wizard";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
 import {
@@ -257,6 +258,8 @@ async function runInteractiveMode(
 	setExtensionUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
 	lspServers: LspStartupServerInfo[] | undefined,
 	mcpManager: MCPManager | undefined,
+	resuming: boolean,
+	forceSetupWizard: boolean,
 	eventBus?: EventBus,
 	initialMessage?: string,
 	initialImages?: ImageContent[],
@@ -271,7 +274,18 @@ async function runInteractiveMode(
 		eventBus,
 	);
 
-	await mode.init();
+	const setupScenes = await selectSetupScenes(settings.get("setupVersion"), ALL_SCENES, mode, {
+		resuming,
+		isTTY: process.stdin.isTTY && process.stdout.isTTY,
+		setupWizardEnabled: settings.get("startup.setupWizard"),
+		force: forceSetupWizard,
+	});
+
+	await mode.init({ suppressWelcomeIntro: setupScenes.length > 0 });
+
+	if (setupScenes.length > 0) {
+		await runSetupWizard(mode, setupScenes);
+	}
 
 	versionCheckPromise
 		.then(newVersion => {
@@ -693,6 +707,7 @@ interface RunRootCommandDependencies {
 	discoverAuthStorage?: typeof discoverAuthStorage;
 	runAcpMode?: typeof runAcpMode;
 	settings?: Settings;
+	forceSetupWizard?: boolean;
 }
 
 export async function runRootCommand(
@@ -1028,6 +1043,8 @@ export async function runRootCommand(
 				setToolUIContext,
 				lspServers,
 				mcpManager,
+				Boolean(parsedArgs.continue || parsedArgs.resume || parsedArgs.fork),
+				deps.forceSetupWizard === true,
 				eventBus,
 				initialMessage,
 				initialImages,

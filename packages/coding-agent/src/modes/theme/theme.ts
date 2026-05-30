@@ -1929,17 +1929,20 @@ export function setThemeInstance(themeInstance: Theme): void {
  */
 export async function setSymbolPreset(preset: SymbolPreset): Promise<void> {
 	currentSymbolPresetOverride = preset;
-	if (currentThemeName) {
-		try {
-			theme = await loadTheme(currentThemeName, getCurrentThemeOptions());
-		} catch {
-			// Fall back to dark theme with new preset
-			theme = await loadTheme("dark", getCurrentThemeOptions());
-		}
-		if (onThemeChangeCallback) {
-			onThemeChangeCallback();
-		}
+	if (!currentThemeName) return;
+
+	const requestId = ++themeLoadRequestId;
+	try {
+		const loadedTheme = await loadTheme(currentThemeName, getCurrentThemeOptions());
+		if (requestId !== themeLoadRequestId) return;
+		theme = loadedTheme;
+	} catch {
+		if (requestId !== themeLoadRequestId) return;
+		// Fall back to dark theme with new preset
+		theme = await loadTheme("dark", getCurrentThemeOptions());
+		if (requestId !== themeLoadRequestId) return;
 	}
+	onThemeChangeCallback?.();
 }
 
 /**
@@ -1955,17 +1958,20 @@ export function getSymbolPresetOverride(): SymbolPreset | undefined {
  */
 export async function setColorBlindMode(enabled: boolean): Promise<void> {
 	currentColorBlindMode = enabled;
-	if (currentThemeName) {
-		try {
-			theme = await loadTheme(currentThemeName, getCurrentThemeOptions());
-		} catch {
-			// Fall back to dark theme
-			theme = await loadTheme("dark", getCurrentThemeOptions());
-		}
-		if (onThemeChangeCallback) {
-			onThemeChangeCallback();
-		}
+	if (!currentThemeName) return;
+
+	const requestId = ++themeLoadRequestId;
+	try {
+		const loadedTheme = await loadTheme(currentThemeName, getCurrentThemeOptions());
+		if (requestId !== themeLoadRequestId) return;
+		theme = loadedTheme;
+	} catch {
+		if (requestId !== themeLoadRequestId) return;
+		// Fall back to dark theme
+		theme = await loadTheme("dark", getCurrentThemeOptions());
+		if (requestId !== themeLoadRequestId) return;
 	}
+	onThemeChangeCallback?.();
 }
 
 /**

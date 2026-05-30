@@ -243,6 +243,7 @@ export const SETTINGS_SCHEMA = {
 	// General settings (no UI)
 	// ────────────────────────────────────────────────────────────────────────
 	lastChangelogVersion: { type: "string", default: undefined },
+	setupVersion: { type: "number", default: 0 },
 
 	// Auth broker — credentials proxied through a remote `omp auth-broker serve`
 	// host. Hidden from the UI; populate via env vars or hand-edited config.yml.
@@ -996,6 +997,16 @@ export const SETTINGS_SCHEMA = {
 			tab: "interaction",
 			label: "Quiet Startup",
 			description: "Skip welcome screen and startup status messages",
+		},
+	},
+
+	"startup.setupWizard": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			label: "Setup Wizard",
+			description: "Show newly added onboarding steps once per setup version",
 		},
 	},
 

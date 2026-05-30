@@ -116,7 +116,14 @@ import {
 	onThemeChange,
 	theme,
 } from "./theme/theme";
-import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoItem, TodoPhase } from "./types";
+import type {
+	CompactionQueuedMessage,
+	InteractiveModeContext,
+	InteractiveModeInitOptions,
+	SubmittedUserInput,
+	TodoItem,
+	TodoPhase,
+} from "./types";
 import { UiHelpers } from "./utils/ui-helpers";
 
 const HINT_SHIMMER_PALETTE: ShimmerPalette = {
@@ -431,7 +438,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#observerRegistry = new SessionObserverRegistry();
 	}
 
-	async init(): Promise<void> {
+	playWelcomeIntro(): void {
+		this.#welcomeComponent?.playIntro(() => this.ui.requestRender());
+	}
+	async init(options: InteractiveModeInitOptions = {}): Promise<void> {
 		if (this.isInitialized) return;
 
 		this.keybindings = logger.time("InteractiveMode.init:keybindings", () => KeybindingsManager.create());
@@ -489,7 +499,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.addChild(new Spacer(1));
 			this.ui.addChild(this.#welcomeComponent);
 			this.ui.addChild(new Spacer(1));
-			this.#welcomeComponent.playIntro(() => this.ui.requestRender());
+			if (!options.suppressWelcomeIntro) {
+				this.playWelcomeIntro();
+			}
 
 			// Add changelog if provided
 			if (this.#changelogMarkdown) {

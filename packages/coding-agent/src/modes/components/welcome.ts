@@ -325,8 +325,7 @@ export class WelcomeComponent implements Component {
 	}
 }
 
-// biome-ignore format: preserve ASCII art layout
-const PI_LOGO = ["▀██████████▀", " ╘██    ██  ", "  ██    ██  ", "  ██    ██  ", " ▄██▄  ▄██▄ "];
+export const PI_LOGO = ["▀██████████▀", " ╘██    ██  ", "  ██    ██  ", "  ██    ██  ", " ▄██▄  ▄██▄ "];
 
 /** Multi-stop palette for the diagonal gradient. */
 const GRADIENT_STOPS: ReadonlyArray<readonly [number, number, number]> = [
@@ -343,11 +342,54 @@ const GRADIENT_RAMP_256 = [199, 171, 135, 99, 75, 51, 87];
 /** Half-width of the shine highlight band, expressed in gradient-t units. */
 const SHINE_HALF_WIDTH = 0.18;
 
-interface ShineConfig {
+export interface ShineConfig {
 	/** Overall opacity of the shine overlay, in [0, 1]. */
 	strength: number;
 	/** Center of the shine band along the diagonal, in [0, 1]. */
 	pos: number;
+}
+
+/**
+ * Resolve the gradient SGR foreground escape for a normalized position `t`
+ * (0..1) along the diagonal, compositing the optional sliding shine highlight.
+ * Shared by {@link gradientLogo} and the setup splash so both stay
+ * color-identical (truecolor when available, 256-color ramp otherwise).
+ */
+export function gradientEscape(t: number, shine?: ShineConfig): string {
+	const shineStrength = shine && shine.strength > 0 ? shine.strength : 0;
+	const shinePos = shine ? shine.pos : 0;
+	if (TERMINAL.trueColor) {
+		// 5-stop palette widens the visible color range and avoids the
+		// deep-blue valley a naive HSL lerp falls into.
+		const stops = GRADIENT_STOPS;
+		const seg = t * (stops.length - 1);
+		const i = Math.min(stops.length - 2, Math.floor(seg));
+		const f = seg - i;
+		const a = stops[i];
+		const b = stops[i + 1];
+		let r = a[0] + (b[0] - a[0]) * f;
+		let g = a[1] + (b[1] - a[1]) * f;
+		let bl = a[2] + (b[2] - a[2]) * f;
+		if (shineStrength > 0) {
+			const dist = Math.abs(t - shinePos);
+			const intensity = Math.max(0, 1 - dist / SHINE_HALF_WIDTH) * shineStrength;
+			if (intensity > 0) {
+				r += (255 - r) * intensity;
+				g += (255 - g) * intensity;
+				bl += (255 - bl) * intensity;
+			}
+		}
+		return `\x1b[38;2;${Math.round(r)};${Math.round(g)};${Math.round(bl)}m`;
+	}
+	const ramp = GRADIENT_RAMP_256;
+	let idx = Math.min(ramp.length - 1, Math.max(0, Math.floor(t * (ramp.length - 1) + 0.5)));
+	if (shineStrength > 0) {
+		const dist = Math.abs(t - shinePos);
+		const intensity = Math.max(0, 1 - dist / SHINE_HALF_WIDTH) * shineStrength;
+		// Promote to the brightest ramp slot when the shine band peaks here.
+		if (intensity > 0.5) idx = ramp.length - 1;
+	}
+	return `\x1b[38;5;${ramp[idx]}m`;
 }
 
 /**
@@ -356,50 +398,13 @@ interface ShineConfig {
  * gradient along the diagonal, wrapping at 1. When `shine` is provided, a soft
  * white highlight is composited on top, centered at `shine.pos`.
  */
-function gradientLogo(lines: readonly string[], phase = 0, shine?: ShineConfig): string[] {
+export function gradientLogo(lines: readonly string[], phase = 0, shine?: ShineConfig): string[] {
 	const reset = "\x1b[0m";
 	const rows = lines.length;
 	const cols = Math.max(...lines.map(l => l.length));
 	// span+1 so `base` stays strictly < 1: avoids the wrap-around at the
 	// far corner mapping back to t=0 (hot pink) on the resting frame.
 	const span = Math.max(1, cols + rows - 1);
-	const shineStrength = shine && shine.strength > 0 ? shine.strength : 0;
-	const shinePos = shine ? shine.pos : 0;
-	const colorAt = TERMINAL.trueColor
-		? (t: number): string => {
-				// 5-stop palette widens the visible color range and avoids the
-				// deep-blue valley a naive HSL lerp falls into.
-				const stops = GRADIENT_STOPS;
-				const seg = t * (stops.length - 1);
-				const i = Math.min(stops.length - 2, Math.floor(seg));
-				const f = seg - i;
-				const a = stops[i];
-				const b = stops[i + 1];
-				let r = a[0] + (b[0] - a[0]) * f;
-				let g = a[1] + (b[1] - a[1]) * f;
-				let bl = a[2] + (b[2] - a[2]) * f;
-				if (shineStrength > 0) {
-					const dist = Math.abs(t - shinePos);
-					const intensity = Math.max(0, 1 - dist / SHINE_HALF_WIDTH) * shineStrength;
-					if (intensity > 0) {
-						r += (255 - r) * intensity;
-						g += (255 - g) * intensity;
-						bl += (255 - bl) * intensity;
-					}
-				}
-				return `\x1b[38;2;${Math.round(r)};${Math.round(g)};${Math.round(bl)}m`;
-			}
-		: (t: number): string => {
-				const ramp = GRADIENT_RAMP_256;
-				let idx = Math.min(ramp.length - 1, Math.max(0, Math.floor(t * (ramp.length - 1) + 0.5)));
-				if (shineStrength > 0) {
-					const dist = Math.abs(t - shinePos);
-					const intensity = Math.max(0, 1 - dist / SHINE_HALF_WIDTH) * shineStrength;
-					// Promote to the brightest ramp slot when the shine band peaks here.
-					if (intensity > 0.5) idx = ramp.length - 1;
-				}
-				return `\x1b[38;5;${ramp[idx]}m`;
-			};
 	return lines.map((line, y) => {
 		let result = "";
 		for (let x = 0; x < line.length; x++) {
@@ -411,7 +416,7 @@ function gradientLogo(lines: readonly string[], phase = 0, shine?: ShineConfig):
 			// Diagonal: bottom-left (x=0, y=rows-1) → top-right (x=cols-1, y=0)
 			const base = (x + (rows - 1 - y)) / span;
 			const t = (((base + phase) % 1) + 1) % 1;
-			result += colorAt(t) + char + reset;
+			result += gradientEscape(t, shine) + char + reset;
 		}
 		return result;
 	});

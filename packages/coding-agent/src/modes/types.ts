@@ -58,6 +58,10 @@ export type TodoPhase = {
 	tasks: TodoItem[];
 };
 
+export interface InteractiveModeInitOptions {
+	suppressWelcomeIntro?: boolean;
+}
+
 export interface InteractiveModeContext {
 	// UI access
 	ui: TUI;
@@ -129,7 +133,8 @@ export interface InteractiveModeContext {
 	todoPhases: TodoPhase[];
 
 	// Lifecycle
-	init(): Promise<void>;
+	init(options?: InteractiveModeInitOptions): Promise<void>;
+	playWelcomeIntro(): void;
 	shutdown(): Promise<void>;
 	checkShutdownRequested(): Promise<void>;
 
