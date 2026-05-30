@@ -3,7 +3,7 @@ begin_patch: "*** Begin Patch" LF
 end_patch:   "*** End Patch" LF?
 
 file_patch: file_header hunk+
-file_header: "¶" filename ("#" file_hash)? LF
+file_header: "¶" filename "#" file_hash LF
 file_hash: /[0-9A-F]{4}/
 filename: /[^\s#]+/
 

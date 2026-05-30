@@ -147,6 +147,7 @@ import type { Goal, GoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import { resolveMemoryBackend } from "../memory-backend";
+import { getMnemosyneSessionState, type MnemosyneSessionState, setMnemosyneSessionState } from "../mnemosyne/state";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import type { PlanModeState } from "../plan-mode/state";
@@ -1238,6 +1239,10 @@ export class AgentSession {
 		const previous = this.#hindsightSessionState;
 		this.#hindsightSessionState = state;
 		return previous;
+	}
+
+	getMnemosyneSessionState(): MnemosyneSessionState | undefined {
+		return getMnemosyneSessionState(this);
 	}
 
 	/** TTSR manager for time-traveling stream rules */
@@ -2787,10 +2792,24 @@ export class AgentSession {
 		this.getHindsightSessionState()?.setSessionId(sid);
 	}
 
+	#rekeyMnemosyneMemoryForCurrentSessionId(): void {
+		if (resolveMemoryBackend(this.settings).id !== "mnemosyne") return;
+		const sid = this.agent.sessionId;
+		if (!sid) return;
+		this.getMnemosyneSessionState()?.setSessionId(sid);
+	}
+
 	/** New session file: reset auto-recall / retain-threshold counters for the new transcript. */
 	#resetHindsightConversationTrackingIfHindsight(): void {
 		if (resolveMemoryBackend(this.settings).id !== "hindsight") return;
 		const state = this.getHindsightSessionState();
+		if (!state || state.aliasOf) return;
+		state.resetConversationTracking();
+	}
+
+	#resetMnemosyneConversationTrackingIfMnemosyne(): void {
+		if (resolveMemoryBackend(this.settings).id !== "mnemosyne") return;
+		const state = this.getMnemosyneSessionState();
 		if (!state || state.aliasOf) return;
 		state.resetConversationTracking();
 	}
@@ -2857,6 +2876,8 @@ export class AgentSession {
 		const hindsightState = this.setHindsightSessionState(undefined);
 		await hindsightState?.flushRetainQueue();
 		hindsightState?.dispose();
+		const mnemosyneState = setMnemosyneSessionState(this, undefined);
+		mnemosyneState?.dispose();
 		this.#disconnectFromAgent();
 		if (this.#unsubscribeAppendOnly) {
 			this.#unsubscribeAppendOnly();
@@ -4866,7 +4887,9 @@ export class AgentSession {
 		this.setTodoPhases([]);
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
+		this.#rekeyMnemosyneMemoryForCurrentSessionId();
 		this.#resetHindsightConversationTrackingIfHindsight();
+		this.#resetMnemosyneConversationTrackingIfMnemosyne();
 		this.#steeringMessages = [];
 		this.#followUpMessages = [];
 		this.#pendingNextTurnMessages = [];
@@ -4961,6 +4984,8 @@ export class AgentSession {
 		// Update agent session ID
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
+		this.#rekeyMnemosyneMemoryForCurrentSessionId();
+		this.#resetMnemosyneConversationTrackingIfMnemosyne();
 
 		// Emit session_switch event with reason "fork" to hooks
 		if (this.#extensionRunner) {
@@ -5712,7 +5737,9 @@ export class AgentSession {
 			this.agent.reset();
 			this.#syncAgentSessionId();
 			this.#rekeyHindsightMemoryForCurrentSessionId();
+			this.#rekeyMnemosyneMemoryForCurrentSessionId();
 			this.#resetHindsightConversationTrackingIfHindsight();
+			this.#resetMnemosyneConversationTrackingIfMnemosyne();
 			this.#steeringMessages = [];
 			this.#followUpMessages = [];
 			this.#pendingNextTurnMessages = [];
@@ -8183,6 +8210,7 @@ export class AgentSession {
 			await this.sessionManager.setSessionFile(sessionPath);
 			this.#syncAgentSessionId();
 			this.#rekeyHindsightMemoryForCurrentSessionId();
+			this.#rekeyMnemosyneMemoryForCurrentSessionId();
 
 			const sessionContext = this.buildDisplaySessionContext();
 			const didReloadConversationChange =
@@ -8255,6 +8283,7 @@ export class AgentSession {
 
 			if (switchingToDifferentSession) {
 				this.#resetHindsightConversationTrackingIfHindsight();
+				this.#resetMnemosyneConversationTrackingIfMnemosyne();
 			}
 			this.#reconnectToAgent();
 			return true;
@@ -8262,6 +8291,7 @@ export class AgentSession {
 			this.sessionManager.restoreState(previousSessionState);
 			this.#syncAgentSessionId(previousSessionState.sessionId);
 			this.#rekeyHindsightMemoryForCurrentSessionId();
+			this.#rekeyMnemosyneMemoryForCurrentSessionId();
 			let restoreMcpError: unknown;
 			try {
 				await this.#restoreMCPSelectionsForSessionContext(previousSessionContext, {
@@ -8357,7 +8387,9 @@ export class AgentSession {
 		this.#syncTodoPhasesFromBranch();
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
+		this.#rekeyMnemosyneMemoryForCurrentSessionId();
 		this.#resetHindsightConversationTrackingIfHindsight();
+		this.#resetMnemosyneConversationTrackingIfMnemosyne();
 
 		// Reload messages from entries (works for both file and in-memory mode)
 		const sessionContext = this.buildDisplaySessionContext();

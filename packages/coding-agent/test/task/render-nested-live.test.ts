@@ -3,12 +3,8 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task";
 import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/render";
+import { formatNumber } from "@oh-my-pi/pi-utils";
 
-// Defends the live-rendering contract for the `task` tool: while a Level-1
-// subagent is still mid-flight, any nested `task` activity it has produced
-// (already-completed sub-calls in `extractedToolData.task`, plus the in-flight
-// snapshot in `inflightTaskDetails`) MUST surface in the parent's streaming
-// output — same way it surfaces in the finished result.
 describe("task renderer: nested live rendering", () => {
 	beforeAll(async () => {
 		resetSettingsForTest();
@@ -21,6 +17,12 @@ describe("task renderer: nested live rendering", () => {
 	afterAll(() => {
 		resetSettingsForTest();
 	});
+
+	// Defends the live-rendering contract for the `task` tool: while a Level-1
+	// subagent is still mid-flight, any nested `task` activity it has produced
+	// (already-completed sub-calls in `extractedToolData.task`, plus the in-flight
+	// snapshot in `inflightTaskDetails`) MUST surface in the parent's streaming
+	// output — same way it surfaces in the finished result.
 
 	function makeRunningProgress(overrides: Partial<AgentProgress>): AgentProgress {
 		return {
@@ -180,5 +182,26 @@ describe("task renderer: nested live rendering", () => {
 		const zetaIdx = text.indexOf("Zeta running");
 		// Completed entries are emitted before the in-flight snapshot.
 		expect(epsilonIdx).toBeLessThan(zetaIdx);
+	});
+
+	it("formats running progress stats with tool icon, context window, and cost", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const text = await render(
+			makeRunningProgress({
+				toolCount: 19,
+				contextTokens: 58_000,
+				contextWindow: 272_000,
+				cost: 2.1,
+				durationMs: 0,
+			}),
+		);
+
+		// Context now matches the status line gauge: 58000/272000 → 21.3%/272K.
+		// Cost is separated by the theme dot separator, not a literal ".".
+		const expectedStats = `${formatNumber(19)} ${theme.icon.extensionTool}${theme.sep.dot}21.3%/272K${theme.sep.dot}$2.10`;
+		expect(text).toContain(expectedStats);
+		expect(text).not.toContain("tools");
+		expect(text).not.toContain("ctx");
+		expect(text).not.toContain("Σ");
 	});
 });

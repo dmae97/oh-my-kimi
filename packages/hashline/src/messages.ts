@@ -5,6 +5,8 @@
  * them.
  */
 
+import { HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
+
 /** Lines of context shown either side of a hash mismatch. */
 export const MISMATCH_CONTEXT = 2;
 
@@ -65,3 +67,23 @@ export const RECOVERY_SESSION_CHAIN_WARNING =
  */
 export const RECOVERY_SESSION_REPLAY_WARNING =
 	"Recovered by replaying your edits onto the current file content — your previous edit in this session changed line(s) you re-targeted with a stale hash. Verify the diff matches your intent before continuing.";
+
+/**
+ * Warning emitted when an `insert head:` / `insert tail:` edit is applied to an
+ * existing file whose snapshot tag is stale (the file drifted since the read).
+ * Head/tail insert position is content-independent — "start"/"end" cannot move
+ * with drift — so this is non-fatal: the edit applies onto the live content and
+ * we surface the drift instead of hard-failing (unlike an anchored mismatch).
+ */
+export const HEADTAIL_DRIFT_WARNING =
+	"Applied an `insert head:`/`insert tail:` edit onto the current file content even though the snapshot tag was stale (the file changed since your read). Head/tail position is content-independent, so the insert was not rejected — but re-read if the drift was unexpected.";
+
+/**
+ * Error text emitted when a hashline section omits the mandatory snapshot tag.
+ * The tag is REQUIRED on every section, enforced identically by the apply path
+ * ({@link Patcher.prepare}) and the preview/diff path, so both surfaces reuse
+ * this single builder to stay in lockstep.
+ */
+export function missingSnapshotTagMessage(sectionPath: string): string {
+	return `Missing hashline snapshot tag for edit to ${sectionPath}; use \`${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}tag\` from your latest read/search output. To create a new file, use the write tool.`;
+}

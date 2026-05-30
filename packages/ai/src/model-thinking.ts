@@ -379,6 +379,18 @@ export function supportsMidConversationSystemMessages(modelId: string): boolean 
 	return parsed.kind === "opus" && semverGte(parsed.version, "4.8");
 }
 
+/**
+ * Claude Opus 4.8 must emit at most one tool call per turn: the Anthropic
+ * Messages provider sends `tool_choice.disable_parallel_tool_use = true` for
+ * this model. Scoped to exactly 4.8 — earlier and later Opus versions keep
+ * Anthropic's default parallel tool-calling.
+ */
+export function disablesParallelToolUse(modelId: string): boolean {
+	const parsed = parseAnthropicModel(getCanonicalModelId(modelId));
+	if (!parsed) return false;
+	return parsed.kind === "opus" && semverEqual(parsed.version, "4.8");
+}
+
 function anthropicModelHasRealXHighEffort<TApi extends Api>(model: ApiModel<TApi>): boolean {
 	if (model.api !== "anthropic-messages") return false;
 	const parsedModel = parseKnownModel(model.id);

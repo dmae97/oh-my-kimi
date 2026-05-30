@@ -11,6 +11,7 @@
  */
 import {
 	Patch as HashlinePatch,
+	missingSnapshotTagMessage,
 	normalizeToLF,
 	type Patch,
 	type PatchSection,
@@ -40,10 +41,6 @@ async function readSectionText(absolutePath: string, sectionPath: string): Promi
 	}
 }
 
-function hasAnchorScoped(section: PatchSection): boolean {
-	return section.hasAnchorScopedEdit;
-}
-
 function snapshotMatchesCurrent(snapshot: Snapshot, currentText: string): boolean {
 	return snapshot.text === currentText;
 }
@@ -54,9 +51,10 @@ function validateSectionHash(
 	snapshots: SnapshotStore,
 ): string | null {
 	if (section.fileHash === undefined) {
-		return hasAnchorScoped(section)
-			? `Missing hashline snapshot tag for anchored edit to ${section.path}; use \`¶${section.path}#tag\` from your latest read.`
-			: null;
+		// The snapshot tag is mandatory on every section — head/tail inserts
+		// included — to keep this preview path in lockstep with the apply path
+		// (`Patcher.prepare`), which rejects tagless sections unconditionally.
+		return missingSnapshotTagMessage(section.path);
 	}
 	const snapshot = snapshots.byHash(absolutePath, section.fileHash);
 	if (snapshot && snapshotMatchesCurrent(snapshot, text)) return null;

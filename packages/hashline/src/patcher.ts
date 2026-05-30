@@ -23,10 +23,11 @@
  * filesystem configuration.
  */
 import { applyEdits } from "./apply";
-import { computeFileHash, formatHashlineHeader, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
+import { computeFileHash, formatHashlineHeader } from "./format";
 import type { Filesystem, WriteResult } from "./fs";
 import { isNotFound } from "./fs";
 import type { Patch, PatchSection } from "./input";
+import { HEADTAIL_DRIFT_WARNING, missingSnapshotTagMessage } from "./messages";
 import { MismatchError } from "./mismatch";
 import { detectLineEnding, type LineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./normalize";
 import { Recovery, type RecoveryResult } from "./recovery";
@@ -102,11 +103,9 @@ function hasAnchorScopedEdit(edits: readonly Edit[]): boolean {
 	});
 }
 
-function assertSectionHashAllowed(sectionPath: string, fileHash: string | undefined, edits: readonly Edit[]): void {
-	if (fileHash !== undefined || !hasAnchorScopedEdit(edits)) return;
-	throw new Error(
-		`Missing hashline snapshot tag for anchored edit to ${sectionPath}; use \`${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}tag\` from your latest read/search output.`,
-	);
+function assertSectionHashPresent(sectionPath: string, fileHash: string | undefined): void {
+	if (fileHash !== undefined) return;
+	throw new Error(missingSnapshotTagMessage(sectionPath));
 }
 
 function recoveryToApplyResult(result: RecoveryResult): ApplyResult {
@@ -213,13 +212,13 @@ export class Patcher {
 	 */
 	async prepare(section: PatchSection): Promise<PreparedSection> {
 		const { edits, warnings: parseWarnings } = section.parse();
-		assertSectionHashAllowed(section.path, section.fileHash, edits);
+		assertSectionHashPresent(section.path, section.fileHash);
 
 		const canonicalPath = this.fs.canonicalPath(section.path);
 		await this.fs.preflightWrite(section.path);
 		const { exists, rawContent } = await this.#tryRead(section.path);
-		if (!exists && hasAnchorScopedEdit(edits)) {
-			throw new Error(`File not found: ${section.path}`);
+		if (!exists) {
+			throw new Error(`File not found: ${section.path}. Use the write tool to create new files.`);
 		}
 
 		const { bom, text } = stripBom(rawContent);
@@ -320,6 +319,14 @@ export class Patcher {
 		// Whole-file unchanged → the tag still names the live content, so an
 		// edit anchored at ANY line (displayed or not) is safe to apply.
 		if (computeFileHash(normalized) === expected) return applyEdits(normalized, [...edits]);
+		// Head/tail-only inserts are position-stable: "start"/"end" cannot move
+		// with content drift, so a stale tag is non-fatal. Apply onto the live
+		// content and warn instead of hard-failing — unlike an anchored
+		// mismatch, which cannot be safely relocated and must reject.
+		if (!hasAnchorScopedEdit(edits)) {
+			const result = applyEdits(normalized, [...edits]);
+			return { ...result, warnings: [HEADTAIL_DRIFT_WARNING, ...(result.warnings ?? [])] };
+		}
 		// File drifted: try to replay the edit against the version the tag
 		// names and 3-way-merge it onto the live content.
 		const recovered = this.recovery.tryRecover({

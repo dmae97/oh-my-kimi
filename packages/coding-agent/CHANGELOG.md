@@ -6,10 +6,34 @@
 
 - Added `--profile <name>` / `OMP_PROFILE` support to isolate agent state (auth credentials, sessions, settings, caches, history, memories, and blobs) under a named profile.
 - Added `--alias <command>` support for generating shell shortcuts like `omp-work` that forward to `omp --profile <name>` while preserving subcommands such as `update` and `--version`.
+- Added a persistent live agent roster pinned below the editor (focus it with `Ctrl+S` or `Alt+Down`), including view-as switching into delegated agent sessions with human-readable delegate names and UI pinning to suppress idle reaping while viewed. The roster stays hidden until at least one delegated agent exists and releases focus back to the editor once the last one is gone.
+- Recorded the originating session ID alongside each prompt in `history.db` (new `session_id` column, surfaced as `HistoryEntry.sessionId`), so recalled prompts can be traced back to the session they came from. Existing history databases gain the column automatically on next launch.
+- Added compact inline TUI renderers for the `retain`, `recall`, and `reflect` memory tools. `retain` now shows one themed bullet line per stored item (truncated to width) under a status header with the stored/queued count, and `recall`/`reflect` collapse to a single query header (recall reports the match count and hides recalled memories until expanded) instead of dumping the raw JSON argument tree.
+
+### Changed
+
+- Changed `irc` to treat the attached human as a first-class `User` peer, merging human prompts into `irc call User` with optional structured question payloads and adding `/dm <agent> <message>` for user-to-agent routing without switching views.
+- Changed the `--resume` session picker (and the in-session resume selector) to also rank sessions by prompt-history matches from `history.db`, not just the session-list metadata. Because the session list only indexes the first 4KB of each file, this surfaces sessions by prompts typed deep into long conversations. Sessions matched by both signals lead, then metadata-only matches, then history-only matches — no metadata match is dropped.
+- Changed the `task` tool's streaming call preview to list each dispatched agent's `id` and UI description as a tree instead of a bare `N agents` count, so the individual agents are visible while the tool-call arguments are still streaming. The collapsed view caps at 12 entries (`… N more agents`); the expanded view shows all.
+
+### Removed
+
+- Removed the standalone `ask`, `task`, and `yield` tools along with their obsolete prompts, docs, and tests; delegation now routes through persistent `delegate` agents plus IRC coordination.
 
 ### Fixed
 
 - Fixed profile bootstrap and alias installation edge cases: `--profile` is now still honored for `launch` argv that merely contain subcommand-shaped words, extension flags no longer parse literal text after `--`, alias installation preserves non-ENOENT shell config read failures, `/bin/sh` is rejected instead of being treated as bash, and aliases cannot shadow `omp` case-insensitively.
+- Fixed the Mnemosyne memory backend lifecycle so auto-retain counts the full session transcript, delegated agents inherit the parent Mnemosyne state, `/memory clear` removes scoped project-bank databases, session disposal closes Mnemosyne SQLite handles, session switches rekey/reset Mnemosyne tracking, and project bank names include an absolute-root hash with safe bank-name sanitization.
+- Fixed the streaming edit preview showing no diff for single-line hashline edits. The preview-diff coalescing keyed only on the arg text, so the final (args-complete) pass — which computes an untrimmed diff — was skipped because the payload was byte-identical to the last streamed chunk whose trailing line had been trimmed. The dedup key now pairs the streaming state with a content hash.
+- Fixed `Esc` in a delegated agent view returning to the main session instead of aborting the delegated agent's active turn.
+- Fixed the subagent stats line to separate the cost with the theme dot separator (was a stray literal `.`) and to render context usage as `<pct>%/<window>` (e.g. `21.3%/272K`) matching the status line gauge, via a shared `formatContextUsage` helper now used by the footer, status-line segment, session observer overlay, and `task` renderer.
+- Fixed the agent roster staying pinned under the editor when all delegated agents are idle or dormant; it now reappears when explicitly focused with `Alt+Down` / session observe.
+- Fixed selector-style UI components to honor `tui.select.up` and `tui.select.down` keybindings instead of hard-coding raw Up/Down arrow bytes ([#1535](https://github.com/can1357/oh-my-pi/issues/1535)).
+- Fixed the bash (and `recipe`) tool result footer not rendering for failed commands. A non-zero exit threw a `ToolError`, which dropped the result details, so the styled `⟨Wall … | Timeout …⟩` footer was replaced by the raw `Wall time: … seconds` / `Command exited with code N` lines. Non-zero exits now resolve as a non-throwing error result that keeps `wallTimeMs`/`timeoutSeconds`/`exitCode`, and the footer shows `⟨Wall … | Timeout … | Status: exit N⟩` with the textual notices folded out of the output pane. Aborts, timeouts, and missing-exit-status still throw as before.
+
+### Fixed
+
+- Fixed selector-style UI components to honor `tui.select.up` and `tui.select.down` keybindings instead of hard-coding raw Up/Down arrow bytes ([#1535](https://github.com/can1357/oh-my-pi/issues/1535)).
 
 ## [15.5.15] - 2026-05-30
 ### Changed
@@ -286,7 +310,6 @@
 - Fixed `/usage` and the status-line reset countdown rendering stale negative deltas after a Codex window had elapsed: Codex keeps reporting the prior window's `reset_at` until a new request opens a fresh window, which turned the `resets in …` suffix into a meaningless negative duration. `formatDuration` now clamps non-positive, NaN, and infinite inputs to `0ms`, and both renderers suppress the `resets in …` suffix entirely once `resetsAt <= now`.
 - Fixed auto-handoff race at the context threshold: when `compaction.strategy = handoff` fired at `agent_end` with an active checkpoint or incomplete todos, the deferred handoff post-prompt task and the rewind/todo-completion path both scheduled work concurrently, so a fresh `agent.continue()` streamed a new assistant turn alongside the handoff LLM call (visible as the "Auto-handoff" loader plus an assistant message still streaming, with the chat container then rebuilt mid-stream). `#checkCompaction` now reports whether it deferred a handoff and the `agent_end` handler short-circuits the rewind/todo passes; `#scheduleAgentContinue` also skips when `isCompacting || isGeneratingHandoff`. The pre-prompt `#checkCompaction` call now forces inline execution (`allowDefer = false`) so the new turn cannot begin until the maintenance settles.
 - Fixed `/exit` and Ctrl+C-double-tap hanging when a deferred handoff was mid-flight: `AgentSession.dispose()` now aborts retry/compaction (auto-compaction + handoff) and the agent stream before draining `#cancelPostPromptTasks`, so the post-prompt task awaiting `generateHandoff` rejects and `Promise.allSettled` can resolve. Tool work (bash/eval/python) is intentionally still left for the existing dispose paths so shared kernels continue to survive across session dispose.
-
 
 ## [15.4.3] - 2026-05-26
 

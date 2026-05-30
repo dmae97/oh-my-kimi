@@ -12,7 +12,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import type { TreeFilterMode } from "../../config/settings-schema";
 import { theme } from "../../modes/theme/theme";
-import { matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
+import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
 import type { SessionTreeNode } from "../../session/session-manager";
 import { shortenPath } from "../../tools/render-utils";
 import { toPathList } from "../../tools/search";
@@ -718,9 +718,9 @@ class TreeList implements Component {
 	}
 
 	handleInput(keyData: string): void {
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			this.#selectedIndex = this.#selectedIndex === 0 ? this.#filteredNodes.length - 1 : this.#selectedIndex - 1;
-		} else if (matchesKey(keyData, "down")) {
+		} else if (matchesSelectDown(keyData)) {
 			this.#selectedIndex = this.#selectedIndex === this.#filteredNodes.length - 1 ? 0 : this.#selectedIndex + 1;
 		} else if (matchesKey(keyData, "left")) {
 			// Page up

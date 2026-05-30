@@ -10,9 +10,10 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import type { HindsightSessionState } from "../hindsight/state";
+import type { MnemosyneSessionState } from "../mnemosyne/state";
 import type { AgentSession } from "../session/agent-session";
 
-export type MemoryBackendId = "off" | "local" | "hindsight";
+export type MemoryBackendId = "off" | "local" | "hindsight" | "mnemosyne";
 
 export interface MemoryBackendStartOptions {
 	session: AgentSession;
@@ -21,6 +22,7 @@ export interface MemoryBackendStartOptions {
 	agentDir: string;
 	taskDepth: number;
 	parentHindsightSessionState?: HindsightSessionState;
+	parentMnemosyneSessionState?: MnemosyneSessionState;
 }
 
 export interface MemoryBackend {

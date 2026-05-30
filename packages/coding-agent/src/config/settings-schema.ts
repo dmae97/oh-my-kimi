@@ -1292,23 +1292,192 @@ export const SETTINGS_SCHEMA = {
 	"memories.summaryInjectionTokenLimit": { type: "number", default: 5000 },
 
 	// Memory backend selector — picks between local memories pipeline,
-	// Hindsight remote memory, or off. Legacy `memories.enabled` keeps gating
-	// the local backend; see config/settings.ts migration for details.
+	// Mnemosyne local SQLite, Hindsight remote memory, or off. Legacy
+	// `memories.enabled` keeps gating the local backend; see config/settings.ts
+	// migration for details.
 	"memory.backend": {
 		type: "enum",
-		values: ["off", "local", "hindsight"] as const,
+		values: ["off", "local", "hindsight", "mnemosyne"] as const,
 		default: "off",
 		ui: {
 			tab: "memory",
 			label: "Memory Backend",
-			description: "Off, local memory pipeline, or Hindsight remote memory",
+			description: "Off, local summary pipeline, Mnemosyne SQLite, or Hindsight remote memory",
 			options: [
 				{ value: "off", label: "Off", description: "No memory subsystem runs" },
 				{ value: "local", label: "Local", description: "Local rollout summarisation pipeline (memory_summary.md)" },
 				{ value: "hindsight", label: "Hindsight", description: "Vectorize Hindsight remote memory service" },
+				{
+					value: "mnemosyne",
+					label: "Mnemosyne",
+					description: "Local SQLite recall/retain backend with optional embeddings",
+				},
 			],
 		},
 	},
+
+	// Mnemosyne local SQLite memory backend.
+	"mnemosyne.dbPath": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne DB Path",
+			description: "Optional SQLite DB path. Defaults to the agent memories directory.",
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.bank": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne Bank",
+			description: "Optional shared bank base name. Per-project modes derive project-local banks from it.",
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.scoping": {
+		type: "enum",
+		values: ["global", "per-project", "per-project-tagged"] as const,
+		default: "per-project",
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne Scoping",
+			description:
+				"global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = project-local writes plus global recall visibility",
+			options: [
+				{
+					value: "global",
+					label: "Global",
+					description: "One shared Mnemosyne bank for every project",
+				},
+				{
+					value: "per-project",
+					label: "Per project",
+					description: "Project-local Mnemosyne bank per cwd basename",
+				},
+				{
+					value: "per-project-tagged",
+					label: "Per project (tagged)",
+					description: "Write to a project-local bank but merge project + shared recall results",
+				},
+			],
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.autoRecall": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne Auto Recall",
+			description: "Recall local memories into the first turn of each session",
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.autoRetain": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne Auto Retain",
+			description: "Retain completed conversation turns into local Mnemosyne memory",
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.noEmbeddings": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne Disable Embeddings",
+			description: "Force deterministic FTS-only recall instead of vector embeddings",
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.embeddingModel": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne Embedding Model",
+			description: "Optional embedding model override passed to Mnemosyne",
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.embeddingApiUrl": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne Embedding API URL",
+			description: "Optional OpenAI-compatible embedding endpoint passed to Mnemosyne",
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.embeddingApiKey": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne Embedding API Key",
+			description: "Optional embedding API key passed to Mnemosyne",
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.llmMode": {
+		type: "enum",
+		values: ["none", "smol", "remote"] as const,
+		default: "smol",
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne LLM Mode",
+			description: "Use no LLM, the configured smol model, or a remote OpenAI-compatible endpoint",
+			condition: "mnemosyneActive",
+			options: [
+				{ value: "none", label: "None", description: "Disable Mnemosyne LLM-backed extraction" },
+				{ value: "smol", label: "Smol", description: "Use the configured pi-ai smol model" },
+				{ value: "remote", label: "Remote", description: "Use the Mnemosyne remote LLM settings below" },
+			],
+		},
+	},
+	"mnemosyne.llmBaseUrl": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne LLM Base URL",
+			description: "Optional OpenAI-compatible LLM endpoint for Mnemosyne remote mode",
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.llmApiKey": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne LLM API Key",
+			description: "Optional LLM API key for Mnemosyne remote mode",
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.llmModel": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne LLM Model",
+			description: "Optional LLM model name for Mnemosyne remote mode",
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.retainEveryNTurns": { type: "number", default: 4 },
+	"mnemosyne.recallLimit": { type: "number", default: 8 },
+	"mnemosyne.recallContextTurns": { type: "number", default: 3 },
+	"mnemosyne.recallMaxQueryChars": { type: "number", default: 4000 },
+	"mnemosyne.injectionTokenLimit": { type: "number", default: 5000 },
+	"mnemosyne.debug": { type: "boolean", default: false },
 
 	// Hindsight (https://hindsight.vectorize.io)
 	"hindsight.apiUrl": {

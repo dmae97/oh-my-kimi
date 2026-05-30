@@ -251,12 +251,24 @@ export class ToolExecutionComponent extends Container {
 			effectiveArgs = args;
 		}
 
-		// Coalesce duplicate computes for identical args.
+		// Coalesce duplicate computes for identical args. The key pairs the
+		// streaming flag with a content hash: the final (args-complete) pass
+		// computes an untrimmed diff and must run even when the payload is
+		// byte-identical to the last streamed chunk — only `isStreaming` differs,
+		// and it flips the trailing-line trim. Without the flag a single-line edit
+		// whose trailing payload line never gets a newline stays stuck on the
+		// trimmed "no changes" streaming preview and renders no diff. Hashing keeps
+		// the retained key tiny instead of holding the whole serialized blob.
+		const streamingState = this.#argsComplete ? "final" : "stream";
 		let argsKey: string;
 		try {
-			argsKey = JSON.stringify(effectiveArgs);
+			argsKey = `${streamingState}:${Bun.hash(JSON.stringify(effectiveArgs))}`;
 		} catch {
-			argsKey = String(Date.now());
+			// effectiveArgs isn't JSON-serializable (exotic value in tool args).
+			// The raw streamed JSON is a plain string, so hash that instead of a
+			// timestamp — a deterministic key keeps the dedup cache working
+			// instead of recomputing (and re-reading the file) on every render.
+			argsKey = `${streamingState}:partial:${Bun.hash(partialJson ?? "")}`;
 		}
 		if (argsKey === this.#editDiffLastArgsKey) return;
 		this.#editDiffLastArgsKey = argsKey;
@@ -428,6 +440,11 @@ export class ToolExecutionComponent extends Container {
 			const inline = Boolean((tool as { inline?: boolean }).inline);
 			this.#contentBox.setBgFn(inline ? undefined : bgFn);
 			this.#contentBox.clear();
+			// Mirror the built-in renderer branch so custom renderers (notably the
+			// task tool, whose live instance routes through here) receive the same
+			// render context — e.g. the `hasResult` flag that suppresses the task
+			// call preview once result lines exist.
+			this.#renderState.renderContext = this.#buildRenderContext();
 
 			// Render call component
 			const shouldRenderCall = !this.#result || !mergeCallAndResult;
@@ -696,6 +713,11 @@ export class ToolExecutionComponent extends Container {
 			context.output = output;
 			context.expanded = this.#expanded;
 			context.previewLines = EVAL_DEFAULT_PREVIEW_LINES;
+		} else if (this.#toolName === "task") {
+			// Once a result snapshot exists the task renderer's `renderResult`
+			// draws every dispatched agent as a progress/result line, so tell
+			// `renderCall` to drop its duplicate streaming preview list.
+			context.hasResult = Boolean(this.#result);
 		} else if (isEditLikeToolName(this.#toolName)) {
 			context.editMode = this.#editMode;
 			const previews = this.#editDiffPreview;

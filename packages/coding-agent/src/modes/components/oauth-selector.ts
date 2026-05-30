@@ -2,7 +2,7 @@ import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import { Container, matchesKey, Spacer, TruncatedText } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
-import { matchesSelectCancel } from "../../modes/utils/keybinding-matchers";
+import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
 import type { AuthStorage } from "../../session/auth-storage";
 import { DynamicBorder } from "./dynamic-border";
 
@@ -193,7 +193,7 @@ export class OAuthSelectorComponent extends Container {
 	}
 	handleInput(keyData: string): void {
 		// Up arrow
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			if (this.#allProviders.length > 0) {
 				this.#selectedIndex = this.#selectedIndex === 0 ? this.#allProviders.length - 1 : this.#selectedIndex - 1;
 			}
@@ -201,7 +201,7 @@ export class OAuthSelectorComponent extends Container {
 			this.#updateList();
 		}
 		// Down arrow
-		else if (matchesKey(keyData, "down")) {
+		else if (matchesSelectDown(keyData)) {
 			if (this.#allProviders.length > 0) {
 				this.#selectedIndex = this.#selectedIndex === this.#allProviders.length - 1 ? 0 : this.#selectedIndex + 1;
 			}
