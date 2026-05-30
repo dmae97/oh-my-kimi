@@ -51,7 +51,9 @@ function getStatusIcon(status: AgentProgress["status"], theme: Theme, spinnerFra
 	}
 }
 
-/** Append tool-count, context, cumulative-tokens, and cost stats to a status line string. */
+/**
+ * Append tool-count, context, and cost stats to a status line string.
+ */
 function appendAgentStats(
 	line: string,
 	opts: {
@@ -66,25 +68,18 @@ function appendAgentStats(
 	theme: Theme,
 ): string {
 	if (opts.toolCount) {
-		line += `${theme.sep.dot}${theme.fg("dim", `${opts.toolCount} tools`)}`;
+		line += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(opts.toolCount)} ${theme.icon.extensionTool}`)}`;
 	}
 	// Current per-turn context — what the user reads as "how full is the context".
-	// Cumulative tokens (billing volume) renders separately with a Σ sigil to avoid
-	// being mistaken for current window pressure.
 	if (opts.contextTokens && opts.contextTokens > 0) {
 		const ctx =
 			opts.contextWindow && opts.contextWindow > 0
-				? `${formatNumber(opts.contextTokens)}/${formatNumber(opts.contextWindow)} ctx`
-				: `${formatNumber(opts.contextTokens)} ctx`;
+				? `${formatNumber(opts.contextTokens)}/${formatNumber(opts.contextWindow)}`
+				: `${formatNumber(opts.contextTokens)}`;
 		line += `${theme.sep.dot}${theme.fg("dim", ctx)}`;
-		if (opts.tokens > 0) {
-			line += `${theme.sep.dot}${theme.fg("dim", `Σ${formatNumber(opts.tokens)}`)}`;
-		}
-	} else if (opts.tokens > 0) {
-		line += `${theme.sep.dot}${theme.fg("dim", `Σ${formatNumber(opts.tokens)}`)}`;
 	}
 	if (opts.cost > 0) {
-		line += `${theme.sep.dot}${theme.fg("statusLineCost", `$${opts.cost.toFixed(2)}`)}`;
+		line += ` . ${theme.fg("statusLineCost", `$${opts.cost.toFixed(2)}`)}`;
 	}
 	if (opts.resolvedModel && opts.showResolvedModelBadge) {
 		line += `${theme.sep.dot}${theme.fg("dim", truncateToWidth(replaceTabs(opts.resolvedModel), 30))}`;

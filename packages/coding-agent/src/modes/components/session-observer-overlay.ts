@@ -266,23 +266,28 @@ export class SessionObserverOverlayComponent extends Container {
 		const progress = session?.progress;
 		if (!progress) return "";
 		const stats: string[] = [];
-		if (progress.toolCount > 0) stats.push(`${formatNumber(progress.toolCount)} tools`);
 		// Current per-turn context — what the user reads as "how full is the context".
-		// Falls back to cumulative billing volume (Σ-prefixed) when context size is unknown.
+		// Used as a compact progress gauge instead of cumulative billing volume.
 		if (progress.contextTokens && progress.contextTokens > 0) {
 			const ctx =
 				progress.contextWindow && progress.contextWindow > 0
-					? `${formatNumber(progress.contextTokens)}/${formatNumber(progress.contextWindow)} ctx`
-					: `${formatNumber(progress.contextTokens)} ctx`;
+					? `${formatNumber(progress.contextTokens)}/${formatNumber(progress.contextWindow)}`
+					: `${formatNumber(progress.contextTokens)}`;
 			stats.push(ctx);
-			if (progress.tokens > 0) stats.push(`Σ${formatNumber(progress.tokens)}`);
-		} else if (progress.tokens > 0) {
-			stats.push(`Σ${formatNumber(progress.tokens)}`);
 		}
-		if (progress.durationMs > 0) stats.push(formatDuration(progress.durationMs));
+		if (progress.durationMs > 0) {
+			stats.push(formatDuration(progress.durationMs));
+		}
 		const parts: string[] = [];
-		if (stats.length > 0) parts.push(theme.fg("dim", stats.join(theme.sep.dot)));
-		if (progress.cost > 0) parts.push(theme.fg("statusLineCost", `$${progress.cost.toFixed(2)}`));
+		if (stats.length > 0 || progress.toolCount > 0) {
+			const toolCountStat =
+				progress.toolCount > 0 ? `${formatNumber(progress.toolCount)} ${theme.icon.extensionTool}` : undefined;
+			const statSegments = [toolCountStat, ...stats].filter((segment): segment is string => Boolean(segment));
+			parts.push(theme.fg("dim", statSegments.join(theme.sep.dot)));
+		}
+		if (progress.cost > 0) {
+			parts.push(`. ${theme.fg("statusLineCost", `$${progress.cost.toFixed(2)}`)}`);
+		}
 		return parts.join(theme.sep.dot);
 	}
 
