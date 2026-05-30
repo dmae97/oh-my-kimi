@@ -35,10 +35,12 @@ export interface ProfileBootstrapResult {
  * argument structure, returning the residual argv to hand to the launch parser
  * and the captured flag values.
  *
- * Global flag extraction stops at the first registered subcommand token (e.g.
- * `grep`): everything from that token onward is forwarded verbatim so a
- * subcommand's own flags and positionals are never stolen (`omp grep --profile
- * <path>` greps for `--profile`; it does not select a profile).
+ * Global flag extraction stops only when the first residual argv token names a
+ * registered subcommand (e.g. `grep`): everything from that token onward is
+ * forwarded verbatim so a subcommand's own flags and positionals are never
+ * stolen (`omp grep --profile <path>` greps for `--profile`; it does not select
+ * a profile). Later subcommand-shaped words still belong to `launch` when an
+ * earlier token already made `launch` the dispatched command.
  *
  * Throws when either flag is supplied without a value.
  */
@@ -48,6 +50,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 	let aliasName: string | undefined;
 	let passThrough = false;
 	let sawSubcommand = false;
+	let canDispatchSubcommand = true;
 
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
@@ -106,6 +109,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 		// --profile foo`: the bootstrap must NOT interpret `--profile` here, it
 		// belongs to `--system-prompt`.
 		if (STRING_VALUE_FLAGS.has(arg)) {
+			canDispatchSubcommand = false;
 			stripped.push(arg);
 			if (index + 1 < argv.length) {
 				stripped.push(argv[index + 1]);
@@ -115,6 +119,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 		}
 
 		if (OPTIONAL_VALUE_FLAGS.has(arg)) {
+			canDispatchSubcommand = false;
 			stripped.push(arg);
 			const config = OPTIONAL_FLAGS[arg];
 			const next = argv[index + 1];
@@ -130,11 +135,12 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 			continue;
 		}
 
-		// A bare token that names a registered subcommand ends global-flag
-		// extraction: its own flags and positionals must reach the subcommand
-		// untouched.
-		if (isSubcommand(arg)) {
+		// Only the first residual argv token can be the dispatched subcommand. Once
+		// any other token has been forwarded, later subcommand names are launch text.
+		if (canDispatchSubcommand && isSubcommand(arg)) {
 			sawSubcommand = true;
+		} else {
+			canDispatchSubcommand = false;
 		}
 		stripped.push(arg);
 	}

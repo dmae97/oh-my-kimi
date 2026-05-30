@@ -109,6 +109,18 @@ describe("extractProfileFlags", () => {
 		expect(result.argv).toEqual(["hello"]);
 	});
 
+	it("continues extracting launch profiles after later subcommand-shaped words", () => {
+		const result = extractProfileFlags(["hello", "grep", "--profile", "work"]);
+		expect(result.profile).toBe("work");
+		expect(result.argv).toEqual(["hello", "grep"]);
+	});
+
+	it("continues extracting launch profiles after launch flags before subcommand-shaped words", () => {
+		const result = extractProfileFlags(["--model", "opus", "grep", "--profile", "work"]);
+		expect(result.profile).toBe("work");
+		expect(result.argv).toEqual(["--model", "opus", "grep"]);
+	});
+
 	it("does not treat a --profile value that names a subcommand as a boundary", () => {
 		const result = extractProfileFlags(["--profile", "config", "later"]);
 		expect(result.profile).toBe("config");
