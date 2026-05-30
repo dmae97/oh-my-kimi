@@ -43,7 +43,6 @@ import { MemoryReflectTool } from "./memory-reflect";
 import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
-import { RecipeTool } from "./recipe";
 import { RenderMermaidTool } from "./render-mermaid";
 import { createReportToolIssueTool, isAutoQaEnabled } from "./report-tool-issue";
 import { ResolveTool } from "./resolve";
@@ -84,7 +83,6 @@ export * from "./memory-recall";
 export * from "./memory-reflect";
 export * from "./memory-retain";
 export * from "./read";
-export * from "./recipe";
 export * from "./render-mermaid";
 export * from "./report-tool-issue";
 export * from "./resolve";
@@ -300,7 +298,6 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	rewind: RewindTool.createIf,
 	task: s => TaskTool.create(s),
 	job: JobTool.createIf,
-	recipe: RecipeTool.createIf,
 	irc: IrcTool.createIf,
 	todo_write: s => new TodoWriteTool(s),
 	web_search: s => new WebSearchTool(s),
@@ -416,13 +413,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		) {
 			requestedTools.push("ast_edit");
 		}
-		if (
-			requestedTools.includes("bash") &&
-			!requestedTools.includes("recipe") &&
-			session.settings.get("recipe.enabled")
-		) {
-			requestedTools.push("recipe");
-		}
 		if (["hindsight", "mnemosyne"].includes(session.settings.get("memory.backend") ?? "")) {
 			for (const name of ["recall", "retain", "reflect"]) {
 				if (!requestedTools.includes(name)) requestedTools.push(name);
@@ -467,7 +457,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			if (!session.settings.get("async.enabled") && session.getAgentId?.() === MAIN_AGENT_ID) return false;
 			return true;
 		}
-		if (name === "recipe") return session.settings.get("recipe.enabled");
 		if (name === "retain" || name === "recall" || name === "reflect") {
 			return ["hindsight", "mnemosyne"].includes(session.settings.get("memory.backend") ?? "");
 		}

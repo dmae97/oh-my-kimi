@@ -213,7 +213,6 @@ Stealth's on by default, so pages see a normal user instead of a headless bot. T
 
 - `bash` — workspace shell, with optional PTY or background-job dispatch.
 - `eval` — persistent Python and JavaScript cells with shared prelude and tool re-entry.
-- `recipe` — invoke a target from a detected task runner — bun, just, make, cargo.
 - `ssh` — one remote command against a configured host.
 
 **Code intelligence**

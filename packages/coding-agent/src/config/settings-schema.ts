@@ -2036,7 +2036,7 @@ export const SETTINGS_SCHEMA = {
 					value: "write",
 					label: "Write",
 					description:
-						"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, task, recipe, and ssh.",
+						"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, task, and ssh.",
 				},
 				{
 					value: "yolo",
@@ -2212,16 +2212,6 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "Text-to-Speech",
 			description: "Enable the tts tool for xAI Grok Voice speech synthesis",
-		},
-	},
-	"recipe.enabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			label: "Recipe",
-			description:
-				"Enable the recipe tool when a justfile / package.json / Cargo.toml / Makefile / Taskfile is present",
 		},
 	},
 

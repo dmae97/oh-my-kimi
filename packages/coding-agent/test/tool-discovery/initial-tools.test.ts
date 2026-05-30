@@ -9,7 +9,6 @@ import {
 	DEFAULT_ESSENTIAL_TOOL_NAMES,
 	IrcTool,
 	JobTool,
-	RecipeTool,
 	SshTool,
 } from "../../src/tools/index";
 
@@ -26,7 +25,6 @@ const allToolsSettings = Settings.isolated({
 	"web_search.enabled": true,
 	"browser.enabled": true,
 	"checkpoint.enabled": true,
-	"recipe.enabled": true,
 	"todo.enabled": true,
 	"memory.backend": "mnemosyne",
 	"tools.discoveryMode": "all",
@@ -50,7 +48,6 @@ async function getToolMetadata(): Promise<Map<string, { loadMode?: string; summa
 		new AskTool({ ...toolSession, hasUI: true }),
 		new SshTool(toolSession, [], new Map(), ""),
 		new JobTool(toolSession),
-		new RecipeTool(toolSession, []),
 		new IrcTool(toolSession),
 	]) {
 		metadata.set(tool.name, { loadMode: tool.loadMode, summary: tool.summary });
