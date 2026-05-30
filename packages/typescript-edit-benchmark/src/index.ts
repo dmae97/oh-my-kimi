@@ -20,8 +20,8 @@ import {
 	type BenchmarkConfig,
 	type BenchmarkResult,
 	buildBenchmarkResult,
-	percentile,
 	type ProgressEvent,
+	percentile,
 	runBenchmark,
 } from "./runner";
 import { type EditTask, loadTasksFromDir, validateFixturesFromDir } from "./tasks";
