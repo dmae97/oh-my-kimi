@@ -1,4 +1,8 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { editToolRenderer } from "@oh-my-pi/pi-coding-agent/edit/renderer";
@@ -145,5 +149,35 @@ describe("editToolRenderer", () => {
 		const rendered = Bun.stripANSI(component.render(160).join("\n"));
 		expect(rendered).toContain("packages/coding-agent/src/edit/renderer.ts");
 		expect(rendered).not.toContain(" …");
+	});
+
+	it("computes the hashline preview diff once a single-line edit finishes streaming", async () => {
+		await getUiTheme();
+		const uiStub = { requestRender() {} } as unknown as TUI;
+		const hashlineTool = { name: "edit", label: "Edit", mode: "hashline" } as unknown as AgentTool;
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "hashline-stream-preview-"));
+		try {
+			const content = "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n";
+			const filePath = path.join(tmpDir, "memory.ts");
+			await Bun.write(filePath, content);
+
+			const snapshots = new InMemorySnapshotStore();
+			const tag = snapshots.record(filePath, content);
+
+			// The trailing payload line carries no newline — the common shape for a
+			// single-line edit. The streaming pass trims that in-flight line, so the
+			// preview only becomes computable once args are marked complete.
+			const input = `¶memory.ts#${tag}\nreplace 2..2:\n+export const b = 22;`;
+			const component = new ToolExecutionComponent("edit", { input }, { snapshots }, hashlineTool, uiStub, tmpDir);
+
+			component.setArgsComplete();
+			await Bun.sleep(50);
+
+			const rendered = Bun.stripANSI(component.render(160).join("\n"));
+			expect(rendered).toContain("export const b = 22;");
+			expect(rendered).not.toContain("No changes would be made");
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
 	});
 });

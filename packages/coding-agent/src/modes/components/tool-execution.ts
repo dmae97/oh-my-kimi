@@ -251,12 +251,24 @@ export class ToolExecutionComponent extends Container {
 			effectiveArgs = args;
 		}
 
-		// Coalesce duplicate computes for identical args.
+		// Coalesce duplicate computes for identical args. The key pairs the
+		// streaming flag with a content hash: the final (args-complete) pass
+		// computes an untrimmed diff and must run even when the payload is
+		// byte-identical to the last streamed chunk — only `isStreaming` differs,
+		// and it flips the trailing-line trim. Without the flag a single-line edit
+		// whose trailing payload line never gets a newline stays stuck on the
+		// trimmed "no changes" streaming preview and renders no diff. Hashing keeps
+		// the retained key tiny instead of holding the whole serialized blob.
+		const streamingState = this.#argsComplete ? "final" : "stream";
 		let argsKey: string;
 		try {
-			argsKey = JSON.stringify(effectiveArgs);
+			argsKey = `${streamingState}:${Bun.hash(JSON.stringify(effectiveArgs))}`;
 		} catch {
-			argsKey = String(Date.now());
+			// effectiveArgs isn't JSON-serializable (exotic value in tool args).
+			// The raw streamed JSON is a plain string, so hash that instead of a
+			// timestamp — a deterministic key keeps the dedup cache working
+			// instead of recomputing (and re-reading the file) on every render.
+			argsKey = `${streamingState}:partial:${Bun.hash(partialJson ?? "")}`;
 		}
 		if (argsKey === this.#editDiffLastArgsKey) return;
 		this.#editDiffLastArgsKey = argsKey;
