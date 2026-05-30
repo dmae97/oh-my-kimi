@@ -39,9 +39,6 @@
     "embed:native": "bun scripts/embed-native.ts",
     "bench": "bun bench/grep.ts"
   },
-  "dependencies": {
-    "@oh-my-pi/hashline": "catalog:"
-  },
   "devDependencies": {
     "@napi-rs/cli": "catalog:",
     "@types/bun": "catalog:"

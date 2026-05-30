@@ -7,7 +7,6 @@
 - Added `--profile <name>` / `OMP_PROFILE` support to isolate agent state (auth credentials, sessions, settings, caches, history, memories, and blobs) under a named profile.
 - Added `--alias <command>` support for generating shell shortcuts like `omp-work` that forward to `omp --profile <name>` while preserving subcommands such as `update` and `--version`.
 
-## [15.5.4] - 2026-05-27
 ## [15.5.14] - 2026-05-29
 ### Added
 
@@ -185,11 +184,6 @@
 
 - Added `read.summarize.minTotalLines` setting (default 100) to set the minimum file length that triggers read summarization
 - Added `<file>:<lines>` support to `search` `paths`, allowing file-scoped constraints such as `:N-M`, `:N+K`, and comma-separated ranges
-- Added `OMP_MCP_TIMEOUT_MS` environment variable to override MCP client request timeout for every server (in milliseconds); set to `0` to disable client-side timeouts. Invalid (negative or non-numeric) values are ignored with a warning and fall back to the per-server timeout or default 30s ([#1415](https://github.com/can1357/oh-my-pi/pull/1415)).
-- Added interactive provider selection to `omp auth-broker logout` when no provider argument is supplied
-- Added `--json` flag to `omp auth-broker list` for machine-readable output
-- Added `omp auth-broker list` to enumerate supported OAuth providers (replaces `bunx @oh-my-pi/pi-ai list`).
-- Added interactive provider selection to `omp auth-broker login` and `omp auth-broker logout` when no provider argument is supplied (replaces `bunx @oh-my-pi/pi-ai login` / `logout` interactive flows).
 
 ### Changed
 
@@ -276,13 +270,6 @@
 - Fixed auto-handoff race at the context threshold: when `compaction.strategy = handoff` fired at `agent_end` with an active checkpoint or incomplete todos, the deferred handoff post-prompt task and the rewind/todo-completion path both scheduled work concurrently, so a fresh `agent.continue()` streamed a new assistant turn alongside the handoff LLM call (visible as the "Auto-handoff" loader plus an assistant message still streaming, with the chat container then rebuilt mid-stream). `#checkCompaction` now reports whether it deferred a handoff and the `agent_end` handler short-circuits the rewind/todo passes; `#scheduleAgentContinue` also skips when `isCompacting || isGeneratingHandoff`. The pre-prompt `#checkCompaction` call now forces inline execution (`allowDefer = false`) so the new turn cannot begin until the maintenance settles.
 - Fixed `/exit` and Ctrl+C-double-tap hanging when a deferred handoff was mid-flight: `AgentSession.dispose()` now aborts retry/compaction (auto-compaction + handoff) and the agent stream before draining `#cancelPostPromptTasks`, so the post-prompt task awaiting `generateHandoff` rejects and `Promise.allSettled` can resolve. Tool work (bash/eval/python) is intentionally still left for the existing dispose paths so shared kernels continue to survive across session dispose.
 
-### Fixed
-
-- Fixed LSP startup for Node-based language servers installed with their own Node runtime when the shell `node` shim has no active version.
-- Fixed the `--profile` / `--alias` bootstrap pre-parser consuming tokens that belong to other string-valued flags such as `--system-prompt`, `--api-key`, and `--model`. The pre-parser now mirrors `parseArgs` value-consumption rules and honors `--`, so `omp --system-prompt --profile foo` correctly treats `--profile` as the prompt body and `foo` as a positional message instead of silently activating profile `foo`.
-- Fixed `setProfile(undefined)` (and `setProfile("default")`) deleting the user's `PI_CODING_AGENT_DIR` override. The pre-profile value is now snapshotted on first activation and restored on reset; `setAgentDir` refreshes the snapshot.
-- Fixed named profiles silently relocating when `$XDG_*_HOME/omp` materialized after first activation. The XDG choice for a named profile is now keyed on the profile-specific XDG path, so the location is decided once and stays stable until the user migrates it explicitly.
-- Fixed `setProfile` accepting Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM0-9`, `LPT0-9`, including dotted variants like `CON.txt`). Those now throw at validation time instead of failing later during directory creation.
 
 ## [15.4.3] - 2026-05-26
 
