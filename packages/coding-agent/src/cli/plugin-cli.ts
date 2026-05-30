@@ -946,6 +946,6 @@ ${chalk.bold("Examples:")}
   ${APP_NAME} plugin config set my-plugin apiKey sk-xxx
   ${APP_NAME} plugin doctor --fix
   ${APP_NAME} plugin install --scope project name@marketplace
-  ${APP_NAME} plugin install github:oldschoola/omp-insights
+  ${APP_NAME} plugin install github:user/repo#v1.0
 `);
 }
