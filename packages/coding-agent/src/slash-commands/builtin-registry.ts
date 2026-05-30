@@ -161,6 +161,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "switch",
+		description: "Switch model for this session (same as alt+p)",
+		handleTui: (_command, runtime) => {
+			runtime.ctx.showModelSelector({ temporaryOnly: true });
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "fast",
 		description: "Toggle priority service tier (OpenAI service_tier=priority, Anthropic speed=fast)",
 		acpDescription: "Toggle fast mode",

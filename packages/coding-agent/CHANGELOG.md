@@ -5,6 +5,7 @@
 ### Added
 
 - Added an `omp completions <bash|zsh|fish>` command that prints a shell completion script generated from the live command/flag metadata, so completions never drift from the actual CLI. Subcommands, flags, and enum values complete statically; `--model`/`--smol`/`--slow`/`--plan` resolve against the bundled model catalog and `--resume` against on-disk sessions via a hidden `__complete` helper.
+- Added a `/switch` slash command that opens the temporary model selector for the current session, mirroring the `alt+p` keybinding.
 
 ### Fixed
 
