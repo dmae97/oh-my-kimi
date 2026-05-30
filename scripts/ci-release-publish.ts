@@ -18,6 +18,11 @@
 
 import * as path from "node:path";
 import { $ } from "bun";
+import {
+	generateNpmPackages,
+	LEAF_TARGETS,
+	type GeneratedLeafPackage,
+} from "../packages/natives/scripts/gen-npm-packages.ts";
 
 interface PublishPackage {
 	dir: string;
@@ -36,7 +41,10 @@ interface JsonObject {
 }
 interface PackageManifest extends JsonObject {
 	name?: string;
+	version?: string;
 	private?: boolean;
+	files?: JsonValue[];
+	optionalDependencies?: JsonObject;
 }
 
 const repoRoot = path.join(import.meta.dir, "..");
@@ -88,7 +96,7 @@ function rewriteExports(exports: JsonValue): JsonValue {
 	return out;
 }
 
-async function rewriteManifest(pkgDir: string, extraFiles: readonly string[]): Promise<PackageManifest> {
+async function rewriteManifest(pkgDir: string, extraFiles: readonly string[], write: boolean): Promise<PackageManifest> {
 	const manifestPath = path.join(pkgDir, "package.json");
 	const manifest = (await Bun.file(manifestPath).json()) as PackageManifest;
 	if (typeof manifest.types === "string" && manifest.types.startsWith("./src/")) {
@@ -102,15 +110,12 @@ async function rewriteManifest(pkgDir: string, extraFiles: readonly string[]): P
 		if (!hasDist && !files.includes(extra)) files.push(extra);
 	}
 	manifest.files = files;
-	await Bun.write(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
+	if (write) await Bun.write(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
 	return manifest;
 }
 
 async function preparePackage(pkg: PublishPackage): Promise<PackageManifest> {
 	const pkgDir = path.join(repoRoot, pkg.dir);
-	if (pkg.kind === "native") {
-		return (await Bun.file(path.join(pkgDir, "package.json")).json()) as PackageManifest;
-	}
 	for (const argv of pkg.preBuild ?? []) {
 		await $`${argv}`.cwd(pkgDir);
 	}
@@ -118,10 +123,74 @@ async function preparePackage(pkg: PublishPackage): Promise<PackageManifest> {
 	for (const cfg of pkg.extraTypeConfigs ?? []) {
 		await $`bun x tsgo -p ${cfg}`.cwd(pkgDir);
 	}
-	return rewriteManifest(pkgDir, pkg.extraFiles ?? []);
+	return rewriteManifest(pkgDir, pkg.extraFiles ?? [], !isDryRun);
+}
+
+function buildNativeOptionalDependencies(version: string): JsonObject {
+	const optionalDependencies: JsonObject = {};
+	for (const target of LEAF_TARGETS) {
+		optionalDependencies[`@oh-my-pi/pi-natives-${target.tag}`] = version;
+	}
+	return optionalDependencies;
+}
+
+async function prepareNativeCorePackage(pkgDir: string, write: boolean): Promise<PackageManifest> {
+	const manifestPath = path.join(pkgDir, "package.json");
+	const manifest = (await Bun.file(manifestPath).json()) as PackageManifest;
+	if (typeof manifest.version !== "string") throw new Error(`Missing version in ${manifestPath}`);
+	manifest.optionalDependencies = buildNativeOptionalDependencies(manifest.version);
+	manifest.files = [
+		"native/index.js",
+		"native/index.d.ts",
+		"native/loader-state.js",
+		"native/loader-state.d.ts",
+		"native/embedded-addon.js",
+		"README.md",
+	];
+	if (write) await Bun.write(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
+	return manifest;
+}
+
+async function publishGeneratedLeafPackage(leaf: GeneratedLeafPackage): Promise<void> {
+	if (isDryRun) {
+		console.log(`DRY RUN bun publish --access public --tolerate-republish (${path.relative(repoRoot, leaf.dir)})`);
+		return;
+	}
+	console.log(`Publishing ${leaf.manifest.name}…`);
+	const result = await $`bun publish --access public --tolerate-republish`.cwd(leaf.dir).quiet().nothrow();
+	const output = `${result.stdout.toString()}${result.stderr.toString()}`.trim();
+	if (output) console.log(output);
+	if (result.exitCode !== 0) process.exit(result.exitCode ?? 1);
+}
+
+async function publishNativePackage(pkg: PublishPackage): Promise<void> {
+	const pkgDir = path.join(repoRoot, pkg.dir);
+	const coreManifest = (await Bun.file(path.join(pkgDir, "package.json")).json()) as PackageManifest;
+	if (typeof coreManifest.version !== "string") throw new Error(`Missing version in ${pkg.dir}/package.json`);
+	const leaves = await generateNpmPackages({ packageDir: pkgDir, dryRun: isDryRun, version: coreManifest.version });
+	for (const leaf of leaves) {
+		await publishGeneratedLeafPackage(leaf);
+	}
+	const manifest = await prepareNativeCorePackage(pkgDir, !isDryRun);
+	const name = manifest.name ?? path.basename(pkg.dir);
+	if (isDryRun) {
+		console.log(`DRY RUN native core manifest rewrite (${pkg.dir})`);
+		console.log(JSON.stringify({ optionalDependencies: manifest.optionalDependencies, files: manifest.files }, null, "\t"));
+		console.log(`DRY RUN bun publish --access public --tolerate-republish (${pkg.dir})`);
+		return;
+	}
+	console.log(`Publishing ${name}…`);
+	const result = await $`bun publish --access public --tolerate-republish`.cwd(pkgDir).quiet().nothrow();
+	const output = `${result.stdout.toString()}${result.stderr.toString()}`.trim();
+	if (output) console.log(output);
+	if (result.exitCode !== 0) process.exit(result.exitCode ?? 1);
 }
 
 async function publishPackage(pkg: PublishPackage): Promise<void> {
+	if (pkg.kind === "native") {
+		await publishNativePackage(pkg);
+		return;
+	}
 	const pkgDir = path.join(repoRoot, pkg.dir);
 	const manifest = await preparePackage(pkg);
 	const name = manifest.name ?? path.basename(pkg.dir);

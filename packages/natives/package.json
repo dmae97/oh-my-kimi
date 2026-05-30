@@ -37,6 +37,7 @@
     "fix": "biome check --write --unsafe .",
     "fmt": "biome format --write .",
     "embed:native": "bun scripts/embed-native.ts",
+    "gen:npm": "bun scripts/gen-npm-packages.ts",
     "bench": "bun bench/grep.ts"
   },
   "devDependencies": {
