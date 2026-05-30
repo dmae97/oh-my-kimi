@@ -355,8 +355,11 @@ describe("buildSessionContext", () => {
 				message: {
 					role: "assistant",
 					content: [
+						{ type: "thinking", thinking: "deliberating step 1", thinkingSignature: "sig_1" },
 						{ type: "text", text: "Let me finish duel.py now" },
 						{ type: "toolCall", id: "call_1", name: "write", arguments: { path: "duel.py" } },
+						{ type: "thinking", thinking: "deliberating step 2", thinkingSignature: "sig_2" },
+						{ type: "redactedThinking", data: "encrypted" },
 						{ type: "toolCall", id: "call_2", name: "bash", arguments: { command: "pytest" } },
 					],
 					api: "anthropic-messages",
@@ -379,8 +382,17 @@ describe("buildSessionContext", () => {
 			expect(ctx.messages).toHaveLength(2);
 			const last = ctx.messages[1];
 			expect(last.role).toBe("assistant");
-			const content = (last as { content: Array<{ type: string }> }).content;
+			const content = (last as { content: Array<{ type: string; thinkingSignature?: string }> }).content;
+			// Dangling tool_use stripped.
 			expect(content.some(block => block.type === "toolCall")).toBe(false);
+			// redacted_thinking dropped (encrypted; cannot be downgraded, would trip immutability).
+			expect(content.some(block => block.type === "redactedThinking")).toBe(false);
+			// thinking preserved but de-signed so the encoder downgrades it to plain text on the wire
+			// (a *modified* latest turn carrying signed thinking is rejected by Anthropic).
+			const thinking = content.filter(block => block.type === "thinking");
+			expect(thinking.length).toBeGreaterThan(0);
+			expect(thinking.every(block => block.thinkingSignature === undefined)).toBe(true);
+			// Visible reasoning/text preserved.
 			expect(content.some(block => block.type === "text")).toBe(true);
 		});
 

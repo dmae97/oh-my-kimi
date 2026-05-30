@@ -709,17 +709,31 @@ export function buildSessionContext(
 	// unpaired as the final message. Downstream that forces `transformMessages` to
 	// fabricate one synthetic "aborted"/"No result provided" result per call plus a
 	// `<turn-aborted>` developer note, which re-injects the whole failed batch and
-	// pushes the model to re-issue it — the rewind/restore loop. Strip the dangling
-	// tool_use so the turn resumes from its reasoning/text; drop it if nothing else
-	// remains. (A live turn never lands here: its results are persisted and the leaf
-	// advances past the assistant before any context rebuild.)
+	// pushes the model to re-issue it — the rewind/restore loop.
+	//
+	// Stripping the tool_use is necessary but not sufficient: a *modified* latest
+	// assistant turn that still carries signed `thinking`/`redacted_thinking` is
+	// rejected by Anthropic — "thinking blocks in the latest assistant message cannot
+	// be modified" (and signed thinking replayed out of its original turn shape can
+	// also fail signature validation). This bites the handoff/branch-summary request,
+	// which ends on exactly this turn. So when we rewrite the turn we also neutralize
+	// its protected reasoning: drop `redactedThinking` (encrypted, no plaintext to
+	// keep) and clear `thinking` signatures so the provider encoder downgrades them to
+	// plain text (verified accepted by the live API), preserving the visible reasoning
+	// while removing the immutability/invalid-signature hazard. Drop the turn entirely
+	// if nothing usable remains. (A live turn never lands here: its results are
+	// persisted and the leaf advances past the assistant before any context rebuild.)
 	const lastMessage = messages[messages.length - 1];
 	if (lastMessage?.role === "assistant" && lastMessage.content.some(block => block.type === "toolCall")) {
-		const withoutToolCalls = lastMessage.content.filter(block => block.type !== "toolCall");
-		if (withoutToolCalls.length === 0) {
+		const normalized = lastMessage.content
+			.filter(block => block.type !== "toolCall" && block.type !== "redactedThinking")
+			.map(block =>
+				block.type === "thinking" && block.thinkingSignature ? { ...block, thinkingSignature: undefined } : block,
+			);
+		if (normalized.length === 0) {
 			messages.pop();
 		} else {
-			messages[messages.length - 1] = { ...lastMessage, content: withoutToolCalls };
+			messages[messages.length - 1] = { ...lastMessage, content: normalized };
 		}
 	}
 
