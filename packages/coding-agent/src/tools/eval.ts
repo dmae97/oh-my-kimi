@@ -10,10 +10,11 @@ import { defaultEvalSessionId } from "../eval/session-id";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
+import { shimmerEnabled } from "../modes/theme/shimmer";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
 import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
-import { renderCodeCell } from "../tui";
+import { borderShimmerTick, renderCodeCell } from "../tui";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { resolveEvalBackends, type ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
@@ -857,7 +858,7 @@ function formatCellOutputLines(
 }
 
 export const evalToolRenderer = {
-	renderCall(args: EvalRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+	renderCall(args: EvalRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const cells = getRenderCells(args);
 
 		if (cells.length === 0) {
@@ -870,7 +871,8 @@ export const evalToolRenderer = {
 
 		return {
 			render: (width: number): string[] => {
-				const key = cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|");
+				const animate = options.isPartial && shimmerEnabled();
+				const key = `${animate ? borderShimmerTick() : 0}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
 				if (cached && cached.key === key && cached.width === width) {
 					return cached.result;
 				}
@@ -889,6 +891,7 @@ export const evalToolRenderer = {
 							width,
 							codeMaxLines: EVAL_DEFAULT_PREVIEW_LINES,
 							expanded: true,
+							animate,
 						},
 						uiTheme,
 					);
@@ -951,7 +954,8 @@ export const evalToolRenderer = {
 				render: (width: number): string[] => {
 					const expanded = options.renderContext?.expanded ?? options.expanded;
 					const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
-					const key = `${expanded}|${previewLines}|${options.spinnerFrame}`;
+					const animate = options.isPartial && shimmerEnabled();
+					const key = `${expanded}|${previewLines}|${options.spinnerFrame}|${animate ? borderShimmerTick() : 0}`;
 					if (cached && cached.key === key && cached.width === width) {
 						return cached.result;
 					}
@@ -988,6 +992,7 @@ export const evalToolRenderer = {
 								codeMaxLines: expanded ? Number.POSITIVE_INFINITY : EVAL_DEFAULT_PREVIEW_LINES,
 								expanded,
 								width,
+								animate,
 							},
 							uiTheme,
 						);

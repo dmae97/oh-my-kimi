@@ -69,6 +69,27 @@ describe("bashToolRenderer", () => {
 		expect(rendered).not.toContain("\t");
 	});
 
+	it("renders the pending call as a bordered block with the command in the body", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const component = bashToolRenderer.renderCall(
+			{ command: "sleep 30" },
+			{ expanded: false, isPartial: true },
+			uiTheme,
+		);
+		const lines = Bun.stripANSI(component.render(60).join("\n")).split("\n");
+		// A block frames the command: a header bar, the command row, and a bottom border.
+		expect(lines.length).toBeGreaterThanOrEqual(3);
+		const header = lines[0]!;
+		const body = lines.slice(1, -1).join("\n");
+		// The header carries the title only; the command lives inside the framed body
+		// (not inline on the status line as the old one-liner preview rendered it).
+		expect(header).toContain("Bash");
+		expect(header).not.toContain("sleep 30");
+		expect(body).toContain("$ sleep 30");
+	});
+
 	it("shows the effective timeout from result details when it differs from call args", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();

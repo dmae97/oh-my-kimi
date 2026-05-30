@@ -7,7 +7,7 @@ import type {
 	ToolApprovalDecision,
 } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { ImageProtocol, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import { getProjectDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { AsyncJobManager } from "../async";
@@ -15,6 +15,7 @@ import { type BashResult, executeBash } from "../exec/bash-executor";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
+import { shimmerEnabled } from "../modes/theme/shimmer";
 import { highlightCode, type Theme } from "../modes/theme/theme";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
 import type { ClientBridgeTerminalExitStatus, ClientBridgeTerminalOutput } from "../session/client-bridge";
@@ -1045,15 +1046,6 @@ export function getBashEnvForDisplay(args: BashRenderArgs): Record<string, strin
 	return args.env ?? partialEnv;
 }
 
-export function formatBashCommand(args: BashRenderArgs): string {
-	const command = replaceTabs(args.command || "…");
-	const prompt = "$";
-	const cwd = getProjectDir();
-	const displayWorkdir = formatToolWorkingDirectory(args.cwd, cwd);
-	const renderedCommand = [formatBashEnvAssignments(getBashEnvForDisplay(args)), command].filter(Boolean).join(" ");
-	return displayWorkdir ? `${prompt} cd ${displayWorkdir} && ${renderedCommand}` : `${prompt} ${renderedCommand}`;
-}
-
 /**
  * Returns the bash command formatted for the result body: the dim `$ cd … &&`
  * prefix joined with syntax-highlighted command lines. The prefix is applied
@@ -1088,10 +1080,20 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 	return {
 		renderCall(args: TArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 			const renderArgs = toBashRenderArgs(args, config);
-			const cmdText = formatBashCommand(renderArgs);
 			const title = config.resolveTitle(args, options);
-			const text = renderStatusLine({ icon: "pending", title, description: cmdText }, uiTheme);
-			return new Text(text, 0, 0);
+			const cmdLines = formatBashCommandLines(renderArgs, uiTheme);
+			const header = renderStatusLine({ icon: "pending", title }, uiTheme);
+			const outputBlock = new CachedOutputBlock();
+			return {
+				render: (width: number): string[] =>
+					outputBlock.render(
+						{ header, state: "pending", sections: [{ lines: cmdLines }], width, animate: true },
+						uiTheme,
+					),
+				invalidate: () => {
+					outputBlock.invalidate();
+				},
+			};
 		},
 
 		renderResult(
@@ -1204,6 +1206,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 								{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 							],
 							width,
+							animate: options.isPartial && shimmerEnabled(),
 						},
 						uiTheme,
 					);

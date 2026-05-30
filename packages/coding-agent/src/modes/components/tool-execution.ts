@@ -15,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { EDIT_MODE_STRATEGIES, type EditMode, type PerFileDiffPreview } from "../../edit";
+import { shimmerEnabled } from "../../modes/theme/shimmer";
 import type { Theme } from "../../modes/theme/theme";
 import { theme } from "../../modes/theme/theme";
 import { BASH_DEFAULT_PREVIEW_LINES } from "../../tools/bash";
@@ -380,7 +381,10 @@ export class ToolExecutionComponent extends Container {
 			this.#toolName === "task" &&
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
 		const isPartialTask = this.#isPartial && this.#toolName === "task" && !isBackgroundAsyncTask;
-		const needsSpinner = isStreamingArgs || isPartialTask;
+		// Sweep the border of bash/eval execution blocks while they're pending.
+		const isPendingExecBlock =
+			this.#isPartial && shimmerEnabled() && (this.#toolName === "bash" || this.#toolName === "eval");
+		const needsSpinner = isStreamingArgs || isPartialTask || isPendingExecBlock;
 		if (needsSpinner && !this.#spinnerInterval) {
 			this.#spinnerInterval = setInterval(() => {
 				const frameCount = theme.spinnerFrames.length;

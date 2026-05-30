@@ -9,6 +9,7 @@
 - Added an `omp completions <bash|zsh|fish>` command that prints a shell completion script generated from the live command/flag metadata, so completions never drift from the actual CLI. Subcommands, flags, and enum values complete statically; `--model`/`--smol`/`--slow`/`--plan` resolve against the bundled model catalog and `--resume` against on-disk sessions via a hidden `__complete` helper.
 - Added a `/switch` slash command that opens the temporary model selector for the current session, mirroring the `alt+p` keybinding.
 - Added `replace block N:` and `delete block N` operators to the `edit` tool: they resolve the syntactic block beginning on line N via tree-sitter (native `blockRangeAt`) and replace or delete its full line span, so a construct can be rewritten or removed without counting its closing line. Unresolvable blocks (unsupported language, blank/closing-delimiter line, or a parse error) are rejected with guidance to use an explicit `replace N..M:` / `delete N..M` range.
+- Added an animated pending border for `bash` and `eval` execution blocks: while a command/cell is running, a single dark segment travels clockwise around the block's outer edge (top → right → bottom → left), replacing the previous static accent border. The animation is driven by the same spinner cadence used elsewhere and respects the `display.shimmer` setting (no motion when `disabled`).
 
 ### Changed
 
@@ -16,6 +17,7 @@
 - Changed the glyph mode picker to preselect the currently configured symbol preset instead of always defaulting to Unicode and to show live glyph samples in the picker rows
 - Changed OAuth sign-in flow in the setup wizard so users can authenticate multiple providers before leaving with Escape
 - Changed the plan-approval model-tier slider and the `ctrl+p`/`alt+p` role-cycle status to share one status-line-style chip track: each tier renders in its own role color and the active tier is filled as a powerline chip with a luminance-matched label. The role-cycle status now shows only the chip track — the resolved model and thinking level already live on the status line — instead of the verbose `Switched to <role>: <model> (cycle: …)` line.
+- Changed the in-flight `bash` tool-call preview to render as a full bordered block as soon as the call appears, instead of a one-line `Bash: $ …` status that only expanded into a block once the command produced its first output chunk. Silent commands (e.g. `sleep 30`) now show the framed command block — with the animated pending border — for their whole runtime.
 
 ### Fixed
 
