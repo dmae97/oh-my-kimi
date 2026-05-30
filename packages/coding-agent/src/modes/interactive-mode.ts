@@ -58,7 +58,7 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
 };
-import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import type { AgentSession, AgentSessionEvent, ResolvedRoleModel } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
@@ -1703,6 +1703,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	async #applyPlanExecutionModel(entry: ResolvedRoleModel | undefined): Promise<void> {
+		if (!entry) return;
+		try {
+			await this.session.applyRoleModel(entry);
+			this.statusLine.invalidate();
+			this.updateEditorBorderColor();
+			this.showStatus(`Continuing with ${entry.role}: ${entry.model.name || entry.model.id}`);
+		} catch (error) {
+			this.showWarning(
+				`Could not switch to the ${entry.role} model: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
 	async #approvePlan(
 		planContent: string,
 		options: {
@@ -1711,6 +1725,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			title: string;
 			preserveContext?: boolean;
 			compactBeforeExecute?: boolean;
+			executionModel?: ResolvedRoleModel;
 		},
 	): Promise<void> {
 		await renameApprovedPlanFile({
@@ -1791,6 +1806,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 			return;
 		}
+
+		await this.#applyPlanExecutionModel(options.executionModel);
 
 		// Approved plans land in a fresh (or compacted) session whose first user-visible
 		// turn is the synthetic plan-approved prompt — that path bypasses the
@@ -2149,31 +2166,21 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.showError(`Plan file not found at ${planFilePath}`);
 					return;
 				}
-				// Apply the operator's tier choice before dispatch so the execution turn
-				// — and any fresh/compacted session #approvePlan spawns — runs on it. The
-				// agent's model survives newSession()/compaction, so setting it here is
-				// sufficient for all three approve paths.
-				if (cycle && selectedTierIndex !== cycle.currentIndex) {
-					const chosen = cycle.models[selectedTierIndex];
-					if (chosen) {
-						try {
-							await this.session.applyRoleModel(chosen);
-							this.statusLine.invalidate();
-							this.updateEditorBorderColor();
-							this.showStatus(`Continuing with ${chosen.role}: ${chosen.model.name || chosen.model.id}`);
-						} catch (error) {
-							this.showWarning(
-								`Could not switch to the ${chosen.role} model: ${error instanceof Error ? error.message : String(error)}`,
-							);
-						}
-					}
-				}
+				// Capture the operator's tier choice and hand it to #approvePlan, which
+				// applies it AFTER #exitPlanMode. #exitPlanMode restores
+				// #planModePreviousModelState (the model from before plan mode), so
+				// applying the slider choice any earlier would be silently reverted —
+				// the bug that made "continue with slow" keep executing on the default
+				// model. Deferred application also survives newSession()/compaction.
+				const executionModel =
+					cycle && selectedTierIndex !== cycle.currentIndex ? cycle.models[selectedTierIndex] : undefined;
 				await this.#approvePlan(latestPlanContent, {
 					planFilePath,
 					finalPlanFilePath,
 					title: details.title,
 					preserveContext: choice !== "Approve and execute",
 					compactBeforeExecute: choice === "Approve and compact context",
+					executionModel,
 				});
 			} catch (error) {
 				this.showError(

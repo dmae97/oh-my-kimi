@@ -9,6 +9,7 @@ import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { Text } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import type { HookSelectorSlider } from "../src/modes/components/hook-selector";
 import { ModelRegistry } from "../src/config/model-registry";
 import { InteractiveMode } from "../src/modes/interactive-mode";
 import { AgentSession } from "../src/session/agent-session";
@@ -141,6 +142,7 @@ describe("InteractiveMode plan review rendering", () => {
 			"Plan mode - next step",
 			["Approve and execute", "Approve and compact context", "Approve and keep context (73.2%)", "Refine plan"],
 			expect.any(Object),
+			expect.any(Object),
 		);
 	});
 
@@ -168,6 +170,7 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(selector).toHaveBeenCalledWith(
 			"Plan mode - next step",
 			["Approve and execute", "Approve and compact context", "Approve and keep context", "Refine plan"],
+			expect.any(Object),
 			expect.any(Object),
 		);
 	});
@@ -232,6 +235,68 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(prompt).toHaveBeenCalledWith(expect.any(String), {
 			synthetic: true,
 		});
+	});
+
+	it("executes on the slider-selected tier, surviving #exitPlanMode's model restore", async () => {
+		// Regression: the model-tier slider's choice used to be applied BEFORE
+		// #approvePlan ran. #approvePlan → #exitPlanMode restores the model that
+		// was active before plan mode (#planModePreviousModelState), which silently
+		// reverted the operator's pick — sliding to "slow" still executed on the
+		// default model. The fix defers application until after the plan-mode exit.
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const slow = session.modelRegistry.find("anthropic", "claude-opus-4-5");
+		const def = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!slow || !def) throw new Error("Expected sonnet + opus to exist in registry");
+
+		// plan === default === the session model: this is what makes plan-mode entry
+		// record a previous-model state for #exitPlanMode to restore. slow differs,
+		// so an early application would be clobbered by that restore.
+		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
+		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
+		session.settings.setModelRole("plan", "anthropic/claude-sonnet-4-5");
+
+		const planFilePath = "local://PLAN.md";
+		const finalPlanFilePath = "local://APPROVED.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nRun this on the slow tier.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.getPlanModeState()?.enabled).toBe(true);
+		expect(session.model?.id).toBe(def.id);
+
+		// Keep-context path avoids newSession() so the assertion isolates the
+		// exit-plan-mode restore from session-clear effects.
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		let observedSegments: string[] = [];
+		vi.spyOn(mode, "showHookSelector").mockImplementation(
+			async (_title, _options, _dialogOptions, extra?: { slider?: HookSelectorSlider }) => {
+				const slider = extra?.slider;
+				expect(slider).toBeDefined();
+				observedSegments = slider!.segments.map(segment => segment.label);
+				const slowIndex = slider!.segments.findIndex(segment => segment.label === "slow");
+				expect(slowIndex).toBeGreaterThanOrEqual(0);
+				// Simulate the operator sliding the tier to "slow" before approving.
+				slider!.onChange?.(slowIndex);
+				return "Approve and keep context";
+			},
+		);
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath,
+		});
+
+		expect(observedSegments).toEqual(["default", "slow"]);
+		// The load-bearing assertion: the approved plan executes on the operator's
+		// selected tier, not the restored default.
+		expect(session.model?.id).toBe(slow.id);
 	});
 
 	it("re-enters plan mode on the approved titled artifact after approve-and-execute", async () => {
