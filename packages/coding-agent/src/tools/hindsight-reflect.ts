@@ -20,17 +20,50 @@ export class HindsightReflectTool implements AgentTool<typeof hindsightReflectSc
 	readonly parameters = hindsightReflectSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
-	readonly summary = "Reflect on recent work and write hindsight memory";
+	readonly summary = "Synthesize an answer from long-term memory";
 
 	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): HindsightReflectTool | null {
-		if (session.settings.get("memory.backend") !== "hindsight") return null;
+		const backend = session.settings.get("memory.backend");
+		if (backend !== "hindsight" && backend !== "mnemosyne") return null;
 		return new HindsightReflectTool(session);
 	}
 
 	async execute(_id: string, params: HindsightReflectParams, signal?: AbortSignal): Promise<AgentToolResult> {
 		return untilAborted(signal, async () => {
+			const backend = this.session.settings.get("memory.backend");
+			if (backend === "mnemosyne") {
+				const state = this.session.getMnemosyneSessionState?.();
+				if (!state) {
+					throw new Error("Mnemosyne backend is not initialised for this session.");
+				}
+
+				try {
+					const query = params.context?.trim()
+						? `${params.query.trim()}\n\nAdditional context:\n${params.context.trim()}`
+						: params.query;
+					const results = state.memory.recallEnhanced(query, state.config.recallLimit, {
+						includeFacts: true,
+						channelId: state.config.bank,
+					});
+					if (results.length === 0) {
+						return {
+							content: [{ type: "text", text: "No relevant information found to reflect on." }],
+							details: {},
+						};
+					}
+					const summary = state.memory.beam.formatContext(results);
+					return {
+						content: [{ type: "text", text: `Based on recalled memories:\n\n${summary}` }],
+						details: {},
+					};
+				} catch (err) {
+					logger.warn("reflect failed", { backend: "mnemosyne", bank: state.config.bank, error: String(err) });
+					throw err instanceof Error ? err : new Error(String(err));
+				}
+			}
+
 			const state = this.session.getHindsightSessionState?.();
 			if (!state) {
 				throw new Error("Hindsight backend is not initialised for this session.");

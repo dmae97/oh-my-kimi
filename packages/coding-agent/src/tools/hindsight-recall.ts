@@ -19,17 +19,51 @@ export class HindsightRecallTool implements AgentTool<typeof hindsightRecallSche
 	readonly parameters = hindsightRecallSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
-	readonly summary = "Search hindsight memory for relevant prior context";
+	readonly summary = "Search memory for relevant prior context";
 
 	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): HindsightRecallTool | null {
-		if (session.settings.get("memory.backend") !== "hindsight") return null;
+		const backend = session.settings.get("memory.backend");
+		if (backend !== "hindsight" && backend !== "mnemosyne") return null;
 		return new HindsightRecallTool(session);
 	}
 
 	async execute(_id: string, params: HindsightRecallParams, signal?: AbortSignal): Promise<AgentToolResult> {
 		return untilAborted(signal, async () => {
+			const backend = this.session.settings.get("memory.backend");
+			if (backend === "mnemosyne") {
+				const state = this.session.getMnemosyneSessionState?.();
+				if (!state) {
+					throw new Error("Mnemosyne backend is not initialised for this session.");
+				}
+				try {
+					const results = state.memory.recallEnhanced(params.query, state.config.recallLimit, {
+						includeFacts: true,
+						channelId: state.config.bank,
+					});
+					if (results.length === 0) {
+						return {
+							content: [{ type: "text", text: "No relevant memories found." }],
+							details: {},
+						};
+					}
+					const formatted = state.memory.beam.formatContext(results);
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Found ${results.length} relevant ${results.length === 1 ? "memory" : "memories"} (as of ${formatCurrentTime()} UTC):\n\n${formatted}`,
+							},
+						],
+						details: {},
+					};
+				} catch (err) {
+					logger.warn("recall failed", { backend: "mnemosyne", bank: state.config.bank, error: String(err) });
+					throw err instanceof Error ? err : new Error(String(err));
+				}
+			}
+
 			const state = this.session.getHindsightSessionState?.();
 			if (!state) {
 				throw new Error("Hindsight backend is not initialised for this session.");
@@ -55,7 +89,7 @@ export class HindsightRecallTool implements AgentTool<typeof hindsightRecallSche
 					content: [
 						{
 							type: "text",
-							text: `Found ${results.length} relevant memories (as of ${formatCurrentTime()} UTC):\n\n${formatted}`,
+							text: `Found ${results.length} relevant ${results.length === 1 ? "memory" : "memories"} (as of ${formatCurrentTime()} UTC):\n\n${formatted}`,
 						},
 					],
 					details: {},

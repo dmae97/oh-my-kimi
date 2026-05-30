@@ -86,8 +86,8 @@ import type { HindsightSessionState } from "./hindsight/state";
 import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./mcp";
-
 import { resolveMemoryBackend } from "./memory-backend";
+import { getMnemosyneSessionState } from "./mnemosyne/state";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
@@ -1187,6 +1187,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				session ? session.trackEvalExecution(execution, abortController) : execution,
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
+			getMnemosyneSessionState: () => getMnemosyneSessionState(session),
 			getAgentId: () => resolvedAgentId,
 			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,

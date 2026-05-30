@@ -24,16 +24,50 @@ export class HindsightRetainTool implements AgentTool<typeof hindsightRetainSche
 	readonly parameters = hindsightRetainSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
-	readonly summary = "Store important facts in hindsight memory";
+	readonly summary = "Store important facts in long-term memory";
 
 	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): HindsightRetainTool | null {
-		if (session.settings.get("memory.backend") !== "hindsight") return null;
+		const backend = session.settings.get("memory.backend");
+		if (backend !== "hindsight" && backend !== "mnemosyne") return null;
 		return new HindsightRetainTool(session);
 	}
 
 	async execute(_id: string, params: HindsightRetainParams): Promise<AgentToolResult> {
+		const backend = this.session.settings.get("memory.backend");
+		if (backend === "mnemosyne") {
+			const state = this.session.getMnemosyneSessionState?.();
+			if (!state) {
+				throw new Error("Mnemosyne backend is not initialised for this session.");
+			}
+
+			for (const item of params.items) {
+				state.memory.remember(item.content, {
+					source: "coding-agent-retain",
+					importance: 0.75,
+					metadata: {
+						session_id: state.sessionId,
+						cwd: state.session.sessionManager.getCwd(),
+						context: item.context ?? null,
+						tool: "retain",
+					},
+					scope: "bank",
+					extract: true,
+					extractEntities: true,
+					veracity: "tool",
+					memoryType: "fact",
+				});
+			}
+
+			const count = params.items.length;
+			const noun = count === 1 ? "memory" : "memories";
+			return {
+				content: [{ type: "text", text: `${count} ${noun} stored.` }],
+				details: { count },
+			};
+		}
+
 		const state = this.session.getHindsightSessionState?.();
 		if (!state) {
 			throw new Error("Hindsight backend is not initialised for this session.");

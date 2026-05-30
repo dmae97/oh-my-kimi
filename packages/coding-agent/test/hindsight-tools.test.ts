@@ -8,10 +8,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
 import { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
+import type { MnemosyneBackendConfig } from "@oh-my-pi/pi-coding-agent/mnemosyne/config";
+import { MnemosyneSessionState } from "@oh-my-pi/pi-coding-agent/mnemosyne/state";
 import { HindsightRecallTool } from "@oh-my-pi/pi-coding-agent/tools/hindsight-recall";
 import { HindsightReflectTool } from "@oh-my-pi/pi-coding-agent/tools/hindsight-reflect";
 import { HindsightRetainTool } from "@oh-my-pi/pi-coding-agent/tools/hindsight-retain";
@@ -19,6 +24,8 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 
 const TEST_SESSION_ID = "test-session-id";
 let registeredState: HindsightSessionState | undefined;
+let registeredMnemosyneState: MnemosyneSessionState | undefined;
+let tempDbPath: string | undefined;
 
 function makeConfig(overrides: Partial<HindsightConfig> = {}): HindsightConfig {
 	return {
@@ -59,6 +66,7 @@ function makeSession(settings: Settings, sessionId: string | null = TEST_SESSION
 		getSessionId: () => sessionId,
 		getSessionSpawns: () => null,
 		getHindsightSessionState: () => (sessionId === TEST_SESSION_ID ? registeredState : undefined),
+		getMnemosyneSessionState: () => (sessionId === TEST_SESSION_ID ? registeredMnemosyneState : undefined),
 	} as unknown as ToolSession;
 }
 
@@ -92,6 +100,55 @@ function registerState(client: HindsightApi, settings?: Settings, opts: Register
 	void settings;
 }
 
+function makeMnemosyneConfig(overrides: Partial<MnemosyneBackendConfig> = {}): MnemosyneBackendConfig {
+	if (!tempDbPath) {
+		const tempDir = path.join(tmpdir(), `mnemosyne-test-${Date.now()}`);
+		mkdirSync(tempDir, { recursive: true });
+		tempDbPath = path.join(tempDir, "mnemosyne.db");
+	}
+	return {
+		dbPath: tempDbPath,
+		bank: "test-bank",
+		autoRecall: true,
+		autoRetain: true,
+		retainEveryNTurns: 3,
+		recallLimit: 10,
+		recallContextTurns: 1,
+		recallMaxQueryChars: 800,
+		injectionTokenLimit: 1024,
+		debug: false,
+		providerOptions: {
+			noEmbeddings: true,
+			embeddingModel: undefined,
+			embeddingApiUrl: undefined,
+			embeddingApiKey: undefined,
+			llm: false,
+		},
+		llmMode: "none",
+		llmBaseUrl: undefined,
+		llmApiKey: undefined,
+		llmModel: undefined,
+		...overrides,
+	};
+}
+
+function registerMnemosyneState(config?: MnemosyneBackendConfig) {
+	const finalConfig = config ?? makeMnemosyneConfig();
+	registeredMnemosyneState = new MnemosyneSessionState({
+		sessionId: TEST_SESSION_ID,
+		config: finalConfig,
+		session: {
+			sessionId: TEST_SESSION_ID,
+			sessionManager: {
+				getEntries: () => [],
+				getCwd: () => "/tmp",
+			} as never,
+			emitNotice: () => {},
+			getHindsightSessionState: () => undefined,
+		} as never,
+	});
+}
+
 describe("Hindsight tool factories", () => {
 	beforeEach(() => {
 		resetSettingsForTest();
@@ -113,6 +170,42 @@ describe("Hindsight tool factories", () => {
 
 	it("retain/recall/reflect factories return tool instances when memory.backend === hindsight", () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
+		const session = makeSession(settings);
+		expect(HindsightRetainTool.createIf(session)).toBeInstanceOf(HindsightRetainTool);
+		expect(HindsightRecallTool.createIf(session)).toBeInstanceOf(HindsightRecallTool);
+		expect(HindsightReflectTool.createIf(session)).toBeInstanceOf(HindsightReflectTool);
+	});
+});
+
+describe("Mnemosyne tool factories", () => {
+	beforeEach(() => {
+		resetSettingsForTest();
+		registeredMnemosyneState = undefined;
+		tempDbPath = undefined;
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		registeredMnemosyneState = undefined;
+		if (tempDbPath) {
+			try {
+				const tempDir = path.dirname(tempDbPath);
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {}
+			tempDbPath = undefined;
+		}
+	});
+
+	it("retain/recall/reflect factories return null when memory.backend !== mnemosyne", () => {
+		const settings = Settings.isolated({ "memory.backend": "local", "memories.enabled": false });
+		const session = makeSession(settings);
+		expect(HindsightRetainTool.createIf(session)).toBeNull();
+		expect(HindsightRecallTool.createIf(session)).toBeNull();
+		expect(HindsightReflectTool.createIf(session)).toBeNull();
+	});
+
+	it("retain/recall/reflect factories return tool instances when memory.backend === mnemosyne", () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
 		const session = makeSession(settings);
 		expect(HindsightRetainTool.createIf(session)).toBeInstanceOf(HindsightRetainTool);
 		expect(HindsightRecallTool.createIf(session)).toBeInstanceOf(HindsightRecallTool);
@@ -208,6 +301,79 @@ describe("retain.execute", () => {
 	});
 });
 
+describe("retain.execute (Mnemosyne backend)", () => {
+	beforeEach(() => {
+		resetSettingsForTest();
+		registeredMnemosyneState = undefined;
+		tempDbPath = undefined;
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		registeredMnemosyneState?.dispose();
+		registeredMnemosyneState = undefined;
+		if (tempDbPath) {
+			try {
+				const tempDir = path.dirname(tempDbPath);
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {}
+			tempDbPath = undefined;
+		}
+	});
+
+	it("writes memories synchronously and returns a stored success message", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		registerMnemosyneState();
+
+		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
+		const result = await tool.execute("call-mnemosyne-1", {
+			items: [{ content: "user prefers tabs", context: "editor configuration" }],
+		});
+
+		expect(result.content[0]).toEqual({ type: "text", text: "1 memory stored." });
+
+		// Verify the memory was actually stored by recalling it
+		const recallTool = HindsightRecallTool.createIf(makeSession(settings))!;
+		const recallResult = await recallTool.execute("call-mnemosyne-recall", { query: "user preferences" });
+
+		const text = (recallResult.content[0] as { text: string }).text;
+		expect(text).toContain("user prefers tabs");
+	});
+
+	it("stores multiple memories and returns correct count", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		registerMnemosyneState();
+
+		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
+		const result = await tool.execute("call-mnemosyne-multi", {
+			items: [
+				{ content: "fact one" },
+				{ content: "fact two", context: "additional context" },
+				{ content: "fact three" },
+			],
+		});
+
+		expect(result.content[0]).toEqual({ type: "text", text: "3 memories stored." });
+
+		// Verify all memories are recallable
+		const recallTool = HindsightRecallTool.createIf(makeSession(settings))!;
+		const recallResult = await recallTool.execute("call-mnemosyne-recall-multi", { query: "facts" });
+
+		const text = (recallResult.content[0] as { text: string }).text;
+		expect(text).toContain("fact one");
+		expect(text).toContain("fact two");
+		expect(text).toContain("fact three");
+	});
+
+	it("throws when no per-session Mnemosyne state is registered", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
+		await expect(tool.execute("call-mnemosyne-no-state", { items: [{ content: "x" }] })).rejects.toThrow(
+			/not initialised/i,
+		);
+	});
+});
+
 describe("recall.execute", () => {
 	beforeEach(() => {
 		resetSettingsForTest();
@@ -276,6 +442,62 @@ describe("recall.execute", () => {
 	});
 });
 
+describe("recall.execute (Mnemosyne backend)", () => {
+	beforeEach(() => {
+		resetSettingsForTest();
+		registeredMnemosyneState = undefined;
+		tempDbPath = undefined;
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		registeredMnemosyneState?.dispose();
+		registeredMnemosyneState = undefined;
+		if (tempDbPath) {
+			try {
+				const tempDir = path.dirname(tempDbPath);
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {}
+			tempDbPath = undefined;
+		}
+	});
+
+	it("returns the no-results sentinel when empty", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		registerMnemosyneState();
+
+		const tool = HindsightRecallTool.createIf(makeSession(settings))!;
+		const result = await tool.execute("call-mnemosyne-empty", { query: "nonexistent query" });
+
+		expect(result.content[0]).toEqual({ type: "text", text: "No relevant memories found." });
+	});
+
+	it("returns a populated text block when a retained memory exists", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		registerMnemosyneState();
+
+		// First, store a memory
+		const retainTool = HindsightRetainTool.createIf(makeSession(settings))!;
+		await retainTool.execute("call-mnemosyne-store", {
+			items: [{ content: "the user prefers dark mode in their editor" }],
+		});
+
+		// Then recall it
+		const recallTool = HindsightRecallTool.createIf(makeSession(settings))!;
+		const result = await recallTool.execute("call-mnemosyne-query", { query: "editor preferences" });
+
+		const text = (result.content[0] as { text: string }).text;
+		expect(text).toContain("Found 1 relevant memory");
+		expect(text).toContain("the user prefers dark mode in their editor");
+	});
+
+	it("throws when no per-session Mnemosyne state is registered", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		const tool = HindsightRecallTool.createIf(makeSession(settings))!;
+		await expect(tool.execute("call-mnemosyne-no-state", { query: "anything" })).rejects.toThrow(/not initialised/i);
+	});
+});
+
 describe("reflect.execute", () => {
 	beforeEach(() => {
 		resetSettingsForTest();
@@ -314,5 +536,98 @@ describe("reflect.execute", () => {
 		const tool = HindsightReflectTool.createIf(makeSession(settings))!;
 		const result = await tool.execute("call-7", { query: "anything" });
 		expect((result.content[0] as { text: string }).text).toBe("No relevant information found to reflect on.");
+	});
+});
+
+describe("reflect.execute (Mnemosyne backend)", () => {
+	beforeEach(() => {
+		resetSettingsForTest();
+		registeredMnemosyneState = undefined;
+		tempDbPath = undefined;
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		registeredMnemosyneState?.dispose();
+		registeredMnemosyneState = undefined;
+		if (tempDbPath) {
+			try {
+				const tempDir = path.dirname(tempDbPath);
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {}
+			tempDbPath = undefined;
+		}
+	});
+
+	it("returns the no-results sentinel when empty", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		registerMnemosyneState();
+
+		const tool = HindsightReflectTool.createIf(makeSession(settings))!;
+		const result = await tool.execute("call-mnemosyne-reflect-empty", {
+			query: "what does the user prefer?",
+		});
+
+		expect(result.content[0]).toEqual({
+			type: "text",
+			text: "No relevant information found to reflect on.",
+		});
+	});
+
+	it("returns a synthesized text block based on recalled memories when data exists", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		registerMnemosyneState();
+
+		// First, store memories
+		const retainTool = HindsightRetainTool.createIf(makeSession(settings))!;
+		await retainTool.execute("call-mnemosyne-store-reflect", {
+			items: [
+				{ content: "the user prefers dark mode in their editor" },
+				{ content: "the user uses Vim keybindings" },
+				{ content: "the user likes tabs over spaces" },
+			],
+		});
+
+		// Then reflect on them
+		const reflectTool = HindsightReflectTool.createIf(makeSession(settings))!;
+		const result = await reflectTool.execute("call-mnemosyne-reflect-query", {
+			query: "what are the user's editor preferences?",
+		});
+
+		const text = (result.content[0] as { text: string }).text;
+		expect(text).toContain("Based on recalled memories");
+		expect(text).toContain("dark mode");
+		expect(text).toContain("Vim");
+		expect(text).toContain("tabs");
+	});
+
+	it("includes additional context in the query when provided", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		registerMnemosyneState();
+
+		// Store a memory
+		const retainTool = HindsightRetainTool.createIf(makeSession(settings))!;
+		await retainTool.execute("call-mnemosyne-store-context", {
+			items: [{ content: "the user works on Python projects" }],
+		});
+
+		// Reflect with context
+		const reflectTool = HindsightReflectTool.createIf(makeSession(settings))!;
+		const result = await reflectTool.execute("call-mnemosyne-reflect-context", {
+			query: "what does the user work on?",
+			context: "this is for a new project setup",
+		});
+
+		const text = (result.content[0] as { text: string }).text;
+		expect(text).toContain("Based on recalled memories");
+		expect(text).toContain("Python");
+	});
+
+	it("throws when no per-session Mnemosyne state is registered", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		const tool = HindsightReflectTool.createIf(makeSession(settings))!;
+		await expect(tool.execute("call-mnemosyne-reflect-no-state", { query: "anything" })).rejects.toThrow(
+			/not initialised/i,
+		);
 	});
 });

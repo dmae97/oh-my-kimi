@@ -11,6 +11,7 @@ import type { GoalModeState, GoalRuntime } from "../goals";
 import { GoalTool } from "../goals/tools/goal-tool";
 import type { HindsightSessionState } from "../hindsight/state";
 import { LspTool } from "../lsp";
+import type { MnemosyneSessionState } from "../mnemosyne/state";
 import type { PlanModeState } from "../plan-mode/state";
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { ArtifactManager } from "../session/artifacts";
@@ -152,6 +153,8 @@ export interface ToolSession {
 	getSessionId?: () => string | null;
 	/** Get Hindsight runtime state for this agent session. */
 	getHindsightSessionState?: () => HindsightSessionState | undefined;
+	/** Get Mnemosyne runtime state for this agent session. */
+	getMnemosyneSessionState?: () => MnemosyneSessionState | undefined;
 	/** Agent identity used for IRC routing. Returns the registry id (e.g. "0-Main", "0-AuthLoader"). */
 	getAgentId?: () => string | null;
 	/** Look up a registered tool by name (used by the eval js backend's tool bridge). */
@@ -417,7 +420,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		) {
 			requestedTools.push("recipe");
 		}
-		if (session.settings.get("memory.backend") === "hindsight") {
+		if (["hindsight", "mnemosyne"].includes(session.settings.get("memory.backend") ?? "")) {
 			for (const name of ["recall", "retain", "reflect"]) {
 				if (!requestedTools.includes(name)) requestedTools.push(name);
 			}
@@ -463,7 +466,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		}
 		if (name === "recipe") return session.settings.get("recipe.enabled");
 		if (name === "retain" || name === "recall" || name === "reflect") {
-			return session.settings.get("memory.backend") === "hindsight";
+			return ["hindsight", "mnemosyne"].includes(session.settings.get("memory.backend") ?? "");
 		}
 		if (name === "task") {
 			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
