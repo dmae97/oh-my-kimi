@@ -7,17 +7,10 @@ import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings
 import { ExtensionList } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/extension-list";
 import type { Extension } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/types";
 import { HistorySearchComponent } from "@oh-my-pi/pi-coding-agent/modes/components/history-search";
-import { OAuthSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/oauth-selector";
 import { SessionSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/session-selector";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tree-selector";
 import { UserMessageSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/user-message-selector";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import {
-	type AuthCredential,
-	type AuthCredentialStore,
-	AuthStorage,
-	type StoredAuthCredential,
-} from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import type { SessionInfo, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { setKeybindings } from "@oh-my-pi/pi-tui";
@@ -30,40 +23,6 @@ const TEST_KEYBINDINGS = KeybindingsManager.inMemory({
 });
 
 const tempDirs: string[] = [];
-
-class EmptyCredentialStore implements AuthCredentialStore {
-	close(): void {}
-
-	listAuthCredentials(_provider?: string): StoredAuthCredential[] {
-		return [];
-	}
-
-	updateAuthCredential(_id: number, _credential: AuthCredential): void {}
-
-	deleteAuthCredential(_id: number, _disabledCause: string): void {}
-
-	tryDisableAuthCredentialIfMatches(_id: number, _expectedData: string, _disabledCause: string): boolean {
-		return false;
-	}
-
-	replaceAuthCredentialsForProvider(_provider: string, _credentials: AuthCredential[]): StoredAuthCredential[] {
-		return [];
-	}
-
-	upsertAuthCredentialForProvider(_provider: string, _credential: AuthCredential): StoredAuthCredential[] {
-		return [];
-	}
-
-	deleteAuthCredentialsForProvider(_provider: string, _disabledCause: string): void {}
-
-	getCache(_key: string, _options?: { includeExpired?: boolean }): string | null {
-		return null;
-	}
-
-	setCache(_key: string, _value: string, _expiresAtSec: number): void {}
-
-	cleanExpiredCache(): void {}
-}
 
 beforeAll(() => {
 	initTheme();
@@ -133,10 +92,6 @@ async function createHistoryStorage(prompts: string[]): Promise<HistoryStorage> 
 	return storage;
 }
 
-function createAuthStorage(): AuthStorage {
-	return new AuthStorage(new EmptyCredentialStore());
-}
-
 describe("selector navigation keybindings", () => {
 	it("uses tui.select.down in the session selector", () => {
 		setKeybindings(TEST_KEYBINDINGS);
@@ -199,22 +154,6 @@ describe("selector navigation keybindings", () => {
 		list.handleInput(CTRL_N);
 
 		expect(list.getSelectedExtension()?.id).toBe("tool-a");
-	});
-
-	it("uses tui.select.down in the OAuth selector", () => {
-		setKeybindings(TEST_KEYBINDINGS);
-		const selected: string[] = [];
-		const selector = new OAuthSelectorComponent(
-			"login",
-			createAuthStorage(),
-			id => selected.push(id),
-			() => {},
-		);
-
-		selector.handleInput(CTRL_N);
-		selector.handleInput("\n");
-
-		expect(selected).toEqual(["alibaba-coding-plan"]);
 	});
 
 	it("uses tui.select.down in history search", async () => {

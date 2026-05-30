@@ -15,6 +15,7 @@
 - Changed setup onboarding to a tabbed `Set up your providers` scene with dedicated `Sign in` and `Web search` panels
 - Changed the glyph mode picker to preselect the currently configured symbol preset instead of always defaulting to Unicode and to show live glyph samples in the picker rows
 - Changed OAuth sign-in flow in the setup wizard so users can authenticate multiple providers before leaving with Escape
+- Changed the plan-approval model-tier slider and the `ctrl+p`/`alt+p` role-cycle status to share one status-line-style chip track: each tier renders in its own role color and the active tier is filled as a powerline chip with a luminance-matched label. The role-cycle status now shows only the chip track — the resolved model and thinking level already live on the status line — instead of the verbose `Switched to <role>: <model> (cycle: …)` line.
 
 ### Fixed
 
