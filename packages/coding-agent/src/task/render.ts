@@ -528,7 +528,11 @@ function renderTaskItemLines(
 /**
  * Render the tool call arguments.
  */
-export function renderCall(args: TaskParams, options: RenderResultOptions, theme: Theme): Component {
+export function renderCall(
+	args: TaskParams,
+	options: RenderResultOptions & { renderContext?: { hasResult?: boolean } },
+	theme: Theme,
+): Component {
 	const lines: string[] = [];
 	lines.push(renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme));
 
@@ -553,7 +557,13 @@ export function renderCall(args: TaskParams, options: RenderResultOptions, theme
 	const tasksPrefix = tasksIsLast ? last : branch;
 	lines.push(` ${tasksPrefix} ${theme.fg("dim", "Tasks")} ${theme.fg("muted", `(${taskCount})`)}`);
 	const tasksContPrefix = tasksIsLast ? "    " : ` ${vertical}  `;
-	lines.push(...renderTaskItemLines(args.tasks, tasksContPrefix, options.expanded, theme));
+	// The per-task preview list only exists to surface dispatched agents while
+	// the call args stream in. Once a result snapshot exists, `renderResult`
+	// draws the same agents as progress/result lines (id + description), so
+	// emitting the preview here would render every task twice.
+	if (!options.renderContext?.hasResult) {
+		lines.push(...renderTaskItemLines(args.tasks, tasksContPrefix, options.expanded, theme));
+	}
 
 	if (showIsolated) {
 		lines.push(` ${last} ${theme.fg("dim", "Isolated")}: ${theme.fg("muted", "true")}`);

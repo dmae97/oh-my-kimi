@@ -440,6 +440,11 @@ export class ToolExecutionComponent extends Container {
 			const inline = Boolean((tool as { inline?: boolean }).inline);
 			this.#contentBox.setBgFn(inline ? undefined : bgFn);
 			this.#contentBox.clear();
+			// Mirror the built-in renderer branch so custom renderers (notably the
+			// task tool, whose live instance routes through here) receive the same
+			// render context — e.g. the `hasResult` flag that suppresses the task
+			// call preview once result lines exist.
+			this.#renderState.renderContext = this.#buildRenderContext();
 
 			// Render call component
 			const shouldRenderCall = !this.#result || !mergeCallAndResult;
@@ -708,6 +713,11 @@ export class ToolExecutionComponent extends Container {
 			context.output = output;
 			context.expanded = this.#expanded;
 			context.previewLines = EVAL_DEFAULT_PREVIEW_LINES;
+		} else if (this.#toolName === "task") {
+			// Once a result snapshot exists the task renderer's `renderResult`
+			// draws every dispatched agent as a progress/result line, so tell
+			// `renderCall` to drop its duplicate streaming preview list.
+			context.hasResult = Boolean(this.#result);
 		} else if (isEditLikeToolName(this.#toolName)) {
 			context.editMode = this.#editMode;
 			const previews = this.#editDiffPreview;
