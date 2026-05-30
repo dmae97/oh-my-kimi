@@ -65,3 +65,13 @@ export const RECOVERY_SESSION_CHAIN_WARNING =
  */
 export const RECOVERY_SESSION_REPLAY_WARNING =
 	"Recovered by replaying your edits onto the current file content — your previous edit in this session changed line(s) you re-targeted with a stale hash. Verify the diff matches your intent before continuing.";
+
+/**
+ * Warning emitted when an `insert head:` / `insert tail:` edit is applied to an
+ * existing file whose snapshot tag is stale (the file drifted since the read).
+ * Head/tail insert position is content-independent — "start"/"end" cannot move
+ * with drift — so this is non-fatal: the edit applies onto the live content and
+ * we surface the drift instead of hard-failing (unlike an anchored mismatch).
+ */
+export const HEADTAIL_DRIFT_WARNING =
+	"Applied an `insert head:`/`insert tail:` edit onto the current file content even though the snapshot tag was stale (the file changed since your read). Head/tail position is content-independent, so the insert was not rejected — but re-read if the drift was unexpected.";
