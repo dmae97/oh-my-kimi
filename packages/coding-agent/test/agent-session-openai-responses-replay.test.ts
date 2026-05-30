@@ -3,7 +3,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
-import type { AssistantMessage, Message, ProviderPayload, ProviderSessionState, Usage } from "@oh-my-pi/pi-ai/types";
+import type {
+	AssistantMessage,
+	Message,
+	ProviderPayload,
+	ProviderSessionState,
+	ToolResultMessage,
+	Usage,
+} from "@oh-my-pi/pi-ai/types";
 import { createOpenAIResponsesHistoryPayload } from "@oh-my-pi/pi-ai/utils";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -79,6 +86,38 @@ function createStaleAssistantMessage(
 		providerPayload: createStaleAssistantHistoryPayload(provider),
 		timestamp: Date.now(),
 	};
+}
+
+/**
+ * Matching tool result for the `tool_call_1` block emitted by
+ * {@link createStaleAssistantMessage}. A real session always persists the
+ * result alongside the assistant turn; without it the tool_use is dangling and
+ * `buildSessionContext` strips it from the rebuilt LLM context.
+ */
+function createPairedToolResult(): ToolResultMessage {
+	return {
+		role: "toolResult",
+		toolCallId: "tool_call_1",
+		toolName: "read",
+		content: [{ type: "text", text: "README contents" }],
+		isError: false,
+		timestamp: Date.now(),
+	};
+}
+
+/**
+ * Persist a complete stale assistant turn: the assistant message followed by
+ * its paired tool result so the tool_use is never dangling. Returns both entry
+ * ids; the tool result is the turn's leaf.
+ */
+function appendStaleAssistantTurn(
+	sessionManager: SessionManager,
+	text: string,
+	options: { api?: AssistantMessage["api"]; provider?: string; model?: string } = {},
+): { assistantId: string; toolResultId: string } {
+	const assistantId = sessionManager.appendMessage(createStaleAssistantMessage(text, options));
+	const toolResultId = sessionManager.appendMessage(createPairedToolResult());
+	return { assistantId, toolResultId };
 }
 
 function isSessionMessageEntry(entry: SessionEntry): entry is SessionMessageEntry {
@@ -234,7 +273,7 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 				providerPayload: preservedUserPayload,
 				timestamp: Date.now() - 2,
 			});
-			sessionManager.appendMessage(createStaleAssistantMessage(assistantText));
+			appendStaleAssistantTurn(sessionManager, assistantText);
 			sessionManager.appendMessage({ role: "user", content: "Follow-up", timestamp: Date.now() - 1 });
 		});
 
@@ -272,13 +311,11 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 		const assistantText = "Codex assistant snapshot";
 
 		const { sessionFile } = await createPersistedSession(tempDir, sessionManager => {
-			sessionManager.appendMessage(
-				createStaleAssistantMessage(assistantText, {
-					api: "openai-codex-responses",
-					provider: "openai-codex",
-					model: "gpt-5.2-codex",
-				}),
-			);
+			appendStaleAssistantTurn(sessionManager, assistantText, {
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				model: "gpt-5.2-codex",
+			});
 		});
 
 		const openedSessionManager = await SessionManager.open(sessionFile, tempDir);
@@ -304,7 +341,7 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 				providerPayload: preservedUserPayload,
 				timestamp: Date.now() - 2,
 			});
-			sessionManager.appendMessage(createStaleAssistantMessage(assistantText));
+			appendStaleAssistantTurn(sessionManager, assistantText);
 		});
 
 		const forkedSessionManager = await SessionManager.forkFrom(sessionFile, forkDir, forkDir);
@@ -330,13 +367,11 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 		const { sessionFile } = await createPersistedSession(tempDir, sessionManager => {
 			sessionManager.appendModelChange("openai-codex/gpt-5.2-codex");
 			sessionManager.appendMessage({ role: "user", content: "Reload summary", timestamp: Date.now() - 2 });
-			sessionManager.appendMessage(
-				createStaleAssistantMessage(assistantText, {
-					api: "openai-codex-responses",
-					provider: "openai-codex",
-					model: "gpt-5.2-codex",
-				}),
-			);
+			appendStaleAssistantTurn(sessionManager, assistantText, {
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				model: "gpt-5.2-codex",
+			});
 			sessionManager.appendMessage({ role: "user", content: "Reload follow-up", timestamp: Date.now() - 1 });
 		});
 
@@ -371,13 +406,11 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 
 		const { sessionFile } = await createPersistedSession(tempDir, sessionManager => {
 			sessionManager.appendModelChange("openai-codex/gpt-5.2-codex");
-			sessionManager.appendMessage(
-				createStaleAssistantMessage(assistantText, {
-					api: "openai-codex-responses",
-					provider: "openai-codex",
-					model: "gpt-5.2-codex",
-				}),
-			);
+			appendStaleAssistantTurn(sessionManager, assistantText, {
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				model: "gpt-5.2-codex",
+			});
 		});
 
 		const reloadedSessionManager = await SessionManager.open(sessionFile, tempDir);
@@ -467,13 +500,11 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 
 		const { sessionFile } = await createPersistedSession(tempDir, sessionManager => {
 			sessionManager.appendModelChange("openai-codex/gpt-5.2-codex");
-			sessionManager.appendMessage(
-				createStaleAssistantMessage(assistantText, {
-					api: "openai-codex-responses",
-					provider: "openai-codex",
-					model: "gpt-5.2-codex",
-				}),
-			);
+			appendStaleAssistantTurn(sessionManager, assistantText, {
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				model: "gpt-5.2-codex",
+			});
 		});
 
 		const reloadedSessionManager = await SessionManager.open(sessionFile, tempDir);
@@ -516,13 +547,11 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 
 		const { sessionFile } = await createPersistedSession(tempDir, sessionManager => {
 			sessionManager.appendModelChange("openai-codex/gpt-5.2-codex");
-			sessionManager.appendMessage(
-				createStaleAssistantMessage(assistantText, {
-					api: "openai-codex-responses",
-					provider: "openai-codex",
-					model: "gpt-5.2-codex",
-				}),
-			);
+			appendStaleAssistantTurn(sessionManager, assistantText, {
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				model: "gpt-5.2-codex",
+			});
 		});
 
 		const reloadedSessionManager = await SessionManager.open(sessionFile, tempDir);
@@ -558,7 +587,7 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 
 		const { sessionFile } = await createPersistedSession(tempDir, sessionManager => {
 			sessionManager.appendModelChange("openai/gpt-5-mini");
-			sessionManager.appendMessage(createStaleAssistantMessage(assistantText));
+			appendStaleAssistantTurn(sessionManager, assistantText);
 		});
 
 		const reloadedSessionManager = await SessionManager.open(sessionFile, tempDir);
@@ -593,7 +622,7 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 		authStorages.push(authStorage);
 
 		const { sessionFile } = await createPersistedSession(tempDir, sessionManager => {
-			sessionManager.appendMessage(createStaleAssistantMessage("Unreadable assistant snapshot"));
+			appendStaleAssistantTurn(sessionManager, "Unreadable assistant snapshot");
 		});
 		const sessionDir = path.dirname(sessionFile);
 		const originalMode = fs.statSync(sessionDir).mode & 0o777;
@@ -633,7 +662,7 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 				providerPayload: preservedUserPayload,
 				timestamp: Date.now() - 2,
 			});
-			sessionManager.appendMessage(createStaleAssistantMessage(assistantText));
+			appendStaleAssistantTurn(sessionManager, assistantText);
 			sessionManager.appendMessage({ role: "user", content: "Older follow-up", timestamp: Date.now() - 1 });
 		});
 
@@ -677,10 +706,10 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 			});
 			sessionManager.branch(rootUserId);
 			sessionManager.appendMessage({ role: "user", content: "Archived branch", timestamp: Date.now() - 3 });
-			const archivedAssistantId = sessionManager.appendMessage(createStaleAssistantMessage(branchAssistantText));
+			const { toolResultId: archivedTurnLeafId } = appendStaleAssistantTurn(sessionManager, branchAssistantText);
 			sessionManager.branch(mainAssistantId);
 			sessionManager.appendMessage({ role: "user", content: "Active branch leaf", timestamp: Date.now() - 2 });
-			return { treeTargetId: archivedAssistantId };
+			return { treeTargetId: archivedTurnLeafId };
 		});
 
 		if (!treeTargetId) {
