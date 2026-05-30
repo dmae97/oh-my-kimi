@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an `omp completions <bash|zsh|fish>` command that prints a shell completion script generated from the live command/flag metadata, so completions never drift from the actual CLI. Subcommands, flags, and enum values complete statically; `--model`/`--smol`/`--slow`/`--plan` resolve against the bundled model catalog and `--resume` against on-disk sessions via a hidden `__complete` helper.
+
+### Fixed
+
+- Fixed the `read` tool description advertising `inspect_image` ("for visual analysis, call `inspect_image`") even when the `inspect_image` tool was disabled, which left the model hunting for a tool absent from its function list. The image section is now gated on `inspect_image.enabled`: when disabled it instead states that reading an image path returns the decoded image inline.
+
 ## [15.6.0] - 2026-05-30
 ### Added
 
