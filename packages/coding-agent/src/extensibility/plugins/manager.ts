@@ -10,6 +10,7 @@ import {
 	isEnoent,
 	logger,
 } from "@oh-my-pi/pi-utils";
+import { isGitSpec } from "./git-url";
 import { extractPackageName, parsePluginSpec } from "./parser";
 import type {
 	DoctorCheck,
@@ -29,8 +30,14 @@ import type {
 /** Valid npm package name pattern (scoped and unscoped, with optional version) */
 const VALID_PACKAGE_NAME = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*(@[a-z0-9-._^~>=<]+)?$/i;
 
+/** Characters that are never valid in any plugin install spec — git or npm. */
+const SHELL_METACHARS = /[;&|`$(){}<>\\\n\r\t]/;
+
 /**
- * Validate package name to prevent command injection.
+ * Validate package name to prevent command injection. npm specs only — git
+ * specs (`github:user/repo`, `https://github.com/...`, ...) MUST go through
+ * {@link validateGitSpec} instead because they contain characters npm rejects
+ * (`:`, `/`, `#`, `+`, `@` in non-version positions).
  */
 function validatePackageName(name: string): void {
 	// Remove version specifier for validation
@@ -41,6 +48,19 @@ function validatePackageName(name: string): void {
 	// Extra safety: no shell metacharacters
 	if (/[;&|`$(){}[\]<>\\]/.test(name)) {
 		throw new Error(`Invalid characters in package name: ${name}`);
+	}
+}
+
+/**
+ * Validate a git install spec — accepts `:`, `/`, `#`, `+`, `.`, `-`, `_`,
+ * `~`, `@` (which would all fail {@link validatePackageName}) but rejects
+ * shell metacharacters so the spec stays safe when forwarded to bun install.
+ * `Bun.spawn` does not invoke a shell, but defense-in-depth keeps things
+ * obvious for future readers.
+ */
+function validateGitSpec(spec: string): void {
+	if (SHELL_METACHARS.test(spec)) {
+		throw new Error(`Invalid characters in plugin source: ${spec}`);
 	}
 }
 
@@ -127,12 +147,39 @@ export class PluginManager {
 		}
 	}
 
+	/**
+	 * Read the `dependencies` map from `plugins/package.json`. Returns an empty
+	 * object when the file does not exist yet so callers can diff `before`
+	 * against `after` to discover the package bun just installed under its
+	 * real name (git specs do not encode the package name in the spec itself).
+	 */
+	async #readDeps(pkgJsonPath: string): Promise<Record<string, string>> {
+		try {
+			const json = await Bun.file(pkgJsonPath).json();
+			return (json.dependencies as Record<string, string>) ?? {};
+		} catch (err) {
+			if (isEnoent(err)) return {};
+			throw err;
+		}
+	}
+
 	// ==========================================================================
 	// Install / Uninstall
 	// ==========================================================================
 
 	/**
-	 * Install a plugin from npm with optional feature selection.
+	 * Install a plugin with optional feature selection.
+	 *
+	 * Accepts:
+	 * - npm specs: `pkg`, `pkg@1.2.3`, `@scope/pkg`, `pkg[features]`
+	 * - namespaced git shorthand: `github:user/repo[#ref]`, `gitlab:`, `bitbucket:`,
+	 *   `codeberg:`, `sourcehut:`/`srht:`
+	 * - full git URLs: `https://github.com/user/repo`, `git@github.com:user/repo`,
+	 *   `ssh://…`, `git+https://…`
+	 *
+	 * For git specs the package name is not knowable from the spec, so the
+	 * installer diffs `plugins/package.json` `dependencies` before and after
+	 * to find the newly added key.
 	 *
 	 * @param specString - Package specifier with optional features: "pkg", "pkg[feat]", "pkg[*]", "pkg[]"
 	 * @param options - Install options
@@ -140,7 +187,12 @@ export class PluginManager {
 	 */
 	async install(specString: string, options: InstallOptions = {}): Promise<InstalledPlugin> {
 		const spec = parsePluginSpec(specString);
-		validatePackageName(spec.packageName);
+		const gitSource = isGitSpec(spec.packageName);
+		if (gitSource) {
+			validateGitSpec(spec.packageName);
+		} else {
+			validatePackageName(spec.packageName);
+		}
 
 		await this.#ensurePackageJson();
 
@@ -154,6 +206,8 @@ export class PluginManager {
 				enabled: true,
 			};
 		}
+		const pkgJsonPath = getPluginsPackageJson();
+		const depsBefore = gitSource ? await this.#readDeps(pkgJsonPath) : {};
 
 		// Run npm install
 		const proc = Bun.spawn(["bun", "install", spec.packageName], {
@@ -169,9 +223,39 @@ export class PluginManager {
 			const stderr = await new Response(proc.stderr).text();
 			throw new Error(`npm install failed: ${stderr}`);
 		}
-
-		// Resolve actual package name (strip version specifier)
-		const actualName = extractPackageName(spec.packageName);
+		// Resolve actual package name. npm specs encode the name (strip version);
+		// git specs do not, so diff plugins/package.json deps to find the new entry.
+		let actualName: string;
+		if (gitSource) {
+			const depsAfter = await this.#readDeps(pkgJsonPath);
+			let resolved: string | undefined;
+			for (const key of Object.keys(depsAfter)) {
+				if (!(key in depsBefore)) {
+					resolved = key;
+					break;
+				}
+			}
+			// Fallback: a force-reinstall of an already-present git plugin will not
+			// add a new key, just rewrite the existing one to the new spec value.
+			// Match by the value containing the original spec instead.
+			if (!resolved) {
+				const needle = spec.packageName.replace(/^git\+/, "");
+				for (const [key, value] of Object.entries(depsAfter)) {
+					if (typeof value === "string" && value.includes(needle)) {
+						resolved = key;
+						break;
+					}
+				}
+			}
+			if (!resolved) {
+				throw new Error(
+					`Installed ${spec.packageName} but could not determine package name from plugins/package.json`,
+				);
+			}
+			actualName = resolved;
+		} else {
+			actualName = extractPackageName(spec.packageName);
+		}
 		const pkgPath = path.join(getPluginsNodeModules(), actualName, "package.json");
 
 		let pkg: { name: string; version: string; omp?: PluginManifest; pi?: PluginManifest };

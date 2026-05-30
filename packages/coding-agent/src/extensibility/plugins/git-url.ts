@@ -25,6 +25,29 @@ const KNOWN_HOSTS: Record<string, (pathname: string, hash: string) => { user: st
 	"codeberg.org": extractStandard,
 };
 
+/**
+ * Namespaced shorthand prefixes recognised by bun's `bun install <spec>`, mapped
+ * to their canonical host. Mirrors npm's `github:`, `gitlab:`, `bitbucket:` etc.
+ * shorthand so callers can pass them through to bun verbatim.
+ */
+const SHORTHAND_PREFIXES: Record<string, string> = {
+	github: "github.com",
+	gitlab: "gitlab.com",
+	bitbucket: "bitbucket.org",
+	codeberg: "codeberg.org",
+	sourcehut: "git.sr.ht",
+	srht: "git.sr.ht",
+};
+
+/**
+ * `<prefix>:<user>/<repo>[.git][#<ref>]` shape. `<repo>` is non-greedy so the
+ * optional `.git` suffix and `#ref` tail bind tightly; `<repo>` may itself
+ * contain `/` to support nested GitLab groups (`gitlab:group/sub/project`).
+ * `<user>` rejects `/`, `:`, `#` to keep protocol URLs (`https://…`) and
+ * scp-like SSH (`git@github.com:user/repo`) out of this path.
+ */
+const SHORTHAND_RE = /^([a-z]+):([^/:#]+)\/([^#]+?)(?:\.git)?(?:#(.+))?$/i;
+
 function stripUrlCredentials(url: string): string {
 	if (!url.includes("://")) return url;
 	try {
@@ -210,13 +233,54 @@ function parseGenericGitUrl(url: string): GitSource | null {
 }
 
 /**
+ * Match an npm/bun-style namespaced shorthand (`github:user/repo`, optionally
+ * `…#ref` or `….git`). Returns null for protocol URLs and any prefix not in
+ * `SHORTHAND_PREFIXES` so the caller can fall through to the generic paths.
+ */
+function tryNamespacedShorthand(trimmed: string): GitSource | null {
+	// Cheap gate: bail out before touching protocol URLs (`https://`, `ssh://`,
+	// `git://`) where the char after the colon is always `/`. The shorthand we
+	// care about never starts with `<scheme>://`.
+	if (!/^[a-z]+:[^/]/i.test(trimmed)) return null;
+	const match = trimmed.match(SHORTHAND_RE);
+	if (!match) return null;
+	const prefix = (match[1] ?? "").toLowerCase();
+	const host = SHORTHAND_PREFIXES[prefix];
+	if (!host) return null;
+	const user = match[2] ?? "";
+	const repoPath = match[3] ?? "";
+	if (!user || !repoPath) return null;
+	const ref = match[4];
+	if (ref) {
+		try {
+			decodeURIComponent(ref);
+		} catch {
+			return null;
+		}
+	}
+	const fullPath = `${user}/${repoPath}`;
+	return {
+		type: "git",
+		repo: `https://${host}/${fullPath}`,
+		host,
+		path: fullPath,
+		ref: ref || undefined,
+		pinned: Boolean(ref),
+	};
+}
+
+/**
  * Parse git source into a GitSource.
  *
  * Rules:
- * - With `git:` prefix, accept shorthand forms.
+ * - Namespaced shorthand (`github:user/repo`, `gitlab:`, `bitbucket:`,
+ *   `codeberg:`, `sourcehut:`/`srht:`) is accepted directly — these mirror
+ *   bun/npm's built-in install shorthands and skip the rest of the pipeline.
+ * - With `git:` prefix, accept generic shorthand forms.
  * - Without `git:` prefix, only accept explicit protocol URLs.
  *
  * Handles:
+ * - `github:user/repo[#ref]`-style namespaced shorthand
  * - `git:` prefixed URLs (`git:github.com/user/repo`)
  * - SSH SCP-like URLs (`git:git@github.com:user/repo`)
  * - HTTPS/HTTP/SSH/git protocol URLs
@@ -227,6 +291,10 @@ function parseGenericGitUrl(url: string): GitSource | null {
  */
 export function parseGitUrl(source: string): GitSource | null {
 	const trimmed = source.trim();
+
+	const shorthand = tryNamespacedShorthand(trimmed);
+	if (shorthand) return shorthand;
+
 	const hasGitPrefix = /^git:(?!\/\/)/i.test(trimmed);
 	const url = hasGitPrefix ? trimmed.slice(4).trim() : trimmed;
 
@@ -278,4 +346,13 @@ export function parseGitUrl(source: string): GitSource | null {
 	}
 
 	return parseGenericGitUrl(url);
+}
+
+/**
+ * Returns true if the spec is parseable as a git source (protocol URL,
+ * scp-like SSH wrapped in `git:`, plain `git:` shorthand, or namespaced
+ * shorthand like `github:user/repo`). The inverse of "this is an npm spec".
+ */
+export function isGitSpec(spec: string): boolean {
+	return parseGitUrl(spec) !== null;
 }
