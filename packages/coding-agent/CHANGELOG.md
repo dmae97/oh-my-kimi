@@ -6,6 +6,7 @@
 
 - Added a persistent live agent roster pinned below the editor (focus it with `Ctrl+S` or `Alt+Down`), including view-as switching into delegated agent sessions with human-readable delegate names and UI pinning to suppress idle reaping while viewed. The roster stays hidden until at least one delegated agent exists and releases focus back to the editor once the last one is gone.
 - Recorded the originating session ID alongside each prompt in `history.db` (new `session_id` column, surfaced as `HistoryEntry.sessionId`), so recalled prompts can be traced back to the session they came from. Existing history databases gain the column automatically on next launch.
+- Added compact inline TUI renderers for the `retain`, `recall`, and `reflect` memory tools. `retain` now shows one themed bullet line per stored item (truncated to width) under a status header with the stored/queued count, and `recall`/`reflect` collapse to a single query header (recall reports the match count and hides recalled memories until expanded) instead of dumping the raw JSON argument tree.
 
 ### Changed
 

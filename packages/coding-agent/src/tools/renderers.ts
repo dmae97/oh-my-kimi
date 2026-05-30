@@ -22,6 +22,7 @@ import { findToolRenderer } from "./find";
 import { githubToolRenderer } from "./gh-renderer";
 import { inspectImageToolRenderer } from "./inspect-image-renderer";
 import { jobToolRenderer } from "./job";
+import { recallToolRenderer, reflectToolRenderer, retainToolRenderer } from "./memory-render";
 import { readToolRenderer } from "./read";
 import { recipeToolRenderer } from "./recipe/render";
 import { resolveToolRenderer } from "./resolve";
@@ -62,6 +63,9 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	read: readToolRenderer as ToolRenderer,
 	job: jobToolRenderer as ToolRenderer,
 	resolve: resolveToolRenderer as ToolRenderer,
+	retain: retainToolRenderer as ToolRenderer,
+	recall: recallToolRenderer as ToolRenderer,
+	reflect: reflectToolRenderer as ToolRenderer,
 	search_tool_bm25: searchToolBm25Renderer as ToolRenderer,
 	ssh: sshToolRenderer as ToolRenderer,
 	task: taskToolRenderer as ToolRenderer,
