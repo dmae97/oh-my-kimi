@@ -33,12 +33,18 @@ export interface ProfileAliasInstallResult {
 
 const ALIAS_NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 
+// Keep local: importing the pi-utils root here would eagerly load env before
+// cli.ts has applied --profile, regressing profile-specific .env loading.
+function isEnoentError(error: unknown): boolean {
+	return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT";
+}
+
 function validateAliasName(aliasName: string): string {
 	const normalized = aliasName.trim();
 	if (!ALIAS_NAME_RE.test(normalized)) {
 		throw new Error(`Invalid alias "${aliasName}". Alias names must match ${ALIAS_NAME_RE.source}.`);
 	}
-	if (normalized === "omp") {
+	if (normalized.toLowerCase() === "omp") {
 		throw new Error('Invalid alias "omp". Refusing to shadow the base omp command.');
 	}
 	return normalized;
@@ -50,7 +56,7 @@ function normalizeShellName(shellPath: string | undefined, platform: NodeJS.Plat
 		.toLowerCase()
 		.replace(/\.exe$/, "");
 	if (shell === "zsh") return "zsh";
-	if (shell === "bash" || shell === "sh") return "bash";
+	if (shell === "bash") return "bash";
 	if (shell === "fish") return "fish";
 	if (shell === "pwsh") return "pwsh";
 	if (shell === "powershell") return "powershell";
@@ -120,6 +126,22 @@ function upsertBlock(content: string, aliasName: string, block: string): string 
 	return `${trimmed}${trimmed ? "\n\n" : ""}${block}\n`;
 }
 
+function readAliasConfigText(filePath: string): Promise<string> {
+	return Bun.file(filePath).text();
+}
+
+export async function readProfileAliasConfigFile(
+	filePath: string,
+	readText: (filePath: string) => Promise<string> = readAliasConfigText,
+): Promise<string> {
+	try {
+		return await readText(filePath);
+	} catch (error) {
+		if (isEnoentError(error)) return "";
+		throw error;
+	}
+}
+
 export async function installProfileAlias(options: ProfileAliasInstallOptions): Promise<ProfileAliasInstallResult> {
 	const profile = normalizeProfileName(options.profile);
 	if (!profile) {
@@ -131,15 +153,7 @@ export async function installProfileAlias(options: ProfileAliasInstallOptions): 
 	const shell = normalizeShellName(options.shellPath ?? process.env.SHELL, platform);
 	const configPath = resolveShellConfigPath(shell, homeDir, platform);
 	const { block, command } = renderAliasBlock(shell, aliasName, profile);
-	const readFile =
-		options.readFile ??
-		(async filePath => {
-			try {
-				return await Bun.file(filePath).text();
-			} catch {
-				return "";
-			}
-		});
+	const readFile = options.readFile ?? readProfileAliasConfigFile;
 	const writeFile =
 		options.writeFile ??
 		(async (filePath, content) => {

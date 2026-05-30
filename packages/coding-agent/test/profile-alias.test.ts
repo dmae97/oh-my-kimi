@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { installProfileAlias } from "../src/cli/profile-alias";
+import { installProfileAlias, readProfileAliasConfigFile } from "../src/cli/profile-alias";
 
 describe("profile alias installer", () => {
 	it("writes a bash-compatible alias that forwards subcommands through omp", async () => {
@@ -94,15 +94,43 @@ describe("profile alias installer", () => {
 		expect(content).not.toContain("--profile old");
 	});
 
-	it("refuses to shadow the base omp command", () => {
-		expect(
+	it("refuses to shadow the base omp command case-insensitively", async () => {
+		for (const aliasName of ["omp", "OMP"]) {
+			await expect(
+				installProfileAlias({
+					profile: "work",
+					aliasName,
+					shellPath: "/bin/bash",
+					homeDir: "/home/me",
+				}),
+			).rejects.toThrow("Refusing to shadow");
+		}
+	});
+
+	it("rejects POSIX sh because it does not read bash config files", async () => {
+		await expect(
 			installProfileAlias({
 				profile: "work",
-				aliasName: "omp",
-				shellPath: "/bin/bash",
+				aliasName: "omp-work",
+				shellPath: "/bin/sh",
+				platform: "linux",
 				homeDir: "/home/me",
 			}),
-		).rejects.toThrow("Refusing to shadow");
+		).rejects.toThrow('Unsupported shell "sh"');
+	});
+
+	it("treats missing shell config as empty but preserves other read failures", async () => {
+		await expect(
+			readProfileAliasConfigFile("/home/me/.bashrc", async () => {
+				throw Object.assign(new Error("missing"), { code: "ENOENT" });
+			}),
+		).resolves.toBe("");
+
+		await expect(
+			readProfileAliasConfigFile("/home/me/.bashrc", async () => {
+				throw Object.assign(new Error("denied"), { code: "EACCES" });
+			}),
+		).rejects.toThrow("denied");
 	});
 
 	it("validates profile names before rendering shell code", async () => {
