@@ -2017,11 +2017,16 @@ export class AcpAgent implements Agent {
 				headers: this.#toNameValueMap(server.headers),
 			};
 		}
-		return {
-			type: "sse",
-			url: server.url,
-			headers: this.#toNameValueMap(server.headers),
-		};
+		if (server.type === "sse") {
+			return {
+				type: "sse",
+				url: server.url,
+				headers: this.#toNameValueMap(server.headers),
+			};
+		}
+		// The experimental ACP-channel transport (`type: "acp"`) is not advertised in
+		// `mcpCapabilities`, so a spec-compliant client never sends it; reject defensively.
+		throw new Error(`Unsupported MCP server transport: ${server.type}`);
 	}
 
 	#toNameValueMap(values: Array<{ name: string; value: string }>): { [name: string]: string } {
