@@ -38,6 +38,21 @@ const DEFAULT_LOCAL_TOKEN = "lm-studio-local";
 // "socket connection was closed unexpectedly").
 const DISCOVERY_DEFAULT_MAX_TOKENS = 32_768;
 
+// Anthropic-safe variant of the discovery cap. The Anthropic stream converter
+// in `packages/ai/src/providers/anthropic.ts` derives the request limit as
+// `(model.maxTokens / 3) | 0`, so the 32K default would surface as 10,922
+// requested output tokens — above the 8,192 hard cap on classic Claude 3.x
+// Sonnet/Haiku/Opus endpoints. Discovered models routed through
+// `anthropic-messages` (proxy `supported_endpoint_types: ["anthropic"]` or a
+// custom provider with `api: anthropic-messages` + openai-models-list
+// discovery) fall back to this conservative value.
+const DISCOVERY_DEFAULT_MAX_TOKENS_ANTHROPIC = 8_192;
+
+/** Routes discovered-model `maxTokens` defaults around Anthropic's 3× output divisor. */
+function discoveryDefaultMaxTokens(api: Api | undefined): number {
+	return api === "anthropic-messages" ? DISCOVERY_DEFAULT_MAX_TOKENS_ANTHROPIC : DISCOVERY_DEFAULT_MAX_TOKENS;
+}
+
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
@@ -1753,7 +1768,7 @@ export class ModelRegistry {
 					input: ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 					contextWindow: 128000,
-					maxTokens: DISCOVERY_DEFAULT_MAX_TOKENS,
+					maxTokens: discoveryDefaultMaxTokens(providerConfig.api),
 					headers,
 					compat: {
 						supportsStore: false,
@@ -1825,13 +1840,7 @@ export class ModelRegistry {
 					input: ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 					contextWindow: 128000,
-					// Anthropic computes `max_tokens` as `(model.maxTokens / 3) | 0` in
-					// `packages/ai/src/providers/anthropic.ts`, so applying the OpenAI-
-					// routed 32K discovery cap here would request 10,922 output tokens —
-					// above the 8,192 hard cap on classic Claude 3.x Sonnet/Haiku/Opus.
-					// Keep the conservative 8K default on the anthropic route; the
-					// OpenAI route still benefits from the raised cap (see #1528).
-					maxTokens: isAnthropic ? 8192 : DISCOVERY_DEFAULT_MAX_TOKENS,
+					maxTokens: discoveryDefaultMaxTokens(api),
 					headers,
 					// OpenAI-compat fields are no-ops on anthropic models; the
 					// Anthropic SDK ignores them. Provider-level disableStrictTools

@@ -151,4 +151,43 @@ describe("issue #1528 discovery maxTokens default", () => {
 		expect(haiku?.api).toBe("anthropic-messages");
 		expect(haiku?.maxTokens).toBe(8192);
 	});
+
+	test("openai-models-list discovery keeps anthropic-messages providers at the 8192 default", async () => {
+		// The validator allows `api: anthropic-messages` with a bare
+		// openai-models-list discovery (e.g. third-party Anthropic catalogs
+		// served behind a `/v1/models` endpoint). Same divisor reasoning as
+		// the proxy branch applies: 32K would surface as 10,922 requested
+		// output tokens, above the Claude 3.x hard cap.
+		fs.writeFileSync(
+			modelsPath,
+			[
+				"providers:",
+				"  third-party-anthropic:",
+				"    baseUrl: https://anthropic-reseller.example.com/v1",
+				"    apiKey: sk-test",
+				"    api: anthropic-messages",
+				"    auth: apiKey",
+				"    discovery:",
+				"      type: openai-models-list",
+			].join("\n"),
+		);
+
+		using _hook = hookFetch(input => {
+			const url = String(input);
+			if (url !== "https://anthropic-reseller.example.com/v1/models") {
+				throw new Error(`Unexpected URL: ${url}`);
+			}
+			return new Response(JSON.stringify({ data: [{ id: "claude-3-5-sonnet" }] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		});
+
+		const registry = new ModelRegistry(authStorage, modelsPath);
+		await registry.refreshProvider("third-party-anthropic");
+
+		const sonnet = registry.find("third-party-anthropic", "claude-3-5-sonnet");
+		expect(sonnet?.api).toBe("anthropic-messages");
+		expect(sonnet?.maxTokens).toBe(8192);
+	});
 });
