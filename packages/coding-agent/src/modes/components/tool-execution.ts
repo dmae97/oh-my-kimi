@@ -31,6 +31,7 @@ import {
 } from "../../tools/json-tree";
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
 import { toolRenderers } from "../../tools/renderers";
+import { TODO_WRITE_STRIKE_TOTAL_FRAMES } from "../../tools/todo-write";
 import { renderStatusLine } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { renderDiff } from "./diff";
@@ -163,6 +164,8 @@ export class ToolExecutionComponent extends Container {
 	// Spinner animation for partial task results
 	#spinnerFrame?: number;
 	#spinnerInterval?: NodeJS.Timeout;
+	// Todo write completion strikethrough reveal animation
+	#todoStrikeInterval?: NodeJS.Timeout;
 	// Track if args are still being streamed (for edit/write spinner)
 	#argsComplete = false;
 	#renderState: {
@@ -316,6 +319,7 @@ export class ToolExecutionComponent extends Container {
 			this.#argsComplete = true;
 		}
 		this.#updateSpinnerAnimation();
+		this.#updateTodoStrikeAnimation();
 		this.#updateDisplay();
 		// Convert non-PNG images to PNG for Kitty protocol (async)
 		this.#maybeConvertImagesForKitty();
@@ -391,6 +395,43 @@ export class ToolExecutionComponent extends Container {
 		}
 	}
 
+	#updateTodoStrikeAnimation(): void {
+		if (this.#toolName !== "todo_write" || this.#isPartial || this.#result?.isError) {
+			this.#stopTodoStrikeAnimation();
+			return;
+		}
+		const completedTasks = (this.#result?.details as { completedTasks?: unknown[] } | undefined)?.completedTasks;
+		if (!completedTasks || completedTasks.length === 0) {
+			this.#stopTodoStrikeAnimation();
+			return;
+		}
+		if (this.#todoStrikeInterval) return;
+
+		this.#spinnerFrame = 0;
+		this.#renderState.spinnerFrame = 0;
+		this.#todoStrikeInterval = setInterval(() => {
+			const nextFrame = (this.#spinnerFrame ?? 0) + 1;
+			if (nextFrame > TODO_WRITE_STRIKE_TOTAL_FRAMES) {
+				this.#stopTodoStrikeAnimation();
+			} else {
+				this.#spinnerFrame = nextFrame;
+				this.#renderState.spinnerFrame = nextFrame;
+			}
+			this.#ui.requestRender();
+		}, 65);
+	}
+
+	#stopTodoStrikeAnimation(): void {
+		if (this.#todoStrikeInterval) {
+			clearInterval(this.#todoStrikeInterval);
+			this.#todoStrikeInterval = undefined;
+		}
+		if (!this.#spinnerInterval) {
+			this.#spinnerFrame = undefined;
+			this.#renderState.spinnerFrame = undefined;
+		}
+	}
+
 	/**
 	 * Stop spinner animation and cleanup resources.
 	 */
@@ -400,6 +441,7 @@ export class ToolExecutionComponent extends Container {
 			this.#spinnerInterval = undefined;
 			this.#spinnerFrame = undefined;
 		}
+		this.#stopTodoStrikeAnimation();
 		this.#editDiffAbort?.abort();
 		this.#editDiffAbort = undefined;
 	}

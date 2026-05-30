@@ -325,8 +325,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
 	#welcomeComponent?: WelcomeComponent;
-	#todoClosingTimeout?: NodeJS.Timeout;
-	#todoClosingState: "idle" | "playing" | "done" = "idle";
 
 	constructor(
 		session: AgentSession,
@@ -1036,28 +1034,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#renderTodoList(): void {
 		this.todoContainer.clear();
 		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
-		if (phases.length === 0) {
-			this.#stopTodoClosingAnimation();
-			this.#todoClosingState = "idle";
-			return;
-		}
-
-		// When every visible task is completed or abandoned, fold the panel
-		// away with a brief celebratory animation (see
-		// #startTodoClosingAnimation). State machine guards against replaying
-		// on every re-render once the animation has finished.
-		const allClosed = phases.every(phase =>
-			phase.tasks.every(t => t.status === "completed" || t.status === "abandoned"),
-		);
-		if (allClosed) {
-			if (this.#todoClosingState === "done") return;
-			if (this.#todoClosingState === "idle") this.#startTodoClosingAnimation(phases);
-			return;
-		}
-		// Any open task here means the close animation is no longer applicable.
-		this.#stopTodoClosingAnimation();
-		this.#todoClosingState = "idle";
-
+		if (phases.length === 0) return;
 		const indent = "  ";
 		const hook = theme.tree.hook;
 		const lines = ["", indent + theme.bold(theme.fg("accent", "Todos"))];
@@ -1097,87 +1074,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 
 		this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
-	}
-
-	/**
-	 * Play a short "all done" close animation: a celebratory bright frame,
-	 * a brief dim transition, then a row-by-row vertical collapse until the
-	 * panel is empty. Triggered from #renderTodoList exactly once per
-	 * open-to-all-closed transition; #todoClosingState gates re-entry.
-	 *
-	 * While playing, the animator owns the panel container; #renderTodoList
-	 * returns early. Subsequent renders with state === "done" keep the
-	 * panel hidden until a fresh open task flips state back to "idle".
-	 */
-	#startTodoClosingAnimation(phases: TodoPhase[]): void {
-		this.#stopTodoClosingAnimation();
-		this.#todoClosingState = "playing";
-
-		const indent = "  ";
-		const hook = theme.tree.hook;
-		const snapshot: string[] = ["", `${indent}Todos ${theme.status.success}`];
-		for (let i = 0; i < phases.length; i++) {
-			const phase = phases[i];
-			snapshot.push(`${indent}${hook} ${formatPhaseDisplayName(phase.name, i + 1)}`);
-			for (let j = 0; j < phase.tasks.length; j++) {
-				const task = phase.tasks[j];
-				const mark = task.status === "abandoned" ? theme.status.aborted : theme.status.success;
-				const prefix = `${indent}${j === 0 ? hook : " "} `;
-				snapshot.push(`${prefix}${mark} ${task.content}`);
-			}
-		}
-
-		// Frame schedule (tint, drop-from-bottom, hold-ms). Frame 0 holds long
-		// enough for the user to actually read the final checkmarks before the
-		// fade starts; later frames fade and progressively drop rows from the
-		// bottom for the collapse effect. Total runtime ≈ 1.4s.
-		const frames = [
-			{ tint: "success" as const, drop: 0, holdMs: 900 },
-			{ tint: "success" as const, drop: 0, holdMs: 150 },
-			{ tint: "muted" as const, drop: 1, holdMs: 90 },
-			{ tint: "muted" as const, drop: 2, holdMs: 90 },
-			{ tint: "dim" as const, drop: 3, holdMs: 80 },
-			{ tint: "dim" as const, drop: 4, holdMs: 80 },
-		];
-
-		let frameIdx = 0;
-		const tick = (): void => {
-			if (this.#todoClosingState !== "playing") return;
-			if (frameIdx >= frames.length) {
-				this.todoContainer.clear();
-				this.#stopTodoClosingAnimation();
-				this.#todoClosingState = "done";
-				this.ui.requestRender();
-				return;
-			}
-			const { tint, drop, holdMs } = frames[frameIdx];
-			const visibleCount = Math.max(0, snapshot.length - drop);
-			this.todoContainer.clear();
-			if (visibleCount > 0) {
-				const visible = snapshot.slice(0, visibleCount);
-				const painted = visible.map((line, idx) => {
-					if (idx === 1) {
-						// Header row gets a bold flourish on the opening tick.
-						const colored = theme.fg(tint, line);
-						return frameIdx === 0 ? theme.bold(colored) : colored;
-					}
-					return theme.fg(tint, line);
-				});
-				this.todoContainer.addChild(new Text(painted.join("\n"), 1, 0));
-			}
-			this.ui.requestRender();
-			frameIdx++;
-			this.#todoClosingTimeout = setTimeout(tick, holdMs);
-		};
-
-		tick();
-	}
-
-	#stopTodoClosingAnimation(): void {
-		if (this.#todoClosingTimeout) {
-			clearTimeout(this.#todoClosingTimeout);
-			this.#todoClosingTimeout = undefined;
-		}
 	}
 
 	async #loadTodoList(): Promise<void> {

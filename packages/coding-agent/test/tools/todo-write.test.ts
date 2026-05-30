@@ -1,13 +1,16 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
 	selectStickyTodoWindow,
+	TODO_WRITE_STRIKE_HOLD_FRAMES,
 	type TodoItem,
 	type TodoPhase,
 	type TodoStatus,
 	TodoWriteTool,
 	todoMatchesAnyDescription,
+	todoWriteToolRenderer,
 } from "@oh-my-pi/pi-coding-agent/tools";
 
 function createSession(initialPhases: TodoPhase[] = []): ToolSession {
@@ -24,6 +27,10 @@ function createSession(initialPhases: TodoPhase[] = []): ToolSession {
 		},
 	};
 }
+
+beforeAll(async () => {
+	await initTheme();
+});
 
 describe("TodoWriteTool auto-start behavior", () => {
 	it("auto-starts the first task after init", async () => {
@@ -61,11 +68,11 @@ describe("TodoWriteTool auto-start behavior", () => {
 
 		const tasks = result.details?.phases[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["completed", "in_progress"]);
+		expect(result.details?.completedTasks).toEqual([{ phase: "Execution", content: "status" }]);
 		const summary = result.content.find(part => part.type === "text");
 		if (summary?.type !== "text") throw new Error("Expected text summary from todo_write");
 		expect(summary.text).toContain("Remaining items (1):");
 		expect(summary.text).toContain("diagnostics [in_progress] (Execution)");
-
 		const completedResult = await tool.execute("call-3", { ops: [{ op: "done", task: "diagnostics" }] });
 		const completedSummary = completedResult.content.find(part => part.type === "text");
 		if (completedSummary?.type !== "text") {
@@ -73,6 +80,25 @@ describe("TodoWriteTool auto-start behavior", () => {
 		}
 		expect(completedSummary.text).toContain("Remaining items: none.");
 	});
+});
+
+it("renders completed tasks as checked before revealing strikethrough", async () => {
+	const tool = new TodoWriteTool(createSession());
+	await tool.execute("call-1", {
+		ops: [{ op: "init", list: [{ phase: "Execution", items: ["finish"] }] }],
+	});
+	const result = await tool.execute("call-2", { ops: [{ op: "done", task: "finish" }] });
+	const options = { expanded: true, isPartial: false, spinnerFrame: 0 };
+	const component = todoWriteToolRenderer.renderResult(result, options, theme);
+
+	const firstFrame = component.render(120).join("\n");
+	expect(Bun.stripANSI(firstFrame)).toContain("finish");
+	expect(firstFrame).not.toContain("\x1b[9m");
+
+	options.spinnerFrame = TODO_WRITE_STRIKE_HOLD_FRAMES + 1;
+	const revealFrame = component.render(120).join("\n");
+	expect(Bun.stripANSI(revealFrame)).toContain("finish");
+	expect(revealFrame).toContain("\x1b[9m");
 });
 
 describe("TodoWriteTool ops operations", () => {
