@@ -702,38 +702,50 @@ export function buildSessionContext(
 		}
 	}
 
-	// Normalize a trailing assistant turn that ends on dangling tool_use blocks.
-	// When the resolved leaf lands ON an assistant turn (e.g. the user rewinds the
-	// tree onto it), that turn's tool results are its children — *below* the leaf —
-	// so they fall off the leaf→root path, leaving the assistant's tool_use blocks
-	// unpaired as the final message. Downstream that forces `transformMessages` to
-	// fabricate one synthetic "aborted"/"No result provided" result per call plus a
-	// `<turn-aborted>` developer note, which re-injects the whole failed batch and
-	// pushes the model to re-issue it — the rewind/restore loop.
+	// Strip dangling tool_use blocks — a tool_use with no matching tool_result on the
+	// resolved leaf→root path — from ANY assistant turn, not just the trailing one.
+	// This happens whenever the leaf (or a branch point) lands such that an assistant
+	// turn's tool results are off the selected path: its result children live on a
+	// sibling branch, or it is the leaf itself (results are children below it). Left
+	// in place, `transformMessages` fabricates one synthetic "aborted"/"No result
+	// provided" result per dangling call plus a `<turn-aborted>` developer note, which
+	// render as phantom failed calls and re-inject the failed batch into the model's
+	// context — the rewind/restore loop.
 	//
-	// Stripping the tool_use is necessary but not sufficient: a *modified* latest
-	// assistant turn that still carries signed `thinking`/`redacted_thinking` is
-	// rejected by Anthropic — "thinking blocks in the latest assistant message cannot
-	// be modified" (and signed thinking replayed out of its original turn shape can
-	// also fail signature validation). This bites the handoff/branch-summary request,
-	// which ends on exactly this turn. So when we rewrite the turn we also neutralize
-	// its protected reasoning: drop `redactedThinking` (encrypted, no plaintext to
-	// keep) and clear `thinking` signatures so the provider encoder downgrades them to
-	// plain text (verified accepted by the live API), preserving the visible reasoning
-	// while removing the immutability/invalid-signature hazard. Drop the turn entirely
-	// if nothing usable remains. (A live turn never lands here: its results are
-	// persisted and the leaf advances past the assistant before any context rebuild.)
-	const lastMessage = messages[messages.length - 1];
-	if (lastMessage?.role === "assistant" && lastMessage.content.some(block => block.type === "toolCall")) {
-		const normalized = lastMessage.content
-			.filter(block => block.type !== "toolCall" && block.type !== "redactedThinking")
+	// Stripping is necessary but not sufficient: a *modified* assistant turn that still
+	// carries signed `thinking`/`redacted_thinking` is rejected by Anthropic — "thinking
+	// blocks in the latest assistant message cannot be modified", and signed thinking
+	// replayed out of its original turn shape can also fail signature validation (this
+	// bites the handoff/branch-summary request). So when we rewrite a turn we also
+	// neutralize its protected reasoning: drop `redactedThinking` (encrypted, no
+	// plaintext to keep) and clear `thinking` signatures so the provider encoder
+	// downgrades them to plain text (verified accepted by the live API), preserving the
+	// visible reasoning while removing the immutability/invalid-signature hazard. Drop a
+	// turn left with no content. (Live turns never qualify: their results are persisted
+	// on the same path before any context rebuild.)
+	const pairedToolResultIds = new Set<string>();
+	for (const message of messages) {
+		if (message.role === "toolResult") pairedToolResultIds.add(message.toolCallId);
+	}
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message.role !== "assistant") continue;
+		const hasDangling = message.content.some(
+			block => block.type === "toolCall" && !pairedToolResultIds.has(block.id),
+		);
+		if (!hasDangling) continue;
+		const normalized = message.content
+			.filter(
+				block =>
+					!(block.type === "toolCall" && !pairedToolResultIds.has(block.id)) && block.type !== "redactedThinking",
+			)
 			.map(block =>
 				block.type === "thinking" && block.thinkingSignature ? { ...block, thinkingSignature: undefined } : block,
 			);
 		if (normalized.length === 0) {
-			messages.pop();
+			messages.splice(i, 1);
 		} else {
-			messages[messages.length - 1] = { ...lastMessage, content: normalized };
+			messages[i] = { ...message, content: normalized };
 		}
 	}
 
