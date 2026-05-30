@@ -87,6 +87,12 @@ export class MnemosyneSessionState {
 		this.sessionId = sessionId;
 	}
 
+	resetConversationTracking(): void {
+		this.lastRetainedTurn = 0;
+		this.hasRecalledForFirstTurn = false;
+		this.lastRecallSnippet = undefined;
+	}
+
 	getScopedRecallTargets(): readonly MnemosyneScopedMemory[] {
 		return this.scoped.recall;
 	}
@@ -193,9 +199,9 @@ export class MnemosyneSessionState {
 		return await this.recallForContext(truncated);
 	}
 
-	async maybeRetainOnAgentEnd(messages: AgentMessage[]): Promise<void> {
+	async maybeRetainOnAgentEnd(_messages: AgentMessage[]): Promise<void> {
 		if (!this.config.autoRetain || this.aliasOf) return;
-		const flat = flattenAgentMessages(messages);
+		const flat = extractMessages(this.session.sessionManager);
 		const userTurns = flat.filter(message => message.role === "user").length;
 		if (userTurns - this.lastRetainedTurn < this.config.retainEveryNTurns) return;
 		await this.retainMessages(flat, `${this.sessionId}-${Date.now()}`);
@@ -302,6 +308,13 @@ function resolveScopedBanks(config: MnemosyneBackendConfig): {
 	const recallBanks =
 		config.recallBanks ?? (scoping === "per-project-tagged" ? uniqueBanks([retainBank, globalBank]) : [retainBank]);
 	return { scoping, globalBank, retainBank, recallBanks };
+}
+
+export function getMnemosyneScopedDbPaths(config: MnemosyneBackendConfig): readonly string[] {
+	const banks = resolveScopedBanks(config);
+	return uniqueBanks([banks.retainBank, banks.globalBank, ...banks.recallBanks]).map(bank =>
+		resolveBankDbPath(config, bank),
+	);
 }
 
 function uniqueBanks(banks: readonly string[]): readonly string[] {

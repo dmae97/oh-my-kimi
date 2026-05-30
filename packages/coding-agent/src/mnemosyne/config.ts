@@ -1,7 +1,8 @@
-import path from "node:path";
+import * as path from "node:path";
 import type { MnemosyneOptions } from "@oh-my-pi/pi-mnemosyne";
 import { getMemoriesDir } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
+import * as git from "../utils/git";
 
 export type MnemosyneLlmMode = "none" | "smol" | "remote";
 
@@ -122,19 +123,34 @@ function resolveBankScope(configured: string | undefined, cwd: string, scoping: 
 }
 
 function sharedBank(configured: string | undefined): string {
-	const raw = configured?.trim();
-	return raw || DEFAULT_SHARED_BANK;
+	return sanitizeBankName(configured) ?? DEFAULT_SHARED_BANK;
 }
 
 function projectBank(configured: string | undefined, cwd: string): string {
-	const project = normalizeProjectName(cwd);
-	const raw = configured?.trim();
-	return raw ? `${raw}-${project}` : project;
+	const projectRoot = git.repo.resolveSync(cwd)?.repoRoot ?? path.resolve(cwd);
+	const project = projectBankSegment(projectRoot);
+	const base = sanitizeBankName(configured);
+	return limitBankName(base ? `${base}-${project}` : project);
 }
 
-function normalizeProjectName(cwd: string): string {
-	const base = path.basename(cwd) || "default";
-	return base.replace(/[^a-zA-Z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "default";
+function projectBankSegment(projectRoot: string): string {
+	const project = sanitizeBankName(path.basename(projectRoot)) ?? "default";
+	return limitBankName(`${project}-${Bun.hash(path.resolve(projectRoot)).toString(36)}`);
+}
+
+function sanitizeBankName(value: string | undefined): string | undefined {
+	const raw = value?.trim();
+	if (!raw) return undefined;
+	const sanitized = raw.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+	return sanitized ? limitBankName(sanitized) : undefined;
+}
+
+function limitBankName(name: string): string {
+	if (name.length <= 64) return name;
+	const hash = Bun.hash(name).toString(36);
+	const prefixLength = Math.max(1, 63 - hash.length);
+	const prefix = name.slice(0, prefixLength).replace(/-+$/g, "") || "bank";
+	return `${prefix}-${hash}`;
 }
 
 export function truncateApproxTokens(text: string, tokenLimit: number): string {

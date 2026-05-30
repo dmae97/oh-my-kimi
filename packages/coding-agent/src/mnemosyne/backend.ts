@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises";
-import { dirname } from "node:path";
+import * as path from "node:path";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
@@ -12,7 +12,12 @@ import {
 	type MnemosyneProviderOptions,
 	truncateApproxTokens,
 } from "./config";
-import { getMnemosyneSessionState, MnemosyneSessionState, setMnemosyneSessionState } from "./state";
+import {
+	getMnemosyneScopedDbPaths,
+	getMnemosyneSessionState,
+	MnemosyneSessionState,
+	setMnemosyneSessionState,
+} from "./state";
 
 const STATIC_INSTRUCTIONS = [
 	"# Memory",
@@ -77,14 +82,12 @@ export const mnemosyneBackend: MemoryBackend = {
 		return await state?.beforeAgentStartPrompt(promptText);
 	},
 
-	async clear(_agentDir, _cwd, session): Promise<void> {
+	async clear(agentDir, _cwd, session): Promise<void> {
 		const previous = session ? setMnemosyneSessionState(session, undefined) : undefined;
 		previous?.dispose();
-		const config = previous?.config;
+		const config = previous?.config ?? (session ? loadMnemosyneConfig(session.settings, agentDir) : undefined);
 		if (!config) return;
-		await rm(config.dbPath, { force: true });
-		await rm(`${config.dbPath}-wal`, { force: true });
-		await rm(`${config.dbPath}-shm`, { force: true });
+		await removeDbFiles(getMnemosyneScopedDbPaths(config));
 	},
 
 	async enqueue(agentDir, _cwd, session): Promise<void> {
@@ -196,12 +199,19 @@ async function resolveMnemosyneProviderOptions(
 }
 
 function getMnemosyneSessionStateFromParent(options: MemoryBackendStartOptions): MnemosyneSessionState | undefined {
-	const parentSession = (options.parentHindsightSessionState as unknown as { session?: AgentSession } | undefined)
-		?.session;
-	return getMnemosyneSessionState(parentSession);
+	const parent = options.parentMnemosyneSessionState;
+	return parent?.aliasOf ?? parent;
 }
 
 export function getMnemosyneDbDirForTests(session: AgentSession): string | undefined {
 	const state = getMnemosyneSessionState(session);
-	return state ? dirname(state.config.dbPath) : undefined;
+	return state ? path.dirname(state.config.dbPath) : undefined;
+}
+
+async function removeDbFiles(dbPaths: readonly string[]): Promise<void> {
+	for (const dbPath of dbPaths) {
+		await rm(dbPath, { force: true });
+		await rm(`${dbPath}-wal`, { force: true });
+		await rm(`${dbPath}-shm`, { force: true });
+	}
 }
