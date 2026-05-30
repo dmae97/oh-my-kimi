@@ -2,10 +2,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as url from "node:url";
 import { getActiveProfile, getAgentDir, setAgentDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { runCli } from "../src/cli";
 import * as profileAliasCli from "../src/cli/profile-alias";
+
+const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
+const cliEntry = path.join(repoRoot, "packages", "coding-agent", "src", "cli.ts");
+
+async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let text = "";
+	try {
+		while (true) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			text += decoder.decode(value, { stream: true });
+		}
+		return text + decoder.decode();
+	} finally {
+		reader.releaseLock();
+	}
+}
 
 describe("global --profile flag", () => {
 	let configDir = "";
@@ -93,5 +113,59 @@ describe("global --profile flag", () => {
 			"--profile requires a profile name",
 		);
 		expect(outSpy).not.toHaveBeenCalled();
+	});
+
+	it("loads profile agent .env before command modules import pi-utils env", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-profile-cli-env-"));
+		try {
+			const home = path.join(root, "home");
+			const configDir = ".omp-profile-cli-env";
+			const defaultAgentDir = path.join(home, configDir, "agent");
+			const profileAgentDir = path.join(home, configDir, "profiles", "work", "agent");
+			await fs.mkdir(defaultAgentDir, { recursive: true });
+			await fs.mkdir(profileAgentDir, { recursive: true });
+			await Bun.write(path.join(defaultAgentDir, ".env"), "OMP_PROFILE_BOOTSTRAP_SENTINEL=default\n");
+			await Bun.write(path.join(profileAgentDir, ".env"), "OMP_PROFILE_BOOTSTRAP_SENTINEL=work\n");
+
+			const probePath = path.join(root, "probe.ts");
+			await Bun.write(
+				probePath,
+				[
+					`import { runCli } from ${JSON.stringify(url.pathToFileURL(cliEntry).href)};`,
+					'await runCli(["--profile", "work", "--help"]);',
+					'process.stdout.write("\\nSENTINEL=" + (Bun.env.OMP_PROFILE_BOOTSTRAP_SENTINEL ?? ""));',
+				].join("\n"),
+			);
+
+			const childEnv: Record<string, string | undefined> = {
+				...process.env,
+				HOME: home,
+				PI_CONFIG_DIR: configDir,
+				PI_NO_TITLE: "1",
+				NO_COLOR: "1",
+			};
+			delete childEnv.OMP_PROFILE;
+			delete childEnv.PI_PROFILE;
+			delete childEnv.PI_CODING_AGENT_DIR;
+			delete childEnv.OMP_PROFILE_BOOTSTRAP_SENTINEL;
+
+			const proc = Bun.spawn([process.execPath, probePath], {
+				cwd: repoRoot,
+				stdout: "pipe",
+				stderr: "pipe",
+				env: childEnv,
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				readStream(proc.stdout as ReadableStream<Uint8Array>),
+				readStream(proc.stderr as ReadableStream<Uint8Array>),
+				proc.exited,
+			]);
+
+			expect(exitCode, stderr).toBe(0);
+			expect(stdout).toContain("SENTINEL=work");
+			expect(stdout).not.toContain("SENTINEL=default");
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
 	});
 });
