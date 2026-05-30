@@ -101,4 +101,54 @@ describe("issue #1528 discovery maxTokens default", () => {
 		const model = registry.find("newapi-proxy", "deepseek-v4-pro");
 		expect(model?.maxTokens).toBe(32_768);
 	});
+
+	test("proxy discovery keeps anthropic-routed models at the 8192 default to stay under Claude 3.x output caps", async () => {
+		// Anthropic's stream converter sends `max_tokens` as
+		// `(model.maxTokens / 3) | 0`. The raised 32K discovery cap would
+		// surface as 10,922 — above the 8,192 hard cap on classic Claude 3.x
+		// models — so the proxy branch keeps the conservative 8K default on
+		// the anthropic route.
+		fs.writeFileSync(
+			modelsPath,
+			[
+				"providers:",
+				"  newapi-proxy:",
+				"    baseUrl: https://proxy.example.com/v1",
+				"    apiKey: sk-test",
+				"    api: openai-completions",
+				"    auth: apiKey",
+				"    discovery:",
+				"      type: proxy",
+			].join("\n"),
+		);
+
+		using _hook = hookFetch(input => {
+			const url = String(input);
+			if (url !== "https://proxy.example.com/v1/models") {
+				throw new Error(`Unexpected URL: ${url}`);
+			}
+			return new Response(
+				JSON.stringify({
+					data: [
+						{ id: "claude-3-5-sonnet", supported_endpoint_types: ["anthropic"] },
+						{ id: "claude-3-5-haiku", supported_endpoint_types: ["anthropic", "openai"] },
+					],
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		});
+
+		const registry = new ModelRegistry(authStorage, modelsPath);
+		await registry.refreshProvider("newapi-proxy");
+
+		const sonnet = registry.find("newapi-proxy", "claude-3-5-sonnet");
+		expect(sonnet?.api).toBe("anthropic-messages");
+		expect(sonnet?.maxTokens).toBe(8192);
+
+		// Dual-endpoint advertisements prefer the anthropic route in the proxy
+		// branch, so they also stay capped at 8K.
+		const haiku = registry.find("newapi-proxy", "claude-3-5-haiku");
+		expect(haiku?.api).toBe("anthropic-messages");
+		expect(haiku?.maxTokens).toBe(8192);
+	});
 });

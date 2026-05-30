@@ -1825,7 +1825,13 @@ export class ModelRegistry {
 					input: ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 					contextWindow: 128000,
-					maxTokens: DISCOVERY_DEFAULT_MAX_TOKENS,
+					// Anthropic computes `max_tokens` as `(model.maxTokens / 3) | 0` in
+					// `packages/ai/src/providers/anthropic.ts`, so applying the OpenAI-
+					// routed 32K discovery cap here would request 10,922 output tokens —
+					// above the 8,192 hard cap on classic Claude 3.x Sonnet/Haiku/Opus.
+					// Keep the conservative 8K default on the anthropic route; the
+					// OpenAI route still benefits from the raised cap (see #1528).
+					maxTokens: isAnthropic ? 8192 : DISCOVERY_DEFAULT_MAX_TOKENS,
 					headers,
 					// OpenAI-compat fields are no-ops on anthropic models; the
 					// Anthropic SDK ignores them. Provider-level disableStrictTools
