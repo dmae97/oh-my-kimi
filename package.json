@@ -48,6 +48,7 @@
       "date-fns": "^4.1.0",
       "diff": "^9.0.0",
       "fflate": "0.8.2",
+      "fastembed": "2.1.0",
       "handlebars": "^4.7.9",
       "linkedom": "^0.18.12",
       "lint-staged": "^16.4.0",

@@ -12,7 +12,7 @@ import type { Settings } from "../config/settings";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { AgentSession } from "../session/agent-session";
 
-export type MemoryBackendId = "off" | "local" | "hindsight";
+export type MemoryBackendId = "off" | "local" | "hindsight" | "mnemosyne";
 
 export interface MemoryBackendStartOptions {
 	session: AgentSession;

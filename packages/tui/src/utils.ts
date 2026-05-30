@@ -85,6 +85,16 @@ export function padding(n: number): string {
 // Grapheme segmenter (shared instance)
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
+const EXTENDED_PICTOGRAPHIC_REGEX = /\p{Extended_Pictographic}/u;
+
+function visibleWidthByGrapheme(str: string): number {
+	let width = 0;
+	for (const { segment } of segmenter.segment(str)) {
+		width += EXTENDED_PICTOGRAPHIC_REGEX.test(segment) ? 2 : nativeVisibleWidth(segment, getDefaultTabWidth());
+	}
+	return width;
+}
+
 /**
  * Get the shared grapheme segmenter instance.
  */
@@ -104,7 +114,7 @@ export function visibleWidthRaw(str: string): number {
 	for (let i = 0; i < str.length; i++) {
 		const code = str.charCodeAt(i);
 		if (code < 0x20 || code > 0x7e) {
-			return nativeVisibleWidth(str, getDefaultTabWidth());
+			return str.includes("\u200d") ? visibleWidthByGrapheme(str) : nativeVisibleWidth(str, getDefaultTabWidth());
 		}
 	}
 	return str.length;

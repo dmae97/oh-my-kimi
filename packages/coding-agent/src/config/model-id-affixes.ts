@@ -1,5 +1,5 @@
-const LEADING_BRACKETED_AFFIX_PATTERN = /^(?:\s*[\[【][^\]】]+[\]】]\s*)+/u;
-const TRAILING_BRACKETED_AFFIX_PATTERN = /(?:\s*[\[【][^\]】]+[\]】]\s*)+$/u;
+const LEADING_BRACKETED_AFFIX_PATTERN = /^(?:\s*(?:\[|【)[^\]】]+(?:\]|】)\s*)+/u;
+const TRAILING_BRACKETED_AFFIX_PATTERN = /(?:\s*(?:\[|【)[^\]】]+(?:\]|】)\s*)+$/u;
 const MODEL_ID_SEGMENT_PATTERN = /[a-z0-9.:-]+/g;
 const MODEL_FAMILY_PREFIX_PATTERN =
 	/^(claude|gemini|gpt|grok|glm|qwen|deepseek|kimi|mimo|doubao|ernie|gpt-oss|gemma|minimax|step|command|jamba|llama|o[1345])/i;
@@ -29,7 +29,6 @@ export function getModelLikeIdSegments(modelId: string): string[] {
 export function getLongestModelLikeIdSegment(modelId: string): string | undefined {
 	return getModelLikeIdSegments(modelId)[0];
 }
-
 
 function normalizeModelIdWhitespace(value: string): string {
 	return value.trim().replace(/\s+/g, " ");
