@@ -23,6 +23,8 @@ describe("profile directories", () => {
 	let originalAgentDir = "";
 	let originalProfile: string | undefined;
 	let originalAgentDirEnv: string | undefined;
+	let originalOmpProfileEnv: string | undefined;
+	let originalPiProfileEnv: string | undefined;
 	let originalConfigDir: string | undefined;
 	let originalXdgDataHome: string | undefined;
 	let originalXdgStateHome: string | undefined;
@@ -32,6 +34,8 @@ describe("profile directories", () => {
 		originalAgentDir = getAgentDir();
 		originalProfile = getActiveProfile();
 		originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+		originalOmpProfileEnv = process.env.OMP_PROFILE;
+		originalPiProfileEnv = process.env.PI_PROFILE;
 		originalConfigDir = process.env.PI_CONFIG_DIR;
 		originalXdgDataHome = process.env.XDG_DATA_HOME;
 		originalXdgStateHome = process.env.XDG_STATE_HOME;
@@ -79,6 +83,16 @@ describe("profile directories", () => {
 			setAgentDir(originalAgentDir);
 		} else {
 			setProfile(undefined);
+		}
+		if (originalOmpProfileEnv === undefined) {
+			delete process.env.OMP_PROFILE;
+		} else {
+			process.env.OMP_PROFILE = originalOmpProfileEnv;
+		}
+		if (originalPiProfileEnv === undefined) {
+			delete process.env.PI_PROFILE;
+		} else {
+			process.env.PI_PROFILE = originalPiProfileEnv;
 		}
 		await fs.rm(tempRoot, { recursive: true, force: true });
 		await fs.rm(path.join(os.homedir(), configDir), { recursive: true, force: true });
@@ -159,6 +173,12 @@ describe("profile directories", () => {
 	it("rejects path-like profile names", () => {
 		expect(() => setProfile("../work")).toThrow("Invalid OMP profile");
 		expect(() => setProfile("work/team")).toThrow("Invalid OMP profile");
+	});
+
+	it("rejects trailing-dot profile names to avoid Windows path collisions", () => {
+		for (const name of ["work.", "work.."]) {
+			expect(() => setProfile(name)).toThrow("cannot end with");
+		}
 	});
 
 	it("restores the pre-profile PI_CODING_AGENT_DIR override on reset", () => {
