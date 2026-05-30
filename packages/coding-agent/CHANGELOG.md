@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `symbols.spinnerFrames` field to custom theme JSON so themes can override the loader/tool-execution spinner. Accepts either a flat `string[]` (used for both spinner types) or `{ "status"?: string[], "activity"?: string[] }` to override each independently; anything not specified falls back to the symbol preset. Documented in `docs/theme.md` and validated by `theme-schema.json`. ([#1553](https://github.com/can1357/oh-my-pi/issues/1553))
+
 ## [15.6.0] - 2026-05-30
 ### Added
 
