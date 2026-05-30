@@ -3,7 +3,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-interface LeafTarget {
+export interface LeafTarget {
 	tag: string;
 	os: string;
 	cpu: string;
@@ -44,6 +44,7 @@ export interface GenerateNpmPackagesInput {
 	packageDir?: string;
 	dryRun?: boolean;
 	version?: string;
+	tags?: readonly string[];
 }
 
 export const LEAF_TARGETS: readonly LeafTarget[] = [
@@ -108,10 +109,23 @@ function buildReadme(tag: string, manifest: LeafManifest): string {
 	return `# ${manifest.name}\n\nPlatform native addon package for \`@oh-my-pi/pi-natives\` on ${tag}.\n\nThis package is generated during release and installed as an optional dependency of the core package.\n`;
 }
 
+function selectTargets(tags: readonly string[] | undefined): readonly LeafTarget[] {
+	if (!tags) return LEAF_TARGETS;
+	const wanted = new Set(tags);
+	const targets = LEAF_TARGETS.filter(target => wanted.has(target.tag));
+	if (targets.length !== wanted.size) {
+		const known = new Set(LEAF_TARGETS.map(target => target.tag));
+		const unknown = tags.filter(tag => !known.has(tag));
+		throw new Error(`Unknown native package tag(s): ${unknown.join(", ")}`);
+	}
+	return targets;
+}
+
 export async function generateNpmPackages({
 	packageDir = packageDirDefault,
 	dryRun = false,
 	version,
+	tags,
 }: GenerateNpmPackagesInput = {}): Promise<GeneratedLeafPackage[]> {
 	const manifestVersion =
 		version ?? ((await Bun.file(path.join(packageDir, "package.json")).json()) as { version: string }).version;
@@ -119,7 +133,7 @@ export async function generateNpmPackages({
 	const npmDir = path.join(packageDir, "npm");
 	const leaves: GeneratedLeafPackage[] = [];
 
-	for (const target of LEAF_TARGETS) {
+	for (const target of selectTargets(tags)) {
 		const files = await discoverAddonFiles(nativeDir, target.tag);
 		const manifestFiles = files.length > 0 ? files : [expectedAddonFilenames(target.tag)[0]];
 		const manifest = buildLeafManifest({ ...target, files: manifestFiles, version: manifestVersion });

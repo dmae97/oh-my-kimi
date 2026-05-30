@@ -2,6 +2,11 @@
 /**
  * Publish workspace packages.
  *
+ * The default mode publishes public JS packages and the `@oh-my-pi/pi-natives`
+ * core package. Generated native leaf packages are published separately with
+ * `--native-leaf <tag>` from the release_binary matrix after that matrix entry
+ * downloads the matching `.node` artifacts.
+ *
  * For each public TypeScript package we:
  *   1. Emit `.d.ts` declarations into `dist/types/` so consumers get
  *      stable types regardless of their tsconfig `lib`.
@@ -54,6 +59,21 @@ interface PackageManifest extends JsonObject {
 
 const repoRoot = path.join(import.meta.dir, "..");
 const isDryRun = process.argv.includes("--dry-run");
+
+function nativeLeafTagFromArgs(argv: readonly string[]): string | null {
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i];
+		if (arg === "--native-leaf") {
+			const tag = argv[i + 1];
+			if (!tag) throw new Error("--native-leaf requires a native target tag");
+			return tag;
+		}
+		if (arg.startsWith("--native-leaf=")) return arg.slice("--native-leaf=".length);
+	}
+	return null;
+}
+
+const nativeLeafTag = nativeLeafTagFromArgs(process.argv.slice(2));
 export const packages: PublishPackage[] = [
 	{ dir: "packages/utils", kind: "typescript" },
 	{ dir: "packages/ai", kind: "typescript" },
@@ -216,14 +236,20 @@ async function publishGeneratedLeafPackage(leaf: GeneratedLeafPackage): Promise<
 	await packAndPublish(leaf.dir, leaf.manifest.name);
 }
 
-async function publishNativePackage(pkg: PublishPackage): Promise<void> {
+async function publishNativeLeafPackage(tag: string): Promise<void> {
+	const pkg = packages.find(candidate => candidate.kind === "native");
+	if (!pkg) throw new Error("No native package configured");
 	const pkgDir = path.join(repoRoot, pkg.dir);
 	const coreManifest = (await Bun.file(path.join(pkgDir, "package.json")).json()) as PackageManifest;
 	if (typeof coreManifest.version !== "string") throw new Error(`Missing version in ${pkg.dir}/package.json`);
-	const leaves = await generateNpmPackages({ packageDir: pkgDir, dryRun: isDryRun, version: coreManifest.version });
-	for (const leaf of leaves) {
-		await publishGeneratedLeafPackage(leaf);
-	}
+	const leaves = await generateNpmPackages({ packageDir: pkgDir, dryRun: isDryRun, version: coreManifest.version, tags: [tag] });
+	const leaf = leaves[0];
+	if (!leaf) throw new Error(`No native leaf generated for ${tag}`);
+	await publishGeneratedLeafPackage(leaf);
+}
+
+async function publishNativePackage(pkg: PublishPackage): Promise<void> {
+	const pkgDir = path.join(repoRoot, pkg.dir);
 	const manifest = await prepareNativeCorePackage(pkgDir, !isDryRun);
 	const name = manifest.name ?? path.basename(pkg.dir);
 	if (isDryRun) {
@@ -249,7 +275,11 @@ async function publishPackage(pkg: PublishPackage): Promise<void> {
 }
 
 if (import.meta.main) {
-	for (const pkg of packages) {
-		await publishPackage(pkg);
+	if (nativeLeafTag) {
+		await publishNativeLeafPackage(nativeLeafTag);
+	} else {
+		for (const pkg of packages) {
+			await publishPackage(pkg);
+		}
 	}
 }
