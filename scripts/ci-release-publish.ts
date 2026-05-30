@@ -10,12 +10,17 @@
  *      and `dist/types` (plus `dist/client` for `stats`) is added to
  *      `files`. The on-repo manifest keeps pointing at source so local
  *      dev resolves types without any build.
- *   3. Invoke `bun publish` on the (now publish-shaped) manifest.
+ *   3. Pack with `bun pm pack` (resolves the `catalog:`/`workspace:`
+ *      protocols npm cannot, and runs each package's `prepack` lifecycle),
+ *      then publish the resolved tarball with `npm publish` — see
+ *      `packAndPublish` for why npm and not `bun publish`.
  *
  * Intended for CI. Mutates `package.json` in place — if you run this
  * locally, expect a dirty working tree and `git restore` after.
  */
 
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
 import {
@@ -24,7 +29,7 @@ import {
 	type GeneratedLeafPackage,
 } from "../packages/natives/scripts/gen-npm-packages.ts";
 
-interface PublishPackage {
+export interface PublishPackage {
 	dir: string;
 	kind: "typescript" | "native";
 	/** Extra build steps before manifest rewrite (e.g. esbuild bundles). */
@@ -49,7 +54,7 @@ interface PackageManifest extends JsonObject {
 
 const repoRoot = path.join(import.meta.dir, "..");
 const isDryRun = process.argv.includes("--dry-run");
-const packages: PublishPackage[] = [
+export const packages: PublishPackage[] = [
 	{ dir: "packages/utils", kind: "typescript" },
 	{ dir: "packages/ai", kind: "typescript" },
 	{ dir: "packages/natives", kind: "native" },
@@ -151,16 +156,64 @@ async function prepareNativeCorePackage(pkgDir: string, write: boolean): Promise
 	return manifest;
 }
 
-async function publishGeneratedLeafPackage(leaf: GeneratedLeafPackage): Promise<void> {
+/**
+ * Pack with `bun pm pack`, then publish the resolved tarball with `npm publish`.
+ *
+ * `bun pm pack` builds the tarball because it resolves the `catalog:` and
+ * `workspace:` protocols (npm would ship them verbatim, producing
+ * uninstallable manifests) and runs the `prepack` lifecycle, baking generated
+ * sources (e.g. coding-agent's docs index) into the tarball.
+ *
+ * The tarball is handed to `npm publish` — not `bun publish` — because only the
+ * npm CLI performs the OIDC trusted-publishing token exchange; `bun publish`
+ * has no OIDC support (oven-sh/bun#22423). In CI with `id-token: write` granted
+ * and `NODE_AUTH_TOKEN` set, npm tries OIDC per package and silently falls back
+ * to the configured token when the package has no matching trusted publisher —
+ * which also covers a package's first-ever publish. npm auto-enables provenance
+ * only on the OIDC path, so we never pass `--provenance` (it would hard-fail the
+ * token fallback).
+ */
+async function packAndPublish(dir: string, name: string): Promise<void> {
 	if (isDryRun) {
-		console.log(`DRY RUN bun publish --access public --tolerate-republish (${path.relative(repoRoot, leaf.dir)})`);
+		console.log(`DRY RUN bun pm pack && npm publish --access public (${path.relative(repoRoot, dir)})`);
 		return;
 	}
-	console.log(`Publishing ${leaf.manifest.name}…`);
-	const result = await $`bun publish --access public --tolerate-republish`.cwd(leaf.dir).quiet().nothrow();
-	const output = `${result.stdout.toString()}${result.stderr.toString()}`.trim();
-	if (output) console.log(output);
-	if (result.exitCode !== 0) process.exit(result.exitCode ?? 1);
+	console.log(`Publishing ${name}…`);
+	const packDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-pack-"));
+	try {
+		const packed = await $`bun pm pack --quiet --destination ${packDir}`.cwd(dir).quiet().nothrow();
+		const packOutput = `${packed.stdout.toString()}${packed.stderr.toString()}`.trim();
+		if (packed.exitCode !== 0) {
+			if (packOutput) console.log(packOutput);
+			process.exit(packed.exitCode ?? 1);
+		}
+		const tarball = (await fs.readdir(packDir)).find(entry => entry.endsWith(".tgz"));
+		if (!tarball) throw new Error(`bun pm pack produced no tarball for ${name} (${path.relative(repoRoot, dir)})`);
+		const result = await $`npm publish ${path.join(packDir, tarball)} --access public`.quiet().nothrow();
+		const output = `${result.stdout.toString()}${result.stderr.toString()}`.trim();
+		if (output) console.log(output);
+		if (result.exitCode !== 0) {
+			// Idempotent re-runs: tolerate this exact version already being on the
+			// registry (the `bun publish --tolerate-republish` equivalent), but
+			// surface every other failure.
+			if (isVersionAlreadyPublished(output)) {
+				console.log(`Skipping ${name} (version already published)`);
+				return;
+			}
+			process.exit(result.exitCode ?? 1);
+		}
+	} finally {
+		await fs.rm(packDir, { recursive: true, force: true });
+	}
+}
+
+/** Match npm's rejection when this exact version already exists on the registry. */
+function isVersionAlreadyPublished(output: string): boolean {
+	return /cannot publish over the previously published version|EPUBLISHCONFLICT/i.test(output);
+}
+
+async function publishGeneratedLeafPackage(leaf: GeneratedLeafPackage): Promise<void> {
+	await packAndPublish(leaf.dir, leaf.manifest.name);
 }
 
 async function publishNativePackage(pkg: PublishPackage): Promise<void> {
@@ -176,14 +229,8 @@ async function publishNativePackage(pkg: PublishPackage): Promise<void> {
 	if (isDryRun) {
 		console.log(`DRY RUN native core manifest rewrite (${pkg.dir})`);
 		console.log(JSON.stringify({ optionalDependencies: manifest.optionalDependencies, files: manifest.files }, null, "\t"));
-		console.log(`DRY RUN bun publish --access public --tolerate-republish (${pkg.dir})`);
-		return;
 	}
-	console.log(`Publishing ${name}…`);
-	const result = await $`bun publish --access public --tolerate-republish`.cwd(pkgDir).quiet().nothrow();
-	const output = `${result.stdout.toString()}${result.stderr.toString()}`.trim();
-	if (output) console.log(output);
-	if (result.exitCode !== 0) process.exit(result.exitCode ?? 1);
+	await packAndPublish(pkgDir, name);
 }
 
 async function publishPackage(pkg: PublishPackage): Promise<void> {
@@ -198,17 +245,11 @@ async function publishPackage(pkg: PublishPackage): Promise<void> {
 		console.log(`Skipping ${name} (private)`);
 		return;
 	}
-	if (isDryRun) {
-		console.log(`DRY RUN bun publish --access public --tolerate-republish (${pkg.dir})`);
-		return;
-	}
-	console.log(`Publishing ${name}…`);
-	const result = await $`bun publish --access public --tolerate-republish`.cwd(pkgDir).quiet().nothrow();
-	const output = `${result.stdout.toString()}${result.stderr.toString()}`.trim();
-	if (output) console.log(output);
-	if (result.exitCode !== 0) process.exit(result.exitCode ?? 1);
+	await packAndPublish(pkgDir, name);
 }
 
-for (const pkg of packages) {
-	await publishPackage(pkg);
+if (import.meta.main) {
+	for (const pkg of packages) {
+		await publishPackage(pkg);
+	}
 }
