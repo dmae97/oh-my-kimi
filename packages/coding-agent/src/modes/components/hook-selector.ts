@@ -15,7 +15,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { getMarkdownTheme, theme } from "../../modes/theme/theme";
+import { getMarkdownTheme, type ThemeColor, theme } from "../../modes/theme/theme";
 import {
 	matchesAppExternalEditor,
 	matchesSelectCancel,
@@ -24,6 +24,33 @@ import {
 } from "../../modes/utils/keybinding-matchers";
 import { CountdownTimer } from "./countdown-timer";
 import { DynamicBorder } from "./dynamic-border";
+
+/** One segment of a {@link HookSelectorSlider} — a label, its accent color, and
+ *  an optional detail line (e.g. the resolved model name) shown beneath the
+ *  track while the segment is active. */
+export interface HookSelectorSliderSegment {
+	label: string;
+	/** Theme color for the segment label; defaults to `accent`. */
+	color?: ThemeColor;
+	/** Secondary line rendered under the track when this segment is selected. */
+	detail?: string;
+}
+
+/**
+ * A horizontal left/right selector rendered above the option list. Unlike the
+ * up/down option cursor, the slider is moved with the left/right arrows from
+ * any list position, letting the caller capture an orthogonal choice (e.g. the
+ * model tier to continue execution with) alongside the selected option.
+ */
+export interface HookSelectorSlider {
+	/** Dim caption rendered before the slider track (e.g. "continue with"). */
+	caption?: string;
+	segments: HookSelectorSliderSegment[];
+	/** Initially highlighted segment index. */
+	index: number;
+	/** Invoked with the new index whenever the slider moves. */
+	onChange?: (index: number) => void;
+}
 
 export interface HookSelectorOptions {
 	tui?: TUI;
@@ -36,6 +63,7 @@ export interface HookSelectorOptions {
 	onRight?: () => void;
 	onExternalEditor?: () => void;
 	helpText?: string;
+	slider?: HookSelectorSlider;
 }
 
 class OutlinedList extends Container {
@@ -74,6 +102,9 @@ export class HookSelectorComponent extends Container {
 	#onLeftCallback: (() => void) | undefined;
 	#onRightCallback: (() => void) | undefined;
 	#onExternalEditorCallback: (() => void) | undefined;
+	#slider: HookSelectorSlider | undefined;
+	#sliderIndex: number = 0;
+	#sliderComponent: Text | undefined;
 	constructor(
 		title: string,
 		options: string[],
@@ -92,6 +123,10 @@ export class HookSelectorComponent extends Container {
 		this.#onLeftCallback = opts?.onLeft;
 		this.#onRightCallback = opts?.onRight;
 		this.#onExternalEditorCallback = opts?.onExternalEditor;
+		if (opts?.slider && opts.slider.segments.length > 0) {
+			this.#slider = opts.slider;
+			this.#sliderIndex = Math.max(0, Math.min(opts.slider.index, opts.slider.segments.length - 1));
+		}
 
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
@@ -99,6 +134,12 @@ export class HookSelectorComponent extends Container {
 		this.#titleComponent = new Markdown(title, 1, 0, getMarkdownTheme(), { color: t => theme.fg("accent", t) });
 		this.addChild(this.#titleComponent);
 		this.addChild(new Spacer(1));
+
+		if (this.#slider) {
+			this.#sliderComponent = new Text(this.#renderSliderLine(), 1, 0);
+			this.addChild(this.#sliderComponent);
+			this.addChild(new Spacer(1));
+		}
 
 		if (opts?.timeout && opts.timeout > 0 && opts.tui) {
 			this.#countdown = new CountdownTimer(
@@ -165,6 +206,44 @@ export class HookSelectorComponent extends Container {
 		}
 	}
 
+	/** Render the slider block: the track (dim caption, edge arrows that brighten
+	 *  while there is room to move, one styled segment per option — active = bold
+	 *  in its color, the rest dim, joined by `›`) plus, when the active segment
+	 *  carries a `detail`, a muted second line beneath it (e.g. the resolved model
+	 *  name). Returns one or two `\n`-joined lines. */
+	#renderSliderLine(): string {
+		const slider = this.#slider;
+		if (!slider) return "";
+		const segments = slider.segments;
+		const sep = theme.fg("dim", " › ");
+		const track = segments
+			.map((segment, i) =>
+				i === this.#sliderIndex
+					? theme.bold(theme.fg(segment.color ?? "accent", segment.label))
+					: theme.fg("dim", segment.label),
+			)
+			.join(sep);
+		const leftArrow = theme.fg(this.#sliderIndex > 0 ? "accent" : "dim", "◂");
+		const rightArrow = theme.fg(this.#sliderIndex < segments.length - 1 ? "accent" : "dim", "▸");
+		const caption = slider.caption ? `${theme.fg("dim", slider.caption)}  ` : "";
+		const trackLine = `${caption}${leftArrow} ${theme.fg("dim", "[")} ${track} ${theme.fg("dim", "]")} ${rightArrow}`;
+		const detail = segments[this.#sliderIndex]?.detail;
+		if (!detail) return trackLine;
+		return `${trackLine}\n  ${theme.fg("dim", "↳")} ${theme.fg("muted", detail)}`;
+	}
+
+	/** Move the slider by `delta`, clamped to the segment range, refresh the
+	 *  rendered track, and notify the caller only when the index actually moves. */
+	#moveSlider(delta: number): void {
+		const slider = this.#slider;
+		if (!slider) return;
+		const next = Math.max(0, Math.min(slider.segments.length - 1, this.#sliderIndex + delta));
+		if (next === this.#sliderIndex) return;
+		this.#sliderIndex = next;
+		this.#sliderComponent?.setText(this.#renderSliderLine());
+		slider.onChange?.(next);
+	}
+
 	handleInput(keyData: string): void {
 		// Reset countdown on any interaction
 		this.#countdown?.reset();
@@ -178,10 +257,12 @@ export class HookSelectorComponent extends Container {
 		} else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			const selected = this.#options[this.#selectedIndex];
 			if (selected) this.#onSelectCallback(selected);
-		} else if (matchesKey(keyData, "left")) {
-			this.#onLeftCallback?.();
-		} else if (matchesKey(keyData, "right")) {
-			this.#onRightCallback?.();
+		} else if (matchesKey(keyData, "left") || (this.#slider && keyData === "h")) {
+			if (this.#slider) this.#moveSlider(-1);
+			else this.#onLeftCallback?.();
+		} else if (matchesKey(keyData, "right") || (this.#slider && keyData === "l")) {
+			if (this.#slider) this.#moveSlider(1);
+			else this.#onRightCallback?.();
 		} else if (this.#onExternalEditorCallback && matchesAppExternalEditor(keyData)) {
 			this.#onExternalEditorCallback();
 		} else if (matchesSelectCancel(keyData)) {

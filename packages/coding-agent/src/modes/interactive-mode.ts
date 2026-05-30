@@ -35,6 +35,7 @@ import {
 import { APP_NAME, adjustHsv, getProjectDir, hsvToRgb, isEnoent, logger, postmortem, prompt } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { KeybindingsManager } from "../config/keybindings";
+import { MODEL_ROLES, type ModelRole } from "../config/model-registry";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
 import type {
 	ExtensionUIContext,
@@ -80,7 +81,7 @@ import { DynamicBorder } from "./components/dynamic-border";
 import type { EvalExecutionComponent } from "./components/eval-execution";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
-import type { HookSelectorComponent } from "./components/hook-selector";
+import type { HookSelectorComponent, HookSelectorSlider } from "./components/hook-selector";
 import { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent, type LspServerInfo as WelcomeLspServerInfo } from "./components/welcome";
@@ -2106,13 +2107,38 @@ export class InteractiveMode implements InteractiveModeContext {
 			contextUsage?.percent != null
 				? `Approve and keep context (${contextUsage.percent.toFixed(1)}%)`
 				: "Approve and keep context";
+
+		// Model-tier slider: let the operator pick which configured role model
+		// (smol/default/slow/…) executes the approved plan. Left/right move it from
+		// any list position. Hidden when fewer than two role models resolve — a lone
+		// tier is no choice. `selectedTierIndex` tracks the live slider position.
+		const cycle = this.session.getRoleModelCycle(this.session.settings.get("cycleOrder"));
+		let selectedTierIndex = cycle?.currentIndex ?? 0;
+		const slider: HookSelectorSlider | undefined =
+			cycle && cycle.models.length > 1
+				? {
+						caption: "continue with",
+						index: cycle.currentIndex,
+						segments: cycle.models.map(entry => ({
+							label: entry.role,
+							color: MODEL_ROLES[entry.role as ModelRole]?.color,
+							detail: entry.model.name || entry.model.id,
+						})),
+						onChange: index => {
+							selectedTierIndex = index;
+						},
+					}
+				: undefined;
+		const helpText = slider ? `${this.#getPlanReviewHelpText()}  ◂/▸ model` : this.#getPlanReviewHelpText();
+
 		const choice = await this.showHookSelector(
 			"Plan mode - next step",
 			["Approve and execute", "Approve and compact context", keepContextLabel, "Refine plan"],
 			{
-				helpText: this.#getPlanReviewHelpText(),
+				helpText,
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
 			},
+			{ slider },
 		);
 
 		if (choice === "Approve and execute" || choice === "Approve and compact context" || choice === keepContextLabel) {
@@ -2122,6 +2148,25 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (!latestPlanContent) {
 					this.showError(`Plan file not found at ${planFilePath}`);
 					return;
+				}
+				// Apply the operator's tier choice before dispatch so the execution turn
+				// — and any fresh/compacted session #approvePlan spawns — runs on it. The
+				// agent's model survives newSession()/compaction, so setting it here is
+				// sufficient for all three approve paths.
+				if (cycle && selectedTierIndex !== cycle.currentIndex) {
+					const chosen = cycle.models[selectedTierIndex];
+					if (chosen) {
+						try {
+							await this.session.applyRoleModel(chosen);
+							this.statusLine.invalidate();
+							this.updateEditorBorderColor();
+							this.showStatus(`Continuing with ${chosen.role}: ${chosen.model.name || chosen.model.id}`);
+						} catch (error) {
+							this.showWarning(
+								`Could not switch to the ${chosen.role} model: ${error instanceof Error ? error.message : String(error)}`,
+							);
+						}
+					}
 				}
 				await this.#approvePlan(latestPlanContent, {
 					planFilePath,
@@ -2904,8 +2949,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		title: string,
 		options: string[],
 		dialogOptions?: ExtensionUIDialogOptions,
+		extra?: { slider?: HookSelectorSlider },
 	): Promise<string | undefined> {
-		return this.#extensionUiController.showHookSelector(title, options, dialogOptions);
+		return this.#extensionUiController.showHookSelector(title, options, dialogOptions, extra);
 	}
 
 	hideHookSelector(): void {

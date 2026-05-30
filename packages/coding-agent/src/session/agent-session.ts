@@ -388,6 +388,22 @@ export interface RoleModelCycleResult {
 	role: string;
 }
 
+/** A configured role resolved to a concrete model, used by role cycling and
+ *  the plan-approval model slider. */
+export interface ResolvedRoleModel {
+	role: string;
+	model: Model;
+	thinkingLevel?: ThinkingLevel;
+	explicitThinkingLevel: boolean;
+}
+
+/** The set of resolvable role models plus the index of the currently active
+ *  one within {@link ResolvedRoleModel.role} order. */
+export interface RoleModelCycle {
+	models: ResolvedRoleModel[];
+	currentIndex: number;
+}
+
 /** Session statistics for /session command */
 export interface SessionStats {
 	sessionFile: string | undefined;
@@ -5087,27 +5103,23 @@ export class AgentSession {
 	}
 
 	/**
-	 * Cycle through configured role models in a fixed order.
-	 * Skips missing roles.
-	 * @param roleOrder - Order of roles to cycle through (e.g., ["slow", "default", "smol"])
-	 * @param options - Optional settings: `temporary` to not persist to settings
+	 * Resolve the configured role models in the given order plus the index of
+	 * the currently active one. Roles that have no configured model, or whose
+	 * configured model is not currently available, are skipped. The `default`
+	 * role falls back to the active model when no explicit assignment exists.
+	 *
+	 * Returns `undefined` only when there is no current model or no available
+	 * models at all; an empty `models` array is never returned (callers should
+	 * still guard on `models.length`).
 	 */
-	async cycleRoleModels(
-		roleOrder: readonly string[],
-		options?: { temporary?: boolean },
-	): Promise<RoleModelCycleResult | undefined> {
+	getRoleModelCycle(roleOrder: readonly string[]): RoleModelCycle | undefined {
 		const availableModels = this.#modelRegistry.getAvailable();
 		if (availableModels.length === 0) return undefined;
 
 		const currentModel = this.model;
 		if (!currentModel) return undefined;
 		const matchPreferences = { usageOrder: this.settings.getStorage()?.getModelUsageOrder() };
-		const roleModels: Array<{
-			role: string;
-			model: Model;
-			thinkingLevel?: ThinkingLevel;
-			explicitThinkingLevel: boolean;
-		}> = [];
+		const models: ResolvedRoleModel[] = [];
 
 		for (const role of roleOrder) {
 			const roleModelStr =
@@ -5123,7 +5135,7 @@ export class AgentSession {
 			});
 			if (!resolved.model) continue;
 
-			roleModels.push({
+			models.push({
 				role,
 				model: resolved.model,
 				thinkingLevel: resolved.thinkingLevel,
@@ -5131,25 +5143,49 @@ export class AgentSession {
 			});
 		}
 
-		if (roleModels.length <= 1) return undefined;
+		if (models.length === 0) return undefined;
 
 		const lastRole = this.sessionManager.getLastModelChangeRole();
-		let currentIndex = lastRole ? roleModels.findIndex(entry => entry.role === lastRole) : -1;
+		let currentIndex = lastRole ? models.findIndex(entry => entry.role === lastRole) : -1;
 		if (currentIndex === -1) {
-			currentIndex = roleModels.findIndex(entry => modelsAreEqual(entry.model, currentModel));
+			currentIndex = models.findIndex(entry => modelsAreEqual(entry.model, currentModel));
 		}
 		if (currentIndex === -1) currentIndex = 0;
 
-		const nextIndex = (currentIndex + 1) % roleModels.length;
-		const next = roleModels[nextIndex];
+		return { models, currentIndex };
+	}
+
+	/**
+	 * Apply a resolved role model as the active model, persisting the choice to
+	 * settings under its role. Mirrors the non-temporary branch of
+	 * {@link cycleRoleModels} and is shared with the plan-approval model slider.
+	 */
+	async applyRoleModel(entry: ResolvedRoleModel): Promise<void> {
+		await this.setModel(entry.model, entry.role);
+		if (entry.explicitThinkingLevel && entry.thinkingLevel !== undefined) {
+			this.setThinkingLevel(entry.thinkingLevel);
+		}
+	}
+
+	/**
+	 * Cycle through configured role models in a fixed order.
+	 * Skips missing roles.
+	 * @param roleOrder - Order of roles to cycle through (e.g., ["slow", "default", "smol"])
+	 * @param options - Optional settings: `temporary` to not persist to settings
+	 */
+	async cycleRoleModels(
+		roleOrder: readonly string[],
+		options?: { temporary?: boolean },
+	): Promise<RoleModelCycleResult | undefined> {
+		const cycle = this.getRoleModelCycle(roleOrder);
+		if (!cycle || cycle.models.length <= 1) return undefined;
+
+		const next = cycle.models[(cycle.currentIndex + 1) % cycle.models.length];
 
 		if (options?.temporary) {
 			await this.setModelTemporary(next.model, next.explicitThinkingLevel ? next.thinkingLevel : undefined);
 		} else {
-			await this.setModel(next.model, next.role);
-			if (next.explicitThinkingLevel && next.thinkingLevel !== undefined) {
-				this.setThinkingLevel(next.thinkingLevel);
-			}
+			await this.applyRoleModel(next);
 		}
 
 		return { model: next.model, thinkingLevel: this.thinkingLevel, role: next.role };
