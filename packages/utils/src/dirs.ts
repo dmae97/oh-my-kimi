@@ -392,6 +392,11 @@ export function getModelDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "models.db", "data");
 }
 
+/** Get the tiny title model cache directory (~/.omp/agent/cache/tiny-models). */
+export function getTinyModelsCacheDir(agentDir?: string): string {
+	return dirs.agentSubdir(agentDir, path.join("cache", "tiny-models"), "cache");
+}
+
 /** Get the sessions directory (~/.omp/agent/sessions). */
 export function getSessionsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "sessions", "data");

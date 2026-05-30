@@ -4,15 +4,20 @@
 
 ### Added
 
+- Added an opt-in Providers → Tiny Model setting for session titles, with five local CPU transformers.js models racing against delayed `pi/smol` fallback while the default remains online-only.
 - Added a persistent live agent roster pinned below the editor (focus it with `Ctrl+S` or `Alt+Down`), including view-as switching into delegated agent sessions with human-readable delegate names and UI pinning to suppress idle reaping while viewed. The roster stays hidden until at least one delegated agent exists and releases focus back to the editor once the last one is gone.
 - Recorded the originating session ID alongside each prompt in `history.db` (new `session_id` column, surfaced as `HistoryEntry.sessionId`), so recalled prompts can be traced back to the session they came from. Existing history databases gain the column automatically on next launch.
 - Added compact inline TUI renderers for the `retain`, `recall`, and `reflect` memory tools. `retain` now shows one themed bullet line per stored item (truncated to width) under a status header with the stored/queued count, and `recall`/`reflect` collapse to a single query header (recall reports the match count and hides recalled memories until expanded) instead of dumping the raw JSON argument tree.
+- Added a randomly picked tip beneath the welcome screen, sourced from an embedded `tips.txt` (one tip per line). The line is italicized with a purple `Tip:` label and a dimmed light-blue body, and the tip is chosen once per welcome instance so intro-animation and LSP re-renders don't shuffle it.
+- Added a Mnemosyne-only `memory_edit` agent tool for updating, forgetting, or invalidating recalled memories by id, and added `/memory stats` plus `/memory diagnose` slash commands for backend maintenance visibility.
 
 ### Changed
 
 - Changed `irc` to treat the attached human as a first-class `User` peer, merging human prompts into `irc call User` with optional structured question payloads and adding `/dm <agent> <message>` for user-to-agent routing without switching views.
 - Changed the `--resume` session picker (and the in-session resume selector) to also rank sessions by prompt-history matches from `history.db`, not just the session-list metadata. Because the session list only indexes the first 4KB of each file, this surfaces sessions by prompts typed deep into long conversations. Sessions matched by both signals lead, then metadata-only matches, then history-only matches — no metadata match is dropped.
 - Changed the `task` tool's streaming call preview to list each dispatched agent's `id` and UI description as a tree instead of a bare `N agents` count, so the individual agents are visible while the tool-call arguments are still streaming. The collapsed view caps at 12 entries (`… N more agents`); the expanded view shows all.
+- Changed Mnemosyne `recall` tool output to include memory ids for explicit recall results so agents can target `memory_edit`; auto-injected memory context and `reflect` remain id-free.
+- Changed the system prompt to advertise `memory://root` only when the local memory backend is active.
 
 ### Removed
 
