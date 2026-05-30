@@ -289,20 +289,22 @@ function retainModelIds<TApi extends Api>(
  * arms calling `resolveProviderModels` with the same `staticModels` array)
  * skip the JSON+hash work after the first call.
  */
+const MODEL_CACHE_FINGERPRINT_VERSION = "merge-v2";
 const kStaticFingerprint = Symbol("model-manager.staticFingerprint");
 type ModelArrayWithFingerprint = readonly Model<Api>[] & { [kStaticFingerprint]?: string };
 function fingerprintStatic<TApi extends Api>(
 	models: readonly Model<TApi>[],
 	dynamicModelsAuthoritative = false,
 ): string {
-	if (models.length === 0) return "empty";
-	if (dynamicModelsAuthoritative) return `authoritative:${fingerprintStatic(models)}`;
+	if (models.length === 0) return `${MODEL_CACHE_FINGERPRINT_VERSION}:empty`;
+	if (dynamicModelsAuthoritative)
+		return `${MODEL_CACHE_FINGERPRINT_VERSION}:authoritative:${fingerprintStatic(models)}`;
 	const tagged = models as ModelArrayWithFingerprint;
 	const cached = tagged[kStaticFingerprint];
 	if (cached !== undefined) return cached;
 	// `Bun.hash` returns a `bigint`; base36 keeps the string short for the
 	// SQLite column without sacrificing distinguishability.
-	const fingerprint = Bun.hash(JSON.stringify(models)).toString(36);
+	const fingerprint = `${MODEL_CACHE_FINGERPRINT_VERSION}:${Bun.hash(JSON.stringify(models)).toString(36)}`;
 	tagged[kStaticFingerprint] = fingerprint;
 	return fingerprint;
 }
