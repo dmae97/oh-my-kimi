@@ -103,7 +103,7 @@ providers:
 ### Allowed auth/discovery values
 
 - `auth`: `apiKey` (default), `none`, or `oauth`; for `models.yml` custom models, `oauth` is accepted by schema but does not waive the `apiKey` requirement
-- `discovery.type`: `ollama`, `llama.cpp`, or `lm-studio`
+- `discovery.type`: `ollama`, `llama.cpp`, `lm-studio`, `openai-models-list`, or `proxy`
 
 ## Validation rules (current)
 
@@ -286,6 +286,33 @@ providers:
     auth: none
     discovery:
       type: llama.cpp
+```
+
+### Proxy discovery (`discovery.type: proxy`)
+
+For Anthropic+OpenAI-compatible proxies (new-api / one-api / similar)
+that expose both `/v1/messages` and `/v1/chat/completions` behind the same
+host. Discovery hits `GET /v1/models` (10s timeout, OpenAI-style payload) and
+derives each model's `api` from the entry's `supported_endpoint_types`:
+
+- contains `"anthropic"` -> `api: anthropic-messages` (routes via `/v1/messages`)
+- contains `"openai"`    -> `api: openai-completions` (routes via `/v1/chat/completions`)
+- otherwise              -> falls back to provider-level `api` if set, else dropped
+
+Provider-level `api` is **optional** with `discovery.type: proxy` because the
+per-model wire is auto-detected. The Anthropic SDK strips a trailing `/v1`
+from `baseUrl` before appending `/v1/messages`, so a single discovery `baseUrl`
+(ending in `/v1`) round-trips correctly to both wires.
+
+```yaml
+providers:
+  newapi-reseller:
+    baseUrl: https://api.example.com/v1
+    apiKey: xxxx
+    authHeader: true            # injects Authorization: Bearer for openai models
+    disableStrictTools: true    # most anthropic-fronted proxies reject `strict`
+    discovery:
+      type: proxy
 ```
 
 ### Extension provider registration
