@@ -94,6 +94,38 @@ describe("profile alias installer", () => {
 		expect(content).not.toContain("--profile old");
 	});
 
+	it("refuses to rewrite a malformed managed block missing its end marker", async () => {
+		// A start marker without its matching end marker means a previous install
+		// was interrupted or hand-edited. Appending a fresh block would let the
+		// *next* install splice from the stale start through the new end, deleting
+		// the user config in between. Refuse and preserve the file untouched.
+		const original = [
+			"# >>> omp profile alias: omp-work >>>",
+			"alias omp-work='command omp --profile old'",
+			"export SECRET=keepme",
+		].join("\n");
+		const files = new Map<string, string>([["/home/me/.zshrc", original]]);
+		let wrote = false;
+
+		await expect(
+			installProfileAlias({
+				profile: "work",
+				aliasName: "omp-work",
+				shellPath: "/bin/zsh",
+				platform: "darwin",
+				homeDir: "/home/me",
+				readFile: async filePath => files.get(filePath) ?? "",
+				writeFile: async (filePath, content) => {
+					wrote = true;
+					files.set(filePath, content);
+				},
+			}),
+		).rejects.toThrow(/without a matching/);
+
+		expect(wrote).toBe(false);
+		expect(files.get("/home/me/.zshrc")).toBe(original);
+	});
+
 	it("refuses to shadow the base omp command case-insensitively", async () => {
 		for (const aliasName of ["omp", "OMP"]) {
 			await expect(

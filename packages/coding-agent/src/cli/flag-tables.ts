@@ -228,3 +228,33 @@ export const STRING_VALUE_FLAGS: ReadonlySet<string> = new Set(Object.keys(STRIN
  * {@link STRING_VALUE_FLAGS}.
  */
 export const OPTIONAL_VALUE_FLAGS: ReadonlySet<string> = new Set(Object.keys(OPTIONAL_FLAGS));
+
+/**
+ * Long-form launch flags that take NO value (booleans). The bootstrap pre-parser
+ * needs this to tell a known value-less flag (whose successor is a fresh
+ * argument — `omp --print --profile work` still selects a profile) apart from an
+ * UNKNOWN long option that might be an extension string flag consuming the next
+ * token as its value (so the bootstrap must not steal that token as a global
+ * `--profile`/`--alias`). MUST mirror the value-less flag arms of `parseArgs`
+ * in `./args.ts`: adding a new boolean launch flag there means adding it here,
+ * or `--<newflag> --profile X` stops selecting a profile. Short aliases
+ * (`-h`/`-v`/`-c`/`-p`) are intentionally omitted — the protection rule only
+ * fires for `--`-prefixed tokens.
+ */
+export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
+	"--help",
+	"--version",
+	"--allow-home",
+	"--continue",
+	"--no-session",
+	"--no-tools",
+	"--no-lsp",
+	"--no-pty",
+	"--print",
+	"--no-extensions",
+	"--no-skills",
+	"--no-rules",
+	"--no-title",
+	"--auto-approve",
+	"--yolo",
+]);

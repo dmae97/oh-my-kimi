@@ -126,4 +126,57 @@ describe("extractProfileFlags", () => {
 		expect(result.profile).toBe("config");
 		expect(result.argv).toEqual(["later"]);
 	});
+
+	it("exempts known value-less launch flags so a trailing profile still activates", () => {
+		// Boolean launch flags (--print, --yolo, --no-tools, -p) take no value, so
+		// the token after them is a fresh argument: `omp --print --profile work`
+		// must still select the profile.
+		expect(extractProfileFlags(["--print", "--profile", "work"])).toEqual({
+			argv: ["--print"],
+			profile: "work",
+			aliasName: undefined,
+		});
+		expect(extractProfileFlags(["--yolo", "--profile", "work"])).toEqual({
+			argv: ["--yolo"],
+			profile: "work",
+			aliasName: undefined,
+		});
+		expect(extractProfileFlags(["--no-tools", "--profile", "work"])).toEqual({
+			argv: ["--no-tools"],
+			profile: "work",
+			aliasName: undefined,
+		});
+		expect(extractProfileFlags(["-p", "--profile", "work"])).toEqual({
+			argv: ["-p"],
+			profile: "work",
+			aliasName: undefined,
+		});
+	});
+
+	it("does not steal --alias/--profile that may be the value of an unknown (extension) string flag", () => {
+		// The bootstrap runs before extensions load and cannot know that `--bar`
+		// is a string flag consuming its next token. It must not interpret that
+		// token as a global --alias/--profile, or `omp --bar --alias foo` would
+		// install a shell alias instead of passing `--alias`/`foo` to the extension.
+		expect(extractProfileFlags(["--bar", "--alias", "foo"])).toEqual({
+			argv: ["--bar", "--alias", "foo"],
+			profile: undefined,
+			aliasName: undefined,
+		});
+		expect(extractProfileFlags(["--bar", "--profile", "work"])).toEqual({
+			argv: ["--bar", "--profile", "work"],
+			profile: undefined,
+			aliasName: undefined,
+		});
+	});
+
+	it("still extracts a trailing profile after an unknown flag that carries its own =value", () => {
+		// `--bar=x` carries its value inline, so the following token is a fresh
+		// argument and the trailing --profile is a genuine global flag.
+		expect(extractProfileFlags(["--bar=x", "--profile", "work"])).toEqual({
+			argv: ["--bar=x"],
+			profile: "work",
+			aliasName: undefined,
+		});
+	});
 });

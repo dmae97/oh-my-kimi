@@ -3,7 +3,7 @@ import {
 	APP_NAME,
 	getActiveProfile,
 	MIN_BUN_VERSION,
-	normalizeProfileName,
+	resolveProfileEnv,
 	setProfile,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
@@ -73,7 +73,7 @@ export async function runCli(argv: string[]): Promise<void> {
 			// invalid value to avoid an uncaught throw before this try/catch is in
 			// scope (see `readProfileFromEnvSafe` in dirs.ts). Surfacing it here turns
 			// `OMP_PROFILE=.. omp --version` into a clean error instead of a stack trace.
-			normalizeProfileName(process.env.OMP_PROFILE || process.env.PI_PROFILE);
+			resolveProfileEnv(process.env.OMP_PROFILE, process.env.PI_PROFILE);
 		}
 		if (extracted.aliasName !== undefined) {
 			const profile = extracted.profile ?? getActiveProfile();

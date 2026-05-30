@@ -115,12 +115,16 @@ function upsertBlock(content: string, aliasName: string, block: string): string 
 	const startIndex = content.indexOf(start);
 	if (startIndex !== -1) {
 		const endIndex = content.indexOf(end, startIndex + start.length);
-		if (endIndex !== -1) {
-			const afterEnd = endIndex + end.length;
-			const prefix = content.slice(0, startIndex).replace(/[\t ]*\n?$/, "");
-			const suffix = content.slice(afterEnd).replace(/^\n?/, "");
-			return [prefix, block, suffix].filter(Boolean).join("\n\n").replace(/\n*$/, "\n");
+		if (endIndex === -1) {
+			throw new Error(
+				`Found "${start}" without a matching "${end}" in the shell config. ` +
+					`The managed alias block is malformed; remove the stale marker line and rerun --alias.`,
+			);
 		}
+		const afterEnd = endIndex + end.length;
+		const prefix = content.slice(0, startIndex).replace(/[\t ]*\n?$/, "");
+		const suffix = content.slice(afterEnd).replace(/^\n?/, "");
+		return [prefix, block, suffix].filter(Boolean).join("\n\n").replace(/\n*$/, "\n");
 	}
 	const trimmed = content.replace(/\s*$/, "");
 	return `${trimmed}${trimmed ? "\n\n" : ""}${block}\n`;

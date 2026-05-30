@@ -28,7 +28,7 @@ export const VERSION: string = version;
 /** Minimum Bun version */
 export const MIN_BUN_VERSION: string = engines.bun.replace(/[^0-9.]/g, "");
 
-const PROFILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const PROFILE_ENV_KEYS = ["OMP_PROFILE", "PI_PROFILE"] as const;
 
 /**
@@ -68,8 +68,20 @@ export function normalizeProfileName(profile: string | undefined): string | unde
 	return normalized;
 }
 
+/**
+ * Resolve the active profile from the two profile env vars. `OMP_PROFILE` is the
+ * canonical variable and takes precedence; `PI_PROFILE` is the legacy
+ * compatibility fallback, consulted only when `OMP_PROFILE` is undefined. An
+ * explicitly-empty `OMP_PROFILE` therefore selects the default profile rather
+ * than silently inheriting `PI_PROFILE`. Delegates validation/normalization to
+ * {@link normalizeProfileName} (which throws on a syntactically invalid value).
+ */
+export function resolveProfileEnv(omp: string | undefined, pi: string | undefined): string | undefined {
+	return normalizeProfileName(omp !== undefined ? omp : pi);
+}
+
 function getProfileFromEnv(): string | undefined {
-	return normalizeProfileName(process.env.OMP_PROFILE || process.env.PI_PROFILE);
+	return resolveProfileEnv(process.env.OMP_PROFILE, process.env.PI_PROFILE);
 }
 
 /**

@@ -19,10 +19,16 @@
  * The shared classification lives in {@link ./flag-tables}, imported below,
  * so the bootstrap and `args.ts` reference one source of truth instead of
  * maintaining parallel constants.
+ *
+ * An unclassified bare long option (one not in any flag table) is treated as a
+ * possible extension string flag: its successor token is forwarded untouched and
+ * never read as a global `--profile`/`--alias`. Known value-less launch flags
+ * ({@link VALUELESS_FLAGS}) are exempt so a trailing profile still activates
+ * (`omp --print --profile work`).
  */
 
 import { isSubcommand } from "../cli-commands";
-import { OPTIONAL_FLAGS, OPTIONAL_VALUE_FLAGS, STRING_VALUE_FLAGS } from "./flag-tables";
+import { OPTIONAL_FLAGS, OPTIONAL_VALUE_FLAGS, STRING_VALUE_FLAGS, VALUELESS_FLAGS } from "./flag-tables";
 
 export interface ProfileBootstrapResult {
 	argv: string[];
@@ -130,6 +136,24 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 				!(config.rejectEmpty === true && next.length === 0)
 			) {
 				stripped.push(next);
+				index += 1;
+			}
+			continue;
+		}
+
+		// An unclassified bare long option (`--xxx` with no `=`) may be an extension
+		// string flag that consumes the next token as its value. The bootstrap runs
+		// before extensions load, so it cannot consult the extension flag table; to
+		// avoid stealing a value that belongs to such a flag (e.g. `omp --bar --alias
+		// foo` where an extension registers string flag `bar`), forward the flag AND
+		// its immediate successor untouched, never interpreting that successor as a
+		// global --profile/--alias. Known value-less launch flags are exempt so a
+		// trailing profile still activates (`omp --print --profile work`).
+		if (arg.startsWith("--") && !arg.includes("=") && !VALUELESS_FLAGS.has(arg)) {
+			canDispatchSubcommand = false;
+			stripped.push(arg);
+			if (index + 1 < argv.length) {
+				stripped.push(argv[index + 1]);
 				index += 1;
 			}
 			continue;

@@ -12,6 +12,8 @@ import {
 	getPythonGatewayDir,
 	getSessionsDir,
 	getStatsDbPath,
+	normalizeProfileName,
+	resolveProfileEnv,
 	setAgentDir,
 	setProfile,
 } from "../src/dirs";
@@ -232,5 +234,29 @@ describe("profile directories", () => {
 		expect(getActiveProfile()).toBeUndefined();
 		expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
 		expect(getAgentDir()).toBe(path.join(os.homedir(), configDir, "agent"));
+	});
+});
+
+describe("profile env + name validation", () => {
+	it("honors OMP_PROFILE precedence and treats empty/default as the default profile", () => {
+		// OMP_PROFILE is canonical and wins over the legacy PI_PROFILE fallback.
+		expect(resolveProfileEnv("work", "other")).toBe("work");
+		// PI_PROFILE is consulted only when OMP_PROFILE is undefined.
+		expect(resolveProfileEnv(undefined, "work")).toBe("work");
+		// An explicitly-empty OMP_PROFILE selects the default profile; it must NOT
+		// fall through to the lower-precedence PI_PROFILE.
+		expect(resolveProfileEnv("", "work")).toBeUndefined();
+		expect(resolveProfileEnv("   ", "work")).toBeUndefined();
+		expect(resolveProfileEnv("default", "work")).toBeUndefined();
+		expect(resolveProfileEnv(undefined, undefined)).toBeUndefined();
+	});
+
+	it("rejects uppercase profile names so isolation is filesystem-independent", () => {
+		// `work` and `WORK` would collide on case-insensitive macOS/Windows but
+		// differ on Linux; reject uppercase to keep profile identity stable.
+		expect(() => normalizeProfileName("WORK")).toThrow("Invalid OMP profile");
+		expect(() => normalizeProfileName("Work")).toThrow("Invalid OMP profile");
+		expect(normalizeProfileName("work")).toBe("work");
+		expect(normalizeProfileName("work-2.0_a")).toBe("work-2.0_a");
 	});
 });
