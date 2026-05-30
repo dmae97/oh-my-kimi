@@ -11,7 +11,14 @@ import type {
 import { getTinyModelsCacheDir, isCompiledBinary, prompt } from "@oh-my-pi/pi-utils";
 import packageJson from "../../package.json" with { type: "json" };
 import tinyTitleSystemPrompt from "../prompts/system/tiny-title-system.md" with { type: "text" };
-import { getTinyLocalModelSpec, type TinyLocalModelKey, type TinyTitleLocalModelKey } from "./models";
+import { resolveTinyModelDevicePreference, type TinyModelDevice, tinyModelDeviceLoadOrder } from "./device";
+import { resolveTinyModelDtypeOverride, type TinyModelDtype } from "./dtype";
+import {
+	getTinyLocalModelSpec,
+	type TinyLocalModelKey,
+	type TinyTitleLocalModelKey,
+	type TinyTitleLocalModelSpec,
+} from "./models";
 import { formatTitleUserMessage, normalizeGeneratedTitle } from "./text";
 import type {
 	TinyTitleProgressEvent,
@@ -31,6 +38,9 @@ const sourceRequire = createRequire(import.meta.url);
 const INSTALL_LOCK_ATTEMPTS = 240;
 const INSTALL_LOCK_SLEEP_MS = 250;
 
+const tinyModelDevicePreference = resolveTinyModelDevicePreference();
+const tinyModelDtypeOverride = resolveTinyModelDtypeOverride();
+
 interface TransformersRuntime {
 	env: {
 		cacheDir?: string;
@@ -45,8 +55,8 @@ interface TransformersRuntime {
 		task: "text-generation",
 		model: string,
 		options: {
-			device: "cpu";
-			dtype: "q4";
+			device: TinyModelDevice;
+			dtype: TinyModelDtype;
 			progress_callback: (info: ProgressInfo) => void;
 		},
 	) => Promise<TextGenerationPipeline>;
@@ -304,6 +314,63 @@ function sendProgress(
 	transport.send({ type: "progress", id, event: toProgressEvent(modelKey, info) });
 }
 
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+async function loadPipelineOnDevice(
+	transformers: TransformersRuntime,
+	spec: TinyTitleLocalModelSpec,
+	modelKey: TinyLocalModelKey,
+	transport: TinyTitleTransport,
+	requestId: string,
+	device: TinyModelDevice,
+): Promise<TextGenerationPipeline> {
+	return transformers.pipeline("text-generation", spec.repo, {
+		device,
+		dtype: tinyModelDtypeOverride ?? spec.dtype,
+		progress_callback: info => sendProgress(transport, requestId, modelKey, info),
+	});
+}
+
+async function loadPipelineWithDeviceFallback(
+	transformers: TransformersRuntime,
+	spec: TinyTitleLocalModelSpec,
+	modelKey: TinyLocalModelKey,
+	transport: TinyTitleTransport,
+	requestId: string,
+): Promise<{ generator: TextGenerationPipeline; device: TinyModelDevice }> {
+	const devices = tinyModelDeviceLoadOrder(tinyModelDevicePreference);
+	if (devices[0] !== tinyModelDevicePreference.device) {
+		sendLog(transport, "warn", "tiny-model: requested device is unsafe in the worker; using CPU", {
+			modelKey,
+			repo: spec.repo,
+			requestedDevice: tinyModelDevicePreference.device,
+			device: devices[0],
+		});
+	}
+	for (let i = 0; i < devices.length; i += 1) {
+		const device = devices[i]!;
+		try {
+			return {
+				generator: await loadPipelineOnDevice(transformers, spec, modelKey, transport, requestId, device),
+				device,
+			};
+		} catch (error) {
+			if (i === devices.length - 1) throw error;
+			const fallbackDevice = devices[i + 1]!;
+			sendLog(transport, "warn", "tiny-model: accelerated device failed; falling back", {
+				modelKey,
+				repo: spec.repo,
+				device,
+				fallbackDevice,
+				error: errorMessage(error),
+			});
+		}
+	}
+	throw new Error("No tiny model devices configured");
+}
+
 async function loadPipeline(
 	modelKey: TinyLocalModelKey,
 	transport: TinyTitleTransport,
@@ -327,31 +394,28 @@ async function loadPipeline(
 
 	const transformers = await loadTransformers(transport, requestId, modelKey);
 	const startedAt = performance.now();
-	const loaded = transformers
-		.pipeline("text-generation", spec.repo, {
-			device: "cpu",
-			dtype: spec.dtype,
-			progress_callback: info => sendProgress(transport, requestId, modelKey, info),
-		})
-		.then(
-			generator => {
-				sendLog(transport, "debug", "tiny-model: local model loaded", {
-					modelKey,
-					repo: spec.repo,
-					elapsedMs: Math.round(performance.now() - startedAt),
-				});
-				transport.send({
-					type: "progress",
-					id: requestId,
-					event: { modelKey, status: "ready", task: "text-generation", model: spec.repo },
-				});
-				return generator;
-			},
-			error => {
-				pipelines.delete(modelKey);
-				throw error;
-			},
-		);
+	const loaded = loadPipelineWithDeviceFallback(transformers, spec, modelKey, transport, requestId).then(
+		({ generator, device }) => {
+			sendLog(transport, "debug", "tiny-model: local model loaded", {
+				modelKey,
+				repo: spec.repo,
+				device,
+				requestedDevice: tinyModelDevicePreference.device,
+				dtype: tinyModelDtypeOverride ?? spec.dtype,
+				elapsedMs: Math.round(performance.now() - startedAt),
+			});
+			transport.send({
+				type: "progress",
+				id: requestId,
+				event: { modelKey, status: "ready", task: "text-generation", model: spec.repo },
+			});
+			return generator;
+		},
+		error => {
+			pipelines.delete(modelKey);
+			throw error;
+		},
+	);
 	pipelines.set(modelKey, loaded);
 	return loaded;
 }
@@ -411,7 +475,7 @@ function buildCompletionPrompt(generator: TextGenerationPipeline, promptText: st
  * Generic single-turn completion used by Mnemosyne memory tasks (fact extraction
  * and consolidation). The caller (Mnemosyne) supplies the full task prompt; we
  * wrap it as the user turn, decode greedily, and return the raw text for the
- * caller's own parser. Output is capped to keep CPU latency bounded.
+ * caller's own parser. Output is capped to keep local inference latency bounded.
  */
 async function generateCompletion(
 	transport: TinyTitleTransport,

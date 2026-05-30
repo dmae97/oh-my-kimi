@@ -1,4 +1,4 @@
-/** Default session-title model: the online pi/smol path (no local download / CPU inference). */
+/** Default session-title model: the online pi/smol path (no local download / on-device inference). */
 export const ONLINE_TINY_TITLE_MODEL_KEY = "online";
 /** Local model the `tiny-models` CLI downloads when none is named. Not the session-title default — that is {@link ONLINE_TINY_TITLE_MODEL_KEY}. */
 export const DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY = "lfm2-700m";
@@ -19,7 +19,7 @@ export const TINY_TITLE_LOCAL_MODELS = [
 		dtype: "q4",
 		label: "LFM2 350M",
 		description: "Recommended local model; best speed/quality balance, about 212 MB cached.",
-		contextNote: "Best local default from the CPU title-generation spike.",
+		contextNote: "Best local default from the title-generation spike.",
 	},
 	{
 		key: "qwen3-0.6b",
@@ -83,7 +83,7 @@ export const TINY_TITLE_MODEL_OPTIONS = [
 	{
 		value: ONLINE_TINY_TITLE_MODEL_KEY,
 		label: "Online (pi/smol)",
-		description: "Current online title generation path; no local model download or CPU inference.",
+		description: "Current online title generation path; no local model download or on-device inference.",
 	},
 	...TINY_TITLE_LOCAL_MODELS.map(model => ({
 		value: model.key,
@@ -110,7 +110,7 @@ export const DEFAULT_MEMORY_LOCAL_MODEL_KEY = "qwen3-1.7b";
 /**
  * Local models for Mnemosyne memory tasks (fact extraction + consolidation).
  * These are larger (1B-1.7B) than the title models: structured extraction and
- * faithful summarization need more capacity than 3-6 word titles. All q4, CPU.
+ * faithful summarization need more capacity than 3-6 word titles. All q4.
  * Ranking/recipe rationale lives in docs/local-models.md.
  */
 export const TINY_MEMORY_LOCAL_MODELS = [
@@ -121,7 +121,7 @@ export const TINY_MEMORY_LOCAL_MODELS = [
 		label: "Qwen3 1.7B",
 		description:
 			"Recommended; most disciplined extraction (ignores chit-chat), good consolidation, about 1.1 GB cached.",
-		contextNote: "Best single-model pick for memory from the CPU experiment.",
+		contextNote: "Best single-model pick for memory from the local experiment.",
 	},
 	{
 		key: "gemma-3-1b",
@@ -176,7 +176,8 @@ export const TINY_MEMORY_MODEL_OPTIONS = [
 	{
 		value: ONLINE_MEMORY_MODEL_KEY,
 		label: "Online (smol/remote)",
-		description: "Use the configured Mnemosyne LLM mode (smol or remote); no local model download or CPU inference.",
+		description:
+			"Use the configured Mnemosyne LLM mode (smol or remote); no local model download or on-device inference.",
 	},
 	...TINY_MEMORY_LOCAL_MODELS.map(model => ({
 		value: model.key,

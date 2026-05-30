@@ -4,19 +4,26 @@ This document summarizes the experiments behind the optional **local** tiny-mode
 coding-agent tasks: session-title generation (`providers.tinyModel`) and Mnemosyne memory
 extraction/consolidation (`providers.memoryModel`). It is a factual engineering record for
 maintainers: what we measured, which recipes won, and which models we shipped. Both settings
-default to `online`, so existing users incur no downloads or CPU cost unless they opt in.
+default to `online`, so existing users incur no downloads or on-device inference cost unless they opt in.
 
 ## Runtime / environment findings
 
 - **Stack**: `@huggingface/transformers` (transformers.js) v4 running under Bun. In Bun the library
-  loads the **native `onnxruntime-node` backend** (not the WASM build). Available device options are
-  `cpu` / `coreml` / `webgpu` — there is **no `wasm` device** in the node build.
-- **Device verdict: use `device:"cpu"`.** CPU is the only reliable path.
-  - `coreml` EP is **broken for decoder LLMs**: it rejects the dynamic KV-cache `past_key_values`
-    zero-element first-token shape.
-  - `webgpu` runs but is **slower and numerically divergent** (worse output quality).
+  loads the **native `onnxruntime-node` backend** (not the WASM build).
+- **Device policy**: local tiny models request a worker-safe accelerated ONNX execution provider when
+  one is available, and retry once on `device:"cpu"` if acceleration cannot initialize.
+  - Defaults: DirectML on Windows, CUDA on Linux x64, and CPU elsewhere.
+  - Direct `coreml` remains opt-in via `PI_TINY_DEVICE=coreml`; it is not part of the default because
+    cached decoder-LLM ONNX loads can fail during session initialization.
+  - WebGPU/Metal works for the single-process eval harness, but it is not enabled in the production
+    worker on macOS because ONNX Runtime/Bun currently hard-crashes on worker teardown after WebGPU
+    inference.
+  - Use `PI_TINY_DEVICE=cpu` for the old CPU-only path.
 - **Quantization: q4 is the sweet spot** — smaller on disk, faster to load, and fast at inference.
-  q8/int8 loads slower *and* infers slower on CPU.
+  q8/int8 loads slower *and* infers slower on CPU. Every shipped model defaults to `q4`; override the
+  precision for whichever local model loads with `PI_TINY_DTYPE` (e.g. `PI_TINY_DTYPE=fp16` for higher
+  fidelity, `PI_TINY_DTYPE=q8`). Accepts `auto`, `fp32`, `fp16`, `q8`, `int8`, `uint8`, `q4`, `bnb4`,
+  `q4f16`, `q2`, `q2f16`, `q1`, `q1f16`; an unrecognized value fails loudly at worker startup.
 - **Load-time correction (important).** An earlier belief that "q4 >=1B models take minutes to load"
   was a **measurement artifact** caused by running ~5 multi-GB HuggingFace downloads in parallel
   (I/O saturation). Clean, isolated **warm** loads are all sub-3s:
@@ -123,8 +130,8 @@ wins that task.
 
 ## Integration notes
 
-- Both settings default to `online`, so existing users get **no downloads or CPU cost** unless they
-  opt in.
+- Both settings default to `online`, so existing users get **no downloads or on-device inference cost**
+  unless they opt in.
 - Local inference runs **in a worker** (off the main thread); models are cached on disk and
   downloaded on first use.
 - The memory local path applies the refined recipes (line-format + small-talk-guarded extraction
