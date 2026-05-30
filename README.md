@@ -233,11 +233,10 @@ Stealth's on by default, so pages see a normal user instead of a headless bot. T
 
 **Misc**
 
-- `calc` — deterministic arithmetic — no model in the loop.
 - `resolve` — apply or discard a queued preview action.
 - `search_tool_bm25` — BM25 over the hidden tool index; activates top matches mid-session.
 
-Setting-gated, off by default: `github`, `calc`, `inspect_image`, `render_mermaid`, `checkpoint`, `rewind`, `search_tool_bm25`, `retain`, `recall`, `reflect`. Flip them on once, scoped per project.
+Setting-gated, off by default: `github`, `inspect_image`, `render_mermaid`, `checkpoint`, `rewind`, `search_tool_bm25`, `retain`, `recall`, `reflect`. Flip them on once, scoped per project.
 
 [Full reference →](https://omp.sh/docs/tools)
 

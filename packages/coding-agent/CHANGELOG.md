@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the `calc` tool (deterministic arithmetic evaluator) and its `calc.enabled` setting. The model can compute via `eval` instead.
+
 ## [15.5.14] - 2026-05-29
 ### Added
 

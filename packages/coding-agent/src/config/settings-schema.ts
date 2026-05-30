@@ -2017,16 +2017,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"calc.enabled": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "tools",
-			label: "Calculator",
-			description: "Enable the calculator tool for basic calculations",
-		},
-	},
-
 	"tts.enabled": {
 		type: "boolean",
 		default: false,
