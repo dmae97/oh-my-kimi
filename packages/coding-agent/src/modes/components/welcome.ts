@@ -1,4 +1,12 @@
-import { type Component, padding, TERMINAL, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	padding,
+	replaceTabs,
+	TERMINAL,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@oh-my-pi/pi-tui";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { theme } from "../../modes/theme/theme";
 import tipsText from "./tips.txt" with { type: "text" };
@@ -8,6 +16,30 @@ const TIPS: readonly string[] = tipsText
 	.split("\n")
 	.map(line => line.trim())
 	.filter(line => line.length > 0);
+
+export function renderWelcomeTip(tip: string, boxWidth: number): string[] {
+	const label = "Tip: ";
+	const labelWidth = visibleWidth(label);
+	const bodyBudget = boxWidth - 1 - labelWidth; // 1 = leading indent
+	if (bodyBudget < 8) return [];
+
+	const wrappedBody = wrapTextWithAnsi(replaceTabs(tip), bodyBudget);
+	if (wrappedBody.length === 0) return [];
+
+	const encoding = TERMINAL.trueColor ? "ansi-16m" : "ansi-256";
+	const purple = Bun.color("#b48cff", encoding) ?? "";
+	const lightBlue = Bun.color("#9ccfff", encoding) ?? "";
+	const italic = "\x1b[3m";
+	const dim = "\x1b[2m";
+	const reset = "\x1b[0m";
+	const continuationIndent = padding(labelWidth);
+
+	return wrappedBody.map((body, index) =>
+		index === 0
+			? ` ${italic}${purple}${label}${dim}${lightBlue}${body}${reset}`
+			: ` ${italic}${continuationIndent}${dim}${lightBlue}${body}${reset}`,
+	);
+}
 
 export interface RecentSession {
 	name: string;
@@ -234,17 +266,7 @@ export class WelcomeComponent implements Component {
 	 */
 	#renderTip(boxWidth: number): string[] {
 		if (!this.#tip) return [];
-		const label = "Tip: ";
-		const bodyBudget = boxWidth - 1 - visibleWidth(label); // 1 = leading indent
-		if (bodyBudget < 8) return [];
-		const body = visibleWidth(this.#tip) > bodyBudget ? truncateToWidth(this.#tip, bodyBudget) : this.#tip;
-		const encoding = TERMINAL.trueColor ? "ansi-16m" : "ansi-256";
-		const purple = Bun.color("#b48cff", encoding) ?? "";
-		const lightBlue = Bun.color("#9ccfff", encoding) ?? "";
-		const italic = "\x1b[3m";
-		const dim = "\x1b[2m";
-		const reset = "\x1b[0m";
-		return [` ${italic}${purple}${label}${dim}${lightBlue}${body}${reset}`];
+		return renderWelcomeTip(this.#tip, boxWidth);
 	}
 
 	/** Center text within a given width */
