@@ -1131,10 +1131,13 @@ function b() {
 			}
 		});
 
-		it("should handle command errors", async () => {
-			await expect(bashTool.execute("test-call-9", { command: "exit 1" })).rejects.toThrow(
-				/(Command failed|code 1)/,
-			);
+		it("should surface non-zero exits as an error result", async () => {
+			// A completed-but-failed command resolves as a non-throwing error
+			// result carrying the exit code, so the renderer keeps its footer.
+			const result = await bashTool.execute("test-call-9", { command: "exit 1" });
+			expect(result.isError).toBe(true);
+			expect(result.details?.exitCode).toBe(1);
+			expect(getTextOutput(result)).toContain("Command exited with code 1");
 		});
 
 		it("should keep short commands inline when auto-background is enabled", async () => {

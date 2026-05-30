@@ -1,5 +1,7 @@
+/** Default session-title model: the online pi/smol path (no local download / CPU inference). */
 export const ONLINE_TINY_TITLE_MODEL_KEY = "online";
-export const DEFAULT_TINY_TITLE_MODEL_KEY = "lfm2-700m";
+/** Local model the `tiny-models` CLI downloads when none is named. Not the session-title default — that is {@link ONLINE_TINY_TITLE_MODEL_KEY}. */
+export const DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY = "lfm2-700m";
 
 export interface TinyTitleLocalModelSpec {
 	key: string;

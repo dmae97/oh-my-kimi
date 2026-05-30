@@ -5,7 +5,7 @@ import { isSubcommand } from "../src/cli-commands";
 import { getDefault, getEnumValues, getUi } from "../src/config/settings-schema";
 import { TinyTitleDownloadProgressComponent } from "../src/modes/components/tiny-title-download-progress";
 import { initTheme } from "../src/modes/theme/theme";
-import { DEFAULT_TINY_TITLE_MODEL_KEY, TINY_TITLE_MODEL_OPTIONS, TINY_TITLE_MODEL_VALUES } from "../src/tiny/models";
+import { ONLINE_TINY_TITLE_MODEL_KEY, TINY_TITLE_MODEL_OPTIONS, TINY_TITLE_MODEL_VALUES } from "../src/tiny/models";
 import { tinyTitleClient } from "../src/tiny/title-client";
 import { generateSessionTitle, raceFirstNonNull, TITLE_LOCAL_FALLBACK_DELAY_MS } from "../src/utils/title-generator";
 
@@ -270,7 +270,7 @@ describe("providers.tinyModel schema", () => {
 	it("keeps enum values and UI options in sync with the tiny model registry", () => {
 		expect(getEnumValues("providers.tinyModel")).toEqual([...TINY_TITLE_MODEL_VALUES]);
 		expect(getUi("providers.tinyModel")?.options).toEqual(TINY_TITLE_MODEL_OPTIONS);
-		expect(getDefault("providers.tinyModel")).toBe(DEFAULT_TINY_TITLE_MODEL_KEY);
+		expect(getDefault("providers.tinyModel")).toBe(ONLINE_TINY_TITLE_MODEL_KEY);
 	});
 });
 

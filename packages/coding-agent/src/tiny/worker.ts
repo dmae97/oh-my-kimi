@@ -27,8 +27,6 @@ const STOP_DECODE_WINDOW_TOKENS = 32;
 const TINY_TITLE_SYSTEM_PROMPT = prompt.render(tinyTitleSystemPrompt);
 const TRANSFORMERS_PACKAGE = "@huggingface/transformers";
 const sourceRequire = createRequire(import.meta.url);
-const TRANSFORMERS_VERSION_SPEC = resolveTransformersVersionSpec();
-const TRANSFORMERS_RUNTIME_KEY = TRANSFORMERS_VERSION_SPEC.replace(/[^A-Za-z0-9._-]/g, "_");
 const INSTALL_LOCK_ATTEMPTS = 240;
 const INSTALL_LOCK_SLEEP_MS = 250;
 
@@ -67,6 +65,23 @@ function resolveTransformersVersionSpec(): string {
 	const installed = sourceRequire(`${TRANSFORMERS_PACKAGE}/package.json`) as { version: string };
 	return installed.version;
 }
+let cachedTransformersVersionSpec: string | undefined;
+/**
+ * Lazily resolve (and memoize) the transformers version spec. In the
+ * `catalog:` case {@link resolveTransformersVersionSpec} `require`s the
+ * installed `@huggingface/transformers/package.json`, so touching it forces
+ * the dependency to exist. Defer it to the compiled-binary runtime-install
+ * path — which only runs when a local title model is actually generated or
+ * downloaded — so loading this worker (smoke-test ping, online title path)
+ * never triggers the transformers resolve/install dance.
+ */
+function getTransformersVersionSpec(): string {
+	cachedTransformersVersionSpec ??= resolveTransformersVersionSpec();
+	return cachedTransformersVersionSpec;
+}
+function getTransformersRuntimeKey(): string {
+	return getTransformersVersionSpec().replace(/[^A-Za-z0-9._-]/g, "_");
+}
 let generateQueue = Promise.resolve();
 let transformersRuntime: Promise<TransformersRuntime> | null = null;
 
@@ -91,7 +106,7 @@ function getTinyTitleRuntimeDir(): string {
 	return path.join(
 		path.dirname(getTinyModelsCacheDir()),
 		"tiny-title-runtime",
-		`transformers-${TRANSFORMERS_RUNTIME_KEY}`,
+		`transformers-${getTransformersRuntimeKey()}`,
 	);
 }
 
@@ -124,7 +139,7 @@ async function writeRuntimeManifest(runtimeDir: string): Promise<void> {
 				private: true,
 				type: "module",
 				dependencies: {
-					[TRANSFORMERS_PACKAGE]: TRANSFORMERS_VERSION_SPEC,
+					[TRANSFORMERS_PACKAGE]: getTransformersVersionSpec(),
 				},
 				trustedDependencies: ["onnxruntime-node"],
 			},
@@ -169,7 +184,7 @@ function sendRuntimeInstallProgress(
 		event: {
 			modelKey,
 			status,
-			name: `${TRANSFORMERS_PACKAGE}@${TRANSFORMERS_VERSION_SPEC}`,
+			name: `${TRANSFORMERS_PACKAGE}@${getTransformersVersionSpec()}`,
 		},
 	});
 }

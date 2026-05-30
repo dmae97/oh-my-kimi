@@ -1,7 +1,7 @@
 import { formatBytes } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import {
-	DEFAULT_TINY_TITLE_MODEL_KEY,
+	DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY,
 	getTinyTitleModelSpec,
 	isTinyTitleLocalModelKey,
 	TINY_TITLE_LOCAL_MODELS,
@@ -35,7 +35,7 @@ function writeLine(text = ""): void {
 }
 
 function resolveModels(model: string | undefined): TinyTitleLocalModelKey[] {
-	if (!model) return [DEFAULT_TINY_TITLE_MODEL_KEY];
+	if (!model) return [DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY];
 	if (model === "all") return TINY_TITLE_LOCAL_MODELS.map(spec => spec.key);
 	if (!isTinyTitleLocalModelKey(model)) {
 		const values = TINY_TITLE_LOCAL_MODELS.map(spec => spec.key).join(", ");
@@ -51,7 +51,7 @@ function listModels(json: boolean | undefined): void {
 	}
 	writeLine(chalk.bold("Tiny title models"));
 	for (const spec of TINY_TITLE_LOCAL_MODELS) {
-		const defaultMark = spec.key === DEFAULT_TINY_TITLE_MODEL_KEY ? chalk.cyan(" default") : "";
+		const defaultMark = spec.key === DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY ? chalk.cyan(" default") : "";
 		writeLine(`${chalk.cyan(spec.key)}${defaultMark}`);
 		writeLine(`  ${spec.label} — ${spec.description}`);
 	}

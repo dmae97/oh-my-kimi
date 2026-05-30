@@ -28,7 +28,7 @@ const allToolsSettings = Settings.isolated({
 	"checkpoint.enabled": true,
 	"recipe.enabled": true,
 	"todo.enabled": true,
-	"memory.backend": "hindsight",
+	"memory.backend": "mnemosyne",
 	"tools.discoveryMode": "all",
 });
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { formatHashlineHeader, InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import { dropIncompleteLastEdit, EDIT_MODE_STRATEGIES } from "@oh-my-pi/pi-coding-agent/edit";
 
 describe("dropIncompleteLastEdit", () => {
@@ -35,26 +36,37 @@ describe("dropIncompleteLastEdit", () => {
 
 describe("hashline streaming preview (multi-section)", () => {
 	const strategy = EDIT_MODE_STRATEGIES.hashline;
+	const textA = "const a = 1;\nconst b = 2;\n";
+	const textB = "export const c = 3;\n";
 	let tmpDir: string;
 	let fileA: string;
 	let fileB: string;
+	let snapshots: InMemorySnapshotStore;
+	let headerA: string;
+	let headerB: string;
 
 	beforeEach(async () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "hashline-stream-"));
 		fileA = path.join(tmpDir, "a.ts");
 		fileB = path.join(tmpDir, "b.ts");
-		await Bun.write(fileA, "const a = 1;\nconst b = 2;\n");
-		await Bun.write(fileB, "export const c = 3;\n");
+		await Bun.write(fileA, textA);
+		await Bun.write(fileB, textB);
+		// Snapshot tags are mandatory on every section (preview path mirrors
+		// the apply path). Record each file's content under the absolute path
+		// the section resolves to, then build tagged headers.
+		snapshots = new InMemorySnapshotStore();
+		headerA = formatHashlineHeader("a.ts", snapshots.record(fileA, textA));
+		headerB = formatHashlineHeader("b.ts", snapshots.record(fileB, textB));
 	});
 
 	afterEach(async () => {
 		await fs.rm(tmpDir, { recursive: true, force: true });
 	});
 
-	const ctx = (cwd: string) => ({ cwd, signal: new AbortController().signal });
+	const ctx = (cwd: string) => ({ cwd, signal: new AbortController().signal, snapshots });
 
 	test("keeps section A's preview when section B's header just arrived", async () => {
-		const input = ["¶a.ts", "insert head:", "+// new", "¶b.ts"].join("\n");
+		const input = [headerA, "insert head:", "+// new", headerB].join("\n");
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).not.toBeNull();
 		expect(previews).toHaveLength(1);
@@ -65,7 +77,7 @@ describe("hashline streaming preview (multi-section)", () => {
 
 	test("ignores parse errors from the trailing in-progress section", async () => {
 		// `7:bad` has invalid payload — the trailing section is still being typed.
-		const input = ["¶a.ts", "insert head:", "+// new", "¶b.ts", "7:bad"].join("\n");
+		const input = [headerA, "insert head:", "+// new", headerB, "7:bad"].join("\n");
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).not.toBeNull();
 		expect(previews).toHaveLength(1);
@@ -74,7 +86,7 @@ describe("hashline streaming preview (multi-section)", () => {
 	});
 
 	test("renders both sections once each has at least one valid op", async () => {
-		const input = ["¶a.ts", "insert head:", "+// new a", "¶b.ts", "insert head:", "+// new b"].join("\n");
+		const input = [headerA, "insert head:", "+// new a", headerB, "insert head:", "+// new b"].join("\n");
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).toHaveLength(2);
 		expect(previews?.map(p => p.path).sort()).toEqual(["a.ts", "b.ts"]);
