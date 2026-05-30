@@ -43,6 +43,12 @@ import {
 	type ModelEquivalenceConfig,
 } from "./model-equivalence";
 import {
+	getBracketStrippedModelIdCandidates,
+	getLongestModelLikeIdSegment,
+	getModelLikeIdSegments,
+	stripBracketedModelIdAffixes,
+} from "./model-id-affixes";
+import {
 	type ModelOverride,
 	type ModelsConfig,
 	ModelsConfigSchema,
@@ -650,20 +656,53 @@ function shouldReplaceCustomReference(existing: Model<Api> | undefined, candidat
 	return existing.provider !== "openai" && candidate.provider === "openai";
 }
 
+function normalizeCustomReferenceKey(value: string): string {
+	return value.trim().toLowerCase();
+}
+
 function buildCustomReferenceMap(): Map<string, Model<Api>> {
 	const references = new Map<string, Model<Api>>();
 	for (const provider of getBundledProviders()) {
 		for (const model of getBundledModels(provider as Parameters<typeof getBundledModels>[0])) {
 			const candidate = model as Model<Api>;
-			if (shouldReplaceCustomReference(references.get(candidate.id), candidate)) {
-				references.set(candidate.id, candidate);
+			const key = normalizeCustomReferenceKey(candidate.id);
+			if (shouldReplaceCustomReference(references.get(key), candidate)) {
+				references.set(key, candidate);
 			}
 		}
 	}
 	return references;
 }
 
+function buildCustomReferenceSuffixAliasMap(exactReferences: ReadonlyMap<string, Model<Api>>): Map<string, Model<Api>> {
+	const aliases = new Map<string, Model<Api>>();
+	for (const reference of exactReferences.values()) {
+		const slashIndex = reference.id.lastIndexOf("/");
+		if (slashIndex === -1) {
+			continue;
+		}
+		const suffix = reference.id.slice(slashIndex + 1);
+		const alias = getLongestModelLikeIdSegment(suffix);
+		if (!alias) {
+			continue;
+		}
+		if (shouldReplaceCustomReference(aliases.get(alias), reference)) {
+			aliases.set(alias, reference);
+		}
+	}
+	return aliases;
+}
+
 const customReferenceMap = buildCustomReferenceMap();
+const customReferenceSuffixAliasMap = buildCustomReferenceSuffixAliasMap(customReferenceMap);
+
+const CUSTOM_REFERENCE_TRAILING_MARKER_PATTERN =
+	/[-:](?:thinking|customtools|high|low|medium|minimal|xhigh|free|cloud|exacto|nitro|original|optimized|nvfp4|fp8|fp4|bf16|int8|int4|search)$/i;
+
+function stripCustomReferenceTrailingMarker(candidate: string): string | undefined {
+	const match = CUSTOM_REFERENCE_TRAILING_MARKER_PATTERN.exec(candidate);
+	return match ? candidate.slice(0, match.index) : undefined;
+}
 
 function getCustomReferenceCandidateIds(modelId: string): string[] {
 	const candidates = new Set<string>();
@@ -673,15 +712,37 @@ function getCustomReferenceCandidateIds(modelId: string): string[] {
 		if (!candidate || candidates.has(candidate)) continue;
 		candidates.add(candidate);
 
+		for (const stripped of getBracketStrippedModelIdCandidates(candidate)) {
+			queue.push(stripped);
+		}
+		for (const segment of getModelLikeIdSegments(candidate)) {
+			queue.push(segment);
+		}
+
 		for (const suffix of [":cloud", "-cloud"] as const) {
 			if (candidate.toLowerCase().endsWith(suffix)) {
 				queue.push(candidate.slice(0, -suffix.length));
 			}
 		}
 
+		const slashIndex = candidate.lastIndexOf("/");
+		if (slashIndex !== -1) {
+			queue.push(candidate.slice(slashIndex + 1));
+		}
+
 		const colonToDash = candidate.replace(/:/g, "-");
 		if (colonToDash !== candidate) {
 			queue.push(colonToDash);
+		}
+
+		const lowercased = candidate.toLowerCase();
+		if (lowercased !== candidate) {
+			queue.push(lowercased);
+		}
+
+		const strippedMarker = stripCustomReferenceTrailingMarker(candidate);
+		if (strippedMarker) {
+			queue.push(strippedMarker);
 		}
 	}
 	return [...candidates];
@@ -689,7 +750,8 @@ function getCustomReferenceCandidateIds(modelId: string): string[] {
 
 function resolveCustomModelReference(modelId: string): Model<Api> | undefined {
 	for (const candidate of getCustomReferenceCandidateIds(modelId)) {
-		const reference = customReferenceMap.get(candidate);
+		const key = normalizeCustomReferenceKey(candidate);
+		const reference = customReferenceMap.get(key) ?? customReferenceSuffixAliasMap.get(key);
 		if (reference) return reference;
 	}
 	return undefined;
@@ -1785,7 +1847,7 @@ export class ModelRegistry {
 			throw new Error(`HTTP ${response.status} from ${modelsUrl}`);
 		}
 		const payload = (await response.json()) as {
-			data?: Array<{ id?: string; supported_endpoint_types?: string[] }>;
+			data?: Array<{ id?: string; name?: string; supported_endpoint_types?: string[] }>;
 		};
 		const items = payload.data ?? [];
 		const discovered: Model<Api>[] = [];
@@ -1800,23 +1862,35 @@ export class ModelRegistry {
 					: providerConfig.api;
 			if (!api) continue;
 			const isAnthropic = api === "anthropic-messages";
+			const reference = resolveCustomModelReference(id);
+			const discoveryName = typeof item.name === "string" ? item.name.trim() : "";
+			const displayName =
+				reference?.name ??
+				(discoveryName && discoveryName !== id ? discoveryName : undefined) ??
+				stripBracketedModelIdAffixes(id) ??
+				id;
 			discovered.push(
 				enrichModelThinking({
 					id,
-					name: id,
+					name: displayName,
 					api,
 					provider: providerConfig.provider,
 					baseUrl,
-					reasoning: false,
-					input: ["text"],
+					reasoning: reference?.reasoning ?? false,
+					thinking: reference?.thinking,
+					input: reference?.input ?? ["text"],
+					// Proxy pricing is provider-specific and usually does not match
+					// upstream bundled catalogs, so keep costs local-unknown even when
+					// we successfully recover the upstream model identity.
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 128000,
-					maxTokens: 8192,
+					contextWindow: reference?.contextWindow ?? 128000,
+					maxTokens: reference?.maxTokens ?? 8192,
 					headers,
 					// OpenAI-compat fields are no-ops on anthropic models; the
 					// Anthropic SDK ignores them. Provider-level disableStrictTools
 					// flows in via #applyProviderCompat for the third-party-Anthropic
-					// path.
+					// path. Cross-wire bundled compat is intentionally not copied:
+					// request-shaping fields are provider-wire specific.
 					compat: isAnthropic
 						? undefined
 						: {

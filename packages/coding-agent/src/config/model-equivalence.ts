@@ -1,4 +1,9 @@
 import { type Api, getBundledModels, getBundledProviders, type Model } from "@oh-my-pi/pi-ai";
+import {
+	getBracketStrippedModelIdCandidates,
+	getLongestModelLikeIdSegment,
+	getModelLikeIdSegments,
+} from "./model-id-affixes";
 
 export type CanonicalModelSource = "override" | "bundled" | "heuristic" | "fallback";
 
@@ -29,6 +34,7 @@ export interface CanonicalModelIndex {
 interface CanonicalReferenceData {
 	references: Map<string, Model<Api>>;
 	officialIds: Set<string>;
+	suffixAliases: Map<string, string>;
 }
 
 interface CompiledEquivalenceConfig {
@@ -42,7 +48,7 @@ interface ResolvedCanonicalModel {
 }
 
 const TRAILING_MARKER_PATTERN =
-	/[-:](?:thinking|customtools|high|low|medium|minimal|xhigh|free|cloud|exacto|nitro|original|optimized|nvfp4|fp8|fp4|bf16|int8|int4)$/i;
+	/[-:](?:thinking|customtools|high|low|medium|minimal|xhigh|free|cloud|exacto|nitro|original|optimized|nvfp4|fp8|fp4|bf16|int8|int4|search)$/i;
 const WRAPPER_PREFIXES = ["duo-chat-"] as const;
 
 let referenceDataCache: CanonicalReferenceData | undefined;
@@ -70,6 +76,26 @@ function shouldReplaceReference(existing: Model<Api> | undefined, candidate: Mod
 	return existing.provider !== "openai" && candidate.provider === "openai";
 }
 
+function buildCanonicalSuffixAliasMap(references: ReadonlyMap<string, Model<Api>>): Map<string, string> {
+	const aliases = new Map<string, string>();
+	for (const reference of references.values()) {
+		const slashIndex = reference.id.lastIndexOf("/");
+		if (slashIndex === -1) {
+			continue;
+		}
+		const suffix = reference.id.slice(slashIndex + 1);
+		const alias = getLongestModelLikeIdSegment(suffix);
+		if (!alias) {
+			continue;
+		}
+		const existing = aliases.get(alias);
+		if (!existing || compareCandidatePreference(reference.id, existing) < 0) {
+			aliases.set(alias, reference.id);
+		}
+	}
+	return new Map([...aliases.entries()].map(([alias, referenceId]) => [normalizeCanonicalIdKey(alias), referenceId]));
+}
+
 function createCanonicalReferenceData(): CanonicalReferenceData {
 	if (referenceDataCache) {
 		return referenceDataCache;
@@ -85,9 +111,11 @@ function createCanonicalReferenceData(): CanonicalReferenceData {
 		}
 	}
 	const officialIds = new Set(references.keys());
+	const suffixAliases = buildCanonicalSuffixAliasMap(references);
 	referenceDataCache = {
 		references: Object.freeze(references) as Map<string, Model<Api>>,
 		officialIds: Object.freeze(officialIds) as Set<string>,
+		suffixAliases: Object.freeze(suffixAliases) as Map<string, string>,
 	};
 	return referenceDataCache;
 }
@@ -590,6 +618,13 @@ function expandHeavyCanonicalCandidates(normalized: string, queue: string[]): vo
 		queue.push(wrapperCandidate);
 	}
 
+	for (const strippedAffixCandidate of getBracketStrippedModelIdCandidates(normalized)) {
+		queue.push(strippedAffixCandidate);
+	}
+	for (const segment of getModelLikeIdSegments(normalized)) {
+		queue.push(segment);
+	}
+
 	const strippedSyntheticPrefix = stripSyntheticPrefix(normalized);
 	if (strippedSyntheticPrefix) {
 		queue.push(strippedSyntheticPrefix);
@@ -718,9 +753,15 @@ function resolveCanonicalIdForModel(
 	}
 
 	const heuristicCandidates = getHeuristicCanonicalCandidates(model.id, referenceData.officialIds);
-	const officialMatches = heuristicCandidates.filter(candidate => referenceData.officialIds.has(candidate));
+	const officialMatches = new Set(heuristicCandidates.filter(candidate => referenceData.officialIds.has(candidate)));
+	for (const candidate of heuristicCandidates) {
+		const aliased = referenceData.suffixAliases.get(normalizeCanonicalIdKey(candidate));
+		if (aliased) {
+			officialMatches.add(aliased);
+		}
+	}
 	const preferredFallback = getPreferredFallbackCanonicalCandidate(model.id, heuristicCandidates);
-	const match = selectBestOfficialCandidate(officialMatches);
+	const match = selectBestOfficialCandidate([...officialMatches]);
 	if (match) {
 		if (
 			preferredFallback &&
