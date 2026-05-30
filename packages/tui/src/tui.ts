@@ -154,15 +154,6 @@ function isMultiplexerSession(): boolean {
 	return Boolean(Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ);
 }
 
-function requiresNativeViewportProofForReplay(): boolean {
-	return (
-		process.platform === "win32" ||
-		(process.platform === "linux" &&
-			Boolean(Bun.env.WT_SESSION) &&
-			Boolean(Bun.env.WSL_DISTRO_NAME || Bun.env.WSL_INTEROP))
-	);
-}
-
 /**
  * Options for overlay positioning and sizing.
  * Values can be absolute numbers or percentage strings (e.g., "50%").
@@ -1442,7 +1433,7 @@ export class TUI extends Container {
 	#nativeViewportIsScrolled(nativeViewportAtBottom: boolean | undefined): boolean {
 		return (
 			nativeViewportAtBottom === false ||
-			(nativeViewportAtBottom === undefined && requiresNativeViewportProofForReplay())
+			(nativeViewportAtBottom === undefined && process.platform === "win32")
 		);
 	}
 
@@ -1456,7 +1447,7 @@ export class TUI extends Container {
 	): boolean {
 		return (
 			nativeViewportAtBottom === true ||
-			(nativeViewportAtBottom === undefined && (allowUnknownViewport || !requiresNativeViewportProofForReplay()))
+			(nativeViewportAtBottom === undefined && (allowUnknownViewport || process.platform !== "win32"))
 		);
 	}
 
