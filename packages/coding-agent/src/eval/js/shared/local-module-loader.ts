@@ -88,7 +88,10 @@ export class LocalModuleLoader {
 
 	async #buildLocalModule(modulePath: string): Promise<LocalModuleEntry> {
 		const rawSource = fs.readFileSync(modulePath, "utf8");
-		const stripped = stripTypeScriptSyntax(rawSource);
+		const stripped = stripTypeScriptSyntax(rawSource, {
+			force: isTypeScriptModulePath(modulePath),
+			loader: stripLoaderForPath(modulePath),
+		});
 		const moduleDir = path.dirname(modulePath);
 		const localDeps = new Set<string>();
 		for (const specifier of collectModuleSourceSpecifiers(stripped)) {
@@ -249,6 +252,15 @@ function isLocalPathSpecifier(source: string): boolean {
 		source.startsWith("~/") ||
 		/^[a-zA-Z]:[\\/]/.test(source)
 	);
+}
+
+function isTypeScriptModulePath(modulePath: string): boolean {
+	const ext = path.extname(modulePath);
+	return ext === ".ts" || ext === ".tsx" || ext === ".mts";
+}
+
+function stripLoaderForPath(modulePath: string): "ts" | "tsx" {
+	return path.extname(modulePath) === ".tsx" ? "tsx" : "ts";
 }
 
 function isManagedLocalModulePath(target: string): boolean {

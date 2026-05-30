@@ -492,6 +492,42 @@ display({"label": "A"})`,
 		expect(reloaded.output.trim()).toBe("2");
 	});
 
+	it("loads TypeScript type-only imports in cells and local modules", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-js-type-imports-");
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `js-type-imports:${crypto.randomUUID()}`;
+		const session = createToolSession(tempDir.path(), sessionFile);
+		const typesPath = path.join(tempDir.path(), "types.ts");
+		const valuesPath = path.join(tempDir.path(), "values.ts");
+		const entryPath = path.join(tempDir.path(), "entry.ts");
+		const typesSpec = JSON.stringify(typesPath);
+		const entrySpec = JSON.stringify(entryPath);
+		await Bun.write(typesPath, "export interface TypeOnly { value: number }\n");
+		await Bun.write(valuesPath, "export interface InlineOnly { value: number }\nexport const imported = 41;\n");
+		await Bun.write(
+			entryPath,
+			[
+				'import type { TypeOnly } from "./types.ts";',
+				'import { type InlineOnly, imported } from "./values.ts";',
+				"export const typeOnly = 1;",
+				"export const inlineType = imported;",
+				"",
+			].join("\n"),
+		);
+
+		const result = await executeJs(
+			`import type { TypeOnly } from ${typesSpec};\nconst mod = await import(${entrySpec});\nreturn mod.typeOnly + mod.inlineType;`,
+			{
+				sessionId,
+				session,
+				sessionFile,
+			},
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("42");
+	});
+
 	it("refreshes the Python tool proxy when bridge env appears after kernel warm-up", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-py-tool-proxy-");
 		const sessionFile = path.join(tempDir.path(), "session.jsonl");

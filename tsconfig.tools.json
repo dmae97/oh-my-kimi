@@ -3,7 +3,8 @@
 	"compilerOptions": {
 		"composite": true,
 		"noEmit": true,
-		"emitDeclarationOnly": false
+		"emitDeclarationOnly": false,
+		"allowImportingTsExtensions": true
 	},
 	"include": ["scripts"],
 	"exclude": ["node_modules"]
