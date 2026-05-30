@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed empty assistant stop retry caps resolving without leaving auto-retry callers waiting indefinitely.
+- Fixed empty assistant stop retry continuations preserving auto-retry state until a non-empty assistant turn completes or recovery reaches its retry cap.
 
 ## [15.7.4] - 2026-05-31
 

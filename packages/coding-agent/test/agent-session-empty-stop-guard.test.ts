@@ -6,7 +6,7 @@ import { z } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -220,6 +220,44 @@ describe("AgentSession empty stop guard", () => {
 		expect(session.isRetrying).toBe(false);
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(3);
 		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(1);
+	});
+
+	it("preserves auto-retry budget across empty stop continuations", async () => {
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const { session, mock } = await createHarness(
+			[
+				{ throw: "503 service unavailable: overloaded_error" },
+				emptyStop(),
+				{ throw: "503 service unavailable: overloaded_error" },
+				{ throw: "503 service unavailable: overloaded_error" },
+			],
+			{
+				"retry.enabled": true,
+				"retry.baseDelayMs": 5,
+				"retry.maxDelayMs": 5_000,
+				"retry.maxRetries": 2,
+			},
+		);
+		const retryEndEvents: Array<Extract<AgentSessionEvent, { type: "auto_retry_end" }>> = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_end") {
+				retryEndEvents.push(event);
+			}
+		});
+
+		await expectPromptCompletes(session.prompt("recover without replenishing retries"));
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(4);
+		expect(retryEndEvents.filter(event => event.success)).toEqual([]);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({
+			type: "auto_retry_end",
+			success: false,
+			attempt: 2,
+		});
+		expect(session.isRetrying).toBe(false);
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
 	});
 
 	it("does not retry normal stop or tool-use turns", async () => {
