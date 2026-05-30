@@ -626,22 +626,24 @@ it("preflights write policy for every section before committing a batch", async 
 });
 
 describe("hashline executor", () => {
-	it("creates a missing file with a file-scoped insert", async () => {
+	it("rejects file creation and directs to the write tool", async () => {
 		await withTempDir(async tempDir => {
 			const input = `¶new.ts\ninsert head:\n${repl("export const x = 1;")}\n`;
-			const result = await executeHashlineSingle(hashlineExecuteOptions(tempDir, input));
-			expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("¶new.ts#");
-			expect(await Bun.file(path.join(tempDir, "new.ts")).text()).toBe("export const x = 1;");
+			await expect(executeHashlineSingle(hashlineExecuteOptions(tempDir, input))).rejects.toThrow(
+				/write tool/,
+			);
+			expect(await Bun.file(path.join(tempDir, "new.ts")).exists()).toBe(false);
 		});
 	});
 	it("applies duplicate pure-insert payload literally", async () => {
 		await withTempDir(async tempDir => {
 			const filePath = path.join(tempDir, "a.ts");
 			const source = ["aaa", "bbb", "ccc"].join("\n");
-			const input = `¶a.ts\ninsert tail:\n${repl("bbb")}\n${repl("ccc")}\n${repl("NEW")}\n`;
 			const session = makeHashlineSession(tempDir);
 
 			await Bun.write(filePath, source);
+			const sourceTag = recordFullSnapshot(getFileReadCache(session), filePath, source);
+			const input = `${header("a.ts", sourceTag)}\ninsert tail:\n${repl("bbb")}\n${repl("ccc")}\n${repl("NEW")}\n`;
 			const result = await executeHashlineSingle(hashlineExecuteOptions(tempDir, input, undefined, session));
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
