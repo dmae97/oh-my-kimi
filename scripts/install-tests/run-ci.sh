@@ -66,7 +66,35 @@ SOURCE_BUN_HOME="$WORK_DIR/bun-source"
 section "Tarball install smoke"
 TARBALL_DIR="$WORK_DIR/tarballs"
 mkdir -p "$TARBALL_DIR"
-for pkg in utils natives hashline ai mnemosyne agent tui stats coding-agent; do
+host_tag="$(bun -e "process.stdout.write(\`\${process.platform}-\${process.arch}\`)")"
+
+# Native addon split: the published core ships only the loader (no `.node`); the
+# prebuilt binary lives in a per-platform leaf package pulled in as an optional
+# dependency. Reproduce that exact published topology so this smoke proves the
+# installed core resolves its addon through the leaf, not a bundled binary.
+
+# 1. Generate + pack the host-platform leaf (carries the built `.node`).
+bun --cwd=packages/natives run gen:npm --tag "$host_tag" >/dev/null
+(
+	cd "$ROOT_DIR/packages/natives/npm/$host_tag"
+	bun pm pack --destination "$TARBALL_DIR" --quiet >/dev/null
+)
+
+# 2. Pack the core with its *published* manifest: the same rewrite release uses
+#    drops `.node` from `files` and adds the leaf `optionalDependencies`. Always
+#    restore the working-tree manifest so local runs aren't left mutated.
+natives_pkg_backup="$WORK_DIR/natives-package.json.orig"
+cp "$ROOT_DIR/packages/natives/package.json" "$natives_pkg_backup"
+core_rc=0
+{
+	bun -e 'import { prepareNativeCorePackage } from "./scripts/ci-release-publish.ts"; await prepareNativeCorePackage("packages/natives", true);' &&
+		( cd "$ROOT_DIR/packages/natives" && bun pm pack --destination "$TARBALL_DIR" --quiet >/dev/null )
+} || core_rc=$?
+cp "$natives_pkg_backup" "$ROOT_DIR/packages/natives/package.json"
+[ "$core_rc" -eq 0 ] || exit "$core_rc"
+
+# 3. Pack the remaining workspace packages (natives core handled above).
+for pkg in utils hashline ai mnemosyne agent tui stats coding-agent; do
 	(
 		cd "$ROOT_DIR/packages/$pkg"
 		bun pm pack --destination "$TARBALL_DIR" --quiet >/dev/null
@@ -74,7 +102,8 @@ for pkg in utils natives hashline ai mnemosyne agent tui stats coding-agent; do
 done
 
 utils_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-utils-*.tgz)"
-natives_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-natives-*.tgz)"
+natives_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-natives-[0-9]*.tgz)"
+natives_leaf_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-natives-"$host_tag"-*.tgz)"
 hashline_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-hashline-*.tgz)"
 ai_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-ai-*.tgz)"
 mnemosyne_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-mnemosyne-*.tgz)"
@@ -96,6 +125,7 @@ mkdir -p "$TARBALL_APP_DIR"
 		pkg.overrides = {
 			'@oh-my-pi/pi-utils': '$utils_tgz',
 			'@oh-my-pi/pi-natives': '$natives_tgz',
+			'@oh-my-pi/pi-natives-$host_tag': '$natives_leaf_tgz',
 			'@oh-my-pi/hashline': '$hashline_tgz',
 			'@oh-my-pi/pi-ai': '$ai_tgz',
 			'@oh-my-pi/pi-mnemosyne': '$mnemosyne_tgz',
@@ -108,6 +138,11 @@ mkdir -p "$TARBALL_APP_DIR"
 	"
 
 	bun add "$utils_tgz" "$natives_tgz" "$hashline_tgz" "$ai_tgz" "$mnemosyne_tgz" "$agent_tgz" "$tui_tgz" "$stats_tgz" "$coding_agent_tgz"
+	# The platform leaf must arrive through the core's optionalDependencies +
+	# override, not as a direct dependency — assert it landed before smoking so a
+	# resolution regression is distinguishable from a runtime loader bug.
+	leaf_dir="node_modules/@oh-my-pi/pi-natives-$host_tag"
+	[ -d "$leaf_dir" ] || { echo "Platform leaf package not installed: $leaf_dir"; exit 1; }
 	smoke_cli ./node_modules/.bin/omp
 )
 

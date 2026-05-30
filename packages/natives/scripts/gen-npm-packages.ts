@@ -161,6 +161,24 @@ export async function generateNpmPackages({
 	return leaves;
 }
 
+/** Parse repeatable `--tag <tag>` / `--tag=<tag>` flags; undefined means all targets. */
+function parseTagArgs(argv: readonly string[]): readonly string[] | undefined {
+	const tags: string[] = [];
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i];
+		if (arg === "--tag") {
+			const value = argv[i + 1];
+			if (!value) throw new Error("--tag requires a native target tag");
+			tags.push(value);
+			i++;
+		} else if (arg.startsWith("--tag=")) {
+			tags.push(arg.slice("--tag=".length));
+		}
+	}
+	return tags.length > 0 ? tags : undefined;
+}
+
 if (import.meta.main) {
-	await generateNpmPackages({ dryRun: process.argv.includes("--dry-run") });
+	const argv = process.argv.slice(2);
+	await generateNpmPackages({ dryRun: argv.includes("--dry-run"), tags: parseTagArgs(argv) });
 }

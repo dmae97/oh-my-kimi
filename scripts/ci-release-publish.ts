@@ -49,7 +49,8 @@ type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
 interface JsonObject {
 	[key: string]: JsonValue;
 }
-interface PackageManifest extends JsonObject {
+interface PackageManifest {
+	[key: string]: JsonValue | undefined;
 	name?: string;
 	version?: string;
 	private?: boolean;
@@ -159,7 +160,7 @@ function buildNativeOptionalDependencies(version: string): JsonObject {
 	return optionalDependencies;
 }
 
-async function prepareNativeCorePackage(pkgDir: string, write: boolean): Promise<PackageManifest> {
+export async function prepareNativeCorePackage(pkgDir: string, write: boolean): Promise<PackageManifest> {
 	const manifestPath = path.join(pkgDir, "package.json");
 	const manifest = (await Bun.file(manifestPath).json()) as PackageManifest;
 	if (typeof manifest.version !== "string") throw new Error(`Missing version in ${manifestPath}`);

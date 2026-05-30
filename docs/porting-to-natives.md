@@ -40,7 +40,7 @@ Consumers import directly from `@oh-my-pi/pi-natives`. The generated declaration
 
 - `packages/natives/scripts/build-native.ts` runs napi-rs, installs the `.node` artifact, copies generated `index.js`/`index.d.ts`, and appends enum runtime exports.
 - `packages/natives/native/index.js` is the loader that chooses a candidate `.node` file and returns the loaded addon.
-- `packages/natives/package.json` exposes only the package root (`@oh-my-pi/pi-natives`).
+- `packages/natives/package.json` exposes only the package root (`@oh-my-pi/pi-natives`) as the import surface. At publish time the binaries are split out: the core ships the loader only (no `.node`), and each platform's `.node` is published as an optional-dependency leaf package `@oh-my-pi/pi-natives-<tag>` (`scripts/ci-release-publish.ts` + `packages/natives/scripts/gen-npm-packages.ts`). This is transparent to importers — you still `import` from `@oh-my-pi/pi-natives`.
 
 **Consumer side:**
 

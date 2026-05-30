@@ -28,6 +28,7 @@ At module initialization, `native/index.js` computes:
 - **Platform tag**: `${process.platform}-${process.arch}` (for example `darwin-arm64`).
 - **Package version**: from `packages/natives/package.json`.
 - **Core directories**:
+  - `leafPackageDir`: directory of the platform leaf package, resolved via `require.resolve("@oh-my-pi/pi-natives-<tag>/package.json")`; `null` when no leaf is installed (e.g. local dev).
   - `nativeDir`: package-local `packages/natives/native`.
   - `execDir`: directory containing `process.execPath`.
   - `versionedDir`: `<getNativesDir()>/<packageVersion>`.
@@ -92,10 +93,15 @@ The default unsuffixed fallback remains part of the x64 candidate list.
 
 ### Non-compiled runtime
 
-For each filename, candidates are:
+For each filename, candidates are, in order:
 
-1. `<nativeDir>/<filename>`
-2. `<execDir>/<filename>`
+1. `<leafPackageDir>/<filename>` (omitted when `leafPackageDir` is `null`)
+2. `<nativeDir>/<filename>`
+3. `<execDir>/<filename>`
+
+The leaf package dir comes first so the optional-dependency binary published with the release is preferred over any `.node` left in the core package's `native/` (e.g. a stale local-dev build).
+
+On Windows installs where `nativeDir` is inside a `node_modules` segment (`shouldStageNodeModulesAddon`), `<versionedDir>/<filename>` staging candidates are prepended ahead of the leaf candidates so a locked `node_modules` binary can be sidestepped during `bun install -g` updates.
 
 ### Compiled runtime
 
