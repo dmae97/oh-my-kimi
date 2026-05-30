@@ -1,5 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
+import { normalizeProfileName } from "@oh-my-pi/pi-utils/dirs";
 
 export type ProfileAliasShell = "bash" | "zsh" | "fish" | "powershell" | "pwsh";
 
@@ -120,8 +121,8 @@ function upsertBlock(content: string, aliasName: string, block: string): string 
 }
 
 export async function installProfileAlias(options: ProfileAliasInstallOptions): Promise<ProfileAliasInstallResult> {
-	const profile = options.profile.trim();
-	if (!profile || profile === "default") {
+	const profile = normalizeProfileName(options.profile);
+	if (!profile) {
 		throw new Error("--alias requires a named --profile value.");
 	}
 	const aliasName = validateAliasName(options.aliasName);
