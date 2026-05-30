@@ -1,5 +1,7 @@
+import { dirname } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { Mnemosyne, type RecallResult } from "@oh-my-pi/pi-mnemosyne";
+import { BankManager } from "@oh-my-pi/pi-mnemosyne/core";
 import { logger } from "@oh-my-pi/pi-utils";
 import {
 	composeRecallQuery,
@@ -300,7 +302,7 @@ function uniqueBanks(banks: readonly string[]): readonly string[] {
 function createMemory(config: MnemosyneBackendConfig, bank: string): Mnemosyne {
 	const providerOptions = config.providerOptions as Record<string, unknown>;
 	return new Mnemosyne({
-		dbPath: config.dbPath,
+		dbPath: resolveBankDbPath(config, bank),
 		bank,
 		sessionId: bank,
 		authorId: "coding-agent",
@@ -308,6 +310,12 @@ function createMemory(config: MnemosyneBackendConfig, bank: string): Mnemosyne {
 		channelId: bank,
 		...providerOptions,
 	} as ConstructorParameters<typeof Mnemosyne>[0]);
+}
+
+function resolveBankDbPath(config: MnemosyneBackendConfig, bank: string): string {
+	const sharedBank = config.globalBank ?? config.baseBank ?? "default";
+	if (bank === sharedBank) return config.dbPath;
+	return new BankManager(dirname(config.dbPath)).getBankDbPath(bank);
 }
 
 function mergeRecallResult(

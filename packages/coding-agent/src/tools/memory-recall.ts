@@ -5,31 +5,31 @@ import { formatCurrentTime, formatMemories } from "../hindsight/content";
 import recallDescription from "../prompts/tools/recall.md" with { type: "text" };
 import type { ToolSession } from ".";
 
-const hindsightRecallSchema = z.object({
+const memoryRecallSchema = z.object({
 	query: z.string().describe("natural language search query"),
 });
 
-export type HindsightRecallParams = z.infer<typeof hindsightRecallSchema>;
+export type MemoryRecallParams = z.infer<typeof memoryRecallSchema>;
 
-export class HindsightRecallTool implements AgentTool<typeof hindsightRecallSchema> {
+export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 	readonly name = "recall";
 	readonly approval = "read" as const;
 	readonly label = "Recall";
 	readonly description = recallDescription;
-	readonly parameters = hindsightRecallSchema;
+	readonly parameters = memoryRecallSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	readonly summary = "Search memory for relevant prior context";
 
 	constructor(private readonly session: ToolSession) {}
 
-	static createIf(session: ToolSession): HindsightRecallTool | null {
+	static createIf(session: ToolSession): MemoryRecallTool | null {
 		const backend = session.settings.get("memory.backend");
 		if (backend !== "hindsight" && backend !== "mnemosyne") return null;
-		return new HindsightRecallTool(session);
+		return new MemoryRecallTool(session);
 	}
 
-	async execute(_id: string, params: HindsightRecallParams, signal?: AbortSignal): Promise<AgentToolResult> {
+	async execute(_id: string, params: MemoryRecallParams, signal?: AbortSignal): Promise<AgentToolResult> {
 		return untilAborted(signal, async () => {
 			const backend = this.session.settings.get("memory.backend");
 			if (backend === "mnemosyne") {

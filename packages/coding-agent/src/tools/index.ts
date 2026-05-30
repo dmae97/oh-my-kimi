@@ -34,12 +34,12 @@ import { DebugTool } from "./debug";
 import { EvalTool } from "./eval";
 import { FindTool } from "./find";
 import { GithubTool } from "./gh";
-import { HindsightRecallTool } from "./hindsight-recall";
-import { HindsightReflectTool } from "./hindsight-reflect";
-import { HindsightRetainTool } from "./hindsight-retain";
 import { InspectImageTool } from "./inspect-image";
 import { IrcTool } from "./irc";
 import { JobTool } from "./job";
+import { MemoryRecallTool } from "./memory-recall";
+import { MemoryReflectTool } from "./memory-reflect";
+import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
 import { RecipeTool } from "./recipe";
@@ -74,13 +74,13 @@ export * from "./debug";
 export * from "./eval";
 export * from "./find";
 export * from "./gh";
-export * from "./hindsight-recall";
-export * from "./hindsight-reflect";
-export * from "./hindsight-retain";
 export * from "./image-gen";
 export * from "./inspect-image";
 export * from "./irc";
 export * from "./job";
+export * from "./memory-recall";
+export * from "./memory-reflect";
+export * from "./memory-retain";
 export * from "./read";
 export * from "./recipe";
 export * from "./render-mermaid";
@@ -304,9 +304,9 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	web_search: s => new WebSearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
-	retain: HindsightRetainTool.createIf,
-	recall: HindsightRecallTool.createIf,
-	reflect: HindsightReflectTool.createIf,
+	retain: MemoryRetainTool.createIf,
+	recall: MemoryRecallTool.createIf,
+	reflect: MemoryReflectTool.createIf,
 };
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {

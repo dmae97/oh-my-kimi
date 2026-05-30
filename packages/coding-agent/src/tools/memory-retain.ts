@@ -3,7 +3,7 @@ import * as z from "zod/v4";
 import retainDescription from "../prompts/tools/retain.md" with { type: "text" };
 import type { ToolSession } from ".";
 
-const hindsightRetainSchema = z.object({
+const memoryRetainSchema = z.object({
 	items: z
 		.array(
 			z.object({
@@ -15,26 +15,26 @@ const hindsightRetainSchema = z.object({
 		.describe("memories to retain"),
 });
 
-export type HindsightRetainParams = z.infer<typeof hindsightRetainSchema>;
-export class HindsightRetainTool implements AgentTool<typeof hindsightRetainSchema> {
+export type MemoryRetainParams = z.infer<typeof memoryRetainSchema>;
+export class MemoryRetainTool implements AgentTool<typeof memoryRetainSchema> {
 	readonly name = "retain";
 	readonly approval = "read" as const;
 	readonly label = "Retain";
 	readonly description = retainDescription;
-	readonly parameters = hindsightRetainSchema;
+	readonly parameters = memoryRetainSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	readonly summary = "Store important facts in long-term memory";
 
 	constructor(private readonly session: ToolSession) {}
 
-	static createIf(session: ToolSession): HindsightRetainTool | null {
+	static createIf(session: ToolSession): MemoryRetainTool | null {
 		const backend = session.settings.get("memory.backend");
 		if (backend !== "hindsight" && backend !== "mnemosyne") return null;
-		return new HindsightRetainTool(session);
+		return new MemoryRetainTool(session);
 	}
 
-	async execute(_id: string, params: HindsightRetainParams): Promise<AgentToolResult> {
+	async execute(_id: string, params: MemoryRetainParams): Promise<AgentToolResult> {
 		const backend = this.session.settings.get("memory.backend");
 		if (backend === "mnemosyne") {
 			const state = this.session.getMnemosyneSessionState?.();

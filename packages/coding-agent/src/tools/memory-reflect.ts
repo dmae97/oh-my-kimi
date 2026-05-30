@@ -5,32 +5,32 @@ import { ensureBankMission } from "../hindsight/bank";
 import reflectDescription from "../prompts/tools/reflect.md" with { type: "text" };
 import type { ToolSession } from ".";
 
-const hindsightReflectSchema = z.object({
+const memoryReflectSchema = z.object({
 	query: z.string().describe("question to answer"),
 	context: z.string().describe("optional context").optional(),
 });
 
-export type HindsightReflectParams = z.infer<typeof hindsightReflectSchema>;
+export type MemoryReflectParams = z.infer<typeof memoryReflectSchema>;
 
-export class HindsightReflectTool implements AgentTool<typeof hindsightReflectSchema> {
+export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema> {
 	readonly name = "reflect";
 	readonly approval = "read" as const;
 	readonly label = "Reflect";
 	readonly description = reflectDescription;
-	readonly parameters = hindsightReflectSchema;
+	readonly parameters = memoryReflectSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	readonly summary = "Synthesize an answer from long-term memory";
 
 	constructor(private readonly session: ToolSession) {}
 
-	static createIf(session: ToolSession): HindsightReflectTool | null {
+	static createIf(session: ToolSession): MemoryReflectTool | null {
 		const backend = session.settings.get("memory.backend");
 		if (backend !== "hindsight" && backend !== "mnemosyne") return null;
-		return new HindsightReflectTool(session);
+		return new MemoryReflectTool(session);
 	}
 
-	async execute(_id: string, params: HindsightReflectParams, signal?: AbortSignal): Promise<AgentToolResult> {
+	async execute(_id: string, params: MemoryReflectParams, signal?: AbortSignal): Promise<AgentToolResult> {
 		return untilAborted(signal, async () => {
 			const backend = this.session.settings.get("memory.backend");
 			if (backend === "mnemosyne") {
