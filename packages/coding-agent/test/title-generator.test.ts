@@ -106,4 +106,24 @@ describe("title generator", () => {
 		expect(title).toBe("Budget Title");
 		expect(maxTokens).toBeGreaterThanOrEqual(1024);
 	});
+
+	it("strips code blocks from the message sent to the model", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "toolCall", id: "call-title", name: "set_title", arguments: { title: "Setup Screen" } }],
+		} as never);
+
+		await generateSessionTitle(
+			"plan a setup screen\n```\nWelcome to Claude Code v2.1.158\n```\npick provider then theme",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		const sentMessages = (completeSimpleMock.mock.calls[0]?.[1] as { messages?: Array<{ content?: string }> })
+			?.messages;
+		const userContent = sentMessages?.[0]?.content ?? "";
+		expect(userContent).not.toContain("Claude Code v2.1.158");
+		expect(userContent).toContain("pick provider then theme");
+	});
 });
