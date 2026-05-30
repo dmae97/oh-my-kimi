@@ -148,6 +148,7 @@ import type { HindsightSessionState } from "../hindsight/state";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import { resolveMemoryBackend } from "../memory-backend";
 import { getMnemosyneSessionState, type MnemosyneSessionState, setMnemosyneSessionState } from "../mnemosyne/state";
+import { containsOrchestrate, ORCHESTRATE_NOTICE } from "../modes/orchestrate";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import type { PlanModeState } from "../plan-mode/state";
@@ -165,7 +166,7 @@ import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
 import { invalidateHostMetadata } from "../ssh/connection-manager";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
-import { shutdownTinyTitleClient } from "../title/tiny-title-client";
+import { shutdownTinyTitleClient } from "../tiny/title-client";
 import {
 	buildDiscoverableToolSearchIndex,
 	collectDiscoverableTools,
@@ -4035,20 +4036,33 @@ export class AgentSession {
 		// Expand file-based prompt templates if requested
 		const expandedText = expandPromptTemplates ? expandPromptTemplate(text, [...this.#promptTemplates]) : text;
 
-		// "ultrathink" keyword: nudge the model toward careful multi-step reasoning by
-		// appending a hidden notice after the user's message. User-authored prompts only —
-		// synthetic/agent-initiated turns never trigger it.
-		const ultrathinkNotice: CustomMessage | undefined =
-			!options?.synthetic && containsUltrathink(expandedText)
-				? {
-						role: "custom",
-						customType: "ultrathink-notice",
-						content: ULTRATHINK_NOTICE,
-						display: false,
-						attribution: "user",
-						timestamp: Date.now(),
-					}
-				: undefined;
+		// Magic keywords ("ultrathink", "orchestrate"): append hidden system notices after the
+		// user's message that steer this turn. User-authored prompts only — synthetic /
+		// agent-initiated turns never trigger them.
+		const keywordNotices: CustomMessage[] = [];
+		if (!options?.synthetic) {
+			const timestamp = Date.now();
+			if (containsUltrathink(expandedText)) {
+				keywordNotices.push({
+					role: "custom",
+					customType: "ultrathink-notice",
+					content: ULTRATHINK_NOTICE,
+					display: false,
+					attribution: "user",
+					timestamp,
+				});
+			}
+			if (containsOrchestrate(expandedText)) {
+				keywordNotices.push({
+					role: "custom",
+					customType: "orchestrate-notice",
+					content: ORCHESTRATE_NOTICE,
+					display: false,
+					attribution: "user",
+					timestamp,
+				});
+			}
+		}
 
 		// If streaming, queue via steer() or followUp() based on option
 		if (this.isStreaming) {
@@ -4060,9 +4074,9 @@ export class AgentSession {
 			} else {
 				await this.#queueSteer(expandedText, options?.images);
 			}
-			// Steer/follow-up the ultrathink notice alongside the queued user message.
-			if (ultrathinkNotice) {
-				await this.sendCustomMessage(ultrathinkNotice, { deliverAs: options.streamingBehavior });
+			// Steer/follow-up the keyword notices alongside the queued user message.
+			for (const notice of keywordNotices) {
+				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
 			}
 			return;
 		}
@@ -4092,7 +4106,7 @@ export class AgentSession {
 			await this.#promptWithMessage(message, expandedText, {
 				...options,
 				prependMessages: eagerTodoPrelude ? [eagerTodoPrelude.message] : undefined,
-				appendMessages: ultrathinkNotice ? [ultrathinkNotice] : undefined,
+				appendMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
 			});
 		} finally {
 			// Clean up residual eager-todo directive if the prompt never consumed it
