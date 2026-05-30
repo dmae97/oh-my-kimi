@@ -33,7 +33,7 @@ There is NO other body row kind. NEVER write `-old` or a bare/context line. To k
 <example>
 Original (the exact shape `read` returns):
 ```
-¶greet.py#A1
+¶greet.py#A1B2
 1:def greet(name):
 2:    msg = "Hello, " + name
 3:    print(msg)
@@ -42,14 +42,14 @@ Original (the exact shape `read` returns):
 
 Insert a guard after line 1:
 ```
-¶greet.py#A1
+¶greet.py#A1B2
 insert after 1:
 +    if not name: name = "stranger"
 ```
 
 Replace line 2 with two lines:
 ```
-¶greet.py#A1
+¶greet.py#A1B2
 replace 2..2:
 +    greeting = "Hi"
 +    msg = f"{greeting}, {name}"
@@ -57,13 +57,13 @@ replace 2..2:
 
 Delete line 3:
 ```
-¶greet.py#A1
+¶greet.py#A1B2
 delete 3
 ```
 
 Add a header and trailer:
 ```
-¶greet.py#A1
+¶greet.py#A1B2
 insert head:
 +# generated header
 insert tail:

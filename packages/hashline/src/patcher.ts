@@ -23,11 +23,11 @@
  * filesystem configuration.
  */
 import { applyEdits } from "./apply";
-import { computeFileHash, formatHashlineHeader, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
+import { computeFileHash, formatHashlineHeader } from "./format";
 import type { Filesystem, WriteResult } from "./fs";
 import { isNotFound } from "./fs";
 import type { Patch, PatchSection } from "./input";
-import { HEADTAIL_DRIFT_WARNING } from "./messages";
+import { HEADTAIL_DRIFT_WARNING, missingSnapshotTagMessage } from "./messages";
 import { MismatchError } from "./mismatch";
 import { detectLineEnding, type LineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./normalize";
 import { Recovery, type RecoveryResult } from "./recovery";
@@ -105,9 +105,7 @@ function hasAnchorScopedEdit(edits: readonly Edit[]): boolean {
 
 function assertSectionHashPresent(sectionPath: string, fileHash: string | undefined): void {
 	if (fileHash !== undefined) return;
-	throw new Error(
-		`Missing hashline snapshot tag for edit to ${sectionPath}; use \`${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}tag\` from your latest read/search output. To create a new file, use the write tool.`,
-	);
+	throw new Error(missingSnapshotTagMessage(sectionPath));
 }
 
 function recoveryToApplyResult(result: RecoveryResult): ApplyResult {
