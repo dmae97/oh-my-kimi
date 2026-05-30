@@ -1,19 +1,24 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added a `Web search` setup tab that lets users choose the preferred `providers.webSearch` provider during onboarding
+- Added manual authorization-code/redirect URL prompts for OAuth providers that require non-callback login in the setup wizard
 - Added an `omp completions <bash|zsh|fish>` command that prints a shell completion script generated from the live command/flag metadata, so completions never drift from the actual CLI. Subcommands, flags, and enum values complete statically; `--model`/`--smol`/`--slow`/`--plan` resolve against the bundled model catalog and `--resume` against on-disk sessions via a hidden `__complete` helper.
 - Added a `/switch` slash command that opens the temporary model selector for the current session, mirroring the `alt+p` keybinding.
 
+### Changed
+
+- Changed setup onboarding to a tabbed `Set up your providers` scene with dedicated `Sign in` and `Web search` panels
+- Changed the glyph mode picker to preselect the currently configured symbol preset instead of always defaulting to Unicode and to show live glyph samples in the picker rows
+- Changed OAuth sign-in flow in the setup wizard so users can authenticate multiple providers before leaving with Escape
+
 ### Fixed
 
+- Fixed OAuth login handling to cancel cleanly when users press Esc or Ctrl+C during authentication
 - Fixed the `read` tool description advertising `inspect_image` ("for visual analysis, call `inspect_image`") even when the `inspect_image` tool was disabled, which left the model hunting for a tool absent from its function list. The image section is now gated on `inspect_image.enabled`: when disabled it instead states that reading an image path returns the decoded image inline.
 - Fixed session-title generation latching onto literal text inside fenced code blocks — a pasted UI mockup containing "Welcome to Claude Code v2.1.158" titled the session "Setup Screen for Claude Code v2.1.158" instead of capturing the actual request. The first user message now has fenced code blocks stripped before titling (both the online `pi/smol` and local CPU model paths share the same preprocessing), with a fallback to the original message when stripping would leave too little to title from (e.g. a message that is essentially just a code block).
-
-### Fixed
-
 - Fixed slash-command autocomplete repaint requests so Windows Terminal sessions with unknown native viewport state keep updating the input box and candidate list. ([#1550](https://github.com/can1357/oh-my-pi/issues/1550))
 
 ## [15.6.0] - 2026-05-30

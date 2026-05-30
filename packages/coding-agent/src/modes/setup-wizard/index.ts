@@ -1,7 +1,7 @@
 import type { Settings } from "../../config/settings";
 import type { InteractiveModeContext } from "../types";
 import { glyphSetupScene } from "./scenes/glyph";
-import { providerSetupScene } from "./scenes/provider";
+import { providersSetupScene } from "./scenes/providers";
 import { themeSetupScene } from "./scenes/theme";
 import type { SetupScene } from "./scenes/types";
 import { SetupWizardComponent } from "./wizard-overlay";
@@ -9,7 +9,7 @@ import { SetupWizardComponent } from "./wizard-overlay";
 export type { SetupScene, SetupSceneController, SetupSceneHost, SetupSceneResult } from "./scenes/types";
 
 export const ALL_SCENES = [
-	providerSetupScene,
+	providersSetupScene,
 	glyphSetupScene,
 	themeSetupScene,
 ] as const satisfies readonly SetupScene[];

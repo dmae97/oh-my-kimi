@@ -19,6 +19,26 @@ export interface SetupSceneController extends Component {
 	dispose?(): void;
 }
 
+/**
+ * A single panel inside a tabbed setup scene. The host scene owns the tab bar
+ * and forwards rendering/input to the active tab.
+ */
+export interface SetupTab {
+	readonly id: string;
+	readonly label: string;
+	/**
+	 * While `true` the tab owns all keyboard input (e.g. an in-progress OAuth
+	 * login). The parent scene MUST NOT switch tabs or finish while modal.
+	 */
+	readonly modal: boolean;
+	render(width: number): string[];
+	handleInput(data: string): void;
+	invalidate(): void;
+	/** Called when the tab becomes active (including initial mount). */
+	onActivate?(): void;
+	dispose(): void;
+}
+
 export interface SetupScene {
 	id: string;
 	title: string;

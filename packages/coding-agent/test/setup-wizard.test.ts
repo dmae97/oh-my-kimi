@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { runOnboardingSetup } from "../src/commands/setup";
 import { Settings } from "../src/config/settings";
+import { SETTINGS_SCHEMA } from "../src/config/settings-schema";
+import { WebSearchTab } from "../src/modes/setup-wizard/scenes/web-search";
 import {
 	ALL_SCENES,
 	CURRENT_SETUP_VERSION,
@@ -67,9 +69,9 @@ describe("setup wizard scene selection", () => {
 		expect(await selectSetupScenes(0, ALL_SCENES, ctx, { isTTY: true, setupWizardEnabled: false })).toEqual([]);
 	});
 
-	it("keeps the provider scene eligible even when a model is already configured", async () => {
+	it("keeps the providers scene eligible even when a model is already configured", async () => {
 		const scenes = await selectSetupScenes(0, ALL_SCENES, fakeContextWithConfiguredModel(), { isTTY: true });
-		expect(scenes.some(scene => scene.id === "provider-login")).toBe(true);
+		expect(scenes.some(scene => scene.id === "providers")).toBe(true);
 	});
 
 	it("force mode ignores version and user skip gates but still requires a TTY", async () => {
