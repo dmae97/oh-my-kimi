@@ -32,9 +32,15 @@ jobs:
       outputs:
          skip: ${{ steps.check.outputs.skip }}
       steps:
+         # `fetch-tags` is scoped to main-branch pushes — the only case where
+         # the dedup detection below runs `git tag --points-at HEAD`. On a tag
+         # push the ref resolves to `refs/tags/v*`, and combining `--tags`
+         # (from fetch-tags) with checkout's explicit `+<sha>:refs/tags/v*`
+         # refspec makes git refuse with "Cannot fetch both <sha> and
+         # refs/tags/v* to refs/tags/v*". Disabling it off-main avoids the clash.
          - uses: actions/checkout@v4
            with:
-              fetch-tags: true
+              fetch-tags: ${{ github.ref == 'refs/heads/main' }}
          - name: Detect duplicate release branch-push run
            id: check
            shell: bash
