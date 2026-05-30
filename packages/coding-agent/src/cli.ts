@@ -1,16 +1,18 @@
 #!/usr/bin/env bun
-import { APP_NAME, getActiveProfile, MIN_BUN_VERSION, procmgr, setProfile, VERSION } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getActiveProfile, MIN_BUN_VERSION, setProfile, VERSION } from "@oh-my-pi/pi-utils/dirs";
 
 // Strip macOS malloc-stack-logging env vars before any subprocess is spawned.
-// Otherwise every child bun process (subagents, plugin installs, ptree spawns,
-// etc.) prints a `MallocStackLogging: can't turn off …` warning to stderr.
-procmgr.scrubProcessEnv();
+// Keep this local instead of importing `@oh-my-pi/pi-utils/procmgr`: that module
+// imports `env.ts`, whose eager .env load must happen after `--profile` bootstrap.
+delete process.env.MallocStackLogging;
+delete process.env.MallocStackLoggingNoCompact;
 
 /**
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
  */
 import { type CliConfig, run } from "@oh-my-pi/pi-utils/cli";
+import { installProfileAlias } from "./cli/profile-alias";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 import { commands, isSubcommand } from "./cli-commands";
 
@@ -64,7 +66,6 @@ export async function runCli(argv: string[]): Promise<void> {
 			if (!profile) {
 				throw new Error("--alias requires --profile <name> or OMP_PROFILE");
 			}
-			const { installProfileAlias } = await import("./cli/profile-alias");
 			const result = await installProfileAlias({ profile, aliasName: extracted.aliasName });
 			process.stdout.write(
 				`Created ${result.aliasName} for profile ${result.profile} in ${result.configPath}\n` +
