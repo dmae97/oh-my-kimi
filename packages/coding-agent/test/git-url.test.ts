@@ -67,8 +67,48 @@ describe("parseGitUrl", () => {
 			expect(parseGitUrl("github.com/user/repo")).toBeNull();
 		});
 
-		test("rejects unprefixed scp-like SSH shorthand", () => {
-			expect(parseGitUrl("git@github.com:user/repo")).toBeNull();
+		test("parses unprefixed scp-like SSH shorthand", () => {
+			const result = parseGitUrl("git@github.com:user/repo");
+			expect(result).toMatchObject({
+				type: "git",
+				host: "github.com",
+				path: "user/repo",
+				repo: "git@github.com:user/repo",
+				pinned: false,
+			});
+		});
+
+		test("parses unprefixed scp-like SSH shorthand with ref", () => {
+			const result = parseGitUrl("git@github.com:user/repo@v1.0.0");
+			expect(result).toMatchObject({
+				type: "git",
+				host: "github.com",
+				path: "user/repo",
+				repo: "git@github.com:user/repo",
+				ref: "v1.0.0",
+				pinned: true,
+			});
+		});
+
+		test("parses git+https URL", () => {
+			const result = parseGitUrl("git+https://github.com/user/repo");
+			expect(result).toMatchObject({
+				type: "git",
+				host: "github.com",
+				path: "user/repo",
+				repo: "https://github.com/user/repo",
+				pinned: false,
+			});
+		});
+
+		test("parses git+ssh URL", () => {
+			const result = parseGitUrl("git+ssh://git@github.com/user/repo");
+			expect(result).toMatchObject({
+				type: "git",
+				host: "github.com",
+				path: "user/repo",
+				pinned: false,
+			});
 		});
 
 		test("does not misclassify local paths containing dots", () => {
@@ -186,8 +226,12 @@ describe("isGitSpec", () => {
 		expect(isGitSpec("https://github.com/user/repo")).toBe(true);
 	});
 
-	test("returns false for unprefixed scp-like ssh (parseGitUrl rejects it)", () => {
-		expect(isGitSpec("git@github.com:user/repo")).toBe(false);
+	test("returns true for unprefixed scp-like SSH (git@host:user/repo)", () => {
+		expect(isGitSpec("git@github.com:user/repo")).toBe(true);
+	});
+
+	test("returns true for git+https URLs", () => {
+		expect(isGitSpec("git+https://github.com/user/repo")).toBe(true);
 	});
 
 	test("returns false for bare npm name", () => {

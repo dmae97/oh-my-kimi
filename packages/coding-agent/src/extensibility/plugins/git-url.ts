@@ -295,10 +295,19 @@ export function parseGitUrl(source: string): GitSource | null {
 	const shorthand = tryNamespacedShorthand(trimmed);
 	if (shorthand) return shorthand;
 
-	const hasGitPrefix = /^git:(?!\/\/)/i.test(trimmed);
-	const url = hasGitPrefix ? trimmed.slice(4).trim() : trimmed;
+	// Strip the `git+` URL prefix that npm/bun accept (`git+https://…`,
+	// `git+ssh://…`, `git+git://…`). The rest of the pipeline only deals with
+	// bare schemes.
+	const stripped = /^git\+/i.test(trimmed) ? trimmed.slice(4) : trimmed;
 
-	if (!hasGitPrefix && !/^(https?|ssh|git):\/\//i.test(url)) {
+	const hasGitPrefix = /^git:(?!\/\/)/i.test(stripped);
+	const url = hasGitPrefix ? stripped.slice(4).trim() : stripped;
+
+	// Accept: explicit protocol URL, `git:` shorthand, or scp-like SSH
+	// (`git@host:user/repo`). The scp form is unambiguous — no local path
+	// starts with `git@` — and matches the syntax that `git clone` itself
+	// accepts, which `bun install` forwards through.
+	if (!hasGitPrefix && !/^(https?|ssh|git):\/\//i.test(url) && !/^git@[^:]+:.+\/.+/i.test(url)) {
 		return null;
 	}
 
