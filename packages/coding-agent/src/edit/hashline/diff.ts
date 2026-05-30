@@ -22,6 +22,7 @@ import {
 import { resolveToCwd } from "../../tools/path-utils";
 import { generateDiffString } from "../diff";
 import { readEditFileText } from "../read-file";
+import { nativeBlockResolver } from "./block-resolver";
 
 export interface HashlineDiffOptions {
 	/**
@@ -74,7 +75,9 @@ export async function computeHashlineSectionDiff(
 		const normalized = normalizeToLF(content);
 		const hashError = validateSectionHash(section, absolutePath, normalized, snapshots);
 		if (hashError) return { error: hashError };
-		const result = options.streaming ? section.applyPartialTo(normalized) : section.applyTo(normalized);
+		const result = options.streaming
+			? section.applyPartialTo(normalized, nativeBlockResolver)
+			: section.applyTo(normalized, nativeBlockResolver);
 		if (normalized === result.text) return { error: `No changes would be made to ${section.path}.` };
 		return generateDiffString(normalized, result.text);
 	} catch (err) {

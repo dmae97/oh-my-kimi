@@ -29,7 +29,9 @@ Patch language inside `input`:
 - **File header**: `¶PATH#TAG` (or `¶PATH` for new-file / head/tail-only inserts). `TAG` is three uppercase-hex chars minted by the session snapshot store.
 - **Operations**:
   - `replace N..M:` — replace original lines N..M with the body rows below.
+  - `replace block N:` — replace the whole tree-sitter block beginning on line N (its header line through its closing line) with the body rows. The line span is resolved at apply time from the file's parse tree; point N at the line that opens the construct. Errors (and steers to `replace N..M:`) when the language is unsupported, line N is blank or a closing delimiter, no node begins there, or the resolved block has a syntax error.
   - `delete N..M` — delete original lines N..M. No body.
+  - `delete block N` — delete the whole tree-sitter block beginning on line N (resolved like `replace block N`). No body. Same resolution failure modes and `delete N..M` fallback.
   - `insert before N:` — insert body rows immediately before line N.
   - `insert after N:` — insert body rows immediately after line N.
   - `insert head:` — insert body rows at the start of the file.
@@ -56,9 +58,10 @@ The canonical grammar is strict, but the hand parser accepts a few non-dangerous
 - `*** Update File:` / `*** Add File:` / `*** Delete File:` / `*** Move to:` apply_patch sentinels throw an `apply_patch sentinel … is not valid in hashline` error.
 - `@@`-bracketed hunk headers are rejected with guidance to write a verb header.
 - Bare `N` and bare `N M` / `N..M` headers are rejected with guidance to write `replace` or `delete`.
-- `delete N..M:` and any body rows under `delete` are rejected.
-- Empty `replace` / `insert` hunks are rejected.
+- `delete N..M:` and any body rows under `delete` / `delete block` are rejected.
+- Empty `replace` / `insert` / `replace block` hunks are rejected.
 - `-` body rows are rejected with `MINUS_ROW_REJECTED`.
+- `replace block N:` / `delete block N` require a wired tree-sitter resolver; `replace block` additionally needs at least one `+TEXT` body row, while `delete block` takes none. An unresolvable block (unsupported language, blank/closing-delimiter line, no node beginning on N, or a syntax error in the resolved block) is rejected on the apply/final-preview path; the streaming preview silently drops it instead.
 
 ## Outputs
 - Single-shot tool result; hashline mode does not use a `resolve` preview/apply handshake.
@@ -165,8 +168,12 @@ delete 20
 - Empty body-bearing hunk:
   - `line N: \`replace N..M:\` needs at least one \`+TEXT\` body row. To delete lines, use \`delete N..M\`.`
   - `line N: \`insert\` needs at least one \`+TEXT\` body row.`
+  - `line N: \`replace block N:\` needs at least one \`+TEXT\` body row. To delete a block, use \`delete N..M\` with the block's line range.`
+- Unresolvable `replace block N:` (apply / final-preview path only):
+  - `line N: \`replace block X:\` could not resolve a syntactic block beginning on line X. The language may be unsupported, the line may be blank or a closing delimiter, or the block may not parse. Use \`replace X..M:\` with the block's explicit end line instead.`
 - Delete with body:
   - `line N: \`delete N..M\` does not take body rows. Remove the body, or use \`replace N..M:\`.`
+  - `line N: \`delete block N\` does not take body rows. Remove the body, or use \`replace block N:\` to replace the block.`
 - Range out of order:
   - `line N: range A..B ends before it starts.`
 - Overlapping hunks on the same anchor:

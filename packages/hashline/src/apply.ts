@@ -7,6 +7,7 @@
  * which fixes the common model mistake of a payload that duplicates or drops
  * the closing delimiter bordering the range (balance-validated; see below).
  */
+import { UNRESOLVED_BLOCK_INTERNAL } from "./messages";
 import { cloneCursor } from "./tokenizer";
 import type { Anchor, ApplyResult, Cursor, Edit } from "./types";
 
@@ -29,7 +30,7 @@ function getCursorAnchors(cursor: Cursor): Anchor[] {
 	return cursor.kind === "before_anchor" || cursor.kind === "after_anchor" ? [cursor.anchor] : [];
 }
 
-function getEditAnchors(edit: Edit): Anchor[] {
+function getEditAnchors(edit: AppliedEdit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
 	return getCursorAnchors(edit.cursor);
 }
@@ -407,8 +408,16 @@ function repairBoundaryBalance(
  * Returns the post-edit text and the first changed line number (1-indexed).
  * Throws if an anchor is out of bounds.
  */
-export function applyEdits(text: string, edits: Edit[]): ApplyResult {
+export function applyEdits(text: string, edits: readonly Edit[]): ApplyResult {
 	if (edits.length === 0) return { text, firstChangedLine: undefined };
+
+	// Block edits are deferred until `resolveBlockEdits` expands them into
+	// concrete inserts + deletes. Reaching the applier with one still present
+	// is an internal wiring bug, not authored-input error.
+	for (const edit of edits) {
+		if (edit.kind === "block") throw new Error(UNRESOLVED_BLOCK_INTERNAL);
+	}
+	const appliedEdits = edits as readonly AppliedEdit[];
 
 	const fileLines = text.split("\n");
 	const lineOrigins: LineOrigin[] = fileLines.map(() => "original");
@@ -418,7 +427,7 @@ export function applyEdits(text: string, edits: Edit[]): ApplyResult {
 		if (firstChangedLine === undefined || line < firstChangedLine) firstChangedLine = line;
 	};
 
-	const targetEdits = edits.map((edit, index) => cloneAppliedEdit(edit, index));
+	const targetEdits = appliedEdits.map((edit, index) => cloneAppliedEdit(edit, index));
 	validateLineBounds(targetEdits, fileLines);
 	const { edits: repaired, warnings } = repairBoundaryBalance(targetEdits, fileLines);
 

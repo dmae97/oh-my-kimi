@@ -14,6 +14,8 @@ export const HL_PAYLOAD_REPLACE = "+";
 
 /** Hunk-header keyword for concrete line replacement. */
 export const HL_REPLACE_KEYWORD = "replace";
+/** Hunk-header sub-keyword: `replace block N:` resolves N to a tree-sitter block range. */
+export const HL_BLOCK_KEYWORD = "block";
 /** Hunk-header keyword for concrete line deletion. */
 export const HL_DELETE_KEYWORD = "delete";
 /** Hunk-header keyword for insertion operations. */

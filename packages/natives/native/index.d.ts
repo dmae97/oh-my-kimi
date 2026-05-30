@@ -344,6 +344,33 @@ export interface BashFixupResult {
   stripped: Array<string>
 }
 
+export interface BlockRange {
+  /** 1-indexed inclusive first line of the resolved block. */
+  startLine: number
+  /** 1-indexed inclusive last line of the resolved block. */
+  endLine: number
+}
+
+/**
+ * Find the outermost named tree-sitter node that begins on `options.line`.
+ *
+ * Returns its 1-indexed inclusive line span, or `null` when the language is
+ * unrecognized, the line is out of range / blank, no node begins on that line,
+ * or the resolved subtree contains a syntax error.
+ */
+export declare function blockRangeAt(options: BlockRangeOptions): BlockRange | null
+
+export interface BlockRangeOptions {
+  /** Source code to inspect. */
+  code: string
+  /** Language alias (e.g. "rust", "typescript") used before path inference. */
+  lang?: string
+  /** File path used to infer language by extension when `lang` is omitted. */
+  path?: string
+  /** 1-indexed source line the block must begin on. */
+  line: number
+}
+
 /** Clipboard image payload encoded as PNG bytes. */
 export interface ClipboardImage {
   /** PNG-encoded image bytes. */

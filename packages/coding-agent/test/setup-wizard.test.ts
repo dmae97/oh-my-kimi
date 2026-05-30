@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { runOnboardingSetup } from "../src/commands/setup";
 import { Settings } from "../src/config/settings";
 import { SETTINGS_SCHEMA } from "../src/config/settings-schema";
-import { WebSearchTab } from "../src/modes/setup-wizard/scenes/web-search";
 import {
 	ALL_SCENES,
 	CURRENT_SETUP_VERSION,
@@ -11,6 +10,7 @@ import {
 	type SetupSceneHost,
 	selectSetupScenes,
 } from "../src/modes/setup-wizard";
+import { WebSearchTab } from "../src/modes/setup-wizard/scenes/web-search";
 import { initTheme, theme } from "../src/modes/theme/theme";
 import type { InteractiveModeContext } from "../src/modes/types";
 
@@ -136,6 +136,65 @@ describe("setup wizard theme previews", () => {
 		await Bun.sleep(20);
 		expect(settings.get("symbolPreset")).toBe("nerd");
 		expect(theme.getSymbolPreset()).toBe("nerd");
+	});
+});
+
+describe("setup wizard glyph scene", () => {
+	it("lists Nerd Font first and commits the chosen preset", async () => {
+		await initTheme(false, "unicode", false, "titanium", "light");
+		const settings = Settings.isolated();
+		const scene = ALL_SCENES.find(s => s.id === "glyph-mode");
+		expect(scene).toBeDefined();
+
+		let finished = false;
+		const host = {
+			ctx: {
+				settings,
+				ui: { invalidate: () => {}, requestRender: () => {} },
+			},
+			requestRender: () => {},
+			finish: () => {
+				finished = true;
+			},
+			setFocus: () => {},
+			restoreFocus: () => {},
+		} as unknown as SetupSceneHost;
+
+		const controller = scene!.mount(host);
+		// Row "1" is now Nerd Font (it must lead the list).
+		controller.handleInput?.("1");
+		await Bun.sleep(20);
+		expect(theme.getSymbolPreset()).toBe("nerd");
+
+		controller.handleInput?.("\n");
+		await Bun.sleep(20);
+		expect(settings.get("symbolPreset")).toBe("nerd");
+		expect(finished).toBe(true);
+	});
+});
+
+describe("setup wizard web search tab", () => {
+	it("persists the highlighted provider as the web search preference", async () => {
+		const settings = Settings.isolated();
+		const host = {
+			ctx: {
+				settings,
+				session: { modelRegistry: { authStorage: { hasAuth: () => false } } },
+			},
+			requestRender: () => {},
+			finish: () => {},
+			setFocus: () => {},
+			restoreFocus: () => {},
+		} as unknown as SetupSceneHost;
+
+		const tab = new WebSearchTab(host);
+		tab.handleInput("\x1b[B"); // move off "auto" to the next provider
+		tab.handleInput("\n"); // confirm the highlighted provider
+		await Bun.sleep(20);
+
+		const expected = SETTINGS_SCHEMA["providers.webSearch"].ui.options[1].value;
+		expect(expected).not.toBe("auto");
+		expect(settings.get("providers.webSearch")).toBe(expected);
 	});
 });
 

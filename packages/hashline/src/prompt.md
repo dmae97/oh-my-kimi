@@ -6,7 +6,9 @@ Every file section starts with `¶PATH#TAG`. `TAG` is the 4-hex snapshot tag fro
 
 <ops>
 replace N..M:      replace original lines N..M with the body rows below.
+replace block N:   replace the whole syntactic block that BEGINS on line N — its header line through its closing line — resolved with tree-sitter. Body rows below. Point N at the line that OPENS the construct (the `if`/`function`/`def`/`{`-bearing line), not a closing `}` or a blank line.
 delete N..M        delete original lines N..M. No body.
+delete block N     delete the whole syntactic block that BEGINS on line N.
 insert before N:   insert the body rows immediately before line N.
 insert after N:    insert the body rows immediately after line N.
 insert head:       insert the body rows at the very start of the file.
@@ -69,6 +71,14 @@ insert head:
 +# generated header
 insert tail:
 +greet("everyone")
+```
+
+Replace the whole `greet` function block — `replace block 1:` resolves lines 1–3 (the `def` header through `print(msg)`); line 4 is a separate statement and stays:
+```
+¶greet.py#A1B2
+replace block 1:
++def greet(name):
++    print(f"Hello, {name}")
 ```
 </example>
 

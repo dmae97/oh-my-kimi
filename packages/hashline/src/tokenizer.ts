@@ -10,6 +10,7 @@
  */
 import {
 	describeAnchorExamples,
+	HL_BLOCK_KEYWORD,
 	HL_DELETE_KEYWORD,
 	HL_FILE_HASH_LENGTH,
 	HL_FILE_HASH_SEP,
@@ -196,7 +197,9 @@ function scanHeaderRange(line: string, index = 0, end = trimEndIndex(line), allo
 
 export type BlockTarget =
 	| { kind: "replace"; range: ParsedRange }
+	| { kind: "block"; anchor: Anchor }
 	| { kind: "delete"; range: ParsedRange }
+	| { kind: "delete_block"; anchor: Anchor }
 	| { kind: "insert_before"; anchor: Anchor }
 	| { kind: "insert_after"; anchor: Anchor }
 	| { kind: "bof" }
@@ -249,6 +252,18 @@ function scanHunkAnchor(line: string, start: number, end: number): TargetScan | 
 	const cursor = skipWhitespace(line, start, end);
 	const replaceEnd = scanKeyword(line, cursor, end, HL_REPLACE_KEYWORD);
 	if (replaceEnd !== null) {
+		// `replace block N:` — resolve N to a tree-sitter block range at apply
+		// time. Try the `block` sub-keyword before falling back to a literal
+		// `replace N..M:` range.
+		const blockEnd = scanKeyword(line, skipWhitespace(line, replaceEnd, end), end, HL_BLOCK_KEYWORD);
+		if (blockEnd !== null) {
+			const anchor = scanLineNumber(line, skipWhitespace(line, blockEnd, end), end);
+			if (anchor === null) return null;
+			return {
+				target: { kind: "block", anchor: { line: anchor.line } },
+				nextIndex: consumeOptionalColon(line, anchor.nextIndex, end),
+			};
+		}
 		const range = scanHeaderRange(line, replaceEnd, end, true);
 		if (range === null) return null;
 		return {
@@ -258,6 +273,17 @@ function scanHunkAnchor(line: string, start: number, end: number): TargetScan | 
 	}
 	const deleteEnd = scanKeyword(line, cursor, end, HL_DELETE_KEYWORD);
 	if (deleteEnd !== null) {
+		// `delete block N` — resolve N to a tree-sitter block range at apply
+		// time and delete its whole span. Like `delete N..M`, it takes no body
+		// and no trailing colon.
+		const blockEnd = scanKeyword(line, skipWhitespace(line, deleteEnd, end), end, HL_BLOCK_KEYWORD);
+		if (blockEnd !== null) {
+			const anchor = scanLineNumber(line, skipWhitespace(line, blockEnd, end), end);
+			if (anchor === null) return null;
+			const next = skipWhitespace(line, anchor.nextIndex, end);
+			if (next < end && line.charCodeAt(next) === CHAR_COLON) return null;
+			return { target: { kind: "delete_block", anchor: { line: anchor.line } }, nextIndex: next };
+		}
 		const range = scanHeaderRange(line, deleteEnd, end, true);
 		if (range === null) return null;
 		const next = skipWhitespace(line, range.nextIndex, end);

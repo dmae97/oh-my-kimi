@@ -6,7 +6,9 @@
 import { HL_PAYLOAD_REPLACE } from "./format";
 import {
 	BARE_BODY_AUTO_PIPED_WARNING,
+	DELETE_BLOCK_TAKES_NO_BODY,
 	DELETE_TAKES_NO_BODY,
+	EMPTY_BLOCK,
 	EMPTY_INSERT,
 	EMPTY_REPLACE,
 	MINUS_ROW_REJECTED,
@@ -159,7 +161,8 @@ export class Executor {
 	endStreaming(): { edits: Edit[]; warnings: string[] } {
 		this.#consumePendingSkippableComments();
 		if (this.#pending && this.#pending.payloads.length > 0) this.#flushPending();
-		else if (this.#pending?.target.kind === "delete") this.#flushPending();
+		else if (this.#pending?.target.kind === "delete" || this.#pending?.target.kind === "delete_block")
+			this.#flushPending();
 		else this.#pending = undefined;
 		this.#validateNoOverlappingDeletes();
 		return { edits: this.#edits, warnings: this.#warnings };
@@ -204,6 +207,7 @@ export class Executor {
 			);
 		}
 		if (pending.target.kind === "delete") throw new Error(`line ${lineNum}: ${DELETE_TAKES_NO_BODY}`);
+		if (pending.target.kind === "delete_block") throw new Error(`line ${lineNum}: ${DELETE_BLOCK_TAKES_NO_BODY}`);
 		pending.payloads.push({ kind: "literal", text, lineNum });
 	}
 
@@ -213,6 +217,8 @@ export class Executor {
 		if (this.#pending) {
 			if (text.trim().length === 0) return;
 			if (this.#pending.target.kind === "delete") throw new Error(`line ${lineNum}: ${DELETE_TAKES_NO_BODY}`);
+			if (this.#pending.target.kind === "delete_block")
+				throw new Error(`line ${lineNum}: ${DELETE_BLOCK_TAKES_NO_BODY}`);
 			if (text.trimStart().charCodeAt(0) === 45 /* - */) throw new Error(`line ${lineNum}: ${MINUS_ROW_REJECTED}`);
 			if (!this.#warnings.includes(BARE_BODY_AUTO_PIPED_WARNING)) this.#warnings.push(BARE_BODY_AUTO_PIPED_WARNING);
 			this.#pending.payloads.push({ kind: "literal", text, lineNum });
@@ -240,6 +246,16 @@ export class Executor {
 		this.#edits.push({ kind: "delete", anchor: { ...anchor }, lineNum, index: this.#editIndex++ });
 	}
 
+	#pushBlock(anchor: Anchor, payloads: readonly PayloadRow[], lineNum: number): void {
+		this.#edits.push({
+			kind: "block",
+			anchor: { ...anchor },
+			payloads: payloads.map(payload => payload.text),
+			lineNum,
+			index: this.#editIndex++,
+		});
+	}
+
 	#emitPayloadRows(cursor: Cursor, payloads: readonly PayloadRow[], lineNum: number, mode?: "replacement"): void {
 		for (const payload of payloads) this.#pushInsert(cursor, payload.text, lineNum, mode);
 	}
@@ -251,6 +267,16 @@ export class Executor {
 		this.#pending = undefined;
 		if (target.kind === "delete") {
 			for (const anchor of expandRange(target.range)) this.#pushDelete(anchor, lineNum);
+			return;
+		}
+		if (target.kind === "delete_block") {
+			// A block edit with no payloads resolves to a pure block deletion.
+			this.#pushBlock(target.anchor, [], lineNum);
+			return;
+		}
+		if (target.kind === "block") {
+			if (payloads.length === 0) throw new Error(`line ${lineNum}: ${EMPTY_BLOCK}`);
+			this.#pushBlock(target.anchor, payloads, lineNum);
 			return;
 		}
 		if (payloads.length === 0) {
