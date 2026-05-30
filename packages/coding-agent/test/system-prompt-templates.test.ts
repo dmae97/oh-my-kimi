@@ -229,7 +229,6 @@ describe("system Handlebars prompt templates", () => {
 		expect(omitted.systemPrompt.join("\n\n")).not.toContain("memory://root");
 	});
 
-
 	test("buildSystemPrompt keeps system and project as separate ordered blocks with date context in project", async () => {
 		await withTempDir(async dir => {
 			const { systemPrompt } = await buildSystemPrompt({

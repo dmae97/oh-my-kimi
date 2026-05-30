@@ -9,8 +9,12 @@ function getModelOrThrow(id: string): Model<Api> {
 	return model;
 }
 
-function createSettings(model: Model<Api>) {
+function createSettings(model: Model<Api>, tinyModel = "online") {
 	return {
+		get(path: string) {
+			if (path === "providers.tinyModel") return tinyModel;
+			return undefined;
+		},
 		getModelRole(role: string) {
 			return role === "smol" ? `${model.provider}/${model.id}` : undefined;
 		},
