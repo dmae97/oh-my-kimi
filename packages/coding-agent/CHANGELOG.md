@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.5.15] - 2026-05-30
 ### Changed
 
 - Enabled the agent loop's tool-call batch cap for Anthropic Claude sessions, cutting oversized streamed tool-use bursts into runnable batches before continuing the conversation.

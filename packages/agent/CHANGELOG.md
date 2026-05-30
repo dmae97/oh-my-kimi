@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.5.15] - 2026-05-30
 ### Added
 
 - Added `maxToolCallsPerTurn` to `AgentLoopConfig`/`AgentOptions`, allowing callers to cut a streamed assistant turn after a completed tool-call batch and execute the runnable partial turn instead of waiting for the provider to yield.

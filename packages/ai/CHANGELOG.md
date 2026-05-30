@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.5.15] - 2026-05-30
+
 ### Added
 
 - Added `PI_REQ_DEBUG=1` request/response recording for provider transports. Each request writes `rr-session-N.json`; each received response writes `rr-session-N.res.log` with response headers followed by raw body bytes.
