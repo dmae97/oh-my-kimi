@@ -1703,7 +1703,10 @@ export class ModelRegistry {
 					input: serverMetadata?.input ?? ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 					contextWindow: serverMetadata?.contextWindow ?? 128000,
-					maxTokens: Math.min(serverMetadata?.contextWindow ?? Number.POSITIVE_INFINITY, DISCOVERY_DEFAULT_MAX_TOKENS),
+					maxTokens: Math.min(
+						serverMetadata?.contextWindow ?? Number.POSITIVE_INFINITY,
+						DISCOVERY_DEFAULT_MAX_TOKENS,
+					),
 					headers,
 					compat: {
 						supportsStore: false,
