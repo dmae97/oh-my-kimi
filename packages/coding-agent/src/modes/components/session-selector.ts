@@ -13,7 +13,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { formatBytes } from "@oh-my-pi/pi-utils";
 import { theme } from "../../modes/theme/theme";
-import { matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
+import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
 import type { SessionInfo } from "../../session/session-manager";
 import { DynamicBorder } from "./dynamic-border";
 import { HookSelectorComponent } from "./hook-selector";
@@ -192,12 +192,12 @@ class SessionList implements Component {
 		}
 
 		// Up arrow
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
 			return;
 		}
 		// Down arrow
-		if (matchesKey(keyData, "down")) {
+		if (matchesSelectDown(keyData)) {
 			this.#selectedIndex = Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + 1);
 			return;
 		}

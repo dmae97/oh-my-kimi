@@ -19,7 +19,7 @@ import { analyzeAuthError, discoverOAuthEndpoints } from "../../mcp/oauth-discov
 import type { MCPHttpServerConfig, MCPServerConfig, MCPSseServerConfig, MCPStdioServerConfig } from "../../mcp/types";
 import { shortenPath } from "../../tools/render-utils";
 import { theme } from "../theme/theme";
-import { matchesAppInterrupt } from "../utils/keybinding-matchers";
+import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
 
 type TransportType = "stdio" | "http" | "sse";
@@ -501,11 +501,11 @@ export class MCPAddWizard extends Container {
 		}
 
 		// Handle up/down arrows for selectors
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			this.#moveSelection(-1);
 			return;
 		}
-		if (matchesKey(keyData, "down")) {
+		if (matchesSelectDown(keyData)) {
 			this.#moveSelection(1);
 			return;
 		}

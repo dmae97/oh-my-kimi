@@ -16,7 +16,12 @@ import {
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
-import { matchesAppExternalEditor, matchesSelectCancel } from "../../modes/utils/keybinding-matchers";
+import {
+	matchesAppExternalEditor,
+	matchesSelectCancel,
+	matchesSelectDown,
+	matchesSelectUp,
+} from "../../modes/utils/keybinding-matchers";
 import { CountdownTimer } from "./countdown-timer";
 import { DynamicBorder } from "./dynamic-border";
 
@@ -164,10 +169,10 @@ export class HookSelectorComponent extends Container {
 		// Reset countdown on any interaction
 		this.#countdown?.reset();
 
-		if (matchesKey(keyData, "up") || keyData === "k") {
+		if (matchesSelectUp(keyData) || keyData === "k") {
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
 			this.#updateList();
-		} else if (matchesKey(keyData, "down") || keyData === "j") {
+		} else if (matchesSelectDown(keyData) || keyData === "j") {
 			this.#selectedIndex = Math.min(this.#options.length - 1, this.#selectedIndex + 1);
 			this.#updateList();
 		} else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {

@@ -1,6 +1,6 @@
 import { type Component, Container, matchesKey, Spacer, Text, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
-import { matchesSelectCancel } from "../../modes/utils/keybinding-matchers";
+import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
 
 interface UserMessageItem {
@@ -78,11 +78,11 @@ class UserMessageList implements Component {
 
 	handleInput(keyData: string): void {
 		// Up arrow - go to previous (older) message, wrap to bottom when at top
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			this.#selectedIndex = this.#selectedIndex === 0 ? this.messages.length - 1 : this.#selectedIndex - 1;
 		}
 		// Down arrow - go to next (newer) message, wrap to top when at bottom
-		else if (matchesKey(keyData, "down")) {
+		else if (matchesSelectDown(keyData)) {
 			this.#selectedIndex = this.#selectedIndex === this.messages.length - 1 ? 0 : this.#selectedIndex + 1;
 		}
 		// Enter - select message and branch
