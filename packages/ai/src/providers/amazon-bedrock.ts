@@ -273,6 +273,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				headers: requestHeaders,
 				body,
 				signal: options.signal,
+				fetch: options.fetch,
 			});
 
 			if (!response.ok) {

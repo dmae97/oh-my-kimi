@@ -54,6 +54,7 @@ import {
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
+import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
@@ -2046,6 +2047,8 @@ class CodexWebSocketConnection {
 	#streamObserver?: (event: RawSseEvent) => void;
 	#heartbeatInterval: NodeJS.Timeout | undefined;
 	#removePongListener?: () => void;
+	#handshakeHeaders?: Headers;
+	#debugResponseLog?: RequestDebugResponseLog;
 	/**
 	 * Wall-clock of the most recent inbound activity on this socket — any
 	 * decoded message, any pong, or the moment the handshake completed. Used
@@ -2189,6 +2192,7 @@ class CodexWebSocketConnection {
 			// the liveness clock — what matters for reuse health is that the upstream
 			// is still talking to us, not that every frame is well-formed.
 			this.#lastInboundAt = Date.now();
+			this.#writeDebugWebSocketFrame(event.data);
 			try {
 				const text = typeof event.data === "string" ? event.data : Buffer.from(event.data).toString("utf-8");
 				if (!text) return;
@@ -2256,6 +2260,19 @@ class CodexWebSocketConnection {
 		}
 
 		try {
+			const debugSession = isRequestDebugEnabled()
+				? await createRequestDebugSession({
+						protocol: "websocket",
+						method: "POST",
+						url: this.#url,
+						headers: this.#headers,
+						body: request,
+					})
+				: undefined;
+			this.#debugResponseLog = debugSession
+				? await debugSession.openResponseLog("WebSocket 101 Switching Protocols", this.#handshakeHeaders)
+				: undefined;
+
 			const requestPayload = JSON.stringify(request);
 			notifyCodexWebSocketOutbound(onSseEvent, request, requestPayload);
 			try {
@@ -2336,14 +2353,35 @@ class CodexWebSocketConnection {
 			if (signal) {
 				signal.removeEventListener("abort", onAbort);
 			}
+			const debugResponseLog = this.#debugResponseLog;
+			this.#debugResponseLog = undefined;
+			await debugResponseLog?.close();
 		}
 	}
 
 	#captureHandshakeHeaders(socket: Bun.WebSocket, openEvent?: Event): void {
-		if (!this.#onHandshakeHeaders) return;
 		const headers = extractCodexWebSocketHandshakeHeaders(socket, openEvent);
 		if (!headers) return;
-		this.#onHandshakeHeaders(headers);
+		this.#handshakeHeaders = headers;
+		this.#onHandshakeHeaders?.(headers);
+	}
+
+	#writeDebugWebSocketFrame(data: unknown): void {
+		const log = this.#debugResponseLog;
+		if (!log) return;
+		if (typeof data === "string") {
+			log.write(data);
+			return;
+		}
+		if (data instanceof Uint8Array) {
+			log.write(data);
+			return;
+		}
+		if (data instanceof ArrayBuffer) {
+			log.write(new Uint8Array(data));
+			return;
+		}
+		log.write(String(data));
 	}
 
 	#startHeartbeat(socket: Bun.WebSocket): void {

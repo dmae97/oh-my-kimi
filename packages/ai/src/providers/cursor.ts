@@ -28,6 +28,7 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
+import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import { toolWireSchema } from "../utils/schema/wire";
 import type { McpToolDefinition } from "./cursor/gen/agent_pb";
@@ -331,6 +332,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 		let h2Client: http2.ClientHttp2Session | null = null;
 		let h2Request: http2.ClientHttp2Stream | null = null;
 		let heartbeatTimer: NodeJS.Timeout | null = null;
+		let debugResponseLogPromise: Promise<RequestDebugResponseLog | undefined> | undefined;
 
 		try {
 			const apiKey = options?.apiKey;
@@ -351,11 +353,10 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			const requestContextTools = buildMcpToolDefinitions(context.tools);
 
 			const baseUrl = model.baseUrl || CURSOR_API_URL;
-			h2Client = http2.connect(baseUrl);
-
-			h2Request = h2Client.request({
+			const requestPath = "/agent.v1.AgentService/Run";
+			const requestHeaders = {
 				":method": "POST",
-				":path": "/agent.v1.AgentService/Run",
+				":path": requestPath,
 				"content-type": "application/connect+proto",
 				"connect-protocol-version": "1",
 				te: "trailers",
@@ -364,7 +365,20 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				"x-cursor-client-version": CURSOR_CLIENT_VERSION,
 				"x-cursor-client-type": "cli",
 				"x-request-id": crypto.randomUUID(),
-			});
+			};
+			const debugSession = isRequestDebugEnabled()
+				? await createRequestDebugSession({
+						protocol: "http2",
+						method: "POST",
+						url: new URL(requestPath, baseUrl).toString(),
+						headers: requestHeaders,
+						bodyBase64: Buffer.from(requestBytes).toString("base64"),
+					})
+				: undefined;
+
+			h2Client = http2.connect(baseUrl);
+
+			h2Request = h2Client.request(requestHeaders);
 
 			stream.push({ type: "start", partial: output });
 
@@ -408,7 +422,19 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			let resolveH2: (() => void) | undefined;
 
+			h2Request.on("response", headers => {
+				debugResponseLogPromise = debugSession?.openResponseLog(
+					`HTTP/2 ${headers[":status"] ?? ""}`.trim(),
+					headers,
+				);
+			});
+
 			h2Request.on("data", (chunk: Buffer) => {
+				if (debugResponseLogPromise) {
+					void debugResponseLogPromise.then(log => {
+						log?.write(chunk);
+					});
+				}
 				pendingBuffer = Buffer.concat([pendingBuffer, chunk]);
 
 				while (pendingBuffer.length >= 5) {
@@ -480,29 +506,44 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			await new Promise<void>((resolve, reject) => {
 				resolveH2 = resolve;
 
+				const closeDebugLog = async (): Promise<void> => {
+					const log = await debugResponseLogPromise;
+					await log?.close();
+				};
+
 				h2Request!.on("trailers", trailers => {
 					const status = trailers["grpc-status"];
 					const msg = trailers["grpc-message"];
 					if (status && status !== "0") {
-						reject(new Error(`gRPC error ${status}: ${decodeURIComponent(String(msg || ""))}`));
+						void closeDebugLog().finally(() => {
+							reject(new Error(`gRPC error ${status}: ${decodeURIComponent(String(msg || ""))}`));
+						});
 					}
 				});
 
 				h2Request!.on("end", () => {
 					resolveH2 = undefined;
-					if (endStreamError) {
-						reject(endStreamError);
-						return;
-					}
-					resolve();
+					void closeDebugLog()
+						.then(() => {
+							if (endStreamError) {
+								reject(endStreamError);
+								return;
+							}
+							resolve();
+						})
+						.catch(reject);
 				});
 
-				h2Request!.on("error", reject);
+				h2Request!.on("error", error => {
+					void closeDebugLog().finally(() => reject(error));
+				});
 
 				if (options?.signal) {
 					options.signal.addEventListener("abort", () => {
 						h2Request?.close();
-						reject(new Error("Request was aborted"));
+						void closeDebugLog().finally(() => {
+							reject(new Error("Request was aborted"));
+						});
 					});
 				}
 			});
@@ -557,6 +598,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		} finally {
+			const log = await debugResponseLogPromise;
+			await log?.close();
 			if (heartbeatTimer) {
 				clearInterval(heartbeatTimer);
 				heartbeatTimer = null;
