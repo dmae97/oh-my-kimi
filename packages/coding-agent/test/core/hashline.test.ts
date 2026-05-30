@@ -629,9 +629,7 @@ describe("hashline executor", () => {
 	it("rejects file creation and directs to the write tool", async () => {
 		await withTempDir(async tempDir => {
 			const input = `¶new.ts\ninsert head:\n${repl("export const x = 1;")}\n`;
-			await expect(executeHashlineSingle(hashlineExecuteOptions(tempDir, input))).rejects.toThrow(
-				/write tool/,
-			);
+			await expect(executeHashlineSingle(hashlineExecuteOptions(tempDir, input))).rejects.toThrow(/write tool/);
 			expect(await Bun.file(path.join(tempDir, "new.ts")).exists()).toBe(false);
 		});
 	});

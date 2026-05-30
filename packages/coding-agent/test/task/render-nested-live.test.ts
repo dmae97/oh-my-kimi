@@ -196,7 +196,9 @@ describe("task renderer: nested live rendering", () => {
 			}),
 		);
 
-		const expectedStats = `${formatNumber(19)} ${theme.icon.extensionTool} · ${formatNumber(58_000)}/${formatNumber(272_000)} . $2.10`;
+		// Context now matches the status line gauge: 58000/272000 → 21.3%/272K.
+		// Cost is separated by the theme dot separator, not a literal ".".
+		const expectedStats = `${formatNumber(19)} ${theme.icon.extensionTool}${theme.sep.dot}21.3%/272K${theme.sep.dot}$2.10`;
 		expect(text).toContain(expectedStats);
 		expect(text).not.toContain("tools");
 		expect(text).not.toContain("ctx");

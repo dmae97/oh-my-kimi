@@ -27,6 +27,7 @@ import type { ObservableSession, SessionObserverRegistry } from "../session-obse
 import { getMarkdownTheme, theme } from "../theme/theme";
 import { matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
+import { formatContextUsage } from "./status-line/context-thresholds";
 
 /** Max thinking characters in collapsed state */
 const MAX_THINKING_CHARS_COLLAPSED = 200;
@@ -267,12 +268,11 @@ export class SessionObserverOverlayComponent extends Container {
 		const progress = session?.progress;
 		if (!progress) return "";
 		const stats: string[] = [];
-		// Current per-turn context — what the user reads as "how full is the context".
-		// Used as a compact progress gauge instead of cumulative billing volume.
+		// Current per-turn context — match the status line's `<pct>%/<window>` gauge (e.g. `5.1%/1M`).
 		if (progress.contextTokens && progress.contextTokens > 0) {
 			const ctx =
 				progress.contextWindow && progress.contextWindow > 0
-					? `${formatNumber(progress.contextTokens)}/${formatNumber(progress.contextWindow)}`
+					? formatContextUsage((progress.contextTokens / progress.contextWindow) * 100, progress.contextWindow)
 					: `${formatNumber(progress.contextTokens)}`;
 			stats.push(ctx);
 		}
@@ -287,7 +287,7 @@ export class SessionObserverOverlayComponent extends Container {
 			parts.push(theme.fg("dim", statSegments.join(theme.sep.dot)));
 		}
 		if (progress.cost > 0) {
-			parts.push(`. ${theme.fg("statusLineCost", `$${progress.cost.toFixed(2)}`)}`);
+			parts.push(theme.fg("statusLineCost", `$${progress.cost.toFixed(2)}`));
 		}
 		return parts.join(theme.sep.dot);
 	}

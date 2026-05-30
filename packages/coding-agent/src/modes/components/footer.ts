@@ -7,7 +7,7 @@ import type { AgentSession } from "../../session/agent-session";
 import { shortenPath } from "../../tools/render-utils";
 import * as git from "../../utils/git";
 import { sanitizeStatusText } from "../shared";
-import { getContextUsageLevel, getContextUsageThemeColor } from "./status-line/context-thresholds";
+import { formatContextUsage, getContextUsageLevel, getContextUsageThemeColor } from "./status-line/context-thresholds";
 
 /**
  * Footer component that shows pwd, token stats, and context usage
@@ -136,7 +136,6 @@ export class FooterComponent implements Component {
 		const contextUsage = this.session.getContextUsage();
 		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
 		const contextPercentValue = contextUsage?.percent ?? 0;
-		const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
 
 		// Replace home directory with ~
 		let pwd = shortenPath(getProjectDir());
@@ -180,10 +179,10 @@ export class FooterComponent implements Component {
 		// Colorize context percentage based on usage
 		let contextPercentStr: string;
 		const autoIndicator = this.#autoCompactEnabled ? " (auto)" : "";
-		const contextPercentDisplay =
-			contextPercent === "?"
-				? `?/${formatNumber(contextWindow)}${autoIndicator}`
-				: `${contextPercent}%/${formatNumber(contextWindow)}${autoIndicator}`;
+		const contextPercentDisplay = `${formatContextUsage(
+			contextUsage?.percent === null ? null : contextPercentValue,
+			contextWindow,
+		)}${autoIndicator}`;
 		if (contextUsage?.percent !== null && contextUsage?.percent !== undefined) {
 			const color = getContextUsageThemeColor(getContextUsageLevel(contextPercentValue, contextWindow));
 			contextPercentStr =
