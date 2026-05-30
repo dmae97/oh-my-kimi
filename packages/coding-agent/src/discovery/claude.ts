@@ -269,11 +269,20 @@ function readClaudeCommandToggles(): { enableUser: boolean; enableProject: boole
 	}
 }
 
-function getClaudeCommandName(commandsDir: string, filePath: string): string {
-	return path
-		.relative(commandsDir, filePath)
-		.replace(/\.md$/, "")
-		.replace(/[\\/]+/g, ":");
+function getClaudeCommandNamespaceAlias(commandsDir: string, filePath: string): string | null {
+	const relativeName = path.relative(commandsDir, filePath).replace(/\.md$/, "");
+	if (!/[\\/]/.test(relativeName)) return null;
+	return relativeName.replace(/[\\/]+/g, ":");
+}
+
+function addClaudeCommandNamespaceAliases(commands: SlashCommand[], commandsDir: string): SlashCommand[] {
+	const aliases: SlashCommand[] = [];
+	for (const command of commands) {
+		const alias = getClaudeCommandNamespaceAlias(commandsDir, command.path);
+		if (alias === null) continue;
+		aliases.push({ ...command, name: alias });
+	}
+	return aliases.length === 0 ? commands : [...commands, ...aliases];
 }
 
 async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashCommand>> {
@@ -288,8 +297,8 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 		const userResult = await loadFilesFromDir<SlashCommand>(ctx, userCommandsDir, PROVIDER_ID, "user", {
 			extensions: ["md"],
 			recursive: true,
-			transform: (_name, content, filePath, source) => ({
-				name: getClaudeCommandName(userCommandsDir, filePath),
+			transform: (name, content, filePath, source) => ({
+				name: name.replace(/\.md$/, ""),
 				path: filePath,
 				content,
 				level: "user",
@@ -297,7 +306,7 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 			}),
 		});
 
-		items.push(...userResult.items);
+		items.push(...addClaudeCommandNamespaceAliases(userResult.items, userCommandsDir));
 		if (userResult.warnings) warnings.push(...userResult.warnings);
 	}
 
@@ -307,8 +316,8 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 		const projectResult = await loadFilesFromDir<SlashCommand>(ctx, projectCommandsDir, PROVIDER_ID, "project", {
 			extensions: ["md"],
 			recursive: true,
-			transform: (_name, content, filePath, source) => ({
-				name: getClaudeCommandName(projectCommandsDir, filePath),
+			transform: (name, content, filePath, source) => ({
+				name: name.replace(/\.md$/, ""),
 				path: filePath,
 				content,
 				level: "project",
@@ -316,7 +325,7 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 			}),
 		});
 
-		items.push(...projectResult.items);
+		items.push(...addClaudeCommandNamespaceAliases(projectResult.items, projectCommandsDir));
 		if (projectResult.warnings) warnings.push(...projectResult.warnings);
 	}
 

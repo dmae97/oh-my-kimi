@@ -42,7 +42,7 @@ describe("Claude Code slash command discovery", () => {
 		await fs.rm(root, { recursive: true, force: true });
 	});
 
-	test("maps subdirectory commands to Claude Code namespace names", async () => {
+	test("loads subdirectory commands under both basename and namespace names", async () => {
 		await writeFile(path.join(project, ".claude", "commands", "triage.md"), "Triage prompt\n");
 		await writeFile(path.join(project, ".claude", "commands", "opsx", "apply.md"), "Apply prompt\n");
 		await writeFile(path.join(home, ".claude", "commands", "team", "audit.md"), "Audit prompt\n");
@@ -55,9 +55,9 @@ describe("Claude Code slash command discovery", () => {
 
 		expect(result.warnings).toEqual([]);
 		expect(names).toContain("triage");
+		expect(names).toContain("apply");
 		expect(names).toContain("opsx:apply");
+		expect(names).toContain("audit");
 		expect(names).toContain("team:audit");
-		expect(names).not.toContain("apply");
-		expect(names).not.toContain("audit");
 	});
 });

@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed Claude Code slash command discovery to load subdirectory commands with Claude-compatible namespace names, e.g. `.claude/commands/opsx/apply.md` resolves as `opsx:apply` ([#1523](https://github.com/can1357/oh-my-pi/issues/1523)).
+- Fixed Claude Code slash command discovery to load subdirectory commands recursively while preserving basename commands (e.g. `/apply`) and adding namespace aliases (e.g. `/opsx:apply`) for tools that install colon-namespaced workflows ([#1523](https://github.com/can1357/oh-my-pi/issues/1523)).
 
 ## [15.5.15] - 2026-05-30
 ### Changed
