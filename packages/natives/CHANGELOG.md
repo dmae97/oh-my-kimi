@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [15.5.10] - 2026-05-28
+
+### Fixed
+
+- Fixed background bash jobs pinning the JS main thread at ~200% CPU when the child process emits output in many tiny writes (printf-style progress, llama-cli token streams). `pi_shell`'s pipe reader forwarded every chunk through a separate `ThreadsafeFunction::call` per kernel `read(2)`, so a chatty child produced millions of cross-thread napi callbacks that the JS main thread had to drain serially — even after the child exited, the queue kept the process saturated for seconds. The bridge now greedily coalesces every chunk already in the mpsc queue into a single batched call (capped at 64 KiB) before crossing into JS, collapsing 1-byte writes into one napi dispatch and bringing the steady-state callback rate back to the JS event-loop's throughput.
+
+## [15.5.9] - 2026-05-28
+### Changed
+
+- Changed native addon extraction to skip re-extracting cached `.node` files when their size already matches embedded archive metadata
+- Changed standalone binaries to embed native addons as a compressed tarball and unpack them into the versioned native cache on first run instead of embedding each `.node` file uncompressed.
+
+### Fixed
+
+- Fixed CI native addon builds retaining ELF debug and symbol sections in release artifacts; stripped builds are now verified to reject `.debug_*`, `.zdebug_*`, `.symtab`, and `.strtab` sections.
+
+### Security
+
+- Hardened embedded addon archive extraction by rejecting unsafe entry names and non-file archive entries before writing binaries to disk
+
 ## [15.5.4] - 2026-05-27
 ### Added
 

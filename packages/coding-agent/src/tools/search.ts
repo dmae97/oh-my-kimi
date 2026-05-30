@@ -1,14 +1,14 @@
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { computeFileHash, formatHashlineHeader } from "@oh-my-pi/hashline";
+import { formatHashlineHeader } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type GrepMatch, GrepOutputMode, type GrepResult, grep } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { getFileSnapshotStore } from "../edit/file-snapshot-store";
+import { recordFileSnapshot } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
@@ -478,8 +478,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						);
 					}
 				} catch (err) {
-					if (err instanceof Error && err.message.startsWith("regex parse error")) {
-						throw new ToolError(err.message);
+					if (err instanceof Error && /^regex(?: parse)? error/i.test(err.message)) {
+						throw new ToolError(err.message.replace(/^regex(?: parse)? error:?\s*/i, "Invalid regex: "));
 					}
 					throw err;
 				}
@@ -609,19 +609,17 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					matchesByFile.get(relativePath)!.push(match);
 				}
 				const displayLines: string[] = [];
-				const hashContexts = new Map<string, { absolutePath: string; fileHash: string }>();
+				const hashContexts = new Map<string, { tag: string }>();
 				if (baseDisplayMode.hashLines) {
 					for (const relativePath of fileList) {
 						if (archiveDisplaySet.has(relativePath)) continue;
 						const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
 						if (immutableSourcePaths.has(absoluteFilePath)) continue;
-						try {
-							const fullText = await Bun.file(absoluteFilePath).text();
-							const fileHash = computeFileHash(fullText);
-							hashContexts.set(relativePath, { absolutePath: absoluteFilePath, fileHash });
-						} catch {
-							// Best-effort: if the file disappeared between grep and render, fall back to plain line output.
-						}
+						// Mint a whole-file content tag so any anchor validates while the
+						// file is unchanged; over-cap / unreadable files get no tag (and
+						// therefore plain, non-editable line output).
+						const tag = await recordFileSnapshot(this.session, absoluteFilePath);
+						if (tag) hashContexts.set(relativePath, { tag });
 					}
 				}
 				const renderMatchesForFile = (relativePath: string): { model: string[]; display: string[] } => {
@@ -640,40 +638,33 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						}
 						return nextWidth;
 					}, 0);
-					const cacheEntries: Array<readonly [number, string]> = [];
 					let lastEmittedLine: number | undefined;
 					const gutterPad = " ".repeat(lineNumberWidth + 1);
 					for (const match of fileMatches) {
-						const pushLine = (lineNumber: number, line: string, isMatch: boolean, recordable: boolean) => {
+						const pushLine = (lineNumber: number, line: string, isMatch: boolean) => {
 							if (lastEmittedLine !== undefined && lineNumber > lastEmittedLine + 1) {
 								modelOut.push("...");
 								displayOut.push(`${gutterPad}│...`);
 							}
 							modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
 							displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
-							if (recordable) cacheEntries.push([lineNumber, line] as const);
 							lastEmittedLine = lineNumber;
 						};
 						if (match.contextBefore) {
 							for (const ctx of match.contextBefore) {
-								pushLine(ctx.lineNumber, ctx.line, false, true);
+								pushLine(ctx.lineNumber, ctx.line, false);
 							}
 						}
-						pushLine(match.lineNumber, match.line, true, !match.truncated);
+						pushLine(match.lineNumber, match.line, true);
 						if (match.truncated) {
 							linesTruncated = true;
 						}
 						if (match.contextAfter) {
 							for (const ctx of match.contextAfter) {
-								pushLine(ctx.lineNumber, ctx.line, false, true);
+								pushLine(ctx.lineNumber, ctx.line, false);
 							}
 						}
 						fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
-					}
-					if (cacheEntries.length > 0 && hashContext) {
-						getFileSnapshotStore(this.session).recordSparse(hashContext.absolutePath, cacheEntries, {
-							fileHash: hashContext.fileHash,
-						});
 					}
 					return { model: modelOut, display: displayOut };
 				};
@@ -684,7 +675,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						return {
 							modelLines: rendered.model,
 							displayLines: rendered.display,
-							headerSuffix: hashContext ? `#${hashContext.fileHash}` : "",
+							headerSuffix: hashContext?.tag ? `#${hashContext.tag}` : "",
 							skip: rendered.model.length === 0,
 						};
 					});
@@ -699,8 +690,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 							displayLines.push("");
 						}
 						const hashContext = hashContexts.get(relativePath);
-						if (hashContext) {
-							outputLines.push(formatHashlineHeader(relativePath, hashContext.fileHash));
+						if (hashContext?.tag) {
+							outputLines.push(formatHashlineHeader(relativePath, hashContext.tag));
 						}
 						outputLines.push(...rendered.model);
 						displayLines.push(...rendered.display);

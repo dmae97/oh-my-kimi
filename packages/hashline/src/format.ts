@@ -1,29 +1,39 @@
 /**
- * Hashline format primitives: sigils, separators, regex fragments, and the
- * file-hash computation. These are the single source of truth for the
- * parser, the tokenizer, the prompt, and the formal grammar.
+ * Hashline format primitives: sigils, separators, regex fragments, and
+ * display helpers. These are the single source of truth for the parser, the
+ * tokenizer, the prompt, and the formal grammar.
  */
 
-/** Op sigil used immediately after a line-number anchor to insert before it. */
-export const HL_OP_INSERT_BEFORE = "↑";
-/** Op sigil used immediately after a line-number anchor to insert after it. */
-export const HL_OP_INSERT_AFTER = "↓";
-/** Op sigil used after a range (or single anchor) to replace its lines. */
-export const HL_OP_REPLACE = ":";
-/** Op sigil used after a range (or single anchor) to delete its lines. */
-export const HL_OP_DELETE = "!";
+import type { Cursor } from "./types";
 
-/** All hashline edit op sigils, concatenated for fast membership tests. */
-export const HL_OP_CHARS = `${HL_OP_INSERT_BEFORE}${HL_OP_INSERT_AFTER}${HL_OP_REPLACE}${HL_OP_DELETE}`;
-
-/** Prefix for payload continuation lines. The prefix itself is not written. */
-export const HL_PAYLOAD_PREFIX = "+";
-
-/** Hashline edit file-section header marker. */
+/** File-section header prefix: `¶path#hash`. */
 export const HL_FILE_PREFIX = "¶";
 
-/** Separator between a hashline file path and its file hash. */
+/** Payload sigil for literal body rows. */
+export const HL_PAYLOAD_REPLACE = "+";
+
+/** Hunk-header keyword for concrete line replacement. */
+export const HL_REPLACE_KEYWORD = "replace";
+/** Hunk-header keyword for concrete line deletion. */
+export const HL_DELETE_KEYWORD = "delete";
+/** Hunk-header keyword for insertion operations. */
+export const HL_INSERT_KEYWORD = "insert";
+/** Insert position keyword for inserting before a concrete line. */
+export const HL_INSERT_BEFORE = "before";
+/** Insert position keyword for inserting after a concrete line. */
+export const HL_INSERT_AFTER = "after";
+/** Insert position keyword for inserting at the start of the file. */
+export const HL_INSERT_HEAD = "head";
+/** Insert position keyword for inserting at the end of the file. */
+export const HL_INSERT_TAIL = "tail";
+/** Hunk-header terminator for body-bearing operations. */
+export const HL_HEADER_COLON = ":";
+
+/** Separator between a hashline file path and its opaque snapshot tag. */
 export const HL_FILE_HASH_SEP = "#";
+
+/** Separator between two line numbers in a range, e.g. `5..10`. */
+export const HL_RANGE_SEP = "..";
 
 /** Separator between a line number and displayed line content in hashline mode. */
 export const HL_LINE_BODY_SEP = ":";
@@ -32,38 +42,68 @@ function regexEscape(str: string): string {
 	return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Decoration prefix that may precede a line number in tool output:
- * `>` (context line in grep), `-` (removed line), `*` (match line).
- * Any combination, in any order, surrounded by optional whitespace. Output
- * formatters emit at most one decoration per line; the parser stays liberal
- * because it accepts whatever the model echoes back.
- */
-export const HL_ANCHOR_DECORATION_RE_RAW = `\\s*[>\\-*]*\\s*`;
-
-/** Capture-group regex source for a decorated bare line-number anchor. */
-export const HL_ANCHOR_RE_RAW = `${HL_ANCHOR_DECORATION_RE_RAW}(\\d+)`;
-
 /** Bare positive line-number Lid (no decorations, no captures, no anchors). */
 export const HL_LINE_RE_RAW = `[1-9]\\d*`;
 
 /** Capture-group form of {@link HL_LINE_RE_RAW}. */
-export const HL_LINE_CAPTURE_RE_RAW = `([1-9]\\d*)`;
+export const HL_LINE_CAPTURE_RE_RAW = `(${HL_LINE_RE_RAW})`;
 
-/** Four-hex-character file hash carried by a hashline section header. */
-export const HL_FILE_HASH_RE_RAW = `[0-9a-f]{4}`;
+/** Format a concrete replacement hunk header. */
+export function formatReplaceHeader(start: number, end: number): string {
+	return `${HL_REPLACE_KEYWORD} ${start}${HL_RANGE_SEP}${end}${HL_HEADER_COLON}`;
+}
 
+/** Format a concrete deletion hunk header. */
+export function formatDeleteHeader(start: number, end = start): string {
+	return start === end ? `${HL_DELETE_KEYWORD} ${start}` : `${HL_DELETE_KEYWORD} ${start}${HL_RANGE_SEP}${end}`;
+}
+
+/** Format an insertion hunk header for a cursor position. */
+export function formatInsertHeader(cursor: Cursor): string {
+	switch (cursor.kind) {
+		case "before_anchor":
+			return `${HL_INSERT_KEYWORD} ${HL_INSERT_BEFORE} ${cursor.anchor.line}${HL_HEADER_COLON}`;
+		case "after_anchor":
+			return `${HL_INSERT_KEYWORD} ${HL_INSERT_AFTER} ${cursor.anchor.line}${HL_HEADER_COLON}`;
+		case "bof":
+			return `${HL_INSERT_KEYWORD} ${HL_INSERT_HEAD}${HL_HEADER_COLON}`;
+		case "eof":
+			return `${HL_INSERT_KEYWORD} ${HL_INSERT_TAIL}${HL_HEADER_COLON}`;
+	}
+}
+
+/** Number of hex characters in a content-derived file-hash tag. */
+export const HL_FILE_HASH_LENGTH = 4;
+/** Canonical uppercase hexadecimal content-hash tag carried by a hashline section header. */
+export const HL_FILE_HASH_RE_RAW = `[0-9A-F]{${HL_FILE_HASH_LENGTH}}`;
 /** Capture-group form of {@link HL_FILE_HASH_RE_RAW}. */
 export const HL_FILE_HASH_CAPTURE_RE_RAW = `(${HL_FILE_HASH_RE_RAW})`;
-
 /** Regex-escaped form of {@link HL_LINE_BODY_SEP}, safe for embedding inside a regex. */
 export const HL_LINE_BODY_SEP_RE_RAW = regexEscape(HL_LINE_BODY_SEP);
-
 /**
- * Representative file hashes for use in user-facing error messages and prompt
- * examples.
+ * Representative file-hash tags for use in user-facing error messages and
+ * prompt examples.
  */
-export const HL_FILE_HASH_EXAMPLES = ["1a2b", "3c4d", "9f3e"] as const;
+export const HL_FILE_HASH_EXAMPLES = ["1A2B", "3C4D", "9F3E"] as const;
+/**
+ * Normalize text before hashing: trim trailing `[ \t\r]` from every line (and
+ * the final line) in a single pass so CRLF endings and display-trimmed lines
+ * do not invalidate a tag.
+ */
+function normalizeFileHashText(text: string): string {
+	return text.replace(/[ \t\r]+(?=\n|$)/g, "");
+}
+/**
+ * Compute the content-derived hash tag carried by a hashline section header.
+ * The tag is a 4-hex fingerprint of the whole file's normalized text: any read
+ * of byte-identical content mints the same tag, and a follow-up edit anchored
+ * at any line validates whenever the live file still hashes to it.
+ */
+export function computeFileHash(text: string): string {
+	const normalized = normalizeFileHashText(text);
+	const low16 = Bun.hash.xxHash32(normalized, 0) & 0xffff;
+	return low16.toString(16).padStart(HL_FILE_HASH_LENGTH, "0").toUpperCase();
+}
 
 /**
  * Format a comma-separated list of example anchors with an optional line-number
@@ -74,26 +114,7 @@ export function describeAnchorExamples(linePrefix = ""): string {
 	return examples.map(e => `"${e}"`).join(", ");
 }
 
-function normalizeFileHashText(text: string): string {
-	return text
-		.replace(/\r/g, "")
-		.split("\n")
-		.map(line => line.trimEnd())
-		.join("\n");
-}
-
-/**
- * Compute the 4-hex-character hash carried by a hashline section header. The
- * hash normalizes CR characters and trailing whitespace before hashing so
- * platform line endings and display-trimmed lines do not invalidate anchors.
- */
-export function computeFileHash(text: string): string {
-	const normalized = normalizeFileHashText(text);
-	const low16 = Bun.hash.xxHash32(normalized, 0) & 0xffff;
-	return low16.toString(16).padStart(4, "0");
-}
-
-/** Format a hashline section header for a file path and file hash. */
+/** Format a hashline section header for a file path and snapshot tag. */
 export function formatHashlineHeader(filePath: string, fileHash: string): string {
 	return `${HL_FILE_PREFIX}${filePath}${HL_FILE_HASH_SEP}${fileHash}`;
 }

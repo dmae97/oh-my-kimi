@@ -258,7 +258,7 @@ describe("ModelRegistry", () => {
 			});
 
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
-			const opusVariants = registry.getCanonicalVariants("claude-opus-4-7");
+			const opusVariants = registry.getCanonicalVariants("claude-opus-4-8");
 			const haikuVariants = registry.getCanonicalVariants("claude-haiku-4-5");
 
 			expect(opusVariants.some(variant => variant.selector === "demo/anthropic/claude-opus-latest")).toBe(true);
@@ -2255,6 +2255,40 @@ describe("ModelRegistry", () => {
 
 		expect(vertexModels.map(model => model.id)).toEqual(["zai-org/glm-4.7-maas"]);
 		expect(registry.find("google-vertex", "gemini-1.5-pro")).toBeUndefined();
+	});
+
+	test("does not re-add bundled synthetic models after authoritative cache load", () => {
+		const cachedModel: Model<"openai-completions"> = {
+			id: "hf:zai-org/GLM-5.1",
+			name: "GLM 5.1",
+			api: "openai-completions",
+			provider: "synthetic",
+			baseUrl: "https://api.synthetic.new/openai/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+		};
+		writeModelCache("synthetic", Date.now(), [cachedModel], true, "authoritative:test", cacheDbPath);
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const syntheticModels = getModelsForProvider(registry, "synthetic");
+
+		expect(syntheticModels.map(model => model.id)).toEqual(["hf:zai-org/GLM-5.1"]);
+		expect(registry.find("synthetic", "hf:moonshotai/Kimi-K2.5")).toBeUndefined();
+	});
+
+	test("does not re-add bundled synthetic models after authoritative refresh", async () => {
+		authStorage.setRuntimeApiKey("synthetic", "synthetic-test-key");
+		using _hook = mockOpenAiCompatibleModels("https://api.synthetic.new/openai/v1/models", ["hf:zai-org/GLM-5.1"]);
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+
+		await registry.refresh("online");
+		const syntheticModels = getModelsForProvider(registry, "synthetic");
+
+		expect(syntheticModels.map(model => model.id)).toEqual(["hf:zai-org/GLM-5.1"]);
+		expect(registry.find("synthetic", "hf:moonshotai/Kimi-K2.5")).toBeUndefined();
 	});
 
 	test("keeps bundled google-vertex fallback when cached project catalog is non-authoritative", () => {

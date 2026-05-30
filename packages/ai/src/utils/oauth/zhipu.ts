@@ -1,19 +1,19 @@
 /**
  * Zhipu Coding Plan login flow.
  *
- * Zhipu BigModel (智谱) provides an OpenAI-compatible API.
- * API docs: https://docs.bigmodel.cn/cn/guide/develop/openai/introduction
+ * GLM Coding Plan provides an OpenAI-compatible API on the dedicated coding
+ * endpoint. API docs: https://docs.bigmodel.cn/cn/coding-plan/quick-start
  *
  * Simple API key flow:
- * 1. User gets their API key from https://open.bigmodel.cn
+ * 1. User gets a Coding Plan API key from https://bigmodel.cn/coding-plan/personal/overview
  * 2. User pastes the API key into the CLI
  */
 
 import { validateOpenAICompatibleApiKey } from "./api-key-validation";
 import type { OAuthController } from "./types";
 
-const AUTH_URL = "https://open.bigmodel.cn/usercenter/apikeys";
-const API_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
+const AUTH_URL = "https://bigmodel.cn/coding-plan/personal/overview";
+const API_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 const VALIDATION_MODEL = "glm-5.1";
 
 /**
@@ -30,7 +30,7 @@ export async function loginZhipuCodingPlan(options: OAuthController): Promise<st
 	// Open browser to API keys page
 	options.onAuth?.({
 		url: AUTH_URL,
-		instructions: "Copy your API key from the dashboard",
+		instructions: "Copy your API key from the Coding Plan dashboard",
 	});
 
 	// Prompt user to paste their API key

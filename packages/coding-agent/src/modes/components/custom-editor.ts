@@ -1,5 +1,6 @@
 import { Editor, type KeyId, matchesKey, parseKittySequence } from "@oh-my-pi/pi-tui";
 import type { AppKeybinding } from "../../config/keybindings";
+import { highlightUltrathink } from "../ultrathink";
 
 type ConfigurableEditorAction = Extract<
 	AppKeybinding,
@@ -44,6 +45,8 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
  * Custom editor that handles configurable app-level shortcuts for coding-agent.
  */
 export class CustomEditor extends Editor {
+	/** Rainbow-highlight the "ultrathink" keyword as the user types it. */
+	decorateText = highlightUltrathink;
 	onEscape?: () => void;
 	shouldBypassAutocompleteOnEscape?: () => boolean;
 	onClear?: () => void;

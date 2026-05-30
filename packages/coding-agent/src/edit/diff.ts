@@ -58,7 +58,7 @@ function formatNumberedDiffLine(prefix: "+" | "-" | " ", lineNum: number, conten
  * Generate a unified diff string with line numbers and context.
  * Returns both the diff string and the first changed line number (in the new file).
  */
-export function generateDiffString(oldContent: string, newContent: string, contextLines = 4): DiffResult {
+export function generateDiffString(oldContent: string, newContent: string, contextLines = 2): DiffResult {
 	const parts = Diff.diffLines(oldContent, newContent);
 	const output: string[] = [];
 
@@ -119,8 +119,9 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 					linesToShow = raw.slice(0, contextLimit);
 				}
 
+				// Leading-skip placeholder is omitted: the first emitted line's
+				// number already conveys that earlier lines were trimmed.
 				if (leadingSkip > 0) {
-					output.push(formatNumberedDiffLine(" ", oldLineNum, "..."));
 					oldLineNum += leadingSkip;
 					newLineNum += leadingSkip;
 				}
@@ -143,8 +144,9 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 					}
 				}
 
+				// Trailing-skip placeholder is omitted for the same reason: the
+				// final emitted line's number tells the reader the file continues.
 				if (trailingSkip > 0) {
-					output.push(formatNumberedDiffLine(" ", oldLineNum, "..."));
 					oldLineNum += trailingSkip;
 					newLineNum += trailingSkip;
 				}

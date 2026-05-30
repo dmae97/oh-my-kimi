@@ -235,17 +235,24 @@ function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string)
 
 function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, label = "streaming"): string {
 	if (!diff) return "";
-	const lines = diff.split("\n");
-	const total = lines.length;
-	const displayLines = lines.slice(-EDIT_STREAMING_PREVIEW_LINES);
-	const hidden = total - displayLines.length;
+	// Hunk-aware truncation keeps the change rows themselves visible. Tail-mode
+	// pins the visible window to the bottom of the diff so newly streamed
+	// hunks stay on screen as more arrives, instead of leaving the user stuck
+	// staring at the head of the file while the tail scrolls offscreen.
+	const {
+		text: truncatedDiff,
+		hiddenHunks,
+		hiddenLines,
+	} = truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, EDIT_STREAMING_PREVIEW_LINES, { fromTail: true });
 	let text = "\n\n";
-	text += renderDiffColored(displayLines.join("\n"), { filePath: rawPath });
-	if (hidden > 0) {
-		text += uiTheme.fg("dim", `\n… (${label} +${hidden} lines)`);
-	} else {
-		text += uiTheme.fg("dim", `\n(${label})`);
+	if (hiddenHunks > 0 || hiddenLines > 0) {
+		const remainder: string[] = [];
+		if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
+		if (hiddenLines > 0) remainder.push(`${hiddenLines} more lines`);
+		text += `${uiTheme.fg("dim", `… (${remainder.join(", ")} above)`)}\n`;
 	}
+	text += renderDiffColored(truncatedDiff, { filePath: rawPath });
+	text += uiTheme.fg("dim", `\n(${label})`);
 	return text;
 }
 
@@ -305,7 +312,7 @@ const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** E
 
 function normalizeHashlineInputPreviewPath(rawPath: string): string {
 	const trimmed = rawPath.trim();
-	const hashStart = /#[0-9a-f]{4}$/u.exec(trimmed)?.index;
+	const hashStart = /#[0-9a-fA-F]{4}$/u.exec(trimmed)?.index;
 	const withoutHash = hashStart === undefined ? trimmed : trimmed.slice(0, hashStart);
 	if (withoutHash.length < 2) return withoutHash;
 	const first = withoutHash[0];

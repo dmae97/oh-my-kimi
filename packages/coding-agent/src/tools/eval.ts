@@ -13,9 +13,19 @@ import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
 import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
-import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
+import { renderCodeCell } from "../tui";
+import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { resolveEvalBackends, type ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
+import {
+	JSON_TREE_MAX_DEPTH_COLLAPSED,
+	JSON_TREE_MAX_DEPTH_EXPANDED,
+	JSON_TREE_MAX_LINES_COLLAPSED,
+	JSON_TREE_MAX_LINES_EXPANDED,
+	JSON_TREE_SCALAR_LEN_COLLAPSED,
+	JSON_TREE_SCALAR_LEN_EXPANDED,
+	renderJsonTreeLines,
+} from "./json-tree";
 import {
 	formatStyledTruncationWarning,
 	resolveOutputMaxColumns,
@@ -60,15 +70,6 @@ export type EvalToolResult = {
 
 export type EvalProxyExecutor = (params: EvalToolParams, signal?: AbortSignal) => Promise<EvalToolResult>;
 
-function formatJsonScalar(value: unknown): string {
-	if (value === null) return "null";
-	if (value === undefined) return "undefined";
-	if (typeof value === "string") return JSON.stringify(value);
-	if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
-	if (typeof value === "function") return "[function]";
-	return "[object]";
-}
-
 /** Cap per `display()` value sent back to the model. */
 const MAX_DISPLAY_TEXT_BYTES = 8000;
 
@@ -99,41 +100,6 @@ function formatDisplayOutputsForText(outputs: EvalDisplayOutput[]): string {
 		chunks.push(`display[${displayIndex}]:\n${formatDisplayJsonForText(output.data)}`);
 	}
 	return chunks.join("\n\n");
-}
-
-function renderJsonTree(value: unknown, theme: Theme, expanded: boolean, maxDepth = expanded ? 6 : 2): string[] {
-	const maxItems = expanded ? 20 : 5;
-
-	const renderNode = (node: unknown, prefix: string, depth: number, isLast: boolean, label?: string): string[] => {
-		const branch = getTreeBranch(isLast, theme);
-		const displayLabel = label ? `${label}: ` : "";
-
-		if (depth >= maxDepth || node === null || typeof node !== "object") {
-			return [`${prefix}${branch} ${displayLabel}${formatJsonScalar(node)}`];
-		}
-
-		const isArray = Array.isArray(node);
-		const entries = isArray
-			? node.map((val, index) => [String(index), val] as const)
-			: Object.entries(node as object);
-		const header = `${prefix}${branch} ${displayLabel}${isArray ? `Array(${entries.length})` : `Object(${entries.length})`}`;
-		const lines = [header];
-
-		const childPrefix = prefix + getTreeContinuePrefix(isLast, theme);
-		const visible = entries.slice(0, maxItems);
-		for (let i = 0; i < visible.length; i++) {
-			const [key, val] = visible[i];
-			const childLast = i === visible.length - 1 && (expanded || entries.length <= maxItems);
-			lines.push(...renderNode(val, childPrefix, depth + 1, childLast, isArray ? `[${key}]` : key));
-		}
-		if (!expanded && entries.length > maxItems) {
-			const moreBranch = theme.tree.last;
-			lines.push(`${childPrefix}${moreBranch} ${entries.length - maxItems} more item(s)`);
-		}
-		return lines;
-	};
-
-	return renderNode(value, "", 0, true);
 }
 
 export interface EvalToolDescriptionOptions {
@@ -403,6 +369,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 
 					const cellStatusEvents: EvalStatusEvent[] = [];
 					const cellDisplayOutputs: EvalDisplayOutput[] = [];
+					const cellImageNotes: string[] = [];
 					let cellHasMarkdown = false;
 					for (const output of result.displayOutputs) {
 						if (output.type === "json") {
@@ -410,8 +377,26 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 							cellDisplayOutputs.push(output);
 						}
 						if (output.type === "image") {
-							images.push({ type: "image", data: output.data, mimeType: output.mimeType });
-							cellDisplayOutputs.push(output);
+							const resized = await resizeImage({
+								type: "image",
+								data: output.data,
+								mimeType: output.mimeType,
+							});
+							const image: ImageContent = {
+								type: "image",
+								data: resized.data,
+								mimeType: resized.mimeType,
+							};
+							images.push(image);
+							cellDisplayOutputs.push({
+								type: "image",
+								data: image.data,
+								mimeType: image.mimeType,
+							});
+							const dimensionNote = formatDimensionNote(resized);
+							if (dimensionNote) {
+								cellImageNotes.push(`display image ${cellImageNotes.length + 1}: ${dimensionNote}`);
+							}
 						}
 						if (output.type === "status") {
 							statusEvents.push(output.event);
@@ -423,9 +408,14 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					}
 
 					const stdoutTrimmed = result.output.trim();
+					const imageText = cellImageNotes.join("\n");
 					const displayText = formatDisplayOutputsForText(cellDisplayOutputs);
+					const visibleDisplayText =
+						displayText && imageText ? `${displayText}\n\n${imageText}` : displayText || imageText;
 					const cellOutput =
-						stdoutTrimmed && displayText ? `${stdoutTrimmed}\n\n${displayText}` : stdoutTrimmed || displayText;
+						stdoutTrimmed && visibleDisplayText
+							? `${stdoutTrimmed}\n\n${visibleDisplayText}`
+							: stdoutTrimmed || visibleDisplayText;
 					cellResult.output = cellOutput;
 					cellResult.exitCode = result.exitCode;
 					cellResult.durationMs = durationMs;
@@ -644,6 +634,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		sh: "icon.package",
 		env: "icon.package",
 		batch: "icon.package",
+		llm: "icon.package",
 	};
 
 	const iconKey = opIcons[op] ?? "icon.file";
@@ -709,6 +700,11 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 			break;
 		case "batch":
 			parts.push(`${data.files} file${(data.files as number) !== 1 ? "s" : ""} processed`);
+			break;
+		case "llm":
+			if (data.model) parts.push(String(data.model));
+			if (data.tier && data.tier !== data.model) parts.push(`(${data.tier})`);
+			parts.push(`${data.chars ?? 0} chars`);
 			break;
 		case "wc":
 			parts.push(`${data.lines}L ${data.words}W ${data.chars}C`);
@@ -925,10 +921,15 @@ export const evalToolRenderer = {
 		const output = stripOutputNotice(rawOutput, details?.meta).trimEnd();
 
 		const jsonOutputs = details?.jsonOutputs ?? [];
+		const treeExpanded = options.renderContext?.expanded ?? options.expanded;
+		const treeDepth = treeExpanded ? JSON_TREE_MAX_DEPTH_EXPANDED : JSON_TREE_MAX_DEPTH_COLLAPSED;
+		const treeLineCap = treeExpanded ? JSON_TREE_MAX_LINES_EXPANDED : JSON_TREE_MAX_LINES_COLLAPSED;
+		const treeScalarLen = treeExpanded ? JSON_TREE_SCALAR_LEN_EXPANDED : JSON_TREE_SCALAR_LEN_COLLAPSED;
+		const labelOutputs = jsonOutputs.length > 1;
 		const jsonLines = jsonOutputs.flatMap((value, index) => {
-			const header = `JSON output ${index + 1}`;
-			const treeLines = renderJsonTree(value, uiTheme, options.renderContext?.expanded ?? options.expanded);
-			return [header, ...treeLines];
+			const tree = renderJsonTreeLines(value, uiTheme, treeDepth, treeLineCap, treeScalarLen);
+			const body = tree.truncated ? [...tree.lines, uiTheme.fg("dim", "…")] : tree.lines;
+			return labelOutputs ? [uiTheme.fg("dim", `display[${index + 1}]`), ...body] : body;
 		});
 
 		const timeoutSeconds = options.renderContext?.timeout;

@@ -45,6 +45,7 @@ describe("resolvePlanPath local:// support", () => {
 
 describe("resolvePlanPath plan-mode redirect", () => {
 	const planMode: PlanModeState = { enabled: true, planFilePath: "local://PLAN.md" };
+	const approvedPlanMode: PlanModeState = { enabled: true, planFilePath: "local://APPROVED.md" };
 
 	it("redirects bare PLAN.md to the session plan path when plan mode is active", () => {
 		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", planMode });
@@ -72,10 +73,20 @@ describe("resolvePlanPath plan-mode redirect", () => {
 		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", planMode });
 		expect(resolvePlanPath(session, "local://PLAN.md")).toBe(path.join("/tmp/agent-artifacts", "local", "PLAN.md"));
 	});
+
+	it("redirects PLAN.md aliases to the active titled plan artifact", () => {
+		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo", planMode: approvedPlanMode });
+		const expected = path.join("/tmp/agent-artifacts", "local", "APPROVED.md");
+		expect(resolvePlanPath(session, "PLAN.md")).toBe(expected);
+		expect(resolvePlanPath(session, "./PLAN.md")).toBe(expected);
+		expect(resolvePlanPath(session, "/repo/PLAN.md")).toBe(expected);
+		expect(resolvePlanPath(session, "local://PLAN.md")).toBe(expected);
+	});
 });
 
 describe("enforcePlanModeWrite plan-mode redirect", () => {
 	const planMode: PlanModeState = { enabled: true, planFilePath: "local://PLAN.md" };
+	const approvedPlanMode: PlanModeState = { enabled: true, planFilePath: "local://APPROVED.md" };
 
 	it("accepts bare PLAN.md as a write to the plan file", () => {
 		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", planMode });
@@ -87,6 +98,11 @@ describe("enforcePlanModeWrite plan-mode redirect", () => {
 		expect(() => enforcePlanModeWrite(session, "src/foo.ts", { op: "update" })).toThrow(
 			/only the plan file may be modified/,
 		);
+	});
+
+	it("accepts bare PLAN.md as a write to a titled active plan file", () => {
+		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", planMode: approvedPlanMode });
+		expect(() => enforcePlanModeWrite(session, "PLAN.md", { op: "update" })).not.toThrow();
 	});
 
 	it("rejects deletes of PLAN.md even when basename matches", () => {

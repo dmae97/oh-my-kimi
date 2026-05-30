@@ -3,8 +3,8 @@
  *
  * Matched lines are prefixed with `*`; context lines are prefixed with a single
  * space so line numbers align in column. In hashline mode the line uses the
- * editable `LINE:content` shape under a file-hash header; in plain mode it keeps
- * the legacy `LINE|content` display-only shape. Line numbers are never padded.
+ * editable `LINE:content` shape under a snapshot-tag header; in plain mode it
+ * keeps the legacy `LINE|content` display-only shape. Line numbers are never padded.
  */
 export function formatMatchLine(
 	lineNumber: number,

@@ -127,6 +127,35 @@ describe("InteractiveMode plan review rendering", () => {
 
 		mode.planModeEnabled = true;
 		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 7320, contextWindow: 10000, percent: 73.2 });
+		const selector = vi.spyOn(mode, "showHookSelector").mockResolvedValue("Refine plan");
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath: "local://APPROVED.md",
+		});
+
+		expect(selector).toHaveBeenCalledWith(
+			"Plan mode - next step",
+			["Approve and execute", "Approve and compact context", "Approve and keep context (73.2%)", "Refine plan"],
+			expect.any(Object),
+		);
+	});
+
+	it("keeps the keep-context label plain when context usage is unknown", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nDo the thing.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		// Post-compaction: tokens unknown until the next LLM response.
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
 		const selector = vi.spyOn(mode, "showHookSelector").mockResolvedValue("Refine plan");
 
 		await mode.handlePlanApproval({
@@ -158,6 +187,7 @@ describe("InteractiveMode plan review rendering", () => {
 
 		mode.planModeEnabled = true;
 		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
 		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Approve and keep context");
 		const clear = vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
 		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
@@ -201,6 +231,39 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(clear).toHaveBeenCalledTimes(1);
 		expect(prompt).toHaveBeenCalledWith(expect.any(String), {
 			synthetic: true,
+		});
+	});
+
+	it("re-enters plan mode on the approved titled artifact after approve-and-execute", async () => {
+		const planFilePath = "local://PLAN.md";
+		const finalPlanFilePath = "local://APPROVED.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nExecute then edit.");
+
+		await mode.handlePlanModeCommand();
+
+		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Approve and execute");
+		vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "APPROVED",
+			finalPlanFilePath,
+		});
+
+		expect(mode.planModeEnabled).toBe(false);
+		expect(session.getPlanReferencePath()).toBe(finalPlanFilePath);
+
+		await mode.handlePlanModeCommand();
+		expect(session.getPlanModeState()).toMatchObject({
+			enabled: true,
+			planFilePath: finalPlanFilePath,
+			reentry: true,
 		});
 	});
 
@@ -459,6 +522,51 @@ describe("InteractiveMode plan review rendering", () => {
 
 		expect(markSpy).not.toHaveBeenCalled();
 		expect(session.isPlanCompactAbortPending).toBe(false);
+	});
+
+	it("re-enters plan mode on the approved titled artifact after approval", async () => {
+		const planFilePath = "local://PLAN.md";
+		const finalPlanFilePath = "local://APPROVED.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nKeep editing this artifact.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.getPlanModeState()?.planFilePath).toBe(planFilePath);
+
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		const selector = vi.spyOn(mode, "showHookSelector").mockResolvedValue("Approve and keep context");
+		const showError = vi.spyOn(mode, "showError");
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "APPROVED",
+			finalPlanFilePath,
+		});
+
+		expect(mode.planModeEnabled).toBe(false);
+		expect(session.getPlanReferencePath()).toBe(finalPlanFilePath);
+
+		await mode.handlePlanModeCommand();
+		expect(session.getPlanModeState()).toMatchObject({
+			enabled: true,
+			planFilePath: finalPlanFilePath,
+			reentry: true,
+		});
+
+		await mode.handlePlanApproval({
+			planFilePath: finalPlanFilePath,
+			planExists: true,
+			title: "APPROVED",
+			finalPlanFilePath,
+		});
+
+		expect(selector).toHaveBeenCalledTimes(2);
+		expect(showError).not.toHaveBeenCalled();
 	});
 
 	// ==========================================================================

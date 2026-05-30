@@ -1044,7 +1044,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.top_p).toBeUndefined();
 		expect(payload.top_k).toBeUndefined();
 		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
-		expect(payload.output_config).toEqual({ effort: "high" });
+		expect(payload.output_config).toEqual({ effort: "xhigh" });
 	});
 
 	it("treats tool prefix helpers as no-ops when prefix is empty", () => {

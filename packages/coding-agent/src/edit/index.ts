@@ -262,19 +262,17 @@ async function executeSinglePathEntries(
 
 function extractApprovalPath(args: unknown): string {
 	const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-	const targetPath = record.path;
-	if (typeof targetPath === "string" && targetPath.length > 0) {
-		return targetPath;
+	const input = typeof record.input === "string" ? record.input : undefined;
+	if (input) {
+		const hashlineMatch = /^(?:¶|§|@)([^\s#]+)/m.exec(input);
+		if (hashlineMatch?.[1]) return hashlineMatch[1];
+
+		const applyPatchMatch = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/m.exec(input);
+		if (applyPatchMatch?.[1]) return applyPatchMatch[1].trim();
 	}
 
-	const input = typeof record.input === "string" ? record.input : undefined;
-	if (!input) return "(unknown)";
-
-	const hashlineMatch = /^(?:¶|§|@)([^\s#]+)/m.exec(input);
-	if (hashlineMatch?.[1]) return hashlineMatch[1];
-
-	const applyPatchMatch = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/m.exec(input);
-	return applyPatchMatch?.[1]?.trim() || "(unknown)";
+	const targetPath = record.path;
+	return typeof targetPath === "string" && targetPath.length > 0 ? targetPath : "(unknown)";
 }
 
 export class EditTool implements AgentTool<TInput> {
@@ -430,11 +428,10 @@ export class EditTool implements AgentTool<TInput> {
 					batchRequest: LspBatchRequest | undefined,
 					_onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
-					const { input, path } = params as HashlineParams & { path?: string };
+					const { input } = params as HashlineParams;
 					return executeHashlineSingle({
 						session: tool.session,
 						input,
-						path,
 						signal,
 						batchRequest,
 						writethrough: tool.#writethrough,

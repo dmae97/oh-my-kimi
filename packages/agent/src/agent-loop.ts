@@ -562,9 +562,23 @@ async function runLoopBody(
 				return;
 			}
 
-			// Check for tool calls
-			const toolCalls = message.content.filter(c => c.type === "toolCall");
-			hasMoreToolCalls = toolCalls.length > 0;
+			// Run tools whenever the turn carries tool_use blocks AND was not truncated.
+			// `stop_reason` is provider metadata that never goes back on the wire, so it
+			// does not gate continuation validity: replaying a tool_use turn with the
+			// tool_results appended is accepted whether the turn ended on `tool_use` or
+			// `end_turn` (adaptive/interleaved-thinking Opus routinely emits tool calls
+			// under `end_turn`; verified against the live Anthropic API). The only
+			// continuation hazard is a thinking block carrying a stale/invalid signature,
+			// which `transformMessages` already neutralizes — it strips the signature on
+			// non-`toolUse` turns and the encoder downgrades the unsigned block to text,
+			// which the API accepts. So treat `stop` (end_turn/pause_turn) the same as
+			// `toolUse`. `length` (max_tokens) is the one reason we must NOT run: the
+			// trailing tool_use may be truncated with incomplete arguments — those calls
+			// are abandoned below. (`error`/`aborted` already returned above.)
+			type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
+			const toolCalls = message.content.filter((c): c is ToolCallContent => c.type === "toolCall");
+			const runnableStop = message.stopReason === "toolUse" || message.stopReason === "stop";
+			hasMoreToolCalls = runnableStop && toolCalls.length > 0;
 
 			const toolResults: ToolResultMessage[] = [];
 			if (hasMoreToolCalls) {
@@ -584,6 +598,23 @@ async function runLoopBody(
 				for (const result of toolResults) {
 					currentContext.messages.push(result);
 					newMessages.push(result);
+				}
+			} else if (toolCalls.length > 0) {
+				// Turn ended on a non-runnable reason (`length` truncation) but left
+				// toolCall blocks behind. The trailing call's arguments may be incomplete,
+				// so don't execute or continue — pair each with a placeholder result to keep
+				// the tool_use/tool_result contract valid for any later request that
+				// replays this turn.
+				for (const toolCall of toolCalls) {
+					const result = createAbortedToolResult(toolCall, stream, "skipped");
+					currentContext.messages.push(result);
+					newMessages.push(result);
+					toolResults.push(result);
+					recordSkippedTool(telemetry, {
+						toolCallId: toolCall.id,
+						toolName: toolCall.name,
+						status: "skipped",
+					});
 				}
 			}
 
@@ -1241,10 +1272,15 @@ async function executeToolCalls(
 function createAbortedToolResult(
 	toolCall: Extract<AssistantMessage["content"][number], { type: "toolCall" }>,
 	stream: EventStream<AgentEvent, AgentMessage[]>,
-	reason: "aborted" | "error",
+	reason: "aborted" | "error" | "skipped",
 	errorMessage?: string,
 ): ToolResultMessage {
-	const message = reason === "aborted" ? "Tool execution was aborted" : "Tool execution failed due to an error";
+	const message =
+		reason === "aborted"
+			? "Tool execution was aborted"
+			: reason === "skipped"
+				? "Tool call was not executed because the assistant ended its turn"
+				: "Tool execution failed due to an error";
 	const result: AgentToolResult<any> = {
 		content: [{ type: "text", text: errorMessage ? `${message}: ${errorMessage}` : `${message}.` }],
 		details: {},

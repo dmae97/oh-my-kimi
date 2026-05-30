@@ -115,6 +115,7 @@ export type KnownProvider =
 	| "cursor"
 	| "deepseek"
 	| "xai"
+	| "xai-oauth"
 	| "groq"
 	| "cerebras"
 	| "openrouter"
@@ -141,6 +142,8 @@ export type KnownProvider =
 	| "venice"
 	| "vllm"
 	| "xiaomi"
+	| "wafer-pass"
+	| "wafer-serverless"
 	| "zenmux"
 	| "lm-studio";
 export type Provider = KnownProvider | string;
@@ -428,6 +431,16 @@ export interface SimpleStreamOptions extends StreamOptions {
 	syntheticApiFormat?: "openai" | "anthropic";
 	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
 	preferWebsockets?: boolean;
+	/**
+	 * OpenRouter routing-variant suffix automatically appended to model IDs when
+	 * the request targets OpenRouter (`model.provider === "openrouter"`). Common
+	 * values: `"nitro"` (throughput), `"floor"` (cheapest), `"online"` (web
+	 * search plugin), `"exacto"` (cherry-picked high-quality providers, only
+	 * defined for some models). Ignored when the resolved model id already
+	 * contains a `:<variant>` suffix (e.g. the user typed `:nitro` explicitly
+	 * or the catalog entry already names the variant).
+	 */
+	openrouterVariant?: string;
 }
 
 // Generic StreamFunction with typed options
@@ -815,6 +828,13 @@ export interface AnthropicCompat {
 	supportsEagerToolInputStreaming?: boolean;
 	/** Whether long prompt-cache retention (`ttl: "1h"`) is supported. Default: true for canonical Anthropic API. */
 	supportsLongCacheRetention?: boolean;
+	/**
+	 * Whether mid-conversation `role: "system"` messages are accepted in the
+	 * `messages` array (Claude Opus 4.8+ on the first-party Claude API and
+	 * Claude Platform on AWS). When unset, auto-detected from the model id and
+	 * base URL. Not available on Bedrock, Vertex AI, or Microsoft Foundry.
+	 */
+	supportsMidConversationSystem?: boolean;
 }
 
 /**

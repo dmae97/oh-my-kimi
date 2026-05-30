@@ -124,7 +124,9 @@ describe("auth-gateway openai-chat: parseRequest", () => {
 		expect(tool.role).toBe("toolResult");
 		if (tool.role !== "toolResult") throw new Error("unreachable");
 		expect(tool.toolCallId).toBe("call_1");
-		expect(tool.toolName).toBe("");
+		// Back-resolved from the prior assistant `tool_calls[].function.name`.
+		// Google's `functionResponse.name` is required to be non-empty.
+		expect(tool.toolName).toBe("lookup");
 		expect(tool.content).toEqual([{ type: "text", text: "result-text" }]);
 
 		expect(parsed.context.tools).toHaveLength(1);
@@ -149,6 +151,55 @@ describe("auth-gateway openai-chat: parseRequest", () => {
 		const parsed = parseRequest({ model: "m", messages: [], max_tokens: 256 });
 		expect(parsed.options.maxOutputTokens).toBe(256);
 		expect(parsed.stream).toBe(false);
+	});
+
+	it("honours an explicit wire `name` on a tool message over back-resolution", () => {
+		const parsed = parseRequest({
+			model: "m",
+			messages: [
+				{ role: "user", content: "go" },
+				{
+					role: "assistant",
+					tool_calls: [{ id: "c1", type: "function", function: { name: "lookup", arguments: "{}" } }],
+				},
+				// SDK-supplied name; takes precedence over the map lookup.
+				{ role: "tool", tool_call_id: "c1", name: "submit_move", content: "ok" },
+			],
+		});
+		const tool = parsed.context.messages.find(m => m.role === "toolResult");
+		if (!tool || tool.role !== "toolResult") throw new Error("expected toolResult");
+		expect(tool.toolName).toBe("submit_move");
+	});
+
+	it("treats an empty wire `name` as absent and falls back to map lookup", () => {
+		const parsed = parseRequest({
+			model: "m",
+			messages: [
+				{ role: "user", content: "go" },
+				{
+					role: "assistant",
+					tool_calls: [{ id: "c1", type: "function", function: { name: "submit_move", arguments: "{}" } }],
+				},
+				{ role: "tool", tool_call_id: "c1", name: "", content: "ok" },
+			],
+		});
+		const tool = parsed.context.messages.find(m => m.role === "toolResult");
+		if (!tool || tool.role !== "toolResult") throw new Error("expected toolResult");
+		expect(tool.toolName).toBe("submit_move");
+	});
+
+	it("leaves toolName empty when no matching tool_call_id and no wire name", () => {
+		const parsed = parseRequest({
+			model: "m",
+			messages: [
+				{ role: "user", content: "go" },
+				// orphan tool reply with no prior assistant tool_call
+				{ role: "tool", tool_call_id: "orphan", content: "ok" },
+			],
+		});
+		const tool = parsed.context.messages.find(m => m.role === "toolResult");
+		if (!tool || tool.role !== "toolResult") throw new Error("expected toolResult");
+		expect(tool.toolName).toBe("");
 	});
 });
 

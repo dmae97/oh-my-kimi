@@ -36,6 +36,7 @@ export const STATUS_LINE_PRESETS: Record<StatusLinePreset, PresetDef> = {
 		leftSegments: ["pi", "hostname", "model", "mode", "path", "git", "pr", "subagents"],
 		rightSegments: [
 			"session_name",
+			"cache_hit",
 			"token_in",
 			"token_out",
 			"token_rate",

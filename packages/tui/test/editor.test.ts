@@ -113,6 +113,19 @@ describe("Editor component", () => {
 			expect(editor.getText()).toBe("second");
 		});
 
+		it("exits history mode at the history edit anchor before public insertText", () => {
+			const editor = new Editor(defaultEditorTheme);
+
+			editor.addToHistory("line1\nline2");
+			editor.handleInput("\x1b[A"); // Up - recalls at the top edit anchor
+			expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
+
+			editor.insertText("[Image #1] ");
+
+			expect(editor.getText()).toBe("line1\nline2[Image #1] ");
+			expect(editor.getCursor()).toEqual({ line: 1, col: "line2[Image #1] ".length });
+		});
+
 		it("does not add empty strings to history", () => {
 			const editor = new Editor(defaultEditorTheme);
 
@@ -508,6 +521,18 @@ describe("Editor component", () => {
 			expect(text).toBe("äöü\nÄÖÜ");
 		});
 
+		it("splits public insertText newlines into logical editor rows", () => {
+			const editor = new Editor(defaultEditorTheme);
+
+			editor.insertText("a\nb");
+
+			expect(editor.getText()).toBe("a\nb");
+			expect(editor.getCursor()).toEqual({ line: 1, col: 1 });
+			for (const renderedLine of editor.render(80)) {
+				expect(renderedLine).not.toContain("\n");
+			}
+		});
+
 		it("replaces the entire document with unicode text via setText (paste simulation)", () => {
 			const editor = new Editor(defaultEditorTheme);
 
@@ -715,10 +740,11 @@ describe("Editor component", () => {
 			// Cursor should be at end (after B)
 			const lines = editor.render(width);
 
-			// The cursor (blinking bar) should be visible
+			// The software cursor should be visible without SGR blink; Ghostty/cmux
+			// can leave afterimages for blinking cells during rapid row repaints.
 			const contentLine = lines[1]!;
-			expect(contentLine.includes("\x1b[5m")).toBeTruthy();
-
+			expect(contentLine).toContain(defaultEditorTheme.symbols.inputCursor);
+			expect(contentLine).not.toContain("\x1b[5m");
 			// Line should still be correct width
 			expect(visibleWidth(contentLine)).toBeLessThanOrEqual(width);
 		});
@@ -729,7 +755,7 @@ describe("Editor component", () => {
 				const width = 20;
 				const contentWidth = width - 2 * (paddingX + 1);
 				const layoutWidth = Math.max(1, contentWidth - (paddingX === 0 ? 1 : 0));
-				const cursorToken = `\x1b[5m${defaultEditorTheme.symbols.inputCursor}\x1b[0m`;
+				const cursorToken = defaultEditorTheme.symbols.inputCursor;
 
 				for (let i = 0; i < layoutWidth; i++) {
 					editor.handleInput("a");
@@ -806,13 +832,13 @@ describe("Editor component", () => {
 			let lines = editor.render(2);
 			expect(lines).toHaveLength(2);
 			expect(lines[0]).toBe("> ");
-			expect(lines[1]).toBe(` \x1b[5m${defaultEditorTheme.symbols.inputCursor}\x1b[0m${CURSOR_MARKER}`);
+			expect(lines[1]).toBe(` ${defaultEditorTheme.symbols.inputCursor}${CURSOR_MARKER}`);
 
 			editor.handleInput("\x1b[A");
 
 			expect(editor.getCursor()).toEqual({ line: 1, col: 1 });
 			lines = editor.render(2);
-			expect(lines).toEqual([`>\x1b[5m${defaultEditorTheme.symbols.inputCursor}\x1b[0m${CURSOR_MARKER}`, "  "]);
+			expect(lines).toEqual([`>${defaultEditorTheme.symbols.inputCursor}${CURSOR_MARKER}`, "  "]);
 		});
 
 		it("keeps the prompt gutter visible at the borderless width limit", () => {

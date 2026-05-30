@@ -291,6 +291,12 @@ export function mergeDiscoveredModel<TApi extends Api>(
 	return model;
 }
 
+const AUTHORITATIVE_RUNTIME_CATALOG_PROVIDERS = new Set<string>(
+	PROVIDER_DESCRIPTORS.filter(descriptor => descriptor.dynamicModelsAuthoritative).map(
+		descriptor => descriptor.providerId,
+	),
+);
+
 function isAuthoritativeProjectCatalogModel(model: Model<Api>): boolean {
 	return (
 		model.provider === "google-vertex" &&
@@ -321,6 +327,11 @@ interface DiscoveryProviderConfig {
 	compat?: Model<Api>["compat"];
 	discovery: ProviderDiscovery;
 	optional?: boolean;
+}
+
+interface BuiltInDiscoveryResult {
+	models: Model<Api>[];
+	authoritativeProviders: Set<string>;
 }
 
 export type ProviderDiscoveryStatus = "idle" | "ok" | "empty" | "cached" | "unavailable" | "unauthenticated";
@@ -914,6 +925,11 @@ export class ModelRegistry {
 				cachedAuthoritativeProviders.add(provider);
 			}
 		}
+		for (const provider of cachedStandardResult.authoritativeFreshProviders) {
+			if (AUTHORITATIVE_RUNTIME_CATALOG_PROVIDERS.has(provider)) {
+				cachedAuthoritativeProviders.add(provider);
+			}
+		}
 		if (cachedAuthoritativeProviders.size > 0) {
 			builtInModels = dropProviderModels(builtInModels, cachedAuthoritativeProviders);
 		}
@@ -1253,12 +1269,12 @@ export class ModelRegistry {
 				: Promise.all(
 						selectedDiscoverableProviders.map(provider => this.#discoverProviderModels(provider, strategy)),
 					).then(results => results.flat());
-		const [configuredDiscovered, builtInDiscovered] = await Promise.all([
+		const [configuredDiscovered, builtInDiscovery] = await Promise.all([
 			configuredDiscoveriesPromise,
 			this.#discoverBuiltInProviderModels(strategy, providerFilter),
 		]);
-		const discovered = [...configuredDiscovered, ...builtInDiscovered];
-		if (discovered.length === 0) {
+		const discovered = [...configuredDiscovered, ...builtInDiscovery.models];
+		if (discovered.length === 0 && builtInDiscovery.authoritativeProviders.size === 0) {
 			return;
 		}
 		const discoveredModels = this.#applyHardcodedModelPolicies(
@@ -1271,6 +1287,9 @@ export class ModelRegistry {
 			),
 		);
 		const authoritativeProviders = providersWithAuthoritativeProjectCatalog(discoveredModels);
+		for (const provider of builtInDiscovery.authoritativeProviders) {
+			authoritativeProviders.add(provider);
+		}
 		const baseModels =
 			authoritativeProviders.size > 0 ? dropProviderModels(this.#models, authoritativeProviders) : this.#models;
 		const resolved = this.#mergeResolvedModels(baseModels, discoveredModels);
@@ -1385,7 +1404,7 @@ export class ModelRegistry {
 	async #discoverBuiltInProviderModels(
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
-	): Promise<Model<Api>[]> {
+	): Promise<BuiltInDiscoveryResult> {
 		// Skip providers already handled by configured discovery (e.g. user-configured ollama with discovery.type)
 		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(p => p.provider));
 		const managerOptions = (await this.#collectBuiltInModelManagerOptions()).filter(opts => {
@@ -1395,12 +1414,20 @@ export class ModelRegistry {
 			return providerFilter ? providerFilter.has(opts.providerId) : true;
 		});
 		if (managerOptions.length === 0) {
-			return [];
+			return { models: [], authoritativeProviders: new Set() };
 		}
 		const discoveries = await Promise.all(
 			managerOptions.map(options => this.#discoverWithModelManager(options, strategy)),
 		);
-		return discoveries.flat();
+		const authoritativeProviders = new Set<string>();
+		const models: Model<Api>[] = [];
+		for (const discovery of discoveries) {
+			models.push(...discovery.models);
+			for (const provider of discovery.authoritativeProviders) {
+				authoritativeProviders.add(provider);
+			}
+		}
+		return { models, authoritativeProviders };
 	}
 
 	async #collectBuiltInModelManagerOptions(): Promise<ModelManagerOptions<Api>[]> {
@@ -1482,19 +1509,24 @@ export class ModelRegistry {
 	async #discoverWithModelManager(
 		options: ModelManagerOptions<Api>,
 		strategy: ModelRefreshStrategy,
-	): Promise<Model<Api>[]> {
+	): Promise<BuiltInDiscoveryResult> {
 		try {
 			const manager = createModelManager({ ...options, cacheDbPath: this.#cacheDbPath });
 			const result = await manager.refresh(strategy);
-			return result.models.map(model =>
+			const models = result.models.map(model =>
 				model.provider === options.providerId ? model : { ...model, provider: options.providerId },
 			);
+			const authoritativeProviders = new Set<string>();
+			if (options.dynamicModelsAuthoritative && !result.stale) {
+				authoritativeProviders.add(options.providerId);
+			}
+			return { models, authoritativeProviders };
 		} catch (error) {
 			logger.warn("model discovery failed for provider", {
 				provider: options.providerId,
 				error: error instanceof Error ? error.message : String(error),
 			});
-			return [];
+			return { models: [], authoritativeProviders: new Set() };
 		}
 	}
 

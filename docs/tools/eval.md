@@ -131,6 +131,7 @@ Implemented in `packages/coding-agent/src/eval/js/context-manager.ts` and `packa
   - `display`, `print`
   - `read`, `write`, `append`, `sort`, `uniq`, `counter`, `diff`, `tree`, `env`, `output`
   - `tool.<name>(args)` proxy for arbitrary session tool calls
+  - `llm(prompt, opts)` for oneshot, stateless LLM calls (see _Oneshot LLM helper_ below)
 - JS helpers are async because they cross the VM/tool boundary
 - `display(value)` behavior:
   - plain objects/arrays become JSON outputs
@@ -162,6 +163,21 @@ Implemented in `packages/coding-agent/src/eval/py/executor.ts`, `packages/coding
   - `text/plain` → text output
   - `text/html` → HTML converted to markdown with `htmlToBasicMarkdown()`
 - Interactive stdin is rejected: `input_request` sends an empty reply, marks `stdinRequested`, and the executor returns exit code `1`
+
+### Oneshot LLM helper (`llm`)
+
+Both runtimes expose `llm()` — a single stateless completion against a model tier. It is intentionally minimal: no conversation history, no agent-visible tools, pure text in / text (or object) out. Implemented host-side in `packages/coding-agent/src/eval/llm-bridge.ts` and routed through the existing tool bridge under the reserved name `__llm__`.
+
+- Signatures:
+  - JS: `await llm(prompt, { model?, system?, schema? })`
+  - Python: `llm(prompt, *, model="default", system=None, schema=None)`
+- `model` selects a tier (default `"default"`):
+  - `"smol"` → `pi/smol` role (fast / cheap)
+  - `"default"` → the session's active model, falling back to the `pi/default` role
+  - `"slow"` → `pi/slow` role; requests high reasoning effort only on reasoning-capable models
+- `system` (optional) supplies a system prompt.
+- `schema` (optional) is a plain JSON-Schema object. When present, the model is forced to call a single synthetic `respond` tool with that schema (loose, non-strict), and the helper returns the parsed object. When absent, the helper returns the completion string.
+- Errors surface as exceptions: unresolved tier, missing API key, an `error`/`aborted` stop reason, or empty output each raise.
 
 ### Multi-language call behavior
 

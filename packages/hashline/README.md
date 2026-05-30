@@ -19,13 +19,15 @@ import {
 } from "@oh-my-pi/hashline";
 
 const fs = new InMemoryFilesystem();
-await fs.writeText(
-	"hello.ts",
-	`const greeting = "hi";\nexport { greeting };\n`,
-);
+const snapshots = new InMemorySnapshotStore();
+const before = `const greeting = "hi";\nexport { greeting };\n`;
+await fs.writeText("hello.ts", before);
 
-const patcher = new Patcher({ fs });
-const patch = Patch.parse(`¶hello.ts\n1:\n+const greeting = "hello";`);
+const tag = snapshots.recordContiguous("hello.ts", 1, before.split("\n"), { fullText: before });
+const patcher = new Patcher({ fs, snapshots });
+const patch = Patch.parse(String.raw`¶hello.ts#${tag}
+@@ 1..1 @@
++const greeting = "hello";`);
 const result = await patcher.apply(patch);
 
 console.log(result.sections[0].op); // "update"
@@ -37,21 +39,19 @@ console.log(await fs.readText("hello.ts"));
 See [`src/prompt.md`](./src/prompt.md) for the user-facing description and
 [`src/grammar.lark`](./src/grammar.lark) for the formal grammar.
 
-Each hunk starts with a `¶PATH#HASH` header. The hash is a 4-hex-character
-xxHash32 truncation of the file's LF-normalized content. The hash protects
-against stale anchors: if the file changed between the read that produced the
-hash and the edit, the patcher refuses (or, with a `SnapshotStore`, tries
-session-aware recovery).
+Each file section starts with `¶PATH#TAG`. The tag is a 3-hex opaque
+pointer into the `SnapshotStore` that minted it; it is not content-derived
+and is not meaningful outside that store. The patcher protects against
+stale anchors by resolving the tag, verifying the recorded snapshot lines
+against live file content, and refusing or attempting session-aware
+recovery on mismatch.
 
-Inside a hunk:
-
-|Op|Meaning|
-|---|---|
-|`LINE↑`|Insert before LINE (or `BOF↑` for the beginning of file)|
-|`LINE↓`|Insert after LINE (or `EOF↓` for the end of file)|
-|`A-B:`|Replace lines A..B (single-anchor `A:` is sugar for `A-A:`)|
-|`A-B!`|Delete lines A..B (single-anchor `A!` is sugar for `A-A!`)|
-|`+TEXT`|Payload continuation. The `+` prefix is stripped|
+Inside a section:
+- `@@ A..B @@` — open a hunk on lines A..B (use `@@ A,A @@` for a single line; bare `@@ A @@` is also accepted).
+- `@@ BOF @@` / `@@ EOF @@` — virtual hunks at the beginning/end of file.
+- `+TEXT` — literal body row (use `+` alone for a blank line).
+- `&A..B` — repeat original file lines A..B inline (`&A` for one line).
+- Empty body — delete the selected range.
 
 ## Abstractions
 
@@ -67,9 +67,9 @@ text-document protocol, a Git tree, anything.
 
 ### `SnapshotStore`
 
-Optional. When provided to `Patcher`, hashline tries to recover from a stale
-section hash by replaying the edit against a cached pre-edit snapshot of the
-file and 3-way-merging onto the current content. See `recovery.ts`.
+Required. Hashline tags are opaque store pointers, so `Patcher` must receive
+the store that minted them. Recovery replays edits against the cached pre-edit
+snapshot and 3-way-merges onto current content when the live file diverged.
 
 ### `Patcher`
 

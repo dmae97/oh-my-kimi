@@ -143,9 +143,14 @@ describe("anthropic first-event timeout retries", () => {
 	it("retries when the provider never sends the first stream event", async () => {
 		let attempt = 0;
 		const requestTimeouts: Array<number | undefined> = [];
-		const create = ((_body: unknown, requestOptions?: { signal?: AbortSignal; timeout?: number }) => {
+		const requestMaxRetries: Array<number | undefined> = [];
+		const create = ((
+			_body: unknown,
+			requestOptions?: { signal?: AbortSignal; timeout?: number; maxRetries?: number },
+		) => {
 			attempt += 1;
 			requestTimeouts.push(requestOptions?.timeout);
+			requestMaxRetries.push(requestOptions?.maxRetries);
 			return createAnthropicMockStream({
 				signal: requestOptions?.signal,
 				events: attempt === 1 ? undefined : createSuccessfulAnthropicEvents("retry recovered"),
@@ -163,6 +168,7 @@ describe("anthropic first-event timeout retries", () => {
 		expect(attempt).toBe(2);
 		expect(providerRetryWait).toHaveBeenCalledWith(2000, undefined);
 		expect(requestTimeouts).toEqual([1, 1]);
+		expect(requestMaxRetries).toEqual([0, 0]);
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toEqual([{ type: "text", text: "retry recovered" }]);
 		expect(result.responseId).toBe("msg_retry_success");
@@ -170,8 +176,13 @@ describe("anthropic first-event timeout retries", () => {
 
 	it("does not arm the Anthropic first-event watchdog before the stream connects", async () => {
 		let seenRequestTimeout: number | undefined;
-		const create = ((_body: unknown, requestOptions?: { signal?: AbortSignal; timeout?: number }) => {
+		let seenRequestMaxRetries: number | undefined;
+		const create = ((
+			_body: unknown,
+			requestOptions?: { signal?: AbortSignal; timeout?: number; maxRetries?: number },
+		) => {
 			seenRequestTimeout = requestOptions?.timeout;
+			seenRequestMaxRetries = requestOptions?.maxRetries;
 			return createAnthropicMockStream({
 				signal: requestOptions?.signal,
 				connectDelayMs: 2,
@@ -187,15 +198,21 @@ describe("anthropic first-event timeout retries", () => {
 
 		expect(result.stopReason).toBe("stop");
 		expect(seenRequestTimeout).toBe(20);
+		expect(seenRequestMaxRetries).toBe(0);
 		expect(result.content).toEqual([{ type: "text", text: "delayed connect" }]);
 	});
 
 	it("times out before the Anthropic stream connects and forwards the budget to the SDK request", async () => {
 		let attempt = 0;
 		const requestTimeouts: Array<number | undefined> = [];
-		const create = ((_body: unknown, requestOptions?: { signal?: AbortSignal; timeout?: number }) => {
+		const requestMaxRetries: Array<number | undefined> = [];
+		const create = ((
+			_body: unknown,
+			requestOptions?: { signal?: AbortSignal; timeout?: number; maxRetries?: number },
+		) => {
 			attempt += 1;
 			requestTimeouts.push(requestOptions?.timeout);
+			requestMaxRetries.push(requestOptions?.maxRetries);
 			return createAnthropicMockStream({
 				signal: requestOptions?.signal,
 				connectDelayMs: 20,
@@ -214,6 +231,7 @@ describe("anthropic first-event timeout retries", () => {
 		expect(attempt).toBe(4);
 		expect(providerRetryWait).toHaveBeenCalledTimes(3);
 		expect(requestTimeouts).toEqual([1, 1, 1, 1]);
+		expect(requestMaxRetries).toEqual([0, 0, 0, 0]);
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toBe("Anthropic stream timed out while waiting for the first event");
 	});

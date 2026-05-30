@@ -10,6 +10,7 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import {
 	type CredentialDisabledEvent,
+	isUsageLimitError,
 	type Message,
 	type Model,
 	type SimpleStreamOptions,
@@ -23,6 +24,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import {
 	$env,
 	$flag,
+	extractRetryHint,
 	getAgentDbPath,
 	getAgentDir,
 	getProjectDir,
@@ -129,6 +131,7 @@ import {
 	FindTool,
 	getSearchTools,
 	HIDDEN_TOOLS,
+	isImageProviderPreference,
 	isSearchProviderPreference,
 	type LspStartupServerInfo,
 	loadSshTool,
@@ -148,6 +151,7 @@ import { ToolContextStore } from "./tools/context";
 import { getImageGenTools } from "./tools/image-gen";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { queueResolveHandler } from "./tools/resolve";
+import { ttsTool } from "./tools/tts";
 import { EventBus } from "./utils/event-bus";
 import { buildNamedToolChoice } from "./utils/tool-choice";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
@@ -893,12 +897,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	const imageProvider = settings.get("providers.image");
-	if (
-		imageProvider === "auto" ||
-		imageProvider === "openai" ||
-		imageProvider === "gemini" ||
-		imageProvider === "openrouter"
-	) {
+	if (isImageProviderPreference(imageProvider)) {
 		setPreferredImageProvider(imageProvider);
 	}
 
@@ -1317,6 +1316,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const imageGenTools = await logger.time("getImageGenTools", () => getImageGenTools(modelRegistry, model));
 		if (imageGenTools.length > 0) {
 			customTools.push(...(imageGenTools as unknown as CustomTool[]));
+		}
+
+		if (settings.get("tts.enabled")) {
+			customTools.push(ttsTool as unknown as CustomTool);
 		}
 
 		// Add web search tools
@@ -1876,21 +1879,49 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 				return key;
 			},
-			streamFn: (streamModel, context, streamOptions) =>
-				streamSimple(streamModel, context, {
+			streamFn: (streamModel, context, streamOptions) => {
+				const openrouterRoutingPreset = settings.get("providers.openrouterVariant");
+				const openrouterVariant =
+					openrouterRoutingPreset && openrouterRoutingPreset !== "default" ? openrouterRoutingPreset : undefined;
+				return streamSimple(streamModel, context, {
 					...streamOptions,
+					openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
 					onAuthError: async (provider, oldKey, error) => {
+						const message = error instanceof Error ? error.message : String(error);
+						// streamSimple invokes this for both 401 auth failures AND
+						// rotatable usage-limit errors (Codex usage_limit_reached,
+						// Anthropic usage_limit_reached, etc.). The two need
+						// different storage actions: a real 401 means the credential
+						// is bad and should be marked suspect; a usage limit just
+						// means this account is parked until reset and should be
+						// temporarily blocked so a sibling can pick the request up.
+						if (isUsageLimitError(message)) {
+							const retryAfterMs = extractRetryHint(undefined, message);
+							const switched = await modelRegistry.authStorage.markUsageLimitReached(provider, agent.sessionId, {
+								retryAfterMs,
+								signal: streamOptions?.signal,
+							});
+							logger.debug("Retrying provider request after usage-limit block", {
+								provider,
+								switched,
+								retryAfterMs,
+								error: message,
+							});
+							if (!switched) return undefined;
+							return modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
+						}
 						await modelRegistry.authStorage.invalidateCredentialMatching(provider, oldKey, {
 							signal: streamOptions?.signal,
 							sessionId: agent.sessionId,
 						});
 						logger.debug("Retrying provider request after credential invalidation", {
 							provider,
-							error: error instanceof Error ? error.message : String(error),
+							error: message,
 						});
 						return modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
 					},
-				}),
+				});
+			},
 			cursorExecHandlers,
 			transformToolCallArguments: (args, _toolName) => {
 				let result = args;

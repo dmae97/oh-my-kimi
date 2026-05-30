@@ -7,6 +7,7 @@ import type { Effort } from "./model-thinking";
 import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
+	modelOmitsReasoningEffort,
 	requireSupportedEffort,
 } from "./model-thinking";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
@@ -43,6 +44,8 @@ import {
 	streamOpenAIResponses,
 } from "./providers/register-builtins";
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
+import { streamXAIResponses } from "./providers/xai-responses";
+import { isUsageLimitError } from "./rate-limit-utils";
 import type {
 	Api,
 	AssistantMessage,
@@ -74,23 +77,98 @@ function hasVertexAdcCredentials(): boolean {
 	}
 	return cachedVertexAdcCredentialsExists;
 }
-function isGoogleVertexOpenAIModel(model: Model<Api>): boolean {
+function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
 	return (
 		model.provider === "google-vertex" &&
-		model.api === "openai-completions" &&
-		model.baseUrl.includes("/endpoints/openapi")
+		((model.api === "openai-completions" && model.baseUrl.includes("/endpoints/openapi")) ||
+			(model.api === "anthropic-messages" && model.baseUrl.includes(":streamRawPredict")))
 	);
 }
 
-function createVertexOpenAIFetch(options: StreamOptions | undefined): FetchImpl {
+function createVertexAuthenticatedFetch(options: StreamOptions | undefined): FetchImpl {
 	const baseFetch = options?.fetch ?? fetch;
 	const vertexFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 		const token = await getVertexAccessToken({ signal: options?.signal, fetch: baseFetch });
 		const headers = new Headers(init?.headers);
 		headers.set("Authorization", `Bearer ${token}`);
-		return baseFetch(input, { ...init, headers });
+		const rewritten = resolveVertexRequest(input);
+		const url = rewritten instanceof Request ? rewritten.url : rewritten.toString();
+		if (isVertexAnthropicRawPredict(url)) {
+			const bodyText = await readVertexRequestBody(rewritten, init);
+			const transformed = transformVertexAnthropicBody(bodyText);
+			return baseFetch(url, {
+				...init,
+				method: init?.method ?? (rewritten instanceof Request ? rewritten.method : "POST"),
+				headers,
+				body: transformed,
+			});
+		}
+		return baseFetch(rewritten, { ...init, headers });
 	};
 	return Object.assign(vertexFetch, baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {});
+}
+
+function isVertexAnthropicRawPredict(url: string): boolean {
+	return url.includes(":streamRawPredict") || url.includes(":rawPredict");
+}
+
+async function readVertexRequestBody(input: string | URL | Request, init: RequestInit | undefined): Promise<string> {
+	if (input instanceof Request) return input.clone().text();
+	const body = init?.body;
+	if (typeof body === "string") return body;
+	if (body instanceof Uint8Array) return new TextDecoder().decode(body);
+	if (body instanceof ArrayBuffer) return new TextDecoder().decode(body);
+	return "";
+}
+
+// Vertex Claude rejects the standard Anthropic body shape: the `model` field
+// is encoded in the URL path and `anthropic_version: "vertex-2023-10-16"` is
+// required in the JSON body instead of the `anthropic-version` HTTP header.
+function transformVertexAnthropicBody(bodyText: string): string {
+	if (!bodyText) return bodyText;
+	try {
+		const payload = JSON.parse(bodyText) as Record<string, unknown>;
+		delete payload.model;
+		payload.anthropic_version = "vertex-2023-10-16";
+		return JSON.stringify(payload);
+	} catch {
+		return bodyText;
+	}
+}
+
+function resolveVertexRequest(input: string | URL | Request): string | URL | Request {
+	const project = $env.GOOGLE_CLOUD_PROJECT || $env.GCP_PROJECT || $env.GCLOUD_PROJECT;
+	const location = $env.GOOGLE_VERTEX_LOCATION || $env.GOOGLE_CLOUD_LOCATION || $env.VERTEX_LOCATION;
+	if (!project || !location) return input;
+
+	const rewriteUrl = (url: string): string => {
+		const hasPlaceholder =
+			url.includes("{project}") ||
+			url.includes("{location}") ||
+			url.includes("%7Bproject%7D") ||
+			url.includes("%7Blocation%7D");
+		const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
+		const rewritten = hasPlaceholder
+			? url
+					.replace("https://{location}-aiplatform.googleapis.com", `https://${host}`)
+					.replace("https://%7Blocation%7D-aiplatform.googleapis.com", `https://${host}`)
+					.replaceAll("{project}", encodeURIComponent(project))
+					.replaceAll("%7Bproject%7D", encodeURIComponent(project))
+					.replaceAll("{location}", encodeURIComponent(location))
+					.replaceAll("%7Blocation%7D", encodeURIComponent(location))
+			: url;
+		return rewritten.replace(":streamRawPredict/v1/messages", ":streamRawPredict");
+	};
+
+	if (input instanceof Request) {
+		const rewrittenUrl = rewriteUrl(input.url);
+		return rewrittenUrl === input.url ? input : new Request(rewrittenUrl, input);
+	}
+	if (input instanceof URL) {
+		const rewrittenUrl = rewriteUrl(input.toString());
+		return rewrittenUrl === input.toString() ? input : new URL(rewrittenUrl);
+	}
+	return rewriteUrl(input);
 }
 
 type KeyResolver = string | (() => string | undefined);
@@ -102,8 +180,11 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	groq: "GROQ_API_KEY",
 	cerebras: "CEREBRAS_API_KEY",
 	xai: "XAI_API_KEY",
+	"xai-oauth": () => $pickenv("XAI_OAUTH_TOKEN", "XAI_API_KEY"),
 	fireworks: "FIREWORKS_API_KEY",
 	firepass: "FIREPASS_API_KEY",
+	"wafer-pass": "WAFER_PASS_API_KEY",
+	"wafer-serverless": "WAFER_SERVERLESS_API_KEY",
 	openrouter: "OPENROUTER_API_KEY",
 	kilo: "KILO_API_KEY",
 	"vercel-ai-gateway": "AI_GATEWAY_API_KEY",
@@ -243,8 +324,12 @@ export function stream<TApi extends Api>(
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
-	const providerOptions = isGoogleVertexOpenAIModel(model)
-		? { ...options, apiKey: "vertex-adc", fetch: createVertexOpenAIFetch(options as StreamOptions | undefined) }
+	const providerOptions = isGoogleVertexAuthenticatedModel(model)
+		? {
+				...options,
+				apiKey: "vertex-adc",
+				fetch: createVertexAuthenticatedFetch(options as StreamOptions | undefined),
+			}
 		: { ...options, apiKey };
 
 	const api: Api = model.api;
@@ -260,8 +345,12 @@ export function stream<TApi extends Api>(
 		case "openai-completions":
 			return streamOpenAICompletions(model as Model<"openai-completions">, context, providerOptions as any);
 
-		case "openai-responses":
+		case "openai-responses": {
+			if (model.provider === "xai-oauth") {
+				return streamXAIResponses(model as Model<"openai-responses">, context, providerOptions as any);
+			}
 			return streamOpenAIResponses(model as Model<"openai-responses">, context, providerOptions as any);
+		}
 
 		case "azure-openai-responses":
 			return streamAzureOpenAIResponses(model as Model<"azure-openai-responses">, context, providerOptions as any);
@@ -311,6 +400,18 @@ function extractStatusFromAssistantError(message: AssistantMessage): number | un
 	return extractHttpStatusFromError({ message: message.errorMessage });
 }
 
+function isRetryableUpstreamError(error: unknown, status: number | undefined, message: string | undefined): boolean {
+	// 401 means the credential is bad. Usage-limit phrasing (Codex's
+	// "You have hit your ChatGPT usage limit", Anthropic's "usage_limit_reached",
+	// Google's "resource_exhausted") means this account is parked but a
+	// sibling credential can usually pick the request up. Both are
+	// rotatable via `onAuthError` — the auth-gateway maps the former to
+	// `invalidateCredentialMatching` and the latter to `markUsageLimitReached`.
+	if (status === 401) return true;
+	void error;
+	return !!message && isUsageLimitError(message);
+}
+
 function createAssistantAuthError(message: AssistantMessage): Error & { status?: number } {
 	const error: Error & { status?: number } = new Error(message.errorMessage ?? "Provider authentication failed");
 	const status = extractStatusFromAssistantError(message);
@@ -352,7 +453,11 @@ export function streamSimple<TApi extends Api>(
 						!emittedReplayUnsafeEvent &&
 						captureAuthFailure &&
 						event.type === "error" &&
-						extractStatusFromAssistantError(event.error) === 401
+						isRetryableUpstreamError(
+							event.error,
+							extractStatusFromAssistantError(event.error),
+							event.error.errorMessage,
+						)
 					) {
 						return { error: createAssistantAuthError(event.error), bufferedEvents, terminalEvent: event };
 					}
@@ -364,7 +469,15 @@ export function streamSimple<TApi extends Api>(
 				flushBuffered();
 				if (!outer.done) outer.end(await inner.result());
 			} catch (error) {
-				if (!emittedReplayUnsafeEvent && captureAuthFailure && extractHttpStatusFromError(error) === 401) {
+				if (
+					!emittedReplayUnsafeEvent &&
+					captureAuthFailure &&
+					isRetryableUpstreamError(
+						error,
+						extractHttpStatusFromError(error),
+						error instanceof Error ? error.message : undefined,
+					)
+				) {
 					return { error, bufferedEvents };
 				}
 				flushBuffered();
@@ -561,6 +674,14 @@ function resolveOpenAiReasoningEffort<TApi extends Api>(
 ): Effort | undefined {
 	const reasoning = options?.reasoning;
 	if (!reasoning || !model.reasoning) return undefined;
+	// Models with compat.supportsReasoningEffort: false reason natively but
+	// reject the wire effort param. The wire-side omitReasoningEffort gate
+	// (providers/xai-responses.ts:78) is the actual strip; returning
+	// undefined here avoids a redundant requireSupportedEffort throw that
+	// would defeat the gate and surface a confusing
+	// "Compaction failed: Thinking effort high is not supported by..." to
+	// the user.
+	if (modelOmitsReasoningEffort(model)) return undefined;
 	return requireSupportedEffort(model, reasoning);
 }
 
@@ -713,6 +834,7 @@ function mapOptionsForApi<TApi extends Api>(
 				disableReasoning: options?.disableReasoning,
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
+				openrouterVariant: options?.openrouterVariant,
 			});
 
 		case "openai-responses":

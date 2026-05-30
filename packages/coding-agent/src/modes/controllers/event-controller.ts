@@ -3,6 +3,7 @@ import { calculatePromptTokens } from "@oh-my-pi/pi-agent-core/compaction/compac
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { type Component, Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
+import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import {
 	ReadToolGroupComponent,
@@ -329,10 +330,10 @@ export class EventController {
 						content.name,
 						renderArgs,
 						{
+							snapshots: getFileSnapshotStore(this.ctx.session),
 							showImages: settings.get("terminal.showImages"),
 							editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 							editAllowFuzzy: settings.get("edit.fuzzyMatch"),
-							hashlineAutoDropPureInsertDuplicates: settings.get("edit.hashlineAutoDropPureInsertDuplicates"),
 						},
 						tool,
 						this.ctx.ui,
@@ -444,10 +445,10 @@ export class EventController {
 				event.toolName,
 				event.args,
 				{
+					snapshots: getFileSnapshotStore(this.ctx.session),
 					showImages: settings.get("terminal.showImages"),
 					editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 					editAllowFuzzy: settings.get("edit.fuzzyMatch"),
-					hashlineAutoDropPureInsertDuplicates: settings.get("edit.hashlineAutoDropPureInsertDuplicates"),
 				},
 				tool,
 				this.ctx.ui,
@@ -598,7 +599,13 @@ export class EventController {
 		};
 		this.ctx.statusContainer.clear();
 		const reasonText =
-			event.reason === "overflow" ? "Context overflow detected, " : event.reason === "idle" ? "Idle " : "";
+			event.reason === "overflow"
+				? "Context overflow detected, "
+				: event.reason === "incomplete"
+					? "Response incomplete, "
+					: event.reason === "idle"
+						? "Idle "
+						: "";
 		const actionLabel = event.action === "handoff" ? "Auto-handoff" : "Auto context-full maintenance";
 		this.ctx.autoCompactionLoader = new Loader(
 			this.ctx.ui,

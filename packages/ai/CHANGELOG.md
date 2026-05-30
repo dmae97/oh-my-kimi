@@ -2,6 +2,118 @@
 
 ## [Unreleased]
 
+## [15.5.12] - 2026-05-29
+### Removed
+
+- Removed ANTML stream markup healing for `antml:function_calls` and `antml:thinking` envelopes, so Anthropic-compatible providers no longer parse those tags into `toolCall`/`thinking` events
+
+### Fixed
+
+- Fixed GLM-5.x coding-plan OpenAI-compatible streams to use a longer default watchdog window, avoiding spurious `OpenAI completions stream stalled while waiting for the next event` errors during slow `glm-5.1` thinking/output phases. ([#1494](https://github.com/can1357/oh-my-pi/issues/1494))
+- Fixed `zhipu-coding-plan` model discovery and credential validation to use the dedicated GLM Coding Plan endpoint (`https://open.bigmodel.cn/api/coding/paas/v4`) instead of the general BigModel endpoint, preventing requests from consuming ordinary account balance. ([#1494](https://github.com/can1357/oh-my-pi/issues/1494))
+- Fixed DeepSeek tool calls failing on NanoGPT (e.g. `nanogpt/deepseek/deepseek-v4-pro` with reasoning enabled) by routing tool-bearing DeepSeek requests through NanoGPT's `:tools` model route and adding `nanogpt` to the DSML leak allowlist so streamed `<｜DSML｜tool_calls>...</｜DSML｜tool_calls>` envelopes are healed into structured tool calls instead of being passed through as visible text. ([#1488](https://github.com/can1357/oh-my-pi/issues/1488))
+- Fixed DeepSeek tool calls failing on NanoGPT (e.g. `nanogpt/deepseek/deepseek-v4-pro` with reasoning enabled) by adding `nanogpt` to the DSML leak allowlist so streamed `<｜DSML｜tool_calls>...</｜DSML｜tool_calls>` envelopes are healed into structured tool calls instead of being passed through as visible text. The `:tools` model suffix is no longer appended on NanoGPT; that route triggered NanoGPT's server-side tool-call parser and 502'd with `code: "malformed_tool_call"` on complex tool schemas (`todo_write`) — the default route forwards `delta.content` (including DSML envelopes) which is healed client-side. ([#1488](https://github.com/can1357/oh-my-pi/issues/1488))
+- Fixed OpenAI-compatible streamed parallel tool calls losing indexed argument deltas by tracking active tool-call blocks by the provider's `tool_calls[].index`; this keeps parallel NanoGPT `read` calls from merging or dropping their `path` arguments. ([#1488](https://github.com/can1357/oh-my-pi/issues/1488))
+
+## [15.5.11] - 2026-05-29
+
+### Added
+
+- Added mid-conversation `system` message support for Anthropic Messages by upgrading eligible `developer` turns to `role: "system"` on first-party Claude API with Claude Opus 4.8+ and newer
+- Added `supportsMidConversationSystem` to Anthropic compatibility settings so consumers can opt in to or disable mid-conversation `system` role handling per model
+- Added `anthropic.claude-opus-4-8` model metadata in the model registry for Bedrock Converse streaming with effort-based thinking support through `xhigh`
+
+### Changed
+
+- Changed Anthropic adaptive-thinking effort mapping for Opus 4.7+ on the Messages API to use the model's full five-tier scale: user-facing efforts now shift up one notch (`minimal→low`, `low→medium`, `medium→high`, `high→xhigh`, `xhigh→max`) so the top tier reaches the genuine `max` level and `high` lands on Anthropic's recommended `xhigh` coding/agentic default. Older adaptive models (Opus 4.6) and Bedrock Converse keep the four-tier legacy mapping where `xhigh` aliases to `max`.
+
+### Fixed
+
+- Fixed OpenCode Zen `400 thinking is enabled but reasoning_content is missing in assistant tool call message` for every model behind `opencode-go`/`opencode-zen` (Kimi K2.x, DeepSeek V4 Pro/Flash, GLM-5.x, Qwen3.x, MiMo, MiniMax) by reactivating `requiresReasoningContentForToolCalls` and pinning the wire field to `reasoning_content` for any opencode request in thinking mode. The static compat default still omits the field for thinking-disabled turns to preserve the `Extra inputs are not permitted` guard from #1071; forced-tool turns also stay off because the existing `disableReasoningOnForcedToolChoice` guard strips thinking from the wire body. ([#1484](https://github.com/can1357/oh-my-pi/issues/1484))
+
+## [15.5.8] - 2026-05-28
+
+### Added
+
+- Added `CheckCredentialsOptions.completionProbe` (and `completionTimeoutMs`) so `AuthStorage.checkCredentials` can additionally exercise each credential against the provider's chat-completion endpoint after refresh-on-expiry. Result lands on `CredentialHealthResult.completion` ({ok, reason?, modelId?, latencyMs?}) without disturbing the usage `ok` field. Public types: `CompletionProbe`, `CompletionProbeInput`, `CompletionProbeCredential`, `CredentialCompletionResult`. The probe is invoked even when no `UsageProvider` is registered for the row, and is skipped when OAuth refresh fails (the stale bytes would only mask the upstream failure).
+- Added Wafer Pass and Wafer Serverless providers (`wafer-pass`, `wafer-serverless`). OpenAI-compatible (`https://pass.wafer.ai/v1`), bearer auth, `wfr_…` keys. `/login wafer-pass` and `/login wafer-serverless` paste-and-validate the key against `/v1/models`. `WAFER_PASS_API_KEY` and `WAFER_SERVERLESS_API_KEY` environment variables wired into `getEnvApiKey`. Bundled catalog seeds `wafer-pass/{GLM-5.1, Qwen3.5-397B-A17B}` and `wafer-serverless/{GLM-5.1, Kimi-K2.6, Qwen3.5-397B-A17B, Qwen3.6-35B-A3B, qwen3.7-max, deepseek-v4-flash, deepseek-v4-pro}`; dynamic discovery via `/v1/models` overlays additional models at runtime. Pass-tier discovery filters `wafer.tier === "pass_included"`. Pass-SKU costs are seeded at `0` (flat-rate subscription, no per-token charge — matches `kimi-code`/`firepass`/`alibaba-coding-plan`). Serverless costs are the wafer.ai retail rate, derived from the `*_cents_per_million` envelope via `value × 125 / 10000` (e.g. GLM-5.1 `120` → $1.50/M, Kimi-K2.6 `88` → $1.10/M). Reasoning entries get a thinking compat picked from the `wafer.provider` envelope: `zai`/`moonshotai` → zai-style `thinking: { type }`, `qwen` → top-level `enable_thinking`, `deepseek` and unknown upstreams stay unset so `detectOpenAICompat` can pick `reasoning_effort` from the id pattern at request time.
+
+### Changed
+
+- Changed auth-gateway credential resolution to use per-conversation `promptCacheKey`/`sessionId` when calling `AuthStorage.getApiKey`, so repeated turns can keep the same credential until it becomes unavailable
+- Changed auth-gateway and pi-native request handling to align `sessionId` with prompt/context identity before credential lookup
+- Changed Anthropic prompt preparation to downscale image blocks over 2000px when a request includes 20+ images, reducing oversized payloads automatically
+- Changed OpenAI chat request parsing to accept `name` on `tool` messages and fall back to the matching assistant `tool_calls` name, so parsed tool results now carry a proper tool name when the wire omits it
+- Changed `checkCredentials` to skip running `completionProbe` when OAuth refresh fails, so stale bearer tokens are never probed and the refresh failure remains the returned `reason`
+- Changed completion reporting to return `completion: { ok: null, reason: ... }` when a credential has no usable bearer bytes instead of attempting the probe
+- Refactored `AuthStorage.checkCredentials` so OAuth refresh-on-expiry runs up-front and the refreshed credential is shared between the usage probe and the new completion probe; rows without a registered `UsageProvider` no longer short-circuit before the completion probe runs.
+
+### Fixed
+
+- Fixed DeepSeek DSML tool-call envelope leaks on Ollama Cloud and OpenAI-compatible streams by healing leaked envelopes into structured tool calls without displaying raw DSML markers. ([#1462](https://github.com/can1357/oh-my-pi/issues/1462))
+- Fixed auth-gateway to classify usage-limit messages such as `usage_limit_reached`, `resource_exhausted`, and Codex-style `Try again in ~X min` text as 429 `rate_limit_error` responses
+- Fixed auth-gateway usage-limit handling to honor parsed retry hints and switch to a sibling credential via `markUsageLimitReached` instead of invalidating the rate-limited credential
+- Fixed `streamSimple` to retry on usage-limit errors (including message-only error events) before any content is emitted, so `onAuthError` can rotate credentials automatically
+- Fixed auth-gateway error classification to extract embedded status codes and use word-boundary matching, so `GenerateContentRequest` and similar messages are no longer misreported as rate-limit errors
+- Fixed `checkCredentials` to handle `completionProbe` exceptions by recording the failure in `CredentialHealthResult.completion.reason` while still returning the usage probe result
+
+### Fixed
+
+- Fixed Google Vertex's bundled model list to use the authoritative models.dev catalog, including MaaS entries such as `deepseek-ai/deepseek-v3.2-maas` and removing retired Gemini 1.5 fallbacks. ([#1456](https://github.com/can1357/oh-my-pi/issues/1456))
+
+## [15.5.7] - 2026-05-27
+### Added
+- `SimpleStreamOptions.openrouterVariant` (`"nitro"`, `"floor"`, `"online"`, `"exacto"`, …) — when set, appends `:<variant>` to OpenRouter model IDs at request time, leaving ids that already carry an explicit `:suffix` untouched. Plumbed through `openai-completions` and the pi-native gateway forwarder.
+
+- xAI Grok OAuth (SuperGrok Subscription) provider in `/login`. Loopback PKCE flow on `127.0.0.1:56121`; the token unlocks Grok-4.x chat. Ported from NousResearch/hermes-agent (MIT).
+- OpenRouter provider in `/login`. API-key paste flow validated against `https://openrouter.ai/api/v1/auth/key` (the `/models` endpoint is public and cannot validate auth). The pasted key is stored under the existing `openrouter` provider id used by `OPENROUTER_API_KEY`.
+- `XAI_OAUTH_TOKEN` environment variable accepted as a headless fallback for the xAI Grok OAuth provider.
+
+### Changed
+
+- `OpenAIResponsesOptions` gains four optional, provider-agnostic fields that adapter wrappers can use to compose provider-specific behavior on top of the generic transport: `includeEncryptedReasoning` (gates `include: ["reasoning.encrypted_content"]`; default `true`, preserves current behavior), `filterReasoningHistory` (strips replayed `type: "reasoning"` items from conversation history; default `false`), `headers` (merged onto the client's default headers), and `extraBody` (merged into the request payload).
+- The existing `XAI_API_KEY` path is unchanged — it continues to use the OpenAI-completions transport.
+
+### Fixed
+
+- Fixed OpenRouter DeepSeek V4 tool-call follow-up requests replaying normalized `reasoning` as-is instead of DeepSeek's required `reasoning_content`, which caused HTTP 400 errors in thinking mode. ([#1445](https://github.com/can1357/oh-my-pi/issues/1445))
+
+## [15.5.6] - 2026-05-27
+### Added
+
+- Added `PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS` to control how long an idle Codex WebSocket stays eligible for reuse, with `0` disabling the check
+
+### Fixed
+
+- Fixed reused Codex WebSocket connections that had gone silent without activity to be dropped and replaced with a fresh handshake after the idle-reuse threshold, preventing stalled next requests
+- Fixed stale response frames left in the websocket queue from a completed turn so subsequent requests no longer process terminal frames from the previous response
+- Fixed websocket dead-socket detection to fail a stale connection when no inbound traffic or pong is observed after a ping timeout, improving recovery on runtimes that do not emit pong events
+
+## [15.5.5] - 2026-05-27
+
+### Added
+
+- Added `PI_CODEX_WEBSOCKET_PING_INTERVAL_MS` to configure the interval for Codex WebSocket protocol ping heartbeats
+- Added `PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS` to configure the Codex WebSocket pong timeout used to detect unresponsive connections
+- Added `PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY` to configure the maximum buffered Codex WebSocket inbound queue size before transport fallback
+
+### Changed
+
+- Improved Codex WebSocket timeout diagnostics to include last event type and time since last progress event
+- Enhanced Codex WebSocket error classification to recognize ping, pong, send, and queue-overflow failures as retryable
+
+### Fixed
+
+- Fixed Codex WebSocket send failures by wrapping socket.send() in try-catch and surfacing errors as retryable transport errors
+- Fixed Codex WebSocket inbound queue overflow by adding capacity bounds and triggering fallback to SSE when exceeded
+- Fixed Codex WebSocket pong timeout detection by tracking pong events and failing the connection when no pong is received within the configured timeout
+- Fixed Anthropic streaming to suppress hallucinated meta-prompt thinking blocks (the recent "I don't see any current rewritten thinking..." regression). When the marker phrase `rewritten thinking` appears in a streamed thinking summary the block is collapsed to a plain `Thinking...` placeholder and its signature is dropped so subsequent turns can't re-anchor on the garbled chain.
+- Fixed Codex WebSocket silent stalls by adding protocol pings, inbound queue bounding, clearer idle-timeout diagnostics, and SDK retry clamping for first-event timeouts.
+
+### Fixed
+
+- Fixed Synthetic model discovery to treat the provider `/models` response as authoritative so deprecated bundled IDs are pruned from the runtime cache, and changed Synthetic login validation to avoid probing a specific model ([#1417](https://github.com/can1357/oh-my-pi/issues/1417)).
+
 ## [15.5.0] - 2026-05-26
 ### Added
 

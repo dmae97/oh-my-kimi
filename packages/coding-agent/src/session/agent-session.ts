@@ -17,6 +17,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
+import { isPromise } from "node:util/types";
+import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import {
 	type AfterToolCallContext,
 	type AfterToolCallResult,
@@ -103,6 +105,8 @@ import { onAppendOnlyModeChanged } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
+import { getFileSnapshotStore } from "../edit/file-snapshot-store";
+import { namespaceSessionId as namespacePythonSessionId } from "../eval/py";
 import {
 	disposeKernelSessionsByOwner,
 	executePython as executePythonCommand,
@@ -144,6 +148,7 @@ import type { HindsightSessionState } from "../hindsight/state";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import { resolveMemoryBackend } from "../memory-backend";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
+import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
@@ -192,6 +197,7 @@ import {
 	type PythonExecutionMessage,
 	readPendingDisplayTag,
 	SILENT_ABORT_MARKER,
+	stripImagesFromMessage,
 } from "./messages";
 import { formatSessionDumpText } from "./session-dump-format";
 import type {
@@ -208,7 +214,11 @@ import { YieldQueue } from "./yield-queue";
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
 	| AgentEvent
-	| { type: "auto_compaction_start"; reason: "threshold" | "overflow" | "idle"; action: "context-full" | "handoff" }
+	| {
+			type: "auto_compaction_start";
+			reason: "threshold" | "overflow" | "idle" | "incomplete";
+			action: "context-full" | "handoff";
+	  }
 	| {
 			type: "auto_compaction_end";
 			action: "context-full" | "handoff";
@@ -737,6 +747,7 @@ export class AgentSession {
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
 	readonly yieldQueue: YieldQueue;
+	fileSnapshotStore?: InMemorySnapshotStore;
 
 	#powerAssertion: MacOSPowerAssertion | undefined;
 
@@ -1307,10 +1318,25 @@ export class AgentSession {
 
 	/** Emit an event to all listeners */
 	#emit(event: AgentSessionEvent): void {
-		// Copy array before iteration to avoid mutation during iteration
+		// Copy array before iteration to avoid mutation during iteration.
 		const listeners = [...this.#eventListeners];
 		for (const l of listeners) {
-			l(event);
+			try {
+				const result = l(event) as unknown;
+				// Listener may be an async function whose returned Promise we don't await;
+				// attach a catch so a rejection does not become an unhandled rejection.
+				if (isPromise(result)) {
+					result.catch(err => {
+						logger.warn("AgentSession listener rejected", {
+							error: err instanceof Error ? err.message : String(err),
+						});
+					});
+				}
+			} catch (err) {
+				logger.warn("AgentSession listener threw", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
 		}
 	}
 
@@ -3615,9 +3641,17 @@ export class AgentSession {
 		const sessionOnResponse = this.#onResponse;
 		const sessionMetadata = this.agent.metadataForProvider(provider);
 		const sessionOnSseEvent = this.#onSseEvent;
-		if (!sessionOnPayload && !sessionOnResponse && !sessionMetadata && !sessionOnSseEvent) return options;
+		const openrouterRoutingPreset =
+			provider === "openrouter" ? this.settings.get("providers.openrouterVariant") : "default";
+		const openrouterVariant =
+			openrouterRoutingPreset !== "default" && options.openrouterVariant === undefined
+				? openrouterRoutingPreset
+				: undefined;
+		if (!sessionOnPayload && !sessionOnResponse && !sessionMetadata && !sessionOnSseEvent && !openrouterVariant)
+			return options;
 
-		const preparedOptions: SimpleStreamOptions = { ...options };
+		const preparedOptions: SimpleStreamOptions =
+			openrouterVariant === undefined ? { ...options } : { ...options, openrouterVariant };
 
 		// Stamp session metadata (e.g. user_id={session_id}) onto direct-call requests so
 		// they share the same session bucket as Agent.prompt-routed requests on Anthropic
@@ -3740,6 +3774,10 @@ export class AgentSession {
 
 	setPlanReferencePath(path: string): void {
 		this.#planReferencePath = path;
+	}
+
+	getPlanReferencePath(): string {
+		return this.#planReferencePath;
 	}
 
 	get clientBridge(): ClientBridge | undefined {
@@ -3960,6 +3998,21 @@ export class AgentSession {
 		// Expand file-based prompt templates if requested
 		const expandedText = expandPromptTemplates ? expandPromptTemplate(text, [...this.#promptTemplates]) : text;
 
+		// "ultrathink" keyword: nudge the model toward careful multi-step reasoning by
+		// appending a hidden notice after the user's message. User-authored prompts only —
+		// synthetic/agent-initiated turns never trigger it.
+		const ultrathinkNotice: CustomMessage | undefined =
+			!options?.synthetic && containsUltrathink(expandedText)
+				? {
+						role: "custom",
+						customType: "ultrathink-notice",
+						content: ULTRATHINK_NOTICE,
+						display: false,
+						attribution: "user",
+						timestamp: Date.now(),
+					}
+				: undefined;
+
 		// If streaming, queue via steer() or followUp() based on option
 		if (this.isStreaming) {
 			if (!options?.streamingBehavior) {
@@ -3969,6 +4022,10 @@ export class AgentSession {
 				await this.#queueFollowUp(expandedText, options?.images);
 			} else {
 				await this.#queueSteer(expandedText, options?.images);
+			}
+			// Steer/follow-up the ultrathink notice alongside the queued user message.
+			if (ultrathinkNotice) {
+				await this.sendCustomMessage(ultrathinkNotice, { deliverAs: options.streamingBehavior });
 			}
 			return;
 		}
@@ -3998,6 +4055,7 @@ export class AgentSession {
 			await this.#promptWithMessage(message, expandedText, {
 				...options,
 				prependMessages: eagerTodoPrelude ? [eagerTodoPrelude.message] : undefined,
+				appendMessages: ultrathinkNotice ? [ultrathinkNotice] : undefined,
 			});
 		} finally {
 			// Clean up residual eager-todo directive if the prompt never consumed it
@@ -4047,6 +4105,7 @@ export class AgentSession {
 		expandedText: string,
 		options?: Pick<PromptOptions, "toolChoice" | "images" | "skipCompactionCheck"> & {
 			prependMessages?: AgentMessage[];
+			appendMessages?: AgentMessage[];
 			skipPostPromptRecoveryWait?: boolean;
 		},
 	): Promise<void> {
@@ -4110,6 +4169,12 @@ export class AgentSession {
 
 			messages.push(message);
 
+			// Inject the ultrathink notice (and any other per-turn appends) right after the
+			// user message so the model reads it as part of the same turn.
+			if (options?.appendMessages) {
+				messages.push(...options.appendMessages);
+			}
+
 			// Early bail-out: if a newer abort/prompt cycle started during setup,
 			// return before mutating shared state (nextTurn messages, system prompt).
 			if (this.#promptGeneration !== generation) {
@@ -4128,6 +4193,7 @@ export class AgentSession {
 				const fileMentionMessages = await generateFileMentionMessages(fileMentions, this.sessionManager.getCwd(), {
 					autoResizeImages: this.settings.get("images.autoResize"),
 					useHashLines: resolveFileDisplayMode(this).hashLines,
+					snapshotStore: getFileSnapshotStore(this),
 				});
 				messages.push(...fileMentionMessages);
 			}
@@ -5274,6 +5340,55 @@ export class AgentSession {
 	}
 
 	/**
+	 * Strip image content blocks from every message on the current branch and
+	 * persist the rewrite. Walks `SessionManager.getBranch()` in place — both
+	 * `SessionMessageEntry.message` and `CustomMessageEntry.content` arrays
+	 * are mutated, then `rewriteEntries` durably commits the new shape. The
+	 * agent's runtime view is rebuilt from the freshly-mutated entries so any
+	 * provider sessions caching message identity (Codex Responses) are torn
+	 * down to force a clean replay on the next turn.
+	 *
+	 * No-op when the branch carries no images; returns `{ removed: 0 }` and
+	 * skips the disk rewrite.
+	 */
+	async dropImages(): Promise<{ removed: number }> {
+		const branchEntries = this.sessionManager.getBranch();
+		let removed = 0;
+		for (const entry of branchEntries) {
+			if (entry.type === "message") {
+				removed += stripImagesFromMessage(entry.message);
+				continue;
+			}
+			if (entry.type === "custom_message" && typeof entry.content !== "string") {
+				const kept: typeof entry.content = [];
+				let dropped = 0;
+				for (const part of entry.content) {
+					if (part.type === "image") {
+						dropped++;
+					} else {
+						kept.push(part);
+					}
+				}
+				if (dropped > 0) {
+					if (kept.length === 0) {
+						kept.push({ type: "text", text: "[image removed]" });
+					}
+					entry.content = kept;
+					removed += dropped;
+				}
+			}
+		}
+		if (removed === 0) {
+			return { removed: 0 };
+		}
+		await this.sessionManager.rewriteEntries();
+		const sessionContext = this.buildDisplaySessionContext();
+		this.agent.replaceMessages(sessionContext.messages);
+		this.#closeCodexProviderSessionsForHistoryRewrite();
+		return { removed };
+	}
+
+	/**
 	 * Manually compact the session context.
 	 * Aborts current agent operation first.
 	 * @param customInstructions Optional instructions for the compaction summary
@@ -5559,6 +5674,11 @@ export class AgentSession {
 					initiatorOverride: "agent",
 					metadata: this.agent.metadataForProvider(model.provider),
 					telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
+					// Honor the user's /model thinking selection on the handoff
+					// path. Clamped per-model inside generateHandoff via
+					// resolveCompactionEffort so unsupported-effort models don't
+					// trip requireSupportedEffort.
+					thinkingLevel: this.thinkingLevel,
 				},
 				handoffSignal,
 			);
@@ -5629,10 +5749,14 @@ export class AgentSession {
 	 * Check if context maintenance or promotion is needed and run it.
 	 * Called after agent_end and before prompt submission.
 	 *
-	 * Three cases (in order):
-	 * 1. Overflow + promotion: promote to larger model, retry without maintenance
-	 * 2. Overflow + no promotion target: run context maintenance, auto-retry on same model
-	 * 3. Threshold: Context over threshold, run context maintenance (no auto-retry)
+	 * Four cases (in order):
+	 * 1. Input overflow + promotion: promote to larger model, retry without maintenance.
+	 * 2. Input overflow + no promotion target: run context maintenance, auto-retry on same model.
+	 * 3. Output incomplete (stopReason === "length", e.g. `response.incomplete`): the
+	 *    model burned its output budget without producing an actionable deliverable
+	 *    (reasoning-only or truncated). Drop the dead turn, try promotion, otherwise
+	 *    run compaction/handoff and retry.
+	 * 4. Threshold: context over threshold, run context maintenance (no auto-retry).
 	 *
 	 * @param assistantMessage The assistant message to check
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
@@ -5691,10 +5815,49 @@ export class AgentSession {
 			}
 			return false;
 		}
+
+		// Case 3: Output-side incomplete — `response.incomplete` from OpenAI Responses
+		// (and Codex) maps to stopReason === "length". The model burned its
+		// `max_output_tokens` budget on reasoning/text and emitted no actionable
+		// deliverable. Same recovery class as overflow: promotion if available,
+		// otherwise compaction/handoff. Unlike overflow, the *input* is fine, so we
+		// allow the handoff strategy to actually run.
+		if (sameModel && !errorIsFromBeforeCompaction && assistantMessage.stopReason === "length") {
+			const messages = this.agent.state.messages;
+			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+				this.agent.replaceMessages(messages.slice(0, -1));
+			}
+
+			const promoted = await this.#tryContextPromotion(assistantMessage);
+			if (promoted) {
+				logger.debug("Context promotion triggered by response.incomplete (length stop)", {
+					from: `${assistantMessage.provider}/${assistantMessage.model}`,
+				});
+				this.#scheduleAgentContinue({ delayMs: 100, generation });
+				return false;
+			}
+
+			const incompleteCompactionSettings = this.settings.getGroup("compaction");
+			if (incompleteCompactionSettings.enabled && incompleteCompactionSettings.strategy !== "off") {
+				logger.debug("Compaction triggered by response.incomplete (length stop, no promotion target)", {
+					model: `${assistantMessage.provider}/${assistantMessage.model}`,
+					strategy: incompleteCompactionSettings.strategy,
+				});
+				await this.#runAutoCompaction("incomplete", true, false, allowDefer);
+			} else {
+				// Neither promotion nor compaction is available — surface the dead-end so
+				// the user understands why the turn yielded with nothing.
+				logger.warn("response.incomplete with no recovery path (promotion + compaction both unavailable)", {
+					model: `${assistantMessage.provider}/${assistantMessage.model}`,
+				});
+			}
+			return false;
+		}
+
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return false;
 
-		// Case 2: Threshold - turn succeeded but context is getting large
+		// Case 4: Threshold - turn succeeded but context is getting large
 		// Skip if this was an error (non-overflow errors don't have usage data)
 		if (assistantMessage.stopReason === "error") return false;
 		const pruneResult = await this.#pruneToolOutputs();
@@ -6294,6 +6457,14 @@ export class AgentSession {
 	}
 	#isCompactionAuthFailure(error: unknown): boolean {
 		if (!(error instanceof Error)) return false;
+		// Real provider 401/403 — surfaced as `.status` by the compaction layer
+		// (see `createSummarizationError` in packages/agent/src/compaction/compaction.ts).
+		// Without this branch, an expired/revoked Anthropic key would bypass the
+		// authenticated-fallback path and dump the raw HTTP body into the UI.
+		const status = (error as Error & { status?: number }).status;
+		if (status === 401 || status === 403) return true;
+		// pi-native gateway synthetic for "no credential configured" (issue #986).
+		// Carries no HTTP status, so the legacy message regex stays.
 		return /auth_unavailable|no auth available/i.test(error.message);
 	}
 
@@ -6329,6 +6500,11 @@ export class AgentSession {
 					metadata: this.agent.metadataForProvider(candidate.provider),
 					convertToLlm,
 					telemetry,
+					// Honor the user's /model thinking selection (incl. `off`) on
+					// the manual `/compact` path. Clamped per-model inside compact()
+					// via resolveCompactionEffort so unsupported-effort models
+					// (xai-oauth/grok-build) don't trip requireSupportedEffort.
+					thinkingLevel: this.thinkingLevel,
 				});
 			} catch (error) {
 				if (!this.#isCompactionAuthFailure(error)) {
@@ -6412,7 +6588,7 @@ export class AgentSession {
 	 * @returns true when a deferred handoff was scheduled. Inline runs always return false.
 	 */
 	async #runAutoCompaction(
-		reason: "overflow" | "threshold" | "idle",
+		reason: "overflow" | "threshold" | "idle" | "incomplete",
 		willRetry: boolean,
 		deferred = false,
 		allowDefer = true,
@@ -6421,10 +6597,14 @@ export class AgentSession {
 		if (compactionSettings.strategy === "off") return false;
 		if (reason !== "idle" && !compactionSettings.enabled) return false;
 		const generation = this.#promptGeneration;
+		// "overflow" and "incomplete" force inline execution because they are recovery
+		// paths the caller wants resolved before scheduling the next turn. "idle" is
+		// triggered by the idle loop and does its own scheduling.
 		if (
 			!deferred &&
 			allowDefer &&
 			reason !== "overflow" &&
+			reason !== "incomplete" &&
 			reason !== "idle" &&
 			compactionSettings.strategy === "handoff"
 		) {
@@ -6439,6 +6619,9 @@ export class AgentSession {
 			return true;
 		}
 
+		// "overflow" forces context-full because the input itself is broken — a handoff
+		// LLM call would hit the same overflow. "incomplete" is an output-side problem,
+		// so a handoff request on the existing context is still viable.
 		let action: "context-full" | "handoff" =
 			compactionSettings.strategy === "handoff" && reason !== "overflow" ? "handoff" : "context-full";
 		await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
@@ -6601,6 +6784,11 @@ export class AgentSession {
 								initiatorOverride: "agent",
 								convertToLlm,
 								telemetry,
+								// Honor the user's /model thinking selection on the
+								// auto-compaction path — the most-fired compaction
+								// site. Clamped per-model inside compact() via
+								// resolveCompactionEffort.
+								thinkingLevel: this.thinkingLevel,
 							});
 							break;
 						} catch (error) {
@@ -6734,8 +6922,18 @@ export class AgentSession {
 			if (willRetry) {
 				const messages = this.agent.state.messages;
 				const lastMsg = messages[messages.length - 1];
-				if (lastMsg?.role === "assistant" && (lastMsg as AssistantMessage).stopReason === "error") {
-					this.agent.replaceMessages(messages.slice(0, -1));
+				if (lastMsg?.role === "assistant") {
+					const lastAssistant = lastMsg as AssistantMessage;
+					// Drop the prior turn before retry when it carries no actionable deliverable:
+					// - "error": failure was kept in history but must not re-enter the next turn's prompt.
+					// - reason === "incomplete" && stopReason === "length": truncated output (typically
+					//   reasoning-only) — re-running it produces the same dead-end.
+					const shouldDrop =
+						lastAssistant.stopReason === "error" ||
+						(reason === "incomplete" && lastAssistant.stopReason === "length");
+					if (shouldDrop) {
+						this.agent.replaceMessages(messages.slice(0, -1));
+					}
 				}
 
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
@@ -6769,7 +6967,9 @@ export class AgentSession {
 				errorMessage:
 					reason === "overflow"
 						? `Context overflow recovery failed: ${errorMessage}`
-						: `Auto-compaction failed: ${errorMessage}`,
+						: reason === "incomplete"
+							? `Incomplete response recovery failed: ${errorMessage}`
+							: `Auto-compaction failed: ${errorMessage}`,
 			});
 		} finally {
 			if (this.#autoCompactionAbortController === autoCompactionAbortController) {
@@ -7478,7 +7678,7 @@ export class AgentSession {
 				});
 			const result = await executePythonCommand(code, {
 				cwd,
-				sessionId,
+				sessionId: namespacePythonSessionId(sessionId),
 				kernelOwnerId: this.#evalKernelOwnerId,
 				kernelMode: this.settings.get("python.kernelMode"),
 				onChunk,

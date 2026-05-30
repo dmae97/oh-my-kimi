@@ -5,17 +5,18 @@ Finds files and directories using fast pattern matching that works with any code
 - Pass multiple targets as **separate array elements** (`paths: ["a", "b"]`), NEVER as a single comma-joined string (`paths: ["a,b"]` is rejected)
 - `gitignore` defaults to `true` and hides files matched by `.gitignore`. Set `gitignore: false` to find `.env*`, `*.log`, freshly-created build outputs, or anything else your repo ignores
 - `hidden` defaults to `true`; combine with `gitignore: false` to surface dotfiles that are also gitignored
+- `limit` is clamped to 1-200 (default 200). Narrow the pattern instead of raising the limit
 - `timeout` is in seconds (default 5, clamped to 0.5–60). On timeout, find returns whatever partial matches it has collected with `truncated: true` and a notice — increase `timeout` or narrow the pattern instead of retrying blindly
 - You SHOULD perform multiple searches in parallel when potentially useful
 </instruction>
 
 <output>
-Matching file and directory paths sorted by modification time (most recent first). Directories are suffixed with `/`. Truncated at 1000 entries or 50KB (configurable via `limit`).
+Matching file and directory paths sorted by modification time (most recent first), grouped by directory to reduce token usage. Each group starts with `# <dir>/` followed by basenames (one per line); directory entries get a trailing `/`. Root-level entries have no header. Truncated at 200 entries or 50KB.
 </output>
 
 <examples>
 # Find files
-`{"paths": ["src/**/*.ts"], "limit": 1000}`
+`{"paths": ["src/**/*.ts"]}`
 # Multiple targets — separate array elements
 `{"paths": ["src/**/*.ts", "test/**/*.ts"]}`
 # Find gitignored files like .env

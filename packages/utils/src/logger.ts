@@ -11,6 +11,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
+import { isPromise } from "node:util/types";
 import winston from "winston";
 import DailyRotateFile from "winston-daily-rotate-file";
 import { getLogsDir } from "./dirs";
@@ -402,7 +403,7 @@ export function time<T, A extends unknown[]>(op: string, fn?: (...args: A) => T,
 	};
 	try {
 		const result = spanStorage.run(span, () => fn(...args));
-		if (result instanceof Promise) {
+		if (isPromise(result)) {
 			return result.finally(finish) as T;
 		}
 		finish();

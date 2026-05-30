@@ -702,6 +702,27 @@ export function buildSessionContext(
 		}
 	}
 
+	// Normalize a trailing assistant turn that ends on dangling tool_use blocks.
+	// When the resolved leaf lands ON an assistant turn (e.g. the user rewinds the
+	// tree onto it), that turn's tool results are its children — *below* the leaf —
+	// so they fall off the leaf→root path, leaving the assistant's tool_use blocks
+	// unpaired as the final message. Downstream that forces `transformMessages` to
+	// fabricate one synthetic "aborted"/"No result provided" result per call plus a
+	// `<turn-aborted>` developer note, which re-injects the whole failed batch and
+	// pushes the model to re-issue it — the rewind/restore loop. Strip the dangling
+	// tool_use so the turn resumes from its reasoning/text; drop it if nothing else
+	// remains. (A live turn never lands here: its results are persisted and the leaf
+	// advances past the assistant before any context rebuild.)
+	const lastMessage = messages[messages.length - 1];
+	if (lastMessage?.role === "assistant" && lastMessage.content.some(block => block.type === "toolCall")) {
+		const withoutToolCalls = lastMessage.content.filter(block => block.type !== "toolCall");
+		if (withoutToolCalls.length === 0) {
+			messages.pop();
+		} else {
+			messages[messages.length - 1] = { ...lastMessage, content: withoutToolCalls };
+		}
+	}
+
 	return {
 		messages,
 		thinkingLevel,

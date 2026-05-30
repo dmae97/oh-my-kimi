@@ -144,6 +144,7 @@ export type SymbolKey =
 	| "md.quoteBorder"
 	| "md.hrChar"
 	| "md.bullet"
+	| "md.colorSwatch"
 	// Language/file type icons
 	| "lang.default"
 	| "lang.typescript"
@@ -308,6 +309,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"md.quoteBorder": "▏",
 	"md.hrChar": "─",
 	"md.bullet": "•",
+	"md.colorSwatch": "■",
 	// Language/file icons (emoji-centric, no Nerd Font required)
 	"lang.default": "⌘",
 	"lang.typescript": "🟦",
@@ -568,6 +570,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"md.hrChar": "─",
 	// pick:  | alt:  •
 	"md.bullet": "\uf111",
+	// pick: ■ | alt:  (U+F096)
+	"md.colorSwatch": "■",
 	// Language icons (nerd font devicons)
 	"lang.default": "",
 	"lang.typescript": "\u{E628}",
@@ -730,6 +734,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"md.quoteBorder": "|",
 	"md.hrChar": "-",
 	"md.bullet": "*",
+	"md.colorSwatch": "[]",
 	// Language icons (ASCII uses abbreviations)
 	"lang.default": "code",
 	"lang.typescript": "ts",
@@ -1519,6 +1524,7 @@ export class Theme {
 			quoteBorder: this.#symbols["md.quoteBorder"],
 			hrChar: this.#symbols["md.hrChar"],
 			bullet: this.#symbols["md.bullet"],
+			colorSwatch: this.#symbols["md.colorSwatch"],
 		};
 	}
 
@@ -2340,6 +2346,7 @@ export function getSymbolTheme(): SymbolTheme {
 		table: theme.boxSharp,
 		quoteBorder: theme.md.quoteBorder,
 		hrChar: theme.md.hrChar,
+		colorSwatch: theme.md.colorSwatch,
 		spinnerFrames: theme.getSpinnerFrames("activity"),
 	};
 }

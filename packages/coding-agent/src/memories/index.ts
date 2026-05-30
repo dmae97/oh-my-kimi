@@ -3,7 +3,7 @@ import type * as fsNode from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { clampThinkingLevelForModel, completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { getAgentDbPath, getMemoriesDir, logger, parseJsonlLenient, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveModelRoleValue } from "../config/model-resolver";
@@ -612,7 +612,7 @@ async function runStage1Job(options: {
 				apiKey,
 				metadata: options.metadata,
 				maxTokens: Math.max(1024, Math.min(4096, Math.floor(modelMaxTokens * 0.2))),
-				reasoning: Effort.Low,
+				reasoning: clampThinkingLevelForModel(model, Effort.Low),
 			},
 		);
 
@@ -744,7 +744,12 @@ async function runConsolidationModel(options: {
 		{
 			messages: [{ role: "user", content: [{ type: "text", text: input }], timestamp: Date.now() }],
 		},
-		{ apiKey, metadata: options.metadata, maxTokens: 8192, reasoning: Effort.Medium },
+		{
+			apiKey,
+			metadata: options.metadata,
+			maxTokens: 8192,
+			reasoning: clampThinkingLevelForModel(model, Effort.Medium),
+		},
 	);
 	if (response.stopReason === "error") {
 		throw new Error(response.errorMessage || "phase2 model error");

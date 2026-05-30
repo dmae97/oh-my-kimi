@@ -70,6 +70,7 @@ const ALLOWED_OPTION_KEYS: ReadonlySet<keyof SimpleStreamOptions> = new Set([
 	"kimiApiFormat",
 	"syntheticApiFormat",
 	"preferWebsockets",
+	"openrouterVariant",
 ] as const satisfies readonly (keyof SimpleStreamOptions)[]);
 
 // ---------------------------------------------------------------------------

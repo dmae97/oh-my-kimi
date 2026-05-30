@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [15.5.14] - 2026-05-29
+
+### Fixed
+
+- Fixed the agent loop abandoning tool calls that Anthropic adaptive/interleaved-thinking models (e.g. Opus) emit under `stop_reason: "end_turn"`. The previous gate only ran tools when `stopReason === "toolUse"`, so an `end_turn`+tool_use turn produced "Tool call was not executed because the assistant ended its turn" placeholders, made no progress, and could trap the model in a re-emit/abandon loop. `stop_reason` is never replayed on the wire and (verified against the live Anthropic Messages API) does not gate continuation validity, so `stop`/`end_turn` turns carrying tool_use blocks are now executed and the loop continues — exactly like `toolUse`. Only `length` (max_tokens truncation) still abandons, since the trailing tool call may have incomplete arguments. The continuation stays valid because `transformMessages` strips the now-untrustworthy thinking signature and the encoder downgrades the block to text.
+
+## [15.5.10] - 2026-05-28
+
+### Fixed
+
+- Fixed compaction summarizer throws losing the provider's HTTP status. `generateSummary`, `generateHandoff`, `generateShortSummary`, and `generateTurnPrefixSummary` now route their `stopReason === "error"` throws through a `createSummarizationError` helper that copies `AssistantMessage.errorStatus` onto the thrown `Error` as `.status`, letting downstream consumers (e.g. `AgentSession.#isCompactionAuthFailure` in `@oh-my-pi/pi-coding-agent`) branch on real provider 401/403s without regex-scraping the message body.
+
 ## [15.5.0] - 2026-05-26
 ### Added
 

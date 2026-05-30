@@ -1,22 +1,22 @@
-start: begin_patch hunk+ end_patch
+start: begin_patch file_patch+ end_patch
 begin_patch: "*** Begin Patch" LF
-end_patch: "*** End Patch" LF?
+end_patch:   "*** End Patch" LF?
 
-hunk: update_hunk
-update_hunk: "¶" filename ("#" file_hash)? LF line_op*
+file_patch: file_header hunk+
+file_header: "¶" filename ("#" file_hash)? LF
+file_hash: /[0-9A-F]{4}/
+filename: /[^\s#]+/
 
-filename: /([^\s#]+)/
-file_hash: /[0-9a-f]{4}/
+hunk: body_hunk | delete_hunk
+body_hunk:   body_header emit_op+
+delete_hunk: "delete " header_range LF
+body_header: (replace_anchor | insert_anchor) LF
+replace_anchor: "replace " header_range ":"
+insert_anchor:  "insert " insert_pos ":"
+insert_pos: "before " LID | "after " LID | "head" | "tail"
+emit_op: "+" /(.*)/ LF
 
-line_op: insert_before | insert_after | replace | delete
-insert_before: anchor "↑" LF payload*
-insert_after: anchor "↓" LF payload*
-replace: range ":" LF payload*
-delete: range "!" LF
-payload: "+" /[^\n]*/ LF
-
-anchor: LID | "EOF" | "BOF"
-range: LID ("-" LID)?
+header_range: LID ".." LID
 LID: /[1-9]\d*/
 
 %import common.LF

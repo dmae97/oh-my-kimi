@@ -3,50 +3,42 @@
  * post-edit lines plus any diagnostic warnings. Pure function: no FS, no
  * mutation of the input.
  *
- * The applier is conservative about edits that look like authoring mistakes:
- *
- * - Replace ops on a blank line with non-empty payload are rejected outright
- *   (the model almost certainly miscounted; recommend `↑`/`↓` instead).
- * - Multi-line replacement-boundary duplicates are auto-absorbed (model
- *   echoed surrounding context as if it were payload).
- * - Single-line structural-boundary duplicates (`}`, `)`, `];`, …) are
- *   auto-absorbed when delimiter balance suggests the range truncated short.
- *
- * Diagnostics are returned as `warnings[]` in {@link ApplyResult}; they do
- * not abort the apply.
+ * Replacement groups are first normalized by {@link repairBoundaryBalance},
+ * which fixes the common model mistake of a payload that duplicates or drops
+ * the closing delimiter bordering the range (balance-validated; see below).
  */
 import { cloneCursor } from "./tokenizer";
-import type { Anchor, ApplyOptions, ApplyResult, Cursor, Edit } from "./types";
+import type { Anchor, ApplyResult, Cursor, Edit } from "./types";
 
 type LineOrigin = "original" | "insert" | "replacement";
 
+type InsertEdit = Extract<Edit, { kind: "insert" }>;
+type DeleteEdit = Extract<Edit, { kind: "delete" }>;
+type AppliedEdit = InsertEdit | DeleteEdit;
+
 interface IndexedEdit {
-	edit: Edit;
+	edit: AppliedEdit;
 	idx: number;
 }
 
-type DeleteEdit = Extract<Edit, { kind: "delete" }>;
+function isReplacementInsert(edit: Edit): edit is InsertEdit & { mode: "replacement" } {
+	return edit.kind === "insert" && edit.mode === "replacement";
+}
 
-interface ReplacementGroup {
-	startIndex: number;
-	endIndex: number;
-	sourceLineNum: number;
-	replacement: string[];
-	deletes: DeleteEdit[];
+function getCursorAnchors(cursor: Cursor): Anchor[] {
+	return cursor.kind === "before_anchor" || cursor.kind === "after_anchor" ? [cursor.anchor] : [];
 }
 
 function getEditAnchors(edit: Edit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
-	if (edit.cursor.kind === "before_anchor") return [edit.cursor.anchor];
-	if (edit.cursor.kind === "after_anchor") return [edit.cursor.anchor];
-	return [];
+	return getCursorAnchors(edit.cursor);
 }
 
 /**
  * Verify every anchored edit points at an existing line. File-version binding is
  * checked once per section via the header hash before this function runs.
  */
-function validateLineBounds(edits: Edit[], fileLines: string[]): void {
+function validateLineBounds(edits: AppliedEdit[], fileLines: string[]): void {
 	for (const edit of edits) {
 		for (const anchor of getEditAnchors(edit)) {
 			if (anchor.line < 1 || anchor.line > fileLines.length) {
@@ -56,55 +48,9 @@ function validateLineBounds(edits: Edit[], fileLines: string[]): void {
 	}
 }
 
-/**
- * Refuse a single-line replace whose target line is blank and whose payload is
- * non-empty. The author is almost certainly miscounting: `A:CONTENT` overwrites
- * the existing line, so applying it to a blank target deletes the blank cadence
- * and inserts content in its place. To insert content at a blank line, use
- * `A↑` (insert before) or `A↓` (insert after) instead.
- *
- * Only fires for the simple shape: exactly one `insert(before_anchor A)` + one
- * `delete(A)` sharing the same source op line, no other inserts/deletes from
- * that op.
- */
-function detectReplaceOnBlankTarget(edits: Edit[], fileLines: string[]): string | null {
-	interface Pair {
-		insert?: Extract<Edit, { kind: "insert" }>;
-		delete?: Extract<Edit, { kind: "delete" }>;
-		multi?: boolean;
-	}
-	const byOpLine = new Map<number, Pair>();
-	for (const edit of edits) {
-		const pair = byOpLine.get(edit.lineNum) ?? {};
-		if (pair.multi) continue;
-		if (edit.kind === "insert") {
-			if (pair.insert) pair.multi = true;
-			else pair.insert = edit;
-		} else {
-			if (pair.delete) pair.multi = true;
-			else pair.delete = edit;
-		}
-		byOpLine.set(edit.lineNum, pair);
-	}
-	for (const pair of byOpLine.values()) {
-		if (pair.multi || !pair.insert || !pair.delete) continue;
-		const insert = pair.insert;
-		const del = pair.delete;
-		if (insert.cursor.kind !== "before_anchor") continue;
-		if (insert.cursor.anchor.line !== del.anchor.line) continue;
-		if (insert.text.includes("\n")) continue;
-		if (insert.text.trim().length === 0) continue;
-		const targetLine = del.anchor.line;
-		const oldLine = fileLines[targetLine - 1];
-		if (oldLine === undefined || oldLine.trim().length !== 0) continue;
-		return (
-			`Edit rejected: replace at line ${targetLine} targets a blank line but the payload is non-empty. ` +
-			`'A:CONTENT' overwrites the line at A; to insert content next to a blank line, use 'A${"\u2191"}' (insert before) ` +
-			`or 'A${"\u2193"}' (insert after) instead. If you really meant to replace this blank with content, ` +
-			`widen the range to include surrounding non-blank lines so the intent is explicit.`
-		);
-	}
-	return null;
+function cloneAppliedEdit(edit: AppliedEdit, index: number): AppliedEdit {
+	if (edit.kind === "delete") return { ...edit, anchor: { ...edit.anchor }, index };
+	return { ...edit, cursor: cloneCursor(edit.cursor), index };
 }
 
 function insertAtStart(fileLines: string[], lineOrigins: LineOrigin[], lines: string[]): void {
@@ -134,94 +80,42 @@ function insertAtEnd(fileLines: string[], lineOrigins: LineOrigin[], lines: stri
 	return insertIndex + 1;
 }
 
-/** Bucket edits by the line they target so we can apply each line's group in one splice. */
-function getAnchorTargetLine(edit: Edit): number | undefined {
-	if (edit.kind === "delete") return edit.anchor.line;
-	if (edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor") return edit.cursor.anchor.line;
-	return undefined;
+function bucketAnchorEditsByLine(edits: IndexedEdit[]): Map<number, IndexedEdit[]> {
+	const byLine = new Map<number, IndexedEdit[]>();
+	for (const entry of edits) {
+		const line =
+			entry.edit.kind === "delete"
+				? entry.edit.anchor.line
+				: entry.edit.cursor.kind === "before_anchor" || entry.edit.cursor.kind === "after_anchor"
+					? entry.edit.cursor.anchor.line
+					: 0;
+		const bucket = byLine.get(line);
+		if (bucket) bucket.push(entry);
+		else byLine.set(line, [entry]);
+	}
+	return byLine;
 }
 
-function collectAnchorTargetLines(edits: Edit[]): Set<number> {
-	const lines = new Set<number>();
-	for (const edit of edits) {
-		const line = getAnchorTargetLine(edit);
-		if (line !== undefined) lines.add(line);
-	}
-	return lines;
-}
+// ═══════════════════════════════════════════════════════════════════════════
+// Boundary-balance repair
+//
+// Models routinely miscount a replacement range's edges. The payload either
+// re-states a closing delimiter that still lives just outside the range
+// (producing a DUPLICATE `}` / `);` / `]`) or the range deletes a closer the
+// payload never restates (DROPPING it). Both are the same defect — a
+// replacement whose payload does not preserve the deleted region's delimiter
+// balance — and both leave the file syntactically broken.
+//
+// A repair fires only when (a) the group's payload balance differs from the
+// deleted region's balance and (b) one boundary operation drives that
+// difference to exactly zero while leaving the surrounding text byte-identical.
+// The operation only ever drops an exact multi-line boundary echo or a single
+// pure structural-closer line, or spares a deleted pure structural-closer line,
+// so content lines are never moved or lost. Balance-preserving edits are left
+// strictly alone.
 
-function findReplacementGroup(edits: Edit[], startIndex: number): ReplacementGroup | undefined {
-	const first = edits[startIndex];
-	if (first?.kind !== "insert" || first.cursor.kind !== "before_anchor") return undefined;
-
-	const sourceLineNum = first.lineNum;
-	const replacement: string[] = [];
-	let index = startIndex;
-	while (index < edits.length) {
-		const edit = edits[index];
-		if (edit.kind !== "insert" || edit.lineNum !== sourceLineNum || edit.cursor.kind !== "before_anchor") break;
-		replacement.push(edit.text);
-		index++;
-	}
-
-	const deletes: DeleteEdit[] = [];
-	while (index < edits.length) {
-		const edit = edits[index];
-		if (edit.kind !== "delete" || edit.lineNum !== sourceLineNum) break;
-		deletes.push(edit);
-		index++;
-	}
-	if (deletes.length === 0) return undefined;
-
-	const startLine = deletes[0].anchor.line;
-	for (let offset = 0; offset < deletes.length; offset++) {
-		if (deletes[offset].anchor.line !== startLine + offset) return undefined;
-	}
-	const cursorLine = first.cursor.anchor.line;
-	if (cursorLine !== startLine) return undefined;
-
-	return { startIndex, endIndex: index - 1, sourceLineNum, replacement, deletes };
-}
-
-function countMatchingPrefixBlock(fileLines: string[], startLine: number, replacement: string[]): number {
-	const max = Math.min(replacement.length, startLine - 1);
-	for (let count = max; count >= 2; count--) {
-		let matches = true;
-		for (let offset = 0; offset < count; offset++) {
-			if (fileLines[startLine - count - 1 + offset] !== replacement[offset]) {
-				matches = false;
-				break;
-			}
-		}
-		if (matches) return count;
-	}
-	return 0;
-}
-
-function countMatchingSuffixBlock(fileLines: string[], endLine: number, replacement: string[]): number {
-	const max = Math.min(replacement.length, fileLines.length - endLine);
-	for (let count = max; count >= 2; count--) {
-		let matches = true;
-		for (let offset = 0; offset < count; offset++) {
-			if (fileLines[endLine + offset] !== replacement[replacement.length - count + offset]) {
-				matches = false;
-				break;
-			}
-		}
-		if (matches) return count;
-	}
-	return 0;
-}
-
-// Single-line replacement-boundary absorption is limited to structural closing
-// delimiters. General one-line context is too easy to delete incorrectly, but
-// duplicated `};` / `)` / `]` boundaries often mean a replacement range stopped
-// one line early and would otherwise produce a syntax error.
-const STRUCTURAL_CLOSING_BOUNDARY_RE = /^\s*[\])}]+[;,]?\s*$/;
-
-function isStructuralClosingBoundaryLine(line: string): boolean {
-	return STRUCTURAL_CLOSING_BOUNDARY_RE.test(line);
-}
+/** A line that is nothing but closing delimiters: `}`, `)`, `];`, `})`, `},`. */
+const STRUCTURAL_CLOSER_RE = /^\s*[)\]}]+[;,]?\s*$/;
 
 interface DelimiterBalance {
 	paren: number;
@@ -230,19 +124,43 @@ interface DelimiterBalance {
 }
 
 /**
- * Naive bracket counter — does NOT skip string/template/comment contents. The
- * single-line structural absorb relies on this being safe-by-asymmetry: the
- * candidate boundary line is constrained by `STRUCTURAL_CLOSING_BOUNDARY_RE`
- * to be pure delimiters, so noise in deleted lines or non-boundary kept
- * payload tends to push `expected !== kept` and biases the heuristic toward
- * NOT absorbing (the safe direction). If we ever extend this to opening
- * boundaries or non-structural single lines, swap this for a real tokenizer.
+ * Net `()` / `[]` / `{}` delta across `lines`, skipping delimiters inside line
+ * comments (`//`), block comments, and string/template literals. Block-comment
+ * and backtick-template state carry across lines; `"` / `'` reset at EOL since
+ * they cannot span lines. Deliberately language-light: constructs it cannot
+ * classify (e.g. regex literals) are counted naively, which can only suppress a
+ * repair (the safe direction), never force one.
  */
-function computeDelimiterBalance(lines: string[]): DelimiterBalance {
+function computeDelimiterBalance(lines: readonly string[]): DelimiterBalance {
 	const balance: DelimiterBalance = { paren: 0, bracket: 0, brace: 0 };
+	let inBlockComment = false;
+	let quote = "";
 	for (const line of lines) {
-		for (const char of line) {
-			switch (char) {
+		for (let i = 0; i < line.length; i++) {
+			const ch = line[i];
+			if (inBlockComment) {
+				if (ch === "*" && line[i + 1] === "/") {
+					inBlockComment = false;
+					i++;
+				}
+				continue;
+			}
+			if (quote) {
+				if (ch === "\\") i++;
+				else if (ch === quote) quote = "";
+				continue;
+			}
+			if (ch === '"' || ch === "'" || ch === "`") {
+				quote = ch;
+				continue;
+			}
+			if (ch === "/" && line[i + 1] === "/") break;
+			if (ch === "/" && line[i + 1] === "*") {
+				inBlockComment = true;
+				i++;
+				continue;
+			}
+			switch (ch) {
 				case "(":
 					balance.paren++;
 					break;
@@ -263,469 +181,252 @@ function computeDelimiterBalance(lines: string[]): DelimiterBalance {
 					break;
 			}
 		}
+		// `"` / `'` cannot span lines; only backtick templates and block comments do.
+		if (quote === '"' || quote === "'") quote = "";
 	}
 	return balance;
 }
 
-function delimiterBalancesEqual(a: DelimiterBalance, b: DelimiterBalance): boolean {
+function balanceDelta(a: DelimiterBalance, b: DelimiterBalance): DelimiterBalance {
+	return { paren: a.paren - b.paren, bracket: a.bracket - b.bracket, brace: a.brace - b.brace };
+}
+
+function balanceNegate(a: DelimiterBalance): DelimiterBalance {
+	return { paren: -a.paren, bracket: -a.bracket, brace: -a.brace };
+}
+
+function balanceEqual(a: DelimiterBalance, b: DelimiterBalance): boolean {
 	return a.paren === b.paren && a.bracket === b.bracket && a.brace === b.brace;
 }
 
+function balanceIsZero(a: DelimiterBalance): boolean {
+	return a.paren === 0 && a.bracket === 0 && a.brace === 0;
+}
+
+interface ReplacementGroup {
+	/** Positions in the edit array of the payload inserts, in payload order. */
+	insertIndices: number[];
+	/** Positions in the edit array of the range deletes, ascending by line. */
+	deleteIndices: number[];
+	payload: string[];
+	/** First deleted line (1-indexed). */
+	startLine: number;
+	/** Last deleted line (1-indexed). */
+	endLine: number;
+}
+
 /**
- * Decides whether the structural-boundary candidate should be dropped: the
- * `keptPayload` (full payload with the boundary line removed) must restore the
- * caller's `expectedBalance`, while the `fullPayload` (boundary line still
- * present) must NOT. For replacements `expectedBalance` is the deleted
- * region's net delimiter balance; for pure inserts it is zero.
+ * Detect a replacement group starting at `start`: a run of `before_anchor`
+ * replacement inserts sharing one source op line, immediately followed by the
+ * contiguous range deletes for that same op. Mirrors how the parser lowers an
+ * `replace N..M:` hunk with a body.
  */
-function shouldDropSingleStructuralBoundary(
-	fullPayload: string[],
-	keptPayload: string[],
-	expectedBalance: DelimiterBalance,
-): boolean {
+function findReplacementGroup(edits: readonly AppliedEdit[], start: number): ReplacementGroup | undefined {
+	const first = edits[start];
+	if (first?.kind !== "insert" || first.mode !== "replacement" || first.cursor.kind !== "before_anchor") {
+		return undefined;
+	}
+	const { lineNum } = first;
+	const anchorLine = first.cursor.anchor.line;
+	const insertIndices: number[] = [];
+	const payload: string[] = [];
+	let i = start;
+	for (; i < edits.length; i++) {
+		const edit = edits[i];
+		if (edit.kind !== "insert" || edit.mode !== "replacement" || edit.lineNum !== lineNum) break;
+		if (edit.cursor.kind !== "before_anchor" || edit.cursor.anchor.line !== anchorLine) break;
+		insertIndices.push(i);
+		payload.push(edit.text);
+	}
+	const deleteIndices: number[] = [];
+	let expectedLine = anchorLine;
+	for (; i < edits.length; i++) {
+		const edit = edits[i];
+		if (edit.kind !== "delete" || edit.lineNum !== lineNum || edit.anchor.line !== expectedLine) break;
+		deleteIndices.push(i);
+		expectedLine++;
+	}
+	if (deleteIndices.length === 0) return undefined;
+	return {
+		insertIndices,
+		deleteIndices,
+		payload,
+		startLine: anchorLine,
+		endLine: anchorLine + deleteIndices.length - 1,
+	};
+}
+
+/**
+ * Largest `k` such that the payload's last `k` lines exactly equal the `k`
+ * surviving file lines just below the range AND dropping them zeroes `delta`.
+ * Single-line drops are limited to pure structural closers.
+ */
+function findDuplicateSuffix(group: ReplacementGroup, fileLines: readonly string[], delta: DelimiterBalance): number {
+	const { payload, endLine } = group;
+	const maxK = Math.min(payload.length, fileLines.length - endLine);
+	for (let k = maxK; k >= 1; k--) {
+		let matches = true;
+		for (let t = 0; t < k; t++) {
+			if (payload[payload.length - k + t] !== fileLines[endLine + t]) {
+				matches = false;
+				break;
+			}
+		}
+		if (!matches) continue;
+		if (k === 1 && !STRUCTURAL_CLOSER_RE.test(payload[payload.length - 1])) continue;
+		if (balanceEqual(computeDelimiterBalance(payload.slice(payload.length - k)), delta)) return k;
+	}
+	return 0;
+}
+
+/**
+ * Largest `j` such that the payload's first `j` lines exactly equal the `j`
+ * surviving file lines just above the range AND dropping them zeroes `delta`.
+ */
+function findDuplicatePrefix(group: ReplacementGroup, fileLines: readonly string[], delta: DelimiterBalance): number {
+	const { payload, startLine } = group;
+	const maxJ = Math.min(payload.length, startLine - 1);
+	for (let j = maxJ; j >= 1; j--) {
+		let matches = true;
+		for (let t = 0; t < j; t++) {
+			if (payload[t] !== fileLines[startLine - 1 - j + t]) {
+				matches = false;
+				break;
+			}
+		}
+		if (!matches) continue;
+		if (j === 1 && !STRUCTURAL_CLOSER_RE.test(payload[0])) continue;
+		if (balanceEqual(computeDelimiterBalance(payload.slice(0, j)), delta)) return j;
+	}
+	return 0;
+}
+
+/**
+ * Smallest `m` such that the range's last `m` deleted lines are all pure
+ * structural closers and sparing them (keeping instead of deleting) zeroes
+ * `delta`. The mirror mistake: a range that swallows a closing delimiter the
+ * payload never restates.
+ */
+function findDroppedSuffixClosers(
+	group: ReplacementGroup,
+	fileLines: readonly string[],
+	delta: DelimiterBalance,
+): number {
+	const wanted = balanceNegate(delta);
+	const maxM = group.deleteIndices.length;
+	for (let m = 1; m <= maxM; m++) {
+		if (!STRUCTURAL_CLOSER_RE.test(fileLines[group.endLine - m] ?? "")) break;
+		if (balanceEqual(computeDelimiterBalance(fileLines.slice(group.endLine - m, group.endLine)), wanted)) return m;
+	}
+	return 0;
+}
+
+function describeBoundaryRepair(group: ReplacementGroup, action: string): string {
 	return (
-		delimiterBalancesEqual(computeDelimiterBalance(keptPayload), expectedBalance) &&
-		!delimiterBalancesEqual(computeDelimiterBalance(fullPayload), expectedBalance)
+		`Auto-repaired a delimiter-balance mismatch in the replacement at line ${group.startLine}: ${action}. ` +
+		`Issue the payload as the final desired content only — never restate or omit a closing bracket bordering the range.`
 	);
 }
 
-function countMatchingSingleStructuralPrefixBoundary(
-	fileLines: string[],
-	startLine: number,
-	replacement: string[],
-	expectedBalance: DelimiterBalance,
-): number {
-	if (replacement.length === 0 || startLine <= 1) return 0;
-	const line = replacement[0];
-	if (!isStructuralClosingBoundaryLine(line)) return 0;
-	if (fileLines[startLine - 2] !== line) return 0;
-	return shouldDropSingleStructuralBoundary(replacement, replacement.slice(1), expectedBalance) ? 1 : 0;
-}
-
-function countMatchingSingleStructuralSuffixBoundary(
-	fileLines: string[],
-	endLine: number,
-	replacement: string[],
-	expectedBalance: DelimiterBalance,
-): number {
-	if (replacement.length === 0 || endLine >= fileLines.length) return 0;
-	const line = replacement[replacement.length - 1];
-	if (!isStructuralClosingBoundaryLine(line)) return 0;
-	if (fileLines[endLine] !== line) return 0;
-	return shouldDropSingleStructuralBoundary(replacement, replacement.slice(0, -1), expectedBalance) ? 1 : 0;
-}
-
 /**
- * Single-line non-structural boundary duplicate detector for replacement
- * groups. Mirrors the same boundary check the pure-insert absorber uses for
- * `ANCHOR↓` (leading) / `ANCHOR↑` (trailing) inserts, but applied to the
- * top/bottom edges of an `A-B:payload` range. Catches mistakes like
- * `103-138:const X = …` where line 102 already reads `const X = …` and the
- * user really meant `103-138!` (delete only).
- *
- * Gated by `options.autoDropPureInsertDuplicates`: the existing 2+-line block
- * absorb already runs unconditionally, and the structural single-line
- * absorber is balance-validated; a non-structural single-line duplicate is
- * ambiguous (could be an intentional `2:foo` over a line that happens to
- * sit next to another `foo`), so we only fire when the user has opted in.
+ * Normalize each replacement group so its payload preserves the deleted
+ * region's delimiter balance. See the section header for the contract. Returns
+ * the (possibly trimmed) edit list plus one warning per repaired group.
  */
-function countMatchingSingleNonStructuralPrefixDuplicate(
-	fileLines: string[],
-	startLine: number,
-	replacement: string[],
-): number {
-	if (replacement.length === 0 || startLine <= 1) return 0;
-	const line = replacement[0];
-	if (line.trim().length === 0) return 0;
-	if (isStructuralClosingBoundaryLine(line)) return 0;
-	if (fileLines[startLine - 2] !== line) return 0;
-	return 1;
-}
-
-function countMatchingSingleNonStructuralSuffixDuplicate(
-	fileLines: string[],
-	endLine: number,
-	replacement: string[],
-): number {
-	if (replacement.length === 0 || endLine >= fileLines.length) return 0;
-	const line = replacement[replacement.length - 1];
-	if (line.trim().length === 0) return 0;
-	if (isStructuralClosingBoundaryLine(line)) return 0;
-	if (fileLines[endLine] !== line) return 0;
-	return 1;
-}
-
-function hasExternalTargets(lines: Iterable<number>, externalTargetLines: Set<number>): boolean {
-	for (const line of lines) {
-		if (externalTargetLines.has(line)) return true;
-	}
-	return false;
-}
-
-function contiguousRange(start: number, count: number): number[] {
-	return Array.from({ length: count }, (_, offset) => start + offset);
-}
-
-function deleteEditForAutoAbsorbedLine(line: number, sourceLineNum: number, index: number): Edit {
-	return {
-		kind: "delete",
-		anchor: { line },
-		lineNum: sourceLineNum,
-		index,
-	};
-}
-
-interface PureInsertGroup {
-	startIndex: number;
-	endIndex: number;
-	sourceLineNum: number;
-	cursor: Cursor;
-	payload: string[];
-}
-
-function cursorMatches(a: Cursor, b: Cursor): boolean {
-	if (a.kind !== b.kind) return false;
-	if (a.kind === "bof" || a.kind === "eof") return true;
-	const aAnchor = (a as { anchor: Anchor }).anchor;
-	const bAnchor = (b as { anchor: Anchor }).anchor;
-	return aAnchor.line === bAnchor.line;
-}
-
-/**
- * Collects a run of consecutive `insert` edits that all share the same
- * `lineNum` and `cursor`, IFF that run is not immediately followed by a
- * `delete` at the same `lineNum` (which would make it a replacement group
- * instead). Returns the contiguous payload so we can check it for boundary
- * duplicates against the file.
- */
-function findPureInsertGroup(edits: Edit[], startIndex: number): PureInsertGroup | undefined {
-	const first = edits[startIndex];
-	if (first?.kind !== "insert") return undefined;
-
-	const sourceLineNum = first.lineNum;
-	const cursor = first.cursor;
-	const payload: string[] = [];
-	let index = startIndex;
-	while (index < edits.length) {
-		const edit = edits[index];
-		if (edit.kind !== "insert" || edit.lineNum !== sourceLineNum) break;
-		if (!cursorMatches(edit.cursor, cursor)) break;
-		payload.push(edit.text);
-		index++;
-	}
-
-	// If the run is followed by a delete at the same source lineNum, this is a
-	// replacement group (handled by absorbReplacement…). Decline.
-	if (index < edits.length && edits[index].kind === "delete" && edits[index].lineNum === sourceLineNum) {
-		return undefined;
-	}
-
-	return { startIndex, endIndex: index - 1, sourceLineNum, cursor, payload };
-}
-
-/**
- * For a pure-insert group, locate the file region adjacent to the insertion
- * point. Returns 0-indexed bounds:
- *   - `aboveEndIdx`: index of the last file line strictly above the insertion
- *     point (-1 if none).
- *   - `belowStartIdx`: index of the first file line strictly below the
- *     insertion point (`fileLines.length` if none).
- */
-function pureInsertNeighborhood(cursor: Cursor, fileLines: string[]): { aboveEndIdx: number; belowStartIdx: number } {
-	if (cursor.kind === "bof") return { aboveEndIdx: -1, belowStartIdx: 0 };
-	if (cursor.kind === "eof") return { aboveEndIdx: fileLines.length - 1, belowStartIdx: fileLines.length };
-	if (cursor.kind === "before_anchor") {
-		return { aboveEndIdx: cursor.anchor.line - 2, belowStartIdx: cursor.anchor.line - 1 };
-	}
-	// after_anchor
-	return { aboveEndIdx: cursor.anchor.line - 1, belowStartIdx: cursor.anchor.line };
-}
-
-interface PureInsertAbsorbResult {
-	keptPayload: string[];
-	absorbedLeading: number;
-	absorbedTrailing: number;
-	leadingFileRange?: { start: number; end: number }; // 1-indexed inclusive
-	trailingFileRange?: { start: number; end: number }; // 1-indexed inclusive
-}
-
-/**
- * For a pure-insert group, drop only multi-line context echoes that exactly
- * duplicate the file lines adjacent to the insertion point. Single-line pure
- * insert duplicates are ambiguous (`N↓}` may be an accidental anchor echo or an
- * intentional inserted delimiter), so they are left literal even when generic
- * duplicate absorption is enabled.
- */
-function tryAbsorbPureInsertGroup(
-	group: PureInsertGroup,
-	fileLines: string[],
-	allowGenericBoundaryAbsorb: boolean,
-): PureInsertAbsorbResult {
-	const empty: PureInsertAbsorbResult = { keptPayload: group.payload, absorbedLeading: 0, absorbedTrailing: 0 };
-	if (group.payload.length === 0) return empty;
-
-	const { aboveEndIdx, belowStartIdx } = pureInsertNeighborhood(group.cursor, fileLines);
-
-	// Leading: payload[0..k-1] vs fileLines[aboveEndIdx-k+1 .. aboveEndIdx].
-	let absorbedLeading = 0;
-	if (allowGenericBoundaryAbsorb) {
-		const maxLead = Math.min(group.payload.length, aboveEndIdx + 1);
-		for (let count = maxLead; count >= 2; count--) {
-			let ok = true;
-			for (let offset = 0; offset < count; offset++) {
-				if (group.payload[offset] !== fileLines[aboveEndIdx - count + 1 + offset]) {
-					ok = false;
-					break;
-				}
-			}
-			if (ok) {
-				absorbedLeading = count;
-				break;
-			}
-		}
-	}
-
-	// Trailing: payload[len-k..len-1] vs fileLines[belowStartIdx..belowStartIdx+k-1].
-	// Don't double-count payload lines already absorbed as leading.
-	let absorbedTrailing = 0;
-	const remaining = group.payload.length - absorbedLeading;
-	if (allowGenericBoundaryAbsorb) {
-		const maxTrail = Math.min(remaining, fileLines.length - belowStartIdx);
-		for (let count = maxTrail; count >= 2; count--) {
-			let ok = true;
-			for (let offset = 0; offset < count; offset++) {
-				if (group.payload[group.payload.length - count + offset] !== fileLines[belowStartIdx + offset]) {
-					ok = false;
-					break;
-				}
-			}
-			if (ok) {
-				absorbedTrailing = count;
-				break;
-			}
-		}
-	}
-
-	if (absorbedLeading === 0 && absorbedTrailing === 0) return empty;
-
-	return {
-		keptPayload: group.payload.slice(absorbedLeading, group.payload.length - absorbedTrailing),
-		absorbedLeading,
-		absorbedTrailing,
-		leadingFileRange:
-			absorbedLeading > 0 ? { start: aboveEndIdx - absorbedLeading + 2, end: aboveEndIdx + 1 } : undefined,
-		trailingFileRange:
-			absorbedTrailing > 0 ? { start: belowStartIdx + 1, end: belowStartIdx + absorbedTrailing } : undefined,
-	};
-}
-
-function absorbReplacementBoundaryDuplicates(
-	edits: Edit[],
-	fileLines: string[],
-	warnings: string[],
-	options: ApplyOptions,
-): Edit[] {
-	let nextSyntheticIndex = edits.length;
-	const absorbed: Edit[] = [];
-
-	// Anchor targets are stable across the loop because we only ever append
-	// synthetic deletes (never mutate originals). A line in this set that
-	// falls outside the current group's range is necessarily owned by another
-	// op, so absorbing it would silently steal its target.
-	const allTargetLines = collectAnchorTargetLines(edits);
-	const emittedAbsorbKeys = new Set<string>();
-
-	for (let index = 0; index < edits.length; index++) {
-		const group = findReplacementGroup(edits, index);
+function repairBoundaryBalance(
+	edits: readonly AppliedEdit[],
+	fileLines: readonly string[],
+): {
+	edits: AppliedEdit[];
+	warnings: string[];
+} {
+	const out: AppliedEdit[] = [];
+	const warnings: string[] = [];
+	let i = 0;
+	while (i < edits.length) {
+		const group = findReplacementGroup(edits, i);
 		if (!group) {
-			const pureInsert = findPureInsertGroup(edits, index);
-			if (pureInsert) {
-				const result = tryAbsorbPureInsertGroup(
-					pureInsert,
-					fileLines,
-					options.autoDropPureInsertDuplicates === true,
-				);
-				if (result.absorbedLeading > 0 || result.absorbedTrailing > 0) {
-					if (result.leadingFileRange) {
-						const { start, end } = result.leadingFileRange;
-						const key = `pure-insert-leading:${start}..${end}`;
-						if (!emittedAbsorbKeys.has(key)) {
-							emittedAbsorbKeys.add(key);
-							warnings.push(
-								`Auto-dropped ${result.absorbedLeading} duplicate line(s) at the start of insert at line ${pureInsert.sourceLineNum} ` +
-									`(file lines ${start}..${end} already match the payload's leading lines).`,
-							);
-						}
-					}
-					if (result.trailingFileRange) {
-						const { start, end } = result.trailingFileRange;
-						const key = `pure-insert-trailing:${start}..${end}`;
-						if (!emittedAbsorbKeys.has(key)) {
-							emittedAbsorbKeys.add(key);
-							warnings.push(
-								`Auto-dropped ${result.absorbedTrailing} duplicate line(s) at the end of insert at line ${pureInsert.sourceLineNum} ` +
-									`(file lines ${start}..${end} already match the payload's trailing lines).`,
-							);
-						}
-					}
-					for (const text of result.keptPayload) {
-						absorbed.push({
-							kind: "insert",
-							cursor: cloneCursor(pureInsert.cursor),
-							text,
-							lineNum: pureInsert.sourceLineNum,
-							index: nextSyntheticIndex++,
-						});
-					}
-					index = pureInsert.endIndex;
-					continue;
-				}
-				for (let groupIndex = pureInsert.startIndex; groupIndex <= pureInsert.endIndex; groupIndex++) {
-					absorbed.push(edits[groupIndex]);
-				}
-				index = pureInsert.endIndex;
-				continue;
-			}
-			absorbed.push(edits[index]);
+			out.push(edits[i]);
+			i++;
+			continue;
+		}
+		const inserts = group.insertIndices.map(idx => edits[idx]);
+		const deletes = group.deleteIndices.map(idx => edits[idx]);
+		i = group.deleteIndices[group.deleteIndices.length - 1] + 1;
+
+		const delta = balanceDelta(
+			computeDelimiterBalance(group.payload),
+			computeDelimiterBalance(fileLines.slice(group.startLine - 1, group.endLine)),
+		);
+		if (balanceIsZero(delta)) {
+			out.push(...inserts, ...deletes);
 			continue;
 		}
 
-		const startLine = group.deletes[0].anchor.line;
-		const endLine = group.deletes[group.deletes.length - 1].anchor.line;
-
-		const deletedBalance = computeDelimiterBalance(
-			group.deletes.map(deleteEdit => fileLines[deleteEdit.anchor.line - 1] ?? ""),
-		);
-		const optInSingleLineAbsorb = options.autoDropPureInsertDuplicates === true;
-		const prefixCount =
-			countMatchingPrefixBlock(fileLines, startLine, group.replacement) ||
-			countMatchingSingleStructuralPrefixBoundary(fileLines, startLine, group.replacement, deletedBalance) ||
-			(optInSingleLineAbsorb
-				? countMatchingSingleNonStructuralPrefixDuplicate(fileLines, startLine, group.replacement)
-				: 0);
-		const suffixCount =
-			countMatchingSuffixBlock(fileLines, endLine, group.replacement) ||
-			countMatchingSingleStructuralSuffixBoundary(fileLines, endLine, group.replacement, deletedBalance) ||
-			(optInSingleLineAbsorb
-				? countMatchingSingleNonStructuralSuffixDuplicate(fileLines, endLine, group.replacement)
-				: 0);
-		const prefixLines = contiguousRange(startLine - prefixCount, prefixCount);
-		const suffixLines = contiguousRange(endLine + 1, suffixCount);
-		const safePrefixCount = hasExternalTargets(prefixLines, allTargetLines) ? 0 : prefixCount;
-		const safeSuffixCount = hasExternalTargets(suffixLines, allTargetLines) ? 0 : suffixCount;
-
-		if (safePrefixCount > 0) {
-			const absorbStart = startLine - safePrefixCount;
-			const key = `prefix:${absorbStart}..${startLine - 1}`;
-			if (!emittedAbsorbKeys.has(key)) {
-				emittedAbsorbKeys.add(key);
-				warnings.push(
-					`Auto-absorbed ${safePrefixCount} duplicate line(s) above replacement at line ${group.sourceLineNum} ` +
-						`(file lines ${absorbStart}..${startLine - 1} matched the payload's leading lines; ` +
-						`widened the deletion to absorb them).`,
-				);
-			}
+		const dupSuffix = findDuplicateSuffix(group, fileLines, delta);
+		if (dupSuffix > 0) {
+			warnings.push(
+				describeBoundaryRepair(
+					group,
+					`dropped ${dupSuffix} duplicated trailing payload line(s) already present below the range`,
+				),
+			);
+			out.push(...inserts.slice(0, inserts.length - dupSuffix), ...deletes);
+			continue;
 		}
-		if (safeSuffixCount > 0) {
-			const absorbEnd = endLine + safeSuffixCount;
-			const key = `suffix:${endLine + 1}..${absorbEnd}`;
-			if (!emittedAbsorbKeys.has(key)) {
-				emittedAbsorbKeys.add(key);
-				warnings.push(
-					`Auto-absorbed ${safeSuffixCount} duplicate line(s) below replacement at line ${group.sourceLineNum} ` +
-						`(file lines ${endLine + 1}..${absorbEnd} matched the payload's trailing lines; ` +
-						`widened the deletion to absorb them).`,
-				);
-			}
+		const dupPrefix = findDuplicatePrefix(group, fileLines, delta);
+		if (dupPrefix > 0) {
+			warnings.push(
+				describeBoundaryRepair(
+					group,
+					`dropped ${dupPrefix} duplicated leading payload line(s) already present above the range`,
+				),
+			);
+			out.push(...inserts.slice(dupPrefix), ...deletes);
+			continue;
 		}
-
-		for (const line of contiguousRange(startLine - safePrefixCount, safePrefixCount)) {
-			absorbed.push(deleteEditForAutoAbsorbedLine(line, group.sourceLineNum, nextSyntheticIndex++));
+		const droppedClosers = findDroppedSuffixClosers(group, fileLines, delta);
+		if (droppedClosers > 0) {
+			warnings.push(
+				describeBoundaryRepair(
+					group,
+					`kept ${droppedClosers} structural closing line(s) the range deleted without restating`,
+				),
+			);
+			out.push(...inserts, ...deletes.slice(0, deletes.length - droppedClosers));
+			continue;
 		}
-		for (let groupIndex = group.startIndex; groupIndex <= group.endIndex; groupIndex++) {
-			absorbed.push(edits[groupIndex]);
-		}
-		for (const line of contiguousRange(endLine + 1, safeSuffixCount)) {
-			absorbed.push(deleteEditForAutoAbsorbedLine(line, group.sourceLineNum, nextSyntheticIndex++));
-		}
-
-		index = group.endIndex;
+		out.push(...inserts, ...deletes);
 	}
-
-	return absorbed;
-}
-
-function bucketAnchorEditsByLine(edits: IndexedEdit[]): Map<number, IndexedEdit[]> {
-	const byLine = new Map<number, IndexedEdit[]>();
-	for (const entry of edits) {
-		const line =
-			entry.edit.kind === "delete"
-				? entry.edit.anchor.line
-				: entry.edit.cursor.kind === "before_anchor"
-					? entry.edit.cursor.anchor.line
-					: 0;
-		const bucket = byLine.get(line);
-		if (bucket) bucket.push(entry);
-		else byLine.set(line, [entry]);
-	}
-	return byLine;
+	return { edits: out, warnings };
 }
 
 /**
  * Apply a parsed list of edits to a text body. Pure function — no I/O.
  *
- * Returns the post-edit text, the first changed line number (1-indexed), and
- * any diagnostic warnings produced by the auto-absorb heuristics or by the
- * structural-boundary delete check. Throws if an anchor is out of bounds or a
- * blank-target replace is detected.
+ * Returns the post-edit text and the first changed line number (1-indexed).
+ * Throws if an anchor is out of bounds.
  */
-export function applyEdits(text: string, edits: Edit[], options: ApplyOptions = {}): ApplyResult {
+export function applyEdits(text: string, edits: Edit[]): ApplyResult {
 	if (edits.length === 0) return { text, firstChangedLine: undefined };
 
 	const fileLines = text.split("\n");
 	const lineOrigins: LineOrigin[] = fileLines.map(() => "original");
-	const warnings: string[] = [];
 
 	let firstChangedLine: number | undefined;
 	const trackFirstChanged = (line: number) => {
 		if (firstChangedLine === undefined || line < firstChangedLine) firstChangedLine = line;
 	};
 
-	validateLineBounds(edits, fileLines);
+	const targetEdits = edits.map((edit, index) => cloneAppliedEdit(edit, index));
+	validateLineBounds(targetEdits, fileLines);
+	const { edits: repaired, warnings } = repairBoundaryBalance(targetEdits, fileLines);
 
-	const blankTargetError = detectReplaceOnBlankTarget(edits, fileLines);
-	if (blankTargetError !== null) throw new Error(blankTargetError);
-
-	const normalizedEdits = absorbReplacementBoundaryDuplicates(edits, fileLines, warnings, options);
-	const targetEdits: Edit[] = [];
-
-	// Normalize after_anchor inserts to before_anchor of the next line, or EOF
-	// when the anchor is the final line. Keep the authored edit objects
-	// immutable: PatchSection caches parsed edits and callers may apply them
-	// repeatedly against different snapshots.
-	for (const edit of normalizedEdits) {
-		if (edit.kind !== "insert" || edit.cursor.kind !== "after_anchor") {
-			targetEdits.push(edit);
-			continue;
-		}
-		const anchorLine = edit.cursor.anchor.line;
-		targetEdits.push({
-			...edit,
-			cursor:
-				anchorLine >= fileLines.length
-					? { kind: "eof" }
-					: {
-							kind: "before_anchor",
-							anchor: { line: anchorLine + 1 },
-						},
-		});
-	}
-
-	// Partition edits into BOF, EOF, and anchor-targeted buckets.
+	// Partition edits into bof, eof, and anchor-targeted buckets.
 	const bofLines: string[] = [];
 	const eofLines: string[] = [];
 	const anchorEdits: IndexedEdit[] = [];
-	targetEdits.forEach((edit, idx) => {
+	repaired.forEach((edit, idx) => {
 		if (edit.kind === "insert" && edit.cursor.kind === "bof") {
 			bofLines.push(edit.text);
 		} else if (edit.kind === "insert" && edit.cursor.kind === "eof") {
@@ -744,40 +445,38 @@ export function applyEdits(text: string, edits: Edit[], options: ApplyOptions = 
 
 		const idx = line - 1;
 		const currentLine = fileLines[idx] ?? "";
-		const beforeLines: string[] = [];
+		const beforeInsertLines: string[] = [];
+		const afterInsertLines: string[] = [];
+		const replacementLines: string[] = [];
 		let deleteLine = false;
 
 		for (const { edit } of bucket) {
-			if (edit.kind === "insert") {
-				beforeLines.push(edit.text);
+			if (isReplacementInsert(edit)) {
+				replacementLines.push(edit.text);
+			} else if (edit.kind === "insert" && edit.cursor.kind === "after_anchor") {
+				afterInsertLines.push(edit.text);
+			} else if (edit.kind === "insert") {
+				beforeInsertLines.push(edit.text);
 			} else if (edit.kind === "delete") {
 				deleteLine = true;
 			}
 		}
-		if (beforeLines.length === 0 && !deleteLine) continue;
+		if (
+			beforeInsertLines.length === 0 &&
+			replacementLines.length === 0 &&
+			afterInsertLines.length === 0 &&
+			!deleteLine
+		)
+			continue;
 
-		const replaceMode = beforeLines.length > 0;
-		if (deleteLine && !replaceMode) {
-			const balance = computeDelimiterBalance([currentLine]);
-			const trimmedCurrentLine = currentLine.trim();
-			const touchesStructuralBoundary =
-				trimmedCurrentLine.startsWith(")") ||
-				trimmedCurrentLine.startsWith("]") ||
-				trimmedCurrentLine.startsWith("}") ||
-				trimmedCurrentLine.endsWith("(") ||
-				trimmedCurrentLine.endsWith("[") ||
-				trimmedCurrentLine.endsWith("{");
-			if (balance.paren !== 0 || balance.bracket !== 0 || balance.brace !== 0 || touchesStructuralBoundary) {
-				warnings.push(
-					`Deleted line ${line} contains a structural bracket/brace boundary (${JSON.stringify(trimmedCurrentLine)}); verify the file is still balanced or use 'A:<replacement>' to keep the boundary intact.`,
-				);
-			}
-		}
-		const replacement = deleteLine ? beforeLines : [...beforeLines, currentLine];
-		const origins = replacement.map((): LineOrigin => (deleteLine ? "replacement" : "insert"));
-		if (!deleteLine) {
-			origins[origins.length - 1] = lineOrigins[idx] ?? "original";
-		}
+		const replacement = deleteLine
+			? [...beforeInsertLines, ...replacementLines, ...afterInsertLines]
+			: [...beforeInsertLines, ...replacementLines, currentLine, ...afterInsertLines];
+		const origins: LineOrigin[] = [];
+		for (let i = 0; i < beforeInsertLines.length; i++) origins.push("insert");
+		for (let i = 0; i < replacementLines.length; i++) origins.push(deleteLine ? "replacement" : "insert");
+		if (!deleteLine) origins.push(lineOrigins[idx] ?? "original");
+		for (let i = 0; i < afterInsertLines.length; i++) origins.push("insert");
 
 		fileLines.splice(idx, 1, ...replacement);
 		lineOrigins.splice(idx, 1, ...origins);

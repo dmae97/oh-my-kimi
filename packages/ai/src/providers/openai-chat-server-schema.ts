@@ -151,6 +151,15 @@ export const toolMessageSchema = z.object({
 	role: z.literal("tool"),
 	content: baseContent.optional(),
 	tool_call_id: z.string().optional(),
+	// OpenAI's wire spec omits `name` on `role:"tool"`, but in practice the
+	// official Python SDK and several wrappers do send it. Accept it so we can
+	// honour it downstream (Google's `functionResponse.name` is required and
+	// non-empty); empty strings are coerced to undefined so the back-resolve
+	// path runs.
+	name: z
+		.string()
+		.optional()
+		.transform(v => (v && v.length > 0 ? v : undefined)),
 });
 
 /**

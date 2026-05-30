@@ -9,7 +9,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
-import { keepaliveWhile } from "@oh-my-pi/pi-agent-core";
+import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	$env,
@@ -37,6 +37,7 @@ import {
 	preloadPluginRoots,
 	resolveActiveProjectRegistryPath,
 } from "./discovery/helpers";
+import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
 import { exportFromFile } from "./export/html";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import {
@@ -144,6 +145,7 @@ export async function submitInteractiveInput(
 	}
 
 	try {
+		using _keepalive = new EventLoopKeepalive();
 		// Continue shortcuts submit an already-started empty prompt with no optimistic user message.
 		if (!input.started && !mode.markPendingSubmissionStarted(input)) {
 			return;
@@ -299,6 +301,7 @@ async function runInteractiveMode(
 
 	if (initialMessage !== undefined) {
 		try {
+			using _keepalive = new EventLoopKeepalive();
 			await session.prompt(initialMessage, { images: initialImages });
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
@@ -308,6 +311,7 @@ async function runInteractiveMode(
 
 	for (const message of initialMessages) {
 		try {
+			using _keepalive = new EventLoopKeepalive();
 			await session.prompt(message);
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
@@ -316,7 +320,7 @@ async function runInteractiveMode(
 	}
 
 	while (true) {
-		const input = await keepaliveWhile(mode.getUserInput());
+		const input = await mode.getUserInput();
 		await submitInteractiveInput(mode, session, input);
 	}
 }
@@ -768,6 +772,17 @@ export async function runRootCommand(
 	// Mark the promise as handled so a synchronous failure does not surface as an unhandled-rejection
 	// warning before we reach the await site below.
 	pluginPreloadPromise.catch(() => {});
+
+	// Register CLI-provided extension package paths (`--extension`, `--hook`) so
+	// the `omp-plugins` discovery provider can surface their `skills/`, `hooks/`,
+	// `tools/`, `commands/`, `rules/`, `prompts/`, and `.mcp.json` sub-trees.
+	// `--no-extensions` short-circuits both the factory load and the sub-discovery.
+	if (!parsedArgs.noExtensions) {
+		const cliExtensions = [...(parsedArgs.extensions ?? []), ...(parsedArgs.hooks ?? [])];
+		if (cliExtensions.length > 0) {
+			injectOmpExtensionCliRoots(cliExtensions, home, getProjectDir());
+		}
+	}
 
 	const cwd = getProjectDir();
 	const settingsInstance = deps.settings ?? (await logger.time("settings:init", Settings.init, { cwd }));

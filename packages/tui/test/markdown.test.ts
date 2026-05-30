@@ -1168,6 +1168,55 @@ bar`,
 	});
 });
 
+describe("Inline color swatches", () => {
+	const FMT = TERMINAL.trueColor ? "ansi-16m" : "ansi-256";
+	// defaultMarkdownTheme supplies no `colorSwatch` symbol, so the renderer uses its ■ default.
+	const swatchFor = (hex: string, glyph = "■"): string => `${Bun.color(`#${hex}`, FMT)}${glyph}`;
+
+	it("paints a colored swatch before a bare hex color in prose", () => {
+		const out = new Markdown("Accent is #C5FFD6 today.", 0, 0, defaultMarkdownTheme).render(80).join("\n");
+		// Swatch (color SGR + chip glyph + fg reset + space) sits immediately before the code.
+		expect(out.includes(`${swatchFor("C5FFD6")}\x1b[39m `)).toBeTruthy();
+		expect(out.includes("#C5FFD6")).toBeTruthy();
+	});
+
+	it("paints a swatch before a backticked hex color", () => {
+		const out = new Markdown("Use `#C5FFD6` for the bg.", 0, 0, defaultMarkdownTheme).render(80).join("\n");
+		expect(out.includes(swatchFor("C5FFD6"))).toBeTruthy();
+		// The code text survives as inline code (theme styles it yellow).
+		expect(out.includes("#C5FFD6")).toBeTruthy();
+	});
+
+	it("does not swatch short numeric references that resemble issue numbers", () => {
+		const out = new Markdown("Fixed #1011, see #123, dark #000.", 0, 0, defaultMarkdownTheme).render(80).join("");
+		expect(out.includes("■")).toBe(false);
+	});
+
+	it("swatches a 3-digit shorthand that contains a hex letter", () => {
+		const out = new Markdown("White is #fff.", 0, 0, defaultMarkdownTheme).render(80).join("\n");
+		expect(out.includes(swatchFor("fff"))).toBeTruthy();
+	});
+
+	it("uses the theme's colorSwatch symbol when provided", () => {
+		const themed = { ...defaultMarkdownTheme, symbols: { ...defaultMarkdownTheme.symbols, colorSwatch: "▢" } };
+		const out = new Markdown("Accent #C5FFD6.", 0, 0, themed).render(80).join("\n");
+		expect(out.includes(swatchFor("C5FFD6", "▢"))).toBeTruthy();
+		expect(out.includes(swatchFor("C5FFD6", "■"))).toBe(false);
+	});
+
+	it("re-applies the surrounding style after the swatch in thinking traces", () => {
+		const out = new Markdown("Picked #C5FFD6 for accent.", 1, 0, defaultMarkdownTheme, {
+			color: text => chalk.gray(text),
+			italic: true,
+		})
+			.render(80)
+			.join("\n");
+		expect(out.includes(swatchFor("C5FFD6"))).toBeTruthy();
+		// Gray (\x1b[90m) is re-opened for the code text — the swatch's fg reset must not bleed.
+		expect(out.includes("\x1b[90m#C5FFD6")).toBeTruthy();
+	});
+});
+
 describe("Module-level LRU render cache", () => {
 	it("invokes highlightCode only once for two distinct instances with identical (text, width, theme)", () => {
 		// Build a theme with a spy on highlightCode. The theme object reference

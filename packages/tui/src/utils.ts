@@ -4,6 +4,7 @@ import {
 	extractSegments as nativeExtractSegments,
 	sliceWithWidth as nativeSliceWithWidth,
 	truncateToWidth as nativeTruncateToWidth,
+	visibleWidth as nativeVisibleWidth,
 	wrapTextWithAnsi as nativeWrapTextWithAnsi,
 	type SliceResult,
 } from "@oh-my-pi/pi-natives";
@@ -96,30 +97,17 @@ export function visibleWidthRaw(str: string): number {
 		return 0;
 	}
 
-	// Fast path: pure ASCII printable
-	let tabLength = 0;
-	const tabWidth = getDefaultTabWidth();
-	let isPureAscii = true;
-	let jamoOvercount = 0;
-	const isMacOS = process.platform === "darwin";
+	// Fast path: printable ASCII has one cell per code unit. Defer every
+	// control/non-ASCII case (tabs, ANSI/OSC, combining marks, CJK) to the
+	// native text engine so all width/slice/wrap helpers share one Unicode
+	// model instead of mixing Bun.stringWidth quirks with Rust truncation.
 	for (let i = 0; i < str.length; i++) {
 		const code = str.charCodeAt(i);
-		if (code === 9) {
-			tabLength += tabWidth;
-		} else if (code < 0x20 || code > 0x7e) {
-			isPureAscii = false;
-			// Hangul Compatibility Jamo (U+3131..U+318E) is EAW=W per UAX#11,
-			// but macOS terminals render them as 1 cell. WezTerm and others
-			// follow UAX#11 at 2 cells. Only correct on macOS.
-			if (isMacOS && code >= 0x3131 && code <= 0x318e) {
-				jamoOvercount++;
-			}
+		if (code < 0x20 || code > 0x7e) {
+			return nativeVisibleWidth(str, getDefaultTabWidth());
 		}
 	}
-	if (isPureAscii) {
-		return str.length + tabLength;
-	}
-	return Bun.stringWidth(str) - jamoOvercount + tabLength;
+	return str.length;
 }
 
 /**

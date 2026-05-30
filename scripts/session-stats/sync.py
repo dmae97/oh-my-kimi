@@ -56,7 +56,7 @@ SCHEMA_VERSION = 3
 # Bump whenever parse_hashline_input / find_longest_repeat / duplicated_anchors
 # / looks_successful / extract_warnings semantics change. Bump invalidates
 # previously-stored ss_edit_* rows on next sync.
-EDIT_PARSER_VERSION = 5
+EDIT_PARSER_VERSION = 6
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS ss_sessions (
@@ -229,30 +229,47 @@ def batch_count_tokens(strings: list[str]) -> list[int]:
 # --------------------------------------------------------------------------- #
 # Hashline edit parser.
 #
-# Supports two on-the-wire formats so the analytic tables stay coherent across
-# the format transition:
+# The session corpus spans several hashline generations, so the parser
+# recognizes all of them and normalizes every `¶`/`§` section into the same
+# EditSection shape. A `¶` section commits to a grammar from its FIRST op line,
+# so the verb and sigil grammars never cross-contaminate (a body line such as
+# `delete 5` inside a sigil-era section stays payload, not a phantom delete op).
 #
-#   new (current):   ¶PATH[#HASH], LINE↑[body], LINE↓[body], A[-B]:[body], A[-B]!
-#   legacy:          §PATH,        «ANCHOR,    »ANCHOR,    ≔ANCHOR[..ANCHOR]
+#   verb (current): ¶PATH[#TAG]  replace N..M: / delete N..M /
+#                                insert before N: / insert after N: /
+#                                insert head: / insert tail:    (+ `+TEXT` body rows)
+#   sigil (corpus): ¶PATH[#TAG]  N↑[body] / N↓[body] / A[-B]:[body] / A[-B]!
+#   legacy:         §PATH        «ANCHOR / »ANCHOR / ≔ANCHOR[..ANCHOR]
 #
-# Legacy "anchor" tokens were `<line><2-letter-hash>` (e.g. `4fb`, `12*`);
-# new ops use bare line numbers and hoist the file hash into the header.
-
-_LEGACY_RANGE_RE = re.compile(r"^\s*(\d+)[a-z*]+(?:\.\.(\d+)[a-z*]+)?\s*$")
-_LEGACY_SINGLE_ANCHOR_RE = re.compile(r"^\s*(\d+)[a-z*]+\s*$")
-_LEGACY_OP_RE = re.compile(r"^([«»≔])\s*(\S+)\s*$")
+# TAG width/case drifted across releases (2-4 hex, lower or upper, sometimes
+# absent), so the header accepts any `#<token>` suffix instead of a fixed width.
+# Legacy "anchor" tokens were `<line><2-letter-hash>` (e.g. `4fb`, `12*`).
 
 # Header: one or more `¶`, optional whitespace, path (no whitespace/#/¶),
-# optional `#HASH` (4 lowercase hex).
-_HEADER_NEW_RE = re.compile(r"^¶+\s*([^\s#¶]+)(?:#([0-9a-f]{4}))?\s*$")
+# optional `#TAG` of any width/case.
+_HEADER_NEW_RE = re.compile(r"^¶+\s*([^\s#¶]+)(?:#\S+)?\s*$")
+
+# Verb-based v4 (current) ops; body rows are `+TEXT` on the following lines.
+_VERB_REPLACE_RE = re.compile(r"^\s*replace\s+([1-9][0-9]*)(?:\s*(?:\.\.|-|…)\s*([1-9][0-9]*))?\s*:?\s*$")
+_VERB_DELETE_RE = re.compile(r"^\s*delete\s+([1-9][0-9]*)(?:\s*(?:\.\.|-|…)\s*([1-9][0-9]*))?\s*$")
+_VERB_INSERT_RE = re.compile(
+    r"^\s*insert\s+(?:(?P<pos>before|after)\s+(?P<anchor>[1-9][0-9]*)|(?P<edge>head|tail))\s*:?\s*$"
+)
+
+# Sigil/colon ops (historical corpus); body rows are bare lines.
 # Insert op: LINE↑BODY / LINE↓BODY / BOF↑BODY / EOF↓BODY …
-_OP_INSERT_NEW_RE = re.compile(
+_OP_INSERT_HL_RE = re.compile(
     r"^\s*(?:[>+\-*]+\s*)?(?P<anchor>[1-9][0-9]*|BOF|EOF)(?P<sigil>[↑↓])(?P<inline>.*)$"
 )
 # Replace / delete op: A:BODY / A-B:BODY / A! / A-B!
-_OP_RANGE_NEW_RE = re.compile(
+_OP_RANGE_HL_RE = re.compile(
     r"^\s*(?:[>+\-*]+\s*)?(?P<a>[1-9][0-9]*)(?:-(?P<b>[1-9][0-9]*))?(?P<sigil>[:!])(?P<inline>.*)$"
 )
+
+# Legacy `§`/`«»≔` ops.
+_LEGACY_RANGE_RE = re.compile(r"^\s*(\d+)[a-z*]+(?:\.\.(\d+)[a-z*]+)?\s*$")
+_LEGACY_SINGLE_ANCHOR_RE = re.compile(r"^\s*(\d+)[a-z*]+\s*$")
+_LEGACY_OP_RE = re.compile(r"^([«»≔])\s*(\S+)\s*$")
 
 _HASHLINE_ENVELOPE_MARKERS = {"*** Begin Patch", "*** End Patch", "*** Abort"}
 
@@ -306,8 +323,9 @@ class EditSection:
 def parse_hashline_input(input_str: str) -> list[EditSection]:
     sections: list[EditSection] = []
     cur: EditSection | None = None
-    cur_format: str | None = None  # "new" | "legacy"
-    open_idx: int | None = None  # current open payload block in cur
+    cur_format: str | None = None   # "hash" (¶) | "legacy" (§)
+    cur_grammar: str | None = None  # within "hash": None | "verb" | "sigil"
+    open_idx: int | None = None     # current open payload block in cur
 
     def open_new(s: EditSection) -> int:
         s.payload_blocks.append([])
@@ -322,13 +340,14 @@ def parse_hashline_input(input_str: str) -> list[EditSection]:
                 break
             continue
 
-        # Headers — new format first, then legacy.
+        # Headers — `¶` (verb/sigil eras) first, then legacy `§`.
         new_header = _HEADER_NEW_RE.match(line)
         if new_header:
             if cur is not None:
                 sections.append(cur)
             cur = EditSection(target_file=new_header.group(1))
-            cur_format = "new"
+            cur_format = "hash"
+            cur_grammar = None
             open_idx = None
             continue
         if line.startswith("§"):
@@ -339,15 +358,65 @@ def parse_hashline_input(input_str: str) -> list[EditSection]:
                 prefix_end += 1
             cur = EditSection(target_file=line[prefix_end:].strip())
             cur_format = "legacy"
+            cur_grammar = None
             open_idx = None
             continue
 
         if cur is None:
             continue
 
-        if cur_format == "new":
-            ins = _OP_INSERT_NEW_RE.match(line)
+        if cur_format == "hash":
+            # Verb-based v4 ops; tried only while the grammar is undecided or
+            # already verb, so sigil-era body lines never match a verb keyword.
+            if cur_grammar in (None, "verb"):
+                m = _VERB_REPLACE_RE.match(line)
+                if m:
+                    cur_grammar = "verb"
+                    a = int(m.group(1))
+                    b = int(m.group(2)) if m.group(2) else a
+                    cur.deleted_lines += max(b - a + 1, 1)
+                    cur.op_anchors.append(str(a))
+                    if b != a:
+                        cur.op_anchors.append(str(b))
+                    cur.touch(a)
+                    cur.touch(b)
+                    cur.op_count += 1
+                    open_idx = open_new(cur)
+                    continue
+                m = _VERB_DELETE_RE.match(line)
+                if m:
+                    cur_grammar = "verb"
+                    a = int(m.group(1))
+                    b = int(m.group(2)) if m.group(2) else a
+                    cur.deleted_lines += max(b - a + 1, 1)
+                    cur.op_anchors.append(str(a))
+                    if b != a:
+                        cur.op_anchors.append(str(b))
+                    cur.touch(a)
+                    cur.touch(b)
+                    cur.op_count += 1
+                    open_idx = None  # delete carries no body
+                    continue
+                m = _VERB_INSERT_RE.match(line)
+                if m:
+                    cur_grammar = "verb"
+                    anchor = m.group("anchor")
+                    if anchor is not None:
+                        cur.op_anchors.append(anchor)
+                        cur.touch(int(anchor))
+                    cur.op_count += 1
+                    open_idx = open_new(cur)
+                    continue
+            if cur_grammar == "verb":
+                # Body rows are `+TEXT` (`+` alone = blank line); skip stray rows.
+                if open_idx is not None and line.startswith("+"):
+                    cur.payload_blocks[open_idx].append(line[1:])
+                continue
+
+            # Sigil/colon ops (historical corpus); body rows are bare lines.
+            ins = _OP_INSERT_HL_RE.match(line)
             if ins:
+                cur_grammar = "sigil"
                 anchor = ins.group("anchor")
                 inline = ins.group("inline")
                 cur.op_anchors.append(anchor)
@@ -362,8 +431,9 @@ def parse_hashline_input(input_str: str) -> list[EditSection]:
                     cur.payload_blocks[open_idx].append(inline)
                 continue
 
-            rng = _OP_RANGE_NEW_RE.match(line)
+            rng = _OP_RANGE_HL_RE.match(line)
             if rng:
+                cur_grammar = "sigil"
                 sigil = rng.group("sigil")
                 a_str = rng.group("a")
                 b_str = rng.group("b") or a_str

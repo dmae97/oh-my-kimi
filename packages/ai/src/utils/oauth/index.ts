@@ -146,6 +146,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "openrouter",
+		name: "OpenRouter",
+		available: true,
+	},
+	{
 		id: "zai",
 		name: "Z.AI (GLM Coding Plan)",
 		available: true,
@@ -223,6 +228,21 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "vercel-ai-gateway",
 		name: "Vercel AI Gateway",
+		available: true,
+	},
+	{
+		id: "xai-oauth",
+		name: "xAI Grok OAuth (SuperGrok Subscription)",
+		available: true,
+	},
+	{
+		id: "wafer-pass",
+		name: "Wafer Pass (flat-rate subscription)",
+		available: true,
+	},
+	{
+		id: "wafer-serverless",
+		name: "Wafer Serverless (pay-as-you-go)",
 		available: true,
 	},
 ];
@@ -315,11 +335,17 @@ export async function refreshOAuthToken(
 			newCredentials = await refreshCursorToken(credentials.refresh);
 			break;
 		}
+		case "xai-oauth": {
+			const { refreshXAIOAuthToken } = await import("./xai-oauth");
+			newCredentials = await refreshXAIOAuthToken(credentials.refresh);
+			break;
+		}
 		case "kilo":
 		case "perplexity":
 		case "huggingface":
 		case "opencode-zen":
 		case "opencode-go":
+		case "openrouter":
 		case "cerebras":
 		case "fireworks":
 		case "firepass":
@@ -343,6 +369,8 @@ export async function refreshOAuthToken(
 		case "cloudflare-ai-gateway":
 		case "vercel-ai-gateway":
 		case "qwen-portal":
+		case "wafer-pass":
+		case "wafer-serverless":
 		case "zenmux":
 		case "vllm":
 			// API keys / static bearer tokens don't expire, return as-is

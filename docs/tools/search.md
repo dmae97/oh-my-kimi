@@ -29,8 +29,8 @@
 ## Outputs
 The tool returns a single text block in `content[0].text` plus structured `details`.
 
-- Match lines are formatted by `formatMatchLine()` as `*LINE:content` for matches and ` LINE:content` for context under a `¶PATH#HASH` header in hashline mode.
-  - Hashline mode: `¶src/login.ts#3c4d`, `*5:content`, ` 9:content`.
+- Match lines are formatted by `formatMatchLine()` as `*LINE:content` for matches and ` LINE:content` for context under a `¶PATH#TAG` header in hashline mode.
+  - Hashline mode: `¶src/login.ts#1f`, `*5:content`, ` 9:content`.
   - Plain mode: `*5|content`, ` 9|content`.
 - Directory results are grouped by file, with `# <path>` headings and blank lines between groups.
 - `details` may include:
@@ -141,4 +141,4 @@ The tool returns a single text block in `content[0].text` plus structured `detai
 - `hidden:true` is hard-coded in `search.ts`; there is no model-facing flag to exclude dotfiles.
 - `gitignore:false` only affects native directory traversal. It does not disable the tool's own path normalization or explicit-file handling.
 - When `paths` resolves to multiple exact files, `search.ts` does not apply the native `500` match cap and reports `totalMatches` internally as the post-skip length for that branch.
-- The section hash in hashline mode comes from `computeFileHash()` in `packages/coding-agent/src/hashline/hash.ts`; `search` emits bare line numbers beneath it.
+- The section tag in hashline mode is a two-hex opaque snapshot tag from the session snapshot store; `search` records only the matched/context lines it emits and prints bare line numbers beneath the header.

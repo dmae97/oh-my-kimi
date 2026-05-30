@@ -803,6 +803,30 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "drop-images",
+		description: "Strip every image from this session's history",
+		acpDescription: "Drop all images from the conversation history",
+		handle: async (_command, runtime) => {
+			const { removed } = await runtime.session.dropImages();
+			await runtime.output(
+				removed === 0
+					? "No images found in this session."
+					: `Dropped ${removed} image${removed === 1 ? "" : "s"} from this session.`,
+			);
+			return commandConsumed();
+		},
+		handleTui: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			const { removed } = await runtime.ctx.session.dropImages();
+			if (removed === 0) {
+				runtime.ctx.showStatus("No images found in this session.");
+				return;
+			}
+			runtime.ctx.rebuildChatFromMessages();
+			runtime.ctx.showStatus(`Dropped ${removed} image${removed === 1 ? "" : "s"} from this session.`);
+		},
+	},
+	{
 		name: "handoff",
 		description: "Hand off session context to a new session",
 		inlineHint: "[focus instructions]",

@@ -1,3 +1,4 @@
+import type { SnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import {
 	Box,
@@ -105,10 +106,10 @@ function resolveEditModeForTool(toolName: string, tool: AgentTool | undefined): 
 }
 
 export interface ToolExecutionOptions {
+	snapshots?: SnapshotStore;
 	showImages?: boolean; // default: true (only used if terminal supports images)
 	editFuzzyThreshold?: number;
 	editAllowFuzzy?: boolean;
-	hashlineAutoDropPureInsertDuplicates?: boolean;
 }
 
 export interface ToolExecutionHandle {
@@ -142,7 +143,7 @@ export class ToolExecutionComponent extends Container {
 	#showImages: boolean;
 	#editFuzzyThreshold: number | undefined;
 	#editAllowFuzzy: boolean | undefined;
-	#hashlineAutoDropPureInsertDuplicates: boolean | undefined;
+	#snapshots?: SnapshotStore;
 	#isPartial = true;
 	#tool?: AgentTool;
 	#ui: TUI;
@@ -189,7 +190,7 @@ export class ToolExecutionComponent extends Container {
 		this.#showImages = options.showImages ?? true;
 		this.#editFuzzyThreshold = options.editFuzzyThreshold;
 		this.#editAllowFuzzy = options.editAllowFuzzy;
-		this.#hashlineAutoDropPureInsertDuplicates = options.hashlineAutoDropPureInsertDuplicates;
+		this.#snapshots = options.snapshots;
 		this.#tool = tool;
 		this.#ui = ui;
 		this.#cwd = cwd;
@@ -266,12 +267,13 @@ export class ToolExecutionComponent extends Container {
 
 		try {
 			const isStreaming = !this.#argsComplete;
+			if (editMode === "hashline" && !this.#snapshots) return;
 			const previews = await strategy.computeDiffPreview(effectiveArgs, {
 				cwd: this.#cwd,
 				signal: controller.signal,
+				snapshots: this.#snapshots!,
 				fuzzyThreshold: this.#editFuzzyThreshold,
 				allowFuzzy: this.#editAllowFuzzy,
-				hashlineAutoDropPureInsertDuplicates: this.#hashlineAutoDropPureInsertDuplicates,
 				isStreaming,
 			});
 			if (controller.signal.aborted) return;

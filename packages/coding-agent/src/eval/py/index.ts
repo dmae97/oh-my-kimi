@@ -5,7 +5,7 @@ import { checkPythonKernelAvailability } from "./kernel";
 
 const PYTHON_SESSION_PREFIX = "python:";
 
-function namespaceSessionId(sessionId: string): string {
+export function namespaceSessionId(sessionId: string): string {
 	return sessionId.startsWith(PYTHON_SESSION_PREFIX) ? sessionId : `${PYTHON_SESSION_PREFIX}${sessionId}`;
 }
 

@@ -16,7 +16,7 @@ const packageJsonGlob = new Glob("packages/*/package.json");
 const cargoTomlGlob = new Glob("crates/*/Cargo.toml");
 
 function git(args: readonly string[]) {
-	return $`git -c core.fsmonitor=false -c core.untrackedCache=false ${args}`;
+	return $`git -c core.fsmonitor=false -c core.untrackedCache=false -c fetch.pruneTags=false ${args}`;
 }
 
 // =============================================================================
@@ -313,17 +313,44 @@ async function cmdRelease(version: string): Promise<void> {
 	await $`bun run check`;
 	console.log();
 
-	// 7. Commit and tag
-	console.log("Committing and tagging...");
+	// 7. Commit
+	console.log("Committing...");
 	await git(["add", "."]);
 	await git(["commit", "-m", `chore: bump version to ${version}`]);
-	await git(["tag", `v${version}`]);
 	console.log();
 
-	// 8. Push
-	console.log("Pushing to remote...");
-	await git(["push", "origin", "main"]);
-	await git(["push", "origin", `v${version}`]);
+	// 8. Tag + push atomically.
+	//
+	// Background `git maintenance run` (scheduled via the global `[maintenance]
+	// repo = …` list) fetches origin with `fetch.pruneTags=true` set globally,
+	// which deletes any local tag that does not yet exist on the remote — i.e.
+	// the brand-new release tag. The `-c fetch.pruneTags=false` we pass to our
+	// git wrapper only applies to our git invocations, not to the concurrent
+	// maintenance process, so we have to defend against the race ourselves:
+	// (re)create the tag immediately before the push and retry on the specific
+	// "src refspec … does not match any" symptom that means it got pruned.
+	console.log("Tagging and pushing to remote...");
+	const tagRef = `v${version}`;
+	for (let attempt = 1; ; attempt++) {
+		await git(["tag", "-f", tagRef]);
+		const result = await git([
+			"push",
+			"--atomic",
+			"origin",
+			"main",
+			`refs/tags/${tagRef}`,
+		]).nothrow();
+		if (result.exitCode === 0) break;
+		const stderr = result.stderr.toString();
+		process.stderr.write(stderr);
+		const pruned = /src refspec .* does not match any/.test(stderr);
+		if (!pruned || attempt >= 3) {
+			throw new Error(`git push failed for ${tagRef} (attempt ${attempt})`);
+		}
+		console.warn(
+			`  Tag ${tagRef} pruned by background maintenance, retrying (${attempt + 1}/3)...`,
+		);
+	}
 	console.log();
 
 	// 9. Watch CI

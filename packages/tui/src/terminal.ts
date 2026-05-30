@@ -18,6 +18,7 @@ let activeTerminal: ProcessTerminal | null = null;
 let terminalEverStarted = false;
 
 const STD_INPUT_HANDLE = -10;
+const STD_OUTPUT_HANDLE = -11;
 const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
 /**
  * Emergency terminal restore - call this from signal/crash handlers
@@ -93,12 +94,17 @@ export interface Terminal {
 	setProgress(active: boolean): void;
 
 	/**
+	 * Returns whether the native terminal viewport is at the scrollback tail when
+	 * the host exposes that state. `undefined` means the terminal cannot report it.
+	 */
+	isNativeViewportAtBottom?(): boolean | undefined;
+
+	/**
 	 * Register a callback for terminal appearance (dark/light) changes.
 	 * Detection uses OSC 11 background color query with Mode 2031 as a change trigger.
 	 * Fires when the detected appearance changes, including the initial detection.
 	 */
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
-
 	/** The last detected terminal appearance, or undefined if not yet known. */
 	get appearance(): TerminalAppearance | undefined;
 }
@@ -202,6 +208,33 @@ export class ProcessTerminal implements Terminal {
 		// but avoid background polling there.
 		if (!isWindowsSubsystemForLinux()) {
 			this.#startOsc11Poll();
+		}
+	}
+
+	/**
+	 * Returns true when Windows' active console viewport is at the scrollback tail.
+	 * POSIX terminals do not expose native scrollback position through a standard API.
+	 */
+	isNativeViewportAtBottom(): boolean | undefined {
+		if (process.platform !== "win32") return undefined;
+		try {
+			const kernel32 = dlopen("kernel32.dll", {
+				GetStdHandle: { args: [FFIType.i32], returns: FFIType.ptr },
+				GetConsoleScreenBufferInfo: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.bool },
+			});
+			try {
+				const handle = kernel32.symbols.GetStdHandle(STD_OUTPUT_HANDLE);
+				const info = new Uint8Array(22);
+				const infoPtr = ptr(info);
+				if (!infoPtr || !kernel32.symbols.GetConsoleScreenBufferInfo(handle, infoPtr)) return undefined;
+				const viewBottom = new DataView(info.buffer, info.byteOffset, info.byteLength).getInt16(16, true);
+				const bufferHeight = new DataView(info.buffer, info.byteOffset, info.byteLength).getInt16(2, true);
+				return viewBottom >= bufferHeight - 1;
+			} finally {
+				kernel32.close();
+			}
+		} catch {
+			return undefined;
 		}
 	}
 

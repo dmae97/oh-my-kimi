@@ -130,6 +130,80 @@ function formatHyperlink(text: string, target: string): string {
 	return `\x1b]8;;${safeTarget}\x07${text}\x1b]8;;\x07`;
 }
 
+// ---------------------------------------------------------------------------
+// Inline hex-color swatches
+// ---------------------------------------------------------------------------
+// When prose/thinking mentions a CSS hex color (e.g. #C5FFD6 or `#C5FFD6`),
+// render a small chip painted with that color just before the code. The chip
+// glyph comes from the theme's symbol set (ASCII → Unicode → Nerd Font), so it
+// degrades gracefully; the color itself is exact 24-bit on truecolor terminals
+// and the nearest 256-color cell otherwise (Bun.color quantizes for us).
+
+/** Fallback chip when the theme supplies no `colorSwatch` symbol (Unicode default). */
+const DEFAULT_COLOR_SWATCH_GLYPH = "■";
+
+// `#` + 3-8 hex digits, not glued to a surrounding word/`#`/`&` (avoids HTML
+// entities like &#9731; and paths like foo#fff) and not trailed by more hex
+// (so over-long runs never produce a misleading swatch). Length/letter rules
+// are enforced in classifyHexColor since the alternation can't express "exactly
+// 3, 4, 6, or 8".
+const HEX_COLOR_REGEX = /(?<![\w#&])#([0-9a-fA-F]{3,8})(?![0-9a-fA-F])/g;
+const HEX_COLOR_EXACT_REGEX = /^#([0-9a-fA-F]{3,8})$/;
+
+/**
+ * Decide whether a run of hex digits denotes a renderable CSS color.
+ *
+ * Only the canonical CSS lengths (#RGB, #RGBA, #RRGGBB, #RRGGBBAA) qualify. In
+ * `strict` mode (bare prose) a 3/4-digit run must contain a hex letter, so the
+ * far more common short issue/PR references (#123, #1011) don't sprout swatches.
+ * Codespans opt out of strictness — the backticks already signal "this is a color".
+ */
+function classifyHexColor(hex: string, strict: boolean): boolean {
+	const n = hex.length;
+	if (n !== 3 && n !== 4 && n !== 6 && n !== 8) return false;
+	if (strict && n <= 4 && !/[a-fA-F]/.test(hex)) return false;
+	return true;
+}
+
+/** ANSI-painted `glyph` for `#${hex}`, or "" when the color can't be encoded. */
+function colorSwatch(hex: string, glyph: string): string {
+	const ansi = Bun.color(`#${hex}`, TERMINAL.trueColor ? "ansi-16m" : "ansi-256");
+	// Reset only the foreground (\x1b[39m) so an enclosing background/decoration
+	// applied later by the line renderer survives across the swatch.
+	return ansi ? `${ansi}${glyph}\x1b[39m ` : "";
+}
+
+/**
+ * Style a plain-text run, inserting a color swatch before each hex color it
+ * mentions. Non-color text (including the matched `#hex` itself) is routed
+ * through `applySegment` so the caller's base styling is preserved verbatim.
+ */
+function renderTextWithSwatches(text: string, applySegment: (t: string) => string, glyph: string): string {
+	HEX_COLOR_REGEX.lastIndex = 0;
+	let result = "";
+	let last = 0;
+	for (;;) {
+		const match = HEX_COLOR_REGEX.exec(text);
+		if (match === null) break;
+		if (!classifyHexColor(match[1], true)) continue;
+		const swatch = colorSwatch(match[1], glyph);
+		if (!swatch) continue;
+		if (match.index > last) result += applySegment(text.slice(last, match.index));
+		result += swatch + applySegment(match[0]);
+		last = match.index + match[0].length;
+	}
+	if (last === 0) return applySegment(text);
+	if (last < text.length) result += applySegment(text.slice(last));
+	return result;
+}
+
+/** Swatch for a codespan whose entire content is a single hex color, else "". */
+function codespanSwatch(code: string, glyph: string): string {
+	const match = HEX_COLOR_EXACT_REGEX.exec(code.trim());
+	if (!match || !classifyHexColor(match[1], false)) return "";
+	return colorSwatch(match[1], glyph);
+}
+
 export class Markdown implements Component {
 	#text: string;
 	#paddingX: number; // Left/right padding
@@ -543,6 +617,7 @@ export class Markdown implements Component {
 			const segments: string[] = text.split("\n");
 			return segments.map((segment: string) => applyText(segment)).join("\n");
 		};
+		const swatchGlyph = this.#theme.symbols.colorSwatch || DEFAULT_COLOR_SWATCH_GLYPH;
 
 		for (const token of tokens) {
 			switch (token.type) {
@@ -551,7 +626,7 @@ export class Markdown implements Component {
 					if (token.tokens && token.tokens.length > 0) {
 						result += this.#renderInlineTokens(token.tokens, resolvedStyleContext);
 					} else {
-						result += applyTextWithNewlines(token.text);
+						result += renderTextWithSwatches(token.text, applyTextWithNewlines, swatchGlyph);
 					}
 					break;
 
@@ -572,9 +647,10 @@ export class Markdown implements Component {
 					break;
 				}
 
-				case "codespan":
-					result += this.#theme.code(token.text) + stylePrefix;
+				case "codespan": {
+					result += codespanSwatch(token.text, swatchGlyph) + this.#theme.code(token.text) + stylePrefix;
 					break;
+				}
 
 				case "link": {
 					const linkText = this.#renderInlineTokens(token.tokens || [], resolvedStyleContext);

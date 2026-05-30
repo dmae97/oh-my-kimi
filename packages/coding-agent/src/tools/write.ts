@@ -1,12 +1,16 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { stripHashlinePrefixes } from "@oh-my-pi/hashline";
+
+import { formatHashlineHeader, stripHashlinePrefixes } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+
+import { getFileSnapshotStore } from "../edit/file-snapshot-store";
+import { normalizeToLF } from "../edit/normalize";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import { parseInternalUrl } from "../internal-urls/parse";
@@ -53,6 +57,8 @@ import {
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
+const LOOSE_HASHLINE_HEADER_RE = /^\s*¶\S+#[^ \t\r\n]*\s*$/;
+
 let fflateModulePromise: Promise<typeof import("fflate")> | undefined;
 async function loadFflate(): Promise<typeof import("fflate")> {
 	if (!fflateModulePromise) fflateModulePromise = import("fflate");
@@ -70,6 +76,33 @@ export type WriteToolInput = z.infer<typeof writeSchema>;
 export interface WriteToolDetails {
 	diagnostics?: FileDiagnosticsResult;
 	meta?: OutputMeta;
+	/** Set when the file was auto-chmod'd because content begins with a `#!` shebang. */
+	madeExecutable?: boolean;
+}
+
+/**
+ * Strip hashline display prefixes from write content.
+ *
+ * Includes a fallback for loosely-formed section headers that still carry
+ * line-number prefixes (for example legacy or malformed hashline echoes).
+ */
+function stripWriteContentWithPotentialLooseHeader(lines: string[]): { text: string; stripped: boolean } {
+	const cleaned = stripHashlinePrefixes(lines);
+	if (cleaned !== lines) {
+		return { text: cleaned.join("\n"), stripped: true };
+	}
+
+	const headerIndex = lines.findIndex(line => line.trim().length > 0);
+	if (headerIndex === -1 || !LOOSE_HASHLINE_HEADER_RE.test(lines[headerIndex])) {
+		return { text: lines.join("\n"), stripped: false };
+	}
+
+	const linesWithoutHeader = lines.slice(0, headerIndex).concat(lines.slice(headerIndex + 1));
+	const cleanedWithoutHeader = stripHashlinePrefixes(linesWithoutHeader);
+	if (cleanedWithoutHeader === linesWithoutHeader) {
+		return { text: lines.join("\n"), stripped: false };
+	}
+	return { text: cleanedWithoutHeader.join("\n"), stripped: true };
 }
 
 /**
@@ -82,10 +115,23 @@ function stripWriteContent(session: ToolSession, content: string): { text: strin
 	if (!resolveFileDisplayMode(session).hashLines) {
 		return { text: content, stripped: false };
 	}
-	const lines = content.split("\n");
-	const cleaned = stripHashlinePrefixes(lines);
-	if (cleaned === lines) return { text: content, stripped: false };
-	return { text: cleaned.join("\n"), stripped: true };
+	return stripWriteContentWithPotentialLooseHeader(content.split("\n"));
+}
+
+/**
+ * Record a snapshot of the freshly-written `content` for `absolutePath`
+ * so subsequent hashline edits address the new file with a current tag,
+ * and return the matching `¶displayPath#TAG` header. Returns `undefined`
+ * when the session is not in hashline mode so callers can no-op cheaply.
+ *
+ * Mirrors the post-commit snapshot recording the hashline patcher performs
+ * after a successful edit: the model gets a tag without an extra `read`.
+ */
+function maybeWriteSnapshotHeader(session: ToolSession, absolutePath: string, content: string): string | undefined {
+	if (!resolveFileDisplayMode(session).hashLines) return undefined;
+	const normalized = normalizeToLF(content);
+	const tag = getFileSnapshotStore(session).record(absolutePath, normalized);
+	return formatHashlineHeader(formatPathRelativeToCwd(absolutePath, session.cwd), tag);
 }
 
 /**
@@ -100,6 +146,28 @@ function appendNoteToResult(result: AgentToolResult<WriteToolDetails>, note: str
 		firstText.text = firstText.text.length > 0 ? `${firstText.text}\n${note}` : note;
 	} else {
 		result.content.push({ type: "text", text: note });
+	}
+}
+
+/**
+ * If `content` begins with a `#!` shebang, ensure the file is executable.
+ *
+ * Mirrors `chmod a+x` (adds user/group/other execute bits to existing mode).
+ * Errors are swallowed: chmod failure (e.g. Windows ACL, read-only mount)
+ * MUST NOT fail an otherwise successful write. Returns whether the mode
+ * actually changed so the caller can surface a note.
+ */
+async function maybeMarkExecutableForShebang(absolutePath: string, content: string): Promise<boolean> {
+	if (!content.startsWith("#!")) return false;
+	try {
+		const stat = await fs.stat(absolutePath);
+		const currentMode = stat.mode & 0o7777;
+		const newMode = currentMode | 0o111;
+		if (newMode === currentMode) return false;
+		await fs.chmod(absolutePath, newMode);
+		return true;
+	} catch {
+		return false;
 	}
 }
 
@@ -490,11 +558,13 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		this.session.fileSnapshotStore?.invalidate(absolutePath);
 		this.session.conflictHistory?.invalidate(entry.id);
 
+		const header = maybeWriteSnapshotHeader(this.session, absolutePath, newContent);
 		const range =
 			entry.startLine === entry.endLine
 				? `line ${entry.startLine}`
 				: `lines ${entry.startLine}\u2013${entry.endLine}`;
-		let resultText = `Resolved conflict #${entry.id} at ${range} in ${entry.displayPath}.`;
+		const summary = `Resolved conflict #${entry.id} at ${range} in ${entry.displayPath}.`;
+		let resultText = header ? `${header}\n${summary}` : summary;
 		if (stripped) {
 			resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
 		}
@@ -574,7 +644,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 		const batchRequest = getLspBatchRequest(context?.toolCall);
 		const allDiagnostics: FileDiagnosticsResult[] = [];
-		const succeededFiles: { displayPath: string; count: number }[] = [];
+		const succeededFiles: { displayPath: string; count: number; header?: string }[] = [];
 		const failedFiles: { displayPath: string; count: number; error: string }[] = [];
 		let totalResolvedIds = 0;
 
@@ -611,7 +681,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			invalidateFsScanAfterWrite(absolutePath);
 			this.session.fileSnapshotStore?.invalidate(absolutePath);
 			for (const entry of fileEntries) history.invalidate(entry.id);
-			succeededFiles.push({ displayPath: sample.displayPath, count: fileEntries.length });
+			const header = maybeWriteSnapshotHeader(this.session, absolutePath, text);
+			succeededFiles.push({ displayPath: sample.displayPath, count: fileEntries.length, header });
 			totalResolvedIds += fileEntries.length;
 			if (diagnostics) allDiagnostics.push(diagnostics);
 		}
@@ -634,6 +705,13 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			for (const file of failedFiles) {
 				summaryLines.push(`  ${file.displayPath}: ${file.count} ${conflictWord(file.count)} (${file.error})`);
 			}
+		}
+		const headerLines = succeededFiles
+			.map(file => file.header)
+			.filter((header): header is string => header !== undefined);
+		if (headerLines.length > 0) {
+			summaryLines.push("Snapshots:");
+			for (const header of headerLines) summaryLines.push(`  ${header}`);
 		}
 		if (stripped) {
 			summaryLines.push("Note: auto-stripped hashline display prefixes from content before writing.");
@@ -763,7 +841,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				}
 				invalidateFsScanAfterWrite(absolutePath);
 				const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
-				let resultText = `Successfully wrote ${cleanContent.length} bytes to ${displayPath}`;
+				const header = maybeWriteSnapshotHeader(this.session, absolutePath, cleanContent);
+				const writeLine = `Successfully wrote ${cleanContent.length} bytes to ${displayPath}`;
+				let resultText = header ? `${header}\n${writeLine}` : writeLine;
 				if (stripped) {
 					resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
 				}
@@ -772,16 +852,19 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 			const diagnostics = await this.#writethrough(absolutePath, cleanContent, signal, undefined, batchRequest);
 			invalidateFsScanAfterWrite(absolutePath);
+			const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, cleanContent);
 
 			const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
-			let resultText = `Successfully wrote ${cleanContent.length} bytes to ${displayPath}`;
+			const header = maybeWriteSnapshotHeader(this.session, absolutePath, cleanContent);
+			const writeLine = `Successfully wrote ${cleanContent.length} bytes to ${displayPath}`;
+			let resultText = header ? `${header}\n${writeLine}` : writeLine;
 			if (stripped) {
 				resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
 			}
 			if (!diagnostics) {
 				return {
 					content: [{ type: "text", text: resultText }],
-					details: {},
+					details: { madeExecutable: madeExecutable || undefined },
 				};
 			}
 
@@ -789,6 +872,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				content: [{ type: "text", text: resultText }],
 				details: {
 					diagnostics,
+					madeExecutable: madeExecutable || undefined,
 					meta: outputMeta()
 						.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
 						.get(),
@@ -915,13 +999,16 @@ export const writeToolRenderer = {
 		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
 		const lineCount = countLines(fileContent);
 		const lineSuffix = formatLineCountSuffix(lineCount, uiTheme);
+		const execSuffix = result.details?.madeExecutable
+			? `${uiTheme.fg("dim", " · ")}${uiTheme.fg("success", "made executable!")}`
+			: "";
 
 		// Build header with status icon
 		const header = renderStatusLine(
 			{
 				icon: "success",
 				title: "Write",
-				description: `${langIcon} ${pathDisplay}${lineSuffix}`,
+				description: `${langIcon} ${pathDisplay}${lineSuffix}${execSuffix}`,
 			},
 			uiTheme,
 		);
