@@ -39,7 +39,7 @@ import {
 } from "./discovery/helpers";
 import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
 import { exportFromFile } from "./export/html";
-import type { ExtensionUIContext } from "./extensibility/extensions/types";
+import type { ExtensionFlag, ExtensionUIContext } from "./extensibility/extensions/types";
 import {
 	getInstalledPluginsRegistryPath,
 	getMarketplacesCacheDir,
@@ -169,7 +169,20 @@ export async function submitInteractiveInput(
 	}
 }
 
-function applyExtensionFlagValues(session: AgentSession, rawArgs: string[]): Map<string, boolean | string> {
+interface ExtensionFlagRunner {
+	getFlags(): ReadonlyMap<string, Pick<ExtensionFlag, "type">>;
+	getFlagValues(): Map<string, boolean | string>;
+	setFlagValue(name: string, value: boolean | string): void;
+}
+
+interface ExtensionFlagSession {
+	readonly extensionRunner?: ExtensionFlagRunner;
+}
+
+export function applyExtensionFlagValues(
+	session: ExtensionFlagSession,
+	rawArgs: readonly string[],
+): Map<string, boolean | string> {
 	const extensionRunner = session.extensionRunner;
 	if (!extensionRunner) {
 		return new Map();
@@ -179,6 +192,9 @@ function applyExtensionFlagValues(session: AgentSession, rawArgs: string[]): Map
 	if (extFlags.size > 0) {
 		for (let i = 0; i < rawArgs.length; i++) {
 			const arg = rawArgs[i];
+			if (arg === "--") {
+				break;
+			}
 			if (!arg.startsWith("--")) {
 				continue;
 			}
