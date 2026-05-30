@@ -1153,55 +1153,51 @@ describe("TUI terminal-state regressions", () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
 
-			await withEnvPatch(
-				{ WT_SESSION: "wt-test", WSL_DISTRO_NAME: "Ubuntu", WSL_INTEROP: undefined },
-				async () => {
-					// Simulate WSL: native viewport probe returns undefined unconditionally
-					// (kernel32.dll FFI cannot bind from a Linux user-space process).
-					const term = new UnknownViewportTerminal(32, 5);
-					const tui = new TUI(term);
-					// Bottom-anchored footer (prompt area) with streaming assistant rows above it.
-					// Seed the transcript so the viewport is already saturated — the footer pins
-					// to the last viewport row and streamed rows must appear above it.
-					const transcript = new MutableLinesComponent(rows("seed-", 4));
-					const footer = new MutableLinesComponent(["prompt>"]);
-					tui.addChild(transcript);
-					tui.addChild(footer);
+			await withEnvPatch({ WT_SESSION: "wt-test", WSL_DISTRO_NAME: "Ubuntu", WSL_INTEROP: undefined }, async () => {
+				// Simulate WSL: native viewport probe returns undefined unconditionally
+				// (kernel32.dll FFI cannot bind from a Linux user-space process).
+				const term = new UnknownViewportTerminal(32, 5);
+				const tui = new TUI(term);
+				// Bottom-anchored footer (prompt area) with streaming assistant rows above it.
+				// Seed the transcript so the viewport is already saturated — the footer pins
+				// to the last viewport row and streamed rows must appear above it.
+				const transcript = new MutableLinesComponent(rows("seed-", 4));
+				const footer = new MutableLinesComponent(["prompt>"]);
+				tui.addChild(transcript);
+				tui.addChild(footer);
 
-					try {
-						tui.start();
+				try {
+					tui.start();
+					await settle(term);
+					expect(visible(term).map(line => line.trim())).toEqual([
+						"seed-0",
+						"seed-1",
+						"seed-2",
+						"seed-3",
+						"prompt>",
+					]);
+
+					// Stream tokens row-by-row. Each frame inserts a new row above the footer,
+					// mimicking an assistant response materializing during a turn.
+					for (let i = 0; i < 4; i++) {
+						transcript.setLines([...rows("seed-", 4), ...rows("token-", i + 1)]);
+						tui.requestRender();
 						await settle(term);
-						expect(visible(term).map(line => line.trim())).toEqual([
-							"seed-0",
-							"seed-1",
-							"seed-2",
-							"seed-3",
-							"prompt>",
-						]);
 
-						// Stream tokens row-by-row. Each frame inserts a new row above the footer,
-						// mimicking an assistant response materializing during a turn.
-						for (let i = 0; i < 4; i++) {
-							transcript.setLines([...rows("seed-", 4), ...rows("token-", i + 1)]);
-							tui.requestRender();
-							await settle(term);
-
-							const viewport = visible(term).map(line => line.trim());
-							// The most recently streamed token MUST land in the viewport without the
-							// user resizing the window. Pre-fix the viewport stayed frozen at the
-							// initial seed because deferredMutation returned a no-op render.
-							expect(viewport).toContain(`token-${i}`);
-							expect(viewport[viewport.length - 1]).toBe("prompt>");
-						}
-					} finally {
-						tui.stop();
+						const viewport = visible(term).map(line => line.trim());
+						// The most recently streamed token MUST land in the viewport without the
+						// user resizing the window. Pre-fix the viewport stayed frozen at the
+						// initial seed because deferredMutation returned a no-op render.
+						expect(viewport).toContain(`token-${i}`);
+						expect(viewport[viewport.length - 1]).toBe("prompt>");
 					}
-				},
-			);
+				} finally {
+					tui.stop();
+				}
+			});
 
 			Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 		});
-
 
 		it("refreshes deferred native scrollback when the native viewport reaches bottom", async () => {
 			const term = new VirtualTerminal(32, 5);

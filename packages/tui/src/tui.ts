@@ -1431,10 +1431,7 @@ export class TUI extends Container {
 	}
 
 	#nativeViewportIsScrolled(nativeViewportAtBottom: boolean | undefined): boolean {
-		return (
-			nativeViewportAtBottom === false ||
-			(nativeViewportAtBottom === undefined && process.platform === "win32")
-		);
+		return nativeViewportAtBottom === false || (nativeViewportAtBottom === undefined && process.platform === "win32");
 	}
 
 	#nativeViewportIsAtBottom(nativeViewportAtBottom: boolean | undefined): boolean {
