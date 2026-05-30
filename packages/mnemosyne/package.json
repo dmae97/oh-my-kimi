@@ -66,6 +66,10 @@
 			"types": "./src/core/beam/index.ts",
 			"import": "./src/core/beam/index.ts"
 		},
+		"./diagnose": {
+			"types": "./src/diagnose.ts",
+			"import": "./src/diagnose.ts"
+		},
 		"./mcp": {
 			"types": "./src/mcp-tools.ts",
 			"import": "./src/mcp-tools.ts"

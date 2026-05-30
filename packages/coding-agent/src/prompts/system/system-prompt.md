@@ -54,7 +54,9 @@ With most FS/bash-like tools, static references to them will automatically resol
 - `skill://<name>`: Skill instructions
    - `/<path>`: File within a skill
 - `rule://<name>`: Rule details
+{{#if hasMemoryRoot}}
 - `memory://root`: Project memory summary
+{{/if}}
 - `agent://<id>`: Full agent output artifact
    - `/<path>`: JSON field extraction
 - `artifact://<id>`: Artifact content

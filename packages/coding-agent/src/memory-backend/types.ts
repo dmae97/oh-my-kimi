@@ -53,6 +53,12 @@ export interface MemoryBackend {
 	/** Force consolidation/retain to happen now (slash `/memory enqueue`). */
 	enqueue(agentDir: string, cwd: string, session?: AgentSession): Promise<void>;
 
+
+	/** Render backend-specific memory statistics as markdown (`/memory stats`). */
+	stats?(agentDir: string, cwd: string, session?: AgentSession): Promise<string | undefined>;
+
+	/** Render backend-specific memory diagnostics as markdown (`/memory diagnose`). */
+	diagnose?(agentDir: string, cwd: string, session?: AgentSession): Promise<string | undefined>;
 	/**
 	 * Optional hook to inject a backend-specific block into the current turn's
 	 * system prompt before the agent starts generating.

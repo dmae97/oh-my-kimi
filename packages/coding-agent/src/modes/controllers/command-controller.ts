@@ -620,12 +620,28 @@ export class CommandController {
 			return;
 		}
 
+
+		if (action === "stats" || action === "diagnose") {
+			const hook = action === "stats" ? backend.stats : backend.diagnose;
+			try {
+				const payload = await hook?.(agentDir, this.ctx.sessionManager.getCwd(), this.ctx.session);
+				if (!payload) {
+					this.ctx.showWarning(`Memory ${action} is not available for the ${backend.id} backend.`);
+					return;
+				}
+				showMarkdownPanel(this.ctx, `Memory ${action === "stats" ? "Stats" : "Diagnostics"}`, payload);
+			} catch (error) {
+				this.ctx.showError(`Memory ${action} failed: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			return;
+		}
+
 		if (action === "mm") {
 			await this.#handleMentalModelsSubcommand(argumentText);
 			return;
 		}
 
-		this.ctx.showError("Usage: /memory <view|clear|reset|enqueue|rebuild|mm ...>");
+		this.ctx.showError("Usage: /memory <view|stats|diagnose|clear|reset|enqueue|rebuild|mm ...>");
 	}
 
 	async #handleMentalModelsSubcommand(argumentText: string): Promise<void> {

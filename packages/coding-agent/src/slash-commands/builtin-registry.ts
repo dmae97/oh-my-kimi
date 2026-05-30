@@ -891,6 +891,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		acpInputHint: "<subcommand>",
 		subcommands: [
 			{ name: "view", description: "Show current memory injection payload" },
+			{ name: "stats", description: "Show memory backend statistics" },
+			{ name: "diagnose", description: "Run memory backend diagnostics" },
 			{ name: "clear", description: "Clear persisted memory data and artifacts" },
 			{ name: "reset", description: "Alias for clear" },
 			{ name: "enqueue", description: "Enqueue memory consolidation maintenance" },
@@ -933,13 +935,20 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 					await runtime.output("Memory consolidation enqueued.");
 					return commandConsumed();
 				}
+				case "stats":
+				case "diagnose": {
+					const hook = verb === "stats" ? backend.stats : backend.diagnose;
+					const payload = await hook?.(runtime.settings.getAgentDir(), runtime.cwd, runtime.session);
+					await runtime.output(payload ?? `Memory ${verb} is not available for the ${backend.id} backend.`);
+					return commandConsumed();
+				}
 				case "mm":
 					return usage(
 						"Mental-model maintenance via /memory mm is unsupported in ACP mode; use the hindsight HTTP API directly.",
 						runtime,
 					);
 				default:
-					return usage("Usage: /memory <view|clear|reset|enqueue|rebuild>", runtime);
+					return usage("Usage: /memory <view|stats|diagnose|clear|reset|enqueue|rebuild>", runtime);
 			}
 		},
 		handleTui: async (command, runtime) => {

@@ -34,6 +34,26 @@ interface MnemosyneScopedResources {
 type MnemosyneRememberInput = Parameters<Mnemosyne["remember"]>[0];
 type MnemosyneRememberOptions = Parameters<Mnemosyne["remember"]>[1];
 
+export type MnemosyneMemoryEditOperation = "update" | "forget" | "invalidate";
+
+export interface MnemosyneMemoryEditOptions {
+	content?: string;
+	importance?: number;
+	replacementId?: string;
+}
+
+export interface MnemosyneMemoryEditResult {
+	status: "updated" | "deleted" | "invalidated" | "not_found";
+	bank?: string;
+	store?: "working" | "episodic";
+}
+
+interface MnemosyneStoredMemoryRow {
+	memory_store?: unknown;
+	session_id?: unknown;
+}
+
+
 export function getMnemosyneSessionState(session: AgentSession | undefined): MnemosyneSessionState | undefined {
 	return session ? (session as AgentSessionWithMnemosyneState)[kMnemosyneSessionState] : undefined;
 }
@@ -100,6 +120,60 @@ export class MnemosyneSessionState {
 	getScopedRetainTarget(): MnemosyneScopedMemory {
 		return this.scoped.retain;
 	}
+
+	editScopedMemory(
+		op: MnemosyneMemoryEditOperation,
+		id: string,
+		options: MnemosyneMemoryEditOptions = {},
+	): MnemosyneMemoryEditResult {
+		const targets = dedupeScopedTargets([
+			this.scoped.retain,
+			...this.scoped.recall,
+			...(this.scoped.global ? [this.scoped.global] : []),
+		]);
+		let ineligible: MnemosyneMemoryEditResult | undefined;
+		for (const target of targets) {
+			const row = target.memory.get(id) as MnemosyneStoredMemoryRow | null;
+			if (!row) continue;
+			const store = row.memory_store === "episodic" ? "episodic" : "working";
+			const resultContext = { bank: target.bank, store };
+			if ((op === "update" || op === "forget") && store !== "working") {
+				ineligible ??= { status: "not_found", ...resultContext };
+				continue;
+			}
+			if (op === "update") {
+				if (target.memory.update(id, options.content ?? null, options.importance ?? null)) {
+					return { status: "updated", ...resultContext };
+				}
+				ineligible ??= { status: "not_found", ...resultContext };
+				continue;
+			}
+			if (op === "forget") {
+				if (target.memory.forget(id)) return { status: "deleted", ...resultContext };
+				ineligible ??= { status: "not_found", ...resultContext };
+				continue;
+			}
+			if (target.memory.beam.invalidate(id, options.replacementId ?? null)) {
+				return { status: "invalidated", ...resultContext };
+			}
+			ineligible ??= { status: "not_found", ...resultContext };
+		}
+		return ineligible ?? { status: "not_found" };
+	}
+
+	formatScopedRecallWithIds(results: readonly RecallResult[]): string {
+		if (results.length === 0) return "";
+		const lines = results.map(result => {
+			const id = result.id ? ` (id: ${result.id})` : " (id unavailable)";
+			const source = result.source ? ` [${result.source}]` : "";
+			const date = result.timestamp ? ` (${result.timestamp.slice(0, 10)})` : "";
+			const score = result.score ?? result.importance;
+			const confidence = typeof score === "number" ? ` c:${score.toFixed(1)}` : "";
+			return `- ${result.content}${id}${source}${date}${confidence}`;
+		});
+		return lines.join("\n\n");
+	}
+
 
 	collectScopedRecallResults(query: string): RecallResult[] {
 		const merged: RecallResult[] = [];
@@ -311,10 +385,23 @@ function resolveScopedBanks(config: MnemosyneBackendConfig): {
 }
 
 export function getMnemosyneScopedDbPaths(config: MnemosyneBackendConfig): readonly string[] {
+	return getMnemosyneScopedBanks(config).map(bank => resolveBankDbPath(config, bank));
+}
+
+export function getMnemosyneScopedBanks(config: MnemosyneBackendConfig): readonly string[] {
 	const banks = resolveScopedBanks(config);
-	return uniqueBanks([banks.retainBank, banks.globalBank, ...banks.recallBanks]).map(bank =>
-		resolveBankDbPath(config, bank),
-	);
+	return uniqueBanks([banks.retainBank, banks.globalBank, ...banks.recallBanks]);
+}
+
+function dedupeScopedTargets(targets: readonly MnemosyneScopedMemory[]): readonly MnemosyneScopedMemory[] {
+	const seen = new Set<string>();
+	const unique: MnemosyneScopedMemory[] = [];
+	for (const target of targets) {
+		if (seen.has(target.bank)) continue;
+		seen.add(target.bank);
+		unique.push(target);
+	}
+	return unique;
 }
 
 function uniqueBanks(banks: readonly string[]): readonly string[] {

@@ -1,5 +1,8 @@
 import { rm } from "node:fs/promises";
 import * as path from "node:path";
+import { inspectDatabase, type DiagnosticSummary } from "@oh-my-pi/pi-mnemosyne/diagnose";
+import { BankManager } from "@oh-my-pi/pi-mnemosyne/core";
+import { Mnemosyne } from "@oh-my-pi/pi-mnemosyne";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
@@ -13,11 +16,13 @@ import {
 	truncateApproxTokens,
 } from "./config";
 import {
+	getMnemosyneScopedBanks,
 	getMnemosyneScopedDbPaths,
 	getMnemosyneSessionState,
 	MnemosyneSessionState,
 	setMnemosyneSessionState,
 } from "./state";
+import { shortenPath } from "../tools/render-utils";
 
 const STATIC_INSTRUCTIONS = [
 	"# Memory",
@@ -110,11 +115,140 @@ export const mnemosyneBackend: MemoryBackend = {
 		}
 	},
 
+	async stats(agentDir, _cwd, session): Promise<string | undefined> {
+		const { targets, owned } = createStatsTargets(agentDir, session);
+		try {
+			if (targets.length === 0) return undefined;
+			return renderMnemosyneStats(targets);
+		} finally {
+			for (const memory of owned) memory.close();
+		}
+	},
+
+	async diagnose(agentDir, _cwd, session): Promise<string | undefined> {
+		const state = getMnemosyneSessionState(session);
+		const config = state?.config ?? (session ? loadMnemosyneConfig(session.settings, agentDir) : undefined);
+		if (!config) return undefined;
+		const banks = getMnemosyneScopedBanks(config);
+		const dbPaths = getMnemosyneScopedDbPaths(config);
+		const summaries = dbPaths.map((dbPath, index) => ({
+			bank: banks[index] ?? "unknown",
+			summary: inspectDatabase({ dbPath, initialize: false }),
+		}));
+		return renderMnemosyneDiagnostics(summaries);
+	},
+
 	async preCompactionContext(messages, _settings, session): Promise<string | undefined> {
 		const state = getMnemosyneSessionState(session);
 		return await state?.recallForCompaction(messages);
 	},
 };
+
+interface MnemosyneStatsTarget {
+	bank: string;
+	memory: Mnemosyne;
+}
+
+function createStatsTargets(
+	agentDir: string,
+	session: AgentSession | undefined,
+): { targets: MnemosyneStatsTarget[]; owned: Mnemosyne[] } {
+	const state = getMnemosyneSessionState(session);
+	if (state) {
+		return {
+			targets: dedupeStatsTargets([state.getScopedRetainTarget(), ...state.getScopedRecallTargets()]),
+			owned: [],
+		};
+	}
+	if (!session) return { targets: [], owned: [] };
+	const config = loadMnemosyneConfig(session.settings, agentDir);
+	const targets = getMnemosyneScopedBanks(config).map(bank => ({
+		bank,
+		memory: createStatsMemory(config, bank),
+	}));
+	return { targets, owned: targets.map(target => target.memory) };
+}
+
+function createStatsMemory(config: MnemosyneBackendConfig, bank: string): Mnemosyne {
+	const providerOptions = config.providerOptions as Record<string, unknown>;
+	return new Mnemosyne({
+		dbPath: resolveBankDbPath(config, bank),
+		bank,
+		sessionId: bank,
+		authorId: "coding-agent",
+		authorType: "agent",
+		channelId: bank,
+		...providerOptions,
+	} as ConstructorParameters<typeof Mnemosyne>[0]);
+}
+
+function resolveBankDbPath(config: MnemosyneBackendConfig, bank: string): string {
+	const sharedBank = config.globalBank ?? config.baseBank ?? "default";
+	if (bank === sharedBank) return config.dbPath;
+	return new BankManager(path.dirname(config.dbPath)).getBankDbPath(bank);
+}
+
+function dedupeStatsTargets(targets: readonly MnemosyneStatsTarget[]): MnemosyneStatsTarget[] {
+	const seen = new Set<string>();
+	const unique: MnemosyneStatsTarget[] = [];
+	for (const target of targets) {
+		if (seen.has(target.bank)) continue;
+		seen.add(target.bank);
+		unique.push(target);
+	}
+	return unique;
+}
+
+function renderMnemosyneStats(targets: readonly MnemosyneStatsTarget[]): string {
+	const lines = [
+		"# Mnemosyne Memory Stats",
+		"",
+		"| Bank | Working | Episodic | Triples | Last memory | Database |",
+		"|---|---:|---:|---:|---|---|",
+	];
+	for (const target of targets) {
+		const stats = target.memory.getStats();
+		lines.push(
+			`| ${escapeMarkdownTableCell(target.bank)} | ${statCount(stats.beam.working_memory)} | ${statCount(
+				stats.beam.episodic_memory,
+			)} | ${stats.beam.triples.total} | ${escapeMarkdownTableCell(stats.last_memory ?? "never")} | ${escapeMarkdownTableCell(shortenPath(stats.database))} |`,
+		);
+	}
+	return lines.join("\n");
+}
+
+function renderMnemosyneDiagnostics(entries: readonly { bank: string; summary: DiagnosticSummary }[]): string {
+	const lines = [
+		"# Mnemosyne Memory Diagnostics",
+		"",
+		"| Bank | Passed | Failed | Integrity | Database |",
+		"|---|---:|---:|---|---|",
+	];
+	for (const { bank, summary } of entries) {
+		const integrity = summary.entries.find(entry => entry.check === "integrity_check")?.status ?? "unknown";
+		lines.push(
+			`| ${escapeMarkdownTableCell(bank)} | ${summary.checks_passed}/${summary.checks_total} | ${summary.checks_failed} | ${escapeMarkdownTableCell(integrity)} | ${escapeMarkdownTableCell(shortenPath(summary.database))} |`,
+		);
+	}
+	const findings = entries.flatMap(({ bank, summary }) =>
+		summary.key_findings.map(finding => `- ${bank}: ${finding}`),
+	);
+	lines.push("", "## Key Findings");
+	lines.push(...(findings.length > 0 ? findings : ["- none"]));
+	return lines.join("\n");
+}
+
+function statCount(value: unknown): number {
+	if (typeof value !== "object" || value === null) return 0;
+	const record = value as { total?: unknown; count?: unknown };
+	if (typeof record.total === "number") return record.total;
+	if (typeof record.count === "number") return record.count;
+	return 0;
+}
+
+function escapeMarkdownTableCell(value: string): string {
+	return value.replaceAll("|", "\\|").replaceAll("\n", " ");
+}
 
 async function loadMnemosyneConfigWithProviders(
 	settings: MemoryBackendStartOptions["settings"],

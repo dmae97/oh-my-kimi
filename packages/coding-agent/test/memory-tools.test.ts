@@ -24,6 +24,7 @@ import {
 	setMnemosyneSessionState,
 } from "@oh-my-pi/pi-coding-agent/mnemosyne/state";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
+import { MemoryEditTool } from "@oh-my-pi/pi-coding-agent/tools/memory-edit";
 import { MemoryRecallTool } from "@oh-my-pi/pi-coding-agent/tools/memory-recall";
 import { MemoryReflectTool } from "@oh-my-pi/pi-coding-agent/tools/memory-reflect";
 import { MemoryRetainTool } from "@oh-my-pi/pi-coding-agent/tools/memory-retain";
@@ -214,20 +215,24 @@ describe("Mnemosyne tool factories", () => {
 		}
 	});
 
-	it("retain/recall/reflect factories return null when memory.backend !== mnemosyne", () => {
-		const settings = Settings.isolated({ "memory.backend": "local", "memories.enabled": false });
-		const session = makeSession(settings);
-		expect(MemoryRetainTool.createIf(session)).toBeNull();
-		expect(MemoryRecallTool.createIf(session)).toBeNull();
-		expect(MemoryReflectTool.createIf(session)).toBeNull();
+	it("memory tool factories gate on supported backends", () => {
+		const offSettings = Settings.isolated({ "memory.backend": "off", "memories.enabled": false });
+		const hindsightSettings = Settings.isolated({ "memory.backend": "hindsight" });
+		const localSession = makeSession(Settings.isolated({ "memory.backend": "local", "memories.enabled": false }));
+		expect(MemoryRetainTool.createIf(localSession)).toBeNull();
+		expect(MemoryRecallTool.createIf(localSession)).toBeNull();
+		expect(MemoryReflectTool.createIf(localSession)).toBeNull();
+		expect(MemoryEditTool.createIf(makeSession(offSettings))).toBeNull();
+		expect(MemoryEditTool.createIf(makeSession(hindsightSettings))).toBeNull();
 	});
 
-	it("retain/recall/reflect factories return tool instances when memory.backend === mnemosyne", () => {
+	it("retain/recall/reflect/edit factories return tool instances when memory.backend === mnemosyne", () => {
 		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
 		const session = makeSession(settings);
 		expect(MemoryRetainTool.createIf(session)).toBeInstanceOf(MemoryRetainTool);
 		expect(MemoryRecallTool.createIf(session)).toBeInstanceOf(MemoryRecallTool);
 		expect(MemoryReflectTool.createIf(session)).toBeInstanceOf(MemoryReflectTool);
+		expect(MemoryEditTool.createIf(session)).toBeInstanceOf(MemoryEditTool);
 	});
 });
 
@@ -656,6 +661,7 @@ describe("recall.execute (Mnemosyne backend)", () => {
 		const result = await recallTool.execute("call-mnemosyne-query", { query: "editor preferences" });
 
 		const text = (result.content[0] as { text: string }).text;
+		expect(text).toMatch(/\(id: [^)]+\)/);
 		expect(text).toContain("Found 1 relevant memory");
 		expect(text).toContain("the user prefers dark mode in their editor");
 	});
@@ -730,6 +736,119 @@ describe("recall.execute (Mnemosyne backend)", () => {
 		await expect(tool.execute("call-mnemosyne-no-state", { query: "anything" })).rejects.toThrow(/not initialised/i);
 	});
 });
+
+describe("memory_edit.execute (Mnemosyne backend)", () => {
+	beforeEach(() => {
+		resetSettingsForTest();
+		registeredMnemosyneState = undefined;
+		tempDbPath = undefined;
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		registeredMnemosyneState?.dispose();
+		registeredMnemosyneState = undefined;
+		if (tempDbPath) {
+			try {
+				const tempDir = path.dirname(tempDbPath);
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {}
+			tempDbPath = undefined;
+		}
+	});
+
+	async function retainAndRecallId(settings: Settings, content: string, query: string): Promise<string> {
+		await MemoryRetainTool.createIf(makeSession(settings))!.execute("call-memory-edit-store", {
+			items: [{ content }],
+		});
+		const id = registeredMnemosyneState?.recallResultsScoped(query)[0]?.id;
+		expect(id).toBeString();
+		return id!;
+	}
+
+	it("updates a working memory by recall id", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		registerMnemosyneState();
+		const id = await retainAndRecallId(settings, "editor accent color is blue", "accent color");
+
+		const result = await MemoryEditTool.createIf(makeSession(settings))!.execute("call-memory-edit-update", {
+			op: "update",
+			id,
+			content: "editor accent color is green",
+			importance: 2,
+		});
+
+		expect((result.content[0] as { text: string }).text).toContain("updated");
+		const recalled = registeredMnemosyneState!.recallResultsScoped("accent color");
+		expect(recalled.map(memory => memory.content)).toContain("editor accent color is green");
+	});
+
+	it("forgets a working memory by recall id", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		registerMnemosyneState();
+		const id = await retainAndRecallId(settings, "temporary deployment note can be deleted", "deployment note");
+
+		const result = await MemoryEditTool.createIf(makeSession(settings))!.execute("call-memory-edit-forget", {
+			op: "forget",
+			id,
+		});
+
+		expect((result.content[0] as { text: string }).text).toContain("deleted");
+		const recalled = registeredMnemosyneState!.recallResultsScoped("deployment note");
+		expect(recalled.map(memory => memory.content)).not.toContain("temporary deployment note can be deleted");
+	});
+
+	it("invalidates a working memory by recall id", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		registerMnemosyneState();
+		const id = await retainAndRecallId(settings, "stale api key rotation policy", "api key rotation");
+
+		const result = await MemoryEditTool.createIf(makeSession(settings))!.execute("call-memory-edit-invalidate", {
+			op: "invalidate",
+			id,
+		});
+
+		expect((result.content[0] as { text: string }).text).toContain("invalidated");
+		const recalled = registeredMnemosyneState!.recallResultsScoped("api key rotation");
+		expect(recalled.map(memory => memory.content)).not.toContain("stale api key rotation policy");
+	});
+
+	it("reports not_found for unknown ids", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		registerMnemosyneState();
+
+		const result = await MemoryEditTool.createIf(makeSession(settings))!.execute("call-memory-edit-missing", {
+			op: "forget",
+			id: "missing-memory-id",
+		});
+
+		expect(result.details).toEqual({ status: "not_found" });
+		expect((result.content[0] as { text: string }).text).toContain("not found");
+	});
+
+	it("throws when no per-session Mnemosyne state is registered", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		const tool = MemoryEditTool.createIf(makeSession(settings))!;
+		await expect(tool.execute("call-memory-edit-no-state", { op: "forget", id: "anything" })).rejects.toThrow(
+			/not initialised/i,
+		);
+	});
+
+	it("renders backend stats and diagnostics for scoped banks", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
+		const state = registerMnemosyneState();
+		await retainAndRecallId(settings, "stats fixture memory for mnemosyne", "stats fixture");
+
+		const stats = await mnemosyneBackend.stats?.("/tmp/agent", "/tmp", state.session);
+		const diagnose = await mnemosyneBackend.diagnose?.("/tmp/agent", "/tmp", state.session);
+
+		expect(stats).toContain("# Mnemosyne Memory Stats");
+		expect(stats).toContain("test-bank");
+		expect(diagnose).toContain("# Mnemosyne Memory Diagnostics");
+		expect(diagnose).toContain("test-bank");
+	});
+});
+
 
 describe("reflect.execute", () => {
 	beforeEach(() => {

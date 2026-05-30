@@ -45,7 +45,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 							details: {},
 						};
 					}
-					const formatted = state.formatContextScoped(results);
+					const formatted = state.formatScopedRecallWithIds(results);
 					return {
 						content: [
 							{

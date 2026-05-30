@@ -205,6 +205,31 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("call `search_tool_bm25` before concluding no such tool exists");
 	});
 
+	test("buildSystemPrompt gates memory root URL advertisement", async () => {
+		const baseOptions = {
+			cwd: os.tmpdir(),
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read"],
+		};
+
+		const enabled = await buildSystemPrompt({
+			...baseOptions,
+			memoryRootEnabled: true,
+		});
+		const disabled = await buildSystemPrompt({
+			...baseOptions,
+			memoryRootEnabled: false,
+		});
+		const omitted = await buildSystemPrompt(baseOptions);
+
+		expect(enabled.systemPrompt.join("\n\n")).toContain("memory://root");
+		expect(disabled.systemPrompt.join("\n\n")).not.toContain("memory://root");
+		expect(omitted.systemPrompt.join("\n\n")).not.toContain("memory://root");
+	});
+
+
 	test("buildSystemPrompt keeps system and project as separate ordered blocks with date context in project", async () => {
 		await withTempDir(async dir => {
 			const { systemPrompt } = await buildSystemPrompt({
