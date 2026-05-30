@@ -25,6 +25,7 @@
       "@oh-my-pi/pi-agent-core": "15.5.15",
       "@oh-my-pi/pi-ai": "15.5.15",
       "@oh-my-pi/pi-coding-agent": "15.5.15",
+      "@oh-my-pi/pi-mnemosyne": "15.5.15",
       "@oh-my-pi/pi-natives": "15.5.15",
       "@oh-my-pi/pi-tui": "15.5.15",
       "@oh-my-pi/pi-utils": "15.5.15",

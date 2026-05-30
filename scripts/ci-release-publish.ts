@@ -47,6 +47,7 @@ const packages: PublishPackage[] = [
 	{ dir: "packages/natives", kind: "native" },
 	{ dir: "packages/tui", kind: "typescript" },
 	{ dir: "packages/hashline", kind: "typescript" },
+	{ dir: "packages/mnemosyne", kind: "typescript" },
 	{
 		dir: "packages/stats",
 		kind: "typescript",
