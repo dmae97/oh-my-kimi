@@ -74,4 +74,45 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 			else Bun.env.WT_SESSION = originalWtSession;
 		}
 	});
+
+	it("repaints autocomplete updates coalesced with offscreen background mutations", async () => {
+		const originalPlatform = process.platform;
+		const originalWtSession = Bun.env.WT_SESSION;
+		Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+		Bun.env.WT_SESSION = "wt-test";
+		const term = new UnknownViewportTerminal(40, 6);
+		const tui = new TUI(term);
+		const root = new Container();
+		let transcriptCounter = 0;
+		const transcriptLines = () => Array.from({ length: 8 }, (_v, i) => `chat-${i}-${transcriptCounter}`);
+		const transcript = { invalidate() {}, render: () => transcriptLines() };
+		root.addChild(transcript);
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider(new SlashProvider());
+		editor.onAutocompleteUpdate = () => tui.requestRender(false, { allowUnknownViewportMutation: true });
+		root.addChild(editor);
+		tui.addChild(root);
+		tui.setFocus(editor);
+
+		try {
+			tui.start();
+			await settle(term);
+			for (const char of "/mo") {
+				// Bump a background row above the viewport in the same render tick as the
+				// autocomplete prefix change. `diff.firstChanged` will point at the
+				// background row, so the bypass MUST still kick in for the live UI rows.
+				transcriptCounter += 1;
+				term.sendInput(char);
+				await settle(term);
+				const viewport = term.getViewport().join("\n");
+				expect(viewport).toContain(editor.getText());
+			}
+			expect(editor.getText()).toBe("/mo");
+		} finally {
+			tui.stop();
+			Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			if (originalWtSession === undefined) delete Bun.env.WT_SESSION;
+			else Bun.env.WT_SESSION = originalWtSession;
+		}
+	});
 });

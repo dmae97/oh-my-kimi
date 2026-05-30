@@ -84,7 +84,17 @@ export interface Focusable {
 export interface RenderRequestOptions {
 	/** Clear terminal scrollback for intentional transcript replacement. */
 	clearScrollback?: boolean;
-	/** Render visible live UI edits even when Windows cannot report native scrollback position. */
+	/**
+	 * Bypass the unknown-Windows-viewport deferral for this render so the
+	 * caller's intentional live UI mutation reaches the terminal even when
+	 * `Terminal#isNativeViewportAtBottom()` cannot answer.
+	 *
+	 * Use only for renders driven by direct user interaction (autocomplete
+	 * updates, IME, etc.). Any background/offscreen transcript change that
+	 * coalesces into the same frame WILL also bypass the deferral and reach
+	 * native scrollback — that is the trade-off, and the reason ordinary
+	 * `requestRender()` calls must continue to omit this flag.
+	 */
 	allowUnknownViewportMutation?: boolean;
 }
 
@@ -1259,8 +1269,6 @@ export class TUI extends Container {
 		// repainting rewrites old buffer rows with newly bottom-anchored content,
 		// which looks like a jump upward.
 		const naturalViewportTop = Math.max(0, newLines.length - height);
-		const allowUnknownViewportVisibleMutation =
-			allowUnknownViewportMutation && diff.firstChanged !== -1 && diff.firstChanged >= prevViewportTop;
 		if (
 			diff.firstChanged !== -1 &&
 			newLines.length < this.#previousLines.length &&
@@ -1268,16 +1276,14 @@ export class TUI extends Container {
 			!isMultiplexerSession()
 		) {
 			if (widthChanged || heightChanged) {
-				if (
-					this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom(), allowUnknownViewportVisibleMutation)
-				) {
+				if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom(), allowUnknownViewportMutation)) {
 					this.#markNativeScrollbackDirty();
 					return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 				}
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();
-			if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom(), allowUnknownViewportVisibleMutation)) {
+			if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom(), allowUnknownViewportMutation)) {
 				return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 			}
 			return { kind: "viewportRepaint" };
@@ -1309,9 +1315,7 @@ export class TUI extends Container {
 		// through to the diff path so the append handler scrolls them into history.
 		if (widthChanged) {
 			if (diff.firstChanged < prevViewportTop) {
-				if (
-					this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom(), allowUnknownViewportVisibleMutation)
-				) {
+				if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom(), allowUnknownViewportMutation)) {
 					this.#markNativeScrollbackDirty();
 					return { kind: "viewportRepaint" };
 				}
@@ -1326,7 +1330,7 @@ export class TUI extends Container {
 		const structuralMutation = newLines.length !== this.#previousLines.length || diff.firstChanged < prevViewportTop;
 		if (!pureAppend && structuralMutation && !isMultiplexerSession()) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
-			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportVisibleMutation)) {
+			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				this.#markNativeScrollbackDirty();
 				return { kind: "deferredMutation" };
 			}
