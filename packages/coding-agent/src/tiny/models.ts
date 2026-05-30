@@ -101,3 +101,111 @@ export function getTinyTitleModelSpec(key: TinyTitleLocalModelKey): (typeof TINY
 	if (!spec) throw new Error(`Unknown tiny title model: ${key}`);
 	return spec;
 }
+
+/** Default memory model: the online path (the configured smol / remote LLM; no local download). */
+export const ONLINE_MEMORY_MODEL_KEY = "online";
+/** Recommended local model for memory tasks when none is named. */
+export const DEFAULT_MEMORY_LOCAL_MODEL_KEY = "qwen3-1.7b";
+
+/**
+ * Local models for Mnemosyne memory tasks (fact extraction + consolidation).
+ * These are larger (1B-1.7B) than the title models: structured extraction and
+ * faithful summarization need more capacity than 3-6 word titles. All q4, CPU.
+ * Ranking/recipe rationale lives in docs/local-models.md.
+ */
+export const TINY_MEMORY_LOCAL_MODELS = [
+	{
+		key: "qwen3-1.7b",
+		repo: "onnx-community/Qwen3-1.7B-ONNX",
+		dtype: "q4",
+		label: "Qwen3 1.7B",
+		description:
+			"Recommended; most disciplined extraction (ignores chit-chat), good consolidation, about 1.1 GB cached.",
+		contextNote: "Best single-model pick for memory from the CPU experiment.",
+	},
+	{
+		key: "gemma-3-1b",
+		repo: "onnx-community/gemma-3-1b-it-ONNX",
+		dtype: "q4",
+		label: "Gemma 3 1B",
+		description: "Best consolidation/dedup; lighter footprint, but leaks small talk during extraction.",
+		contextNote: "Use when consolidation quality and size matter most.",
+	},
+	{
+		key: "qwen2.5-1.5b",
+		repo: "onnx-community/Qwen2.5-1.5B-Instruct",
+		dtype: "q4",
+		label: "Qwen2.5 1.5B",
+		description: "Best extraction granularity (atomic facts); weaker consolidation.",
+		contextNote: "Use when fine-grained, deduplicatable facts matter more than summaries.",
+	},
+	{
+		key: "lfm2-1.2b",
+		repo: "onnx-community/LFM2-1.2B-ONNX",
+		dtype: "q4",
+		label: "LFM2 1.2B",
+		description: "Fastest load; solid all-rounder, slightly noisier extraction labels.",
+		contextNote: "Use when local startup cost is the priority.",
+	},
+] as const satisfies readonly TinyTitleLocalModelSpec[];
+
+export const TINY_MEMORY_MODEL_VALUES = [
+	ONLINE_MEMORY_MODEL_KEY,
+	"qwen3-1.7b",
+	"gemma-3-1b",
+	"qwen2.5-1.5b",
+	"lfm2-1.2b",
+] as const;
+
+export type TinyMemoryModelKey = (typeof TINY_MEMORY_MODEL_VALUES)[number];
+export type TinyMemoryLocalModelKey = (typeof TINY_MEMORY_LOCAL_MODELS)[number]["key"];
+
+type MissingTinyMemoryModelValue = Exclude<
+	typeof ONLINE_MEMORY_MODEL_KEY | TinyMemoryLocalModelKey,
+	TinyMemoryModelKey
+>;
+type ExtraTinyMemoryModelValue = Exclude<TinyMemoryModelKey, typeof ONLINE_MEMORY_MODEL_KEY | TinyMemoryLocalModelKey>;
+const TINY_MEMORY_MODEL_VALUES_MATCH_REGISTRY: MissingTinyMemoryModelValue extends never
+	? ExtraTinyMemoryModelValue extends never
+		? true
+		: never
+	: never = true;
+void TINY_MEMORY_MODEL_VALUES_MATCH_REGISTRY;
+
+export const TINY_MEMORY_MODEL_OPTIONS = [
+	{
+		value: ONLINE_MEMORY_MODEL_KEY,
+		label: "Online (smol/remote)",
+		description: "Use the configured Mnemosyne LLM mode (smol or remote); no local model download or CPU inference.",
+	},
+	...TINY_MEMORY_LOCAL_MODELS.map(model => ({
+		value: model.key,
+		label: model.label,
+		description: model.description,
+	})),
+] satisfies ReadonlyArray<{ value: TinyMemoryModelKey; label: string; description: string }>;
+
+export function isTinyMemoryLocalModelKey(value: string): value is TinyMemoryLocalModelKey {
+	return TINY_MEMORY_LOCAL_MODELS.some(model => model.key === value);
+}
+
+export function getTinyMemoryModelSpec(key: TinyMemoryLocalModelKey): (typeof TINY_MEMORY_LOCAL_MODELS)[number] {
+	const spec = TINY_MEMORY_LOCAL_MODELS.find(model => model.key === key);
+	if (!spec) throw new Error(`Unknown tiny memory model: ${key}`);
+	return spec;
+}
+
+/** Any local model key (title or memory), used by the shared inference worker. */
+export type TinyLocalModelKey = TinyTitleLocalModelKey | TinyMemoryLocalModelKey;
+
+/** Resolve a local model spec by key across both the title and memory registries. */
+export function getTinyLocalModelSpec(key: string): TinyTitleLocalModelSpec | undefined {
+	return (
+		TINY_TITLE_LOCAL_MODELS.find(model => model.key === key) ??
+		TINY_MEMORY_LOCAL_MODELS.find(model => model.key === key)
+	);
+}
+
+export function isTinyLocalModelKey(value: string): value is TinyLocalModelKey {
+	return getTinyLocalModelSpec(value) !== undefined;
+}

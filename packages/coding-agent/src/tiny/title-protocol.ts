@@ -1,4 +1,4 @@
-import type { TinyTitleLocalModelKey } from "./models";
+import type { TinyLocalModelKey, TinyTitleLocalModelKey } from "./models";
 
 export type TinyTitleProgressStatus =
 	| "initiate"
@@ -15,7 +15,7 @@ export interface TinyTitleProgressFileState {
 }
 
 export interface TinyTitleProgressEvent {
-	modelKey: TinyTitleLocalModelKey;
+	modelKey: TinyLocalModelKey;
 	status: TinyTitleProgressStatus;
 	name?: string;
 	file?: string;
@@ -30,12 +30,14 @@ export interface TinyTitleProgressEvent {
 export type TinyTitleWorkerInbound =
 	| { type: "ping"; id: string }
 	| { type: "generate"; id: string; modelKey: TinyTitleLocalModelKey; message: string }
-	| { type: "download"; id: string; modelKey: TinyTitleLocalModelKey }
+	| { type: "complete"; id: string; modelKey: TinyLocalModelKey; prompt: string; maxTokens?: number }
+	| { type: "download"; id: string; modelKey: TinyLocalModelKey }
 	| { type: "close" };
 
 export type TinyTitleWorkerOutbound =
 	| { type: "pong"; id: string }
 	| { type: "title"; id: string; title: string | null }
+	| { type: "completion"; id: string; text: string | null }
 	| { type: "downloaded"; id: string }
 	| { type: "error"; id: string; error: string }
 	| { type: "progress"; id: string; event: TinyTitleProgressEvent }

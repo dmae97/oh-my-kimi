@@ -1,5 +1,12 @@
 import { isCompiledBinary, logger } from "@oh-my-pi/pi-utils";
-import { isTinyTitleLocalModelKey, type TinyTitleLocalModelKey } from "./models";
+import {
+	isTinyLocalModelKey,
+	isTinyMemoryLocalModelKey,
+	isTinyTitleLocalModelKey,
+	type TinyLocalModelKey,
+	type TinyMemoryLocalModelKey,
+	type TinyTitleLocalModelKey,
+} from "./models";
 import type { TinyTitleProgressEvent, TinyTitleWorkerInbound, TinyTitleWorkerOutbound } from "./title-protocol";
 
 interface WorkerHandle {
@@ -11,7 +18,8 @@ interface WorkerHandle {
 
 type PendingRequest =
 	| { kind: "generate"; modelKey: TinyTitleLocalModelKey; resolve: (title: string | null) => void }
-	| { kind: "download"; modelKey: TinyTitleLocalModelKey; resolve: (ok: boolean) => void };
+	| { kind: "complete"; modelKey: TinyMemoryLocalModelKey; resolve: (text: string | null) => void }
+	| { kind: "download"; modelKey: TinyLocalModelKey; resolve: (ok: boolean) => void };
 
 export interface TinyTitleDownloadOptions {
 	signal?: AbortSignal;
@@ -145,8 +153,44 @@ export class TinyTitleClient {
 		}
 	}
 
+	async complete(
+		modelKey: string,
+		prompt: string,
+		options: { maxTokens?: number; signal?: AbortSignal } = {},
+	): Promise<string | null> {
+		if (!isTinyMemoryLocalModelKey(modelKey)) return null;
+		if (options.signal?.aborted) return null;
+
+		try {
+			const worker = this.#ensureWorker();
+			const id = String(++this.#nextRequestId);
+			const { promise, resolve } = Promise.withResolvers<string | null>();
+			this.#pending.set(id, { kind: "complete", modelKey, resolve });
+			const abort = (): void => {
+				const pending = this.#pending.get(id);
+				if (pending?.kind !== "complete") return;
+				this.#pending.delete(id);
+				pending.resolve(null);
+			};
+			options.signal?.addEventListener("abort", abort, { once: true });
+			try {
+				worker.send({ type: "complete", id, modelKey, prompt, maxTokens: options.maxTokens });
+				return await promise;
+			} finally {
+				options.signal?.removeEventListener("abort", abort);
+				this.#pending.delete(id);
+			}
+		} catch (error) {
+			logger.debug("tiny-model: local completion failed", {
+				modelKey,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return null;
+		}
+	}
+
 	async downloadModel(modelKey: string, options: TinyTitleDownloadOptions = {}): Promise<boolean> {
-		if (!isTinyTitleLocalModelKey(modelKey)) return false;
+		if (!isTinyLocalModelKey(modelKey)) return false;
 		if (options.signal?.aborted) return false;
 
 		const unsubscribe = options.onProgress ? this.onProgress(options.onProgress) : undefined;
@@ -189,7 +233,7 @@ export class TinyTitleClient {
 		this.#unsubscribeError = null;
 		for (const pending of this.#pending.values()) {
 			this.#emitProgress({ modelKey: pending.modelKey, status: "error" });
-			if (pending.kind === "generate") pending.resolve(null);
+			if (pending.kind === "generate" || pending.kind === "complete") pending.resolve(null);
 			else pending.resolve(false);
 		}
 		this.#pending.clear();
@@ -232,9 +276,13 @@ export class TinyTitleClient {
 			if (pending.kind === "download") pending.resolve(true);
 			return;
 		}
+		if (message.type === "completion") {
+			if (pending.kind === "complete") pending.resolve(message.text);
+			return;
+		}
 		logger.debug("tiny-title: worker returned error", { error: message.error });
 		this.#emitProgress({ modelKey: pending.modelKey, status: "error" });
-		if (pending.kind === "generate") pending.resolve(null);
+		if (pending.kind === "generate" || pending.kind === "complete") pending.resolve(null);
 		else pending.resolve(false);
 	}
 
@@ -246,7 +294,7 @@ export class TinyTitleClient {
 		logger.warn("tiny-title: worker error", { error: error.message });
 		for (const pending of this.#pending.values()) {
 			this.#emitProgress({ modelKey: pending.modelKey, status: "error" });
-			if (pending.kind === "generate") pending.resolve(null);
+			if (pending.kind === "generate" || pending.kind === "complete") pending.resolve(null);
 			else pending.resolve(false);
 		}
 		this.#pending.clear();
@@ -255,6 +303,9 @@ export class TinyTitleClient {
 }
 
 export const tinyTitleClient = new TinyTitleClient();
+
+/** Alias for the shared tiny-model worker client (titles + memory completions). */
+export const tinyModelClient = tinyTitleClient;
 
 export async function shutdownTinyTitleClient(): Promise<void> {
 	await tinyTitleClient.terminate();

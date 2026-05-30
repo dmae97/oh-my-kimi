@@ -125,7 +125,8 @@ function memoryLines(memories: readonly string[]): string {
 }
 
 function formatSleepPrompt(memories: readonly string[], source = ""): string | null {
-	const template = sleepPrompt();
+	const override = getMnemosyneRuntimeOptions()?.llm?.consolidationPrompt;
+	const template = override !== undefined && override !== "" ? override : sleepPrompt();
 	if (template === "") {
 		return null;
 	}
@@ -151,7 +152,7 @@ export function buildPrompt(memories: readonly string[], source = ""): string {
 	return `/no_think\n${header}\n\n${memoryLines(memories)}\n\nSummary:`;
 }
 
-async function callConfiguredCompletion(
+export async function callConfiguredCompletion(
 	prompt: string,
 	temperature: number,
 	opts: MnemosyneLlmCompleteOptions = {},
@@ -214,7 +215,7 @@ function hostBackendWillHandleCall(): boolean {
 	return llmEnabled() && hostLlmEnabled() && getHostLlmBackend() !== null;
 }
 
-function configuredLlmWillHandleCall(): boolean {
+export function configuredLlmWillHandleCall(): boolean {
 	return llmEnabled() && (activeCustomCompletion() !== undefined || activePiAiModel() !== undefined);
 }
 

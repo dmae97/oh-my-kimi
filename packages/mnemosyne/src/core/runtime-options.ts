@@ -34,6 +34,10 @@ export interface MnemosyneLlmRuntimeOptions {
 	model?: string | Model<Api>;
 	maxTokens?: number;
 	complete?: MnemosyneLlmCompletion;
+	/** Override the fact-extraction prompt template ({text}/{lang}). Used to feed small local models a friendlier format. */
+	extractionPrompt?: string;
+	/** Override the consolidation/sleep prompt template ({memories}/{source}/{memory_count}). */
+	consolidationPrompt?: string;
 }
 
 export interface MnemosyneRuntimeOptions {
@@ -56,6 +60,8 @@ export interface ResolvedMnemosyneLlmRuntimeOptions {
 	model?: string | Model<Api>;
 	maxTokens?: number;
 	complete?: MnemosyneLlmCompletion;
+	extractionPrompt?: string;
+	consolidationPrompt?: string;
 }
 
 export interface ResolvedMnemosyneRuntimeOptions {

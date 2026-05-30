@@ -194,13 +194,17 @@ function resolveRuntimeOptions(options: MnemosyneOptions): ResolvedMnemosyneRunt
 		const llmApiKey = options.llmApiKey ?? nestedLlm?.apiKey;
 		const llmMaxTokens = nestedLlm?.maxTokens;
 		const llmComplete = nestedLlm?.complete;
+		const llmExtractionPrompt = nestedLlm?.extractionPrompt;
+		const llmConsolidationPrompt = nestedLlm?.consolidationPrompt;
 		if (
 			llmEnabled !== undefined ||
 			llmBaseUrl !== undefined ||
 			llmApiKey !== undefined ||
 			llmModel !== undefined ||
 			llmMaxTokens !== undefined ||
-			llmComplete !== undefined
+			llmComplete !== undefined ||
+			llmExtractionPrompt !== undefined ||
+			llmConsolidationPrompt !== undefined
 		) {
 			llm = {
 				enabled: llmEnabled,
@@ -209,6 +213,8 @@ function resolveRuntimeOptions(options: MnemosyneOptions): ResolvedMnemosyneRunt
 				model: llmModel,
 				maxTokens: llmMaxTokens,
 				complete: llmComplete,
+				extractionPrompt: llmExtractionPrompt,
+				consolidationPrompt: llmConsolidationPrompt,
 			};
 		}
 	}

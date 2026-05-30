@@ -1,6 +1,7 @@
 import { getDiagnostics, safeForLog } from "./extraction/diagnostics";
 import { callHostLlm, getHostLlmBackend } from "./llm-backends";
-import { callLocalLlm, callRemoteLlm, cleanOutput, llmAvailable } from "./local-llm";
+import { callLocalLlm, callConfiguredCompletion, callRemoteLlm, cleanOutput, configuredLlmWillHandleCall, llmAvailable } from "./local-llm";
+import { getMnemosyneRuntimeOptions } from "./runtime-options";
 
 const TRUE_VALUES: Record<string, true> = { "1": true, true: true, yes: true, on: true };
 
@@ -64,7 +65,8 @@ User message: {text}
 Extraction:`;
 
 export function buildExtractionPrompt(text: string, detectedLang = "en"): string {
-	return EXTRACTION_PROMPT_TEMPLATE.split("{text}").join(text).split("{lang}").join(detectedLang);
+	const template = getMnemosyneRuntimeOptions()?.llm?.extractionPrompt ?? EXTRACTION_PROMPT_TEMPLATE;
+	return template.split("{text}").join(text).split("{lang}").join(detectedLang);
 }
 function stripFence(raw: string): string {
 	let s = raw.trim();
@@ -228,6 +230,32 @@ export async function extractFacts(text: string | null | undefined): Promise<str
 		return [];
 	}
 	const prompt = buildExtractionPrompt(text);
+
+	// Configured completion (host-injected runtime LLM, e.g. the coding-agent's smol
+	// or a local on-device model). Mirrors consolidation's precedence: when a
+	// complete() fn is wired, it is the chosen path. Extraction is deterministic
+	// (temperature 0) so re-ingesting the same content does not create near-dupes.
+	if (configuredLlmWillHandleCall()) {
+		diag.recordAttempt("host");
+		try {
+			const raw = await callConfiguredCompletion(prompt, 0, { maxTokens: llmMaxTokens() });
+			if (typeof raw === "string" && raw.trim() !== "") {
+				const facts = parseFacts(raw);
+				if (facts.length > 0) {
+					diag.recordSuccess("host", facts.length);
+					diag.recordCall({ succeeded: true });
+					return facts;
+				}
+			}
+			diag.recordNoOutput("host");
+		} catch (exc) {
+			diag.recordFailure("host", exc, "configured_completion_raised");
+			diag.recordCall({ succeeded: false });
+			console.warn(`extractFacts: configured completion raised: ${safeForLog(exc)}`);
+			return [];
+		}
+		return localFallback(prompt, text, diag);
+	}
 
 	try {
 		const [attempted, hostText] = await tryHostExtraction(prompt);

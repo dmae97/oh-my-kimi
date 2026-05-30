@@ -11,7 +11,7 @@ import type {
 import { getTinyModelsCacheDir, isCompiledBinary, prompt } from "@oh-my-pi/pi-utils";
 import packageJson from "../../package.json" with { type: "json" };
 import tinyTitleSystemPrompt from "../prompts/system/tiny-title-system.md" with { type: "text" };
-import { getTinyTitleModelSpec, type TinyTitleLocalModelKey } from "./models";
+import { getTinyLocalModelSpec, type TinyLocalModelKey, type TinyTitleLocalModelKey } from "./models";
 import { formatTitleUserMessage, normalizeGeneratedTitle } from "./text";
 import type {
 	TinyTitleProgressEvent,
@@ -24,6 +24,7 @@ const TITLE_PREFILL = "<title>";
 const TITLE_CLOSE = "</title>";
 const TITLE_MAX_NEW_TOKENS = 20;
 const STOP_DECODE_WINDOW_TOKENS = 32;
+const MEMORY_COMPLETION_MAX_NEW_TOKENS = 256;
 const TINY_TITLE_SYSTEM_PROMPT = prompt.render(tinyTitleSystemPrompt);
 const TRANSFORMERS_PACKAGE = "@huggingface/transformers";
 const sourceRequire = createRequire(import.meta.url);
@@ -51,7 +52,7 @@ interface TransformersRuntime {
 	) => Promise<TextGenerationPipeline>;
 }
 
-const pipelines = new Map<TinyTitleLocalModelKey, Promise<TextGenerationPipeline>>();
+const pipelines = new Map<TinyLocalModelKey, Promise<TextGenerationPipeline>>();
 
 function resolveTransformersVersionSpec(): string {
 	const manifest = packageJson as {
@@ -175,7 +176,7 @@ async function runRuntimeInstall(runtimeDir: string): Promise<void> {
 function sendRuntimeInstallProgress(
 	transport: TinyTitleTransport,
 	requestId: string,
-	modelKey: TinyTitleLocalModelKey,
+	modelKey: TinyLocalModelKey,
 	status: "initiate" | "download" | "done",
 ): void {
 	transport.send({
@@ -192,7 +193,7 @@ function sendRuntimeInstallProgress(
 async function ensureCompiledTransformersRuntime(
 	transport: TinyTitleTransport,
 	requestId: string,
-	modelKey: TinyTitleLocalModelKey,
+	modelKey: TinyLocalModelKey,
 ): Promise<string> {
 	const runtimeDir = getTinyTitleRuntimeDir();
 	if (await isCompiledRuntimeInstalled(runtimeDir)) return runtimeDir;
@@ -221,7 +222,7 @@ function configureTransformers(transformers: TransformersRuntime): TransformersR
 async function loadTransformers(
 	transport: TinyTitleTransport,
 	requestId: string,
-	modelKey: TinyTitleLocalModelKey,
+	modelKey: TinyLocalModelKey,
 ): Promise<TransformersRuntime> {
 	if (transformersRuntime) return transformersRuntime;
 	transformersRuntime = (async () => {
@@ -304,13 +305,14 @@ function sendProgress(
 }
 
 async function loadPipeline(
-	modelKey: TinyTitleLocalModelKey,
+	modelKey: TinyLocalModelKey,
 	transport: TinyTitleTransport,
 	requestId: string,
 ): Promise<TextGenerationPipeline> {
+	const spec = getTinyLocalModelSpec(modelKey);
+	if (!spec) throw new Error(`Unknown tiny local model: ${modelKey}`);
 	const cached = pipelines.get(modelKey);
 	if (cached) {
-		const spec = getTinyTitleModelSpec(modelKey);
 		void cached
 			.then(() => {
 				transport.send({
@@ -323,7 +325,6 @@ async function loadPipeline(
 		return cached;
 	}
 
-	const spec = getTinyTitleModelSpec(modelKey);
 	const transformers = await loadTransformers(transport, requestId, modelKey);
 	const startedAt = performance.now();
 	const loaded = transformers
@@ -334,7 +335,7 @@ async function loadPipeline(
 		})
 		.then(
 			generator => {
-				sendLog(transport, "debug", "tiny-title: local model loaded", {
+				sendLog(transport, "debug", "tiny-model: local model loaded", {
 					modelKey,
 					repo: spec.repo,
 					elapsedMs: Math.round(performance.now() - startedAt),
@@ -396,6 +397,41 @@ async function generateTitle(
 	return extractTinyTitle(output[0]?.generated_text ?? "");
 }
 
+function buildCompletionPrompt(generator: TextGenerationPipeline, promptText: string): string {
+	const chat = [{ role: "user", content: promptText }];
+	return `${generator.tokenizer.apply_chat_template(chat, {
+		add_generation_prompt: true,
+		tokenize: false,
+		enable_thinking: false,
+	})}`;
+}
+
+/**
+ * Generic single-turn completion used by Mnemosyne memory tasks (fact extraction
+ * and consolidation). The caller (Mnemosyne) supplies the full task prompt; we
+ * wrap it as the user turn, decode greedily, and return the raw text for the
+ * caller's own parser. Output is capped to keep CPU latency bounded.
+ */
+async function generateCompletion(
+	transport: TinyTitleTransport,
+	requestId: string,
+	modelKey: TinyLocalModelKey,
+	promptText: string,
+	maxTokens: number | undefined,
+): Promise<string | null> {
+	const generator = await loadPipeline(modelKey, transport, requestId);
+	const text = buildCompletionPrompt(generator, promptText);
+	const requested = maxTokens ?? MEMORY_COMPLETION_MAX_NEW_TOKENS;
+	const maxNewTokens = Math.min(Math.max(1, requested), MEMORY_COMPLETION_MAX_NEW_TOKENS);
+	const output = (await generator(text, {
+		max_new_tokens: maxNewTokens,
+		do_sample: false,
+		return_full_text: false,
+	})) as TextGenerationStringOutput;
+	const generated = (output[0]?.generated_text ?? "").trim();
+	return generated === "" ? null : generated;
+}
+
 function releasePipelines(): void {
 	// Intentionally NOT calling `pipeline.dispose()`. transformers.js disposes the
 	// underlying onnxruntime InferenceSession, freeing native memory that Bun's
@@ -408,7 +444,7 @@ function releasePipelines(): void {
 
 function enqueueRequest(
 	transport: TinyTitleTransport,
-	request: Extract<TinyTitleWorkerInbound, { type: "generate" | "download" }>,
+	request: Extract<TinyTitleWorkerInbound, { type: "generate" | "complete" | "download" }>,
 ): void {
 	generateQueue = generateQueue.then(
 		async () => {
@@ -422,12 +458,17 @@ function enqueueRequest(
 
 async function handleQueuedRequest(
 	transport: TinyTitleTransport,
-	request: Extract<TinyTitleWorkerInbound, { type: "generate" | "download" }>,
+	request: Extract<TinyTitleWorkerInbound, { type: "generate" | "complete" | "download" }>,
 ): Promise<void> {
 	try {
 		if (request.type === "download") {
 			await loadPipeline(request.modelKey, transport, request.id);
 			transport.send({ type: "downloaded", id: request.id });
+			return;
+		}
+		if (request.type === "complete") {
+			const text = await generateCompletion(transport, request.id, request.modelKey, request.prompt, request.maxTokens);
+			transport.send({ type: "completion", id: request.id, text });
 			return;
 		}
 		const title = await generateTitle(transport, request.id, request.modelKey, request.message);

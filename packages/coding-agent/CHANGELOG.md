@@ -1,9 +1,10 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added Mnemosyne memory inference model selection with an online mode or local transformers.js options (`qwen3-1.7b`, `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`) so memory extraction and consolidation can run via the shared tiny-model worker
+- Changed memory tiny-model handling to route local memory prompts through the same queueed tiny-model worker pipeline with bounded completion output
 - Added a Providers → Tiny Model setting for session titles, defaulting to the online `pi/smol` path with five optional local CPU transformers.js models. A local model — and the one-time `@huggingface/transformers` runtime install in compiled binaries — is downloaded and loaded only when explicitly selected (or via `omp tiny-models download`); the default online path never spawns the title worker for inference. Selecting a local model adds a delayed `pi/smol` fallback so titles never block, plus in-chat download progress.
 - Added a persistent live agent roster pinned below the editor (focus it with `Ctrl+S` or `Alt+Down`), including view-as switching into delegated agent sessions with human-readable delegate names and UI pinning to suppress idle reaping while viewed. The roster stays hidden until at least one delegated agent exists and releases focus back to the editor once the last one is gone.
 - Recorded the originating session ID alongside each prompt in `history.db` (new `session_id` column, surfaced as `HistoryEntry.sessionId`), so recalled prompts can be traced back to the session they came from. Existing history databases gain the column automatically on next launch.
@@ -21,11 +22,6 @@
 - Changed Mnemosyne `recall` tool output to include memory ids for explicit recall results so agents can target `memory_edit`; auto-injected memory context and `reflect` remain id-free.
 - Changed the system prompt to advertise `memory://root` only when the local memory backend is active.
 
-### Fixed
-
-- Fixed a native crash (`malloc: pointer being freed was not allocated` / `NAPI FATAL ERROR`) when quitting after the local transformers.js title model had run. The tiny-title worker no longer calls `pipeline.dispose()` on shutdown — disposing the onnxruntime session freed native memory that Bun's worker/NAPI teardown then freed again. The worker is torn down immediately after, so the OS reclaims the model memory regardless.
-- Fixed the tiny-title download progress bar flashing on every first message even when the local model was already downloaded. A cached model emits the same `download`/`progress` events as a real download, so the bar is now revealed only when in-flight progress events keep arriving past a short grace window — cache hits finish (or fall silent during onnxruntime init) before then and never show the bar.
-
 ### Removed
 
 - Removed the standalone `ask`, `task`, and `yield` tools along with their obsolete prompts, docs, and tests; delegation now routes through persistent `delegate` agents plus IRC coordination.
@@ -33,6 +29,8 @@
 
 ### Fixed
 
+- Fixed a native crash (`malloc: pointer being freed was not allocated` / `NAPI FATAL ERROR`) when quitting after the local transformers.js title model had run. The tiny-title worker no longer calls `pipeline.dispose()` on shutdown — disposing the onnxruntime session freed native memory that Bun's worker/NAPI teardown then freed again. The worker is torn down immediately after, so the OS reclaims the model memory regardless.
+- Fixed the tiny-title download progress bar flashing on every first message even when the local model was already downloaded. A cached model emits the same `download`/`progress` events as a real download, so the bar is now revealed only when in-flight progress events keep arriving past a short grace window — cache hits finish (or fall silent during onnxruntime init) before then and never show the bar.
 - Fixed the Mnemosyne memory backend lifecycle so auto-retain counts the full session transcript, delegated agents inherit the parent Mnemosyne state, `/memory clear` removes scoped project-bank databases, session disposal closes Mnemosyne SQLite handles, session switches rekey/reset Mnemosyne tracking, and project bank names include an absolute-root hash with safe bank-name sanitization.
 - Fixed the streaming edit preview showing no diff for single-line hashline edits. The preview-diff coalescing keyed only on the arg text, so the final (args-complete) pass — which computes an untrimmed diff — was skipped because the payload was byte-identical to the last streamed chunk whose trailing line had been trimmed. The dedup key now pairs the streaming state with a content hash.
 - Fixed `Esc` in a delegated agent view returning to the main session instead of aborting the delegated agent's active turn.
@@ -40,9 +38,6 @@
 - Fixed the agent roster staying pinned under the editor when all delegated agents are idle or dormant; it now reappears when explicitly focused with `Alt+Down` / session observe.
 - Fixed selector-style UI components to honor `tui.select.up` and `tui.select.down` keybindings instead of hard-coding raw Up/Down arrow bytes ([#1535](https://github.com/can1357/oh-my-pi/issues/1535)).
 - Fixed the bash (and `recipe`) tool result footer not rendering for failed commands. A non-zero exit threw a `ToolError`, which dropped the result details, so the styled `⟨Wall … | Timeout …⟩` footer was replaced by the raw `Wall time: … seconds` / `Command exited with code N` lines. Non-zero exits now resolve as a non-throwing error result that keeps `wallTimeMs`/`timeoutSeconds`/`exitCode`, and the footer shows `⟨Wall … | Timeout … | Exit: N⟩` with the textual notices folded out of the output pane. Aborts, timeouts, and missing-exit-status still throw as before.
-
-### Fixed
-
 - Fixed selector-style UI components to honor `tui.select.up` and `tui.select.down` keybindings instead of hard-coding raw Up/Down arrow bytes ([#1535](https://github.com/can1357/oh-my-pi/issues/1535)).
 
 ## [15.5.15] - 2026-05-30
