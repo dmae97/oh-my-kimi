@@ -266,7 +266,7 @@ async function elicitFromAcpClient(
 			finish(undefined);
 		});
 	const response = await promise;
-	if (!response || response.action !== "accept" || !response.content) {
+	if (response?.action !== "accept" || !response.content) {
 		return undefined;
 	}
 	return response.content.value;

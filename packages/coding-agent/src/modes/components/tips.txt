@@ -9,3 +9,4 @@ Did you know? Each kitty/tmux split keeps its own session — `omp -c` resumes t
 Drop the word `ultrathink` in your message for harder multi-step reasoning — watch it glow rainbow as you type
 Say `orchestrate` in your message to drive a multi-phase task with parallel subagents — watch it glow as you type
 Log in to several accounts of the same provider — `/login` again — and omp load-balances across them automatically
+Run `omp auth-broker serve` once and every machine pulls live tokens over the wire — refresh keys never leave the host; `omp auth-gateway` fronts it as a drop-in proxy any OpenAI-compatible client can hit

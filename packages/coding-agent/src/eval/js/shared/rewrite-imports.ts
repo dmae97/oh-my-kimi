@@ -178,8 +178,7 @@ export function rewriteImports(code: string): string {
 		if (node.type !== "CallExpression") return;
 		const call = node as unknown as { callee?: { type?: string; start?: number; end?: number } };
 		const callee = call.callee;
-		if (!callee || callee.type !== "Import" || typeof callee.start !== "number" || typeof callee.end !== "number")
-			return;
+		if (callee?.type !== "Import" || typeof callee.start !== "number" || typeof callee.end !== "number") return;
 		edits.push({ start: callee.start, end: callee.end, text: "__omp_import__" });
 	});
 
@@ -252,12 +251,7 @@ export function rewriteDynamicImports(code: string, callee = "__omp_import__"): 
 		if (node.type !== "CallExpression") return;
 		const call = node as unknown as { callee?: { type?: string; start?: number; end?: number } };
 		const callCallee = call.callee;
-		if (
-			!callCallee ||
-			callCallee.type !== "Import" ||
-			typeof callCallee.start !== "number" ||
-			typeof callCallee.end !== "number"
-		) {
+		if (callCallee?.type !== "Import" || typeof callCallee.start !== "number" || typeof callCallee.end !== "number") {
 			return;
 		}
 		edits.push({ start: callCallee.start, end: callCallee.end, text: callee });
