@@ -1884,7 +1884,7 @@ export class AgentSession {
 			}
 			this.#lastSuccessfulYieldToolCallId = undefined;
 
-			if (this.#handleEmptyAssistantStop(msg)) {
+			if (await this.#handleEmptyAssistantStop(msg)) {
 				return;
 			}
 
@@ -6240,7 +6240,7 @@ export class AgentSession {
 		return lastToolCall?.name === "yield" && lastToolCall.id === toolCallId;
 	}
 
-	#handleEmptyAssistantStop(assistantMessage: AssistantMessage): boolean {
+	async #handleEmptyAssistantStop(assistantMessage: AssistantMessage): Promise<boolean> {
 		if (!this.#isEmptyAssistantStop(assistantMessage)) {
 			this.#emptyStopRetryCount = 0;
 			return false;
@@ -6253,6 +6253,15 @@ export class AgentSession {
 				model: assistantMessage.model,
 				provider: assistantMessage.provider,
 			});
+			if (this.#retryAttempt > 0) {
+				await this.#emitSessionEvent({
+					type: "auto_retry_end",
+					success: false,
+					attempt: this.#retryAttempt,
+					finalError: "Assistant returned empty stop after retry cap",
+				});
+				this.#retryAttempt = 0;
+			}
 			this.#resolveRetry();
 			return true;
 		}

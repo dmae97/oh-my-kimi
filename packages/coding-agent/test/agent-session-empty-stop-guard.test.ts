@@ -202,7 +202,7 @@ describe("AgentSession empty stop guard", () => {
 		expect(emptyAssistantStops(activeBranchMessages)).toHaveLength(1);
 	});
 
-	it("resolves outstanding auto-retry wait when empty stop retries hit the cap", async () => {
+	it("ends auto-retry state when empty stop retries hit the cap", async () => {
 		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
 		const { session, mock } = await createHarness(
 			[{ throw: "503 service unavailable: overloaded_error" }, emptyStop(), emptyStop(), emptyStop(), emptyStop()],
@@ -210,16 +210,65 @@ describe("AgentSession empty stop guard", () => {
 				"retry.enabled": true,
 				"retry.baseDelayMs": 5,
 				"retry.maxDelayMs": 5_000,
+				"retry.maxRetries": 2,
 			},
 		);
+		const retryStartEvents: Array<Extract<AgentSessionEvent, { type: "auto_retry_start" }>> = [];
+		const retryEndEvents: Array<Extract<AgentSessionEvent, { type: "auto_retry_end" }>> = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_start") {
+				retryStartEvents.push(event);
+			}
+			if (event.type === "auto_retry_end") {
+				retryEndEvents.push(event);
+			}
+		});
 
 		await expectPromptCompletes(session.prompt("recover from transient error"));
 		await session.waitForIdle();
 
 		expect(mock.calls).toHaveLength(5);
 		expect(session.isRetrying).toBe(false);
+		expect(session.retryAttempt).toBe(0);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryStartEvents[0]?.attempt).toBe(1);
+		expect(retryEndEvents.filter(event => event.success)).toEqual([]);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({
+			type: "auto_retry_end",
+			success: false,
+			attempt: 1,
+		});
+		expect(retryEndEvents[0]?.finalError).toContain("empty stop");
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(3);
 		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(1);
+
+		mock.push({ content: ["fresh unrelated success"], stopReason: "stop" });
+		await session.prompt("start unrelated turn after cap");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(6);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(session.isRetrying).toBe(false);
+		expect(session.retryAttempt).toBe(0);
+		expect(assistantText(session.agent.state.messages)).toContain("fresh unrelated success");
+
+		mock.push({ throw: "503 service unavailable: overloaded_error" });
+		mock.push({ content: ["fresh retry success"], stopReason: "stop" });
+		await expectPromptCompletes(session.prompt("recover with fresh retry budget"));
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(8);
+		expect(retryStartEvents).toHaveLength(2);
+		expect(retryStartEvents[1]?.attempt).toBe(1);
+		expect(retryEndEvents).toHaveLength(2);
+		expect(retryEndEvents[1]).toMatchObject({
+			type: "auto_retry_end",
+			success: true,
+			attempt: 1,
+		});
+		expect(session.isRetrying).toBe(false);
+		expect(session.retryAttempt).toBe(0);
 	});
 
 	it("preserves auto-retry budget across empty stop continuations", async () => {
