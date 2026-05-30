@@ -15,11 +15,11 @@
  * npm site and the rest proceed unattended (npm docs: ~80 packages per window).
  *
  * Prerequisites:
- *   - npm >= 11.10.0 (`npm install -g npm@latest`)
+ *   - npm >= 11.16.0 (`npm install -g npm@latest`)
  *   - `npm login` with a 2FA-enabled account that has publish access
- *   - the package must already exist on the registry — trusted publishing cannot
- *     create it, so brand-new packages show up as "not published yet" until the
- *     first token-based release creates them.
+ *   - non-native packages must already exist on the registry. Generated native
+ *     leaf packages are bootstrapped automatically as inert `0.0.0`
+ *     package.json+README placeholders before trust is configured.
  *
  * Usage:
  *   bun scripts/setup-npm-trust.ts                 Configure trust for all packages
@@ -31,15 +31,44 @@
  *   bun scripts/setup-npm-trust.ts --workflow f    Override the workflow file (default: ci.yml)
  */
 
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
 import { LEAF_TARGETS } from "../packages/natives/scripts/gen-npm-packages.ts";
 import { packages } from "./ci-release-publish.ts";
 
 const repoRoot = path.join(import.meta.dir, "..");
-const MIN_NPM = "11.10.0";
+const MIN_NPM = "11.16.0";
 const DEFAULT_WORKFLOW = "ci.yml";
 const FALLBACK_REPO = "can1357/oh-my-pi";
+const PLACEHOLDER_VERSION = "0.0.0";
+
+interface NativeLeafTarget {
+	tag: string;
+	os: string;
+	cpu: string;
+}
+
+interface PlaceholderManifest {
+	name: string;
+	version: string;
+	description: string;
+	license: string;
+	os: string[];
+	cpu: string[];
+	repository: {
+		type: string;
+		url: string;
+		directory: string;
+	};
+	engines: {
+		bun: string;
+	};
+	publishConfig: {
+		access: string;
+	};
+}
 
 interface Options {
 	list: boolean;
@@ -203,6 +232,77 @@ async function packageExists(name: string): Promise<boolean> {
 	return result.exitCode === 0;
 }
 
+async function waitForPackageExists(name: string): Promise<boolean> {
+	for (let attempt = 0; attempt < 6; attempt++) {
+		if (await packageExists(name)) return true;
+		await Bun.sleep(1000 * (attempt + 1));
+	}
+	return false;
+}
+
+function nativeLeafName(tag: string): string {
+	return `@oh-my-pi/pi-natives-${tag}`;
+}
+
+function nativeLeafTargetForPackage(name: string): NativeLeafTarget | null {
+	for (const target of LEAF_TARGETS) {
+		if (nativeLeafName(target.tag) === name) return target;
+	}
+	return null;
+}
+
+function repoGitUrl(repo: string): string {
+	return `git+https://github.com/${repo}.git`;
+}
+
+function placeholderManifest(name: string, target: NativeLeafTarget, repo: string): PlaceholderManifest {
+	return {
+		name,
+		version: PLACEHOLDER_VERSION,
+		description: `Placeholder for the ${target.tag} native addon of @oh-my-pi/pi-natives. The real binary is published during release.`,
+		license: "MIT",
+		os: [target.os],
+		cpu: [target.cpu],
+		repository: {
+			type: "git",
+			url: repoGitUrl(repo),
+			directory: "packages/natives",
+		},
+		engines: {
+			bun: ">=1.3.14",
+		},
+		publishConfig: {
+			access: "public",
+		},
+	};
+}
+
+function placeholderReadme(name: string, target: NativeLeafTarget): string {
+	return [
+		`# ${name}`,
+		"",
+		`Placeholder package reserving the npm name for the \`${target.tag}\` native addon of \`@oh-my-pi/pi-natives\`.`,
+		"",
+		`This \`${PLACEHOLDER_VERSION}\` release ships no binary. The real, versioned platform addon is generated during release and installed as an optional dependency of the core package.`,
+		"",
+	].join("\n");
+}
+
+async function publishNativeLeafPlaceholder(name: string, target: NativeLeafTarget, repo: string): Promise<boolean> {
+	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-native-placeholder-"));
+	try {
+		await Bun.write(path.join(tmpDir, "package.json"), `${JSON.stringify(placeholderManifest(name, target, repo), null, "\t")}\n`);
+		await Bun.write(path.join(tmpDir, "README.md"), placeholderReadme(name, target));
+		return (await npmInteractive(["publish", tmpDir, "--access", "public"])) === 0;
+	} finally {
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	}
+}
+
+function shouldThrottle(first: boolean): boolean {
+	return !first;
+}
+
 type Outcome = "configured" | "already" | "replaced" | "missing" | "failed";
 
 async function main(): Promise<void> {
@@ -242,6 +342,8 @@ async function main(): Promise<void> {
 	if (opts.dryRun) {
 		console.log(`Would configure trust for ${targets.length} package(s) → repo ${repo}, workflow ${workflow}:\n`);
 		for (const name of targets) {
+			const target = nativeLeafTargetForPackage(name);
+			if (target) console.log(`  if missing: npm publish ${name}@${PLACEHOLDER_VERSION} placeholder`);
 			console.log(`  npm trust github ${name} --repo ${repo} --file ${workflow} --allow-publish --yes`);
 		}
 		return;
@@ -266,21 +368,39 @@ async function main(): Promise<void> {
 		return;
 	}
 
-	console.log("The first operation triggers 2FA. When prompted, complete it and choose");
-	console.log("'skip 2FA for the next 5 minutes' on the npm site so the rest run unattended.\n");
+	console.log("The first mutating npm operation triggers 2FA. When prompted, complete it and choose");
+	console.log("'skip 2FA for the next 5 minutes' on the npm site so placeholder publishes and trust setup run unattended.\n");
 
 	const outcomes = new Map<string, Outcome>();
+	let bootstrapped = 0;
 	let first = true;
 	for (const name of targets) {
 		if (!(await packageExists(name))) {
-			outcomes.set(name, "missing");
-			console.log(`- ${name}: not published yet — publish it first, then re-run.`);
-			continue;
+			const target = nativeLeafTargetForPackage(name);
+			if (!target) {
+				outcomes.set(name, "missing");
+				console.log(`- ${name}: not published yet — create it first, then re-run.`);
+				continue;
+			}
+			if (shouldThrottle(first)) await Bun.sleep(2000);
+			first = false;
+			console.log(`- ${name}: not published yet — publishing inert ${PLACEHOLDER_VERSION} placeholder.`);
+			if (!(await publishNativeLeafPlaceholder(name, target, repo))) {
+				outcomes.set(name, "failed");
+				console.error(`- ${name}: failed to publish placeholder.`);
+				continue;
+			}
+			if (!(await waitForPackageExists(name))) {
+				outcomes.set(name, "failed");
+				console.error(`- ${name}: placeholder published, but npm view did not observe it yet.`);
+				continue;
+			}
+			bootstrapped++;
 		}
 
 		// Throttle between mutating calls per npm's bulk-config guidance, but not
 		// before the very first one (it carries the interactive 2FA prompt).
-		if (!first) await Bun.sleep(2000);
+		if (shouldThrottle(first)) await Bun.sleep(2000);
 		first = false;
 
 		const existing = await trustListJson(name);
@@ -321,20 +441,21 @@ async function main(): Promise<void> {
 		outcomes.set(name, code === 0 ? (replaced ? "replaced" : "configured") : "failed");
 	}
 
-	printSummary(outcomes);
+	printSummary(outcomes, bootstrapped);
 	const failed = [...outcomes.values()].filter(o => o === "failed").length;
 	process.exit(failed > 0 ? 1 : 0);
 }
 
-function printSummary(outcomes: ReadonlyMap<string, Outcome>): void {
+function printSummary(outcomes: ReadonlyMap<string, Outcome>, bootstrapped: number): void {
 	const counts: Record<Outcome, number> = { configured: 0, already: 0, replaced: 0, missing: 0, failed: 0 };
 	for (const outcome of outcomes.values()) counts[outcome]++;
 	console.log("\nSummary:");
-	console.log(`  configured: ${counts.configured}`);
-	if (counts.replaced) console.log(`  replaced:   ${counts.replaced}`);
-	console.log(`  already:    ${counts.already}`);
-	if (counts.missing) console.log(`  missing:    ${counts.missing} (not published yet)`);
-	if (counts.failed) console.log(`  failed:     ${counts.failed}`);
+	if (bootstrapped) console.log(`  bootstrapped: ${bootstrapped} placeholder package(s)`);
+	console.log(`  configured:   ${counts.configured}`);
+	if (counts.replaced) console.log(`  replaced:     ${counts.replaced}`);
+	console.log(`  already:      ${counts.already}`);
+	if (counts.missing) console.log(`  missing:      ${counts.missing} (not auto-bootstrappable)`);
+	if (counts.failed) console.log(`  failed:       ${counts.failed}`);
 }
 
 await main();
