@@ -104,4 +104,23 @@ describe("profile alias installer", () => {
 			}),
 		).rejects.toThrow("Refusing to shadow");
 	});
+
+	it("validates profile names before rendering shell code", async () => {
+		const files = new Map<string, string>();
+
+		await expect(
+			installProfileAlias({
+				profile: "work'; touch /tmp/pwn; #",
+				aliasName: "omp-work",
+				shellPath: "/bin/bash",
+				platform: "linux",
+				homeDir: "/home/me",
+				readFile: async filePath => files.get(filePath) ?? "",
+				writeFile: async (filePath, content) => {
+					files.set(filePath, content);
+				},
+			}),
+		).rejects.toThrow("Invalid OMP profile");
+		expect(files.size).toBe(0);
+	});
 });

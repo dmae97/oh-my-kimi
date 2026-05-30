@@ -32,12 +32,16 @@ describe("global --profile flag", () => {
 	let originalProfile: string | undefined;
 	let originalAgentDir = "";
 	let originalAgentDirEnv: string | undefined;
+	let originalOmpProfileEnv: string | undefined;
+	let originalPiProfileEnv: string | undefined;
 	let originalConfigDir: string | undefined;
 
 	beforeEach(() => {
 		originalProfile = getActiveProfile();
 		originalAgentDir = getAgentDir();
 		originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+		originalOmpProfileEnv = process.env.OMP_PROFILE;
+		originalPiProfileEnv = process.env.PI_PROFILE;
 		originalConfigDir = process.env.PI_CONFIG_DIR;
 		configDir = `.omp-profile-cli-test-${Snowflake.next()}`;
 		process.env.PI_CONFIG_DIR = configDir;
@@ -58,6 +62,16 @@ describe("global --profile flag", () => {
 			setAgentDir(originalAgentDir);
 		} else {
 			setProfile(undefined);
+		}
+		if (originalOmpProfileEnv === undefined) {
+			delete process.env.OMP_PROFILE;
+		} else {
+			process.env.OMP_PROFILE = originalOmpProfileEnv;
+		}
+		if (originalPiProfileEnv === undefined) {
+			delete process.env.PI_PROFILE;
+		} else {
+			process.env.PI_PROFILE = originalPiProfileEnv;
 		}
 		process.exitCode = 0;
 		await fs.rm(path.join(os.homedir(), configDir), { recursive: true, force: true });
