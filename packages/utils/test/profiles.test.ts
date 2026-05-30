@@ -192,4 +192,25 @@ describe("profile directories", () => {
 			expect(() => setProfile(name)).toThrow("Windows reserved device name");
 		}
 	});
+
+	it("does not restore a profile-derived agent dir as the default baseline", () => {
+		// Reproduces a child process that inherited OMP_PROFILE=work plus the
+		// profile-derived PI_CODING_AGENT_DIR that setProfile propagates to
+		// children. The module-load snapshot must not capture that profile dir as
+		// the default baseline, or setProfile(undefined) would resolve default
+		// mode into the work profile's agent dir.
+		setProfile("work");
+		const workAgentDir = path.join(os.homedir(), configDir, "profiles", "work", "agent");
+		expect(getAgentDir()).toBe(workAgentDir);
+		expect(process.env.PI_CODING_AGENT_DIR).toBe(workAgentDir);
+
+		// Re-snapshot exactly as module load would, now that OMP_PROFILE and the
+		// profile-derived PI_CODING_AGENT_DIR are present in the environment.
+		__resetProfileSnapshotForTests();
+
+		setProfile(undefined);
+		expect(getActiveProfile()).toBeUndefined();
+		expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
+		expect(getAgentDir()).toBe(path.join(os.homedir(), configDir, "agent"));
+	});
 });

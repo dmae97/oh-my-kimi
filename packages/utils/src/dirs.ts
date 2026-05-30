@@ -71,6 +71,22 @@ function getProfileFromEnv(): string | undefined {
 	return normalizeProfileName(process.env.OMP_PROFILE || process.env.PI_PROFILE);
 }
 
+/**
+ * Module-load profile resolution. Unlike {@link getProfileFromEnv}, an invalid
+ * OMP_PROFILE/PI_PROFILE value does NOT throw here — a bad env var must not
+ * crash a bare `import` of this module with an uncaught stack trace before the
+ * CLI's error handling is in scope. The default profile is used instead; the
+ * CLI re-validates the env (see `runCli` in coding-agent/src/cli.ts) so the
+ * user still gets a clean "Invalid OMP profile" message.
+ */
+function readProfileFromEnvSafe(): string | undefined {
+	try {
+		return getProfileFromEnv();
+	} catch {
+		return undefined;
+	}
+}
+
 function getBaseConfigRoot(): string {
 	return path.join(os.homedir(), getConfigDirName());
 }
@@ -261,7 +277,22 @@ class DirResolver {
 	}
 }
 
-let activeProfile = getProfileFromEnv();
+/**
+ * Decide which `PI_CODING_AGENT_DIR` value to capture as the pre-profile
+ * baseline. A value equal to the active profile's derived agent dir is
+ * profile-derived (propagated by a parent's `setProfile`), so it must NOT be
+ * snapshotted as the default-mode baseline — otherwise `setProfile(undefined)`
+ * would resolve default mode to the profile's agent dir. Returns `undefined`
+ * in that case so reset falls back to the standard `~/.omp/agent`.
+ */
+function resolvePreProfileAgentDir(
+	profile: string | undefined,
+	agentDirEnv: string | undefined,
+	activeAgentDir: string,
+): string | undefined {
+	return profile !== undefined && agentDirEnv === activeAgentDir ? undefined : agentDirEnv;
+}
+let activeProfile = readProfileFromEnvSafe();
 let dirs = new DirResolver({
 	agentDirOverride: activeProfile ? undefined : process.env.PI_CODING_AGENT_DIR,
 	profile: activeProfile,
@@ -272,10 +303,16 @@ let dirs = new DirResolver({
  * unconditionally deleting the env var. Without the snapshot, a process started
  * with `PI_CODING_AGENT_DIR=/custom` then `setProfile("work")` then
  * `setProfile(undefined)` would silently lose `/custom` and fall back to
- * `~/.omp/agent`. Captured at module load and refreshed on `setAgentDir`,
- * since that call is the user explicitly redefining the baseline.
+ * `~/.omp/agent`. Captured at module load — ignoring a profile-derived value
+ * inherited from a parent's `setProfile` (see {@link resolvePreProfileAgentDir})
+ * — and refreshed on `setAgentDir`, since that call is the user explicitly
+ * redefining the baseline.
  */
-let preProfileAgentDirEnv: string | undefined = process.env.PI_CODING_AGENT_DIR;
+let preProfileAgentDirEnv: string | undefined = resolvePreProfileAgentDir(
+	activeProfile,
+	process.env.PI_CODING_AGENT_DIR,
+	dirs.agentDir,
+);
 // Anchor home for the resolver. Captured at module load to stay stable across
 // test mocks of `os.homedir()`. `getPluginsDir(home)` compares against this so
 // production callers (`home === RESOLVER_HOME`) hit the XDG-aware resolver while
@@ -311,7 +348,7 @@ export function setAgentDir(dir: string): void {
  * no business clearing it.
  */
 export function __resetProfileSnapshotForTests(): void {
-	preProfileAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+	preProfileAgentDirEnv = resolvePreProfileAgentDir(activeProfile, process.env.PI_CODING_AGENT_DIR, dirs.agentDir);
 }
 
 /** Activate a named profile. Passing undefined or "default" returns to the default profile. */
@@ -643,10 +680,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * winner's id). Survives independently of agent state: deleting
  * `~/.omp/agent/` does not regenerate it. Server-side dedup for grievance
  * pushes (and similar telemetry) keys on this id.
+ *
+ * Anchored to the base config root (`~/.omp/install-id`) regardless of the
+ * active profile: install identity is per-install, not per-profile, so every
+ * profile shares one id and the global cache stays correct no matter the
+ * profile / `getInstallId` call order.
  */
 export function getInstallId(): string {
 	if (cachedInstallId) return cachedInstallId;
-	const filePath = path.join(getConfigRootDir(), INSTALL_ID_FILE);
+	const filePath = path.join(getBaseConfigRoot(), INSTALL_ID_FILE);
 
 	let observedInvalid = false;
 	try {
