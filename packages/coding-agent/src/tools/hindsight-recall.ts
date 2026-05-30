@@ -38,17 +38,14 @@ export class HindsightRecallTool implements AgentTool<typeof hindsightRecallSche
 					throw new Error("Mnemosyne backend is not initialised for this session.");
 				}
 				try {
-					const results = state.memory.recallEnhanced(params.query, state.config.recallLimit, {
-						includeFacts: true,
-						channelId: state.config.bank,
-					});
+					const results = state.recallResultsScoped(params.query);
 					if (results.length === 0) {
 						return {
 							content: [{ type: "text", text: "No relevant memories found." }],
 							details: {},
 						};
 					}
-					const formatted = state.memory.beam.formatContext(results);
+					const formatted = state.formatContextScoped(results);
 					return {
 						content: [
 							{

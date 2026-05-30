@@ -68,6 +68,18 @@ const dynamicLlm = new Mnemosyne({
 });
 ```
 
+### Banks and host scoping
+
+`Mnemosyne` itself exposes banks directly through constructor options such as `bank`; it does not hard-code coding-agent project scoping.
+
+The Oh My Pi coding-agent wrapper adds `mnemosyne.scoping` on top of those constructor options:
+
+- `global`: one shared bank
+- `per-project`: isolated project memory
+- `per-project-tagged`: project-local writes plus global recall visibility
+
+In `per-project-tagged`, the wrapper is responsible for combining project-local retention with global recall visibility. The package still just exposes banks plus constructor-level LLM and embedding options.
+
 Common environment fallbacks:
 
 - `MNEMOSYNE_DATA_DIR` / `MNEMOSYNE_DB_PATH`: default storage location.

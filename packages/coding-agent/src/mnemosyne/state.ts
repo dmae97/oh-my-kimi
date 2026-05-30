@@ -9,13 +9,28 @@ import {
 } from "../hindsight/content";
 import { extractMessages } from "../hindsight/transcript";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
-import type { MnemosyneBackendConfig } from "./config";
+import type { MnemosyneBackendConfig, MnemosyneScoping } from "./config";
 
 const kMnemosyneSessionState = Symbol("mnemosyne.sessionState");
 
 interface AgentSessionWithMnemosyneState extends AgentSession {
 	[kMnemosyneSessionState]?: MnemosyneSessionState;
 }
+
+interface MnemosyneScopedMemory {
+	bank: string;
+	memory: Mnemosyne;
+}
+
+interface MnemosyneScopedResources {
+	retain: MnemosyneScopedMemory;
+	recall: readonly MnemosyneScopedMemory[];
+	owned: readonly Mnemosyne[];
+	global?: MnemosyneScopedMemory;
+}
+
+type MnemosyneRememberInput = Parameters<Mnemosyne["remember"]>[0];
+type MnemosyneRememberOptions = Parameters<Mnemosyne["remember"]>[1];
 
 export function getMnemosyneSessionState(session: AgentSession | undefined): MnemosyneSessionState | undefined {
 	return session ? (session as AgentSessionWithMnemosyneState)[kMnemosyneSessionState] : undefined;
@@ -46,7 +61,9 @@ export class MnemosyneSessionState {
 	readonly config: MnemosyneBackendConfig;
 	readonly session: AgentSession;
 	readonly memory: Mnemosyne;
+	readonly globalMemory?: Mnemosyne;
 	readonly aliasOf?: MnemosyneSessionState;
+	private readonly scoped: MnemosyneScopedResources;
 	lastRetainedTurn: number;
 	hasRecalledForFirstTurn: boolean;
 	lastRecallSnippet?: string;
@@ -59,36 +76,86 @@ export class MnemosyneSessionState {
 		this.aliasOf = options.aliasOf;
 		this.lastRetainedTurn = options.lastRetainedTurn ?? 0;
 		this.hasRecalledForFirstTurn = options.hasRecalledForFirstTurn ?? false;
-		const providerOptions = options.config.providerOptions as Record<string, unknown>;
-		this.memory =
-			options.aliasOf?.memory ??
-			new Mnemosyne({
-				dbPath: options.config.dbPath,
-				bank: options.config.bank,
-				sessionId: options.config.bank,
-				authorId: "coding-agent",
-				authorType: "agent",
-				channelId: options.config.bank,
-				...providerOptions,
-			} as ConstructorParameters<typeof Mnemosyne>[0]);
+		this.scoped = options.aliasOf?.scoped ?? createScopedResources(options.config);
+		this.memory = this.scoped.retain.memory;
+		this.globalMemory = this.scoped.global?.memory;
 	}
 
 	setSessionId(sessionId: string): void {
 		this.sessionId = sessionId;
 	}
 
-	async recallForContext(query: string): Promise<string | undefined> {
+	getScopedRecallTargets(): readonly MnemosyneScopedMemory[] {
+		return this.scoped.recall;
+	}
+
+	getScopedRetainTarget(): MnemosyneScopedMemory {
+		return this.scoped.retain;
+	}
+
+	collectScopedRecallResults(query: string): RecallResult[] {
+		const merged: RecallResult[] = [];
+		const byId = new Map<string, number>();
+		const byContent = new Map<string, number>();
+		for (const target of this.scoped.recall) {
+			try {
+				const results = target.memory.recallEnhanced(query, this.config.recallLimit, {
+					includeFacts: true,
+					channelId: target.bank,
+				});
+				for (const result of results) {
+					mergeRecallResult(merged, byId, byContent, result);
+				}
+			} catch (error) {
+				if (this.config.debug) {
+					logger.debug("Mnemosyne: scoped recall target failed", {
+						bank: target.bank,
+						error: String(error),
+					});
+				}
+			}
+		}
+		merged.sort(compareRecallResults);
+		if (merged.length > this.config.recallLimit) merged.length = this.config.recallLimit;
+		return merged;
+	}
+
+	recallResultsScoped(query: string): RecallResult[] {
+		return this.collectScopedRecallResults(query);
+	}
+
+	formatScopedRecallContext(
+		results: readonly RecallResult[],
+		format: "bullet" | "json" = "bullet",
+	): string | undefined {
+		if (results.length === 0) return undefined;
+		return this.memory.beam.formatContext(results, format);
+	}
+
+	formatContextScoped(results: readonly RecallResult[], format: "bullet" | "json" = "bullet"): string {
+		return this.formatScopedRecallContext(results, format) ?? "";
+	}
+
+	rememberInScope(memory: MnemosyneRememberInput, options: MnemosyneRememberOptions = {}): string | undefined {
 		try {
-			const results = this.memory.recallEnhanced(query, this.config.recallLimit, {
-				includeFacts: true,
-				channelId: this.config.bank,
-			});
-			if (results.length === 0) return undefined;
-			return formatRecallBlock(results);
+			return this.scoped.retain.memory.remember(memory, options);
 		} catch (error) {
-			if (this.config.debug) logger.debug("Mnemosyne: recall failed", { error: String(error) });
+			logger.warn("Mnemosyne: retain failed", {
+				bank: this.scoped.retain.bank,
+				error: String(error),
+			});
 			return undefined;
 		}
+	}
+
+	rememberScoped(memory: MnemosyneRememberInput, options: MnemosyneRememberOptions = {}): string | undefined {
+		return this.rememberInScope(memory, options);
+	}
+
+	async recallForContext(query: string): Promise<string | undefined> {
+		const results = this.collectScopedRecallResults(query);
+		if (results.length === 0) return undefined;
+		return formatRecallBlock(results);
 	}
 
 	async beforeAgentStartPrompt(promptText: string): Promise<string | undefined> {
@@ -134,25 +201,21 @@ export class MnemosyneSessionState {
 	async retainMessages(messages: Array<{ role: string; content: string }>, sourceId: string): Promise<void> {
 		const { transcript, messageCount } = prepareRetentionTranscript(messages, true);
 		if (!transcript) return;
-		try {
-			this.memory.remember(transcript, {
-				source: "coding-agent-transcript",
-				importance: 0.65,
-				metadata: {
-					session_id: this.sessionId,
-					source_id: sourceId,
-					message_count: messageCount,
-					cwd: this.session.sessionManager.getCwd(),
-				},
-				scope: "bank",
-				extract: true,
-				extractEntities: true,
-				veracity: "unknown",
-				memoryType: "episode",
-			});
-		} catch (error) {
-			logger.warn("Mnemosyne: retain failed", { error: String(error) });
-		}
+		this.rememberInScope(transcript, {
+			source: "coding-agent-transcript",
+			importance: 0.65,
+			metadata: {
+				session_id: this.sessionId,
+				source_id: sourceId,
+				message_count: messageCount,
+				cwd: this.session.sessionManager.getCwd(),
+			},
+			scope: "bank",
+			extract: true,
+			extractEntities: true,
+			veracity: "unknown",
+			memoryType: "episode",
+		});
 	}
 
 	attachSessionListeners(): void {
@@ -187,8 +250,94 @@ export class MnemosyneSessionState {
 	dispose(): void {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
-		if (!this.aliasOf) this.memory.close();
+		if (!this.aliasOf) {
+			for (const memory of this.scoped.owned) memory.close();
+		}
 	}
+}
+
+// `per-project-tagged` is implemented by opening both the project bank and the
+// shared bank, then merging recall results while keeping writes project-local.
+function createScopedResources(config: MnemosyneBackendConfig): MnemosyneScopedResources {
+	const banks = resolveScopedBanks(config);
+	const memories = new Map<string, MnemosyneScopedMemory>();
+	const open = (bank: string): MnemosyneScopedMemory => {
+		const existing = memories.get(bank);
+		if (existing) return existing;
+		const scoped = { bank, memory: createMemory(config, bank) };
+		memories.set(bank, scoped);
+		return scoped;
+	};
+	const retain = open(banks.retainBank);
+	const recall = banks.recallBanks.map(open);
+	const global = banks.scoping === "per-project-tagged" ? open(banks.globalBank) : undefined;
+	return {
+		retain,
+		recall,
+		global,
+		owned: [...memories.values()].map(entry => entry.memory),
+	};
+}
+
+function resolveScopedBanks(config: MnemosyneBackendConfig): {
+	scoping: MnemosyneScoping;
+	globalBank: string;
+	retainBank: string;
+	recallBanks: readonly string[];
+} {
+	const scoping = config.scoping ?? "per-project";
+	const retainBank = config.retainBank ?? config.bank;
+	const globalBank = config.globalBank ?? config.baseBank ?? config.bank;
+	const recallBanks =
+		config.recallBanks ?? (scoping === "per-project-tagged" ? uniqueBanks([retainBank, globalBank]) : [retainBank]);
+	return { scoping, globalBank, retainBank, recallBanks };
+}
+
+function uniqueBanks(banks: readonly string[]): readonly string[] {
+	return [...new Set(banks)];
+}
+
+function createMemory(config: MnemosyneBackendConfig, bank: string): Mnemosyne {
+	const providerOptions = config.providerOptions as Record<string, unknown>;
+	return new Mnemosyne({
+		dbPath: config.dbPath,
+		bank,
+		sessionId: bank,
+		authorId: "coding-agent",
+		authorType: "agent",
+		channelId: bank,
+		...providerOptions,
+	} as ConstructorParameters<typeof Mnemosyne>[0]);
+}
+
+function mergeRecallResult(
+	merged: RecallResult[],
+	byId: Map<string, number>,
+	byContent: Map<string, number>,
+	result: RecallResult,
+): void {
+	const id = result.id ?? "";
+	const existingIndex = (id.length > 0 ? byId.get(id) : undefined) ?? byContent.get(result.content);
+	if (existingIndex === undefined) {
+		const index = merged.push(result) - 1;
+		if (id.length > 0) byId.set(id, index);
+		byContent.set(result.content, index);
+		return;
+	}
+	const current = merged[existingIndex];
+	if (compareRecallResults(result, current) < 0) {
+		merged[existingIndex] = result;
+	}
+	if (id.length > 0) byId.set(id, existingIndex);
+	byContent.set(result.content, existingIndex);
+}
+
+function compareRecallResults(left: RecallResult, right: RecallResult): number {
+	return (
+		(right.score ?? 0) - (left.score ?? 0) ||
+		(right.timestamp ?? "").localeCompare(left.timestamp ?? "") ||
+		left.content.localeCompare(right.content)
+	);
 }
 
 function formatRecallBlock(results: RecallResult[]): string {

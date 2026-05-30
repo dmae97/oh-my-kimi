@@ -1333,7 +1333,36 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "memory",
 			label: "Mnemosyne Bank",
-			description: "Memory bank/session name. Defaults to the current project directory name.",
+			description: "Optional shared bank base name. Per-project modes derive project-local banks from it.",
+			condition: "mnemosyneActive",
+		},
+	},
+	"mnemosyne.scoping": {
+		type: "enum",
+		values: ["global", "per-project", "per-project-tagged"] as const,
+		default: "per-project",
+		ui: {
+			tab: "memory",
+			label: "Mnemosyne Scoping",
+			description:
+				"global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = project-local writes plus global recall visibility",
+			options: [
+				{
+					value: "global",
+					label: "Global",
+					description: "One shared Mnemosyne bank for every project",
+				},
+				{
+					value: "per-project",
+					label: "Per project",
+					description: "Project-local Mnemosyne bank per cwd basename",
+				},
+				{
+					value: "per-project-tagged",
+					label: "Per project (tagged)",
+					description: "Write to a project-local bank but merge project + shared recall results",
+				},
+			],
 			condition: "mnemosyneActive",
 		},
 	},

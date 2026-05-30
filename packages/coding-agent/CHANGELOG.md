@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a persistent live agent roster pinned below the editor (focus it with `Ctrl+S` or `Alt+Down`), including view-as switching into delegated agent sessions with human-readable delegate names and UI pinning to suppress idle reaping while viewed. The roster stays hidden until at least one delegated agent exists and releases focus back to the editor once the last one is gone.
+- Recorded the originating session ID alongside each prompt in `history.db` (new `session_id` column, surfaced as `HistoryEntry.sessionId`), so recalled prompts can be traced back to the session they came from. Existing history databases gain the column automatically on next launch.
+
+### Changed
+
+- Changed `irc` to treat the attached human as a first-class `User` peer, merging human prompts into `irc call User` with optional structured question payloads and adding `/dm <agent> <message>` for user-to-agent routing without switching views.
+- Changed the `--resume` session picker (and the in-session resume selector) to also rank sessions by prompt-history matches from `history.db`, not just the session-list metadata. Because the session list only indexes the first 4KB of each file, this surfaces sessions by prompts typed deep into long conversations. Sessions matched by both signals lead, then metadata-only matches, then history-only matches — no metadata match is dropped.
+
+### Removed
+
+- Removed the standalone `ask`, `task`, and `yield` tools along with their obsolete prompts, docs, and tests; delegation now routes through persistent `delegate` agents plus IRC coordination.
+
+### Fixed
+
+- Fixed `Esc` in a delegated agent view returning to the main session instead of aborting the delegated agent's active turn.
+- Fixed the agent roster staying pinned under the editor when all delegated agents are idle or dormant; it now reappears when explicitly focused with `Alt+Down` / session observe.
+- Fixed selector-style UI components to honor `tui.select.up` and `tui.select.down` keybindings instead of hard-coding raw Up/Down arrow bytes ([#1535](https://github.com/can1357/oh-my-pi/issues/1535)).
+
 ## [15.5.15] - 2026-05-30
 ### Changed
 

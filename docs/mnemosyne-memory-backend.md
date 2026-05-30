@@ -9,6 +9,15 @@ memory:
   backend: mnemosyne
 ```
 
+Example:
+
+```yaml
+memory:
+  backend: mnemosyne
+mnemosyne:
+  scoping: per-project-tagged
+```
+
 With this backend enabled, the coding agent:
 
 1. Opens a local Mnemosyne SQLite database.
@@ -24,7 +33,8 @@ Recalled memory is background context, not instructions. Current user messages a
 | --- | --- | --- |
 | `memory.backend` | `off` | Set to `mnemosyne` to enable this backend. |
 | `mnemosyne.dbPath` | agent memories dir | Optional SQLite database path. |
-| `mnemosyne.bank` | project directory name | Bank/session name used to partition project memories. |
+| `mnemosyne.bank` | project directory name | Base bank name passed to `Mnemosyne`; the coding-agent wrapper scopes from this base according to `mnemosyne.scoping`. |
+| `mnemosyne.scoping` | `per-project` | Memory visibility mode: `global` = one shared bank, `per-project` = isolated project memory, `per-project-tagged` = project-local writes plus global recall visibility. |
 | `mnemosyne.autoRecall` | `true` | Recall memory on the first turn of a session. |
 | `mnemosyne.autoRetain` | `true` | Retain completed turns automatically. |
 | `mnemosyne.retainEveryNTurns` | `4` | Minimum user turns between automatic retain writes. |
@@ -42,6 +52,15 @@ Recalled memory is background context, not instructions. Current user messages a
 | `mnemosyne.llmApiKey` | env/default | LLM API key for `llmMode: remote`. |
 | `mnemosyne.llmModel` | env/default | LLM model id for `llmMode: remote`. |
 
+## Scoping
+
+The coding-agent wrapper applies scoping on top of the underlying `Mnemosyne` package:
+
+- `global` uses one shared bank for every project.
+- `per-project` uses a separate bank per project.
+- `per-project-tagged` keeps writes project-local while recall can also read from shared global memory.
+
+The combined project-plus-global behavior lives in the wrapper. The `@oh-my-pi/pi-mnemosyne` package itself still exposes banks and constructor options directly, including `bank` for selecting a bank name.
 ## LLM and embeddings
 
 The backend passes these settings to the `Mnemosyne` constructor; if a setting is omitted, Mnemosyne falls back to its `MNEMOSYNE_*` environment defaults. The backend does not download or run a local GGUF LLM. LLM-dependent paths use a configured pi-ai model, a dynamic completion function, a remote OpenAI-compatible endpoint, or deterministic no-LLM fallbacks.

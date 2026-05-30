@@ -43,17 +43,14 @@ export class HindsightReflectTool implements AgentTool<typeof hindsightReflectSc
 					const query = params.context?.trim()
 						? `${params.query.trim()}\n\nAdditional context:\n${params.context.trim()}`
 						: params.query;
-					const results = state.memory.recallEnhanced(query, state.config.recallLimit, {
-						includeFacts: true,
-						channelId: state.config.bank,
-					});
+					const results = state.recallResultsScoped(query);
 					if (results.length === 0) {
 						return {
 							content: [{ type: "text", text: "No relevant information found to reflect on." }],
 							details: {},
 						};
 					}
-					const summary = state.memory.beam.formatContext(results);
+					const summary = state.formatContextScoped(results);
 					return {
 						content: [{ type: "text", text: `Based on recalled memories:\n\n${summary}` }],
 						details: {},

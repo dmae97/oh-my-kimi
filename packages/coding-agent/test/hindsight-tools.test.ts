@@ -100,7 +100,9 @@ function registerState(client: HindsightApi, settings?: Settings, opts: Register
 	void settings;
 }
 
-function makeMnemosyneConfig(overrides: Partial<MnemosyneBackendConfig> = {}): MnemosyneBackendConfig {
+function makeMnemosyneConfig(
+	overrides: (Partial<MnemosyneBackendConfig> & Record<string, unknown>) | undefined = {},
+): MnemosyneBackendConfig {
 	if (!tempDbPath) {
 		const tempDir = path.join(tmpdir(), `mnemosyne-test-${Date.now()}`);
 		mkdirSync(tempDir, { recursive: true });
@@ -132,21 +134,31 @@ function makeMnemosyneConfig(overrides: Partial<MnemosyneBackendConfig> = {}): M
 	};
 }
 
-function registerMnemosyneState(config?: MnemosyneBackendConfig) {
+interface RegisterMnemosyneStateOptions {
+	cwd?: string;
+	sessionId?: string;
+}
+
+function registerMnemosyneState(
+	config?: MnemosyneBackendConfig,
+	options: RegisterMnemosyneStateOptions = {},
+): MnemosyneSessionState {
 	const finalConfig = config ?? makeMnemosyneConfig();
+	const sessionId = options.sessionId ?? TEST_SESSION_ID;
 	registeredMnemosyneState = new MnemosyneSessionState({
-		sessionId: TEST_SESSION_ID,
+		sessionId,
 		config: finalConfig,
 		session: {
-			sessionId: TEST_SESSION_ID,
+			sessionId,
 			sessionManager: {
 				getEntries: () => [],
-				getCwd: () => "/tmp",
+				getCwd: () => options.cwd ?? "/tmp",
 			} as never,
 			emitNotice: () => {},
 			getHindsightSessionState: () => undefined,
 		} as never,
 	});
+	return registeredMnemosyneState;
 }
 
 describe("Hindsight tool factories", () => {
@@ -365,6 +377,37 @@ describe("retain.execute (Mnemosyne backend)", () => {
 		expect(text).toContain("fact three");
 	});
 
+	it("isolates memories between projects when scoping is per-project", async () => {
+		const settings = Settings.isolated({
+			"memory.backend": "mnemosyne",
+			"hindsight.scoping": "per-project",
+		});
+		const config = makeMnemosyneConfig({ scoping: "per-project" });
+
+		registerMnemosyneState(config, { cwd: "/work/project-alpha" });
+		await HindsightRetainTool.createIf(makeSession(settings))!.execute("call-mnemosyne-alpha-store", {
+			items: [{ content: "alpha uses tabs" }],
+		});
+
+		registeredMnemosyneState?.dispose();
+		registerMnemosyneState(config, { cwd: "/work/project-beta" });
+		const betaRecall = await HindsightRecallTool.createIf(makeSession(settings))!.execute(
+			"call-mnemosyne-beta-recall",
+			{
+				query: "tabs",
+			},
+		);
+		expect(betaRecall.content[0]).toEqual({ type: "text", text: "No relevant memories found." });
+
+		registeredMnemosyneState?.dispose();
+		registerMnemosyneState(config, { cwd: "/work/project-alpha" });
+		const alphaRecall = await HindsightRecallTool.createIf(makeSession(settings))!.execute(
+			"call-mnemosyne-alpha-recall",
+			{ query: "tabs" },
+		);
+		expect((alphaRecall.content[0] as { text: string }).text).toContain("alpha uses tabs");
+	});
+
 	it("throws when no per-session Mnemosyne state is registered", async () => {
 		const settings = Settings.isolated({ "memory.backend": "mnemosyne" });
 		const tool = HindsightRetainTool.createIf(makeSession(settings))!;
@@ -489,6 +532,65 @@ describe("recall.execute (Mnemosyne backend)", () => {
 		const text = (result.content[0] as { text: string }).text;
 		expect(text).toContain("Found 1 relevant memory");
 		expect(text).toContain("the user prefers dark mode in their editor");
+	});
+
+	it("shares memories across projects when scoping is global", async () => {
+		const settings = Settings.isolated({
+			"memory.backend": "mnemosyne",
+			"hindsight.scoping": "global",
+		});
+		const config = makeMnemosyneConfig({ scoping: "global" });
+
+		registerMnemosyneState(config, { cwd: "/work/project-alpha" });
+		await HindsightRetainTool.createIf(makeSession(settings))!.execute("call-mnemosyne-global-store", {
+			items: [{ content: "global memory survives project switches" }],
+		});
+
+		registeredMnemosyneState?.dispose();
+		registerMnemosyneState(config, { cwd: "/work/project-beta" });
+		const result = await HindsightRecallTool.createIf(makeSession(settings))!.execute(
+			"call-mnemosyne-global-recall",
+			{ query: "project switches" },
+		);
+
+		const text = (result.content[0] as { text: string }).text;
+		expect(text).toContain("global memory survives project switches");
+	});
+
+	it("merges global and project-local memories on recall when scoping is per-project-tagged", async () => {
+		const settings = Settings.isolated({
+			"memory.backend": "mnemosyne",
+			"hindsight.scoping": "per-project-tagged",
+		});
+
+		registerMnemosyneState(makeMnemosyneConfig({ scoping: "global" }), { cwd: "/work/project-alpha" });
+		await HindsightRetainTool.createIf(makeSession(settings))!.execute("call-mnemosyne-tagged-global", {
+			items: [{ content: "the user likes concise CLI output" }],
+		});
+
+		registeredMnemosyneState?.dispose();
+		registerMnemosyneState(makeMnemosyneConfig({ scoping: "per-project-tagged" }), { cwd: "/work/project-alpha" });
+		await HindsightRetainTool.createIf(makeSession(settings))!.execute("call-mnemosyne-tagged-local", {
+			items: [{ content: "project alpha uses pnpm workspaces" }],
+		});
+
+		registeredMnemosyneState?.dispose();
+		registerMnemosyneState(makeMnemosyneConfig({ scoping: "per-project-tagged" }), { cwd: "/work/project-beta" });
+		await HindsightRetainTool.createIf(makeSession(settings))!.execute("call-mnemosyne-tagged-other", {
+			items: [{ content: "project beta deploys to staging first" }],
+		});
+
+		registeredMnemosyneState?.dispose();
+		registerMnemosyneState(makeMnemosyneConfig({ scoping: "per-project-tagged" }), { cwd: "/work/project-alpha" });
+		const result = await HindsightRecallTool.createIf(makeSession(settings))!.execute(
+			"call-mnemosyne-tagged-recall",
+			{ query: "what should I know about this user and project alpha?" },
+		);
+
+		const text = (result.content[0] as { text: string }).text;
+		expect(text).toContain("the user likes concise CLI output");
+		expect(text).toContain("project alpha uses pnpm workspaces");
+		expect(text).not.toContain("project beta deploys to staging first");
 	});
 
 	it("throws when no per-session Mnemosyne state is registered", async () => {
@@ -621,6 +723,34 @@ describe("reflect.execute (Mnemosyne backend)", () => {
 		const text = (result.content[0] as { text: string }).text;
 		expect(text).toContain("Based on recalled memories");
 		expect(text).toContain("Python");
+	});
+
+	it("merges global and project-local memories on reflect when scoping is per-project-tagged", async () => {
+		const settings = Settings.isolated({
+			"memory.backend": "mnemosyne",
+			"hindsight.scoping": "per-project-tagged",
+		});
+
+		registerMnemosyneState(makeMnemosyneConfig({ scoping: "global" }), { cwd: "/work/project-alpha" });
+		await HindsightRetainTool.createIf(makeSession(settings))!.execute("call-mnemosyne-reflect-global", {
+			items: [{ content: "the user prefers concise summaries" }],
+		});
+
+		registeredMnemosyneState?.dispose();
+		registerMnemosyneState(makeMnemosyneConfig({ scoping: "per-project-tagged" }), { cwd: "/work/project-alpha" });
+		await HindsightRetainTool.createIf(makeSession(settings))!.execute("call-mnemosyne-reflect-local", {
+			items: [{ content: "project alpha uses turbo for task orchestration" }],
+		});
+
+		const result = await HindsightReflectTool.createIf(makeSession(settings))!.execute(
+			"call-mnemosyne-reflect-tagged",
+			{ query: "what matters for this user working in project alpha?" },
+		);
+
+		const text = (result.content[0] as { text: string }).text;
+		expect(text).toContain("Based on recalled memories");
+		expect(text).toContain("the user prefers concise summaries");
+		expect(text).toContain("project alpha uses turbo for task orchestration");
 	});
 
 	it("throws when no per-session Mnemosyne state is registered", async () => {

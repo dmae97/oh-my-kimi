@@ -43,7 +43,7 @@ export class HindsightRetainTool implements AgentTool<typeof hindsightRetainSche
 			}
 
 			for (const item of params.items) {
-				state.memory.remember(item.content, {
+				state.rememberScoped(item.content, {
 					source: "coding-agent-retain",
 					importance: 0.75,
 					metadata: {
