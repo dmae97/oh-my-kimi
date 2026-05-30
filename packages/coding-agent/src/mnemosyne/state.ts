@@ -99,14 +99,23 @@ export class MnemosyneSessionState {
 		const merged: RecallResult[] = [];
 		const byId = new Map<string, number>();
 		const byContent = new Map<string, number>();
+		const sharedFallbackQuery = deriveSharedRecallFallbackQuery(
+			query,
+			this.scoped.retain.bank,
+			this.scoped.global?.bank,
+		);
 		for (const target of this.scoped.recall) {
+			const queries =
+				target.bank === this.scoped.global?.bank && sharedFallbackQuery ? [query, sharedFallbackQuery] : [query];
 			try {
-				const results = target.memory.recallEnhanced(query, this.config.recallLimit, {
-					includeFacts: true,
-					channelId: target.bank,
-				});
-				for (const result of results) {
-					mergeRecallResult(merged, byId, byContent, result);
+				for (const recallQuery of queries) {
+					const results = target.memory.recallEnhanced(recallQuery, this.config.recallLimit, {
+						includeFacts: true,
+						channelId: target.bank,
+					});
+					for (const result of results) {
+						mergeRecallResult(merged, byId, byContent, result);
+					}
 				}
 			} catch (error) {
 				if (this.config.debug) {
@@ -299,6 +308,58 @@ function uniqueBanks(banks: readonly string[]): readonly string[] {
 	return [...new Set(banks)];
 }
 
+/**
+ * In `per-project-tagged`, shared-bank lexical recall can miss global facts
+ * when the query is packed with project-bank tokens. Strip those literal bank
+ * tokens for one fallback pass so broad user-preference memories still match.
+ */
+function deriveSharedRecallFallbackQuery(
+	query: string,
+	projectBank: string,
+	sharedBank: string | undefined,
+): string | undefined {
+	if (!sharedBank || projectBank === sharedBank) return undefined;
+	const tokens = tokenizeBankName(projectBank);
+	if (tokens.length === 0) return undefined;
+	let broadened = stripLiteralBankPhrase(query, tokens);
+	for (const token of tokens) {
+		broadened = broadened.replace(new RegExp(`\\b${escapeRegExp(token)}\\b`, "gi"), " ");
+	}
+	broadened = cleanupBroadenedRecallQuery(broadened);
+	const normalizedBroadened = normalizeRecallQuery(broadened);
+	if (normalizedBroadened.length === 0) return undefined;
+	return normalizedBroadened === normalizeRecallQuery(query) ? undefined : broadened;
+}
+
+function tokenizeBankName(bank: string): string[] {
+	return [...new Set(bank.toLowerCase().match(/[a-z0-9]+/g) ?? [])];
+}
+
+function stripLiteralBankPhrase(query: string, tokens: readonly string[]): string {
+	if (tokens.length < 2) return query;
+	const separators = "[\\s_-]+";
+	const phrase = tokens.map(token => escapeRegExp(token)).join(separators);
+	return query.replace(new RegExp(`\\b${phrase}\\b`, "gi"), " ");
+}
+
+function cleanupBroadenedRecallQuery(query: string): string {
+	return query
+		.replace(/\s+([?!.,;:])/g, "$1")
+		.replace(/\b(and|or)\s*([?!.,;:]|$)/gi, "$2")
+		.replace(/\s{2,}/g, " ")
+		.trim();
+}
+
+function normalizeRecallQuery(query: string): string {
+	return query
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
+}
+
+function escapeRegExp(text: string): string {
+	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 function createMemory(config: MnemosyneBackendConfig, bank: string): Mnemosyne {
 	const providerOptions = config.providerOptions as Record<string, unknown>;
 	return new Mnemosyne({

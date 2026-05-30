@@ -407,6 +407,7 @@ describe("retain.execute (Mnemosyne backend)", () => {
 		const tool = MemoryRetainTool.createIf(makeSession(settings))!;
 		await expect(tool.execute("call-mnemosyne-no-state", { items: [{ content: "x" }] })).rejects.toThrow(
 			/not initialised/i,
+		);
 	});
 });
 
