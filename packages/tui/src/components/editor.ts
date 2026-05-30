@@ -1571,6 +1571,10 @@ export class Editor implements Component, Focusable {
 				else if (textBeforeCursor.match(/(?:^|[\s([{>]):[a-zA-Z0-9_+-]*$/)) {
 					this.#tryTriggerAutocomplete();
 				}
+				// Check if we're typing an internal URL scheme (e.g. local://, skill://)
+				else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
+					this.#tryTriggerAutocomplete();
+				}
 			}
 		} else {
 			this.#debouncedUpdateAutocomplete();
@@ -1762,6 +1766,10 @@ export class Editor implements Component, Focusable {
 			else if (textBeforeCursor.match(/#[^\s#]*$/)) {
 				this.#tryTriggerAutocomplete();
 			}
+			// internal URL scheme context (e.g. local://, skill://)
+			else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
+				this.#tryTriggerAutocomplete();
+			}
 		}
 	}
 
@@ -1912,6 +1920,8 @@ export class Editor implements Component, Focusable {
 			} else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
 				this.#tryTriggerAutocomplete();
 			} else if (textBeforeCursor.match(/#[^\s#]*$/)) {
+				this.#tryTriggerAutocomplete();
+			} else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
 				this.#tryTriggerAutocomplete();
 			}
 		}
@@ -2232,6 +2242,10 @@ export class Editor implements Component, Focusable {
 			else if (textBeforeCursor.match(/#[^\s#]*$/)) {
 				this.#tryTriggerAutocomplete();
 			}
+			// internal URL scheme context (e.g. local://, skill://)
+			else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
+				this.#tryTriggerAutocomplete();
+			}
 		}
 	}
 
@@ -2463,6 +2477,17 @@ export class Editor implements Component, Focusable {
 	}
 
 	// Autocomplete methods
+	/**
+	 * Whether the text ending at the cursor looks like a `scheme://` URL token.
+	 * Generic by design: any scheme triggers a suggestion fetch and the active
+	 * provider decides whether it has candidates (returning none is a no-op).
+	 * MUST stay in sync with the token grammar in coding-agent's
+	 * `internal-url-autocomplete.ts`.
+	 */
+	#textTriggersUrlAutocomplete(textBeforeCursor: string): boolean {
+		return /(?:^|[\s"'`(<=])[a-z][a-z0-9+.-]*:\/{1,2}[^\s"'`()<>]*$/i.test(textBeforeCursor);
+	}
+
 	async #tryTriggerAutocomplete(explicitTab: boolean = false): Promise<void> {
 		if (!this.#autocompleteProvider) return;
 		// Check if we should trigger file completion on Tab

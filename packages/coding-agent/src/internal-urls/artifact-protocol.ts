@@ -13,7 +13,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { artifactsDirsFromRegistry } from "./registry-helpers";
-import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
+import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 export class ArtifactProtocolHandler implements ProtocolHandler {
 	readonly scheme = "artifact";
@@ -76,5 +76,23 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 			size: Buffer.byteLength(content, "utf-8"),
 			sourcePath: foundPath,
 		};
+	}
+
+	async complete(): Promise<UrlCompletion[]> {
+		const ids = new Set<string>();
+		for (const dir of artifactsDirsFromRegistry()) {
+			let files: string[];
+			try {
+				files = await fs.readdir(dir);
+			} catch (err) {
+				if (isEnoent(err)) continue;
+				throw err;
+			}
+			for (const f of files) {
+				const m = f.match(/^(\d+)\./);
+				if (m) ids.add(m[1]!);
+			}
+		}
+		return [...ids].sort((a, b) => Number(a) - Number(b)).map(value => ({ value }));
 	}
 }

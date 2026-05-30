@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added autocomplete triggering for internal URL scheme tokens such as `local://` and `skill://` while typing in the editor
 
 ### Fixed
 

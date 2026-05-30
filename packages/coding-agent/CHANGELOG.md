@@ -1,8 +1,12 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added prompt-mode autocomplete for supported internal URL schemes (`skill://`, `rule://`, `agent://`, `artifact://`, `local://`, `memory://`, and `omp://`) so typing those tokens now suggests existing resources as completion candidates
+- Added fuzzy matching and ranked suggestion ordering for internal URL completion, including rule and skill descriptions, with accepted completion replacing just the typed token and inserting the chosen URL followed by a space
+- Changed internal URL completions now include nested `local://` path suggestions from the configured local workspace
 - Added Mnemosyne memory inference model selection with an online mode or local transformers.js options (`qwen3-1.7b`, `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`) so memory extraction and consolidation can run via the shared tiny-model worker
 - Changed memory tiny-model handling to route local memory prompts through the same queueed tiny-model worker pipeline with bounded completion output
 - Added a Providers → Tiny Model setting for session titles, defaulting to the online `pi/smol` path with five optional local CPU transformers.js models. A local model — and the one-time `@huggingface/transformers` runtime install in compiled binaries — is downloaded and loaded only when explicitly selected (or via `omp tiny-models download`); the default online path never spawns the title worker for inference. Selecting a local model adds a delayed `pi/smol` fallback so titles never block, plus in-chat download progress.
