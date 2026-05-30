@@ -1,6 +1,11 @@
 # Changelog
 
+All notable changes to this package will be documented in this file.
+
 ## [Unreleased]
+### Added
+
+- Added a `native-compat` adapter that backs the legacy `@oh-my-pi/pi-natives` Hashline class and enum exports.
 
 ## [15.5.13] - 2026-05-29
 ### Breaking Changes
@@ -93,7 +98,6 @@
 
 - Removed legacy deletion semantics that treated bare `A-B:` as a blank-line replacement; a bare range anchor now deletes the range.
 
-All notable changes to this package will be documented in this file.
 
 ## [15.5.4] - 2026-05-27
 ### Added

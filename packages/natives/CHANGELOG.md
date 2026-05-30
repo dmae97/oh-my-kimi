@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Restored the documented `Hashline`, `HashlineChunker`, `HashlineCursorKind`, `HashlineEditKind`, and `HashlineTokenKind` exports from the package entrypoint.
 
 ## [15.5.10] - 2026-05-28
 

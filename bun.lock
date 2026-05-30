@@ -93,6 +93,9 @@
     "packages/natives": {
       "name": "@oh-my-pi/pi-natives",
       "version": "15.5.14",
+      "dependencies": {
+        "@oh-my-pi/hashline": "catalog:",
+      },
       "devDependencies": {
         "@napi-rs/cli": "catalog:",
         "@types/bun": "catalog:",

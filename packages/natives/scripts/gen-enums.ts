@@ -22,6 +22,19 @@ const jsPath = path.join(nativeDir, "index.js");
 
 const MARKER_START = "// --- generated native exports (do not edit) ---";
 const MARKER_END = "// --- end generated native exports ---";
+const HASHLINE_COMPAT_EXPORTS = [
+	"Hashline",
+	"HashlineChunker",
+	"HashlineCursorKind",
+	"HashlineEditKind",
+	"HashlineTokenKind",
+] as const;
+const HASHLINE_COMPAT_EXPORT_SET = new Set<string>(HASHLINE_COMPAT_EXPORTS);
+const HASHLINE_COMPAT_DTS_START = "// --- hashline compatibility exports (do not edit) ---";
+const HASHLINE_COMPAT_DTS_END = "// --- end hashline compatibility exports ---";
+const HASHLINE_COMPAT_DTS = `${HASHLINE_COMPAT_DTS_START}
+export * from "@oh-my-pi/hashline/native-compat";
+${HASHLINE_COMPAT_DTS_END}`;
 
 // Match each `export declare const enum Name { ... }` block. The closing `}`
 // is matched only at line start (enum bodies are indented).
@@ -74,17 +87,36 @@ function collectMatches(dts: string, re: RegExp): string[] {
 	return names;
 }
 
+function stripHashlineCompatDts(dts: string): string {
+	const blockStart = dts.indexOf(HASHLINE_COMPAT_DTS_START);
+	if (blockStart === -1) return dts;
+	const blockEnd = dts.indexOf(HASHLINE_COMPAT_DTS_END, blockStart);
+	if (blockEnd === -1) {
+		throw new Error(`gen-enums: ${dtsPath} contains ${HASHLINE_COMPAT_DTS_START} without ${HASHLINE_COMPAT_DTS_END}`);
+	}
+	const afterBlock = blockEnd + HASHLINE_COMPAT_DTS_END.length;
+	const before = dts.slice(0, blockStart).trimEnd();
+	const after = dts.slice(afterBlock).trimStart();
+	return after.length > 0 ? `${before}\n${after}` : `${before}\n`;
+}
+
 function buildGeneratedBlock(dts: string): string {
-	const classes = collectMatches(dts, CLASS_RE);
-	const functions = collectMatches(dts, FUNCTION_RE);
-	const enums = collectEnums(dts);
+	const classes = collectMatches(dts, CLASS_RE).filter(name => !HASHLINE_COMPAT_EXPORT_SET.has(name));
+	const functions = collectMatches(dts, FUNCTION_RE).filter(name => !HASHLINE_COMPAT_EXPORT_SET.has(name));
+	const enums = collectEnums(dts).filter(e => !HASHLINE_COMPAT_EXPORT_SET.has(e.name));
 
 	if (classes.length === 0 && functions.length === 0 && enums.length === 0) {
 		throw new Error("No public symbols found in index.d.ts — check napi build output");
 	}
 
-	const lines: string[] = [];
+	const lines: string[] = [
+		"// hashline compatibility exports",
+		"export {",
+		...HASHLINE_COMPAT_EXPORTS.map(name => `\t${name},`),
+		'} from "@oh-my-pi/hashline/native-compat";',
+	];
 	if (classes.length > 0) {
+		lines.push("");
 		lines.push("// classes");
 		for (const name of classes) {
 			lines.push(`export const ${name} = nativeBindings.${name};`);
@@ -109,7 +141,8 @@ function buildGeneratedBlock(dts: string): string {
 }
 
 export async function generateEnumExports(): Promise<void> {
-	const dts = await Bun.file(dtsPath).text();
+	const rawDts = await Bun.file(dtsPath).text();
+	const dts = stripHashlineCompatDts(rawDts);
 	const existing = await Bun.file(jsPath).text();
 	const generatedBlock = buildGeneratedBlock(dts);
 
@@ -132,10 +165,11 @@ export async function generateEnumExports(): Promise<void> {
 	// Also fix the .d.ts: replace `const enum` with `enum` so TS allows
 	// assigning string literals to enum types without casts.
 	const constEnumCount = (dts.match(/export (?:declare )?const enum/g) ?? []).length;
-	const dtsContent = dts
+	const fixedDts = dts
 		.replaceAll("export const enum", "export declare enum")
-		.replaceAll("export declare const enum", "export declare enum");
-	await Bun.write(dtsPath, dtsContent);
+		.replaceAll("export declare const enum", "export declare enum")
+		.trimEnd();
+	await Bun.write(dtsPath, `${fixedDts}\n\n${HASHLINE_COMPAT_DTS}\n`);
 
 	const symbolCount = (generatedBlock.match(/^export const /gm) ?? []).length;
 	console.log(

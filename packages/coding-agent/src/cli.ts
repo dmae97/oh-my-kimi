@@ -11,8 +11,8 @@ procmgr.scrubProcessEnv();
  * lightweight CLI runner from pi-utils.
  */
 import { type CliConfig, run } from "@oh-my-pi/pi-utils/cli";
-import { commands, isSubcommand } from "./cli-commands";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
+import { commands, isSubcommand } from "./cli-commands";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(

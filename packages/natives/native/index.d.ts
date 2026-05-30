@@ -1374,3 +1374,7 @@ export interface WorkProfile {
  * Returns UTF-16 lines with active SGR codes carried across line boundaries.
  */
 export declare function wrapTextWithAnsi(text: string, width: number, tabWidth: number): Array<string>
+
+// --- hashline compatibility exports (do not edit) ---
+export * from "@oh-my-pi/hashline/native-compat";
+// --- end hashline compatibility exports ---

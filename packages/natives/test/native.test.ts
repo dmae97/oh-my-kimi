@@ -10,6 +10,11 @@ import {
 	GrepOutputMode,
 	glob,
 	grep,
+	Hashline,
+	HashlineChunker,
+	HashlineCursorKind,
+	HashlineEditKind,
+	HashlineTokenKind,
 	htmlToMarkdown,
 	invalidateFsScanCache,
 	listWorkspace,
@@ -82,6 +87,45 @@ describe("pi-natives", () => {
 		return async () => {
 			await cleanupFixtures();
 		};
+	});
+
+	describe("hashline compatibility exports", () => {
+		it("links and applies the legacy Hashline API", () => {
+			const text = "one\n";
+			const hash = Hashline.computeFileHash(text);
+
+			expect(Hashline.formatHeader("file.ts", hash)).toBe(`¶file.ts#${hash}`);
+			expect(Hashline.formatLine(2, "two")).toBe("2:two");
+			expect(Hashline.formatLines("one\ntwo", 5)).toBe("5:one\n6:two");
+			expect(HashlineCursorKind.BeforeAnchor).toBe("before_anchor");
+			expect(HashlineTokenKind.OpBlock).toBe("op-block");
+
+			const patch = "replace 1..1:\n+uno";
+			const parsed = Hashline.parse(patch);
+			expect(parsed.edits.map(edit => edit.kind)).toEqual([HashlineEditKind.Insert, HashlineEditKind.Delete]);
+			expect(Hashline.apply(text, parsed.edits).lines).toBe("uno\n");
+			expect(Hashline.parseAndApply(patch, text).lines).toBe("uno\n");
+			expect(Hashline.containsOps(patch)).toBe(true);
+
+			const section = Hashline.splitOne(`¶file.ts#${hash}\n${patch}`);
+			expect(section).toEqual({ path: "file.ts", fileHash: hash, diff: patch });
+
+			const diff = Hashline.computeSectionDiff(section, text);
+			expect(diff.diff).toContain("-1|one");
+			expect(diff.diff).toContain("+1|uno");
+			expect(Hashline.compactPreview(diff.diff).preview).toContain("-1:one");
+		});
+
+		it("streams numbered lines with the legacy HashlineChunker API", () => {
+			const chunker = new HashlineChunker({ startLine: 3, maxChunkLines: 1 });
+
+			expect(chunker.push("alpha\nbeta")).toEqual(["3:alpha"]);
+			expect(chunker.finish()).toEqual(["4:beta"]);
+			expect(Hashline.streamChunks(["alpha\n", "beta"], { startLine: 7, maxChunkLines: 1 })).toEqual([
+				"7:alpha",
+				"8:beta",
+			]);
+		});
 	});
 
 	describe("summarize", () => {

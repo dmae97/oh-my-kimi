@@ -15,6 +15,15 @@ import { loadNative } from "./loader-state.js";
 
 const nativeBindings = loadNative();
 // --- generated native exports (do not edit) ---
+// hashline compatibility exports
+export {
+	Hashline,
+	HashlineChunker,
+	HashlineCursorKind,
+	HashlineEditKind,
+	HashlineTokenKind,
+} from "@oh-my-pi/hashline/native-compat";
+
 // classes
 export const MacAppearanceObserver = nativeBindings.MacAppearanceObserver;
 export const MacOSPowerAssertion = nativeBindings.MacOSPowerAssertion;
