@@ -1,5 +1,12 @@
 #!/usr/bin/env bun
-import { APP_NAME, getActiveProfile, MIN_BUN_VERSION, setProfile, VERSION } from "@oh-my-pi/pi-utils/dirs";
+import {
+	APP_NAME,
+	getActiveProfile,
+	MIN_BUN_VERSION,
+	normalizeProfileName,
+	setProfile,
+	VERSION,
+} from "@oh-my-pi/pi-utils/dirs";
 
 // Strip macOS malloc-stack-logging env vars before any subprocess is spawned.
 // Keep this local instead of importing `@oh-my-pi/pi-utils/procmgr`: that module
@@ -60,6 +67,13 @@ export async function runCli(argv: string[]): Promise<void> {
 		resolvedArgv = extracted.argv;
 		if (extracted.profile !== undefined) {
 			setProfile(extracted.profile);
+		} else {
+			// No explicit --profile: re-validate any OMP_PROFILE/PI_PROFILE inherited
+			// from the environment. Module-load resolution deliberately swallows an
+			// invalid value to avoid an uncaught throw before this try/catch is in
+			// scope (see `readProfileFromEnvSafe` in dirs.ts). Surfacing it here turns
+			// `OMP_PROFILE=.. omp --version` into a clean error instead of a stack trace.
+			normalizeProfileName(process.env.OMP_PROFILE || process.env.PI_PROFILE);
 		}
 		if (extracted.aliasName !== undefined) {
 			const profile = extracted.profile ?? getActiveProfile();

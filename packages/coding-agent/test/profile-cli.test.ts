@@ -168,4 +168,53 @@ describe("global --profile flag", () => {
 			await fs.rm(root, { recursive: true, force: true });
 		}
 	});
+
+	it("surfaces an invalid OMP_PROFILE env as a clean error, not an import crash", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-profile-cli-env-bad-"));
+		try {
+			const home = path.join(root, "home");
+			await fs.mkdir(home, { recursive: true });
+
+			const probePath = path.join(root, "probe.ts");
+			await Bun.write(
+				probePath,
+				[
+					`import { runCli } from ${JSON.stringify(url.pathToFileURL(cliEntry).href)};`,
+					'await runCli(["--version"]);',
+					// Reached only if the module import did NOT throw — i.e. the invalid
+					// env was deferred to runCli's error handler instead of crashing the
+					// process during the static import of dirs.ts.
+					'process.stdout.write("HANDLED");',
+				].join("\n"),
+			);
+
+			const childEnv: Record<string, string | undefined> = {
+				...process.env,
+				HOME: home,
+				PI_CONFIG_DIR: ".omp-profile-cli-env-bad",
+				OMP_PROFILE: "..",
+				NO_COLOR: "1",
+			};
+			delete childEnv.PI_PROFILE;
+			delete childEnv.PI_CODING_AGENT_DIR;
+
+			const proc = Bun.spawn([process.execPath, probePath], {
+				cwd: repoRoot,
+				stdout: "pipe",
+				stderr: "pipe",
+				env: childEnv,
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				readStream(proc.stdout as ReadableStream<Uint8Array>),
+				readStream(proc.stderr as ReadableStream<Uint8Array>),
+				proc.exited,
+			]);
+
+			expect(stdout, stderr).toContain("HANDLED");
+			expect(stderr).toContain("Invalid OMP profile");
+			expect(exitCode).toBe(1);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
 });
