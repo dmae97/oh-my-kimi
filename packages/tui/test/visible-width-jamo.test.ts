@@ -45,8 +45,12 @@ describe("visibleWidth — Hangul Compatibility Jamo correction", () => {
 	});
 
 	it("U+3164 HANGUL FILLER (inside the corrected range) follows platform width", () => {
-		// Often emitted by IME for empty-syllable placeholders.
-		expect(visibleWidth("\u3164")).toBe(JAMO_CELLS);
+		// Often emitted by IME for empty-syllable placeholders. The filler is the
+		// one code point in the block that UAX#11 / `unicode-width` classify as
+		// zero-width, so off-darwin it measures 0 cells. On darwin the blanket
+		// jamo correction (U+3131..U+318E → 1) forces it to a single cell.
+		const fillerCells = process.platform === "darwin" ? 1 : 0;
+		expect(visibleWidth("\u3164")).toBe(fillerCells);
 	});
 
 	it("string of 8 consecutive jamo is 8 cells on darwin, 16 elsewhere", () => {

@@ -103,6 +103,12 @@ export interface AgentOptions {
 	interruptMode?: "immediate" | "wait";
 
 	/**
+	 * Maximum completed tool calls to accept from one streamed assistant turn before
+	 * executing the batch. Undefined disables batching.
+	 */
+	maxToolCallsPerTurn?: number;
+
+	/**
 	 * API format for Kimi Code provider: "openai" or "anthropic" (default: "anthropic")
 	 */
 	kimiApiFormat?: "openai" | "anthropic";
@@ -269,6 +275,7 @@ export class Agent {
 	#steeringMode: "all" | "one-at-a-time";
 	#followUpMode: "all" | "one-at-a-time";
 	#interruptMode: "immediate" | "wait";
+	#maxToolCallsPerTurn?: number;
 	#sessionId?: string;
 	#metadata?: Record<string, unknown>;
 	#metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
@@ -325,6 +332,7 @@ export class Agent {
 		this.#steeringMode = opts.steeringMode || "one-at-a-time";
 		this.#followUpMode = opts.followUpMode || "one-at-a-time";
 		this.#interruptMode = opts.interruptMode || "immediate";
+		this.#maxToolCallsPerTurn = opts.maxToolCallsPerTurn;
 		this.streamFn = opts.streamFn || streamSimple;
 		this.#sessionId = opts.sessionId;
 		this.#providerSessionState = opts.providerSessionState;
@@ -545,6 +553,14 @@ export class Agent {
 	 */
 	set maxRetryDelayMs(value: number | undefined) {
 		this.#maxRetryDelayMs = value;
+	}
+
+	get maxToolCallsPerTurn(): number | undefined {
+		return this.#maxToolCallsPerTurn;
+	}
+
+	set maxToolCallsPerTurn(value: number | undefined) {
+		this.#maxToolCallsPerTurn = value;
 	}
 
 	get state(): AgentState {
@@ -917,6 +933,7 @@ export class Agent {
 			serviceTier: this.#serviceTier,
 			hideThinkingSummary: this.#hideThinkingSummary,
 			interruptMode: this.#interruptMode,
+			maxToolCallsPerTurn: this.#maxToolCallsPerTurn,
 			sessionId: this.#sessionId,
 			metadata: this.#metadataResolver ? undefined : this.#metadata,
 			metadataResolver: this.#metadataResolver,

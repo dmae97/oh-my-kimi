@@ -963,16 +963,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		const marker = formatHudNoteMarker(todo.notes?.length ?? 0);
 		switch (todo.status) {
 			case "completed":
-				return (
-					theme.fg("success", `${prefix}${theme.status.success} ${chalk.strikethrough(todo.content)}`) + marker
-				);
+				return theme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(todo.content)}`) + marker;
 			case "in_progress":
-				return theme.fg("accent", `${prefix}${theme.status.running} ${todo.content}`) + marker;
+				return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 			case "abandoned":
 				return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`) + marker;
 			default:
 				if (matched) {
-					return theme.fg("accent", `${prefix}${theme.status.running} ${todo.content}`) + marker;
+					return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 				}
 				return theme.fg("dim", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 		}

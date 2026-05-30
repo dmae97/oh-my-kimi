@@ -1315,9 +1315,27 @@ export class TUI extends Container {
 		const pureAppend = diff.appendedLines && diff.firstChanged === this.#previousLines.length;
 		const structuralMutation = newLines.length !== this.#previousLines.length || diff.firstChanged < prevViewportTop;
 		if (!pureAppend && structuralMutation && !isMultiplexerSession()) {
-			if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom())) {
+			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
+			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom)) {
 				this.#markNativeScrollbackDirty();
 				return { kind: "deferredMutation" };
+			}
+			// Expanding a collapsed offscreen cell inserts rows before an unchanged
+			// suffix. A viewport-only repaint makes the live bottom look correct but
+			// leaves native scrollback holding the old collapsed rows; scrolling up then
+			// shows a splice of stale history and the new tail. Pure tail appends with an
+			// offscreen status/header tick are still handled by the append-tail path.
+			if (
+				contentGrew &&
+				diff.firstChanged < prevViewportTop &&
+				this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, false)
+			) {
+				const appendedTailStart = diff.appendedLines ? this.#findAppendedTailStart(newLines) : newLines.length;
+				const tailAppendCount = newLines.length - appendedTailStart;
+				const addedCount = newLines.length - this.#previousLines.length;
+				if (addedCount > tailAppendCount) {
+					return { kind: "historyRebuild" };
+				}
 			}
 		}
 

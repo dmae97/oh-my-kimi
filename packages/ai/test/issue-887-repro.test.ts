@@ -8,10 +8,20 @@
  * descriptor must override these specific ids to openai-completions so that
  * regenerated models.json keeps the correct routing.
  */
-import { describe, expect, test } from "bun:test";
-import { MODELS_DEV_PROVIDER_DESCRIPTORS, type ModelsDevModel } from "../src/provider-models/openai-compat";
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+	MODELS_DEV_PROVIDER_DESCRIPTORS,
+	type ModelsDevModel,
+	opencodeGoModelManagerOptions,
+} from "../src/provider-models/openai-compat";
 
 const OPENCODE_GO_BASE = "https://opencode.ai/zen/go/v1";
+
+const originalFetch = global.fetch;
+
+afterEach(() => {
+	global.fetch = originalFetch;
+});
 
 describe("opencode-go resolver routes 404-ing ids to openai-completions (issue #887)", () => {
 	const descriptor = MODELS_DEV_PROVIDER_DESCRIPTORS.find(d => d.providerId === "opencode-go");
@@ -37,5 +47,27 @@ describe("opencode-go resolver routes 404-ing ids to openai-completions (issue #
 		const m25: ModelsDevModel = { tool_call: true };
 		const resolved = descriptor?.resolveApi?.("minimax-m2.5", m25);
 		expect(resolved).toEqual({ api: "openai-completions", baseUrl: OPENCODE_GO_BASE });
+	});
+
+	test("runtime /v1/models refresh preserves qwen3.7-max Anthropic transport", async () => {
+		let requestedUrl = "";
+		const mockFetch = async (input: string | Request | URL): Promise<Response> => {
+			requestedUrl = input instanceof Request ? input.url : String(input);
+			return new Response(
+				JSON.stringify({
+					data: [{ id: "qwen3.7-max", name: "Qwen3.7 Max", context_length: 1000000 }],
+				}),
+				{ headers: { "content-type": "application/json" } },
+			);
+		};
+		global.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
+
+		const options = opencodeGoModelManagerOptions({ apiKey: "opencode-test-key" });
+		const models = await options.fetchDynamicModels?.();
+		const qwenMax = models?.find(model => model.id === "qwen3.7-max");
+
+		expect(requestedUrl).toBe("https://opencode.ai/zen/go/v1/models");
+		expect(qwenMax?.api).toBe("anthropic-messages");
+		expect(qwenMax?.baseUrl).toBe("https://opencode.ai/zen/go");
 	});
 });

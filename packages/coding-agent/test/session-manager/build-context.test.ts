@@ -355,8 +355,11 @@ describe("buildSessionContext", () => {
 				message: {
 					role: "assistant",
 					content: [
+						{ type: "thinking", thinking: "deliberating step 1", thinkingSignature: "sig_1" },
 						{ type: "text", text: "Let me finish duel.py now" },
 						{ type: "toolCall", id: "call_1", name: "write", arguments: { path: "duel.py" } },
+						{ type: "thinking", thinking: "deliberating step 2", thinkingSignature: "sig_2" },
+						{ type: "redactedThinking", data: "encrypted" },
 						{ type: "toolCall", id: "call_2", name: "bash", arguments: { command: "pytest" } },
 					],
 					api: "anthropic-messages",
@@ -379,8 +382,17 @@ describe("buildSessionContext", () => {
 			expect(ctx.messages).toHaveLength(2);
 			const last = ctx.messages[1];
 			expect(last.role).toBe("assistant");
-			const content = (last as { content: Array<{ type: string }> }).content;
+			const content = (last as { content: Array<{ type: string; thinkingSignature?: string }> }).content;
+			// Dangling tool_use stripped.
 			expect(content.some(block => block.type === "toolCall")).toBe(false);
+			// redacted_thinking dropped (encrypted; cannot be downgraded, would trip immutability).
+			expect(content.some(block => block.type === "redactedThinking")).toBe(false);
+			// thinking preserved but de-signed so the encoder downgrades it to plain text on the wire
+			// (a *modified* latest turn carrying signed thinking is rejected by Anthropic).
+			const thinking = content.filter(block => block.type === "thinking");
+			expect(thinking.length).toBeGreaterThan(0);
+			expect(thinking.every(block => block.thinkingSignature === undefined)).toBe(true);
+			// Visible reasoning/text preserved.
 			expect(content.some(block => block.type === "text")).toBe(true);
 		});
 
@@ -412,6 +424,87 @@ describe("buildSessionContext", () => {
 			const ctx = buildSessionContext(entries, "a1");
 			expect(ctx.messages).toHaveLength(1);
 			expect(ctx.messages[0].role).toBe("user");
+		});
+
+		it("strips a dangling mid-path assistant turn while leaving a paired turn intact", () => {
+			// Branch scenario: a user message was inserted after an assistant turn whose
+			// tool results live on a sibling branch (off this path), so its tool_use is
+			// dangling mid-conversation. An earlier turn whose result IS on-path must be
+			// left untouched.
+			const usage = {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			};
+			const asst = (id: string, parentId: string, content: unknown[], stopReason: string): SessionMessageEntry =>
+				({
+					type: "message",
+					id,
+					parentId,
+					timestamp: "2025-01-01T00:00:00Z",
+					message: {
+						role: "assistant",
+						content,
+						api: "anthropic-messages",
+						provider: "anthropic",
+						model: "claude-test",
+						usage,
+						stopReason,
+						timestamp: 1,
+					},
+				}) as SessionMessageEntry;
+			const toolRes = (id: string, parentId: string, toolCallId: string): SessionMessageEntry =>
+				({
+					type: "message",
+					id,
+					parentId,
+					timestamp: "2025-01-01T00:00:00Z",
+					message: {
+						role: "toolResult",
+						toolCallId,
+						toolName: "bash",
+						content: [{ type: "text", text: "ok" }],
+						details: {},
+						isError: false,
+						timestamp: 1,
+					},
+				}) as SessionMessageEntry;
+
+			const entries: SessionEntry[] = [
+				msg("u1", null, "user", "do it"),
+				asst(
+					"paired",
+					"u1",
+					[
+						{ type: "text", text: "running A" },
+						{ type: "toolCall", id: "call_a", name: "bash", arguments: {} },
+					],
+					"toolUse",
+				),
+				toolRes("r_a", "paired", "call_a"),
+				asst(
+					"dangling",
+					"r_a",
+					[
+						{ type: "text", text: "running B" },
+						{ type: "toolCall", id: "call_b", name: "bash", arguments: {} },
+					],
+					"toolUse",
+				),
+				msg("u2", "dangling", "user", "actually stop"),
+			];
+			const ctx = buildSessionContext(entries, "u2");
+			expect(ctx.messages).toHaveLength(5);
+			const paired = ctx.messages[1] as { content: Array<{ type: string }> };
+			const dangling = ctx.messages[3] as { content: Array<{ type: string }> };
+			// paired turn keeps its tool_use (result is on-path)
+			expect(paired.content.some(block => block.type === "toolCall")).toBe(true);
+			// dangling mid-path turn has its tool_use stripped, text preserved
+			expect(dangling.content.some(block => block.type === "toolCall")).toBe(false);
+			expect(dangling.content.some(block => block.type === "text")).toBe(true);
 		});
 	});
 });

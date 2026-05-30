@@ -24,7 +24,6 @@ const allToolsSettings = Settings.isolated({
 	"lsp.enabled": true,
 	"inspect_image.enabled": true,
 	"web_search.enabled": true,
-	"calc.enabled": true,
 	"browser.enabled": true,
 	"checkpoint.enabled": true,
 	"irc.enabled": true,

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [15.5.15] - 2026-05-30
+
+### Added
+
+- Added `PI_REQ_DEBUG=1` request/response recording for provider transports. Each request writes `rr-session-N.json`; each received response writes `rr-session-N.res.log` with response headers followed by raw body bytes.
+
+### Fixed
+
+- Fixed OpenCode-Go dynamic model refresh downgrading `qwen3.7-max` from Anthropic Messages to OpenAI-compatible transport, which caused `401 Model qwen3.7-max is not supported for format oa-compat` after `/v1/models` cache refreshes.
+
 ## [15.5.12] - 2026-05-29
 ### Removed
 
