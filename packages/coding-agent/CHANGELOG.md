@@ -1,10 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Enabled the agent loop's tool-call batch cap for Anthropic Claude sessions, cutting oversized streamed tool-use bursts into runnable batches before continuing the conversation.
 
 ### Removed
 
 - Removed the `calc` tool (deterministic arithmetic evaluator) and its `calc.enabled` setting. The model can compute via `eval` instead.
+
+### Fixed
+
+- Fixed Anthropic Claude tool-call batching to clear and reapply the Claude-specific batch cap whenever the session model changes
 
 ## [15.5.14] - 2026-05-29
 ### Added
