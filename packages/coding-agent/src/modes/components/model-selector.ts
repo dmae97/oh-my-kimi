@@ -105,6 +105,8 @@ const STATIC_PROVIDER_TABS: ProviderTabState[] = [
 	{ id: CANONICAL_TAB, label: CANONICAL_TAB },
 ];
 
+const MODEL_TAB_REFRESH_DEBOUNCE_MS = 120;
+
 function formatProviderTabLabel(providerId: string): string {
 	return providerId.replace(/[-_]+/g, " ").toUpperCase();
 }
@@ -145,6 +147,10 @@ export class ModelSelectorComponent extends Container {
 	// Tab state
 	#providers: ProviderTabState[] = STATIC_PROVIDER_TABS;
 	#activeTabIndex: number = 0;
+	#refreshingProviders: Set<string> = new Set();
+	#scheduledProviderRefreshes: Map<string, ReturnType<typeof setTimeout>> = new Map();
+	#refreshSpinnerFrame: number = 0;
+	#refreshSpinnerInterval?: NodeJS.Timeout;
 
 	// Context menu state
 	#isMenuOpen: boolean = false;
@@ -475,17 +481,96 @@ export class ModelSelectorComponent extends Container {
 			activeIndex >= 0 ? activeIndex : Math.min(this.#activeTabIndex, this.#providers.length - 1);
 	}
 
-	async #refreshSelectedProvider(): Promise<void> {
+	#getActiveProviderRefreshStatusText(): string | undefined {
+		const providerId = this.#getActiveProviderId();
+		if (!providerId || !this.#refreshingProviders.has(providerId)) {
+			return undefined;
+		}
+		const spinnerFrames = theme.spinnerFrames;
+		const spinner =
+			spinnerFrames.length > 0
+				? spinnerFrames[this.#refreshSpinnerFrame % spinnerFrames.length]
+				: theme.status.pending;
+		return theme.fg("warning", `  ${spinner} Refreshing ${formatProviderTabLabel(providerId)} in background...`);
+	}
+
+	#startRefreshSpinner(): void {
+		if (this.#refreshSpinnerInterval) {
+			return;
+		}
+		this.#refreshSpinnerInterval = setInterval(() => {
+			const frameCount = theme.spinnerFrames.length;
+			if (frameCount > 0) {
+				this.#refreshSpinnerFrame = (this.#refreshSpinnerFrame + 1) % frameCount;
+			}
+			this.#updateTabBar();
+			this.#tui.requestRender();
+		}, 80);
+	}
+
+	#stopRefreshSpinner(): void {
+		if (this.#refreshingProviders.size > 0) {
+			return;
+		}
+		if (this.#refreshSpinnerInterval) {
+			clearInterval(this.#refreshSpinnerInterval);
+			this.#refreshSpinnerInterval = undefined;
+		}
+		this.#refreshSpinnerFrame = 0;
+	}
+
+	#setProviderRefreshing(providerId: string, refreshing: boolean): void {
+		if (refreshing) {
+			this.#refreshingProviders.add(providerId);
+			this.#startRefreshSpinner();
+		} else {
+			this.#refreshingProviders.delete(providerId);
+			this.#stopRefreshSpinner();
+		}
+	}
+
+	#cancelScheduledProviderRefreshesExcept(keepProviderId?: string): void {
+		for (const [providerId, timer] of this.#scheduledProviderRefreshes) {
+			if (providerId === keepProviderId) {
+				continue;
+			}
+			clearTimeout(timer);
+			this.#scheduledProviderRefreshes.delete(providerId);
+			this.#setProviderRefreshing(providerId, false);
+		}
+	}
+
+	#scheduleSelectedProviderRefresh(): void {
 		const providerId = this.#getActiveProviderId();
 		if (this.#scopedModels.length > 0 || !providerId) {
 			return;
 		}
-		await this.#modelRegistry.refreshProvider(providerId);
-		await this.#loadModels();
-		this.#buildProviderTabs();
-		this.#updateTabBar();
-		this.#applyTabFilter();
-		this.#tui.requestRender();
+		if (this.#scheduledProviderRefreshes.has(providerId) || this.#refreshingProviders.has(providerId)) {
+			return;
+		}
+		this.#setProviderRefreshing(providerId, true);
+		const timer = setTimeout(() => {
+			this.#scheduledProviderRefreshes.delete(providerId);
+			void this.#refreshProviderInBackground(providerId);
+		}, MODEL_TAB_REFRESH_DEBOUNCE_MS);
+		this.#scheduledProviderRefreshes.set(providerId, timer);
+	}
+
+	async #refreshProviderInBackground(providerId: string): Promise<void> {
+		try {
+			await this.#modelRegistry.refreshProvider(providerId, "online");
+			await this.#loadModels();
+			this.#buildProviderTabs();
+			this.#updateTabBar();
+			this.#applyTabFilter();
+		} catch (error) {
+			this.#errorMessage = error instanceof Error ? error.message : String(error);
+			this.#updateList();
+		} finally {
+			this.#setProviderRefreshing(providerId, false);
+			this.#updateTabBar();
+			this.#tui.requestRender();
+		}
 	}
 
 	#updateTabBar(): void {
@@ -496,15 +581,21 @@ export class ModelSelectorComponent extends Container {
 		tabBar.onTabChange = (_tab, index) => {
 			this.#activeTabIndex = index;
 			this.#selectedIndex = 0;
+			this.#cancelScheduledProviderRefreshesExcept(this.#getActiveProviderId());
 			this.#applyTabFilter();
-			void this.#refreshSelectedProvider().catch(error => {
-				this.#errorMessage = error instanceof Error ? error.message : String(error);
-				this.#updateList();
-				this.#tui.requestRender();
-			});
+			this.#scheduleSelectedProviderRefresh();
+			this.#updateTabBar();
+			// Let TUI's normal post-input render paint the new tab immediately.
+			// The live refresh is debounced onto a later timer so tab cycling never
+			// shares a stack frame with provider refresh work.
+			this.#tui.requestRender();
 		};
 		this.#tabBar = tabBar;
 		this.#headerContainer.addChild(tabBar);
+		const refreshStatusText = this.#getActiveProviderRefreshStatusText();
+		if (refreshStatusText) {
+			this.#headerContainer.addChild(new Text(refreshStatusText, 0, 0));
+		}
 	}
 
 	#getActiveTab(): ProviderTabState {

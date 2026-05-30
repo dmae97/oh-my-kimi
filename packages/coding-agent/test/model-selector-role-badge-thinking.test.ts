@@ -150,12 +150,90 @@ describe("ModelSelector role badge thinking display", () => {
 
 		selector.handleInput("\t");
 		selector.handleInput("\t");
-		await Bun.sleep(0);
+		await Bun.sleep(125);
 		installTestTheme();
 
-		expect(refreshProvider).toHaveBeenCalledWith("ollama-cloud");
+		expect(refreshProvider).toHaveBeenCalledWith("ollama-cloud", "online");
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(rendered).toContain("deepseek-v4-pro");
 		expect(rendered).not.toContain("Provider has not been refreshed yet");
+	});
+
+	test("switches provider tabs immediately and refreshes in background with spinner animation", async () => {
+		installTestTheme();
+		const settings = Settings.isolated({});
+		const discoveredModel = createOllamaCloudModel("deepseek-v4-pro");
+		let availableModels: Model[] = [];
+		let resolveRefresh: (() => void) | undefined;
+		const refreshProvider = vi.fn(
+			(_providerId: string, _strategy?: string) =>
+				new Promise<void>(resolve => {
+					resolveRefresh = () => {
+						availableModels = [discoveredModel];
+						resolve();
+					};
+				}),
+		);
+		const modelRegistry = {
+			getAll: () => availableModels,
+			refresh: vi.fn(async () => {}),
+			refreshProvider,
+			getError: () => undefined,
+			getAvailable: () => availableModels,
+			getDiscoverableProviders: () => ["ollama-cloud"],
+			getCanonicalModels: () => [],
+			resolveCanonicalModel: () => undefined,
+			getProviderDiscoveryState: () => ({
+				provider: "ollama-cloud",
+				status: "idle",
+				optional: false,
+				stale: false,
+				models: [],
+			}),
+		} as unknown as ModelRegistry;
+		const ui = {
+			requestRender: vi.fn(),
+		} as unknown as TUI;
+
+		const selector = new ModelSelectorComponent(
+			ui,
+			undefined,
+			settings,
+			modelRegistry,
+			[],
+			() => {},
+			() => {},
+		);
+		await Bun.sleep(0);
+		installTestTheme();
+
+		selector.handleInput("\t");
+		selector.handleInput("\t");
+
+		// Core regression: tab switch must not synchronously enter provider refresh.
+		expect(refreshProvider).not.toHaveBeenCalled();
+
+		const immediateRendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(immediateRendered).toContain("Refreshing OLLAMA CLOUD in background");
+
+		await Bun.sleep(5);
+		expect(refreshProvider).not.toHaveBeenCalled();
+		await Bun.sleep(120);
+		expect(refreshProvider).toHaveBeenCalledWith("ollama-cloud", "online");
+
+		const spinnerFrame1 = selector.render(220).join("\n");
+		await Bun.sleep(100);
+		installTestTheme();
+		const spinnerFrame2 = selector.render(220).join("\n");
+		expect(normalizeRenderedText(spinnerFrame2)).toContain("Refreshing OLLAMA CLOUD in background");
+		expect(spinnerFrame2).not.toEqual(spinnerFrame1);
+
+		resolveRefresh?.();
+		await Bun.sleep(10);
+		installTestTheme();
+
+		const finalRendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(finalRendered).toContain("deepseek-v4-pro");
+		expect(finalRendered).not.toContain("Refreshing OLLAMA CLOUD in background");
 	});
 });
