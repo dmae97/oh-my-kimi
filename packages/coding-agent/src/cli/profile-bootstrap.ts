@@ -20,6 +20,8 @@
  * so the bootstrap and `args.ts` reference one source of truth instead of
  * maintaining parallel constants.
  */
+
+import { isSubcommand } from "../cli-commands";
 import { OPTIONAL_FLAGS, OPTIONAL_VALUE_FLAGS, STRING_VALUE_FLAGS } from "./flag-tables";
 
 export interface ProfileBootstrapResult {
@@ -30,8 +32,13 @@ export interface ProfileBootstrapResult {
 
 /**
  * Strip `--profile` / `--alias` from argv while preserving the surrounding
- * argument structure. Returns the residual argv to hand to the launch parser
+ * argument structure, returning the residual argv to hand to the launch parser
  * and the captured flag values.
+ *
+ * Global flag extraction stops at the first registered subcommand token (e.g.
+ * `grep`): everything from that token onward is forwarded verbatim so a
+ * subcommand's own flags and positionals are never stolen (`omp grep --profile
+ * <path>` greps for `--profile`; it does not select a profile).
  *
  * Throws when either flag is supplied without a value.
  */
@@ -40,11 +47,12 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 	let profile: string | undefined;
 	let aliasName: string | undefined;
 	let passThrough = false;
+	let sawSubcommand = false;
 
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 
-		if (passThrough) {
+		if (passThrough || sawSubcommand) {
 			stripped.push(arg);
 			continue;
 		}
@@ -122,6 +130,12 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 			continue;
 		}
 
+		// A bare token that names a registered subcommand ends global-flag
+		// extraction: its own flags and positionals must reach the subcommand
+		// untouched.
+		if (isSubcommand(arg)) {
+			sawSubcommand = true;
+		}
 		stripped.push(arg);
 	}
 

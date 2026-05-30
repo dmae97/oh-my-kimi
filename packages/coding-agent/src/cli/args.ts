@@ -83,8 +83,21 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 		unknownFlags: new Map(),
 	};
 
+	// `--` ends option parsing (POSIX end-of-options). Everything after it is
+	// literal positional text, so `omp -- --profile work` sends the tokens
+	// `--profile` and `work` as the message instead of selecting a profile.
+	let passThrough = false;
+
 	for (let i = 0; i < args.length; i++) {
 		let arg = args[i];
+		if (passThrough) {
+			result.messages.push(arg);
+			continue;
+		}
+		if (arg === "--") {
+			passThrough = true;
+			continue;
+		}
 
 		// Support --flag=value syntax (e.g. --tools=ask,read)
 		if (arg.startsWith("--") && arg.includes("=")) {

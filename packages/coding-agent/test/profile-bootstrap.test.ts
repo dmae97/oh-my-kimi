@@ -88,4 +88,30 @@ describe("extractProfileFlags", () => {
 		expect(() => extractProfileFlags(["--alias", "--profile"])).toThrow("--alias requires a command name");
 		expect(() => extractProfileFlags(["--alias="])).toThrow("--alias requires a command name");
 	});
+
+	it("stops extracting global flags at a subcommand boundary", () => {
+		// `omp grep --profile <path>` must reach the grep subcommand intact; the
+		// bootstrap must not treat `--profile <path>` as a profile selection.
+		const result = extractProfileFlags(["grep", "--profile", "packages/coding-agent/src/cli.ts"]);
+		expect(result.profile).toBeUndefined();
+		expect(result.argv).toEqual(["grep", "--profile", "packages/coding-agent/src/cli.ts"]);
+	});
+
+	it("extracts a global --profile that precedes a subcommand", () => {
+		const result = extractProfileFlags(["--profile", "work", "grep", "foo"]);
+		expect(result.profile).toBe("work");
+		expect(result.argv).toEqual(["grep", "foo"]);
+	});
+
+	it("still extracts --profile after a non-subcommand positional (launch message)", () => {
+		const result = extractProfileFlags(["hello", "--profile", "work"]);
+		expect(result.profile).toBe("work");
+		expect(result.argv).toEqual(["hello"]);
+	});
+
+	it("does not treat a --profile value that names a subcommand as a boundary", () => {
+		const result = extractProfileFlags(["--profile", "config", "later"]);
+		expect(result.profile).toBe("config");
+		expect(result.argv).toEqual(["later"]);
+	});
 });

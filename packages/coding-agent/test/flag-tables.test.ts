@@ -73,3 +73,25 @@ describe("OPTIONAL_FLAGS per-flag quirks", () => {
 		expect(result.messages).toEqual([]);
 	});
 });
+
+describe("parseArgs end-of-options (--)", () => {
+	it("treats tokens after -- as literal messages, not flags", () => {
+		const result = parseArgs(["--", "--profile", "work"]);
+		expect(result.profile).toBeUndefined();
+		expect(result.messages).toEqual(["--profile", "work"]);
+	});
+
+	it("does not interpret @ args or known value flags after --", () => {
+		const result = parseArgs(["--", "@file.md", "--model", "opus"]);
+		expect(result.model).toBeUndefined();
+		expect(result.fileArgs).toEqual([]);
+		expect(result.messages).toEqual(["@file.md", "--model", "opus"]);
+	});
+
+	it("parses flags before -- and forwards the rest as text", () => {
+		const result = parseArgs(["--print", "hello", "--", "--no-tools"]);
+		expect(result.print).toBe(true);
+		expect(result.noTools).toBeUndefined();
+		expect(result.messages).toEqual(["hello", "--no-tools"]);
+	});
+});
