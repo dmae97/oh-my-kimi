@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { HookSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/hook-selector";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
@@ -171,5 +171,52 @@ describe("HookSelectorComponent", () => {
 		expect(plain).toContain("Path B");
 		expect(plain).toContain("Launch a browser flow");
 		expect(plain).not.toContain("Path A");
+	});
+
+	it("skips disabled options during keyboard navigation", () => {
+		let selected: string | undefined;
+		const component = new HookSelectorComponent(
+			"Pick one",
+			["First", "Disabled", "Third"],
+			option => {
+				selected = option;
+			},
+			() => {},
+			{ disabledIndices: [1] },
+		);
+
+		component.handleInput("j");
+		component.handleInput("\n");
+
+		expect(selected).toBe("Third");
+	});
+
+	it("does not select disabled options", () => {
+		let selected: string | undefined;
+		const component = new HookSelectorComponent(
+			"Pick one",
+			["Disabled"],
+			option => {
+				selected = option;
+			},
+			() => {},
+			{ disabledIndices: [0] },
+		);
+
+		component.handleInput("\n");
+
+		expect(selected).toBeUndefined();
+	});
+
+	it("renders disabled options dimmed", () => {
+		const component = new HookSelectorComponent(
+			"Pick one",
+			["First", "Disabled"],
+			() => {},
+			() => {},
+			{ disabledIndices: [1] },
+		);
+
+		expect(component.render(80).join("\n")).toContain(theme.fg("dim", "Disabled"));
 	});
 });
