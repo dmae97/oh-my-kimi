@@ -24,6 +24,7 @@ import {
 } from "../../modes/utils/keybinding-matchers";
 import { CountdownTimer } from "./countdown-timer";
 import { DynamicBorder } from "./dynamic-border";
+import { renderSegmentTrack } from "./segment-track";
 
 /** One segment of a {@link HookSelectorSlider} — a label, its accent color, and
  *  an optional detail line (e.g. the resolved model name) shown beneath the
@@ -206,28 +207,25 @@ export class HookSelectorComponent extends Container {
 		}
 	}
 
-	/** Render the slider block: the track (dim caption, edge arrows that brighten
-	 *  while there is room to move, one styled segment per option — active = bold
-	 *  in its color, the rest dim, joined by `›`) plus, when the active segment
-	 *  carries a `detail`, a muted second line beneath it (e.g. the resolved model
-	 *  name). Returns one or two `\n`-joined lines. */
+	/** Render the slider block in the style of the status line: each option is a
+	 *  distinctly colored segment, the active one filled as a powerline chip
+	 *  (its accent as the background, a luminance-matched label, flanked by
+	 *  triangle caps) and the rest shown as plain colored labels joined by a thin
+	 *  separator. Edge arrows brighten while there is room to move. When the
+	 *  active segment carries a `detail` (e.g. the resolved model name) a muted
+	 *  second line is appended. Returns one or two `\n`-joined lines. */
 	#renderSliderLine(): string {
 		const slider = this.#slider;
 		if (!slider) return "";
 		const segments = slider.segments;
-		const sep = theme.fg("dim", " › ");
-		const track = segments
-			.map((segment, i) =>
-				i === this.#sliderIndex
-					? theme.bold(theme.fg(segment.color ?? "accent", segment.label))
-					: theme.fg("dim", segment.label),
-			)
-			.join(sep);
-		const leftArrow = theme.fg(this.#sliderIndex > 0 ? "accent" : "dim", "◂");
-		const rightArrow = theme.fg(this.#sliderIndex < segments.length - 1 ? "accent" : "dim", "▸");
+		const active = this.#sliderIndex;
+		const track = renderSegmentTrack(segments, active);
+
+		const leftArrow = theme.fg(active > 0 ? "accent" : "dim", "◂");
+		const rightArrow = theme.fg(active < segments.length - 1 ? "accent" : "dim", "▸");
 		const caption = slider.caption ? `${theme.fg("dim", slider.caption)}  ` : "";
-		const trackLine = `${caption}${leftArrow} ${theme.fg("dim", "[")} ${track} ${theme.fg("dim", "]")} ${rightArrow}`;
-		const detail = segments[this.#sliderIndex]?.detail;
+		const trackLine = `${caption}${leftArrow}  ${track}  ${rightArrow}`;
+		const detail = segments[active]?.detail;
 		if (!detail) return trackLine;
 		return `${trackLine}\n  ${theme.fg("dim", "↳")} ${theme.fg("muted", detail)}`;
 	}

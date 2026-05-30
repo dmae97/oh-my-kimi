@@ -1310,6 +1310,24 @@ export class Theme {
 		return ansi;
 	}
 
+	/**
+	 * Foreground ANSI for text drawn **on top of** `fillColor` used as a solid
+	 * background (e.g. a powerline chip). Picks near-black or near-white by the
+	 * fill's perceived luminance (Rec. 601 luma) so the label stays legible on
+	 * both bright and dark fills, across light and dark themes.
+	 *
+	 * Reads the RGB out of the already-resolved truecolor escape; when the fill
+	 * is encoded as a 256-palette index (limited terminals) the RGB is
+	 * unavailable, so it falls back to the theme `text` color.
+	 */
+	getContrastFgAnsi(fillColor: ThemeColor): string {
+		const ansi = this.#fgColors[fillColor];
+		const match = ansi ? /38;2;(\d+);(\d+);(\d+)/.exec(ansi) : null;
+		if (!match) return this.#fgColors.text;
+		const luma = 0.299 * Number(match[1]) + 0.587 * Number(match[2]) + 0.114 * Number(match[3]);
+		return luma > 140 ? "\x1b[38;2;0;0;0m" : "\x1b[38;2;255;255;255m";
+	}
+
 	getColorMode(): ColorMode {
 		return this.mode;
 	}

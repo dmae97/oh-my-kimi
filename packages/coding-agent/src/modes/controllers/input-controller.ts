@@ -1,8 +1,10 @@
 import * as fs from "node:fs/promises";
-import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, sanitizeText } from "@oh-my-pi/pi-utils";
+import { getRoleInfo } from "../../config/model-registry";
 import { isSettingsInitialized, settings } from "../../config/settings";
+import { renderSegmentTrack } from "../../modes/components/segment-track";
 import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
@@ -769,27 +771,16 @@ export class InputController {
 
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
-			const roleLabel = result.role === "default" ? "default" : result.role;
-			const roleLabelStyled = theme.bold(theme.fg("accent", roleLabel));
-			const thinkingStr =
-				result.model.thinking && result.thinkingLevel !== ThinkingLevel.Off
-					? ` (thinking: ${result.thinkingLevel})`
-					: "";
-			const tempLabel = options?.temporary ? " (temporary)" : "";
-			const cycleSeparator = theme.fg("dim", " > ");
-			const cycleLabel = cycleOrder
-				.map(role => {
-					if (role === result.role) {
-						return theme.bold(theme.fg("accent", role));
-					}
-					return theme.fg("muted", role);
-				})
-				.join(cycleSeparator);
-			const orderLabel = ` (cycle: ${cycleLabel})`;
-			this.ctx.showStatus(
-				`Switched to ${roleLabelStyled}: ${result.model.name || result.model.id}${thinkingStr}${tempLabel}${orderLabel}`,
-				{ dim: false },
+			// The status line already reports the resolved model + thinking level, so
+			// the cycle status is just a status-line-style chip track (active role
+			// filled), matching the plan-approval model slider. A dim suffix flags a
+			// temporary switch since that isn't shown elsewhere.
+			const track = renderSegmentTrack(
+				cycleOrder.map(role => ({ label: role, color: getRoleInfo(role, settings).color })),
+				cycleOrder.indexOf(result.role),
 			);
+			const tempLabel = options?.temporary ? theme.fg("dim", "  (temporary)") : "";
+			this.ctx.showStatus(`${track}${tempLabel}`, { dim: false });
 		} catch (error) {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}
