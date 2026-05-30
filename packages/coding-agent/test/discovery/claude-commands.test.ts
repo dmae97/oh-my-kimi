@@ -60,4 +60,23 @@ describe("Claude Code slash command discovery", () => {
 		expect(names).toContain("audit");
 		expect(names).toContain("team:audit");
 	});
+	test("keeps root commands ahead of nested basename duplicates", async () => {
+		const rootApply = path.join(project, ".claude", "commands", "apply.md");
+		const nestedApply = path.join(project, ".claude", "commands", "agent", "apply.md");
+		await writeFile(rootApply, "Root apply prompt\n");
+		await writeFile(nestedApply, "Nested apply prompt\n");
+
+		const result = await loadCapability<SlashCommand>(slashCommandCapability.id, {
+			cwd: project,
+			providers: ["claude"],
+		});
+		const apply = result.items.find(command => command.name === "apply");
+		const agentApply = result.items.find(command => command.name === "agent:apply");
+
+		expect(result.warnings).toEqual([]);
+		expect(apply?.path).toBe(rootApply);
+		expect(apply?.content).toBe("Root apply prompt\n");
+		expect(agentApply?.path).toBe(nestedApply);
+		expect(agentApply?.content).toBe("Nested apply prompt\n");
+	});
 });

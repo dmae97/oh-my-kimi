@@ -269,20 +269,27 @@ function readClaudeCommandToggles(): { enableUser: boolean; enableProject: boole
 	}
 }
 
-function getClaudeCommandNamespaceAlias(commandsDir: string, filePath: string): string | null {
-	const relativeName = path.relative(commandsDir, filePath).replace(/\.md$/, "");
-	if (!/[\\/]/.test(relativeName)) return null;
-	return relativeName.replace(/[\\/]+/g, ":");
+function getClaudeRelativeCommandName(commandsDir: string, filePath: string): string {
+	return path.relative(commandsDir, filePath).replace(/\.md$/, "");
 }
 
 function addClaudeCommandNamespaceAliases(commands: SlashCommand[], commandsDir: string): SlashCommand[] {
+	const rootCommands: SlashCommand[] = [];
+	const nestedCommands: SlashCommand[] = [];
 	const aliases: SlashCommand[] = [];
+
 	for (const command of commands) {
-		const alias = getClaudeCommandNamespaceAlias(commandsDir, command.path);
-		if (alias === null) continue;
-		aliases.push({ ...command, name: alias });
+		const relativeName = getClaudeRelativeCommandName(commandsDir, command.path);
+		if (!/[\\/]/.test(relativeName)) {
+			rootCommands.push(command);
+			continue;
+		}
+
+		nestedCommands.push(command);
+		aliases.push({ ...command, name: relativeName.replace(/[\\/]+/g, ":") });
 	}
-	return aliases.length === 0 ? commands : [...commands, ...aliases];
+
+	return nestedCommands.length === 0 ? commands : [...rootCommands, ...nestedCommands, ...aliases];
 }
 
 async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashCommand>> {
