@@ -22,6 +22,7 @@ import {
 	readSseEvents,
 } from "@oh-my-pi/pi-utils";
 import {
+	disablesParallelToolUse,
 	hasOpus47ApiRestrictions,
 	mapEffortToAnthropicAdaptiveEffort,
 	supportsMidConversationSystemMessages,
@@ -2130,6 +2131,21 @@ function buildParams(
 			};
 		} else {
 			params.tool_choice = options.toolChoice;
+		}
+	}
+
+	// Claude Opus 4.8 must emit at most one tool call per turn. Force
+	// `disable_parallel_tool_use` onto the outgoing tool_choice (synthesizing an
+	// `auto` choice when none is set). Gated on tools being present: Anthropic
+	// rejects `tool_choice` without `tools`, and parallelism is moot otherwise.
+	// `none` rejects the field, so leave it untouched. A fresh object is built
+	// rather than mutated so the caller's `options.toolChoice` is never aliased.
+	if (disablesParallelToolUse(model.id) && params.tools && params.tools.length > 0) {
+		const current = params.tool_choice;
+		if (!current) {
+			params.tool_choice = { type: "auto", disable_parallel_tool_use: true };
+		} else if (current.type !== "none") {
+			params.tool_choice = { ...current, disable_parallel_tool_use: true };
 		}
 	}
 
