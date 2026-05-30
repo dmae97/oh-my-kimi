@@ -28,6 +28,11 @@ export const VERSION: string = version;
 /** Minimum Bun version */
 export const MIN_BUN_VERSION: string = engines.bun.replace(/[^0-9.]/g, "");
 
+try {
+	delete process.env.MallocStackLogging;
+	delete process.env.MallocStackLoggingNoCompact;
+} catch {}
+
 // =============================================================================
 // Project directory
 // =============================================================================
