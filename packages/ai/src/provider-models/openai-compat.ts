@@ -2147,25 +2147,23 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 						const reference = resolveReference(defaults.id);
 						const copilotLimits = extractCopilotLimits(entry);
 						// Copilot exposes token limits under capabilities.limits.*.
-						// max_prompt_tokens is the prompt capacity (what OMP calls contextWindow).
-						// max_context_window_tokens is the total window (prompt + output budget)
-						// and must NOT be used for contextWindow — it inflates the limit and
-						// breaks compaction thresholds, overflow detection, and promotion.
-						// The OpenAI-compatible root-level `context_length` field mirrors the
-						// total window (e.g. 400k for gpt-5.4), so Copilot's max_prompt_tokens
-						// (the true prompt budget) must take precedence whenever it is present.
-						const contextWindowFallback = toPositiveNumber(
-							entry.context_length,
-							reference?.contextWindow ?? defaults.contextWindow,
-						);
+						// max_context_window_tokens is the model's total usable window;
+						// max_prompt_tokens is Copilot's prompt/summarization budget and
+						// must only be a fallback when total-window fields are absent.
 						const contextWindow = toPositiveNumber(
-							copilotLimits.maxPromptTokens,
-							reference ? Math.min(contextWindowFallback, reference.contextWindow) : contextWindowFallback,
+							copilotLimits.maxContextWindowTokens,
+							toPositiveNumber(
+								entry.context_length,
+								toPositiveNumber(
+									copilotLimits.maxPromptTokens,
+									reference?.contextWindow ?? defaults.contextWindow,
+								),
+							),
 						);
 						const maxTokens = toPositiveNumber(
-							entry.max_completion_tokens,
+							copilotLimits.maxOutputTokens,
 							toPositiveNumber(
-								copilotLimits.maxOutputTokens,
+								entry.max_completion_tokens,
 								toPositiveNumber(
 									copilotLimits.maxNonStreamingOutputTokens,
 									reference?.maxTokens ?? defaults.maxTokens,
