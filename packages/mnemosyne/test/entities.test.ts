@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
 	ENTITY_EXTRACTION_STOP_WORDS,
-	extract_entities_regex,
 	extractEntitiesRegex,
 	findSimilarEntities,
 	levenshteinDistance,
@@ -45,7 +44,7 @@ describe("entity utilities", () => {
 	it("drops lowercase prose, pure numbers, and substring duplicate capitalized terms", () => {
 		expect(extractEntitiesRegex("the quick brown fox jumps")).toEqual([]);
 		expect(extractEntitiesRegex("The Quick Brown Fox 123 1,234")).toEqual(["Brown", "Fox", "Quick"]);
-		expect(extract_entities_regex("I visited New York with Abdias yesterday.")).toEqual(["Abdias", "New York"]);
+		expect(extractEntitiesRegex("I visited New York with Abdias yesterday.")).toEqual(["Abdias", "New York"]);
 	});
 
 	it("finds similar entities above threshold sorted by score", () => {

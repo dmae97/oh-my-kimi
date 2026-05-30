@@ -12,7 +12,7 @@ export class MnemosynePlugin {
 	name = "";
 	version = "1.0.0";
 	enabled = true;
-	protected _initialized = false;
+	protected initialized = false;
 	readonly config: PluginConfig;
 
 	constructor(config: PluginConfig = {}) {
@@ -26,50 +26,33 @@ export class MnemosynePlugin {
 	}
 
 	initialize(): void {
-		this._initialized = true;
+		this.initialized = true;
 	}
 
 	shutdown(): void {
-		this._initialized = false;
+		this.initialized = false;
 	}
 
 	onRemember(_memory: MemoryDict): void {
 		throw new TypeError("Plugin must implement onRemember");
 	}
-	on_recall(_memory: MemoryDict): void {
-		this.onRecall(_memory);
-	}
 	onRecall(_memory: MemoryDict): void {
 		throw new TypeError("Plugin must implement onRecall");
-	}
-	on_remember(memory: MemoryDict): void {
-		this.onRemember(memory);
 	}
 	onConsolidate(_summary: MemoryDict): void {
 		throw new TypeError("Plugin must implement onConsolidate");
 	}
-	on_consolidate(summary: MemoryDict): void {
-		this.onConsolidate(summary);
-	}
 	onInvalidate(_memoryId: string): void {
 		throw new TypeError("Plugin must implement onInvalidate");
 	}
-	on_invalidate(memoryId: string): void {
-		this.onInvalidate(memoryId);
-	}
-
 	toDict(): Record<string, unknown> {
 		return {
 			name: this.name,
 			version: this.version,
 			enabled: this.enabled,
-			initialized: this._initialized,
+			initialized: this.initialized,
 			config: this.config,
 		};
-	}
-
-	to_dict(): Record<string, unknown> {
-		return this.toDict();
 	}
 }
 
@@ -124,14 +107,8 @@ export class LoggingPlugin extends MnemosynePlugin {
 	getLog(): MemoryDict[] {
 		return this.memoryLog.slice();
 	}
-	get_log(): MemoryDict[] {
-		return this.getLog();
-	}
 	clearLog(): void {
 		this.memoryLog.length = 0;
-	}
-	clear_log(): void {
-		this.clearLog();
 	}
 }
 
@@ -176,20 +153,11 @@ export class MetricsPlugin extends MnemosynePlugin {
 		samples.push(durationMs);
 		if (samples.length > this.maxTimingSamples) samples.shift();
 	}
-	record_timing(event: string, durationMs: number): void {
-		this.recordTiming(event, durationMs);
-	}
 	getCounters(): Record<string, number> {
 		return { ...this.counters };
 	}
-	get_counters(): Record<string, number> {
-		return this.getCounters();
-	}
 	getTimings(event: string): number[] {
 		return (this.timings[event] ?? []).slice();
-	}
-	get_timings(event: string): number[] {
-		return this.getTimings(event);
 	}
 	getAverageTiming(event: string): number | null {
 		const samples = this.timings[event] ?? [];
@@ -197,9 +165,6 @@ export class MetricsPlugin extends MnemosynePlugin {
 		let total = 0;
 		for (const sample of samples) total += sample;
 		return total / samples.length;
-	}
-	get_average_timing(event: string): number | null {
-		return this.getAverageTiming(event);
 	}
 	reset(): void {
 		for (const key of Object.keys(this.counters) as MetricsEvent[]) this.counters[key] = 0;
@@ -209,9 +174,6 @@ export class MetricsPlugin extends MnemosynePlugin {
 		const averages: Record<string, number | null> = {};
 		for (const event of Object.keys(this.timings)) averages[event] = this.getAverageTiming(event);
 		return { counters: this.getCounters(), averages };
-	}
-	get_summary(): Record<string, unknown> {
-		return this.getSummary();
 	}
 }
 
@@ -231,21 +193,12 @@ export class FilterPlugin extends MnemosynePlugin {
 	addRule(rule: FilterRule): void {
 		this.rules.push(rule);
 	}
-	add_rule(rule: FilterRule): void {
-		this.addRule(rule);
-	}
 	removeRule(rule: FilterRule): void {
 		const index = this.rules.indexOf(rule);
 		if (index >= 0) this.rules.splice(index, 1);
 	}
-	remove_rule(rule: FilterRule): void {
-		this.removeRule(rule);
-	}
 	clearRules(): void {
 		this.rules.length = 0;
-	}
-	clear_rules(): void {
-		this.clearRules();
 	}
 	override onRemember(memory: MemoryDict): void {
 		if (!this.passes(memory)) this.block(memory);
@@ -274,18 +227,12 @@ export class FilterPlugin extends MnemosynePlugin {
 	getBlocked(): MemoryDict[] {
 		return this.blocked.slice();
 	}
-	get_blocked(): MemoryDict[] {
-		return this.getBlocked();
-	}
 	isBlocked(memoryId: string): boolean {
 		for (const entry of this.blocked) {
 			const item = entry.item as MemoryDict | undefined;
 			if (item?.id === memoryId) return true;
 		}
 		return false;
-	}
-	is_blocked(memoryId: string): boolean {
-		return this.isBlocked(memoryId);
 	}
 }
 
@@ -303,9 +250,6 @@ export class CompressionPlugin extends MnemosynePlugin {
 	compressLines(lines: string[]): string[] {
 		if (!this.enabled || this.threshold < 0) return lines;
 		return lines;
-	}
-	compress_lines(lines: string[]): string[] {
-		return this.compressLines(lines);
 	}
 	override onRemember(_memory: MemoryDict): void {}
 	override onRecall(_memory: MemoryDict): void {}
@@ -331,9 +275,6 @@ export class PluginManager {
 		if (this.registry.has(name)) throw new ValueError(`Plugin '${name}' is already registered`);
 		this.registry.set(name, pluginClass);
 	}
-	register_plugin(name: string, pluginClass: PluginConstructor): void {
-		this.registerPlugin(name, pluginClass);
-	}
 	loadPlugin(name: string, config: PluginConfig = {}): MnemosynePlugin {
 		const pluginClass = this.registry.get(name);
 		if (pluginClass === undefined) throw new ValueError(`Plugin '${name}' is not registered`);
@@ -343,17 +284,11 @@ export class PluginManager {
 		this.instances.set(name, instance);
 		return instance;
 	}
-	load_plugin(name: string, config: PluginConfig = {}): MnemosynePlugin {
-		return this.loadPlugin(name, config);
-	}
 	unloadPlugin(name: string): void {
 		const instance = this.instances.get(name);
 		if (instance === undefined) throw new ValueError(`Plugin '${name}' is not loaded`);
 		this.instances.delete(name);
 		instance.shutdown();
-	}
-	unload_plugin(name: string): void {
-		this.unloadPlugin(name);
 	}
 	listPlugins(): Array<Record<string, unknown>> {
 		const result: Array<Record<string, unknown>> = [];
@@ -366,29 +301,17 @@ export class PluginManager {
 			});
 		return result;
 	}
-	list_plugins(): Array<Record<string, unknown>> {
-		return this.listPlugins();
-	}
 	getPlugin(name: string): MnemosynePlugin | null {
 		const loaded = this.instances.get(name);
 		if (loaded !== undefined) return loaded;
 		if (this.registry.has(name)) return this.loadPlugin(name);
 		return null;
 	}
-	get_plugin(name: string): MnemosynePlugin | null {
-		return this.getPlugin(name);
-	}
 	isLoaded(name: string): boolean {
 		return this.instances.has(name);
 	}
-	is_loaded(name: string): boolean {
-		return this.isLoaded(name);
-	}
 	isRegistered(name: string): boolean {
 		return this.registry.has(name);
-	}
-	is_registered(name: string): boolean {
-		return this.isRegistered(name);
 	}
 	loadAll(configs: Record<string, PluginConfig> = {}): MnemosynePlugin[] {
 		const loaded: MnemosynePlugin[] = [];
@@ -396,21 +319,12 @@ export class PluginManager {
 			if (!this.instances.has(name)) loaded.push(this.loadPlugin(name, configs[name] ?? {}));
 		return loaded;
 	}
-	load_all(configs: Record<string, PluginConfig> = {}): MnemosynePlugin[] {
-		return this.loadAll(configs);
-	}
 	unloadAll(): void {
 		for (const name of Array.from(this.instances.keys())) this.unloadPlugin(name);
-	}
-	unload_all(): void {
-		this.unloadAll();
 	}
 	discoverPlugins(): string[] {
 		if (!existsSync(this.pluginDir)) return [];
 		return [];
-	}
-	discover_plugins(): string[] {
-		return this.discoverPlugins();
 	}
 	notifyRemember(memory: MemoryDict): void {
 		for (const instance of this.instances.values())
@@ -420,9 +334,6 @@ export class PluginManager {
 				} catch {}
 			}
 	}
-	notify_remember(memory: MemoryDict): void {
-		this.notifyRemember(memory);
-	}
 	notifyRecall(memory: MemoryDict): void {
 		for (const instance of this.instances.values())
 			if (instance.enabled) {
@@ -430,9 +341,6 @@ export class PluginManager {
 					instance.onRecall(memory);
 				} catch {}
 			}
-	}
-	notify_recall(memory: MemoryDict): void {
-		this.notifyRecall(memory);
 	}
 	notifyConsolidate(summary: MemoryDict): void {
 		for (const instance of this.instances.values())
@@ -442,9 +350,6 @@ export class PluginManager {
 				} catch {}
 			}
 	}
-	notify_consolidate(summary: MemoryDict): void {
-		this.notifyConsolidate(summary);
-	}
 	notifyInvalidate(memoryId: string): void {
 		for (const instance of this.instances.values())
 			if (instance.enabled) {
@@ -453,9 +358,6 @@ export class PluginManager {
 				} catch {}
 			}
 	}
-	notify_invalidate(memoryId: string): void {
-		this.notifyInvalidate(memoryId);
-	}
 }
 
 export class ValueError extends Error {
@@ -463,17 +365,11 @@ export class ValueError extends Error {
 }
 
 let defaultManager: PluginManager | null = null;
-export function get_manager(): PluginManager {
+export function getManager(): PluginManager {
 	if (defaultManager === null) defaultManager = new PluginManager();
 	return defaultManager;
 }
-export function getManager(): PluginManager {
-	return get_manager();
-}
-export function reset_manager(): void {
+export function resetManager(): void {
 	if (defaultManager !== null) defaultManager.unloadAll();
 	defaultManager = null;
-}
-export function resetManager(): void {
-	reset_manager();
 }

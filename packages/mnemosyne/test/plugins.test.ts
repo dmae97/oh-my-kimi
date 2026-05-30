@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import {
 	FilterPlugin,
-	get_manager,
+	getManager,
 	LoggingPlugin,
 	MetricsPlugin,
 	MnemosynePlugin,
 	PluginManager,
-	reset_manager,
+	resetManager,
 } from "../src/core/plugins";
 
 class CountingPlugin extends MnemosynePlugin {
@@ -27,66 +27,66 @@ class CountingPlugin extends MnemosynePlugin {
 }
 
 describe("PluginManager", () => {
-	beforeEach(() => reset_manager());
+	beforeEach(() => resetManager());
 
 	it("registers, loads, notifies, and unloads plugins", () => {
 		const manager = new PluginManager();
-		manager.register_plugin("counting", CountingPlugin);
-		const plugin = manager.load_plugin("counting") as CountingPlugin;
-		expect(plugin.to_dict().initialized).toBe(true);
-		manager.notify_remember({ id: "m1", content: "hello" });
-		manager.notify_recall({ id: "m1" });
-		manager.notify_consolidate({ summary: "sum" });
-		manager.notify_invalidate("m1");
+		manager.registerPlugin("counting", CountingPlugin);
+		const plugin = manager.loadPlugin("counting") as CountingPlugin;
+		expect(plugin.toDict().initialized).toBe(true);
+		manager.notifyRemember({ id: "m1", content: "hello" });
+		manager.notifyRecall({ id: "m1" });
+		manager.notifyConsolidate({ summary: "sum" });
+		manager.notifyInvalidate("m1");
 		expect(plugin.calls).toEqual(["remember:m1", "recall:m1", "consolidate:sum", "invalidate:m1"]);
-		expect(manager.list_plugins().some(entry => entry.name === "counting" && entry.loaded === true)).toBe(true);
-		manager.unload_plugin("counting");
-		expect(plugin.to_dict().initialized).toBe(false);
+		expect(manager.listPlugins().some(entry => entry.name === "counting" && entry.loaded === true)).toBe(true);
+		manager.unloadPlugin("counting");
+		expect(plugin.toDict().initialized).toBe(false);
 	});
 
 	it("lazy-loads registered plugins through get_plugin", () => {
 		const manager = new PluginManager();
-		expect(manager.is_loaded("logging")).toBe(false);
-		expect(manager.get_plugin("logging")).toBeInstanceOf(LoggingPlugin);
-		expect(manager.is_loaded("logging")).toBe(true);
+		expect(manager.isLoaded("logging")).toBe(false);
+		expect(manager.getPlugin("logging")).toBeInstanceOf(LoggingPlugin);
+		expect(manager.isLoaded("logging")).toBe(true);
 	});
 
 	it("global manager can be reset", () => {
-		const first = get_manager();
-		first.load_plugin("metrics");
-		reset_manager();
-		const second = get_manager();
+		const first = getManager();
+		first.loadPlugin("metrics");
+		resetManager();
+		const second = getManager();
 		expect(second).not.toBe(first);
-		expect(second.is_loaded("metrics")).toBe(false);
+		expect(second.isLoaded("metrics")).toBe(false);
 	});
 });
 
 describe("built-in plugins", () => {
 	it("logging records bounded memory lifecycle entries", () => {
 		const plugin = new LoggingPlugin({ max_entries: 2 });
-		plugin.on_remember({ id: "m1", content: "x".repeat(100) });
-		plugin.on_recall({ id: "m2", content: "short" });
-		plugin.on_invalidate("m3");
-		expect(plugin.get_log()).toHaveLength(2);
-		expect(plugin.get_log()[1]?.event).toBe("invalidate");
+		plugin.onRemember({ id: "m1", content: "x".repeat(100) });
+		plugin.onRecall({ id: "m2", content: "short" });
+		plugin.onInvalidate("m3");
+		expect(plugin.getLog()).toHaveLength(2);
+		expect(plugin.getLog()[1]?.event).toBe("invalidate");
 	});
 
 	it("metrics counts hooks and records timings", () => {
 		const plugin = new MetricsPlugin();
-		plugin.on_remember({ id: "m1" });
-		plugin.on_recall({ id: "m1" });
-		plugin.record_timing("remember", 10);
-		plugin.record_timing("remember", 30);
-		expect(plugin.get_counters()).toMatchObject({ remember: 1, recall: 1 });
-		expect(plugin.get_average_timing("remember")).toBe(20);
+		plugin.onRemember({ id: "m1" });
+		plugin.onRecall({ id: "m1" });
+		plugin.recordTiming("remember", 10);
+		plugin.recordTiming("remember", 30);
+		expect(plugin.getCounters()).toMatchObject({ remember: 1, recall: 1 });
+		expect(plugin.getAverageTiming("remember")).toBe(20);
 	});
 
 	it("filter tracks blocked items when rules fail", () => {
 		const plugin = new FilterPlugin();
-		plugin.add_rule(item => item.allow === true);
-		plugin.on_remember({ id: "blocked", allow: false });
-		plugin.on_remember({ id: "allowed", allow: true });
-		expect(plugin.is_blocked("blocked")).toBe(true);
-		expect(plugin.is_blocked("allowed")).toBe(false);
+		plugin.addRule(item => item.allow === true);
+		plugin.onRemember({ id: "blocked", allow: false });
+		plugin.onRemember({ id: "allowed", allow: true });
+		expect(plugin.isBlocked("blocked")).toBe(true);
+		expect(plugin.isBlocked("allowed")).toBe(false);
 	});
 });

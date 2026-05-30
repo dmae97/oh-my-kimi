@@ -7,6 +7,7 @@ import { BankManager, ValueError } from "./core/banks";
 import { BeamMemory } from "./core/beam";
 import type { ImportStats, RecallResult } from "./core/beam/types";
 import { runDiagnostics } from "./diagnose";
+import { main as runMcpMain } from "./mcp-server";
 
 export interface CliIo {
 	write(data: string): void;
@@ -163,8 +164,7 @@ export const cmdImport: CommandHandler = (args, context) => {
 };
 
 export const cmdMcp: CommandHandler = async args => {
-	const server = await import("./mcp_server");
-	server.main(args);
+	await runMcpMain(args);
 	return 0;
 };
 

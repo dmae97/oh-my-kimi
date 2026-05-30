@@ -4,12 +4,11 @@ import {
 	type PolyphonicRecallOptions,
 	polyphonicRecall,
 	polyphonicRecallIsEnabled,
-} from "./polyphonic_recall";
+} from "./polyphonic-recall";
 
 export interface OrchestratorBeam extends BeamMemoryState {
 	recall?: (query: string, topK?: number, options?: RecallOptions) => RecallResult[];
 	recallEnhanced?: (query: string, topK?: number, options?: RecallOptions) => RecallResult[];
-	recall_enhanced?: (query: string, topK?: number, options?: RecallOptions) => RecallResult[];
 }
 
 export interface OrchestrateRecallOptions
@@ -48,10 +47,7 @@ export function orchestrateRecall(
 	const linearOptions = toLinearRecallOptions(options);
 	if (options.enhanced === true) {
 		if (typeof beam.recallEnhanced === "function") return beam.recallEnhanced(query, topK, linearOptions);
-		if (typeof beam.recall_enhanced === "function") return beam.recall_enhanced(query, topK, linearOptions);
 	}
 	if (typeof beam.recall === "function") return beam.recall(query, topK, linearOptions);
 	return [];
 }
-
-export const orchestrate_recall = orchestrateRecall;

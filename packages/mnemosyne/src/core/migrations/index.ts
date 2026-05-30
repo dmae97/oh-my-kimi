@@ -1,1 +1,1 @@
-export * from "./e6_triplestore_split";
+export * from "./e6-triplestore-split";

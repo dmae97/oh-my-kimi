@@ -5,11 +5,11 @@ import { join } from "node:path";
 import {
 	ANNOTATION_KINDS,
 	AnnotationStore,
-	add_annotation,
-	filter_clean_mentions,
-	filter_facts,
-	init_annotations,
-	query_annotations,
+	addAnnotation,
+	filterCleanMentions,
+	filterFacts,
+	initAnnotations,
+	queryAnnotations,
 } from "../src/core/annotations";
 import { openDatabase } from "../src/db";
 
@@ -39,10 +39,10 @@ describe("AnnotationStore", () => {
 
 			expect(firstId).toBeGreaterThan(0);
 			expect(secondId).toBeGreaterThan(firstId);
-			expect(new Set(store.query_by_memory("mem-1", "mentions").map(row => row.value))).toEqual(
+			expect(new Set(store.queryByMemory("mem-1", "mentions").map(row => row.value))).toEqual(
 				new Set(["Alice", "Bob", "Charlie"]),
 			);
-			const [row] = store.export_all();
+			const [row] = store.exportAll();
 			expect(row).not.toHaveProperty("valid_from");
 			expect(row).not.toHaveProperty("valid_until");
 		} finally {
@@ -60,13 +60,13 @@ describe("AnnotationStore", () => {
 
 			expect(store.queryByMemory("mem-1")).toHaveLength(3);
 			expect(store.queryByMemory("mem-1", "mentions").every(row => row.kind === "mentions")).toBe(true);
-			expect(new Set(store.query_by_kind("mentions", "Alice").map(row => row.memory_id))).toEqual(
+			expect(new Set(store.queryByKind("mentions", { value: "Alice" }).map(row => row.memory_id))).toEqual(
 				new Set(["mem-1", "mem-2"]),
 			);
 			expect(new Set(store.queryByKind("mentions", { memory_id: "mem-1" }).map(row => row.value))).toEqual(
 				new Set(["Alice", "Bob"]),
 			);
-			expect(store.get_distinct_values("mentions")).toEqual(["Alice", "Bob"]);
+			expect(store.getDistinctValues("mentions")).toEqual(["Alice", "Bob"]);
 		} finally {
 			store.close();
 		}
@@ -78,10 +78,10 @@ describe("AnnotationStore", () => {
 			store.add("mem-1", "mentions", "Alice", "extractor", 0.8);
 			store.add("mem-1", "mentions", "Alice", "other", 0.1);
 			store.add("mem-1", "fact", "Alice");
-			store.add_many("mem-1", "mentions", ["Alice", "Bob", "", "  "]);
+			store.addMany("mem-1", "mentions", ["Alice", "Bob", "", "  "]);
 
-			expect(store.query_by_memory("mem-1", "mentions").map(row => row.value)).toEqual(["Alice", "Bob"]);
-			expect(store.query_by_memory("mem-1", "fact").map(row => row.value)).toEqual(["Alice"]);
+			expect(store.queryByMemory("mem-1", "mentions").map(row => row.value)).toEqual(["Alice", "Bob"]);
+			expect(store.queryByMemory("mem-1", "fact").map(row => row.value)).toEqual(["Alice"]);
 		} finally {
 			store.close();
 		}
@@ -92,9 +92,9 @@ describe("AnnotationStore", () => {
 		expect(ANNOTATION_KINDS.has("fact")).toBe(true);
 		expect(ANNOTATION_KINDS.has("occurred_on")).toBe(true);
 		expect(ANNOTATION_KINDS.has("has_source")).toBe(true);
-		expect(filter_facts(["short", "This fact is long enough"])).toEqual(["This fact is long enough"]);
+		expect(filterFacts(["short", "This fact is long enough"])).toEqual(["This fact is long enough"]);
 		expect(
-			filter_clean_mentions([{ value: "Alice" }, { value: "assistant" }, { value: "Project Alice" }]).map(
+			filterCleanMentions([{ value: "Alice" }, { value: "assistant" }, { value: "Project Alice" }]).map(
 				row => row.value,
 			),
 		).toEqual(["Alice"]);
@@ -108,19 +108,19 @@ describe("AnnotationStore", () => {
 			src.add("mem-1", "mentions", "Bob");
 			const exported = src.exportAll();
 
-			expect(dst.import_all(exported)).toEqual({
+			expect(dst.importAll(exported)).toEqual({
 				inserted: 2,
 				skipped: 0,
 				overwritten: 0,
 				imported_renumbered: 0,
 			});
-			expect(dst.import_all(exported)).toEqual({
+			expect(dst.importAll(exported)).toEqual({
 				inserted: 0,
 				skipped: 2,
 				overwritten: 0,
 				imported_renumbered: 0,
 			});
-			expect(dst.export_all()).toHaveLength(2);
+			expect(dst.exportAll()).toHaveLength(2);
 		} finally {
 			src.close();
 			dst.close();
@@ -129,7 +129,7 @@ describe("AnnotationStore", () => {
 
 	it("initializes and reuses a shared bun:sqlite connection", () => {
 		const path = tempDb();
-		init_annotations(path);
+		initAnnotations(path);
 		const db = openDatabase(path);
 		try {
 			const store = new AnnotationStore({ conn: db });
@@ -147,8 +147,8 @@ describe("AnnotationStore", () => {
 
 	it("provides module-level snake_case convenience APIs", () => {
 		const path = tempDb();
-		add_annotation("mem-1", "occurred_on", "2026-05-30", "test", 1.0, path);
-		add_annotation("mem-1", "mentions", "Alice", "test", 1.0, path);
-		expect(query_annotations("mem-1", "occurred_on", undefined, path).map(row => row.value)).toEqual(["2026-05-30"]);
+		addAnnotation("mem-1", "occurred_on", "2026-05-30", "test", 1.0, path);
+		addAnnotation("mem-1", "mentions", "Alice", "test", 1.0, path);
+		expect(queryAnnotations("mem-1", "occurred_on", undefined, path).map(row => row.value)).toEqual(["2026-05-30"]);
 	});
 });

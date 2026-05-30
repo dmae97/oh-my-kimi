@@ -2,21 +2,21 @@ import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { initBeam } from "../src/core/beam";
 import {
-	_cluster_by_similarity,
-	_cosine_similarity,
-	_embed,
-	get_resonance_log,
+	clusterBySimilarity,
+	cosineSimilarity,
+	embed,
+	getResonanceLog,
 	harmonize,
-	recall_beliefs,
+	recallBeliefs,
 } from "../src/core/shmr";
 
 describe("SHMR deterministic helpers", () => {
 	it("clusters related hashed embeddings by cosine similarity", () => {
-		const a = _embed("dark mode preference");
-		const b = _embed("dark mode preference");
-		const c = _embed("unrelated database migration");
-		expect(_cosine_similarity(a, b)).toBeGreaterThan(0.99);
-		const clusters = _cluster_by_similarity(
+		const a = embed("dark mode preference");
+		const b = embed("dark mode preference");
+		const c = embed("unrelated database migration");
+		expect(cosineSimilarity(a, b)).toBeGreaterThan(0.99);
+		const clusters = clusterBySimilarity(
 			[
 				{ object: "dark mode preference", embedding: a },
 				{ object: "dark mode preference", embedding: b },
@@ -43,11 +43,11 @@ describe("SHMR deterministic helpers", () => {
 			expect(stats.status).toBe("harmonized");
 			expect(stats.clusters_found).toBe(1);
 			expect(stats.beliefs_generated).toBeGreaterThanOrEqual(1);
-			const beliefs = recall_beliefs({ db }, "dark mode", 5);
+			const beliefs = recallBeliefs({ db }, "dark mode", 5);
 			expect(beliefs.some(belief => belief.content === "dark mode" && belief.source === "harmonic_belief")).toBe(
 				true,
 			);
-			expect(get_resonance_log({ db }, 1)[0]?.beliefs_generated).toBeGreaterThanOrEqual(1);
+			expect(getResonanceLog({ db }, 1)[0]?.beliefs_generated).toBeGreaterThanOrEqual(1);
 		} finally {
 			db.close();
 		}

@@ -103,6 +103,39 @@ describe("CLI command handlers", () => {
 		}
 	});
 
+	it("awaits the MCP server until stdin closes", async () => {
+		const originalStream = Bun.stdin.stream;
+		const ready = Promise.withResolvers<void>();
+		let controller: ReadableStreamDefaultController<Uint8Array<ArrayBuffer>> | undefined;
+		let closed = false;
+		const input = new ReadableStream<Uint8Array<ArrayBuffer>>({
+			start(streamController) {
+				controller = streamController;
+				ready.resolve();
+			},
+		});
+		Bun.stdin.stream = () => input;
+		try {
+			let resolved = false;
+			const cliPromise = runCli(["mcp"]).then(code => {
+				resolved = true;
+				return code;
+			});
+			await ready.promise;
+			await Promise.resolve();
+			expect(resolved).toBe(false);
+			const activeController = controller;
+			if (activeController === undefined) throw new Error("expected stdin stream controller");
+			activeController.close();
+			closed = true;
+			expect(await cliPromise).toBe(0);
+			expect(resolved).toBe(true);
+		} finally {
+			Bun.stdin.stream = originalStream;
+			if (!closed) controller?.close();
+		}
+	});
+
 	it("manages scratchpad and banks in the configured data directory", async () => {
 		const root = tempRoot();
 		try {

@@ -2,7 +2,7 @@ import type { SQLQueryBindings } from "bun:sqlite";
 import { generateId, stableMemoryId } from "../../util/ids";
 import { aaakEncode } from "../aaak";
 import { heuristicExtractFacts } from "../extraction";
-import { clampVeracity } from "../veracity_consolidation";
+import { clampVeracity } from "../veracity-consolidation";
 import type { BeamMemoryState, BeamStats, JsonValue, MemoriaRetrieveResult, Metadata, SleepResult } from "./types";
 
 type Row = Record<string, unknown>;
@@ -304,9 +304,6 @@ export function consolidateToEpisodic(
 	});
 	return memoryId;
 }
-
-export const consolidate_to_episodic = consolidateToEpisodic;
-
 export function detectLanguage(_beam: BeamMemoryState, text: string): string {
 	if (typeof text !== "string" || text.length === 0) return "en";
 	const lower = text.toLowerCase();
@@ -365,9 +362,6 @@ export function detectLanguage(_beam: BeamMemoryState, text: string): string {
 	}
 	return spanish >= 3 ? "es" : "en";
 }
-
-export const detect_language = detectLanguage;
-
 export function extractAndStoreFacts(
 	beam: BeamMemoryState,
 	content: string,
@@ -473,9 +467,6 @@ export function extractAndStoreFacts(
 	if (/\b(decided|decision|choose|chose|approved|rejected)\b/i.test(text)) counts.decision++;
 	return counts;
 }
-
-export const extract_and_store_facts = extractAndStoreFacts;
-
 function classifyAbility(query: string): string {
 	const q = query.toLowerCase();
 	if (
@@ -592,9 +583,6 @@ export function memoriaRetrieve(
 		return factRetrieve(beam, query, topK);
 	return { ability: selected, query, results: [] };
 }
-
-export const memoria_retrieve = memoriaRetrieve;
-
 export function getEpisodicStats(
 	beam: BeamMemoryState,
 	authorId: string | null = null,
@@ -626,9 +614,6 @@ export function getEpisodicStats(
 		.get(...params) as { timestamp: string | null } | null;
 	return { count: total, total, last: last?.timestamp ?? null, vectors: 0, vec_type: "none" };
 }
-
-export const get_episodic_stats = getEpisodicStats;
-
 export function getMemoriaStats(beam: BeamMemoryState): BeamStats {
 	const stats: Record<string, number> = Object.create(null);
 	let total = 0;
@@ -645,9 +630,6 @@ export function getMemoriaStats(beam: BeamMemoryState): BeamStats {
 	}
 	return { count: total, ...stats };
 }
-
-export const get_memoria_stats = getMemoriaStats;
-
 function extractKeySignal(content: string, maxChars: number): string {
 	const sentences = content.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 0);
 	if (sentences.length === 0) return content.slice(0, maxChars);
@@ -744,9 +726,6 @@ export function degradeEpisodic(beam: BeamMemoryState, dryRun = false): Record<s
 	}
 	return result;
 }
-
-export const degrade_episodic = degradeEpisodic;
-
 export function getContaminated(beam: BeamMemoryState, limit = 50, minImportance = 0.0): Row[] {
 	const rows = asRows(
 		beam.db
@@ -760,9 +739,6 @@ export function getContaminated(beam: BeamMemoryState, limit = 50, minImportance
 	);
 	return rows.filter(row => CONTAMINATED_VERACITY[rowValue(row, "veracity") ?? "unknown"] === true);
 }
-
-export const get_contaminated = getContaminated;
-
 export function health(
 	beam: BeamMemoryState,
 	staleThresholdHours = 24.0,
@@ -787,7 +763,7 @@ export function health(
 			stale_threshold_hours: staleThresholdHours,
 			details: { stale: true, consolidation_log_entries_checked: "last 7 days" },
 			recommendation:
-				"No consolidation_log entries found with items_consolidated > 0. Run sleep_all_sessions() or check logs.",
+				"No consolidation_log entries found with items_consolidated > 0. Run sleepAllSessions() or check logs.",
 		};
 	}
 	const staleHours = Math.round(((Date.now() - Date.parse(lastTs)) / 3_600_000) * 100) / 100;
@@ -801,7 +777,7 @@ export function health(
 		details: { stale: status === "stale", consolidation_log_entries_checked: "last 7 days" },
 		recommendation:
 			status === "stale"
-				? `Last successful consolidation was ${staleHours.toFixed(1)} hours ago (threshold: ${staleThresholdHours.toFixed(0)}h). Run sleep_all_sessions().`
+				? `Last successful consolidation was ${staleHours.toFixed(1)} hours ago (threshold: ${staleThresholdHours.toFixed(0)}h). Run sleepAllSessions().`
 				: "Consolidation is within the healthy window.",
 	};
 }
@@ -964,9 +940,6 @@ export function sleepAllSessions(beam: BeamMemoryState, dryRun = false): SleepRe
 		original_session: originalSession,
 	};
 }
-
-export const sleep_all_sessions = sleepAllSessions;
-
 export function getConsolidationLog(beam: BeamMemoryState, limit = 10): Row[] {
 	return asRows(
 		beam.db
@@ -977,5 +950,3 @@ export function getConsolidationLog(beam: BeamMemoryState, limit = 10): Row[] {
 			.all(sourceSession(beam), limit),
 	);
 }
-
-export const get_consolidation_log = getConsolidationLog;

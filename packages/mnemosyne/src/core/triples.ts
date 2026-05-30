@@ -315,30 +315,15 @@ export class TripleStore {
 			.all(...params)
 			.map(rowToTriple);
 	}
-
-	query_by_predicate(predicate: string, object?: string | null, subject?: string | null): TripleRow[] {
-		return this.queryByPredicate(predicate, object, subject);
-	}
-
 	getDistinctObjects(predicate: string): string[] {
 		return this.conn
 			.query("SELECT DISTINCT object FROM triples WHERE predicate = ? ORDER BY object")
 			.all(predicate)
 			.map(row => (row as { object: string }).object);
 	}
-
-	get_distinct_objects(predicate: string): string[] {
-		return this.getDistinctObjects(predicate);
-	}
-
 	exportAll(): TripleRow[] {
 		return this.conn.query(`SELECT ${TRIPLE_COLUMNS} FROM triples ORDER BY id`).all().map(rowToTriple);
 	}
-
-	export_all(): TripleRow[] {
-		return this.exportAll();
-	}
-
 	importAll(triples: readonly TripleImportRow[], force = false): TripleImportStats {
 		const stats: TripleImportStats = {
 			inserted: 0,
@@ -408,11 +393,6 @@ export class TripleStore {
 			throw error;
 		}
 	}
-
-	import_all(triples: readonly TripleImportRow[], force = false): TripleImportStats {
-		return this.importAll(triples, force);
-	}
-
 	#insertWithId(item: TripleImportRow, id: number): void {
 		const bindings = normalizeImportBindings(item);
 		const params: SQLQueryBindings[] = [
@@ -470,7 +450,3 @@ export function queryTriples(options?: TripleQueryOptions & { readonly dbPath?: 
 		store.close();
 	}
 }
-
-export const init_triples = initTriples;
-export const add_triple = addTriple;
-export const query_triples = queryTriples;

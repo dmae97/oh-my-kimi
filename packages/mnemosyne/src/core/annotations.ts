@@ -59,7 +59,6 @@ const ANNOTATION_KIND_VALUES = ["mentions", "fact", "occurred_on", "has_source"]
 export type AnnotationKind = (typeof ANNOTATION_KIND_VALUES)[number] | (string & {});
 
 export const ENTITY_STOP_WORDS: ReadonlySet<string> = new Set(ENTITY_STOP_WORD_VALUES);
-export const _ENTITY_STOP_WORDS = ENTITY_STOP_WORDS;
 export const ANNOTATION_KINDS: ReadonlySet<string> = new Set(ANNOTATION_KIND_VALUES);
 export const MIN_FACT_LENGTH = 10;
 
@@ -196,16 +195,10 @@ function insertAnnotation(statement: WritableStatement, item: AnnotationInput, i
 export function filterCleanMentions<T extends { readonly value?: string | null }>(rows: readonly T[]): T[] {
 	return rows.filter(row => !isNoisyMention(row.value ?? ""));
 }
-
-export const filter_clean_mentions = filterCleanMentions;
-
 export function filterFacts(facts: readonly string[] | null | undefined): string[] {
 	if (!facts) return [];
 	return facts.filter(fact => fact.length > MIN_FACT_LENGTH);
 }
-
-export const filter_facts = filterFacts;
-
 export function initAnnotations(path: string = dbPath()): void {
 	const db = openDatabase(path);
 	try {
@@ -214,9 +207,6 @@ export function initAnnotations(path: string = dbPath()): void {
 		closeQuietly(db);
 	}
 }
-
-export const init_annotations = initAnnotations;
-
 export function initAnnotationsWithConn(db: Database): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS annotations (
@@ -233,9 +223,6 @@ export function initAnnotationsWithConn(db: Database): void {
 	db.exec("CREATE INDEX IF NOT EXISTS idx_annot_kind_value ON annotations(kind, value)");
 	db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_annot_unique ON annotations(memory_id, kind, value)");
 }
-
-export const _init_annotations_with_conn = initAnnotationsWithConn;
-
 export class AnnotationStore {
 	readonly dbPath: string;
 	readonly db: Database;
@@ -261,17 +248,17 @@ export class AnnotationStore {
 		if (this.ownsConnection) closeQuietly(this.db);
 	}
 
-	add(memory_id: string, kind: string, value: string, source = "", confidence = 1.0): number {
+	add(memoryId: string, kind: string, value: string, source = "", confidence = 1.0): number {
 		const result = this.db
 			.prepare(
 				"INSERT OR IGNORE INTO annotations (memory_id, kind, value, source, confidence) VALUES (?, ?, ?, ?, ?)",
 			)
-			.run(memory_id, kind, value, source, confidence);
+			.run(memoryId, kind, value, source, confidence);
 		return Number(result.lastInsertRowid);
 	}
 
 	addMany(
-		memory_id: string,
+		memoryId: string,
 		kind: string,
 		values: readonly string[] | null | undefined,
 		source = "",
@@ -284,37 +271,21 @@ export class AnnotationStore {
 			"INSERT OR IGNORE INTO annotations (memory_id, kind, value, source, confidence) VALUES (?, ?, ?, ?, ?)",
 		);
 		transaction(this.db, () => {
-			for (const value of rows) insert.run(memory_id, kind, value, source, confidence);
+			for (const value of rows) insert.run(memoryId, kind, value, source, confidence);
 		});
 		return rows.length;
 	}
-
-	add_many(
-		memory_id: string,
-		kind: string,
-		values: readonly string[] | null | undefined,
-		source = "",
-		confidence = 1.0,
-	): number {
-		return this.addMany(memory_id, kind, values, source, confidence);
-	}
-
-	queryByMemory(memory_id: string, kind?: string | null): AnnotationRow[] {
+	queryByMemory(memoryId: string, kind?: string | null): AnnotationRow[] {
 		const sql =
 			kind === null || kind === undefined
 				? "SELECT * FROM annotations WHERE memory_id = ? ORDER BY created_at ASC, id ASC"
 				: "SELECT * FROM annotations WHERE memory_id = ? AND kind = ? ORDER BY created_at ASC, id ASC";
 		const rows =
 			kind === null || kind === undefined
-				? this.db.prepare(sql).all(memory_id)
-				: this.db.prepare(sql).all(memory_id, kind);
+				? this.db.prepare(sql).all(memoryId)
+				: this.db.prepare(sql).all(memoryId, kind);
 		return (rows as AnnotationRow[]).map(normalizeRow);
 	}
-
-	query_by_memory(memory_id: string, kind?: string | null): AnnotationRow[] {
-		return this.queryByMemory(memory_id, kind);
-	}
-
 	queryByKind(
 		kind: string,
 		options: {
@@ -343,33 +314,18 @@ export class AnnotationStore {
 		const filterNoise = options.filter_noise ?? options.filterNoise ?? true;
 		return filterNoise && kind === "mentions" ? filterCleanMentions(normalized) : normalized;
 	}
-
-	query_by_kind(kind: string, value?: string | null, memory_id?: string | null, filter_noise = true): AnnotationRow[] {
-		return this.queryByKind(kind, { value, memory_id, filter_noise });
-	}
-
 	getDistinctValues(kind: string): string[] {
 		const rows = this.db
 			.prepare("SELECT DISTINCT value FROM annotations WHERE kind = ? ORDER BY value")
 			.all(kind) as { value: string }[];
 		return rows.map(row => row.value);
 	}
-
-	get_distinct_values(kind: string): string[] {
-		return this.getDistinctValues(kind);
-	}
-
 	exportAll(): AnnotationRow[] {
 		const rows = this.db
 			.prepare("SELECT id, memory_id, kind, value, source, confidence, created_at FROM annotations ORDER BY id")
 			.all() as AnnotationRow[];
 		return rows.map(normalizeRow);
 	}
-
-	export_all(): AnnotationRow[] {
-		return this.exportAll();
-	}
-
 	importAll(annotations: readonly AnnotationInput[], force = false): AnnotationImportStats {
 		const stats: AnnotationImportStats = {
 			inserted: 0,
@@ -438,14 +394,10 @@ export class AnnotationStore {
 		});
 		return stats;
 	}
-
-	import_all(annotations: readonly AnnotationInput[], force = false): AnnotationImportStats {
-		return this.importAll(annotations, force);
-	}
 }
 
 export function addAnnotation(
-	memory_id: string,
+	memoryId: string,
 	kind: string,
 	value: string,
 	source = "",
@@ -454,14 +406,11 @@ export function addAnnotation(
 ): number {
 	const store = new AnnotationStore(path === undefined ? {} : path);
 	try {
-		return store.add(memory_id, kind, value, source, confidence);
+		return store.add(memoryId, kind, value, source, confidence);
 	} finally {
 		store.close();
 	}
 }
-
-export const add_annotation = addAnnotation;
-
 export interface QueryAnnotationsOptions {
 	readonly memory_id?: string | null;
 	readonly memoryId?: string | null;
@@ -473,10 +422,10 @@ export interface QueryAnnotationsOptions {
 
 export function queryAnnotations(options?: QueryAnnotationsOptions): AnnotationRow[];
 export function queryAnnotations(
-	memory_id?: string | null,
+	memoryId?: string | null,
 	kind?: string | null,
 	value?: string | null,
-	db_path?: string | null,
+	dbPath?: string | null,
 ): AnnotationRow[];
 export function queryAnnotations(
 	first: QueryAnnotationsOptions | string | null = {},
@@ -506,5 +455,3 @@ export function queryAnnotations(
 		store.close();
 	}
 }
-
-export const query_annotations = queryAnnotations;

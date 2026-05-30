@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { generateId as generateTimedId, sha256Hex16, stableMemoryId } from "../../util/ids";
-import { cosineSimilarity as vectorCosineSimilarity } from "../binary_vectors";
+import { cosineSimilarity as vectorCosineSimilarity } from "../binary-vectors";
 import type { BeamMemoryState, JsonValue, Metadata } from "./types";
 
 export type Vector = number[];
@@ -910,56 +910,11 @@ function intersectionCount(left: ReadonlySet<string>, right: ReadonlySet<string>
 export function memoryRowMetadata(row: unknown): Metadata {
 	return normalizeMetadata(rowValue<unknown>(row, "metadata_json") ?? rowValue<unknown>(row, "metadata"));
 }
-
-export const generate_id = generateId;
-export const generate_stable_id = generateStableId;
-export const stable_id = generateStableId;
-export const normalize_weights = normalizeWeights;
-export const normalize_importance = normalizeImportance;
-export const normalize_datetime_utc = normalizeDateUtc;
-export const parse_iso_datetime_utc = parseIsoDateTimeUtc;
-export const parse_query_time = parseQueryTime;
-export const parse_ts_fast = parseTimestampFast;
-export const recency_decay = recencyDecay;
-export const temporal_boost = temporalBoost;
-export const recall_tokens = recallTokens;
-export const expanded_query_tokens = expandedQueryTokens;
-export const minimum_recall_relevance = minimumRecallRelevance;
-export const fact_match_tokens = factMatchTokens;
-export const contains_spaceless_cjk = containsSpacelessCjk;
-export const has_cjk = hasCjk;
-export const cjk_fts_terms = cjkFtsTerms;
-export const lexical_relevance = lexicalRelevance;
-export const strict_fact_matches = strictFactMatches;
-export const fts_query_terms = ftsQueryTerms;
-export const build_fts_query = buildFtsQuery;
-export const cjk_like_search = cjkLikeSearch;
-export const fts_search = ftsSearch;
-export const fts_search_working = ftsSearchWorking;
-export const encode_vector = encodeVector;
-export const decode_vector = decodeVector;
-export const vec_available = vecAvailable;
-export const effective_vec_type = effectiveVecType;
-export const vec_insert = vecInsert;
-export const vec_search = vecSearch;
-export const in_memory_vec_search = inMemoryVecSearch;
-export const wm_vec_search = workingMemoryVecSearch;
-export const working_memory_vec_search = workingMemoryVecSearch;
-export const normalize_metadata = normalizeMetadata;
-export const metadata_json = metadataJson;
-export const detect_language = detectLanguage;
-export const memory_row_metadata = memoryRowMetadata;
-
 export {
-	cosine_similarity,
 	cosineSimilarity,
-	hamming_distance,
 	hammingDistance,
-	information_theoretic_score,
 	informationTheoreticScore,
-	maximally_informative_binarization,
 	maximallyInformativeBinarization,
-	quantize_int8,
 	quantizeInt8,
-} from "../binary_vectors";
+} from "../binary-vectors";
 export { sha256Hex16 };

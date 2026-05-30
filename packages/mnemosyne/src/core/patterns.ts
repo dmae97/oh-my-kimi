@@ -30,10 +30,6 @@ export class CompressionStats {
 		if (this.originalSize === 0) return 0.0;
 		return (1.0 - this.compressedSize / this.originalSize) * 100;
 	}
-
-	get savings_percent(): number {
-		return this.savingsPercent;
-	}
 }
 
 export type MemoryRecord = Record<string, unknown> & {
@@ -71,11 +67,6 @@ export class MemoryCompressor {
 			"mnemosyne ": "\r",
 		};
 	}
-
-	static _build_default_dict(): Record<string, string> {
-		return MemoryCompressor.buildDefaultDict();
-	}
-
 	compress(content: string, method = "dict"): readonly [string, CompressionStats] {
 		const originalSize = utf8Size(content);
 		if (method === "auto") {
@@ -172,11 +163,6 @@ export class MemoryCompressor {
 			}),
 		];
 	}
-
-	compress_batch(memories: readonly MemoryRecord[], method = "auto"): readonly [MemoryRecord[], CompressionStats] {
-		return this.compressBatch(memories, method);
-	}
-
 	decompress(content: string, method = "dict"): string {
 		if (method === "dict") {
 			let decompressed = content;
@@ -220,10 +206,6 @@ export class DetectedPattern {
 		this.metadata = { ...(init.metadata ?? {}) };
 	}
 
-	get pattern_type(): string {
-		return this.patternType;
-	}
-
 	toDict(): Record<string, unknown> {
 		return {
 			pattern_type: this.patternType,
@@ -232,10 +214,6 @@ export class DetectedPattern {
 			samples: [...this.samples],
 			metadata: { ...this.metadata },
 		};
-	}
-
-	to_dict(): Record<string, unknown> {
-		return this.toDict();
 	}
 }
 
@@ -301,10 +279,6 @@ export class PatternDetector {
 		this.minConfidence = minConfidence;
 	}
 
-	get min_confidence(): number {
-		return this.minConfidence;
-	}
-
 	detectTemporal(memories: readonly MemoryRecord[]): DetectedPattern[] {
 		const patterns: DetectedPattern[] = [];
 		const timestamps: Date[] = [];
@@ -360,11 +334,6 @@ export class PatternDetector {
 		}
 		return patterns;
 	}
-
-	detect_temporal(memories: readonly MemoryRecord[]): DetectedPattern[] {
-		return this.detectTemporal(memories);
-	}
-
 	detectContent(memories: readonly MemoryRecord[]): DetectedPattern[] {
 		const patterns: DetectedPattern[] = [];
 		const allText = memories.map(contentOf).join(" ");
@@ -439,11 +408,6 @@ export class PatternDetector {
 		}
 		return patterns;
 	}
-
-	detect_content(memories: readonly MemoryRecord[]): DetectedPattern[] {
-		return this.detectContent(memories);
-	}
-
 	detectSequence(memories: readonly MemoryRecord[]): DetectedPattern[] {
 		const patterns: DetectedPattern[] = [];
 		if (memories.length < 3) return patterns;
@@ -491,11 +455,6 @@ export class PatternDetector {
 		}
 		return patterns;
 	}
-
-	detect_sequence(memories: readonly MemoryRecord[]): DetectedPattern[] {
-		return this.detectSequence(memories);
-	}
-
 	detectAll(memories: readonly MemoryRecord[]): DetectedPattern[] {
 		const patterns = [
 			...this.detectTemporal(memories),
@@ -505,11 +464,6 @@ export class PatternDetector {
 		patterns.sort((left, right) => right.confidence - left.confidence);
 		return patterns;
 	}
-
-	detect_all(memories: readonly MemoryRecord[]): DetectedPattern[] {
-		return this.detectAll(memories);
-	}
-
 	summarizePatterns(memories: readonly MemoryRecord[]): Record<string, unknown> {
 		const patterns = this.detectAll(memories);
 		return {
@@ -526,9 +480,5 @@ export class PatternDetector {
 				.map(pattern => pattern.toDict()),
 			top_pattern: patterns[0]?.toDict() ?? null,
 		};
-	}
-
-	summarize_patterns(memories: readonly MemoryRecord[]): Record<string, unknown> {
-		return this.summarizePatterns(memories);
 	}
 }

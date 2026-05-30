@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { EmbeddingModel, FlagEmbedding } from "fastembed";
-import { getMnemosyneRuntimeOptions, resolveEmbeddingProvider } from "./runtime_options";
+import { getMnemosyneRuntimeOptions, resolveEmbeddingProvider } from "./runtime-options";
 
 export type Vector = number[];
 export type EmbeddingMatrix = Vector[];
@@ -17,13 +17,25 @@ interface LocalEmbeddingModel {
 	queryEmbed?(query: string): Promise<number[]>;
 }
 
+type LocalModelInitOptions = {
+	model: StandardEmbeddingModel;
+	cacheDir?: string;
+	showDownloadProgress?: boolean;
+};
+type LocalModelInitializer = (options: LocalModelInitOptions) => Promise<LocalEmbeddingModel>;
+
 const FASTEMBED_CACHE_DIR = `${process.env.HOME ?? ""}/.hermes/cache/fastembed`;
 const QUERY_CACHE_MAX = 512;
 
 let providerOverride: EmbeddingProvider | null = null;
-let localModelPromise: Promise<LocalEmbeddingModel | null> | null = null;
+let localModelPromise: Promise<LocalEmbeddingModel> | null = null;
+let localModelInitializer: LocalModelInitializer = defaultLocalModelInitializer;
 let apiCallCount = 0;
 const queryCache = new Map<string, Vector>();
+
+function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
+	return FlagEmbedding.init(options) as Promise<LocalEmbeddingModel>;
+}
 
 function activeEmbeddingOptions() {
 	return getMnemosyneRuntimeOptions()?.embeddings;
@@ -81,7 +93,7 @@ function defaultModel(): string {
 	return env("MNEMOSYNE_EMBEDDING_MODEL") || "BAAI/bge-small-en-v1.5";
 }
 
-function isApiModel(modelName: string): boolean {
+export function isApiModel(modelName: string): boolean {
 	if (
 		modelName.startsWith("openai/") ||
 		modelName.includes("text-embedding") ||
@@ -97,7 +109,7 @@ function isApiModel(modelName: string): boolean {
 	return truthy(env("MNEMOSYNE_EMBEDDINGS_VIA_API"));
 }
 
-function embeddingDimFor(modelName: string): number {
+export function embeddingDimFor(modelName: string): number {
 	const override = Number.parseInt(env("MNEMOSYNE_EMBEDDING_DIM"), 10);
 	if (Number.isFinite(override)) {
 		return override;
@@ -251,23 +263,23 @@ async function getLocalModel(): Promise<LocalEmbeddingModel | null> {
 		return localModelPromise;
 	}
 
-	localModelPromise = (async () => {
-		try {
-			const modelName = fastembedModelName(defaultModel());
-			if (modelName === null) {
-				return null;
-			}
-			mkdirSync(FASTEMBED_CACHE_DIR, { recursive: true });
-			return await FlagEmbedding.init({
-				model: modelName,
-				cacheDir: FASTEMBED_CACHE_DIR,
-				showDownloadProgress: false,
-			});
-		} catch {
-			return null;
-		}
-	})();
-	return localModelPromise;
+	const modelName = fastembedModelName(defaultModel());
+	if (modelName === null) {
+		return null;
+	}
+	mkdirSync(FASTEMBED_CACHE_DIR, { recursive: true });
+	const loading = localModelInitializer({
+		model: modelName,
+		cacheDir: FASTEMBED_CACHE_DIR,
+		showDownloadProgress: false,
+	});
+	localModelPromise = loading;
+	try {
+		return await loading;
+	} catch {
+		if (localModelPromise === loading) localModelPromise = null;
+		return null;
+	}
 }
 
 async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | null> {
@@ -342,9 +354,16 @@ export function setEmbeddingProviderForTests(provider: EmbeddingProvider | null 
 
 export const setEmbeddingProvider = setEmbeddingProviderForTests;
 
+export function setLocalModelInitializerForTests(initializer: LocalModelInitializer | null | undefined): void {
+	localModelInitializer = initializer ?? defaultLocalModelInitializer;
+	localModelPromise = null;
+	queryCache.clear();
+}
+
 export function resetEmbeddingProviderForTests(): void {
 	providerOverride = null;
 	localModelPromise = null;
+	localModelInitializer = defaultLocalModelInitializer;
 	apiCallCount = 0;
 	queryCache.clear();
 }
@@ -463,16 +482,9 @@ export function cosineSimilarity(a: readonly number[], b: readonly number[]): nu
 	}
 	return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
-
-export const embed_query = embedQuery;
-export const available_api = availableApi;
-export const cosine_similarity = cosineSimilarity;
-
 export function getEmbeddingApiCallCountForTests(): number {
 	return apiCallCount;
 }
 
-export const _DEFAULT_MODEL = defaultModel();
-export const EMBEDDING_DIM = embeddingDimFor(_DEFAULT_MODEL);
-export const _isApiModel = isApiModel;
-export const _getEmbeddingDim = embeddingDimFor;
+export const DEFAULT_MODEL = defaultModel();
+export const EMBEDDING_DIM = embeddingDimFor(DEFAULT_MODEL);

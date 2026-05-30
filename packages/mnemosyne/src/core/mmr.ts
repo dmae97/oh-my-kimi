@@ -6,7 +6,7 @@ export interface MmrResult {
 
 export type SimilarityFn = (textA: string, textB: string) => number;
 
-export function _jaccard_similarity(textA: string, textB: string): number {
+export function jaccardSimilarity(textA: string, textB: string): number {
 	const wordsA = new Set(textA.toLowerCase().split(/\s+/).filter(Boolean));
 	const wordsB = new Set(textB.toLowerCase().split(/\s+/).filter(Boolean));
 
@@ -19,16 +19,15 @@ export function _jaccard_similarity(textA: string, textB: string): number {
 
 	return intersection / (wordsA.size + wordsB.size - intersection);
 }
-
-export const jaccard_similarity = _jaccard_similarity;
-
-export function mmr_rerank<T extends MmrResult>(
+export function mmrRerank<T extends MmrResult>(
 	results: readonly T[],
 	lambdaParam = 0.7,
 	topK = 10,
-	similarityFn: SimilarityFn = _jaccard_similarity,
+	similarityFn: SimilarityFn = jaccardSimilarity,
 ): T[] {
-	if (results.length <= 1) return results.slice(0, topK);
+	const limit = Math.max(0, Math.trunc(topK));
+	if (limit <= 0) return [];
+	if (results.length <= 1) return results.slice(0, limit);
 
 	const sortedResults = results.slice().sort((left, right) => (right.score ?? 0) - (left.score ?? 0));
 	const first = sortedResults[0];
@@ -37,7 +36,7 @@ export function mmr_rerank<T extends MmrResult>(
 	const selected: T[] = [first];
 	const remaining = sortedResults.slice(1);
 
-	while (remaining.length > 0 && selected.length < topK) {
+	while (remaining.length > 0 && selected.length < limit) {
 		let bestIdx = 0;
 		let bestScore = Number.NEGATIVE_INFINITY;
 
@@ -64,8 +63,8 @@ export function mmr_rerank<T extends MmrResult>(
 		if (chosen !== undefined) selected.push(chosen);
 	}
 
-	if (selected.length < topK) {
-		selected.push(...remaining.slice(0, topK - selected.length));
+	if (selected.length < limit) {
+		selected.push(...remaining.slice(0, limit - selected.length));
 	}
 
 	return selected;

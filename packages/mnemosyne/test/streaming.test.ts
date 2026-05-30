@@ -15,16 +15,16 @@ describe("MemoryEvent", () => {
 			content: "Test",
 			importance: 0.7,
 		});
-		expect(event.to_dict().event_type).toBe("MEMORY_ADDED");
-		expect(JSON.parse(event.to_json()).memory_id).toBe("mem_123");
-		const restored = MemoryEvent.from_dict({
+		expect(event.toDict().event_type).toBe("MEMORY_ADDED");
+		expect(JSON.parse(event.toJSON()).memory_id).toBe("mem_123");
+		const restored = MemoryEvent.fromDict({
 			event_type: "MEMORY_RECALLED",
 			memory_id: "mem_456",
 			timestamp: "2026-01-01T00:00:00",
 			content: "Recalled",
 		});
-		expect(restored.event_type).toBe(EventType.MEMORY_RECALLED);
-		expect(restored.memory_id).toBe("mem_456");
+		expect(restored.eventType).toBe(EventType.MEMORY_RECALLED);
+		expect(restored.memoryId).toBe("mem_456");
 	});
 });
 
@@ -35,8 +35,8 @@ describe("MemoryStream", () => {
 		stream.on(EventType.MEMORY_ADDED, () => {
 			throw new Error("boom");
 		});
-		stream.on(EventType.MEMORY_ADDED, event => calls.push(event.memory_id));
-		stream.on_any(event => calls.push(`any:${event.memory_id}`));
+		stream.on(EventType.MEMORY_ADDED, event => calls.push(event.memoryId));
+		stream.onAny(event => calls.push(`any:${event.memoryId}`));
 		stream.emit(new MemoryEvent({ event_type: EventType.MEMORY_ADDED, memory_id: "a" }));
 		expect(calls).toEqual(["a", "any:a"]);
 	});
@@ -48,10 +48,10 @@ describe("MemoryStream", () => {
 		stream.emit(new MemoryEvent({ event_type: EventType.MEMORY_RECALLED, memory_id: "b" }));
 		stream.emit(new MemoryEvent({ event_type: EventType.MEMORY_ADDED, memory_id: "c" }));
 		stream.emit(new MemoryEvent({ event_type: EventType.MEMORY_ADDED, memory_id: "d" }));
-		expect(stream.get_buffer().map(event => event.memory_id)).toEqual(["b", "c", "d"]);
-		expect(stream.get_buffer([EventType.MEMORY_ADDED], since).map(event => event.memory_id)).toEqual(["c", "d"]);
-		stream.clear_buffer();
-		expect(stream.get_buffer()).toHaveLength(0);
+		expect(stream.getBuffer().map(event => event.memoryId)).toEqual(["b", "c", "d"]);
+		expect(stream.getBuffer([EventType.MEMORY_ADDED], since).map(event => event.memoryId)).toEqual(["c", "d"]);
+		stream.clearBuffer();
+		expect(stream.getBuffer()).toHaveLength(0);
 	});
 
 	it("feeds async listeners with type filtering", async () => {
@@ -76,17 +76,17 @@ describe("DeltaSync", () => {
 				["wm1", "Memory 1", "test", "2026-01-01T00:00:00", "s", 0.5],
 			);
 			const sync = new DeltaSync({ db }, root);
-			const delta = sync.compute_delta("peer", "working_memory");
+			const delta = sync.computeDelta("peer", "working_memory");
 			expect(delta).toHaveLength(1);
-			const stats = sync.apply_delta(
+			const stats = sync.applyDelta(
 				"peer",
 				[{ id: "wm2", content: "Imported", source: "remote", importance: 0.9 }],
 				"working_memory",
 			);
 			expect(stats.inserted).toBe(1);
-			expect(sync.get_checkpoint("peer")?.peer_id).toBe("peer");
+			expect(sync.getCheckpoint("peer")?.peerId).toBe("peer");
 			const reloaded = new DeltaSync({ db }, root);
-			expect(reloaded.get_checkpoint("peer")?.peer_id).toBe("peer");
+			expect(reloaded.getCheckpoint("peer")?.peerId).toBe("peer");
 		} finally {
 			db.close();
 			rmSync(root, { recursive: true, force: true });
@@ -99,6 +99,6 @@ describe("DeltaSync", () => {
 			last_sync_at: "2026-01-01T00:00:00",
 			last_rowid: 42,
 		});
-		expect(JSON.parse(checkpoint.to_json()).last_rowid).toBe(42);
+		expect(JSON.parse(checkpoint.toJson()).last_rowid).toBe(42);
 	});
 });

@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
-	_build_extraction_prompt,
-	_parse_facts,
+	buildExtractionPrompt,
 	extractFacts,
 	extractFactsSafe,
 	heuristicExtractFacts,
+	parseFacts,
 } from "../src/core/extraction";
 import { getExtractionStats, resetExtractionStats } from "../src/core/extraction/diagnostics";
-import { CallableLlmBackend, resetHostLlmBackendForTests, setHostLlmBackend } from "../src/core/llm_backends";
+import { CallableLlmBackend, resetHostLlmBackendForTests, setHostLlmBackend } from "../src/core/llm-backends";
 
 const OLD_ENV = { ...process.env };
 function restoreEnv(): void {
@@ -29,19 +29,19 @@ afterEach(() => {
 
 describe("structured extraction", () => {
 	it("builds prompts and parses JSON and legacy facts", () => {
-		const prompt = _build_extraction_prompt("I love coffee");
+		const prompt = buildExtractionPrompt("I love coffee");
 		expect(prompt).toContain("I love coffee");
 		expect(prompt.toLowerCase()).toContain("extract");
 
-		expect(_parse_facts('{"facts":["The user likes coffee"],"preferences":["The user prefers tea"]}')).toEqual([
+		expect(parseFacts('{"facts":["The user likes coffee"],"preferences":["The user prefers tea"]}')).toEqual([
 			"The user likes coffee",
 			"The user prefers tea",
 		]);
-		expect(_parse_facts("1. The user loves coffee\n- The user hates mornings")).toEqual([
+		expect(parseFacts("1. The user loves coffee\n- The user hates mornings")).toEqual([
 			"The user loves coffee",
 			"The user hates mornings",
 		]);
-		expect(_parse_facts("NO_FACTS")).toEqual([]);
+		expect(parseFacts("NO_FACTS")).toEqual([]);
 	});
 
 	it("uses deterministic heuristic extraction when no LLM is configured", async () => {

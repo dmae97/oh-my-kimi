@@ -22,15 +22,11 @@ export interface BankStats {
 
 export class BankManager {
 	readonly dataDir: string;
-	readonly data_dir: string;
 	readonly banksDir: string;
-	readonly banks_dir: string;
 
 	constructor(dataDir?: string) {
 		this.dataDir = dataDir ?? configuredDataDir();
-		this.data_dir = this.dataDir;
 		this.banksDir = join(this.dataDir, "banks");
-		this.banks_dir = this.banksDir;
 		mkdirSync(this.banksDir, { recursive: true });
 	}
 
@@ -44,23 +40,14 @@ export class BankManager {
 		closeQuietly(db);
 		return dbPath;
 	}
-
-	create_bank(name: string): string {
-		return this.createBank(name);
-	}
-
 	deleteBank(name: string, force = false): boolean {
+		this.validateName(name);
 		if (name === "default" && !force) throw new ValueError("Cannot delete 'default' bank without force=True");
 		const bankDir = join(this.banksDir, name);
 		if (!existsSync(bankDir)) return false;
 		rmSync(bankDir, { recursive: true, force: true });
 		return true;
 	}
-
-	delete_bank(name: string, force = false): boolean {
-		return this.deleteBank(name, force);
-	}
-
 	listBanks(): string[] {
 		const banks: string[] = ["default"];
 		if (existsSync(this.banksDir)) {
@@ -70,29 +57,15 @@ export class BankManager {
 		}
 		return banks.sort();
 	}
-
-	list_banks(): string[] {
-		return this.listBanks();
-	}
-
 	bankExists(name: string): boolean {
 		if (name === "default") return true;
 		return existsSync(join(this.banksDir, name));
 	}
-
-	bank_exists(name: string): boolean {
-		return this.bankExists(name);
-	}
-
 	getBankDbPath(name: string): string {
 		if (name.length === 0 || name === "default") return join(this.dataDir, DB_FILENAME);
+		this.validateName(name);
 		return join(this.banksDir, name, DB_FILENAME);
 	}
-
-	get_bank_db_path(name: string): string {
-		return this.getBankDbPath(name);
-	}
-
 	renameBank(oldName: string, newName: string): string {
 		if (oldName === "default") throw new ValueError("Cannot rename 'default' bank");
 		this.validateName(newName);
@@ -103,22 +76,12 @@ export class BankManager {
 		renameSync(oldDir, newDir);
 		return join(newDir, DB_FILENAME);
 	}
-
-	rename_bank(oldName: string, newName: string): string {
-		return this.renameBank(oldName, newName);
-	}
-
 	getBankStats(name: string): BankStats {
 		const dbPath = this.getBankDbPath(name);
 		const present = existsSync(dbPath);
 		const size = present ? statSync(dbPath).size : 0;
 		return { name, exists: present, db_path: dbPath, dbSizeBytes: size, db_size_bytes: size };
 	}
-
-	get_bank_stats(name: string): BankStats {
-		return this.getBankStats(name);
-	}
-
 	private validateName(name: string): void {
 		if (name.length === 0) throw new ValueError("Bank name cannot be empty");
 		if (name === "default") return;
@@ -138,63 +101,33 @@ export class BankManager {
 
 let defaultBank = "default";
 
-export function create_bank(name: string, dataDir?: string): string {
+export function createBank(name: string, dataDir?: string): string {
 	const manager = new BankManager(dataDir);
 	return manager.createBank(name);
 }
-
-export function createBank(name: string, dataDir?: string): string {
-	return create_bank(name, dataDir);
-}
-
-export function delete_bank(name: string, dataDir?: string, force = false): boolean {
+export function deleteBank(name: string, dataDir?: string, force = false): boolean {
 	const manager = new BankManager(dataDir);
 	return manager.deleteBank(name, force);
 }
-
-export function deleteBank(name: string, dataDir?: string, force = false): boolean {
-	return delete_bank(name, dataDir, force);
-}
-
-export function list_banks(dataDir?: string): string[] {
+export function listBanks(dataDir?: string): string[] {
 	const manager = new BankManager(dataDir);
 	return manager.listBanks();
 }
-
-export function listBanks(dataDir?: string): string[] {
-	return list_banks(dataDir);
-}
-
-export function bank_exists(name: string, dataDir?: string): boolean {
+export function bankExists(name: string, dataDir?: string): boolean {
 	const manager = new BankManager(dataDir);
 	return manager.bankExists(name);
 }
-
-export function bankExists(name: string, dataDir?: string): boolean {
-	return bank_exists(name, dataDir);
-}
-
 export function bankDbPath(name = defaultBank, dataDir?: string): string {
 	const manager = new BankManager(dataDir);
 	return manager.getBankDbPath(name);
 }
 
-export function set_bank(bank: string): void {
+export function setBank(bank: string): void {
 	defaultBank = bank;
 }
-
-export function setBank(bank: string): void {
-	set_bank(bank);
-}
-
-export function get_bank(): string {
+export function getBank(): string {
 	return defaultBank;
 }
-
-export function getBank(): string {
-	return get_bank();
-}
-
 export function resetBankForTests(): void {
 	defaultBank = "default";
 }

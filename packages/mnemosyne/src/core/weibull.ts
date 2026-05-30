@@ -84,7 +84,7 @@ function paramsFor(memoryType: string): WeibullParams | undefined {
 	return WEIBULL_PARAMS[memoryType as MemoryType];
 }
 
-export function weibull_boost(
+export function weibullBoost(
 	timestamp: TimestampInput,
 	queryTime: Date | null = new Date(),
 	memoryType = "general",
@@ -111,7 +111,7 @@ export function weibull_boost(
 	return Math.exp(-((ageHours / params.eta) ** params.k));
 }
 
-export function weibull_decay_factor(ageHours: number, memoryType = "general"): number {
+export function weibullDecayFactor(ageHours: number, memoryType = "general"): number {
 	if (ageHours <= 0) return 1.0;
 
 	const params = paramsFor(memoryType);

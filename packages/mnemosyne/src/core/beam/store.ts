@@ -2,7 +2,7 @@ import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { transaction } from "../../db";
 import { toUtcIso } from "../../util/datetime";
 import { generateId } from "../../util/ids";
-import { EpisodicGraph } from "../episodic_graph";
+import { EpisodicGraph } from "../episodic-graph";
 import { vecAvailable, vecInsert } from "./helpers";
 import type {
 	BeamEvent,
@@ -769,15 +769,3 @@ export function importFromDict(beam: BeamMemoryState, data: Record<string, unkno
 	invalidateCaches(beam);
 	return stats;
 }
-
-export const remember_batch = rememberBatch;
-export const get_context = getContext;
-export const get_working_stats = getWorkingStats;
-export const get_global_working_stats = getGlobalWorkingStats;
-export const update_working = updateWorking;
-export const forget_working = forgetWorking;
-export const scratchpad_write = scratchpadWrite;
-export const scratchpad_read = scratchpadRead;
-export const scratchpad_clear = scratchpadClear;
-export const export_to_dict = exportToDict;
-export const import_from_dict = importFromDict;

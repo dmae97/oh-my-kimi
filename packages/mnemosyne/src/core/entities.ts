@@ -118,9 +118,6 @@ const ENTITY_EXTRACTION_STOP_WORD_VALUES = [
 ] as const;
 
 export const ENTITY_EXTRACTION_STOP_WORDS: ReadonlySet<string> = new Set(ENTITY_EXTRACTION_STOP_WORD_VALUES);
-
-export const _STOP_WORDS = ENTITY_EXTRACTION_STOP_WORDS;
-
 const ENTITY_PATTERNS: readonly RegExp[] = [
 	/@(\w{2,30})/g,
 	/#(\w{2,30})/g,
@@ -163,9 +160,6 @@ export function levenshteinDistance(s1: string, s2: string): number {
 	}
 	return previousRow[right.length] ?? 0;
 }
-
-export const levenshtein_distance = levenshteinDistance;
-
 export function similarity(s1: string, s2: string): number {
 	const s1Lower = s1.toLowerCase().trim();
 	const s2Lower = s2.toLowerCase().trim();
@@ -239,9 +233,6 @@ export function extractEntitiesRegex(text: string): string[] {
 	}
 	return Array.from(filtered).sort();
 }
-
-export const extract_entities_regex = extractEntitiesRegex;
-
 export type SimilarEntity = readonly [entity: string, score: number];
 
 export function findSimilarEntities(
@@ -261,13 +252,8 @@ export function findSimilarEntities(
 	matches.sort((left, right) => right[1] - left[1]);
 	return matches;
 }
-
-export const find_similar_entities = findSimilarEntities;
-
 export function entityExtractionPerformance(text: string, iterations = 1000): number {
 	const start = performance.now();
 	for (let i = 0; i < iterations; i++) extractEntitiesRegex(text);
 	return (performance.now() - start) / iterations;
 }
-
-export const entity_extraction_performance = entityExtractionPerformance;

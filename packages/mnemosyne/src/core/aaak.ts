@@ -140,8 +140,3 @@ export function encode(text: string): string {
 }
 
 export const aaakEncode = encode;
-export const aaak_encode = encode;
-export const _apply_category_prefixes = applyCategoryPrefixes;
-export const _apply_phrases = applyPhrases;
-export const _apply_structural = applyStructural;
-export const _compact_parens = compactParens;

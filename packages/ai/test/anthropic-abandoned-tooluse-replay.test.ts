@@ -104,6 +104,14 @@ describe("Anthropic abandoned/aborted tool-use replay", () => {
 		expect(blocks.some(b => b.type === "tool_use")).toBe(true);
 	});
 
+	it("preserves signed thinking on the latest surviving abandoned tool-use turn when trailing truncated thinking is dropped", () => {
+		const blocks = assistantBlocks(buildHistoryWithTrailingTruncatedThinking("stop", "sig_valid"));
+		expectNoUnsignedThinking(blocks);
+		expect(blocks.some(b => b.type === "thinking" && b.signature === "sig_valid")).toBe(true);
+		expect(blocks.some(b => b.type === "text" && b.text?.includes("deliberating about the forecast"))).toBe(false);
+		expect(blocks.some(b => b.type === "tool_use")).toBe(true);
+	});
+
 	it("downgrades historical end_turn(stop) tool-use thinking to text so the continuation stays wire-valid", () => {
 		const blocks = assistantBlocks(buildHistoryWithLaterAssistant("stop", "sig_valid"));
 		expectNoUnsignedThinking(blocks);
@@ -138,6 +146,27 @@ function buildHistoryWithLaterAssistant(
 			usage: emptyUsage,
 			stopReason: "stop",
 			timestamp: 5,
+		} satisfies AssistantMessage,
+	];
+}
+
+function buildHistoryWithTrailingTruncatedThinking(
+	stopReason: AssistantMessage["stopReason"],
+	signature: string | undefined,
+): Message[] {
+	const abandonedToolUse = buildHistory(stopReason, signature);
+	return [
+		abandonedToolUse[0]!,
+		abandonedToolUse[1]!,
+		{
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "truncated final thought", thinkingSignature: "sig_truncated" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: model.id,
+			usage: emptyUsage,
+			stopReason: "length",
+			timestamp: 4,
 		} satisfies AssistantMessage,
 	];
 }

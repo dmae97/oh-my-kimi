@@ -118,15 +118,6 @@ export class MemoryEvent {
 		this.metadata = init.metadata ?? null;
 		this.delta = init.delta ?? null;
 	}
-	get event_type(): EventType {
-		return this.eventType;
-	}
-	get memory_id(): string {
-		return this.memoryId;
-	}
-	get session_id(): string | null {
-		return this.sessionId;
-	}
 	toDict(): MemoryEventDict {
 		const out: MemoryEventDict = {
 			event_type: this.eventType,
@@ -141,21 +132,12 @@ export class MemoryEvent {
 		if (this.delta !== null) out.delta = this.delta;
 		return out;
 	}
-	to_dict(): MemoryEventDict {
-		return this.toDict();
-	}
 	toJSON(): string {
 		return JSON.stringify(this.toDict());
-	}
-	to_json(): string {
-		return this.toJSON();
 	}
 	static fromDict(data: MemoryEventDict | MemoryEventInit): MemoryEvent {
 		const eventType = normalizeEventType(("eventType" in data ? data.eventType : undefined) ?? data.event_type);
 		return new MemoryEvent({ ...data, eventType });
-	}
-	static from_dict(data: MemoryEventDict | MemoryEventInit): MemoryEvent {
-		return MemoryEvent.fromDict(data);
 	}
 }
 
@@ -171,7 +153,7 @@ export class StreamIterator implements AsyncIterable<MemoryEvent>, AsyncIterator
 		private readonly stream: MemoryStream,
 		private readonly eventTypes: readonly EventType[] | null = null,
 	) {}
-	_push(event: MemoryEvent): void {
+	push(event: MemoryEvent): void {
 		if (this.closed || (this.eventTypes !== null && !this.eventTypes.includes(event.eventType))) return;
 		const waiter = this.waiters.shift();
 		if (waiter !== undefined) waiter({ value: event, done: false });
@@ -207,9 +189,6 @@ export class MemoryStream {
 	on(eventType: EventType, callback: MemoryEventHandler): void {
 		this.callbacks.get(eventType)?.push(callback);
 	}
-	on_any(callback: MemoryEventHandler): void {
-		this.onAny(callback);
-	}
 	onAny(callback: MemoryEventHandler): void {
 		this.anyCallbacks.push(callback);
 	}
@@ -218,9 +197,6 @@ export class MemoryStream {
 		if (callbacks === undefined) return;
 		const index = callbacks.indexOf(callback);
 		if (index >= 0) callbacks.splice(index, 1);
-	}
-	off_any(callback: MemoryEventHandler): void {
-		this.offAny(callback);
 	}
 	offAny(callback: MemoryEventHandler): void {
 		const index = this.anyCallbacks.indexOf(callback);
@@ -239,7 +215,7 @@ export class MemoryStream {
 				callback(event);
 			} catch {}
 		}
-		for (const iterator of this.iterators) iterator._push(event);
+		for (const iterator of this.iterators) iterator.push(event);
 	}
 	listen(eventTypes: readonly EventType[] | null = null): StreamIterator {
 		const iterator = new StreamIterator(this, eventTypes);
@@ -249,23 +225,14 @@ export class MemoryStream {
 	removeIterator(iterator: StreamIterator): void {
 		this.iterators.delete(iterator);
 	}
-	_remove_iterator(iterator: StreamIterator): void {
-		this.removeIterator(iterator);
-	}
 	getBuffer(eventTypes: readonly EventType[] | null = null, since: string | null = null): MemoryEvent[] {
 		let events = this.buffer.slice();
 		if (eventTypes !== null) events = events.filter(event => eventTypes.includes(event.eventType));
 		if (since !== null) events = events.filter(event => event.timestamp >= since);
 		return events;
 	}
-	get_buffer(eventTypes: readonly EventType[] | null = null, since: string | null = null): MemoryEvent[] {
-		return this.getBuffer(eventTypes, since);
-	}
 	clearBuffer(): void {
 		this.buffer.length = 0;
-	}
-	clear_buffer(): void {
-		this.clearBuffer();
 	}
 }
 
@@ -289,15 +256,6 @@ export class SyncCheckpoint {
 		this.lastRowid = init.lastRowid ?? init.last_rowid ?? 0;
 		this.checksum = init.checksum ?? null;
 	}
-	get peer_id(): string {
-		return this.peerId;
-	}
-	get last_sync_at(): string {
-		return this.lastSyncAt;
-	}
-	get last_rowid(): number {
-		return this.lastRowid;
-	}
 	toDict(): Record<string, unknown> {
 		return {
 			peer_id: this.peerId,
@@ -306,11 +264,8 @@ export class SyncCheckpoint {
 			checksum: this.checksum,
 		};
 	}
-	to_json(): string {
+	toJson(): string {
 		return JSON.stringify(this.toDict());
-	}
-	toJSON(): string {
-		return this.to_json();
 	}
 	static fromJSON(text: string): SyncCheckpoint {
 		return new SyncCheckpoint(JSON.parse(text) as SyncCheckpointInit);
@@ -366,21 +321,15 @@ export class DeltaSync {
 		}
 		return null;
 	}
-	get_checkpoint(peerId: string, table: DeltaTable = "working_memory"): SyncCheckpoint | null {
-		return this.getCheckpoint(peerId, table);
-	}
 	saveCheckpoint(checkpoint: SyncCheckpoint, table: DeltaTable = "working_memory"): void {
 		assertDeltaTable(table);
-		writeFileSync(this.checkpointPath(checkpoint.peerId, table), checkpoint.toJSON());
+		writeFileSync(this.checkpointPath(checkpoint.peerId, table), checkpoint.toJson());
 	}
 	setCheckpoint(peerId: string, checkpoint: SyncCheckpoint, table: DeltaTable = "working_memory"): void {
 		assertDeltaTable(table);
 		const peerCheckpoint =
 			checkpoint.peerId === peerId ? checkpoint : new SyncCheckpoint({ ...checkpoint.toDict(), peerId });
 		this.saveCheckpoint(peerCheckpoint, table);
-	}
-	set_checkpoint(peerId: string, checkpoint: SyncCheckpoint, table: DeltaTable = "working_memory"): void {
-		this.setCheckpoint(peerId, checkpoint, table);
 	}
 	computeDelta(peerId: string, table: DeltaTable = "working_memory"): Record<string, unknown>[] {
 		assertDeltaTable(table);
@@ -389,9 +338,6 @@ export class DeltaSync {
 		return this.db
 			.query(`SELECT rowid, * FROM ${QUALIFIED_TABLE_NAMES[table]} WHERE rowid > ? ORDER BY rowid ASC`)
 			.all(minRowid) as Record<string, unknown>[];
-	}
-	compute_delta(peerId: string, table: DeltaTable = "working_memory"): Record<string, unknown>[] {
-		return this.computeDelta(peerId, table);
 	}
 	applyDelta(
 		peerId: string,
@@ -459,19 +405,9 @@ export class DeltaSync {
 		);
 		return { inserted, updated, skipped, filtered_keys: filteredKeys };
 	}
-	apply_delta(
-		peerId: string,
-		delta: readonly Record<string, unknown>[],
-		table: DeltaTable = "working_memory",
-	): { inserted: number; updated: number; skipped: number; filtered_keys: number } {
-		return this.applyDelta(peerId, delta, table);
-	}
 	syncTo(peerId: string, table: DeltaTable = "working_memory"): { delta: Record<string, unknown>[]; count: number } {
 		const delta = this.computeDelta(peerId, table);
 		return { delta, count: delta.length };
-	}
-	sync_to(peerId: string, table: DeltaTable = "working_memory"): { delta: Record<string, unknown>[]; count: number } {
-		return this.syncTo(peerId, table);
 	}
 	syncFrom(
 		peerId: string,
@@ -480,13 +416,4 @@ export class DeltaSync {
 	): { stats: { inserted: number; updated: number; skipped: number; filtered_keys: number } } {
 		return { stats: this.applyDelta(peerId, delta, table) };
 	}
-	sync_from(
-		peerId: string,
-		delta: readonly Record<string, unknown>[],
-		table: DeltaTable = "working_memory",
-	): { stats: { inserted: number; updated: number; skipped: number; filtered_keys: number } } {
-		return this.syncFrom(peerId, delta, table);
-	}
 }
-
-export const _StreamIterator = StreamIterator;

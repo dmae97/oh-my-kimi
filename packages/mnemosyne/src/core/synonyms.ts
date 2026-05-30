@@ -167,9 +167,6 @@ export function normalizeQuery(query: string): string {
 	}
 	return Array.from(canonicalWords).sort().join(" ");
 }
-
-export const normalize_query = normalizeQuery;
-
 export function expandQuery(query: string): string {
 	const words = query.toLowerCase().split(/\s+/);
 	const expandedParts: string[] = [];
@@ -192,14 +189,9 @@ export function expandQuery(query: string): string {
 	}
 	return expandedParts.join(" ");
 }
-
-export const expand_query = expandQuery;
-
 export function getSynonyms(word: string): string[] {
 	const lowered = word.toLowerCase();
 	const canonical = WORD_TO_CANONICAL.get(lowered);
 	if (canonical === undefined) return [lowered];
 	return [canonical, ...SYNONYM_GROUPS[canonical]];
 }
-
-export const get_synonyms = getSynonyms;

@@ -167,9 +167,6 @@ export function inspectDatabase(options: DiagnosticOptions = {}): DiagnosticSumm
 export function runDiagnostics(options: DiagnosticOptions = {}): DiagnosticSummary {
 	return inspectDatabase(options);
 }
-
-export const run_diagnostics = runDiagnostics;
-
 if (import.meta.main) {
 	const summary = runDiagnostics();
 	console.log(JSON.stringify(summary, null, 2));

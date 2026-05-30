@@ -1,12 +1,13 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gunzipSync } from "node:zlib";
-import { createBackup, restoreBackup, verifyIntegrity } from "../src/dr/recovery";
+import { gunzipSync, gzipSync } from "node:zlib";
+import { createBackup, emergencyRestore, restoreBackup, verifyIntegrity } from "../src/dr/recovery";
 
 const tempDirs: string[] = [];
+const SQLITE_HEADER = Buffer.from("SQLite format 3\0", "binary");
 
 function makeTempDir(): string {
 	const dir = mkdtempSync(join(tmpdir(), "mnemosyne-recovery-"));
@@ -35,6 +36,31 @@ function readMemory(path: string): string {
 		return row.content;
 	} finally {
 		db.close();
+	}
+}
+
+function writeCorruptSqliteBackup(path: string): void {
+	writeFileSync(path, gzipSync(Buffer.concat([SQLITE_HEADER, Buffer.from("corrupt backup payload")])));
+}
+
+function withFrozenNow<T>(iso: string, fn: () => T): T {
+	const realDate = Date;
+	const fixedMs = realDate.parse(iso);
+	class FrozenDate extends realDate {
+		constructor(value?: string | number | Date) {
+			if (value === undefined) super(fixedMs);
+			else super(value);
+		}
+
+		static now(): number {
+			return fixedMs;
+		}
+	}
+	globalThis.Date = FrozenDate as DateConstructor;
+	try {
+		return fn();
+	} finally {
+		globalThis.Date = realDate;
 	}
 }
 
@@ -69,6 +95,25 @@ describe("SQLite recovery helpers", () => {
 		).toBe("SQLite format 3\0");
 	});
 
+	it("creates distinct backup files when called twice in the same second", () => {
+		const dir = makeTempDir();
+		const dbPath = join(dir, "mnemosyne.db");
+		const backupDir = join(dir, "backups");
+		createSqliteDb(dbPath);
+
+		const [first, second] = withFrozenNow("2026-05-30T12:00:00.000Z", () => [
+			createBackup(dbPath, backupDir),
+			createBackup(dbPath, backupDir),
+		]);
+
+		expect(first.backup_path).not.toBe(second.backup_path);
+		expect(first.metadata_path).not.toBe(second.metadata_path);
+		expect(existsSync(first.backup_path)).toBe(true);
+		expect(existsSync(second.backup_path)).toBe(true);
+		expect(existsSync(first.metadata_path)).toBe(true);
+		expect(existsSync(second.metadata_path)).toBe(true);
+	});
+
 	it("returns true for a valid SQLite database integrity check", () => {
 		const dir = makeTempDir();
 		const dbPath = join(dir, "mnemosyne.db");
@@ -94,5 +139,42 @@ describe("SQLite recovery helpers", () => {
 		});
 		expect(verifyIntegrity(restoredPath)).toBe(true);
 		expect(readMemory(restoredPath)).toBe("backup me");
+	});
+
+	it("keeps the current WAL database untouched when a staged restore fails integrity", () => {
+		const dir = makeTempDir();
+		const dbPath = join(dir, "mnemosyne.db");
+		const backupDir = join(dir, "backups");
+		mkdirSync(backupDir, { recursive: true });
+		const badBackup = join(backupDir, "mnemosyne_backup_20260530_120000.db.gz");
+		writeCorruptSqliteBackup(badBackup);
+		const db = new Database(dbPath, { create: true, readwrite: true, strict: true });
+		try {
+			db.exec("PRAGMA journal_mode=WAL");
+			db.exec("CREATE TABLE memories (id INTEGER PRIMARY KEY, content TEXT NOT NULL)");
+			db.prepare("INSERT INTO memories (content) VALUES (?)").run("wal protected");
+			expect(existsSync(`${dbPath}-wal`)).toBe(true);
+
+			expect(() => restoreBackup(badBackup, dbPath)).toThrow(/integrity/);
+
+			expect(existsSync(`${dbPath}-wal`)).toBe(true);
+			const row = db.query("SELECT content FROM memories WHERE id = 1").get() as { content: string } | null;
+			expect(row?.content).toBe("wal protected");
+		} finally {
+			db.close();
+		}
+	});
+
+	it("leaves the original database intact when emergency restore exhausts corrupt backups", () => {
+		const dir = makeTempDir();
+		const dbPath = join(dir, "mnemosyne.db");
+		const backupDir = join(dir, "backups");
+		createSqliteDb(dbPath);
+		mkdirSync(backupDir, { recursive: true });
+		writeCorruptSqliteBackup(join(backupDir, "mnemosyne_backup_20260530_120000.db.gz"));
+
+		expect(() => emergencyRestore(backupDir, dbPath)).toThrow("All backups failed integrity check");
+		expect(verifyIntegrity(dbPath)).toBe(true);
+		expect(readMemory(dbPath)).toBe("backup me");
 	});
 });

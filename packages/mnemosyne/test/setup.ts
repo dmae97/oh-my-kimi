@@ -2,8 +2,8 @@ import { afterEach, beforeEach } from "bun:test";
 
 import * as Beam from "../src/core/beam/index";
 import * as Embeddings from "../src/core/embeddings";
-import type { CompleteOptions, LlmBackend } from "../src/core/llm_backends";
-import * as LlmBackends from "../src/core/llm_backends";
+import type { CompleteOptions, LlmBackend } from "../src/core/llm-backends";
+import * as LlmBackends from "../src/core/llm-backends";
 import * as Memory from "../src/core/memory";
 
 type ResettableModule = Record<string, unknown>;

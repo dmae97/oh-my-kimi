@@ -7,6 +7,9 @@ export const OPENROUTER_BASE_URL = (process.env.OPENROUTER_BASE_URL || "https://
 	"",
 );
 export const FALLBACK_MODELS = ["google/gemini-flash-latest"] as const;
+const RATE_LIMIT_BACKOFF_BASE_MS = 1_000;
+const RATE_LIMIT_BACKOFF_MAX_MS = 30_000;
+const FALLBACK_MODEL_DELAY_MS = 1_000;
 
 export interface ChatMessage {
 	role: string;
@@ -58,7 +61,7 @@ export class ExtractionClient {
 		for (const model of models) {
 			for (let attempt = 0; attempt < 3; attempt += 1) {
 				try {
-					const result = await this._call_api(model, messages, temperature, maxTokens);
+					const result = await this.callApi(model, messages, temperature, maxTokens);
 					if (result === "") {
 						diag.recordNoOutput("cloud");
 					}
@@ -67,13 +70,13 @@ export class ExtractionClient {
 					lastError = exc;
 					const msg = String(exc).toLowerCase();
 					if (msg.includes("429") || msg.includes("rate")) {
-						await sleep(2 ** attempt);
+						await sleep(Math.min(RATE_LIMIT_BACKOFF_MAX_MS, RATE_LIMIT_BACKOFF_BASE_MS * 2 ** attempt));
 						continue;
 					}
 					break;
 				}
 			}
-			await sleep(1);
+			await sleep(FALLBACK_MODEL_DELAY_MS);
 		}
 
 		diag.recordFailure("cloud", lastError, "all_models_failed");
@@ -153,11 +156,7 @@ export class ExtractionClient {
 		return [];
 	}
 
-	_call_api(model: string, messages: readonly ChatMessage[], temperature: number, maxTokens: number): Promise<string> {
-		return this.callApi(model, messages, temperature, maxTokens);
-	}
-
-	extract_facts(messages: readonly ChatMessage[]): Promise<ExtractedFact[]> {
+	xtractFacts(messages: readonly ChatMessage[]): Promise<ExtractedFact[]> {
 		return this.extractFacts(messages);
 	}
 }

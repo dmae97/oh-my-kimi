@@ -3,8 +3,8 @@ import { existsSync } from "node:fs";
 import { ftsWeight, importanceWeight, vectorWeight } from "../../config";
 import { closeQuietly, openDatabase } from "../../db";
 import { AnnotationStore } from "../annotations";
-import { EpisodicGraph } from "../episodic_graph";
-import { hasPendingMigration, migrate as migrateTriplestoreSplit } from "../migrations/e6_triplestore_split";
+import { EpisodicGraph } from "../episodic-graph";
+import { hasPendingMigration, migrate as migrateTriplestoreSplit } from "../migrations/e6-triplestore-split";
 import {
 	consolidateToEpisodic,
 	degradeEpisodic,
@@ -329,120 +329,6 @@ export class BeamMemory implements BeamMemoryState {
 	importFromDict(data: Record<string, unknown>, force = false): ImportStats {
 		return importFromDict(this, data, force);
 	}
-
-	remember_batch(items: readonly RememberBatchItem[], options: RememberBatchOptions = {}): string[] {
-		return this.rememberBatch(items, options);
-	}
-
-	get_context(limit = 10): unknown[] {
-		return this.getContext(limit);
-	}
-
-	get_working_stats(
-		authorId: string | null = null,
-		authorType: string | null = null,
-		channelId: string | null = null,
-	): BeamStats {
-		return this.getWorkingStats(authorId, authorType, channelId);
-	}
-
-	get_global_working_stats(): BeamStats {
-		return this.getGlobalWorkingStats();
-	}
-
-	update_working(memoryId: string, content: string | null = null, importance: number | null = null): boolean {
-		return this.updateWorking(memoryId, content, importance);
-	}
-
-	forget_working(memoryId: string): boolean {
-		return this.forgetWorking(memoryId);
-	}
-
-	consolidate_to_episodic(
-		summary: string,
-		sourceWmIds: readonly string[],
-		source = "consolidation",
-		importance = 0.6,
-	): string {
-		return this.consolidateToEpisodic(summary, sourceWmIds, source, importance);
-	}
-
-	detect_language(text: string): string {
-		return this.detectLanguage(text);
-	}
-
-	extract_and_store_facts(
-		content: string,
-		messageIdx = 0,
-		sourceMemoryId: string | null = null,
-	): Record<string, unknown> {
-		return this.extractAndStoreFacts(content, messageIdx, sourceMemoryId);
-	}
-
-	memoria_retrieve(query: string, ability: string | null = null, topK = 10): MemoriaRetrieveResult {
-		return this.memoriaRetrieve(query, ability, topK);
-	}
-
-	recall_enhanced(query: string, topK = 40, options: RecallEnhancedOptions = {}): RecallResult[] {
-		return this.recallEnhanced(query, topK, options);
-	}
-
-	format_context(results: readonly RecallResult[], format = "bullet"): string {
-		return this.formatContext(results, format);
-	}
-
-	fact_recall(query: string, topK = 30): RecallResult[] {
-		return this.factRecall(query, topK);
-	}
-
-	get_episodic_stats(
-		authorId: string | null = null,
-		authorType: string | null = null,
-		channelId: string | null = null,
-	): BeamStats {
-		return this.getEpisodicStats(authorId, authorType, channelId);
-	}
-
-	get_memoria_stats(): BeamStats {
-		return this.getMemoriaStats();
-	}
-
-	scratchpad_write(content: string): string {
-		return this.scratchpadWrite(content);
-	}
-
-	scratchpad_read(): unknown[] {
-		return this.scratchpadRead();
-	}
-
-	scratchpad_clear(): void {
-		this.scratchpadClear();
-	}
-
-	degrade_episodic(dryRun = false): Record<string, unknown> {
-		return this.degradeEpisodic(dryRun);
-	}
-
-	get_contaminated(limit = 50, minImportance = 0.0): unknown[] {
-		return this.getContaminated(limit, minImportance);
-	}
-
-	sleep_all_sessions(dryRun = false): SleepResult {
-		return this.sleepAllSessions(dryRun);
-	}
-
-	get_consolidation_log(limit = 10): unknown[] {
-		return this.getConsolidationLog(limit);
-	}
-
-	export_to_dict(): Record<string, unknown> {
-		return this.exportToDict();
-	}
-
-	import_from_dict(data: Record<string, unknown>, force = false): ImportStats {
-		return this.importFromDict(data, force);
-	}
-
 	protected emitEvent(type: string, data: Omit<BeamEvent, "type" | "sessionId" | "timestamp"> = {}): void {
 		const event: BeamEvent = {
 			...data,

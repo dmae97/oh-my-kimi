@@ -7,7 +7,7 @@ describe("memory compression", () => {
 			new CompressionStats({ originalSize: 100, compressedSize: 70, ratio: 0.7, method: "dict" }).savingsPercent,
 		).toBeCloseTo(30);
 		expect(
-			new CompressionStats({ originalSize: 0, compressedSize: 0, ratio: 1, method: "none" }).savings_percent,
+			new CompressionStats({ originalSize: 0, compressedSize: 0, ratio: 1, method: "none" }).savingsPercent,
 		).toBe(0);
 	});
 
@@ -58,7 +58,7 @@ describe("pattern detection", () => {
 		const patterns = detector.detectTemporal(memories);
 		expect(patterns.some(pattern => pattern.patternType === "temporal")).toBe(true);
 		expect(patterns.some(pattern => pattern.description.includes("09:00"))).toBe(true);
-		expect(detector.detect_temporal([{ content: "Only one", timestamp: "2026-01-01T09:00:00" }])).toEqual([]);
+		expect(detector.detectTemporal([{ content: "Only one", timestamp: "2026-01-01T09:00:00" }])).toEqual([]);
 	});
 
 	it("detects frequent keywords and co-occurrence", () => {
@@ -110,7 +110,7 @@ describe("pattern detection", () => {
 			samples: ["sample1", "sample2"],
 			metadata: { key: "value" },
 		});
-		expect(pattern.to_dict()).toEqual({
+		expect(pattern.toDict()).toEqual({
 			pattern_type: "content",
 			description: "Test pattern",
 			confidence: 0.85,

@@ -67,8 +67,8 @@
 			"import": "./src/core/beam/index.ts"
 		},
 		"./mcp": {
-			"types": "./src/mcp_tools.ts",
-			"import": "./src/mcp_tools.ts"
+			"types": "./src/mcp-tools.ts",
+			"import": "./src/mcp-tools.ts"
 		},
 		"./cli": {
 			"types": "./src/cli.ts",

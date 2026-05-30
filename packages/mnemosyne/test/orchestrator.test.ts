@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { type BeamMemoryState, initBeam, type RecallResult } from "../src/core/beam/index";
 import { orchestrateRecall } from "../src/core/orchestrator";
-import { PolyphonicRecallEngine } from "../src/core/polyphonic_recall";
+import { PolyphonicRecallEngine } from "../src/core/polyphonic-recall";
 import { closeQuietly, openDatabase } from "../src/db";
 
 interface FakeBeam extends BeamMemoryState {

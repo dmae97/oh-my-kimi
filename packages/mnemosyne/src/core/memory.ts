@@ -4,9 +4,11 @@ import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { dbPath as configuredDbPath } from "../config";
 import { closeQuietly } from "../db";
 import type { MemoryInput, Metadata } from "../types";
+import { AnnotationStore } from "./annotations";
 import { BankManager } from "./banks";
 import { BeamMemory, initBeam } from "./beam/index";
 import type { RecallEnhancedOptions, RecallOptions, RecallResult, SleepResult } from "./beam/types";
+import { EpisodicGraph } from "./episodic-graph";
 import {
 	isPiAiModel,
 	type MnemosyneEmbeddingRuntimeOptions,
@@ -15,7 +17,7 @@ import {
 	type ResolvedMnemosyneRuntimeOptions,
 	resolveEmbeddingProvider,
 	withMnemosyneRuntimeOptions,
-} from "./runtime_options";
+} from "./runtime-options";
 
 export interface MnemosyneOptions {
 	readonly db?: Database;
@@ -300,6 +302,23 @@ function sourceCounts(db: Database): Record<string, number> {
 	return counts;
 }
 
+function buildBeamAnnotations(db: Database, dbPath: string | undefined): BeamMemory["annotations"] {
+	const annotationStore = dbPath === undefined ? new AnnotationStore({ db }) : new AnnotationStore({ db, dbPath });
+	return {
+		add: (memoryId, kind, value, writeOptions) =>
+			annotationStore.add(memoryId, kind, value, writeOptions?.source, writeOptions?.confidence),
+		addMany: (memoryId, kind, values, writeOptions) =>
+			annotationStore.addMany(memoryId, kind, values, writeOptions?.source, writeOptions?.confidence),
+		queryByMemory: (memoryId, kind) => annotationStore.queryByMemory(memoryId, kind),
+		queryByKind: (kind, value) => annotationStore.queryByKind(kind, { value }),
+		getDistinctValues: kind => annotationStore.getDistinctValues(kind),
+	};
+}
+
+function buildEpisodicGraph(db: Database, dbPath: string | undefined): EpisodicGraph {
+	return dbPath === undefined ? new EpisodicGraph({ db }) : new EpisodicGraph({ db, dbPath });
+}
+
 function defaultFor(bank: string | null | undefined = null): Mnemosyne {
 	const targetBank = bank ?? defaultBank ?? "default";
 	if (defaultInstance === null || defaultInstance.bank !== targetBank) {
@@ -311,36 +330,26 @@ function defaultFor(bank: string | null | undefined = null): Mnemosyne {
 }
 
 export class Mnemosyne {
-	public readonly sessionId: string;
-	public readonly session_id: string;
-	public readonly bank: string;
-	public readonly dbPath?: string;
-	public readonly db_path?: string;
-	public readonly authorId: string | null;
-	public readonly author_id: string | null;
-	public readonly authorType: string | null;
-	public readonly author_type: string | null;
-	public readonly channelId: string;
-	public readonly channel_id: string;
-	public readonly beam: BeamMemory;
-	public readonly conn: Database;
-	public readonly db: Database;
-	public readonly runtimeOptions?: ResolvedMnemosyneRuntimeOptions;
+	readonly sessionId: string;
+	readonly bank: string;
+	readonly dbPath?: string;
+	readonly authorId: string | null;
+	readonly authorType: string | null;
+	readonly channelId: string;
+	readonly beam: BeamMemory;
+	readonly conn: Database;
+	readonly db: Database;
+	readonly runtimeOptions?: ResolvedMnemosyneRuntimeOptions;
 	#ownsDb: boolean;
 	#closed = false;
 
 	constructor(options: MnemosyneOptions = {}) {
 		this.sessionId = options.sessionId ?? options.session_id ?? "default";
-		this.session_id = this.sessionId;
 		this.bank = options.bank ?? "default";
 		this.authorId = options.authorId ?? options.author_id ?? null;
-		this.author_id = this.authorId;
 		this.authorType = options.authorType ?? options.author_type ?? null;
-		this.author_type = this.authorType;
 		this.channelId = options.channelId ?? options.channel_id ?? this.sessionId;
-		this.channel_id = this.channelId;
 		this.dbPath = resolveDbPath(options, this.bank);
-		this.db_path = this.dbPath;
 		this.runtimeOptions = resolveRuntimeOptions(options);
 
 		this.beam = new BeamMemory({
@@ -355,6 +364,12 @@ export class Mnemosyne {
 			const opened = this.beam.db;
 			initBeam(options.db);
 			Object.defineProperty(this.beam, "db", { value: options.db });
+			Object.defineProperty(this.beam, "annotations", {
+				value: buildBeamAnnotations(options.db, this.dbPath),
+			});
+			Object.defineProperty(this.beam, "episodicGraph", {
+				value: buildEpisodicGraph(options.db, this.dbPath),
+			});
 			closeQuietly(opened);
 		}
 		this.conn = this.beam.db;
@@ -475,60 +490,19 @@ export class Mnemosyne {
 	consolidate(dryRun = false): SleepResult {
 		return this.sleep(dryRun);
 	}
-
-	get_context(limit = 10): unknown[] {
-		return this.getContext(limit);
-	}
-
-	get_stats(
-		authorId: string | null = null,
-		authorType: string | null = null,
-		channelId: string | null = null,
-	): MemoryFacadeStats {
-		return this.getStats(authorId, authorType, channelId);
-	}
-
-	recall_enhanced(query: string, topK = 5, options: RecallFacadeOptions & RecallEnhancedOptions = {}): RecallResult[] {
-		return this.recallEnhanced(query, topK, options);
-	}
-
-	sleep_all_sessions(dryRun = false): SleepResult {
-		return this.sleepAllSessions(dryRun);
-	}
-
-	scratchpad_write(content: string): string {
-		return this.scratchpadWrite(content);
-	}
-
-	scratchpad_read(): unknown[] {
-		return this.scratchpadRead();
-	}
-
-	scratchpad_clear(): void {
-		this.scratchpadClear();
-	}
-
 	#withRuntimeOptions<T>(fn: () => T): T {
 		return withMnemosyneRuntimeOptions(this.runtimeOptions, fn);
 	}
 }
 
-export function set_bank(bank: string): void {
+export function setBank(bank: string): void {
 	defaultBank = bank;
 	defaultInstance?.close();
 	defaultInstance = null;
 }
 
-export function setBank(bank: string): void {
-	set_bank(bank);
-}
-
-export function get_bank(): string {
-	return defaultBank || "default";
-}
-
 export function getBank(): string {
-	return get_bank();
+	return defaultBank || "default";
 }
 
 export function getDefaultInstance(bank: string | null = null): Mnemosyne {
@@ -547,21 +521,13 @@ export function recallEnhanced(query: string, topK = 5, options: ModuleRecallEnh
 	return defaultFor(options.bank).recallEnhanced(query, topK, options);
 }
 
-export function recall_enhanced(query: string, topK = 5, options: ModuleRecallEnhancedOptions = {}): RecallResult[] {
-	return recallEnhanced(query, topK, options);
-}
-
-export function get_context(limit = 10, bank: string | null = null): unknown[] {
+export function getContext(limit = 10, bank: string | null = null): unknown[] {
 	return defaultFor(bank).getContext(limit);
 }
 
-export const getContext = get_context;
-
-export function get_stats(bank: string | null = null): MemoryFacadeStats {
+export function getStats(bank: string | null = null): MemoryFacadeStats {
 	return defaultFor(bank).getStats();
 }
-
-export const getStats = get_stats;
 
 export function get(memoryId: string, bank: string | null = null): unknown | null {
 	return defaultFor(bank).get(memoryId);
@@ -584,32 +550,21 @@ export function sleep(dryRun = false, bank: string | null = null): SleepResult {
 	return defaultFor(bank).sleep(dryRun);
 }
 
-export function sleep_all_sessions(dryRun = false, bank: string | null = null): SleepResult {
+export function sleepAllSessions(dryRun = false, bank: string | null = null): SleepResult {
 	return defaultFor(bank).sleepAllSessions(dryRun);
 }
 
-export function sleepAllSessions(dryRun = false, bank: string | null = null): SleepResult {
-	return sleep_all_sessions(dryRun, bank);
-}
-
-export function scratchpad_write(content: string, bank: string | null = null): string {
+export function scratchpadWrite(content: string, bank: string | null = null): string {
 	return defaultFor(bank).scratchpadWrite(content);
 }
 
-export const scratchpadWrite = scratchpad_write;
-
-export function scratchpad_read(bank: string | null = null): unknown[] {
+export function scratchpadRead(bank: string | null = null): unknown[] {
 	return defaultFor(bank).scratchpadRead();
 }
 
-export const scratchpadRead = scratchpad_read;
-
-export function scratchpad_clear(bank: string | null = null): void {
+export function scratchpadClear(bank: string | null = null): void {
 	defaultFor(bank).scratchpadClear();
 }
-
-export const scratchpadClear = scratchpad_clear;
-
 export function addMemory(memory: string | RememberInput, options: ModuleRememberOptions = {}): string {
 	return remember(memory, options);
 }

@@ -1,6 +1,6 @@
-import { _safeForLog, getDiagnostics } from "./extraction/diagnostics";
-import { callHostLlm, getHostLlmBackend } from "./llm_backends";
-import { _callRemoteLlm, _cleanOutput, callLocalLlm, llmAvailable } from "./local_llm";
+import { getDiagnostics, safeForLog } from "./extraction/diagnostics";
+import { callHostLlm, getHostLlmBackend } from "./llm-backends";
+import { callLocalLlm, callRemoteLlm, cleanOutput, llmAvailable } from "./local-llm";
 
 const TRUE_VALUES: Record<string, true> = { "1": true, true: true, yes: true, on: true };
 
@@ -66,9 +66,6 @@ Extraction:`;
 export function buildExtractionPrompt(text: string, detectedLang = "en"): string {
 	return EXTRACTION_PROMPT_TEMPLATE.split("{text}").join(text).split("{lang}").join(detectedLang);
 }
-
-export const _build_extraction_prompt = buildExtractionPrompt;
-
 function stripFence(raw: string): string {
 	let s = raw.trim();
 	if (!s.startsWith("```")) {
@@ -138,9 +135,6 @@ export function parseFacts(rawOutput: string | null | undefined): string[] {
 	}
 	return cleaned.slice(0, 5);
 }
-
-export const _parse_facts = parseFacts;
-
 function sentenceCase(value: string): string {
 	const trimmed = value.trim().replace(/[.!?]+$/, "");
 	return trimmed === "" ? "" : `${trimmed[0]?.toUpperCase() ?? ""}${trimmed.slice(1)}`;
@@ -204,7 +198,7 @@ async function localFallback(prompt: string, sourceText: string, diag = getDiagn
 	try {
 		const raw = await callLocalLlm(prompt);
 		if (raw !== null) {
-			const facts = parseFacts(_cleanOutput(raw));
+			const facts = parseFacts(cleanOutput(raw));
 			if (facts.length > 0) {
 				diag.recordSuccess("local", facts.length);
 				diag.recordCall({ succeeded: true });
@@ -254,7 +248,7 @@ export async function extractFacts(text: string | null | undefined): Promise<str
 		diag.recordAttempt("host");
 		diag.recordFailure("host", exc, "host_adapter_raised");
 		diag.recordCall({ succeeded: false });
-		console.warn(`extractFacts: host LLM adapter raised: ${_safeForLog(exc)}`);
+		console.warn(`extractFacts: host LLM adapter raised: ${safeForLog(exc)}`);
 		return [];
 	}
 
@@ -274,9 +268,9 @@ export async function extractFacts(text: string | null | undefined): Promise<str
 	if (llmEnabled() && llmBaseUrl() !== "") {
 		diag.recordAttempt("remote");
 		try {
-			const raw = await _callRemoteLlm(prompt, 0);
+			const raw = await callRemoteLlm(prompt, 0);
 			if (raw !== null) {
-				const facts = parseFacts(_cleanOutput(raw));
+				const facts = parseFacts(cleanOutput(raw));
 				if (facts.length > 0) {
 					diag.recordSuccess("remote", facts.length);
 					diag.recordCall({ succeeded: true });
@@ -286,7 +280,7 @@ export async function extractFacts(text: string | null | undefined): Promise<str
 			diag.recordNoOutput("remote");
 		} catch (exc) {
 			diag.recordFailure("remote", exc, "remote_call_raised");
-			console.warn(`extractFacts: remote LLM raised: ${_safeForLog(exc)}`);
+			console.warn(`extractFacts: remote LLM raised: ${safeForLog(exc)}`);
 		}
 	}
 
@@ -300,10 +294,7 @@ export async function extractFactsSafe(text: string | null | undefined): Promise
 		const diag = getDiagnostics();
 		diag.recordFailure("wrapper", exc, "outer_wrapper_caught");
 		diag.recordCall({ succeeded: false });
-		console.warn(`extractFactsSafe: extractFacts() raised: ${_safeForLog(exc)}`);
+		console.warn(`extractFactsSafe: extractFacts() raised: ${safeForLog(exc)}`);
 		return [];
 	}
 }
-
-export const extract_facts = extractFacts;
-export const extract_facts_safe = extractFactsSafe;

@@ -48,7 +48,7 @@ interface ResolvedCanonicalModel {
 }
 
 const TRAILING_MARKER_PATTERN =
-	/[-:](?:thinking|customtools|high|low|medium|minimal|xhigh|free|cloud|exacto|nitro|original|optimized|nvfp4|fp8|fp4|bf16|int8|int4|search)$/i;
+	/[-:](?:thinking|customtools|high|low|medium|minimal|xhigh|free|cloud|exacto|nitro|original|optimized|nvfp4|fp8|fp4|bf16|int8|int4)$/i;
 const WRAPPER_PREFIXES = ["duo-chat-"] as const;
 
 let referenceDataCache: CanonicalReferenceData | undefined;

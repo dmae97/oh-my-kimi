@@ -100,8 +100,6 @@ CREATE INDEX IF NOT EXISTS idx_beliefs_confidence ON harmonic_beliefs(confidence
 export function initSchema(db: Database): void {
 	db.exec(FACTS_SCHEMA_SQL);
 }
-export const _init_schema = initSchema;
-
 function textForEmbedding(text: string): Vector {
 	const out = new Float32Array(EMBEDDING_DIM);
 	const words = text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
@@ -113,11 +111,11 @@ function textForEmbedding(text: string): Vector {
 	return out;
 }
 
-export function _embed(text: string): Vector {
+export function embed(text: string): Vector {
 	return textForEmbedding(text);
 }
 
-export function _cosine_similarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
+export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
 	let dot = 0;
 	let aNorm = 0;
 	let bNorm = 0;
@@ -133,18 +131,18 @@ export function _cosine_similarity(a: ArrayLike<number>, b: ArrayLike<number>): 
 	return dot / (Math.sqrt(aNorm) * Math.sqrt(bNorm));
 }
 
-export function _cluster_by_similarity(items: readonly ShmrItem[], threshold: number): ShmrItem[][] {
+export function clusterBySimilarity(items: readonly ShmrItem[], threshold: number): ShmrItem[][] {
 	if (items.length === 0) return [];
 	const adjacency: number[][] = Array.from({ length: items.length }, () => []);
 	for (let i = 0; i < items.length; i++) {
 		const left = items[i];
 		if (left === undefined) continue;
-		const leftEmbedding = left.embedding ?? _embed(left.object ?? left.content ?? "");
+		const leftEmbedding = left.embedding ?? embed(left.object ?? left.content ?? "");
 		for (let j = i + 1; j < items.length; j++) {
 			const right = items[j];
 			if (right === undefined) continue;
-			const rightEmbedding = right.embedding ?? _embed(right.object ?? right.content ?? "");
-			if (_cosine_similarity(leftEmbedding, rightEmbedding) >= threshold) {
+			const rightEmbedding = right.embedding ?? embed(right.object ?? right.content ?? "");
+			if (cosineSimilarity(leftEmbedding, rightEmbedding) >= threshold) {
 				adjacency[i]?.push(j);
 				adjacency[j]?.push(i);
 			}
@@ -169,7 +167,7 @@ export function _cluster_by_similarity(items: readonly ShmrItem[], threshold: nu
 	return clusters;
 }
 
-export function _format_cluster_for_llm(cluster: readonly ShmrItem[]): string {
+export function formatClusterForLlm(cluster: readonly ShmrItem[]): string {
 	const lines = ["=== MEMORY CLUSTER ==="];
 	for (let i = 0; i < cluster.length; i++) {
 		const item = cluster[i];
@@ -181,7 +179,7 @@ export function _format_cluster_for_llm(cluster: readonly ShmrItem[]): string {
 	return lines.join("\n");
 }
 
-export function _extract_json_from_llm_output(text: string): Belief[] {
+export function extractJsonFromLlmOutput(text: string): Belief[] {
 	const candidates = [text];
 	const fenced = /```(?:json)?\s*(\[[\s\S]*?\])\s*```/.exec(text);
 	if (fenced?.[1] !== undefined) candidates.push(fenced[1]);
@@ -263,20 +261,20 @@ function deterministicBeliefs(cluster: readonly ShmrItem[]): Belief[] {
 	];
 }
 
-export function _compute_harmony_score(beliefs: readonly Belief[], cluster: readonly ShmrItem[]): number {
+export function computeHarmonyScore(beliefs: readonly Belief[], cluster: readonly ShmrItem[]): number {
 	if (beliefs.length === 0 || cluster.length === 0) return 0;
 	const centroid = new Float32Array(EMBEDDING_DIM);
 	for (const item of cluster) {
-		const embedding = item.embedding ?? _embed(item.object ?? item.content ?? "");
+		const embedding = item.embedding ?? embed(item.object ?? item.content ?? "");
 		for (let i = 0; i < EMBEDDING_DIM; i++) centroid[i] = (centroid[i] ?? 0) + (embedding[i] ?? 0) / cluster.length;
 	}
 	let total = 0;
 	for (const belief of beliefs)
-		total += _cosine_similarity(_embed(`${belief.predicate} ${belief.object}`), centroid) * belief.confidence;
+		total += cosineSimilarity(embed(`${belief.predicate} ${belief.object}`), centroid) * belief.confidence;
 	return total / beliefs.length;
 }
 
-export function _apply_beliefs(
+export function applyBeliefs(
 	db: Database,
 	beliefs: readonly Belief[],
 	cluster: readonly ShmrItem[],
@@ -343,7 +341,7 @@ export function harmonize(
 				confidence: row.confidence ?? 0.5,
 				timestamp: row.timestamp ?? undefined,
 				source: "fact",
-				embedding: _embed(row.object),
+				embedding: embed(row.object),
 			});
 	}
 	if (tableExists(db, "episodic_memory")) {
@@ -360,7 +358,7 @@ export function harmonize(
 					confidence: row.importance ?? 0.5,
 					timestamp: row.created_at ?? undefined,
 					source: "episodic",
-					embedding: _embed(row.content.slice(0, 300)),
+					embedding: embed(row.content.slice(0, 300)),
 				});
 	}
 	if (candidates.length < SHMR_MIN_CLUSTER_SIZE)
@@ -372,7 +370,7 @@ export function harmonize(
 			duration_ms: Math.floor(performance.now() - started),
 			status: "insufficient_candidates",
 		};
-	const clusters = _cluster_by_similarity(candidates, similarityThreshold).filter(
+	const clusters = clusterBySimilarity(candidates, similarityThreshold).filter(
 		cluster => cluster.length >= SHMR_MIN_CLUSTER_SIZE,
 	);
 	let totalBeliefs = 0;
@@ -384,13 +382,10 @@ export function harmonize(
 		const clusterId = `shmr_${Date.now()}_${clusterIndex}`;
 		for (let iteration = 0; iteration < maxIterations; iteration++) {
 			const beliefs = deterministicBeliefs(cluster);
-			const score = Math.max(
-				_compute_harmony_score(beliefs, cluster),
-				beliefs.length > 0 ? SHMR_HARMONY_THRESHOLD : 0,
-			);
+			const score = Math.max(computeHarmonyScore(beliefs, cluster), beliefs.length > 0 ? SHMR_HARMONY_THRESHOLD : 0);
 			scores.push(score);
 			if (score >= SHMR_HARMONY_THRESHOLD) {
-				_apply_beliefs(db, beliefs, cluster, clusterId);
+				applyBeliefs(db, beliefs, cluster, clusterId);
 				totalBeliefs += beliefs.filter(belief => belief.action !== "dampen").length;
 				totalContradictions += beliefs.filter(belief => belief.action === "dampen").length;
 				break;
@@ -422,10 +417,10 @@ export function harmonize(
 	};
 }
 
-export function recall_beliefs(beam: BeamLike, query: string, topK = 10): Array<Record<string, unknown>> {
+export function recallBeliefs(beam: BeamLike, query: string, topK = 10): Array<Record<string, unknown>> {
 	const db = dbOf(beam);
 	initSchema(db);
-	const queryEmbedding = _embed(query);
+	const queryEmbedding = embed(query);
 	const rows = db
 		.query(
 			"SELECT belief_id, subject, predicate, object, confidence, provenance, created_at FROM harmonic_beliefs ORDER BY confidence DESC LIMIT ?",
@@ -434,7 +429,7 @@ export function recall_beliefs(beam: BeamLike, query: string, topK = 10): Array<
 	return rows
 		.map(row => ({
 			row,
-			score: _cosine_similarity(queryEmbedding, _embed(row.object)) * (row.confidence ?? 0.5),
+			score: cosineSimilarity(queryEmbedding, embed(row.object)) * (row.confidence ?? 0.5),
 		}))
 		.sort((a, b) => b.score - a.score)
 		.slice(0, topK)
@@ -448,11 +443,6 @@ export function recall_beliefs(beam: BeamLike, query: string, topK = 10): Array<
 			source: "harmonic_belief",
 		}));
 }
-
-export function recallBeliefs(beam: BeamLike, query: string, topK = 10): Array<Record<string, unknown>> {
-	return recall_beliefs(beam, query, topK);
-}
-
 export function reflect(
 	_beam: BeamLike | null,
 	_question: string,
@@ -472,14 +462,10 @@ export function reflect(
 	);
 }
 
-export function get_resonance_log(beam: BeamLike, limit = 10): Array<Record<string, unknown>> {
+export function getResonanceLog(beam: BeamLike, limit = 10): Array<Record<string, unknown>> {
 	const db = dbOf(beam);
 	initSchema(db);
 	return db.query("SELECT * FROM memory_resonance_log ORDER BY created_at DESC LIMIT ?").all(limit) as Array<
 		Record<string, unknown>
 	>;
-}
-
-export function getResonanceLog(beam: BeamLike, limit = 10): Array<Record<string, unknown>> {
-	return get_resonance_log(beam, limit);
 }

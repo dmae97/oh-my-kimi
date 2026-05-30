@@ -19,6 +19,8 @@ import { closeQuietly, openDatabase } from "../db";
 
 type SerializableDatabase = Database & { serialize(): Uint8Array };
 const SQLITE_HEADER = new Uint8Array([83, 81, 76, 105, 116, 101, 32, 102, 111, 114, 109, 97, 116, 32, 51, 0]);
+const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
+let uniqueCounter = 0;
 
 export interface RecoveryPaths {
 	readonly dataDir: string;
@@ -92,6 +94,39 @@ function sha256Hex16(bytes: NodeJS.ArrayBufferView): string {
 	return createHash("sha256").update(bytes).digest("hex").slice(0, 16);
 }
 
+function nextUniqueToken(): string {
+	uniqueCounter = (uniqueCounter + 1) % 0x1fffffff;
+	return `${Date.now().toString(36)}_${process.pid.toString(36)}_${uniqueCounter.toString(36)}`;
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+	return (
+		error !== null &&
+		typeof error === "object" &&
+		"code" in error &&
+		(error as { readonly code?: unknown }).code === code
+	);
+}
+
+function writeBackupFile(destinationDir: string, timestamp: string, bytes: Uint8Array): string {
+	for (let attempt = 0; attempt < 64; attempt += 1) {
+		const suffix = attempt === 0 ? "" : `_${nextUniqueToken()}`;
+		const backupPath = join(destinationDir, `mnemosyne_backup_${timestamp}${suffix}.db.gz`);
+		try {
+			writeFileSync(backupPath, bytes, { flag: "wx" });
+			return backupPath;
+		} catch (error) {
+			if (hasErrorCode(error, "EEXIST")) continue;
+			throw error;
+		}
+	}
+	throw new Error(`Unable to allocate unique backup path in ${destinationDir}`);
+}
+
+function restoreTempPath(targetPath: string): string {
+	return join(dirname(targetPath), `.${basename(targetPath)}.${process.pid}.${nextUniqueToken()}.restore.tmp`);
+}
+
 function defaultBackupDir(env: Env = process.env): string {
 	const explicit = env.MNEMOSYNE_BACKUP_DIR;
 	if (explicit !== undefined && explicit.length > 0) return explicit;
@@ -106,9 +141,6 @@ export function getDefaultPaths(env: Env = process.env): RecoveryPaths {
 		dbPath: configuredDbPath(env),
 	};
 }
-
-export const get_default_paths = getDefaultPaths;
-
 export function createBackup(dbPath?: string | null, backupDir?: string | null): BackupResult {
 	const paths = getDefaultPaths();
 	const sourcePath = dbPath ?? paths.dbPath;
@@ -118,16 +150,17 @@ export function createBackup(dbPath?: string | null, backupDir?: string | null):
 
 	mkdirSync(destinationDir, { recursive: true });
 	const timestamp = timestampForBackup();
-	const backupPath = join(destinationDir, `mnemosyne_backup_${timestamp}.db.gz`);
 
+	let snapshot: Uint8Array | null = null;
 	let sourceDb: Database | null = null;
 	try {
 		sourceDb = openDatabase(sourcePath, { create: false, readwrite: false, pragmas: false });
-		const snapshot = (sourceDb as SerializableDatabase).serialize();
-		writeFileSync(backupPath, gzipSync(snapshot));
+		snapshot = (sourceDb as SerializableDatabase).serialize();
 	} finally {
 		closeQuietly(sourceDb);
 	}
+	if (snapshot === null) throw new Error(`Unable to serialize database backup: ${sourcePath}`);
+	const backupPath = writeBackupFile(destinationDir, timestamp, gzipSync(snapshot));
 
 	const dbBytes = readFileSync(sourcePath);
 	const backupBytes = readFileSync(backupPath);
@@ -144,9 +177,6 @@ export function createBackup(dbPath?: string | null, backupDir?: string | null):
 
 	return { backup_path: backupPath, metadata_path: metadataPath, ...metadata };
 }
-
-export const create_backup = createBackup;
-
 function isSqliteFile(bytes: Uint8Array): boolean {
 	if (bytes.length < SQLITE_HEADER.length) return false;
 	for (let i = 0; i < SQLITE_HEADER.length; i += 1) {
@@ -155,7 +185,7 @@ function isSqliteFile(bytes: Uint8Array): boolean {
 	return true;
 }
 
-function replaceWithGzippedSqlDump(sql: string, targetPath: string, tempPath: string): void {
+function writeGzippedSqlDump(sql: string, tempPath: string): void {
 	let db: Database | null = null;
 	try {
 		db = new Database(tempPath, { create: true, readwrite: true, strict: true });
@@ -163,13 +193,14 @@ function replaceWithGzippedSqlDump(sql: string, targetPath: string, tempPath: st
 	} finally {
 		closeQuietly(db);
 	}
-	renameSync(tempPath, targetPath);
+}
+
+function sqliteSidecarPath(dbPath: string, suffix: (typeof SQLITE_SIDECAR_SUFFIXES)[number]): string {
+	return `${dbPath}${suffix}`;
 }
 
 function removeSqliteSidecars(dbPath: string): void {
-	rmSync(`${dbPath}-wal`, { force: true });
-	rmSync(`${dbPath}-shm`, { force: true });
-	rmSync(`${dbPath}-journal`, { force: true });
+	for (const suffix of SQLITE_SIDECAR_SUFFIXES) rmSync(sqliteSidecarPath(dbPath, suffix), { force: true });
 }
 
 function emergencyBackupPath(targetPath: string): string {
@@ -178,43 +209,82 @@ function emergencyBackupPath(targetPath: string): string {
 	return `${targetPath.slice(0, -ext.length)}.emergency_backup.db`;
 }
 
+function emergencyBackupSidecarPath(targetPath: string, suffix: (typeof SQLITE_SIDECAR_SUFFIXES)[number]): string {
+	return `${emergencyBackupPath(targetPath)}${suffix}`;
+}
+
+function snapshotCurrentDatabase(targetPath: string): void {
+	const mainBackup = emergencyBackupPath(targetPath);
+	rmSync(mainBackup, { force: true });
+	for (const suffix of SQLITE_SIDECAR_SUFFIXES)
+		rmSync(emergencyBackupSidecarPath(targetPath, suffix), { force: true });
+	if (existsSync(targetPath)) copyFileSync(targetPath, mainBackup);
+	for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+		const sidecar = sqliteSidecarPath(targetPath, suffix);
+		if (existsSync(sidecar)) copyFileSync(sidecar, emergencyBackupSidecarPath(targetPath, suffix));
+	}
+}
+
+function restoreCurrentDatabaseSnapshot(targetPath: string): void {
+	const mainBackup = emergencyBackupPath(targetPath);
+	if (!existsSync(mainBackup)) return;
+	copyFileSync(mainBackup, targetPath);
+	for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+		const sidecar = sqliteSidecarPath(targetPath, suffix);
+		rmSync(sidecar, { force: true });
+		const backupSidecar = emergencyBackupSidecarPath(targetPath, suffix);
+		if (existsSync(backupSidecar)) copyFileSync(backupSidecar, sidecar);
+	}
+}
+
+function writeRestoreCandidate(uncompressed: Buffer, tempPath: string): void {
+	if (isSqliteFile(uncompressed)) {
+		writeFileSync(tempPath, uncompressed, { flag: "wx" });
+		return;
+	}
+	writeGzippedSqlDump(uncompressed.toString("utf8"), tempPath);
+}
+
 export function restoreBackup(backupPath: string, dbPath?: string | null): RestoreResult {
 	const targetPath = dbPath ?? getDefaultPaths().dbPath;
 	if (!existsSync(backupPath)) throw new FileNotFoundError(`Backup not found: ${backupPath}`);
 
 	mkdirSync(dirname(targetPath), { recursive: true });
-	if (existsSync(targetPath)) copyFileSync(targetPath, emergencyBackupPath(targetPath));
 
 	const uncompressed = gunzipSync(readFileSync(backupPath));
-	const tempPath = join(dirname(targetPath), `.${basename(targetPath)}.${process.pid}.restore.tmp`);
+	const tempPath = restoreTempPath(targetPath);
+	let replacedTarget = false;
 	try {
+		writeRestoreCandidate(uncompressed, tempPath);
+		if (!verifyIntegrity(tempPath)) throw new Error(`Backup failed integrity check: ${backupPath}`);
+		snapshotCurrentDatabase(targetPath);
+		renameSync(tempPath, targetPath);
+		replacedTarget = true;
 		removeSqliteSidecars(targetPath);
-		if (isSqliteFile(uncompressed)) {
-			writeFileSync(tempPath, uncompressed);
-			renameSync(tempPath, targetPath);
-		} else {
-			replaceWithGzippedSqlDump(uncompressed.toString("utf8"), targetPath, tempPath);
-		}
-		removeSqliteSidecars(targetPath);
+		const integrity = verifyIntegrity(targetPath);
+		if (!integrity) throw new Error(`Restored database failed integrity check: ${backupPath}`);
+		return {
+			restored: true,
+			backup_used: backupPath,
+			database_path: targetPath,
+			integrity_check: integrity,
+		};
 	} catch (error) {
 		try {
 			rmSync(tempPath, { force: true });
 		} catch {
 			// Preserve the restore failure.
 		}
+		if (replacedTarget) {
+			try {
+				restoreCurrentDatabaseSnapshot(targetPath);
+			} catch {
+				// Preserve the restore failure.
+			}
+		}
 		throw error;
 	}
-
-	return {
-		restored: true,
-		backup_used: backupPath,
-		database_path: targetPath,
-		integrity_check: verifyIntegrity(targetPath),
-	};
 }
-
-export const restore_backup = restoreBackup;
-
 export function emergencyRestore(backupDir?: string | null, dbPath?: string | null): EmergencyRestoreResult {
 	const paths = getDefaultPaths();
 	const dir = backupDir ?? paths.backupDir;
@@ -241,9 +311,6 @@ export function emergencyRestore(backupDir?: string | null, dbPath?: string | nu
 	}
 	throw new Error("All backups failed integrity check");
 }
-
-export const emergency_restore = emergencyRestore;
-
 export function verifyIntegrity(dbPath?: string | null): boolean {
 	const targetPath = dbPath ?? getDefaultPaths().dbPath;
 	if (!existsSync(targetPath)) return false;
@@ -259,9 +326,6 @@ export function verifyIntegrity(dbPath?: string | null): boolean {
 		closeQuietly(db);
 	}
 }
-
-export const verify_integrity = verifyIntegrity;
-
 export function listBackups(backupDir?: string | null): BackupInfo[] {
 	const dir = backupDir ?? getDefaultPaths().backupDir;
 	if (!existsSync(dir)) return [];
@@ -284,9 +348,6 @@ export function listBackups(backupDir?: string | null): BackupInfo[] {
 			return { ...info, metadata: JSON.parse(readFileSync(metaFile, "utf8")) as BackupMetadata };
 		});
 }
-
-export const list_backups = listBackups;
-
 export function rotateBackups(backupDir?: string | null, keep = 10): RotateBackupsResult {
 	const dir = backupDir ?? getDefaultPaths().backupDir;
 	const backups = existsSync(dir)
@@ -310,9 +371,6 @@ export function rotateBackups(backupDir?: string | null, keep = 10): RotateBacku
 		deleted_files: deletedFiles,
 	};
 }
-
-export const rotate_backups = rotateBackups;
-
 export function healthCheck(): HealthCheckResult {
 	const paths = getDefaultPaths();
 	const dbExists = existsSync(paths.dbPath);
@@ -335,9 +393,6 @@ export function healthCheck(): HealthCheckResult {
 		status: dbValid ? "healthy" : "unhealthy",
 	};
 }
-
-export const health_check = healthCheck;
-
 export class FileNotFoundError extends Error {
 	constructor(message: string) {
 		super(message);

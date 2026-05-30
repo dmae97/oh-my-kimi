@@ -1,9 +1,9 @@
 import { normalizedRecallWeights, temporalHalflifeHours } from "../../config";
 import { cosineSimilarity } from "../embeddings";
-import { mmr_rerank } from "../mmr";
-import { adjust_weights, classify_intent } from "../query_intent";
+import { mmrRerank } from "../mmr";
+import { adjustWeights, classifyIntent } from "../query-intent";
 import { getSynonyms, normalizeQuery } from "../synonyms";
-import { extract_temporal } from "../temporal_parser";
+import { extractTemporal } from "../temporal-parser";
 import type { BeamMemoryState, RecallEnhancedOptions, RecallOptions, RecallResult } from "./types";
 
 type DbValue = string | number | null | Uint8Array;
@@ -27,6 +27,7 @@ type RecallOptionsInternal = RecallOptions & {
 	mmrLambda?: number;
 	ignoreSessionScope?: boolean;
 	currentSensitive?: boolean;
+	updateRecallCounts?: boolean;
 };
 
 type CandidateSignals = {
@@ -309,7 +310,7 @@ function recencyDecay(timestamp: unknown, halfLifeHours = 72): number {
 	return Math.exp(-ageHours / Math.max(halfLifeHours, 0.001));
 }
 
-function parseQueryTime(value: RecallOptionsInternal["queryTime"]): Date {
+export function parseQueryTime(value: RecallOptionsInternal["queryTime"]): Date {
 	if (value == null) return new Date();
 	if (value instanceof Date) {
 		if (!Number.isFinite(value.getTime())) throw new RangeError("Invalid query time");
@@ -327,7 +328,7 @@ function parseQueryTime(value: RecallOptionsInternal["queryTime"]): Date {
 	throw new TypeError("queryTime must be null, an ISO date string, or a valid Date");
 }
 
-function temporalBoost(timestamp: unknown, queryTime: Date, halfLifeHours: number): number {
+export function temporalBoost(timestamp: unknown, queryTime: Date, halfLifeHours: number): number {
 	const raw = asString(timestamp);
 	if (raw.length === 0) return 0;
 	const parsed = Date.parse(raw);
@@ -338,7 +339,7 @@ function temporalBoost(timestamp: unknown, queryTime: Date, halfLifeHours: numbe
 
 function inferTemporalOptions(query: string, options: RecallOptionsInternal): RecallOptionsInternal {
 	const copy: RecallOptionsInternal = { ...options };
-	const info = extract_temporal(query, options.queryTime ?? undefined);
+	const info = extractTemporal(query, options.queryTime ?? undefined);
 	if (info.event_date !== null) {
 		copy.queryTime ??= info.event_date;
 		copy.temporalWeight ??= 0.35;
@@ -373,6 +374,19 @@ function tableExists(beam: BeamMemoryState, table: string): boolean {
 		queryGet(beam, "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'virtual table') AND name = ?", [table]) !==
 		null
 	);
+}
+
+function factsHaveScopeColumn(beam: BeamMemoryState): boolean {
+	const rows = queryAll(beam, "PRAGMA table_info(facts)");
+	return rows.some(row => asString(row.name) === "scope");
+}
+
+function factVisibilityWhere(beam: BeamMemoryState, tableAlias: string): { where: string; params: DbValue[] } {
+	const prefix = tableAlias.length === 0 ? "" : `${tableAlias}.`;
+	if (factsHaveScopeColumn(beam)) {
+		return { where: `(${prefix}session_id = ? OR ${prefix}scope = 'global')`, params: [beam.sessionId] };
+	}
+	return { where: `${prefix}session_id = ?`, params: [beam.sessionId] };
 }
 
 function buildWhere(
@@ -766,7 +780,7 @@ function rerankRecallResults(results: readonly RecallResult[], lambdaParam: numb
 		score: result.score,
 		result,
 	}));
-	return mmr_rerank(items, lambdaParam, topK).map(item => item.result);
+	return mmrRerank(items, lambdaParam, topK).map(item => item.result);
 }
 
 function updateRecallCounts(
@@ -838,9 +852,7 @@ function collectMemoryCandidates(
 	else if (options.includeWorking !== false) candidates.push(...fallbackCandidates(beam, "working", options));
 	if (emRowids.length > 0) candidates.push(...fetchCandidates(beam, "episodic", emRowids, emFts, emVec, options));
 	else candidates.push(...fallbackCandidates(beam, "episodic", options));
-	if (candidates.length === 0 && options.ignoreSessionScope !== true) {
-		return collectMemoryCandidates(beam, query, topK, { ...options, ignoreSessionScope: true });
-	}
+	if (candidates.length === 0) return candidates;
 	void useSynonyms;
 	return candidates;
 }
@@ -864,8 +876,8 @@ export function recall(
 		options.importanceWeight ?? beam.config.importanceWeight,
 	);
 	if (options.useIntent === true) {
-		const intent = classify_intent(query);
-		weights = adjust_weights(weights[0], weights[1], weights[2], intent);
+		const intent = classifyIntent(query);
+		weights = adjustWeights(weights[0], weights[1], weights[2], intent);
 	}
 	const useSynonyms = options.useSynonyms !== false;
 	const tokens = expandedTokens(query, useSynonyms);
@@ -886,7 +898,7 @@ export function recall(
 	} else {
 		finalResults = finalResults.slice(0, topK);
 	}
-	updateRecallCounts(beam, finalResults, temporalOptions);
+	if (temporalOptions.updateRecallCounts !== false) updateRecallCounts(beam, finalResults, temporalOptions);
 	return finalResults;
 }
 
@@ -936,13 +948,18 @@ export function recallEnhanced(
 		useIntent: options.useIntent !== false,
 		useMmr: options.useMmr !== false,
 	};
-	const results = recall(beam, query, Math.max(topK * 2, topK), enhancedOptions);
+	const results = recall(beam, query, Math.max(topK * 2, topK), {
+		...enhancedOptions,
+		updateRecallCounts: false,
+	});
 	if (options.includeFacts === true) {
 		const facts = factRecall(beam, query, Math.min(3, topK));
 		results.push(...facts);
 	}
 	results.sort((left, right) => (right.score ?? 0) - (left.score ?? 0));
-	return rerankRecallResults(results, options.mmrLambda ?? 0.7, topK);
+	const finalResults = rerankRecallResults(results, options.mmrLambda ?? 0.7, topK);
+	if (enhancedOptions.updateRecallCounts !== false) updateRecallCounts(beam, finalResults, enhancedOptions);
+	return finalResults;
 }
 
 function sandwichOrder(results: readonly RecallResult[]): {
@@ -999,10 +1016,16 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 	let matched: Row[] = [];
 	if (tableExists(beam, "fts_facts")) {
 		try {
+			const visibility = factVisibilityWhere(beam, "facts");
 			matched = queryAll(
 				beam,
-				"SELECT rowid, rank FROM fts_facts WHERE fts_facts MATCH ? ORDER BY rank, rowid LIMIT ?",
-				[ftsQuery(query), topK * 3],
+				`SELECT fts_facts.rowid, fts_facts.rank
+				 FROM fts_facts
+				 JOIN facts ON facts.rowid = fts_facts.rowid
+				 WHERE fts_facts MATCH ? AND ${visibility.where}
+				 ORDER BY fts_facts.rank, fts_facts.rowid
+				 LIMIT ?`,
+				[ftsQuery(query), ...visibility.params, topK * 3],
 			);
 		} catch {
 			matched = [];
@@ -1011,10 +1034,14 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 	if (matched.length === 0) {
 		const seen = new Set<number>();
 		for (const token of expandedTokens(query).slice(0, 6)) {
+			const visibility = factVisibilityWhere(beam, "");
 			const rows = queryAll(
 				beam,
-				"SELECT rowid FROM facts WHERE subject LIKE ? OR predicate LIKE ? OR object LIKE ? LIMIT ?",
-				[`%${token}%`, `%${token}%`, `%${token}%`, topK],
+				`SELECT rowid
+				 FROM facts
+				 WHERE (subject LIKE ? OR predicate LIKE ? OR object LIKE ?) AND ${visibility.where}
+				 LIMIT ?`,
+				[`%${token}%`, `%${token}%`, `%${token}%`, ...visibility.params, topK],
 			);
 			for (const row of rows) {
 				const rowid = asNumber(row.rowid);
@@ -1030,11 +1057,17 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 		.slice(0, topK)
 		.map(row => asNumber(row.rowid))
 		.filter(rowid => rowid > 0);
+	if (rowids.length === 0) return [];
+	const visibility = factVisibilityWhere(beam, "");
 	const ranks = normalizeRanks(matched, "rowid");
 	const rows = queryAll(
 		beam,
-		`SELECT rowid, fact_id, subject, predicate, object, timestamp, confidence FROM facts WHERE rowid IN (${placeholders(rowids.length)}) ORDER BY confidence DESC LIMIT ?`,
-		[...rowids, topK],
+		`SELECT rowid, fact_id, subject, predicate, object, timestamp, confidence
+		 FROM facts
+		 WHERE rowid IN (${placeholders(rowids.length)}) AND ${visibility.where}
+		 ORDER BY confidence DESC
+		 LIMIT ?`,
+		[...rowids, ...visibility.params, topK],
 	);
 	return rows.map(row => {
 		const subject = asString(row.subject);
@@ -1056,12 +1089,3 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 		return result;
 	});
 }
-
-export const recall_enhanced = recallEnhanced;
-export const format_context = formatContext;
-export const fact_recall = factRecall;
-export const lexical_relevance = lexicalRelevance;
-export const recency_decay = recencyDecay;
-export const temporal_boost = temporalBoost;
-export const tokenize_recall = tokenize;
-export const parse_query_time = parseQueryTime;

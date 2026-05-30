@@ -40,7 +40,7 @@ interface MutableTierStats {
 	error_samples: ErrorSample[];
 }
 
-export function _safeForLog(value: unknown): string {
+export function safeForLog(value: unknown): string {
 	if (value === null || value === undefined) {
 		return "";
 	}
@@ -98,29 +98,14 @@ export class ExtractionDiagnostics {
 		this.validateTier(tier);
 		this.tierStats[tier].attempts += 1;
 	}
-
-	record_attempt(tier: ExtractionTier): void {
-		this.recordAttempt(tier);
-	}
-
 	recordSuccess(tier: ExtractionTier, _factCount = 0): void {
 		this.validateTier(tier);
 		this.tierStats[tier].successes += 1;
 	}
-
-	record_success(tier: ExtractionTier, factCount = 0): void {
-		this.recordSuccess(tier, factCount);
-	}
-
 	recordNoOutput(tier: ExtractionTier): void {
 		this.validateTier(tier);
 		this.tierStats[tier].no_output += 1;
 	}
-
-	record_no_output(tier: ExtractionTier): void {
-		this.recordNoOutput(tier);
-	}
-
 	recordFailure(tier: ExtractionTier, exc?: unknown, reason?: string): void {
 		this.validateTier(tier);
 		const stats = this.tierStats[tier];
@@ -141,11 +126,6 @@ export class ExtractionDiagnostics {
 			stats.error_samples.splice(0, stats.error_samples.length - MAX_ERROR_SAMPLES_PER_TIER);
 		}
 	}
-
-	record_failure(tier: ExtractionTier, exc?: unknown, reason?: string): void {
-		this.recordFailure(tier, exc, reason);
-	}
-
 	recordCall(opts: { succeeded: boolean; allEmpty?: boolean }): void {
 		this.totalCalls += 1;
 		if (opts.succeeded) {
@@ -156,19 +136,9 @@ export class ExtractionDiagnostics {
 			this.totalFailures += 1;
 		}
 	}
-
-	record_call(opts: { succeeded: boolean; all_empty?: boolean; allEmpty?: boolean }): void {
-		this.recordCall({ succeeded: opts.succeeded, allEmpty: opts.allEmpty ?? opts.all_empty });
-	}
-
 	successRate(): number {
 		return this.totalCalls === 0 ? 0 : this.totalSuccesses / this.totalCalls;
 	}
-
-	success_rate(): number {
-		return this.successRate();
-	}
-
 	snapshot(): ExtractionStatsSnapshot {
 		const byTier = {} as Record<ExtractionTier, TierStatsSnapshot>;
 		for (const tier of EXTRACTION_TIERS) {
@@ -221,8 +191,3 @@ export function getExtractionStats(): ExtractionStatsSnapshot {
 export function resetExtractionStats(): void {
 	getDiagnostics().reset();
 }
-
-export const get_diagnostics = getDiagnostics;
-export const get_extraction_stats = getExtractionStats;
-export const reset_extraction_stats = resetExtractionStats;
-export const _safe_for_log = _safeForLog;

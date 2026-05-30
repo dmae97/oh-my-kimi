@@ -1,14 +1,11 @@
 export * from "./core/beam/index";
 export * from "./core/embeddings";
-export * from "./core/llm_backends";
+export * from "./core/llm-backends";
 export * from "./core/memory";
 export {
 	addMemory,
 	forget,
 	get,
-	get_bank,
-	get_context,
-	get_stats,
 	getBank,
 	getContext,
 	getDefaultInstance,
@@ -16,24 +13,18 @@ export {
 	Mnemosyne,
 	query,
 	recall,
-	recall_enhanced,
 	recallEnhanced,
 	remember,
 	resetDefaultInstanceForTests,
 	resetMemoryForTests,
 	resetModuleStateForTests,
 	saveMemory,
-	scratchpad_clear,
-	scratchpad_read,
-	scratchpad_write,
 	scratchpadClear,
 	scratchpadRead,
 	scratchpadWrite,
 	search,
-	set_bank,
 	setBank,
 	sleep,
-	sleep_all_sessions,
 	sleepAllSessions,
 	storeMemory,
 	update,
