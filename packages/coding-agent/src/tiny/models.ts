@@ -209,3 +209,9 @@ export function getTinyLocalModelSpec(key: string): TinyTitleLocalModelSpec | un
 export function isTinyLocalModelKey(value: string): value is TinyLocalModelKey {
 	return getTinyLocalModelSpec(value) !== undefined;
 }
+
+/** Combined local model registry (title + memory) for the shared tiny-models CLI. */
+export const TINY_LOCAL_MODELS = [
+	...TINY_TITLE_LOCAL_MODELS,
+	...TINY_MEMORY_LOCAL_MODELS,
+] as const satisfies readonly TinyTitleLocalModelSpec[];

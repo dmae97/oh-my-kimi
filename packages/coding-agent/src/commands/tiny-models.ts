@@ -4,7 +4,7 @@ import { runTinyModelsCommand, type TinyModelsAction, type TinyModelsCommandArgs
 const ACTIONS: TinyModelsAction[] = ["download", "list"];
 
 export default class TinyModels extends Command {
-	static description = "Download tiny local title models";
+	static description = "Download tiny local models (session titles + memory)";
 
 	static args = {
 		action: Args.string({

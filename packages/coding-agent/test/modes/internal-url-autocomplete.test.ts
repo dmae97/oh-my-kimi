@@ -10,6 +10,7 @@ import {
 	getInternalUrlSuggestions,
 	isInternalUrlPrefix,
 } from "../../src/modes/internal-url-autocomplete";
+import { PromptActionAutocompleteProvider } from "../../src/modes/prompt-action-autocomplete";
 
 function skill(name: string, description = ""): Skill {
 	return { name, description, filePath: `/skills/${name}/SKILL.md`, baseDir: `/skills/${name}`, source: "test" };
@@ -165,6 +166,24 @@ describe("internal-url-autocomplete", () => {
 		it("rejects non-url prefixes", () => {
 			expect(isInternalUrlPrefix("@src/foo")).toBe(false);
 			expect(isInternalUrlPrefix("/model")).toBe(false);
+		});
+	});
+
+	describe("PromptActionAutocompleteProvider integration", () => {
+		it("returns url suggestions before falling back to file/emoji completion", async () => {
+			const provider = new PromptActionAutocompleteProvider([], process.cwd(), []);
+			const line = "look at skill://hum";
+			const result = await provider.getSuggestions([line], 0, line.length);
+			expect(result?.prefix).toBe("skill://hum");
+			expect(result?.items.map(i => i.value)).toEqual(["skill://humanizer"]);
+		});
+
+		it("applies the selected url candidate in place", async () => {
+			const provider = new PromptActionAutocompleteProvider([], process.cwd(), []);
+			const line = "look at skill://hum";
+			const result = await provider.getSuggestions([line], 0, line.length);
+			const applied = provider.applyCompletion([line], 0, line.length, result!.items[0]!, result!.prefix);
+			expect(applied.lines[0]).toBe("look at skill://humanizer ");
 		});
 	});
 });

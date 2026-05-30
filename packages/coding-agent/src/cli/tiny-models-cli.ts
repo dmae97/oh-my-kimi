@@ -2,10 +2,10 @@ import { formatBytes } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import {
 	DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY,
-	getTinyTitleModelSpec,
-	isTinyTitleLocalModelKey,
-	TINY_TITLE_LOCAL_MODELS,
-	type TinyTitleLocalModelKey,
+	getTinyLocalModelSpec,
+	isTinyLocalModelKey,
+	TINY_LOCAL_MODELS,
+	type TinyLocalModelKey,
 } from "../tiny/models";
 import { shutdownTinyTitleClient, tinyTitleClient } from "../tiny/title-client";
 import type { TinyTitleProgressEvent } from "../tiny/title-protocol";
@@ -26,7 +26,7 @@ interface ProgressReporter {
 }
 
 interface DownloadResult {
-	model: TinyTitleLocalModelKey;
+	model: TinyLocalModelKey;
 	ok: boolean;
 }
 
@@ -34,34 +34,34 @@ function writeLine(text = ""): void {
 	process.stdout.write(`${text}\n`);
 }
 
-function resolveModels(model: string | undefined): TinyTitleLocalModelKey[] {
+function resolveModels(model: string | undefined): TinyLocalModelKey[] {
 	if (!model) return [DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY];
-	if (model === "all") return TINY_TITLE_LOCAL_MODELS.map(spec => spec.key);
-	if (!isTinyTitleLocalModelKey(model)) {
-		const values = TINY_TITLE_LOCAL_MODELS.map(spec => spec.key).join(", ");
-		throw new Error(`Unknown tiny title model: ${model}. Expected one of: ${values}, all`);
+	if (model === "all") return TINY_LOCAL_MODELS.map(spec => spec.key);
+	if (!isTinyLocalModelKey(model)) {
+		const values = TINY_LOCAL_MODELS.map(spec => spec.key).join(", ");
+		throw new Error(`Unknown tiny local model: ${model}. Expected one of: ${values}, all`);
 	}
 	return [model];
 }
 
 function listModels(json: boolean | undefined): void {
 	if (json) {
-		writeLine(JSON.stringify({ models: TINY_TITLE_LOCAL_MODELS }));
+		writeLine(JSON.stringify({ models: TINY_LOCAL_MODELS }));
 		return;
 	}
-	writeLine(chalk.bold("Tiny title models"));
-	for (const spec of TINY_TITLE_LOCAL_MODELS) {
+	writeLine(chalk.bold("Tiny local models"));
+	for (const spec of TINY_LOCAL_MODELS) {
 		const defaultMark = spec.key === DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY ? chalk.cyan(" default") : "";
 		writeLine(`${chalk.cyan(spec.key)}${defaultMark}`);
 		writeLine(`  ${spec.label} — ${spec.description}`);
 	}
 }
 
-function makeProgressReporter(modelKey: TinyTitleLocalModelKey, json: boolean | undefined): ProgressReporter {
+function makeProgressReporter(modelKey: TinyLocalModelKey, json: boolean | undefined): ProgressReporter {
 	if (json || !process.stdout.isTTY) {
 		return { onProgress: () => undefined, finish: () => undefined };
 	}
-	const spec = getTinyTitleModelSpec(modelKey);
+	const label = getTinyLocalModelSpec(modelKey)?.label ?? modelKey;
 	let lastWidth = 0;
 	let lastProgress = -1;
 	const render = (event: TinyTitleProgressEvent): void => {
@@ -75,8 +75,8 @@ function makeProgressReporter(modelKey: TinyTitleLocalModelKey, json: boolean | 
 		const pct = progress >= 0 ? `${Math.floor(progress).toString().padStart(3, " ")}%` : " --%";
 		const bytes = event.loaded && event.total ? ` ${formatBytes(event.loaded)}/${formatBytes(event.total)}` : "";
 		const file = event.file ? ` ${event.file.split("/").at(-1) ?? event.file}` : "";
-		const label = event.status === "ready" ? "Ready" : "Downloading";
-		const line = `${chalk.cyan(label)} ${spec.label} [${bar}] ${pct}${bytes}${file}`;
+		const statusLabel = event.status === "ready" ? "Ready" : "Downloading";
+		const line = `${chalk.cyan(statusLabel)} ${label} [${bar}] ${pct}${bytes}${file}`;
 		process.stdout.write(`\r${line.padEnd(lastWidth)}`);
 		lastWidth = line.length;
 	};
@@ -87,19 +87,18 @@ function makeProgressReporter(modelKey: TinyTitleLocalModelKey, json: boolean | 
 		},
 		finish(ok) {
 			const suffix = ok ? chalk.green("done") : chalk.red("failed");
-			process.stdout.write(`\r${`${spec.label}: ${suffix}`.padEnd(lastWidth)}\n`);
+			process.stdout.write(`\r${`${label}: ${suffix}`.padEnd(lastWidth)}\n`);
 		},
 	};
 }
 
-async function downloadOne(modelKey: TinyTitleLocalModelKey, json: boolean | undefined): Promise<DownloadResult> {
-	const spec = getTinyTitleModelSpec(modelKey);
-	if (!json && !process.stdout.isTTY) writeLine(`Downloading ${spec.label} (${modelKey})...`);
+async function downloadOne(modelKey: TinyLocalModelKey, json: boolean | undefined): Promise<DownloadResult> {
+	const label = getTinyLocalModelSpec(modelKey)?.label ?? modelKey;
+	if (!json && !process.stdout.isTTY) writeLine(`Downloading ${label} (${modelKey})...`);
 	const progress = makeProgressReporter(modelKey, json);
 	const ok = await tinyTitleClient.downloadModel(modelKey, { onProgress: progress.onProgress });
 	progress.finish(ok);
-	if (!json && !process.stdout.isTTY)
-		writeLine(ok ? `Downloaded ${spec.label}.` : `Failed to download ${spec.label}.`);
+	if (!json && !process.stdout.isTTY) writeLine(ok ? `Downloaded ${label}.` : `Failed to download ${label}.`);
 	return { model: modelKey, ok };
 }
 

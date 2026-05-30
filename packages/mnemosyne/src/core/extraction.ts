@@ -1,6 +1,13 @@
 import { getDiagnostics, safeForLog } from "./extraction/diagnostics";
 import { callHostLlm, getHostLlmBackend } from "./llm-backends";
-import { callLocalLlm, callConfiguredCompletion, callRemoteLlm, cleanOutput, configuredLlmWillHandleCall, llmAvailable } from "./local-llm";
+import {
+	callConfiguredCompletion,
+	callLocalLlm,
+	callRemoteLlm,
+	cleanOutput,
+	configuredLlmWillHandleCall,
+	llmAvailable,
+} from "./local-llm";
 import { getMnemosyneRuntimeOptions } from "./runtime-options";
 
 const TRUE_VALUES: Record<string, true> = { "1": true, true: true, yes: true, on: true };

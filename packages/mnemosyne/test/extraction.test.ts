@@ -8,6 +8,7 @@ import {
 } from "../src/core/extraction";
 import { getExtractionStats, resetExtractionStats } from "../src/core/extraction/diagnostics";
 import { CallableLlmBackend, resetHostLlmBackendForTests, setHostLlmBackend } from "../src/core/llm-backends";
+import { type ResolvedMnemosyneRuntimeOptions, withMnemosyneRuntimeOptions } from "../src/core/runtime-options";
 
 const OLD_ENV = { ...process.env };
 function restoreEnv(): void {
@@ -75,6 +76,32 @@ describe("structured extraction", () => {
 
 		const facts = await extractFacts("Alex said they prefer Neovim and dislike VSCode.");
 		expect(facts).toEqual(["Alex uses Neovim", "Alex dislikes VSCode"]);
+		expect(capturedTemperature).toBe(0);
+		expect(getExtractionStats().by_tier.host.successes).toBe(1);
+	});
+
+	it("prefers a configured completion with the extraction-prompt override at temperature zero", async () => {
+		process.env.MNEMOSYNE_LLM_ENABLED = "true";
+		let capturedPrompt = "";
+		let capturedTemperature = -1;
+		const resolved: ResolvedMnemosyneRuntimeOptions = {
+			llm: {
+				enabled: true,
+				extractionPrompt: "ONLY-LINES for: {text}\nItems:",
+				complete: (prompt, opts) => {
+					capturedPrompt = prompt;
+					capturedTemperature = opts?.temperature ?? -1;
+					return "Sam works at Globex\nSam prefers dark mode";
+				},
+			},
+		};
+
+		const facts = await withMnemosyneRuntimeOptions(resolved, () =>
+			extractFacts("Sam works at Globex and prefers dark mode."),
+		);
+
+		expect(facts).toEqual(["Sam works at Globex", "Sam prefers dark mode"]);
+		expect(capturedPrompt).toContain("ONLY-LINES for: Sam works at Globex and prefers dark mode.");
 		expect(capturedTemperature).toBe(0);
 		expect(getExtractionStats().by_tier.host.successes).toBe(1);
 	});

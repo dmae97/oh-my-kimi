@@ -266,7 +266,7 @@ function createStopOnTextCriteria(
 	return new StopOnTextCriteria();
 }
 
-function toProgressEvent(modelKey: TinyTitleLocalModelKey, info: ProgressInfo): TinyTitleProgressEvent {
+function toProgressEvent(modelKey: TinyLocalModelKey, info: ProgressInfo): TinyTitleProgressEvent {
 	if (info.status === "ready") {
 		return { modelKey, status: info.status, task: info.task, model: info.model };
 	}
@@ -298,7 +298,7 @@ function toProgressEvent(modelKey: TinyTitleLocalModelKey, info: ProgressInfo): 
 function sendProgress(
 	transport: TinyTitleTransport,
 	id: string,
-	modelKey: TinyTitleLocalModelKey,
+	modelKey: TinyLocalModelKey,
 	info: ProgressInfo,
 ): void {
 	transport.send({ type: "progress", id, event: toProgressEvent(modelKey, info) });
@@ -399,11 +399,12 @@ async function generateTitle(
 
 function buildCompletionPrompt(generator: TextGenerationPipeline, promptText: string): string {
 	const chat = [{ role: "user", content: promptText }];
-	return `${generator.tokenizer.apply_chat_template(chat, {
+	const chatTemplateOptions = {
 		add_generation_prompt: true,
 		tokenize: false,
 		enable_thinking: false,
-	})}`;
+	};
+	return `${generator.tokenizer.apply_chat_template(chat, chatTemplateOptions)}`;
 }
 
 /**
@@ -467,7 +468,13 @@ async function handleQueuedRequest(
 			return;
 		}
 		if (request.type === "complete") {
-			const text = await generateCompletion(transport, request.id, request.modelKey, request.prompt, request.maxTokens);
+			const text = await generateCompletion(
+				transport,
+				request.id,
+				request.modelKey,
+				request.prompt,
+				request.maxTokens,
+			);
 			transport.send({ type: "completion", id: request.id, text });
 			return;
 		}
