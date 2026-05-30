@@ -27,6 +27,7 @@ const workerEntrypoints = [
 	"./packages/stats/src/sync-worker.ts",
 	"./packages/coding-agent/src/tools/browser/tab-worker-entry.ts",
 	"./packages/coding-agent/src/eval/js/worker-entry.ts",
+	"./packages/coding-agent/src/title/tiny-title-worker.ts",
 ];
 const isDryRun = process.argv.includes("--dry-run");
 const targets: BinaryTarget[] = [

@@ -1,6 +1,13 @@
 import { type Component, padding, TERMINAL, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { theme } from "../../modes/theme/theme";
+import tipsText from "./tips.txt" with { type: "text" };
+
+/** Tips embedded at build time, one per line; blanks dropped. */
+const TIPS: readonly string[] = tipsText
+	.split("\n")
+	.map(line => line.trim())
+	.filter(line => line.length > 0);
 
 export interface RecentSession {
 	name: string;
@@ -19,6 +26,8 @@ export interface LspServerInfo {
 export class WelcomeComponent implements Component {
 	#animStart: number | null = null;
 	#animTimer: ReturnType<typeof setInterval> | null = null;
+	/** Tip chosen once per instance so re-renders (intro, LSP updates) don't shuffle it. */
+	readonly #tip: string | undefined = TIPS.length > 0 ? TIPS[Math.floor(Math.random() * TIPS.length)] : undefined;
 
 	constructor(
 		private readonly version: string,
@@ -212,7 +221,30 @@ export class WelcomeComponent implements Component {
 			lines.push(bl + h.repeat(leftCol) + br);
 		}
 
+		// Randomly picked tip, rendered directly beneath the box.
+		lines.push(...this.#renderTip(boxWidth));
+
 		return lines;
+	}
+
+	/**
+	 * Render the per-instance tip line: a purple "Tip:" label followed by the
+	 * tip body in dimmed light blue, the whole line italicized. Returns `[]`
+	 * when no tip is available or the box is too narrow to be useful.
+	 */
+	#renderTip(boxWidth: number): string[] {
+		if (!this.#tip) return [];
+		const label = "Tip: ";
+		const bodyBudget = boxWidth - 1 - visibleWidth(label); // 1 = leading indent
+		if (bodyBudget < 8) return [];
+		const body = visibleWidth(this.#tip) > bodyBudget ? truncateToWidth(this.#tip, bodyBudget) : this.#tip;
+		const encoding = TERMINAL.trueColor ? "ansi-16m" : "ansi-256";
+		const purple = Bun.color("#b48cff", encoding) ?? "";
+		const lightBlue = Bun.color("#9ccfff", encoding) ?? "";
+		const italic = "\x1b[3m";
+		const dim = "\x1b[2m";
+		const reset = "\x1b[0m";
+		return [` ${italic}${purple}${label}${dim}${lightBlue}${body}${reset}`];
 	}
 
 	/** Center text within a given width */

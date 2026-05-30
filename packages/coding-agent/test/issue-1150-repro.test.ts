@@ -35,6 +35,7 @@ describe("issue #1150 — release-build script must list all worker --compile en
 		"./packages/stats/src/sync-worker.ts",
 		"./packages/coding-agent/src/tools/browser/tab-worker-entry.ts",
 		"./packages/coding-agent/src/eval/js/worker-entry.ts",
+		"./packages/coding-agent/src/title/tiny-title-worker.ts",
 	];
 
 	it("scripts/ci-release-build-binaries.ts lists every worker as an explicit --compile entrypoint", async () => {
@@ -55,6 +56,7 @@ describe("issue #1150 — release-build script must list all worker --compile en
 			"../stats/src/sync-worker.ts",
 			"./src/tools/browser/tab-worker-entry.ts",
 			"./src/eval/js/worker-entry.ts",
+			"./src/title/tiny-title-worker.ts",
 		];
 		const source = await Bun.file(devScriptPath).text();
 		for (const entry of devEntrypoints) {
