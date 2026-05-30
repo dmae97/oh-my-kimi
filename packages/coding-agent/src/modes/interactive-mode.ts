@@ -368,7 +368,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender(true);
 		};
 		this.editor.onAutocompleteUpdate = () => {
-			this.ui.requestRender();
+			this.ui.requestRender(false, { allowUnknownViewportMutation: true });
 		};
 		this.#syncEditorMaxHeight();
 		this.#resizeHandler = () => {
@@ -2259,7 +2259,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender(true);
 		};
 		nextEditor.onAutocompleteUpdate = () => {
-			this.ui.requestRender();
+			this.ui.requestRender(false, { allowUnknownViewportMutation: true });
 		};
 		nextEditor.setMaxHeight(this.#computeEditorMaxHeight());
 		if (this.historyStorage) {

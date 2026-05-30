@@ -45,6 +45,25 @@ class WrappingLinesComponent implements Component {
 	}
 }
 
+class FocusedInputComponent implements Component, Focusable {
+	focused = false;
+	#onInput: () => void;
+
+	constructor(onInput: () => void) {
+		this.#onInput = onInput;
+	}
+
+	handleInput(): void {
+		this.#onInput();
+	}
+
+	invalidate(): void {}
+
+	render(): string[] {
+		return [this.focused ? `prompt>${CURSOR_MARKER}` : "prompt>"];
+	}
+}
+
 class UnknownViewportTerminal extends VirtualTerminal {
 	isNativeViewportAtBottom(): undefined {
 		return undefined;
@@ -1149,6 +1168,39 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("keeps the unknown Windows viewport guard on ordinary focused input", async () => {
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			const term = new UnknownViewportTerminal(32, 5);
+			const tui = new TUI(term);
+			const transcript = new MutableLinesComponent(rows("line-", 12));
+			const input = new FocusedInputComponent(() => {
+				transcript.setLines([...rows("line-", 6), "typed-token", ...rows("line-", 12).slice(6)]);
+			});
+			tui.addChild(transcript);
+			tui.addChild(input);
+			tui.setFocus(input);
+
+			try {
+				tui.start();
+				await settle(term);
+				term.scrollLines(-2);
+				const before = term.getBufferPosition();
+				const beforeViewport = visible(term).map(line => line.trim());
+				expect(before.viewportY).toBeGreaterThan(0);
+
+				term.sendInput("x");
+				await settle(term);
+
+				const after = term.getBufferPosition();
+				expect(after.viewportY).toBe(before.viewportY);
+				expect(visible(term).map(line => line.trim())).toEqual(beforeViewport);
+				expect(term.getScrollBuffer().join("\n")).not.toContain("typed-token");
+			} finally {
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				tui.stop();
+			}
+		});
 		it("renders streaming row inserts on WSL Windows Terminal even when viewport probe is unavailable", async () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
