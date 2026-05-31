@@ -1185,11 +1185,6 @@ export class TUI extends Container {
 			allowUnknownViewportMutation,
 		);
 		this.#logRedraw(intent, lines.length, height);
-		if (process.env.PI_DUMP_OP && String((globalThis as Record<string, unknown>).__OPIDX) === process.env.PI_DUMP_OP) {
-			const t = this.terminal as unknown as { getBufferPosition?: () => { baseY: number; viewportY: number } };
-			const pos = t.getBufferPosition?.();
-			fs.appendFileSync("/tmp/renderTrace.jsonl", `${JSON.stringify({ intent: intent.kind, appendFrom: (intent as { appendFrom?: number }).appendFrom, prev: this.#previousLines.length, nw: lines.length, prevH: this.#previousHeight, h: height, widthCh: widthChanged, heightCh: heightChanged, vpTop: this.#viewportTopRow, hw: this.#hardwareCursorRow, baseY: pos?.baseY, vpY: pos?.viewportY })}\n`);
-		}
 		// 4. Execute.
 		switch (intent.kind) {
 			case "noop":
@@ -1435,6 +1430,17 @@ export class TUI extends Container {
 			return { kind: "viewportRepaint" };
 		}
 
+		// A height change that also grew the content cannot use the diff or
+		// append-tail emitters below: both position scrolled rows against the
+		// previous viewport top and hardware cursor row, which the reflow just
+		// invalidated, so the appended tail lands `height`-delta rows too low.
+		// Repaint the viewport at the new geometry instead; if content still
+		// overflows, defer the native scrollback rebuild to the next checkpoint.
+		if (heightChanged && !isTermuxSession() && !isMultiplexerSession()) {
+			if (newLines.length > height) this.#markNativeScrollbackDirty();
+			return { kind: "viewportRepaint" };
+		}
+
 		// Configurable shrink-clear: opt-in path that repaints to wipe rows the
 		// diff path would leave behind.
 		if (this.#clearOnShrink && newLines.length < this.#previousLines.length && this.overlayStack.length === 0) {
@@ -1585,10 +1591,7 @@ export class TUI extends Container {
 		nativeViewportAtBottom: boolean | undefined,
 		allowUnknownViewportMutation: boolean,
 	): boolean {
-		return (
-			nativeViewportAtBottom === true ||
-			(nativeViewportAtBottom === undefined && allowUnknownViewportMutation)
-		);
+		return nativeViewportAtBottom === true || (nativeViewportAtBottom === undefined && allowUnknownViewportMutation);
 	}
 
 	#padDeferredShrinkLines(lines: string[], paddedLength: number): string[] {

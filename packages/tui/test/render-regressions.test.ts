@@ -1363,6 +1363,77 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("keeps a scrolled-up reader anchored while streaming inserts arrive on POSIX (unknown viewport)", async () => {
+			// POSIX terminals cannot report scrollback position, so isNativeViewportAtBottom()
+			// is undefined. Before the fix the planner optimistically treated "unknown" as
+			// "at bottom" and rebuilt native scrollback (clear + replay) on every offscreen
+			// streaming insert, wiping history and yanking a scrolled-up reader to the tail.
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			try {
+				await withEnvPatch({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
+					const term = new UnknownViewportTerminal(32, 5);
+					const tui = new TUI(term);
+					// Assistant transcript that already overflows into scrollback, pinned footer below.
+					const transcript = new MutableLinesComponent(rows("seed-", 12));
+					const footer = new MutableLinesComponent(["prompt>"]);
+					tui.addChild(transcript);
+					tui.addChild(footer);
+
+					try {
+						tui.start();
+						await settle(term);
+
+						// Reader scrolls up into history.
+						term.scrollLines(-4);
+						const before = term.getBufferPosition();
+						const anchored = visible(term).map(line => line.trim());
+						expect(before.viewportY).toBeGreaterThan(0);
+						expect(before.viewportY).toBeLessThan(before.baseY);
+
+						// Stream rows above the footer — the real coding-agent shape. Each frame is a
+						// length-changing insert that previously routed to a destructive historyRebuild.
+						for (let i = 0; i < 4; i++) {
+							transcript.setLines([...rows("seed-", 12), ...rows("token-", i + 1)]);
+							tui.requestRender();
+							await settle(term);
+
+							const pos = term.getBufferPosition();
+							// Still scrolled up (not snapped to the tail) and reading the same rows.
+							expect(pos.viewportY).toBeLessThan(pos.baseY);
+							expect(visible(term).map(line => line.trim())).toEqual(anchored);
+						}
+
+						// The incremental diff path streamed the tail straight into native
+						// scrollback without a destructive rebuild: earliest history survives and
+						// the live tail is reachable once the reader returns to the bottom.
+						expect(term.getScrollBuffer().join("\n")).toContain("seed-0");
+						expect(term.getScrollBuffer().join("\n")).toContain("token-3");
+
+						// An offscreen reflow (edit above the fold) must defer rather than rebuild,
+						// so the reader is still not yanked; the deferred rewrite is marked dirty.
+						transcript.setLines(["seed-EDIT", ...rows("seed-", 12).slice(1), ...rows("token-", 4)]);
+						tui.requestRender();
+						await settle(term);
+						const offscreenPos = term.getBufferPosition();
+						expect(offscreenPos.viewportY).toBeLessThan(offscreenPos.baseY);
+						expect(visible(term).map(line => line.trim())).toEqual(anchored);
+
+						// At an explicit checkpoint (prompt submit equivalent) the deferred edit
+						// reconciles into clean scrollback.
+						term.scrollLines(999);
+						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+						await settle(term);
+						expect(term.getScrollBuffer().join("\n")).toContain("seed-EDIT");
+					} finally {
+						tui.stop();
+					}
+				});
+			} finally {
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			}
+		});
+
 		it("refreshes deferred native scrollback when the native viewport reaches bottom", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);

@@ -811,7 +811,6 @@ class StressDriver {
 			for (let index = 0; index < this.#scenario.iterations; index++) {
 				const before = this.#snapshot();
 				const kind = this.#chooseOperation(index, before);
-				(globalThis as Record<string, unknown>).__OPIDX = index;
 				const op = await this.#applyOperation(kind);
 				const after = this.#snapshot();
 				this.#recordOperation(index, op.kind, op.detail, before, after);
