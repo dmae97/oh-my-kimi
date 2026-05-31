@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.7.4] - 2026-05-31
+
 ### Removed
 
 - Removed the local-model `summarizeShakeRegions` compressor and related shake-summary prompt/types; shake now only provides mechanical artifact-backed elision primitives.

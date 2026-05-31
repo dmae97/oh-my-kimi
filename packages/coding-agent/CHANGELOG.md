@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.7.4] - 2026-05-31
+
 ### Removed
 
 - Removed `/shake summary`, the `shake-summary` auto-compaction strategy, and the `providers.shakeSummaryModel` setting. Use `/shake` or `compaction.strategy: shake` for mechanical artifact-backed elision without local-model CPU.

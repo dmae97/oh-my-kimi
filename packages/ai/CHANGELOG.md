@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.7.4] - 2026-05-31
+
 ### Fixed
 
 - Fixed Anthropic stream idle-timeout retries after the provider stream has already begun.
