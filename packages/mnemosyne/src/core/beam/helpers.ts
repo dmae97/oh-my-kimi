@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { generateId as generateTimedId, sha256Hex16, stableMemoryId } from "../../util/ids";
-import { cosineSimilarity as vectorCosineSimilarity } from "../binary-vectors";
+import { cosineSimilarity as vectorCosineSimilarity } from "../vector-math";
 import type { BeamMemoryState, JsonValue, Metadata } from "./types";
 
 export type Vector = number[];

@@ -348,6 +348,11 @@ export function getGithubCacheDbPath(): string {
 	return dirs.rootSubdir(path.join("cache", "github-cache.db"), "cache");
 }
 
+/** Get the local FastEmbed model cache directory (~/.omp/cache/fastembed). */
+export function getFastembedCacheDir(): string {
+	return dirs.rootSubdir(path.join("cache", "fastembed"), "cache");
+}
+
 /** Get the natives directory (~/.omp/natives). */
 export function getNativesDir(): string {
 	return dirs.rootSubdir("natives", "cache");

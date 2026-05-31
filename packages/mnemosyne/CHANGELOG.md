@@ -1,6 +1,16 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Changed embedding result normalization to return `Float32Array` vectors so `embed` and `embedQuery` now cache and emit float32 rows
+- Changed local model cache directory resolution for `fastembed` to use `getFastembedCacheDir` instead of the hard-coded `~/.hermes/cache/fastembed` path
+
+### Fixed
+
+- Fixed cosine similarity behavior across retrieval, clustering, and caching to consistently handle mismatched vector lengths as zero-padded and ignore non-finite values
+- Fixed embedding API requests to retry transient failures with backoff via shared retry logic before returning null
+- Fixed compiled `omp` binaries losing local Mnemosyne embeddings by keeping `fastembed` and `onnxruntime-node` reachable to Bun's static compiler while preserving lazy runtime loading.
 
 ## [15.7.2] - 2026-05-31
 

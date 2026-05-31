@@ -3,6 +3,8 @@ import type { Database } from "bun:sqlite";
 import { embeddingDim, type VecType } from "../config";
 import { closeQuietly, type DatabasePath, openDatabase } from "../db";
 
+export { cosineSimilarity } from "./vector-math";
+
 export const BITS_PER_BYTE = 8;
 export const EMBEDDING_DIM = embeddingDim();
 export const BYTES_PER_VECTOR = Math.ceil(EMBEDDING_DIM / BITS_PER_BYTE);
@@ -171,27 +173,6 @@ export function informationTheoreticScore(distance: number, dim: number = EMBEDD
 		return 0;
 	}
 	return 1.0 - distance / dim;
-}
-
-export function cosineSimilarity(a: readonly number[], b: readonly number[]): number {
-	const length = Math.min(a.length, b.length);
-	if (length === 0) {
-		return 0;
-	}
-	let dot = 0;
-	let normA = 0;
-	let normB = 0;
-	for (let i = 0; i < length; i += 1) {
-		const av = toFiniteNumber(a[i]);
-		const bv = toFiniteNumber(b[i]);
-		dot += av * bv;
-		normA += av * av;
-		normB += bv * bv;
-	}
-	if (normA === 0 || normB === 0) {
-		return 0;
-	}
-	return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 export class BinaryVectorStore {

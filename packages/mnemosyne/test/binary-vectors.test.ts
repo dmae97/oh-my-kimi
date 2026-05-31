@@ -37,6 +37,8 @@ describe("binary vector helpers", () => {
 		expect(cosineSimilarity([1, 0], [0, 1])).toBe(0);
 		expect(cosineSimilarity([0, 0], [1, 2])).toBe(0);
 		expect(cosineSimilarity([1, 1], [1, 1])).toBeCloseTo(1, 12);
+		expect(cosineSimilarity([1], [1, 1])).toBeCloseTo(Math.SQRT1_2, 12);
+		expect(cosineSimilarity([Number.NaN, 1], [1, 0])).toBe(0);
 	});
 
 	it("normalizes MNEMOSYNE_VEC_TYPE with Python-compatible fallback", () => {

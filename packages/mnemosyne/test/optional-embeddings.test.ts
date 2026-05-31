@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { getFastembedCacheDir } from "@oh-my-pi/pi-utils";
 import "./setup";
 import {
 	available,
@@ -96,8 +97,8 @@ describe("optional embeddings", () => {
 			});
 
 			expect(await available()).toBe(true);
-			expect(await embedQuery("cache me")).toEqual([8, 99]);
-			expect(await embedQuery("cache me")).toEqual([8, 99]);
+			expect(await embedQuery("cache me")).toEqual(new Float32Array([8, 99]));
+			expect(await embedQuery("cache me")).toEqual(new Float32Array([8, 99]));
 			expect(calls).toBe(1);
 		});
 	});
@@ -142,10 +143,7 @@ describe("optional embeddings", () => {
 				},
 				async () => {
 					expect(await available()).toBe(true);
-					expect(await embed(["hi", "world"])).toEqual([
-						[2, 1],
-						[5, 2],
-					]);
+					expect(await embed(["hi", "world"])).toEqual([new Float32Array([2, 1]), new Float32Array([5, 2])]);
 					expect(getEmbeddingApiCallCountForTests()).toBe(1);
 				},
 			);
@@ -154,7 +152,7 @@ describe("optional embeddings", () => {
 			server.stop(true);
 		}
 	});
-	it("normalizes Float32Array embeddings to number[][]", async () => {
+	it("normalizes Float32Array embeddings to Float32Array rows", async () => {
 		await withEnv({ MNEMOSYNE_NO_EMBEDDINGS: undefined }, async () => {
 			setEmbeddingProviderForTests({
 				embed(texts) {
@@ -163,13 +161,10 @@ describe("optional embeddings", () => {
 				},
 				available: () => true,
 			});
-			expect(await embed(["a", "bc"])).toEqual([
-				[1, 97, 42],
-				[2, 98, 42],
-			]);
+			expect(await embed(["a", "bc"])).toEqual([new Float32Array([1, 97, 42]), new Float32Array([2, 98, 42])]);
 		});
 	});
-	it("normalizes async Float32Array batches to number[][]", async () => {
+	it("normalizes async Float32Array batches to Float32Array rows", async () => {
 		await withEnv({ MNEMOSYNE_NO_EMBEDDINGS: undefined }, async () => {
 			setEmbeddingProviderForTests({
 				embed(texts) {
@@ -187,9 +182,9 @@ describe("optional embeddings", () => {
 				available: () => true,
 			});
 			expect(await embed(["hi", "world", "test"])).toEqual([
-				[2, 104],
-				[5, 119],
-				[4, 116],
+				new Float32Array([2, 104]),
+				new Float32Array([5, 119]),
+				new Float32Array([4, 116]),
 			]);
 		});
 	});
@@ -228,7 +223,7 @@ describe("optional embeddings", () => {
 		});
 		try {
 			const result = await withMnemosyneRuntimeOptions(memory.runtimeOptions, () => embedQuery("cache me"));
-			expect(result).toEqual([8, 99]);
+			expect(result).toEqual(new Float32Array([8, 99]));
 		} finally {
 			memory.close();
 		}
@@ -248,8 +243,10 @@ describe("optional embeddings", () => {
 			},
 			async () => {
 				let initCalls = 0;
-				setLocalModelInitializerForTests(async () => {
+				const observedCacheDirs: Array<string | undefined> = [];
+				setLocalModelInitializerForTests(async options => {
 					initCalls += 1;
+					observedCacheDirs.push(options.cacheDir);
 					if (initCalls === 1) throw new Error("transient init failure");
 					return {
 						embed(texts) {
@@ -259,8 +256,10 @@ describe("optional embeddings", () => {
 				});
 
 				expect(await embed(["first"])).toBeNull();
-				expect(await embed(["second"])).toEqual([[6, 115]]);
+				expect(await embed(["second"])).toEqual([new Float32Array([6, 115])]);
 				expect(initCalls).toBe(2);
+				expect(observedCacheDirs).toEqual([getFastembedCacheDir(), getFastembedCacheDir()]);
+				expect(observedCacheDirs.some(cacheDir => cacheDir?.includes(".hermes") ?? false)).toBe(false);
 			},
 		);
 	});

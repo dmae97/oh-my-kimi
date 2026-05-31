@@ -1,9 +1,9 @@
 import { normalizedRecallWeights, temporalHalflifeHours } from "../../config";
-import { cosineSimilarity } from "../embeddings";
 import { mmrRerank } from "../mmr";
 import { adjustWeights, classifyIntent } from "../query-intent";
 import { getSynonyms, normalizeQuery } from "../synonyms";
 import { extractTemporal } from "../temporal-parser";
+import { cosineSimilarity } from "../vector-math";
 import type { BeamMemoryState, RecallEnhancedOptions, RecallOptions, RecallResult } from "./types";
 
 type DbValue = string | number | null | Uint8Array;

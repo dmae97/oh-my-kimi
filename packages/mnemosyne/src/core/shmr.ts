@@ -1,5 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { cosineSimilarity } from "./vector-math";
+
+export { cosineSimilarity };
 
 export const SHMR_BATCH_SIZE = Number.parseInt(process.env.MNEMOSYNE_SHMR_BATCH_SIZE ?? "50", 10);
 export const SHMR_MAX_ITERATIONS = Number.parseInt(process.env.MNEMOSYNE_SHMR_MAX_ITERATIONS ?? "3", 10);
@@ -113,22 +116,6 @@ function textForEmbedding(text: string): Vector {
 
 export function embed(text: string): Vector {
 	return textForEmbedding(text);
-}
-
-export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
-	let dot = 0;
-	let aNorm = 0;
-	let bNorm = 0;
-	const n = Math.min(a.length, b.length);
-	for (let i = 0; i < n; i++) {
-		const av = a[i] ?? 0;
-		const bv = b[i] ?? 0;
-		dot += av * bv;
-		aNorm += av * av;
-		bNorm += bv * bv;
-	}
-	if (aNorm === 0 || bNorm === 0) return 0;
-	return dot / (Math.sqrt(aNorm) * Math.sqrt(bNorm));
 }
 
 export function clusterBySimilarity(items: readonly ShmrItem[], threshold: number): ShmrItem[][] {

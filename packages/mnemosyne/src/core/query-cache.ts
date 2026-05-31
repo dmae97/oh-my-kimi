@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { cosineSimilarity } from "./vector-math";
 
 export type QueryCacheResult = Record<string, unknown>;
 export type QueryEmbedding = readonly number[];
@@ -151,7 +152,7 @@ export class QueryCache {
 			let bestKey: string | null = null;
 			for (const [cachedKey, cached] of this.#tier23) {
 				if (this.#isExpired(cachedKey, now)) continue;
-				const cosine = this.cosineSimilarity(embedding, cached.embedding);
+				const cosine = cosineSimilarity(embedding, cached.embedding);
 				if (cosine >= 0.88) {
 					bestScore = cosine;
 					bestKey = cachedKey;
@@ -246,23 +247,6 @@ export class QueryCache {
 			if (rawWord.length > 1) words.push(rawWord.toLowerCase());
 		}
 		return words.sort().join(" ");
-	}
-
-	cosineSimilarity(embA: QueryEmbedding, embB: QueryEmbedding): number {
-		if (embA.length === 0 || embB.length === 0) return 0;
-		const maxLength = embA.length > embB.length ? embA.length : embB.length;
-		let dot = 0;
-		let magA = 0;
-		let magB = 0;
-		for (let i = 0; i < maxLength; i += 1) {
-			const a = embA[i] ?? 0;
-			const b = embB[i] ?? 0;
-			dot += a * b;
-			magA += a * a;
-			magB += b * b;
-		}
-		if (magA === 0 || magB === 0) return 0;
-		return dot / (Math.sqrt(magA) * Math.sqrt(magB));
 	}
 
 	jaccardWords(queryA: string, queryB: string): number {

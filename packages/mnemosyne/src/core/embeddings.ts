@@ -1,9 +1,18 @@
 import { mkdirSync } from "node:fs";
-import { createRequire } from "node:module";
-import type { EmbeddingModel, FlagEmbedding } from "fastembed";
+import {
+	$env,
+	$flag,
+	extractHttpStatusFromError,
+	fetchWithRetry,
+	getFastembedCacheDir,
+	logger,
+} from "@oh-my-pi/pi-utils";
+import type { EmbeddingModel } from "fastembed";
 import { getMnemosyneRuntimeOptions, resolveEmbeddingProvider } from "./runtime-options";
 
-export type Vector = number[];
+export { cosineSimilarity } from "./vector-math";
+
+export type Vector = Float32Array;
 export type EmbeddingMatrix = Vector[];
 
 export interface EmbeddingProvider {
@@ -25,14 +34,7 @@ type LocalModelInitOptions = {
 };
 type LocalModelInitializer = (options: LocalModelInitOptions) => Promise<LocalEmbeddingModel>;
 
-interface FastembedRuntime {
-	EmbeddingModel: typeof EmbeddingModel;
-	FlagEmbedding: typeof FlagEmbedding;
-}
-
-const FASTEMBED_CACHE_DIR = `${process.env.HOME ?? ""}/.hermes/cache/fastembed`;
 const QUERY_CACHE_MAX = 512;
-const sourceRequire = createRequire(import.meta.url);
 
 let providerOverride: EmbeddingProvider | null = null;
 let localModelPromise: Promise<LocalEmbeddingModel> | null = null;
@@ -40,38 +42,18 @@ let localModelInitializer: LocalModelInitializer = defaultLocalModelInitializer;
 let apiCallCount = 0;
 const queryCache = new Map<string, Vector>();
 
-function loadFastembedRuntime(): FastembedRuntime {
-	// Preload ORT 1.24 before fastembed's ORT 1.21 binding to avoid Windows DLL reuse crashes.
-	sourceRequire("onnxruntime-node");
-	return sourceRequire("fastembed") as FastembedRuntime;
-}
-
-function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
-	return loadFastembedRuntime().FlagEmbedding.init(options);
+async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
+	await import("onnxruntime-node");
+	const { FlagEmbedding } = await import("fastembed");
+	return FlagEmbedding.init(options);
 }
 
 function activeEmbeddingOptions() {
 	return getMnemosyneRuntimeOptions()?.embeddings;
 }
 
-function env(name: string): string {
-	return process.env[name] ?? "";
-}
-
-function truthy(value: string): boolean {
-	switch (value.trim().toLowerCase()) {
-		case "1":
-		case "true":
-		case "yes":
-		case "on":
-			return true;
-		default:
-			return false;
-	}
-}
-
 function inTestRuntime(): boolean {
-	return env("NODE_ENV") === "test" || env("BUN_ENV") === "test";
+	return $env.NODE_ENV === "test" || $env.BUN_ENV === "test";
 }
 
 function embeddingsDisabled(): boolean {
@@ -79,7 +61,7 @@ function embeddingsDisabled(): boolean {
 	if (active?.disabled !== undefined) {
 		return active.disabled;
 	}
-	return truthy(env("MNEMOSYNE_NO_EMBEDDINGS"));
+	return $flag("MNEMOSYNE_NO_EMBEDDINGS");
 }
 
 function embeddingApiKey(): string {
@@ -87,7 +69,7 @@ function embeddingApiKey(): string {
 	if (active?.apiKey !== undefined) {
 		return active.apiKey;
 	}
-	return env("MNEMOSYNE_EMBEDDING_API_KEY") || env("OPENROUTER_API_KEY") || env("OPENAI_API_KEY");
+	return $env.MNEMOSYNE_EMBEDDING_API_KEY || $env.OPENROUTER_API_KEY || $env.OPENAI_API_KEY || "";
 }
 
 function embeddingBaseUrl(): string {
@@ -95,7 +77,7 @@ function embeddingBaseUrl(): string {
 	if (active?.apiUrl !== undefined) {
 		return active.apiUrl;
 	}
-	return env("MNEMOSYNE_EMBEDDING_API_URL") || env("OPENROUTER_BASE_URL") || "https://openrouter.ai/api/v1";
+	return $env.MNEMOSYNE_EMBEDDING_API_URL || $env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
 }
 
 function defaultModel(): string {
@@ -103,7 +85,7 @@ function defaultModel(): string {
 	if (active?.model !== undefined) {
 		return active.model;
 	}
-	return env("MNEMOSYNE_EMBEDDING_MODEL") || "BAAI/bge-small-en-v1.5";
+	return $env.MNEMOSYNE_EMBEDDING_MODEL || "BAAI/bge-small-en-v1.5";
 }
 
 export function isApiModel(modelName: string): boolean {
@@ -115,56 +97,67 @@ export function isApiModel(modelName: string): boolean {
 		return true;
 	}
 	const active = activeEmbeddingOptions();
-	const baseUrl = active?.apiUrl ?? (env("MNEMOSYNE_EMBEDDING_API_URL") || env("OPENROUTER_BASE_URL"));
+	const baseUrl = active?.apiUrl ?? ($env.MNEMOSYNE_EMBEDDING_API_URL || $env.OPENROUTER_BASE_URL);
 	if (baseUrl !== undefined && baseUrl !== "" && !baseUrl.includes("openrouter.ai")) {
 		return true;
 	}
-	return truthy(env("MNEMOSYNE_EMBEDDINGS_VIA_API"));
+	return $flag("MNEMOSYNE_EMBEDDINGS_VIA_API");
 }
 
+const MODEL_DIMS: Record<string, number> = {
+	"BAAI/bge-small-en-v1.5": 384,
+	"BAAI/bge-base-en-v1.5": 768,
+	"BAAI/bge-large-en-v1.5": 1024,
+	"BAAI/bge-small-zh-v1.5": 512,
+	"BAAI/bge-base-zh-v1.5": 768,
+	"BAAI/bge-large-zh-v1.5": 1024,
+	"intfloat/multilingual-e5-small": 384,
+	"intfloat/multilingual-e5-base": 768,
+	"intfloat/multilingual-e5-large": 1024,
+	"BAAI/bge-m3": 1024,
+	"BAAI/bge-multilingual-gemma2": 3584,
+	"openai/text-embedding-3-small": 1536,
+	"openai/text-embedding-3-large": 3072,
+	"text-embedding-3-small": 1536,
+	"text-embedding-3-large": 3072,
+	"jina-embeddings-v5-omni-nano": 768,
+	"jina-embeddings-v5-omni-small": 1024,
+};
 export function embeddingDimFor(modelName: string): number {
-	const override = Number.parseInt(env("MNEMOSYNE_EMBEDDING_DIM"), 10);
+	const override = Number.parseInt($env.MNEMOSYNE_EMBEDDING_DIM ?? "", 10);
 	if (Number.isFinite(override)) {
 		return override;
 	}
-
-	const dims: Record<string, number> = {
-		"BAAI/bge-small-en-v1.5": 384,
-		"BAAI/bge-base-en-v1.5": 768,
-		"BAAI/bge-large-en-v1.5": 1024,
-		"BAAI/bge-small-zh-v1.5": 512,
-		"BAAI/bge-base-zh-v1.5": 768,
-		"BAAI/bge-large-zh-v1.5": 1024,
-		"intfloat/multilingual-e5-small": 384,
-		"intfloat/multilingual-e5-base": 768,
-		"intfloat/multilingual-e5-large": 1024,
-		"BAAI/bge-m3": 1024,
-		"BAAI/bge-multilingual-gemma2": 3584,
-		"openai/text-embedding-3-small": 1536,
-		"openai/text-embedding-3-large": 3072,
-		"text-embedding-3-small": 1536,
-		"text-embedding-3-large": 3072,
-		"jina-embeddings-v5-omni-nano": 768,
-		"jina-embeddings-v5-omni-small": 1024,
-	};
-	return dims[modelName] ?? 384;
+	return MODEL_DIMS[modelName] ?? 384;
 }
 
 function normalizeVector(input: unknown): Vector | null {
-	// Accept Array or TypedArray (ArrayLike with length and numeric indexed access)
 	if (input == null || typeof input !== "object") {
 		return null;
 	}
-	const arr = input as unknown as ArrayLike<unknown>;
-	if (typeof arr.length !== "number" || !Number.isFinite(arr.length)) {
-		return null;
-	}
-	// Must be an Array or TypedArray (ArrayBuffer.isView), reject plain objects
 	if (!Array.isArray(input) && !ArrayBuffer.isView(input)) {
 		return null;
 	}
-	const vector = new Array<number>(arr.length);
-	for (let i = 0; i < arr.length; i += 1) {
+	if (input instanceof DataView) {
+		return null;
+	}
+
+	const arr = input as ArrayLike<unknown>;
+	const length = arr.length;
+	if (typeof length !== "number" || !Number.isInteger(length) || length < 0) {
+		return null;
+	}
+	if (input instanceof Float32Array) {
+		for (let i = 0; i < input.length; i += 1) {
+			if (!Number.isFinite(input[i])) {
+				return null;
+			}
+		}
+		return input;
+	}
+
+	const vector = new Float32Array(length);
+	for (let i = 0; i < length; i += 1) {
 		const value = Number(arr[i]);
 		if (!Number.isFinite(value)) {
 			return null;
@@ -284,10 +277,11 @@ async function getLocalModel(): Promise<LocalEmbeddingModel | null> {
 	if (modelName === null) {
 		return null;
 	}
-	mkdirSync(FASTEMBED_CACHE_DIR, { recursive: true });
+	const cacheDir = getFastembedCacheDir();
+	mkdirSync(cacheDir, { recursive: true });
 	const loading = localModelInitializer({
 		model: modelName,
-		cacheDir: FASTEMBED_CACHE_DIR,
+		cacheDir,
 		showDownloadProgress: false,
 	});
 	localModelPromise = loading;
@@ -316,41 +310,37 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 		headers.Authorization = `Bearer ${apiKey}`;
 	}
 
-	for (let attempt = 0; attempt < 3; attempt += 1) {
-		try {
-			const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/embeddings`, {
-				method: "POST",
-				headers,
-				body: JSON.stringify({ model: defaultModel(), input: texts }),
-				signal: AbortSignal.timeout(30000),
-			});
-			if ((response.status === 429 || response.status === 503) && attempt < 2) {
-				await Bun.sleep(2 ** attempt * 1000);
-				continue;
-			}
-			if (!response.ok) {
-				return null;
-			}
-			const data = (await response.json()) as { data?: Array<{ embedding?: unknown }> };
-			const rows = data.data;
-			if (rows === undefined) {
-				return null;
-			}
-			const vectors: Vector[] = [];
-			for (const row of rows) {
-				const vector = normalizeVector(row.embedding);
-				if (vector === null) {
-					return null;
-				}
-				vectors.push(vector);
-			}
-			apiCallCount += 1;
-			return vectors;
-		} catch {
+	try {
+		const response = await fetchWithRetry(`${baseUrl.replace(/\/+$/, "")}/embeddings`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ model: defaultModel(), input: texts }),
+			signal: AbortSignal.timeout(30000),
+			maxAttempts: 3,
+			defaultDelayMs: attempt => 2 ** attempt * 1000,
+		});
+		if (!response.ok) {
 			return null;
 		}
+		const data = (await response.json()) as { data?: Array<{ embedding?: unknown }> };
+		const rows = data.data;
+		if (rows === undefined) {
+			return null;
+		}
+		const vectors: Vector[] = [];
+		for (const row of rows) {
+			const vector = normalizeVector(row.embedding);
+			if (vector === null) {
+				return null;
+			}
+			vectors.push(vector);
+		}
+		apiCallCount += 1;
+		return vectors;
+	} catch (error) {
+		logger.debug("mnemosyne embedding request failed", { status: extractHttpStatusFromError(error) });
+		return null;
 	}
-	return null;
 }
 
 async function providerAvailable(provider: EmbeddingProvider): Promise<boolean> {
@@ -400,7 +390,7 @@ export async function available(): Promise<boolean> {
 		return providerAvailable(providerOverride);
 	}
 	if (isApiModel(defaultModel())) {
-		const baseUrl = active?.apiUrl ?? (env("MNEMOSYNE_EMBEDDING_API_URL") || env("OPENROUTER_BASE_URL"));
+		const baseUrl = active?.apiUrl ?? ($env.MNEMOSYNE_EMBEDDING_API_URL || $env.OPENROUTER_BASE_URL);
 		if (baseUrl !== undefined && baseUrl !== "" && !baseUrl.includes("openrouter.ai")) {
 			return true;
 		}
@@ -467,7 +457,10 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 	try {
 		const vectors = await normalizeEmbeddingResult(await model.embed([...texts]));
 		if (vectors !== null && vectors.length === 1) {
-			cacheSet(texts[0] ?? "", vectors[0] ?? []);
+			const vector = vectors[0];
+			if (vector !== undefined) {
+				cacheSet(texts[0] ?? "", vector);
+			}
 		}
 		return vectors;
 	} catch {
@@ -475,30 +468,6 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 	}
 }
 
-export function serialize(vec: readonly number[]): string {
-	return JSON.stringify(vec);
-}
-
-export function cosineSimilarity(a: readonly number[], b: readonly number[]): number {
-	const length = Math.min(a.length, b.length);
-	if (length === 0) {
-		return 0;
-	}
-	let dot = 0;
-	let normA = 0;
-	let normB = 0;
-	for (let i = 0; i < length; i += 1) {
-		const av = a[i] ?? 0;
-		const bv = b[i] ?? 0;
-		dot += av * bv;
-		normA += av * av;
-		normB += bv * bv;
-	}
-	if (normA === 0 || normB === 0) {
-		return 0;
-	}
-	return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
 export function getEmbeddingApiCallCountForTests(): number {
 	return apiCallCount;
 }
