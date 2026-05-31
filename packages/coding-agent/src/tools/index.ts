@@ -195,6 +195,10 @@ export interface ToolSession {
 	getGoalRuntime?: () => GoalRuntime | undefined;
 	/** Get cumulative session usage statistics (input/output tokens, cost). */
 	getUsageStatistics?: () => import("../session/session-manager").UsageStatistics;
+	/** Current per-turn token budget {total, spent, hard} for the eval `budget` helper. */
+	getTurnBudget?: () => { total: number | null; spent: number; hard: boolean };
+	/** Record output tokens consumed by an eval-spawned subagent toward the current turn budget. */
+	recordEvalSubagentUsage?: (output: number) => void;
 	/** Bridge to the connected client (e.g. ACP editor host). Tools should route fs/terminal/permission requests through this when available. */
 	getClientBridge?: () => ClientBridge | undefined;
 	/** Get compact conversation context for subagents (excludes tool results, system prompts) */

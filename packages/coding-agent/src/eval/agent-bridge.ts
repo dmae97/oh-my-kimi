@@ -175,6 +175,13 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	assertDepthAllowed(options.session);
 	assertSpawnAllowed(options.session, agentName);
 
+	const turnBudget = options.session.getTurnBudget?.();
+	if (turnBudget?.hard && turnBudget.total !== null && turnBudget.spent >= turnBudget.total) {
+		throw new ToolError(
+			`agent() blocked: turn token budget exhausted (${turnBudget.spent}/${turnBudget.total} output tokens). Raise or drop the +Nk! ceiling to continue.`,
+		);
+	}
+
 	const { agents } = await taskDiscovery.discoverAgents(options.session.cwd);
 	const agent = taskDiscovery.getAgent(agents, agentName);
 	if (!agent) {
@@ -259,6 +266,8 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			result.error ?? result.stderr ?? result.abortReason ?? `agent() subagent '${agentName}' failed.`;
 		throw new ToolError(failureMessage);
 	}
+
+	options.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0);
 
 	options.emitStatus?.({
 		op: "agent",

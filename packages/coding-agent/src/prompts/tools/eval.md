@@ -56,8 +56,8 @@ log(message) → None
     Emit a progress line above the status tree.
 phase(title) → None
     Start a phase; the status lines that follow group under it.
-budget → token budget for this turn
-    {{#if py}}`budget.total` (ceiling or None), `budget.spent()` (output tokens), `budget.remaining()` (math.inf when no ceiling).{{/if}}{{#if js}}`await budget.total()` (ceiling or null), `await budget.spent()`, `await budget.remaining()` (Infinity when no ceiling).{{/if}} A ceiling exists only when one is set for the turn (e.g. Goal Mode); otherwise total is None/null.
+budget → per-turn token budget
+    {{#if py}}`budget.total` (ceiling or None), `budget.spent()` (output tokens this turn), `budget.remaining()` (math.inf when no ceiling), `budget.hard` (bool).{{/if}}{{#if js}}`await budget.total()` (ceiling or null), `await budget.spent()`, `await budget.remaining()` (Infinity when no ceiling), `await budget.hard()`.{{/if}} A ceiling is set by a `+Nk` message directive (advisory) or `+Nk!`/Goal Mode (hard — `agent()` refuses to spawn past it); otherwise total is None/null and spend is still tracked across the turn (main loop + eval subagents).
 ```
 </prelude>
 

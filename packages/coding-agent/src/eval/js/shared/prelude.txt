@@ -120,6 +120,7 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 			const s = await __budgetSnap();
 			return s.total == null ? Infinity : Math.max(0, Number(s.total) - Number(s.spent ?? 0));
 		},
+		hard: async () => Boolean((await __budgetSnap()).hard),
 	};
 
 	const display = value => {

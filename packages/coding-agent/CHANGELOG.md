@@ -1,14 +1,15 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added support for decimal and `k`/`m` suffix turn-budget directives, enabling budgets like `+1.5k` and `+2m` in eval message parsing
+- Changed eval budget resolution to honor a user `+Nk` directive over an active Goal Mode limit while falling back to Goal Mode when no per-turn ceiling is set
 - Added `agent()` eval options `agent_type`/`agentType`, `model`, `context`, and `label`, and returned structured JSON when `schema` is provided in JS and Python eval cells
 - Added `agent()` to the `eval` runtime so JS and Python cells can spawn one subagent through the existing task executor; JS eval also gained bounded `parallel()` and `pipeline()` helpers for orchestrating subagent calls.
 - Added a `workflow` magic keyword (mirrors `orchestrate`/`ultrathink`): the standalone word glows amber→green in the editor and appends a hidden notice steering the model to author deterministic multi-subagent fan-outs in `eval` (agent/parallel/pipeline). Matching is word-bounded and case-insensitive; the singular and plural both trigger, but inflections like `workflowed` do not.
 - Added `parallel()` and `pipeline()` to the Python `eval` runtime (thread-pool over the synchronous `agent()` bridge), mirroring the JS helpers: bounded pool (default 4, max 16), input-order preservation, a barrier between every `pipeline` stage, and contextvar propagation so `agent()` works inside worker threads.
-- Added `log()`, `phase()`, and a `budget` object to both `eval` runtimes (Python and JS). `log`/`phase` emit progress/phase status lines; `budget.total`/`budget.spent()`/`budget.remaining()` expose the turn token ceiling and spend (backed by Goal Mode when active, else session output-token usage).
+- Added `log()`, `phase()`, and a `budget` object to both `eval` runtimes (Python and JS). `log`/`phase` emit progress/phase status lines; `budget.total`/`budget.spent()`/`budget.remaining()`/`budget.hard` expose a real per-turn output-token budget. A `+Nk` directive in the user's message sets an advisory budget (the model self-limits via `budget.remaining()`); `+Nk!` (or an active Goal Mode budget) makes it a hard ceiling that blocks further eval `agent()` spawns once reached. `budget.spent()` counts output tokens spent this turn across the main loop and all eval-spawned subagents.
 - Added search support for virtual internal URLs (including `omp://` roots) by resolving and scanning in-memory internal resources as search targets alongside filesystem paths
 - Added expansion of virtual internal URL search targets so `search` can match multiple internal documents when given `omp://`
 - Added `/omfg <complaint>` slash command that drafts a TTSR rule from a complaint, validates it against the current conversation, saves it to project or `~/.omp/agent/rules`, and registers it live.
@@ -17,6 +18,7 @@
 
 ### Changed
 
+- Fixed turn-budget parsing to match `+Nk` directives only at token boundaries, preventing values like `version 1.2.3`, `c++`, and `+500kfoo` from triggering a budget rule
 - Changed overflowing provider, hook-option, branch-message, agent, extension, and session-tree pickers to support fuzzy type-to-filter search.
 - Changed Shift+Ctrl+P to cycle role models backward instead of cycling forward without persisting.
 - Changed empty prompt input so `?` inserts a literal question mark instead of opening `/hotkeys`; use `/hotkeys` explicitly for the shortcut reference.
@@ -24,6 +26,10 @@
 - Changed `/omfg` to run up to three generation attempts with validation feedback and only prompt saving when no draft matches assistant history
 - Changed `/omfg` to show a live draft panel with generation/validation/saving status and allow canceling an active rule request with `Esc`
 - Changed keybindings config to use `~/.omp/agent/keybindings.yml`, with automatic migration from legacy `keybindings.json` and continued support for `keybindings.yaml`.
+
+### Removed
+
+- Removed the `/drop-images` slash command; use `/shake images`, which strips every image from the session through the same `dropImages()` path.
 
 ### Fixed
 
@@ -36,10 +42,7 @@
 - Fixed auto-thinking sessions to persist the concrete resolved effort after classification, so resuming the session restores that level instead of returning to pending `auto`.
 - Fixed extension-registered CLI flags (e.g. `--spawn-peer <value>`) leaking into the initial prompt: argv is re-parsed once the extension flag set is known so flag values are consumed instead of becoming messages or being misread as `@file` arguments. Registered flags shadow same-named built-ins, so a colliding flag (e.g. plan-mode's `--plan`) is parsed with the extension's semantics rather than being consumed by the built-in branch (which would otherwise eat the following message and corrupt the built-in field). Extension flags and `@file` arguments are now resolved before the session is created, so an unreadable initial `@file` exits without leaving a junk session/terminal breadcrumb behind. ([#1503](https://github.com/can1357/oh-my-pi/pull/1503))
 - Fixed footer status-line truncation: the left stats and right model segments now truncate by terminal cell width (via `truncateToWidth`) and strip all VT/ANSI escapes (via `stripVTControlCharacters`) instead of a SGR-only regex plus code-point `substring`, so wide glyphs, OSC hyperlinks, and non-SGR sequences can no longer overflow the line.
-
-### Removed
-
-- Removed the `/drop-images` slash command; use `/shake images`, which strips every image from the session through the same `dropImages()` path.
+- Fixed the streaming edit diff preview "box grows and shrinks repeatedly" stutter. A whole-file Myers re-diff is recomputed on every streamed chunk and its alignment is not monotonic in payload length — a partial or just-completed line transiently matches a duplicated line further down the file (a brace, a blank line, a repeated token), so the rendered change region gains and loses rows tick to tick. The streaming preview now reserves its high-water rendered height (measured at the real layout width, so soft-wrapped diff lines count exactly), so the box only ever grows mid-stream and collapses once when the edit finalizes.
 
 ## [15.7.2] - 2026-05-31
 ### Added

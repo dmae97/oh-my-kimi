@@ -586,6 +586,11 @@ if "__omp_prelude_loaded__" not in globals():
             snap = _bridge_call("__budget__", {})
             return (snap or {}).get("total")
 
+        @property
+        def hard(self):
+            snap = _bridge_call("__budget__", {})
+            return bool((snap or {}).get("hard"))
+
         def spent(self):
             snap = _bridge_call("__budget__", {})
             return int((snap or {}).get("spent") or 0)

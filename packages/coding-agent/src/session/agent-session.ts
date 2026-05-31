@@ -160,6 +160,7 @@ import { resolveMemoryBackend } from "../memory-backend";
 import { getMnemosyneSessionState, type MnemosyneSessionState, setMnemosyneSessionState } from "../mnemosyne/state";
 import { containsOrchestrate, ORCHESTRATE_NOTICE } from "../modes/orchestrate";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
+import { parseTurnBudget } from "../modes/turn-budget";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
 import type { PlanModeState } from "../plan-mode/state";
@@ -4115,6 +4116,8 @@ export class AgentSession {
 		const keywordNotices: CustomMessage[] = [];
 		if (!options?.synthetic) {
 			const timestamp = Date.now();
+			const turnBudget = parseTurnBudget(expandedText);
+			this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
 			if (containsUltrathink(expandedText)) {
 				keywordNotices.push({
 					role: "custom",
