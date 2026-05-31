@@ -1275,7 +1275,7 @@ export class AcpAgent implements Agent {
 			category: "thought_level",
 			type: "select",
 			currentValue: this.#toThinkingConfigValue(
-				session.model?.reasoning ? session.configuredThinkingLevel() : undefined,
+				session.model?.reasoning ? this.#getConfiguredThinkingLevel(session) : undefined,
 			),
 			options: this.#buildThinkingOptions(session),
 		});
@@ -1314,6 +1314,11 @@ export class AcpAgent implements Agent {
 			})),
 		];
 	}
+	#getConfiguredThinkingLevel(session: AgentSession): string | undefined {
+		const configuredThinkingLevel = (session as { configuredThinkingLevel?: () => string | undefined }).configuredThinkingLevel;
+		return typeof configuredThinkingLevel === "function" ? configuredThinkingLevel.call(session) : session.thinkingLevel;
+	}
+
 
 	#toThinkingConfigValue(value: string | undefined): string {
 		return value && value !== "inherit" ? value : THINKING_OFF;
