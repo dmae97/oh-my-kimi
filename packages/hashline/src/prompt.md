@@ -31,6 +31,7 @@ There is NO other body row kind. NEVER write `-old` or a bare/context line. To k
 - One hunk per range; the body is the final content, never an old/new pair.
 - Keep every range as tight as the change: a range must cover ONLY lines whose content actually changes. Never widen it to swallow an unchanged signature, brace, or neighboring statement just to rewrite a few lines inside — change one line with `replace N..N`, not the whole block around it. (A range where every line genuinely changes is correctly long; tightness is about excluding unchanged lines, not about being short.) This bounds the blast radius if a number is off: a stale single-line replace corrupts one line, while a stale block replace shreds the whole block and its structure.
 - To change lines 2 and 5 while keeping 3–4, issue two hunks (`replace 2..2:` and `replace 5..5:`). Untouched lines are simply absent from every range.
+- NEVER use this tool to format code — reordering imports, re-indenting, aligning columns, or any mechanical restyling. That is the project formatter's job; run it instead of hand-editing layout here.
 </rules>
 
 <example>
