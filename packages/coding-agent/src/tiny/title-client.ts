@@ -211,7 +211,7 @@ export class TinyTitleClient {
 	async complete(
 		modelKey: string,
 		prompt: string,
-		options: { maxTokens?: number; signal?: AbortSignal } = {},
+		options: { maxTokens?: number; signal?: AbortSignal; prefill?: string; stop?: string } = {},
 	): Promise<string | null> {
 		if (!isTinyMemoryLocalModelKey(modelKey)) return null;
 		if (options.signal?.aborted) return null;
@@ -229,7 +229,15 @@ export class TinyTitleClient {
 			};
 			options.signal?.addEventListener("abort", abort, { once: true });
 			try {
-				worker.send({ type: "complete", id, modelKey, prompt, maxTokens: options.maxTokens });
+				worker.send({
+					type: "complete",
+					id,
+					modelKey,
+					prompt,
+					maxTokens: options.maxTokens,
+					prefill: options.prefill,
+					stop: options.stop,
+				});
 				return await promise;
 			} finally {
 				options.signal?.removeEventListener("abort", abort);
