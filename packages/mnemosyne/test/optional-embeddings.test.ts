@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { getFastembedCacheDir } from "@oh-my-pi/pi-utils";
 import "./setup";
+import packageJson from "../package.json" with { type: "json" };
 import {
 	available,
 	embed,
@@ -122,6 +123,13 @@ describe("optional embeddings", () => {
 			port: 0,
 			fetch: async request => {
 				requests += 1;
+				expect(request.headers.get("content-type")).toBe("application/json");
+				expect(request.headers.get("user-agent")).toBe(`Oh-My-Pi/${packageJson.version}`);
+				expect(request.headers.get("http-referer")).toBe("https://omp.sh/");
+				expect(request.headers.get("x-openrouter-title")).toBe("Oh-My-Pi");
+				expect(request.headers.get("x-openrouter-categories")).toBe("cli-agent");
+				expect(request.headers.get("x-title")).toBeNull();
+				expect(request.headers.get("authorization")).toBeNull();
 				expect(new URL(request.url).pathname).toBe("/embeddings");
 				const payload = (await request.json()) as { model: string; input: string[] };
 				expect(payload.model).toBe("openai/text-embedding-3-small");

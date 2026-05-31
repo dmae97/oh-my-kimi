@@ -18,13 +18,14 @@ export type MnemosyneLlmCompletion = (
 export type EmbeddingRow = Float32Array | readonly number[];
 
 /**
- * Everything an embedding provider's `embed` is allowed to return. Rows come back either directly as
- * a flat list, or in batches (each batch a list of rows) through a sync or async iterable — fastembed's
- * `embed()` is an `AsyncGenerator<number[][]>`. Non-array / non-finite values are rejected at runtime.
+ * What an embedding provider's `embed` may return: the full matrix as a list of rows, or that matrix
+ * streamed in batches through a sync or async iterable — fastembed's `embed()` is an
+ * `AsyncGenerator<number[][]>`. Wrongly shaped or non-finite values are rejected at runtime.
  */
 export type EmbeddingOutput =
-	| Iterable<EmbeddingRow | readonly EmbeddingRow[]>
-	| AsyncIterable<EmbeddingRow | readonly EmbeddingRow[]>;
+	| readonly EmbeddingRow[]
+	| Iterable<readonly EmbeddingRow[]>
+	| AsyncIterable<readonly EmbeddingRow[]>;
 
 export interface MnemosyneEmbeddingProvider {
 	embed(texts: readonly string[]): EmbeddingOutput | Promise<EmbeddingOutput>;

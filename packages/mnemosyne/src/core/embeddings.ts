@@ -9,6 +9,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import type { EmbeddingModel } from "fastembed";
 import { LRUCache } from "lru-cache/raw";
+import packageJson from "../../package.json" with { type: "json" };
 import { type EmbeddingOutput, getMnemosyneRuntimeOptions, resolveEmbeddingProvider } from "./runtime-options";
 
 export type { EmbeddingOutput, EmbeddingRow } from "./runtime-options";
@@ -133,59 +134,46 @@ export function embeddingDimFor(modelName: string): number {
 	return MODEL_DIMS[modelName] ?? 384;
 }
 
-/** Structural test that tells a batch (array of rows) from a single row, and gates {@link normalizeVector}. */
-function isVectorLike(value: unknown): value is ArrayLike<number> {
-	return Array.isArray(value) || (ArrayBuffer.isView(value) && !(value instanceof DataView));
+/** Coerce one untrusted row to a finite-checked `Float32Array`, reusing the input when it already is one. */
+function normalizeVector(input: Float32Array | Iterable<number> | undefined | null): Vector | null {
+	let vec: Float32Array;
+	if (!(input instanceof Float32Array)) {
+		if (!input) return null;
+		vec = new Float32Array(input);
+	} else {
+		vec = input;
+	}
+	for (let i = 0; i < vec.length; i += 1) {
+		if (!Number.isFinite(vec[i])) return null;
+	}
+	return vec;
 }
 
-/** Validate one untrusted row into a finite-checked `Float32Array`, reusing the input when it already is one. */
-function normalizeVector(input: unknown): Vector | null {
-	if (input instanceof Float32Array) {
-		for (let i = 0; i < input.length; i += 1) {
-			if (!Number.isFinite(input[i])) return null;
-		}
-		return input;
+/** Append every row of one batch to `rows`; false on the first row that isn't a finite vector. */
+function pushRows(rows: Vector[], batch: unknown): boolean {
+	if (!Array.isArray(batch)) return false;
+	for (const row of batch) {
+		const vector = normalizeVector(row);
+		if (vector === null) return false;
+		rows.push(vector);
 	}
-	if (!isVectorLike(input)) return null;
-	const vector = new Float32Array(input.length);
-	for (let i = 0; i < input.length; i += 1) {
-		const value = Number(input[i]);
-		if (!Number.isFinite(value)) return null;
-		vector[i] = value;
-	}
-	return vector;
-}
-
-/** Append a single row, or a batch (array of rows), to `rows`; returns false on the first bad value. */
-function appendNormalized(rows: Vector[], input: unknown): boolean {
-	if (Array.isArray(input) && input.length > 0 && isVectorLike(input[0])) {
-		for (const item of input) {
-			const row = normalizeVector(item);
-			if (row === null) return false;
-			rows.push(row);
-		}
-		return true;
-	}
-	const vector = normalizeVector(input);
-	if (vector === null) return false;
-	rows.push(vector);
 	return true;
 }
 
 async function normalizeEmbeddingResult(result: EmbeddingOutput): Promise<EmbeddingMatrix | null> {
 	const rows: Vector[] = [];
-	// A bare array is the row list (or a single row); an iterable yields batches of rows.
+	// A plain array is the whole matrix; an (async) iterable streams it in batches (fastembed).
 	if (Array.isArray(result)) {
-		return appendNormalized(rows, result) ? rows : null;
+		return pushRows(rows, result) ? rows : null;
 	}
 	if (Symbol.asyncIterator in result) {
 		for await (const batch of result) {
-			if (!appendNormalized(rows, batch)) return null;
+			if (!pushRows(rows, batch)) return null;
 		}
 		return rows;
 	}
 	for (const batch of result) {
-		if (!appendNormalized(rows, batch)) return null;
+		if (!pushRows(rows, batch)) return null;
 	}
 	return rows;
 }
@@ -245,8 +233,10 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
-		"HTTP-Referer": "https://mnemosyne.site",
-		"X-Title": "Mnemosyne Embedding",
+		"User-Agent": `Oh-My-Pi/${packageJson.version}`,
+		"HTTP-Referer": "https://omp.sh/",
+		"X-OpenRouter-Title": "Oh-My-Pi",
+		"X-OpenRouter-Categories": "cli-agent",
 	};
 	if (apiKey !== "") {
 		headers.Authorization = `Bearer ${apiKey}`;
@@ -264,8 +254,7 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 		if (!response.ok) {
 			return null;
 		}
-		const data = (await response.json()) as { data?: Array<{ embedding?: unknown }> };
-		const rows = data.data;
+		const { data: rows } = (await response.json()) as { data?: Array<{ embedding?: Array<number> }> };
 		if (rows === undefined) {
 			return null;
 		}
