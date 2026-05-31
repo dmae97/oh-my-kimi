@@ -1531,6 +1531,56 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+		it("defers bottom-anchored shrink when POSIX viewport state is unknown", async () => {
+			// Repro for #1566 follow-up (kitty/Linux): a bottom-anchored shrink across the
+			// viewport boundary used to fall through to `viewportRepaint`, which redrew the
+			// new transcript at `newLength - height` while leaving rows
+			// `[newLength - height .. prevLength - height - 1]` already in native
+			// scrollback — they reappeared at the top of the viewport, duplicating two rows
+			// at the boundary in the captured trace.
+			const term = new UnknownViewportTerminal(40, 6);
+			const tui = new TUI(term);
+			const body = rows("line-", 12);
+			const component = new MutableLinesComponent([...body, "spinner-row", "spacer-row", "prompt-row"]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				component.setLines([...body, "prompt-row"]);
+				tui.requestRender();
+				await settle(term);
+
+				const scrollback = term.getScrollBuffer();
+				for (let i = 0; i < body.length; i++) {
+					const pattern = new RegExp(`\\bline-${i}\\b`);
+					expect(
+						countMatches(scrollback, pattern),
+						`line-${i} must not duplicate at boundary`,
+					).toBeLessThanOrEqual(1);
+				}
+
+				expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+				await settle(term);
+				expect(visible(term).map(line => line.trim())).toEqual([
+					"line-7",
+					"line-8",
+					"line-9",
+					"line-10",
+					"line-11",
+					"prompt-row",
+				]);
+				const rebuilt = term.getScrollBuffer();
+				for (let i = 0; i < body.length; i++) {
+					const pattern = new RegExp(`\\bline-${i}\\b`);
+					expect(countMatches(rebuilt, pattern), `line-${i} appears once post-checkpoint`).toBe(1);
+				}
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("renders streaming row inserts on WSL Windows Terminal even when viewport probe is unavailable", async () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });

@@ -1335,8 +1335,14 @@ export class TUI extends Container {
 			) {
 				return { kind: "historyRebuild" };
 			}
+			// POSIX terminals that cannot report viewport position fall through here
+			// (`canRebuildNativeScrollbackLive` is false): a viewport-only repaint would
+			// bottom-anchor `newLines` and re-emit the rows between the new and old
+			// viewport tops on top of the copies the terminal already kept in native
+			// scrollback. Pad to the previous row count instead and let the next
+			// checkpoint rebuild (e.g. prompt submit) clean up.
 			this.#markNativeScrollbackDirty();
-			return { kind: "viewportRepaint" };
+			return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 		}
 
 		const suppressSuffixScroll = this.#suppressNextSuffixScroll;
