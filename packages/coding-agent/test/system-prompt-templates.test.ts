@@ -181,11 +181,11 @@ describe("system Handlebars prompt templates", () => {
 			assignment: "Do the task.",
 		});
 
-		expect(subagentSystem).toContain("[CONTEXT]\nShared task background\n[/CONTEXT]");
-		expect(subagentSystem).toContain("[ROLE]");
+		expect(subagentSystem).toMatch(/CONTEXT\n=+\n\nShared task background/);
+		expect(subagentSystem).toMatch(/ROLE\n=+/);
 		expect(subagentUser).toContain("Complete the assignment below, thoroughly:");
 		expect(subagentUser).toContain("Do the task.");
-		expect(subagentUser).not.toContain("[CONTEXT]");
+		expect(subagentUser).not.toMatch(/CONTEXT\n=+/);
 		expect(subagentUser).not.toContain("Shared task background");
 	});
 	test("system-prompt renders MCP discovery hint when enabled", async () => {
@@ -247,7 +247,7 @@ describe("system Handlebars prompt templates", () => {
 			});
 
 			expect(systemPrompt).toHaveLength(2);
-			expect(systemPrompt[0]).toContain("[CONTRACT]");
+			expect(systemPrompt[0]).toMatch(/CONTRACT\n=+/);
 			expect(systemPrompt[0]).not.toContain("current working directory");
 			expect(systemPrompt[1]).toContain("<workstation>");
 			expect(systemPrompt[1]).toContain("<workspace-tree>");

@@ -226,10 +226,10 @@ describe("runSubprocess yield reminders", () => {
 		expect(systemPrompt).toHaveLength(4);
 		expect(systemPrompt?.[0]).toBe("system");
 		expect(systemPrompt?.[1]).toBe("project");
-		expect(systemPrompt?.[2]).toContain("[CONTEXT]\nShared task background\n[/CONTEXT]");
-		expect(systemPrompt?.[2]).toContain("[ROLE]\ntest\n[/ROLE]");
+		expect(systemPrompt?.[2]).toMatch(/CONTEXT\n=+\n\nShared task background/);
+		expect(systemPrompt?.[2]).toMatch(/ROLE\n=+\n\ntest/);
 		expect(systemPrompt?.[3]).toBe("now");
-		expect(userPrompt).not.toContain("[CONTEXT]");
+		expect(userPrompt).not.toMatch(/CONTEXT\n=+/);
 		expect(userPrompt).not.toContain("Shared task background");
 	});
 

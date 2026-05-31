@@ -633,7 +633,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (atMaxDepth && toolNames?.includes("task")) {
 		toolNames = toolNames.filter(name => name !== "task");
 	}
-	// IRC is always available; the [COOP] prompt advertises it, so a restricted
+	// IRC is always available; the COOP prompt section advertises it, so a restricted
 	// whitelist must still carry `irc` for the subagent to actually use it.
 	if (toolNames && !toolNames.includes("irc")) {
 		toolNames = [...toolNames, "irc"];
