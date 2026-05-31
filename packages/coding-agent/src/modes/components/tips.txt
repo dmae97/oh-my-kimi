@@ -4,7 +4,7 @@ Ctrl+D can be used to exit, but with your draft saved!
 Find out which model you emotionally abuse the most with `omp stats`
 Try task isolation to create CoW worktrees
 Your LLM can call an LLM using `llm(x...)`. Have a big batch of tasks? Ask clanker to use it!
-Next time you see spaghet try: "omp, create a TTSR rule that will prevent this pattern, use omp://"
+Spaghetti code? Try complaining with /omfg
 Did you know? Each kitty/tmux split keeps its own session — `omp -c` resumes the right one
 Drop the word `ultrathink` in your message for harder multi-step reasoning — watch it glow rainbow as you type
 Say `orchestrate` in your message to drive a multi-phase task with parallel subagents — watch it glow as you type

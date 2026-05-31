@@ -865,6 +865,17 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "omfg",
+		description: "Forge a TTSR rule from a complaint to stop a recurring behavior",
+		inlineHint: "<complaint>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const complaint = command.text.slice(`/${command.name}`.length).trim();
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.handleOmfgCommand(complaint);
+		},
+	},
+	{
 		name: "retry",
 		description: "Retry the last failed agent turn",
 		handleTui: async (_command, runtime) => {

@@ -91,6 +91,7 @@ import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
+import { OmfgController } from "./controllers/omfg-controller";
 import { SelectorController } from "./controllers/selector-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
@@ -236,6 +237,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	statusContainer: Container;
 	todoContainer: Container;
 	btwContainer: Container;
+	omfgContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	hookWidgetContainerAbove: Container;
@@ -315,6 +317,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 
 	readonly #btwController: BtwController;
+	readonly #omfgController: OmfgController;
 	readonly #commandController: CommandController;
 	readonly #todoCommandController: TodoCommandController;
 	readonly #eventController: EventController;
@@ -368,6 +371,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.statusContainer = new Container();
 		this.todoContainer = new Container();
 		this.btwContainer = new Container();
+		this.omfgContainer = new Container();
 		this.editor = new CustomEditor(getEditorTheme());
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setAutocompleteMaxVisible(settings.get("autocompleteMaxVisible"));
@@ -429,6 +433,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.#uiHelpers = new UiHelpers(this);
 		this.#btwController = new BtwController(this);
+		this.#omfgController = new OmfgController(this);
 		this.#extensionUiController = new ExtensionUiController(this);
 		this.#eventController = new EventController(this);
 		this.#commandController = new CommandController(this);
@@ -526,6 +531,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.addChild(this.statusContainer);
 		this.ui.addChild(this.todoContainer);
 		this.ui.addChild(this.btwContainer);
+		this.ui.addChild(this.omfgContainer);
 		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
 		this.ui.addChild(this.hookWidgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
@@ -2211,6 +2217,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			logger.warn("Failed to save session draft", { error: String(err) });
 		}
 		this.#btwController.dispose();
+		this.#omfgController.dispose();
 
 		// Emit shutdown event to hooks
 		await this.session.dispose();
@@ -2532,6 +2539,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#prepareSessionSwitch(): void {
 		this.#btwController.dispose();
+		this.#omfgController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		this.#planReviewContainer = undefined;
 	}
@@ -2548,6 +2556,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleForkCommand(): Promise<void> {
 		this.#btwController.dispose();
+		this.#omfgController.dispose();
 		return this.#commandController.handleForkCommand();
 	}
 
@@ -2733,6 +2742,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleResumeSession(sessionPath: string): Promise<void> {
 		this.#btwController.dispose();
+		this.#omfgController.dispose();
 		this.resetObserverRegistry();
 		return this.#selectorController.handleResumeSession(sessionPath);
 	}
@@ -2784,6 +2794,18 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleBtwEscape(): boolean {
 		return this.#btwController.handleEscape();
+	}
+
+	handleOmfgCommand(complaint: string): Promise<void> {
+		return this.#omfgController.start(complaint);
+	}
+
+	hasActiveOmfg(): boolean {
+		return this.#omfgController.hasActiveRequest();
+	}
+
+	handleOmfgEscape(): boolean {
+		return this.#omfgController.handleEscape();
 	}
 
 	cycleThinkingLevel(): void {

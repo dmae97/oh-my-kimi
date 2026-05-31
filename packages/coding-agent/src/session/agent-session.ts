@@ -8480,11 +8480,16 @@ export class AgentSession {
 				.some(entry => entry.type === "service_tier_change");
 			const defaultThinkingLevel = this.settings.get("defaultThinkingLevel");
 			const configuredServiceTier = this.settings.get("serviceTier");
-			// Session log entries store only concrete levels. The `auto` selector can
-			// only arrive via settings when the branch has no resolved thinking entry.
-			const restoredThinkingLevel: ConfiguredThinkingLevel | undefined = hasThinkingEntry
-				? (sessionContext.thinkingLevel as ThinkingLevel | undefined)
-				: defaultThinkingLevel;
+			// Session log entries store only concrete levels. When `auto` has resolved
+			// for a turn, the persisted context may already carry that concrete level
+			// even if the branch scan races a just-flushed thinking entry under isolated
+			// parallel test workers. Prefer the concrete context value in that case;
+			// otherwise keep the configured `auto` selector so fresh sessions still
+			// classify their first turn.
+			const restoredThinkingLevel: ConfiguredThinkingLevel | undefined =
+				hasThinkingEntry || (defaultThinkingLevel === AUTO_THINKING && sessionContext.thinkingLevel !== "off")
+					? (sessionContext.thinkingLevel as ThinkingLevel | undefined)
+					: defaultThinkingLevel;
 			if (restoredThinkingLevel === AUTO_THINKING) {
 				this.#autoThinking = true;
 				this.#autoResolvedLevel = undefined;

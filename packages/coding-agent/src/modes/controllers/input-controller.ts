@@ -91,6 +91,7 @@ export class InputController {
 			Boolean(
 				this.ctx.loadingAnimation ||
 					this.ctx.hasActiveBtw() ||
+					this.ctx.hasActiveOmfg() ||
 					this.ctx.session.isStreaming ||
 					this.ctx.session.isCompacting ||
 					this.ctx.session.isGeneratingHandoff ||
@@ -112,6 +113,9 @@ export class InputController {
 				return;
 			}
 			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) {
+				return;
+			}
+			if (this.ctx.hasActiveOmfg() && this.ctx.handleOmfgEscape()) {
 				return;
 			}
 			if (this.ctx.loadingAnimation) {
@@ -605,6 +609,9 @@ export class InputController {
 		}
 		if (this.ctx.hasActiveBtw()) {
 			this.ctx.handleBtwEscape();
+		}
+		if (this.ctx.hasActiveOmfg()) {
+			this.ctx.handleOmfgEscape();
 		}
 
 		this.ctx.isBackgrounded = true;
