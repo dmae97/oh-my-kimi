@@ -1308,7 +1308,14 @@ export class TUI extends Container {
 				this.#markNativeScrollbackDirty();
 				return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 			}
-			if (this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, allowUnknownViewportMutation)) {
+			// A width change rewraps the whole transcript, so committed scrollback is
+			// mis-wrapped at the old width. Yank is acceptable on an explicit resize, so
+			// rebuild even when the viewport position is unknown (POSIX); the
+			// known-scrolled case already deferred above.
+			if (
+				widthChanged ||
+				this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, allowUnknownViewportMutation)
+			) {
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();

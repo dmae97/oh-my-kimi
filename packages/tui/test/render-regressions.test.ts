@@ -363,6 +363,49 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("rewraps committed native scrollback when the terminal widens on POSIX (unknown viewport)", async () => {
+			// POSIX reports no viewport position. A width change rewraps the whole
+			// transcript, so committed scrollback must be rebuilt at the new width even
+			// though we cannot prove the viewport is at the tail — yank is acceptable on
+			// an explicit resize. Regression: widening drops the wrapped line count, which
+			// the shrink-defer branch intercepted, leaving history wrapped at the old width.
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			try {
+				await withEnvPatch({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
+					// Each logical line is 36 cols: wraps to 20+16 at width 20, fits on one row at width 40.
+					const logical = Array.from({ length: 10 }, (_v, i) => `L${i}:${"x".repeat(33)}`);
+					const term = new UnknownViewportTerminal(20, 4, 200);
+					const tui = new TUI(term);
+					const component = new WrappingLinesComponent(logical);
+					tui.addChild(component);
+
+					try {
+						tui.start();
+						await settle(term);
+						const narrow = term.getScrollBuffer().map(line => line.trimEnd());
+						// Precondition: history is wrapped narrow (L0 split into a 20-col fragment).
+						expect(narrow).toContain(`L0:${"x".repeat(17)}`);
+
+						term.resize(40, 4);
+						await settle(term);
+
+						const wide = term.getScrollBuffer().map(line => line.trimEnd());
+						// Offscreen history rewrapped: each logical line is now a single full row.
+						for (let i = 0; i < 6; i++) {
+							expect(wide).toContain(`L${i}:${"x".repeat(33)}`);
+						}
+						// The stale narrow fragments are gone — no duplicate old-width rows survive.
+						expect(wide.some(line => line.length === 20 && line.startsWith("L"))).toBeFalse();
+					} finally {
+						tui.stop();
+					}
+				});
+			} finally {
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			}
+		});
+
 		it("resizing width truncates visible lines without ghost wrap rows", async () => {
 			const term = new VirtualTerminal(30, 6);
 			const tui = new TUI(term);
