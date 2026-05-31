@@ -33,6 +33,10 @@
 - Changed the local SQLite memory backend identifier from `mnemosyne` to `mnemopi`. Existing configs are migrated automatically on load: `memory.backend: mnemosyne` becomes `mnemopi` and the `mnemosyne.*` settings block is renamed to `mnemopi.*` (skipped when an explicit `mnemopi` block already exists).
 - Changed the `ultrathink`/`orchestrate`/`workflow` magic keywords to be markdown-aware: the standalone word now also glows in the rendered user message bubble (matching the live editor), and neither the glow nor the hidden steering notice triggers when the keyword sits inside a fenced code block, an inline `` `code` `` span, or an XML/HTML section.
 
+### Fixed
+
+- Fixed Ctrl+O tool-result expansion on POSIX terminals so offscreen tool blocks rebuild native scrollback instead of leaving stale collapsed rows above the viewport.
+
 ### Removed
 
 - Removed the `/drop-images` slash command; use `/shake images`, which strips every image from the session through the same `dropImages()` path.

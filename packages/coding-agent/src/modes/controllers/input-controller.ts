@@ -800,7 +800,7 @@ export class InputController {
 				child.setExpanded(expanded);
 			}
 		}
-		this.ctx.ui.requestRender();
+		this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
 	}
 
 	toggleThinkingBlockVisibility(): void {
