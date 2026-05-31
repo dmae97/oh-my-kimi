@@ -22,6 +22,7 @@ import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
+	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
 	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
@@ -122,7 +123,11 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			const params = buildParams(model, context, options, deploymentName, baseUrl);
 			options?.onPayload?.(params);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
-			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+			const firstEventTimeoutMs =
+				options?.streamFirstEventTimeoutMs ??
+				(options?.streamIdleTimeoutMs === undefined
+					? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs)
+					: getStreamFirstEventTimeoutMs(idleTimeoutMs));
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			rawRequestDump = {

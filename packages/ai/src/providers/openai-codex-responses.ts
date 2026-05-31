@@ -49,6 +49,7 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
+	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
 	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
@@ -603,7 +604,11 @@ function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): C
 		: requestAbortController.signal;
 	const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 	const websocketIdleTimeoutMs = options?.streamIdleTimeoutMs ?? getCodexWebSocketIdleTimeoutMs();
-	const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+	const firstEventTimeoutMs =
+		options?.streamFirstEventTimeoutMs ??
+		(options?.streamIdleTimeoutMs === undefined
+			? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs)
+			: getStreamFirstEventTimeoutMs(idleTimeoutMs));
 	const websocketFirstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getCodexWebSocketFirstEventTimeoutMs();
 	const wrapCodexSseStream = (
 		source: AsyncGenerator<Record<string, unknown>>,

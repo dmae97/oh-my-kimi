@@ -46,6 +46,7 @@ import {
 	rewriteCopilotError,
 } from "../utils/http-inspector";
 import {
+	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
 	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
@@ -421,10 +422,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const idleTimeoutMs =
-				options?.streamIdleTimeoutMs ??
-				getOpenAIStreamIdleTimeoutMs(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model));
-			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+			const idleTimeoutFallbackMs = getOpenAICompletionsStreamIdleTimeoutFallbackMs(model);
+			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs(idleTimeoutFallbackMs);
+			const firstEventTimeoutMs =
+				options?.streamFirstEventTimeoutMs ??
+				(options?.streamIdleTimeoutMs === undefined
+					? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs, idleTimeoutFallbackMs)
+					: getStreamFirstEventTimeoutMs(idleTimeoutMs));
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			const {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
+	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
 	getStreamFirstEventTimeoutMs,
 	getStreamIdleTimeoutMs,
@@ -19,6 +20,7 @@ const ENV_KEYS = [
 	"PI_STREAM_IDLE_TIMEOUT_MS",
 	"PI_OPENAI_STREAM_IDLE_TIMEOUT_MS",
 	"PI_STREAM_FIRST_EVENT_TIMEOUT_MS",
+	"PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS",
 ] as const;
 
 const originalEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
@@ -99,6 +101,31 @@ describe("getStreamFirstEventTimeoutMs(idleTimeoutMs, fallbackMs)", () => {
 
 	it("falls back to the 100s global default when no fallback or env is provided", () => {
 		expect(getStreamFirstEventTimeoutMs()).toBe(100_000);
+	});
+});
+
+describe("getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs, fallbackMs)", () => {
+	it("lets the OpenAI idle env widen a lower generic first-event timeout", () => {
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "20";
+		Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = "84";
+		expect(getOpenAIStreamFirstEventTimeoutMs(84, 300_000)).toBe(84);
+	});
+
+	it("lets the OpenAI first-event env override the OpenAI idle env", () => {
+		Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS = "42";
+		Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = "84";
+		expect(getOpenAIStreamFirstEventTimeoutMs(84, 300_000)).toBe(42);
+	});
+
+	it("falls back to the generic first-event env when OpenAI env vars are unset", () => {
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "42";
+		expect(getOpenAIStreamFirstEventTimeoutMs(undefined, 300_000)).toBe(42);
+	});
+
+	it("treats PI_OPENAI_STREAM_IDLE_TIMEOUT_MS=0 as an OpenAI watchdog disable", () => {
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "42";
+		Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = "0";
+		expect(getOpenAIStreamFirstEventTimeoutMs(undefined, 300_000)).toBeUndefined();
 	});
 });
 
