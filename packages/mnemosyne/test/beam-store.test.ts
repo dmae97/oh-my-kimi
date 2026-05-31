@@ -101,17 +101,21 @@ describe("beam store free functions", () => {
 
 	it("batch remembers items and returns context ordered by global scope, importance, then recency", () => {
 		const beam = makeState();
+		// Timestamps must stay inside the 24h working-memory TTL or trimWorkingMemory
+		// drops them, so anchor them to "now" rather than a fixed (and eventually
+		// stale) calendar date. Order: low-priority oldest, global, high newest.
+		const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
 		const ids = rememberBatch(
 			beam,
 			[
-				{ content: "Local low priority", importance: 0.1, timestamp: "2026-05-30T00:00:00.000Z" },
+				{ content: "Local low priority", importance: 0.1, timestamp: minutesAgo(3) },
 				{
 					content: "Global rule always include",
 					importance: 0.2,
 					scope: "global",
-					timestamp: "2026-05-30T00:01:00.000Z",
+					timestamp: minutesAgo(2),
 				},
-				{ content: "Local high priority", importance: 0.9, timestamp: "2026-05-30T00:02:00.000Z" },
+				{ content: "Local high priority", importance: 0.9, timestamp: minutesAgo(1) },
 			],
 			{ veracity: "imported" },
 		);

@@ -36,9 +36,11 @@ describe("renderSegmentTrack", () => {
 
 	it("fills exactly the active segment as a bold chip with a background", () => {
 		const raw = renderSegmentTrack(SEGMENTS, 1);
-		// One filled chip: a single bold run and a single background fill.
+		// One filled chip: a single bold run and a single background fill. The bg
+		// introducer is `48;2;` on truecolor terminals and `48;5;` on 256-palette
+		// ones (CI), so match the palette-agnostic `\x1b[48;` prefix.
 		expect(raw.match(/\x1b\[1m/g)?.length).toBe(1);
-		expect(raw.match(/48;2;/g)?.length).toBe(1);
+		expect(raw.match(/\x1b\[48;/g)?.length).toBe(1);
 		// The active label sits inside the bold run, and the fill is its own accent.
 		expect(raw).toContain("\x1b[1m default \x1b[22m");
 		const activeBg = theme.getFgAnsi("success").replace("\x1b[38;", "\x1b[48;");
