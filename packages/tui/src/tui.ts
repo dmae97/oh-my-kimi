@@ -1297,6 +1297,20 @@ export class TUI extends Container {
 			diff.firstChanged < this.#previousLines.length &&
 			!isMultiplexerSession()
 		) {
+			// A checkpoint replay is followed by one frame where transient live chrome
+			// (status/footer rows) may be inserted inside the visible suffix and then
+			// disappear; repaint it in place so it never enters scrollback. Offscreen
+			// inserts or real appended tails still need a replay, otherwise history loses
+			// rows while the viewport looks correct.
+			const appendedTailStart = this.#findAppendedTailStart(newLines);
+			if (appendedTailStart === newLines.length && diff.firstChanged >= prevViewportTop) {
+				return { kind: "viewportRepaint" };
+			}
+			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
+			if (this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewportMutation)) {
+				return { kind: "historyRebuild" };
+			}
+			this.#markNativeScrollbackDirty();
 			return { kind: "viewportRepaint" };
 		}
 
