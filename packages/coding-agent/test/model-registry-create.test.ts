@@ -53,18 +53,19 @@ describe("ModelRegistry.create() factory (F6)", () => {
 		}
 	});
 
-	test("ConfigFile.warmup is idempotent — second call is a no-op", async () => {
+	test("ConfigFile migration is idempotent — second load is a no-op", async () => {
 		const yml = path.join(tempDir.path(), "models.yml");
 		const json = path.join(tempDir.path(), "models.json");
 		await Bun.write(json, JSON.stringify({ models: [] }));
 
 		const cf = new ConfigFile("models", ModelsConfigSchema, yml);
-		await ConfigFile.warmup(cf);
+		cf.tryLoad();
 		expect(fs.existsSync(yml)).toBe(true);
 		const mtime1 = fs.statSync(yml).mtimeMs;
 
-		// Second warmup should not rewrite the file (idempotent path).
-		await ConfigFile.warmup(cf);
+		// Second load should not rewrite the file (idempotent migration path).
+		cf.invalidate();
+		cf.tryLoad();
 		const mtime2 = fs.statSync(yml).mtimeMs;
 		expect(mtime2).toBe(mtime1);
 	});

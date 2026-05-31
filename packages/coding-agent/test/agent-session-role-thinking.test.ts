@@ -173,7 +173,7 @@ describe("AgentSession role model thinking behavior", () => {
 			},
 		});
 
-		await session.setModel(slowModel);
+		await session.setModel(slowModel, "default", { persist: true });
 
 		expect(sessionSettings.getModelRole("default")).toBe(`${slowModel.provider}/${slowModel.id}:off`);
 	});

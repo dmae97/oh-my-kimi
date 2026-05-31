@@ -426,6 +426,7 @@ export class SelectorController {
 							await this.ctx.session.setModel(model, role, {
 								selector,
 								thinkingLevel: concreteThinking,
+								persist: true,
 							});
 							if (isAuto) {
 								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);

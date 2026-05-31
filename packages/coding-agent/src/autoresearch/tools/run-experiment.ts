@@ -3,12 +3,12 @@ import * as path from "node:path";
 import { Text } from "@oh-my-pi/pi-tui";
 import { formatBytes } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+import { executeBash } from "../../exec/bash-executor";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TailBuffer, truncateTail } from "../../session/streaming-output";
 import { replaceTabs, shortenPath } from "../../tools/render-utils";
 import * as git from "../../utils/git";
-import { executeBash } from "../../exec/bash-executor";
 import { parseWorkDirDirtyPaths } from "../git";
 import {
 	EXPERIMENT_MAX_BYTES,
