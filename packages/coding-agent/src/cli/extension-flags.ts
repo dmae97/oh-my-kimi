@@ -12,51 +12,22 @@ export interface ExtensionFlagSink {
 }
 
 /**
- * Recover an extension flag's value directly from argv. {@link parseArgs}
- * already surfaces every flag it consumes through `unknownFlags`; this fallback
- * only matters for the cases it leaves out — chiefly a name that collides with a
- * built-in (e.g. plan-mode registers `--plan`, which is also the built-in
- * plan-model selector), which `parseArgs` routes to the built-in branch so it
- * never reaches `unknownFlags`. Mirrors `parseArgs`'s consumption rules:
- * `--flag`, `--flag value` (a flag-looking value in space form is left to be its
- * own flag — pass it as `--flag=value`), and `--flag=value`. Returns `undefined`
- * for a flag that was not passed, so it is a safe no-op for absent flags — which
- * is what lets this work without a hand-maintained list of built-in flag names.
- */
-function recoverFlagValue(rawArgs: string[], name: string, type: "boolean" | "string"): boolean | string | undefined {
-	const eqPrefix = `--${name}=`;
-	for (let i = 0; i < rawArgs.length; i++) {
-		const arg = rawArgs[i];
-		if (arg === `--${name}`) {
-			if (type === "boolean") return true;
-			const next = rawArgs[i + 1];
-			return next !== undefined && !next.startsWith("-") ? next : undefined;
-		}
-		if (arg.startsWith(eqPrefix)) {
-			return type === "boolean" ? true : arg.slice(eqPrefix.length);
-		}
-	}
-	return undefined;
-}
-
-/**
  * Resolve extension-registered CLI flags from `rawArgs` once the flag set is
  * known, push the resolved values onto the sink, and return the parsed
- * {@link Args}.
+ * {@link Args} (whose `messages` and `fileArgs` now reflect those flags).
  *
  * The startup parse runs before extensions load, so it cannot recognise their
  * flags: a string flag's value (`--spawn-peer reviewer` or `--spawn-peer=reviewer`)
  * is otherwise left in `messages` and leaks into the initial prompt. Re-parsing
  * here — through the *same* {@link parseArgs} the startup pass uses, now seeded
  * with the registered flags — consumes every flag form (`--flag`, `--flag value`,
- * `--flag=value`) identically, so no form can be handled by one parser and missed
- * by another.
+ * `--flag=value`).
  *
- * A flag whose name collides with a built-in is consumed by the built-in branch
- * instead of `unknownFlags`; for those the value is recovered straight from argv
- * via {@link recoverFlagValue} (e.g. plan-mode's `--plan`). Because that recovery
- * is a no-op for any flag `parseArgs` already surfaced or that was not passed,
- * it can run unconditionally — no list of built-in flag names to keep in sync.
+ * {@link parseArgs} lets a registered flag shadow a same-named built-in, so even
+ * a built-in-colliding flag (e.g. plan-mode's boolean `--plan`, which would
+ * otherwise hit the built-in plan-model branch) is parsed with the extension's
+ * semantics and surfaces in `unknownFlags` — without consuming the following
+ * message or overwriting the built-in field. No built-in name list to maintain.
  *
  * Returns `null` when there is no sink or no registered extension flags, in
  * which case the caller keeps its original startup parse (an extension-aware
@@ -68,11 +39,10 @@ export function applyExtensionFlags(runner: ExtensionFlagSink | undefined, rawAr
 		return null;
 	}
 	const parsed = parseArgs(rawArgs, extensionFlags);
-	for (const [name, def] of extensionFlags) {
-		const value = parsed.unknownFlags.get(name) ?? recoverFlagValue(rawArgs, name, def.type);
-		if (value !== undefined) {
-			runner.setFlagValue(name, value);
-		}
+	// `parseArgs` only records registered extension flags in `unknownFlags`, so
+	// every entry here is a flag this runner owns that was actually passed.
+	for (const [name, value] of parsed.unknownFlags) {
+		runner.setFlagValue(name, value);
 	}
 	return parsed;
 }

@@ -83,7 +83,26 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			equalsValueIndex = i + 1;
 		}
 
-		if (arg === "--help" || arg === "-h") {
+		// Extension-registered flags take precedence over built-ins: a flag an
+		// extension owns (e.g. plan-mode's boolean `--plan`) is parsed with the
+		// extension's semantics rather than falling into a built-in branch. For a
+		// value-taking built-in (`--plan`, `--model`, …) that branch would consume
+		// the following token — eating the user's message and setting the wrong
+		// built-in field — so registered flags shadow same-named built-ins here.
+		const extFlag = arg.startsWith("--") ? extensionFlags?.get(arg.slice(2)) : undefined;
+		if (extFlag) {
+			const flagName = arg.slice(2);
+			if (extFlag.type === "boolean") {
+				result.unknownFlags.set(flagName, true);
+			} else if (extFlag.type === "string" && i + 1 < args.length) {
+				// Consume the value in `--flag=value` form, or when the next token is
+				// not flag-looking. A `-`-prefixed token in space form is left to be
+				// its own flag; pass a flag-looking value as `--flag=value`.
+				if (equalsValueIndex !== -1 || !args[i + 1].startsWith("-")) {
+					result.unknownFlags.set(flagName, args[++i]);
+				}
+			}
+		} else if (arg === "--help" || arg === "-h") {
 			result.help = true;
 		} else if (arg === "--version" || arg === "-v") {
 			result.version = true;
@@ -208,25 +227,6 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			}
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
-		} else if (arg.startsWith("--") && extensionFlags) {
-			// Check if it's an extension-registered flag
-			const flagName = arg.slice(2);
-			const extFlag = extensionFlags.get(flagName);
-			if (extFlag) {
-				if (extFlag.type === "boolean") {
-					result.unknownFlags.set(flagName, true);
-				} else if (extFlag.type === "string" && i + 1 < args.length) {
-					// Consume the value in `--flag=value` form, or when the next token
-					// is not flag-looking. A `-`-prefixed token in space form is left
-					// to be parsed as its own flag, so this extension-aware parse agrees
-					// with the extension-unaware startup parse on command shape; pass a
-					// flag-looking value as `--flag=value`.
-					if (equalsValueIndex !== -1 || !args[i + 1].startsWith("-")) {
-						result.unknownFlags.set(flagName, args[++i]);
-					}
-				}
-			}
-			// Unknown flags without extensionFlags are silently ignored (first pass)
 		} else if (!arg.startsWith("-")) {
 			result.messages.push(arg);
 		}

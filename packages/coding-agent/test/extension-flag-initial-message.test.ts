@@ -67,6 +67,16 @@ describe("extension flags vs initial message", () => {
 		const parsed = parseArgs(["--spawn-peer", "@notes.md", "hello"]);
 		expect(parsed.fileArgs).toEqual(["notes.md"]);
 	});
+	it("lets a registered flag shadow a same-named built-in instead of consuming the next token (bot P2)", () => {
+		// A boolean extension flag colliding with the value-taking built-in --plan
+		// must be parsed as the extension's boolean, NOT the built-in plan-model
+		// selector — otherwise it eats the following message and corrupts result.plan.
+		const planFlags = new Map<string, { type: "boolean" | "string" }>([["plan", { type: "boolean" }]]);
+		const parsed = parseArgs(["--plan", "review the diff"], planFlags);
+		expect(parsed.unknownFlags.get("plan")).toBe(true);
+		expect(parsed.plan).toBeUndefined();
+		expect(parsed.messages).toEqual(["review the diff"]);
+	});
 
 	it("builds the initial prompt from the real message, not the flag value, when flags are known", () => {
 		const parsed = parseArgs(["--spawn-peer", "reviewer", "review the diff"], extFlags);
@@ -159,32 +169,40 @@ describe("applyExtensionFlags (single-parser flag resolution)", () => {
 		expect(args?.messages).toEqual(["just a prompt"]);
 		expect(runner.values.size).toBe(0);
 	});
-	it("delivers a built-in-colliding flag's value to the runner (preserves plan-mode --plan)", () => {
+	it("preserves the message and built-in field for a built-in-colliding boolean flag (plan-mode --plan)", () => {
+		// Bot P2: a colliding boolean flag must not let the built-in --plan (string)
+		// branch eat the prompt or set the plan-model field. The extension flag
+		// shadows the built-in, so plan=true is delivered AND the message survives.
 		const runner = fakeRunner({ plan: "boolean" });
-		applyExtensionFlags(runner, ["--plan", "do the task"]);
+		const args = applyExtensionFlags(runner, ["--plan", "review the diff"]);
 		expect(runner.values.get("plan")).toBe(true);
+		expect(args?.messages).toEqual(["review the diff"]);
+		expect(args?.plan).toBeUndefined();
 	});
 	it("does not deliver a colliding flag that was not passed", () => {
 		const runner = fakeRunner({ plan: "boolean" });
-		applyExtensionFlags(runner, ["just a prompt"]);
+		const args = applyExtensionFlags(runner, ["just a prompt"]);
 		expect(runner.values.has("plan")).toBe(false);
+		expect(args?.messages).toEqual(["just a prompt"]);
 	});
-	it("recovers any colliding built-in flag's value, with no hardcoded name list (--model)", () => {
-		// `--model` is a built-in string flag never present in the removed
-		// BUILTIN_FLAG_NAMES-style list lookup: parseArgs routes it to the built-in
-		// branch so it never reaches unknownFlags, yet recovery must still deliver
-		// it purely by scanning argv.
+	it("shadows a colliding string built-in flag, delivering its value and keeping the message (--model)", () => {
+		// `--model` is a built-in string flag; the registered extension flag shadows
+		// it so the value reaches unknownFlags and the trailing message is preserved,
+		// without consulting any list of built-in names.
 		const runner = fakeRunner({ model: "string" });
-		applyExtensionFlags(runner, ["--model", "haiku", "do the task"]);
+		const args = applyExtensionFlags(runner, ["--model", "haiku", "do the task"]);
 		expect(runner.values.get("model")).toBe("haiku");
+		expect(args?.messages).toEqual(["do the task"]);
+		expect(args?.model).toBeUndefined();
 	});
-	it("does not recover a non-colliding flag-looking value in space form (mirrors parseArgs P1#2)", () => {
-		// The recovery scan honors parseArgs's rule: a flag-looking value in space
-		// form stays its own flag in both passes, so it must not be swallowed as the
-		// extension flag's value (pass it as --flag=value instead).
+	it("does not consume a non-colliding flag-looking value in space form (mirrors parseArgs P1#2)", () => {
+		// A flag-looking value in space form stays its own flag in both passes, so
+		// it must not be swallowed as the extension flag's value (use --flag=value).
 		const runner = fakeRunner({ "spawn-peer": "string" });
-		applyExtensionFlags(runner, ["--spawn-peer", "--print", "do the task"]);
+		const args = applyExtensionFlags(runner, ["--spawn-peer", "--print", "do the task"]);
 		expect(runner.values.has("spawn-peer")).toBe(false);
+		expect(args?.print).toBe(true);
+		expect(args?.messages).toEqual(["do the task"]);
 	});
 });
 describe("registerFlag with built-in-named flags (r3323473227)", () => {
