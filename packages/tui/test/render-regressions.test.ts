@@ -781,6 +781,37 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		}, 15_000);
+
+		it("keeps appended rows contiguous when a height grow coincides with new content", async () => {
+			// A terminal resize fires requestRender(), and streamed content fires
+			// its own requestRender(); the 16ms throttle coalesces them into a
+			// single frame that is both taller and longer. The diff/append-tail
+			// emitters position scrolled rows against the previous viewport top and
+			// hardware cursor row, both invalidated by the reflow — so the appended
+			// tail used to slip down by the height delta, leaving a blank gap.
+			const term = new VirtualTerminal(40, 12);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("line-", 16));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				term.resize(40, 24);
+				component.setLines(rows("line-", 19));
+				tui.requestRender();
+				await settle(term);
+
+				// 19 lines fit inside the 24-row viewport: rows 0..18 hold content,
+				// 19..23 stay blank — with no 4-row (height delta) displacement.
+				expect(visible(term)).toEqual([...rows("line-", 19), "", "", "", "", ""]);
+				const position = term.getBufferPosition();
+				expect(position.viewportY).toBe(position.baseY);
+			} finally {
+				tui.stop();
+			}
+		});
 	});
 
 	describe("scrollback integrity", () => {

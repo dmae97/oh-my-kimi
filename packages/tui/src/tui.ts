@@ -1430,14 +1430,14 @@ export class TUI extends Container {
 			return { kind: "viewportRepaint" };
 		}
 
-		// A height change that also grew the content cannot use the diff or
-		// append-tail emitters below: both position scrolled rows against the
-		// previous viewport top and hardware cursor row, which the reflow just
-		// invalidated, so the appended tail lands `height`-delta rows too low.
-		// Repaint the viewport at the new geometry instead; if content still
-		// overflows, defer the native scrollback rebuild to the next checkpoint.
-		if (heightChanged && !isTermuxSession() && !isMultiplexerSession()) {
-			if (newLines.length > height) this.#markNativeScrollbackDirty();
+		// A height change that also grew the content into a frame that now fits
+		// entirely on screen cannot use the diff or append-tail emitters below:
+		// both position scrolled rows against the previous viewport top and
+		// hardware cursor row, which the reflow just invalidated, so the appended
+		// tail lands `height`-delta rows too low. With no overflow there is no
+		// native scrollback to preserve, so repaint the viewport at the new
+		// geometry. (Height changes with overflow keep the existing deferral.)
+		if (heightChanged && newLines.length <= height && !isTermuxSession() && !isMultiplexerSession()) {
 			return { kind: "viewportRepaint" };
 		}
 
