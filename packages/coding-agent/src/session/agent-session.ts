@@ -8993,7 +8993,7 @@ export class AgentSession {
 			const msg = messages[i];
 			if (msg.role === "assistant") {
 				const assistantMsg = msg as AssistantMessage;
-				if (assistantMsg.usage) {
+				if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
 					lastUsage = assistantMsg.usage;
 					lastUsageIndex = i;
 					break;
