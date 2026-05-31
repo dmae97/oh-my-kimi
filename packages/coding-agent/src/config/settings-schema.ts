@@ -1705,6 +1705,26 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"ttsr.builtinRules": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "context",
+			label: "Builtin Rules",
+			description: "Load the default rules shipped with the agent (override individually with ttsr.disabledRules)",
+		},
+	},
+
+	"ttsr.disabledRules": {
+		type: "array",
+		default: [] as string[],
+		ui: {
+			tab: "context",
+			label: "Disabled Rules",
+			description: "Rule names to ignore entirely (applies to bundled defaults and your own rules)",
+		},
+	},
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Editing
 	// ────────────────────────────────────────────────────────────────────────
@@ -3299,6 +3319,10 @@ export interface TtsrSettings {
 	interruptMode: "never" | "prose-only" | "tool-only" | "always";
 	repeatMode: "once" | "after-gap";
 	repeatGap: number;
+	/** Bucketing-only (read by bucketRules, not the TtsrManager). */
+	builtinRules?: boolean;
+	/** Bucketing-only (read by bucketRules, not the TtsrManager). */
+	disabledRules?: string[];
 }
 
 export interface ExaSettings {

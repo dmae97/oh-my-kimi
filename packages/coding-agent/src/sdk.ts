@@ -38,6 +38,7 @@ import { type AsyncJob, AsyncJobManager, isBackgroundJobSupportEnabled } from ".
 import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
+import { bucketRules } from "./capability/rule-buckets";
 import { ModelRegistry } from "./config/model-registry";
 import {
 	formatModelString,
@@ -1045,21 +1046,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			options.rules !== undefined
 				? { items: options.rules, warnings: undefined }
 				: await loadCapability<Rule>(ruleCapability.id, { cwd });
-		const rulebookRules: Rule[] = [];
-		const alwaysApplyRules: Rule[] = [];
-		for (const rule of rulesResult.items) {
-			const isTtsrRule = rule.condition && rule.condition.length > 0 ? ttsrManager.addRule(rule) : false;
-			if (isTtsrRule) {
-				continue;
-			}
-			if (rule.alwaysApply === true) {
-				alwaysApplyRules.push(rule);
-				continue;
-			}
-			if (rule.description) {
-				rulebookRules.push(rule);
-			}
-		}
+		const { rulebookRules, alwaysApplyRules } = bucketRules(rulesResult.items, ttsrManager, {
+			builtinRules: ttsrSettings.builtinRules,
+			disabledRules: ttsrSettings.disabledRules,
+		});
 		if (existingSession.injectedTtsrRules.length > 0) {
 			ttsrManager.restoreInjected(existingSession.injectedTtsrRules);
 		}

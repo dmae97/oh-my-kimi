@@ -2,8 +2,8 @@ import { describe, expect, it } from "bun:test";
 import {
 	normalizeTinyModelDevice,
 	resolveTinyModelDevicePreference,
-	tinyModelDeviceLoadOrder,
 	type TinyModelDevice,
+	tinyModelDeviceLoadOrder,
 } from "../src/tiny/device";
 
 function expectedDefaultDevice(): TinyModelDevice {
