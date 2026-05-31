@@ -120,6 +120,13 @@ interface SpawnedSubprocess {
 	proc: Subprocess<"ignore", "inherit", "inherit">;
 	inbound: Set<(message: TinyTitleWorkerOutbound) => void>;
 	errors: Set<(error: Error) => void>;
+	/**
+	 * Flipped to `true` by {@link wrapSubprocess}'s `terminate()` right
+	 * before it SIGKILLs the child so `onExit` can distinguish the
+	 * expected hard-kill from a crash/OOM/external signal. Only the
+	 * latter is surfaced as a worker error.
+	 */
+	intentionalExit: { value: boolean };
 }
 
 /**
@@ -130,6 +137,7 @@ interface SpawnedSubprocess {
 export function createTinyTitleSubprocess(): SpawnedSubprocess {
 	const inbound = new Set<(message: TinyTitleWorkerOutbound) => void>();
 	const errors = new Set<(error: Error) => void>();
+	const intentionalExit = { value: false };
 	const proc = Bun.spawn({
 		cmd: tinyWorkerSpawnCmd(),
 		env: tinyWorkerEnv(),
@@ -142,19 +150,28 @@ export function createTinyTitleSubprocess(): SpawnedSubprocess {
 			for (const handler of inbound) handler(message as TinyTitleWorkerOutbound);
 		},
 		onExit(_proc, exitCode, signalCode) {
-			if (exitCode === 0 || exitCode === null) return;
-			const signalSuffix = signalCode ? ` (signal ${signalCode})` : "";
-			const err = new Error(`tiny model subprocess exited with code ${exitCode}${signalSuffix}`);
+			// Clean exit. The child only exits via SIGKILL in practice, but
+			// treat code 0 as a no-op for symmetry.
+			if (exitCode === 0) return;
+			// `exitCode === null` + non-null `signalCode` covers both the
+			// expected SIGKILL from `terminate()` AND external kills
+			// (SIGSEGV from a native crash, SIGKILL from the OOM killer, an
+			// operator `kill -9`, etc.). Swallow only the expected one;
+			// every other signal exit is a real worker death that must
+			// fault every in-flight request so callers don't await forever.
+			if (exitCode === null && intentionalExit.value) return;
+			const reason = exitCode !== null ? `code ${exitCode}` : `signal ${signalCode ?? "unknown"}`;
+			const err = new Error(`tiny model subprocess exited with ${reason}`);
 			for (const handler of errors) handler(err);
 		},
 	});
 	// Don't keep the parent event loop alive on account of an idle worker; the
 	// agent dispose path calls `terminate()` explicitly when shutting down.
 	proc.unref();
-	return { proc, inbound, errors };
+	return { proc, inbound, errors, intentionalExit };
 }
 
-function wrapSubprocess({ proc, inbound, errors }: SpawnedSubprocess): WorkerHandle {
+function wrapSubprocess({ proc, inbound, errors, intentionalExit }: SpawnedSubprocess): WorkerHandle {
 	return {
 		send(message) {
 			try {
@@ -179,6 +196,9 @@ function wrapSubprocess({ proc, inbound, errors }: SpawnedSubprocess): WorkerHan
 			// SIGTERM lets the subprocess try to clean up, which is exactly the
 			// codepath that crashes Bun on Windows. Hard-kill instead — the
 			// model lives in process memory and the OS reclaims everything.
+			// Flip the intentional-exit flag *before* killing so `onExit` can
+			// tell this apart from a crash or external SIGKILL.
+			intentionalExit.value = true;
 			try {
 				proc.kill("SIGKILL");
 			} catch {
