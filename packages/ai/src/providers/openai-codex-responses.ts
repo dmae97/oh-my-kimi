@@ -51,7 +51,6 @@ import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-ins
 import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
@@ -604,11 +603,7 @@ function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): C
 		: requestAbortController.signal;
 	const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 	const websocketIdleTimeoutMs = options?.streamIdleTimeoutMs ?? getCodexWebSocketIdleTimeoutMs();
-	const firstEventTimeoutMs =
-		options?.streamFirstEventTimeoutMs ??
-		(options?.streamIdleTimeoutMs === undefined
-			? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs)
-			: getStreamFirstEventTimeoutMs(idleTimeoutMs));
+	const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 	const websocketFirstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getCodexWebSocketFirstEventTimeoutMs();
 	const wrapCodexSseStream = (
 		source: AsyncGenerator<Record<string, unknown>>,

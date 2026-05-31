@@ -364,8 +364,10 @@ export interface StreamOptions {
 	 * event arrives, `streamIdleTimeoutMs` governs inter-event stalls. Falls
 	 * back to `PI_STREAM_FIRST_EVENT_TIMEOUT_MS` and then to a 100s default.
 	 * OpenAI-family transports additionally honor
-	 * `PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS` and use
-	 * `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS` as the first-event floor.
+	 * `PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS` as the most-specific override and
+	 * floor the first-event budget at the resolved idle (per-call
+	 * `streamIdleTimeoutMs` or `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS`) so slow local
+	 * OpenAI-compatible servers are not undercut during prompt processing.
 	 *
 	 * Iterator-level honored by: every built-in provider (via the lazy-stream
 	 * forwarder in `register-builtins`). SDK-request honored by:

@@ -24,7 +24,6 @@ import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-ins
 import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
@@ -124,10 +123,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			options?.onPayload?.(params);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs =
-				options?.streamFirstEventTimeoutMs ??
-				(options?.streamIdleTimeoutMs === undefined
-					? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs)
-					: getStreamFirstEventTimeoutMs(idleTimeoutMs));
+				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			rawRequestDump = {

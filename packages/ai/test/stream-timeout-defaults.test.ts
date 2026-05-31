@@ -105,16 +105,20 @@ describe("getStreamFirstEventTimeoutMs(idleTimeoutMs, fallbackMs)", () => {
 });
 
 describe("getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs, fallbackMs)", () => {
-	it("lets the OpenAI idle env widen a lower generic first-event timeout", () => {
+	it("floors the first-event budget at the caller-resolved idle when the generic env is lower", () => {
 		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "20";
-		Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = "84";
-		expect(getOpenAIStreamFirstEventTimeoutMs(84, 300_000)).toBe(84);
+		expect(getOpenAIStreamFirstEventTimeoutMs(1500, 100_000)).toBe(1500);
 	});
 
-	it("lets the OpenAI first-event env override the OpenAI idle env", () => {
+	it("honors PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS even when caller pins per-call idle", () => {
 		Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS = "42";
-		Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = "84";
-		expect(getOpenAIStreamFirstEventTimeoutMs(84, 300_000)).toBe(42);
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "20";
+		expect(getOpenAIStreamFirstEventTimeoutMs(5_000, 100_000)).toBe(42);
+	});
+
+	it("treats PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS=0 as an explicit watchdog disable", () => {
+		Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS = "0";
+		expect(getOpenAIStreamFirstEventTimeoutMs(1500, 100_000)).toBeUndefined();
 	});
 
 	it("falls back to the generic first-event env when OpenAI env vars are unset", () => {
@@ -122,10 +126,9 @@ describe("getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs, fallbackMs)", () => 
 		expect(getOpenAIStreamFirstEventTimeoutMs(undefined, 300_000)).toBe(42);
 	});
 
-	it("treats PI_OPENAI_STREAM_IDLE_TIMEOUT_MS=0 as an OpenAI watchdog disable", () => {
-		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "42";
-		Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = "0";
-		expect(getOpenAIStreamFirstEventTimeoutMs(undefined, 300_000)).toBeUndefined();
+	it("respects PI_STREAM_FIRST_EVENT_TIMEOUT_MS=0 disable when no OpenAI override is set", () => {
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "0";
+		expect(getOpenAIStreamFirstEventTimeoutMs(1500, 100_000)).toBeUndefined();
 	});
 });
 

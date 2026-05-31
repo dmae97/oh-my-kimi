@@ -35,7 +35,6 @@ import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } fr
 import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
@@ -230,10 +229,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			const { params } = buildParams(model, context, options, providerSessionState, baseUrl);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs =
-				options?.streamFirstEventTimeoutMs ??
-				(options?.streamIdleTimeoutMs === undefined
-					? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs)
-					: getStreamFirstEventTimeoutMs(idleTimeoutMs));
+				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			options?.onPayload?.(params);

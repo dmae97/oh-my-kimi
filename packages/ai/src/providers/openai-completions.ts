@@ -48,7 +48,6 @@ import {
 import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
@@ -425,10 +424,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			const idleTimeoutFallbackMs = getOpenAICompletionsStreamIdleTimeoutFallbackMs(model);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs(idleTimeoutFallbackMs);
 			const firstEventTimeoutMs =
-				options?.streamFirstEventTimeoutMs ??
-				(options?.streamIdleTimeoutMs === undefined
-					? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs, idleTimeoutFallbackMs)
-					: getStreamFirstEventTimeoutMs(idleTimeoutMs));
+				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			const {
