@@ -1560,6 +1560,49 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("rebuilds offscreen edits into clean scrollback while eager rebuild is enabled (active tool)", async () => {
+			// The streaming-text default defers offscreen edits on POSIX (no yank, but a
+			// growing/re-laying-out tool result leaves stale duplicated rows above the
+			// fold). While a foreground tool is active the agent opts into eager rebuild:
+			// offscreen edits rebuild native scrollback cleanly even though the viewport
+			// position is unknown (a snap to the tail is acceptable mid-tool).
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			try {
+				await withEnvPatch({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
+					const term = new UnknownViewportTerminal(40, 5, 200);
+					const tui = new TUI(term);
+					const component = new MutableLinesComponent(rows("row-", 16));
+					tui.addChild(component);
+
+					try {
+						tui.start();
+						await settle(term);
+						// Default (no active tool) would defer the offscreen edit; confirm the flag flips behavior.
+						tui.setEagerNativeScrollbackRebuild(true);
+
+						// A streaming tool result re-laying out: an offscreen header changes and the
+						// block grows past the fold in the same frame.
+						component.setLines(["HEADER-EDITED", ...rows("row-", 16).slice(1), ...rows("tail-", 4)]);
+						tui.requestRender();
+						await settle(term);
+
+						const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+						// History was rebuilt at the new content: offscreen edit reflected, no stale copy.
+						expect(buffer).toContain("HEADER-EDITED");
+						expect(buffer).not.toContain("row-0");
+						// The grown tail is reachable exactly once — no duplicated rows above the viewport.
+						expect(buffer.filter(line => line === "tail-3")).toHaveLength(1);
+						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
+					} finally {
+						tui.stop();
+					}
+				});
+			} finally {
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			}
+		});
+
 		it("refreshes deferred native scrollback when the native viewport reaches bottom", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);

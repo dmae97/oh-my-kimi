@@ -331,6 +331,7 @@ export class TUI extends Container {
 	#clearScrollbackOnNextRender = false;
 	#forceViewportRepaintOnNextRender = false;
 	#allowUnknownViewportMutationOnNextRender = false;
+	#eagerNativeScrollbackRebuild = false;
 	#hasEverRendered = false;
 	#stopped = false;
 
@@ -376,6 +377,21 @@ export class TUI extends Container {
 	 */
 	setClearOnShrink(enabled: boolean): void {
 		this.#clearOnShrink = enabled;
+	}
+
+	/**
+	 * When enabled, live render frames rebuild native scrollback on offscreen and
+	 * structural changes even when the viewport position is unobservable (POSIX,
+	 * where `isNativeViewportAtBottom()` is `undefined`), instead of deferring to a
+	 * non-destructive repaint. This trades the anti-yank guarantee for a clean,
+	 * duplicate-free history and is meant for windows where output above the fold
+	 * is actively re-rendering — e.g. a tool whose result is still streaming and
+	 * re-laying-out rows that have already scrolled into history. A snap to the tail
+	 * is acceptable there. A terminal that can report a *known*-scrolled viewport
+	 * (Windows) still defers; only the unknown case is forced to rebuild.
+	 */
+	setEagerNativeScrollbackRebuild(enabled: boolean): void {
+		this.#eagerNativeScrollbackRebuild = enabled;
 	}
 
 	setFocus(component: Component | null): void {
@@ -1164,7 +1180,8 @@ export class TUI extends Container {
 		const prevHardwareCursorRow = this.#hardwareCursorRow;
 		const widthChanged = this.#previousWidth > 0 && this.#previousWidth !== width;
 		const heightChanged = this.#previousHeight > 0 && this.#previousHeight !== height;
-		const allowUnknownViewportMutation = this.#allowUnknownViewportMutationOnNextRender;
+		const allowUnknownViewportMutation =
+			this.#allowUnknownViewportMutationOnNextRender || this.#eagerNativeScrollbackRebuild;
 		this.#allowUnknownViewportMutationOnNextRender = false;
 
 		// 3. Classify intent.
