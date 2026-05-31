@@ -328,6 +328,7 @@ export class TUI extends Container {
 	#nativeScrollbackDirty = false;
 	#fullRedrawCount = 0;
 	#clearScrollbackOnNextRender = false;
+	#previousLinesDroppedForForcedRender = false;
 	#allowUnknownViewportMutationOnNextRender = false;
 	#hasEverRendered = false;
 	#stopped = false;
@@ -705,6 +706,7 @@ export class TUI extends Container {
 	#prepareForcedRender(clearScrollback: boolean): void {
 		this.#clearScrollbackOnNextRender ||= clearScrollback;
 		this.#previousLines = [];
+		this.#previousLinesDroppedForForcedRender = true;
 		this.#previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
 		this.#previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
 		this.#cursorRow = 0;
@@ -1256,9 +1258,11 @@ export class TUI extends Container {
 		if (this.#clearScrollbackOnNextRender) return { kind: "sessionReplace" };
 
 		// Forced reset (requestRender(true)) without scrollback wipe: previous
-		// lines were dropped, so no diff is possible. Repaint visible rows only
-		// — emitting the transcript here would duplicate it into scrollback.
-		if (this.#previousLines.length === 0) return { kind: "viewportRepaint" };
+		// lines were intentionally dropped, so no diff is possible. Repaint visible
+		// rows only — emitting the transcript here would duplicate it into scrollback.
+		// A legitimately empty previous frame must still diff as an append so newly
+		// expanded content is reachable through native scrollback.
+		if (this.#previousLinesDroppedForForcedRender) return { kind: "viewportRepaint" };
 		if (this.#nativeScrollbackDirty && this.#nativeViewportIsAtBottom(this.#readNativeViewportAtBottom())) {
 			return { kind: "historyRebuild" };
 		}
@@ -1300,11 +1304,17 @@ export class TUI extends Container {
 		) {
 			// A checkpoint replay is followed by one frame where transient live chrome
 			// (status/footer rows) may be inserted inside the visible suffix and then
-			// disappear; repaint it in place so it never enters scrollback. Offscreen
-			// inserts or real appended tails still need a replay, otherwise history loses
-			// rows while the viewport looks correct.
+			// disappear; repaint it in place so it never enters scrollback. If the
+			// insertion grows the overflow boundary, native history would lose rows
+			// while the viewport looks correct, so rebuild instead.
 			const appendedTailStart = this.#findAppendedTailStart(newLines);
-			if (appendedTailStart === newLines.length && diff.firstChanged >= prevViewportTop) {
+			const overflowBefore = Math.max(0, this.#previousLines.length - height);
+			const overflowAfter = Math.max(0, newLines.length - height);
+			if (
+				appendedTailStart === newLines.length &&
+				diff.firstChanged >= prevViewportTop &&
+				overflowAfter <= overflowBefore
+			) {
 				return { kind: "viewportRepaint" };
 			}
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
@@ -1369,6 +1379,12 @@ export class TUI extends Container {
 				if (addedCount !== tailAppendCount) {
 					return { kind: "historyRebuild" };
 				}
+			}
+			if (
+				newLines.length !== this.#previousLines.length &&
+				this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewportMutation)
+			) {
+				return { kind: "historyRebuild" };
 			}
 		}
 
@@ -1532,6 +1548,7 @@ export class TUI extends Container {
 	 */
 	#commit(lines: string[], width: number, height: number, viewportTop: number, hardwareCursorRow: number): void {
 		this.#previousLines = lines;
+		this.#previousLinesDroppedForForcedRender = false;
 		this.#previousWidth = width;
 		this.#previousHeight = height;
 		this.#cursorRow = Math.max(0, lines.length - 1);

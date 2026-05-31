@@ -59,6 +59,7 @@ type OperationKind =
 	| "appendRepeatedTail"
 	| "injectBlankCluster"
 	| "appendDuplicateOfExisting"
+	| "highWaterPreviewCollapse"
 	| "scrollUp"
 	| "scrollToBottom"
 	| "scrollPartial"
@@ -438,6 +439,27 @@ class StressModel {
 		return { nextLength };
 	}
 
+	beginHighWaterPreview(height: number): JsonObject {
+		while (this.lines.length < height + 8) {
+			this.lines.push(this.#freshLine("seed"));
+		}
+		const start = this.lines.length;
+		const count = this.#rng.int(height + 4, height + 14);
+		for (let i = 0; i < count; i++) {
+			this.lines.push(this.#freshLine("preview"));
+		}
+		return { start, count };
+	}
+
+	collapseHighWaterPreview(start: number, count: number): JsonObject {
+		const removed = this.lines.splice(start, count);
+		this.#ensureLine();
+		const editedIndex = this.lines.length - 1;
+		const before = this.lines[editedIndex]?.text ?? "";
+		this.lines[editedIndex] = this.#freshLine("done");
+		return { start, count: removed.length, editedIndex, before, after: this.lines[editedIndex]?.text ?? "" };
+	}
+
 	swapOffscreenRows(height: number): JsonObject {
 		const offscreenLimit = this.lines.length - height;
 		if (offscreenLimit < 2) return { swapped: 0 };
@@ -635,6 +657,7 @@ class StressDriver {
 	#overlays: StressOverlayEntry[] = [];
 	#nextOverlayId = 0;
 	#opLog: OperationLogEntry[] = [];
+	#nativeScrollbackAuditBlocked = false;
 
 	constructor(scenario: Scenario) {
 		this.#scenario = scenario;
@@ -714,8 +737,22 @@ class StressDriver {
 	}
 
 	#chooseOperation(index: number, before: Snapshot): OperationKind {
-		if (this.#scenario.strictScrollback && before.atBottom && before.frame.length > before.height + 8 && index % 43 === 0) {
+		if (
+			this.#scenario.strictScrollback &&
+			before.atBottom &&
+			before.frame.length > before.height + 8 &&
+			index % 43 === 0
+		) {
 			return "collapseToFew";
+		}
+		if (
+			this.#scenario.strictScrollback &&
+			before.atBottom &&
+			before.frame.length > before.height + 8 &&
+			!this.#hasVisibleOverlay() &&
+			index % 37 === 0
+		) {
+			return "highWaterPreviewCollapse";
 		}
 		if (this.#scenario.strictScrollback && before.atBottom && index % 41 === 0) {
 			return "offscreenEditAppendRepeatedTail";
@@ -759,6 +796,7 @@ class StressDriver {
 		this.#pushWeighted(weighted, "rotateUp", 4);
 		this.#pushWeighted(weighted, "swapOffscreenRows", 3);
 		this.#pushWeighted(weighted, "collapseToFew", 1);
+		this.#pushWeighted(weighted, "highWaterPreviewCollapse", 2);
 		this.#pushWeighted(weighted, "resizeBoth", 2);
 		this.#pushWeighted(weighted, "resizeNoop", 1);
 		return this.#rng.pick(weighted);
@@ -804,6 +842,8 @@ class StressDriver {
 				return await this.#applyContent(kind, this.#model.injectBlankCluster(), true);
 			case "appendDuplicateOfExisting":
 				return await this.#applyContent(kind, this.#model.appendDuplicateOfExisting(), true);
+			case "highWaterPreviewCollapse":
+				return await this.#highWaterPreviewCollapse();
 			case "scrollUp":
 				return await this.#scrollUp();
 			case "scrollToBottom":
@@ -877,6 +917,26 @@ class StressDriver {
 				allowUnknownViewportMutation ? { allowUnknownViewportMutation: true } : undefined,
 			);
 		}
+	}
+
+	async #highWaterPreviewCollapse(): Promise<AppliedOperation> {
+		const begin = this.#model.beginHighWaterPreview(this.#term.rows);
+		this.#renderContentFrame();
+		await settle(this.#term);
+		const start = typeof begin.start === "number" ? begin.start : 0;
+		const count = typeof begin.count === "number" ? begin.count : 0;
+		const collapse = this.#model.collapseHighWaterPreview(start, count);
+		this.#renderContentFrame();
+		await settle(this.#term);
+		return {
+			kind: "highWaterPreviewCollapse",
+			detail: { begin, collapse },
+			mutatesContent: true,
+			checksRowAccounting: false,
+			geometryChanged: false,
+			forcedRender: false,
+			checkpoint: false,
+		};
 	}
 
 	async #coalescedBurst(): Promise<AppliedOperation> {
@@ -1442,16 +1502,16 @@ class StressDriver {
 	}
 
 	#assertNativeScrollbackReplay(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
-		if (!this.#scenario.strictScrollback || this.#hasVisibleOverlay()) return;
-		if (!after.atBottom || op.geometryChanged) return;
-		if (!op.mutatesContent && !op.forcedRender && !op.checkpoint) return;
-		const expected = expectedScrollbackBuffer(after.frame, after.height, after.buffer.length);
-		if (expected === null) {
-			this.#fail("native scrollback shorter than logical frame", op, before, after, index, {
-				expectedMinimumLength: Math.max(after.height, after.frame.length),
-				actualLength: after.buffer.length,
-			});
+		if (!this.#scenario.strictScrollback) return;
+		if (op.geometryChanged) {
+			this.#nativeScrollbackAuditBlocked = true;
+			return;
 		}
+		if (this.#hasVisibleOverlay()) return;
+		if (this.#nativeScrollbackAuditBlocked && !op.checkpoint) return;
+		if (!after.atBottom) return;
+		if (!op.mutatesContent && !op.forcedRender && !op.checkpoint) return;
+		const expected = expectedScrollbackBuffer(after.frame, after.height);
 		if (!sameLines(after.buffer, expected)) {
 			const mismatch = firstMismatchIndex(after.buffer, expected);
 			this.#fail("native scrollback buffer fidelity", op, before, after, index, {
@@ -1462,6 +1522,7 @@ class StressDriver {
 				actualWindow: windowAround(after.buffer, mismatch),
 			});
 		}
+		this.#nativeScrollbackAuditBlocked = false;
 
 		const probes = scrollbackProbePositions(after.position.baseY, after.frame.length, after.height);
 		try {
@@ -1563,15 +1624,9 @@ function windowAround(lines: readonly string[], center: number): string[] {
 	return lines.slice(start, end);
 }
 
-function expectedScrollbackBuffer(
-	frame: readonly string[],
-	height: number,
-	actualLength: number,
-): string[] | null {
-	const minimumLength = Math.max(height, frame.length);
-	if (actualLength < minimumLength) return null;
+function expectedScrollbackBuffer(frame: readonly string[], height: number): string[] {
 	const expected = [...frame];
-	for (let i = frame.length; i < actualLength; i++) {
+	while (expected.length < height) {
 		expected.push("");
 	}
 	return expected;

@@ -237,6 +237,27 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+
+		it("appends overflowing content after a legitimately empty previous frame", async () => {
+			const term = new VirtualTerminal(20, 3);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent([]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				component.setLines(["A", "B", "C", "D", "E"]);
+				tui.requestRender();
+				await settle(term);
+
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(["A", "B", "C", "D", "E"]);
+				expect(visible(term)).toEqual(["C", "D", "E"]);
+			} finally {
+				tui.stop();
+			}
+		});
 	});
 
 	describe("resize + viewport behavior", () => {
