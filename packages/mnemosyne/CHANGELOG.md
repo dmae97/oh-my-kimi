@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.7.2] - 2026-05-31
+
 ### Fixed
 
 - Fixed Windows startup crashes by keeping fastembed's older ONNX Runtime binding lazy until local embeddings are used.

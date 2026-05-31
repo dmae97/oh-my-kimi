@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.7.2] - 2026-05-31
 ### Added
 
 - Added `providers.autoThinkingModel` setting so users can choose the `auto` thinking classifier backend (online smol or local tiny-memory model)
