@@ -56,20 +56,27 @@ describe("MCP reconnect storm (issue #1592)", () => {
 			// produced thousands of processes within a second; with the fix the
 			// circuit breaker caps the per-server spawn budget.
 			await Bun.sleep(3000);
+
+			const spawns = countSpawns();
+			// `RECONNECT_BURST_LIMIT` (5) is the per-server reconnect cap inside
+			// the burst window. The initial connect from `connectServers` adds
+			// one more spawn. On the "initialize + tools/list succeed, then
+			// exit" path the inner retry-with-backoff in `#doReconnect` never
+			// fires, so the steady-state ceiling is
+			// `1 + RECONNECT_BURST_LIMIT + 1` ≈ 7 spawns. 10 leaves room for
+			// scheduling jitter without weakening the bound.
+			expect(spawns).toBeLessThanOrEqual(10);
+			// Sanity check: we did spawn at least once. If the fixture never ran
+			// the regression target is wrong and the test is meaningless.
+			expect(spawns).toBeGreaterThan(0);
+
+			// Once the breaker trips, the stale connection must be torn down so
+			// `getConnectionStatus`/`waitForConnection` cannot hand callers a
+			// dead transport. Tools stay registered in the manager's tool list
+			// so the user can recover via `/mcp reconnect`.
+			expect(manager.getConnectionStatus("crashy")).toBe("disconnected");
 		} finally {
 			await manager.disconnectAll();
 		}
-
-		const spawns = countSpawns();
-		// `RECONNECT_BURST_LIMIT` (5) is the per-server reconnect cap inside
-		// the burst window. The initial connect from `connectServers` adds one
-		// more spawn. On the "initialize + tools/list succeed, then exit" path
-		// the inner retry-with-backoff in `#doReconnect` never fires, so the
-		// steady-state ceiling is `1 + RECONNECT_BURST_LIMIT + 1` ≈ 7 spawns.
-		// 10 leaves room for scheduling jitter without weakening the bound.
-		expect(spawns).toBeLessThanOrEqual(10);
-		// Sanity check: we did spawn at least once. If the fixture never ran
-		// the regression target is wrong and the test is meaningless.
-		expect(spawns).toBeGreaterThan(0);
 	}, 15_000);
 });

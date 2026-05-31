@@ -795,10 +795,21 @@ export class MCPManager {
 				crashes: recent.length,
 				windowMs: RECONNECT_BURST_WINDOW_MS,
 			});
-			// Detach the closed connection's onClose so a late EOF event on a
-			// process we already gave up on cannot re-trigger this path.
+			// Tear down the stale connection so `getConnectionStatus()` no
+			// longer reports it as "connected" and `waitForConnection()` does
+			// not hand a closed transport to callers. Tools stay registered
+			// in `#tools` — the user can recover with `/mcp reconnect <name>`
+			// once they've fixed the underlying misconfiguration. Mirrors the
+			// teardown in `#doReconnect`: detach `onClose` first so the
+			// transport's own `close()` cannot re-arm this path.
 			const stale = this.#connections.get(name);
-			if (stale) stale.transport.onClose = undefined;
+			if (stale) {
+				stale.transport.onClose = undefined;
+				void stale.transport.close().catch(() => {});
+				this.#connections.delete(name);
+			}
+			this.#pendingConnections.delete(name);
+			this.#pendingToolLoads.delete(name);
 			return true;
 		}
 		return false;
