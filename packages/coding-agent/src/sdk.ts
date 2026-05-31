@@ -1960,8 +1960,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				sessionManager.appendModelChange(`${model.provider}/${model.id}`);
 			}
 			if (!autoThinking) {
-				// `auto` is never written to the session log; resume reads it from the
-				// `defaultThinkingLevel` setting instead, keeping `hasThinkingEntry` false.
+				// Do not write the `auto` selector before the first turn resolves; auto
+				// classification persists its concrete effort once a real user turn runs.
 				sessionManager.appendThinkingLevelChange(effectiveThinkingLevel);
 			}
 			if (initialServiceTier) {

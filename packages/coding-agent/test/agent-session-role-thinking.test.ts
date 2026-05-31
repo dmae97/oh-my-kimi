@@ -10,6 +10,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { TempDir } from "@oh-my-pi/pi-utils";
 import * as autoThinkingClassifier from "../src/auto-thinking/classifier";
 import { AUTO_THINKING, clampAutoThinkingEffort, resolveProvisionalAutoLevel } from "../src/thinking";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 describe("AgentSession role model thinking behavior", () => {
 	let tempDir: TempDir;
@@ -261,6 +262,51 @@ describe("AgentSession role model thinking behavior", () => {
 		expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
 		expect(session.thinkingLevel).toBe(Effort.Medium);
 		expect(session.autoResolvedThinkingLevel()).toBe(Effort.Medium);
+		expect(session.agent.state.thinkingLevel).toBe(Effort.Medium);
+	});
+
+	it("restores the last resolved auto effort instead of pending auto on resume", async () => {
+		const model = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+				thinkingLevel: resolveProvisionalAutoLevel(model),
+			},
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth-auto-resume.db"));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-auto-resume.yml"));
+		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+		sessionSettings = Settings.isolated();
+		sessionSettings.set("defaultThinkingLevel", AUTO_THINKING);
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: sessionSettings,
+			modelRegistry,
+			thinkingLevel: AUTO_THINKING,
+		});
+		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+		vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.Medium);
+
+		await session.prompt("Implement a focused parser fix");
+
+		expect(session.isAutoThinking).toBe(true);
+		expect(session.sessionManager.buildSessionContext().thinkingLevel).toBe(Effort.Medium);
+		session.sessionManager.appendMessage(createAssistantMessage("done"));
+
+		const sessionFile = session.sessionFile;
+		expect(sessionFile).toBeDefined();
+		await session.sessionManager.flush();
+
+		expect(await session.switchSession(sessionFile!)).toBe(true);
+		expect(session.isAutoThinking).toBe(false);
+		expect(session.configuredThinkingLevel()).toBe(Effort.Medium);
+		expect(session.thinkingLevel).toBe(Effort.Medium);
 		expect(session.agent.state.thinkingLevel).toBe(Effort.Medium);
 	});
 

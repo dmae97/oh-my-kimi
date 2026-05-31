@@ -5340,9 +5340,10 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Set the thinking level. `auto` enables per-turn classification (session-level,
-	 * never written to the session log); a concrete level clears auto. The effective
-	 * metadata-clamped level is saved to the session/settings only when it changes.
+	 * Set the thinking level. `auto` enables per-turn classification; the selector
+	 * itself is never written to the session log, but resolved concrete levels are
+	 * persisted when real user turns are classified so resumed sessions keep the
+	 * last resolved effort instead of reverting to pending auto.
 	 */
 	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
 		if (level === AUTO_THINKING) {
@@ -5454,9 +5455,13 @@ export class AgentSession {
 
 		const effort = resolved ?? resolveProvisionalAutoLevel(model);
 		if (effort === undefined) return;
+		const shouldPersistResolution = this.#autoResolvedLevel !== effort;
 		this.#autoResolvedLevel = effort;
 		this.#thinkingLevel = effort;
 		this.agent.setThinkingLevel(toReasoningEffort(effort));
+		if (shouldPersistResolution) {
+			this.sessionManager.appendThinkingLevelChange(effort);
+		}
 		this.#emit({
 			type: "thinking_level_changed",
 			thinkingLevel: effort,
@@ -8181,6 +8186,7 @@ export class AgentSession {
 		promptText: string;
 		onTextDelta?: (delta: string) => void;
 		signal?: AbortSignal;
+		dedupeReply?: boolean;
 	}): Promise<{ replyText: string; assistantMessage: AssistantMessage }> {
 		const model = this.model;
 		if (!model) {
@@ -8243,7 +8249,10 @@ export class AgentSession {
 		if (!assistantMessage) {
 			throw new Error("Ephemeral turn ended without a final message");
 		}
-		return { replyText: dedupeIrcReply(replyText.trim()), assistantMessage };
+		return {
+			replyText: args.dedupeReply === false ? replyText.trim() : dedupeIrcReply(replyText.trim()),
+			assistantMessage,
+		};
 	}
 
 	/**
@@ -8471,8 +8480,8 @@ export class AgentSession {
 				.some(entry => entry.type === "service_tier_change");
 			const defaultThinkingLevel = this.settings.get("defaultThinkingLevel");
 			const configuredServiceTier = this.settings.get("serviceTier");
-			// Session log entries only ever store concrete levels (auto is never
-			// written), so `auto` can only arrive via the settings default.
+			// Session log entries store only concrete levels. The `auto` selector can
+			// only arrive via settings when the branch has no resolved thinking entry.
 			const restoredThinkingLevel: ConfiguredThinkingLevel | undefined = hasThinkingEntry
 				? (sessionContext.thinkingLevel as ThinkingLevel | undefined)
 				: defaultThinkingLevel;
