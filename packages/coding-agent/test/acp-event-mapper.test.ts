@@ -93,9 +93,6 @@ class ReplayTestSession {
 	}
 
 	async refreshMCPTools(_tools: unknown): Promise<void> {}
-	configuredThinkingLevel(): string | undefined {
-		return this.thinkingLevel;
-	}
 }
 
 describe("ACP event mapper", () => {

@@ -10,6 +10,7 @@
 
 - Updated the interactive thinking selectors in model/model-role pickers and ACP thinking options to include `auto` as a selectable level
 - Updated footer and status-line rendering to show `auto` while auto-thinking is being resolved and `auto → <level>` once it resolves
+- Changed the local tiny-model device default to CPU on every platform; explicit `providers.tinyModelDevice` / `PI_TINY_DEVICE` values still opt into accelerated ONNX providers.
 
 ### Fixed
 

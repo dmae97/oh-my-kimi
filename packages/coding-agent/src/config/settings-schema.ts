@@ -2960,7 +2960,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "providers",
 			label: "Tiny Model Device",
 			description:
-				"ONNX execution provider for local tiny models (titles + memory). Default picks DirectML on Windows, CUDA on Linux x64, CPU elsewhere. The PI_TINY_DEVICE env var overrides this.",
+				"ONNX execution provider for local tiny models (titles + memory). Default uses CPU-only inference. The PI_TINY_DEVICE env var overrides this.",
 			options: TINY_MODEL_DEVICE_SETTING_OPTIONS,
 		},
 	},

@@ -1315,10 +1315,12 @@ export class AcpAgent implements Agent {
 		];
 	}
 	#getConfiguredThinkingLevel(session: AgentSession): string | undefined {
-		const configuredThinkingLevel = (session as { configuredThinkingLevel?: () => string | undefined }).configuredThinkingLevel;
-		return typeof configuredThinkingLevel === "function" ? configuredThinkingLevel.call(session) : session.thinkingLevel;
+		const configuredThinkingLevel = (session as { configuredThinkingLevel?: () => string | undefined })
+			.configuredThinkingLevel;
+		return typeof configuredThinkingLevel === "function"
+			? configuredThinkingLevel.call(session)
+			: session.thinkingLevel;
 	}
-
 
 	#toThinkingConfigValue(value: string | undefined): string {
 		return value && value !== "inherit" ? value : THINKING_OFF;

@@ -27,12 +27,6 @@ const DEVICE_VALUES: Record<TinyModelDevice, true> = {
 	"webnn-cpu": true,
 };
 
-function defaultTinyModelDevice(): TinyModelDevice {
-	if (process.platform === "win32") return "dml";
-	if (process.platform === "linux" && process.arch === "x64") return "cuda";
-	return CPU_DEVICE;
-}
-
 function usesDarwinWorkerWebGpu(device: TinyModelDevice): boolean {
 	return process.platform === "darwin" && (device === "gpu" || device === "webgpu" || device === "auto");
 }
@@ -51,7 +45,7 @@ export function resolveTinyModelDevicePreference(
 	value: string | undefined = $env.PI_TINY_DEVICE,
 ): TinyModelDevicePreference {
 	return {
-		device: normalizeTinyModelDevice(value) ?? defaultTinyModelDevice(),
+		device: normalizeTinyModelDevice(value) ?? CPU_DEVICE,
 		raw: value,
 	};
 }
@@ -62,7 +56,7 @@ export function tinyModelDeviceLoadOrder(preference: TinyModelDevicePreference):
 	return [preference.device, CPU_DEVICE];
 }
 
-/** Sentinel `providers.tinyModelDevice` value meaning "use the built-in platform default". */
+/** Sentinel `providers.tinyModelDevice` value meaning "use the built-in CPU default". */
 export const TINY_MODEL_DEVICE_DEFAULT = "default";
 
 /** Accepted values for the `providers.tinyModelDevice` setting (validation + UI). */
@@ -85,7 +79,7 @@ export const TINY_MODEL_DEVICE_SETTING_VALUES = [
 
 /** Submenu metadata for the `providers.tinyModelDevice` setting. */
 export const TINY_MODEL_DEVICE_SETTING_OPTIONS = [
-	{ value: "default", label: "Default", description: "DirectML on Windows, CUDA on Linux x64, CPU elsewhere" },
+	{ value: "default", label: "Default", description: "CPU-only inference" },
 	{ value: "gpu", label: "GPU", description: "Accelerated provider (WebGPU/Metal, CUDA, or DirectML)" },
 	{ value: "cpu", label: "CPU", description: "CPU-only inference" },
 	{ value: "metal", label: "Metal", description: "WebGPU alias for Apple GPUs" },
@@ -108,7 +102,7 @@ export const TINY_MODEL_DEVICE_SETTING_OPTIONS = [
 /**
  * Map a `providers.tinyModelDevice` setting value onto a `PI_TINY_DEVICE` env
  * value for the worker. Returns `undefined` for the default sentinel so the
- * worker keeps its built-in platform default; the worker still validates the
+ * worker keeps its built-in CPU default; the worker still validates the
  * forwarded value via {@link normalizeTinyModelDevice}.
  */
 export function tinyModelDeviceSettingToEnv(value: string | undefined): string | undefined {
