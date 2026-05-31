@@ -1234,6 +1234,8 @@ function handleToolCallArgumentsDone(
 	if (typeof args === "string") {
 		currentBlock.partialJson = args;
 		currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+		delete (currentBlock as { partialJson?: string }).partialJson;
+		delete (currentBlock as { lastParseLen?: number }).lastParseLen;
 	}
 }
 
@@ -1312,6 +1314,10 @@ function handleOutputItemDone(
 			name: item.name,
 			arguments: parseStreamingJson(item.arguments || "{}"),
 		};
+		if (runtime.currentBlock?.type === "toolCall") {
+			delete (runtime.currentBlock as { partialJson?: string }).partialJson;
+			delete (runtime.currentBlock as { lastParseLen?: number }).lastParseLen;
+		}
 		runtime.canSafelyReplayWebsocketOverSse = false;
 		stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
 		return;
