@@ -10,6 +10,7 @@ It covers tool behavior, runner lifecycle, environment handling, execution seman
 - Subprocess kernel client: `src/eval/py/kernel.ts`
 - Python wrapper / NDJSON server: `src/eval/py/runner.py`
 - Prelude helpers loaded into every kernel: `src/eval/py/prelude.py`
+- Host-side subagent helper bridge: `src/eval/agent-bridge.ts`
 - MIME bundle renderer (text + structured outputs): `src/eval/py/display.ts`
 - Interactive-mode renderer for user-triggered Python runs: `src/modes/components/eval-execution.ts`
 - Runtime/env filtering and Python resolution: `src/eval/py/runtime.ts`
@@ -158,6 +159,8 @@ The runner additionally receives `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-
 `PI_PY` and `PI_JS` use normal boolean flag parsing. If either env var is set, the env pair overrides the per-key settings; an unset member of the pair defaults to enabled.
 
 If Python preflight fails and `eval.js` is enabled, `eval` remains available for `js` cells; `py` cells fail with a Python-backend availability error.
+
+Python prelude helpers include `agent(prompt, *, agent_type="task", model=None, context=None, label=None, schema=None)`. It synchronously calls the host bridge, runs one subagent through the task executor, and returns the final text. When `schema` is supplied, the helper parses the subagent's JSON output and returns the object.
 
 ## Execution flow and cancellation/timeout
 

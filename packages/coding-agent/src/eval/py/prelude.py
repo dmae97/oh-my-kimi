@@ -479,3 +479,26 @@ if "__omp_prelude_loaded__" not in globals():
         res = _bridge_call("__llm__", args)
         text = res.get("text") if isinstance(res, dict) else res
         return json.loads(text) if schema is not None else text
+
+    def agent(prompt, *, agent_type="task", model=None, context=None, label=None, schema=None):
+        """Run a subagent and return its final output.
+
+        `agent_type` selects the subagent definition (default "task"). Pass
+        `model` to override that agent's model, `context` for shared background,
+        `label` for the output artifact id, and `schema` to request structured
+        JSON output; when `schema` is supplied the parsed object is returned.
+        """
+        args = {"prompt": prompt}
+        if agent_type is not None:
+            args["agentType"] = agent_type
+        if model is not None:
+            args["model"] = model
+        if context is not None:
+            args["context"] = context
+        if label is not None:
+            args["label"] = label
+        if schema is not None:
+            args["schema"] = schema
+        res = _bridge_call("__agent__", args)
+        text = res.get("text") if isinstance(res, dict) else res
+        return json.loads(text) if schema is not None else text

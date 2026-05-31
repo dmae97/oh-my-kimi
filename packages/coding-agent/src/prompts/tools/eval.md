@@ -46,6 +46,13 @@ tool.<name>(args) → unknown
     Invoke any session tool by name. `args` is the tool's parameter object.
 llm(prompt, model?="default", system?=None, schema?=None) → str | dict
     Oneshot, stateless LLM call (no history, no tools). `model` picks a tier: "smol" (fast), "default" (this session's model), "slow" (most capable). Pass `system` for a system prompt. Pass a JSON-Schema `schema` to force structured output and get the parsed object back; otherwise returns the completion text.
+agent(prompt, agent_type?="task", model?=None, context?=None, label?=None, schema?=None) → str | dict
+    Run a subagent and return its final output. Defaults to the bundled "task" agent; pass `agent_type`/`agentType` for another discovered agent. Pass a JSON-Schema `schema` to force structured output and get the parsed object back.
+{{#if js}}parallel(thunks, { concurrency?=4 }) → list
+    Run async thunks through a bounded pool (default concurrency 4, max 16), preserving input order and propagating failures.
+pipeline(items, ...stages, { concurrency?=4 }) → list
+    Apply async stage functions to each item with the same bounded-pool semantics; stage failures propagate.
+{{/if}}
 ```
 </prelude>
 
