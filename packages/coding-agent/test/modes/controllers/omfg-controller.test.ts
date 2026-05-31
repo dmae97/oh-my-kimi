@@ -11,6 +11,8 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { Container, type TUI } from "@oh-my-pi/pi-tui";
 
 const PROJECT_OPTION = "This project (.omp/rules)";
+const GLOBAL_OPTION = "Global — all projects (~/.omp/agent/rules)";
+const AMEND_OPTION = "Amend with feedback…";
 
 const usage: Usage = {
 	input: 0,
@@ -37,12 +39,15 @@ type RunEphemeralTurn = (args: RunEphemeralTurnArgs) => Promise<RunEphemeralTurn
 type AddRule = (rule: Rule) => boolean;
 type ShowHookSelector = (title: string, options: string[]) => Promise<string | undefined>;
 type ShowHookConfirm = (title: string, message: string) => Promise<boolean>;
+type ShowHookInput = (title: string, placeholder?: string) => Promise<string | undefined>;
 
 interface HarnessOptions {
 	runEphemeralTurn: RunEphemeralTurn;
 	messages?: AgentMessage[];
 	hasModel?: boolean;
 	selectorChoice?: string | undefined;
+	selectorChoices?: Array<string | undefined>;
+	inputChoice?: string | undefined;
 	confirmResult?: boolean;
 }
 
@@ -54,6 +59,7 @@ interface Harness {
 	ttsrAddRule: Mock<AddRule>;
 	showHookSelector: Mock<ShowHookSelector>;
 	showHookConfirm: Mock<ShowHookConfirm>;
+	showHookInput: Mock<ShowHookInput>;
 }
 
 const tempRoots: string[] = [];
@@ -116,8 +122,10 @@ async function createHarness(options: HarnessOptions): Promise<Harness> {
 	await fs.mkdir(agentDir, { recursive: true });
 
 	const ttsrAddRule = vi.fn<AddRule>(() => true);
-	const showHookSelector = vi.fn<ShowHookSelector>(async () => options.selectorChoice ?? PROJECT_OPTION);
+	const selectorChoices = [...(options.selectorChoices ?? [options.selectorChoice ?? PROJECT_OPTION])];
+	const showHookSelector = vi.fn<ShowHookSelector>(async () => selectorChoices.shift());
 	const showHookConfirm = vi.fn<ShowHookConfirm>(async () => options.confirmResult ?? true);
+	const showHookInput = vi.fn<ShowHookInput>(async () => options.inputChoice);
 	const session = {
 		model: options.hasModel === false ? undefined : { provider: "anthropic", id: "claude-sonnet-4-5" },
 		runEphemeralTurn: options.runEphemeralTurn,
@@ -133,10 +141,11 @@ async function createHarness(options: HarnessOptions): Promise<Harness> {
 		settings: { getAgentDir: () => agentDir } as unknown as InteractiveModeContext["settings"],
 		showStatus: vi.fn(),
 		showError: vi.fn(),
+		showHookInput,
 		showHookSelector,
 		showHookConfirm,
 	} as unknown as InteractiveModeContext;
-	return { ctx, container, projectDir, agentDir, ttsrAddRule, showHookSelector, showHookConfirm };
+	return { ctx, container, projectDir, agentDir, ttsrAddRule, showHookSelector, showHookConfirm, showHookInput };
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
@@ -179,9 +188,9 @@ describe("OmfgController", () => {
 		expect(await Bun.file(savedPath).text()).toBe(
 			expectedRuleMarkdown("ts-no-any", ": any|as any", "tool:edit(*.ts)"),
 		);
-		expect(harness.showHookSelector).toHaveBeenCalledWith("Save TTSR rule where?", [
-			PROJECT_OPTION,
-			"Global — all projects (~/.omp/agent/rules)",
+		expect(harness.showHookSelector.mock.calls[0]).toEqual([
+			"Save TTSR rule where?",
+			[PROJECT_OPTION, GLOBAL_OPTION, AMEND_OPTION],
 		]);
 		expect(harness.ttsrAddRule.mock.calls[0]?.[0].path).toBe(savedPath);
 	});
@@ -231,6 +240,44 @@ describe("OmfgController", () => {
 		expect(harness.showHookConfirm.mock.calls[0]?.[0]).toBe("Validation");
 		expect(harness.showHookSelector).not.toHaveBeenCalled();
 		expect(await Bun.file(path.join(harness.projectDir, ".omp", "rules", "no-match.md")).exists()).toBe(false);
+	});
+
+	it("lets the user amend from the save selector before writing the rule", async () => {
+		const firstReply = createRule("ts-any-broad", ": any|as any", "tool:edit(*.ts)");
+		const secondReply = createRule("ts-no-explicit-any", ": any|as any", "tool:edit(*.ts)");
+		const runEphemeralTurn = vi
+			.fn<RunEphemeralTurn>()
+			.mockResolvedValueOnce({
+				replyText: firstReply,
+				assistantMessage: createAssistantMessage([{ type: "text", text: firstReply }]),
+			})
+			.mockResolvedValueOnce({
+				replyText: secondReply,
+				assistantMessage: createAssistantMessage([{ type: "text", text: secondReply }]),
+			});
+		const harness = await createHarness({
+			runEphemeralTurn,
+			messages: createMatchingMessages(),
+			selectorChoices: [AMEND_OPTION, PROJECT_OPTION],
+			inputChoice: "Rename it and make the guidance stricter before saving.",
+		});
+		const controller = new OmfgController(harness.ctx);
+
+		await controller.start("Stop using any");
+		await waitFor(() => runEphemeralTurn.mock.calls.length === 2 && harness.ttsrAddRule.mock.calls.length === 1);
+
+		expect(harness.showHookInput).toHaveBeenCalledWith(
+			"Amend TTSR rule",
+			"e.g. Make it specific to Ruby string eval in tool:write(*.rb)",
+		);
+		expect(runEphemeralTurn.mock.calls[1]?.[0].promptText).toContain("User requested this amendment before saving:");
+		expect(runEphemeralTurn.mock.calls[1]?.[0].promptText).toContain(
+			"Rename it and make the guidance stricter before saving.",
+		);
+		expect(await Bun.file(path.join(harness.projectDir, ".omp", "rules", "ts-any-broad.md")).exists()).toBe(false);
+		expect(await Bun.file(path.join(harness.projectDir, ".omp", "rules", "ts-no-explicit-any.md")).exists()).toBe(
+			true,
+		);
 	});
 
 	it("guards empty complaints and missing models before model calls", async () => {

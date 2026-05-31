@@ -40,12 +40,12 @@ Complaint:
 {{complaint}}
 
 {{#if feedback}}
-Failed attempts so far:
+Failed attempts or requested amendments so far:
 {{feedback}}
 
 Latest candidate JSON:
 {{previousRule}}
 
-Regenerate one corrected rule. Fix the listed validation failures; do not repeat failed scopes or conditions.
+Regenerate one corrected rule. Fix the listed validation failures or user amendment; do not repeat failed scopes or conditions.
 {{/if}}
 </omfg>

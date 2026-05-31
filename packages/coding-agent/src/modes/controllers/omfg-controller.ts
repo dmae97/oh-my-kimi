@@ -24,9 +24,17 @@ interface OmfgCandidate extends ParsedGeneratedRule {
 	validated: boolean;
 }
 
+interface GenerateCandidateOptions {
+	initialFeedback?: string;
+	previousRule?: string;
+}
+
+type SaveCandidateResult = { kind: "saved" | "aborted" | "rejected" } | { kind: "amend"; feedback: string };
+
 const MAX_ATTEMPTS = 3;
 const PROJECT_OPTION = "This project (.omp/rules)";
 const GLOBAL_OPTION = "Global — all projects (~/.omp/agent/rules)";
+const AMEND_OPTION = "Amend with feedback…";
 
 export class OmfgController {
 	#activeRequest: OmfgRequest | undefined;
@@ -76,27 +84,38 @@ export class OmfgController {
 
 	async #runRequest(request: OmfgRequest): Promise<void> {
 		try {
-			const candidate = await this.#generateCandidate(request);
-			if (!this.#isActiveRequest(request)) return;
-			if (!candidate) {
-				request.component.markError("The model did not return a valid TTSR rule.");
-				return;
-			}
-
-			if (!candidate.validated) {
-				request.component.setStatus("confirming", "Couldn't confirm a conversation match.");
-				const shouldSave = await this.ctx.showHookConfirm(
-					"Validation",
-					"Couldn't confirm this rule matches the conversation. Save anyway?",
-				);
+			let candidate = await this.#generateCandidate(request);
+			for (;;) {
 				if (!this.#isActiveRequest(request)) return;
-				if (!shouldSave) {
-					request.component.markRejected();
+				if (!candidate) {
+					request.component.markError("The model did not return a valid TTSR rule.");
 					return;
 				}
-			}
 
-			await this.#saveCandidate(request, candidate);
+				if (!candidate.validated) {
+					request.component.setStatus("confirming", "Couldn't confirm a conversation match.");
+					const shouldSave = await this.ctx.showHookConfirm(
+						"Validation",
+						"Couldn't confirm this rule matches the conversation. Save anyway?",
+					);
+					if (!this.#isActiveRequest(request)) return;
+					if (!shouldSave) {
+						request.component.markRejected();
+						return;
+					}
+				}
+
+				const saveResult = await this.#saveCandidate(request, candidate);
+				if (!this.#isActiveRequest(request)) return;
+				if (saveResult.kind !== "amend") {
+					return;
+				}
+
+				candidate = await this.#generateCandidate(request, {
+					initialFeedback: `User requested this amendment before saving:\n${saveResult.feedback}`,
+					previousRule: candidate.fileContent,
+				});
+			}
 		} catch (error) {
 			if (!this.#isActiveRequest(request)) {
 				return;
@@ -109,9 +128,12 @@ export class OmfgController {
 		}
 	}
 
-	async #generateCandidate(request: OmfgRequest): Promise<OmfgCandidate | undefined> {
-		const failedAttempts: string[] = [];
-		let previousRule: string | undefined;
+	async #generateCandidate(
+		request: OmfgRequest,
+		options: GenerateCandidateOptions = {},
+	): Promise<OmfgCandidate | undefined> {
+		const failedAttempts = options.initialFeedback ? [options.initialFeedback] : [];
+		let previousRule = options.previousRule;
 		let lastCandidate: ParsedGeneratedRule | undefined;
 
 		for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -168,15 +190,35 @@ export class OmfgController {
 		return lastCandidate ? { ...lastCandidate, validated: false } : undefined;
 	}
 
-	async #saveCandidate(request: OmfgRequest, candidate: OmfgCandidate): Promise<void> {
-		if (this.#shouldStop(request)) return;
-		request.component.setStatus("saving", "Choose where to save the TTSR rule…");
-		const location = await this.ctx.showHookSelector("Save TTSR rule where?", [PROJECT_OPTION, GLOBAL_OPTION]);
-		if (!this.#isActiveRequest(request)) return;
+	async #saveCandidate(request: OmfgRequest, candidate: OmfgCandidate): Promise<SaveCandidateResult> {
+		if (this.#shouldStop(request)) return { kind: "aborted" };
+		request.component.setStatus("saving", "Choose where to save or amend the TTSR rule…");
+		const location = await this.ctx.showHookSelector("Save TTSR rule where?", [
+			PROJECT_OPTION,
+			GLOBAL_OPTION,
+			AMEND_OPTION,
+		]);
+		if (!this.#isActiveRequest(request)) return { kind: "aborted" };
 		if (!location) {
 			request.component.markAborted();
 			this.#closeActiveRequest({ abort: false });
-			return;
+			return { kind: "aborted" };
+		}
+
+		if (location === AMEND_OPTION) {
+			request.component.setStatus("confirming", "Describe how to amend the rule…");
+			const amendment = await this.ctx.showHookInput(
+				"Amend TTSR rule",
+				"e.g. Make it specific to Ruby string eval in tool:write(*.rb)",
+			);
+			if (!this.#isActiveRequest(request)) return { kind: "aborted" };
+			const feedback = amendment?.trim();
+			if (!feedback) {
+				request.component.markAborted();
+				this.#closeActiveRequest({ abort: false });
+				return { kind: "aborted" };
+			}
+			return { kind: "amend", feedback };
 		}
 
 		const target = this.#resolveTarget(location, candidate.rule.name);
@@ -185,20 +227,21 @@ export class OmfgController {
 				"Overwrite TTSR rule?",
 				`${shortenPath(target.filePath)} already exists. Overwrite it?`,
 			);
-			if (!this.#isActiveRequest(request)) return;
+			if (!this.#isActiveRequest(request)) return { kind: "aborted" };
 			if (!shouldOverwrite) {
 				request.component.markRejected();
-				return;
+				return { kind: "rejected" };
 			}
 		}
 
 		request.component.setStatus("saving", `Saving ${candidate.rule.name}…`);
 		await Bun.write(target.filePath, candidate.fileContent);
-		if (!this.#isActiveRequest(request)) return;
+		if (!this.#isActiveRequest(request)) return { kind: "aborted" };
 
 		const savedRule = buildOmfgRuleForPath(candidate.rule.name, candidate.fileContent, target.filePath, target.level);
 		this.#registerLive(savedRule);
 		request.component.markSaved(shortenPath(target.filePath));
+		return { kind: "saved" };
 	}
 
 	#resolveTarget(location: string, ruleName: string): { filePath: string; level: OmfgRuleSourceLevel } {

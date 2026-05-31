@@ -146,7 +146,7 @@ describe("ruleMatchesAssistantHistory", () => {
 		).toBe(false);
 	});
 
-	it("repairs one layer of double-escaped regex condition when validation succeeds", () => {
+	it("repairs one layer of double-escaped regex condition while parsing", () => {
 		const candidate = mustParse(
 			ruleJson({
 				name: "ruby-no-eval",
@@ -165,10 +165,10 @@ describe("ruleMatchesAssistantHistory", () => {
 			]),
 		];
 
-		expect(ruleMatchesAssistantHistory(candidate.rule, messages)).toBe(false);
+		expect(candidate.rule.condition).toEqual(["\\beval\\s*\\("]);
+		expect(ruleMatchesAssistantHistory(candidate.rule, messages)).toBe(true);
 		const validation = validateParsedRuleAgainstAssistantHistory(candidate, messages);
-		expect(validation.repairedCondition).toBe(true);
+		expect(validation.repairedCondition).toBe(false);
 		expect(validation.validation.matched).toBe(true);
-		expect(validation.candidate.rule.condition).toEqual(["\\beval\\s*\\("]);
 	});
 });
