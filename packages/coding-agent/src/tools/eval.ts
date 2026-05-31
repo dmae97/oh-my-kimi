@@ -61,6 +61,10 @@ export const evalSchema = z.object({
 		.array(evalCellSchema)
 		.min(1)
 		.describe("cells executed in order. State persists within each language across cells and tool calls."),
+	args: z
+		.unknown()
+		.optional()
+		.describe("Optional value exposed as the `args` global in every cell of this call (null when omitted)."),
 });
 export type EvalToolParams = z.infer<typeof evalSchema>;
 
@@ -362,6 +366,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						reset: cell.reset,
 						artifactPath,
 						artifactId,
+						args: params.args ?? null,
 						onChunk: chunk => {
 							outputSink!.push(chunk);
 						},
@@ -636,6 +641,8 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		env: "icon.package",
 		batch: "icon.package",
 		llm: "icon.package",
+		log: "icon.package",
+		phase: "icon.package",
 	};
 
 	const iconKey = opIcons[op] ?? "icon.file";
@@ -715,6 +722,12 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		case "mkdir":
 		case "touch":
 			if (data.path) parts.push(shortenPath(String(data.path)));
+			break;
+		case "log":
+			parts.push(String(data.message ?? ""));
+			break;
+		case "phase":
+			parts.push(String(data.title ?? ""));
 			break;
 		default:
 			if (data.count !== undefined) {

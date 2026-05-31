@@ -3,7 +3,7 @@ from __future__ import annotations
 if "__omp_prelude_loaded__" not in globals():
     __omp_prelude_loaded__ = True
     from pathlib import Path
-    import os, json
+    import os, json, math
 
     # __omp_display is injected by runner.py before the prelude executes; it
     # mirrors IPython's display() semantics with the same MIME bundle output.
@@ -502,3 +502,109 @@ if "__omp_prelude_loaded__" not in globals():
         res = _bridge_call("__agent__", args)
         text = res.get("text") if isinstance(res, dict) else res
         return json.loads(text) if schema is not None else text
+
+    def _normalize_concurrency(value):
+        """Clamp a concurrency hint to [1, 16], defaulting to 4 on bad input."""
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            n = 4
+        return max(1, min(16, n))
+
+    def _pool_map(items, fn, concurrency):
+        """Run ``fn`` over ``items`` through a bounded thread pool.
+
+        Preserves input order, barriers until every task settles, and raises the
+        lowest-index exception if any task failed. Each task runs inside a copy
+        of the submitting thread's context so the ``_CURRENT_RID`` ContextVar
+        propagates and bridge calls (agent(), tool.*, etc.) keep working.
+        """
+        import concurrent.futures, contextvars
+        items = list(items)
+        if not items:
+            return []
+        workers = min(_normalize_concurrency(concurrency), len(items))
+        results = [None] * len(items)
+        errors = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {}
+            for i, item in enumerate(items):
+                ctx = contextvars.copy_context()
+                futures[pool.submit(ctx.run, fn, item)] = i
+            for fut in concurrent.futures.as_completed(futures):
+                i = futures[fut]
+                try:
+                    results[i] = fut.result()
+                except BaseException as exc:  # noqa: BLE001 - propagate to caller
+                    errors[i] = exc
+        if errors:
+            raise errors[min(errors)]
+        return results
+
+    def parallel(thunks, *, concurrency=4):
+        """Run zero-arg callables through a bounded pool, preserving input order.
+
+        Barriers until all finish; re-raises the lowest-index exception if any
+        thunk raised.
+        """
+        thunks = list(thunks)
+        for t in thunks:
+            if not callable(t):
+                raise TypeError("parallel() expects an iterable of zero-arg callables")
+        return _pool_map(thunks, lambda t: t(), concurrency)
+
+    def pipeline(items, *stages, concurrency=4):
+        """Map items left-to-right through one-arg stage callables.
+
+        Every item clears stage N before any item enters stage N+1 (barrier per
+        stage). Stage 1 receives the original item; later stages receive the
+        previous stage's result.
+        """
+        current = list(items)
+        for stage in stages:
+            if not callable(stage):
+                raise TypeError("pipeline() stages must be callables")
+            current = _pool_map(current, stage, concurrency)
+        return current
+
+    def log(message):
+        """Emit a status ``log`` event for TUI rendering."""
+        _emit_status("log", message=str(message))
+        return None
+
+    def phase(title):
+        """Record the current readable phase and emit a status ``phase`` event."""
+        globals()["__omp_current_phase__"] = str(title)
+        _emit_status("phase", title=str(title))
+        return None
+
+    class _Budget:
+        """Live view of the host Goal Mode token budget via the host bridge."""
+
+        @property
+        def total(self):
+            snap = _bridge_call("__budget__", {})
+            return (snap or {}).get("total")
+
+        def spent(self):
+            snap = _bridge_call("__budget__", {})
+            return int((snap or {}).get("spent") or 0)
+
+        def remaining(self):
+            snap = _bridge_call("__budget__", {}) or {}
+            total = snap.get("total")
+            if total is None:
+                return math.inf
+            return max(0, total - int(snap.get("spent") or 0))
+
+        def __repr__(self):
+            try:
+                snap = _bridge_call("__budget__", {}) or {}
+                return f"<budget total={snap.get('total')} spent={snap.get('spent')}>"
+            except Exception:
+                return "<budget unavailable>"
+
+    budget = _Budget()
+
+    # User code always has an `args` name; the per-call request overwrites it.
+    args = None

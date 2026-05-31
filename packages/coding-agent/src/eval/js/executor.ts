@@ -15,6 +15,7 @@ export interface JsExecutorOptions {
 	artifactPath?: string;
 	artifactId?: string;
 	session: ToolSession;
+	args?: unknown;
 }
 
 export interface JsResult {
@@ -74,6 +75,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 			code,
 			filename: `js-cell-${crypto.randomUUID()}.js`,
 			timeoutMs,
+			args: options.args,
 			runState: {
 				signal,
 				onText: chunk => outputSink.push(chunk),

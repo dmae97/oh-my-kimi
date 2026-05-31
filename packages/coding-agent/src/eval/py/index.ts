@@ -40,6 +40,7 @@ export default {
 			artifactId: opts.artifactId,
 			onChunk: opts.onChunk,
 			toolSession: opts.session,
+			args: opts.args,
 		};
 		const result = await executePython(code, executorOptions);
 		return {

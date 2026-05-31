@@ -66,6 +66,8 @@ export interface KernelExecuteOptions {
 	silent?: boolean;
 	storeHistory?: boolean;
 	allowStdin?: boolean;
+	/** Per-call workflow argument exposed to user code as the `args` global. */
+	args?: unknown;
 }
 
 export interface KernelExecuteResult {
@@ -378,6 +380,7 @@ export class PythonKernel {
 			env: options?.env,
 			silent: options?.silent ?? false,
 			storeHistory: options?.storeHistory ?? !(options?.silent ?? false),
+			...(options?.args !== undefined ? { args: options.args } : {}),
 		});
 
 		try {

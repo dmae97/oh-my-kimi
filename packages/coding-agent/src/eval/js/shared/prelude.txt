@@ -98,6 +98,30 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 		return current;
 	};
 
+	const log = message => globalThis.__omp_emit_status__("log", { message: String(message) });
+
+	const phase = title => {
+		globalThis.__omp_phase__ = String(title);
+		globalThis.__omp_emit_status__("phase", { title: String(title) });
+	};
+
+	const __budgetSnap = async () => {
+		const r = await globalThis.__omp_call_tool__("__budget__", {});
+		return r && typeof r === "object" ? r : {};
+	};
+
+	const budget = {
+		total: async () => {
+			const s = await __budgetSnap();
+			return s.total ?? null;
+		},
+		spent: async () => Number((await __budgetSnap()).spent ?? 0),
+		remaining: async () => {
+			const s = await __budgetSnap();
+			return s.total == null ? Infinity : Math.max(0, Number(s.total) - Number(s.spent ?? 0));
+		},
+	};
+
 	const display = value => {
 		globalThis.__omp_display__(value);
 	};
@@ -125,6 +149,9 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	globalThis.agent = agent;
 	globalThis.parallel = parallel;
 	globalThis.pipeline = pipeline;
+	globalThis.log = log;
+	globalThis.phase = phase;
+	globalThis.budget = budget;
 	globalThis.__pool = __pool;
 	globalThis.read = read;
 	globalThis.write = write;
@@ -135,4 +162,5 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	globalThis.diff = diff;
 	globalThis.tree = tree;
 	globalThis.env = env;
+	if (!("args" in globalThis)) globalThis.args = undefined;
 }

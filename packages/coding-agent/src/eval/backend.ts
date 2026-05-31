@@ -14,6 +14,8 @@ export interface ExecutorBackendExecOptions {
 	artifactPath: string | undefined;
 	artifactId: string | undefined;
 	onChunk: (chunk: string) => void;
+	/** Per-tool-call args value exposed as the kernel `args` global (null when omitted). */
+	args?: unknown;
 }
 
 /** Result returned by a backend's execute(). */

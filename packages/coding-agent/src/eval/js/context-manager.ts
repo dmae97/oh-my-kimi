@@ -65,6 +65,7 @@ export async function executeInVmContext(options: {
 	filename: string;
 	timeoutMs?: number;
 	runState: VmRunState;
+	args?: unknown;
 }): Promise<{ value: unknown }> {
 	if (options.reset) {
 		if (resettingSessions.has(options.sessionKey)) {
@@ -116,6 +117,7 @@ async function runOnce(
 		code: string;
 		filename: string;
 		runState: VmRunState;
+		args?: unknown;
 	},
 ): Promise<{ value: unknown }> {
 	const runId = `r-${Snowflake.next()}`;
@@ -153,6 +155,7 @@ async function runOnce(
 			code: options.code,
 			filename: options.filename,
 			snapshot: { cwd: options.cwd, sessionId: options.sessionId },
+			args: options.args,
 		});
 		return await promise;
 	} finally {
