@@ -1541,8 +1541,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					}
 					const isTransientEnvelopeFailure =
 						isTransientStreamParseError(streamFailure) || isTransientStreamEnvelopeError(streamFailure);
+					const isLocalIdleTimeout =
+						streamFailure === idleTimeoutAbortError ||
+						(streamFailure instanceof Error && streamFailure.message === idleTimeoutAbortError.message);
 					const canRetryTransientEnvelopeFailure = isTransientEnvelopeFailure && !streamedReplayUnsafeContent;
 					const canRetryProviderFailure =
+						!isLocalIdleTimeout &&
 						firstTokenTime === undefined &&
 						!streamedReplayUnsafeContent &&
 						isProviderRetryableError(streamFailure, model.provider);

@@ -291,14 +291,17 @@ describe("anthropic first-event timeout retries", () => {
 			}) as never;
 		}) as unknown as Anthropic["messages"]["create"];
 		const client = { messages: { create } } as Anthropic;
+		const providerRetryWait = vi.fn(async () => {});
 
 		const result = await streamAnthropic(model, context, {
 			client,
 			streamFirstEventTimeoutMs: 5000,
-			streamIdleTimeoutMs: 1,
+			streamIdleTimeoutMs: 50,
+			providerRetryWait,
 		}).result();
 
 		expect(attempt).toBe(1);
+		expect(providerRetryWait).not.toHaveBeenCalled();
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toBe("Anthropic stream stalled while waiting for the next event");
 		expect(result.content).toEqual([

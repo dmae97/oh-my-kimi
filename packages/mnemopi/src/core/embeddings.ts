@@ -46,7 +46,16 @@ let apiCallCount = 0;
 const queryCache = new LRUCache<string, Vector>({ max: QUERY_CACHE_MAX });
 
 async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
-	await import("onnxruntime-node");
+	// Preload ORT 1.24 before fastembed's bundled ORT 1.21 — only on Windows,
+	// where loading the older binding first triggers a DLL-reuse crash. The 1.24
+	// line also has no darwin/x64 prebuilt, so importing it unconditionally breaks
+	// the darwin-x64 `bun build --compile` (Bun folds process.platform/arch and
+	// fails to resolve a binding that doesn't ship). The `win32` literal guard is
+	// statically foldable, so Bun dead-code-eliminates this import on every
+	// non-Windows target; fastembed loads its own ORT 1.21 binding there.
+	if (process.platform === "win32") {
+		await import("onnxruntime-node");
+	}
 	const { FlagEmbedding } = await import("fastembed");
 	return FlagEmbedding.init(options);
 }

@@ -30,7 +30,17 @@ export interface TinyTitleProgressEvent {
 export type TinyTitleWorkerInbound =
 	| { type: "ping"; id: string }
 	| { type: "generate"; id: string; modelKey: TinyTitleLocalModelKey; message: string }
-	| { type: "complete"; id: string; modelKey: TinyLocalModelKey; prompt: string; maxTokens?: number }
+	| {
+			type: "complete";
+			id: string;
+			modelKey: TinyLocalModelKey;
+			prompt: string;
+			maxTokens?: number;
+			/** Optional assistant-turn prefix appended after the generation prompt to pin output format. */
+			prefill?: string;
+			/** Optional literal stop string; generation halts once it appears in the decoded tail. */
+			stop?: string;
+	  }
 	| { type: "download"; id: string; modelKey: TinyLocalModelKey }
 	| { type: "close" };
 
