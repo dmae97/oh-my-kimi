@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed Anthropic stream idle-timeout retries after the provider stream has already begun.
+- Fixed OpenAI-compatible tool-call replay to send empty assistant content instead of `null`, avoiding strict custom backends that crash with `str`/`NoneType` concatenation after subagent tool results. ([#1585](https://github.com/can1357/oh-my-pi/issues/1585))
 
 ## [15.7.3] - 2026-05-31
 
