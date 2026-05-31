@@ -128,4 +128,29 @@ describe("HookSelectorComponent model slider", () => {
 		h.component.handleInput(RIGHT);
 		expect([left, right]).toEqual([1, 1]);
 	});
+
+	it("fuzzy-filters overflowing option lists from typed input", () => {
+		const selected: string[] = [];
+		const component = new HookSelectorComponent(
+			"Choose provider",
+			["Ollama", "Kagi", "OpenCode Go", "Tavily"],
+			option => selected.push(option),
+			() => {},
+			{ maxVisible: 3 },
+		);
+
+		component.handleInput("o");
+		component.handleInput("g");
+		const rendered = component
+			.render(80)
+			.map(line => Bun.stripANSI(line))
+			.join("\n");
+
+		expect(rendered).toContain("OpenCode Go");
+		expect(rendered).not.toContain("Ollama");
+		expect(rendered).toContain("Search: og");
+
+		component.handleInput("\n");
+		expect(selected).toEqual(["OpenCode Go"]);
+	});
 });

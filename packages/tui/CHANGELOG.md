@@ -1,9 +1,18 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `overflowSearch` to `SelectListLayoutOptions` to let consumers enable or disable type-to-filter search and search-status rendering per SelectList instance
+- Added fuzzy type-to-filter search to overflowing `SelectList` pickers, with search status and result counts.
+
+### Changed
+
+- Disabled interactive search filtering for editor autocomplete and slash-command `SelectList`s by passing `overflowSearch: false` in their layout options
 
 ### Fixed
 
+- Fixed `tui.select.cancel` handling in `SelectList` so pressing Escape or Ctrl+C closes the list even when no matches are currently shown
 - Fixed native scrollback corruption when an offscreen row edit and repeated-tail append land in one render frame; ambiguous appended tails now rebuild history instead of splicing stale rows into the buffer.
 
 ## [15.7.0] - 2026-05-31

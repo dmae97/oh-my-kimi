@@ -19,9 +19,14 @@ import {
 } from "../utils";
 import { SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list";
 
+const AUTOCOMPLETE_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
+	overflowSearch: false,
+};
+
 const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	minPrimaryColumnWidth: 12,
 	maxPrimaryColumnWidth: 32,
+	overflowSearch: false,
 };
 
 function sanitizeLoadedText(text: string): string {
@@ -2524,11 +2529,8 @@ export class Editor implements Component, Focusable {
 		prefix: string,
 		items: Array<{ value: string; label: string; description?: string }>,
 	): SelectList {
-		// Layout options prepared for future SelectList enhancements (e.g., for slash commands)
-		const layout = prefix.startsWith("/") ? SLASH_COMMAND_SELECT_LIST_LAYOUT : undefined;
-		// TODO: Pass layout to SelectList when constructor is updated to support it
-		void layout; // Use layout variable to avoid lint warnings
-		return new SelectList(items, this.#autocompleteMaxVisible, this.#theme.selectList);
+		const layout = prefix.startsWith("/") ? SLASH_COMMAND_SELECT_LIST_LAYOUT : AUTOCOMPLETE_SELECT_LIST_LAYOUT;
+		return new SelectList(items, this.#autocompleteMaxVisible, this.#theme.selectList, layout);
 	}
 
 	#handleTabCompletion(): void {

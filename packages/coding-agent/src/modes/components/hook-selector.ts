@@ -4,6 +4,8 @@
  */
 import {
 	Container,
+	extractPrintableText,
+	fuzzyFilter,
 	Markdown,
 	matchesKey,
 	padding,
@@ -91,6 +93,8 @@ class OutlinedList extends Container {
 
 export class HookSelectorComponent extends Container {
 	#options: string[];
+	#filteredOptions: string[];
+	#searchQuery = "";
 	#selectedIndex: number;
 	#maxVisible: number;
 	#listContainer: Container | undefined;
@@ -116,7 +120,8 @@ export class HookSelectorComponent extends Container {
 		super();
 
 		this.#options = options;
-		this.#selectedIndex = Math.min(opts?.initialIndex ?? 0, options.length - 1);
+		this.#filteredOptions = options;
+		this.#selectedIndex = Math.min(opts?.initialIndex ?? 0, this.#filteredOptions.length - 1);
 		this.#maxVisible = Math.max(3, opts?.maxVisible ?? 12);
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
@@ -149,8 +154,7 @@ export class HookSelectorComponent extends Container {
 				s => this.#titleComponent.setText(`${this.#baseTitle} (${s}s)`),
 				() => {
 					opts?.onTimeout?.();
-					// Auto-select current option on timeout (typically the first/recommended option)
-					const selected = this.#options[this.#selectedIndex];
+					const selected = this.#filteredOptions[this.#selectedIndex];
 					if (selected) {
 						this.#onSelectCallback(selected);
 					} else {
@@ -178,24 +182,31 @@ export class HookSelectorComponent extends Container {
 
 	#updateList(): void {
 		const lines: string[] = [];
+		const total = this.#filteredOptions.length;
 		const startIndex = Math.max(
 			0,
-			Math.min(this.#selectedIndex - Math.floor(this.#maxVisible / 2), this.#options.length - this.#maxVisible),
+			Math.min(this.#selectedIndex - Math.floor(this.#maxVisible / 2), total - this.#maxVisible),
 		);
-		const endIndex = Math.min(startIndex + this.#maxVisible, this.#options.length);
+		const endIndex = Math.min(startIndex + this.#maxVisible, total);
 
 		const mdTheme = getMarkdownTheme();
 		for (let i = startIndex; i < endIndex; i++) {
+			const option = this.#filteredOptions[i];
+			if (option === undefined) continue;
 			const isSelected = i === this.#selectedIndex;
 			const label = isSelected
-				? renderInlineMarkdown(this.#options[i], mdTheme, t => theme.fg("accent", t))
-				: renderInlineMarkdown(this.#options[i], mdTheme, t => theme.fg("text", t));
+				? renderInlineMarkdown(option, mdTheme, t => theme.fg("accent", t))
+				: renderInlineMarkdown(option, mdTheme, t => theme.fg("text", t));
 			const prefix = isSelected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
 			lines.push(prefix + label);
 		}
 
-		if (startIndex > 0 || endIndex < this.#options.length) {
-			lines.push(theme.fg("dim", `  (${this.#selectedIndex + 1}/${this.#options.length})`));
+		if (total === 0) {
+			lines.push(theme.fg("dim", "  No matching options"));
+		}
+
+		if (startIndex > 0 || endIndex < total || this.#shouldRenderSearchStatus()) {
+			lines.push(this.#renderStatusLine(total));
 		}
 		if (this.#outlinedList) {
 			this.#outlinedList.setLines(lines);
@@ -242,29 +253,84 @@ export class HookSelectorComponent extends Container {
 		slider.onChange?.(next);
 	}
 
+	#isSearchEnabled(): boolean {
+		return this.#options.length > this.#maxVisible;
+	}
+
+	#shouldRenderSearchStatus(): boolean {
+		return this.#isSearchEnabled() || this.#searchQuery.length > 0;
+	}
+
+	#renderStatusLine(total: number): string {
+		const selectedCount = total === 0 ? 0 : this.#selectedIndex + 1;
+		const count =
+			this.#searchQuery.trim() && total !== this.#options.length
+				? `${selectedCount}/${total} of ${this.#options.length}`
+				: `${selectedCount}/${total}`;
+		const suffix = this.#searchQuery.trim() ? `  Search: ${this.#searchQuery}` : "  Type to search";
+		return theme.fg("dim", `  (${count})${suffix}`);
+	}
+
+	#setSearchQuery(query: string): void {
+		this.#searchQuery = query;
+		this.#filteredOptions = query.trim() ? fuzzyFilter(this.#options, query, option => option) : this.#options;
+		this.#selectedIndex = 0;
+		this.#updateList();
+	}
+
+	#handleSearchInput(keyData: string): boolean {
+		if (!this.#isSearchEnabled()) return false;
+
+		if (matchesKey(keyData, "backspace")) {
+			if (this.#searchQuery.length === 0) return false;
+			const chars = [...this.#searchQuery];
+			chars.pop();
+			this.#setSearchQuery(chars.join(""));
+			return true;
+		}
+
+		const printableText = extractPrintableText(keyData);
+		if (printableText === undefined) return false;
+		if (this.#searchQuery.length === 0 && printableText.trim().length === 0) return false;
+
+		this.#setSearchQuery(this.#searchQuery + printableText);
+		return true;
+	}
+
 	handleInput(keyData: string): void {
 		// Reset countdown on any interaction
 		this.#countdown?.reset();
 
-		if (matchesSelectUp(keyData) || keyData === "k") {
-			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
-			this.#updateList();
-		} else if (matchesSelectDown(keyData) || keyData === "j") {
-			this.#selectedIndex = Math.min(this.#options.length - 1, this.#selectedIndex + 1);
-			this.#updateList();
+		if (matchesSelectCancel(keyData)) {
+			this.#onCancelCallback();
+			return;
+		}
+
+		if (this.#handleSearchInput(keyData)) {
+			return;
+		}
+
+		if (matchesSelectUp(keyData) || (!this.#isSearchEnabled() && keyData === "k")) {
+			if (this.#filteredOptions.length > 0) {
+				this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
+				this.#updateList();
+			}
+		} else if (matchesSelectDown(keyData) || (!this.#isSearchEnabled() && keyData === "j")) {
+			if (this.#filteredOptions.length > 0) {
+				this.#selectedIndex = Math.min(this.#filteredOptions.length - 1, this.#selectedIndex + 1);
+				this.#updateList();
+			}
 		} else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			const selected = this.#options[this.#selectedIndex];
+			const selected = this.#filteredOptions[this.#selectedIndex];
 			if (selected) this.#onSelectCallback(selected);
-		} else if (matchesKey(keyData, "left") || (this.#slider && keyData === "h")) {
+		} else if (matchesKey(keyData, "left") || (this.#slider && !this.#isSearchEnabled() && keyData === "h")) {
 			if (this.#slider) this.#moveSlider(-1);
 			else this.#onLeftCallback?.();
-		} else if (matchesKey(keyData, "right") || (this.#slider && keyData === "l")) {
+		} else if (matchesKey(keyData, "right") || (this.#slider && !this.#isSearchEnabled() && keyData === "l")) {
 			if (this.#slider) this.#moveSlider(1);
 			else this.#onRightCallback?.();
 		} else if (this.#onExternalEditorCallback && matchesAppExternalEditor(keyData)) {
 			this.#onExternalEditorCallback();
-		} else if (matchesSelectCancel(keyData)) {
-			this.#onCancelCallback();
 		}
 	}
 

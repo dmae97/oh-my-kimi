@@ -3,6 +3,7 @@
  * Handles data loading, tree building, filtering, and toggle persistence.
  */
 import * as path from "node:path";
+import { fuzzyMatch } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ContextFile } from "../../../capability/context-file";
 import type { ExtensionModule } from "../../../capability/extension-module";
@@ -404,11 +405,9 @@ export function applyFilter(extensions: Extension[], query: string): Extension[]
 			ext.trigger || "",
 			ext.source.providerName,
 			ext.kind,
-		]
-			.join(" ")
-			.toLowerCase();
+		].join(" ");
 
-		return tokens.every(token => searchable.includes(token));
+		return tokens.every(token => fuzzyMatch(token, searchable).matches);
 	});
 }
 

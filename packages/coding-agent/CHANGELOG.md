@@ -17,6 +17,7 @@
 
 ### Changed
 
+- Changed overflowing provider, hook-option, branch-message, agent, extension, and session-tree pickers to support fuzzy type-to-filter search.
 - Changed Shift+Ctrl+P to cycle role models backward instead of cycling forward without persisting.
 - Changed empty prompt input so `?` inserts a literal question mark instead of opening `/hotkeys`; use `/hotkeys` explicitly for the shortcut reference.
 - Changed `search` output to preserve full virtual and internal URL paths in grouped results and `details.files` instead of collapsing them to file basenames
