@@ -285,6 +285,58 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+
+		it("keeps appended rows in scrollback when a forced render coalesces with content growth", async () => {
+			const term = new VirtualTerminal(20, 3);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("L", 5));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				tui.requestRender(true);
+				component.setLines(rows("L", 6));
+				tui.requestRender();
+				await settle(term);
+
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("L", 6));
+				expect(visible(term)).toEqual(["L3", "L4", "L5"]);
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("does not yank a scrolled viewport for pure tail appends", async () => {
+			const term = new VirtualTerminal(20, 3, 5);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("L", 8));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				term.scrollLines(-1);
+
+				const beforePosition = term.getBufferPosition();
+				const beforeView = visible(term);
+
+				component.setLines(rows("L", 9));
+				tui.requestRender();
+				await settle(term);
+
+				expect(term.getBufferPosition()).toEqual(beforePosition);
+				expect(visible(term)).toEqual(beforeView);
+
+				term.scrollLines(1_000_000);
+				expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBeTrue();
+				await term.flush();
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("L", 9).slice(1));
+			} finally {
+				tui.stop();
+			}
+		});
 	});
 
 	describe("resize + viewport behavior", () => {
@@ -815,7 +867,7 @@ describe("TUI terminal-state regressions", () => {
 	});
 
 	describe("scrollback integrity", () => {
-		it("does not probe native viewport state during pure appends", async () => {
+		it("does not probe native viewport state before appends can affect scrollback", async () => {
 			const term = new CountingViewportTerminal(32, 5);
 			const tui = new TUI(term);
 			const lines = rows("line-", 3);
@@ -826,7 +878,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.start();
 				await settle(term);
 
-				for (let i = 3; i < 20; i++) {
+				for (let i = 3; i < 5; i++) {
 					lines.push(`line-${i}`);
 					component.setLines(lines);
 					tui.requestRender();

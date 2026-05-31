@@ -46,49 +46,6 @@ function ensureInvalidate(component: unknown): Component {
 }
 
 /**
- * Wraps a streaming edit preview so its rendered height only ever grows while
- * the tool args are still streaming, then collapses once on finalize.
- *
- * A whole-file line diff is recomputed from scratch on every streamed chunk,
- * and the optimal Myers alignment is not monotonic in payload length: a
- * partial — or just-completed — line keeps matching a duplicated line further
- * down the file (a brace, a blank line, a repeated token), so the visible
- * change region gains and loses rows tick to tick. That is the "box grows and
- * shrinks repeatedly" stutter. Reserving the high-water row count (padding with
- * blank rows the host Box fills with the tool background) holds the box steady
- * for the whole stream; the finalized diff renders through a different,
- * unwrapped path, so the one allowed collapse happens when args complete.
- *
- * Rows are measured at the real layout width, so soft-wrapped diff lines are
- * counted exactly rather than approximated from newline counts.
- */
-class StreamingPreviewHeight implements Component {
-	#child?: Component;
-	#maxRows = 0;
-
-	setChild(child: Component): void {
-		this.#child = child;
-	}
-
-	render(width: number): string[] {
-		const child = this.#child;
-		if (!child) return [];
-		const lines = child.render(width);
-		if (lines.length >= this.#maxRows) {
-			this.#maxRows = lines.length;
-			return lines;
-		}
-		const padded = lines.slice();
-		while (padded.length < this.#maxRows) padded.push("");
-		return padded;
-	}
-
-	invalidate(): void {
-		this.#child?.invalidate();
-	}
-}
-
-/**
  * Drop trailing removal/hunk-header lines that appear in a streaming diff
  * before the matching `+added` lines have arrived. Without this, a partial
  * apply_patch / hashline preview shows `-old` first and then visibly grows
@@ -215,9 +172,6 @@ export class ToolExecutionComponent extends Container {
 	#editDiffPreview?: PerFileDiffPreview[];
 	#editDiffAbort?: AbortController;
 	#editDiffLastArgsKey?: string;
-	// Reserves the streaming edit preview's high-water height so the box never
-	// shrinks mid-stream; see StreamingPreviewHeight.
-	#streamPreviewHeight = new StreamingPreviewHeight();
 	// Cached converted images for Kitty protocol (which requires PNG), keyed by index
 	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	// Spinner animation for partial task results
@@ -697,18 +651,7 @@ export class ToolExecutionComponent extends Container {
 					try {
 						const callComponent = renderer.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
 						if (callComponent) {
-							const child = ensureInvalidate(callComponent);
-							// While edit args stream, the recomputed diff preview gains and
-							// loses rows tick to tick (non-monotonic Myers re-alignment),
-							// stuttering the box larger/smaller. Reserve the high-water
-							// height so it only grows mid-stream and collapses once the edit
-							// finalizes (a different, unwrapped render path).
-							if (isEditLikeToolName(this.#toolName) && !this.#result && !this.#argsComplete) {
-								this.#streamPreviewHeight.setChild(child);
-								this.#contentBox.addChild(this.#streamPreviewHeight);
-							} else {
-								this.#contentBox.addChild(child);
-							}
+							this.#contentBox.addChild(ensureInvalidate(callComponent));
 						}
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });

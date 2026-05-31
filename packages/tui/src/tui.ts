@@ -329,7 +329,7 @@ export class TUI extends Container {
 	#nativeScrollbackDirty = false;
 	#fullRedrawCount = 0;
 	#clearScrollbackOnNextRender = false;
-	#previousLinesDroppedForForcedRender = false;
+	#forceViewportRepaintOnNextRender = false;
 	#allowUnknownViewportMutationOnNextRender = false;
 	#hasEverRendered = false;
 	#stopped = false;
@@ -713,15 +713,7 @@ export class TUI extends Container {
 			geometryChanged &&
 			this.#canReplayNativeScrollbackAtCheckpoint(this.#readNativeViewportAtBottom(), allowUnknownViewportMutation);
 		this.#clearScrollbackOnNextRender ||= clearScrollback || replayGeometry;
-		const droppedLines = this.#previousLines.length > 0;
-		this.#previousLines = [];
-		this.#previousLinesDroppedForForcedRender ||= droppedLines;
-		this.#previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
-		this.#previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
-		this.#cursorRow = 0;
-		this.#hardwareCursorRow = 0;
-		this.#viewportTopRow = 0;
-		this.#maxLinesRendered = 0;
+		this.#forceViewportRepaintOnNextRender = true;
 		if (this.#renderTimer) {
 			clearTimeout(this.#renderTimer);
 			this.#renderTimer = undefined;
@@ -1279,12 +1271,7 @@ export class TUI extends Container {
 		// Caller opted into a scrollback wipe via requestRender(true, { clearScrollback: true }).
 		if (this.#clearScrollbackOnNextRender) return { kind: "sessionReplace" };
 
-		// Forced reset (requestRender(true)) without scrollback wipe: previous
-		// lines were intentionally dropped, so no diff is possible. Repaint visible
-		// rows only — emitting the transcript here would duplicate it into scrollback.
-		// A legitimately empty previous frame must still diff as an append so newly
-		// expanded content is reachable through native scrollback.
-		if (this.#previousLinesDroppedForForcedRender) return { kind: "viewportRepaint" };
+		const forceViewportRepaint = this.#forceViewportRepaintOnNextRender;
 		if (this.hasOverlay()) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (
@@ -1360,9 +1347,12 @@ export class TUI extends Container {
 		}
 
 		if (diff.firstChanged === -1) {
-			// Content unchanged. Width change still alters wrapping geometry;
-			// height change shifts the visible window. Either needs a repaint
-			// (outside hostile environments).
+			// Content unchanged. A forced render still needs to refresh the visible
+			// viewport, but it must keep the existing diff basis so later coalesced
+			// content mutations can still update native scrollback correctly.
+			if (forceViewportRepaint) return { kind: "viewportRepaint" };
+			// Width change still alters wrapping geometry; height change shifts the
+			// visible window. Either needs a repaint (outside hostile environments).
 			if (widthChanged) return { kind: "viewportRepaint" };
 			if (heightChanged && !isTermuxSession() && !isMultiplexerSession()) return { kind: "viewportRepaint" };
 			return { kind: "noop" };
@@ -1387,6 +1377,13 @@ export class TUI extends Container {
 		const contentGrew = newLines.length > this.#previousLines.length;
 		const pureAppend = diff.appendedLines && diff.firstChanged === this.#previousLines.length;
 		const structuralMutation = newLines.length !== this.#previousLines.length || diff.firstChanged < prevViewportTop;
+		if (pureAppend && contentGrew && this.#previousLines.length > height && !isMultiplexerSession()) {
+			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
+			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
+				this.#markNativeScrollbackDirty();
+				return { kind: "deferredMutation" };
+			}
+		}
 		if (!pureAppend && structuralMutation && !isMultiplexerSession()) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
@@ -1469,6 +1466,15 @@ export class TUI extends Container {
 			}
 			this.#markNativeScrollbackDirty();
 			return { kind: "viewportRepaint", appendFrom: cleanTailAppend ? this.#previousLines.length : undefined };
+		}
+
+		if (forceViewportRepaint) {
+			if (pureAppend && contentGrew && this.#previousLines.length > 0) {
+				return { kind: "viewportRepaint", appendFrom: this.#previousLines.length };
+			}
+			if (newLines.length === this.#previousLines.length && diff.firstChanged >= prevViewportTop) {
+				return { kind: "viewportRepaint" };
+			}
 		}
 
 		return {
@@ -1625,7 +1631,7 @@ export class TUI extends Container {
 	 */
 	#commit(lines: string[], width: number, height: number, viewportTop: number, hardwareCursorRow: number): void {
 		this.#previousLines = lines;
-		this.#previousLinesDroppedForForcedRender = false;
+		this.#forceViewportRepaintOnNextRender = false;
 		this.#previousWidth = width;
 		this.#previousHeight = height;
 		this.#cursorRow = Math.max(0, lines.length - 1);

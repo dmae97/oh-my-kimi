@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `overflowSearch` to `SelectListLayoutOptions` to let consumers enable or disable type-to-filter search and search-status rendering per SelectList instance
@@ -12,6 +13,8 @@
 
 ### Fixed
 
+- Preserved hidden tmux overlays in the live viewport by removing overlay content from view when an overlay was hidden while keeping pane history intact
+- Preserved native scrollback when forced TUI renders coalesce with content growth, and deferred pure tail appends while readers are scrolled into history.
 - Preserved existing terminal scrollback during forced and structural TUI renders so preexisting shell lines remained visible after component mutations
 - Rebuilt native scrollback for safe bottom-anchored offscreen edits and high-water preview collapses instead of repainting only the viewport, preventing stale or duplicated rows above the live viewport.
 - Stripped internal cursor marker sentinels from all rendered lines so offscreen focus markers no longer leak into terminal output

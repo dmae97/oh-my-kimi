@@ -1934,7 +1934,13 @@ class StressDriver {
 				.filter(entry => isExpectedOverlayVisible(entry, this.#term.columns, this.#term.rows))
 				.map(entry => entry.sentinel),
 		);
-		const nativeText = `${after.buffer.join("\n")}\n${after.view.join("\n")}`;
+		// Multiplexers preserve pane history and do not allow the renderer to scrub
+		// scrollback safely. A hidden overlay must disappear from the live viewport;
+		// historical copies can remain after tmux resize/reflow.
+		const nativeText =
+			this.#scenario.envMode === "tmux"
+				? after.view.join("\n")
+				: `${after.buffer.join("\n")}\n${after.view.join("\n")}`;
 		for (const sentinel of this.#hiddenOverlaySentinels) {
 			if (visibleSentinels.has(sentinel)) continue;
 			if (nativeText.includes(sentinel)) {
