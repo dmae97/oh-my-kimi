@@ -947,6 +947,40 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("does not duplicate the viewport-top row when an offscreen edit repeats the tail", async () => {
+			// 6 rows over height 4: scrollback ["E0","E1"], viewport ["a","b","c","d"].
+			const term = new VirtualTerminal(32, 4);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(["E0", "E1", "a", "b", "c", "d"]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(term.isNativeViewportAtBottom()).toBe(true);
+				expect(visible(term).map(line => line.trim())).toEqual(["a", "b", "c", "d"]);
+
+				// An offscreen edit (E0 -> E0x, above the viewport top) lands together
+				// with a tail append whose rows make the prior last line "d" recur one
+				// row early. The append-tail heuristic then mis-locates the tail and,
+				// before the fix, scrolled an extra row into history — duplicating the
+				// viewport-top row "b" just above the viewport.
+				component.setLines(["E0x", "E1", "a", "b", "d", "e", "f"]);
+				tui.requestRender();
+				await settle(term);
+
+				expect(visible(term).map(line => line.trim())).toEqual(["b", "d", "e", "f"]);
+				const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+				for (const line of ["E0x", "E1", "a", "b", "d", "e", "f"]) {
+					expect(buffer.filter(row => row === line).length, `${line} should appear exactly once`).toBe(1);
+				}
+				// The offscreen edit must be reflected in history, not left stale.
+				expect(buffer).not.toContain("E0");
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("removes collapsed ctrl-o markers from scrollback after offscreen expansion", async () => {
 			const term = new VirtualTerminal(48, 6);
 			const tui = new TUI(term);

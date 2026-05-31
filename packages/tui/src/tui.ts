@@ -1334,11 +1334,15 @@ export class TUI extends Container {
 				this.#markNativeScrollbackDirty();
 				return { kind: "deferredMutation" };
 			}
-			// Expanding a collapsed offscreen cell inserts rows before an unchanged
-			// suffix. A viewport-only repaint makes the live bottom look correct but
-			// leaves native scrollback holding the old collapsed rows; scrolling up then
-			// shows a splice of stale history and the new tail. Pure tail appends with an
-			// offscreen status/header tick are still handled by the append-tail path.
+			// The append-tail path can only scroll a clean pure-tail append over an
+			// offscreen edit into history: the rows it pushes must equal the net
+			// growth, i.e. `#findAppendedTailStart` must land on `previousLines.length`
+			// (`tailAppendCount === addedCount`). Any mismatch is structurally
+			// ambiguous — more added than the matched tail means offscreen rows were
+			// inserted (a collapsed cell expanding); fewer means the previous last
+			// line repeats earlier so the tail is mis-located. Under-counting splices
+			// stale history; over-counting scrolls an extra row and duplicates the
+			// line at the viewport top. Rebuild whenever the replay checkpoint allows.
 			if (
 				contentGrew &&
 				diff.firstChanged < prevViewportTop &&
@@ -1347,7 +1351,7 @@ export class TUI extends Container {
 				const appendedTailStart = diff.appendedLines ? this.#findAppendedTailStart(newLines) : newLines.length;
 				const tailAppendCount = newLines.length - appendedTailStart;
 				const addedCount = newLines.length - this.#previousLines.length;
-				if (addedCount > tailAppendCount) {
+				if (addedCount !== tailAppendCount) {
 					return { kind: "historyRebuild" };
 				}
 			}
@@ -1372,10 +1376,17 @@ export class TUI extends Container {
 		}
 
 		// Offscreen edit: viewport repaint corrects shifted rows when the native
-		// viewport is at the tail. Scrolled native-history cases are deferred above.
+		// viewport is at the tail. The append-tail prefix is only safe at the clean
+		// boundary (`#findAppendedTailStart === previousLines.length`); the guard above
+		// rebuilds the ambiguous cases when replay is possible. When it was not (no
+		// viewport proof), repaint visible rows only and mark history dirty so the next
+		// checkpoint rebuilds — scrolling a mis-located tail would splice stale rows or
+		// duplicate the viewport-top row into scrollback.
 		if (diff.firstChanged < prevViewportTop) {
-			const appendFrom = diff.appendedLines ? this.#findAppendedTailStart(newLines) : undefined;
-			return { kind: "viewportRepaint", appendFrom };
+			const cleanTailAppend =
+				diff.appendedLines && this.#findAppendedTailStart(newLines) === this.#previousLines.length;
+			if (diff.appendedLines && !cleanTailAppend) this.#markNativeScrollbackDirty();
+			return { kind: "viewportRepaint", appendFrom: cleanTailAppend ? this.#previousLines.length : undefined };
 		}
 
 		return {
