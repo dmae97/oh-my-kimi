@@ -174,13 +174,13 @@ describe("SearchTool internal URL resolution", () => {
 		const tool = new SearchTool(session);
 
 		const result = await tool.execute("test-call", {
-			pattern: "non-filesystem internal URLs",
+			pattern: "Search file contents with a regex across files",
 			paths: ["omp://"],
 		});
 
 		const text = getResultText(result);
 		expect(text).toContain("# omp://tools/search.md");
-		expect(text).toContain("non-filesystem internal URLs");
+		expect(text).toContain("Search file contents with a regex across files");
 	});
 
 	it("throws when internal URL has no sourcePath", async () => {
