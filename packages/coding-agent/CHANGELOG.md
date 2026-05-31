@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.7.0] - 2026-05-31
+
 ### Added
 
 - Added a `Web search` setup tab that lets users choose the preferred `providers.webSearch` provider during onboarding
