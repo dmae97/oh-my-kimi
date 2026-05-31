@@ -19,7 +19,7 @@
 		"check": "biome check . && bun run check:types",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
 		"lint": "biome lint .",
-		"test": "bun test",
+		"test": "bun test --parallel",
 		"fix": "biome check --write --unsafe .",
 		"fmt": "biome format --write .",
 		"generate": "bun run src/generate.ts --typescript-dir /tmp/pi-mono-source --count-per-type 4",
