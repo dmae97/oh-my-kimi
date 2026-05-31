@@ -32,6 +32,7 @@ import {
 	hasGlobPathChars,
 	isLineInRanges,
 	type LineRange,
+	type ResolvedSearchTarget,
 	parseLineRanges,
 	resolveReadPath,
 	resolveToolSearchScope,
@@ -280,6 +281,7 @@ interface IndexedContentLines {
 	starts: number[];
 }
 
+const INTERNAL_URL_DISPLAY_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 const OMP_ROOT_URL_RE = /^omp:\/\/\/?$/i;
 
 function normalizeSearchLine(line: string): string {
@@ -724,7 +726,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				let scopePath: string;
 				let globFilter: string | undefined;
 				let isDirectory: boolean;
-				let multiTargets: Array<{ basePath: string; glob?: string }> | undefined;
+				let multiTargets: ResolvedSearchTarget[] | undefined;
 				let exactFilePaths: string[] | undefined;
 				let missingPaths: string[];
 				const immutableSourcePaths = new Set(internalResolution.immutableSourcePaths);
@@ -780,30 +782,72 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				const baseDisplayMode = resolveFileDisplayMode(this.session);
 
 				const effectiveOutputMode = GrepOutputMode.Content;
-				// Multi-scope = more than one file may match. We fetch up to
-				// INTERNAL_TOTAL_CAP matches from native grep, then in JS group by
-				// file, apply a per-file cap (so one hot file doesn't crowd the
-				// window), and round-robin emit from up to DEFAULT_FILE_LIMIT files.
-				const isMultiScope = isDirectory || Boolean(exactFilePaths) || Boolean(multiTargets);
+				const isMultiScope =
+					isDirectory ||
+					Boolean(exactFilePaths) ||
+					Boolean(multiTargets) ||
+					(virtualResources.length > 0 && (virtualResources.length > 1 || searchablePaths.length > 0));
 				const perFileMatchCap = isMultiScope ? MULTI_FILE_PER_FILE_MATCHES : SINGLE_FILE_MATCHES;
 
 				// Run grep
-				let result: GrepResult;
+				let result: GrepResult = {
+					matches: [],
+					totalMatches: 0,
+					filesWithMatches: 0,
+					filesSearched: 0,
+					limitReached: false,
+				};
 				try {
-					if (exactFilePaths || multiTargets) {
-						const matches: GrepMatch[] = [];
-						let limitReached = false;
-						let totalMatches = 0;
-						let filesSearched = 0;
-						const targets = exactFilePaths
-							? exactFilePaths.map(filePath => ({ basePath: filePath, glob: undefined as string | undefined }))
-							: (multiTargets ?? []);
-						for (const target of targets) {
-							const targetResult = await grep(
+					if (searchablePaths.length > 0) {
+						if (exactFilePaths || multiTargets) {
+							const matches: GrepMatch[] = [];
+							let limitReached = false;
+							let totalMatches = 0;
+							let filesSearched = 0;
+							const targets = exactFilePaths
+								? exactFilePaths.map(filePath => ({ basePath: filePath, glob: undefined as string | undefined }))
+								: (multiTargets ?? []);
+							for (const target of targets) {
+								const targetResult = await grep(
+									{
+										pattern: normalizedPattern,
+										path: target.basePath,
+										glob: target.glob,
+										ignoreCase,
+										multiline: effectiveMultiline,
+										hidden: true,
+										gitignore: useGitignore,
+										cache: false,
+										maxCount: INTERNAL_TOTAL_CAP,
+										contextBefore: normalizedContextBefore,
+										contextAfter: normalizedContextAfter,
+										maxColumns: DEFAULT_MAX_COLUMN,
+										mode: effectiveOutputMode,
+									},
+									undefined,
+								);
+								limitReached = limitReached || Boolean(targetResult.limitReached);
+								totalMatches += targetResult.totalMatches;
+								filesSearched += targetResult.filesSearched;
+								for (const match of targetResult.matches) {
+									const absolute = path.resolve(target.basePath, match.path);
+									const rebased = path.relative(searchPath, absolute).replace(/\\/g, "/");
+									matches.push({ ...match, path: rebased });
+								}
+							}
+							result = {
+								matches,
+								totalMatches: exactFilePaths ? matches.length : totalMatches,
+								filesWithMatches: new Set(matches.map(match => match.path)).size,
+								filesSearched: exactFilePaths ? exactFilePaths.length : filesSearched,
+								limitReached,
+							};
+						} else {
+							result = await grep(
 								{
 									pattern: normalizedPattern,
-									path: target.basePath,
-									glob: target.glob,
+									path: searchPath,
+									glob: globFilter,
 									ignoreCase,
 									multiline: effectiveMultiline,
 									hidden: true,
@@ -817,41 +861,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 								},
 								undefined,
 							);
-							limitReached = limitReached || Boolean(targetResult.limitReached);
-							totalMatches += targetResult.totalMatches;
-							filesSearched += targetResult.filesSearched;
-							for (const match of targetResult.matches) {
-								const absolute = path.resolve(target.basePath, match.path);
-								const rebased = path.relative(searchPath, absolute).replace(/\\/g, "/");
-								matches.push({ ...match, path: rebased });
-							}
 						}
-						result = {
-							matches,
-							totalMatches: exactFilePaths ? matches.length : totalMatches,
-							filesWithMatches: new Set(matches.map(match => match.path)).size,
-							filesSearched: exactFilePaths ? exactFilePaths.length : filesSearched,
-							limitReached,
-						};
-					} else {
-						result = await grep(
-							{
-								pattern: normalizedPattern,
-								path: searchPath,
-								glob: globFilter,
-								ignoreCase,
-								multiline: effectiveMultiline,
-								hidden: true,
-								gitignore: useGitignore,
-								cache: false,
-								maxCount: INTERNAL_TOTAL_CAP,
-								contextBefore: normalizedContextBefore,
-								contextAfter: normalizedContextAfter,
-								maxColumns: DEFAULT_MAX_COLUMN,
-								mode: effectiveOutputMode,
-							},
-							undefined,
-						);
 					}
 				} catch (err) {
 					if (err instanceof Error && /^regex(?: parse)? error/i.test(err.message)) {
@@ -859,6 +869,16 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					}
 					throw err;
 				}
+				const virtualResult = searchVirtualResources(
+					virtualResources,
+					normalizedPattern,
+					ignoreCase,
+					effectiveMultiline,
+					normalizedContextBefore,
+					normalizedContextAfter,
+					INTERNAL_TOTAL_CAP,
+				);
+				result = mergeGrepResults(result, virtualResult, INTERNAL_TOTAL_CAP);
 				if (rangesByAbsPath.size > 0) {
 					const filteredMatches: GrepMatch[] = [];
 					for (const match of result.matches) {
@@ -897,7 +917,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				}
 
 				const formatPath = (filePath: string): string =>
-					archiveDisplaySet.has(filePath)
+					archiveDisplaySet.has(filePath) || virtualPathSet.has(filePath)
 						? filePath
 						: formatResultPath(filePath, isDirectory, searchPath, this.session.cwd);
 
@@ -988,7 +1008,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				const hashContexts = new Map<string, { tag: string }>();
 				if (baseDisplayMode.hashLines) {
 					for (const relativePath of fileList) {
-						if (archiveDisplaySet.has(relativePath)) continue;
+						if (archiveDisplaySet.has(relativePath) || virtualPathSet.has(relativePath)) continue;
 						const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
 						if (immutableSourcePaths.has(absoluteFilePath)) continue;
 						// Mint a whole-file content tag so any anchor validates while the
@@ -1044,7 +1064,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					}
 					return { model: modelOut, display: displayOut };
 				};
-				if (isDirectory) {
+				const useGroupedOutput = isDirectory || isMultiScope;
+				if (useGroupedOutput) {
 					const grouped = formatGroupedFiles(fileList, relativePath => {
 						const rendered = renderMatchesForFile(relativePath);
 						const hashContext = hashContexts.get(relativePath);
@@ -1278,6 +1299,10 @@ export const searchToolRenderer = {
 										.slice(2)
 										.trimEnd()
 										.replace(/\s+\([^)]*\)\s*$/, "");
+									if (INTERNAL_URL_DISPLAY_RE.test(raw)) {
+										contextDir = "";
+										return uiTheme.fg("accent", line);
+									}
 									const isDirectory = raw.endsWith("/");
 									const name = isDirectory ? raw.replace(/\/$/, "") : raw.replace(/#[0-9a-f]+$/, "");
 									if (isDirectory) {
