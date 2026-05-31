@@ -10,7 +10,8 @@
 ### Fixed
 
 - Fixed generated profile aliases to pass the profile as `--profile=<name>`, avoiding the separate argv value that could be misread as an initial prompt while still forcing the CLI's explicit profile bootstrap path.
-- Fixed `--alias` when run from a source checkout (`bun src/cli.ts` / `omp-test`) so the generated profile command targets that same checkout instead of a stale installed `omp` binary.
+- Fixed `--alias` when run from a source checkout (`bun src/cli.ts` / `omp-test`) so the generated profile command targets that same checkout instead of a stale installed `omp` binary, while preserving the directory where the alias is invoked.
+- Fixed explicit `omp launch --profile <name>` / `omp launch --alias <name>` so `launch` behaves like the default command during profile bootstrap instead of blocking global profile extraction.
 
 ## [15.7.3] - 2026-05-31
 ### Added

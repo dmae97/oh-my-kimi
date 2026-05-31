@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { installProfileAlias, readProfileAliasConfigFile } from "../src/cli/profile-alias";
+import {
+	installProfileAlias,
+	readProfileAliasConfigFile,
+	resolveProfileAliasCommandFromProcess,
+} from "../src/cli/profile-alias";
 
 describe("profile alias installer", () => {
 	it("writes a bash-compatible function that forwards subcommands through omp", async () => {
@@ -23,6 +27,15 @@ describe("profile alias installer", () => {
 		expect(files.get("/home/me/.bashrc")).toContain('command omp --profile=work "$@"');
 	});
 
+	it("resolves source invocations without forcing the source checkout as cwd", () => {
+		const command = resolveProfileAliasCommandFromProcess(["/bin/bun", "src/cli.ts"], "/repo/packages/coding-agent");
+
+		expect(command.display).toBe("/bin/bun /repo/packages/coding-agent/src/cli.ts");
+		expect(command.posix).toBe("'/bin/bun' '/repo/packages/coding-agent/src/cli.ts'");
+		expect(command.fish).toBe("'/bin/bun' '/repo/packages/coding-agent/src/cli.ts'");
+		expect(command.powerShell).toBe("'/bin/bun' '/repo/packages/coding-agent/src/cli.ts'");
+	});
+
 	it("can target the current source invocation instead of the installed omp binary", async () => {
 		const files = new Map<string, string>();
 
@@ -33,10 +46,10 @@ describe("profile alias installer", () => {
 			platform: "darwin",
 			homeDir: "/Users/me",
 			command: {
-				display: "bun --cwd /repo/packages/coding-agent src/cli.ts",
-				posix: "bun --cwd '/repo/packages/coding-agent' src/cli.ts",
-				fish: "bun --cwd /repo/packages/coding-agent src/cli.ts",
-				powerShell: "bun --cwd '/repo/packages/coding-agent' src/cli.ts",
+				display: "bun /repo/packages/coding-agent/src/cli.ts",
+				posix: "bun '/repo/packages/coding-agent/src/cli.ts'",
+				fish: "bun /repo/packages/coding-agent/src/cli.ts",
+				powerShell: "bun '/repo/packages/coding-agent/src/cli.ts'",
 			},
 			readFile: async filePath => files.get(filePath) ?? "",
 			writeFile: async (filePath, content) => {
@@ -44,10 +57,10 @@ describe("profile alias installer", () => {
 			},
 		});
 
-		expect(result.command).toBe("bun --cwd /repo/packages/coding-agent src/cli.ts --profile=work");
+		expect(result.command).toBe("bun /repo/packages/coding-agent/src/cli.ts --profile=work");
 		expect(files.get("/Users/me/.zshrc")).toContain("omp-work() {");
 		expect(files.get("/Users/me/.zshrc")).toContain(
-			`command bun --cwd '/repo/packages/coding-agent' src/cli.ts --profile=work "$@"`,
+			`command bun '/repo/packages/coding-agent/src/cli.ts' --profile=work "$@"`,
 		);
 	});
 

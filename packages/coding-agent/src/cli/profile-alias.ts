@@ -79,18 +79,21 @@ function normalizeShellName(shellPath: string | undefined, platform: NodeJS.Plat
 	throw new Error(`Unsupported shell${shell ? ` "${shell}"` : ""}. Supported shells: bash, zsh, fish, PowerShell.`);
 }
 
-export function resolveProfileAliasCommandFromProcess(): ProfileAliasCommand {
-	const runtime = process.argv[0];
-	const script = process.argv[1];
-	if (!script || !/\.[cm]?[jt]s$/.test(script)) return DEFAULT_ALIAS_COMMAND;
+export function resolveProfileAliasCommandFromProcess(
+	argv: readonly string[] = process.argv,
+	cwd: string = process.cwd(),
+): ProfileAliasCommand {
+	const runtime = argv[0];
+	const script = argv[1];
+	if (!runtime || !script || !/\.[cm]?[jt]s$/.test(script)) return DEFAULT_ALIAS_COMMAND;
 
-	const cwd = process.cwd();
-	const posix = `${quoteForShell(runtime)} --cwd ${quoteForShell(cwd)} ${quoteForShell(script)}`;
+	const scriptPath = path.resolve(cwd, script);
+	const posix = `${quoteForShell(runtime)} ${quoteForShell(scriptPath)}`;
 	return {
-		display: `${runtime} --cwd ${cwd} ${script}`,
+		display: `${runtime} ${scriptPath}`,
 		posix,
 		fish: posix,
-		powerShell: `${quoteForPowerShell(runtime)} --cwd ${quoteForPowerShell(cwd)} ${quoteForPowerShell(script)}`,
+		powerShell: `${quoteForPowerShell(runtime)} ${quoteForPowerShell(scriptPath)}`,
 	};
 }
 

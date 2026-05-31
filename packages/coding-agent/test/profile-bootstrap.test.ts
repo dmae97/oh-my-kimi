@@ -103,6 +103,20 @@ describe("extractProfileFlags", () => {
 		expect(result.argv).toEqual(["grep", "foo"]);
 	});
 
+	it("treats explicit launch as the default command and keeps extracting globals", () => {
+		expect(extractProfileFlags(["launch", "--profile", "work", "--alias", "omp-work"])).toEqual({
+			argv: ["launch"],
+			profile: "work",
+			aliasName: "omp-work",
+		});
+	});
+
+	it("treats later subcommand-shaped words as launch text after explicit launch", () => {
+		const result = extractProfileFlags(["launch", "grep", "--profile", "work"]);
+		expect(result.profile).toBe("work");
+		expect(result.argv).toEqual(["launch", "grep"]);
+	});
+
 	it("still extracts --profile after a non-subcommand positional (launch message)", () => {
 		const result = extractProfileFlags(["hello", "--profile", "work"]);
 		expect(result.profile).toBe("work");

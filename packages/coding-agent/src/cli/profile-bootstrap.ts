@@ -42,11 +42,11 @@ export interface ProfileBootstrapResult {
  * and the captured flag values.
  *
  * Global flag extraction stops only when the first residual argv token names a
- * registered subcommand (e.g. `grep`): everything from that token onward is
- * forwarded verbatim so a subcommand's own flags and positionals are never
- * stolen (`omp grep --profile <path>` greps for `--profile`; it does not select
- * a profile). Later subcommand-shaped words still belong to `launch` when an
- * earlier token already made `launch` the dispatched command.
+ * registered non-launch subcommand (e.g. `grep`): everything from that token
+ * onward is forwarded verbatim so a subcommand's own flags and positionals are
+ * never stolen (`omp grep --profile <path>` greps for `--profile`; it does not
+ * select a profile). `launch` is the explicit spelling of the default command,
+ * so `omp launch --profile work` still selects profile `work`.
  *
  * Throws when either flag is supplied without a value.
  */
@@ -161,11 +161,12 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 
 		// Only the first residual argv token can be the dispatched subcommand. Once
 		// any other token has been forwarded, later subcommand names are launch text.
-		if (canDispatchSubcommand && isSubcommand(arg)) {
+		// `launch` is special: it is an explicit spelling of the default command,
+		// so global launch flags that follow it must still be extracted.
+		if (canDispatchSubcommand && isSubcommand(arg) && arg !== "launch") {
 			sawSubcommand = true;
-		} else {
-			canDispatchSubcommand = false;
 		}
+		canDispatchSubcommand = false;
 		stripped.push(arg);
 	}
 

@@ -3,7 +3,16 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
-import { getActiveProfile, getAgentDbPath, getAgentDir, setAgentDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
+import {
+	__resetProfileSnapshotForTests,
+	APP_NAME,
+	getActiveProfile,
+	getAgentDbPath,
+	getAgentDir,
+	setAgentDir,
+	setProfile,
+	VERSION,
+} from "@oh-my-pi/pi-utils/dirs";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { runCli } from "../src/cli";
 import * as profileAliasCli from "../src/cli/profile-alias";
@@ -73,6 +82,12 @@ describe("global --profile flag", () => {
 		} else {
 			process.env.PI_PROFILE = originalPiProfileEnv;
 		}
+		if (originalAgentDirEnv === undefined) {
+			delete process.env.PI_CODING_AGENT_DIR;
+		} else {
+			process.env.PI_CODING_AGENT_DIR = originalAgentDirEnv;
+		}
+		__resetProfileSnapshotForTests();
 		process.exitCode = 0;
 		await fs.rm(path.join(os.homedir(), configDir), { recursive: true, force: true });
 	});
@@ -133,7 +148,34 @@ describe("global --profile flag", () => {
 				aliasName: "omp-work",
 			}),
 		);
-		expect(outSpy.mock.calls.map(call => String(call[0] ?? "")).join("\n")).toContain("Created omp-work");
+		const output = outSpy.mock.calls.map(call => String(call[0] ?? "")).join("\n");
+		expect(output).toContain("Created omp-work");
+		expect(output).not.toContain(`${APP_NAME}/${VERSION}`);
+	});
+
+	it("installs a shell alias when launch is explicit", async () => {
+		const installSpy = vi.spyOn(profileAliasCli, "installProfileAlias").mockResolvedValue({
+			shell: "bash",
+			configPath: "/home/me/.bashrc",
+			aliasName: "omp-work",
+			profile: "work",
+			command: "omp --profile=work",
+			reloadedWith: ". '/home/me/.bashrc'",
+		});
+		const outSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+		await runCli(["launch", "--profile", "work", "--alias", "omp-work", "--version"]);
+
+		expect(process.exitCode).toBe(0);
+		expect(installSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				profile: "work",
+				aliasName: "omp-work",
+			}),
+		);
+		const output = outSpy.mock.calls.map(call => String(call[0] ?? "")).join("\n");
+		expect(output).toContain("Created omp-work");
+		expect(output).not.toContain(`${APP_NAME}/${VERSION}`);
 	});
 
 	it("rejects missing profile values without dispatching", async () => {
