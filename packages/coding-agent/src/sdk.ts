@@ -1300,10 +1300,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			setActiveRules([...rulebookRules, ...alwaysApplyRules]);
 			if (asyncJobManager) AsyncJobManager.setInstance(asyncJobManager);
 		}
+		const localProtocolOptions = options.localProtocolOptions ?? {
+			getArtifactsDir,
+			getSessionId: () => sessionManager.getSessionId?.() ?? null,
+		};
 		if (options.localProtocolOptions) {
 			LocalProtocolHandler.setOverride(options.localProtocolOptions);
 		}
 		toolSession.getArtifactsDir = getArtifactsDir;
+		toolSession.localProtocolOptions = localProtocolOptions;
 		toolSession.agentOutputManager = new AgentOutputManager(
 			getArtifactsDir,
 			options.parentTaskPrefix ? { parentPrefix: options.parentTaskPrefix } : undefined,
@@ -1314,6 +1319,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		// Discover MCP tools from .mcp.json files
 		let mcpManager: MCPManager | undefined = options.mcpManager;
+		toolSession.mcpManager = mcpManager;
 		const enableMCP = options.enableMCP ?? true;
 		const customTools: CustomTool[] = [];
 		if (enableMCP && !mcpManager) {
@@ -1332,6 +1338,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				authStorage,
 			});
 			mcpManager = mcpResult.manager;
+			toolSession.mcpManager = mcpManager;
 
 			if (settings.get("mcp.notifications")) {
 				mcpManager.setNotificationsEnabled(true);

@@ -10,7 +10,9 @@ import type { Skill } from "../extensibility/skills";
 import type { GoalModeState, GoalRuntime } from "../goals";
 import { GoalTool } from "../goals/tools/goal-tool";
 import type { HindsightSessionState } from "../hindsight/state";
+import type { LocalProtocolOptions } from "../internal-urls";
 import { LspTool } from "../lsp";
+import type { MCPManager } from "../mcp";
 import type { MnemosyneSessionState } from "../mnemosyne/state";
 import type { PlanModeState } from "../plan-mode/state";
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
@@ -179,6 +181,10 @@ export interface ToolSession {
 	modelRegistry?: import("../config/model-registry").ModelRegistry;
 	/** Agent output manager for unique agent:// IDs across task invocations */
 	agentOutputManager?: AgentOutputManager;
+	/** MCP manager visible to subagents without relying on the process-global singleton. */
+	mcpManager?: MCPManager;
+	/** Local protocol root to propagate to nested subagents and eval-created agents. */
+	localProtocolOptions?: LocalProtocolOptions;
 	/** Settings instance for passing to subagents */
 	settings: Settings;
 	/** Plan mode state (if active) */
