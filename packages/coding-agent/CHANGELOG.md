@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `omp` segfaulting on exit on Windows after the tiny title/memory model loaded `onnxruntime-node` (issue [#1606](https://github.com/can1357/oh-my-pi/issues/1606)). The tiny model now runs in a Bun subprocess instead of a Worker thread, so the NAPI finalizer that crashes during shutdown never executes in the agent's address space; the subprocess is `SIGKILL`'d on dispose to skip every native destructor on every platform.
+
 ## [15.7.4] - 2026-05-31
 
 ### Removed
