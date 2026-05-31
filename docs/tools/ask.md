@@ -1,6 +1,6 @@
 # ask
 
-> Prompts the interactive user for one or more choices or free-form answers.
+> Prompts the interactive user for one or more option-picker or free-form answers.
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/ask.ts`
@@ -22,7 +22,7 @@
 | --- | --- | --- | --- |
 | `id` | `string` | Yes | Stable identifier used in multi-question results. |
 | `question` | `string` | Yes | Prompt text shown to the user. |
-| `options` | `{ label: string }[]` | Yes | Explicit options. The UI always appends `Other (type your own)`; callers must not include it. |
+| `options` | `{ label: string }[]` | Yes | Option labels for the picker. The schema does not require a minimum length; the UI always appends `Other (type your own)`, and callers must not include it. |
 | `multi` | `boolean` | No | Enables multi-select mode. Default: `false`. |
 | `recommended` | `number` | No | Zero-based recommended option index. In single-select mode the label gets ` (Recommended)` appended in the UI. |
 
@@ -39,7 +39,7 @@
 ## Flow
 1. `AskTool.createIf()` only registers the tool when `session.hasUI` is true; headless sessions never get it.
 2. `execute()` requires `context.ui`; if missing it aborts the context and throws `ToolAbortError("Ask tool requires interactive mode")`.
-3. It reads `ask.timeout` from settings, converts seconds to milliseconds, and disables timeout entirely while plan mode is enabled (`packages/coding-agent/src/tools/ask.ts`).
+3. It reads `ask.timeout` from settings, converts seconds to milliseconds (`0` disables timeout), and disables timeout entirely while plan mode is enabled (`packages/coding-agent/src/tools/ask.ts`).
 4. If `ask.notify` is not `off`, it sends a terminal notification: `Waiting for input`.
 5. For each question, `askSingleQuestion()` drives either:
    - single-select list + optional editor for `Other`
@@ -68,8 +68,8 @@
 
 ## Limits & Caps
 - `questions` must contain at least 1 item (`askSchema` in `packages/coding-agent/src/tools/ask.ts`).
-- `ask.timeout` default is `30` seconds; `0` disables timeout (`packages/coding-agent/src/config/settings-schema.ts`).
-- Prompt guidance says provide 2-5 options, but code does not enforce that (`packages/coding-agent/src/prompts/tools/ask.md`).
+- `ask.timeout` default is `0` seconds, which disables timeout (`packages/coding-agent/src/config/settings-schema.ts`). Configured non-zero values are seconds.
+- Prompt guidance says provide 2-5 options, but code only requires the `options` array field and does not enforce a minimum or maximum length (`packages/coding-agent/src/prompts/tools/ask.md`).
 - Timeout only applies to the option picker; once the user chooses `Other`, the editor has no timeout (`packages/coding-agent/src/prompts/tools/ask.md`).
 
 ## Errors

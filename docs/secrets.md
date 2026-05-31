@@ -1,6 +1,6 @@
 # Secret Obfuscation
 
-Prevents sensitive values (API keys, tokens, passwords) from being sent to LLM providers. When enabled, secrets are replaced with deterministic placeholders before leaving the process, and restored in tool call arguments returned by the model.
+Prevents sensitive values (API keys, tokens, passwords) from being sent to LLM providers. When enabled, secrets are replaced before outbound text content leaves the process. Reversible obfuscation placeholders are restored when session context is rebuilt for display or resume.
 
 ## Enabling
 
@@ -19,14 +19,14 @@ secrets:
 
 2. Outbound text messages to the LLM have secret values replaced with deterministic placeholders like `#AB12#`.
 
-3. Session context/tool arguments returned from the model are deep-walked and obfuscation placeholders are restored to original values before display or execution.
+3. Session context is deep-walked and obfuscation placeholders are restored when building display/resume context. Replace-mode substitutions are one-way and are not restored.
 
 Two modes control what happens to each secret:
 
-| Mode                  | Behavior                                                | Reversible                                      |
-| --------------------- | ------------------------------------------------------- | ----------------------------------------------- |
-| `obfuscate` (default) | Replaced with deterministic placeholder `#[A-Z0-9]{4}#` | Yes (deobfuscated in tool args/session context) |
-| `replace`             | Replaced with deterministic same-length string          | No (one-way)                                    |
+| Mode                  | Behavior                                                | Reversible                                   |
+| --------------------- | ------------------------------------------------------- | -------------------------------------------- |
+| `obfuscate` (default) | Replaced with deterministic placeholder `#[A-Z0-9]{4}#` | Yes (deobfuscated in display/resume context) |
+| `replace`             | Replaced with deterministic same-length string          | No (one-way)                                 |
 
 ## secrets.yml
 

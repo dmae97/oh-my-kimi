@@ -32,8 +32,8 @@ import {
 	hasGlobPathChars,
 	isLineInRanges,
 	type LineRange,
-	type ResolvedSearchTarget,
 	parseLineRanges,
+	type ResolvedSearchTarget,
 	resolveReadPath,
 	resolveToolSearchScope,
 	splitPathAndSel,
@@ -805,7 +805,10 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 							let totalMatches = 0;
 							let filesSearched = 0;
 							const targets = exactFilePaths
-								? exactFilePaths.map(filePath => ({ basePath: filePath, glob: undefined as string | undefined }))
+								? exactFilePaths.map(filePath => ({
+										basePath: filePath,
+										glob: undefined as string | undefined,
+									}))
 								: (multiTargets ?? []);
 							for (const target of targets) {
 								const targetResult = await grep(

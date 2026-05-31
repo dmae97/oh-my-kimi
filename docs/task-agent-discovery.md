@@ -195,13 +195,12 @@ In `runSubprocess` (`src/task/executor.ts`):
 
 So deeper levels cannot spawn further tasks even if the agent definition includes `spawns`.
 
-## Plan mode caveat (current implementation)
+## Plan mode behavior
 
-`TaskTool.execute` computes an `effectiveAgent` for plan mode (prepends plan-mode prompt, forces read-only tool subset, clears spawns), but `runSubprocess` is called with `agent` rather than `effectiveAgent`.
+When parent plan mode is enabled, `TaskTool.execute` builds an `effectiveAgent` before launching subprocesses:
 
-Current effect:
+- prepends the plan-mode subagent system prompt
+- restricts tools to `read`, `search`, `find`, `lsp`, and `web_search`
+- clears child spawns
 
-- model override / thinking level / output schema are derived from `effectiveAgent`
-- system prompt and tool/spawn restrictions from `effectiveAgent` are not passed through in this call path
-
-This is an implementation caveat worth knowing when reading plan-mode behavior expectations.
+The same `effectiveAgent` is used for subprocess launch, model/thinking overrides, and output-schema selection.

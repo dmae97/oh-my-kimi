@@ -6,7 +6,7 @@ Tool approval has two independent inputs:
    - `read`: reads data or updates UI-only session metadata.
    - `write`: mutates workspace/session state but does not execute arbitrary code.
    - `exec`: executes code, shells out, drives a browser, spawns agents, or performs similarly broad actions.
-2. **User policy** — `tools.approval.<toolName>: allow | deny | prompt` overrides the mode for that tool.
+2. **User policy** — `tools.approval.<toolName>: allow | deny | prompt` overrides the mode for that tool unless a non-yolo safety override forces a prompt.
 
 Tools without an `approval` declaration are treated as `exec`. This is the safe default for MCP and unknown custom tools.
 
@@ -14,13 +14,11 @@ Tools without an `approval` declaration are treated as `exec`. This is the safe 
 
 Configure with `tools.approvalMode`:
 
-## Modes
-
-| Mode | Auto-approves | Prompts for |
-| --- | --- | --- |
-| `always-ask` | `read` | `write`, `exec` |
-| `write` | `read`, `write` | `exec` |
-| `yolo` (default) | `read`, `write`, `exec` | none |
+| Mode             | Auto-approves           | Prompts for     |
+| ---------------- | ----------------------- | --------------- |
+| `always-ask`     | `read`                  | `write`, `exec` |
+| `write`          | `read`, `write`         | `exec`          |
+| `yolo` (default) | `read`, `write`, `exec` | none            |
 
 `--auto-approve` and `--yolo` force `tools.approvalMode: yolo` for the session.
 
@@ -40,12 +38,11 @@ tools:
 Resolution per tool call:
 
 1. Compute the tool's approval decision from `tool.approval(args)`; omitted means `exec`.
-2. A user policy in `tools.approval.<tool>` is always applied.
-3. In `yolo` mode, with no user policy, the call is auto-approved.
-4. In non-yolo modes, if the tool sets `override: true`, `deny` is blocked and all other cases prompt.
-5. Otherwise, the active mode auto-approves or prompts by tier.
-
-Invalid policy values are ignored and fall back to the tool tier/mode decision.
+2. Normalize `tools.approval.<tool>` if present; invalid values are ignored.
+3. In `yolo` mode, the user policy is used when present; otherwise the call is allowed. Safety `override` reasons do not force a prompt in `yolo`.
+4. In non-yolo modes, if the tool sets `override: true`, `deny` is blocked and all other cases prompt, even if user policy says `allow`.
+5. Otherwise, a valid user policy wins.
+6. Otherwise, the active mode auto-approves or prompts by tier.
 
 ## Safety overrides
 
@@ -55,7 +52,7 @@ A tool can force a prompt with object-form approval:
 approval: { tier: "exec", override: true, reason: "Critical pattern detected" }
 ```
 
- `bash` uses this for critical destructive patterns such as `rm -rf /`, fork bombs, remote-fetch-then-execute, writes to `/etc/passwd`, and host shutdown commands. These surface as `reason` in the approval prompt, but in `yolo` mode they are auto-approved unless a user policy for the tool is set to `prompt` or `deny`.
+`bash` uses this for critical destructive patterns such as `rm -rf /`, fork bombs, remote-fetch-then-execute, writes to `/etc/passwd`, and host shutdown commands. These surface as `reason` in the approval prompt, but in `yolo` mode they are auto-approved unless a user policy for the tool is set to `prompt` or `deny`.
 
 ## Per-tool prompt details
 
@@ -82,13 +79,14 @@ formatApprovalDetails?: (args: unknown) => string | string[] | undefined;
 Examples:
 
 ```ts
-approval: "read"
+approval: "read";
 
-approval: args => LSP_READONLY_ACTIONS.has(args.action) ? "read" : "write"
+approval: (args) => (LSP_READONLY_ACTIONS.has(args.action) ? "read" : "write");
 
-approval: args => isCritical(args.command)
-  ? { tier: "exec", override: true, reason: "Critical pattern detected" }
-  : "exec"
+approval: (args) =>
+  isCritical(args.command)
+    ? { tier: "exec", override: true, reason: "Critical pattern detected" }
+    : "exec";
 ```
 
 ## Subagents

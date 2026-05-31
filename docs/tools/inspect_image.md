@@ -46,10 +46,10 @@ TUI rendering adds presentation-only truncation from `packages/coding-agent/src/
 6. `readImageMetadata(...)` in `packages/utils/src/mime.ts` inspects file headers only. Supported detected MIME types are `image/png`, `image/jpeg`, `image/gif`, and `image/webp`.
 7. If `images.autoResize` is true, `loadImageInput(...)` calls `resizeImage(...)`. Resize failures are swallowed there and the original bytes are kept.
 8. If MIME detection returned no supported image type, `execute(...)` throws `ToolError("inspect_image only supports PNG, JPEG, GIF, and WEBP files detected by file content.")`.
-9. The tool calls `completeSimple(...)` with one user message containing two content parts in order:
+9. The tool calls `instrumentedCompleteSimple(...)` with one user message containing two content parts in order:
    - `{ type: "image", data: imageInput.data, mimeType: imageInput.mimeType }`
    - `{ type: "text", text: params.question }`
-10. `systemPrompt` is a one-element array rendered from `packages/coding-agent/src/prompts/tools/inspect-image-system.md`.
+10. `systemPrompt` is a one-element array rendered from `packages/coding-agent/src/prompts/tools/inspect-image-system.md`; telemetry is tagged with oneshot kind `inspect_image`.
 11. If the model response stop reason is `error` or `aborted`, the tool maps that to `ToolError`.
 12. `extractResponseText(...)` concatenates only `text` content blocks from the assistant message, trims the result, and fails if nothing remains.
 13. Success returns the text plus `details`; `inspectImageToolRenderer` formats the result for the TUI.
@@ -65,11 +65,11 @@ TUI rendering adds presentation-only truncation from `packages/coding-agent/src/
   - Resolves and reads the target image from disk.
   - Stats the file once with `Bun.file(...).stat()` and reads it fully with `fs.readFile(...)`.
 - Network
-  - Sends the final base64 image payload plus question text to the selected model through `completeSimple(...)`.
+  - Sends the final base64 image payload plus question text to the selected model through `instrumentedCompleteSimple(...)` / the configured simple completion implementation.
 - Session state
   - Reads session settings, active model preferences, cwd, and model registry.
 - Background work / cancellation
-  - Passes the caller `AbortSignal` into `completeSimple(...)`.
+  - Passes the caller `AbortSignal` into `instrumentedCompleteSimple(...)` and the configured simple completion implementation.
   - Image preprocessing is local and not cancellation-aware in these helpers.
 
 ## Limits & Caps
@@ -112,6 +112,7 @@ TUI rendering adds presentation-only truncation from `packages/coding-agent/src/
 Failures surface as thrown `ToolError`s from `execute(...)`; the normal success return shape is not used for error reporting.
 
 ## Notes
+- The tool schema is not marked strict in `InspectImageTool`; callers should still treat only `path` and `question` as supported inputs because the implementation reads no other fields.
 - The model-facing prompt path on disk is `packages/coding-agent/src/prompts/tools/inspect-image.md`; the assignment's underscore form does not exist.
 - Format support is based on file content, not filename extension. Renaming a non-image file to `.png` does not make it valid.
 - `resolveReadPath(...)` tries macOS-specific path variants: shell-unescaped spaces, AM/PM narrow no-break-space filenames, NFD normalization, and curly-quote variants.

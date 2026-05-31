@@ -14,8 +14,9 @@ This document explains how preview/apply workflows are modeled in coding-agent a
 
 `resolve` is a hidden tool that finalizes a pending preview action.
 
-- `action: "apply"` executes the queued action's `apply(reason)` callback and returns that result with resolve metadata.
-- `action: "discard"` invokes `reject(reason)` if provided; otherwise returns `Discarded: <label>. Reason: <reason>`.
+- `action: "apply"` executes the queued action's `apply(reason, extra)` callback and returns that result with resolve metadata.
+- `action: "discard"` invokes `reject(reason, extra)` if provided; otherwise returns `Discarded: <label>. Reason: <reason>`.
+- `extra` is optional free-form metadata. Queue handlers receive it; producers decide whether it has meaning.
 
 If no pending action exists, `resolve` fails with:
 
@@ -32,7 +33,9 @@ Runtime behavior:
 - if the model rejects the forced tool choice, the queue directive is requeued,
 - `resolve` does not maintain a separate pending-action stack.
 
-Multiple pending previews therefore follow the active tool-choice queue ordering, not an independent pending-action store.
+`resolve` also checks a standing resolve handler after the queue invoker; this is used by long-lived approval flows that are not ordinary preview tool calls.
+
+Multiple pending previews therefore follow the active tool-choice queue ordering, not an independent pending-action store. If an apply callback throws, the queued helper re-pushes the same resolve directive and reminder so the preview can still be discarded or retried.
 
 ## Built-in producer example (`ast_edit`)
 
@@ -40,9 +43,9 @@ Multiple pending previews therefore follow the active tool-choice queue ordering
 
 - label (human-readable summary)
 - `sourceToolName` (`ast_edit`)
-- `apply(reason: string)` callback that reruns AST edit with `dryRun: false`
+- `apply(reason: string, extra?: Record<string, unknown>)` callback that reruns AST edit with `dryRun: false`
 
-`resolve(action="apply", reason="...")` passes `reason` into this callback.
+`resolve(action="apply", reason="...")` passes `reason` into this callback. `ast_edit` currently ignores `extra`.
 
 ## Custom tools: `pushPendingAction`
 

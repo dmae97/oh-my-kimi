@@ -4,10 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
-	InternalUrlRouter,
-	LocalProtocolHandler,
 	type InternalResource,
 	type InternalUrl,
+	InternalUrlRouter,
+	LocalProtocolHandler,
 	type ProtocolHandler,
 } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";

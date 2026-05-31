@@ -1,10 +1,12 @@
 # Embedded Local Tiny-Model Experiments
 
-This document summarizes the experiments behind the optional **local** tiny-model paths for two
-coding-agent tasks: session-title generation (`providers.tinyModel`) and Mnemosyne memory
-extraction/consolidation (`providers.memoryModel`). It is a factual engineering record for
-maintainers: what we measured, which recipes won, and which models we shipped. Both settings
-default to `online`, so existing users incur no downloads or on-device inference cost unless they opt in.
+This document summarizes the experiments behind the optional **local** tiny-model paths for
+session-title generation (`providers.tinyModel`), Mnemosyne memory extraction/consolidation
+(`providers.memoryModel`), and the `auto` thinking-level difficulty classifier
+(`providers.autoThinkingModel`, which reuses the memory-model registry). It is a factual engineering
+record for maintainers: what we measured, which recipes won, and which models we shipped. All three
+settings default to `online`, so existing users incur no downloads or on-device inference cost unless
+they opt in.
 
 ## Runtime / environment findings
 
@@ -14,15 +16,17 @@ default to `online`, so existing users incur no downloads or on-device inference
   explicit accelerated provider cannot initialize.
   - Pick a provider persistently with the `providers.tinyModelDevice` setting (`default` keeps CPU),
     or per-run with the `PI_TINY_DEVICE` env var (which overrides the setting).
+  - Accepted values are `cpu`, `gpu`, `metal`/`webgpu`, `auto`, `cuda`, `dml`, `coreml`, `wasm`,
+    `webnn`, `webnn-gpu`, `webnn-cpu`, and `webnn-npu`.
   - Direct `coreml` remains opt-in via `PI_TINY_DEVICE=coreml`; it is not part of the default because
     cached decoder-LLM ONNX loads can fail during session initialization.
-  - WebGPU/Metal works for the single-process eval harness, but it is not enabled in the production
-    worker on macOS because ONNX Runtime/Bun currently hard-crashes on worker teardown after WebGPU
-    inference.
+  - WebGPU/Metal works for the single-process eval harness, but the production worker forces
+    Darwin `gpu`/`webgpu`/`auto` requests back to CPU because ONNX Runtime/Bun currently
+    hard-crashes on worker teardown after WebGPU inference.
   - Use `providers.tinyModelDevice` or `PI_TINY_DEVICE` only when explicitly opting out of the CPU
     default.
 - **Quantization: q4 is the sweet spot** — smaller on disk, faster to load, and fast at inference.
-  q8/int8 loads slower *and* infers slower on CPU. Every shipped model defaults to `q4`; override the
+  q8/int8 loads slower _and_ infers slower on CPU. Every shipped model defaults to `q4`; override the
   precision persistently with the `providers.tinyModelDtype` setting (`default` keeps `q4`, e.g. `fp16`
   for higher fidelity), or per-run with `PI_TINY_DTYPE` (which overrides the setting). Accepts `auto`,
   `fp32`, `fp16`, `q8`, `int8`, `uint8`, `q4`, `bnb4`, `q4f16`, `q2`, `q2f16`, `q1`, `q1f16`; an
@@ -61,14 +65,14 @@ default to `online`, so existing users incur no downloads or on-device inference
 
 **Leaderboard** (tag trick, CPU, warm):
 
-| Model | Verdict |
-| --- | --- |
-| LFM2-350M | Best speed/quality balance (~212MB) |
-| Qwen3-0.6B | Most robust |
-| gemma-3-270m | Smallest viable |
-| Qwen2.5-0.5B | Acceptable |
-| SmolLM2-135M | Too small |
-| flan-t5-small | Rejected — just echoes the input |
+| Model         | Verdict                             |
+| ------------- | ----------------------------------- |
+| LFM2-350M     | Best speed/quality balance (~212MB) |
+| Qwen3-0.6B    | Most robust                         |
+| gemma-3-270m  | Smallest viable                     |
+| Qwen2.5-0.5B  | Acceptable                          |
+| SmolLM2-135M  | Too small                           |
+| flan-t5-small | Rejected — just echoes the input    |
 
 **Shipped local options**: `lfm2-350m`, `qwen3-0.6b`, `gemma-270m`, `qwen2.5-0.5b`, `lfm2-700m`.
 **Default**: `online` (pi/smol).
@@ -133,10 +137,11 @@ wins that task.
 
 ## Integration notes
 
-- Both settings default to `online`, so existing users get **no downloads or on-device inference cost**
-  unless they opt in.
+- `providers.tinyModel`, `providers.memoryModel`, and `providers.autoThinkingModel` default to
+  `online`, so existing users get **no downloads or on-device inference cost** unless they opt in.
 - Local inference runs **in a worker** (off the main thread); models are cached on disk and
   downloaded on first use.
 - The memory local path applies the refined recipes (line-format + small-talk-guarded extraction
   prompt, hardened consolidation prompt) via Mnemosyne prompt overrides; the **online path is
   unchanged**.
+- `providers.autoThinkingModel` uses the same shipped local options as `providers.memoryModel`.

@@ -22,11 +22,11 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `input` | `string` | Yes | One or more file sections. Anchored sections start with `¶PATH#TAG`; hashless `¶PATH` is allowed only for new-file creation or purely `insert head:` / `insert tail:` inserts. Optional `*** Begin Patch` / `*** End Patch` envelope is ignored if present. |
+| `input` | `string` | Yes | One or more file sections. Anchored sections must start with `¶PATH#TAG`; `TAG` is the four-hex snapshot tag emitted by the latest `read`/`search`/`write`/successful `edit`. Optional `*** Begin Patch` / `*** End Patch` envelope is ignored if present. |
 
 Patch language inside `input`:
 
-- **File header**: `¶PATH#TAG` (or `¶PATH` for new-file / head/tail-only inserts). `TAG` is three uppercase-hex chars minted by the session snapshot store.
+- **File header**: `¶PATH#TAG`. `TAG` is four uppercase-hex chars minted by the session snapshot store.
 - **Operations**:
   - `replace N..M:` — replace original lines N..M with the body rows below.
   - `replace block N:` — replace the whole tree-sitter block beginning on line N (its header line through its closing line) with the body rows. The line span is resolved at apply time from the file's parse tree; point N at the line that opens the construct. Errors (and steers to `replace N..M:`) when the language is unsupported, line N is blank or a closing delimiter, no node begins there, or the resolved block has a syntax error.
@@ -55,7 +55,8 @@ The canonical grammar is strict, but the hand parser accepts a few non-dangerous
 - `replace N-M:`, `replace N…M:`, and `replace N M:` — accepted as `replace N..M:`.
 - Bare body rows with no `+` prefix are auto-prepended with `+` and a `BARE_BODY_AUTO_PIPED_WARNING` is appended.
 - `*** Begin Patch` / `*** End Patch` envelopes are silently consumed. `*** Abort` terminates parsing silently — ops parsed before the marker still apply, no warning surfaced.
-- `*** Update File:` / `*** Add File:` / `*** Delete File:` / `*** Move to:` apply_patch sentinels throw an `apply_patch sentinel … is not valid in hashline` error.
+- Some malformed `¶` headers are recovered after stripping apply-patch path noise such as `Update File:` / `Add File:` and extra `***`, but the recovered header still needs a valid four-hex tag for the patcher to apply it.
+- `*** Update File:` / `*** Add File:` / `*** Delete File:` / `*** Move to:` apply_patch sentinels inside the diff body throw an `apply_patch sentinel … is not valid in hashline` error.
 - `@@`-bracketed hunk headers are rejected with guidance to write a verb header.
 - Bare `N` and bare `N M` / `N..M` headers are rejected with guidance to write `replace` or `delete`.
 - `delete N..M:` and any body rows under `delete` / `delete block` are rejected.
@@ -89,7 +90,7 @@ Warnings:
 Reference file (the exact shape `read` returns):
 
 ```text
-¶a.ts#0A3
+¶a.ts#0A3B
 1:const X = "a";
 2:const Y = X;
 3:
@@ -101,7 +102,7 @@ Reference file (the exact shape `read` returns):
 Replace line 1 with two lines:
 
 ```text
-¶a.ts#0A3
+¶a.ts#0A3B
 replace 1..1:
 +const X = "b";
 +export const Y = X;
@@ -110,7 +111,7 @@ replace 1..1:
 Insert below line 5:
 
 ```text
-¶a.ts#0A3
+¶a.ts#0A3B
 insert after 5:
 +console.log(X + Y);
 ```
@@ -118,7 +119,7 @@ insert after 5:
 Insert above line 5:
 
 ```text
-¶a.ts#0A3
+¶a.ts#0A3B
 insert before 5:
 +console.log(X + Y);
 ```
@@ -126,14 +127,14 @@ insert before 5:
 Delete lines 4..5 entirely:
 
 ```text
-¶a.ts#0A3
+¶a.ts#0A3B
 delete 4..5
 ```
 
 Insert at start and end of file:
 
 ```text
-¶a.ts#0A3
+¶a.ts#0A3B
 insert head:
 +// header
 insert tail:
@@ -143,15 +144,15 @@ insert tail:
 Multi-file:
 
 ```text
-¶src/a.ts#0A3
+¶src/a.ts#0A3B
 replace 4..4:
 +const enabled = true;
-¶src/b.ts#1F7
+¶src/b.ts#1F7C
 delete 20
 ```
 
 ## Limits & Caps
-- File snapshot tags are exactly three uppercase-hex chars minted by the per-session snapshot store.
+- File snapshot tags are exactly four uppercase-hex chars minted by the per-session snapshot store.
 - The visible mismatch report shows 2 lines of context on each side (`MISMATCH_CONTEXT`) in `packages/hashline/src/messages.ts`.
 - Stale-anchor recovery uses `fuzzFactor: 0` in `packages/hashline/src/recovery.ts`.
 - `HL_FILE_PREFIX` is `¶`, `HL_PAYLOAD_REPLACE` is `+`, `HL_RANGE_SEP` is `..`, `HL_FILE_HASH_SEP` is `#`, and hunk keyword constants are `replace` / `delete` / `insert` (`packages/hashline/src/format.ts`).
@@ -159,7 +160,7 @@ delete 20
 ## Errors
 - Missing section header:
   - `input must begin with "¶PATH#HASH" on the first non-blank line for anchored edits; got: ...`
-- Missing tag for anchored edit:
+- Missing tag for any section:
   - `Missing hashline snapshot tag for anchored edit to <path>; use ¶<path>#tag from your latest read/search output.`
 - Stray payload line:
   - `line N: payload line has no preceding hunk header. Use \`replace N..M:\`, \`delete N..M\`, or \`insert before|after|head|tail:\` above the body. Got "...".`

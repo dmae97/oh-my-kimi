@@ -81,4 +81,3 @@ You are in an active checkpoint. You MUST call rewind with your investigation fi
   - blob-store contents
   - SQLite history rows from `packages/coding-agent/src/session/history-storage.ts`
   - auth or agent records from `packages/coding-agent/src/session/agent-storage.ts`
-- If the turn ends with `stopReason === "aborted"` while a checkpoint is active, `AgentSession` clears `#checkpointState` and `#pendingRewindReport` instead of preserving a half-finished checkpoint.

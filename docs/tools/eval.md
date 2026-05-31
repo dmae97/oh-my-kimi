@@ -9,10 +9,10 @@
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/eval.md`
 - Key collaborators:
   - `packages/coding-agent/src/eval/backend.ts` — backend execution contract
-  - `packages/coding-agent/src/eval/js/index.ts` — JS backend adapter
-  - `packages/coding-agent/src/eval/js/executor.ts` — JS execution + output sink
-  - `packages/coding-agent/src/eval/js/context-manager.ts` — persistent VM contexts, prelude, tool bridge
-  - `packages/coding-agent/src/eval/js/prelude.txt` — JS global helpers
+  - `packages/coding-agent/src/eval/js/executor.ts` — JS backend adapter
+  - `packages/coding-agent/src/eval/js/worker-core.ts` — JS execution, VM context, display/log capture
+  - `packages/coding-agent/src/eval/js/shared/prelude.txt` — JS global helper installer
+  - `packages/coding-agent/src/eval/js/shared/helpers.ts` — JS filesystem/text/env helper implementations
   - `packages/coding-agent/src/eval/py/index.ts` — Python backend adapter
   - `packages/coding-agent/src/eval/py/executor.ts` — kernel session retention, reset, cleanup
   - `packages/coding-agent/src/eval/py/kernel.ts` — Jupyter gateway/kernel protocol, display capture
@@ -56,13 +56,12 @@ Final result from `EvalTool.execute()` is single-shot, but `onUpdate` streams pa
 
 Returned shape:
 
-- `content`: one text block containing combined cell output, or `(no text output)` / `(no output)` when only rich outputs exist.
+- `content`: one text block containing combined cell output, `(displayed N image(s); no text output)` when only images exist, or `(no output)` when nothing visible was produced; image outputs are appended as additional image content blocks.
 - `details` (`EvalToolDetails` from `packages/coding-agent/src/eval/types.ts`):
   - `cells`: per-cell code, status (`pending`/`running`/`complete`/`error`), output, duration, exit code, status events, markdown flag
   - `language`: first backend used
   - `languages`: distinct backends used, in first-use order
   - `jsonOutputs`: structured values emitted via `display(...)`
-  - `images`: image payloads emitted by Python rich display or JS `display({ type: "image", ... })`
   - `statusEvents`: aggregated helper/tool status events
   - `notice`: backend fallback notice (currently unused; reserved for future per-cell notices)
   - `meta`: truncation metadata
@@ -75,7 +74,7 @@ Renderer behavior in `packages/coding-agent/src/tools/eval.ts`:
 - markdown outputs are rendered with the Markdown component instead of plain text
 - `jsonOutputs` render as a tree, collapsed or expanded depending on UI state
 - timeout / truncation notices render as dim metadata lines
-- images are carried in `details.images`; generic tool UI image handling renders them outside the text block
+- images are returned as content image blocks; live updates may also carry `details.images` while execution is in progress
 
 Side-channel artifacts:
 
@@ -92,7 +91,7 @@ Side-channel artifacts:
 3. The tool allocates an `OutputSink`, a `TailBuffer`, per-cell result objects, and a `sessionAbortController`. `session.trackEvalExecution?.(...)` can wrap the whole run for external cancellation tracking.
 4. It resolves the executor session id from `session.getEvalSessionId?.()`, falling back to `defaultEvalSessionId(session)`. Subagents inherit the parent's id so both sides share the same JS VM and Python kernel for each backend.
 5. Cells execute sequentially within one eval tool call. For each cell, `execute()`:
-   - clamps `(cell.timeout ?? 30) * 1000` ms through `clampTimeout("eval", ...)`
+   - clamps `cell.timeout ?? 30` seconds through `clampTimeout("eval", ...)`
    - builds a combined abort signal from the tool signal, the timeout, and the session abort controller
    - marks the cell `running` and emits an update
    - calls the backend’s `execute()` with `cwd`, `sessionId`, `sessionFile`, `kernelOwnerId`, `deadlineMs`, `reset` (defaults to `false`), artifact info, and chunk callback
@@ -120,7 +119,7 @@ If the requested backend is disabled or unavailable, the tool throws `ToolError`
 
 ### JavaScript runtime
 
-Implemented in `packages/coding-agent/src/eval/js/context-manager.ts` and `packages/coding-agent/src/eval/js/prelude.txt`.
+Implemented in `packages/coding-agent/src/eval/js/worker-core.ts`, `packages/coding-agent/src/eval/js/shared/prelude.txt`, and `packages/coding-agent/src/eval/js/shared/helpers.ts`.
 
 - Persistent worker-backed VM sessions keyed by `js:${sessionId}`
 - `reset: true` calls `resetVmContext(sessionKey)` before the cell executes; reset is destructive for all live runs on that JS session
@@ -131,8 +130,12 @@ Implemented in `packages/coding-agent/src/eval/js/context-manager.ts` and `packa
   - `display`, `print`
   - `read`, `write`, `append`, `sort`, `uniq`, `counter`, `diff`, `tree`, `env`, `output`
   - `tool.<name>(args)` proxy for arbitrary session tool calls
-  - `llm(prompt, opts)` for oneshot, stateless LLM calls (see _Oneshot LLM helper_ below)
-- JS helpers are async because they cross the VM/tool boundary
+  - `llm(prompt, opts?)` for oneshot, stateless LLM calls (see _Oneshot LLM helper_ below)
+- JS helpers that touch the host/runtime boundary are async and `await`able; pure text helpers (`sort`, `uniq`, `counter`) return synchronously but may still be safely awaited.
+- JS helper signatures use a trailing options object rather than Python keyword arguments:
+  - `await read(path, { offset?, limit? })`
+  - `await tree(path = ".", { maxDepth?, hidden? })`
+  - `sort(text, { reverse?, unique? })`, `uniq(text, { count? })`, `counter(items, { limit?, reverse? })`
 - `display(value)` behavior:
   - plain objects/arrays become JSON outputs
   - `{ type: "image", data, mimeType }` becomes an image output
@@ -190,7 +193,8 @@ A single tool call can mix Python and JS cells. Persistence is per language runt
 ## Side Effects
 
 - Filesystem
-  - JS/Python prelude helpers can read, write, append, diff, and traverse files under the session cwd or absolute paths.
+  - JS/Python prelude helpers can read, write, append, diff, and traverse filesystem paths under the session cwd or absolute paths.
+  - JS helper `read()` rejects protocol URIs (`://`) and directory paths; use `tool.read(...)` for internal URLs or reader-mode behavior.
   - Output may spill to an artifact file via `OutputSink`.
 - Network
   - Python backend speaks NDJSON to a local `python3` subprocess over stdin/stdout (no network).
@@ -250,11 +254,11 @@ A single tool call can mix Python and JS cells. Persistence is per language runt
 
 ## Notes
 
-- Backend selection is now strictly explicit per cell: `language` must be `"py"` or `"js"`. The previous `*** Cell` header parser, the `eval.lark` constrained grammar, and the sniffer-based fallback have all been removed.
+- Backend selection is strictly explicit per cell: `language` must be `"py"` or `"js"`. The previous `*** Cell` header parser, the `eval.lark` constrained grammar, and the sniffer-based fallback have all been removed.
 - `EvalTool.customFormat` no longer exists. Tool calls flow through the standard JSON schema; there is no Lark-constrained sampling path.
 - `tool.<name>()` exists in both JS and Python. Python calls route through a per-run loopback bridge keyed by the current cell id.
-- JS helper paths reject protocol URIs (`://`) in `resolvePath()`; the JS prelude is filesystem-only unless the code calls `tool.read(...)` or another tool explicitly.
-- Python helper `output(...)` depends on `PI_SESSION_FILE`; it fails outside a session-backed run.
+- JS helper paths reject protocol URIs (`://`) in `resolveRegularFile()` for `read()`, and resolve other paths against the session cwd or absolute filesystem path. Use `tool.read(...)` or another tool explicitly for internal URLs.
+- Python helper `output(...)` depends on `PI_ARTIFACTS_DIR` or `PI_SESSION_FILE`; it fails outside a session-backed run.
 - `display()` can produce text and structured outputs from the same value; the renderer prefers markdown over `text/plain` when both exist.
 - JS static imports are rewritten only at top level. Nested imports stay invalid and surface normal JS syntax/runtime errors.
 - `EvalTool` is `concurrency = "exclusive"` within one agent session, but parent and subagent sessions can run eval concurrently when they share an inherited executor id.

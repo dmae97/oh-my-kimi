@@ -152,6 +152,7 @@ Artifacts and side channels:
   - `task` — general-purpose worker with full capabilities.
   - `quick_task` — low-reasoning mechanical worker using the same task prompt body.
   - `librarian` — source-grounded external API/library researcher.
+  - `oracle` — senior-engineer implementation/debugging/general consultation agent.
 
 ## Side Effects
 - Filesystem
