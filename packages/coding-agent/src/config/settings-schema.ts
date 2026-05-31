@@ -14,9 +14,12 @@ import {
 import {
 	AUTO_THINKING_MODEL_OPTIONS,
 	AUTO_THINKING_MODEL_VALUES,
+	DEFAULT_SHAKE_SUMMARY_MODEL_KEY,
 	ONLINE_AUTO_THINKING_MODEL_KEY,
 	ONLINE_MEMORY_MODEL_KEY,
 	ONLINE_TINY_TITLE_MODEL_KEY,
+	SHAKE_SUMMARY_MODEL_OPTIONS,
+	SHAKE_SUMMARY_MODEL_VALUES,
 	TINY_MEMORY_MODEL_OPTIONS,
 	TINY_MEMORY_MODEL_VALUES,
 	TINY_TITLE_MODEL_OPTIONS,
@@ -1136,12 +1139,13 @@ export const SETTINGS_SCHEMA = {
 
 	"compaction.strategy": {
 		type: "enum",
-		values: ["context-full", "handoff", "off"] as const,
+		values: ["context-full", "handoff", "shake", "shake-summary", "off"] as const,
 		default: "context-full",
 		ui: {
 			tab: "context",
 			label: "Compaction Strategy",
-			description: "Choose in-place context-full maintenance, auto-handoff, or disable auto maintenance (off)",
+			description:
+				"Choose in-place context-full maintenance, auto-handoff, surgical shake (drop heavy content), shake with local-model summaries, or disable auto maintenance (off)",
 			options: [
 				{
 					value: "context-full",
@@ -1149,6 +1153,16 @@ export const SETTINGS_SCHEMA = {
 					description: "Summarize in-place and keep the current session",
 				},
 				{ value: "handoff", label: "Handoff", description: "Generate handoff and continue in a new session" },
+				{
+					value: "shake",
+					label: "Shake",
+					description: "Drop heavy content (tool results + large blocks) in place; recover via artifact",
+				},
+				{
+					value: "shake-summary",
+					label: "Shake (summary)",
+					description: "Shake, but compress heavy regions with a local on-device model instead of dropping",
+				},
 				{
 					value: "off",
 					label: "Off",
@@ -3004,6 +3018,19 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"providers.shakeSummaryModel": {
+		type: "enum",
+		values: SHAKE_SUMMARY_MODEL_VALUES,
+		default: DEFAULT_SHAKE_SUMMARY_MODEL_KEY,
+		ui: {
+			tab: "context",
+			label: "Shake Summary Model",
+			description:
+				"Local on-device model used by /shake summary and the shake-summary compaction strategy to compress heavy regions. Runs entirely on-device; downloads on first use. Falls back to plain elide when unavailable.",
+			options: SHAKE_SUMMARY_MODEL_OPTIONS,
+		},
+	},
+
 	"providers.kimiApiFormat": {
 		type: "enum",
 		values: ["openai", "anthropic"] as const,
@@ -3292,7 +3319,7 @@ export type TreeFilterMode = SettingValue<"treeFilterMode">;
 
 export interface CompactionSettings {
 	enabled: boolean;
-	strategy: "context-full" | "handoff" | "off";
+	strategy: "context-full" | "handoff" | "shake" | "shake-summary" | "off";
 	thresholdPercent: number;
 	thresholdTokens: number;
 	reserveTokens: number;
