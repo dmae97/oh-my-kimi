@@ -103,6 +103,7 @@
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "fastembed": "catalog:",
+        "onnxruntime-node": "catalog:",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
@@ -278,6 +279,7 @@
     "lucide-react": "^1.16.0",
     "marked": "^18.0.4",
     "markit-ai": "0.5.3",
+    "onnxruntime-node": "1.24.3",
     "openai": "^6.39.0",
     "partial-json": "^0.1.7",
     "postcss": "^8.5.15",

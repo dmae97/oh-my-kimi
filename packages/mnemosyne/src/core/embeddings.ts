@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
-import { EmbeddingModel, FlagEmbedding } from "fastembed";
+import { createRequire } from "node:module";
+import type { EmbeddingModel, FlagEmbedding } from "fastembed";
 import { getMnemosyneRuntimeOptions, resolveEmbeddingProvider } from "./runtime-options";
 
 export type Vector = number[];
@@ -24,8 +25,14 @@ type LocalModelInitOptions = {
 };
 type LocalModelInitializer = (options: LocalModelInitOptions) => Promise<LocalEmbeddingModel>;
 
+interface FastembedRuntime {
+	EmbeddingModel: typeof EmbeddingModel;
+	FlagEmbedding: typeof FlagEmbedding;
+}
+
 const FASTEMBED_CACHE_DIR = `${process.env.HOME ?? ""}/.hermes/cache/fastembed`;
 const QUERY_CACHE_MAX = 512;
+const sourceRequire = createRequire(import.meta.url);
 
 let providerOverride: EmbeddingProvider | null = null;
 let localModelPromise: Promise<LocalEmbeddingModel> | null = null;
@@ -33,8 +40,14 @@ let localModelInitializer: LocalModelInitializer = defaultLocalModelInitializer;
 let apiCallCount = 0;
 const queryCache = new Map<string, Vector>();
 
+function loadFastembedRuntime(): FastembedRuntime {
+	// Preload ORT 1.24 before fastembed's ORT 1.21 binding to avoid Windows DLL reuse crashes.
+	sourceRequire("onnxruntime-node");
+	return sourceRequire("fastembed") as FastembedRuntime;
+}
+
 function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
-	return FlagEmbedding.init(options) as Promise<LocalEmbeddingModel>;
+	return loadFastembedRuntime().FlagEmbedding.init(options);
 }
 
 function activeEmbeddingOptions() {
@@ -243,6 +256,7 @@ function cacheSet(key: string, value: Vector): void {
 }
 
 function fastembedModelName(modelName: string): StandardEmbeddingModel | null {
+	const { EmbeddingModel } = loadFastembedRuntime();
 	const known: Record<string, StandardEmbeddingModel> = {
 		"BAAI/bge-small-en-v1.5": EmbeddingModel.BGESmallENV15,
 		"BAAI/bge-base-en-v1.5": EmbeddingModel.BGEBaseENV15,

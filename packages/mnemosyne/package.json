@@ -40,7 +40,8 @@
 	},
 	"dependencies": {
 		"@oh-my-pi/pi-ai": "catalog:",
-		"fastembed": "catalog:"
+		"fastembed": "catalog:",
+		"onnxruntime-node": "catalog:"
 	},
 	"devDependencies": {
 		"@types/bun": "catalog:"
