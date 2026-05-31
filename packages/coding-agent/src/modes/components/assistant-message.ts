@@ -1,5 +1,4 @@
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
-import type { Component } from "@oh-my-pi/pi-tui";
 import { Container, Image, ImageProtocol, Markdown, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
@@ -134,35 +133,25 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	#renderThinkingExtensions(
-		message: AssistantMessage,
-		contentIndex: number,
-		thinkingIndex: number,
-		text: string,
-	): Component | undefined {
+	#appendThinkingExtensions(contentIndex: number, thinkingIndex: number, text: string): void {
 		for (const renderer of this.thinkingRenderers) {
 			try {
 				const component = renderer(
 					{
-						message,
 						contentIndex,
 						thinkingIndex,
 						text,
-						requestRender: () => {
-							if (this.#lastMessage) {
-								this.updateContent(this.#lastMessage);
-							}
-							this.onImageUpdate?.();
-						},
+						requestRender: () => this.onImageUpdate?.(),
 					},
 					theme,
 				);
-				if (component) return component;
+				if (component) {
+					this.#contentContainer.addChild(component);
+				}
 			} catch {
 				// Ignore extension renderer failures and keep the original thinking block visible.
 			}
 		}
-		return undefined;
 	}
 
 	updateContent(message: AssistantMessage): void {
@@ -209,16 +198,8 @@ export class AssistantMessageComponent extends Container {
 							italic: true,
 						}),
 					);
-					const renderedThinkingExtension = this.#renderThinkingExtensions(
-						message,
-						i,
-						thinkingIndex,
-						thinkingText,
-					);
+					this.#appendThinkingExtensions(i, thinkingIndex, thinkingText);
 					thinkingIndex += 1;
-					if (renderedThinkingExtension) {
-						this.#contentContainer.addChild(renderedThinkingExtension);
-					}
 					if (hasVisibleContentAfter) {
 						this.#contentContainer.addChild(new Spacer(1));
 					}

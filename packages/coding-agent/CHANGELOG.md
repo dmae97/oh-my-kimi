@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added an extension API for rendering supplemental UI below visible assistant thinking blocks.
 
 ## [15.7.3] - 2026-05-31
 ### Added

@@ -76,7 +76,8 @@ describe("AssistantMessageComponent mermaid markdown", () => {
 });
 
 describe("AssistantMessageComponent thinking renderers", () => {
-	it("renders extension output below visible thinking blocks", () => {
+	it("renders all extension outputs below visible thinking blocks in registration order", () => {
+		const contexts: Array<{ contentIndex: number; thinkingIndex: number; text: string }> = [];
 		const component = new AssistantMessageComponent(
 			{
 				...createAssistantMessage(""),
@@ -84,12 +85,24 @@ describe("AssistantMessageComponent thinking renderers", () => {
 			},
 			false,
 			undefined,
-			[() => new Text("translated note", 1, 0)],
+			[
+				context => {
+					contexts.push({
+						contentIndex: context.contentIndex,
+						thinkingIndex: context.thinkingIndex,
+						text: context.text,
+					});
+					return new Text("first note", 1, 0);
+				},
+				() => new Text("second note", 1, 0),
+			],
 		);
 
 		const rendered = Bun.stripANSI(component.render(120).join("\n"));
 		expect(rendered).toContain("I should inspect the input.");
-		expect(rendered).toContain("translated note");
+		expect(rendered.indexOf("I should inspect the input.")).toBeLessThan(rendered.indexOf("first note"));
+		expect(rendered.indexOf("first note")).toBeLessThan(rendered.indexOf("second note"));
+		expect(contexts).toEqual([{ contentIndex: 0, thinkingIndex: 0, text: "I should inspect the input." }]);
 	});
 
 	it("keeps original thinking visible when an extension renderer throws", () => {
@@ -110,6 +123,66 @@ describe("AssistantMessageComponent thinking renderers", () => {
 		const rendered = Bun.stripANSI(component.render(120).join("\n"));
 		expect(rendered).toContain("I should inspect the input.");
 		expect(rendered).not.toContain("renderer failed");
+	});
+
+	it("keeps async renderer components mounted when they request a render", () => {
+		let renderRequests = 0;
+		let rendererCalls = 0;
+		let mountedNote: Text | undefined;
+		let requestRender: (() => void) | undefined;
+		const component = new AssistantMessageComponent(
+			{
+				...createAssistantMessage(""),
+				content: [{ type: "thinking", thinking: "I should inspect the input." }],
+			},
+			false,
+			() => {
+				renderRequests += 1;
+			},
+			[
+				context => {
+					rendererCalls += 1;
+					requestRender = context.requestRender;
+					const note = new Text("translation loading", 1, 0);
+					mountedNote ??= note;
+					return note;
+				},
+			],
+		);
+
+		expect(Bun.stripANSI(component.render(120).join("\n"))).toContain("translation loading");
+		mountedNote?.setText("translation ready");
+		requestRender?.();
+
+		const rendered = Bun.stripANSI(component.render(120).join("\n"));
+		expect(renderRequests).toBe(1);
+		expect(rendererCalls).toBe(1);
+		expect(rendered).toContain("translation ready");
+		expect(rendered).not.toContain("translation loading");
+	});
+
+	it("does not invoke extension renderers when thinking is hidden", () => {
+		let rendererCalled = false;
+		const component = new AssistantMessageComponent(
+			{
+				...createAssistantMessage(""),
+				content: [{ type: "thinking", thinking: "I should inspect the input." }],
+			},
+			true,
+			undefined,
+			[
+				() => {
+					rendererCalled = true;
+					return new Text("hidden note", 1, 0);
+				},
+			],
+		);
+
+		const rendered = Bun.stripANSI(component.render(120).join("\n"));
+		expect(rendered).toContain("Thinking...");
+		expect(rendered).not.toContain("I should inspect the input.");
+		expect(rendered).not.toContain("hidden note");
+		expect(rendererCalled).toBe(false);
 	});
 });
 

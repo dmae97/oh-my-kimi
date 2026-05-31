@@ -371,7 +371,7 @@ pi.registerAssistantThinkingRenderer((context, theme) => {
 });
 ```
 
-Used by interactive rendering to add display-only supplemental UI below each visible assistant thinking block. The renderer receives the original thinking text plus message/content indexes and a `requestRender()` callback for async renderers. It must not mutate messages; the original thinking block remains the provider/session source of truth.
+Used by interactive rendering to add display-only supplemental UI below each visible assistant thinking block. The renderer receives the already-visible thinking text, content/thinking indexes, theme, and a `requestRender()` callback for async renderers. All registered renderers that return a component are appended in registration order. Renderers must not mutate messages; the original thinking block remains the provider/session source of truth.
 
 ## Tool call/result renderer
 

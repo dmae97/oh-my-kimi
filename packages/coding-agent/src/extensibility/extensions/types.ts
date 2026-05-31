@@ -11,7 +11,6 @@ import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback, ThinkingLe
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
 	Api,
-	AssistantMessage,
 	AssistantMessageEvent,
 	AssistantMessageEventStream,
 	Context,
@@ -804,7 +803,6 @@ export type MessageRenderer<T = unknown> = (
 ) => Component | undefined;
 
 export interface AssistantThinkingRenderContext {
-	message: AssistantMessage;
 	contentIndex: number;
 	thinkingIndex: number;
 	text: string;
