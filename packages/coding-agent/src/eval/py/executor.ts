@@ -61,8 +61,6 @@ export interface PythonExecutorOptions {
 	bridgeSessionId?: string;
 	/** @internal Bridge endpoint info, set by `executePython` before delegating. */
 	bridge?: { url: string; token: string };
-	/** Per-call workflow argument exposed to user code as the `args` global. */
-	args?: unknown;
 }
 
 export interface PythonKernelExecutor {
@@ -501,7 +499,6 @@ async function executeWithKernel(
 			timeoutMs: executionTimeoutMs,
 			onChunk: text => sink.push(text),
 			onDisplay: output => void displayOutputs.push(output),
-			args: options?.args,
 		});
 
 		if (result.cancelled) {

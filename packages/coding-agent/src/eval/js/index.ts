@@ -29,7 +29,6 @@ export default {
 			artifactId: opts.artifactId,
 			onChunk: opts.onChunk,
 			session: opts.session,
-			args: opts.args,
 		});
 		return {
 			output: result.output,

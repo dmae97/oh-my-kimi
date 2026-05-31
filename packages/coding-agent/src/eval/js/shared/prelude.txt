@@ -162,5 +162,4 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	globalThis.diff = diff;
 	globalThis.tree = tree;
 	globalThis.env = env;
-	if (!("args" in globalThis)) globalThis.args = undefined;
 }

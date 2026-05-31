@@ -163,7 +163,7 @@ export class JsRuntime {
 		code: string,
 		filename: string | undefined,
 		hooks: RuntimeHooks,
-		options: { runId?: string; cwd?: string; args?: unknown } = {},
+		options: { runId?: string; cwd?: string } = {},
 	): Promise<unknown> {
 		const context: RunContext = {
 			runId: options.runId ?? crypto.randomUUID(),
@@ -173,8 +173,6 @@ export class JsRuntime {
 			finalExpressionValue: undefined,
 		};
 		return await this.#als.run(context, async () => {
-			// Reset the per-run `args` global every run so a prior cell's args never leak.
-			(globalThis as { args?: unknown }).args = "args" in options ? (options.args ?? null) : null;
 			const wrapped = wrapCode(code);
 			const value = indirectEval(wrapped.source, filename);
 			if (wrapped.finalExpressionReturned) {

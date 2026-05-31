@@ -61,10 +61,6 @@ export const evalSchema = z.object({
 		.array(evalCellSchema)
 		.min(1)
 		.describe("cells executed in order. State persists within each language across cells and tool calls."),
-	args: z
-		.unknown()
-		.optional()
-		.describe("Optional value exposed as the `args` global in every cell of this call (null when omitted)."),
 });
 export type EvalToolParams = z.infer<typeof evalSchema>;
 
@@ -366,7 +362,6 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						reset: cell.reset,
 						artifactPath,
 						artifactId,
-						args: params.args ?? null,
 						onChunk: chunk => {
 							outputSink!.push(chunk);
 						},

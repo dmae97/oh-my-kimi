@@ -37,25 +37,6 @@ describe("executeJs workflow helpers", () => {
 		tempDir.removeSync();
 	});
 
-	it("exposes the per-call args value as a global and resets it when omitted", async () => {
-		const session = baseSession(tempDir.path(), sessionFile);
-		const sessionId = `js-args:${tempDir.path()}`;
-
-		const withArgs = await executeJs("return JSON.stringify(args);", {
-			sessionId,
-			session,
-			sessionFile,
-			args: { hello: "world" },
-		});
-		expect(withArgs.exitCode).toBe(0);
-		expect(withArgs.output.trim()).toBe('{"hello":"world"}');
-
-		// Same kernel, no args this call → global must reset to null, not leak the prior value.
-		const withoutArgs = await executeJs("return JSON.stringify(args);", { sessionId, session, sessionFile });
-		expect(withoutArgs.exitCode).toBe(0);
-		expect(withoutArgs.output.trim()).toBe("null");
-	});
-
 	it("emits log and phase status events", async () => {
 		const session = baseSession(tempDir.path(), sessionFile);
 		const result = await executeJs('log("hello"); phase("Scan");', {

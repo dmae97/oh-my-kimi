@@ -19,7 +19,7 @@ export type ToolReply = { ok: true; value: unknown } | { ok: false; error: RunEr
 
 export type WorkerInbound =
 	| { type: "init"; snapshot: SessionSnapshot }
-	| { type: "run"; runId: string; code: string; filename: string; snapshot: SessionSnapshot; args?: unknown }
+	| { type: "run"; runId: string; code: string; filename: string; snapshot: SessionSnapshot }
 	| { type: "tool-reply"; id: string; reply: ToolReply }
 	| { type: "close" };
 

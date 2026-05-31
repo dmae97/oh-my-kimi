@@ -52,7 +52,7 @@ export class WorkerCore {
 				this.#ensureRuntime(msg.snapshot);
 				return;
 			case "run":
-				void this.#runOne(msg.runId, msg.code, msg.filename, msg.snapshot, msg.args);
+				void this.#runOne(msg.runId, msg.code, msg.filename, msg.snapshot);
 				return;
 			case "tool-reply":
 				this.#deliverToolReply(msg.id, msg.reply);
@@ -75,13 +75,7 @@ export class WorkerCore {
 		return this.#runtime;
 	}
 
-	async #runOne(
-		runId: string,
-		code: string,
-		filename: string,
-		snapshot: SessionSnapshot,
-		args?: unknown,
-	): Promise<void> {
+	async #runOne(runId: string, code: string, filename: string, snapshot: SessionSnapshot): Promise<void> {
 		const runtime = this.#ensureRuntime(snapshot);
 		runtime.setCwd(snapshot.cwd);
 		const active: ActiveRun = { runId, pendingTools: new Map() };
@@ -92,7 +86,7 @@ export class WorkerCore {
 			callTool: (name, args) => this.#callTool(active, name, args),
 		};
 		try {
-			const value = await runtime.run(code, filename, hooks, { runId, cwd: snapshot.cwd, args });
+			const value = await runtime.run(code, filename, hooks, { runId, cwd: snapshot.cwd });
 			runtime.displayValue(value, hooks);
 			this.#transport.send({ type: "result", runId, ok: true });
 		} catch (error) {

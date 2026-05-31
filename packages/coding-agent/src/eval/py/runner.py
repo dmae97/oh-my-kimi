@@ -880,8 +880,6 @@ async def _handle_request_async(req: dict) -> None:
     rid = str(req.get("id"))
     token = _CURRENT_RID.set(rid)
     _STATE.user_ns["__omp_run_id__"] = rid
-    if "args" in req:
-        _STATE.user_ns["args"] = req["args"]
     _STATE.cancel_requested = False
     _STATE.execution_count += 1
     execution_count = _STATE.execution_count

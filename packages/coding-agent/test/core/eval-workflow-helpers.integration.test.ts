@@ -1,6 +1,6 @@
 /**
  * End-to-end exercise of the Python eval workflow helpers: parallel, pipeline,
- * log/phase status events, and the per-call `args` global.
+ * and log/phase status events.
  *
  * Gated by `PI_PYTHON_INTEGRATION=1` so CI without a real Python interpreter
  * (or sandboxes where subprocess spawning is restricted) does not fail.
@@ -98,26 +98,6 @@ describe.skipIf(!SHOULD_RUN)("python eval workflow helpers", () => {
 			const phaseEvent = statuses.find(s => s.event.op === "phase");
 			expect(phaseEvent).toBeDefined();
 			expect(phaseEvent?.event.title).toBe("Scan");
-		} finally {
-			await kernel.shutdown();
-		}
-	});
-
-	it("exposes the per-call args global", async () => {
-		using tempDir = TempDir.createSync("@eval-workflow-args-");
-		const kernel = await PythonKernel.start({ cwd: tempDir.path() });
-		try {
-			const withArgs = await executePythonWithKernel(kernel, "print(args)", {
-				args: { hello: "world" },
-			});
-			expect(withArgs.exitCode).toBe(0);
-			expect(withArgs.output).toContain("world");
-
-			// A subsequent call that omits `args` does not reset the global; the
-			// runner only overwrites it when the request frame carries the key.
-			const withoutArgs = await executePythonWithKernel(kernel, "print(args)");
-			expect(withoutArgs.exitCode).toBe(0);
-			expect(withoutArgs.output).toContain("world");
 		} finally {
 			await kernel.shutdown();
 		}

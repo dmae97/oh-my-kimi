@@ -605,6 +605,3 @@ if "__omp_prelude_loaded__" not in globals():
                 return "<budget unavailable>"
 
     budget = _Budget()
-
-    # User code always has an `args` name; the per-call request overwrites it.
-    args = None

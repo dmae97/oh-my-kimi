@@ -19,7 +19,6 @@ State persists across cells, so scout in one cell and fan out in the next. Every
 - `llm(prompt, *, model="default", system=None, schema=None)` — oneshot, stateless model call (no tools, no history). Tiers: "smol", "default", "slow". Cheap classification/scoring inside a fan-out.
 - `log(message)` — emit a progress line above the status tree. `phase(title)` — start a phase; the status lines that follow group under it.
 - `budget` — `budget.total` (token ceiling, or `None` when none is set this turn), `budget.spent()`, `budget.remaining()` (`math.inf` when total is `None`). A ceiling exists only under an active turn budget (e.g. Goal Mode); otherwise total is `None` and a budget loop never engages — gate on `budget.total` first.
-- `args` — the value passed via the eval tool's `args` input (`None` when unset).
 
 Everything runs INLINE and synchronously inside the eval call — no background mode, no resume, no separate progress app. Each eval call is one well-scoped fan-out; chain several across cells and turns for multi-phase work, reading each result before you decide the next phase.
 </helpers>
