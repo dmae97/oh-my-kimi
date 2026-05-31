@@ -1186,7 +1186,9 @@ export class TUI extends Container {
 		);
 		this.#logRedraw(intent, lines.length, height);
 		if (process.env.PI_DUMP_OP && String((globalThis as Record<string, unknown>).__OPIDX) === process.env.PI_DUMP_OP) {
-			fs.writeFileSync("/tmp/frameDump.json", JSON.stringify({ intent: intent.kind, lines }));
+			const t = this.terminal as unknown as { getBufferPosition?: () => { baseY: number; viewportY: number } };
+			const pos = t.getBufferPosition?.();
+			fs.appendFileSync("/tmp/renderTrace.jsonl", `${JSON.stringify({ intent: intent.kind, appendFrom: (intent as { appendFrom?: number }).appendFrom, prev: this.#previousLines.length, nw: lines.length, prevH: this.#previousHeight, h: height, widthCh: widthChanged, heightCh: heightChanged, vpTop: this.#viewportTopRow, hw: this.#hardwareCursorRow, baseY: pos?.baseY, vpY: pos?.viewportY })}\n`);
 		}
 		// 4. Execute.
 		switch (intent.kind) {
