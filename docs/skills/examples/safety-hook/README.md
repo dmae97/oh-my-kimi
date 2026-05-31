@@ -1,12 +1,12 @@
 # safety-hook
 
-An `oh-my-pi` extension that demonstrates `tool_call` blocking. It intercepts every `bash` tool call and returns `{ block: true, reason: "..." }` if the command matches `rm -rf /`, preventing the LLM from executing the command.
+An `oh-my-pi` extension that demonstrates `tool_call` blocking. It intercepts `bash` tool calls and returns `{ block: true, reason: "..." }` when the command contains `rm -rf /` with normal whitespace, preventing the tool from executing.
 
 ## What it demonstrates
 
 - `pi.on("tool_call", ...)` — pre-execution interception
 - `return { block: true, reason: "..." }` — blocking contract
-- Exact-pattern guard on bash input
+- Regex guard on bash input (`/\brm\s+-rf\s+\//`)
 
 ## Install
 
@@ -30,7 +30,7 @@ LLM calls bash tool
        ▼
 tool_call handlers run
        │
-       ├─ command matches /rm\s+-rf\s+\// ?
+       ├─ command matches /\brm\s+-rf\s+\// ?
        │       yes → { block: true, reason: "..." }  ←  execution stops, reason sent to LLM
        │       no  → undefined                        ←  execution continues normally
        ▼

@@ -1,5 +1,8 @@
-import { describe, expect, it } from "bun:test";
-import { filterEnv } from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { enumeratePythonRuntimes, filterEnv, resolvePythonRuntime } from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
+import * as piUtils from "@oh-my-pi/pi-utils";
 
 describe("Python gateway environment filtering", () => {
 	it("filters sensitive and unknown variables from shell env", () => {
@@ -40,5 +43,61 @@ describe("Python gateway environment filtering", () => {
 		expect(filtered.XDG_RUNTIME_DIR).toBe("/run/user/1000");
 		expect(filtered.LC_CTYPE).toBe("UTF-8");
 		expect(filtered.LC_MESSAGES).toBe("en_US.UTF-8");
+	});
+});
+
+describe("enumeratePythonRuntimes", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	const managedDir = path.join(path.sep, "fake", ".omp", "python-env");
+	const managedBin = path.join(managedDir, process.platform === "win32" ? "Scripts" : "bin");
+	const managedPy = path.join(managedBin, process.platform === "win32" ? "python.exe" : "python");
+	const systemPy = path.join(path.sep, "usr", "bin", "python3");
+
+	it("enumerates the managed env AND the system interpreter so a broken managed env can fall through", () => {
+		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
+		vi.spyOn(piUtils, "$which").mockImplementation(bin => (bin === "python" ? systemPy : null));
+		// Only the managed interpreter physically exists; no project/active venv.
+		vi.spyOn(fs, "existsSync").mockImplementation(candidate => candidate === managedPy);
+
+		const runtimes = enumeratePythonRuntimes(path.join(path.sep, "work"), {
+			PATH: path.join(path.sep, "usr", "bin"),
+		});
+
+		expect(runtimes.map(r => r.pythonPath)).toEqual([managedPy, systemPy]);
+
+		const [managed, system] = runtimes;
+		expect(managed.venvPath).toBe(managedDir);
+		expect(managed.env.VIRTUAL_ENV).toBe(managedDir);
+		expect(managed.env.PATH).toBe(`${managedBin}${path.delimiter}${path.join(path.sep, "usr", "bin")}`);
+
+		// The system candidate must not inherit the managed env's VIRTUAL_ENV/PATH mutation.
+		expect(system.venvPath).toBeUndefined();
+		expect(system.env.VIRTUAL_ENV).toBeUndefined();
+		expect(system.env.PATH).toBe(path.join(path.sep, "usr", "bin"));
+	});
+
+	it("falls back to the system interpreter when no managed env or venv exists", () => {
+		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
+		vi.spyOn(piUtils, "$which").mockImplementation(bin => (bin === "python" ? systemPy : null));
+		vi.spyOn(fs, "existsSync").mockReturnValue(false);
+
+		const runtimes = enumeratePythonRuntimes(path.join(path.sep, "work"), {
+			PATH: path.join(path.sep, "usr", "bin"),
+		});
+
+		expect(runtimes.map(r => r.pythonPath)).toEqual([systemPy]);
+		expect(resolvePythonRuntime(path.join(path.sep, "work"), {}).pythonPath).toBe(systemPy);
+	});
+
+	it("throws from resolvePythonRuntime when no interpreter can be found", () => {
+		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
+		vi.spyOn(piUtils, "$which").mockReturnValue(null);
+		vi.spyOn(fs, "existsSync").mockReturnValue(false);
+
+		expect(enumeratePythonRuntimes(path.join(path.sep, "work"), {})).toEqual([]);
+		expect(() => resolvePythonRuntime(path.join(path.sep, "work"), {})).toThrow("Python executable not found");
 	});
 });

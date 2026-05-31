@@ -1,12 +1,12 @@
-import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Text } from "@oh-my-pi/pi-tui";
 import { formatBytes } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+import { executeBash } from "../../exec/bash-executor";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateTail } from "../../session/streaming-output";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TailBuffer, truncateTail } from "../../session/streaming-output";
 import { replaceTabs, shortenPath } from "../../tools/render-utils";
 import * as git from "../../utils/git";
 import { parseWorkDirDirtyPaths } from "../git";
@@ -15,7 +15,6 @@ import {
 	EXPERIMENT_MAX_LINES,
 	formatElapsed,
 	formatNum,
-	killTree,
 	parseAsiLines,
 	parseMetricLines,
 	tryGitPrefix,
@@ -117,7 +116,7 @@ export function createRunExperimentTool(
 			let execution: ProcessExecutionResult;
 			try {
 				execution = await executeProcess({
-					command: ["bash", "-lc", resolvedCommand],
+					command: resolvedCommand,
 					cwd: ctx.cwd,
 					logPath: benchmarkLogPath,
 					timeoutMs,
@@ -268,68 +267,18 @@ export function createRunExperimentTool(
 	};
 }
 async function executeProcess(opts: {
-	command: string[];
+	command: string;
 	cwd: string;
 	logPath: string;
 	timeoutMs: number;
 	signal?: AbortSignal;
 	onProgress?(details: ProgressSnapshot): void;
 }): Promise<ProcessExecutionResult> {
-	const { promise, resolve, reject } = Promise.withResolvers<ProcessExecutionResult>();
-	const child = childProcess.spawn(opts.command[0] ?? "bash", opts.command.slice(1), {
-		cwd: opts.cwd,
-		detached: true,
-		stdio: ["ignore", "pipe", "pipe"],
-	});
+	const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES * 2);
 
-	const tailChunks: Buffer[] = [];
-	let chunksBytes = 0;
-	let killedByTimeout = false;
-	let resolved = false;
-	let writeStream: fs.WriteStream | undefined = fs.createWriteStream(opts.logPath);
-	let forceKillTimeout: NodeJS.Timeout | undefined;
-
-	const closeWriteStream = (): Promise<void> => {
-		if (!writeStream) return Promise.resolve();
-		const stream = writeStream;
-		writeStream = undefined;
-		return new Promise<void>((resolveClose, rejectClose) => {
-			stream.end((error?: Error | null) => {
-				if (error) {
-					rejectClose(error);
-					return;
-				}
-				resolveClose();
-			});
-		});
-	};
-
-	const cleanup = (): void => {
-		if (progressTimer) clearInterval(progressTimer);
-		if (timeoutHandle) clearTimeout(timeoutHandle);
-		if (forceKillTimeout) clearTimeout(forceKillTimeout);
-		opts.signal?.removeEventListener("abort", abortHandler);
-	};
-
-	const finish = (callback: () => void): void => {
-		if (resolved) return;
-		resolved = true;
-		cleanup();
-		callback();
-	};
-
-	const appendChunk = (data: Buffer): void => {
-		writeStream?.write(data);
-		tailChunks.push(data);
-		chunksBytes += data.length;
-		while (chunksBytes > DEFAULT_MAX_BYTES * 2 && tailChunks.length > 1) {
-			const removed = tailChunks.shift();
-			if (removed) chunksBytes -= removed.length;
-		}
-	};
-
+	const startedAt = Date.now();
 	const snapshot = (): ProgressSnapshot => {
-		const tail = truncateTail(Buffer.concat(tailChunks).toString("utf8"), {
+		const tail = truncateTail(tailBuffer.text(), {
 			maxBytes: DEFAULT_MAX_BYTES,
 			maxLines: DEFAULT_MAX_LINES,
 		});
@@ -342,71 +291,54 @@ async function executeProcess(opts: {
 		};
 	};
 
-	const killTreeWithEscalation = (): void => {
-		if (!child.pid) return;
-		killTree(child.pid);
-		forceKillTimeout = setTimeout(() => {
-			if (child.pid) killTree(child.pid, "SIGKILL");
-		}, 1_000);
-		forceKillTimeout.unref?.();
-	};
-
-	const startedAt = Date.now();
 	const progressTimer = opts.onProgress
 		? setInterval(() => {
 				opts.onProgress?.(snapshot());
 			}, 1000)
 		: undefined;
-	const timeoutHandle =
-		opts.timeoutMs > 0
-			? setTimeout(() => {
-					killedByTimeout = true;
-					killTreeWithEscalation();
-				}, opts.timeoutMs)
-			: undefined;
 
-	const abortHandler = (): void => {
-		killTreeWithEscalation();
+	const logSink = Bun.file(opts.logPath).writer();
+	let logSinkClosed = false;
+	const closeLogSink = async (): Promise<void> => {
+		if (logSinkClosed) return;
+		logSinkClosed = true;
+		await logSink.end();
 	};
-	if (opts.signal?.aborted) {
-		abortHandler();
-	} else {
-		opts.signal?.addEventListener("abort", abortHandler, { once: true });
-	}
-
-	child.stdout?.on("data", data => {
-		appendChunk(data);
-	});
-	child.stderr?.on("data", data => {
-		appendChunk(data);
-	});
-	child.on("error", error => {
-		void closeWriteStream().finally(() => {
-			finish(() => reject(error));
+	try {
+		const result = await executeBash(opts.command, {
+			cwd: opts.cwd,
+			sessionKey: `autoresearch:${opts.cwd}`,
+			timeout: opts.timeoutMs > 0 ? opts.timeoutMs : 2_147_000_000,
+			signal: opts.signal,
+			chunkThrottleMs: 0,
+			onChunk: chunk => {
+				tailBuffer.append(chunk);
+				logSink.write(chunk);
+			},
 		});
-	});
-	child.on("close", async code => {
-		try {
-			await closeWriteStream();
-			if (opts.signal?.aborted) {
-				finish(() => reject(new Error("aborted")));
-				return;
-			}
-			const output = await fs.promises.readFile(opts.logPath, "utf8");
-			finish(() =>
-				resolve({
-					exitCode: code,
-					killed: killedByTimeout,
-					logPath: opts.logPath,
-					output,
-				}),
-			);
-		} catch (error) {
-			finish(() => reject(error));
+		await closeLogSink();
+		if (opts.signal?.aborted) {
+			throw new Error("aborted");
 		}
-	});
 
-	return promise;
+		const output = await fs.promises.readFile(opts.logPath, "utf8");
+
+		return {
+			exitCode: result.exitCode ?? null,
+			killed: result.cancelled,
+			logPath: opts.logPath,
+			output,
+		};
+	} finally {
+		if (progressTimer) clearInterval(progressTimer);
+		if (!logSinkClosed) {
+			try {
+				await closeLogSink();
+			} catch {
+				// Preserve the command failure when cleanup is best-effort.
+			}
+		}
+	}
 }
 
 function buildRunText(details: RunDetails, outputPreview: string, bestMetric: number | null): string {

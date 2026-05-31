@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
@@ -56,7 +57,7 @@ function createContext(args: {
 }
 
 function stripAnsi(text: string): string {
-	return text.replace(/\x1b\[[0-9;]*m/g, "");
+	return stripVTControlCharacters(text);
 }
 
 beforeAll(async () => {

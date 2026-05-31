@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
-import { getActiveProfile, getAgentDir, setAgentDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
+import { getActiveProfile, getAgentDbPath, getAgentDir, setAgentDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { runCli } from "../src/cli";
 import * as profileAliasCli from "../src/cli/profile-alias";
@@ -88,6 +88,21 @@ describe("global --profile flag", () => {
 		expect(getAgentDir()).toBe(path.join(os.homedir(), configDir, "profiles", "work", "agent"));
 	});
 
+	it("activates a profile inherited from OMP_PROFILE at run time", async () => {
+		const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		setProfile(undefined);
+		process.env.OMP_PROFILE = "work";
+		delete process.env.PI_PROFILE;
+
+		await runCli(["--version"]);
+
+		expect(process.exitCode).toBe(0);
+		expect(writeSpy).toHaveBeenCalled();
+		expect(getActiveProfile()).toBe("work");
+		expect(getAgentDir()).toBe(path.join(os.homedir(), configDir, "profiles", "work", "agent"));
+		expect(getAgentDbPath()).toBe(path.join(os.homedir(), configDir, "profiles", "work", "agent", "agent.db"));
+	});
+
 	it("accepts the profile flag after other root flags", async () => {
 		vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
@@ -104,7 +119,7 @@ describe("global --profile flag", () => {
 			configPath: "/home/me/.bashrc",
 			aliasName: "omp-work",
 			profile: "work",
-			command: "omp --profile work",
+			command: "omp --profile=work",
 			reloadedWith: ". '/home/me/.bashrc'",
 		});
 		const outSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -112,7 +127,12 @@ describe("global --profile flag", () => {
 		await runCli(["--profile", "work", "--alias", "omp-work", "--version"]);
 
 		expect(process.exitCode).toBe(0);
-		expect(installSpy).toHaveBeenCalledWith({ profile: "work", aliasName: "omp-work" });
+		expect(installSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				profile: "work",
+				aliasName: "omp-work",
+			}),
+		);
 		expect(outSpy.mock.calls.map(call => String(call[0] ?? "")).join("\n")).toContain("Created omp-work");
 	});
 

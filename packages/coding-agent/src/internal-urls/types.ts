@@ -33,6 +33,22 @@ export interface InternalResource {
 }
 
 /**
+ * A single autocomplete candidate for the host/path portion of a `scheme://`
+ * URL, produced by {@link ProtocolHandler.complete}.
+ */
+export interface UrlCompletion {
+	/**
+	 * The text that follows `scheme://` for this candidate (e.g. `humanizer`,
+	 * `subdir/data.json`, `root`). The caller renders it as `scheme://<value>`.
+	 */
+	value: string;
+	/** Human-facing label for the dropdown. Defaults to {@link value}. */
+	label?: string;
+	/** Optional one-line description shown beside the candidate. */
+	description?: string;
+}
+
+/**
  * Parsed internal URL with preserved host casing.
  */
 export interface InternalUrl extends URL {
@@ -107,4 +123,15 @@ export interface ProtocolHandler {
 	 * surfaces a clear "not writable" error when invoked against them.
 	 */
 	write?(url: InternalUrl, content: string, context?: WriteContext): Promise<void>;
+	/**
+	 * Optional autocomplete hook. Returns candidate completions for the
+	 * host/path portion of a `scheme://` URL while the user composes a prompt.
+	 *
+	 * Implementations **MUST** be fast and local — this runs on every keystroke.
+	 * Schemes backed by network or external CLIs (issue://, pr://, vault://,
+	 * mcp://) omit it. The caller fuzzy-filters the returned set against the
+	 * partially typed `query`, so handlers return their full (bounded) candidate
+	 * list; `query` is provided only so handlers can scope expensive enumeration.
+	 */
+	complete?(query: string): Promise<UrlCompletion[]>;
 }

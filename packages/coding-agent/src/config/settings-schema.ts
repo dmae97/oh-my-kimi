@@ -1,6 +1,30 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { TASK_SIMPLE_MODES } from "../task/simple-mode";
-import { getThinkingLevelMetadata } from "../thinking";
+import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
+import {
+	TINY_MODEL_DEVICE_DEFAULT,
+	TINY_MODEL_DEVICE_SETTING_OPTIONS,
+	TINY_MODEL_DEVICE_SETTING_VALUES,
+} from "../tiny/device";
+import {
+	TINY_MODEL_DTYPE_DEFAULT,
+	TINY_MODEL_DTYPE_SETTING_OPTIONS,
+	TINY_MODEL_DTYPE_SETTING_VALUES,
+} from "../tiny/dtype";
+import {
+	AUTO_THINKING_MODEL_OPTIONS,
+	AUTO_THINKING_MODEL_VALUES,
+	DEFAULT_SHAKE_SUMMARY_MODEL_KEY,
+	ONLINE_AUTO_THINKING_MODEL_KEY,
+	ONLINE_MEMORY_MODEL_KEY,
+	ONLINE_TINY_TITLE_MODEL_KEY,
+	SHAKE_SUMMARY_MODEL_OPTIONS,
+	SHAKE_SUMMARY_MODEL_VALUES,
+	TINY_MEMORY_MODEL_OPTIONS,
+	TINY_MEMORY_MODEL_VALUES,
+	TINY_TITLE_MODEL_OPTIONS,
+	TINY_TITLE_MODEL_VALUES,
+} from "../tiny/models";
 import { EDIT_MODES } from "../utils/edit-mode";
 
 /** Unified settings schema - single source of truth for all settings.
@@ -235,6 +259,7 @@ export const SETTINGS_SCHEMA = {
 	// General settings (no UI)
 	// ────────────────────────────────────────────────────────────────────────
 	lastChangelogVersion: { type: "string", default: undefined },
+	setupVersion: { type: "number", default: 0 },
 
 	// Auth broker — credentials proxied through a remote `omp auth-broker serve`
 	// host. Hidden from the UI; populate via env vars or hand-edited config.yml.
@@ -652,13 +677,16 @@ export const SETTINGS_SCHEMA = {
 	// Reasoning and prompts
 	defaultThinkingLevel: {
 		type: "enum",
-		values: THINKING_EFFORTS,
+		values: [...THINKING_EFFORTS, AUTO_THINKING],
 		default: "high",
 		ui: {
 			tab: "model",
 			label: "Thinking Level",
 			description: "Reasoning depth for thinking-capable models",
-			options: [...THINKING_EFFORTS.map(getThinkingLevelMetadata)],
+			options: [
+				getConfiguredThinkingLevelMetadata(AUTO_THINKING),
+				...THINKING_EFFORTS.map(getThinkingLevelMetadata),
+			],
 		},
 	},
 
@@ -991,6 +1019,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"startup.setupWizard": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			label: "Setup Wizard",
+			description: "Show newly added onboarding steps once per setup version",
+		},
+	},
+
 	"startup.checkUpdate": {
 		type: "boolean",
 		default: true,
@@ -1101,12 +1139,13 @@ export const SETTINGS_SCHEMA = {
 
 	"compaction.strategy": {
 		type: "enum",
-		values: ["context-full", "handoff", "off"] as const,
+		values: ["context-full", "handoff", "shake", "shake-summary", "off"] as const,
 		default: "context-full",
 		ui: {
 			tab: "context",
 			label: "Compaction Strategy",
-			description: "Choose in-place context-full maintenance, auto-handoff, or disable auto maintenance (off)",
+			description:
+				"Choose in-place context-full maintenance, auto-handoff, surgical shake (drop heavy content), shake with local-model summaries, or disable auto maintenance (off)",
 			options: [
 				{
 					value: "context-full",
@@ -1114,6 +1153,16 @@ export const SETTINGS_SCHEMA = {
 					description: "Summarize in-place and keep the current session",
 				},
 				{ value: "handoff", label: "Handoff", description: "Generate handoff and continue in a new session" },
+				{
+					value: "shake",
+					label: "Shake",
+					description: "Drop heavy content (tool results + large blocks) in place; recover via artifact",
+				},
+				{
+					value: "shake-summary",
+					label: "Shake (summary)",
+					description: "Shake, but compress heavy regions with a local on-device model instead of dropping",
+				},
 				{
 					value: "off",
 					label: "Off",
@@ -1292,70 +1341,70 @@ export const SETTINGS_SCHEMA = {
 	"memories.summaryInjectionTokenLimit": { type: "number", default: 5000 },
 
 	// Memory backend selector — picks between local memories pipeline,
-	// Mnemosyne local SQLite, Hindsight remote memory, or off. Legacy
+	// Mnemopi local SQLite, Hindsight remote memory, or off. Legacy
 	// `memories.enabled` keeps gating the local backend; see config/settings.ts
 	// migration for details.
 	"memory.backend": {
 		type: "enum",
-		values: ["off", "local", "hindsight", "mnemosyne"] as const,
+		values: ["off", "local", "hindsight", "mnemopi"] as const,
 		default: "off",
 		ui: {
 			tab: "memory",
 			label: "Memory Backend",
-			description: "Off, local summary pipeline, Mnemosyne SQLite, or Hindsight remote memory",
+			description: "Off, local summary pipeline, Mnemopi SQLite, or Hindsight remote memory",
 			options: [
 				{ value: "off", label: "Off", description: "No memory subsystem runs" },
 				{ value: "local", label: "Local", description: "Local rollout summarisation pipeline (memory_summary.md)" },
 				{ value: "hindsight", label: "Hindsight", description: "Vectorize Hindsight remote memory service" },
 				{
-					value: "mnemosyne",
-					label: "Mnemosyne",
+					value: "mnemopi",
+					label: "Mnemopi",
 					description: "Local SQLite recall/retain backend with optional embeddings",
 				},
 			],
 		},
 	},
 
-	// Mnemosyne local SQLite memory backend.
-	"mnemosyne.dbPath": {
+	// Mnemopi local SQLite memory backend.
+	"mnemopi.dbPath": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne DB Path",
+			label: "Mnemopi DB Path",
 			description: "Optional SQLite DB path. Defaults to the agent memories directory.",
-			condition: "mnemosyneActive",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.bank": {
+	"mnemopi.bank": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Bank",
+			label: "Mnemopi Bank",
 			description: "Optional shared bank base name. Per-project modes derive project-local banks from it.",
-			condition: "mnemosyneActive",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.scoping": {
+	"mnemopi.scoping": {
 		type: "enum",
 		values: ["global", "per-project", "per-project-tagged"] as const,
 		default: "per-project",
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Scoping",
+			label: "Mnemopi Scoping",
 			description:
 				"global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = project-local writes plus global recall visibility",
 			options: [
 				{
 					value: "global",
 					label: "Global",
-					description: "One shared Mnemosyne bank for every project",
+					description: "One shared Mnemopi bank for every project",
 				},
 				{
 					value: "per-project",
 					label: "Per project",
-					description: "Project-local Mnemosyne bank per cwd basename",
+					description: "Project-local Mnemopi bank per cwd basename",
 				},
 				{
 					value: "per-project-tagged",
@@ -1363,121 +1412,121 @@ export const SETTINGS_SCHEMA = {
 					description: "Write to a project-local bank but merge project + shared recall results",
 				},
 			],
-			condition: "mnemosyneActive",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.autoRecall": {
+	"mnemopi.autoRecall": {
 		type: "boolean",
 		default: true,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Auto Recall",
+			label: "Mnemopi Auto Recall",
 			description: "Recall local memories into the first turn of each session",
-			condition: "mnemosyneActive",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.autoRetain": {
+	"mnemopi.autoRetain": {
 		type: "boolean",
 		default: true,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Auto Retain",
-			description: "Retain completed conversation turns into local Mnemosyne memory",
-			condition: "mnemosyneActive",
+			label: "Mnemopi Auto Retain",
+			description: "Retain completed conversation turns into local Mnemopi memory",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.noEmbeddings": {
+	"mnemopi.noEmbeddings": {
 		type: "boolean",
 		default: false,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Disable Embeddings",
+			label: "Mnemopi Disable Embeddings",
 			description: "Force deterministic FTS-only recall instead of vector embeddings",
-			condition: "mnemosyneActive",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.embeddingModel": {
+	"mnemopi.embeddingModel": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Embedding Model",
-			description: "Optional embedding model override passed to Mnemosyne",
-			condition: "mnemosyneActive",
+			label: "Mnemopi Embedding Model",
+			description: "Optional embedding model override passed to Mnemopi",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.embeddingApiUrl": {
+	"mnemopi.embeddingApiUrl": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Embedding API URL",
-			description: "Optional OpenAI-compatible embedding endpoint passed to Mnemosyne",
-			condition: "mnemosyneActive",
+			label: "Mnemopi Embedding API URL",
+			description: "Optional OpenAI-compatible embedding endpoint passed to Mnemopi",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.embeddingApiKey": {
+	"mnemopi.embeddingApiKey": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Embedding API Key",
-			description: "Optional embedding API key passed to Mnemosyne",
-			condition: "mnemosyneActive",
+			label: "Mnemopi Embedding API Key",
+			description: "Optional embedding API key passed to Mnemopi",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.llmMode": {
+	"mnemopi.llmMode": {
 		type: "enum",
 		values: ["none", "smol", "remote"] as const,
 		default: "smol",
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne LLM Mode",
+			label: "Mnemopi LLM Mode",
 			description: "Use no LLM, the configured smol model, or a remote OpenAI-compatible endpoint",
-			condition: "mnemosyneActive",
+			condition: "mnemopiActive",
 			options: [
-				{ value: "none", label: "None", description: "Disable Mnemosyne LLM-backed extraction" },
+				{ value: "none", label: "None", description: "Disable Mnemopi LLM-backed extraction" },
 				{ value: "smol", label: "Smol", description: "Use the configured pi-ai smol model" },
-				{ value: "remote", label: "Remote", description: "Use the Mnemosyne remote LLM settings below" },
+				{ value: "remote", label: "Remote", description: "Use the Mnemopi remote LLM settings below" },
 			],
 		},
 	},
-	"mnemosyne.llmBaseUrl": {
+	"mnemopi.llmBaseUrl": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne LLM Base URL",
-			description: "Optional OpenAI-compatible LLM endpoint for Mnemosyne remote mode",
-			condition: "mnemosyneActive",
+			label: "Mnemopi LLM Base URL",
+			description: "Optional OpenAI-compatible LLM endpoint for Mnemopi remote mode",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.llmApiKey": {
+	"mnemopi.llmApiKey": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne LLM API Key",
-			description: "Optional LLM API key for Mnemosyne remote mode",
-			condition: "mnemosyneActive",
+			label: "Mnemopi LLM API Key",
+			description: "Optional LLM API key for Mnemopi remote mode",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.llmModel": {
+	"mnemopi.llmModel": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne LLM Model",
-			description: "Optional LLM model name for Mnemosyne remote mode",
-			condition: "mnemosyneActive",
+			label: "Mnemopi LLM Model",
+			description: "Optional LLM model name for Mnemopi remote mode",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.retainEveryNTurns": { type: "number", default: 4 },
-	"mnemosyne.recallLimit": { type: "number", default: 8 },
-	"mnemosyne.recallContextTurns": { type: "number", default: 3 },
-	"mnemosyne.recallMaxQueryChars": { type: "number", default: 4000 },
-	"mnemosyne.injectionTokenLimit": { type: "number", default: 5000 },
-	"mnemosyne.debug": { type: "boolean", default: false },
+	"mnemopi.retainEveryNTurns": { type: "number", default: 4 },
+	"mnemopi.recallLimit": { type: "number", default: 8 },
+	"mnemopi.recallContextTurns": { type: "number", default: 3 },
+	"mnemopi.recallMaxQueryChars": { type: "number", default: 4000 },
+	"mnemopi.injectionTokenLimit": { type: "number", default: 5000 },
+	"mnemopi.debug": { type: "boolean", default: false },
 
 	// Hindsight (https://hindsight.vectorize.io)
 	"hindsight.apiUrl": {
@@ -1683,6 +1732,26 @@ export const SETTINGS_SCHEMA = {
 				{ value: "20", label: "20 messages" },
 				{ value: "30", label: "30 messages" },
 			],
+		},
+	},
+
+	"ttsr.builtinRules": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "context",
+			label: "Builtin Rules",
+			description: "Load the default rules shipped with the agent (override individually with ttsr.disabledRules)",
+		},
+	},
+
+	"ttsr.disabledRules": {
+		type: "array",
+		default: [] as string[],
+		ui: {
+			tab: "context",
+			label: "Disabled Rules",
+			description: "Rule names to ignore entirely (applies to bundled defaults and your own rules)",
 		},
 	},
 
@@ -2017,7 +2086,7 @@ export const SETTINGS_SCHEMA = {
 					value: "write",
 					label: "Write",
 					description:
-						"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, task, recipe, and ssh.",
+						"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, task, and ssh.",
 				},
 				{
 					value: "yolo",
@@ -2193,16 +2262,6 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "Text-to-Speech",
 			description: "Enable the tts tool for xAI Grok Voice speech synthesis",
-		},
-	},
-	"recipe.enabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			label: "Recipe",
-			description:
-				"Enable the recipe tool when a justfile / package.json / Cargo.toml / Makefile / Taskfile is present",
 		},
 	},
 
@@ -2896,6 +2955,81 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+	"providers.tinyModel": {
+		type: "enum",
+		values: TINY_TITLE_MODEL_VALUES,
+		default: ONLINE_TINY_TITLE_MODEL_KEY,
+		ui: {
+			tab: "providers",
+			label: "Tiny Model",
+			description: "Session-title model: online pi/smol by default, or a local on-device model",
+			options: TINY_TITLE_MODEL_OPTIONS,
+		},
+	},
+	"providers.tinyModelDevice": {
+		type: "enum",
+		values: TINY_MODEL_DEVICE_SETTING_VALUES,
+		default: TINY_MODEL_DEVICE_DEFAULT,
+		ui: {
+			tab: "providers",
+			label: "Tiny Model Device",
+			description:
+				"ONNX execution provider for local tiny models (titles + memory). Default uses CPU-only inference. The PI_TINY_DEVICE env var overrides this.",
+			options: TINY_MODEL_DEVICE_SETTING_OPTIONS,
+		},
+	},
+	"providers.tinyModelDtype": {
+		type: "enum",
+		values: TINY_MODEL_DTYPE_SETTING_VALUES,
+		default: TINY_MODEL_DTYPE_DEFAULT,
+		ui: {
+			tab: "providers",
+			label: "Tiny Model Precision",
+			description:
+				"ONNX quantization/precision for local tiny models. Default uses each model's shipped dtype (q4); lower precision is faster, higher is more faithful. The PI_TINY_DTYPE env var overrides this.",
+			options: TINY_MODEL_DTYPE_SETTING_OPTIONS,
+		},
+	},
+	"providers.memoryModel": {
+		type: "enum",
+		values: TINY_MEMORY_MODEL_VALUES,
+		default: ONLINE_MEMORY_MODEL_KEY,
+		ui: {
+			tab: "memory",
+			label: "Memory Model",
+			description:
+				"Mnemopi LLM for fact extraction + consolidation: online (smol/remote) by default, or a local on-device model",
+			condition: "mnemopiActive",
+			options: TINY_MEMORY_MODEL_OPTIONS,
+		},
+	},
+
+	"providers.autoThinkingModel": {
+		type: "enum",
+		values: AUTO_THINKING_MODEL_VALUES,
+		default: ONLINE_AUTO_THINKING_MODEL_KEY,
+		ui: {
+			tab: "model",
+			label: "Auto Thinking Model",
+			description:
+				"Difficulty classifier for the `auto` thinking level: online smol by default, or a local on-device model",
+			condition: "autoThinkingActive",
+			options: AUTO_THINKING_MODEL_OPTIONS,
+		},
+	},
+
+	"providers.shakeSummaryModel": {
+		type: "enum",
+		values: SHAKE_SUMMARY_MODEL_VALUES,
+		default: DEFAULT_SHAKE_SUMMARY_MODEL_KEY,
+		ui: {
+			tab: "context",
+			label: "Shake Summary Model",
+			description:
+				"Local on-device model used by /shake summary and the shake-summary compaction strategy to compress heavy regions. Runs entirely on-device; downloads on first use. Falls back to plain elide when unavailable.",
+			options: SHAKE_SUMMARY_MODEL_OPTIONS,
+		},
+	},
 
 	"providers.kimiApiFormat": {
 		type: "enum",
@@ -3185,7 +3319,7 @@ export type TreeFilterMode = SettingValue<"treeFilterMode">;
 
 export interface CompactionSettings {
 	enabled: boolean;
-	strategy: "context-full" | "handoff" | "off";
+	strategy: "context-full" | "handoff" | "shake" | "shake-summary" | "off";
 	thresholdPercent: number;
 	thresholdTokens: number;
 	reserveTokens: number;
@@ -3266,6 +3400,10 @@ export interface TtsrSettings {
 	interruptMode: "never" | "prose-only" | "tool-only" | "always";
 	repeatMode: "once" | "after-gap";
 	repeatGap: number;
+	/** Bucketing-only (read by bucketRules, not the TtsrManager). */
+	builtinRules?: boolean;
+	/** Bucketing-only (read by bucketRules, not the TtsrManager). */
+	disabledRules?: string[];
 }
 
 export interface ExaSettings {

@@ -12,6 +12,20 @@ function quoteForPowerShell(pathValue: string): string {
 	return `'${pathValue.replace(/'/g, `''`)}'`;
 }
 
+export interface ProfileAliasCommand {
+	display: string;
+	posix: string;
+	fish: string;
+	powerShell: string;
+}
+
+const DEFAULT_ALIAS_COMMAND: ProfileAliasCommand = {
+	display: "omp",
+	posix: "omp",
+	fish: "omp",
+	powerShell: "omp",
+};
+
 export interface ProfileAliasInstallOptions {
 	profile: string;
 	aliasName: string;
@@ -19,6 +33,7 @@ export interface ProfileAliasInstallOptions {
 	platform?: NodeJS.Platform;
 	homeDir?: string;
 	readFile?: (filePath: string) => Promise<string>;
+	command?: ProfileAliasCommand;
 	writeFile?: (filePath: string, content: string) => Promise<void>;
 }
 
@@ -64,6 +79,21 @@ function normalizeShellName(shellPath: string | undefined, platform: NodeJS.Plat
 	throw new Error(`Unsupported shell${shell ? ` "${shell}"` : ""}. Supported shells: bash, zsh, fish, PowerShell.`);
 }
 
+export function resolveProfileAliasCommandFromProcess(): ProfileAliasCommand {
+	const runtime = process.argv[0];
+	const script = process.argv[1];
+	if (!script || !/\.[cm]?[jt]s$/.test(script)) return DEFAULT_ALIAS_COMMAND;
+
+	const cwd = process.cwd();
+	const posix = `${quoteForShell(runtime)} --cwd ${quoteForShell(cwd)} ${quoteForShell(script)}`;
+	return {
+		display: `${runtime} --cwd ${cwd} ${script}`,
+		posix,
+		fish: posix,
+		powerShell: `${quoteForPowerShell(runtime)} --cwd ${quoteForPowerShell(cwd)} ${quoteForPowerShell(script)}`,
+	};
+}
+
 function resolveShellConfigPath(shell: ProfileAliasShell, homeDir: string, platform: NodeJS.Platform): string {
 	switch (shell) {
 		case "zsh":
@@ -85,8 +115,9 @@ function renderAliasBlock(
 	shell: ProfileAliasShell,
 	aliasName: string,
 	profile: string,
+	command: ProfileAliasCommand,
 ): { block: string; command: string } {
-	const command = `omp --profile ${profile}`;
+	const profiledCommand = `${command.display} --profile=${profile}`;
 	const start = `# >>> omp profile alias: ${aliasName} >>>`;
 	const end = `# <<< omp profile alias: ${aliasName} <<<`;
 	let body: string;
@@ -94,19 +125,19 @@ function renderAliasBlock(
 		case "fish":
 			body = [
 				`function ${aliasName} --wraps omp --description 'OMP profile ${profile}'`,
-				`    command ${command} $argv`,
+				`    command ${command.fish} --profile=${profile} $argv`,
 				"end",
 			].join("\n");
 			break;
 		case "powershell":
 		case "pwsh":
-			body = [`function ${aliasName} {`, `    & omp --profile ${profile} @args`, "}"].join("\n");
+			body = [`function ${aliasName} {`, `    & ${command.powerShell} --profile=${profile} @args`, "}"].join("\n");
 			break;
 		default:
-			body = `alias ${aliasName}='command ${command}'`;
+			body = [`${aliasName}() {`, `    command ${command.posix} --profile=${profile} "$@"`, "}"].join("\n");
 			break;
 	}
-	return { block: `${start}\n${body}\n${end}`, command };
+	return { block: `${start}\n${body}\n${end}`, command: profiledCommand };
 }
 
 function upsertBlock(content: string, aliasName: string, block: string): string {
@@ -156,7 +187,7 @@ export async function installProfileAlias(options: ProfileAliasInstallOptions): 
 	const homeDir = options.homeDir ?? os.homedir();
 	const shell = normalizeShellName(options.shellPath ?? process.env.SHELL, platform);
 	const configPath = resolveShellConfigPath(shell, homeDir, platform);
-	const { block, command } = renderAliasBlock(shell, aliasName, profile);
+	const { block, command } = renderAliasBlock(shell, aliasName, profile, options.command ?? DEFAULT_ALIAS_COMMAND);
 	const readFile = options.readFile ?? readProfileAliasConfigFile;
 	const writeFile =
 		options.writeFile ??

@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { hookFetch } from "@oh-my-pi/pi-utils";
 import { runSearchQuery } from "../../src/web/search";
 import {
@@ -7,6 +11,17 @@ import {
 	searchExa,
 	synthesizeAnswer,
 } from "../../src/web/search/providers/exa";
+
+async function withLocalAuthStorage<T>(run: (authStorage: AuthStorage) => Promise<T>): Promise<T> {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "web-search-exa-auth-"));
+	const authStorage = await AuthStorage.create(path.join(dir, "auth.db"));
+	try {
+		return await run(authStorage);
+	} finally {
+		authStorage.close();
+		await fs.rm(dir, { recursive: true, force: true });
+	}
+}
 
 // ────────────────────────────────────────────────────────────
 // Unit tests for pure helpers (no mocking needed)
@@ -544,7 +559,9 @@ describe("searchExa", () => {
 			);
 		});
 
-		const result = await runSearchQuery({ query: "provider exa plain text", provider: "exa" });
+		const result = await withLocalAuthStorage(authStorage =>
+			runSearchQuery({ query: "provider exa plain text", provider: "exa" }, { authStorage }),
+		);
 		expect(result.details.error).toBeUndefined();
 		expect(result.details.response.provider).toBe("exa");
 		expect(result.details.response.sources).toHaveLength(2);
@@ -563,7 +580,9 @@ describe("searchExa", () => {
 			);
 		});
 
-		const result = await runSearchQuery({ query: "provider exa", provider: "exa" });
+		const result = await withLocalAuthStorage(authStorage =>
+			runSearchQuery({ query: "provider exa", provider: "exa" }, { authStorage }),
+		);
 		expect(result.details.error).toBeUndefined();
 		expect(result.details.response.provider).toBe("exa");
 		expect(result.content[0]?.text).toContain("3 sources");

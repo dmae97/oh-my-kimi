@@ -1,35 +1,58 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import { scheduler } from "node:timers/promises";
 import { ExponentialYield, yieldIfDue } from "../src/utils/yield";
 
-const YIELD_SLEEP_MS = 20;
 const YIELD_INTERVAL_MS = 50;
+const YIELD_CLOCK_STEP_MS = 60_000;
+let fakeClockNow = Date.now();
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
+function installYieldClock(): { advanceBy: (ms: number) => void } {
+	fakeClockNow += YIELD_CLOCK_STEP_MS;
+	let now = fakeClockNow;
+	vi.spyOn(Date, "now").mockImplementation(() => now);
+	return {
+		advanceBy(ms: number) {
+			now += ms;
+			fakeClockNow = now;
+		},
+	};
+}
 
 describe("yieldIfDue", () => {
-	it("sleeps on the first call and primes the timestamp gate", async () => {
-		// Prime the gate so the next call is in a known state.
+	it("sleeps on the first call and gates immediate callers", async () => {
+		const clock = installYieldClock();
+		const waitSpy = vi.spyOn(scheduler, "wait");
+
 		await yieldIfDue();
-		const start = performance.now();
+		expect(waitSpy.mock.calls.length).toBeGreaterThan(0);
+		const callsAfterFirstYield = waitSpy.mock.calls.length;
+
+		clock.advanceBy(YIELD_INTERVAL_MS - 1);
 		await yieldIfDue();
-		const elapsed = performance.now() - start;
-		// Within the 50 ms gate window — must be a near-instant return.
-		expect(elapsed).toBeLessThan(YIELD_SLEEP_MS / 2);
+		expect(waitSpy.mock.calls.length).toBe(callsAfterFirstYield);
 	});
 
 	it("sleeps again once the gate window elapses", async () => {
+		const clock = installYieldClock();
+		const waitSpy = vi.spyOn(scheduler, "wait");
+
 		await yieldIfDue();
-		// Wait past the gate the same way callers would (real time).
-		await new Promise<void>(r => setTimeout(r, YIELD_INTERVAL_MS + 5));
-		const start = performance.now();
+		const callsAfterFirstYield = waitSpy.mock.calls.length;
+
+		clock.advanceBy(YIELD_INTERVAL_MS);
 		await yieldIfDue();
-		const elapsed = performance.now() - start;
-		expect(elapsed).toBeGreaterThanOrEqual(YIELD_SLEEP_MS - 5);
+		expect(waitSpy.mock.calls.length).toBeGreaterThan(callsAfterFirstYield);
 	});
 });
 
 describe("ExponentialYield.race", () => {
 	it("returns the racer's value as soon as it settles", async () => {
 		const ey = new ExponentialYield({ minMs: 5_000, maxMs: 10_000 });
-		const racer = new Promise<string>(r => setTimeout(() => r("done"), 10));
+		const racer = Bun.sleep(10).then(() => "done");
 		const start = performance.now();
 		const out = await ey.race([racer]);
 		const elapsed = performance.now() - start;
@@ -44,7 +67,7 @@ describe("ExponentialYield.race", () => {
 		// kept fresh timers ticking. We pick a minMs far larger than the racer
 		// delay and assert we return well before it.
 		const ey = new ExponentialYield({ minMs: 2_000, maxMs: 2_000 });
-		const racer = new Promise<number>(r => setTimeout(() => r(42), 20));
+		const racer = Bun.sleep(20).then(() => 42);
 		const start = performance.now();
 		const out = await ey.race([racer]);
 		const elapsed = performance.now() - start;
@@ -54,6 +77,6 @@ describe("ExponentialYield.race", () => {
 		// After race resolves, ensure the AbortController-driven cancel really
 		// unblocked the underlying timer: a short follow-up sleep should not
 		// be perturbed by residual pending timers. (Sanity: this returns.)
-		await new Promise<void>(r => setTimeout(r, 30));
+		await Bun.sleep(30);
 	});
 });

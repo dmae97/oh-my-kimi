@@ -9,7 +9,7 @@
  */
 import * as path from "node:path";
 import { getActiveSkills } from "../extensibility/skills";
-import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
+import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 function getContentType(filePath: string): InternalResource["contentType"] {
 	const ext = path.extname(filePath).toLowerCase();
@@ -85,5 +85,12 @@ export class SkillProtocolHandler implements ProtocolHandler {
 			sourcePath: targetPath,
 			notes: [],
 		};
+	}
+
+	async complete(): Promise<UrlCompletion[]> {
+		return getActiveSkills().map(skill => ({
+			value: skill.name,
+			...(skill.description ? { description: skill.description } : {}),
+		}));
 	}
 }

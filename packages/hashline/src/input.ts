@@ -9,10 +9,11 @@
  */
 import * as path from "node:path";
 import { applyEdits } from "./apply";
+import { resolveBlockEdits } from "./block";
 import { HL_FILE_HASH_LENGTH, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
 import { parsePatch, parsePatchStreaming } from "./parser";
 import { Tokenizer } from "./tokenizer";
-import type { ApplyResult, Edit, SplitOptions } from "./types";
+import type { ApplyResult, BlockResolver, Edit, SplitOptions } from "./types";
 
 // Pure classification — single shared tokenizer is safe.
 const TOKENIZER = new Tokenizer();
@@ -251,6 +252,8 @@ export class PatchSection {
 	get hasAnchorScopedEdit(): boolean {
 		return this.edits.some(edit => {
 			if (edit.kind === "delete") return true;
+			// A `replace block N:` edit is anchored to concrete content on line N.
+			if (edit.kind === "block") return true;
 			return edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor";
 		});
 	}
@@ -260,6 +263,10 @@ export class PatchSection {
 		const lines = new Set<number>();
 		for (const edit of this.edits) {
 			if (edit.kind === "delete") {
+				lines.add(edit.anchor.line);
+				continue;
+			}
+			if (edit.kind === "block") {
 				lines.add(edit.anchor.line);
 				continue;
 			}
@@ -276,10 +283,14 @@ export class PatchSection {
 	 * {@link Patcher} owns tag validation and recovery; reach for this
 	 * method directly when you've already validated the file content and
 	 * just want the result.
+	 *
+	 * `blockResolver` resolves any `replace block N:` edits against `text`; an
+	 * unresolvable block throws (this is the final, authoritative preview path).
 	 */
-	applyTo(text: string): ApplyResult {
+	applyTo(text: string, blockResolver?: BlockResolver): ApplyResult {
 		const { edits, warnings } = this.parse();
-		const result = applyEdits(text, [...edits]);
+		const resolved = resolveBlockEdits(edits, text, this.path, blockResolver, { onUnresolved: "throw" });
+		const result = applyEdits(text, resolved);
 		// Preserve parse warnings so consumers don't need to call `parse()`
 		// separately.
 		const merged = warnings.length === 0 ? result.warnings : [...warnings, ...(result.warnings ?? [])];
@@ -294,10 +305,15 @@ export class PatchSection {
 	 * or a per-token parse error mid-stream) does not throw or emit a phantom
 	 * empty-payload edit. Intended for incremental diff previews; the writer
 	 * path should always use {@link applyTo}.
+	 *
+	 * `blockResolver` resolves any `replace block N:` edits against `text`; an
+	 * unresolvable block is silently dropped so a half-written file does not
+	 * throw mid-stream.
 	 */
-	applyPartialTo(text: string): ApplyResult {
+	applyPartialTo(text: string, blockResolver?: BlockResolver): ApplyResult {
 		const { edits, warnings } = parsePatchStreaming(this.diff);
-		const result = applyEdits(text, [...edits]);
+		const resolved = resolveBlockEdits(edits, text, this.path, blockResolver, { onUnresolved: "drop" });
+		const result = applyEdits(text, resolved);
 		const merged = warnings.length === 0 ? result.warnings : [...warnings, ...(result.warnings ?? [])];
 		return merged && merged.length > 0
 			? { ...result, warnings: merged }

@@ -17,6 +17,11 @@ import { YAML } from "bun";
  * model (anthropic) is selected even though the path enables only
  * `openai-codex`.
  */
+
+function emptyWorkspaceTree(cwd: string) {
+	return { rootPath: cwd, rendered: ".\n", truncated: false, totalLines: 1, agentsMdFiles: [] };
+}
+
 describe("issue #1022 — path-scoped enabledModels respected by default fallback", () => {
 	let testDir: string;
 	let agentDir: string;
@@ -71,6 +76,7 @@ describe("issue #1022 — path-scoped enabledModels respected by default fallbac
 				skills: [],
 				contextFiles: [],
 				promptTemplates: [],
+				workspaceTree: emptyWorkspaceTree(cwd),
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,

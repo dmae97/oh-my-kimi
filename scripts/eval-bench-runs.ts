@@ -57,16 +57,18 @@ const SEPARATOR_DISPLAY: Record<string, string> = {
 
 const args = process.argv.slice(2);
 const dirs: string[] = [];
-let format: "table" | "md" | "csv" | "json" = "table";
-let sortBy: "sep" | "model" | "task" | "edit" | "tokens" = "sep";
+type OutputFormat = "table" | "md" | "csv" | "json";
+type SortKey = "sep" | "model" | "task" | "edit" | "tokens";
+let format: OutputFormat = "table";
+let sortBy: SortKey = "sep";
 let aggregate = false;
 
 for (let i = 0; i < args.length; i++) {
 	const a = args[i];
 	if (a === "--format") {
-		format = args[++i] as typeof format;
+		format = args[++i] as OutputFormat;
 	} else if (a === "--sort") {
-		sortBy = args[++i] as typeof sortBy;
+		sortBy = args[++i] as SortKey;
 	} else if (a === "--aggregate") {
 		aggregate = true;
 	} else if (!a.startsWith("--")) {

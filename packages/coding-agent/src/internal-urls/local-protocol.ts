@@ -5,7 +5,7 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import { AgentRegistry } from "../registry/agent-registry";
 import { parseInternalUrl } from "./parse";
 import { validateRelativePath } from "./skill-protocol";
-import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
+import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 export interface LocalProtocolOptions {
 	getArtifactsDir?: () => string | null;
@@ -245,5 +245,18 @@ export class LocalProtocolHandler implements ProtocolHandler {
 			sourcePath: realTargetPath,
 			notes: ["Use write path local://<file> to persist large intermediate artifacts across turns."],
 		};
+	}
+
+	async complete(): Promise<UrlCompletion[]> {
+		const opts = LocalProtocolHandler.resolveOptions();
+		if (!opts) return [];
+		const localRoot = path.resolve(resolveLocalRoot(opts));
+		try {
+			const files = await listFilesRecursively(localRoot);
+			return files.map(value => ({ value }));
+		} catch (err) {
+			if (isEnoent(err)) return [];
+			throw err;
+		}
 	}
 }

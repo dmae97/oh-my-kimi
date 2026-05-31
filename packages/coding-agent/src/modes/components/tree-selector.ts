@@ -3,6 +3,7 @@ import {
 	type Component,
 	Container,
 	extractPrintableText,
+	fuzzyMatch,
 	Input,
 	matchesKey,
 	Spacer,
@@ -325,10 +326,10 @@ class TreeList implements Component {
 
 			if (!passesFilter) return false;
 
-			// Apply search filter
+			// Apply fuzzy search filter
 			if (searchTokens.length > 0) {
-				const nodeText = this.#getSearchableText(flatNode.node).toLowerCase();
-				return searchTokens.every(token => nodeText.includes(token));
+				const nodeText = this.#getSearchableText(flatNode.node);
+				return searchTokens.every(token => fuzzyMatch(token, nodeText).matches);
 			}
 
 			return true;

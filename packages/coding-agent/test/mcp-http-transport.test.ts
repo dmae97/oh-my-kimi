@@ -57,7 +57,7 @@ describe("HTTP MCP transport", () => {
 			connection = await connectToServer("storybook", {
 				type: "http",
 				url: String(activeServer.url),
-				timeout: 200,
+				timeout: 1_000,
 			});
 
 			expect(connection.serverInfo.name).toBe("storybook-repro");

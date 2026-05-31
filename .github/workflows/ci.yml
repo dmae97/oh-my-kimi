@@ -3,7 +3,6 @@ name: CI
 on:
    push:
       branches: [main]
-      tags: ["v*"]
    pull_request:
       branches: [main]
    workflow_dispatch:
@@ -18,6 +17,54 @@ concurrency:
    cancel-in-progress: true
 
 jobs:
+   # scripts/release.ts pushes the version-bump commit and its `v*` tag
+   # atomically (`git push --atomic origin main refs/tags/v*`), so a release
+   # now arrives as a single `push` to `refs/heads/main` — we no longer trigger
+   # on the tag ref at all (see `on.push`). This one branch-push run is therefore
+   # authoritative: it runs the full build AND, when HEAD carries a release tag,
+   # the release/publish jobs. `gate` resolves that tag once so downstream jobs
+   # switch on `is-release` and address the tag by name — `github.ref` is
+   # `refs/heads/main` here, not the tag. A `workflow_dispatch` from a `v*` tag
+   # ref is also treated as a release (the manual re-publish escape hatch).
+   gate:
+      runs-on: ubuntu-22.04
+      outputs:
+         is-release: ${{ steps.check.outputs.is-release }}
+         release-tag: ${{ steps.check.outputs.release-tag }}
+      steps:
+         # Only a main-branch push needs tags fetched, so `git tag --points-at
+         # HEAD` can see the freshly-pushed `v*`. A tag-ref dispatch reads the
+         # tag straight from `github.ref_name`, and fetching `--tags` while
+         # checkout uses an explicit tag refspec makes git refuse — so scope
+         # fetch-tags to main pushes.
+         - uses: actions/checkout@v4
+           with:
+              fetch-tags: ${{ github.ref == 'refs/heads/main' }}
+         - name: Detect release tag at HEAD
+           id: check
+           shell: bash
+           run: |
+              is_release=false
+              release_tag=""
+              case "${{ github.ref }}" in
+                refs/tags/v[0-9]*)
+                  release_tag="${{ github.ref_name }}"
+                  ;;
+                refs/heads/main)
+                  if [ "${{ github.event_name }}" != "pull_request" ]; then
+                    release_tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1 || true)
+                  fi
+                  ;;
+              esac
+              if [ -n "$release_tag" ]; then
+                echo "HEAD carries release tag $release_tag; this run builds and publishes the release."
+                is_release=true
+              fi
+              {
+                echo "is-release=$is_release"
+                echo "release-tag=$release_tag"
+              } >> "$GITHUB_OUTPUT"
+
    # Compute a stable hash of every input that affects the native cdylib output,
    # then look for any prior successful main run that already uploaded the
    # native artifacts for this hash. Two independent outputs:
@@ -134,10 +181,10 @@ jobs:
            run: bun run ci:check:full
 
    # Linux x64 baseline + modern: required by `test`, so it runs on every PR
-   # unless rust-hash found a cached run. Tags always rebuild for fresh artifacts.
+   # unless rust-hash found a cached run. Release pushes always rebuild for fresh artifacts.
    native_linux:
-      needs: [rust-hash]
-      if: ${{ startsWith(github.ref, 'refs/tags/v') || needs.rust-hash.outputs.linux-run-id == '' }}
+      needs: [gate, rust-hash]
+      if: ${{ needs.gate.outputs.is-release == 'true' || needs.rust-hash.outputs.linux-run-id == '' }}
       runs-on: ubuntu-22.04
       strategy:
          fail-fast: false
@@ -154,14 +201,14 @@ jobs:
               arch: x64
               variant: ${{ matrix.variant }}
               rust_checks: ${{ matrix.rust_checks && 'true' || 'false' }}
-              save_cache: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+              save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
    # Pre-warm the cross-platform native build cache on `main`, in addition to
    # building the artifacts that ship in release tags. Skipped on main when the
    # rust-hash canary already found a recent run with all artifacts intact.
    native_release:
-      needs: [rust-hash]
-      if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.rust-hash.outputs.release-run-id == '') }}
+      needs: [gate, rust-hash]
+      if: ${{ needs.gate.outputs.is-release == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.rust-hash.outputs.release-run-id == '') }}
       strategy:
          fail-fast: false
          matrix:
@@ -180,7 +227,7 @@ jobs:
               arch: ${{ matrix.arch }}
               variant: ${{ matrix.variant }}
               target: ${{ matrix.target }}
-              save_cache: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+              save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
    test:
       runs-on: ubuntu-22.04
@@ -222,13 +269,10 @@ jobs:
               run-id: ${{ steps.source.outputs.run-id }}
               github-token: ${{ secrets.GITHUB_TOKEN }}
          - name: Test workspace (TS)
-           env:
-              # Bun's `bun test` emits `::group::`/`::endgroup::` per file under
-              # GHA. `--workspaces` prefixes each output line with `<pkg> test: `,
-              # which breaks GHA's column-0 parsing and leaks the markers as
-              # literal text. Unset for this step only — the annotations would be
-              # equally broken by the prefix, so we lose nothing.
-              GITHUB_ACTIONS: ""
+           # `test:ts` sets GITHUB_ACTIONS=0 inline so `bun test` skips its
+           # per-file `::group::`/`::endgroup::` annotations. Under `--workspaces`
+           # every line is prefixed with `<pkg> test: `, which breaks GHA's
+           # column-0 parsing and would leak those markers as literal log spam.
            run: bun run test:ts
          - name: CLI smoke test
            run: bun run ci:test:smoke
@@ -247,8 +291,7 @@ jobs:
            with:
               shared-key: install-methods-linux-x64
               cache-on-failure: true
-              save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' ||
-                 startsWith(github.ref, 'refs/tags/v')) }}
+              save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
               cache-workspace-crates: true
          # Layer sccache on top of rust-cache for the same reason as the
          # build-native action: tag pushes bump workspace versions and bust
@@ -279,11 +322,11 @@ jobs:
            run: bun run ci:test:install-methods
 
    release_binary:
-      if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
+      if: ${{ needs.gate.outputs.is-release == 'true' && !cancelled() &&
          needs.native_linux.result == 'success' && needs.native_release.result ==
          'success' && needs.test.result == 'success' && needs.check.result ==
          'success' && needs.install_methods.result == 'success' }}
-      needs: [check, native_linux, native_release, test, install_methods, rust-hash]
+      needs: [gate, check, native_linux, native_release, test, install_methods, rust-hash]
       strategy:
          fail-fast: false
          matrix:
@@ -326,11 +369,20 @@ jobs:
       runs-on: ${{ matrix.os }}
       permissions:
          contents: read
+         id-token: write
       steps:
          - uses: actions/checkout@v4
          - uses: oven-sh/setup-bun@v2
            with:
               bun-version: "1.3"
+         - uses: actions/setup-node@v4
+           with:
+              node-version: "24"
+              registry-url: "https://registry.npmjs.org"
+         # Trusted publishing allowed-actions flags require npm >= 11.16.0.
+         - name: Ensure npm supports trusted publishing
+           if: ${{ !inputs.skip_npm }}
+           run: npm install -g npm@latest
          - name: Cache bun dependencies
            uses: actions/cache@v4
            with:
@@ -357,6 +409,14 @@ jobs:
               runtime_dir="$(mktemp -d)"
               HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --version
               HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --smoke-test
+         - name: Publish native addon package
+           if: ${{ !inputs.skip_npm }}
+           env:
+              # Fallback auth: setup-node wrote an .npmrc referencing
+              # NODE_AUTH_TOKEN; npm uses it only when OIDC has no trusted
+              # publisher for the package (or on a first publish).
+              NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+           run: bun run ci:release:publish-native-leaf ${{ matrix.target_id }}
          - name: Upload release binary artifact
            uses: actions/upload-artifact@v4
            with:
@@ -364,9 +424,9 @@ jobs:
               path: ${{ matrix.binary_path }}
 
    release-github:
-      if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
+      if: ${{ needs.gate.outputs.is-release == 'true' && !cancelled() &&
          needs.release_binary.result == 'success' }}
-      needs: [release_binary]
+      needs: [gate, release_binary]
       runs-on: ubuntu-22.04
       permissions:
          contents: write
@@ -376,7 +436,7 @@ jobs:
            with:
               bun-version: "1.3"
          - name: Generate release notes from CHANGELOGs
-           run: bun scripts/ci-release-notes.ts
+           run: bun scripts/ci-release-notes.ts ${{ needs.gate.outputs.release-tag }}
          - name: Download release binaries
            uses: actions/download-artifact@v4
            with:
@@ -386,6 +446,7 @@ jobs:
          - name: Create GitHub Release
            uses: softprops/action-gh-release@v2
            with:
+              tag_name: ${{ needs.gate.outputs.release-tag }}
               files: |
                  packages/coding-agent/binaries/omp-*
               body_path: release-notes.md
@@ -393,16 +454,16 @@ jobs:
 
 
    release_github_verify:
-      if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
+      if: ${{ needs.gate.outputs.is-release == 'true' && !cancelled() &&
          needs['release-github'].result == 'success' }}
-      needs: [release-github]
+      needs: [gate, release-github]
       runs-on: macos-14
       permissions:
          contents: read
       steps:
          - name: Download published macOS arm64 binary
            run: |
-              curl -fsSL -o omp-darwin-arm64 "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/omp-darwin-arm64"
+              curl -fsSL -o omp-darwin-arm64 "https://github.com/${{ github.repository }}/releases/download/${{ needs.gate.outputs.release-tag }}/omp-darwin-arm64"
               chmod +x omp-darwin-arm64
          - name: Verify published macOS arm64 binary
            run: |
@@ -411,12 +472,19 @@ jobs:
               HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" ./omp-darwin-arm64 --version
 
    release-npm:
-      if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
+      if: ${{ needs.gate.outputs.is-release == 'true' && !cancelled() &&
          needs.release_binary.result == 'success' &&
          needs.release_github_verify.result == 'success' &&
          !inputs.skip_npm }}
-      needs: [release_binary, release_github_verify, rust-hash]
+      needs: [gate, release_binary, release_github_verify]
       runs-on: ubuntu-22.04
+      # `id-token: write` lets npm mint the GitHub OIDC token it exchanges for a
+      # short-lived publish token (trusted publishing + provenance). When a
+      # package has no matching trusted publisher configured, npm silently falls
+      # back to NODE_AUTH_TOKEN below — which also covers first-ever publishes.
+      permissions:
+         id-token: write
+         contents: read
       steps:
          - uses: actions/checkout@v4
          - uses: oven-sh/setup-bun@v2
@@ -426,19 +494,19 @@ jobs:
            with:
               node-version: "24"
               registry-url: "https://registry.npmjs.org"
+         # Trusted publishing (OIDC) and auto-provenance need npm >= 11.5.1.
+         - name: Ensure npm supports OIDC trusted publishing
+           run: npm install -g npm@latest
          - name: Cache bun dependencies
            uses: actions/cache@v4
            with:
               path: ~/.bun/install/cache
               key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
          - run: bun install --frozen-lockfile
-         - name: Download native addons
-           uses: actions/download-artifact@v4
-           with:
-              pattern: pi-natives-*-h${{ needs.rust-hash.outputs.hash }}
-              path: packages/natives/native
-              merge-multiple: true
          - name: Publish to npm
            env:
-              NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+              # Fallback auth: setup-node wrote an .npmrc referencing
+              # NODE_AUTH_TOKEN; npm uses it only when OIDC has no trusted
+              # publisher for the package (or on a first publish).
+              NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
            run: bun run ci:release:publish

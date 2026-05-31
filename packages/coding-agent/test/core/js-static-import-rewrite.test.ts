@@ -130,4 +130,11 @@ describe("rewriteImports", () => {
 		expect(wrapped.finalExpressionReturned).toBe(true);
 		expect(wrapped.source).toContain("__omp_set_final_expr__((await Promise.resolve(1)))");
 	});
+
+	it("strips type-only imports before rewriting imports and top-level return", () => {
+		const wrapped = wrapCode(`${IMPORT} type { Thing } from "./types";\nreturn 42;`);
+		expect(wrapped.finalExpressionReturned).toBe(true);
+		expect(wrapped.source).toContain("__omp_set_final_expr__(42)");
+		expect(wrapped.source).not.toContain(`${IMPORT} type`);
+	});
 });

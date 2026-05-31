@@ -126,10 +126,16 @@ Important edge behavior from runtime:
 - `{ id?, type: "get_branch_messages" }`
 - `{ id?, type: "get_last_assistant_text" }`
 - `{ id?, type: "set_session_name", name: string }`
+- `{ id?, type: "handoff", customInstructions?: string }`
 
 ### Messages
 
 - `{ id?, type: "get_messages" }`
+
+### Login
+
+- `{ id?, type: "get_login_providers" }`
+- `{ id?, type: "login", providerId: string }`
 
 ## Response Schema
 
@@ -170,14 +176,19 @@ Data payloads are command-specific and defined in `rpc-types.ts`.
       ]
     }
   ],
-  "systemPrompt": "...",
+  "systemPrompt": ["..."],
   "dumpTools": [
     {
       "name": "read",
       "description": "Read files and URLs",
       "parameters": {}
     }
-  ]
+  ],
+  "contextUsage": {
+    "tokens": 1100,
+    "contextWindow": 200000,
+    "percent": 0.55
+  }
 }
 ```
 
@@ -364,6 +375,7 @@ Extensions in RPC mode use request/response UI frames.
 
 - `select`, `confirm`, `input`, `editor`, `cancel`
 - `notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`
+- `open_url` (emitted by RPC login flows)
 
 Runtime note:
 
@@ -622,8 +634,8 @@ Current helper characteristics:
 
 - Spawns `bun <cliPath> --mode rpc`
 - Correlates responses by generated `req_<n>` ids
-- Dispatches only recognized `AgentEvent` types to listeners
+- Dispatches recognized core `AgentEvent` types to listeners
 - Supports host-owned custom tools via `setCustomTools()` and automatic handling of `host_tool_call` / `host_tool_cancel`
-- Does **not** expose helper methods for every protocol command (for example, `set_interrupt_mode` and `set_session_name` are in protocol types but not wrapped as dedicated methods)
+- Wraps common protocol commands including OAuth `getLoginProviders()` / `login(...)`; use raw protocol frames for any surface not wrapped by the helper.
 
 Use raw protocol frames if you need complete surface coverage.

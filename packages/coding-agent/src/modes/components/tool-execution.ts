@@ -15,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { EDIT_MODE_STRATEGIES, type EditMode, type PerFileDiffPreview } from "../../edit";
+import { shimmerEnabled } from "../../modes/theme/shimmer";
 import type { Theme } from "../../modes/theme/theme";
 import { theme } from "../../modes/theme/theme";
 import { BASH_DEFAULT_PREVIEW_LINES } from "../../tools/bash";
@@ -31,6 +32,7 @@ import {
 } from "../../tools/json-tree";
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
 import { toolRenderers } from "../../tools/renderers";
+import { TODO_WRITE_STRIKE_TOTAL_FRAMES } from "../../tools/todo-write";
 import { renderStatusLine } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { renderDiff } from "./diff";
@@ -41,15 +43,6 @@ function ensureInvalidate(component: unknown): Component {
 		c.invalidate = () => {};
 	}
 	return c as Component;
-}
-
-function cloneToolArgs<T>(args: T): T {
-	if (args === null || args === undefined) return args;
-	try {
-		return structuredClone(args);
-	} catch {
-		return args;
-	}
 }
 
 /**
@@ -103,6 +96,27 @@ function resolveEditModeForTool(toolName: string, tool: AgentTool | undefined): 
 	if (toolName === "apply_patch") return "apply_patch";
 	if (toolName !== "edit") return undefined;
 	return (tool as { mode?: EditMode } | undefined)?.mode;
+}
+
+function rawTextInputFromPartialJson(partialJson: unknown): string | undefined {
+	if (typeof partialJson !== "string") return undefined;
+	if (partialJson.length === 0) return undefined;
+	const trimmed = partialJson.trimStart();
+	if (trimmed.length === 0) return undefined;
+	const first = trimmed[0];
+	// Function-tool arguments stream as JSON. Custom/free-form tools stream raw
+	// text in the same transport field; only the raw form is a valid fallback for
+	// the conventional `input` parameter.
+	if (first === "{" || first === "[" || first === '"') return undefined;
+	return partialJson;
+}
+
+function getArgsWithStreamedTextInput(args: unknown): unknown {
+	if (args == null || typeof args !== "object") return args;
+	const record = args as Record<string, unknown>;
+	if (typeof record.input === "string") return args;
+	const input = rawTextInputFromPartialJson(record.__partialJson);
+	return input === undefined ? args : { ...record, input };
 }
 
 export interface ToolExecutionOptions {
@@ -163,6 +177,8 @@ export class ToolExecutionComponent extends Container {
 	// Spinner animation for partial task results
 	#spinnerFrame?: number;
 	#spinnerInterval?: NodeJS.Timeout;
+	// Todo write completion strikethrough reveal animation
+	#todoStrikeInterval?: NodeJS.Timeout;
 	// Track if args are still being streamed (for edit/write spinner)
 	#argsComplete = false;
 	#renderState: {
@@ -194,7 +210,7 @@ export class ToolExecutionComponent extends Container {
 		this.#tool = tool;
 		this.#ui = ui;
 		this.#cwd = cwd;
-		this.#args = cloneToolArgs(args);
+		this.#args = args;
 
 		this.addChild(new Spacer(1));
 
@@ -218,7 +234,12 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	updateArgs(args: any, _toolCallId?: string): void {
-		this.#args = cloneToolArgs(args);
+		// Reference-equality short-circuit before any further work. Callers
+		// always allocate a new arg object on each streamed delta (see
+		// event-controller.ts and ui-helpers.ts), so a same-reference assignment
+		// signals "nothing meaningful changed" and the renderer can skip.
+		if (args === this.#args) return;
+		this.#args = args;
 		this.#updateSpinnerAnimation();
 		void this.#runPreviewDiff();
 		this.#updateDisplay();
@@ -243,12 +264,13 @@ export class ToolExecutionComponent extends Container {
 		const args = this.#args;
 		if (args == null || typeof args !== "object") return;
 
-		const partialJson = (args as { __partialJson?: string }).__partialJson;
+		const previewArgs = getArgsWithStreamedTextInput(args);
+		const partialJson = (previewArgs as { __partialJson?: string }).__partialJson;
 		let effectiveArgs: unknown;
 		try {
-			effectiveArgs = strategy.extractCompleteEdits(args, partialJson);
+			effectiveArgs = strategy.extractCompleteEdits(previewArgs, partialJson);
 		} catch {
-			effectiveArgs = args;
+			effectiveArgs = previewArgs;
 		}
 
 		// Coalesce duplicate computes for identical args. The key pairs the
@@ -316,6 +338,7 @@ export class ToolExecutionComponent extends Container {
 			this.#argsComplete = true;
 		}
 		this.#updateSpinnerAnimation();
+		this.#updateTodoStrikeAnimation();
 		this.#updateDisplay();
 		// Convert non-PNG images to PNG for Kitty protocol (async)
 		this.#maybeConvertImagesForKitty();
@@ -376,7 +399,10 @@ export class ToolExecutionComponent extends Container {
 			this.#toolName === "task" &&
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
 		const isPartialTask = this.#isPartial && this.#toolName === "task" && !isBackgroundAsyncTask;
-		const needsSpinner = isStreamingArgs || isPartialTask;
+		// Sweep the border of bash/eval execution blocks while they're pending.
+		const isPendingExecBlock =
+			this.#isPartial && shimmerEnabled() && (this.#toolName === "bash" || this.#toolName === "eval");
+		const needsSpinner = isStreamingArgs || isPartialTask || isPendingExecBlock;
 		if (needsSpinner && !this.#spinnerInterval) {
 			this.#spinnerInterval = setInterval(() => {
 				const frameCount = theme.spinnerFrames.length;
@@ -391,6 +417,43 @@ export class ToolExecutionComponent extends Container {
 		}
 	}
 
+	#updateTodoStrikeAnimation(): void {
+		if (this.#toolName !== "todo_write" || this.#isPartial || this.#result?.isError) {
+			this.#stopTodoStrikeAnimation();
+			return;
+		}
+		const completedTasks = (this.#result?.details as { completedTasks?: unknown[] } | undefined)?.completedTasks;
+		if (!completedTasks || completedTasks.length === 0) {
+			this.#stopTodoStrikeAnimation();
+			return;
+		}
+		if (this.#todoStrikeInterval) return;
+
+		this.#spinnerFrame = 0;
+		this.#renderState.spinnerFrame = 0;
+		this.#todoStrikeInterval = setInterval(() => {
+			const nextFrame = (this.#spinnerFrame ?? 0) + 1;
+			if (nextFrame > TODO_WRITE_STRIKE_TOTAL_FRAMES) {
+				this.#stopTodoStrikeAnimation();
+			} else {
+				this.#spinnerFrame = nextFrame;
+				this.#renderState.spinnerFrame = nextFrame;
+			}
+			this.#ui.requestRender();
+		}, 65);
+	}
+
+	#stopTodoStrikeAnimation(): void {
+		if (this.#todoStrikeInterval) {
+			clearInterval(this.#todoStrikeInterval);
+			this.#todoStrikeInterval = undefined;
+		}
+		if (!this.#spinnerInterval) {
+			this.#spinnerFrame = undefined;
+			this.#renderState.spinnerFrame = undefined;
+		}
+	}
+
 	/**
 	 * Stop spinner animation and cleanup resources.
 	 */
@@ -400,6 +463,7 @@ export class ToolExecutionComponent extends Container {
 			this.#spinnerInterval = undefined;
 			this.#spinnerFrame = undefined;
 		}
+		this.#stopTodoStrikeAnimation();
 		this.#editDiffAbort?.abort();
 		this.#editDiffAbort = undefined;
 	}
@@ -671,20 +735,21 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	#getCallArgsForRender(): any {
+		const renderArgs = getArgsWithStreamedTextInput(this.#args);
 		if (!isEditLikeToolName(this.#toolName)) {
-			return this.#args;
+			return renderArgs;
 		}
 		const previews = this.#editDiffPreview;
 		if (!previews || previews.length === 0) {
-			return this.#args;
+			return renderArgs;
 		}
 		// Single-file previews feed the existing `previewDiff` channel consumed
 		// by `formatStreamingDiff` in the renderer.
 		const first = previews[0];
 		if (!first?.diff) {
-			return this.#args;
+			return renderArgs;
 		}
-		return { ...(this.#args as Record<string, unknown>), previewDiff: first.diff };
+		return { ...(renderArgs as Record<string, unknown>), previewDiff: first.diff };
 	}
 
 	/**
@@ -735,7 +800,7 @@ export class ToolExecutionComponent extends Container {
 			if (!previews?.some(preview => preview.diff)) {
 				const editMode = this.#editMode;
 				const strategy = editMode ? EDIT_MODE_STRATEGIES[editMode] : undefined;
-				const fallback = strategy?.renderStreamingFallback(this.#args, theme);
+				const fallback = strategy?.renderStreamingFallback(getArgsWithStreamedTextInput(this.#args), theme);
 				if (fallback) context.editStreamingFallback = fallback;
 			}
 			context.renderDiff = renderDiff;

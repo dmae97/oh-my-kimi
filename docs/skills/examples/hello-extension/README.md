@@ -28,7 +28,7 @@ omp --extension ./hello-extension
 
 ## Usage
 
-After loading, type `/hello` in the omp prompt to trigger the notification.
+After loading, type `/hello` or `/hello Ada` in the omp prompt. The command sends a visible greeting custom message into the conversation and shows a "Message sent!" notification.
 
 ## What it demonstrates
 

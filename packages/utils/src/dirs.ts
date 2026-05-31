@@ -28,6 +28,11 @@ export const VERSION: string = version;
 /** Minimum Bun version */
 export const MIN_BUN_VERSION: string = engines.bun.replace(/[^0-9.]/g, "");
 
+try {
+	delete process.env.MallocStackLogging;
+	delete process.env.MallocStackLoggingNoCompact;
+} catch {}
+
 const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const PROFILE_ENV_KEYS = ["OMP_PROFILE", "PI_PROFILE"] as const;
 
@@ -533,6 +538,11 @@ export function getGithubCacheDbPath(): string {
 	return dirs.rootSubdir(path.join("cache", "github-cache.db"), "cache");
 }
 
+/** Get the local FastEmbed model cache directory (~/.omp/cache/fastembed). */
+export function getFastembedCacheDir(): string {
+	return dirs.rootSubdir(path.join("cache", "fastembed"), "cache");
+}
+
 /** Get the natives directory (~/.omp/natives). */
 export function getNativesDir(): string {
 	return dirs.rootSubdir("natives", "cache");
@@ -580,6 +590,11 @@ export function getHistoryDbPath(agentDir?: string): string {
 /** Get the path to models.db (model cache database). */
 export function getModelDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "models.db", "data");
+}
+
+/** Get the tiny title model cache directory (~/.omp/agent/cache/tiny-models). */
+export function getTinyModelsCacheDir(agentDir?: string): string {
+	return dirs.agentSubdir(agentDir, path.join("cache", "tiny-models"), "cache");
 }
 
 /** Get the sessions directory (~/.omp/agent/sessions). */

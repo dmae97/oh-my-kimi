@@ -21,6 +21,7 @@ import {
 	type Component,
 	Container,
 	extractPrintableText,
+	fuzzyMatch,
 	Input,
 	matchesKey,
 	padding,
@@ -110,18 +111,17 @@ function formatResolution(resolution: ModelResolution): string {
 }
 
 function matchAgent(agent: DashboardAgent, query: string): boolean {
-	const q = query.toLowerCase();
-	if (agent.name.toLowerCase().includes(q)) return true;
-	if (agent.description.toLowerCase().includes(q)) return true;
-	if (SOURCE_LABEL[agent.source].toLowerCase().includes(q)) return true;
-	if (agent.overrideModel?.toLowerCase().includes(q)) return true;
-	return false;
+	const text = `${agent.name} ${agent.description} ${SOURCE_LABEL[agent.source]} ${agent.overrideModel ?? ""}`;
+	return query
+		.trim()
+		.split(/\s+/)
+		.every(token => fuzzyMatch(token, text).matches);
 }
 
 function extractAssistantText(messages: AgentMessage[]): string | null {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];
-		if (!message || message.role !== "assistant") continue;
+		if (message?.role !== "assistant") continue;
 		const blocks = message.content;
 		if (!Array.isArray(blocks)) continue;
 		const text = blocks

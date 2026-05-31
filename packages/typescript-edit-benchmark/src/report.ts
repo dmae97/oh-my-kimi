@@ -174,21 +174,21 @@ export function generateReport(result: BenchmarkResult): string {
 	lines.push("");
 	lines.push("### Tokens & Time");
 	lines.push("");
-	lines.push("| Metric | Total (best) | Avg/Task |");
-	lines.push("|--------|--------------|----------|");
+	lines.push("| Metric | Total (best) | Avg/Task | Median | P1 | P99 |");
+	lines.push("|--------|--------------|----------|--------|----|----|");
 	lines.push(
-		`| Input Tokens | ${formatNumber(summary.totalTokens.input)} | ${formatNumber(summary.avgTokensPerTask.input)} |`,
+		`| Input Tokens | ${formatNumber(summary.totalTokens.input)} | ${formatNumber(summary.avgTokensPerTask.input)} | ${formatNumber(summary.medianTokensPerTask.input)} | ${formatNumber(summary.p1TokensPerTask.input)} | ${formatNumber(summary.p99TokensPerTask.input)} |`,
 	);
 	lines.push(
-		`| Output Tokens | ${formatNumber(summary.totalTokens.output)} | ${formatNumber(summary.avgTokensPerTask.output)} |`,
+		`| Output Tokens | ${formatNumber(summary.totalTokens.output)} | ${formatNumber(summary.avgTokensPerTask.output)} | ${formatNumber(summary.medianTokensPerTask.output)} | ${formatNumber(summary.p1TokensPerTask.output)} | ${formatNumber(summary.p99TokensPerTask.output)} |`,
 	);
 	lines.push(
-		`| Total Tokens | ${formatNumber(summary.totalTokens.total)} | ${formatNumber(summary.avgTokensPerTask.total)} |`,
+		`| Total Tokens | ${formatNumber(summary.totalTokens.total)} | ${formatNumber(summary.avgTokensPerTask.total)} | ${formatNumber(summary.medianTokensPerTask.total)} | ${formatNumber(summary.p1TokensPerTask.total)} | ${formatNumber(summary.p99TokensPerTask.total)} |`,
 	);
 	lines.push(
-		`| Duration | ${formatDuration(summary.totalDuration)} | ${formatDuration(summary.avgDurationPerTask)} |`,
+		`| Duration | ${formatDuration(summary.totalDuration)} | ${formatDuration(summary.avgDurationPerTask)} | — | — | — |`,
 	);
-	lines.push(`| **Avg Indent Score** | — | **${formatScore(summary.avgIndentScore)}** |`);
+	lines.push(`| **Avg Indent Score** | — | **${formatScore(summary.avgIndentScore)}** | — | — | — |`);
 	lines.push("");
 
 	if (summary.hashlineEditSubtypes) {

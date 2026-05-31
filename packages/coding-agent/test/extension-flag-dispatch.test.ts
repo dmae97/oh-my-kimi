@@ -1,18 +1,18 @@
 import { describe, expect, it } from "bun:test";
-import { applyExtensionFlagValues } from "../src/main";
+import { applyExtensionFlags, type ExtensionFlagSink } from "../src/cli/extension-flags";
 
-class FakeExtensionRunner {
+class FakeExtensionFlagSink implements ExtensionFlagSink {
 	#values = new Map<string, boolean | string>();
 
-	getFlags(): ReadonlyMap<string, { type: "boolean" | "string" }> {
+	get values(): ReadonlyMap<string, boolean | string> {
+		return this.#values;
+	}
+
+	getFlags(): Map<string, { type: "boolean" | "string" }> {
 		return new Map<string, { type: "boolean" | "string" }>([
 			["foo", { type: "boolean" }],
 			["bar", { type: "string" }],
 		]);
-	}
-
-	getFlagValues(): Map<string, boolean | string> {
-		return new Map(this.#values);
 	}
 
 	setFlagValue(name: string, value: boolean | string): void {
@@ -22,19 +22,21 @@ class FakeExtensionRunner {
 
 describe("extension flag dispatch", () => {
 	it("stops scanning raw argv at the end-of-options marker", () => {
-		const extensionRunner = new FakeExtensionRunner();
+		const sink = new FakeExtensionFlagSink();
 
-		const values = applyExtensionFlagValues({ extensionRunner }, ["--", "--foo", "bar"]);
+		const args = applyExtensionFlags(sink, ["--", "--foo", "bar"]);
 
-		expect(values.size).toBe(0);
+		expect(sink.values.size).toBe(0);
+		expect(args?.messages).toEqual(["--foo", "bar"]);
 	});
 
 	it("still allows -- to be the value of a string extension flag", () => {
-		const extensionRunner = new FakeExtensionRunner();
+		const sink = new FakeExtensionFlagSink();
 
-		const values = applyExtensionFlagValues({ extensionRunner }, ["--bar", "--"]);
+		const args = applyExtensionFlags(sink, ["--bar", "--"]);
 
-		expect(values.get("bar")).toBe("--");
-		expect(values.size).toBe(1);
+		expect(sink.values.get("bar")).toBe("--");
+		expect(sink.values.size).toBe(1);
+		expect(args?.messages).toEqual([]);
 	});
 });

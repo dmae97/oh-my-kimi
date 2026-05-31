@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { installProfileAlias, readProfileAliasConfigFile } from "../src/cli/profile-alias";
 
 describe("profile alias installer", () => {
-	it("writes a bash-compatible alias that forwards subcommands through omp", async () => {
+	it("writes a bash-compatible function that forwards subcommands through omp", async () => {
 		const files = new Map<string, string>();
 
 		const result = await installProfileAlias({
@@ -18,7 +18,37 @@ describe("profile alias installer", () => {
 		});
 
 		expect(result.configPath).toBe("/home/me/.bashrc");
-		expect(files.get("/home/me/.bashrc")).toContain("alias omp-work='command omp --profile work'");
+		expect(result.command).toBe("omp --profile=work");
+		expect(files.get("/home/me/.bashrc")).toContain("omp-work() {");
+		expect(files.get("/home/me/.bashrc")).toContain('command omp --profile=work "$@"');
+	});
+
+	it("can target the current source invocation instead of the installed omp binary", async () => {
+		const files = new Map<string, string>();
+
+		const result = await installProfileAlias({
+			profile: "work",
+			aliasName: "omp-work",
+			shellPath: "/bin/zsh",
+			platform: "darwin",
+			homeDir: "/Users/me",
+			command: {
+				display: "bun --cwd /repo/packages/coding-agent src/cli.ts",
+				posix: "bun --cwd '/repo/packages/coding-agent' src/cli.ts",
+				fish: "bun --cwd /repo/packages/coding-agent src/cli.ts",
+				powerShell: "bun --cwd '/repo/packages/coding-agent' src/cli.ts",
+			},
+			readFile: async filePath => files.get(filePath) ?? "",
+			writeFile: async (filePath, content) => {
+				files.set(filePath, content);
+			},
+		});
+
+		expect(result.command).toBe("bun --cwd /repo/packages/coding-agent src/cli.ts --profile=work");
+		expect(files.get("/Users/me/.zshrc")).toContain("omp-work() {");
+		expect(files.get("/Users/me/.zshrc")).toContain(
+			`command bun --cwd '/repo/packages/coding-agent' src/cli.ts --profile=work "$@"`,
+		);
 	});
 
 	it("writes a fish function that forwards argv", async () => {
@@ -38,7 +68,7 @@ describe("profile alias installer", () => {
 
 		const content = files.get("/Users/me/.config/fish/conf.d/omp-profiles.fish") ?? "";
 		expect(content).toContain("function omp-work --wraps omp");
-		expect(content).toContain("command omp --profile work $argv");
+		expect(content).toContain("command omp --profile=work $argv");
 	});
 
 	it("writes a PowerShell function because aliases cannot carry arguments", async () => {
@@ -58,7 +88,7 @@ describe("profile alias installer", () => {
 
 		const content = files.get("C:\\Users\\me/Documents/PowerShell/Microsoft.PowerShell_profile.ps1") ?? "";
 		expect(content).toContain("function omp-work");
-		expect(content).toContain("& omp --profile work @args");
+		expect(content).toContain("& omp --profile=work @args");
 	});
 
 	it("replaces a previous block for the same alias", async () => {
@@ -68,7 +98,7 @@ describe("profile alias installer", () => {
 				[
 					"before",
 					"# >>> omp profile alias: omp-work >>>",
-					"alias omp-work='command omp --profile old'",
+					"alias omp-work='command omp --profile=old'",
 					"# <<< omp profile alias: omp-work <<<",
 					"after",
 				].join("\n"),
@@ -90,8 +120,8 @@ describe("profile alias installer", () => {
 		const content = files.get("/home/me/.zshrc") ?? "";
 		expect(content).toContain("before");
 		expect(content).toContain("after");
-		expect(content).toContain("alias omp-work='command omp --profile work'");
-		expect(content).not.toContain("--profile old");
+		expect(content).toContain('command omp --profile=work "$@"');
+		expect(content).not.toContain("--profile=old");
 	});
 
 	it("refuses to rewrite a malformed managed block missing its end marker", async () => {
@@ -99,11 +129,7 @@ describe("profile alias installer", () => {
 		// was interrupted or hand-edited. Appending a fresh block would let the
 		// *next* install splice from the stale start through the new end, deleting
 		// the user config in between. Refuse and preserve the file untouched.
-		const original = [
-			"# >>> omp profile alias: omp-work >>>",
-			"alias omp-work='command omp --profile old'",
-			"export SECRET=keepme",
-		].join("\n");
+		const original = ["# >>> omp profile alias: omp-work >>>", "omp-work() {", "export SECRET=keepme"].join("\n");
 		const files = new Map<string, string>([["/home/me/.zshrc", original]]);
 		let wrote = false;
 

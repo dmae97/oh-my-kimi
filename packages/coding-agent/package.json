@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-coding-agent",
-	"version": "15.5.15",
+	"version": "15.7.3",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
@@ -51,7 +51,7 @@
 		"@oh-my-pi/omp-stats": "catalog:",
 		"@oh-my-pi/pi-agent-core": "catalog:",
 		"@oh-my-pi/pi-ai": "catalog:",
-		"@oh-my-pi/pi-mnemosyne": "workspace:*",
+		"@oh-my-pi/pi-mnemopi": "catalog:",
 		"@oh-my-pi/pi-natives": "catalog:",
 		"@oh-my-pi/pi-tui": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
@@ -69,6 +69,9 @@
 		"turndown": "catalog:",
 		"turndown-plugin-gfm": "catalog:",
 		"zod": "catalog:"
+	},
+	"optionalDependencies": {
+		"@huggingface/transformers": "catalog:"
 	},
 	"devDependencies": {
 		"@types/bun": "catalog:"

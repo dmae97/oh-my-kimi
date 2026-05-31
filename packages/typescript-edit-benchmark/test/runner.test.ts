@@ -271,6 +271,41 @@ describe("buildBenchmarkResult", () => {
 		expect(taskResult.tokens.total).toBe(60);
 		expect(result.summary.ghostRuns).toBe(1);
 	});
+
+	it("reports median, p1, and p99 token stats across best runs", () => {
+		// Five tasks, each a single successful best run with a distinct token cost.
+		const totals = [110, 220, 330, 440, 550];
+		const tasks = totals.map((_, i) => createTask(`t${i}`));
+		const resultsByTask = new Map(
+			totals.map((total, i) => [
+				tasks[i]!.id,
+				[createRun(0, true, { tokens: { input: (i + 1) * 100, output: (i + 1) * 10, total } })],
+			]),
+		);
+
+		const result = buildBenchmarkResult({
+			tasks,
+			config: {
+				provider: "anthropic",
+				model: "claude",
+				runsPerTask: 1,
+				timeout: 1000,
+				taskConcurrency: 1,
+			},
+			resultsByTask,
+			startTime: "2026-04-28T00:00:00.000Z",
+			endTime: "2026-04-28T00:00:01.000Z",
+		});
+
+		const { summary } = result;
+		// Mean is unchanged by the new fields: total sum 1650 / 5 tasks = 330.
+		expect(summary.avgTokensPerTask.total).toBe(330);
+		// Median = the middle sample (linear interpolation at rank 2 of [110..550]).
+		expect(summary.medianTokensPerTask).toEqual({ input: 300, output: 30, total: 330 });
+		// p1/p99 interpolate near the extremes (ranks 0.04 and 3.96 over 5 samples).
+		expect(summary.p1TokensPerTask).toEqual({ input: 104, output: 10, total: 114 });
+		expect(summary.p99TokensPerTask).toEqual({ input: 496, output: 50, total: 546 });
+	});
 });
 
 describe("writeConversationDump", () => {

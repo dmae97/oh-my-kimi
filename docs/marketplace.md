@@ -1,6 +1,6 @@
 # Marketplace plugin system
 
-The marketplace system lets you discover, install, and manage plugins from Git-hosted catalogs. It is compatible with the Claude Code plugin registry format.
+The marketplace system lets you discover, install, and manage plugins from Git, local, or direct-catalog sources. It is compatible with the Claude Code plugin registry format.
 
 ## Quick start
 
@@ -9,20 +9,20 @@ The marketplace system lets you discover, install, and manage plugins from Git-h
 /marketplace install wordpress.com@claude-plugins-official
 ```
 
-Or just type `/marketplace` with no arguments to open the interactive plugin browser.
+In the TUI, `/marketplace` with no arguments opens the interactive plugin browser. In non-TUI command handling, `/marketplace` lists configured marketplaces; use `/marketplace discover` to browse.
 
 ## Concepts
 
 A **marketplace** is a Git repository (or local directory) containing a catalog file at `.claude-plugin/marketplace.json`. The catalog lists available plugins with their sources, descriptions, and metadata.
 
-A **plugin** is a directory containing skills, commands, hooks, MCP servers, or LSP servers. Plugins are identified by `name@marketplace` (e.g. `code-review@claude-plugins-official`).
+A **plugin** is a directory containing Claude/OMP plugin content such as skills, commands, hooks, tools, MCP servers, LSP servers, rules, prompts, or extension modules. Plugins are identified by `name@marketplace` (e.g. `code-review@claude-plugins-official`).
 
-**Scopes**: plugins can be installed at two scopes:
+**Scopes**: marketplace plugins can be installed at two scopes:
 
 - **user** (default) -- available in all projects, stored in `~/.omp/plugins/installed_plugins.json`
-- **project** -- available only in the current project, stored in `.omp/plugins/installed_plugins.json`
+- **project** -- available only in the active project, stored in the nearest project `.omp/plugins/installed_plugins.json`
 
-Project-scoped installs shadow user-scoped installs of the same plugin.
+Enabled project-scoped installs shadow enabled user-scoped installs of the same plugin. A disabled project install does not shadow the user install.
 
 ## Commands
 
@@ -43,13 +43,16 @@ Project-scoped installs shadow user-scoped installs of the same plugin.
 
 ### Plugin operations
 
-| Command                                                                   | Effect                             |
-| ------------------------------------------------------------------------- | ---------------------------------- |
-| `/marketplace discover [marketplace]`                                     | Browse available plugins           |
-| `/marketplace install [--force] [--scope user\|project] name@marketplace` | Install a plugin                   |
-| `/marketplace uninstall [--scope user\|project] name@marketplace`         | Uninstall a plugin                 |
-| `/marketplace installed`                                                  | List installed marketplace plugins |
-| `/marketplace upgrade [--scope user\|project] [name@marketplace]`         | Upgrade one or all plugins         |
+| Command                                                                   | Effect                                             |
+| ------------------------------------------------------------------------- | -------------------------------------------------- |
+| `/marketplace discover [marketplace]`                                     | Browse available plugins                           |
+| `/marketplace install [--force] [--scope user\|project] name@marketplace` | Install a plugin                                   |
+| `/marketplace uninstall [--scope user\|project] name@marketplace`         | Uninstall a plugin; no args opens the TUI selector |
+| `/marketplace installed`                                                  | List installed marketplace plugins                 |
+| `/marketplace upgrade [--scope user\|project] [name@marketplace]`         | Upgrade one or all plugins                         |
+| `/plugins list`                                                           | List npm/link and marketplace plugins              |
+| `/plugins enable [--scope user\|project] name@marketplace`                | Enable a marketplace plugin                        |
+| `/plugins disable [--scope user\|project] name@marketplace`               | Disable a marketplace plugin                       |
 
 ### CLI equivalents
 
@@ -64,20 +67,23 @@ omp plugin discover [marketplace]
 omp plugin install [--force] [--scope user|project] name@marketplace
 omp plugin uninstall [--scope user|project] name@marketplace
 omp plugin upgrade [--scope user|project] [name@marketplace]
+omp plugin enable [--scope user|project] name@marketplace
+omp plugin disable [--scope user|project] name@marketplace
 ```
 
 ## Marketplace sources
 
 When you run `/marketplace add <source>`, the system classifies the source:
 
-| Source format                   | Type               | Example                                |
-| ------------------------------- | ------------------ | -------------------------------------- |
-| `owner/repo`                    | GitHub shorthand   | `anthropics/claude-plugins-official`   |
-| `https://...*.json`             | Direct catalog URL | `https://example.com/marketplace.json` |
-| `https://...*.git` or `git@...` | Git repository     | `https://github.com/org/repo.git`      |
-| `./path` or `~/path` or `/path` | Local directory    | `./my-marketplace`                     |
+| Source format                   | Type                                               | Example                                |
+| ------------------------------- | -------------------------------------------------- | -------------------------------------- |
+| `owner/repo`                    | GitHub shorthand                                   | `anthropics/claude-plugins-official`   |
+| `https://...*.json`             | Direct catalog URL                                 | `https://example.com/marketplace.json` |
+| `https://...` / `http://...`    | Git repository unless the URL path ends in `.json` | `https://github.com/org/repo`          |
+| `git@...` / `ssh://...`         | Git repository                                     | `git@github.com:org/repo.git`          |
+| `./path` or `~/path` or `/path` | Local directory                                    | `./my-marketplace`                     |
 
-The system clones the repository (or reads the local directory), locates `.claude-plugin/marketplace.json`, validates it, and caches the catalog locally.
+Git and local sources must contain `.claude-plugin/marketplace.json`. Direct catalog URLs cache only the JSON catalog; plugins in URL-sourced catalogs cannot use relative string sources like `"./plugins/foo"`.
 
 ## Catalog format (marketplace.json)
 
@@ -91,12 +97,16 @@ A marketplace catalog lives at `.claude-plugin/marketplace.json` in the reposito
     "name": "Your Name",
     "email": "you@example.com"
   },
-  "description": "A collection of plugins",
+  "metadata": {
+    "description": "A collection of plugins",
+    "version": "1.0.0",
+    "pluginRoot": "plugins"
+  },
   "plugins": [
     {
       "name": "my-plugin",
       "description": "What this plugin does",
-      "source": "./plugins/my-plugin",
+      "source": "./my-plugin",
       "category": "development",
       "homepage": "https://github.com/you/my-plugin"
     }
@@ -112,33 +122,38 @@ A marketplace catalog lives at `.claude-plugin/marketplace.json` in the reposito
 | `owner.name` | Marketplace owner name                                                                                           |
 | `plugins`    | Array of plugin entries                                                                                          |
 
+Top-level `metadata.description`, `metadata.version`, and `metadata.pluginRoot` are optional. When `metadata.pluginRoot` is set, it is prepended to relative plugin `source` paths.
+
 ### Plugin entry fields
 
-| Field         | Required | Description                                                      |
-| ------------- | -------- | ---------------------------------------------------------------- |
-| `name`        | yes      | Plugin name (same rules as marketplace name)                     |
-| `source`      | yes      | Where to find the plugin (see below)                             |
-| `description` | no       | Short description                                                |
-| `version`     | no       | Version string                                                   |
-| `author`      | no       | `{ name, email? }`                                               |
-| `homepage`    | no       | URL                                                              |
-| `category`    | no       | Category string (e.g. `development`, `productivity`, `security`) |
-| `tags`        | no       | Array of string tags                                             |
-| `strict`      | no       | Boolean                                                          |
-| `commands`    | no       | Slash commands provided                                          |
-| `agents`      | no       | Agents provided                                                  |
-| `hooks`       | no       | Hook definitions                                                 |
-| `mcpServers`  | no       | MCP server definitions                                           |
-| `lspServers`  | no       | LSP server definitions                                           |
+| Field         | Required | Description                                                                             |
+| ------------- | -------- | --------------------------------------------------------------------------------------- |
+| `name`        | yes      | Plugin name (same rules as marketplace name)                                            |
+| `source`      | yes      | Where to find the plugin (see below)                                                    |
+| `description` | no       | Short description                                                                       |
+| `version`     | no       | Version string; install version falls back to plugin manifest, source SHA, then `0.0.0` |
+| `author`      | no       | `{ name, email? }`                                                                      |
+| `homepage`    | no       | URL                                                                                     |
+| `repository`  | no       | Repository URL/string                                                                   |
+| `license`     | no       | License string                                                                          |
+| `keywords`    | no       | Array of string keywords                                                                |
+| `category`    | no       | Category string (e.g. `development`, `productivity`, `security`)                        |
+| `tags`        | no       | Array of string tags                                                                    |
+| `strict`      | no       | Boolean                                                                                 |
+| `commands`    | no       | Slash commands provided                                                                 |
+| `agents`      | no       | Agents provided                                                                         |
+| `hooks`       | no       | Hook definitions                                                                        |
+| `mcpServers`  | no       | MCP server definitions                                                                  |
+| `lspServers`  | no       | LSP server definitions or path; copied to `.lsp.json` on install                        |
 
 ### Plugin source formats
 
-The `source` field supports several formats:
+The `source` field supports these formats. String sources must start with `./` and are resolved inside the marketplace root, after optional `metadata.pluginRoot` is prepended:
 
 **Relative path** (within the marketplace repo):
 
 ```json
-"source": "./plugins/my-plugin"
+"source": "./my-plugin"
 ```
 
 **Git repository URL**:
@@ -174,7 +189,7 @@ The `source` field supports several formats:
 }
 ```
 
-**npm package**:
+**npm package** (parsed but not installable yet):
 
 ```json
 "source": {
@@ -184,20 +199,22 @@ The `source` field supports several formats:
 }
 ```
 
+Current installer behavior rejects npm marketplace sources with `npm plugin sources are not yet supported`; use relative, GitHub, URL, or git-subdir sources.
+
 ## On-disk layout
 
 ```
 ~/.omp/
   marketplaces.json              # Registry of added marketplaces
   plugins/
-    installed_plugins.json       # User-scoped installed plugins
+    installed_plugins.json       # User-scoped marketplace plugins (version: 2)
     cache/
-      marketplaces/              # Cached marketplace catalogs
-      plugins/                   # Cached plugin directories
+      marketplaces/<name>/       # Cached marketplace clone/catalog
+      plugins/<marketplace>___<plugin>___<version>/  # Cached plugin directories
 
 <project>/.omp/
   plugins/
-    installed_plugins.json       # Project-scoped installed plugins
+    installed_plugins.json       # Project-scoped marketplace plugins (version: 2)
 ```
 
 ## Naming rules

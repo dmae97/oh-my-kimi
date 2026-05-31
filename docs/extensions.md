@@ -10,7 +10,7 @@ This document covers the current extension runtime in:
 - `src/extensibility/extensions/index.ts`
 - `src/modes/controllers/extension-ui-controller.ts`
 
-For discovery paths and filesystem loading rules, see `docs/extension-loading.md`.
+For discovery paths and filesystem loading rules, see [`extension-loading.md`](./extension-loading.md).
 
 ## What an extension is
 
@@ -113,8 +113,10 @@ Core methods:
 - `on(event, handler)`
 - `registerTool`, `registerCommand`, `registerShortcut`, `registerFlag`
 - `registerMessageRenderer`
-- `sendMessage`, `sendUserMessage`, `appendEntry`
+- `setLabel`, `getFlag`
+- `sendMessage`, `sendUserMessage`, `appendEntry`, `exec`
 - `getActiveTools`, `getAllTools`, `setActiveTools`
+- `getCommands`
 - `getSessionName`, `setSessionName`
 - `setModel`, `getThinkingLevel`, `setThinkingLevel`
 - `registerProvider`
@@ -125,7 +127,8 @@ In interactive mode, `input` handlers run before the built-in first-message auto
 Also exposed:
 
 - `pi.logger`
-- `pi.zod` (injected `zod` module — use for tool parameter schemas)
+- `pi.typebox` (zod-backed compatibility shim for legacy TypeBox-style schemas)
+- `pi.zod` (injected `zod/v4` module — canonical for tool parameter schemas)
 - `pi.pi` (package exports)
 
 ### Message delivery semantics
@@ -191,6 +194,8 @@ Cancelable pre-events:
 
 - `input`
 - `before_agent_start`
+- `before_provider_request` (may replace provider request payload)
+- `after_provider_response`
 - `context`
 - `agent_start` / `agent_end`
 - `turn_start` / `turn_end`
@@ -210,6 +215,8 @@ Cancelable pre-events:
 - `auto_retry_start` / `auto_retry_end`
 - `ttsr_triggered`
 - `todo_reminder`
+- `goal_updated`
+- `credential_disabled`
 
 ### User command interception
 
@@ -247,6 +254,9 @@ pi.registerTool({
   label: "My Tool",
   description: "...",
   parameters: z.object({}),
+  hidden: false,
+  defaultInactive: false,
+  deferrable: false,
   async execute(_id, _params, signal, onUpdate, ctx) {
     if (signal?.aborted) {
       return { content: [{ type: "text", text: "Cancelled" }] };
@@ -266,7 +276,7 @@ pi.registerTool({
 });
 ```
 
-`tool_call`/`tool_result` intercept all tools once the registry is wrapped in `sdk.ts`, including built-ins and extension/custom tools.
+`tool_call`/`tool_result` intercept all tools once the registry is wrapped in `sdk.ts`, including built-ins and extension/custom tools. `ToolDefinition` also supports optional `hidden`, `defaultInactive`, `deferrable`, `mcpServerName`, `mcpToolName`, `renderCall`, and `renderResult` fields.
 
 ## UI integration points
 
@@ -277,6 +287,8 @@ pi.registerTool({
 Supported:
 
 - dialogs: `select`, `confirm`, `input`, `editor`
+- input editing: `setEditorText`, `getEditorText`, `pasteToEditor`, `editor`
+- terminal title and working message (`setTitle`, `setWorkingMessage`)
 - notifications/status/editor text/terminal input/custom overlays
 - theme listing/loading by name (`setTheme` supports string names)
 - tools expanded toggle

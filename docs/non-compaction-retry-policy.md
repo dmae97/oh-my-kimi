@@ -65,10 +65,11 @@ Flow (`#handleRetryableError`):
 6. Compute base delay: `retry.baseDelayMs * 2^(attempt-1)`.
 7. For usage-limit errors, parse retry hints and call auth storage (`markUsageLimitReached(...)`); if credential switching succeeds, force delay to `0`, otherwise use a larger retry-after/backoff hint when present.
 8. If no credential switch occurred, suppress the current model selector for cooldown, try configured retry model fallback chains, and force delay to `0` on model switch.
-9. Emit `auto_retry_start`.
-10. Remove the trailing assistant error message from agent runtime state (kept in persisted session history).
-11. Sleep with abort support.
-12. Schedule `agent.continue()` through the post-prompt task scheduler (`delayMs: 1`) for the same prompt generation.
+9. If the final delay exceeds `retry.maxDelayMs` and no credential/model switch happened, emit final failure and do not sleep.
+10. Emit `auto_retry_start`.
+11. Remove the trailing assistant error message from agent runtime state (kept in persisted session history).
+12. Sleep with abort support.
+13. Schedule `agent.continue()` through the post-prompt task scheduler (`delayMs: 1`) for the same prompt generation.
 
 ### What resets retry counters
 
@@ -77,8 +78,9 @@ Flow (`#handleRetryableError`):
 - first successful non-error, non-aborted assistant message after retries started (emits `auto_retry_end { success: true }`)
 - retry cancellation during backoff sleep
 - max retries exceeded path
+- max delay exceeded path
 
-`#retryPromise` resolves/clears when retry chain ends (success, cancellation, or max-exceeded), via `#resolveRetry()`.
+`#retryPromise` resolves/clears when retry chain ends (success, cancellation, max-exceeded, or max-delay failure), via `#resolveRetry()`.
 
 ## Backoff and max-attempt semantics
 
@@ -87,6 +89,7 @@ Settings:
 - `retry.enabled` (default `true`)
 - `retry.maxRetries` (default `3`)
 - `retry.baseDelayMs` (default `2000`)
+- `retry.maxDelayMs` (default `300000`, 5 minutes; `<= 0` disables the fail-fast cap)
 
 Attempt numbering:
 
@@ -100,7 +103,7 @@ Backoff sequence with default settings:
 - attempt 2: 4000 ms
 - attempt 3: 8000 ms
 
-Delay override inputs can come from parsed retry headers (`retry-after-ms`, `retry-after`, `x-ratelimit-reset-ms`, `x-ratelimit-reset`) or usage-limit backoff. Credential/model fallback switches set delay to `0`; otherwise parsed hints can extend the exponential local delay.
+Delay override inputs can come from parsed retry headers (`retry-after-ms`, `retry-after`, `x-ratelimit-reset-ms`, `x-ratelimit-reset`) or usage-limit backoff. Credential/model fallback switches set delay to `0`; otherwise parsed hints can extend the exponential local delay. If the computed delay is greater than `retry.maxDelayMs` and no switch succeeded, retry ends immediately with a final error instead of sleeping.
 
 ## Abort mechanics
 
@@ -149,6 +152,7 @@ Defined in settings schema under retry group:
 - `retry.enabled`
 - `retry.maxRetries`
 - `retry.baseDelayMs`
+- `retry.maxDelayMs`
 - `retry.fallbackChains`
 - `retry.fallbackRevertPolicy` (`"cooldown-expiry"` by default; `"never"` disables automatic restoration)
 
@@ -190,7 +194,7 @@ Propagation:
 
 Final failure surfacing:
 
-- On max-exceeded or cancellation, `auto_retry_end.success === false`
+- On max-exceeded, max-delay failure, or cancellation, `auto_retry_end.success === false`
 - TUI shows: `Retry failed after N attempts: <finalError>`
 - Extensions/hooks receive `auto_retry_end` with same fields
 - RPC consumers receive same event object on stdout stream
@@ -203,6 +207,7 @@ Retry stops and will not auto-continue when any of these occur:
 - error is not retry-classified
 - error is context overflow (delegated to compaction path)
 - max retries exceeded
+- provider-requested delay exceeds `retry.maxDelayMs` and no credential/model switch is available
 - user cancels retry (`abort_retry` or `Esc` during retry loader)
 - global abort (`abort`) cancels retry first
 

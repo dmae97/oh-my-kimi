@@ -19,9 +19,14 @@ import {
 } from "../utils";
 import { SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list";
 
+const AUTOCOMPLETE_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
+	overflowSearch: false,
+};
+
 const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	minPrimaryColumnWidth: 12,
 	maxPrimaryColumnWidth: 32,
+	overflowSearch: false,
 };
 
 function sanitizeLoadedText(text: string): string {
@@ -1571,6 +1576,10 @@ export class Editor implements Component, Focusable {
 				else if (textBeforeCursor.match(/(?:^|[\s([{>]):[a-zA-Z0-9_+-]*$/)) {
 					this.#tryTriggerAutocomplete();
 				}
+				// Check if we're typing an internal URL scheme (e.g. local://, skill://)
+				else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
+					this.#tryTriggerAutocomplete();
+				}
 			}
 		} else {
 			this.#debouncedUpdateAutocomplete();
@@ -1762,6 +1771,10 @@ export class Editor implements Component, Focusable {
 			else if (textBeforeCursor.match(/#[^\s#]*$/)) {
 				this.#tryTriggerAutocomplete();
 			}
+			// internal URL scheme context (e.g. local://, skill://)
+			else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
+				this.#tryTriggerAutocomplete();
+			}
 		}
 	}
 
@@ -1912,6 +1925,8 @@ export class Editor implements Component, Focusable {
 			} else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
 				this.#tryTriggerAutocomplete();
 			} else if (textBeforeCursor.match(/#[^\s#]*$/)) {
+				this.#tryTriggerAutocomplete();
+			} else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
 				this.#tryTriggerAutocomplete();
 			}
 		}
@@ -2232,6 +2247,10 @@ export class Editor implements Component, Focusable {
 			else if (textBeforeCursor.match(/#[^\s#]*$/)) {
 				this.#tryTriggerAutocomplete();
 			}
+			// internal URL scheme context (e.g. local://, skill://)
+			else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
+				this.#tryTriggerAutocomplete();
+			}
 		}
 	}
 
@@ -2463,6 +2482,17 @@ export class Editor implements Component, Focusable {
 	}
 
 	// Autocomplete methods
+	/**
+	 * Whether the text ending at the cursor looks like a `scheme://` URL token.
+	 * Generic by design: any scheme triggers a suggestion fetch and the active
+	 * provider decides whether it has candidates (returning none is a no-op).
+	 * MUST stay in sync with the token grammar in coding-agent's
+	 * `internal-url-autocomplete.ts`.
+	 */
+	#textTriggersUrlAutocomplete(textBeforeCursor: string): boolean {
+		return /(?:^|[\s"'`(<=])[a-z][a-z0-9+.-]*:\/{1,2}[^\s"'`()<>]*$/i.test(textBeforeCursor);
+	}
+
 	async #tryTriggerAutocomplete(explicitTab: boolean = false): Promise<void> {
 		if (!this.#autocompleteProvider) return;
 		// Check if we should trigger file completion on Tab
@@ -2499,11 +2529,8 @@ export class Editor implements Component, Focusable {
 		prefix: string,
 		items: Array<{ value: string; label: string; description?: string }>,
 	): SelectList {
-		// Layout options prepared for future SelectList enhancements (e.g., for slash commands)
-		const layout = prefix.startsWith("/") ? SLASH_COMMAND_SELECT_LIST_LAYOUT : undefined;
-		// TODO: Pass layout to SelectList when constructor is updated to support it
-		void layout; // Use layout variable to avoid lint warnings
-		return new SelectList(items, this.#autocompleteMaxVisible, this.#theme.selectList);
+		const layout = prefix.startsWith("/") ? SLASH_COMMAND_SELECT_LIST_LAYOUT : AUTOCOMPLETE_SELECT_LIST_LAYOUT;
+		return new SelectList(items, this.#autocompleteMaxVisible, this.#theme.selectList, layout);
 	}
 
 	#handleTabCompletion(): void {

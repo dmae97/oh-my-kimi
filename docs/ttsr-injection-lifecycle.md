@@ -17,17 +17,23 @@ This document covers the current Time Traveling Stream Rules (TTSR) runtime path
 
 ## 1. Discovery feed and rule registration
 
-At session creation, `createAgentSession()` loads discovered rules and constructs a `TtsrManager`:
+At session creation, `createAgentSession()` loads discovered rules, constructs a `TtsrManager`, and buckets rules through `bucketRules(...)`:
 
 ```ts
 const ttsrSettings = settings.getGroup("ttsr");
 const ttsrManager = new TtsrManager(ttsrSettings);
 const rulesResult = await loadCapability<Rule>(ruleCapability.id, { cwd });
-for (const rule of rulesResult.items) {
-  if (rule.condition?.length && ttsrManager.addRule(rule)) continue;
-  // non-TTSR rules continue through normal rule handling
-}
+const { rulebookRules, alwaysApplyRules } = bucketRules(
+  rulesResult.items,
+  ttsrManager,
+  {
+    builtinRules: ttsrSettings.builtinRules,
+    disabledRules: ttsrSettings.disabledRules,
+  },
+);
 ```
+
+`bucketRules(...)` drops names listed in `ttsr.disabledRules`, drops embedded `builtin-defaults` rules when `ttsr.builtinRules === false`, registers accepted TTSR rules, and then routes the remaining rules to always-apply/rulebook buckets.
 
 ### Pre-registration dedupe behavior
 
@@ -41,7 +47,7 @@ Registration is skipped when:
 - a rule with the same `rule.name` was already registered in this manager
 - the rule scope excludes all monitored streams
 
-Invalid regex conditions and unreachable scopes are logged as warnings and ignored; session startup continues.
+Invalid regex conditions and unreachable scopes are logged as warnings and ignored; session startup continues. If a TTSR rule defines `globs`, those globs are compiled as a global file-path gate for matching.
 
 ### Setting caveat
 
@@ -65,7 +71,7 @@ When assistant updates arrive and rules exist:
 - append delta into a source/tool scoped manager buffer
 - call `checkDelta(delta, matchContext)`
 
-`checkDelta()` iterates registered rules and returns all matching rules that pass scope, global-path, condition, and repeat policy checks.
+`checkDelta()` iterates registered rules and returns all matching rules that pass scope, global path-glob, condition, and repeat policy checks.
 
 ## 3. Trigger decision and immediate abort path
 
@@ -216,6 +222,9 @@ During the timer window, state can change (user interruption, mode actions, addi
 - Invalid `condition` regex: skipped with warning; other conditions/rules continue.
 - Duplicate rule names at capability layer: lower-priority duplicates are shadowed before registration.
 - Duplicate names at manager layer: second registration is ignored.
+- `ttsr.disabledRules`: listed names are dropped before TTSR registration and are not surfaced through always-apply/rulebook buckets.
+- `ttsr.builtinRules: false`: embedded `builtin-defaults` rules are dropped before TTSR registration; user/project rules still load.
+- `globs` on a TTSR rule require the stream match context to include at least one matching file path.
 - `contextMode: "keep"`: partial violating output can remain in context before reminder retry.
 - `interruptMode: "never"`: prose-source matches queue a deferred hidden injection after a successful assistant message; tool-source matches fold an in-band `<system-reminder>` into the matched tool call's `toolResult` content via the `afterToolCall` hook (no mid-stream abort, no separate follow-up turn).
 - Tool-source non-interrupting buckets are cleared when the parent assistant message ends with `stopReason === "aborted"` or `"error"`, so rules whose target tool never produced a result remain eligible to re-trigger.

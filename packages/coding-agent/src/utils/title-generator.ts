@@ -9,13 +9,16 @@ import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
+import { ONLINE_TINY_TITLE_MODEL_KEY } from "../tiny/models";
+import { formatTitleUserMessage, normalizeGeneratedTitle } from "../tiny/text";
+import { tinyTitleClient } from "../tiny/title-client";
 
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
 
 const DEFAULT_TERMINAL_TITLE = "π";
 const TERMINAL_TITLE_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 
-const MAX_INPUT_CHARS = 2000;
+export const TITLE_LOCAL_FALLBACK_DELAY_MS = 10_000;
 const TITLE_MAX_TOKENS = 30;
 const REASONING_SAFE_MAX_TOKENS = 1024;
 const SET_TITLE_TOOL_NAME = "set_title";
@@ -48,6 +51,78 @@ function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel
 	return undefined;
 }
 
+export async function raceFirstNonNull<T>(
+	primary: Promise<T | null>,
+	startFallback: () => Promise<T | null>,
+	delayMs: number = TITLE_LOCAL_FALLBACK_DELAY_MS,
+	onPrimaryWinAfterFallback?: () => void,
+): Promise<T | null> {
+	const { promise, resolve } = Promise.withResolvers<T | null>();
+	let resolved = false;
+	let primarySettled = false;
+	let fallbackStarted = false;
+	let fallbackSettled = false;
+
+	const resolveOnce = (value: T | null): void => {
+		if (resolved) return;
+		resolved = true;
+		resolve(value);
+	};
+	const maybeResolveNull = (): void => {
+		if (primarySettled && fallbackStarted && fallbackSettled) resolveOnce(null);
+	};
+	const startFallbackOnce = (): void => {
+		if (fallbackStarted || resolved) return;
+		fallbackStarted = true;
+		let fallback: Promise<T | null>;
+		try {
+			fallback = startFallback();
+		} catch {
+			fallbackSettled = true;
+			maybeResolveNull();
+			return;
+		}
+		void fallback.then(
+			value => {
+				fallbackSettled = true;
+				if (value !== null) resolveOnce(value);
+				else maybeResolveNull();
+			},
+			() => {
+				fallbackSettled = true;
+				maybeResolveNull();
+			},
+		);
+	};
+
+	const timer = setTimeout(startFallbackOnce, delayMs);
+	void primary.then(
+		value => {
+			primarySettled = true;
+			clearTimeout(timer);
+			if (value !== null) {
+				if (fallbackStarted) onPrimaryWinAfterFallback?.();
+				resolveOnce(value);
+				return;
+			}
+			startFallbackOnce();
+			maybeResolveNull();
+		},
+		() => {
+			primarySettled = true;
+			clearTimeout(timer);
+			startFallbackOnce();
+			maybeResolveNull();
+		},
+	);
+
+	try {
+		return await promise;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 /**
  * Generate a title for a session based on the first user message.
  *
@@ -69,18 +144,48 @@ export async function generateSessionTitle(
 	currentModel?: Model<Api>,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
 ): Promise<string | null> {
+	const tinyModel = settings.get("providers.tinyModel");
+	if (tinyModel === ONLINE_TINY_TITLE_MODEL_KEY) {
+		return generateTitleOnline(firstMessage, registry, settings, sessionId, currentModel, metadataResolver);
+	}
+
+	const onlineAbortController = new AbortController();
+	const localTitle = tinyTitleClient.generate(tinyModel, firstMessage).then(
+		title => title || null,
+		() => null,
+	);
+	const startOnline = (): Promise<string | null> =>
+		generateTitleOnline(
+			firstMessage,
+			registry,
+			settings,
+			sessionId,
+			currentModel,
+			metadataResolver,
+			onlineAbortController.signal,
+		);
+
+	return raceFirstNonNull(localTitle, startOnline, TITLE_LOCAL_FALLBACK_DELAY_MS, () => {
+		onlineAbortController.abort();
+	});
+}
+
+export async function generateTitleOnline(
+	firstMessage: string,
+	registry: ModelRegistry,
+	settings: Settings,
+	sessionId?: string,
+	currentModel?: Model<Api>,
+	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
+	signal?: AbortSignal,
+): Promise<string | null> {
 	const model = getTitleModel(registry, settings, currentModel);
 	if (!model) {
 		logger.debug("title-generator: no title model found");
 		return null;
 	}
 
-	// Truncate message if too long
-	const truncatedMessage =
-		firstMessage.length > MAX_INPUT_CHARS ? `${firstMessage.slice(0, MAX_INPUT_CHARS)}…` : firstMessage;
-	const userMessage = `<user-message>
-${truncatedMessage}
-</user-message>`;
+	const userMessage = formatTitleUserMessage(firstMessage);
 
 	const apiKey = await registry.getApiKey(model, sessionId);
 	if (!apiKey) {
@@ -122,6 +227,7 @@ ${truncatedMessage}
 				disableReasoning: true,
 				toolChoice: { type: "tool", name: SET_TITLE_TOOL_NAME },
 				metadata,
+				signal,
 			},
 		);
 
@@ -134,7 +240,7 @@ ${truncatedMessage}
 			return null;
 		}
 
-		const title = extractGeneratedTitle(response.content);
+		const title = normalizeGeneratedTitle(extractGeneratedTitle(response.content));
 
 		logger.debug("title-generator: response", {
 			model: request.model,
@@ -143,11 +249,7 @@ ${truncatedMessage}
 			stopReason: response.stopReason,
 		});
 
-		if (!title) {
-			return null;
-		}
-
-		return title.replace(/^["']|["']$/g, "").replace(/[.!?]$/, "");
+		return title;
 	} catch (err) {
 		logger.debug("title-generator: error", {
 			model: request.model,

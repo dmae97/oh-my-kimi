@@ -135,7 +135,7 @@ describe("EvalTool display() text surfacing", () => {
 
 		const image = result.content.find(c => c.type === "image");
 		expect(image).toBeDefined();
-		if (!image || image.type !== "image") throw new Error("Expected image content");
+		if (image?.type !== "image") throw new Error("Expected image content");
 		expect(image.data).not.toBe(base64);
 
 		const { width, height } = await new Bun.Image(Buffer.from(image.data, "base64")).metadata();

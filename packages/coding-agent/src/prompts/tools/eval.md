@@ -8,7 +8,7 @@ Cell fields:
 - `language` — {{#if py}}`"py"` for the IPython kernel{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`"js"` for the persistent JavaScript VM{{/if}}.
 - `code` — cell body, verbatim. Newlines, quotes, and indentation are JSON-encoded; no fences, no headers.
 - `title` (optional) — short label shown in the transcript (e.g. `"imports"`, `"load config"`).
-- `timeout` (optional) — per-cell timeout in seconds (1-600). Default 30.
+- `timeout` (optional) — per-cell **inactivity** budget in seconds (1-600). Default 30. The cell is interrupted only after this long with no progress, and every status event (`agent()` updates, `log()`/`phase()`, tool activity) resets the clock — so a long `agent()`/`parallel()` fanout that keeps reporting progress is not killed. Raw `print`/stdout does not reset it; raise `timeout` for a cell that runs long without emitting status.
 - `reset` (optional) — wipe this cell's language kernel before running.{{#ifAll py js}} Reset is per-language: a `py` cell's reset does not touch the JavaScript VM and vice versa.{{/ifAll}}
 
 **Work incrementally:**
@@ -46,6 +46,18 @@ tool.<name>(args) → unknown
     Invoke any session tool by name. `args` is the tool's parameter object.
 llm(prompt, model?="default", system?=None, schema?=None) → str | dict
     Oneshot, stateless LLM call (no history, no tools). `model` picks a tier: "smol" (fast), "default" (this session's model), "slow" (most capable). Pass `system` for a system prompt. Pass a JSON-Schema `schema` to force structured output and get the parsed object back; otherwise returns the completion text.
+agent(prompt, agent_type?="task", model?=None, context?=None, label?=None, schema?=None) → str | dict
+    Run a subagent and return its final output. Defaults to the bundled "task" agent; pass `agent_type`/`agentType` for another discovered agent. Pass a JSON-Schema `schema` to force structured output and get the parsed object back.
+parallel(thunks, concurrency?=4) → list
+    Run thunks (callables) through a bounded pool (default 4, max 16), preserving input order. Barrier: returns once all finish; a thunk that throws propagates.
+pipeline(items, ...stages, concurrency?=4) → list
+    Map each item through stages left-to-right; a barrier runs between stages (every item clears stage N before stage N+1). Each stage is a one-arg callable: stage 1 gets the original item, later stages get the previous result.
+log(message) → None
+    Emit a progress line above the status tree.
+phase(title) → None
+    Start a phase; the status lines that follow group under it.
+budget → per-turn token budget
+    {{#if py}}`budget.total` (ceiling or None), `budget.spent()` (output tokens this turn), `budget.remaining()` (math.inf when no ceiling), `budget.hard` (bool).{{/if}}{{#if js}}`await budget.total()` (ceiling or null), `await budget.spent()`, `await budget.remaining()` (Infinity when no ceiling), `await budget.hard()`.{{/if}} A ceiling is set by a `+Nk` message directive (advisory) or `+Nk!`/Goal Mode (hard — `agent()` refuses to spawn past it); otherwise total is None/null and spend is still tracked across the turn (main loop + eval subagents).
 ```
 </prelude>
 

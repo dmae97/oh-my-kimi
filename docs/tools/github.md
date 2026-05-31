@@ -32,7 +32,10 @@
 | `reviewer` | `string[]` | No | Used only by `pr_create`; each entry becomes `--reviewer`. |
 | `assignee` | `string[]` | No | Used only by `pr_create`; each entry becomes `--assignee`. |
 | `label` | `string[]` | No | Used only by `pr_create`; each entry becomes `--label`. |
-| `query` | `string` | No | Used by all `search_*` ops. Required there. |
+| `query` | `string` | No | Used by all `search_*` ops. Required by local validation only for `search_code`; the other search ops compose it with optional date/repo/type qualifiers and send the result to GitHub. |
+| `since` | `string` | No | Lower date bound for `search_issues`, `search_prs`, `search_commits`, and `search_repos`. Accepts relative durations (`3d`, `12h`, `2w`, `2mo`, `1y`), `YYYY-MM-DD`, or an ISO datetime. Rejected for `search_code`. |
+| `until` | `string` | No | Upper date bound for `search_issues`, `search_prs`, `search_commits`, and `search_repos`. Same formats as `since`. Rejected for `search_code`. |
+| `dateField` | `"created" \| "updated"` | No | Date qualifier field for issue/PR/repo search. Defaults to `created`; repo search maps `updated` to GitHub's `pushed:` qualifier. Ignored for commit search, which always uses `committer-date:`. |
 | `limit` | `number` | No | Used by all `search_*` ops. Defaults to `10`, floored, clamped to `50`, and must be `> 0`. |
 | `run` | `string` | No | Used only by `run_watch`. Must be a numeric run ID or full GitHub Actions run URL. |
 | `tail` | `number` | No | Used only by `run_watch`. Defaults to `15`, floored, clamped to `200`, and must be `> 0`. |
@@ -61,12 +64,12 @@ The tool returns a single text result built by `buildTextResult()` in `packages/
    - maps common auth/repo-context failures into tool-facing `ToolError` messages;
    - `json()` rejects empty or invalid JSON.
 5. Read-style ops (`repo_view`, `search_*`) fetch JSON and format Markdown-like text summaries. Single-issue and single-PR views were moved out of the tool and now resolve through the `issue://` / `pr://` internal URL schemes, which share the same SQLite cache.
-7. PR diffs moved out of the tool. `pr://<N>/diff` lists changed files, `pr://<N>/diff/<i>` slices a single file, and `pr://<N>/diff/all` returns the full unified diff — see `docs/tools/read.md`. All three variants share one `gh pr diff` invocation through the `pr-diff` cache row.
-8. `pr_checkout` resolves PR metadata first, then enters `git.withRepoLock()` before any git mutation so parallel checkout calls for the same primary repo do not race on shared `.git` state.
-9. `pr_push` reads PR head metadata back from git branch config, derives a refspec, then pushes with `git.push()`.
-10. `pr_create` shells out once, then best-effort re-reads the created PR for a richer summary.
-11. `run_watch` chooses either run mode (`run` supplied) or commit mode (`run` omitted), polls GitHub Actions APIs every 3 seconds, emits streaming updates, and may save a full failed-log artifact before returning.
-12. Final text goes through `toolResult().text(...)`; if `session.allocateOutputArtifact()` returns a slot, failed-log text is persisted with `Bun.write()`.
+6. PR diffs moved out of the tool. `pr://<N>/diff` lists changed files, `pr://<N>/diff/<i>` slices a single file, and `pr://<N>/diff/all` returns the full unified diff — see `docs/tools/read.md`. All three variants share one `gh pr diff` invocation through the `pr-diff` cache row.
+7. `pr_checkout` resolves PR metadata first, then enters `git.withRepoLock()` before any git mutation so parallel checkout calls for the same primary repo do not race on shared `.git` state.
+8. `pr_push` reads PR head metadata back from git branch config, derives a refspec, then pushes with `git.push()`.
+9. `pr_create` shells out once, then best-effort re-reads the created PR for a richer summary.
+10. `run_watch` chooses either run mode (`run` supplied) or commit mode (`run` omitted), polls GitHub Actions APIs every 3 seconds, emits streaming updates, and may save a full failed-log artifact before returning.
+11. Final text goes through `toolResult().text(...)`; if `session.allocateOutputArtifact()` returns a slot, failed-log text is persisted with `Bun.write()`.
 
 ## Modes / Variants
 
@@ -142,21 +145,21 @@ Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`rem
 
 | Aspect | Value |
 | --- | --- |
-| Required fields | `op`, `query` |
-| Optional fields | `repo`, `limit` |
-| `gh` command | `gh api -X GET /search/issues -f q="<query> [repo:<repo>] is:issue" -F per_page=<limit>` |
+| Required fields | `op` |
+| Optional fields | `repo`, `query`, `limit`, `since`, `until`, `dateField` |
+| `gh` command | `gh api -X GET /search/issues -f q="<query> [date qualifier] [repo:<repo>] is:issue" -F per_page=<limit>` |
 | Batching | None |
 | Output | `# GitHub issues search`, echoed query, optional repo, result count, then one bullet per issue with repo/state/author/labels/timestamps/URL. |
 
-`repo` defaults to the current checkout's `owner/repo` via `resolveSearchRepoScope()` when omitted. The default is suppressed when the query already contains a leading `repo:`/`org:`/`user:`/`owner:` qualifier or when `gh repo view` fails to resolve the current checkout (e.g. outside a github remote).
+`repo` defaults to the current checkout's `owner/repo` via `resolveSearchRepoScope()` when omitted. The default is suppressed when the composed query already contains a leading `repo:`/`org:`/`user:`/`owner:` qualifier or when `gh repo view` fails to resolve the current checkout (e.g. outside a github remote).
 
 ### `search_prs`
 
 | Aspect | Value |
 | --- | --- |
-| Required fields | `op`, `query` |
-| Optional fields | `repo`, `limit` |
-| `gh` command | `gh api -X GET /search/issues -f q="<query> [repo:<repo>] is:pr" -F per_page=<limit>` |
+| Required fields | `op` |
+| Optional fields | `repo`, `query`, `limit`, `since`, `until`, `dateField` |
+| `gh` command | `gh api -X GET /search/issues -f q="<query> [date qualifier] [repo:<repo>] is:pr" -F per_page=<limit>` |
 | Batching | None |
 | Output | Same shape as `search_issues`, labeled as pull requests. |
 
@@ -172,15 +175,15 @@ Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`rem
 | Batching | None |
 | Output | `# GitHub code search`, result count, then one bullet per match with path, repo, short commit SHA, URL, and first normalized text-match fragment line when present. |
 
-`repo` defaults to the current checkout's `owner/repo` as in `search_issues`.
+`repo` defaults to the current checkout's `owner/repo` as in `search_issues`. `since` and `until` are explicitly rejected for this op because GitHub code search has no supported date qualifier.
 
 ### `search_commits`
 
 | Aspect | Value |
 | --- | --- |
-| Required fields | `op`, `query` |
-| Optional fields | `repo`, `limit` |
-| `gh` command | `gh api -X GET /search/commits -f q="<query> [repo:<repo>]" -F per_page=<limit>` |
+| Required fields | `op` |
+| Optional fields | `repo`, `query`, `limit`, `since`, `until`, `dateField` (accepted but ignored; commit searches use `committer-date`) |
+| `gh` command | `gh api -X GET /search/commits -f q="<query> [committer-date qualifier] [repo:<repo>]" -F per_page=<limit>` |
 | Batching | None |
 | Output | `# GitHub commits search`, result count, then one bullet per commit: short SHA + first commit-message line, repo, author, date, URL. |
 
@@ -190,13 +193,13 @@ Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`rem
 
 | Aspect | Value |
 | --- | --- |
-| Required fields | `op`, `query` |
-| Optional fields | `limit` |
-| `gh` command | `gh api -X GET /search/repositories -f q="<query>" -F per_page=<limit>` |
+| Required fields | `op` |
+| Optional fields | `query`, `limit`, `since`, `until`, `dateField` |
+| `gh` command | `gh api -X GET /search/repositories -f q="<query> [date qualifier]" -F per_page=<limit>` |
 | Batching | None |
 | Output | `# GitHub repositories search`, result count, then one bullet per repo with first description line, language, stars, forks, open issues, visibility, archive/fork flags, updated time, URL. |
 
-`repo` is intentionally not used for this op.
+`repo` is intentionally not used for this op. If `query`, `since`, and `until` are all omitted, the tool sends an empty GitHub repository-search query and the GitHub API may reject it.
 
 ### `run_watch`
 
@@ -260,8 +263,9 @@ Watch flow:
   - otherwise stderr/stdout text, or fallback `GitHub CLI command failed: gh ...`
 - `json()` also throws on empty stdout or invalid JSON.
 - Local validation errors throw `ToolError`, including:
-  - missing required per-op fields (`query`, `title unless fill=true`)
+  - missing required per-op fields (`query` for `search_code`, `title unless fill=true`)
   - invalid numeric `limit` / `tail`
+  - invalid `since` / `until` date bound
   - invalid `run` format
   - `fill` combined with `title` or `body`
   - missing git repo / branch / HEAD context for checkout, push, or watch

@@ -46,7 +46,11 @@ Extracts text from PDF, Word, PowerPoint, Excel, RTF, and EPUB. Notebooks (`.ipy
 
 # Images
 
+{{#if INSPECT_IMAGE_ENABLED}}
 Reading an image path returns metadata (mime, bytes, dimensions, channels, alpha). For actual visual analysis, call `inspect_image` with the path and a question describing what to inspect.
+{{else}}
+Reading an image path returns the decoded image inline (PNG, JPEG, GIF, WEBP) for direct visual analysis.
+{{/if}}
 
 # Archives
 

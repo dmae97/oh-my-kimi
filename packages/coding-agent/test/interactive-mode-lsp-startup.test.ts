@@ -69,6 +69,11 @@ describe("InteractiveMode LSP startup welcome banner", () => {
 			},
 		];
 		mode = new InteractiveMode(session, "test", undefined, () => {}, lspServers, undefined, eventBus);
+		// This test exercises the LSP startup banner, not git branch watching.
+		// Starting a real fs.watch on the repo HEAD in a parallel Bun worker is
+		// enough to trigger a Bun SIGTRAP in unrelated workers during the
+		// 4-worker suite reproducer, so keep the watcher out of this contract.
+		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
 	});
 
 	afterEach(async () => {

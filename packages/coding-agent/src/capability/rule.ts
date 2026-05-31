@@ -10,6 +10,14 @@ import type { SourceMeta } from "./types";
 const CONDITION_GLOB_SCOPE_TOOLS = ["edit", "write"] as const;
 
 /**
+ * Provider id for the bundled default rules shipped with the agent.
+ * Lowest priority, so any user/project/tool rule of the same name overrides
+ * a bundled default. Also used to gate the whole bundled set via
+ * `ttsr.builtinRules`.
+ */
+export const BUILTIN_DEFAULTS_PROVIDER_ID = "builtin-defaults";
+
+/**
  * Parsed frontmatter from rule files.
  */
 export interface RuleFrontmatter {

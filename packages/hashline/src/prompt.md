@@ -6,7 +6,9 @@ Every file section starts with `¶PATH#TAG`. `TAG` is the 4-hex snapshot tag fro
 
 <ops>
 replace N..M:      replace original lines N..M with the body rows below.
+replace block N:   replace the whole syntactic block that BEGINS on line N — its header line through its closing line — resolved with tree-sitter. Body rows below. Point N at the line that OPENS the construct (the `if`/`function`/`def`/`{`-bearing line), not a closing `}` or a blank line.
 delete N..M        delete original lines N..M. No body.
+delete block N     delete the whole syntactic block that BEGINS on line N.
 insert before N:   insert the body rows immediately before line N.
 insert after N:    insert the body rows immediately after line N.
 insert head:       insert the body rows at the very start of the file.
@@ -27,7 +29,9 @@ There is NO other body row kind. NEVER write `-old` or a bare/context line. To k
 - A line number is an offset, not a structural boundary: never `insert after N` into a construct you have not read, and never start or end a `replace`/`delete` range mid-expression or mid-block. If unsure what is on those lines, `read` them first.
 - On a stale-tag rejection — or any result you cannot fully account for — STOP and re-`read`. Never stack more line-numbered edits onto output you have not re-grounded; that compounds corruption.
 - One hunk per range; the body is the final content, never an old/new pair.
+- Keep every range as tight as the change: a range must cover ONLY lines whose content actually changes. Never widen it to swallow an unchanged signature, brace, or neighboring statement just to rewrite a few lines inside — change one line with `replace N..N`, not the whole block around it. (A range where every line genuinely changes is correctly long; tightness is about excluding unchanged lines, not about being short.) This bounds the blast radius if a number is off: a stale single-line replace corrupts one line, while a stale block replace shreds the whole block and its structure.
 - To change lines 2 and 5 while keeping 3–4, issue two hunks (`replace 2..2:` and `replace 5..5:`). Untouched lines are simply absent from every range.
+- NEVER use this tool to format code — reordering imports, re-indenting, aligning columns, or any mechanical restyling. That is the project formatter's job; run it instead of hand-editing layout here.
 </rules>
 
 <example>
@@ -69,6 +73,14 @@ insert head:
 insert tail:
 +greet("everyone")
 ```
+
+Replace the whole `greet` function block — `replace block 1:` resolves lines 1–3 (the `def` header through `print(msg)`); line 4 is a separate statement and stays:
+```
+¶greet.py#A1B2
+replace block 1:
++def greet(name):
++    print(f"Hello, {name}")
+```
 </example>
 
 <anti-patterns>
@@ -88,3 +100,10 @@ replace 3..3:
 replace 3..3:
 +   return msg
 </anti-patterns>
+
+<critical>
+If you remember nothing else:
+1. RE-GROUND AFTER EVERY EDIT. Each applied edit mints a fresh `#TAG` and renumbers the file — the tag and line numbers you just used are now dead. Take the next edit's numbers from the edit response or a fresh `read`, never from pre-edit memory. On a stale-tag rejection or any unexpected result, STOP and re-`read`.
+2. RANGES ARE TIGHT AND IN-BOUNDS. Cover only lines whose content actually changes; never widen a range to swallow an unchanged signature, brace, or statement, and never start or end a range mid-expression or mid-block. A stale single-line replace corrupts one line; a stale block replace shreds the whole block.
+3. THE BODY IS THE FINAL CONTENT. Only `+TEXT` rows under a `:` header — never `-old`/bare context lines, never an old/new pair. The range does the deleting.
+</critical>

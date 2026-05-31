@@ -76,7 +76,12 @@ const PARSE_DEPS: ParseDeps = {
 	THINKING_EFFORTS,
 };
 
-export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
+export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
+	// Work on a copy: the `--option=value` handling below splices the value
+	// into the array, and callers reuse the same argv (the post-extension
+	// reparse in `runRootCommand` parses it a second time). Mutating the input
+	// would corrupt that later parse, so never touch the caller's array.
+	const args = [...inputArgs];
 	const result: Args = {
 		messages: [],
 		fileArgs: [],
@@ -98,23 +103,46 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			passThrough = true;
 			continue;
 		}
+		const flagIndex = i;
 
-		// Support --flag=value syntax (e.g. --tools=ask,read)
+		// Support --flag=value syntax (e.g. --tools=ask,read). The value is
+		// spliced in as the next token so value-consuming flags pick it up via
+		// `args[++i]`; a non-consuming flag (e.g. a boolean) leaves it behind and
+		// the post-loop guard drops it so it is not mistaken for a message.
+		let equalsValueIndex = -1;
 		if (arg.startsWith("--") && arg.includes("=")) {
 			const eqIdx = arg.indexOf("=");
 			const value = arg.slice(eqIdx + 1);
 			arg = arg.slice(0, eqIdx);
-			// Insert the value so the existing "args[++i]" logic picks it up
 			args.splice(i + 1, 0, value);
+			equalsValueIndex = i + 1;
 		}
 
-		if (STRING_VALUE_FLAGS.has(arg)) {
+		// Extension-registered flags take precedence over built-ins: a flag an
+		// extension owns (e.g. plan-mode's boolean `--plan`) is parsed with the
+		// extension's semantics rather than falling into a built-in branch. For a
+		// value-taking built-in (`--plan`, `--model`, …) that branch would consume
+		// the following token — eating the user's message and setting the wrong
+		// built-in field — so registered flags shadow same-named built-ins here.
+		const extFlag = arg.startsWith("--") ? extensionFlags?.get(arg.slice(2)) : undefined;
+		if (extFlag) {
+			const flagName = arg.slice(2);
+			if (extFlag.type === "boolean") {
+				result.unknownFlags.set(flagName, true);
+			} else if (extFlag.type === "string" && i + 1 < args.length) {
+				// Consume the value in `--flag=value` form, when the next token is not
+				// flag-looking, or when the next token is the end-of-options marker itself
+				// (valid as a string flag value). Pass other flag-looking values as
+				// `--flag=value`.
+				if (equalsValueIndex !== -1 || args[i + 1] === "--" || !args[i + 1].startsWith("-")) {
+					result.unknownFlags.set(flagName, args[++i]);
+				}
+			}
+		} else if (STRING_VALUE_FLAGS.has(arg)) {
 			if (i + 1 < args.length) {
 				STRING_SETTERS[arg](result, args[++i], PARSE_DEPS);
 			}
-			continue;
-		}
-		if (OPTIONAL_VALUE_FLAGS.has(arg)) {
+		} else if (OPTIONAL_VALUE_FLAGS.has(arg)) {
 			const config = OPTIONAL_FLAGS[arg];
 			const next = args[i + 1];
 			const consume =
@@ -123,9 +151,7 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 				!(config.rejectAtPrefix === true && next.startsWith("@")) &&
 				!(config.rejectEmpty === true && next.length === 0);
 			config.set(result, consume ? args[++i] : undefined);
-			continue;
-		}
-		if (arg === "--help" || arg === "-h") {
+		} else if (arg === "--help" || arg === "-h") {
 			result.help = true;
 		} else if (arg === "--version" || arg === "-v") {
 			result.version = true;
@@ -164,21 +190,15 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 		} else if (arg === "--auto-approve" || arg === "--yolo") {
 			result.autoApprove = true;
 		} else if (arg.startsWith("@")) {
-			result.fileArgs.push(arg.slice(1));
-		} else if (arg.startsWith("--") && extensionFlags) {
-			// Extension-registered flags: dispatched dynamically via the runtime map.
-			const flagName = arg.slice(2);
-			const extFlag = extensionFlags.get(flagName);
-			if (extFlag) {
-				if (extFlag.type === "boolean") {
-					result.unknownFlags.set(flagName, true);
-				} else if (extFlag.type === "string" && i + 1 < args.length) {
-					result.unknownFlags.set(flagName, args[++i]);
-				}
-			}
-			// Unknown flags without extensionFlags are silently ignored (first pass).
+			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
 		} else if (!arg.startsWith("-")) {
 			result.messages.push(arg);
+		}
+		// Drop an unconsumed `--flag=value` value (e.g. a boolean flag): when no
+		// branch advanced past the spliced token, remove it so it does not fall
+		// through to a later iteration and become a positional message.
+		if (equalsValueIndex !== -1 && i === flagIndex) {
+			args.splice(equalsValueIndex, 1);
 		}
 	}
 

@@ -28,7 +28,7 @@ export default {
 		const kernelMode = readSetting<PythonExecutorOptions["kernelMode"]>(opts.session, "python.kernelMode");
 		const executorOptions: PythonExecutorOptions = {
 			cwd: opts.cwd,
-			deadlineMs: opts.deadlineMs,
+			idleTimeoutMs: opts.idleTimeoutMs,
 			signal: opts.signal,
 			sessionId: namespaceSessionId(opts.sessionId),
 			kernelMode,
@@ -39,6 +39,7 @@ export default {
 			artifactPath: opts.artifactPath,
 			artifactId: opts.artifactId,
 			onChunk: opts.onChunk,
+			onStatus: opts.onStatus,
 			toolSession: opts.session,
 		};
 		const result = await executePython(code, executorOptions);
