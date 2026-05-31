@@ -628,6 +628,11 @@ export async function processResponsesStream<TApi extends Api>(
 					arguments: args,
 				};
 				if (currentBlock?.type === "toolCall") {
+					// Persist the authoritative final args on the stored block. The
+					// throttled delta parser may have skipped the last partial parse,
+					// leaving currentBlock.arguments stale (often `{}`); the emitted
+					// toolCall and the persisted block must agree.
+					currentBlock.arguments = args;
 					delete (currentBlock as { partialJson?: string }).partialJson;
 					delete (currentBlock as { lastParseLen?: number }).lastParseLen;
 				}

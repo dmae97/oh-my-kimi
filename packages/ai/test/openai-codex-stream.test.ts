@@ -280,6 +280,37 @@ describe("openai-codex streaming", () => {
 		]);
 	});
 
+	it("persists final tool-call args when SSE finalizes via output_item.done without an args.done event", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		// Two small arg deltas: the second grows the buffer far less than the
+		// throttle's min-growth threshold, so the throttled parser skips the final
+		// re-parse. No function_call_arguments.done is sent, leaving
+		// output_item.done as the sole finalization path; it must still persist the
+		// full arguments on the stored block rather than the stale partial parse.
+		const sse = `${[
+			`data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "read_file", arguments: "" } })}`,
+			`data: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_1", delta: '{"path":"' })}`,
+			`data: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_1", delta: 'README.md"}' })}`,
+			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "read_file", arguments: '{"path":"README.md"}' } })}`,
+			`data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } } } })}`,
+		].join("\n\n")}\n\n`;
+		global.fetch = vi.fn(
+			async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }),
+		) as unknown as typeof fetch;
+
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const result = await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
+
+		const toolCall = result.content.find(c => c.type === "toolCall");
+		if (toolCall?.type !== "toolCall") throw new Error("expected a finalized toolCall block");
+		expect(toolCall.arguments).toEqual({ path: "README.md" });
+		expect("partialJson" in toolCall).toBe(false);
+		expect("lastParseLen" in toolCall).toBe(false);
+	});
+
 	it("waits for caller abort when SSE streams only no-progress status events", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
@@ -2061,7 +2092,6 @@ describe("openai-codex streaming", () => {
 				id: "call_ws_stalled|fc_ws_stalled",
 				name: "todo_write",
 				arguments: {},
-				partialJson: "",
 			}),
 		]);
 		expect(fetchMock).not.toHaveBeenCalled();

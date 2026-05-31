@@ -1315,6 +1315,9 @@ function handleOutputItemDone(
 			arguments: parseStreamingJson(item.arguments || "{}"),
 		};
 		if (runtime.currentBlock?.type === "toolCall") {
+			// Persist the authoritative final args on the stored block; the throttled
+			// delta parser may have left currentBlock.arguments stale (often `{}`).
+			runtime.currentBlock.arguments = toolCall.arguments;
 			delete (runtime.currentBlock as { partialJson?: string }).partialJson;
 			delete (runtime.currentBlock as { lastParseLen?: number }).lastParseLen;
 		}

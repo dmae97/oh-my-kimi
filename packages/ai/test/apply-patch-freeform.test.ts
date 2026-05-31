@@ -268,9 +268,67 @@ describe("custom_tool_call stream receive", () => {
 			makeModel(),
 		);
 
-		const block = output.content[0] as Record<string, unknown>;
-		expect(block.type).toBe("toolCall");
+		const block = output.content[0];
+		expect(block?.type).toBe("toolCall");
+		if (block?.type !== "toolCall") throw new Error("expected toolCall block");
 		expect(block.arguments).toEqual({ command: "x".repeat(300) });
+		expect("partialJson" in block).toBe(false);
+		expect("lastParseLen" in block).toBe(false);
+	});
+
+	test("persists final args on the block when finalized via output_item.done without an args.done event", async () => {
+		const output: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			timestamp: Date.now(),
+			provider: "openai",
+			model: "gpt-5",
+			api: "openai-responses",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+		};
+		const stream = { push: () => {}, end: () => {} } as never;
+
+		// Two small deltas: the second grows the buffer by far less than the
+		// throttle's min-growth threshold, so parseStreamingJsonThrottled skips the
+		// final re-parse and currentBlock.arguments is left at the first partial
+		// parse. No function_call_arguments.done arrives, so output_item.done is the
+		// sole finalization path and must still persist the full arguments.
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.added",
+					item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "read_file", arguments: "" },
+				},
+				{ type: "response.function_call_arguments.delta", delta: '{"path":"' },
+				{ type: "response.function_call_arguments.delta", delta: 'README.md"}' },
+				{
+					type: "response.output_item.done",
+					item: {
+						type: "function_call",
+						id: "fc_1",
+						call_id: "call_1",
+						name: "read_file",
+						arguments: '{"path":"README.md"}',
+					},
+				},
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		const block = output.content[0];
+		expect(block?.type).toBe("toolCall");
+		if (block?.type !== "toolCall") throw new Error("expected toolCall block");
+		expect(block.arguments).toEqual({ path: "README.md" });
 		expect("partialJson" in block).toBe(false);
 		expect("lastParseLen" in block).toBe(false);
 	});
