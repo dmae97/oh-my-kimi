@@ -258,6 +258,33 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+
+		it("does not duplicate scrollback when two forced renders coalesce in one tick", async () => {
+			const term = new VirtualTerminal(20, 3);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("L", 8));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				// Two forced renders queued before the render flush must still be
+				// treated as a single drop of the already-committed transcript;
+				// otherwise the second one re-emits the whole frame into scrollback.
+				tui.requestRender(true);
+				tui.requestRender(true);
+				await settle(term);
+
+				const occurrences = term
+					.getScrollBuffer()
+					.map(line => line.trimEnd())
+					.filter(line => line === "L0").length;
+				expect(occurrences).toBe(1);
+			} finally {
+				tui.stop();
+			}
+		});
 	});
 
 	describe("resize + viewport behavior", () => {

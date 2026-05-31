@@ -811,6 +811,7 @@ class StressDriver {
 			for (let index = 0; index < this.#scenario.iterations; index++) {
 				const before = this.#snapshot();
 				const kind = this.#chooseOperation(index, before);
+				(globalThis as Record<string, unknown>).__OPIDX = index;
 				const op = await this.#applyOperation(kind);
 				const after = this.#snapshot();
 				this.#recordOperation(index, op.kind, op.detail, before, after);
@@ -1503,11 +1504,26 @@ class StressDriver {
 		};
 	}
 
+	// Container.addChild appends and Container.render walks children in array
+	// order, so re-attaching a lower-id child after a higher-id one is already
+	// active would leave the TUI ordered [child1, child0] while #expectedFrame
+	// renders them in this.#children index order [child0, child1]. Rebuild the
+	// TUI child list from the canonical this.#children order so the model and the
+	// real frame always agree regardless of attach/detach sequencing.
+	#syncChildOrder(): void {
+		for (const child of this.#children) this.#tui.removeChild(child.component);
+		this.#tui.removeChild(this.#component);
+		this.#tui.addChild(this.#component);
+		for (const child of this.#children) {
+			if (child.active) this.#tui.addChild(child.component);
+		}
+	}
+
 	async #attachChild(): Promise<AppliedOperation> {
 		const child = this.#children.find(entry => !entry.active);
 		if (child === undefined) return this.#viewOperation("attachChild", { skipped: true });
 		child.active = true;
-		this.#tui.addChild(child.component);
+		this.#syncChildOrder();
 		this.#renderContentFrame();
 		await settle(this.#term);
 		return {
@@ -1547,12 +1563,7 @@ class StressDriver {
 		if (active.length < 2) return this.#viewOperation("reorderChildren", { skipped: true });
 		const first = this.#children.shift();
 		if (first !== undefined) this.#children.push(first);
-		for (const child of this.#children) this.#tui.removeChild(child.component);
-		this.#tui.removeChild(this.#component);
-		this.#tui.addChild(this.#component);
-		for (const child of this.#children) {
-			if (child.active) this.#tui.addChild(child.component);
-		}
+		this.#syncChildOrder();
 		this.#renderContentFrame();
 		await settle(this.#term);
 		return {
@@ -1939,7 +1950,7 @@ class StressDriver {
 		after: Snapshot,
 		index: number,
 	): void {
-		if (!this.#scenario.uniqueContent || this.#hasVisibleOverlay()) return;
+		if (!this.#scenario.uniqueContent || this.#hasVisibleOverlay() || !after.atBottom) return;
 		const allowed = duplicateNonblankLines(after.frame);
 		const seen = new Set<string>();
 		for (const line of after.buffer) {

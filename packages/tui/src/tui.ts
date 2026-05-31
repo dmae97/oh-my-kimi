@@ -282,6 +282,7 @@ type RenderIntent =
 	| { kind: "initial" }
 	| { kind: "sessionReplace" }
 	| { kind: "historyRebuild" }
+	| { kind: "overlayRebuild" }
 	| { kind: "viewportRepaint"; appendFrom?: number }
 	| { kind: "deferredShrink"; paddedLength: number }
 	| { kind: "deferredMutation" }
@@ -676,7 +677,7 @@ export class TUI extends Container {
 		) {
 			return false;
 		}
-		this.#prepareForcedRender(true);
+		this.#prepareForcedRender(true, options?.allowUnknownViewport === true);
 		this.#renderRequested = false;
 		this.#lastRenderAt = performance.now();
 		this.#doRender();
@@ -684,9 +685,10 @@ export class TUI extends Container {
 	}
 
 	requestRender(force = false, options?: RenderRequestOptions): void {
-		this.#allowUnknownViewportMutationOnNextRender ||= options?.allowUnknownViewportMutation === true;
+		const allowUnknownViewportMutation = options?.allowUnknownViewportMutation === true;
+		this.#allowUnknownViewportMutationOnNextRender ||= allowUnknownViewportMutation;
 		if (force) {
-			this.#prepareForcedRender(options?.clearScrollback === true);
+			this.#prepareForcedRender(options?.clearScrollback === true, allowUnknownViewportMutation);
 			this.#renderRequested = true;
 			process.nextTick(() => {
 				if (this.#stopped || !this.#renderRequested) {
@@ -703,11 +705,17 @@ export class TUI extends Container {
 		process.nextTick(() => this.#scheduleRender());
 	}
 
-	#prepareForcedRender(clearScrollback: boolean): void {
-		this.#clearScrollbackOnNextRender ||= clearScrollback;
+	#prepareForcedRender(clearScrollback: boolean, allowUnknownViewportMutation: boolean): void {
+		const geometryChanged =
+			(this.#previousWidth > 0 && this.#previousWidth !== this.terminal.columns) ||
+			(this.#previousHeight > 0 && this.#previousHeight !== this.terminal.rows);
+		const replayGeometry =
+			geometryChanged &&
+			this.#canReplayNativeScrollbackAtCheckpoint(this.#readNativeViewportAtBottom(), allowUnknownViewportMutation);
+		this.#clearScrollbackOnNextRender ||= clearScrollback || replayGeometry;
 		const droppedLines = this.#previousLines.length > 0;
 		this.#previousLines = [];
-		this.#previousLinesDroppedForForcedRender = droppedLines;
+		this.#previousLinesDroppedForForcedRender ||= droppedLines;
 		this.#previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
 		this.#previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
 		this.#cursorRow = 0;
@@ -1147,12 +1155,17 @@ export class TUI extends Container {
 		const height = this.terminal.rows;
 
 		// 1. Compose the frame.
-		let lines = this.render(width);
+		let baseLines = this.render(width);
+		let lines = baseLines;
 		if (this.overlayStack.length > 0) {
-			lines = this.#compositeOverlays(lines, width, height);
+			lines = this.#compositeOverlays(baseLines, width, height);
 		}
 		const cursorPos = this.#extractCursorPosition(lines, height);
-		lines = this.#applyLineResets(lines);
+		lines = this.#fitLinesToWidth(this.#applyLineResets(lines), width);
+		if (lines !== baseLines) {
+			this.#extractCursorPosition(baseLines, height);
+			baseLines = this.#fitLinesToWidth(this.#applyLineResets(baseLines), width);
+		}
 
 		// 2. Capture transition + pre-render state before any emitter runs.
 		const prevViewportTop = this.#viewportTopRow;
@@ -1172,6 +1185,9 @@ export class TUI extends Container {
 			allowUnknownViewportMutation,
 		);
 		this.#logRedraw(intent, lines.length, height);
+		if (process.env.PI_DUMP_OP && String((globalThis as Record<string, unknown>).__OPIDX) === process.env.PI_DUMP_OP) {
+			fs.writeFileSync("/tmp/frameDump.json", JSON.stringify({ intent: intent.kind, lines }));
+		}
 		// 4. Execute.
 		switch (intent.kind) {
 			case "noop":
@@ -1198,6 +1214,14 @@ export class TUI extends Container {
 					clearViewport: true,
 					clearScrollback: !isMultiplexerSession(),
 				});
+				return;
+			case "overlayRebuild":
+				this.#clearNativeScrollbackDirty();
+				this.#emitFullPaint(baseLines, width, height, null, {
+					clearViewport: true,
+					clearScrollback: !isMultiplexerSession(),
+				});
+				this.#emitViewportRepaint(lines, width, height, cursorPos);
 				return;
 			case "viewportRepaint":
 				if (intent.appendFrom !== undefined) {
@@ -1264,6 +1288,18 @@ export class TUI extends Container {
 		// A legitimately empty previous frame must still diff as an append so newly
 		// expanded content is reachable through native scrollback.
 		if (this.#previousLinesDroppedForForcedRender) return { kind: "viewportRepaint" };
+		if (this.hasOverlay()) {
+			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
+			if (
+				this.#nativeScrollbackDirty &&
+				this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewportMutation)
+			) {
+				return { kind: "overlayRebuild" };
+			}
+			this.#markNativeScrollbackDirty();
+			return { kind: "viewportRepaint" };
+		}
+
 		if (this.#nativeScrollbackDirty && this.#nativeViewportIsAtBottom(this.#readNativeViewportAtBottom())) {
 			return { kind: "historyRebuild" };
 		}
@@ -1537,6 +1573,13 @@ export class TUI extends Container {
 	 * `truncateToWidth` drops the trailing bytes appended by
 	 * {@link #applyLineResets}.
 	 */
+	#fitLinesToWidth(lines: string[], width: number): string[] {
+		for (let i = 0; i < lines.length; i++) {
+			lines[i] = this.#fitLineToWidth(lines[i], width);
+		}
+		return lines;
+	}
+
 	#fitLineToWidth(line: string, width: number): string {
 		if (TERMINAL.isImageLine(line)) return line;
 		if (visibleWidth(line) <= width) return line;

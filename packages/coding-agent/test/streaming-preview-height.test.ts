@@ -6,7 +6,8 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EDIT_MODE_STRATEGIES } from "@oh-my-pi/pi-coding-agent/edit";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import { TUI } from "@oh-my-pi/pi-tui";
+import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { ToolExecutionComponent } from "../src/modes/components/tool-execution";
 
 // Reproduces the streaming-edit "box grows and shrinks repeatedly" stutter and
@@ -77,6 +78,36 @@ describe("streaming edit preview height (monotonic while streaming)", () => {
 		const settle = () =>
 			Promise.race([new Promise<void>(res => (resolveRender = res)), Bun.sleep(250).then(() => undefined)]);
 		return { component, settle };
+	}
+
+	// Real TUI + virtual terminal harness: drives the component through the
+	// actual differential renderer so native scrollback (not just the in-memory
+	// component height) is exercised. Mirrors makeComponent's construction but
+	// swaps the stub for a live TUI wired to an xterm-backed terminal.
+	function makeTuiComponent(): { component: ToolExecutionComponent; term: VirtualTerminal; tui: TUI } {
+		const term = new VirtualTerminal(80, 8);
+		const tui = new TUI(term);
+		const tool = { mode: "replace" } as unknown as AgentTool;
+		const component = new ToolExecutionComponent(
+			"edit",
+			{ path: file, edits: [{ old_text: oldBlock, new_text: fullNew.slice(0, 1) }] },
+			{},
+			tool,
+			tui,
+			tmpDir,
+		);
+		tui.addChild(component);
+		return { component, term, tui };
+	}
+
+	// Let the TUI's throttled render pipeline flush, then drain the terminal.
+	function settleTerminal(term: VirtualTerminal): Promise<void> {
+		return term.waitForRender();
+	}
+
+	// Whole native buffer (scrollback + viewport) with trailing padding trimmed.
+	function normalizedBufferRows(term: VirtualTerminal): string[] {
+		return term.getScrollBuffer().map(row => row.trimEnd());
 	}
 
 	test("rendered height never shrinks across streamed chunks, then collapses on finalize", async () => {
