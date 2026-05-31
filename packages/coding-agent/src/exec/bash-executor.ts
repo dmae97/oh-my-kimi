@@ -16,6 +16,7 @@ export interface BashExecutorOptions {
 	cwd?: string;
 	timeout?: number;
 	onChunk?: (chunk: string) => void;
+	chunkThrottleMs?: number;
 	signal?: AbortSignal;
 	/** Session key suffix to isolate shell sessions per agent */
 	sessionKey?: string;
@@ -97,9 +98,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		artifactId: options?.artifactId,
 		headBytes: resolveOutputSinkHeadBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),
-		// Throttle the streaming preview callback to avoid saturating the
-		// event loop when commands produce massive output (e.g. seq 1 50M).
-		chunkThrottleMs: options?.onChunk ? 50 : 0,
+		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? 50) : 0,
 	});
 
 	// sink.push() is synchronous — buffer management, counters, and onChunk
