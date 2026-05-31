@@ -1076,6 +1076,32 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("rebuilds scrollback when a bottom-anchored high-water preview collapses", async () => {
+			const term = new VirtualTerminal(40, 5);
+			const highWaterFrame = [...rows("base-", 8), ...rows("preview-", 10)];
+			const finalFrame = [...rows("base-", 8), "result-0", "result-1"];
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(highWaterFrame);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(highWaterFrame);
+				expect(term.getBufferPosition().viewportY).toBe(term.getBufferPosition().baseY);
+
+				component.setLines(finalFrame);
+				tui.requestRender();
+				await settle(term);
+
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(finalFrame);
+				expect(term.getScrollBuffer().join("\n")).not.toContain("preview-");
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("defers stale-history rebuild while native scrollback is scrolled", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);
@@ -1317,7 +1343,7 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
-		it("refreshes dirty native scrollback before transient checkpoint rows render", async () => {
+		it("keeps transient checkpoint rows out of clean rebuilt scrollback", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);
 			const chat = new MutableLinesComponent(rows("line-", 12));
@@ -1336,7 +1362,7 @@ describe("TUI terminal-state regressions", () => {
 				await settle(term);
 				term.scrollLines(999);
 
-				expect(tui.refreshNativeScrollbackIfDirty()).toBe(true);
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
 				status.setLines(["LOADER"]);
 				tui.requestRender();
 				await settle(term);
@@ -1352,13 +1378,11 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
-		it("tail-cell mutation is cleaned up at the next native scrollback checkpoint", async () => {
-			// Repro for the old scrollback-duplication bug: once a header
-			// (e.g. the welcome screen) has scrolled into terminal history, the
-			// last tool cell mutating (grow/shrink cycles, completion collapse)
-			// makes native scrollback stale. Live frames now defer the destructive
-			// clear+replay until a user-run checkpoint rather than yanking users who
-			// are reading scrollback mid-stream.
+		it("tail-cell mutation is cleaned up before the next native scrollback checkpoint", async () => {
+			// Once a header has scrolled into terminal history, a bottom-anchored
+			// tail cell shrink must rebuild immediately. Deferring until the next
+			// checkpoint leaves stale high-water rows above the viewport and duplicates
+			// retained header/tail rows when users scroll back.
 			const term = new VirtualTerminal(40, 10);
 			const tui = new TUI(term);
 			const header = new MutableLinesComponent(["HEADER-0", "HEADER-1", "HEADER-2", "HEADER-3", "HEADER-4"]);
@@ -1394,15 +1418,14 @@ describe("TUI terminal-state regressions", () => {
 					await settle(term);
 				}
 
-				// Final completion-style collapse: full transcript fits in the
-				// viewport again, even though scrollback already holds an
-				// earlier copy of HEADER. Rebuild at the next checkpoint to clean the
-				// stale native history.
+				// Final completion-style collapse: the rebuild happens on this render
+				// while the viewport is bottom-anchored, so the checkpoint below should
+				// have no dirty native scrollback left to repair.
 				tail.setLines(["[completed: many lines]", "[footer]"]);
 				tui.requestRender();
 				await settle(term);
 				term.scrollLines(999);
-				expect(tui.refreshNativeScrollbackIfDirty()).toBe(true);
+				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
 				await settle(term);
 				const scrollback = term.getScrollBuffer();
 				for (let i = 0; i < 5; i++) {

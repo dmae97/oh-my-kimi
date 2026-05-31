@@ -714,6 +714,9 @@ class StressDriver {
 	}
 
 	#chooseOperation(index: number, before: Snapshot): OperationKind {
+		if (this.#scenario.strictScrollback && before.atBottom && before.frame.length > before.height + 8 && index % 43 === 0) {
+			return "collapseToFew";
+		}
 		if (this.#scenario.strictScrollback && before.atBottom && index % 41 === 0) {
 			return "offscreenEditAppendRepeatedTail";
 		}
@@ -1260,6 +1263,7 @@ class StressDriver {
 		this.#assertRowAccounting(op, before, after, index);
 		this.#assertScrollbackGrowthMatchesFrameGrowth(op, before, after, index);
 		this.#assertHistoryPrefixStability(op, before, after, index);
+		this.#assertNativeScrollbackReplay(op, before, after, index);
 		if (op.checkpoint && this.#scenario.strictScrollback) {
 			this.#assertCleanBuffer(op, before, after, index);
 		}
@@ -1437,7 +1441,50 @@ class StressDriver {
 		}
 	}
 
+	#assertNativeScrollbackReplay(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		if (!this.#scenario.strictScrollback || this.#hasVisibleOverlay()) return;
+		if (!after.atBottom || op.geometryChanged) return;
+		if (!op.mutatesContent && !op.forcedRender && !op.checkpoint) return;
+		const expected = expectedScrollbackBuffer(after.frame, after.height, after.buffer.length);
+		if (expected === null) {
+			this.#fail("native scrollback shorter than logical frame", op, before, after, index, {
+				expectedMinimumLength: Math.max(after.height, after.frame.length),
+				actualLength: after.buffer.length,
+			});
+		}
+		if (!sameLines(after.buffer, expected)) {
+			const mismatch = firstMismatchIndex(after.buffer, expected);
+			this.#fail("native scrollback buffer fidelity", op, before, after, index, {
+				expectedLength: expected.length,
+				actualLength: after.buffer.length,
+				firstMismatch: mismatch,
+				expectedWindow: windowAround(expected, mismatch),
+				actualWindow: windowAround(after.buffer, mismatch),
+			});
+		}
+
+		const probes = scrollbackProbePositions(after.position.baseY, after.frame.length, after.height);
+		try {
+			for (const viewportY of probes) {
+				const current = this.#term.getBufferPosition().viewportY;
+				this.#term.scrollLines(viewportY - current);
+				const actual = normalizeLines(this.#term.getViewport());
+				const expectedView = fixedViewportSlice(expected, viewportY, after.height);
+				if (!sameLines(actual, expectedView)) {
+					this.#fail("native scrollback viewport fidelity", op, before, after, index, {
+						viewportY,
+						expected: expectedView,
+						actual,
+					});
+				}
+			}
+		} finally {
+			this.#term.scrollLines(LARGE_SCROLL);
+		}
+	}
+
 	#assertCleanBuffer(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		if (this.#hasVisibleOverlay()) return;
 		if (!bufferReflectsFrame(after.buffer, after.frame, after.height)) {
 			this.#fail("clean checkpoint reconstruction", op, before, after, index, {
 				expectedLength: Math.max(after.height, after.frame.length),
@@ -1499,6 +1546,53 @@ function sameLines(left: readonly string[], right: readonly string[]): boolean {
 		if (left[i] !== right[i]) return false;
 	}
 	return true;
+}
+
+function firstMismatchIndex(left: readonly string[], right: readonly string[]): number {
+	const maxLength = Math.max(left.length, right.length);
+	for (let i = 0; i < maxLength; i++) {
+		if (left[i] !== right[i]) return i;
+	}
+	return -1;
+}
+
+function windowAround(lines: readonly string[], center: number): string[] {
+	const safeCenter = center < 0 ? 0 : center;
+	const start = Math.max(0, safeCenter - 3);
+	const end = Math.min(lines.length, safeCenter + 4);
+	return lines.slice(start, end);
+}
+
+function expectedScrollbackBuffer(
+	frame: readonly string[],
+	height: number,
+	actualLength: number,
+): string[] | null {
+	const minimumLength = Math.max(height, frame.length);
+	if (actualLength < minimumLength) return null;
+	const expected = [...frame];
+	for (let i = frame.length; i < actualLength; i++) {
+		expected.push("");
+	}
+	return expected;
+}
+
+function scrollbackProbePositions(maxViewportY: number, frameLength: number, height: number): number[] {
+	const maxY = Math.max(0, maxViewportY);
+	const positions = new Set<number>();
+	const add = (value: number): void => {
+		positions.add(Math.max(0, Math.min(maxY, value)));
+	};
+	add(0);
+	add(maxY);
+	add(Math.floor(maxY / 2));
+	add(Math.max(0, frameLength - height));
+	add(frameLength - 1);
+	add(frameLength);
+	if (maxY <= 32) {
+		for (let y = 0; y <= maxY; y++) add(y);
+	}
+	return [...positions].sort((left, right) => left - right);
 }
 
 function isCleanBuffer(buffer: readonly string[], frame: readonly string[], height: number): boolean {

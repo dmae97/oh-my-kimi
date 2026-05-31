@@ -1265,13 +1265,12 @@ export class TUI extends Container {
 
 		const diff = this.#diffLines(newLines);
 		// Shrink across the viewport boundary: the new transcript would re-expose
-		// rows already committed to native scrollback. A real resize already
-		// reflowed history, so rebuild it now; a pure content shrink (e.g. a
-		// streaming tail cell collapsing) defers the clear+replay. When the terminal
-		// can report that the user is scrolled into history, the live repaint keeps
-		// the previous row count with blank tail padding; otherwise cursor-home
-		// repainting rewrites old buffer rows with newly bottom-anchored content,
-		// which looks like a jump upward.
+		// rows already committed to native scrollback. Rebuild immediately when the
+		// viewport is known/allowed to be at the tail; otherwise defer the rewrite
+		// and repaint against the previous row count so users scrolled into history
+		// are not yanked. A viewport-only repaint for a bottom-anchored shrink leaves
+		// stale high-water rows in native scrollback and duplicates the new tail above
+		// the viewport.
 		const naturalViewportTop = Math.max(0, newLines.length - height);
 		if (
 			diff.firstChanged !== -1 &&
@@ -1279,17 +1278,15 @@ export class TUI extends Container {
 			naturalViewportTop < this.#scrollbackHighWater &&
 			!isMultiplexerSession()
 		) {
-			if (widthChanged || heightChanged) {
-				if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom(), allowUnknownViewportMutation)) {
-					this.#markNativeScrollbackDirty();
-					return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
-				}
+			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
+			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
+				this.#markNativeScrollbackDirty();
+				return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
+			}
+			if (this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();
-			if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom(), allowUnknownViewportMutation)) {
-				return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
-			}
 			return { kind: "viewportRepaint" };
 		}
 
