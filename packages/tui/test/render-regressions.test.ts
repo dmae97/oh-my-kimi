@@ -1580,6 +1580,51 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+		it("rebuilds history when a shrink leaves no real rows above the scrollback boundary", async () => {
+			// Reviewer scenario (#1599): a large completion-style collapse (e.g. a 100-row
+			// streamed transcript shrinking to a 20-row final cell in a 10-row viewport)
+			// must NOT use the padded `deferredShrink` — the viewport would fall entirely
+			// past the end of `newLines` and render as all blanks (no prompt visible) until
+			// the next checkpoint. Yank the scrollback instead so the new tail stays on
+			// screen.
+			const term = new UnknownViewportTerminal(40, 10);
+			const tui = new TUI(term);
+			const body = rows("line-", 99);
+			const component = new MutableLinesComponent([...body, "prompt-row"]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const short = rows("short-", 19);
+				component.setLines([...short, "prompt-row"]);
+				tui.requestRender();
+				await settle(term);
+
+				const viewport = visible(term).map(line => line.trim());
+				expect(viewport).toEqual([
+					"short-10",
+					"short-11",
+					"short-12",
+					"short-13",
+					"short-14",
+					"short-15",
+					"short-16",
+					"short-17",
+					"short-18",
+					"prompt-row",
+				]);
+				const scrollback = term.getScrollBuffer();
+				for (let i = 0; i < short.length; i++) {
+					const pattern = new RegExp(`\\bshort-${i}\\b`);
+					expect(countMatches(scrollback, pattern), `short-${i} appears once`).toBe(1);
+				}
+				expect(scrollback.join("\n")).not.toContain("line-");
+			} finally {
+				tui.stop();
+			}
+		});
 
 		it("renders streaming row inserts on WSL Windows Terminal even when viewport probe is unavailable", async () => {
 			const originalPlatform = process.platform;
