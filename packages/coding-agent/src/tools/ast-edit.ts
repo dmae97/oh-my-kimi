@@ -230,6 +230,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				rawPaths: params.paths,
 				cwd: this.session.cwd,
 				internalUrlAction: "rewrite",
+				settings: this.session.settings,
+				signal,
+				localProtocolOptions: this.session.localProtocolOptions,
 			});
 			const { searchPath: resolvedSearchPath, scopePath, isDirectory, multiTargets, globFilter } = scope;
 
