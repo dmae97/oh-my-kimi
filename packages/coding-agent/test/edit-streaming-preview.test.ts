@@ -97,6 +97,49 @@ describe("hashline streaming preview (multi-section)", () => {
 	});
 });
 
+describe("hashline streaming preview (single-op trailing payload)", () => {
+	const strategy = EDIT_MODE_STRATEGIES.hashline;
+	const text = "const a = 1;\nconst b = 2;\nconst c = 3;\n";
+	let tmpDir: string;
+	let file: string;
+	let snapshots: InMemorySnapshotStore;
+	let header: string;
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "hashline-stream-single-"));
+		file = path.join(tmpDir, "a.ts");
+		await Bun.write(file, text);
+		snapshots = new InMemorySnapshotStore();
+		header = formatHashlineHeader("a.ts", snapshots.record(file, text));
+	});
+
+	afterEach(async () => {
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	const ctx = (cwd: string) => ({ cwd, signal: new AbortController().signal, snapshots, isStreaming: true });
+
+	test("renders a live diff while the sole payload line is still being typed", async () => {
+		// The `+` payload has no trailing newline — the common single-op case
+		// the trailing-line trim used to erase, collapsing the preview to a
+		// "No changes" error that rendered as a blank box for the whole stream.
+		const input = `${header}\nreplace 2..2:\n+const b = 22`;
+		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
+		expect(previews).toHaveLength(1);
+		expect(previews?.[0]?.error).toBeUndefined();
+		expect(previews?.[0]?.diff).toContain("const b = 22");
+	});
+
+	test("yields no preview (not an error) before the first payload byte arrives", async () => {
+		// Op header typed, payload still empty: applyPartialTo drops the
+		// payload-less op so nothing changes yet. The preview must report null
+		// (preserving any prior frame), never a 'No changes' error that wipes it.
+		const input = `${header}\nreplace 2..2:\n`;
+		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
+		expect(previews).toBeNull();
+	});
+});
+
 describe("apply_patch streaming preview (trailing partial line)", () => {
 	const strategy = EDIT_MODE_STRATEGIES.apply_patch;
 	let tmpDir: string;
