@@ -1200,6 +1200,102 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+
+		it("defers offscreen expansion rebuild when the viewport position is unknown", async () => {
+			// POSIX terminals cannot report whether the user scrolled up, so an
+			// ordinary offscreen expansion must NOT destructively rebuild scrollback
+			// (anti-yank). The collapsed ctrl+o markers that scrolled into history
+			// therefore stay stale until the next checkpoint — this is the deferral
+			// that makes an un-flagged Ctrl+O expand look broken above the fold.
+			const term = new UnknownViewportTerminal(48, 6);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent([
+				"frame-top",
+				"code preview … 16 more lines ⟨(Ctrl+O for more)⟩",
+				"output preview … 106 more lines (ctrl+o to expand)",
+				...rows("json-", 10),
+				"status",
+				"editor",
+			]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(term.isNativeViewportAtBottom()).toBeUndefined();
+				expect(term.getScrollBuffer().join("\n")).toContain("ctrl+o");
+
+				component.setLines([
+					"frame-top",
+					"code line 0",
+					"code line 1",
+					"output line 0",
+					"output line 1",
+					...rows("json-", 10),
+					"status",
+					"editor",
+				]);
+				tui.requestRender();
+				await settle(term);
+
+				// No flag: the rebuild is deferred, so the stale markers survive offscreen.
+				expect(term.getScrollBuffer().join("\n")).toContain("ctrl+o");
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("rebuilds scrollback on a user-driven offscreen expansion when the viewport position is unknown", async () => {
+			// Pressing Ctrl+O is a direct user keystroke, so the expand reaches the
+			// renderer with `allowUnknownViewportMutation: true`. On a terminal that
+			// cannot report viewport position (POSIX), that opt-in is the only thing
+			// that promotes the offscreen structural mutation to a clean history
+			// rebuild instead of a partial viewport repaint — without it the collapsed
+			// preview rows linger above the fold and the expansion renders garbled.
+			const term = new UnknownViewportTerminal(48, 6);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent([
+				"frame-top",
+				"code preview … 16 more lines ⟨(Ctrl+O for more)⟩",
+				"output preview … 106 more lines (ctrl+o to expand)",
+				...rows("json-", 10),
+				"status",
+				"editor",
+			]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(term.isNativeViewportAtBottom()).toBeUndefined();
+				expect(term.getScrollBuffer().join("\n")).toContain("ctrl+o");
+
+				component.setLines([
+					"frame-top",
+					"code line 0",
+					"code line 1",
+					"output line 0",
+					"output line 1",
+					...rows("json-", 10),
+					"status",
+					"editor",
+				]);
+				tui.requestRender(false, { allowUnknownViewportMutation: true });
+				await settle(term);
+
+				const scrollback = term.getScrollBuffer();
+				const scrollbackText = scrollback.join("\n");
+				expect(scrollbackText).not.toContain("ctrl+o");
+				expect(scrollbackText).toContain("code line 1");
+				expect(scrollbackText).toContain("output line 1");
+				for (let i = 0; i < 10; i++) {
+					const pattern = new RegExp(`\\bjson-${i}\\b`);
+					expect(countMatches(scrollback, pattern), `json-${i} should appear exactly once`).toBe(1);
+				}
+			} finally {
+				tui.stop();
+			}
+		});
 		it("updates visible tail line when appending during overflow", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);

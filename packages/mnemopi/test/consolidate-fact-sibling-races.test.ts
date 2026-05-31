@@ -1,10 +1,13 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { VeracityConsolidator } from "../src/core/veracity-consolidation";
 import { closeQuietly } from "../src/db";
 
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 function withDb<T>(fn: (path: string, cons: VeracityConsolidator) => T): T {
 	const dir = mkdtempSync(join(tmpdir(), "mnemopi-veracity-siblings-"));
 	const path = join(dir, "facts.db");
@@ -25,8 +28,11 @@ describe("VeracityConsolidator sibling write methods", () => {
 			const conflict = cons.getConflicts()[0];
 			if (conflict === undefined) throw new Error("expected Alice conflict");
 
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			cons.resolveConflict(conflict.id, conflict.fact_a_id);
 			cons.resolveConflict(conflict.id, conflict.fact_b_id);
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy.mock.calls[0]?.[0]).toContain("already resolved");
 
 			const facts = cons.conn
 				.query("SELECT id, superseded_by FROM consolidated_facts WHERE subject = 'Alice'")

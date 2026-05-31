@@ -1,10 +1,14 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { computeFactId, VeracityConsolidator } from "../src/core/veracity-consolidation";
 import { closeQuietly } from "../src/db";
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 function withDb<T>(fn: (path: string, cons: VeracityConsolidator) => T): T {
 	const dir = mkdtempSync(join(tmpdir(), "mnemopi-veracity-"));
@@ -131,7 +135,10 @@ describe("consolidate_fact id collision behavior", () => {
 			const conflict = cons.getConflicts()[0];
 			if (conflict === undefined) throw new Error("expected Grace conflict");
 
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			cons.resolveConflict(conflict.id, "cf_definitely_not_in_db_0000000000");
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy.mock.calls[0]?.[0]).toContain("matches neither fact_a_id");
 			expect(cons.getConflicts()).toHaveLength(1);
 
 			const winning = computeFactId("Grace", "is", "the CTO");
