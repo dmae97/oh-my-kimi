@@ -107,26 +107,24 @@ function resolveEditModeForTool(toolName: string, tool: AgentTool | undefined): 
 	return (tool as { mode?: EditMode } | undefined)?.mode;
 }
 
-function rawFreeformEditInputFromPartialJson(partialJson: unknown): string | undefined {
+function rawTextInputFromPartialJson(partialJson: unknown): string | undefined {
 	if (typeof partialJson !== "string") return undefined;
 	if (partialJson.length === 0) return undefined;
 	const trimmed = partialJson.trimStart();
 	if (trimmed.length === 0) return undefined;
 	const first = trimmed[0];
-	// Function-tool arguments stream as JSON. Custom/free-form edit tools stream
-	// the raw patch/hashline payload in the same transport field; only the raw
-	// form is a valid fallback for `input`.
+	// Function-tool arguments stream as JSON. Custom/free-form tools stream raw
+	// text in the same transport field; only the raw form is a valid fallback for
+	// the conventional `input` parameter.
 	if (first === "{" || first === "[" || first === '"') return undefined;
 	return partialJson;
 }
 
-function getEditArgsForPreview(args: unknown, editMode: EditMode | undefined): unknown {
-	if ((editMode !== "hashline" && editMode !== "apply_patch") || args == null || typeof args !== "object") {
-		return args;
-	}
+function getArgsWithStreamedTextInput(args: unknown): unknown {
+	if (args == null || typeof args !== "object") return args;
 	const record = args as Record<string, unknown>;
 	if (typeof record.input === "string") return args;
-	const input = rawFreeformEditInputFromPartialJson(record.__partialJson);
+	const input = rawTextInputFromPartialJson(record.__partialJson);
 	return input === undefined ? args : { ...record, input };
 }
 
@@ -270,7 +268,7 @@ export class ToolExecutionComponent extends Container {
 		const args = this.#args;
 		if (args == null || typeof args !== "object") return;
 
-		const previewArgs = getEditArgsForPreview(args, editMode);
+		const previewArgs = getArgsWithStreamedTextInput(args);
 		const partialJson = (previewArgs as { __partialJson?: string }).__partialJson;
 		let effectiveArgs: unknown;
 		try {
@@ -741,10 +739,10 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	#getCallArgsForRender(): any {
+		const renderArgs = getArgsWithStreamedTextInput(this.#args);
 		if (!isEditLikeToolName(this.#toolName)) {
-			return this.#args;
+			return renderArgs;
 		}
-		const renderArgs = getEditArgsForPreview(this.#args, this.#editMode);
 		const previews = this.#editDiffPreview;
 		if (!previews || previews.length === 0) {
 			return renderArgs;
@@ -806,7 +804,7 @@ export class ToolExecutionComponent extends Container {
 			if (!previews?.some(preview => preview.diff)) {
 				const editMode = this.#editMode;
 				const strategy = editMode ? EDIT_MODE_STRATEGIES[editMode] : undefined;
-				const fallback = strategy?.renderStreamingFallback(getEditArgsForPreview(this.#args, editMode), theme);
+				const fallback = strategy?.renderStreamingFallback(getArgsWithStreamedTextInput(this.#args), theme);
 				if (fallback) context.editStreamingFallback = fallback;
 			}
 			context.renderDiff = renderDiff;
