@@ -162,20 +162,14 @@ function pushRows(rows: Vector[], batch: unknown): boolean {
 
 async function normalizeEmbeddingResult(result: EmbeddingOutput): Promise<EmbeddingMatrix | null> {
 	const rows: Vector[] = [];
-	// A plain array is the whole matrix; an (async) iterable streams it in batches (fastembed).
-	if (Array.isArray(result)) {
-		return pushRows(rows, result) ? rows : null;
-	}
+	// fastembed streams the matrix as async batches; providers hand back the matrix array directly.
 	if (Symbol.asyncIterator in result) {
 		for await (const batch of result) {
 			if (!pushRows(rows, batch)) return null;
 		}
 		return rows;
 	}
-	for (const batch of result) {
-		if (!pushRows(rows, batch)) return null;
-	}
-	return rows;
+	return pushRows(rows, result) ? rows : null;
 }
 
 const KNOWN_MODEL_NAMES: Record<string, string> = {

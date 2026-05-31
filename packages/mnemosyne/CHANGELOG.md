@@ -4,7 +4,7 @@
 ### Changed
 
 - Changed embedding result normalization to return `Float32Array` vectors so `embed` and `embedQuery` now cache and emit float32 rows
-- Changed the embedding provider contract to a typed `EmbeddingOutput` (exported alongside `EmbeddingRow`) instead of `unknown`, so `EmbeddingProvider.embed` and the `provider` runtime option now describe the rows / batches / (async) iterables they may return
+- Changed the embedding provider contract to a typed `EmbeddingOutput` (exported alongside `EmbeddingRow`) instead of `unknown`, so `EmbeddingProvider.embed` and the `provider` runtime option now state they return the embedding matrix as a list of rows, or as fastembed-style async batches
 - Changed local model cache directory resolution for `fastembed` to use `getFastembedCacheDir` instead of the hard-coded `~/.hermes/cache/fastembed` path
 
 ### Fixed

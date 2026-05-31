@@ -196,16 +196,14 @@ describe("optional embeddings", () => {
 			]);
 		});
 	});
-	it("rejects non-numeric embedding objects", async () => {
+	it("rejects embeddings containing non-finite values", async () => {
 		await withEnv({ MNEMOSYNE_NO_EMBEDDINGS: undefined }, async () => {
-			setEmbeddingProviderForTests({
-				embed() {
-					// Return objects with length property but not actual arrays
-					return [{ length: 3, 0: 1, 1: 2, 2: 3 }] as unknown as number[][];
-				},
-				available: () => true,
-			});
-			expect(await embed(["test"])).toBeNull();
+			// A single NaN/Infinity component silently zeroes a vector's cosine score, so the whole
+			// result is rejected rather than stored as poison.
+			for (const bad of [Number.NaN, Number.POSITIVE_INFINITY]) {
+				setEmbeddingProviderForTests({ embed: () => [[1, bad, 3]], available: () => true });
+				expect(await embed(["test"])).toBeNull();
+			}
 		});
 	});
 
