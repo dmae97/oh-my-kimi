@@ -2,12 +2,14 @@ import { DEFAULT_MAX_BYTES, OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
+import type { JsStatusEvent } from "./shared/types";
 
 export interface JsExecutorOptions {
 	cwd?: string;
 	timeoutMs?: number;
 	deadlineMs?: number;
 	onChunk?: (chunk: string) => Promise<void> | void;
+	onStatus?: (event: JsStatusEvent) => void;
 	signal?: AbortSignal;
 	sessionId: string;
 	reset?: boolean;
@@ -79,6 +81,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 				onText: chunk => outputSink.push(chunk),
 				onDisplay: output => {
 					displayOutputs.push(output);
+					if (output.type === "status") options.onStatus?.(output.event);
 				},
 			},
 		});

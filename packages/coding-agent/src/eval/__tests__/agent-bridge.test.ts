@@ -7,7 +7,7 @@ import * as taskDiscovery from "../../task/discovery";
 import type { ExecutorOptions } from "../../task/executor";
 import * as taskExecutor from "../../task/executor";
 import { AgentOutputManager } from "../../task/output-manager";
-import type { AgentDefinition, SingleResult } from "../../task/types";
+import type { AgentDefinition, AgentProgress, SingleResult } from "../../task/types";
 import type { ToolSession } from "../../tools";
 import { EVAL_AGENT_MAX_DEPTH, runEvalAgent } from "../agent-bridge";
 import { disposeAllVmContexts } from "../js/context-manager";
@@ -338,5 +338,96 @@ describe("agent() through eval runtimes", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe("hello from python");
+	});
+
+	it("streams enriched agent progress through onStatus before the cell finishes", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-progress-");
+		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "js-agent-progress");
+		mockAgents();
+
+		const makeProgress = (options: ExecutorOptions, overrides: Partial<AgentProgress>): AgentProgress => ({
+			index: options.index,
+			id: options.id,
+			agent: options.agent.name,
+			agentSource: options.agent.source,
+			status: "running",
+			task: options.task,
+			assignment: options.assignment,
+			description: options.description,
+			recentTools: [],
+			recentOutput: [],
+			toolCount: 0,
+			tokens: 0,
+			cost: 0,
+			durationMs: 0,
+			...overrides,
+		});
+
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			options.onProgress?.(
+				makeProgress(options, {
+					status: "running",
+					currentTool: "read",
+					currentToolArgs: "config.ts",
+					lastIntent: "Reading config",
+					toolCount: 4,
+					contextTokens: 5000,
+					contextWindow: 200000,
+					cost: 0.03,
+					durationMs: 800,
+					resolvedModel: "p/model",
+				}),
+			);
+			options.onProgress?.(
+				makeProgress(options, {
+					status: "completed",
+					toolCount: 7,
+					contextTokens: 8000,
+					contextWindow: 200000,
+					cost: 0.06,
+					durationMs: 1500,
+					resolvedModel: "p/model",
+				}),
+			);
+			return singleResult(options, { output: "done" });
+		});
+
+		const events: Array<{ op: string; [key: string]: unknown }> = [];
+		const result = await executeJs('await agent("investigate", { label: "Scout" });', {
+			cwd: tempDir.path(),
+			sessionId,
+			session,
+			sessionFile,
+			onStatus: event => events.push(event),
+		});
+
+		expect(result.exitCode).toBe(0);
+
+		const agentEvents = events.filter(event => event.op === "agent");
+		// Both throttled ticks were delivered live (the cell awaited agent() and
+		// the executor collected them as displayOutputs too).
+		expect(agentEvents.length).toBe(2);
+
+		const running = agentEvents[0];
+		expect(running.status).toBe("running");
+		expect(running.currentTool).toBe("read");
+		expect(running.lastIntent).toBe("Reading config");
+		expect(running.contextTokens).toBe(5000);
+		expect(running.taskPreview).toBe("investigate");
+		expect(typeof running.id).toBe("string");
+
+		// The final completion event keeps the rich stats — no sparse event
+		// coalesces over it and drops toolCount/cost.
+		const completed = agentEvents[1];
+		expect(completed.status).toBe("completed");
+		expect(completed.toolCount).toBe(7);
+		expect(completed.cost).toBeCloseTo(0.06);
+		expect(completed.id).toBe(running.id);
+
+		// Same events are still present in the executor's returned displayOutputs.
+		const displayAgentEvents = result.displayOutputs.filter(
+			(output): output is Extract<typeof output, { type: "status" }> => output.type === "status",
+		);
+		expect(displayAgentEvents.length).toBe(2);
 	});
 });

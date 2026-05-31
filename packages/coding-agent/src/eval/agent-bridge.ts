@@ -151,15 +151,24 @@ async function getArtifacts(session: ToolSession): Promise<{
 }
 
 function emitProgressStatus(emitStatus: ((event: JsStatusEvent) => void) | undefined, progress: AgentProgress): void {
-	emitStatus?.({
+	if (!emitStatus) return;
+	const preview = (progress.assignment ?? progress.task ?? "").split("\n")[0]?.slice(0, 120);
+	emitStatus({
 		op: "agent",
-		agent: progress.agent,
 		id: progress.id,
+		agent: progress.agent,
 		status: progress.status,
 		lastIntent: progress.lastIntent,
+		currentTool: progress.currentTool,
+		currentToolArgs: progress.currentToolArgs,
+		taskPreview: preview || undefined,
 		toolCount: progress.toolCount,
+		tokens: progress.tokens,
+		contextTokens: progress.contextTokens,
+		contextWindow: progress.contextWindow,
+		cost: progress.cost,
 		durationMs: progress.durationMs,
-		model: progress.resolvedModel ?? progress.modelOverride,
+		model: progress.resolvedModel,
 	});
 }
 
@@ -269,14 +278,10 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 
 	options.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0);
 
-	options.emitStatus?.({
-		op: "agent",
-		agent: result.agent,
-		id: result.id,
-		status: "completed",
-		chars: result.output.length,
-		model: result.resolvedModel ?? modelOverride,
-	});
+	// The final `onProgress` flush from `runSubprocess` already emits a
+	// status:"completed" event carrying full stats (toolCount, cost, context),
+	// so we don't emit a second, sparser completion event here — it would
+	// coalesce over the richer one and drop those stats.
 
 	return {
 		text: result.output,

@@ -57,6 +57,13 @@ export interface PythonExecutorOptions {
 	toolSession?: ToolSession;
 	/** Callback for status events emitted by tool bridge invocations. */
 	emitStatus?: (event: JsStatusEvent) => void;
+	/**
+	 * Live status events streamed as they are emitted (both host-side bridge
+	 * helpers like `agent()` and kernel-side `display`/`log`/`phase`). Mirrors
+	 * what lands in `displayOutputs` so callers can render progress before the
+	 * cell finishes.
+	 */
+	onStatus?: (event: JsStatusEvent) => void;
 	/** @internal Bridge session id, set by `executePython` before delegating. */
 	bridgeSessionId?: string;
 	/** @internal Bridge endpoint info, set by `executePython` before delegating. */
@@ -474,11 +481,13 @@ async function executeWithKernel(
 	const deadlineMs = getExecutionDeadlineMs(options);
 	let executionTimeoutMs: number | undefined;
 
-	const emitStatus =
-		options?.emitStatus ??
-		((event: JsStatusEvent) => {
-			displayOutputs.push({ type: "status", event });
-		});
+	// Collect every display output and, for status events, stream them live so
+	// long-running bridge helpers (e.g. `agent()`) surface progress mid-cell.
+	const collectDisplay = (output: KernelDisplayOutput) => {
+		displayOutputs.push(output);
+		if (output.type === "status") options?.onStatus?.(output.event);
+	};
+	const emitStatus = options?.emitStatus ?? ((event: JsStatusEvent) => collectDisplay({ type: "status", event }));
 	const runId = `py-${crypto.randomUUID()}`;
 	const unregisterBridge =
 		options?.toolSession && options?.bridgeSessionId
@@ -498,7 +507,7 @@ async function executeWithKernel(
 			signal: options?.signal,
 			timeoutMs: executionTimeoutMs,
 			onChunk: text => sink.push(text),
-			onDisplay: output => void displayOutputs.push(output),
+			onDisplay: output => collectDisplay(output),
 		});
 
 		if (result.cancelled) {

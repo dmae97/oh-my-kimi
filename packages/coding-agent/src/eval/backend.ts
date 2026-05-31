@@ -1,5 +1,5 @@
 import type { ToolSession } from "../tools";
-import type { EvalDisplayOutput, EvalLanguage } from "./types";
+import type { EvalDisplayOutput, EvalLanguage, EvalStatusEvent } from "./types";
 
 /** Per-cell execute() options. */
 export interface ExecutorBackendExecOptions {
@@ -14,6 +14,13 @@ export interface ExecutorBackendExecOptions {
 	artifactPath: string | undefined;
 	artifactId: string | undefined;
 	onChunk: (chunk: string) => void;
+	/**
+	 * Live status events (read/write/agent/…) delivered as they are emitted,
+	 * before the cell finishes. The same events are also returned in
+	 * `displayOutputs`; this channel exists so callers can stream long-running
+	 * progress (e.g. `agent()` subagents) into the UI mid-execution.
+	 */
+	onStatus?: (event: EvalStatusEvent) => void;
 }
 
 /** Result returned by a backend's execute(). */

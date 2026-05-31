@@ -28,6 +28,7 @@ export default {
 			artifactPath: opts.artifactPath,
 			artifactId: opts.artifactId,
 			onChunk: opts.onChunk,
+			onStatus: opts.onStatus,
 			session: opts.session,
 		});
 		return {

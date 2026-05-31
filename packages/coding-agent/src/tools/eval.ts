@@ -2,13 +2,15 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Markdown, Text } from "@oh-my-pi/pi-tui";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { formatNumber, prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+import { settings } from "../config/settings";
 import { jsBackend, pythonBackend } from "../eval";
 import type { ExecutorBackend } from "../eval/backend";
 import { defaultEvalSessionId } from "../eval/session-id";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import { shimmerEnabled } from "../modes/theme/shimmer";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
@@ -33,7 +35,16 @@ import {
 	resolveOutputSinkHeadBytes,
 	stripOutputNotice,
 } from "./output-meta";
-import { formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
+import {
+	formatBadge,
+	formatDuration,
+	formatStatusIcon,
+	formatTitle,
+	replaceTabs,
+	shortenPath,
+	truncateToWidth,
+	wrapBrackets,
+} from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
@@ -365,6 +376,11 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						onChunk: chunk => {
 							outputSink!.push(chunk);
 						},
+						onStatus: event => {
+							cellResult.statusEvents ??= [];
+							upsertStatusEvent(cellResult.statusEvents, event);
+							pushUpdate();
+						},
 					});
 					const durationMs = Date.now() - startTime;
 
@@ -400,8 +416,8 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 							}
 						}
 						if (output.type === "status") {
-							statusEvents.push(output.event);
-							cellStatusEvents.push(output.event);
+							upsertStatusEvent(statusEvents, output.event);
+							upsertStatusEvent(cellStatusEvents, output.event);
 						}
 						if (output.type === "markdown") {
 							cellHasMarkdown = true;
@@ -606,6 +622,137 @@ function getRenderCells(args: EvalRenderArgs | undefined): EvalRenderCell[] {
 		});
 	}
 	return out;
+}
+
+type AgentEventStatus = "pending" | "running" | "completed" | "failed" | "aborted";
+
+/**
+ * Append or replace a status event. `agent` events are progress snapshots keyed
+ * by `id`, so they coalesce in place (preserving first-seen order); every other
+ * op is a discrete action and simply appends. Keeps the persisted event list
+ * bounded even when a subagent emits hundreds of throttled progress ticks.
+ */
+function upsertStatusEvent(events: EvalStatusEvent[], event: EvalStatusEvent): void {
+	if (event.op === "agent" && typeof event.id === "string") {
+		const id = event.id;
+		const idx = events.findIndex(e => e.op === "agent" && e.id === id);
+		if (idx >= 0) {
+			events[idx] = event;
+			return;
+		}
+	}
+	events.push(event);
+}
+
+function eventString(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function eventNumber(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function agentEventStatus(value: unknown): AgentEventStatus {
+	switch (value) {
+		case "pending":
+		case "running":
+		case "completed":
+		case "failed":
+		case "aborted":
+			return value;
+		default:
+			return "running";
+	}
+}
+
+/** Append the toolCount · context · cost · model stat run, mirroring the task tool. */
+function formatAgentStats(event: EvalStatusEvent, theme: Theme): string {
+	let line = "";
+	const toolCount = eventNumber(event.toolCount);
+	if (toolCount > 0) {
+		line += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(toolCount)} ${theme.icon.extensionTool}`)}`;
+	}
+	const contextTokens = eventNumber(event.contextTokens);
+	if (contextTokens > 0) {
+		const contextWindow = eventNumber(event.contextWindow);
+		const ctx =
+			contextWindow > 0
+				? formatContextUsage((contextTokens / contextWindow) * 100, contextWindow)
+				: formatNumber(contextTokens);
+		line += `${theme.sep.dot}${theme.fg("dim", ctx)}`;
+	}
+	const cost = eventNumber(event.cost);
+	if (cost > 0) {
+		line += `${theme.sep.dot}${theme.fg("statusLineCost", `$${cost.toFixed(2)}`)}`;
+	}
+	const model = eventString(event.model);
+	if (model && settings.get("task.showResolvedModelBadge")) {
+		line += `${theme.sep.dot}${theme.fg("dim", truncateToWidth(replaceTabs(model), 30))}`;
+	}
+	return line;
+}
+
+/**
+ * Render coalesced `agent()` progress as a Task-tool-style tree, one entry per
+ * subagent: a status line (icon · id · stats) plus, while running, the current
+ * tool/intent. Drawn below the cell box so progress streams live.
+ */
+function renderAgentProgressEvents(events: EvalStatusEvent[], theme: Theme, spinnerFrame?: number): string[] {
+	const lines: string[] = [];
+	for (let i = 0; i < events.length; i++) {
+		const event = events[i];
+		const isLast = i === events.length - 1;
+		const prefix = theme.fg("dim", isLast ? theme.tree.last : theme.tree.branch);
+		const cont = isLast ? "   " : `${theme.fg("dim", theme.tree.vertical)}  `;
+
+		const status = agentEventStatus(event.status);
+		const iconStatus =
+			status === "completed"
+				? "success"
+				: status === "failed"
+					? "error"
+					: status === "aborted"
+						? "aborted"
+						: status === "pending"
+							? "pending"
+							: "running";
+		const iconColor =
+			status === "completed" ? "success" : status === "failed" || status === "aborted" ? "error" : "accent";
+		const icon = formatStatusIcon(iconStatus, theme, status === "running" ? spinnerFrame : undefined);
+
+		const id = eventString(event.id) ?? "agent";
+		let line = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", theme.bold(id))}`;
+
+		if (status === "failed" || status === "aborted") {
+			line += ` ${formatBadge(status, iconColor, theme)}`;
+		}
+
+		const currentTool = eventString(event.currentTool);
+		const lastIntent = eventString(event.lastIntent);
+		if (status === "running" && !currentTool && !lastIntent) {
+			const preview = eventString(event.taskPreview);
+			if (preview) line += ` ${theme.fg("muted", truncateToWidth(replaceTabs(preview), 48))}`;
+		}
+
+		line += formatAgentStats(event, theme);
+		if (status === "completed" || status === "failed" || status === "aborted") {
+			const durationMs = eventNumber(event.durationMs);
+			if (durationMs > 0) line += `${theme.sep.dot}${theme.fg("dim", formatDuration(durationMs))}`;
+		}
+		lines.push(line);
+
+		if (status === "running") {
+			if (currentTool) {
+				let toolLine = `${cont}${theme.tree.hook} ${theme.fg("muted", currentTool)}`;
+				const detail = lastIntent ?? eventString(event.currentToolArgs);
+				if (detail) toolLine += `: ${theme.fg("dim", truncateToWidth(replaceTabs(detail), 48))}`;
+				lines.push(toolLine);
+			} else if (lastIntent) {
+				lines.push(`${cont}${theme.tree.hook} ${theme.fg("dim", truncateToWidth(replaceTabs(lastIntent), 48))}`);
+			}
+		}
+	}
+	return lines;
 }
 
 /** Format a status event as a single line for display. */
@@ -971,7 +1118,10 @@ export const evalToolRenderer = {
 					const lines: string[] = [];
 					for (let i = 0; i < cellResults.length; i++) {
 						const cell = cellResults[i];
-						const statusLines = renderStatusEvents(cell.statusEvents ?? [], uiTheme, expanded);
+						const allEvents = cell.statusEvents ?? [];
+						const agentEvents = allEvents.filter(e => e.op === "agent");
+						const otherEvents = agentEvents.length > 0 ? allEvents.filter(e => e.op !== "agent") : allEvents;
+						const statusLines = renderStatusEvents(otherEvents, uiTheme, expanded);
 						const outputContent = formatCellOutputLines(cell, expanded, previewLines, uiTheme, width);
 						const outputLines = [...outputContent.lines];
 						if (!expanded && outputContent.hiddenCount > 0) {
@@ -1005,6 +1155,9 @@ export const evalToolRenderer = {
 							uiTheme,
 						);
 						lines.push(...cellLines);
+						if (agentEvents.length > 0) {
+							lines.push(...renderAgentProgressEvents(agentEvents, uiTheme, options.spinnerFrame));
+						}
 						if (i < cellResults.length - 1) {
 							lines.push("");
 						}
