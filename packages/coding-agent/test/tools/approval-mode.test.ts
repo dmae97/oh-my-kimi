@@ -19,7 +19,6 @@ function emptyWorkspaceTree(cwd: string) {
 	return { rootPath: cwd, rendered: ".\n", truncated: false, totalLines: 1, agentsMdFiles: [] };
 }
 
-
 async function makeSession(extraSettings: Record<string, unknown> = {}) {
 	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-approval-mode-${Snowflake.next()}-`));
 	const cwd = path.join(tempDir, "cwd");

@@ -35,7 +35,6 @@ function emptyWorkspaceTree(cwd: string) {
 	return { rootPath: cwd, rendered: ".\n", truncated: false, totalLines: 1, agentsMdFiles: [] };
 }
 
-
 class TestClient implements Client {
 	readonly updates: SessionNotification[] = [];
 

@@ -22,7 +22,6 @@ function emptyWorkspaceTree(cwd: string) {
 	return { rootPath: cwd, rendered: ".\n", truncated: false, totalLines: 1, agentsMdFiles: [] };
 }
 
-
 const expiredOAuth = () =>
 	({
 		type: "oauth" as const,
