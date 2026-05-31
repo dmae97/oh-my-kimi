@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { EmbeddingModel, FlagEmbedding } from "fastembed";
+import type { EmbeddingModel } from "fastembed";
 import { getMnemosyneRuntimeOptions, resolveEmbeddingProvider } from "./runtime-options";
 
 export type Vector = number[];
@@ -33,7 +33,11 @@ let localModelInitializer: LocalModelInitializer = defaultLocalModelInitializer;
 let apiCallCount = 0;
 const queryCache = new Map<string, Vector>();
 
-function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
+async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
+	// Lazily pull in fastembed here — its module eagerly imports `onnxruntime-node`,
+	// whose native addon load segfaults in some runtimes. Deferring to the actual
+	// model init keeps API-model, disabled, and test runtimes from ever loading it.
+	const { FlagEmbedding } = await import("fastembed");
 	return FlagEmbedding.init(options) as Promise<LocalEmbeddingModel>;
 }
 
@@ -242,17 +246,21 @@ function cacheSet(key: string, value: Vector): void {
 	}
 }
 
+const KNOWN_MODEL_NAMES: Record<string, string> = {
+	"BAAI/bge-small-en-v1.5": "fast-bge-small-en-v1.5",
+	"BAAI/bge-base-en-v1.5": "fast-bge-base-en-v1.5",
+	"BAAI/bge-small-en": "fast-bge-small-en",
+	"BAAI/bge-base-en": "fast-bge-base-en",
+	"BAAI/bge-small-zh-v1.5": "fast-bge-small-zh-v1.5",
+	"intfloat/multilingual-e5-large": "fast-multilingual-e5-large",
+	"sentence-transformers/all-MiniLM-L6-v2": "fast-all-MiniLM-L6-v2",
+};
 function fastembedModelName(modelName: string): StandardEmbeddingModel | null {
-	const known: Record<string, StandardEmbeddingModel> = {
-		"BAAI/bge-small-en-v1.5": EmbeddingModel.BGESmallENV15,
-		"BAAI/bge-base-en-v1.5": EmbeddingModel.BGEBaseENV15,
-		"BAAI/bge-small-en": EmbeddingModel.BGESmallEN,
-		"BAAI/bge-base-en": EmbeddingModel.BGEBaseEN,
-		"BAAI/bge-small-zh-v1.5": EmbeddingModel.BGESmallZH,
-		"intfloat/multilingual-e5-large": EmbeddingModel.MLE5Large,
-		"sentence-transformers/all-MiniLM-L6-v2": EmbeddingModel.AllMiniLML6V2,
-	};
-	return known[modelName] ?? null;
+	// Fastembed `EmbeddingModel` enum string values, inlined so resolving a model name
+	// (and `available()`) never imports `fastembed` — its module eagerly loads the
+	// `onnxruntime-node` native addon, which segfaults in some runtimes.
+	const id = KNOWN_MODEL_NAMES[modelName];
+	return id === undefined ? null : (id as StandardEmbeddingModel);
 }
 
 async function getLocalModel(): Promise<LocalEmbeddingModel | null> {
