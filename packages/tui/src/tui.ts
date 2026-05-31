@@ -1090,23 +1090,27 @@ export class TUI extends Container {
 	 * @returns Cursor position { row, col } or null if no marker found
 	 */
 	#extractCursorPosition(lines: string[], height: number): { row: number; col: number } | null {
-		// Only scan the bottom `height` lines (visible viewport)
+		// Cursor markers are internal sentinels and must never reach the terminal,
+		// even when the focused component is above the visible viewport. Only a
+		// visible marker becomes a hardware cursor target.
 		const viewportTop = Math.max(0, lines.length - height);
-		for (let row = lines.length - 1; row >= viewportTop; row--) {
+		let cursor: { row: number; col: number } | null = null;
+		for (let row = lines.length - 1; row >= 0; row--) {
 			const line = lines[row];
-			const markerIndex = line.indexOf(CURSOR_MARKER);
-			if (markerIndex !== -1) {
-				// Calculate visual column (width of text before marker)
+			let markerIndex = line.indexOf(CURSOR_MARKER);
+			if (markerIndex === -1) continue;
+			if (cursor === null && row >= viewportTop) {
 				const beforeMarker = line.slice(0, markerIndex);
-				const col = visibleWidth(beforeMarker);
-
-				// Strip marker from the line
-				lines[row] = line.slice(0, markerIndex) + line.slice(markerIndex + CURSOR_MARKER.length);
-
-				return { row, col };
+				cursor = { row, col: visibleWidth(beforeMarker) };
 			}
+			let stripped = line;
+			while (markerIndex !== -1) {
+				stripped = stripped.slice(0, markerIndex) + stripped.slice(markerIndex + CURSOR_MARKER.length);
+				markerIndex = stripped.indexOf(CURSOR_MARKER, markerIndex);
+			}
+			lines[row] = stripped;
 		}
-		return null;
+		return cursor;
 	}
 
 	/**
@@ -1194,7 +1198,7 @@ export class TUI extends Container {
 				return;
 			case "viewportRepaint":
 				if (intent.appendFrom !== undefined) {
-					this.#emitAppendTail(lines, intent.appendFrom, height, prevViewportTop, prevHardwareCursorRow);
+					this.#emitAppendTail(lines, intent.appendFrom, height, width, prevViewportTop, prevHardwareCursorRow);
 				}
 				this.#emitViewportRepaint(lines, width, height, cursorPos);
 				return;
@@ -1551,7 +1555,7 @@ export class TUI extends Container {
 		}
 		for (let i = 0; i < lines.length; i++) {
 			if (i > 0) buffer += "\r\n";
-			buffer += lines[i];
+			buffer += this.#fitLineToWidth(lines[i], width);
 		}
 		const finalRow = Math.max(0, lines.length - 1);
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
@@ -1617,6 +1621,7 @@ export class TUI extends Container {
 		lines: string[],
 		start: number,
 		height: number,
+		width: number,
 		prevViewportTop: number,
 		prevHardwareCursorRow: number,
 	): void {
@@ -1631,7 +1636,7 @@ export class TUI extends Container {
 		if (moveToBottom > 0) buffer += `\x1b[${moveToBottom}B`;
 		for (let i = start; i < lines.length; i++) {
 			buffer += "\r\n";
-			buffer += lines[i];
+			buffer += this.#fitLineToWidth(lines[i], width);
 		}
 		buffer += PAINT_END;
 		this.terminal.write(buffer);

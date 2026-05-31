@@ -1,5 +1,20 @@
 import { afterEach, beforeEach, describe, it, vi } from "bun:test";
-import { type Component, CURSOR_MARKER, type Focusable, TUI } from "@oh-my-pi/pi-tui";
+import { stripVTControlCharacters } from "node:util";
+import {
+	type Component,
+	CURSOR_MARKER,
+	Ellipsis,
+	extractSegments,
+	type Focusable,
+	type OverlayAnchor,
+	type OverlayHandle,
+	type OverlayOptions,
+	sliceByColumn,
+	sliceWithWidth,
+	TUI,
+	truncateToWidth,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 const BASE_SEEDS = [
@@ -13,6 +28,10 @@ const SOAK_BULK_MAX = 1_000;
 const CORE_TIMEOUT_MS = 30_000;
 const SOAK_TIMEOUT_MS = 120_000;
 
+const SEGMENT_RESET = "\x1b[0m";
+const ESC = "\x1b";
+const BEL = "\x07";
+const SMILE = String.fromCodePoint(0x1f642);
 type TestPlatform = "darwin" | "linux" | "win32";
 type TerminalMode = "normal" | "unknown";
 type GeometryMode = "small" | "large";
@@ -47,6 +66,13 @@ type OperationKind =
 	| "resizeHeight"
 	| "forceRender"
 	| "toggleFocusInput"
+	| "moveCursorVisible"
+	| "moveCursorOffscreen"
+	| "showOverlay"
+	| "hideOverlay"
+	| "toggleOverlayHidden"
+	| "editOverlay"
+	| "moveOverlayCursor"
 	| "coalescedBurst"
 	| "rotateUp"
 	| "collapseToFew"
@@ -64,6 +90,39 @@ const BURST_STEP_KINDS = [
 	"tickStatusHeader",
 ] as const;
 type BurstStepKind = (typeof BURST_STEP_KINDS)[number];
+const OVERLAY_ANCHORS = [
+	"center",
+	"top-left",
+	"top-right",
+	"bottom-left",
+	"bottom-right",
+	"top-center",
+	"bottom-center",
+	"left-center",
+	"right-center",
+] as const satisfies readonly OverlayAnchor[];
+const CURSOR_MODES = ["start", "middle", "end", "wideBoundary"] as const;
+type CursorMode = (typeof CURSOR_MODES)[number];
+
+interface ExpectedCursor {
+	row: number;
+	col: number;
+}
+
+interface ExpectedFrame {
+	frame: string[];
+	cursor: ExpectedCursor | null;
+}
+
+interface StressOverlayEntry {
+	id: number;
+	model: StressOverlayModel;
+	component: StressOverlayComponent;
+	handle: OverlayHandle;
+	options: OverlayOptions;
+	hidden: boolean;
+	detail: JsonObject;
+}
 
 interface LogicalLine {
 	id: number;
@@ -93,6 +152,7 @@ interface Snapshot {
 	view: string[];
 	position: { baseY: number; viewportY: number };
 	cursor: { row: number; col: number };
+	expectedCursor: ExpectedCursor | null;
 	redraws: number;
 	width: number;
 	height: number;
@@ -171,6 +231,8 @@ class StressModel {
 	#rng: Rng;
 	#nextId = 0;
 	#collapsibleIds: number[] = [];
+	#cursorLineIndex: number | null = null;
+	#cursorMode: CursorMode = "end";
 
 	constructor(rng: Rng, minLines: number) {
 		this.#rng = rng;
@@ -181,13 +243,34 @@ class StressModel {
 		}
 	}
 
-	renderedLines(width: number): string[] {
-		const safeWidth = Math.max(1, width);
-		return this.lines.map(line => (line.text.length > safeWidth ? line.text.slice(0, safeWidth) : line.text));
+	renderedLines(width: number, focused = false): string[] {
+		const lines = this.lines.map(line => line.text);
+		if (focused && lines.length > 0) {
+			const index = this.#clampedCursorLineIndex();
+			lines[index] = insertCursorMarker(lines[index] ?? "", this.#cursorMode, width);
+		}
+		return lines;
 	}
 
 	debugLines(): string[] {
-		return this.lines.map(line => `${line.id}:${JSON.stringify(line.text)}`);
+		const cursor = this.#cursorLineIndex === null ? "none" : `${this.#cursorLineIndex}:${this.#cursorMode}`;
+		return [`cursor:${cursor}`, ...this.lines.map(line => `${line.id}:${JSON.stringify(line.text)}`)];
+	}
+
+	setCursorVisible(height: number, width: number): JsonObject {
+		this.#ensureLine();
+		const start = Math.max(0, this.lines.length - height);
+		const index = this.#rng.int(start, this.lines.length - 1);
+		return this.#setCursor(index, width, false);
+	}
+
+	setCursorOffscreen(height: number, width: number): JsonObject {
+		while (this.lines.length <= height) {
+			this.lines.push(this.#randomLine("u"));
+		}
+		const limit = Math.max(1, this.lines.length - height);
+		const index = this.#rng.int(0, limit - 1);
+		return this.#setCursor(index, width, true);
 	}
 
 	appendSmall(): JsonObject {
@@ -321,7 +404,12 @@ class StressModel {
 			}
 		}
 
-		const block = [this.#line("blk0"), this.#line("blk1"), this.#line("blk2"), this.#line("blk3")];
+		const block = [
+			this.#line(styledText("blk0", 35)),
+			this.#line(wideText("blk1")),
+			this.#line(linkedText("blk2")),
+			this.#line(longText("blk3", 3)),
+		];
 		this.#collapsibleIds = block.map(line => line.id);
 		const index = Math.min(2, this.lines.length);
 		this.lines.splice(index, 0, ...block);
@@ -365,6 +453,10 @@ class StressModel {
 
 	#initialText(index: number): string {
 		if (index % 13 === 0) return "";
+		if (index % 23 === 0) return longText(`L${index.toString(36)}`, 4);
+		if (index % 19 === 0) return linkedText(`link${index.toString(36)}`);
+		if (index % 17 === 0) return styledText(`sg${index.toString(36)}界`, 31 + (index % 6));
+		if (index % 11 === 0) return wideText(`w${index.toString(36)}`);
 		if (index % 7 === 0) return `r${index % 3}`;
 		return `l${index.toString(36)}`;
 	}
@@ -379,9 +471,9 @@ class StressModel {
 
 	#randomLine(prefix: string): LogicalLine {
 		const roll = this.#rng.next();
-		if (roll < 0.12) return this.#line("");
-		if (roll < 0.28) return this.#line(`r${this.#rng.int(0, 3)}`);
-		if (roll < 0.42 && this.lines.length > 0) {
+		if (roll < 0.1) return this.#line("");
+		if (roll < 0.2) return this.#line(`r${this.#rng.int(0, 3)}`);
+		if (roll < 0.34 && this.lines.length > 0) {
 			const source = this.lines[this.#rng.int(0, this.lines.length - 1)];
 			return this.#line(source?.text ?? "");
 		}
@@ -389,7 +481,29 @@ class StressModel {
 	}
 
 	#freshLine(prefix: string): LogicalLine {
-		return this.#line(`${prefix}${this.#nextId.toString(36)}`);
+		const id = this.#nextId.toString(36);
+		return this.#line(randomDecoratedText(this.#rng, `${prefix}${id}`));
+	}
+
+	#ensureLine(): void {
+		if (this.lines.length === 0) {
+			this.lines.push(this.#freshLine("q"));
+		}
+	}
+
+	#setCursor(index: number, width: number, offscreen: boolean): JsonObject {
+		const clampedIndex = Math.max(0, Math.min(index, this.lines.length - 1));
+		const text = this.lines[clampedIndex]?.text ?? "";
+		const mode = pickCursorMode(this.#rng, text, width);
+		this.#cursorLineIndex = clampedIndex;
+		this.#cursorMode = mode;
+		return { index: clampedIndex, mode, offscreen, text };
+	}
+
+	#clampedCursorLineIndex(): number {
+		if (this.lines.length === 0) return 0;
+		if (this.#cursorLineIndex === null) return this.lines.length - 1;
+		return Math.max(0, Math.min(this.#cursorLineIndex, this.lines.length - 1));
 	}
 
 	#line(text: string): LogicalLine {
@@ -410,12 +524,104 @@ class StressComponent implements Component, Focusable {
 	invalidate(): void {}
 
 	render(width: number): string[] {
-		const lines = this.#model.renderedLines(width);
-		if (this.focused && lines.length > 0) {
-			const last = lines.length - 1;
-			lines[last] = `${lines[last]}${CURSOR_MARKER}`;
+		return this.#model.renderedLines(width, this.focused);
+	}
+}
+
+class StressOverlayModel {
+	readonly lines: LogicalLine[] = [];
+	#rng: Rng;
+	#nextId = 0;
+	#cursorLineIndex = 0;
+	#cursorMode: CursorMode = "middle";
+
+	constructor(rng: Rng, id: number) {
+		this.#rng = rng;
+		const count = rng.int(1, 5);
+		for (let i = 0; i < count; i++) {
+			this.lines.push(this.#line(randomDecoratedText(rng, `ov${id}-${i}`)));
+		}
+	}
+
+	renderedLines(width: number, focused = false): string[] {
+		const lines = this.lines.map(line => line.text);
+		if (focused && lines.length > 0) {
+			const index = this.#clampedCursorLineIndex();
+			lines[index] = insertCursorMarker(lines[index] ?? "", this.#cursorMode, width);
 		}
 		return lines;
+	}
+
+	mutate(width: number): JsonObject {
+		this.#ensureLine();
+		const action = this.#rng.int(0, 3);
+		if (action === 0 || this.lines.length === 1) {
+			const line = this.#freshLine("oa");
+			this.lines.push(line);
+			return { action: "append", text: line.text };
+		}
+		if (action === 1) {
+			const index = this.#rng.int(0, this.lines.length - 1);
+			const before = this.lines[index]?.text ?? "";
+			this.lines[index] = this.#freshLine("oe");
+			return { action: "edit", index, before, after: this.lines[index]?.text ?? "" };
+		}
+		if (action === 2) {
+			const index = this.#rng.int(0, this.lines.length - 1);
+			const removed = this.lines.splice(index, 1);
+			return { action: "delete", index, removed: removed[0]?.text ?? "" };
+		}
+		return { action: "cursor", ...this.setCursor(width) };
+	}
+
+	setCursor(width: number): JsonObject {
+		this.#ensureLine();
+		const index = this.#rng.int(0, this.lines.length - 1);
+		const text = this.lines[index]?.text ?? "";
+		const mode = pickCursorMode(this.#rng, text, width);
+		this.#cursorLineIndex = index;
+		this.#cursorMode = mode;
+		return { index, mode, text };
+	}
+
+	debugLines(): string[] {
+		return this.lines.map(line => `${line.id}:${JSON.stringify(line.text)}`);
+	}
+
+	#freshLine(prefix: string): LogicalLine {
+		const id = this.#nextId.toString(36);
+		return this.#line(randomDecoratedText(this.#rng, `${prefix}${id}`));
+	}
+
+	#ensureLine(): void {
+		if (this.lines.length === 0) {
+			this.lines.push(this.#freshLine("oq"));
+		}
+	}
+
+	#clampedCursorLineIndex(): number {
+		return Math.max(0, Math.min(this.#cursorLineIndex, this.lines.length - 1));
+	}
+
+	#line(text: string): LogicalLine {
+		const line = { id: this.#nextId, text };
+		this.#nextId += 1;
+		return line;
+	}
+}
+
+class StressOverlayComponent implements Component, Focusable {
+	focused = false;
+	#model: StressOverlayModel;
+
+	constructor(model: StressOverlayModel) {
+		this.#model = model;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		return this.#model.renderedLines(width, this.focused);
 	}
 }
 
@@ -426,6 +632,8 @@ class StressDriver {
 	#tui: TUI;
 	#model: StressModel;
 	#component: StressComponent;
+	#overlays: StressOverlayEntry[] = [];
+	#nextOverlayId = 0;
 	#opLog: OperationLogEntry[] = [];
 
 	constructor(scenario: Scenario) {
@@ -478,18 +686,31 @@ class StressDriver {
 
 	#snapshot(): Snapshot {
 		const position = this.#term.getBufferPosition();
-		const frame = this.#model.renderedLines(this.#term.columns);
+		const expected = this.#expectedFrame();
 		return {
 			buffer: normalizeLines(this.#term.getScrollBuffer()),
 			view: normalizeLines(this.#term.getViewport()),
 			position,
 			cursor: this.#term.getCursor(),
+			expectedCursor: expected.cursor,
 			redraws: this.#tui.fullRedraws,
 			width: this.#term.columns,
 			height: this.#term.rows,
-			frame,
+			frame: expected.frame,
 			atBottom: position.viewportY >= position.baseY,
 		};
+	}
+
+	#expectedFrame(): ExpectedFrame {
+		const width = this.#term.columns;
+		const height = this.#term.rows;
+		const baseLines = this.#component.render(width);
+		const composed = compositeExpectedOverlays(baseLines, this.#overlays, width, height);
+		return expectedFrameFromLines(composed, width, height);
+	}
+
+	#hasVisibleOverlay(): boolean {
+		return this.#overlays.some(entry => isExpectedOverlayVisible(entry, this.#term.columns, this.#term.rows));
 	}
 
 	#chooseOperation(index: number, before: Snapshot): OperationKind {
@@ -524,6 +745,13 @@ class StressDriver {
 		this.#pushWeighted(weighted, "resizeHeight", 3);
 		this.#pushWeighted(weighted, "forceRender", 2);
 		this.#pushWeighted(weighted, "toggleFocusInput", 2);
+		this.#pushWeighted(weighted, "moveCursorVisible", 3);
+		this.#pushWeighted(weighted, "moveCursorOffscreen", 2);
+		this.#pushWeighted(weighted, "showOverlay", this.#overlays.length < 2 ? 3 : 1);
+		this.#pushWeighted(weighted, "hideOverlay", this.#overlays.length > 0 ? 2 : 0);
+		this.#pushWeighted(weighted, "toggleOverlayHidden", this.#overlays.length > 0 ? 2 : 0);
+		this.#pushWeighted(weighted, "editOverlay", this.#overlays.length > 0 ? 4 : 0);
+		this.#pushWeighted(weighted, "moveOverlayCursor", this.#overlays.length > 0 ? 2 : 0);
 		this.#pushWeighted(weighted, "coalescedBurst", 6);
 		this.#pushWeighted(weighted, "rotateUp", 4);
 		this.#pushWeighted(weighted, "swapOffscreenRows", 3);
@@ -587,6 +815,20 @@ class StressDriver {
 				return await this.#forceRender();
 			case "toggleFocusInput":
 				return await this.#toggleFocusInput();
+			case "moveCursorVisible":
+				return await this.#moveBaseCursor("moveCursorVisible", false);
+			case "moveCursorOffscreen":
+				return await this.#moveBaseCursor("moveCursorOffscreen", true);
+			case "showOverlay":
+				return await this.#showOverlay();
+			case "hideOverlay":
+				return await this.#hideOverlay();
+			case "toggleOverlayHidden":
+				return await this.#toggleOverlayHidden();
+			case "editOverlay":
+				return await this.#editOverlay();
+			case "moveOverlayCursor":
+				return await this.#moveOverlayCursor();
 			case "rotateUp":
 				return await this.#applyContent(kind, this.#model.rotateUp(), false);
 			case "collapseToFew":
@@ -674,6 +916,135 @@ class StressDriver {
 			case "tickStatusHeader":
 				return this.#model.tickStatusHeader();
 		}
+	}
+
+	async #moveBaseCursor(
+		kind: "moveCursorVisible" | "moveCursorOffscreen",
+		offscreen: boolean,
+	): Promise<AppliedOperation> {
+		const cursor = offscreen
+			? this.#model.setCursorOffscreen(this.#term.rows, this.#term.columns)
+			: this.#model.setCursorVisible(this.#term.rows, this.#term.columns);
+		this.#tui.setFocus(this.#component);
+		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
+		await settle(this.#term);
+		return this.#viewOperation(kind, { cursor });
+	}
+
+	async #showOverlay(): Promise<AppliedOperation> {
+		const id = this.#nextOverlayId;
+		this.#nextOverlayId += 1;
+		const model = new StressOverlayModel(this.#rng, id);
+		const component = new StressOverlayComponent(model);
+		const { options, detail } = this.#randomOverlayOptions();
+		const handle = this.#tui.showOverlay(component, options);
+		const entry: StressOverlayEntry = { id, model, component, handle, options, hidden: false, detail };
+		this.#overlays.push(entry);
+		await settle(this.#term);
+		return this.#viewOperation("showOverlay", { id, options: detail, lines: model.debugLines() });
+	}
+
+	async #hideOverlay(): Promise<AppliedOperation> {
+		const entry = this.#pickOverlay();
+		if (entry === undefined) return this.#viewOperation("hideOverlay", { skipped: true });
+		entry.handle.hide();
+		this.#overlays = this.#overlays.filter(overlay => overlay !== entry);
+		await settle(this.#term);
+		return this.#viewOperation("hideOverlay", { id: entry.id });
+	}
+
+	async #toggleOverlayHidden(): Promise<AppliedOperation> {
+		const entry = this.#pickOverlay();
+		if (entry === undefined) return this.#viewOperation("toggleOverlayHidden", { skipped: true });
+		entry.hidden = !entry.hidden;
+		entry.handle.setHidden(entry.hidden);
+		await settle(this.#term);
+		return this.#viewOperation("toggleOverlayHidden", { id: entry.id, hidden: entry.hidden });
+	}
+
+	async #editOverlay(): Promise<AppliedOperation> {
+		const entry = this.#pickOverlay();
+		if (entry === undefined) return this.#viewOperation("editOverlay", { skipped: true });
+		const detail = entry.model.mutate(this.#term.columns);
+		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
+		await settle(this.#term);
+		return this.#viewOperation("editOverlay", { id: entry.id, detail });
+	}
+
+	async #moveOverlayCursor(): Promise<AppliedOperation> {
+		const entry = this.#pickOverlay();
+		if (entry === undefined) return this.#viewOperation("moveOverlayCursor", { skipped: true });
+		const cursor = entry.model.setCursor(this.#term.columns);
+		this.#tui.setFocus(entry.component);
+		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
+		await settle(this.#term);
+		return this.#viewOperation("moveOverlayCursor", { id: entry.id, cursor });
+	}
+
+	#pickOverlay(): StressOverlayEntry | undefined {
+		if (this.#overlays.length === 0) return undefined;
+		return this.#overlays[this.#rng.int(0, this.#overlays.length - 1)];
+	}
+
+	#randomOverlayOptions(): { options: OverlayOptions; detail: JsonObject } {
+		const options: OverlayOptions = {};
+		const detail: JsonObject = {};
+		if (this.#rng.chance(0.75)) {
+			const width = this.#rng.chance(0.35)
+				? (`${this.#rng.pick([25, 40, 60, 80])}%` as `${number}%`)
+				: this.#rng.int(1, Math.max(1, this.#term.columns + 8));
+			options.width = width;
+			detail.width = width;
+		}
+		if (this.#rng.chance(0.35)) {
+			const maxHeight = this.#rng.chance(0.35)
+				? (`${this.#rng.pick([25, 50, 75])}%` as `${number}%`)
+				: this.#rng.int(1, Math.max(1, this.#term.rows));
+			options.maxHeight = maxHeight;
+			detail.maxHeight = maxHeight;
+		}
+		if (this.#rng.chance(0.25)) {
+			const minWidth = this.#rng.int(1, Math.max(1, this.#term.columns + 4));
+			options.minWidth = minWidth;
+			detail.minWidth = minWidth;
+		}
+		if (this.#rng.chance(0.5)) {
+			const anchor = this.#rng.pick(OVERLAY_ANCHORS);
+			options.anchor = anchor;
+			options.offsetX = this.#rng.int(-3, 3);
+			options.offsetY = this.#rng.int(-2, 2);
+			detail.anchor = anchor;
+			detail.offsetX = options.offsetX;
+			detail.offsetY = options.offsetY;
+		} else {
+			const row = this.#rng.chance(0.45)
+				? (`${this.#rng.pick([0, 25, 50, 75, 100])}%` as `${number}%`)
+				: this.#rng.int(-2, this.#term.rows + 2);
+			const col = this.#rng.chance(0.45)
+				? (`${this.#rng.pick([0, 25, 50, 75, 100])}%` as `${number}%`)
+				: this.#rng.int(-4, this.#term.columns + 4);
+			options.row = row;
+			options.col = col;
+			detail.row = row;
+			detail.col = col;
+		}
+		if (this.#rng.chance(0.6)) {
+			if (this.#rng.chance(0.5)) {
+				const margin = this.#rng.int(0, 2);
+				options.margin = margin;
+				detail.margin = margin;
+			} else {
+				const margin = {
+					top: this.#rng.int(0, 2),
+					right: this.#rng.int(0, 2),
+					bottom: this.#rng.int(0, 2),
+					left: this.#rng.int(0, 2),
+				};
+				options.margin = margin;
+				detail.margin = margin;
+			}
+		}
+		return { options, detail };
 	}
 
 	async #resizeBoth(): Promise<AppliedOperation> {
@@ -792,16 +1163,20 @@ class StressDriver {
 	}
 
 	async #toggleFocusInput(): Promise<AppliedOperation> {
+		let cursor: JsonObject | null = null;
 		if (this.#component.focused) {
 			this.#tui.setFocus(null);
 		} else {
+			cursor = this.#rng.chance(0.25)
+				? this.#model.setCursorOffscreen(this.#term.rows, this.#term.columns)
+				: this.#model.setCursorVisible(this.#term.rows, this.#term.columns);
 			this.#tui.setFocus(this.#component);
 		}
 		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
 		await settle(this.#term);
 		return {
 			kind: "toggleFocusInput",
-			detail: { focused: this.#component.focused },
+			detail: { focused: this.#component.focused, cursor },
 			mutatesContent: false,
 			checksRowAccounting: false,
 			geometryChanged: false,
@@ -878,6 +1253,8 @@ class StressDriver {
 	}
 	#assertOracles(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		this.#assertViewportFidelity(op, before, after, index);
+		this.#assertCleanBufferWhenAligned(op, before, after, index);
+		this.#assertNoFrameNeutralScrollbackGrowth(op, before, after, index);
 		this.#assertCursor(op, before, after, index);
 		this.#assertScrolledDeferral(op, before, after, index);
 		this.#assertRowAccounting(op, before, after, index);
@@ -888,6 +1265,7 @@ class StressDriver {
 	}
 
 	#assertViewportFidelity(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		if (this.#hasVisibleOverlay()) return;
 		if (!after.atBottom) return;
 		// Strict bottom-anchoring only holds when the buffer carries no ghost/stale
 		// extra rows. A trailing shrink clears the bottom row in place (it cannot pull
@@ -901,31 +1279,57 @@ class StressDriver {
 		}
 	}
 
+	#assertCleanBufferWhenAligned(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		if (!this.#scenario.strictScrollback || !after.atBottom) return;
+		if (this.#hasVisibleOverlay()) return;
+		if (before.redraws !== after.redraws) return;
+		if (!bufferReflectsFrame(before.buffer, before.frame, before.height)) return;
+		if (after.buffer.length !== Math.max(after.height, after.frame.length)) return;
+		if (!bufferReflectsFrame(after.buffer, after.frame, after.height)) {
+			this.#fail("aligned buffer fidelity", op, before, after, index, {
+				expectedLength: Math.max(after.height, after.frame.length),
+				actualLength: after.buffer.length,
+			});
+		}
+	}
+
+	#assertNoFrameNeutralScrollbackGrowth(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		if (this.#hasVisibleOverlay()) return;
+		if (!this.#scenario.strictScrollback || op.checkpoint || op.geometryChanged) return;
+		if (!before.atBottom || !after.atBottom) return;
+		if (!sameLines(before.frame, after.frame)) return;
+		if (after.buffer.length > before.buffer.length) {
+			this.#fail("frame-neutral scrollback growth", op, before, after, index, {
+				beforeLength: before.buffer.length,
+				afterLength: after.buffer.length,
+			});
+		}
+	}
+
 	#assertCursor(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		if (this.#hasVisibleOverlay()) return;
 		if (after.cursor.row < 0 || after.cursor.row >= after.height || after.cursor.col < 0) {
 			this.#fail("cursor bounds", op, before, after, index, { cursor: cursorObject(after) });
 		}
-		if (!this.#component.focused || !after.atBottom || after.frame.length === 0) return;
+		const expectedCursor = after.expectedCursor;
+		if (expectedCursor === null || !after.atBottom) return;
 		// Exact cursor parking is only predictable when the buffer is bottom-anchored
 		// (no ghost/stale rows). After a trailing shrink the cursor sits on the
 		// de-anchored last content row, which is checked once a repaint re-anchors.
 		if (after.buffer.length !== Math.max(after.height, after.frame.length)) return;
-		const expectedRow = Math.min(after.frame.length, after.height) - 1;
-		if (after.cursor.row !== expectedRow) {
+		if (after.cursor.row !== expectedCursor.row) {
 			this.#fail("focused cursor row", op, before, after, index, {
-				expectedRow,
+				expectedRow: expectedCursor.row,
 				actualRow: after.cursor.row,
 				actualCol: after.cursor.col,
 			});
 		}
-		// The marker sits after the last line. When that line fills (or overflows) the
-		// viewport width the cursor is parked at the right margin, where the reported
-		// column is terminal-dependent (pending-wrap reports `width`, CHA clamping
-		// reports `width - 1`). Only assert the exact column when it is unambiguous.
-		const lastLineWidth = after.frame[after.frame.length - 1]?.length ?? 0;
-		if (lastLineWidth < after.width && after.cursor.col !== lastLineWidth) {
+		// Cursor column is a terminal cell offset, not a UTF-16 length. When the
+		// marker is at or beyond the right margin, CHA clamping/pending-wrap details
+		// are terminal-dependent, so only assert exact columns that fit in-view.
+		if (expectedCursor.col < after.width && after.cursor.col !== expectedCursor.col) {
 			this.#fail("focused cursor column", op, before, after, index, {
-				expectedCol: lastLineWidth,
+				expectedCol: expectedCursor.col,
 				actualCol: after.cursor.col,
 				actualRow: after.cursor.row,
 			});
@@ -962,9 +1366,10 @@ class StressDriver {
 	}
 
 	#assertRowAccounting(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
-		if (!this.#scenario.strictScrollback) return;
+		if (!this.#scenario.strictScrollback || this.#hasVisibleOverlay()) return;
 		if (!op.mutatesContent || !op.checksRowAccounting || op.geometryChanged || op.forcedRender) return;
 		if (!before.atBottom || !after.atBottom) return;
+		if (before.redraws !== after.redraws) return;
 		// Row accounting is only meaningful once content overflows the viewport. While
 		// content fits within `height`, xterm pins buffer.length at `height`, so a
 		// content row added inside the viewport grows the buffer by 0 — `ΔB == ΔF`
@@ -1086,12 +1491,289 @@ function bufferReflectsFrame(buffer: readonly string[], frame: readonly string[]
 	return true;
 }
 
+function expectedTerminalLine(line: string, width: number): string {
+	const safeWidth = Math.max(1, width);
+	const fitted = visibleWidth(line) > safeWidth ? truncateToWidth(line, safeWidth, Ellipsis.Omit) : line;
+	return stripPlainTerminalText(fitted).trimEnd();
+}
+
+function stripPlainTerminalText(text: string): string {
+	return stripVTControlCharacters(text)
+		.replace(/\]8;;[^\x07]*(?:\x07)?/g, "")
+		.replaceAll(BEL, "");
+}
+
+function expectedFrameFromLines(lines: readonly string[], width: number, height: number): ExpectedFrame {
+	const stripped = [...lines];
+	const viewportTop = Math.max(0, stripped.length - height);
+	let cursor: ExpectedCursor | null = null;
+	for (let row = stripped.length - 1; row >= 0; row--) {
+		const line = stripped[row] ?? "";
+		const markerIndex = line.indexOf(CURSOR_MARKER);
+		if (markerIndex === -1) continue;
+		if (cursor === null && row >= viewportTop) {
+			cursor = { row: row - viewportTop, col: visibleWidth(line.slice(0, markerIndex)) };
+		}
+		stripped[row] = removeCursorMarkers(line);
+	}
+	return { frame: stripped.map(line => expectedTerminalLine(line, width)), cursor };
+}
+
+function removeCursorMarkers(line: string): string {
+	return line.includes(CURSOR_MARKER) ? line.split(CURSOR_MARKER).join("") : line;
+}
+
+function compositeExpectedOverlays(
+	lines: readonly string[],
+	overlays: readonly StressOverlayEntry[],
+	termWidth: number,
+	termHeight: number,
+): string[] {
+	if (overlays.length === 0) return [...lines];
+	const result = [...lines];
+	const rendered: { overlayLines: string[]; row: number; col: number; w: number }[] = [];
+	let minLinesNeeded = result.length;
+	for (const entry of overlays) {
+		if (!isExpectedOverlayVisible(entry, termWidth, termHeight)) continue;
+		const firstLayout = resolveExpectedOverlayLayout(entry.options, 0, termWidth, termHeight);
+		let overlayLines = entry.component.render(firstLayout.width);
+		if (firstLayout.maxHeight !== undefined && overlayLines.length > firstLayout.maxHeight) {
+			overlayLines = overlayLines.slice(0, firstLayout.maxHeight);
+		}
+		const layout = resolveExpectedOverlayLayout(entry.options, overlayLines.length, termWidth, termHeight);
+		rendered.push({ overlayLines, row: layout.row, col: layout.col, w: layout.width });
+		minLinesNeeded = Math.max(minLinesNeeded, layout.row + overlayLines.length);
+	}
+	const workingHeight = Math.max(result.length, minLinesNeeded);
+	while (result.length < workingHeight) {
+		result.push("");
+	}
+	const viewportStart = Math.max(0, workingHeight - termHeight);
+	for (const { overlayLines, row, col, w } of rendered) {
+		for (let i = 0; i < overlayLines.length; i++) {
+			const index = viewportStart + row + i;
+			if (index < 0 || index >= result.length) continue;
+			const overlayLine = overlayLines[i] ?? "";
+			const truncatedOverlayLine =
+				visibleWidth(overlayLine) > w ? sliceByColumn(overlayLine, 0, w, true) : overlayLine;
+			result[index] = compositeExpectedLineAt(result[index] ?? "", truncatedOverlayLine, col, w, termWidth);
+		}
+	}
+	return result;
+}
+
+function isExpectedOverlayVisible(entry: StressOverlayEntry, termWidth: number, termHeight: number): boolean {
+	if (entry.hidden) return false;
+	return entry.options.visible?.(termWidth, termHeight) ?? true;
+}
+
+function resolveExpectedOverlayLayout(
+	options: OverlayOptions | undefined,
+	overlayHeight: number,
+	termWidth: number,
+	termHeight: number,
+): { width: number; row: number; col: number; maxHeight: number | undefined } {
+	const opt = options ?? {};
+	const margin =
+		typeof opt.margin === "number"
+			? { top: opt.margin, right: opt.margin, bottom: opt.margin, left: opt.margin }
+			: (opt.margin ?? {});
+	const marginTop = Math.max(0, margin.top ?? 0);
+	const marginRight = Math.max(0, margin.right ?? 0);
+	const marginBottom = Math.max(0, margin.bottom ?? 0);
+	const marginLeft = Math.max(0, margin.left ?? 0);
+	const availWidth = Math.max(1, termWidth - marginLeft - marginRight);
+	const availHeight = Math.max(1, termHeight - marginTop - marginBottom);
+	let width = parseOverlaySizeValue(opt.width, termWidth) ?? Math.min(80, availWidth);
+	if (opt.minWidth !== undefined) {
+		width = Math.max(width, opt.minWidth);
+	}
+	width = Math.max(1, Math.min(width, availWidth));
+	let maxHeight = parseOverlaySizeValue(opt.maxHeight, termHeight);
+	if (maxHeight !== undefined) {
+		maxHeight = Math.max(1, Math.min(maxHeight, availHeight));
+	}
+	const effectiveHeight = maxHeight !== undefined ? Math.min(overlayHeight, maxHeight) : overlayHeight;
+	let row: number;
+	let col: number;
+	if (opt.row !== undefined) {
+		row =
+			typeof opt.row === "string"
+				? resolveOverlayPercentPosition(opt.row, Math.max(0, availHeight - effectiveHeight), marginTop)
+				: opt.row;
+	} else {
+		row = resolveExpectedAnchorRow(opt.anchor ?? "center", effectiveHeight, availHeight, marginTop);
+	}
+	if (opt.col !== undefined) {
+		col =
+			typeof opt.col === "string"
+				? resolveOverlayPercentPosition(opt.col, Math.max(0, availWidth - width), marginLeft)
+				: opt.col;
+	} else {
+		col = resolveExpectedAnchorCol(opt.anchor ?? "center", width, availWidth, marginLeft);
+	}
+	if (opt.offsetY !== undefined) row += opt.offsetY;
+	if (opt.offsetX !== undefined) col += opt.offsetX;
+	row = Math.max(marginTop, Math.min(row, termHeight - marginBottom - effectiveHeight));
+	col = Math.max(marginLeft, Math.min(col, termWidth - marginRight - width));
+	return { width, row, col, maxHeight };
+}
+
+function parseOverlaySizeValue(value: OverlayOptions["width"] | undefined, referenceSize: number): number | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value === "number") return value;
+	const match = value.match(/^(\d+(?:\.\d+)?)%$/);
+	return match ? Math.floor((referenceSize * Number.parseFloat(match[1] ?? "0")) / 100) : undefined;
+}
+
+function resolveOverlayPercentPosition(value: string, maxPosition: number, margin: number): number {
+	const match = value.match(/^(\d+(?:\.\d+)?)%$/);
+	if (!match) return margin + Math.floor(maxPosition / 2);
+	return margin + Math.floor(maxPosition * (Number.parseFloat(match[1] ?? "0") / 100));
+}
+
+function resolveExpectedAnchorRow(
+	anchor: OverlayAnchor,
+	height: number,
+	availHeight: number,
+	marginTop: number,
+): number {
+	switch (anchor) {
+		case "top-left":
+		case "top-center":
+		case "top-right":
+			return marginTop;
+		case "bottom-left":
+		case "bottom-center":
+		case "bottom-right":
+			return marginTop + availHeight - height;
+		case "left-center":
+		case "center":
+		case "right-center":
+			return marginTop + Math.floor((availHeight - height) / 2);
+	}
+}
+
+function resolveExpectedAnchorCol(
+	anchor: OverlayAnchor,
+	width: number,
+	availWidth: number,
+	marginLeft: number,
+): number {
+	switch (anchor) {
+		case "top-left":
+		case "left-center":
+		case "bottom-left":
+			return marginLeft;
+		case "top-right":
+		case "right-center":
+		case "bottom-right":
+			return marginLeft + availWidth - width;
+		case "top-center":
+		case "center":
+		case "bottom-center":
+			return marginLeft + Math.floor((availWidth - width) / 2);
+	}
+}
+
+function compositeExpectedLineAt(
+	baseLine: string,
+	overlayLine: string,
+	startCol: number,
+	overlayWidth: number,
+	totalWidth: number,
+): string {
+	const afterStart = startCol + overlayWidth;
+	const base = extractSegments(baseLine, startCol, afterStart, totalWidth - afterStart, true);
+	const overlay = sliceWithWidth(overlayLine, 0, overlayWidth, true);
+	const beforePad = Math.max(0, startCol - base.beforeWidth);
+	const overlayPad = Math.max(0, overlayWidth - overlay.width);
+	const actualBeforeWidth = Math.max(startCol, base.beforeWidth);
+	const actualOverlayWidth = Math.max(overlayWidth, overlay.width);
+	const afterTarget = Math.max(0, totalWidth - actualBeforeWidth - actualOverlayWidth);
+	const afterPad = Math.max(0, afterTarget - base.afterWidth);
+	const result =
+		base.before +
+		" ".repeat(beforePad) +
+		SEGMENT_RESET +
+		overlay.text +
+		" ".repeat(overlayPad) +
+		SEGMENT_RESET +
+		base.after +
+		" ".repeat(afterPad);
+	return visibleWidth(result) <= totalWidth ? result : sliceByColumn(result, 0, totalWidth, true);
+}
+
+function wideText(label: string): string {
+	return `${label}界${SMILE}한`;
+}
+
+function styledText(label: string, color: number): string {
+	return `${ESC}[${color}m${label}${ESC}[0m`;
+}
+
+function linkedText(label: string): string {
+	return `${ESC}]8;;https://example.test/${label}${BEL}${label}-link${ESC}]8;;${BEL}`;
+}
+
+function longText(label: string, repeats: number): string {
+	let text = `${label}-`;
+	for (let i = 0; i < repeats; i++) {
+		text += `${i}界`;
+	}
+	return `${text}-${label}`;
+}
+
+function randomDecoratedText(rng: Rng, label: string): string {
+	const roll = rng.next();
+	if (roll < 0.22) return wideText(label);
+	if (roll < 0.42) return styledText(`${label}界`, 31 + rng.int(0, 6));
+	if (roll < 0.62) return linkedText(label);
+	if (roll < 0.82) return longText(label, rng.int(2, 6));
+	return label;
+}
+
+function pickCursorMode(rng: Rng, text: string, width: number): CursorMode {
+	if (text.includes("\x1b") || visibleWidth(text) === 0 || width <= 1) {
+		return rng.chance(0.5) ? "start" : "end";
+	}
+	return rng.pick(CURSOR_MODES);
+}
+
+function insertCursorMarker(text: string, mode: CursorMode, width: number): string {
+	const index = cursorInsertionIndex(text, mode, width);
+	return `${text.slice(0, index)}${CURSOR_MARKER}${text.slice(index)}`;
+}
+
+const SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+function cursorInsertionIndex(text: string, mode: CursorMode, width: number): number {
+	if (mode === "start") return 0;
+	if (mode === "end" || text.includes("\x1b")) return text.length;
+	const textWidth = visibleWidth(text);
+	const target = mode === "wideBoundary" ? Math.max(0, Math.min(width - 1, textWidth)) : Math.floor(textWidth / 2);
+	let offset = 0;
+	let col = 0;
+	for (const segment of SEGMENTER.segment(text)) {
+		const nextCol = col + visibleWidth(segment.segment);
+		if (nextCol > target) break;
+		offset = segment.index + segment.segment.length;
+		col = nextCol;
+		if (col >= target) break;
+	}
+	return offset;
+}
+
 function snapshotDump(snapshot: Snapshot): JsonObject {
 	return {
 		buffer: snapshot.buffer,
 		view: snapshot.view,
 		position: { baseY: snapshot.position.baseY, viewportY: snapshot.position.viewportY },
 		cursor: cursorObject(snapshot),
+		expectedCursor:
+			snapshot.expectedCursor === null
+				? null
+				: { row: snapshot.expectedCursor.row, col: snapshot.expectedCursor.col },
 		redraws: snapshot.redraws,
 		width: snapshot.width,
 		height: snapshot.height,

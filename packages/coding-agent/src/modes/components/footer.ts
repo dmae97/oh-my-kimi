@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { stripVTControlCharacters } from "node:util";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Component, padding, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
@@ -218,9 +219,9 @@ export class FooterComponent implements Component {
 
 		// If statsLeft is too wide, truncate it
 		if (statsLeftWidth > width) {
-			// Truncate statsLeft to fit width (no room for right side)
-			const plainStatsLeft = statsLeft.replace(/\x1b\[[0-9;]*m/g, "");
-			statsLeft = `${plainStatsLeft.substring(0, width - 1)}…`;
+			// Drop styling and truncate by terminal cells (not code points) so wide
+			// glyphs and non-SGR escapes can't overflow the line.
+			statsLeft = truncateToWidth(stripVTControlCharacters(statsLeft), width);
 			statsLeftWidth = visibleWidth(statsLeft);
 		}
 
@@ -237,12 +238,10 @@ export class FooterComponent implements Component {
 			// Need to truncate right side
 			const availableForRight = width - statsLeftWidth - minPadding;
 			if (availableForRight > 3) {
-				// Truncate to fit (strip ANSI codes for length calculation, then truncate raw string)
-				const plainRightSide = rightSide.replace(/\x1b\[[0-9;]*m/g, "");
-				const truncatedPlain = plainRightSide.substring(0, availableForRight);
-				// For simplicity, just use plain truncated version (loses color, but fits)
-				const pad = padding(width - statsLeftWidth - truncatedPlain.length);
-				statsLine = statsLeft + pad + truncatedPlain;
+				// Drop styling and truncate by terminal cells so the right side fits.
+				const truncatedRight = truncateToWidth(stripVTControlCharacters(rightSide), availableForRight);
+				const pad = padding(width - statsLeftWidth - visibleWidth(truncatedRight));
+				statsLine = statsLeft + pad + truncatedRight;
 			} else {
 				// Not enough space for right side at all
 				statsLine = statsLeft;
