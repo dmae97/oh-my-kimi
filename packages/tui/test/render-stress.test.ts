@@ -1258,6 +1258,7 @@ class StressDriver {
 		this.#assertCursor(op, before, after, index);
 		this.#assertScrolledDeferral(op, before, after, index);
 		this.#assertRowAccounting(op, before, after, index);
+		this.#assertScrollbackGrowthMatchesFrameGrowth(op, before, after, index);
 		this.#assertHistoryPrefixStability(op, before, after, index);
 		if (op.checkpoint && this.#scenario.strictScrollback) {
 			this.#assertCleanBuffer(op, before, after, index);
@@ -1386,6 +1387,38 @@ class StressDriver {
 				deltaBuffer,
 				clean,
 				expected: "deltaBuffer === deltaFrame OR clean full reconstruction",
+			});
+		}
+	}
+
+	#assertScrollbackGrowthMatchesFrameGrowth(
+		op: AppliedOperation,
+		before: Snapshot,
+		after: Snapshot,
+		index: number,
+	): void {
+		if (!this.#scenario.strictScrollback || this.#hasVisibleOverlay()) return;
+		if (op.checkpoint || op.geometryChanged) return;
+		if (!before.atBottom || !after.atBottom) return;
+		const deltaBuffer = after.buffer.length - before.buffer.length;
+		if (deltaBuffer <= 0) return;
+		const clean = isCleanBuffer(after.buffer, after.frame, after.height);
+		if (clean) return;
+		const deltaFrame = Math.max(0, after.frame.length - before.frame.length);
+		if (deltaBuffer > deltaFrame) {
+			this.#fail("scrollback grew faster than frame", op, before, after, index, {
+				deltaFrame,
+				deltaBuffer,
+				expected: "dirty live scrollback growth must not exceed logical frame growth",
+			});
+		}
+		const expectedTail = after.frame.slice(after.frame.length - deltaBuffer);
+		const actualTail = after.buffer.slice(after.buffer.length - deltaBuffer);
+		if (!sameLines(actualTail, expectedTail)) {
+			this.#fail("scrollback growth tail mismatch", op, before, after, index, {
+				deltaBuffer,
+				expectedTail,
+				actualTail,
 			});
 		}
 	}
