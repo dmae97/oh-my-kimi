@@ -54,7 +54,12 @@ export interface Args {
 	unknownFlags: Map<string, boolean | string>;
 }
 
-export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
+export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
+	// Work on a copy: the `--option=value` handling below splices the value
+	// into the array, and callers reuse the same argv (the post-extension
+	// reparse in `runRootCommand` parses it a second time). Mutating the input
+	// would corrupt that later parse, so never touch the caller's array.
+	const args = [...inputArgs];
 	const result: Args = {
 		messages: [],
 		fileArgs: [],
@@ -63,14 +68,19 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 
 	for (let i = 0; i < args.length; i++) {
 		let arg = args[i];
+		const flagIndex = i;
 
-		// Support --flag=value syntax (e.g. --tools=ask,read)
+		// Support --flag=value syntax (e.g. --tools=ask,read). The value is
+		// spliced in as the next token so value-consuming flags pick it up via
+		// `args[++i]`; a non-consuming flag (e.g. a boolean) leaves it behind and
+		// the post-loop guard drops it so it is not mistaken for a message.
+		let equalsValueIndex = -1;
 		if (arg.startsWith("--") && arg.includes("=")) {
 			const eqIdx = arg.indexOf("=");
 			const value = arg.slice(eqIdx + 1);
 			arg = arg.slice(0, eqIdx);
-			// Insert the value so the existing "args[++i]" logic picks it up
 			args.splice(i + 1, 0, value);
+			equalsValueIndex = i + 1;
 		}
 
 		if (arg === "--help" || arg === "-h") {
@@ -206,12 +216,25 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 				if (extFlag.type === "boolean") {
 					result.unknownFlags.set(flagName, true);
 				} else if (extFlag.type === "string" && i + 1 < args.length) {
-					result.unknownFlags.set(flagName, args[++i]);
+					// Consume the value in `--flag=value` form, or when the next token
+					// is not flag-looking. A `-`-prefixed token in space form is left
+					// to be parsed as its own flag, so this extension-aware parse agrees
+					// with the extension-unaware startup parse on command shape; pass a
+					// flag-looking value as `--flag=value`.
+					if (equalsValueIndex !== -1 || !args[i + 1].startsWith("-")) {
+						result.unknownFlags.set(flagName, args[++i]);
+					}
 				}
 			}
 			// Unknown flags without extensionFlags are silently ignored (first pass)
 		} else if (!arg.startsWith("-")) {
 			result.messages.push(arg);
+		}
+		// Drop an unconsumed `--flag=value` value (e.g. a boolean flag): when no
+		// branch advanced past the spliced token, remove it so it does not fall
+		// through to a later iteration and become a positional message.
+		if (equalsValueIndex !== -1 && i === flagIndex) {
+			args.splice(equalsValueIndex, 1);
 		}
 	}
 

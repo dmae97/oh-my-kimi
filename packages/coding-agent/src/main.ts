@@ -22,6 +22,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import type { Args } from "./cli/args";
+import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { runListModelsCommand } from "./cli/list-models";
@@ -39,6 +40,7 @@ import {
 } from "./discovery/helpers";
 import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
 import { exportFromFile } from "./export/html";
+import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import {
 	getInstalledPluginsRegistryPath,
@@ -57,6 +59,7 @@ import {
 	type CreateAgentSessionResult,
 	createAgentSession,
 	discoverAuthStorage,
+	loadSessionExtensions,
 } from "./sdk";
 import type { AgentSession } from "./session/agent-session";
 import type { AuthStorage } from "./session/auth-storage";
@@ -65,7 +68,7 @@ import { resolvePromptInput } from "./system-prompt";
 import { AUTO_THINKING } from "./thinking";
 import type { LspStartupServerInfo } from "./tools";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
-import type { EventBus } from "./utils/event-bus";
+import { EventBus } from "./utils/event-bus";
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
 	if (!settings.get("startup.checkUpdate")) {
@@ -171,37 +174,6 @@ export async function submitInteractiveInput(
 	}
 }
 
-function applyExtensionFlagValues(session: AgentSession, rawArgs: string[]): Map<string, boolean | string> {
-	const extensionRunner = session.extensionRunner;
-	if (!extensionRunner) {
-		return new Map();
-	}
-
-	const extFlags = extensionRunner.getFlags();
-	if (extFlags.size > 0) {
-		for (let i = 0; i < rawArgs.length; i++) {
-			const arg = rawArgs[i];
-			if (!arg.startsWith("--")) {
-				continue;
-			}
-			const flagName = arg.slice(2);
-			const extFlag = extFlags.get(flagName);
-			if (!extFlag) {
-				continue;
-			}
-			if (extFlag.type === "boolean") {
-				extensionRunner.setFlagValue(flagName, true);
-				continue;
-			}
-			if (i + 1 < rawArgs.length) {
-				extensionRunner.setFlagValue(flagName, rawArgs[++i]);
-			}
-		}
-	}
-
-	return extensionRunner.getFlagValues();
-}
-
 type AcpSessionFactory = (cwd: string) => Promise<AgentSession>;
 
 export interface AcpSessionFactoryOptions {
@@ -244,7 +216,7 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 		if (args.parsedArgs.apiKey && !args.baseOptions.model && nextSession.model) {
 			args.authStorage.setRuntimeApiKey(nextSession.model.provider, args.parsedArgs.apiKey);
 		}
-		applyExtensionFlagValues(nextSession, args.rawArgs);
+		applyExtensionFlags(nextSession.extensionRunner, args.rawArgs);
 		return nextSession;
 	};
 }
@@ -820,22 +792,7 @@ export async function runRootCommand(
 	if (parsedArgs.noTitle || parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") {
 		Bun.env.PI_NO_TITLE = "1";
 	}
-	const { pipedInput, fileText, fileImages } = await logger.time("prepareInitialMessage", async () => {
-		const pipedInput = await readPipedInput();
-		if (parsedArgs.fileArgs.length === 0) {
-			return { pipedInput, fileText: undefined, fileImages: undefined };
-		}
-		const processed = await processFileArguments(parsedArgs.fileArgs, {
-			autoResizeImages: settingsInstance.get("images.autoResize"),
-		});
-		return { pipedInput, fileText: processed.text, fileImages: processed.images };
-	});
-	const { initialMessage, initialImages } = buildInitialMessage({
-		parsed: parsedArgs,
-		fileText,
-		fileImages,
-		stdinContent: pipedInput,
-	});
+	const pipedInput = await logger.time("readPipedInput", readPipedInput);
 	const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 	const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
 	const mode = parsedArgs.mode || "text";
@@ -984,8 +941,42 @@ export async function runRootCommand(
 		});
 		await (deps.runAcpMode ?? runAcpMode)(createAcpSession);
 	} else {
-		const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager, eventBus } =
-			await createSession(sessionOptions);
+		// Resolve extension-registered CLI flags before creating the session so a
+		// bad `@file` fails fast WITHOUT leaving a junk session/breadcrumb
+		// (createAgentSession writes the terminal breadcrumb eagerly). Loading the
+		// extensions here also makes `@file` classification extension-aware — e.g. a
+		// string-flag value such as `--target @notes.md` is the flag's value, not a
+		// file — and the same result is handed to createAgentSession via
+		// `preloadedExtensions` so the discovery work is not repeated.
+		const eventBus = new EventBus();
+		const extensionsResult = await loadSessionExtensions(sessionOptions, cwd, settingsInstance, eventBus);
+		const extensionFlagSink: ExtensionFlagSink = {
+			getFlags: () => ExtensionRunner.aggregateFlags(extensionsResult.extensions),
+			setFlagValue: (name, value) => {
+				extensionsResult.runtime.flagValues.set(name, value);
+			},
+		};
+		const initialArgs = applyExtensionFlags(extensionFlagSink, rawArgs) ?? parsedArgs;
+		const processedFiles =
+			initialArgs.fileArgs.length > 0
+				? await logger.time("processFileArguments", () =>
+						processFileArguments(initialArgs.fileArgs, {
+							autoResizeImages: settingsInstance.get("images.autoResize"),
+						}),
+					)
+				: undefined;
+		const { initialMessage, initialImages } = buildInitialMessage({
+			parsed: initialArgs,
+			fileText: processedFiles?.text,
+			fileImages: processedFiles?.images,
+			stdinContent: pipedInput,
+		});
+
+		const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager } = await createSession({
+			...sessionOptions,
+			eventBus,
+			preloadedExtensions: extensionsResult,
+		});
 		if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 			authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
 		}
@@ -998,8 +989,6 @@ export async function runRootCommand(
 		if (modelRegistryError) {
 			notifs.push({ kind: "error", message: modelRegistryError.message });
 		}
-
-		applyExtensionFlagValues(session, rawArgs);
 
 		if (!isInteractive && !session.model) {
 			if (modelFallbackMessage) {
@@ -1044,7 +1033,7 @@ export async function runRootCommand(
 				changelogMarkdown,
 				notifs,
 				versionCheckPromise,
-				parsedArgs.messages,
+				initialArgs.messages,
 				setToolUIContext,
 				lspServers,
 				mcpManager,
@@ -1057,7 +1046,7 @@ export async function runRootCommand(
 		} else {
 			await runPrintMode(session, {
 				mode,
-				messages: parsedArgs.messages,
+				messages: initialArgs.messages,
 				initialMessage,
 				initialImages,
 			});

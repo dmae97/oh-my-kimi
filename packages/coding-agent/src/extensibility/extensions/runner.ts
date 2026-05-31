@@ -315,14 +315,24 @@ export class ExtensionRunner {
 		return tools;
 	}
 
-	getFlags(): Map<string, ExtensionFlag> {
+	/**
+	 * Aggregate the registered CLI flags across a set of extensions (last write
+	 * wins on name collision). Static so callers that need the flag set before a
+	 * runner exists — e.g. the CLI resolving `@file`/flag args before session
+	 * creation — share this exact logic instead of duplicating it.
+	 */
+	static aggregateFlags(extensions: readonly Extension[]): Map<string, ExtensionFlag> {
 		const allFlags = new Map<string, ExtensionFlag>();
-		for (const ext of this.extensions) {
+		for (const ext of extensions) {
 			for (const [name, flag] of ext.flags) {
 				allFlags.set(name, flag);
 			}
 		}
 		return allFlags;
+	}
+
+	getFlags(): Map<string, ExtensionFlag> {
+		return ExtensionRunner.aggregateFlags(this.extensions);
 	}
 
 	getFlagValues(): Map<string, boolean | string> {
