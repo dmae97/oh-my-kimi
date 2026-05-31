@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
-import type { EmbeddingModel } from "fastembed";
+import { createRequire } from "node:module";
+import type { EmbeddingModel, FlagEmbedding } from "fastembed";
 import { getMnemosyneRuntimeOptions, resolveEmbeddingProvider } from "./runtime-options";
 
 export type Vector = number[];
@@ -24,8 +25,14 @@ type LocalModelInitOptions = {
 };
 type LocalModelInitializer = (options: LocalModelInitOptions) => Promise<LocalEmbeddingModel>;
 
+interface FastembedRuntime {
+	EmbeddingModel: typeof EmbeddingModel;
+	FlagEmbedding: typeof FlagEmbedding;
+}
+
 const FASTEMBED_CACHE_DIR = `${process.env.HOME ?? ""}/.hermes/cache/fastembed`;
 const QUERY_CACHE_MAX = 512;
+const sourceRequire = createRequire(import.meta.url);
 
 let providerOverride: EmbeddingProvider | null = null;
 let localModelPromise: Promise<LocalEmbeddingModel> | null = null;
@@ -33,12 +40,14 @@ let localModelInitializer: LocalModelInitializer = defaultLocalModelInitializer;
 let apiCallCount = 0;
 const queryCache = new Map<string, Vector>();
 
-async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
-	// Lazily pull in fastembed here — its module eagerly imports `onnxruntime-node`,
-	// whose native addon load segfaults in some runtimes. Deferring to the actual
-	// model init keeps API-model, disabled, and test runtimes from ever loading it.
-	const { FlagEmbedding } = await import("fastembed");
-	return FlagEmbedding.init(options) as Promise<LocalEmbeddingModel>;
+function loadFastembedRuntime(): FastembedRuntime {
+	// Preload ORT 1.24 before fastembed's ORT 1.21 binding to avoid Windows DLL reuse crashes.
+	sourceRequire("onnxruntime-node");
+	return sourceRequire("fastembed") as FastembedRuntime;
+}
+
+function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
+	return loadFastembedRuntime().FlagEmbedding.init(options);
 }
 
 function activeEmbeddingOptions() {
