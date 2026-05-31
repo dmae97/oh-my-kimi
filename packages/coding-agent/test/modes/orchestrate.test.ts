@@ -10,21 +10,34 @@ beforeAll(() => {
 });
 
 describe("orchestrate keyword detection", () => {
-	it("matches the standalone word in any case", () => {
+	it("matches the lowercase word delimited by whitespace or a string edge", () => {
 		expect(containsOrchestrate("orchestrate")).toBe(true);
-		expect(containsOrchestrate("Orchestrate")).toBe(true);
-		expect(containsOrchestrate("ORCHESTRATE")).toBe(true);
 		expect(containsOrchestrate("please orchestrate this rollout")).toBe(true);
-		expect(containsOrchestrate("do it. orchestrate.")).toBe(true);
+		expect(containsOrchestrate("orchestrate the rollout")).toBe(true);
+		// A newline is whitespace, and end-of-string is a valid right boundary.
+		expect(containsOrchestrate("do it now\norchestrate")).toBe(true);
 	});
 
-	it("ignores inflected forms and embedded substrings", () => {
+	it("ignores casing, inflections, punctuation-adjacent, and path-embedded forms", () => {
+		expect(containsOrchestrate("Orchestrate")).toBe(false);
+		expect(containsOrchestrate("ORCHESTRATE")).toBe(false);
 		expect(containsOrchestrate("orchestrated the build")).toBe(false);
 		expect(containsOrchestrate("orchestrating now")).toBe(false);
 		expect(containsOrchestrate("a clean orchestration")).toBe(false);
 		expect(containsOrchestrate("it orchestrates well")).toBe(false);
 		expect(containsOrchestrate("reorchestrate everything")).toBe(false);
+		// The reported bug: a path/extension is not whitespace, so the word never triggers.
+		expect(containsOrchestrate("packages/coding-agent/src/modes/orchestrate.ts")).toBe(false);
+		expect(containsOrchestrate("do it. orchestrate.")).toBe(false);
 		expect(containsOrchestrate("nothing to see here")).toBe(false);
+	});
+
+	it("ignores keywords inside code spans, fenced blocks, and XML sections", () => {
+		expect(containsOrchestrate("use `orchestrate` here")).toBe(false);
+		expect(containsOrchestrate("```\norchestrate\n```")).toBe(false);
+		expect(containsOrchestrate("<note>orchestrate</note>")).toBe(false);
+		// A real prose request alongside code still triggers.
+		expect(containsOrchestrate("run `setup` then orchestrate the rollout")).toBe(true);
 	});
 });
 
@@ -38,8 +51,12 @@ describe("orchestrate keyword highlighting", () => {
 
 	it("leaves text without the standalone keyword untouched", () => {
 		expect(highlightOrchestrate("nothing here")).toBe("nothing here");
-		// Probe hits the substring but the word boundary fails — no decoration.
+		// Probe hits the substring but the whitespace boundary fails — no decoration.
 		expect(highlightOrchestrate("orchestrated builds")).toBe("orchestrated builds");
+		expect(highlightOrchestrate("Orchestrate this")).toBe("Orchestrate this");
+		// The reported bug: a filename must not be painted.
+		const filePath = "packages/coding-agent/src/modes/orchestrate.ts";
+		expect(highlightOrchestrate(filePath)).toBe(filePath);
 	});
 
 	it("does not cross-trigger with the ultrathink highlighter", () => {
