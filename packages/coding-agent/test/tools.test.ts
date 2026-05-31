@@ -1167,7 +1167,7 @@ function b() {
 						testDir,
 						Settings.isolated({
 							"bash.autoBackground.enabled": true,
-							"bash.autoBackground.thresholdMs": 50,
+							"bash.autoBackground.thresholdMs": 2_000,
 						}),
 						{
 							getSessionId: () => "test-session",
