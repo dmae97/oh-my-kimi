@@ -610,7 +610,14 @@ export class EventController {
 					: event.reason === "idle"
 						? "Idle "
 						: "";
-		const actionLabel = event.action === "handoff" ? "Auto-handoff" : "Auto context-full maintenance";
+		const actionLabel =
+			event.action === "handoff"
+				? "Auto-handoff"
+				: event.action === "shake"
+					? "Auto-shake"
+					: event.action === "shake-summary"
+						? "Auto-shake (summary)"
+						: "Auto context-full maintenance";
 		this.ctx.autoCompactionLoader = new Loader(
 			this.ctx.ui,
 			spinner => theme.fg("accent", spinner),
@@ -634,8 +641,27 @@ export class EventController {
 			this.ctx.statusContainer.clear();
 		}
 		const isHandoffAction = event.action === "handoff";
+		const isShakeAction = event.action === "shake" || event.action === "shake-summary";
 		if (event.aborted) {
-			this.ctx.showStatus(isHandoffAction ? "Auto-handoff cancelled" : "Auto context-full maintenance cancelled");
+			this.ctx.showStatus(
+				isHandoffAction
+					? "Auto-handoff cancelled"
+					: isShakeAction
+						? "Auto-shake cancelled"
+						: "Auto context-full maintenance cancelled",
+			);
+		} else if (isShakeAction) {
+			// Shake produces no CompactionResult; rebuild on success, suppress benign skips.
+			if (event.errorMessage) {
+				this.ctx.showWarning(event.errorMessage);
+			} else if (!event.skipped) {
+				this.ctx.rebuildChatFromMessages();
+				this.ctx.statusLine.invalidate();
+				this.ctx.updateEditorTopBorder();
+				this.ctx.showStatus(
+					event.action === "shake-summary" ? "Auto-shake (summary) completed" : "Auto-shake completed",
+				);
+			}
 		} else if (event.result) {
 			this.ctx.rebuildChatFromMessages();
 			this.ctx.statusLine.invalidate();

@@ -21,6 +21,7 @@ import {
 } from "../extensibility/plugins/marketplace";
 import { resolveMemoryBackend } from "../memory-backend";
 import type { InteractiveModeContext } from "../modes/types";
+import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
 import { buildContextReportText } from "./helpers/context-report";
 import { formatDuration } from "./helpers/format";
@@ -56,6 +57,15 @@ const shutdownHandlerTui = (_command: ParsedSlashCommand, runtime: TuiSlashComma
 	void runtime.ctx.shutdown();
 	return commandConsumed();
 };
+
+/** Parse the `/shake` subcommand into a {@link ShakeMode}; empty defaults to elide. */
+function parseShakeMode(args: string): ShakeMode | { error: string } {
+	const verb = args.trim().toLowerCase();
+	if (verb === "" || verb === "elide") return "elide";
+	if (verb === "summary") return "summary";
+	if (verb === "images") return "images";
+	return { error: `Unknown /shake mode "${verb}". Use elide, summary, or images.` };
+}
 
 const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
@@ -811,27 +821,31 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
-		name: "drop-images",
-		description: "Strip every image from this session's history",
-		acpDescription: "Drop all images from the conversation history",
-		handle: async (_command, runtime) => {
-			const { removed } = await runtime.session.dropImages();
-			await runtime.output(
-				removed === 0
-					? "No images found in this session."
-					: `Dropped ${removed} image${removed === 1 ? "" : "s"} from this session.`,
-			);
+		name: "shake",
+		description: "Drop heavy content from context (tool results, large blocks)",
+		acpDescription: "Shake heavy content out of the conversation context",
+		subcommands: [
+			{ name: "elide", description: "Strip tool results + large blocks (default)" },
+			{ name: "summary", description: "Compress heavy regions with a local on-device model" },
+			{ name: "images", description: "Strip image blocks" },
+		],
+		acpInputHint: "[elide|summary|images]",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const mode = parseShakeMode(command.args);
+			if (typeof mode !== "string") return usage(mode.error, runtime);
+			const result = await runtime.session.shake(mode);
+			await runtime.output(formatShakeSummary(result));
 			return commandConsumed();
 		},
-		handleTui: async (_command, runtime) => {
+		handleTui: async (command, runtime) => {
 			runtime.ctx.editor.setText("");
-			const { removed } = await runtime.ctx.session.dropImages();
-			if (removed === 0) {
-				runtime.ctx.showStatus("No images found in this session.");
+			const mode = parseShakeMode(command.args);
+			if (typeof mode !== "string") {
+				runtime.ctx.showWarning(mode.error);
 				return;
 			}
-			runtime.ctx.rebuildChatFromMessages();
-			runtime.ctx.showStatus(`Dropped ${removed} image${removed === 1 ? "" : "s"} from this session.`);
+			await runtime.ctx.handleShakeCommand(mode);
 		},
 	},
 	{

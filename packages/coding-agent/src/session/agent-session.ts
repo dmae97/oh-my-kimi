@@ -33,20 +33,29 @@ import {
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import {
+	AGGRESSIVE_SHAKE_CONFIG,
 	AUTO_HANDOFF_THRESHOLD_FOCUS,
+	applyShakeRegions,
 	CompactionCancelledError,
 	type CompactionPreparation,
 	type CompactionResult,
 	calculateContextTokens,
 	calculatePromptTokens,
 	collectEntriesForBranchSummary,
+	collectShakeRegions,
 	compact,
+	DEFAULT_SHAKE_CONFIG,
 	estimateTokens,
 	generateBranchSummary,
 	generateHandoff,
 	prepareCompaction,
+	type ShakeConfig,
+	type ShakeRegion,
+	type ShakeSummaryComplete,
+	type ShakeSummaryItem,
 	type SummaryOptions,
 	shouldCompact,
+	summarizeShakeRegions,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "@oh-my-pi/pi-agent-core/compaction/pruning";
 import type {
@@ -77,7 +86,7 @@ import {
 	resolveServiceTier,
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
-import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
+import { countTokens, MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
 	extractRetryHint,
 	getAgentDbPath,
@@ -152,6 +161,7 @@ import { getMnemosyneSessionState, type MnemosyneSessionState, setMnemosyneSessi
 import { containsOrchestrate, ORCHESTRATE_NOTICE } from "../modes/orchestrate";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
+import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
 import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
@@ -174,7 +184,8 @@ import {
 	resolveThinkingLevelForModel,
 	toReasoningEffort,
 } from "../thinking";
-import { shutdownTinyTitleClient } from "../tiny/title-client";
+import { isTinyMemoryLocalModelKey } from "../tiny/models";
+import { shutdownTinyTitleClient, tinyModelClient } from "../tiny/title-client";
 import {
 	buildDiscoverableToolSearchIndex,
 	collectDiscoverableTools,
@@ -219,6 +230,7 @@ import type {
 	SessionManager,
 } from "./session-manager";
 import { getLatestCompactionEntry } from "./session-manager";
+import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { YieldQueue } from "./yield-queue";
 
@@ -228,11 +240,11 @@ export type AgentSessionEvent =
 	| {
 			type: "auto_compaction_start";
 			reason: "threshold" | "overflow" | "idle" | "incomplete";
-			action: "context-full" | "handoff";
+			action: "context-full" | "handoff" | "shake" | "shake-summary";
 	  }
 	| {
 			type: "auto_compaction_end";
-			action: "context-full" | "handoff";
+			action: "context-full" | "handoff" | "shake" | "shake-summary";
 			result: CompactionResult | undefined;
 			aborted: boolean;
 			willRetry: boolean;
@@ -268,6 +280,8 @@ export interface AsyncJobSnapshot {
 	recent: AsyncJobSnapshotItem[];
 	delivery: AsyncJobDeliveryState;
 }
+
+export type { ShakeMode, ShakeResult };
 
 // ============================================================================
 // Types
@@ -4121,6 +4135,16 @@ export class AgentSession {
 					timestamp,
 				});
 			}
+			if (containsWorkflow(expandedText)) {
+				keywordNotices.push({
+					role: "custom",
+					customType: "workflow-notice",
+					content: WORKFLOW_NOTICE,
+					display: false,
+					attribution: "user",
+					timestamp,
+				});
+			}
 		}
 
 		// If streaming, queue via steer() or followUp() based on option
@@ -5627,6 +5651,165 @@ export class AgentSession {
 	}
 
 	/**
+	 * Surgically reduce context by dropping heavy content ("shake").
+	 *
+	 * - `images` delegates to {@link dropImages}.
+	 * - `elide` replaces whole tool-call results and large fenced/XML blocks
+	 *   with short placeholders that embed an `artifact://` recovery link.
+	 * - `summary` extractively compresses the same regions with the configured
+	 *   local on-device model (`providers.shakeSummaryModel`), falling back to
+	 *   the elide placeholder per region (or wholesale when the local model is
+	 *   unavailable). Never calls a remote/cloud LLM.
+	 *
+	 * Mutates the branch in place, persists via `rewriteEntries`, replays the
+	 * rebuilt context through the agent, and tears down provider sessions that
+	 * cache message identity — same rewrite contract as {@link dropImages}.
+	 *
+	 * No-op (zero counts) when nothing is eligible.
+	 */
+	async shake(mode: ShakeMode, opts: { config?: ShakeConfig; signal?: AbortSignal } = {}): Promise<ShakeResult> {
+		if (mode === "images") {
+			const { removed } = await this.dropImages();
+			return { mode, toolResultsDropped: 0, blocksDropped: 0, imagesDropped: removed, tokensFreed: 0 };
+		}
+
+		const config = opts.config ?? AGGRESSIVE_SHAKE_CONFIG;
+		const regions = collectShakeRegions(this.sessionManager.getBranch(), config);
+		if (regions.length === 0) {
+			return { mode, toolResultsDropped: 0, blocksDropped: 0, tokensFreed: 0 };
+		}
+
+		const artifactId = await this.#saveShakeArtifact(regions);
+		let replacements: string[];
+		if (mode === "summary") {
+			// Manual `/shake summary` installs the compaction controller so Esc /
+			// `abortCompaction()` can cancel the local-model pass; the auto-shake path
+			// passes its own signal and manages `#autoCompactionAbortController`.
+			let controller: AbortController | undefined;
+			let signal = opts.signal;
+			if (!signal) {
+				if (this.#compactionAbortController) throw new Error("Compaction already in progress");
+				controller = new AbortController();
+				this.#compactionAbortController = controller;
+				signal = controller.signal;
+			}
+			try {
+				replacements = await this.#buildShakeSummaryReplacements(regions, artifactId, signal);
+			} finally {
+				if (controller && this.#compactionAbortController === controller) {
+					this.#compactionAbortController = undefined;
+				}
+			}
+		} else {
+			replacements = regions.map((region, index) => this.#shakeElidePlaceholder(region, index, artifactId));
+		}
+
+		let toolResultsDropped = 0;
+		let blocksDropped = 0;
+		let originalTokens = 0;
+		let replacementTokens = 0;
+		const items = regions.map((region, index) => {
+			if (region.kind === "toolResult") toolResultsDropped++;
+			else blocksDropped++;
+			originalTokens += region.tokens;
+			const replacement = replacements[index];
+			if (replacement.length > 0) replacementTokens += countTokens(replacement);
+			return { region, replacement };
+		});
+
+		applyShakeRegions(items);
+
+		await this.sessionManager.rewriteEntries();
+		const sessionContext = this.buildDisplaySessionContext();
+		this.agent.replaceMessages(sessionContext.messages);
+		this.#closeCodexProviderSessionsForHistoryRewrite();
+
+		return {
+			mode,
+			toolResultsDropped,
+			blocksDropped,
+			tokensFreed: Math.max(0, originalTokens - replacementTokens),
+			artifactId,
+		};
+	}
+
+	#shakeElidePlaceholder(region: ShakeRegion, index: number, artifactId: string | undefined): string {
+		if (artifactId) {
+			return `[shaken ~${region.tokens} tokens — recover: artifact://${artifactId} (region ${index + 1})]`;
+		}
+		return `[shaken ~${region.tokens} tokens]`;
+	}
+
+	/**
+	 * Concatenate the original region contents into one session artifact so the
+	 * agent can read them back via `artifact://<id>`. Returns `undefined` when
+	 * the session is not persisted or the write fails — callers degrade to a
+	 * bare placeholder.
+	 */
+	async #saveShakeArtifact(regions: ShakeRegion[]): Promise<string | undefined> {
+		const parts: string[] = [];
+		for (let i = 0; i < regions.length; i++) {
+			const region = regions[i];
+			parts.push(`### region ${i + 1} (${region.label}, ~${region.tokens} tok)`, "", region.originalText, "");
+		}
+		try {
+			return await this.sessionManager.saveArtifact(parts.join("\n"), "shake");
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * Build per-region replacements for summary mode using the configured local
+	 * on-device model (`providers.shakeSummaryModel`) via {@link tinyModelClient}.
+	 * Shake summary never calls a remote/cloud LLM. When the configured model is
+	 * not a known local key, every region falls back to the elide placeholder.
+	 * Otherwise compresses via {@link summarizeShakeRegions}; per region, uses
+	 * the parsed summary (with a recovery footer) or the elide placeholder when
+	 * the local model omitted it / was unavailable. Any thrown failure degrades
+	 * the whole batch to elide so the reduction still happens.
+	 */
+	async #buildShakeSummaryReplacements(
+		regions: ShakeRegion[],
+		artifactId: string | undefined,
+		signal: AbortSignal | undefined,
+	): Promise<string[]> {
+		const elide = (): string[] =>
+			regions.map((region, index) => this.#shakeElidePlaceholder(region, index, artifactId));
+
+		const modelKey = this.settings.get("providers.shakeSummaryModel");
+		if (!isTinyMemoryLocalModelKey(modelKey)) return elide();
+
+		const items: ShakeSummaryItem[] = regions.map((region, index) => ({
+			index,
+			label: region.label,
+			text: region.originalText,
+		}));
+
+		const complete: ShakeSummaryComplete = (promptText, opts) =>
+			tinyModelClient.complete(modelKey, promptText, { maxTokens: opts.maxTokens, signal: opts.signal });
+
+		let summaries: Map<number, string>;
+		try {
+			summaries = await summarizeShakeRegions(items, complete, { signal });
+		} catch (error) {
+			logger.warn("Shake summary compression failed; falling back to elide", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return elide();
+		}
+
+		return regions.map((region, index) => {
+			const summary = summaries.get(index);
+			if (!summary) return this.#shakeElidePlaceholder(region, index, artifactId);
+			if (artifactId) {
+				return `${summary}\n\n[recover full: artifact://${artifactId} (region ${index + 1})]`;
+			}
+			return summary;
+		});
+	}
+
+	/**
 	 * Manually compact the session context.
 	 * Aborts current agent operation first.
 	 * @param customInstructions Optional instructions for the compaction summary
@@ -6838,6 +7021,14 @@ export class AgentSession {
 		if (compactionSettings.strategy === "off") return false;
 		if (reason !== "idle" && !compactionSettings.enabled) return false;
 		const generation = this.#promptGeneration;
+
+		// Shake strategies run inline (cheap, no remote LLM). On overflow recovery,
+		// if shake reclaims nothing we fall through to the summary-compaction body
+		// below so the oversized input still gets resolved.
+		if (compactionSettings.strategy === "shake" || compactionSettings.strategy === "shake-summary") {
+			const outcome = await this.#runAutoShake(reason, compactionSettings.strategy, willRetry, generation);
+			if (outcome !== "fallback") return false;
+		}
 		// "overflow" and "incomplete" force inline execution because they are recovery
 		// paths the caller wants resolved before scheduling the next turn. "idle" is
 		// triggered by the idle loop and does its own scheduling.
@@ -7218,6 +7409,119 @@ export class AgentSession {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Run a shake-strategy auto-maintenance pass. Emits the
+	 * `auto_compaction_start`/`auto_compaction_end` pair with a shake `action`,
+	 * runs {@link shake} inline against the protect-window config, and schedules
+	 * continuation exactly like the context-full tail.
+	 *
+	 * Returns `"fallback"` only for an overflow recovery where shake reclaimed
+	 * nothing (or threw) — the caller then runs the summary-compaction body so
+	 * the oversized input still gets resolved. Returns `"handled"` otherwise.
+	 */
+	async #runAutoShake(
+		reason: "overflow" | "threshold" | "idle" | "incomplete",
+		strategy: "shake" | "shake-summary",
+		willRetry: boolean,
+		generation: number,
+	): Promise<"handled" | "fallback"> {
+		const action = strategy === "shake-summary" ? "shake-summary" : "shake";
+		const mode = strategy === "shake-summary" ? "summary" : "elide";
+		await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
+		this.#autoCompactionAbortController?.abort();
+		const controller = new AbortController();
+		this.#autoCompactionAbortController = controller;
+		const signal = controller.signal;
+		const compactionSettings = this.settings.getGroup("compaction");
+		try {
+			const result = await this.shake(mode, { config: DEFAULT_SHAKE_CONFIG, signal });
+			if (signal.aborted) {
+				await this.#emitSessionEvent({
+					type: "auto_compaction_end",
+					action,
+					result: undefined,
+					aborted: true,
+					willRetry: false,
+				});
+				return "handled";
+			}
+			const reclaimed = result.toolResultsDropped + result.blocksDropped > 0;
+			// Overflow needs the input to actually shrink before the retry; if shake
+			// reclaimed nothing, summarization is the only remaining recovery.
+			if (reason === "overflow" && !reclaimed) {
+				await this.#emitSessionEvent({
+					type: "auto_compaction_end",
+					action,
+					result: undefined,
+					aborted: false,
+					willRetry: false,
+					skipped: true,
+				});
+				return "fallback";
+			}
+			await this.#emitSessionEvent({
+				type: "auto_compaction_end",
+				action,
+				result: undefined,
+				aborted: false,
+				willRetry,
+				skipped: !reclaimed,
+			});
+
+			if (!willRetry && reason !== "idle" && compactionSettings.autoContinue !== false) {
+				this.#scheduleAutoContinuePrompt(generation);
+			}
+			if (willRetry) {
+				// The shake rebuild replays every entry, so a trailing error/length
+				// assistant from the failed turn re-enters agent state — drop it before
+				// retrying, same as the context-full tail.
+				const messages = this.agent.state.messages;
+				const lastMsg = messages[messages.length - 1];
+				if (lastMsg?.role === "assistant") {
+					const lastAssistant = lastMsg as AssistantMessage;
+					const shouldDrop =
+						lastAssistant.stopReason === "error" ||
+						(reason === "incomplete" && lastAssistant.stopReason === "length");
+					if (shouldDrop) this.agent.replaceMessages(messages.slice(0, -1));
+				}
+				this.#scheduleAgentContinue({ delayMs: 100, generation });
+			} else if (this.agent.hasQueuedMessages()) {
+				this.#scheduleAgentContinue({
+					delayMs: 100,
+					generation,
+					shouldContinue: () => this.agent.hasQueuedMessages(),
+				});
+			}
+			return "handled";
+		} catch (error) {
+			if (signal.aborted) {
+				await this.#emitSessionEvent({
+					type: "auto_compaction_end",
+					action,
+					result: undefined,
+					aborted: true,
+					willRetry: false,
+				});
+				return "handled";
+			}
+			const message = error instanceof Error ? error.message : "shake failed";
+			await this.#emitSessionEvent({
+				type: "auto_compaction_end",
+				action,
+				result: undefined,
+				aborted: false,
+				willRetry: false,
+				errorMessage: `Auto-shake failed: ${message}`,
+			});
+			// Overflow still needs recovery even if shake threw.
+			return reason === "overflow" ? "fallback" : "handled";
+		} finally {
+			if (this.#autoCompactionAbortController === controller) {
+				this.#autoCompactionAbortController = undefined;
+			}
+		}
 	}
 
 	/**

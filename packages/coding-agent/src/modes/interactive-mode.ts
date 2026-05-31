@@ -62,6 +62,7 @@ import type { AgentSession, AgentSessionEvent, ResolvedRoleModel } from "../sess
 import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
+import type { ShakeMode } from "../session/shake-types";
 import { formatDuration } from "../slash-commands/helpers/format";
 import { STTController, type SttState } from "../stt";
 import type { LspStartupServerInfo } from "../tools";
@@ -2697,6 +2698,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleHandoffCommand(customInstructions?: string): Promise<void> {
 		return this.#commandController.handleHandoffCommand(customInstructions);
+	}
+
+	handleShakeCommand(mode: ShakeMode): Promise<void> {
+		return this.#commandController.handleShakeCommand(mode);
 	}
 
 	executeCompaction(
