@@ -25,6 +25,17 @@ type AgentSessionEventKind = AgentSessionEvent["type"];
 
 const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
 
+// Events that change which foreground tools are executing, or that reset a turn.
+// The eager native-scrollback rebuild mode is recomputed only on these — other
+// events (assistant text streaming, IRC, notices) leave it untouched so plain
+// streaming keeps the no-yank deferral.
+const TOOL_RENDER_MODE_EVENTS: Record<string, true> = {
+	agent_start: true,
+	tool_execution_start: true,
+	tool_execution_update: true,
+	tool_execution_end: true,
+};
+
 type AgentSessionEventHandlers = {
 	[E in AgentSessionEventKind]: (event: Extract<AgentSessionEvent, { type: E }>) => Promise<void>;
 };
@@ -158,6 +169,27 @@ export class EventController {
 
 		const run = this.#handlers[event.type] as (e: AgentSessionEvent) => Promise<void>;
 		await run(event);
+		// While a foreground tool is executing, its streaming result re-renders and can
+		// re-lay-out rows that already scrolled into native scrollback. Let the TUI
+		// rebuild history on those offscreen edits (a snap to the tail is acceptable
+		// mid-tool) instead of deferring, which would leave stale/duplicated rows.
+		// Background-running tools are excluded so their late async updates — and the
+		// assistant text that streams alongside them — keep the no-yank deferral;
+		// agent_start resets the mode at every turn boundary.
+		if (TOOL_RENDER_MODE_EVENTS[event.type]) {
+			this.#refreshToolRenderMode();
+		}
+	}
+
+	#refreshToolRenderMode(): void {
+		let foregroundToolActive = false;
+		for (const toolCallId of this.ctx.pendingTools.keys()) {
+			if (!this.#backgroundToolCallIds.has(toolCallId)) {
+				foregroundToolActive = true;
+				break;
+			}
+		}
+		this.ctx.ui.setEagerNativeScrollbackRebuild(foregroundToolActive);
 	}
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
