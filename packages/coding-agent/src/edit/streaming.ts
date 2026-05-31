@@ -353,6 +353,7 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 			const section = sectionsToProcess[i];
 			const result = await computeHashlineSectionDiff(section, ctx.cwd, ctx.snapshots, {
 				streaming: ctx.isStreaming,
+				skipHashValidation: ctx.isStreaming === true,
 			});
 			ctx.signal.throwIfAborted();
 			// Ignore parse/apply errors from the trailing (actively-typed)

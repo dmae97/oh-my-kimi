@@ -31,6 +31,12 @@ export interface HashlineDiffOptions {
 	 * preview path only.
 	 */
 	streaming?: boolean;
+	/**
+	 * Skip snapshot-tag validation. Streaming previews use this so transient
+	 * stale/missing tags do not flash re-read errors while the model is still
+	 * authoring input; the final apply path still validates through Patcher.
+	 */
+	skipHashValidation?: boolean;
 }
 
 async function readSectionText(absolutePath: string, sectionPath: string): Promise<string> {
@@ -73,8 +79,10 @@ export async function computeHashlineSectionDiff(
 		const rawContent = await readSectionText(absolutePath, section.path);
 		const { text: content } = stripBom(rawContent);
 		const normalized = normalizeToLF(content);
-		const hashError = validateSectionHash(section, absolutePath, normalized, snapshots);
-		if (hashError) return { error: hashError };
+		if (!options.skipHashValidation) {
+			const hashError = validateSectionHash(section, absolutePath, normalized, snapshots);
+			if (hashError) return { error: hashError };
+		}
 		const result = options.streaming
 			? section.applyPartialTo(normalized, nativeBlockResolver)
 			: section.applyTo(normalized, nativeBlockResolver);

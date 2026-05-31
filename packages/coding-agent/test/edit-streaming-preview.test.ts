@@ -117,7 +117,12 @@ describe("hashline streaming preview (single-op trailing payload)", () => {
 		await fs.rm(tmpDir, { recursive: true, force: true });
 	});
 
-	const ctx = (cwd: string) => ({ cwd, signal: new AbortController().signal, snapshots, isStreaming: true });
+	const ctx = (cwd: string, isStreaming = true) => ({
+		cwd,
+		signal: new AbortController().signal,
+		snapshots,
+		isStreaming,
+	});
 
 	test("renders a live diff while the sole payload line is still being typed", async () => {
 		// The `+` payload has no trailing newline — the common single-op case
@@ -128,6 +133,21 @@ describe("hashline streaming preview (single-op trailing payload)", () => {
 		expect(previews).toHaveLength(1);
 		expect(previews?.[0]?.error).toBeUndefined();
 		expect(previews?.[0]?.diff).toContain("const b = 22");
+	});
+
+	test("does not surface stale hash errors while streaming", async () => {
+		const input = "¶a.ts#FFFF\nreplace 2..2:\n+const b = 22";
+		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
+		expect(previews).toHaveLength(1);
+		expect(previews?.[0]?.error).toBeUndefined();
+		expect(previews?.[0]?.diff).toContain("const b = 22");
+	});
+
+	test("surfaces stale hash errors once streaming is complete", async () => {
+		const input = "¶a.ts#FFFF\nreplace 2..2:\n+const b = 22\n";
+		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir, false) as never);
+		expect(previews).toHaveLength(1);
+		expect(previews?.[0]?.error).toContain("re-read and try again");
 	});
 
 	test("yields no preview (not an error) before the first payload byte arrives", async () => {
