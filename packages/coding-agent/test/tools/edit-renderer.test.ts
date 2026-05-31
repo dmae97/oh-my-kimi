@@ -8,7 +8,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { editToolRenderer } from "@oh-my-pi/pi-coding-agent/edit/renderer";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import { Text, type TUI } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -245,5 +245,30 @@ describe("editToolRenderer", () => {
 		expect(rendered).toContain("src/demo.ts");
 		expect(rendered).toContain("const value = 2;");
 		expect(rendered).not.toContain(" …");
+	});
+
+	it("normalizes raw streamed text input for any renderer", async () => {
+		await getUiTheme();
+		const uiStub = { requestRender() {} } as unknown as TUI;
+		const customTextTool = {
+			name: "custom_text",
+			label: "Custom Text",
+			renderCall(args: unknown) {
+				const input =
+					typeof (args as { input?: unknown }).input === "string" ? (args as { input: string }).input : "";
+				return new Text(input, 0, 0);
+			},
+		} as unknown as AgentTool;
+
+		const component = new ToolExecutionComponent(
+			"custom_text",
+			{ __partialJson: "plain streamed text" },
+			{},
+			customTextTool,
+			uiStub,
+		);
+
+		const rendered = Bun.stripANSI(component.render(160).join("\n"));
+		expect(rendered).toContain("plain streamed text");
 	});
 });
