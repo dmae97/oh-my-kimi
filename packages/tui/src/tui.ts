@@ -705,8 +705,9 @@ export class TUI extends Container {
 
 	#prepareForcedRender(clearScrollback: boolean): void {
 		this.#clearScrollbackOnNextRender ||= clearScrollback;
+		const droppedLines = this.#previousLines.length > 0;
 		this.#previousLines = [];
-		this.#previousLinesDroppedForForcedRender = true;
+		this.#previousLinesDroppedForForcedRender = droppedLines;
 		this.#previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
 		this.#previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
 		this.#cursorRow = 0;
@@ -1382,6 +1383,7 @@ export class TUI extends Container {
 			}
 			if (
 				newLines.length !== this.#previousLines.length &&
+				this.#scrollbackHighWater > 0 &&
 				this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewportMutation)
 			) {
 				return { kind: "historyRebuild" };

@@ -27,13 +27,14 @@ const CORE_BULK_MAX = 1_000;
 const SOAK_BULK_MAX = 1_000;
 const CORE_TIMEOUT_MS = 30_000;
 const SOAK_TIMEOUT_MS = 120_000;
+const EXHAUSTIVE_SCROLLBACK = Bun.env.TUI_STRESS_EXHAUSTIVE_SCROLLBACK === "1";
 
 const SEGMENT_RESET = "\x1b[0m";
 const ESC = "\x1b";
 const BEL = "\x07";
 const SMILE = String.fromCodePoint(0x1f642);
 type TestPlatform = "darwin" | "linux" | "win32";
-type TerminalMode = "normal" | "unknown";
+type TerminalMode = "normal" | "unknown" | "intermittentUnknown" | "staleBottom";
 type GeometryMode = "small" | "large";
 type EnvMode = "plain" | "tmux" | "termux";
 const ENV_KEYS = ["TMUX", "STY", "ZELLIJ", "TERMUX_VERSION"] as const;
@@ -79,7 +80,14 @@ type OperationKind =
 	| "collapseToFew"
 	| "swapOffscreenRows"
 	| "resizeBoth"
-	| "resizeNoop";
+	| "resizeNoop"
+	| "forceRenderAllowUnknown"
+	| "forceRenderClearScrollback"
+	| "forceRenderAfterEmptyOverflow"
+	| "attachChild"
+	| "detachChild"
+	| "reorderChildren"
+	| "mutateChild";
 
 const BURST_STEP_KINDS = [
 	"appendSmall",
@@ -89,6 +97,11 @@ const BURST_STEP_KINDS = [
 	"editVisibleLine",
 	"editOffscreenLine",
 	"tickStatusHeader",
+	"resizeWidth",
+	"resizeHeight",
+	"scrollPartial",
+	"scrollToBottom",
+	"forceRender",
 ] as const;
 type BurstStepKind = (typeof BURST_STEP_KINDS)[number];
 const OVERLAY_ANCHORS = [
@@ -117,12 +130,20 @@ interface ExpectedFrame {
 
 interface StressOverlayEntry {
 	id: number;
+	sentinel: string;
 	model: StressOverlayModel;
 	component: StressOverlayComponent;
 	handle: OverlayHandle;
 	options: OverlayOptions;
 	hidden: boolean;
 	detail: JsonObject;
+}
+
+interface StressChildEntry {
+	id: number;
+	model: StressModel;
+	component: StressComponent;
+	active: boolean;
 }
 
 interface LogicalLine {
@@ -146,6 +167,7 @@ interface Scenario {
 	scrollback: number;
 	strictScrollback: boolean;
 	timeoutMs: number;
+	uniqueContent: boolean;
 }
 
 interface Snapshot {
@@ -169,6 +191,7 @@ interface AppliedOperation {
 	geometryChanged: boolean;
 	forcedRender: boolean;
 	checkpoint: boolean;
+	mutatesViewport: boolean;
 	coalesced?: boolean;
 }
 
@@ -191,6 +214,51 @@ interface OperationLogEntry {
 class UnknownViewportTerminal extends VirtualTerminal {
 	isNativeViewportAtBottom(): undefined {
 		return undefined;
+	}
+}
+
+class IntermittentUnknownViewportTerminal extends VirtualTerminal {
+	#probeCount = 0;
+
+	isNativeViewportAtBottom(): boolean | undefined {
+		this.#probeCount += 1;
+		return this.#probeCount % 3 === 0 ? undefined : super.isNativeViewportAtBottom();
+	}
+}
+
+class StaleBottomTerminal extends VirtualTerminal {
+	#previous: boolean | undefined;
+	#returnStale = false;
+
+	isNativeViewportAtBottom(): boolean | undefined {
+		const current = super.isNativeViewportAtBottom();
+		if (this.#returnStale) {
+			this.#returnStale = false;
+			const stale = this.#previous;
+			this.#previous = current;
+			return stale;
+		}
+		this.#returnStale = true;
+		this.#previous = current;
+		return current;
+	}
+}
+
+class MutableLinesComponent implements Component {
+	#lines: string[];
+
+	constructor(lines: readonly string[]) {
+		this.#lines = [...lines];
+	}
+
+	setLines(lines: readonly string[]): void {
+		this.#lines = [...lines];
+	}
+
+	invalidate(): void {}
+
+	render(_width: number): string[] {
+		return [...this.#lines];
 	}
 }
 
@@ -234,10 +302,15 @@ class StressModel {
 	#collapsibleIds: number[] = [];
 	#cursorLineIndex: number | null = null;
 	#cursorMode: CursorMode = "end";
+	#uniqueContent: boolean;
+	#usedText = new Set<string>();
+	#labelPrefix: string;
 
-	constructor(rng: Rng, minLines: number) {
+	constructor(rng: Rng, minLines: number, uniqueContent = false, labelPrefix = "") {
 		this.#rng = rng;
 		this.minLines = minLines;
+		this.#uniqueContent = uniqueContent;
+		this.#labelPrefix = labelPrefix;
 		const initialLength = minLines + 20;
 		for (let i = 0; i < initialLength; i++) {
 			this.lines.push(this.#line(this.#initialText(i)));
@@ -297,6 +370,11 @@ class StressModel {
 	}
 
 	appendRepeatedTail(): JsonObject {
+		if (this.#uniqueContent) {
+			const line = this.#freshLine("repeatAlt");
+			this.lines.push(line);
+			return { convertedToUnique: true, text: line.text };
+		}
 		const text = this.lines[this.lines.length - 1]?.text ?? "";
 		this.lines.push(this.#line(text));
 		return { text };
@@ -304,6 +382,11 @@ class StressModel {
 
 	appendDuplicateOfExisting(): JsonObject {
 		const sourceIndex = this.#rng.int(0, this.lines.length - 1);
+		if (this.#uniqueContent) {
+			const line = this.#freshLine("dupAlt");
+			this.lines.push(line);
+			return { sourceIndex, convertedToUnique: true, text: line.text };
+		}
 		const text = this.lines[sourceIndex]?.text ?? "";
 		this.lines.push(this.#line(text));
 		return { sourceIndex, text };
@@ -343,7 +426,7 @@ class StressModel {
 		const previousLast = this.lines[previousLength - 1]?.text ?? "";
 		this.lines[offscreenIndex] = this.#randomLine("x");
 		const repeatedIndex = Math.max(0, previousLength - 2);
-		this.lines[repeatedIndex] = this.#line(previousLast);
+		this.lines[repeatedIndex] = this.#uniqueContent ? this.#freshLine("xAlt") : this.#line(previousLast);
 		this.lines[previousLength - 1] = this.#randomLine("e");
 		this.lines.push(this.#randomLine("f"));
 		return { offscreenIndex, repeatedIndex, previousLast, previousLength };
@@ -405,12 +488,14 @@ class StressModel {
 			}
 		}
 
-		const block = [
-			this.#line(styledText("blk0", 35)),
-			this.#line(wideText("blk1")),
-			this.#line(linkedText("blk2")),
-			this.#line(longText("blk3", 3)),
-		];
+		const block = this.#uniqueContent
+			? [this.#freshLine("blk0"), this.#freshLine("blk1"), this.#freshLine("blk2"), this.#freshLine("blk3")]
+			: [
+					this.#line(styledText("blk0", 35)),
+					this.#line(wideText("blk1")),
+					this.#line(linkedText("blk2")),
+					this.#line(longText("blk3", 3)),
+				];
 		this.#collapsibleIds = block.map(line => line.id);
 		const index = Math.min(2, this.lines.length);
 		this.lines.splice(index, 0, ...block);
@@ -437,6 +522,17 @@ class StressModel {
 		const nextLength = this.#rng.int(0, 2);
 		this.lines.splice(0, this.lines.length, ...this.#newLines(nextLength, "c"));
 		return { nextLength };
+	}
+
+	clear(): JsonObject {
+		const previousLength = this.lines.length;
+		this.lines.splice(0, this.lines.length);
+		return { previousLength };
+	}
+
+	appendCount(count: number, prefix: string): JsonObject {
+		this.lines.push(...this.#newLines(count, prefix));
+		return { count };
 	}
 
 	beginHighWaterPreview(height: number): JsonObject {
@@ -474,6 +570,7 @@ class StressModel {
 	}
 
 	#initialText(index: number): string {
+		if (this.#uniqueContent) return index % 13 === 0 ? "" : `${this.#labelPrefix}init${index.toString(36)}`;
 		if (index % 13 === 0) return "";
 		if (index % 23 === 0) return longText(`L${index.toString(36)}`, 4);
 		if (index % 19 === 0) return linkedText(`link${index.toString(36)}`);
@@ -492,6 +589,7 @@ class StressModel {
 	}
 
 	#randomLine(prefix: string): LogicalLine {
+		if (this.#uniqueContent) return this.#freshLine(prefix);
 		const roll = this.#rng.next();
 		if (roll < 0.1) return this.#line("");
 		if (roll < 0.2) return this.#line(`r${this.#rng.int(0, 3)}`);
@@ -503,8 +601,12 @@ class StressModel {
 	}
 
 	#freshLine(prefix: string): LogicalLine {
-		const id = this.#nextId.toString(36);
-		return this.#line(randomDecoratedText(this.#rng, `${prefix}${id}`));
+		for (;;) {
+			const id = this.#nextId.toString(36);
+			const text = randomDecoratedText(this.#rng, `${this.#labelPrefix}${prefix}${id}`);
+			if (!this.#uniqueContent || text.length === 0 || !this.#usedText.has(text)) return this.#line(text);
+			this.#nextId += 1;
+		}
 	}
 
 	#ensureLine(): void {
@@ -531,6 +633,7 @@ class StressModel {
 	#line(text: string): LogicalLine {
 		const line = { id: this.#nextId, text };
 		this.#nextId += 1;
+		if (text.length > 0) this.#usedText.add(text);
 		return line;
 	}
 }
@@ -552,6 +655,7 @@ class StressComponent implements Component, Focusable {
 
 class StressOverlayModel {
 	readonly lines: LogicalLine[] = [];
+	readonly sentinel: string;
 	#rng: Rng;
 	#nextId = 0;
 	#cursorLineIndex = 0;
@@ -559,14 +663,17 @@ class StressOverlayModel {
 
 	constructor(rng: Rng, id: number) {
 		this.#rng = rng;
+		this.sentinel = `OV_SENTINEL_${id.toString(36)}_`;
 		const count = rng.int(1, 5);
-		for (let i = 0; i < count; i++) {
+		this.lines.push(this.#line(`${this.sentinel}${randomDecoratedText(rng, `ov${id}-0`)}`));
+		for (let i = 1; i < count; i++) {
 			this.lines.push(this.#line(randomDecoratedText(rng, `ov${id}-${i}`)));
 		}
 	}
 
 	renderedLines(width: number, focused = false): string[] {
 		const lines = this.lines.map(line => line.text);
+		if (!lines.some(line => line.includes(this.sentinel))) lines.unshift(this.sentinel);
 		if (focused && lines.length > 0) {
 			const index = this.#clampedCursorLineIndex();
 			lines[index] = insertCursorMarker(lines[index] ?? "", this.#cursorMode, width);
@@ -654,7 +761,9 @@ class StressDriver {
 	#tui: TUI;
 	#model: StressModel;
 	#component: StressComponent;
+	#children: StressChildEntry[] = [];
 	#overlays: StressOverlayEntry[] = [];
+	#hiddenOverlaySentinels = new Set<string>();
 	#nextOverlayId = 0;
 	#opLog: OperationLogEntry[] = [];
 	#nativeScrollbackAuditBlocked = false;
@@ -663,8 +772,17 @@ class StressDriver {
 		this.#scenario = scenario;
 		this.#rng = new Rng(scenario.seed);
 		const maxHeight = maxOf(scenario.heightChoices);
-		this.#model = new StressModel(this.#rng, maxHeight + 12);
+		this.#model = new StressModel(this.#rng, maxHeight + 12, scenario.uniqueContent, "root-");
 		this.#component = new StressComponent(this.#model);
+		this.#children = [0, 1].map(id => {
+			const model = new StressModel(
+				this.#rng,
+				Math.max(1, Math.min(3, maxHeight)),
+				scenario.uniqueContent,
+				`child${id}-`,
+			);
+			return { id, model, component: new StressComponent(model), active: false };
+		});
 		this.#term = createTerminal(scenario);
 		this.#tui = new TUI(this.#term, true);
 		this.#tui.addChild(this.#component);
@@ -682,6 +800,7 @@ class StressDriver {
 					checksRowAccounting: false,
 					geometryChanged: false,
 					forcedRender: true,
+					mutatesViewport: false,
 					checkpoint: false,
 				},
 				this.#snapshot(),
@@ -727,9 +846,16 @@ class StressDriver {
 	#expectedFrame(): ExpectedFrame {
 		const width = this.#term.columns;
 		const height = this.#term.rows;
-		const baseLines = this.#component.render(width);
+		const baseLines = this.#baseFrameLines(width);
 		const composed = compositeExpectedOverlays(baseLines, this.#overlays, width, height);
 		return expectedFrameFromLines(composed, width, height);
+	}
+
+	#baseFrameLines(width: number): string[] {
+		return [
+			...this.#component.render(width),
+			...this.#children.flatMap(child => (child.active ? child.component.render(width) : [])),
+		];
 	}
 
 	#hasVisibleOverlay(): boolean {
@@ -764,8 +890,8 @@ class StressDriver {
 		const weighted: OperationKind[] = [];
 		this.#pushWeighted(weighted, "appendSmall", 14);
 		this.#pushWeighted(weighted, "streamOne", 12);
-		this.#pushWeighted(weighted, "appendRepeatedTail", 8);
-		this.#pushWeighted(weighted, "appendDuplicateOfExisting", 8);
+		this.#pushWeighted(weighted, "appendRepeatedTail", this.#scenario.uniqueContent ? 2 : 8);
+		this.#pushWeighted(weighted, "appendDuplicateOfExisting", this.#scenario.uniqueContent ? 2 : 8);
 		this.#pushWeighted(weighted, "injectBlankCluster", 5);
 		this.#pushWeighted(weighted, "appendBulk", 3);
 		this.#pushWeighted(weighted, "editVisibleLine", 8);
@@ -784,6 +910,9 @@ class StressDriver {
 		this.#pushWeighted(weighted, "resizeWidth", 3);
 		this.#pushWeighted(weighted, "resizeHeight", 3);
 		this.#pushWeighted(weighted, "forceRender", 2);
+		this.#pushWeighted(weighted, "forceRenderAllowUnknown", 2);
+		this.#pushWeighted(weighted, "forceRenderClearScrollback", 1);
+		this.#pushWeighted(weighted, "forceRenderAfterEmptyOverflow", 1);
 		this.#pushWeighted(weighted, "toggleFocusInput", 2);
 		this.#pushWeighted(weighted, "moveCursorVisible", 3);
 		this.#pushWeighted(weighted, "moveCursorOffscreen", 2);
@@ -799,6 +928,10 @@ class StressDriver {
 		this.#pushWeighted(weighted, "highWaterPreviewCollapse", 2);
 		this.#pushWeighted(weighted, "resizeBoth", 2);
 		this.#pushWeighted(weighted, "resizeNoop", 1);
+		this.#pushWeighted(weighted, "attachChild", this.#children.some(child => !child.active) ? 2 : 0);
+		this.#pushWeighted(weighted, "detachChild", this.#children.some(child => child.active) ? 2 : 0);
+		this.#pushWeighted(weighted, "reorderChildren", this.#children.filter(child => child.active).length > 1 ? 1 : 0);
+		this.#pushWeighted(weighted, "mutateChild", this.#children.some(child => child.active) ? 3 : 0);
 		return this.#rng.pick(weighted);
 	}
 
@@ -856,6 +989,12 @@ class StressDriver {
 				return await this.#resizeHeight();
 			case "forceRender":
 				return await this.#forceRender();
+			case "forceRenderAllowUnknown":
+				return await this.#forceRenderAllowUnknown();
+			case "forceRenderClearScrollback":
+				return await this.#forceRenderClearScrollback();
+			case "forceRenderAfterEmptyOverflow":
+				return await this.#forceRenderAfterEmptyOverflow();
 			case "toggleFocusInput":
 				return await this.#toggleFocusInput();
 			case "moveCursorVisible":
@@ -884,6 +1023,14 @@ class StressDriver {
 				return await this.#resizeBoth();
 			case "resizeNoop":
 				return await this.#resizeNoop();
+			case "attachChild":
+				return await this.#attachChild();
+			case "detachChild":
+				return await this.#detachChild();
+			case "reorderChildren":
+				return await this.#reorderChildren();
+			case "mutateChild":
+				return await this.#mutateChild();
 		}
 	}
 
@@ -901,6 +1048,7 @@ class StressDriver {
 			checksRowAccounting,
 			geometryChanged: false,
 			forcedRender: false,
+			mutatesViewport: false,
 			checkpoint: false,
 		};
 	}
@@ -935,6 +1083,7 @@ class StressDriver {
 			checksRowAccounting: false,
 			geometryChanged: false,
 			forcedRender: false,
+			mutatesViewport: false,
 			checkpoint: false,
 		};
 	}
@@ -942,21 +1091,41 @@ class StressDriver {
 	async #coalescedBurst(): Promise<AppliedOperation> {
 		const count = this.#rng.int(2, 6);
 		const steps: JsonValue[] = [];
+		let mutatesContent = false;
+		let geometryChanged = false;
+		let forcedRender = false;
+		let mutatesViewport = false;
 		for (let i = 0; i < count; i++) {
 			const stepKind = this.#rng.pick(BURST_STEP_KINDS);
-			steps.push({ kind: stepKind, detail: this.#applyBurstStep(stepKind) });
+			const detail = this.#applyBurstStep(stepKind);
+			steps.push({ kind: stepKind, detail });
+			mutatesContent ||=
+				stepKind !== "resizeWidth" &&
+				stepKind !== "resizeHeight" &&
+				stepKind !== "scrollPartial" &&
+				stepKind !== "scrollToBottom" &&
+				stepKind !== "forceRender";
+			geometryChanged ||= stepKind === "resizeWidth" || stepKind === "resizeHeight";
+			mutatesViewport ||=
+				stepKind === "resizeWidth" ||
+				stepKind === "resizeHeight" ||
+				stepKind === "scrollPartial" ||
+				stepKind === "scrollToBottom" ||
+				stepKind === "forceRender";
+			forcedRender ||= stepKind === "forceRender";
 			// Schedule without settling so the throttle coalesces every step into one paint.
-			this.#tui.requestRender();
+			if (stepKind !== "forceRender") this.#tui.requestRender();
 		}
 		this.#renderContentFrame();
 		await settle(this.#term);
 		return {
 			kind: "coalescedBurst",
 			detail: { count, steps },
-			mutatesContent: true,
+			mutatesContent,
 			checksRowAccounting: false,
-			geometryChanged: false,
-			forcedRender: false,
+			geometryChanged,
+			forcedRender,
+			mutatesViewport,
 			checkpoint: false,
 			coalesced: true,
 		};
@@ -978,6 +1147,28 @@ class StressDriver {
 				return this.#model.editOffscreenLine(this.#term.rows);
 			case "tickStatusHeader":
 				return this.#model.tickStatusHeader();
+			case "resizeWidth": {
+				const columns = this.#pickDifferent(this.#scenario.widthChoices, this.#term.columns);
+				this.#term.resize(columns, this.#term.rows);
+				return { columns };
+			}
+			case "resizeHeight": {
+				const rows = this.#pickDifferent(this.#scenario.heightChoices, this.#term.rows);
+				this.#term.resize(this.#term.columns, rows);
+				return { rows };
+			}
+			case "scrollPartial": {
+				const amount = this.#rng.int(1, Math.max(1, this.#term.rows));
+				const direction = this.#rng.chance(0.5) ? -1 : 1;
+				this.#term.scrollLines(direction * amount);
+				return { amount: direction * amount };
+			}
+			case "scrollToBottom":
+				this.#term.scrollLines(LARGE_SCROLL);
+				return { amount: LARGE_SCROLL };
+			case "forceRender":
+				this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+				return { allowUnknownViewportMutation: true };
 		}
 	}
 
@@ -1001,10 +1192,24 @@ class StressDriver {
 		const component = new StressOverlayComponent(model);
 		const { options, detail } = this.#randomOverlayOptions();
 		const handle = this.#tui.showOverlay(component, options);
-		const entry: StressOverlayEntry = { id, model, component, handle, options, hidden: false, detail };
+		const entry: StressOverlayEntry = {
+			id,
+			sentinel: model.sentinel,
+			model,
+			component,
+			handle,
+			options,
+			hidden: false,
+			detail,
+		};
 		this.#overlays.push(entry);
 		await settle(this.#term);
-		return this.#viewOperation("showOverlay", { id, options: detail, lines: model.debugLines() });
+		return this.#viewOperation("showOverlay", {
+			id,
+			sentinel: model.sentinel,
+			options: detail,
+			lines: model.debugLines(),
+		});
 	}
 
 	async #hideOverlay(): Promise<AppliedOperation> {
@@ -1012,8 +1217,9 @@ class StressDriver {
 		if (entry === undefined) return this.#viewOperation("hideOverlay", { skipped: true });
 		entry.handle.hide();
 		this.#overlays = this.#overlays.filter(overlay => overlay !== entry);
+		this.#hiddenOverlaySentinels.add(entry.sentinel);
 		await settle(this.#term);
-		return this.#viewOperation("hideOverlay", { id: entry.id });
+		return this.#viewOperation("hideOverlay", { id: entry.id, sentinel: entry.sentinel });
 	}
 
 	async #toggleOverlayHidden(): Promise<AppliedOperation> {
@@ -1021,8 +1227,13 @@ class StressDriver {
 		if (entry === undefined) return this.#viewOperation("toggleOverlayHidden", { skipped: true });
 		entry.hidden = !entry.hidden;
 		entry.handle.setHidden(entry.hidden);
+		if (entry.hidden) this.#hiddenOverlaySentinels.add(entry.sentinel);
 		await settle(this.#term);
-		return this.#viewOperation("toggleOverlayHidden", { id: entry.id, hidden: entry.hidden });
+		return this.#viewOperation("toggleOverlayHidden", {
+			id: entry.id,
+			sentinel: entry.sentinel,
+			hidden: entry.hidden,
+		});
 	}
 
 	async #editOverlay(): Promise<AppliedOperation> {
@@ -1125,6 +1336,7 @@ class StressDriver {
 			checksRowAccounting: false,
 			geometryChanged: true,
 			forcedRender: false,
+			mutatesViewport: true,
 			checkpoint: false,
 		};
 	}
@@ -1139,6 +1351,7 @@ class StressDriver {
 			checksRowAccounting: false,
 			geometryChanged: false,
 			forcedRender: false,
+			mutatesViewport: false,
 			checkpoint: false,
 		};
 	}
@@ -1164,6 +1377,7 @@ class StressDriver {
 			checksRowAccounting: false,
 			geometryChanged: false,
 			forcedRender: true,
+			mutatesViewport: true,
 			checkpoint: true,
 		};
 	}
@@ -1189,6 +1403,7 @@ class StressDriver {
 			checksRowAccounting: false,
 			geometryChanged: true,
 			forcedRender: false,
+			mutatesViewport: true,
 			checkpoint: false,
 		};
 	}
@@ -1207,20 +1422,59 @@ class StressDriver {
 			checksRowAccounting: false,
 			geometryChanged: true,
 			forcedRender: false,
+			mutatesViewport: true,
 			checkpoint: false,
 		};
 	}
 
 	async #forceRender(): Promise<AppliedOperation> {
+		this.#tui.requestRender(true);
+		await settle(this.#term);
+		return this.#forceOperation("forceRender", {});
+	}
+
+	async #forceRenderAllowUnknown(): Promise<AppliedOperation> {
+		this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+		await settle(this.#term);
+		return this.#forceOperation("forceRenderAllowUnknown", { allowUnknownViewportMutation: true });
+	}
+
+	async #forceRenderClearScrollback(): Promise<AppliedOperation> {
+		this.#term.scrollLines(LARGE_SCROLL);
+		this.#tui.requestRender(true, { allowUnknownViewportMutation: true, clearScrollback: true });
+		await settle(this.#term);
+		return { ...this.#forceOperation("forceRenderClearScrollback", { clearScrollback: true }), checkpoint: true };
+	}
+
+	async #forceRenderAfterEmptyOverflow(): Promise<AppliedOperation> {
+		const detachedChildren: number[] = [];
+		for (const child of this.#children) {
+			if (!child.active) continue;
+			child.active = false;
+			detachedChildren.push(child.id);
+			this.#tui.removeChild(child.component);
+		}
+		const empty = this.#model.clear();
+		this.#tui.requestRender(true, { allowUnknownViewportMutation: true, clearScrollback: true });
+		await settle(this.#term);
+		const overflow = this.#model.appendCount(this.#term.rows + this.#rng.int(1, 4), "overflow");
 		this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
 		await settle(this.#term);
 		return {
-			kind: "forceRender",
-			detail: {},
+			...this.#forceOperation("forceRenderAfterEmptyOverflow", { detachedChildren, empty, overflow }),
+			mutatesContent: true,
+		};
+	}
+
+	#forceOperation(kind: OperationKind, detail: JsonObject): AppliedOperation {
+		return {
+			kind,
+			detail,
 			mutatesContent: false,
 			checksRowAccounting: false,
 			geometryChanged: false,
 			forcedRender: true,
+			mutatesViewport: kind === "forceRenderClearScrollback" || kind === "forceRenderAfterEmptyOverflow",
 			checkpoint: false,
 		};
 	}
@@ -1244,6 +1498,90 @@ class StressDriver {
 			checksRowAccounting: false,
 			geometryChanged: false,
 			forcedRender: false,
+			mutatesViewport: false,
+			checkpoint: false,
+		};
+	}
+
+	async #attachChild(): Promise<AppliedOperation> {
+		const child = this.#children.find(entry => !entry.active);
+		if (child === undefined) return this.#viewOperation("attachChild", { skipped: true });
+		child.active = true;
+		this.#tui.addChild(child.component);
+		this.#renderContentFrame();
+		await settle(this.#term);
+		return {
+			kind: "attachChild",
+			detail: { id: child.id, lines: child.model.debugLines() },
+			mutatesContent: true,
+			checksRowAccounting: false,
+			geometryChanged: false,
+			forcedRender: false,
+			mutatesViewport: false,
+			checkpoint: false,
+		};
+	}
+
+	async #detachChild(): Promise<AppliedOperation> {
+		const active = this.#children.filter(entry => entry.active);
+		const child = active.length === 0 ? undefined : active[this.#rng.int(0, active.length - 1)];
+		if (child === undefined) return this.#viewOperation("detachChild", { skipped: true });
+		child.active = false;
+		this.#tui.removeChild(child.component);
+		this.#renderContentFrame();
+		await settle(this.#term);
+		return {
+			kind: "detachChild",
+			detail: { id: child.id },
+			mutatesContent: true,
+			checksRowAccounting: false,
+			geometryChanged: false,
+			forcedRender: false,
+			mutatesViewport: false,
+			checkpoint: false,
+		};
+	}
+
+	async #reorderChildren(): Promise<AppliedOperation> {
+		const active = this.#children.filter(entry => entry.active);
+		if (active.length < 2) return this.#viewOperation("reorderChildren", { skipped: true });
+		const first = this.#children.shift();
+		if (first !== undefined) this.#children.push(first);
+		for (const child of this.#children) this.#tui.removeChild(child.component);
+		this.#tui.removeChild(this.#component);
+		this.#tui.addChild(this.#component);
+		for (const child of this.#children) {
+			if (child.active) this.#tui.addChild(child.component);
+		}
+		this.#renderContentFrame();
+		await settle(this.#term);
+		return {
+			kind: "reorderChildren",
+			detail: { activeOrder: this.#children.filter(child => child.active).map(child => child.id) },
+			mutatesContent: true,
+			checksRowAccounting: false,
+			geometryChanged: false,
+			forcedRender: false,
+			mutatesViewport: false,
+			checkpoint: false,
+		};
+	}
+
+	async #mutateChild(): Promise<AppliedOperation> {
+		const active = this.#children.filter(entry => entry.active);
+		const child = active.length === 0 ? undefined : active[this.#rng.int(0, active.length - 1)];
+		if (child === undefined) return this.#viewOperation("mutateChild", { skipped: true });
+		const detail = this.#rng.chance(0.5) ? child.model.appendSmall() : child.model.editVisibleLine(this.#term.rows);
+		this.#renderContentFrame();
+		await settle(this.#term);
+		return {
+			kind: "mutateChild",
+			detail: { id: child.id, detail },
+			mutatesContent: true,
+			checksRowAccounting: false,
+			geometryChanged: false,
+			forcedRender: false,
+			mutatesViewport: false,
 			checkpoint: false,
 		};
 	}
@@ -1256,6 +1594,7 @@ class StressDriver {
 			checksRowAccounting: false,
 			geometryChanged: false,
 			forcedRender: false,
+			mutatesViewport: kind === "scrollUp" || kind === "scrollPartial",
 			checkpoint: false,
 		};
 	}
@@ -1283,6 +1622,7 @@ class StressDriver {
 				checksRowAccounting: false,
 				geometryChanged: false,
 				forcedRender: true,
+				mutatesViewport: true,
 				checkpoint: true,
 			},
 			before,
@@ -1324,6 +1664,8 @@ class StressDriver {
 		this.#assertScrollbackGrowthMatchesFrameGrowth(op, before, after, index);
 		this.#assertHistoryPrefixStability(op, before, after, index);
 		this.#assertNativeScrollbackReplay(op, before, after, index);
+		this.#assertNoStaleOverlaySentinels(op, before, after, index);
+		this.#assertUniqueContentNoUnexpectedDuplicates(op, before, after, index);
 		if (op.checkpoint && this.#scenario.strictScrollback) {
 			this.#assertCleanBuffer(op, before, after, index);
 		}
@@ -1337,7 +1679,7 @@ class StressDriver {
 		// a scrollback line down without a disruptive full repaint), leaving the
 		// content top-aligned with a ghost blank below — buffer.length then exceeds
 		// the clean expectation until the next forced repaint/checkpoint re-anchors it.
-		if (after.buffer.length !== Math.max(after.height, after.frame.length)) return;
+		if (after.buffer.length !== this.#expectedScrollbackBuffer(after).length) return;
 		const expected = expectedViewport(after.frame, after.height);
 		if (!sameLines(after.view, expected)) {
 			this.#fail("viewport fidelity", op, before, after, index, { expected });
@@ -1347,11 +1689,12 @@ class StressDriver {
 	#assertCleanBufferWhenAligned(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		if (!this.#scenario.strictScrollback || !after.atBottom || op.geometryChanged) return;
 		if (this.#hasVisibleOverlay()) return;
-		if (!bufferReflectsFrame(before.buffer, before.frame, before.height)) return;
-		if (after.buffer.length !== Math.max(after.height, after.frame.length)) return;
-		if (!bufferReflectsFrame(after.buffer, after.frame, after.height)) {
+		if (!this.#bufferReflectsFrame(before.buffer, before.frame, before.height)) return;
+		const expected = this.#expectedScrollbackBuffer(after);
+		if (after.buffer.length !== expected.length) return;
+		if (!sameLines(after.buffer, expected)) {
 			this.#fail("aligned buffer fidelity", op, before, after, index, {
-				expectedLength: Math.max(after.height, after.frame.length),
+				expectedLength: expected.length,
 				actualLength: after.buffer.length,
 			});
 		}
@@ -1380,7 +1723,7 @@ class StressDriver {
 		// Exact cursor parking is only predictable when the buffer is bottom-anchored
 		// (no ghost/stale rows). After a trailing shrink the cursor sits on the
 		// de-anchored last content row, which is checked once a repaint re-anchors.
-		if (after.buffer.length !== Math.max(after.height, after.frame.length)) return;
+		if (after.buffer.length !== this.#expectedScrollbackBuffer(after).length) return;
 		if (after.cursor.row !== expectedCursor.row) {
 			this.#fail("focused cursor row", op, before, after, index, {
 				expectedRow: expectedCursor.row,
@@ -1402,7 +1745,8 @@ class StressDriver {
 
 	#assertScrolledDeferral(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		if (!op.mutatesContent || before.atBottom) return;
-		if (this.#scenario.terminalMode === "unknown" && this.#scenario.platform !== "win32") return;
+		if (op.mutatesViewport || op.geometryChanged || op.checkpoint) return;
+		if (this.#scenario.terminalMode !== "normal" && this.#scenario.platform !== "win32") return;
 		if (after.position.viewportY !== before.position.viewportY) {
 			this.#fail("scrolled viewport moved during content mutation", op, before, after, index, {
 				expectedViewportY: before.position.viewportY,
@@ -1433,6 +1777,7 @@ class StressDriver {
 		if (!this.#scenario.strictScrollback || this.#hasVisibleOverlay()) return;
 		if (!op.mutatesContent || !op.checksRowAccounting || op.geometryChanged || op.forcedRender) return;
 		if (!before.atBottom || !after.atBottom) return;
+		if (this.#scrollbackCapReached(before) || this.#scrollbackCapReached(after)) return;
 		if (before.redraws !== after.redraws) return;
 		// Row accounting is only meaningful once content overflows the viewport. While
 		// content fits within `height`, xterm pins buffer.length at `height`, so a
@@ -1443,7 +1788,7 @@ class StressDriver {
 		if (deltaFrame < 0) return;
 		const deltaBuffer = after.buffer.length - before.buffer.length;
 		const incremental = deltaBuffer === deltaFrame;
-		const clean = isCleanBuffer(after.buffer, after.frame, after.height);
+		const clean = this.#isCleanBuffer(after.buffer, after.frame, after.height);
 		if (!incremental && !clean) {
 			this.#fail("buffer row accounting", op, before, after, index, {
 				deltaFrame,
@@ -1464,8 +1809,9 @@ class StressDriver {
 		if (op.checkpoint || op.geometryChanged) return;
 		if (!before.atBottom || !after.atBottom) return;
 		const deltaBuffer = after.buffer.length - before.buffer.length;
+		if (this.#scrollbackCapReached(before) || this.#scrollbackCapReached(after)) return;
 		if (deltaBuffer <= 0) return;
-		const clean = isCleanBuffer(after.buffer, after.frame, after.height);
+		const clean = this.#isCleanBuffer(after.buffer, after.frame, after.height);
 		if (clean) return;
 		const deltaFrame = Math.max(0, after.frame.length - before.frame.length);
 		if (deltaBuffer > deltaFrame) {
@@ -1488,6 +1834,7 @@ class StressDriver {
 
 	#assertHistoryPrefixStability(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		if (!this.#scenario.strictScrollback) return;
+		if (this.#scrollbackCapReached(before) || this.#scrollbackCapReached(after)) return;
 		if (!op.mutatesContent || before.redraws !== after.redraws) return;
 		const prefixLength = Math.max(0, Math.min(before.position.viewportY, before.buffer.length));
 		const beforePrefix = before.buffer.slice(0, prefixLength);
@@ -1511,7 +1858,7 @@ class StressDriver {
 		if (this.#nativeScrollbackAuditBlocked && !op.checkpoint) return;
 		if (!after.atBottom) return;
 		if (!op.mutatesContent && !op.forcedRender && !op.checkpoint) return;
-		const expected = expectedScrollbackBuffer(after.frame, after.height);
+		const expected = this.#expectedScrollbackBuffer(after);
 		if (!sameLines(after.buffer, expected)) {
 			const mismatch = firstMismatchIndex(after.buffer, expected);
 			this.#fail("native scrollback buffer fidelity", op, before, after, index, {
@@ -1524,7 +1871,7 @@ class StressDriver {
 		}
 		this.#nativeScrollbackAuditBlocked = false;
 
-		const probes = scrollbackProbePositions(after.position.baseY, after.frame.length, after.height);
+		const probes = scrollbackProbePositions(after.position.baseY, expected.length, after.height);
 		try {
 			for (const viewportY of probes) {
 				const current = this.#term.getBufferPosition().viewportY;
@@ -1546,11 +1893,61 @@ class StressDriver {
 
 	#assertCleanBuffer(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		if (this.#hasVisibleOverlay()) return;
-		if (!bufferReflectsFrame(after.buffer, after.frame, after.height)) {
+		const expected = this.#expectedScrollbackBuffer(after);
+		if (!sameLines(after.buffer, expected)) {
 			this.#fail("clean checkpoint reconstruction", op, before, after, index, {
-				expectedLength: Math.max(after.height, after.frame.length),
+				expectedLength: expected.length,
 				actualLength: after.buffer.length,
 			});
+		}
+	}
+
+	#expectedScrollbackBuffer(snapshot: Snapshot): string[] {
+		return expectedScrollbackBuffer(snapshot.frame, snapshot.height, this.#scenario.scrollback);
+	}
+	#scrollbackCapReached(snapshot: Snapshot): boolean {
+		return Math.max(snapshot.height, snapshot.frame.length) > snapshot.height + this.#scenario.scrollback;
+	}
+
+	#bufferReflectsFrame(buffer: readonly string[], frame: readonly string[], height: number): boolean {
+		return sameLines(buffer, expectedScrollbackBuffer(frame, height, this.#scenario.scrollback));
+	}
+
+	#isCleanBuffer(buffer: readonly string[], frame: readonly string[], height: number): boolean {
+		return this.#bufferReflectsFrame(buffer, frame, height);
+	}
+
+	#assertNoStaleOverlaySentinels(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		if (this.#hiddenOverlaySentinels.size === 0) return;
+		const visibleSentinels = new Set(
+			this.#overlays
+				.filter(entry => isExpectedOverlayVisible(entry, this.#term.columns, this.#term.rows))
+				.map(entry => entry.sentinel),
+		);
+		const nativeText = `${after.buffer.join("\n")}\n${after.view.join("\n")}`;
+		for (const sentinel of this.#hiddenOverlaySentinels) {
+			if (visibleSentinels.has(sentinel)) continue;
+			if (nativeText.includes(sentinel)) {
+				this.#fail("stale overlay sentinel", op, before, after, index, { sentinel });
+			}
+		}
+	}
+
+	#assertUniqueContentNoUnexpectedDuplicates(
+		op: AppliedOperation,
+		before: Snapshot,
+		after: Snapshot,
+		index: number,
+	): void {
+		if (!this.#scenario.uniqueContent || this.#hasVisibleOverlay()) return;
+		const allowed = duplicateNonblankLines(after.frame);
+		const seen = new Set<string>();
+		for (const line of after.buffer) {
+			if (line.length === 0) continue;
+			if (seen.has(line) && !allowed.has(line)) {
+				this.#fail("unexpected duplicate native scrollback line", op, before, after, index, { line });
+			}
+			seen.add(line);
 		}
 	}
 
@@ -1579,10 +1976,16 @@ class StressDriver {
 }
 
 function createTerminal(scenario: Scenario): VirtualTerminal {
-	if (scenario.terminalMode === "unknown") {
-		return new UnknownViewportTerminal(scenario.columns, scenario.rows, scenario.scrollback);
+	switch (scenario.terminalMode) {
+		case "unknown":
+			return new UnknownViewportTerminal(scenario.columns, scenario.rows, scenario.scrollback);
+		case "intermittentUnknown":
+			return new IntermittentUnknownViewportTerminal(scenario.columns, scenario.rows, scenario.scrollback);
+		case "staleBottom":
+			return new StaleBottomTerminal(scenario.columns, scenario.rows, scenario.scrollback);
+		case "normal":
+			return new VirtualTerminal(scenario.columns, scenario.rows, scenario.scrollback);
 	}
-	return new VirtualTerminal(scenario.columns, scenario.rows, scenario.scrollback);
 }
 
 function normalizeLines(lines: readonly string[]): string[] {
@@ -1624,12 +2027,13 @@ function windowAround(lines: readonly string[], center: number): string[] {
 	return lines.slice(start, end);
 }
 
-function expectedScrollbackBuffer(frame: readonly string[], height: number): string[] {
+function expectedScrollbackBuffer(frame: readonly string[], height: number, scrollback: number): string[] {
 	const expected = [...frame];
 	while (expected.length < height) {
 		expected.push("");
 	}
-	return expected;
+	const cap = height + scrollback;
+	return expected.length > cap ? expected.slice(expected.length - cap) : expected;
 }
 
 function scrollbackProbePositions(maxViewportY: number, frameLength: number, height: number): number[] {
@@ -1644,32 +2048,21 @@ function scrollbackProbePositions(maxViewportY: number, frameLength: number, hei
 	add(Math.max(0, frameLength - height));
 	add(frameLength - 1);
 	add(frameLength);
-	if (maxY <= 32) {
+	if (EXHAUSTIVE_SCROLLBACK || maxY <= 32) {
 		for (let y = 0; y <= maxY; y++) add(y);
 	}
 	return [...positions].sort((left, right) => left - right);
 }
 
-function isCleanBuffer(buffer: readonly string[], frame: readonly string[], height: number): boolean {
-	return bufferReflectsFrame(buffer, frame, height);
-}
-
-/**
- * A clean terminal buffer holds the logical frame followed by blank padding up to
- * the viewport height. When content overflows the viewport this collapses to a
- * byte-for-byte match (`buffer.length === frame.length`); when content fits, the
- * terminal still keeps `height` rows, so the tail is blank padding.
- */
-function bufferReflectsFrame(buffer: readonly string[], frame: readonly string[], height: number): boolean {
-	const expectedLength = Math.max(height, frame.length);
-	if (buffer.length !== expectedLength) return false;
-	for (let i = 0; i < frame.length; i++) {
-		if (buffer[i] !== frame[i]) return false;
+function duplicateNonblankLines(lines: readonly string[]): Set<string> {
+	const seen = new Set<string>();
+	const duplicates = new Set<string>();
+	for (const line of lines) {
+		if (line.length === 0) continue;
+		if (seen.has(line)) duplicates.add(line);
+		seen.add(line);
 	}
-	for (let i = frame.length; i < buffer.length; i++) {
-		if (buffer[i] !== "") return false;
-	}
-	return true;
+	return duplicates;
 }
 
 function expectedTerminalLine(line: string, width: number): string {
@@ -2006,6 +2399,20 @@ function scenarioEnv(envMode: EnvMode): Record<EnvKey, string | undefined> {
 function buildScenarios(): Scenario[] {
 	const soak = Bun.env.TUI_STRESS_SOAK === "1";
 	const templates = soak ? soakTemplates() : coreTemplates();
+	const replay = parseReplay(templates);
+	if (replay !== null) {
+		const maxHeight = maxOf(replay.template.heightChoices);
+		return [
+			materializeScenario(
+				replay.template,
+				replay.seed,
+				replay.iterations,
+				SOAK_BULK_MAX,
+				SOAK_TIMEOUT_MS,
+				maxHeight,
+			),
+		];
+	}
 	const defaultSeedCount = soak ? Math.max(BASE_SEEDS.length, templates.length) : BASE_SEEDS.length;
 	const seedCount = parsePositiveInt("TUI_STRESS_SEEDS", defaultSeedCount);
 	const iterations = parsePositiveInt("TUI_STRESS_ITER", soak ? SOAK_ITERATIONS : CORE_ITERATIONS);
@@ -2016,18 +2423,56 @@ function buildScenarios(): Scenario[] {
 	for (let i = 0; i < seeds.length; i++) {
 		const template = templates[i % templates.length]!;
 		const maxHeight = maxOf(template.heightChoices);
-		scenarios.push({
-			...template,
-			seed: seeds[i]!,
-			iterations,
-			bulkMax,
-			scrollback: Math.max(10_000, maxHeight + 64 + iterations * (bulkMax + 8)),
-			strictScrollback:
-				template.envMode !== "tmux" && template.terminalMode === "normal" && template.platform !== "win32",
-			timeoutMs,
-		});
+		scenarios.push(materializeScenario(template, seeds[i]!, iterations, bulkMax, timeoutMs, maxHeight));
 	}
 	return scenarios;
+}
+
+function materializeScenario(
+	template: ScenarioTemplate,
+	seed: number,
+	iterations: number,
+	bulkMax: number,
+	timeoutMs: number,
+	maxHeight: number,
+): Scenario {
+	return {
+		...template,
+		seed,
+		iterations,
+		bulkMax,
+		scrollback: template.scrollbackRows ?? Math.max(10_000, maxHeight + 64 + iterations * (bulkMax + 8)),
+		strictScrollback:
+			template.envMode !== "tmux" && template.terminalMode === "normal" && template.platform !== "win32",
+		timeoutMs,
+		uniqueContent: template.uniqueContent ?? false,
+	};
+}
+
+function parseReplay(
+	templates: readonly ScenarioTemplate[],
+): { template: ScenarioTemplate; seed: number; iterations: number } | null {
+	const raw = Bun.env.TUI_STRESS_REPLAY;
+	if (raw === undefined || raw.length === 0) return null;
+	const parsed = JSON.parse(raw) as JsonObject;
+	const scenario = typeof parsed.scenario === "string" ? parsed.scenario : "";
+	const template = templates.find(candidate => candidate.name === scenario);
+	if (template === undefined) throw new Error(`Unknown TUI_STRESS_REPLAY scenario: ${scenario}`);
+	const iterations =
+		typeof parsed.iterations === "number" && Number.isFinite(parsed.iterations)
+			? Math.max(1, Math.floor(parsed.iterations))
+			: CORE_ITERATIONS;
+	const seed = parseReplaySeed(parsed.seed);
+	return { template, seed, iterations };
+}
+
+function parseReplaySeed(seed: JsonValue | undefined): number {
+	if (typeof seed === "number" && Number.isFinite(seed)) return seed >>> 0;
+	if (typeof seed === "string") {
+		const parsed = Number.parseInt(seed, seed.startsWith("0x") || seed.startsWith("0X") ? 16 : 10);
+		if (Number.isFinite(parsed)) return parsed >>> 0;
+	}
+	return BASE_SEEDS[0];
 }
 
 function buildSeeds(count: number): number[] {
@@ -2041,8 +2486,11 @@ function buildSeeds(count: number): number[] {
 
 type ScenarioTemplate = Omit<
 	Scenario,
-	"seed" | "iterations" | "bulkMax" | "scrollback" | "strictScrollback" | "timeoutMs"
->;
+	"seed" | "iterations" | "bulkMax" | "scrollback" | "strictScrollback" | "timeoutMs" | "uniqueContent"
+> & {
+	scrollbackRows?: number;
+	uniqueContent?: boolean;
+};
 
 function coreTemplates(): ScenarioTemplate[] {
 	return [
@@ -2056,6 +2504,7 @@ function coreTemplates(): ScenarioTemplate[] {
 			rows: 4,
 			widthChoices: [10, 16, 24, 32, 40],
 			heightChoices: [3, 4, 6],
+			scrollbackRows: 5,
 		},
 		{
 			name: "linux-normal-small",
@@ -2080,9 +2529,9 @@ function coreTemplates(): ScenarioTemplate[] {
 			heightChoices: [12, 24],
 		},
 		{
-			name: "win32-unknown-small",
+			name: "win32-intermittentUnknown-small",
 			platform: "win32",
-			terminalMode: "unknown",
+			terminalMode: "intermittentUnknown",
 			envMode: "plain",
 			geometryMode: "small",
 			columns: 32,
@@ -2102,9 +2551,9 @@ function coreTemplates(): ScenarioTemplate[] {
 			heightChoices: [3, 4, 6],
 		},
 		{
-			name: "linux-unknown-large",
+			name: "linux-staleBottom-large",
 			platform: "linux",
-			terminalMode: "unknown",
+			terminalMode: "staleBottom",
 			envMode: "plain",
 			geometryMode: "large",
 			columns: 120,
@@ -2122,6 +2571,7 @@ function coreTemplates(): ScenarioTemplate[] {
 			rows: 1,
 			widthChoices: [1, 2, 6, 12],
 			heightChoices: [1, 2, 3],
+			uniqueContent: true,
 		},
 		{
 			name: "linux-normal-termux-small",
@@ -2140,7 +2590,7 @@ function coreTemplates(): ScenarioTemplate[] {
 function soakTemplates(): ScenarioTemplate[] {
 	const templates: ScenarioTemplate[] = [];
 	const platforms: readonly TestPlatform[] = ["darwin", "linux", "win32"];
-	const terminalModes: readonly TerminalMode[] = ["normal", "unknown"];
+	const terminalModes: readonly TerminalMode[] = ["normal", "unknown", "intermittentUnknown", "staleBottom"];
 	const envModes: readonly EnvMode[] = ["plain", "tmux", "termux"];
 	const geometries: readonly GeometryMode[] = ["small", "large"];
 	for (const platform of platforms) {
@@ -2158,6 +2608,9 @@ function soakTemplates(): ScenarioTemplate[] {
 						rows: large ? 12 : 4,
 						widthChoices: large ? [80, 120] : [2, 10, 16, 24, 32, 40],
 						heightChoices: large ? [12, 24] : [3, 4, 6],
+						...(!large && terminalMode === "normal" && envMode === "plain"
+							? { scrollbackRows: 5, uniqueContent: true }
+							: {}),
 					});
 				}
 			}
@@ -2230,6 +2683,55 @@ describe("TUI randomized render stress", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+	});
+
+	it("preserves preexisting shell scrollback during visible structural mutations", async () => {
+		const term = new VirtualTerminal(40, 5, 100);
+		term.write(`${Array.from({ length: 12 }, (_value, index) => `shell-${index}`).join("\r\n")}\r\n`);
+		await settle(term);
+
+		const tui = new TUI(term, true);
+		const component = new MutableLinesComponent(["ui-0", "ui-1", "ui-2"]);
+		tui.addChild(component);
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const externalRows = normalizeLines(term.getScrollBuffer()).filter(line => line.startsWith("shell-"));
+			if (externalRows.length === 0) {
+				throw new Error("Test setup failed: preexisting shell scrollback did not survive initial TUI paint");
+			}
+
+			const frames = [
+				["ui-0", "inserted-0", "ui-1", "ui-2"],
+				["ui-0", "inserted-1", "ui-1", "ui-2"],
+				["ui-0", "ui-1", "ui-2"],
+				["prefix", "ui-0", "ui-1", "ui-2"],
+			] as const;
+
+			for (let index = 0; index < frames.length; index++) {
+				component.setLines(frames[index]!);
+				tui.requestRender();
+				await settle(term);
+
+				const buffer = normalizeLines(term.getScrollBuffer());
+				for (const row of externalRows) {
+					if (!buffer.includes(row)) {
+						throw new Error(
+							`Preexisting shell scrollback was cleared by visible structural mutation\n${JSON.stringify(
+								{ mutationIndex: index, missing: row, externalRows, buffer },
+								null,
+								2,
+							)}`,
+						);
+					}
+				}
+			}
+		} finally {
+			tui.stop();
+			await term.flush();
+		}
 	});
 
 	for (const scenario of buildScenarios()) {

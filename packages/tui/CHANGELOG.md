@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `overflowSearch` to `SelectListLayoutOptions` to let consumers enable or disable type-to-filter search and search-status rendering per SelectList instance
@@ -13,6 +12,7 @@
 
 ### Fixed
 
+- Preserved existing terminal scrollback during forced and structural TUI renders so preexisting shell lines remained visible after component mutations
 - Rebuilt native scrollback for safe bottom-anchored offscreen edits and high-water preview collapses instead of repainting only the viewport, preventing stale or duplicated rows above the live viewport.
 - Stripped internal cursor marker sentinels from all rendered lines so offscreen focus markers no longer leak into terminal output
 - Truncated all painted lines to terminal width during viewport repaints and append-tail updates so long content no longer overflows or wraps unexpectedly
