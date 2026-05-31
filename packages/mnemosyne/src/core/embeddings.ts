@@ -8,22 +8,24 @@ import {
 	logger,
 } from "@oh-my-pi/pi-utils";
 import type { EmbeddingModel } from "fastembed";
-import { getMnemosyneRuntimeOptions, resolveEmbeddingProvider } from "./runtime-options";
+import { LRUCache } from "lru-cache/raw";
+import { type EmbeddingOutput, getMnemosyneRuntimeOptions, resolveEmbeddingProvider } from "./runtime-options";
 
+export type { EmbeddingOutput, EmbeddingRow } from "./runtime-options";
 export { cosineSimilarity } from "./vector-math";
 
 export type Vector = Float32Array;
 export type EmbeddingMatrix = Vector[];
 
 export interface EmbeddingProvider {
-	embed(texts: readonly string[]): unknown | Promise<unknown>;
+	embed(texts: readonly string[]): EmbeddingOutput | Promise<EmbeddingOutput>;
 	available?(): boolean | Promise<boolean>;
 }
 
 type StandardEmbeddingModel = Exclude<EmbeddingModel, EmbeddingModel.CUSTOM>;
 
 interface LocalEmbeddingModel {
-	embed(texts: string[], batchSize?: number): unknown;
+	embed(texts: string[], batchSize?: number): EmbeddingOutput;
 	queryEmbed?(query: string): Promise<number[]>;
 }
 
@@ -40,7 +42,7 @@ let providerOverride: EmbeddingProvider | null = null;
 let localModelPromise: Promise<LocalEmbeddingModel> | null = null;
 let localModelInitializer: LocalModelInitializer = defaultLocalModelInitializer;
 let apiCallCount = 0;
-const queryCache = new Map<string, Vector>();
+const queryCache = new LRUCache<string, Vector>({ max: QUERY_CACHE_MAX });
 
 async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
 	await import("onnxruntime-node");
@@ -131,121 +133,61 @@ export function embeddingDimFor(modelName: string): number {
 	return MODEL_DIMS[modelName] ?? 384;
 }
 
-function normalizeVector(input: unknown): Vector | null {
-	if (input == null || typeof input !== "object") {
-		return null;
-	}
-	if (!Array.isArray(input) && !ArrayBuffer.isView(input)) {
-		return null;
-	}
-	if (input instanceof DataView) {
-		return null;
-	}
+/** Structural test that tells a batch (array of rows) from a single row, and gates {@link normalizeVector}. */
+function isVectorLike(value: unknown): value is ArrayLike<number> {
+	return Array.isArray(value) || (ArrayBuffer.isView(value) && !(value instanceof DataView));
+}
 
-	const arr = input as ArrayLike<unknown>;
-	const length = arr.length;
-	if (typeof length !== "number" || !Number.isInteger(length) || length < 0) {
-		return null;
-	}
+/** Validate one untrusted row into a finite-checked `Float32Array`, reusing the input when it already is one. */
+function normalizeVector(input: unknown): Vector | null {
 	if (input instanceof Float32Array) {
 		for (let i = 0; i < input.length; i += 1) {
-			if (!Number.isFinite(input[i])) {
-				return null;
-			}
+			if (!Number.isFinite(input[i])) return null;
 		}
 		return input;
 	}
-
-	const vector = new Float32Array(length);
-	for (let i = 0; i < length; i += 1) {
-		const value = Number(arr[i]);
-		if (!Number.isFinite(value)) {
-			return null;
-		}
+	if (!isVectorLike(input)) return null;
+	const vector = new Float32Array(input.length);
+	for (let i = 0; i < input.length; i += 1) {
+		const value = Number(input[i]);
+		if (!Number.isFinite(value)) return null;
 		vector[i] = value;
 	}
 	return vector;
 }
-function isVectorLike(value: unknown): boolean {
-	if (value == null || typeof value !== "object") {
-		return false;
-	}
-	// Accept Array or TypedArray (ArrayBuffer.isView), but reject DataView
-	if (Array.isArray(value)) {
-		return true;
-	}
-	if (ArrayBuffer.isView(value)) {
-		// Reject DataView as it's not numeric-indexed
-		return !(value instanceof DataView);
-	}
-	return false;
-}
 
+/** Append a single row, or a batch (array of rows), to `rows`; returns false on the first bad value. */
 function appendNormalized(rows: Vector[], input: unknown): boolean {
 	if (Array.isArray(input) && input.length > 0 && isVectorLike(input[0])) {
 		for (const item of input) {
 			const row = normalizeVector(item);
-			if (row === null) {
-				return false;
-			}
+			if (row === null) return false;
 			rows.push(row);
 		}
 		return true;
 	}
-
 	const vector = normalizeVector(input);
-	if (vector !== null) {
-		rows.push(vector);
-		return true;
-	}
-	return false;
+	if (vector === null) return false;
+	rows.push(vector);
+	return true;
 }
 
-async function normalizeEmbeddingResult(result: unknown): Promise<EmbeddingMatrix | null> {
+async function normalizeEmbeddingResult(result: EmbeddingOutput): Promise<EmbeddingMatrix | null> {
 	const rows: Vector[] = [];
+	// A bare array is the row list (or a single row); an iterable yields batches of rows.
 	if (Array.isArray(result)) {
 		return appendNormalized(rows, result) ? rows : null;
 	}
-	if (result !== null && typeof result === "object" && Symbol.asyncIterator in result) {
-		for await (const item of result as AsyncIterable<unknown>) {
-			if (!appendNormalized(rows, item)) {
-				return null;
-			}
+	if (Symbol.asyncIterator in result) {
+		for await (const batch of result) {
+			if (!appendNormalized(rows, batch)) return null;
 		}
 		return rows;
 	}
-	if (result !== null && typeof result === "object" && Symbol.iterator in result) {
-		for (const item of result as Iterable<unknown>) {
-			if (!appendNormalized(rows, item)) {
-				return null;
-			}
-		}
-		return rows;
+	for (const batch of result) {
+		if (!appendNormalized(rows, batch)) return null;
 	}
-	return null;
-}
-
-function cacheGet(key: string): Vector | null {
-	const value = queryCache.get(key);
-	if (value === undefined) {
-		return null;
-	}
-	queryCache.delete(key);
-	queryCache.set(key, value);
-	return value;
-}
-
-function cacheSet(key: string, value: Vector): void {
-	if (queryCache.has(key)) {
-		queryCache.delete(key);
-	}
-	queryCache.set(key, value);
-	if (queryCache.size > QUERY_CACHE_MAX) {
-		const oldest = queryCache.keys().next().value as string | undefined;
-		if (oldest !== undefined) {
-			queryCache.delete(oldest);
-		}
-	}
+	return rows;
 }
 
 const KNOWN_MODEL_NAMES: Record<string, string> = {
@@ -410,14 +352,14 @@ export async function embedQuery(text: string): Promise<Vector | null> {
 	if (text === "" || embeddingsDisabled()) {
 		return null;
 	}
-	const cached = cacheGet(text);
-	if (cached !== null) {
+	const cached = queryCache.get(text);
+	if (cached !== undefined) {
 		return cached;
 	}
 	const vectors = await embed([text]);
 	const vector = vectors?.[0] ?? null;
 	if (vector !== null) {
-		cacheSet(text, vector);
+		queryCache.set(text, vector);
 	}
 	return vector;
 }
@@ -445,8 +387,8 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 		return embedApi(texts);
 	}
 	if (texts.length === 1) {
-		const cached = cacheGet(texts[0] ?? "");
-		if (cached !== null) {
+		const cached = queryCache.get(texts[0] ?? "");
+		if (cached !== undefined) {
 			return [cached];
 		}
 	}
@@ -459,7 +401,7 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 		if (vectors !== null && vectors.length === 1) {
 			const vector = vectors[0];
 			if (vector !== undefined) {
-				cacheSet(texts[0] ?? "", vector);
+				queryCache.set(texts[0] ?? "", vector);
 			}
 		}
 		return vectors;

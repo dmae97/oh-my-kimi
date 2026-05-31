@@ -42,6 +42,7 @@
 		"@oh-my-pi/pi-ai": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
 		"fastembed": "catalog:",
+		"lru-cache": "catalog:",
 		"onnxruntime-node": "catalog:"
 	},
 	"devDependencies": {

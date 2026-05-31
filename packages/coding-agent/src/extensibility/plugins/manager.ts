@@ -10,7 +10,7 @@ import {
 	isEnoent,
 	logger,
 } from "@oh-my-pi/pi-utils";
-import { parseGitUrl, type GitSource } from "./git-url";
+import { type GitSource, parseGitUrl } from "./git-url";
 import { extractPackageName, parsePluginSpec } from "./parser";
 import type {
 	DoctorCheck,

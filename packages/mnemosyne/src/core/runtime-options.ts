@@ -14,8 +14,20 @@ export type MnemosyneLlmCompletion = (
 	opts?: MnemosyneLlmCompleteOptions,
 ) => string | null | Promise<string | null>;
 
+/** A single embedding row as a provider may emit it: a packed `Float32Array` or plain numbers. */
+export type EmbeddingRow = Float32Array | readonly number[];
+
+/**
+ * Everything an embedding provider's `embed` is allowed to return. Rows come back either directly as
+ * a flat list, or in batches (each batch a list of rows) through a sync or async iterable — fastembed's
+ * `embed()` is an `AsyncGenerator<number[][]>`. Non-array / non-finite values are rejected at runtime.
+ */
+export type EmbeddingOutput =
+	| Iterable<EmbeddingRow | readonly EmbeddingRow[]>
+	| AsyncIterable<EmbeddingRow | readonly EmbeddingRow[]>;
+
 export interface MnemosyneEmbeddingProvider {
-	embed(texts: readonly string[]): unknown | Promise<unknown>;
+	embed(texts: readonly string[]): EmbeddingOutput | Promise<EmbeddingOutput>;
 	available?(): boolean | Promise<boolean>;
 }
 
@@ -24,7 +36,7 @@ export interface MnemosyneEmbeddingRuntimeOptions {
 	model?: string;
 	apiUrl?: string;
 	apiKey?: string;
-	provider?: MnemosyneEmbeddingProvider | ((texts: readonly string[]) => unknown | Promise<unknown>);
+	provider?: MnemosyneEmbeddingProvider | ((texts: readonly string[]) => EmbeddingOutput | Promise<EmbeddingOutput>);
 }
 
 export interface MnemosyneLlmRuntimeOptions {
@@ -83,7 +95,10 @@ export function getMnemosyneRuntimeOptions(): ResolvedMnemosyneRuntimeOptions | 
 }
 
 export function resolveEmbeddingProvider(
-	provider: MnemosyneEmbeddingProvider | ((texts: readonly string[]) => unknown | Promise<unknown>) | undefined,
+	provider:
+		| MnemosyneEmbeddingProvider
+		| ((texts: readonly string[]) => EmbeddingOutput | Promise<EmbeddingOutput>)
+		| undefined,
 ): MnemosyneEmbeddingProvider | undefined {
 	if (provider === undefined) {
 		return undefined;
