@@ -1625,6 +1625,61 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+		it("rebuilds history when prior POSIX repaint left the padded viewport past the new tail", async () => {
+			const term = new UnknownViewportTerminal(40, 10);
+			const tui = new TUI(term);
+			const initial = rows("line-", 19);
+			const component = new MutableLinesComponent([...initial, "prompt-row"]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				// Unknown-POSIX offscreen mutation: repainting the viewport commits the
+				// 120-row logical frame, but `#emitViewportRepaint` intentionally does not
+				// advance `#scrollbackHighWater` (it remains at the original 20-row frame's
+				// 10-row overflow). The later shrink must compare against the padded viewport
+				// top (`120 - height`) rather than the stale high-water mark.
+				const expanded = ["edited-line", ...rows("line-", 118), "prompt-row"];
+				component.setLines(expanded);
+				tui.requestRender();
+				await settle(term);
+				expect(visible(term).map(line => line.trim())).toEqual([
+					"line-109",
+					"line-110",
+					"line-111",
+					"line-112",
+					"line-113",
+					"line-114",
+					"line-115",
+					"line-116",
+					"line-117",
+					"prompt-row",
+				]);
+
+				const short = [...rows("short-", 14), "prompt-row"];
+				component.setLines(short);
+				tui.requestRender();
+				await settle(term);
+
+				expect(visible(term).map(line => line.trim())).toEqual([
+					"short-5",
+					"short-6",
+					"short-7",
+					"short-8",
+					"short-9",
+					"short-10",
+					"short-11",
+					"short-12",
+					"short-13",
+					"prompt-row",
+				]);
+				expect(term.getScrollBuffer().join("\n")).not.toContain("line-");
+			} finally {
+				tui.stop();
+			}
+		});
 
 		it("renders streaming row inserts on WSL Windows Terminal even when viewport probe is unavailable", async () => {
 			const originalPlatform = process.platform;
