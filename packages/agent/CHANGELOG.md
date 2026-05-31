@@ -23,6 +23,10 @@
 
 - Fixed compaction summarizer throws losing the provider's HTTP status. `generateSummary`, `generateHandoff`, `generateShortSummary`, and `generateTurnPrefixSummary` now route their `stopReason === "error"` throws through a `createSummarizationError` helper that copies `AssistantMessage.errorStatus` onto the thrown `Error` as `.status`, letting downstream consumers (e.g. `AgentSession.#isCompactionAuthFailure` in `@oh-my-pi/pi-coding-agent`) branch on real provider 401/403s without regex-scraping the message body.
 
+### Changed
+
+- Changed `Agent.appendMessage`, `popMessage`, `clearMessages`, and `reset` to mutate `state.messages` and `state.pendingToolCalls` in place instead of allocating a fresh array/Set on every transition. Subscribers that capture `state.messages` by reference now observe updates without needing to re-read `state` after each event. The public type signature is unchanged (always `AgentMessage[]` / `Set<string>`).
+
 ## [15.5.0] - 2026-05-26
 ### Added
 

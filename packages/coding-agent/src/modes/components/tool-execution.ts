@@ -45,15 +45,6 @@ function ensureInvalidate(component: unknown): Component {
 	return c as Component;
 }
 
-function cloneToolArgs<T>(args: T): T {
-	if (args === null || args === undefined) return args;
-	try {
-		return structuredClone(args);
-	} catch {
-		return args;
-	}
-}
-
 /**
  * Drop trailing removal/hunk-header lines that appear in a streaming diff
  * before the matching `+added` lines have arrived. Without this, a partial
@@ -219,7 +210,7 @@ export class ToolExecutionComponent extends Container {
 		this.#tool = tool;
 		this.#ui = ui;
 		this.#cwd = cwd;
-		this.#args = cloneToolArgs(args);
+		this.#args = args;
 
 		this.addChild(new Spacer(1));
 
@@ -243,7 +234,12 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	updateArgs(args: any, _toolCallId?: string): void {
-		this.#args = cloneToolArgs(args);
+		// Reference-equality short-circuit before any further work. Callers
+		// always allocate a new arg object on each streamed delta (see
+		// event-controller.ts and ui-helpers.ts), so a same-reference assignment
+		// signals "nothing meaningful changed" and the renderer can skip.
+		if (args === this.#args) return;
+		this.#args = args;
 		this.#updateSpinnerAnimation();
 		void this.#runPreviewDiff();
 		this.#updateDisplay();

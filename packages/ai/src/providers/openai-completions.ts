@@ -50,7 +50,7 @@ import {
 	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
-import { parseStreamingJson } from "../utils/json-parse";
+import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 import { notifyProviderResponse } from "../utils/provider-response";
@@ -539,7 +539,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			// so users don't see raw `<｜...｜>` tokens.
 			const stripDeepseekChatTemplateTokens =
 				/deepseek/i.test(model.id) && (model.provider === "nvidia" || model.provider === "deepseek");
-			type ToolCallStreamBlock = ToolCall & { partialArgs?: string; streamIndex?: number };
+			type ToolCallStreamBlock = ToolCall & { partialArgs?: string; streamIndex?: number; lastParseLen?: number };
 			type OpenAIStreamBlock = TextContent | ThinkingContent | ToolCallStreamBlock;
 			const pendingToolCallBlocks: ToolCallStreamBlock[] = [];
 			const toolCallBlockByIndex = new Map<number, ToolCallStreamBlock>();
@@ -554,6 +554,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				if (contentIndex < 0) return;
 				block.arguments = parseStreamingJson(block.partialArgs);
 				delete block.partialArgs;
+				delete block.lastParseLen;
 				if (block.streamIndex !== undefined) {
 					toolCallBlockByIndex.delete(block.streamIndex);
 					delete block.streamIndex;
@@ -848,7 +849,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 							if (toolCall.function?.arguments) {
 								delta = toolCall.function.arguments;
 								block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
-								block.arguments = parseStreamingJson(block.partialArgs);
+								const throttled = parseStreamingJsonThrottled(block.partialArgs, block.lastParseLen ?? 0);
+								if (throttled) {
+									block.arguments = throttled.value;
+									block.lastParseLen = throttled.parsedLen;
+								}
 							}
 							stream.push({
 								type: "toolcall_delta",
