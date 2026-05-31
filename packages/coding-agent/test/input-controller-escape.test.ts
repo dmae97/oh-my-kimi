@@ -2,8 +2,8 @@ import { describe, expect, it, type Mock, vi } from "bun:test";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext, SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 
-
 type Spy = Mock<(...args: unknown[]) => unknown>;
+type StartPendingSubmissionSpy = Mock<InteractiveModeContext["startPendingSubmission"]>;
 type FakeEditor = {
 	onEscape?: () => void;
 	onSubmit?: (text: string) => Promise<void>;
@@ -64,7 +64,7 @@ function createContext(): {
 		onInputCallback: Spy;
 		prompt: Spy;
 		requestRender: Spy;
-		startPendingSubmission: Spy;
+		startPendingSubmission: StartPendingSubmissionSpy;
 	};
 } {
 	let editorText = "";

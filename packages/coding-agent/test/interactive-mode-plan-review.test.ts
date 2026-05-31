@@ -39,6 +39,7 @@ describe("InteractiveMode plan review rendering", () => {
 	});
 
 	beforeEach(async () => {
+		Bun.gc(true);
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-plan-review-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
@@ -67,11 +68,20 @@ describe("InteractiveMode plan review rendering", () => {
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
-		mode?.stop();
-		await session?.dispose();
-		authStorage?.close();
-		tempDir?.removeSync();
+		const currentMode = mode;
+		const currentSession = session;
+		const currentAuthStorage = authStorage;
+		const currentTempDir = tempDir;
+		mode = undefined as unknown as InteractiveMode;
+		session = undefined as unknown as AgentSession;
+		authStorage = undefined as unknown as AuthStorage;
+		tempDir = undefined as unknown as TempDir;
+		currentMode?.stop();
+		await currentSession?.dispose();
+		currentAuthStorage?.close();
+		currentTempDir?.removeSync();
 		resetSettingsForTest();
+		Bun.gc(true);
 	});
 
 	it("appends each submitted plan review preview to preserve scrollback", async () => {
