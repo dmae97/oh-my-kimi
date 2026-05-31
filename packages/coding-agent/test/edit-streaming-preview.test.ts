@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { formatHashlineHeader, InMemorySnapshotStore } from "@oh-my-pi/hashline";
+import { computeFileHash, formatHashlineHeader, InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import { dropIncompleteLastEdit, EDIT_MODE_STRATEGIES } from "@oh-my-pi/pi-coding-agent/edit";
 
 describe("dropIncompleteLastEdit", () => {
@@ -143,11 +143,37 @@ describe("hashline streaming preview (single-op trailing payload)", () => {
 		expect(previews?.[0]?.diff).toContain("const b = 22");
 	});
 
+	test("final preview accepts a live content hash even when the snapshot store has no history", async () => {
+		const liveHeader = formatHashlineHeader("a.ts", computeFileHash(text));
+		const input = `${liveHeader}\nreplace 2..2:\n+const b = 22\n`;
+		const previews = await strategy.computeDiffPreview(
+			{ input } as never,
+			{
+				cwd: tmpDir,
+				signal: new AbortController().signal,
+				snapshots: new InMemorySnapshotStore(),
+				isStreaming: false,
+			} as never,
+		);
+		expect(previews).toHaveLength(1);
+		expect(previews?.[0]?.error).toBeUndefined();
+		expect(previews?.[0]?.diff).toContain("const b = 22");
+	});
+
+	test("final preview recovers a stale tag from snapshot history", async () => {
+		await Bun.write(file, `// external\n${text}`);
+		const input = `${header}\nreplace 2..2:\n+const b = 22\n`;
+		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir, false) as never);
+		expect(previews).toHaveLength(1);
+		expect(previews?.[0]?.error).toBeUndefined();
+		expect(previews?.[0]?.diff).toContain("const b = 22");
+	});
+
 	test("surfaces stale hash errors once streaming is complete", async () => {
 		const input = "¶a.ts#FFFF\nreplace 2..2:\n+const b = 22\n";
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir, false) as never);
 		expect(previews).toHaveLength(1);
-		expect(previews?.[0]?.error).toContain("re-read and try again");
+		expect(previews?.[0]?.error).toContain("not from this session");
 	});
 
 	test("yields no preview (not an error) before the first payload byte arrives", async () => {
