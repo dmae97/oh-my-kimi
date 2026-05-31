@@ -177,6 +177,6 @@ export function parseStreamingJsonThrottled<T = Record<string, unknown>>(
 	minGrowthBytes: number = STREAMING_JSON_PARSE_MIN_GROWTH,
 ): { value: T; parsedLen: number } | null {
 	const len = partialJson?.length ?? 0;
-	if (len - lastParsedLen < minGrowthBytes) return null;
+	if (len === 0 || (lastParsedLen > 0 && len - lastParsedLen < minGrowthBytes)) return null;
 	return { value: parseStreamingJson<T>(partialJson), parsedLen: len };
 }

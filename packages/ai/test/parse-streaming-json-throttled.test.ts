@@ -6,9 +6,11 @@ import {
 } from "../src/utils/json-parse";
 
 describe("parseStreamingJsonThrottled (F5)", () => {
-	it("returns null when buffer growth is below the threshold", () => {
+	it("parses the first non-empty buffer even when growth is below the threshold", () => {
 		const out = parseStreamingJsonThrottled('{"a":1', 0, 256);
-		expect(out).toBeNull();
+		expect(out).not.toBeNull();
+		expect(out!.parsedLen).toBe(6);
+		expect(out!.value).toEqual({ a: 1 });
 	});
 
 	it("re-parses when buffer has grown by at least minGrowthBytes since the last parsed length", () => {
