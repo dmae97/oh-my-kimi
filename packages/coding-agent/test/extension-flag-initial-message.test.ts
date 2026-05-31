@@ -3,6 +3,7 @@ import { parseArgs } from "../src/cli/args";
 import { applyExtensionFlags, type ExtensionFlagSink } from "../src/cli/extension-flags";
 import { buildInitialMessage } from "../src/cli/initial-message";
 import { ExtensionRuntime, loadExtensionFromFactory } from "../src/extensibility/extensions/loader";
+import { ExtensionRunner } from "../src/extensibility/extensions/runner";
 import { EventBus } from "../src/utils/event-bus";
 
 // Regression coverage for extension-registered flags leaking into the initial
@@ -168,6 +169,23 @@ describe("applyExtensionFlags (single-parser flag resolution)", () => {
 		applyExtensionFlags(runner, ["just a prompt"]);
 		expect(runner.values.has("plan")).toBe(false);
 	});
+	it("recovers any colliding built-in flag's value, with no hardcoded name list (--model)", () => {
+		// `--model` is a built-in string flag never present in the removed
+		// BUILTIN_FLAG_NAMES-style list lookup: parseArgs routes it to the built-in
+		// branch so it never reaches unknownFlags, yet recovery must still deliver
+		// it purely by scanning argv.
+		const runner = fakeRunner({ model: "string" });
+		applyExtensionFlags(runner, ["--model", "haiku", "do the task"]);
+		expect(runner.values.get("model")).toBe("haiku");
+	});
+	it("does not recover a non-colliding flag-looking value in space form (mirrors parseArgs P1#2)", () => {
+		// The recovery scan honors parseArgs's rule: a flag-looking value in space
+		// form stays its own flag in both passes, so it must not be swallowed as the
+		// extension flag's value (pass it as --flag=value instead).
+		const runner = fakeRunner({ "spawn-peer": "string" });
+		applyExtensionFlags(runner, ["--spawn-peer", "--print", "do the task"]);
+		expect(runner.values.has("spawn-peer")).toBe(false);
+	});
 });
 describe("registerFlag with built-in-named flags (r3323473227)", () => {
 	it("loads an extension that registers a built-in-named flag without throwing", async () => {
@@ -191,5 +209,39 @@ describe("registerFlag with built-in-named flags (r3323473227)", () => {
 			new ExtensionRuntime(),
 		);
 		expect(ext.flags.has("spawn-peer")).toBe(true);
+	});
+	it("resolves extension flags from a pre-session load (main.ts @file-before-session pattern)", async () => {
+		// main.ts now loads extensions and resolves their flags BEFORE creating the
+		// session (and its breadcrumb), building an ExtensionFlagSink straight from
+		// the loaded extensions + runtime with no ExtensionRunner/session yet. Prove
+		// that exact pattern resolves flag values and classifies `@file` args
+		// extension-aware — the reason file processing can safely run pre-session.
+		const runtime = new ExtensionRuntime();
+		const ext = await loadExtensionFromFactory(
+			api => {
+				api.registerFlag("spawn-peer", { type: "string" });
+			},
+			process.cwd(),
+			new EventBus(),
+			runtime,
+		);
+		const sink: ExtensionFlagSink = {
+			getFlags: () => ExtensionRunner.aggregateFlags([ext]),
+			setFlagValue: (name, value) => {
+				runtime.flagValues.set(name, value);
+			},
+		};
+
+		const args = applyExtensionFlags(sink, ["--spawn-peer", "reviewer", "review the diff"]);
+		expect(runtime.flagValues.get("spawn-peer")).toBe("reviewer");
+		expect(args?.messages).toEqual(["review the diff"]);
+
+		// A string flag's `@`-value is the flag's value, not a file arg (P1#1) — so
+		// classifying it requires this extension-aware parse, which is only possible
+		// once the flag set is known before the session exists.
+		const withFileLikeValue = applyExtensionFlags(sink, ["--spawn-peer", "@notes.md", "hello"]);
+		expect(runtime.flagValues.get("spawn-peer")).toBe("@notes.md");
+		expect(withFileLikeValue?.fileArgs).toEqual([]);
+		expect(withFileLikeValue?.messages).toEqual(["hello"]);
 	});
 });

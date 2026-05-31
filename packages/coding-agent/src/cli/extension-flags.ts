@@ -1,4 +1,4 @@
-import { type Args, BUILTIN_FLAG_NAMES, parseArgs } from "./args";
+import { type Args, parseArgs } from "./args";
 
 /**
  * Minimal extension-runner surface needed to resolve CLI flag values. The real
@@ -12,24 +12,25 @@ export interface ExtensionFlagSink {
 }
 
 /**
- * Recover a single extension flag's value from argv. Used only for flags whose
- * name collides with a built-in (e.g. the bundled plan-mode extension registers
- * `--plan`, which is also the built-in plan-model selector): {@link parseArgs}
- * routes those to the built-in branch, so they never reach `unknownFlags`, yet
- * the extension still needs the value delivered. Handles the same `--flag`,
- * `--flag value`, and `--flag=value` forms.
+ * Recover an extension flag's value directly from argv. {@link parseArgs}
+ * already surfaces every flag it consumes through `unknownFlags`; this fallback
+ * only matters for the cases it leaves out — chiefly a name that collides with a
+ * built-in (e.g. plan-mode registers `--plan`, which is also the built-in
+ * plan-model selector), which `parseArgs` routes to the built-in branch so it
+ * never reaches `unknownFlags`. Mirrors `parseArgs`'s consumption rules:
+ * `--flag`, `--flag value` (a flag-looking value in space form is left to be its
+ * own flag — pass it as `--flag=value`), and `--flag=value`. Returns `undefined`
+ * for a flag that was not passed, so it is a safe no-op for absent flags — which
+ * is what lets this work without a hand-maintained list of built-in flag names.
  */
-function resolveCollidingFlag(
-	rawArgs: string[],
-	name: string,
-	type: "boolean" | "string",
-): boolean | string | undefined {
+function recoverFlagValue(rawArgs: string[], name: string, type: "boolean" | "string"): boolean | string | undefined {
 	const eqPrefix = `--${name}=`;
 	for (let i = 0; i < rawArgs.length; i++) {
 		const arg = rawArgs[i];
 		if (arg === `--${name}`) {
 			if (type === "boolean") return true;
-			return i + 1 < rawArgs.length ? rawArgs[i + 1] : undefined;
+			const next = rawArgs[i + 1];
+			return next !== undefined && !next.startsWith("-") ? next : undefined;
 		}
 		if (arg.startsWith(eqPrefix)) {
 			return type === "boolean" ? true : arg.slice(eqPrefix.length);
@@ -39,8 +40,8 @@ function resolveCollidingFlag(
 }
 
 /**
- * Resolve extension-registered CLI flags from `rawArgs` once the runner's flag
- * set is known, push the resolved values onto the runner, and return the parsed
+ * Resolve extension-registered CLI flags from `rawArgs` once the flag set is
+ * known, push the resolved values onto the sink, and return the parsed
  * {@link Args}.
  *
  * The startup parse runs before extensions load, so it cannot recognise their
@@ -49,11 +50,15 @@ function resolveCollidingFlag(
  * here — through the *same* {@link parseArgs} the startup pass uses, now seeded
  * with the registered flags — consumes every flag form (`--flag`, `--flag value`,
  * `--flag=value`) identically, so no form can be handled by one parser and missed
- * by another. A flag whose name collides with a built-in is consumed by the
- * built-in branch instead of `unknownFlags`, so its value is recovered via
- * {@link resolveCollidingFlag} to preserve delivery (e.g. plan-mode's `--plan`).
+ * by another.
  *
- * Returns `null` when there is no runner or no registered extension flags, in
+ * A flag whose name collides with a built-in is consumed by the built-in branch
+ * instead of `unknownFlags`; for those the value is recovered straight from argv
+ * via {@link recoverFlagValue} (e.g. plan-mode's `--plan`). Because that recovery
+ * is a no-op for any flag `parseArgs` already surfaced or that was not passed,
+ * it can run unconditionally — no list of built-in flag names to keep in sync.
+ *
+ * Returns `null` when there is no sink or no registered extension flags, in
  * which case the caller keeps its original startup parse (an extension-aware
  * re-parse would be identical anyway).
  */
@@ -64,10 +69,7 @@ export function applyExtensionFlags(runner: ExtensionFlagSink | undefined, rawAr
 	}
 	const parsed = parseArgs(rawArgs, extensionFlags);
 	for (const [name, def] of extensionFlags) {
-		let value = parsed.unknownFlags.get(name);
-		if (value === undefined && BUILTIN_FLAG_NAMES.has(name)) {
-			value = resolveCollidingFlag(rawArgs, name, def.type);
-		}
+		const value = parsed.unknownFlags.get(name) ?? recoverFlagValue(rawArgs, name, def.type);
 		if (value !== undefined) {
 			runner.setFlagValue(name, value);
 		}

@@ -54,54 +54,6 @@ export interface Args {
 	unknownFlags: Map<string, boolean | string>;
 }
 
-/**
- * Long names of every built-in CLI flag recognized by {@link parseArgs}.
- * Extension flags that would shadow one of these are rejected at registration
- * (see ExtensionAPI.registerFlag), because a built-in branch in parseArgs would
- * consume the flag before the extension ever sees it. Keep in sync with the
- * flag branches below.
- */
-export const BUILTIN_FLAG_NAMES: ReadonlySet<string> = new Set([
-	"help",
-	"version",
-	"allow-home",
-	"mode",
-	"continue",
-	"resume",
-	"session",
-	"fork",
-	"provider",
-	"model",
-	"smol",
-	"slow",
-	"plan",
-	"api-key",
-	"system-prompt",
-	"append-system-prompt",
-	"provider-session-id",
-	"no-session",
-	"session-dir",
-	"models",
-	"no-tools",
-	"no-lsp",
-	"no-pty",
-	"tools",
-	"thinking",
-	"print",
-	"export",
-	"hook",
-	"extension",
-	"plugin-dir",
-	"no-extensions",
-	"no-skills",
-	"no-rules",
-	"no-title",
-	"auto-approve",
-	"yolo",
-	"approval-mode",
-	"skills",
-	"list-models",
-]);
 export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
 	// Work on a copy: the `--option=value` handling below splices the value
 	// into the array, and callers reuse the same argv (the post-extension

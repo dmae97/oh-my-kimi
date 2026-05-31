@@ -465,6 +465,44 @@ export async function discoverExtensions(cwd?: string): Promise<LoadExtensionsRe
 }
 
 /**
+ * Load the discovered/configured extensions for a session — everything {@link
+ * createAgentSession} would load except the inline factory extensions it appends
+ * itself. Extracted so the CLI can resolve extension-registered flags (and thus
+ * classify `@file` arguments extension-aware) *before* a session — and its
+ * terminal breadcrumb — is created, then hand the result back through
+ * {@link CreateAgentSessionOptions.preloadedExtensions} so the work is not
+ * repeated. Keep this the single source of the discovery branch logic.
+ */
+export async function loadSessionExtensions(
+	options: Pick<CreateAgentSessionOptions, "disableExtensionDiscovery" | "additionalExtensionPaths">,
+	cwd: string,
+	settings: Settings,
+	eventBus: EventBus,
+): Promise<LoadExtensionsResult> {
+	let result: LoadExtensionsResult;
+	if (options.disableExtensionDiscovery) {
+		const configuredPaths = options.additionalExtensionPaths ?? [];
+		result = await logger.time("loadExtensions", loadExtensions, configuredPaths, cwd, eventBus);
+	} else {
+		// Merge CLI extension paths with settings extension paths.
+		const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])];
+		const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
+		result = await logger.time(
+			"discoverAndLoadExtensions",
+			discoverAndLoadExtensions,
+			configuredPaths,
+			cwd,
+			eventBus,
+			disabledExtensionIds,
+		);
+	}
+	for (const { path, error } of result.errors) {
+		logger.error("Failed to load extension", { path, error });
+	}
+	return result;
+}
+
+/**
  * Discover skills from cwd and agentDir.
  */
 export async function discoverSkills(
@@ -1357,32 +1395,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}
 
-		// Load extensions (discovers from standard locations + configured paths)
-		let extensionsResult: LoadExtensionsResult;
-		if (options.disableExtensionDiscovery) {
-			const configuredPaths = options.additionalExtensionPaths ?? [];
-			extensionsResult = await logger.time("loadExtensions", loadExtensions, configuredPaths, cwd, eventBus);
-			for (const { path, error } of extensionsResult.errors) {
-				logger.error("Failed to load extension", { path, error });
-			}
-		} else if (options.preloadedExtensions) {
-			extensionsResult = options.preloadedExtensions;
-		} else {
-			// Merge CLI extension paths with settings extension paths
-			const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])];
-			const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
-			extensionsResult = await logger.time(
-				"discoverAndLoadExtensions",
-				discoverAndLoadExtensions,
-				configuredPaths,
-				cwd,
-				eventBus,
-				disabledExtensionIds,
-			);
-			for (const { path, error } of extensionsResult.errors) {
-				logger.error("Failed to load extension", { path, error });
-			}
-		}
+		// Load extensions. A preloaded result (e.g. resolved by the CLI before
+		// session creation so it can classify `@file` args extension-aware without
+		// a session/breadcrumb existing yet) is reused as-is; otherwise discover now
+		// through the shared helper. Preloaded wins over `disableExtensionDiscovery`
+		// because the preloaded result already reflects that choice — re-running the
+		// loader here would double-load.
+		const extensionsResult: LoadExtensionsResult =
+			options.preloadedExtensions ?? (await loadSessionExtensions(options, cwd, settings, eventBus));
 
 		// Load inline extensions from factories
 		if (inlineExtensions.length > 0) {
