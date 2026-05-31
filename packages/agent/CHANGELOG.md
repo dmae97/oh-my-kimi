@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.7.3] - 2026-05-31
+
 ### Added
 
 - Added `shake` compaction primitives (`collectShakeRegions`, `applyShakeRegion`, `applyShakeRegions`, `summarizeShakeRegions`, `DEFAULT_SHAKE_CONFIG`, `AGGRESSIVE_SHAKE_CONFIG`, plus the `ShakeRegion`/`ShakeConfig`/`ShakeSummaryItem`/`ShakeSummaryComplete`/`ProtectedToolMatcher` types) under `@oh-my-pi/pi-agent-core/compaction`. These detect heavy context regions — whole tool-call results plus large fenced/XML blocks — and either elide them with placeholders or extractively compress them through an injected completion backend (no LLM summary cut-point). The compressor is provider-agnostic: callers wire it to a local on-device model. Pure detection/mutation; no I/O.

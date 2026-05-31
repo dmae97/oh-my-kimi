@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.7.3] - 2026-05-31
+
 ### Added
 
 - Added `overflowSearch` to `SelectListLayoutOptions` to let consumers enable or disable type-to-filter search and search-status rendering per SelectList instance

@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.7.3] - 2026-05-31
 ### Added
 
 - Added support for decimal and `k`/`m` suffix turn-budget directives, enabling budgets like `+1.5k` and `+2m` in eval message parsing

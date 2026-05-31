@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.7.3] - 2026-05-31
 ### Changed
 
 - Changed embedding result normalization to return `Float32Array` vectors so `embed` and `embedQuery` now cache and emit float32 rows

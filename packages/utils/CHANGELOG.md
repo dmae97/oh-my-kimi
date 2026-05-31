@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.7.3] - 2026-05-31
 ### Added
 
 - Added `getFastembedCacheDir` to return the FastEmbed model cache directory under ~/.omp/cache/fastembed
