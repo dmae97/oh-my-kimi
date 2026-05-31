@@ -3617,8 +3617,13 @@ export class AgentSession {
 	/**
 	 * Replace MCP tools in the registry and recompute the visible MCP tool set immediately.
 	 * This allows /mcp add/remove/reauth to take effect without restarting the session.
+	 *
+	 * @param mcpTools The new MCP tools to register.
+	 * @param options.activateAll When true, force-activates every newly registered MCP tool
+	 *   regardless of prior selection state. Used when an ACP client provisions MCP servers
+	 *   for a session where MCP discovery is disabled.
 	 */
-	async refreshMCPTools(mcpTools: CustomTool[]): Promise<void> {
+	async refreshMCPTools(mcpTools: CustomTool[], options?: { activateAll?: boolean }): Promise<void> {
 		const previousSelectedMCPToolNames = this.getSelectedMCPToolNames();
 		const existingNames = Array.from(this.#toolRegistry.keys());
 		for (const name of existingNames) {
@@ -3658,6 +3663,18 @@ export class AgentSession {
 			this.sessionFile,
 			this.#getConfiguredDefaultSelectedMCPToolNames(),
 		);
+
+		if (options?.activateAll) {
+			// Force-activate every newly registered MCP tool. This path is used
+			// when an ACP client provisions MCP servers for a session where MCP
+			// discovery is disabled — without it, getSelectedMCPToolNames()
+			// returns only already-active tools (circular deadlock: tools can
+			// only become active if they're already active).
+			const newMcpNames = mcpTools.map(t => t.name);
+			const nextActive = [...new Set([...this.#getActiveNonMCPToolNames(), ...newMcpNames])];
+			await this.#applyActiveToolsByName(nextActive, { previousSelectedMCPToolNames });
+			return;
+		}
 
 		const nextActive = [...this.#getActiveNonMCPToolNames(), ...this.getSelectedMCPToolNames()];
 		await this.#applyActiveToolsByName(nextActive, { previousSelectedMCPToolNames });
