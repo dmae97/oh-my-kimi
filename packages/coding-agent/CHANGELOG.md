@@ -12,6 +12,7 @@
 - Changed `search` output to preserve full virtual and internal URL paths in grouped results and `details.files` instead of collapsing them to file basenames
 - Changed `/omfg` to run up to three generation attempts with validation feedback and only prompt saving when no draft matches assistant history
 - Changed `/omfg` to show a live draft panel with generation/validation/saving status and allow canceling an active rule request with `Esc`
+- Changed keybindings config to use `~/.omp/agent/keybindings.yml`, with automatic migration from legacy `keybindings.json` and continued support for `keybindings.yaml`.
 
 ### Fixed
 
