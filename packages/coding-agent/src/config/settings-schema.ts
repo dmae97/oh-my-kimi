@@ -2,6 +2,16 @@ import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { TASK_SIMPLE_MODES } from "../task/simple-mode";
 import { getThinkingLevelMetadata } from "../thinking";
 import {
+	TINY_MODEL_DEVICE_DEFAULT,
+	TINY_MODEL_DEVICE_SETTING_OPTIONS,
+	TINY_MODEL_DEVICE_SETTING_VALUES,
+} from "../tiny/device";
+import {
+	TINY_MODEL_DTYPE_DEFAULT,
+	TINY_MODEL_DTYPE_SETTING_OPTIONS,
+	TINY_MODEL_DTYPE_SETTING_VALUES,
+} from "../tiny/dtype";
+import {
 	ONLINE_MEMORY_MODEL_KEY,
 	ONLINE_TINY_TITLE_MODEL_KEY,
 	TINY_MEMORY_MODEL_OPTIONS,
@@ -2934,6 +2944,30 @@ export const SETTINGS_SCHEMA = {
 			label: "Tiny Model",
 			description: "Session-title model: online pi/smol by default, or a local on-device model",
 			options: TINY_TITLE_MODEL_OPTIONS,
+		},
+	},
+	"providers.tinyModelDevice": {
+		type: "enum",
+		values: TINY_MODEL_DEVICE_SETTING_VALUES,
+		default: TINY_MODEL_DEVICE_DEFAULT,
+		ui: {
+			tab: "providers",
+			label: "Tiny Model Device",
+			description:
+				"ONNX execution provider for local tiny models (titles + memory). Default picks DirectML on Windows, CUDA on Linux x64, CPU elsewhere. The PI_TINY_DEVICE env var overrides this.",
+			options: TINY_MODEL_DEVICE_SETTING_OPTIONS,
+		},
+	},
+	"providers.tinyModelDtype": {
+		type: "enum",
+		values: TINY_MODEL_DTYPE_SETTING_VALUES,
+		default: TINY_MODEL_DTYPE_DEFAULT,
+		ui: {
+			tab: "providers",
+			label: "Tiny Model Precision",
+			description:
+				"ONNX quantization/precision for local tiny models. Default uses each model's shipped dtype (q4); lower precision is faster, higher is more faithful. The PI_TINY_DTYPE env var overrides this.",
+			options: TINY_MODEL_DTYPE_SETTING_OPTIONS,
 		},
 	},
 	"providers.memoryModel": {

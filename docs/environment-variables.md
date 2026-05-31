@@ -285,8 +285,8 @@ Extra conditional behavior:
 | `PI_SLOW_MODEL`              | Ephemeral model-role override for `slow` (CLI `--slow` takes precedence)                           |
 | `PI_PLAN_MODEL`              | Ephemeral model-role override for `plan` (CLI `--plan` takes precedence)                           |
 | `PI_NO_TITLE`                | If set (any non-empty value), disables auto session title generation on first user message         |
-| `PI_TINY_DEVICE`            | ONNX execution provider for local tiny models (default: DirectML on Windows, CUDA on Linux x64, CPU elsewhere; supports `cpu`, `cuda`, `dml`, `coreml`, `gpu`, `metal`/`webgpu`, `auto`) |
-| `PI_TINY_DTYPE`             | ONNX quantization/precision for local tiny models (default: each model's shipped dtype, currently `q4`; supports `auto`, `fp32`, `fp16`, `q8`, `int8`, `uint8`, `q4`, `bnb4`, `q4f16`, `q2`, `q2f16`, `q1`, `q1f16`) |
+| `PI_TINY_DEVICE`            | ONNX execution provider for local tiny models; overrides the `providers.tinyModelDevice` setting (default: DirectML on Windows, CUDA on Linux x64, CPU elsewhere; supports `cpu`, `cuda`, `dml`, `coreml`, `gpu`, `metal`/`webgpu`, `auto`) |
+| `PI_TINY_DTYPE`             | ONNX quantization/precision for local tiny models; overrides the `providers.tinyModelDtype` setting (default: each model's shipped dtype, currently `q4`; supports `auto`, `fp32`, `fp16`, `q8`, `int8`, `uint8`, `q4`, `bnb4`, `q4f16`, `q2`, `q2f16`, `q1`, `q1f16`) |
 | `NULL_PROMPT`                | If `true`, system prompt builder returns empty string                                              |
 | `PI_BLOCKED_AGENT`           | Blocks a specific subagent type in task tool                                                       |
 | `PI_SUBPROCESS_CMD`          | Overrides subagent spawn command (`omp` / `omp.cmd` resolution bypass)                             |

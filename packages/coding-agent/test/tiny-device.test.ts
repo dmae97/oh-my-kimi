@@ -2,8 +2,12 @@ import { describe, expect, it } from "bun:test";
 import {
 	normalizeTinyModelDevice,
 	resolveTinyModelDevicePreference,
+	TINY_MODEL_DEVICE_DEFAULT,
+	TINY_MODEL_DEVICE_SETTING_OPTIONS,
+	TINY_MODEL_DEVICE_SETTING_VALUES,
 	type TinyModelDevice,
 	tinyModelDeviceLoadOrder,
+	tinyModelDeviceSettingToEnv,
 } from "../src/tiny/device";
 
 function expectedDefaultDevice(): TinyModelDevice {
@@ -38,5 +42,31 @@ describe("tiny model device selection", () => {
 
 	it("rejects unknown ONNX execution providers", () => {
 		expect(() => resolveTinyModelDevicePreference("neural-magic")).toThrow("Unsupported PI_TINY_DEVICE");
+	});
+});
+
+describe("tiny model device setting → PI_TINY_DEVICE mapping", () => {
+	it("returns undefined for the default sentinel so the worker keeps its platform default", () => {
+		expect(tinyModelDeviceSettingToEnv(TINY_MODEL_DEVICE_DEFAULT)).toBeUndefined();
+		expect(tinyModelDeviceSettingToEnv(undefined)).toBeUndefined();
+		expect(tinyModelDeviceSettingToEnv("")).toBeUndefined();
+	});
+
+	it("forwards a concrete device value verbatim for the worker to validate", () => {
+		expect(tinyModelDeviceSettingToEnv("metal")).toBe("metal");
+		expect(tinyModelDeviceSettingToEnv("cuda")).toBe("cuda");
+	});
+
+	it("keeps every non-default setting value resolvable by the worker", () => {
+		for (const value of TINY_MODEL_DEVICE_SETTING_VALUES) {
+			if (value === TINY_MODEL_DEVICE_DEFAULT) continue;
+			expect(() => normalizeTinyModelDevice(tinyModelDeviceSettingToEnv(value))).not.toThrow();
+		}
+	});
+
+	it("keeps submenu options aligned with the accepted values", () => {
+		expect(TINY_MODEL_DEVICE_SETTING_OPTIONS.map(option => option.value)).toEqual([
+			...TINY_MODEL_DEVICE_SETTING_VALUES,
+		]);
 	});
 });

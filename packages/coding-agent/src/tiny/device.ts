@@ -61,3 +61,57 @@ export function tinyModelDeviceLoadOrder(preference: TinyModelDevicePreference):
 	if (usesDarwinWorkerWebGpu(preference.device)) return DARWIN_WEBGPU_UNSAFE_ORDER;
 	return [preference.device, CPU_DEVICE];
 }
+
+/** Sentinel `providers.tinyModelDevice` value meaning "use the built-in platform default". */
+export const TINY_MODEL_DEVICE_DEFAULT = "default";
+
+/** Accepted values for the `providers.tinyModelDevice` setting (validation + UI). */
+export const TINY_MODEL_DEVICE_SETTING_VALUES = [
+	TINY_MODEL_DEVICE_DEFAULT,
+	"gpu",
+	"cpu",
+	"metal",
+	"webgpu",
+	"cuda",
+	"dml",
+	"coreml",
+	"auto",
+	"wasm",
+	"webnn",
+	"webnn-gpu",
+	"webnn-cpu",
+	"webnn-npu",
+] as const;
+
+/** Submenu metadata for the `providers.tinyModelDevice` setting. */
+export const TINY_MODEL_DEVICE_SETTING_OPTIONS = [
+	{ value: "default", label: "Default", description: "DirectML on Windows, CUDA on Linux x64, CPU elsewhere" },
+	{ value: "gpu", label: "GPU", description: "Accelerated provider (WebGPU/Metal, CUDA, or DirectML)" },
+	{ value: "cpu", label: "CPU", description: "CPU-only inference" },
+	{ value: "metal", label: "Metal", description: "WebGPU alias for Apple GPUs" },
+	{ value: "webgpu", label: "WebGPU", description: "WebGPU/Metal backend" },
+	{ value: "cuda", label: "CUDA", description: "NVIDIA CUDA (Linux x64)" },
+	{ value: "dml", label: "DirectML", description: "DirectML backend (Windows)" },
+	{ value: "coreml", label: "CoreML", description: "Apple CoreML (opt-in; can fail to load)" },
+	{ value: "auto", label: "Auto", description: "Let ONNX Runtime choose a provider" },
+	{ value: "wasm", label: "WASM", description: "WebAssembly backend" },
+	{ value: "webnn", label: "WebNN", description: "WebNN backend" },
+	{ value: "webnn-gpu", label: "WebNN GPU", description: "WebNN GPU device" },
+	{ value: "webnn-cpu", label: "WebNN CPU", description: "WebNN CPU device" },
+	{ value: "webnn-npu", label: "WebNN NPU", description: "WebNN NPU device" },
+] as const satisfies ReadonlyArray<{
+	value: (typeof TINY_MODEL_DEVICE_SETTING_VALUES)[number];
+	label: string;
+	description: string;
+}>;
+
+/**
+ * Map a `providers.tinyModelDevice` setting value onto a `PI_TINY_DEVICE` env
+ * value for the worker. Returns `undefined` for the default sentinel so the
+ * worker keeps its built-in platform default; the worker still validates the
+ * forwarded value via {@link normalizeTinyModelDevice}.
+ */
+export function tinyModelDeviceSettingToEnv(value: string | undefined): string | undefined {
+	if (!value || value === TINY_MODEL_DEVICE_DEFAULT) return undefined;
+	return value;
+}

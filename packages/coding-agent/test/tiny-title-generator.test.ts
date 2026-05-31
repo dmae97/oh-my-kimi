@@ -5,6 +5,16 @@ import { isSubcommand } from "../src/cli-commands";
 import { getDefault, getEnumValues, getUi } from "../src/config/settings-schema";
 import { TinyTitleDownloadProgressComponent } from "../src/modes/components/tiny-title-download-progress";
 import { initTheme } from "../src/modes/theme/theme";
+import {
+	TINY_MODEL_DEVICE_DEFAULT,
+	TINY_MODEL_DEVICE_SETTING_OPTIONS,
+	TINY_MODEL_DEVICE_SETTING_VALUES,
+} from "../src/tiny/device";
+import {
+	TINY_MODEL_DTYPE_DEFAULT,
+	TINY_MODEL_DTYPE_SETTING_OPTIONS,
+	TINY_MODEL_DTYPE_SETTING_VALUES,
+} from "../src/tiny/dtype";
 import { ONLINE_TINY_TITLE_MODEL_KEY, TINY_TITLE_MODEL_OPTIONS, TINY_TITLE_MODEL_VALUES } from "../src/tiny/models";
 import { tinyTitleClient } from "../src/tiny/title-client";
 import { generateSessionTitle, raceFirstNonNull, TITLE_LOCAL_FALLBACK_DELAY_MS } from "../src/utils/title-generator";
@@ -271,6 +281,20 @@ describe("providers.tinyModel schema", () => {
 		expect(getEnumValues("providers.tinyModel")).toEqual([...TINY_TITLE_MODEL_VALUES]);
 		expect(getUi("providers.tinyModel")?.options).toEqual(TINY_TITLE_MODEL_OPTIONS);
 		expect(getDefault("providers.tinyModel")).toBe(ONLINE_TINY_TITLE_MODEL_KEY);
+	});
+});
+
+describe("tiny model acceleration schema", () => {
+	it("keeps the device setting in sync with the device module constants", () => {
+		expect(getEnumValues("providers.tinyModelDevice")).toEqual([...TINY_MODEL_DEVICE_SETTING_VALUES]);
+		expect(getUi("providers.tinyModelDevice")?.options).toEqual(TINY_MODEL_DEVICE_SETTING_OPTIONS);
+		expect(getDefault("providers.tinyModelDevice")).toBe(TINY_MODEL_DEVICE_DEFAULT);
+	});
+
+	it("keeps the precision setting in sync with the dtype module constants", () => {
+		expect(getEnumValues("providers.tinyModelDtype")).toEqual([...TINY_MODEL_DTYPE_SETTING_VALUES]);
+		expect(getUi("providers.tinyModelDtype")?.options).toEqual(TINY_MODEL_DTYPE_SETTING_OPTIONS);
+		expect(getDefault("providers.tinyModelDtype")).toBe(TINY_MODEL_DTYPE_DEFAULT);
 	});
 });
 

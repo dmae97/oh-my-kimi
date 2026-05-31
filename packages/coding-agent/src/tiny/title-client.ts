@@ -1,4 +1,7 @@
-import { isCompiledBinary, logger } from "@oh-my-pi/pi-utils";
+import { $env, isCompiledBinary, logger } from "@oh-my-pi/pi-utils";
+import { settings } from "../config/settings";
+import { tinyModelDeviceSettingToEnv } from "./device";
+import { tinyModelDtypeSettingToEnv } from "./dtype";
 import {
 	isTinyLocalModelKey,
 	isTinyMemoryLocalModelKey,
@@ -28,10 +31,62 @@ export interface TinyTitleDownloadOptions {
 
 const SMOKE_TEST_TIMEOUT_MS = 5_000;
 
+function readTinyModelSetting(path: "providers.tinyModelDevice" | "providers.tinyModelDtype"): string | undefined {
+	try {
+		const value = settings.get(path);
+		return typeof value === "string" ? value : undefined;
+	} catch {
+		// Settings may be uninitialized (e.g. `omp --smoke-test`); fall back to env/default.
+		return undefined;
+	}
+}
+
+/**
+ * Decide which `PI_TINY_DEVICE` / `PI_TINY_DTYPE` vars to overlay onto the worker
+ * env. A present env var wins (left untouched); otherwise the mapped persisted
+ * setting is used. Returns only the keys to add — never the default sentinel.
+ * Pure for testability; see {@link tinyWorkerEnv} for the spawn-time glue.
+ * @internal
+ */
+export function tinyWorkerEnvOverlay(
+	env: Record<string, string | undefined>,
+	deviceSetting: string | undefined,
+	dtypeSetting: string | undefined,
+): Record<string, string> {
+	const overlay: Record<string, string> = {};
+	if (!env.PI_TINY_DEVICE) {
+		const device = tinyModelDeviceSettingToEnv(deviceSetting);
+		if (device) overlay.PI_TINY_DEVICE = device;
+	}
+	if (!env.PI_TINY_DTYPE) {
+		const dtype = tinyModelDtypeSettingToEnv(dtypeSetting);
+		if (dtype) overlay.PI_TINY_DTYPE = dtype;
+	}
+	return overlay;
+}
+
+/**
+ * Env handed to the tiny-model worker. The `PI_TINY_DEVICE` / `PI_TINY_DTYPE` env
+ * vars win; otherwise the persisted `providers.tinyModelDevice` /
+ * `providers.tinyModelDtype` settings are mapped onto those vars so the worker's
+ * env-based resolution picks them up. Resolved once at spawn (pipelines are cached).
+ */
+function tinyWorkerEnv(): Record<string, string> | undefined {
+	const overlay = tinyWorkerEnvOverlay(
+		$env,
+		readTinyModelSetting("providers.tinyModelDevice"),
+		readTinyModelSetting("providers.tinyModelDtype"),
+	);
+	if (Object.keys(overlay).length === 0) return undefined;
+	return { ...($env as Record<string, string>), ...overlay };
+}
+
 export function createTinyTitleWorker(): Worker {
+	const env = tinyWorkerEnv();
+	const options: WorkerOptions = env ? { type: "module", env } : { type: "module" };
 	return isCompiledBinary()
-		? new Worker("./packages/coding-agent/src/tiny/worker.ts", { type: "module" })
-		: new Worker(new URL("./worker.ts", import.meta.url).href, { type: "module" });
+		? new Worker("./packages/coding-agent/src/tiny/worker.ts", options)
+		: new Worker(new URL("./worker.ts", import.meta.url).href, options);
 }
 
 function wrapBunWorker(worker: Worker): WorkerHandle {

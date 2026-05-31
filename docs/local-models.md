@@ -12,18 +12,21 @@ default to `online`, so existing users incur no downloads or on-device inference
   loads the **native `onnxruntime-node` backend** (not the WASM build).
 - **Device policy**: local tiny models request a worker-safe accelerated ONNX execution provider when
   one is available, and retry once on `device:"cpu"` if acceleration cannot initialize.
-  - Defaults: DirectML on Windows, CUDA on Linux x64, and CPU elsewhere.
+  - Defaults: DirectML on Windows, CUDA on Linux x64, and CPU elsewhere. Pick a provider persistently
+    with the `providers.tinyModelDevice` setting (`default` keeps the platform pick); the
+    `PI_TINY_DEVICE` env var overrides the setting.
   - Direct `coreml` remains opt-in via `PI_TINY_DEVICE=coreml`; it is not part of the default because
     cached decoder-LLM ONNX loads can fail during session initialization.
   - WebGPU/Metal works for the single-process eval harness, but it is not enabled in the production
     worker on macOS because ONNX Runtime/Bun currently hard-crashes on worker teardown after WebGPU
     inference.
-  - Use `PI_TINY_DEVICE=cpu` for the old CPU-only path.
+  - Use `providers.tinyModelDevice: cpu` (or `PI_TINY_DEVICE=cpu`) for the old CPU-only path.
 - **Quantization: q4 is the sweet spot** — smaller on disk, faster to load, and fast at inference.
   q8/int8 loads slower *and* infers slower on CPU. Every shipped model defaults to `q4`; override the
-  precision for whichever local model loads with `PI_TINY_DTYPE` (e.g. `PI_TINY_DTYPE=fp16` for higher
-  fidelity, `PI_TINY_DTYPE=q8`). Accepts `auto`, `fp32`, `fp16`, `q8`, `int8`, `uint8`, `q4`, `bnb4`,
-  `q4f16`, `q2`, `q2f16`, `q1`, `q1f16`; an unrecognized value fails loudly at worker startup.
+  precision persistently with the `providers.tinyModelDtype` setting (`default` keeps `q4`, e.g. `fp16`
+  for higher fidelity), or per-run with `PI_TINY_DTYPE` (which overrides the setting). Accepts `auto`,
+  `fp32`, `fp16`, `q8`, `int8`, `uint8`, `q4`, `bnb4`, `q4f16`, `q2`, `q2f16`, `q1`, `q1f16`; an
+  unrecognized value fails loudly at worker startup.
 - **Load-time correction (important).** An earlier belief that "q4 >=1B models take minutes to load"
   was a **measurement artifact** caused by running ~5 multi-GB HuggingFace downloads in parallel
   (I/O saturation). Clean, isolated **warm** loads are all sub-3s:
