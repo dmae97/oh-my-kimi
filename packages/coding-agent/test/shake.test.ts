@@ -8,7 +8,6 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { tinyModelClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const usage = {
@@ -141,56 +140,6 @@ describe("AgentSession shake", () => {
 			const userMsg = branch.find(e => e.type === "message" && (e.message as { role?: string }).role === "user");
 			const content = (userMsg as { message: { content: unknown } }).message.content as Array<{ type: string }>;
 			expect(content.some(b => b.type === "image")).toBe(false);
-		});
-	});
-
-	describe("summary (local model)", () => {
-		it("replaces regions with the local model's parsed compression", async () => {
-			seedHeavyToolResult("Y".repeat(4000));
-			const completeSpy = vi
-				.spyOn(tinyModelClient, "complete")
-				.mockResolvedValue('<region index="0">compressed bash output</region>');
-
-			const result = await session.shake("summary");
-
-			expect(result.mode).toBe("summary");
-			expect(result.toolResultsDropped).toBe(1);
-			expect(completeSpy).toHaveBeenCalledTimes(1);
-			// The configured local model key (default qwen3-1.7b) is the first arg.
-			expect(completeSpy.mock.calls[0][0]).toBe("qwen3-1.7b");
-
-			const [tr] = branchToolResults();
-			const text = tr.content.map(b => (b.type === "text" ? b.text : "")).join("");
-			expect(text).toContain("compressed bash output");
-		});
-
-		it("falls back to the elide placeholder when the local model is unavailable", async () => {
-			seedHeavyToolResult("Z".repeat(4000));
-			const completeSpy = vi.spyOn(tinyModelClient, "complete").mockResolvedValue(null);
-
-			const result = await session.shake("summary");
-
-			expect(completeSpy).toHaveBeenCalled();
-			expect(result.toolResultsDropped).toBe(1);
-			const [tr] = branchToolResults();
-			const text = tr.content.map(b => (b.type === "text" ? b.text : "")).join("");
-			expect(text).toContain("shaken");
-			expect(text).toContain("artifact://");
-		});
-
-		it("falls back to elide per region the local model omits", async () => {
-			seedHeavyToolResult("A".repeat(4000));
-			seedHeavyToolResult("B".repeat(4000));
-			// Only region 0 is summarized; region 1 is omitted → elide fallback.
-			vi.spyOn(tinyModelClient, "complete").mockResolvedValue('<region index="0">summary of A</region>');
-
-			const result = await session.shake("summary");
-
-			expect(result.toolResultsDropped).toBe(2);
-			const results = branchToolResults();
-			const texts = results.map(tr => tr.content.map(b => (b.type === "text" ? b.text : "")).join(""));
-			expect(texts.some(t => t.includes("summary of A"))).toBe(true);
-			expect(texts.some(t => t.includes("shaken"))).toBe(true);
 		});
 	});
 

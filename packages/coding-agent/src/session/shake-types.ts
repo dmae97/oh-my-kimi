@@ -6,14 +6,14 @@
  */
 
 /** Mode selector for `AgentSession.shake`. */
-export type ShakeMode = "elide" | "summary" | "images";
+export type ShakeMode = "elide" | "images";
 
 /** Outcome of an `AgentSession.shake` run. */
 export interface ShakeResult {
 	mode: ShakeMode;
-	/** Whole tool-call results dropped/compressed. */
+	/** Whole tool-call results dropped. */
 	toolResultsDropped: number;
-	/** Large fenced/XML blocks dropped/compressed. */
+	/** Large fenced/XML blocks dropped. */
 	blocksDropped: number;
 	/** Image blocks removed (images mode only). */
 	imagesDropped?: number;
@@ -39,6 +39,5 @@ export function formatShakeSummary(result: ShakeResult): string {
 		parts.push(`${result.blocksDropped} block${result.blocksDropped === 1 ? "" : "s"}`);
 	}
 	if (parts.length === 0) return "Nothing to shake.";
-	const verb = result.mode === "summary" ? "Compressed" : "Shook";
-	return `${verb} ${parts.join(" + ")} (~${result.tokensFreed} tokens freed).`;
+	return `Shook ${parts.join(" + ")} (~${result.tokensFreed} tokens freed).`;
 }

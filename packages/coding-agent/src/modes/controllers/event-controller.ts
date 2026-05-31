@@ -647,9 +647,7 @@ export class EventController {
 				? "Auto-handoff"
 				: event.action === "shake"
 					? "Auto-shake"
-					: event.action === "shake-summary"
-						? "Auto-shake (summary)"
-						: "Auto context-full maintenance";
+					: "Auto context-full maintenance";
 		this.ctx.autoCompactionLoader = new Loader(
 			this.ctx.ui,
 			spinner => theme.fg("accent", spinner),
@@ -673,7 +671,7 @@ export class EventController {
 			this.ctx.statusContainer.clear();
 		}
 		const isHandoffAction = event.action === "handoff";
-		const isShakeAction = event.action === "shake" || event.action === "shake-summary";
+		const isShakeAction = event.action === "shake";
 		if (event.aborted) {
 			this.ctx.showStatus(
 				isHandoffAction
@@ -690,9 +688,7 @@ export class EventController {
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorTopBorder();
-				this.ctx.showStatus(
-					event.action === "shake-summary" ? "Auto-shake (summary) completed" : "Auto-shake completed",
-				);
+				this.ctx.showStatus("Auto-shake completed");
 			}
 		} else if (event.result) {
 			this.ctx.rebuildChatFromMessages();
