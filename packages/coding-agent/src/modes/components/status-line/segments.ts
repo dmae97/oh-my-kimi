@@ -92,10 +92,10 @@ const modelSegment: StatusLineSegment = {
 		if (opts.showThinkingLevel !== false && state.model?.thinking) {
 			if (ctx.session.isAutoThinking) {
 				// Pending (no turn classified yet / classifying) shows a symbol-theme
-				// question-box marker; once resolved it shows `auto → <level>`.
+				// question-box marker; once resolved it shows `<level>`.
 				const resolved = ctx.session.autoResolvedThinkingLevel();
 				const resolvedText = resolved ? (theme.thinking[resolved as keyof typeof theme.thinking] ?? resolved) : "";
-				content += `${theme.sep.dot}${resolved ? `auto → ${resolvedText}` : `${theme.thinking.autoPending} auto`}`;
+				content += `${theme.sep.dot}${resolved ? resolvedText : `${theme.thinking.autoPending} auto`}`;
 			} else {
 				const level = state.thinkingLevel ?? ThinkingLevel.Off;
 				if (level !== ThinkingLevel.Off) {

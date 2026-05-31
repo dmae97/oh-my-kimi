@@ -202,9 +202,9 @@ export class FooterComponent implements Component {
 		if (state.model?.thinking) {
 			if (this.session.isAutoThinking) {
 				// Pending (no turn classified yet / classifying) shows a symbol-theme
-				// question-box marker; once resolved it shows `auto → <level>`.
+				// question-box marker; once resolved it shows `<level>`.
 				const resolved = this.session.autoResolvedThinkingLevel();
-				rightSide = `${modelName} • ${resolved ? `auto → ${resolved}` : `${theme.thinking.autoPending} auto`}`;
+				rightSide = `${modelName} • ${resolved ? resolved : `${theme.thinking.autoPending} auto`}`;
 			} else {
 				const thinkingLevel = state.thinkingLevel ?? ThinkingLevel.Off;
 				if (thinkingLevel !== ThinkingLevel.Off) {
