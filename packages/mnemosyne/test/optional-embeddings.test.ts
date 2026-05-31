@@ -75,10 +75,19 @@ afterEach(() => {
 	resetEmbeddingProviderForTests();
 });
 
+/** Wrap a synchronous matrix function as the `AsyncIterable<number[][]>` a provider now returns. */
+function streamRows(
+	rows: (texts: readonly string[]) => number[][],
+): (texts: readonly string[]) => AsyncGenerator<number[][]> {
+	return async function* (texts) {
+		yield rows(texts);
+	};
+}
+
 describe("optional embeddings", () => {
 	it("falls back cleanly when embeddings are disabled", async () => {
 		await withEnv({ MNEMOSYNE_NO_EMBEDDINGS: "1" }, async () => {
-			setEmbeddingProviderForTests({ embed: () => [[1, 2, 3]], available: () => true });
+			setEmbeddingProviderForTests({ embed: streamRows(() => [[1, 2, 3]]), available: () => true });
 
 			expect(await available()).toBe(false);
 			expect(await embedQuery("hello")).toBeNull();
@@ -90,10 +99,10 @@ describe("optional embeddings", () => {
 		await withEnv({ MNEMOSYNE_NO_EMBEDDINGS: undefined }, async () => {
 			let calls = 0;
 			setEmbeddingProviderForTests({
-				embed(texts) {
+				embed: streamRows(texts => {
 					calls += 1;
 					return texts.map(text => [text.length, text.charCodeAt(0) || 0]);
-				},
+				}),
 				available: () => true,
 			});
 
@@ -160,32 +169,14 @@ describe("optional embeddings", () => {
 			server.stop(true);
 		}
 	});
-	it("normalizes Float32Array embeddings to Float32Array rows", async () => {
+	it("flattens async batches into one matrix", async () => {
 		await withEnv({ MNEMOSYNE_NO_EMBEDDINGS: undefined }, async () => {
 			setEmbeddingProviderForTests({
-				embed(texts) {
-					// Simulate fastembed output: Array of Float32Array rows
-					return texts.map(text => new Float32Array([text.length, text.charCodeAt(0) || 0, 42]));
-				},
-				available: () => true,
-			});
-			expect(await embed(["a", "bc"])).toEqual([new Float32Array([1, 97, 42]), new Float32Array([2, 98, 42])]);
-		});
-	});
-	it("normalizes async Float32Array batches to Float32Array rows", async () => {
-		await withEnv({ MNEMOSYNE_NO_EMBEDDINGS: undefined }, async () => {
-			setEmbeddingProviderForTests({
-				embed(texts) {
-					// Simulate fastembed AsyncGenerator<Array<Float32Array>>
-					return (async function* () {
-						// Yield batches
-						for (let i = 0; i < texts.length; i += 2) {
-							const batch = texts.slice(i, i + 2);
-							yield batch.map(
-								text => new Float32Array([text.length, text.charCodeAt(0) || 0]),
-							) as Float32Array[];
-						}
-					})();
+				// fastembed-shaped: an async generator yielding batches of rows.
+				embed: async function* (texts) {
+					for (let i = 0; i < texts.length; i += 2) {
+						yield texts.slice(i, i + 2).map(text => [text.length, text.charCodeAt(0) || 0]);
+					}
 				},
 				available: () => true,
 			});
@@ -196,20 +187,10 @@ describe("optional embeddings", () => {
 			]);
 		});
 	});
-	it("rejects embeddings containing non-finite values", async () => {
-		await withEnv({ MNEMOSYNE_NO_EMBEDDINGS: undefined }, async () => {
-			// A single NaN/Infinity component silently zeroes a vector's cosine score, so the whole
-			// result is rejected rather than stored as poison.
-			for (const bad of [Number.NaN, Number.POSITIVE_INFINITY]) {
-				setEmbeddingProviderForTests({ embed: () => [[1, bad, 3]], available: () => true });
-				expect(await embed(["test"])).toBeNull();
-			}
-		});
-	});
 
 	it("lets constructor-scoped noEmbeddings override enabled providers", async () => {
 		setEmbeddingProviderForTests({
-			embed: texts => texts.map(() => [1, 2, 3]),
+			embed: streamRows(texts => texts.map(() => [1, 2, 3])),
 			available: () => true,
 		});
 		const memory = new Mnemosyne({ noEmbeddings: true });
@@ -224,7 +205,7 @@ describe("optional embeddings", () => {
 	it("uses a constructor-scoped embedding provider", async () => {
 		const memory = new Mnemosyne({
 			embeddings: {
-				provider: texts => texts.map(text => [text.length, text.charCodeAt(0) || 0]),
+				provider: streamRows(texts => texts.map(text => [text.length, text.charCodeAt(0) || 0])),
 			},
 		});
 		try {
@@ -255,9 +236,7 @@ describe("optional embeddings", () => {
 					observedCacheDirs.push(options.cacheDir);
 					if (initCalls === 1) throw new Error("transient init failure");
 					return {
-						embed(texts) {
-							return texts.map(text => [text.length, text.charCodeAt(0) || 0]);
-						},
+						embed: streamRows(texts => texts.map(text => [text.length, text.charCodeAt(0) || 0])),
 					};
 				});
 

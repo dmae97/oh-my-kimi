@@ -124,8 +124,8 @@ describe("multilingual embedding metadata", () => {
 describe("multilingual embedding ordering", () => {
 	it("preserves semantic ordering with a deterministic fake multilingual provider", async () => {
 		setEmbeddingProviderForTests({
-			embed(texts) {
-				return texts.map(text => {
+			async *embed(texts) {
+				yield texts.map(text => {
 					if (text.includes("猫") || text.toLowerCase().includes("cat") || text.toLowerCase().includes("gato")) {
 						return [1, 0, 0];
 					}

@@ -14,15 +14,13 @@ export type MnemosyneLlmCompletion = (
 	opts?: MnemosyneLlmCompleteOptions,
 ) => string | null | Promise<string | null>;
 
-/** A single embedding row as a provider may emit it: a packed `Float32Array` or plain numbers. */
-export type EmbeddingRow = Float32Array | readonly number[];
-
 /**
- * What an embedding provider's `embed` may return: the full matrix as a list of rows (one row per
- * input text), or that matrix streamed as async batches — fastembed's `embed()` is an
- * `AsyncGenerator<number[][]>`. Wrongly shaped or non-finite values are rejected at runtime.
+ * What an embedding provider's `embed` returns: the embedding matrix streamed as async batches,
+ * matching fastembed's `embed()` (`AsyncGenerator<number[][]>`). Each yielded batch is a list of
+ * rows; each row is one number per dimension. Yield the whole matrix as a single batch when not
+ * streaming: `async *embed(texts) { yield texts.map(embedOne); }`.
  */
-export type EmbeddingOutput = readonly EmbeddingRow[] | AsyncIterable<readonly EmbeddingRow[]>;
+export type EmbeddingOutput = AsyncIterable<number[][]>;
 
 export interface MnemosyneEmbeddingProvider {
 	embed(texts: readonly string[]): EmbeddingOutput | Promise<EmbeddingOutput>;

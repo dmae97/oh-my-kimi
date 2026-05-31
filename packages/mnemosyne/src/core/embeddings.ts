@@ -12,7 +12,7 @@ import { LRUCache } from "lru-cache/raw";
 import packageJson from "../../package.json" with { type: "json" };
 import { type EmbeddingOutput, getMnemosyneRuntimeOptions, resolveEmbeddingProvider } from "./runtime-options";
 
-export type { EmbeddingOutput, EmbeddingRow } from "./runtime-options";
+export type { EmbeddingOutput } from "./runtime-options";
 export { cosineSimilarity } from "./vector-math";
 
 export type Vector = Float32Array;
@@ -134,42 +134,15 @@ export function embeddingDimFor(modelName: string): number {
 	return MODEL_DIMS[modelName] ?? 384;
 }
 
-/** Coerce one untrusted row to a finite-checked `Float32Array`, reusing the input when it already is one. */
-function normalizeVector(input: Float32Array | Iterable<number> | undefined | null): Vector | null {
-	let vec: Float32Array;
-	if (!(input instanceof Float32Array)) {
-		if (!input) return null;
-		vec = new Float32Array(input);
-	} else {
-		vec = input;
-	}
-	for (let i = 0; i < vec.length; i += 1) {
-		if (!Number.isFinite(vec[i])) return null;
-	}
-	return vec;
-}
-
-/** Append every row of one batch to `rows`; false on the first row that isn't a finite vector. */
-function pushRows(rows: Vector[], batch: unknown): boolean {
-	if (!Array.isArray(batch)) return false;
-	for (const row of batch) {
-		const vector = normalizeVector(row);
-		if (vector === null) return false;
-		rows.push(vector);
-	}
-	return true;
-}
-
-async function normalizeEmbeddingResult(result: EmbeddingOutput): Promise<EmbeddingMatrix | null> {
+/** Drain an embedding stream (a custom provider or fastembed) into a `Float32Array` matrix. */
+async function collectMatrix(batches: EmbeddingOutput): Promise<EmbeddingMatrix> {
 	const rows: Vector[] = [];
-	// fastembed streams the matrix as async batches; providers hand back the matrix array directly.
-	if (Symbol.asyncIterator in result) {
-		for await (const batch of result) {
-			if (!pushRows(rows, batch)) return null;
+	for await (const batch of batches) {
+		for (const row of batch) {
+			rows.push(new Float32Array(row));
 		}
-		return rows;
 	}
-	return pushRows(rows, result) ? rows : null;
+	return rows;
 }
 
 const KNOWN_MODEL_NAMES: Record<string, string> = {
@@ -248,20 +221,12 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 		if (!response.ok) {
 			return null;
 		}
-		const { data: rows } = (await response.json()) as { data?: Array<{ embedding?: Array<number> }> };
+		const { data: rows } = (await response.json()) as { data?: Array<{ embedding: number[] }> };
 		if (rows === undefined) {
 			return null;
 		}
-		const vectors: Vector[] = [];
-		for (const row of rows) {
-			const vector = normalizeVector(row.embedding);
-			if (vector === null) {
-				return null;
-			}
-			vectors.push(vector);
-		}
 		apiCallCount += 1;
-		return vectors;
+		return rows.map(row => new Float32Array(row.embedding));
 	} catch (error) {
 		logger.debug("mnemosyne embedding request failed", { status: extractHttpStatusFromError(error) });
 		return null;
@@ -354,14 +319,14 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 	const activeProvider = resolveEmbeddingProvider(activeEmbeddingOptions()?.provider);
 	if (activeProvider !== undefined) {
 		try {
-			return await normalizeEmbeddingResult(await activeProvider.embed(texts));
+			return await collectMatrix(await activeProvider.embed(texts));
 		} catch {
 			return null;
 		}
 	}
 	if (providerOverride !== null) {
 		try {
-			return await normalizeEmbeddingResult(await providerOverride.embed(texts));
+			return await collectMatrix(await providerOverride.embed(texts));
 		} catch {
 			return null;
 		}
@@ -380,8 +345,8 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 		return null;
 	}
 	try {
-		const vectors = await normalizeEmbeddingResult(await model.embed([...texts]));
-		if (vectors !== null && vectors.length === 1) {
+		const vectors = await collectMatrix(model.embed([...texts]));
+		if (vectors.length === 1) {
 			const vector = vectors[0];
 			if (vector !== undefined) {
 				queryCache.set(texts[0] ?? "", vector);
