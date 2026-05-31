@@ -90,11 +90,19 @@ const modelSegment: StatusLineSegment = {
 
 		// Add thinking level with dot separator
 		if (opts.showThinkingLevel !== false && state.model?.thinking) {
-			const level = state.thinkingLevel ?? ThinkingLevel.Off;
-			if (level !== ThinkingLevel.Off) {
-				const thinkingText = theme.thinking[level as keyof typeof theme.thinking];
-				if (thinkingText) {
-					content += `${theme.sep.dot}${thinkingText}`;
+			if (ctx.session.isAutoThinking) {
+				// Pending (no turn classified yet / classifying) shows a symbol-theme
+				// question-box marker; once resolved it shows `auto → <level>`.
+				const resolved = ctx.session.autoResolvedThinkingLevel();
+				const resolvedText = resolved ? (theme.thinking[resolved as keyof typeof theme.thinking] ?? resolved) : "";
+				content += `${theme.sep.dot}${resolved ? `auto → ${resolvedText}` : `${theme.thinking.autoPending} auto`}`;
+			} else {
+				const level = state.thinkingLevel ?? ThinkingLevel.Off;
+				if (level !== ThinkingLevel.Off) {
+					const thinkingText = theme.thinking[level as keyof typeof theme.thinking];
+					if (thinkingText) {
+						content += `${theme.sep.dot}${thinkingText}`;
+					}
 				}
 			}
 		}

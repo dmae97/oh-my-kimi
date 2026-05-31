@@ -216,3 +216,27 @@ export const TINY_LOCAL_MODELS = [
 	...TINY_TITLE_LOCAL_MODELS,
 	...TINY_MEMORY_LOCAL_MODELS,
 ] as const satisfies readonly TinyTitleLocalModelSpec[];
+
+/**
+ * Difficulty-classifier model for the `auto` thinking level. Defaults to the
+ * online smol path; the local options reuse the memory-model registry because
+ * the shared worker's `complete()` only accepts memory local keys, and the
+ * 1B+ memory models classify coding difficulty far more reliably than the
+ * sub-1B title models.
+ */
+export const ONLINE_AUTO_THINKING_MODEL_KEY = ONLINE_MEMORY_MODEL_KEY;
+export const AUTO_THINKING_MODEL_VALUES = TINY_MEMORY_MODEL_VALUES;
+export type AutoThinkingModelKey = TinyMemoryModelKey;
+
+export const AUTO_THINKING_MODEL_OPTIONS = [
+	{
+		value: ONLINE_AUTO_THINKING_MODEL_KEY,
+		label: "Online (smol)",
+		description: "Classify prompt difficulty with the online smol model; no local download or on-device inference.",
+	},
+	...TINY_MEMORY_LOCAL_MODELS.map(model => ({
+		value: model.key,
+		label: model.label,
+		description: model.description,
+	})),
+] satisfies ReadonlyArray<{ value: AutoThinkingModelKey; label: string; description: string }>;

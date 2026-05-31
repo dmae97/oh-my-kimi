@@ -64,7 +64,7 @@ import {
 	type UsageStatistics,
 } from "../../session/session-manager";
 import { ACP_BUILTIN_SLASH_COMMANDS, executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
-import { parseThinkingLevel } from "../../thinking";
+import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";
 import { createAcpClientBridge } from "./acp-client-bridge";
 import {
 	buildToolCallStartUpdate,
@@ -1274,7 +1274,9 @@ export class AcpAgent implements Agent {
 			name: "Thinking",
 			category: "thought_level",
 			type: "select",
-			currentValue: this.#toThinkingConfigValue(session.thinkingLevel),
+			currentValue: this.#toThinkingConfigValue(
+				session.model?.reasoning ? session.configuredThinkingLevel() : undefined,
+			),
 			options: this.#buildThinkingOptions(session),
 		});
 		return configOptions;
@@ -1305,6 +1307,7 @@ export class AcpAgent implements Agent {
 	#buildThinkingOptions(session: AgentSession): Array<{ value: string; name: string; description?: string }> {
 		return [
 			{ value: THINKING_OFF, name: "Off" },
+			{ value: AUTO_THINKING, name: "Auto", description: "Auto-detect per prompt (low–xhigh)" },
 			...session.getAvailableThinkingLevels().map(level => ({
 				value: level,
 				name: level,
@@ -1325,7 +1328,7 @@ export class AcpAgent implements Agent {
 	}
 
 	#setThinkingLevelById(session: AgentSession, value: string): void {
-		const thinkingLevel = parseThinkingLevel(value);
+		const thinkingLevel = parseConfiguredThinkingLevel(value);
 		if (!thinkingLevel) {
 			throw new Error(`Unknown ACP thinking level: ${value}`);
 		}

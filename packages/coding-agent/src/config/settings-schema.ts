@@ -1,6 +1,6 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { TASK_SIMPLE_MODES } from "../task/simple-mode";
-import { getThinkingLevelMetadata } from "../thinking";
+import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
 	TINY_MODEL_DEVICE_SETTING_OPTIONS,
@@ -12,6 +12,9 @@ import {
 	TINY_MODEL_DTYPE_SETTING_VALUES,
 } from "../tiny/dtype";
 import {
+	AUTO_THINKING_MODEL_OPTIONS,
+	AUTO_THINKING_MODEL_VALUES,
+	ONLINE_AUTO_THINKING_MODEL_KEY,
 	ONLINE_MEMORY_MODEL_KEY,
 	ONLINE_TINY_TITLE_MODEL_KEY,
 	TINY_MEMORY_MODEL_OPTIONS,
@@ -671,13 +674,16 @@ export const SETTINGS_SCHEMA = {
 	// Reasoning and prompts
 	defaultThinkingLevel: {
 		type: "enum",
-		values: THINKING_EFFORTS,
+		values: [...THINKING_EFFORTS, AUTO_THINKING],
 		default: "high",
 		ui: {
 			tab: "model",
 			label: "Thinking Level",
 			description: "Reasoning depth for thinking-capable models",
-			options: [...THINKING_EFFORTS.map(getThinkingLevelMetadata)],
+			options: [
+				getConfiguredThinkingLevelMetadata(AUTO_THINKING),
+				...THINKING_EFFORTS.map(getThinkingLevelMetadata),
+			],
 		},
 	},
 
@@ -2981,6 +2987,20 @@ export const SETTINGS_SCHEMA = {
 				"Mnemosyne LLM for fact extraction + consolidation: online (smol/remote) by default, or a local on-device model",
 			condition: "mnemosyneActive",
 			options: TINY_MEMORY_MODEL_OPTIONS,
+		},
+	},
+
+	"providers.autoThinkingModel": {
+		type: "enum",
+		values: AUTO_THINKING_MODEL_VALUES,
+		default: ONLINE_AUTO_THINKING_MODEL_KEY,
+		ui: {
+			tab: "model",
+			label: "Auto Thinking Model",
+			description:
+				"Difficulty classifier for the `auto` thinking level: online smol by default, or a local on-device model",
+			condition: "autoThinkingActive",
+			options: AUTO_THINKING_MODEL_OPTIONS,
 		},
 	},
 

@@ -65,7 +65,11 @@ export class EventController {
 			todo_auto_clear: e => this.#handleTodoAutoClear(e),
 			irc_message: e => this.#handleIrcMessage(e),
 			notice: e => this.#handleNotice(e),
-			thinking_level_changed: async () => {},
+			thinking_level_changed: async () => {
+				this.ctx.statusLine.invalidate();
+				this.ctx.updateEditorBorderColor();
+				this.ctx.ui.requestRender();
+			},
 			goal_updated: async () => {},
 		} satisfies AgentSessionEventHandlers;
 	}
