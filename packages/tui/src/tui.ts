@@ -1335,8 +1335,28 @@ export class TUI extends Container {
 			) {
 				return { kind: "historyRebuild" };
 			}
+			// POSIX terminals that cannot report viewport position fall through here
+			// (`canRebuildNativeScrollbackLive` is false). A viewport-only repaint would
+			// re-emit the rows between the new and old viewport tops on top of the copies
+			// the terminal already kept in native scrollback. `deferredShrink` pads to the
+			// previous row count so no committed row is re-emitted, and the next checkpoint
+			// rebuild (e.g. prompt submit -> `refreshNativeScrollbackIfDirty`) cleans up.
+			//
+			// That deferral only carries real content when `newLines.length` reaches the
+			// padded viewport top (`previousLines.length - height`) — otherwise every
+			// row the padded repaint draws is past the end of `newLines` and renders as
+			// blank, hiding the prompt until the next checkpoint. This can happen even
+			// when `scrollbackHighWater` is much lower than `previousLines.length - height`,
+			// because prior unknown-POSIX viewport repaints commit longer logical frames
+			// without moving the native scrollback boundary. For shrinks that large,
+			// yanking a scrolled reader (historyRebuild) is the lesser evil; do it
+			// unconditionally.
+			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
+			if (newLines.length <= paddedViewportTop) {
+				return { kind: "historyRebuild" };
+			}
 			this.#markNativeScrollbackDirty();
-			return { kind: "viewportRepaint" };
+			return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 		}
 
 		const suppressSuffixScroll = this.#suppressNextSuffixScroll;
