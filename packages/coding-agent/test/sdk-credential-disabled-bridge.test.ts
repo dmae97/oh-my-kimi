@@ -18,6 +18,11 @@ interface SessionDirs {
 	agentDir: string;
 }
 
+function emptyWorkspaceTree(cwd: string) {
+	return { rootPath: cwd, rendered: ".\n", truncated: false, totalLines: 1, agentsMdFiles: [] };
+}
+
+
 const expiredOAuth = () =>
 	({
 		type: "oauth" as const,
@@ -95,6 +100,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 		skills: [],
 		contextFiles: [],
 		promptTemplates: [],
+		workspaceTree: emptyWorkspaceTree(dirs.cwd),
 		slashCommands: [],
 		enableMCP: false,
 		enableLsp: false,
@@ -414,6 +420,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 			skills: [],
 			contextFiles: [],
 			promptTemplates: [],
+			workspaceTree: emptyWorkspaceTree(dirs.cwd),
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
@@ -456,6 +463,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 				skills: [],
 				contextFiles: [],
 				promptTemplates: [],
+				workspaceTree: emptyWorkspaceTree(dirs.cwd),
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,

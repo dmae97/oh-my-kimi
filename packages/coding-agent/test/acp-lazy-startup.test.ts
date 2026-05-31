@@ -31,6 +31,11 @@ const TEST_MODEL: Model = {
 	maxTokens: 8_192,
 };
 
+function emptyWorkspaceTree(cwd: string) {
+	return { rootPath: cwd, rendered: ".\n", truncated: false, totalLines: 1, agentsMdFiles: [] };
+}
+
+
 class TestClient implements Client {
 	readonly updates: SessionNotification[] = [];
 
@@ -252,7 +257,11 @@ describe("ACP lazy startup", () => {
 				[],
 				{
 					discoverAuthStorage: async () => authStorage,
-					createAgentSession,
+					createAgentSession: options =>
+						createAgentSession({
+							...options,
+							workspaceTree: options.workspaceTree ?? emptyWorkspaceTree(options.cwd ?? cwd),
+						}),
 					settings,
 					runAcpMode: async createAcpSession => {
 						session = await createAcpSession(cwd);

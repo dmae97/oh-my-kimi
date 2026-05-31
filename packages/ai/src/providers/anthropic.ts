@@ -1543,7 +1543,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						isTransientStreamParseError(streamFailure) || isTransientStreamEnvelopeError(streamFailure);
 					const canRetryTransientEnvelopeFailure = isTransientEnvelopeFailure && !streamedReplayUnsafeContent;
 					const canRetryProviderFailure =
-						firstTokenTime === undefined && isProviderRetryableError(streamFailure, model.provider);
+						firstTokenTime === undefined &&
+						!streamedReplayUnsafeContent &&
+						isProviderRetryableError(streamFailure, model.provider);
 					if (
 						activeAbortTracker.wasCallerAbort() ||
 						providerRetryAttempt >= PROVIDER_MAX_RETRIES ||
