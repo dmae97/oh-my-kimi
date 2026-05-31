@@ -1,5 +1,5 @@
-import { scheduler } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { scheduler } from "node:timers/promises";
 import { ExponentialYield, yieldIfDue } from "../src/utils/yield";
 
 const YIELD_INTERVAL_MS = 50;
