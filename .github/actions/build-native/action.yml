@@ -12,7 +12,7 @@ inputs:
       description: Target arch (x64, arm64)
       required: true
    variant:
-      description: Optional build variant (baseline, modern)
+      description: Optional build variant (baseline, modern); required for native x64 builds.
       required: false
       default: ""
    target:
@@ -46,17 +46,54 @@ runs:
            toolchain_bin="$(dirname "$(rustup which cargo)")"
            echo "$toolchain_bin" >> "$GITHUB_PATH"
            echo "Prepended $toolchain_bin to PATH"
+      # `Swatinem/rust-cache` keys target/ off its restore-time environment, so
+      # set RUSTFLAGS before restoring it. If x64 target-cpu is only selected
+      # inside ci-build-native.ts/build-native.ts, cargo invalidates the restored
+      # target/ but rust-cache sees an exact key and refuses to save the rebuilt
+      # artifacts, causing macOS x64 baseline to rebuild forever.
+      #
+      # Include the native source hash in the shared key as well: rust-cache's
+      # lockfile scan misses the workspace root Cargo.toml version that Cargo
+      # fingerprints for workspace crates. Without it, release version bumps can
+      # get an exact hit for artifacts Cargo must rebuild.
+      #
+      # sccache is still layered on top of rust-cache: target/ wins when warm,
+      # sccache fills the gaps when target/ is cold.
+      - name: Configure native Rust flags
+        if: inputs.target == ''
+        shell: bash
+        env:
+           TARGET_ARCH: ${{ inputs.arch }}
+           TARGET_VARIANT: ${{ inputs.variant }}
+        run: |
+           case "$TARGET_ARCH:$TARGET_VARIANT" in
+             x64:modern)
+               rustflags="-C target-cpu=x86-64-v3"
+               ;;
+             x64:baseline)
+               rustflags="-C target-cpu=x86-64-v2"
+               ;;
+             x64:*)
+               echo "::error::x64 native builds require variant=modern or variant=baseline"
+               exit 1
+               ;;
+             *)
+               if [ -n "${RUSTFLAGS:-}" ]; then
+                 echo "Using caller-provided RUSTFLAGS=$RUSTFLAGS"
+                 exit 0
+               fi
+               rustflags="-C target-cpu=native"
+               ;;
+           esac
+
+           echo "RUSTFLAGS=$rustflags" >> "$GITHUB_ENV"
+           echo "Configured RUSTFLAGS=$rustflags"
       - uses: Swatinem/rust-cache@v2
         with:
-           shared-key: native-${{ inputs.platform }}-${{ inputs.arch }}-${{ inputs.variant || 'default' }}
+           shared-key: native-${{ inputs.platform }}-${{ inputs.arch }}-${{ inputs.variant || 'default' }}-h${{ inputs.hash }}
            cache-on-failure: true
            save-if: ${{ inputs.save_cache == 'true' }}
            cache-workspace-crates: true
-      # `Swatinem/rust-cache` keys target/ off Cargo.lock content; release
-      # tag pushes bump workspace versions, busting that key every time. sccache
-      # caches at the rustc-invocation level (source + flags), so it still hits
-      # across version bumps. Layered on top of rust-cache: target/ wins when
-      # warm, sccache fills the gaps when target/ is cold.
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.10
       - name: Enable sccache for cargo

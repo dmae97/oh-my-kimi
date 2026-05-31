@@ -3,7 +3,6 @@ name: CI
 on:
    push:
       branches: [main]
-      tags: ["v*"]
    pull_request:
       branches: [main]
    workflow_dispatch:
@@ -18,41 +17,53 @@ concurrency:
    cancel-in-progress: true
 
 jobs:
-   # During a release the version-bump commit and its `v*` tag are pushed
-   # atomically (`git push --atomic origin main refs/tags/v*` in
-   # scripts/release.ts), so GitHub fires two `push` events — one for
-   # `refs/heads/main`, one for the tag — that would each run the full build.
-   # The tag run is authoritative: it self-contains the native build and runs
-   # the release/publish jobs (release_binary downloads natives from its own
-   # run). Detect when this branch-push run is for a commit that already
-   # carries a release tag and skip the duplicate build here; normal main
-   # pushes (no `v*` tag at HEAD) and PRs are unaffected.
+   # scripts/release.ts pushes the version-bump commit and its `v*` tag
+   # atomically (`git push --atomic origin main refs/tags/v*`), so a release
+   # now arrives as a single `push` to `refs/heads/main` — we no longer trigger
+   # on the tag ref at all (see `on.push`). This one branch-push run is therefore
+   # authoritative: it runs the full build AND, when HEAD carries a release tag,
+   # the release/publish jobs. `gate` resolves that tag once so downstream jobs
+   # switch on `is-release` and address the tag by name — `github.ref` is
+   # `refs/heads/main` here, not the tag. A `workflow_dispatch` from a `v*` tag
+   # ref is also treated as a release (the manual re-publish escape hatch).
    gate:
       runs-on: ubuntu-22.04
       outputs:
-         skip: ${{ steps.check.outputs.skip }}
+         is-release: ${{ steps.check.outputs.is-release }}
+         release-tag: ${{ steps.check.outputs.release-tag }}
       steps:
-         # `fetch-tags` is scoped to main-branch pushes — the only case where
-         # the dedup detection below runs `git tag --points-at HEAD`. On a tag
-         # push the ref resolves to `refs/tags/v*`, and combining `--tags`
-         # (from fetch-tags) with checkout's explicit `+<sha>:refs/tags/v*`
-         # refspec makes git refuse with "Cannot fetch both <sha> and
-         # refs/tags/v* to refs/tags/v*". Disabling it off-main avoids the clash.
+         # Only a main-branch push needs tags fetched, so `git tag --points-at
+         # HEAD` can see the freshly-pushed `v*`. A tag-ref dispatch reads the
+         # tag straight from `github.ref_name`, and fetching `--tags` while
+         # checkout uses an explicit tag refspec makes git refuse — so scope
+         # fetch-tags to main pushes.
          - uses: actions/checkout@v4
            with:
               fetch-tags: ${{ github.ref == 'refs/heads/main' }}
-         - name: Detect duplicate release branch-push run
+         - name: Detect release tag at HEAD
            id: check
            shell: bash
            run: |
-              skip=false
-              if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
-                if git tag --points-at HEAD | grep -qE '^v[0-9]'; then
-                  echo "HEAD carries a release tag; skipping the duplicate branch-push build (the tag run is authoritative)."
-                  skip=true
-                fi
+              is_release=false
+              release_tag=""
+              case "${{ github.ref }}" in
+                refs/tags/v[0-9]*)
+                  release_tag="${{ github.ref_name }}"
+                  ;;
+                refs/heads/main)
+                  if [ "${{ github.event_name }}" != "pull_request" ]; then
+                    release_tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1 || true)
+                  fi
+                  ;;
+              esac
+              if [ -n "$release_tag" ]; then
+                echo "HEAD carries release tag $release_tag; this run builds and publishes the release."
+                is_release=true
               fi
-              echo "skip=$skip" >> "$GITHUB_OUTPUT"
+              {
+                echo "is-release=$is_release"
+                echo "release-tag=$release_tag"
+              } >> "$GITHUB_OUTPUT"
 
    # Compute a stable hash of every input that affects the native cdylib output,
    # then look for any prior successful main run that already uploaded the
@@ -66,8 +77,6 @@ jobs:
    # Non-tag native jobs are skipped when their canary hits; the canary
    # retention window (see build-native action) is the effective TTL.
    rust-hash:
-      needs: [gate]
-      if: ${{ needs.gate.outputs.skip != 'true' }}
       runs-on: ubuntu-22.04
       outputs:
          hash: ${{ steps.compute.outputs.hash }}
@@ -156,8 +165,6 @@ jobs:
 
    # Fast lint + type check (no Rust, no native build needed)
    check:
-      needs: [gate]
-      if: ${{ needs.gate.outputs.skip != 'true' }}
       runs-on: ubuntu-22.04
       steps:
          - uses: actions/checkout@v4
@@ -174,10 +181,10 @@ jobs:
            run: bun run ci:check:full
 
    # Linux x64 baseline + modern: required by `test`, so it runs on every PR
-   # unless rust-hash found a cached run. Tags always rebuild for fresh artifacts.
+   # unless rust-hash found a cached run. Release pushes always rebuild for fresh artifacts.
    native_linux:
       needs: [gate, rust-hash]
-      if: ${{ needs.gate.outputs.skip != 'true' && (startsWith(github.ref, 'refs/tags/v') || needs.rust-hash.outputs.linux-run-id == '') }}
+      if: ${{ needs.gate.outputs.is-release == 'true' || needs.rust-hash.outputs.linux-run-id == '' }}
       runs-on: ubuntu-22.04
       strategy:
          fail-fast: false
@@ -194,14 +201,14 @@ jobs:
               arch: x64
               variant: ${{ matrix.variant }}
               rust_checks: ${{ matrix.rust_checks && 'true' || 'false' }}
-              save_cache: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+              save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
    # Pre-warm the cross-platform native build cache on `main`, in addition to
    # building the artifacts that ship in release tags. Skipped on main when the
    # rust-hash canary already found a recent run with all artifacts intact.
    native_release:
       needs: [gate, rust-hash]
-      if: ${{ needs.gate.outputs.skip != 'true' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.rust-hash.outputs.release-run-id == '')) }}
+      if: ${{ needs.gate.outputs.is-release == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.rust-hash.outputs.release-run-id == '') }}
       strategy:
          fail-fast: false
          matrix:
@@ -220,12 +227,12 @@ jobs:
               arch: ${{ matrix.arch }}
               variant: ${{ matrix.variant }}
               target: ${{ matrix.target }}
-              save_cache: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+              save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
    test:
       runs-on: ubuntu-22.04
-      needs: [gate, native_linux, rust-hash]
-      if: ${{ !cancelled() && needs.gate.outputs.skip != 'true' && needs.native_linux.result != 'failure' }}
+      needs: [native_linux, rust-hash]
+      if: ${{ !cancelled() && needs.native_linux.result != 'failure' }}
       timeout-minutes: 30
       steps:
          - uses: actions/checkout@v4
@@ -271,8 +278,6 @@ jobs:
            run: bun run ci:test:smoke
 
    install_methods:
-      needs: [gate]
-      if: ${{ needs.gate.outputs.skip != 'true' }}
       runs-on: ubuntu-22.04
       steps:
          - uses: actions/checkout@v4
@@ -286,8 +291,7 @@ jobs:
            with:
               shared-key: install-methods-linux-x64
               cache-on-failure: true
-              save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' ||
-                 startsWith(github.ref, 'refs/tags/v')) }}
+              save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
               cache-workspace-crates: true
          # Layer sccache on top of rust-cache for the same reason as the
          # build-native action: tag pushes bump workspace versions and bust
@@ -318,11 +322,11 @@ jobs:
            run: bun run ci:test:install-methods
 
    release_binary:
-      if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
+      if: ${{ needs.gate.outputs.is-release == 'true' && !cancelled() &&
          needs.native_linux.result == 'success' && needs.native_release.result ==
          'success' && needs.test.result == 'success' && needs.check.result ==
          'success' && needs.install_methods.result == 'success' }}
-      needs: [check, native_linux, native_release, test, install_methods, rust-hash]
+      needs: [gate, check, native_linux, native_release, test, install_methods, rust-hash]
       strategy:
          fail-fast: false
          matrix:
@@ -420,9 +424,9 @@ jobs:
               path: ${{ matrix.binary_path }}
 
    release-github:
-      if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
+      if: ${{ needs.gate.outputs.is-release == 'true' && !cancelled() &&
          needs.release_binary.result == 'success' }}
-      needs: [release_binary]
+      needs: [gate, release_binary]
       runs-on: ubuntu-22.04
       permissions:
          contents: write
@@ -432,7 +436,7 @@ jobs:
            with:
               bun-version: "1.3"
          - name: Generate release notes from CHANGELOGs
-           run: bun scripts/ci-release-notes.ts
+           run: bun scripts/ci-release-notes.ts ${{ needs.gate.outputs.release-tag }}
          - name: Download release binaries
            uses: actions/download-artifact@v4
            with:
@@ -442,6 +446,7 @@ jobs:
          - name: Create GitHub Release
            uses: softprops/action-gh-release@v2
            with:
+              tag_name: ${{ needs.gate.outputs.release-tag }}
               files: |
                  packages/coding-agent/binaries/omp-*
               body_path: release-notes.md
@@ -449,16 +454,16 @@ jobs:
 
 
    release_github_verify:
-      if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
+      if: ${{ needs.gate.outputs.is-release == 'true' && !cancelled() &&
          needs['release-github'].result == 'success' }}
-      needs: [release-github]
+      needs: [gate, release-github]
       runs-on: macos-14
       permissions:
          contents: read
       steps:
          - name: Download published macOS arm64 binary
            run: |
-              curl -fsSL -o omp-darwin-arm64 "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/omp-darwin-arm64"
+              curl -fsSL -o omp-darwin-arm64 "https://github.com/${{ github.repository }}/releases/download/${{ needs.gate.outputs.release-tag }}/omp-darwin-arm64"
               chmod +x omp-darwin-arm64
          - name: Verify published macOS arm64 binary
            run: |
@@ -467,11 +472,11 @@ jobs:
               HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" ./omp-darwin-arm64 --version
 
    release-npm:
-      if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
+      if: ${{ needs.gate.outputs.is-release == 'true' && !cancelled() &&
          needs.release_binary.result == 'success' &&
          needs.release_github_verify.result == 'success' &&
          !inputs.skip_npm }}
-      needs: [release_binary, release_github_verify]
+      needs: [gate, release_binary, release_github_verify]
       runs-on: ubuntu-22.04
       # `id-token: write` lets npm mint the GitHub OIDC token it exchanges for a
       # short-lived publish token (trusted publishing + provenance). When a
