@@ -29,7 +29,7 @@ export async function runAgenticCommit(args: CommitCommandArgs): Promise<void> {
 	const [settings, authStorage] = await Promise.all([Settings.init({ cwd }), discoverAuthStorage()]);
 
 	process.stdout.write("● Resolving model...\n");
-	const modelRegistry = await ModelRegistry.create(authStorage);
+	const modelRegistry = new ModelRegistry(authStorage);
 	await modelRegistry.refresh();
 	const stagedFilesPromise = (async () => {
 		let stagedFiles = await git.diff.changedFiles(cwd, { cached: true });

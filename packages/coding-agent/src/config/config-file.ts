@@ -53,42 +53,6 @@ function migrateJsonToYml(jsonPath: string, ymlPath: string) {
 	}
 }
 
-/**
- * Async sibling of `migrateJsonToYml`. Uses Bun.file so the boot path no
- * longer blocks on a sync FS read before the first await. Idempotent and
- * shares the process-wide `migratedPaths` cache with the sync path.
- */
-async function migrateJsonToYmlAsync(jsonPath: string, ymlPath: string) {
-	const key = migrationKey(jsonPath, ymlPath);
-	if (migratedPaths.has(key)) return;
-	try {
-		if (await Bun.file(ymlPath).exists()) {
-			migratedPaths.add(key);
-			return;
-		}
-		let content: string;
-		try {
-			content = await Bun.file(jsonPath).text();
-		} catch (err) {
-			if (isEnoent(err)) {
-				migratedPaths.add(key);
-				return;
-			}
-			throw err;
-		}
-		const parsed = JSON.parse(content);
-		if (!parsed) {
-			logger.warn("migrateJsonToYmlAsync: invalid json structure", { path: jsonPath });
-			migratedPaths.add(key);
-			return;
-		}
-		await Bun.write(ymlPath, YAML.stringify(parsed, null, 2));
-		migratedPaths.add(key);
-	} catch (error) {
-		logger.warn("migrateJsonToYmlAsync: migration failed", { error: String(error) });
-	}
-}
-
 export interface IConfigFile<T> {
 	readonly id: string;
 	readonly schema: ZodType<T>;
@@ -185,36 +149,17 @@ export class ConfigFile<T> implements IConfigFile<T> {
 	 * Run the JSON → YAML migration synchronously, if applicable. Idempotent.
 	 * Sync callers (tests, settings init) hit this implicitly via {@link tryLoad}.
 	 */
-	#ensureMigratedSync(): void {
+	#ensureMigrated(): void {
 		if (this.#jsonMigrationPath) {
 			migrateJsonToYml(this.#jsonMigrationPath, this.#basePath);
 		}
-	}
-
-	/**
-	 * Async sibling of {@link #ensureMigratedSync}. Boot-path callers should
-	 * `await ConfigFile.warmup(file)` before doing any sync `tryLoad`/`load`
-	 * so the migration's I/O happens off the event-loop's hot path.
-	 */
-	async #ensureMigratedAsync(): Promise<void> {
-		if (this.#jsonMigrationPath) {
-			await migrateJsonToYmlAsync(this.#jsonMigrationPath, this.#basePath);
-		}
-	}
-
-	/**
-	 * Run any pending JSON → YAML migration asynchronously, ahead of a sync
-	 * `tryLoad()` on the boot path. Safe to call multiple times; subsequent
-	 * calls are O(1) thanks to the module-level migration cache.
-	 */
-	static warmup<U>(file: ConfigFile<U>): Promise<void> {
-		return file.#ensureMigratedAsync();
 	}
 
 	relocate(configPath?: string): ConfigFile<T> {
 		if (!configPath || configPath === this.#basePath) return this;
 		const result = new ConfigFile<T>(this.id, this.schema, configPath);
 		result.#auxValidate = this.#auxValidate;
+		result.#ensureMigrated();
 		return result;
 	}
 
@@ -308,7 +253,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 
 	tryLoad(): LoadResult<T> {
 		if (this.#cache) return this.#cache;
-		this.#ensureMigratedSync();
+		this.#ensureMigrated();
 
 		let content: string;
 		try {
@@ -328,7 +273,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 
 	async tryLoadAsync(): Promise<LoadResult<T>> {
 		if (this.#cache) return this.#cache;
-		await this.#ensureMigratedAsync();
+		this.#ensureMigrated();
 
 		let content: string;
 		try {

@@ -23,7 +23,7 @@ describe("ModelRegistry.create() factory (F6)", () => {
 	test("produces an instance whose authStorage matches and that exposes bundled models", async () => {
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		try {
-			const registry = await ModelRegistry.create(authStorage, path.join(tempDir.path(), "models.yml"));
+			const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 			expect(registry.authStorage).toBe(authStorage);
 			// The constructor's bundled-model load runs after warmup, so the
 			// factory's returned instance must be queryable immediately.
@@ -46,7 +46,7 @@ describe("ModelRegistry.create() factory (F6)", () => {
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		try {
-			await ModelRegistry.create(authStorage, yml);
+			new ModelRegistry(authStorage, yml);
 			expect(fs.existsSync(yml)).toBe(true);
 		} finally {
 			authStorage.close();

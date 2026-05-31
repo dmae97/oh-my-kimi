@@ -45,13 +45,6 @@ function ensureInvalidate(component: unknown): Component {
 	return c as Component;
 }
 
-// F8: ToolExecutionComponent receives args from event-controller.ts (live
-// stream) and ui-helpers.ts (transcript rebuild). Both spread their input
-// (`{ ...content.arguments, __partialJson }`) before calling updateArgs, so
-// caller isolation is already guaranteed. Cloning here is dead work — every
-// per-delta structuredClone of a streaming tool's arguments was hitting the
-// renderer hot path even though we never mutate `#args` after assignment.
-
 /**
  * Drop trailing removal/hunk-header lines that appear in a streaming diff
  * before the matching `+added` lines have arrived. Without this, a partial
