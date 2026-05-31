@@ -461,15 +461,14 @@ async function generateTitle(
 	return extractTinyTitle(output[0]?.generated_text ?? "");
 }
 
-function buildCompletionPrompt(generator: TextGenerationPipeline, promptText: string, prefill?: string): string {
+function buildCompletionPrompt(generator: TextGenerationPipeline, promptText: string): string {
 	const chat = [{ role: "user", content: promptText }];
 	const chatTemplateOptions = {
 		add_generation_prompt: true,
 		tokenize: false,
 		enable_thinking: false,
 	};
-	const base = generator.tokenizer.apply_chat_template(chat, chatTemplateOptions) as string;
-	return prefill ? `${base}${prefill}` : base;
+	return `${generator.tokenizer.apply_chat_template(chat, chatTemplateOptions)}`;
 }
 
 /**
@@ -484,27 +483,18 @@ async function generateCompletion(
 	modelKey: TinyLocalModelKey,
 	promptText: string,
 	maxTokens: number | undefined,
-	prefill?: string,
-	stop?: string,
 ): Promise<string | null> {
 	const generator = await loadPipeline(modelKey, transport, requestId);
-	const text = buildCompletionPrompt(generator, promptText, prefill);
+	const text = buildCompletionPrompt(generator, promptText);
 	const requested = maxTokens ?? MEMORY_COMPLETION_MAX_NEW_TOKENS;
 	const maxNewTokens = Math.min(Math.max(1, requested), MEMORY_COMPLETION_MAX_NEW_TOKENS);
-	const transformers = stop ? await loadTransformers(transport, requestId, modelKey) : undefined;
 	const output = (await generator(text, {
 		max_new_tokens: maxNewTokens,
 		do_sample: false,
 		return_full_text: false,
-		...(transformers && stop
-			? { stopping_criteria: createStopOnTextCriteria(transformers, generator.tokenizer, stop) }
-			: {}),
 	})) as TextGenerationStringOutput;
-	const generated = output[0]?.generated_text ?? "";
-	// Re-attach the forced prefix so the caller's parser sees the full assistant turn,
-	// including the opening tag it pinned via `prefill`.
-	const full = `${prefill ?? ""}${generated}`.trim();
-	return full === "" ? null : full;
+	const generated = (output[0]?.generated_text ?? "").trim();
+	return generated === "" ? null : generated;
 }
 
 function releasePipelines(): void {
@@ -548,8 +538,6 @@ async function handleQueuedRequest(
 				request.modelKey,
 				request.prompt,
 				request.maxTokens,
-				request.prefill,
-				request.stop,
 			);
 			transport.send({ type: "completion", id: request.id, text });
 			return;

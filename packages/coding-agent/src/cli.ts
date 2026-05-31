@@ -1,4 +1,15 @@
 #!/usr/bin/env bun
+// Strip macOS malloc-stack-logging vars in the parent entrypoint, before any
+// subprocess/worker spawn. libmalloc reads MallocStackLogging /
+// MallocStackLoggingNoCompact during malloc bootstrap (pre-main) in every child
+// and warns when they're present but set to "off"; a child cannot suppress its
+// own warning, so the only fix is to keep them out of the inherited env here.
+// (They must be unset, not set — presence is the trigger.)
+try {
+	delete process.env.MallocStackLogging;
+	delete process.env.MallocStackLoggingNoCompact;
+} catch {}
+
 /**
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.

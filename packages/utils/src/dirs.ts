@@ -113,7 +113,6 @@ function getProfileConfigRoot(profile: string | undefined): string {
 	const root = getBaseConfigRoot();
 	return profile ? path.join(root, "profiles", profile) : root;
 }
-
 // =============================================================================
 // Project directory
 // =============================================================================

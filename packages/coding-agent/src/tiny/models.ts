@@ -196,34 +196,6 @@ export function getTinyMemoryModelSpec(key: TinyMemoryLocalModelKey): (typeof TI
 	return spec;
 }
 
-/**
- * Shake-summary models. Shake's `summary` mode (and the `shake-summary`
- * compaction strategy) compress heavy regions strictly on-device — there is no
- * online/remote option, so this registry reuses the local memory models only.
- */
-export const SHAKE_SUMMARY_MODEL_VALUES = [
-	"qwen3-1.7b",
-	"gemma-3-1b",
-	"qwen2.5-1.5b",
-	"lfm2-1.2b",
-] as const satisfies readonly TinyMemoryLocalModelKey[];
-
-export type ShakeSummaryModelKey = (typeof SHAKE_SUMMARY_MODEL_VALUES)[number];
-
-// Guard: every local memory model is offered for shake summary (catches drift).
-type MissingShakeSummaryValue = Exclude<TinyMemoryLocalModelKey, ShakeSummaryModelKey>;
-const SHAKE_SUMMARY_MODEL_VALUES_MATCH_REGISTRY: MissingShakeSummaryValue extends never ? true : never = true;
-void SHAKE_SUMMARY_MODEL_VALUES_MATCH_REGISTRY;
-
-export const SHAKE_SUMMARY_MODEL_OPTIONS = TINY_MEMORY_LOCAL_MODELS.map(model => ({
-	value: model.key,
-	label: model.label,
-	description: model.description,
-})) satisfies ReadonlyArray<{ value: ShakeSummaryModelKey; label: string; description: string }>;
-
-/** Default shake-summary local model when none is named. */
-export const DEFAULT_SHAKE_SUMMARY_MODEL_KEY: ShakeSummaryModelKey = DEFAULT_MEMORY_LOCAL_MODEL_KEY;
-
 /** Any local model key (title or memory), used by the shared inference worker. */
 export type TinyLocalModelKey = TinyTitleLocalModelKey | TinyMemoryLocalModelKey;
 

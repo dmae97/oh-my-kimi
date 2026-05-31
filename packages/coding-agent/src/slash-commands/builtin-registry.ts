@@ -62,9 +62,8 @@ const shutdownHandlerTui = (_command: ParsedSlashCommand, runtime: TuiSlashComma
 function parseShakeMode(args: string): ShakeMode | { error: string } {
 	const verb = args.trim().toLowerCase();
 	if (verb === "" || verb === "elide") return "elide";
-	if (verb === "summary") return "summary";
 	if (verb === "images") return "images";
-	return { error: `Unknown /shake mode "${verb}". Use elide, summary, or images.` };
+	return { error: `Unknown /shake mode "${verb}". Use elide or images.` };
 }
 
 const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
@@ -826,10 +825,9 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		acpDescription: "Shake heavy content out of the conversation context",
 		subcommands: [
 			{ name: "elide", description: "Strip tool results + large blocks (default)" },
-			{ name: "summary", description: "Compress heavy regions with a local on-device model" },
 			{ name: "images", description: "Strip image blocks" },
 		],
-		acpInputHint: "[elide|summary|images]",
+		acpInputHint: "[elide|images]",
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const mode = parseShakeMode(command.args);

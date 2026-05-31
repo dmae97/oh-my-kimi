@@ -135,7 +135,7 @@ export interface CompactionResult<T = unknown> {
 
 export interface CompactionSettings {
 	enabled: boolean;
-	strategy?: "context-full" | "handoff" | "shake" | "shake-summary" | "off";
+	strategy?: "context-full" | "handoff" | "shake" | "off";
 	thresholdPercent?: number;
 	thresholdTokens?: number;
 	reserveTokens: number;

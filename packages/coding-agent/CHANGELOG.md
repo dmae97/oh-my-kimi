@@ -13,6 +13,16 @@
 - Fixed `--alias` when run from a source checkout (`bun src/cli.ts` / `omp-test`) so the generated profile command targets that same checkout instead of a stale installed `omp` binary, while preserving the directory where the alias is invoked.
 - Fixed explicit `omp launch --profile <name>` / `omp launch --alias <name>` so `launch` behaves like the default command during profile bootstrap instead of blocking global profile extraction.
 
+## [15.7.4] - 2026-05-31
+
+### Removed
+
+- Removed `/shake summary`, the `shake-summary` auto-compaction strategy, and the `providers.shakeSummaryModel` setting. Use `/shake` or `compaction.strategy: shake` for mechanical artifact-backed elision without local-model CPU.
+
+### Fixed
+
+- Fixed plugin install failing for sources pinned to a SHA: `git.clone()` no longer adds `--depth 1` when `options.sha` is set, so the checkout of arbitrary commits succeeds instead of bailing out with "shallow clone may not contain this commit" ([#1589](https://github.com/can1357/oh-my-pi/issues/1589)).
+
 ## [15.7.3] - 2026-05-31
 ### Added
 
