@@ -327,6 +327,9 @@ export class Agent {
 
 	constructor(opts: AgentOptions = {}) {
 		this.#state = { ...this.#state, ...opts.initialState };
+		if (opts.initialState?.messages) this.#state.messages = opts.initialState.messages.slice();
+		if (opts.initialState?.pendingToolCalls)
+			this.#state.pendingToolCalls = new Set(opts.initialState.pendingToolCalls);
 		this.#convertToLlm = opts.convertToLlm || defaultConvertToLlm;
 		this.#transformContext = opts.transformContext;
 		this.#steeringMode = opts.steeringMode || "one-at-a-time";

@@ -352,4 +352,18 @@ describe("Agent — F3 in-place state mutation", () => {
 		external.push({ role: "user", content: "leaked", timestamp: 2 });
 		expect(agent.state.messages.length).toBe(1);
 	});
+
+	it("constructor snapshots caller-owned mutable initial state collections", () => {
+		const messages = [{ role: "user" as const, content: "x", timestamp: 1 }];
+		const pendingToolCalls = new Set(["call-1"]);
+		const agent = new Agent({ initialState: { messages, pendingToolCalls } });
+
+		agent.appendMessage({ role: "user", content: "y", timestamp: 2 });
+		agent.emitExternalEvent({ type: "tool_execution_end", toolCallId: "call-1", toolName: "tool", result: {} });
+
+		expect(messages.length).toBe(1);
+		expect(pendingToolCalls.has("call-1")).toBe(true);
+		expect(agent.state.messages).not.toBe(messages);
+		expect(agent.state.pendingToolCalls).not.toBe(pendingToolCalls);
+	});
 });
