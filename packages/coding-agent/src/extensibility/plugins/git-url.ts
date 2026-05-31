@@ -26,9 +26,9 @@ const KNOWN_HOSTS: Record<string, (pathname: string, hash: string) => { user: st
 };
 
 /**
- * Namespaced shorthand prefixes recognised by bun's `bun install <spec>`, mapped
- * to their canonical host. Mirrors npm's `github:`, `gitlab:`, `bitbucket:` etc.
- * shorthand so callers can pass them through to bun verbatim.
+ * Namespaced shorthand prefixes accepted by `omp plugin install`, mapped to
+ * their canonical host. `PluginManager.install` normalizes non-GitHub prefixes
+ * before invoking bun because bun only treats `github:` as a hosted shorthand.
  */
 const SHORTHAND_PREFIXES: Record<string, string> = {
 	github: "github.com",
@@ -274,8 +274,8 @@ function tryNamespacedShorthand(trimmed: string): GitSource | null {
  *
  * Rules:
  * - Namespaced shorthand (`github:user/repo`, `gitlab:`, `bitbucket:`,
- *   `codeberg:`, `sourcehut:`/`srht:`) is accepted directly — these mirror
- *   bun/npm's built-in install shorthands and skip the rest of the pipeline.
+ *   `codeberg:`, `sourcehut:`/`srht:`) is accepted directly; installers should
+ *   normalize entries that bun does not understand natively.
  * - With `git:` prefix, accept generic shorthand forms.
  * - Without `git:` prefix, only accept explicit protocol URLs.
  *

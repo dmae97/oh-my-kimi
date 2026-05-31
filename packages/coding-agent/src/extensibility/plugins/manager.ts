@@ -10,7 +10,7 @@ import {
 	isEnoent,
 	logger,
 } from "@oh-my-pi/pi-utils";
-import { isGitSpec } from "./git-url";
+import { parseGitUrl, type GitSource } from "./git-url";
 import { extractPackageName, parsePluginSpec } from "./parser";
 import type {
 	DoctorCheck,
@@ -62,6 +62,16 @@ function validateGitSpec(spec: string): void {
 	if (SHELL_METACHARS.test(spec)) {
 		throw new Error(`Invalid characters in plugin source: ${spec}`);
 	}
+}
+
+function gitInstallSpec(original: string, source: GitSource): string {
+	if (/^github:/i.test(original) || !/^[a-z]+:[^/]/i.test(original)) {
+		return original;
+	}
+	if (!source.ref || source.repo.includes("#")) {
+		return source.repo;
+	}
+	return `${source.repo}#${source.ref}`;
 }
 
 // =============================================================================
@@ -187,7 +197,7 @@ export class PluginManager {
 	 */
 	async install(specString: string, options: InstallOptions = {}): Promise<InstalledPlugin> {
 		const spec = parsePluginSpec(specString);
-		const gitSource = isGitSpec(spec.packageName);
+		const gitSource = parseGitUrl(spec.packageName);
 		if (gitSource) {
 			validateGitSpec(spec.packageName);
 		} else {
@@ -208,9 +218,10 @@ export class PluginManager {
 		}
 		const pkgJsonPath = getPluginsPackageJson();
 		const depsBefore = gitSource ? await this.#readDeps(pkgJsonPath) : {};
+		const packageInstallSpec = gitSource ? gitInstallSpec(spec.packageName, gitSource) : spec.packageName;
 
 		// Run npm install
-		const proc = Bun.spawn(["bun", "install", spec.packageName], {
+		const proc = Bun.spawn(["bun", "install", packageInstallSpec], {
 			cwd: getPluginsDir(),
 			stdin: "ignore",
 			stdout: "pipe",
@@ -237,9 +248,10 @@ export class PluginManager {
 			}
 			// Fallback: a force-reinstall of an already-present git plugin will not
 			// add a new key, just rewrite the existing one to the new spec value.
-			// Match by the value containing the original spec instead.
+			// Match by the install value for force-reinstalls where no new key is
+			// added (non-GitHub shorthands are normalized before bun sees them).
 			if (!resolved) {
-				const needle = spec.packageName.replace(/^git\+/, "");
+				const needle = packageInstallSpec.replace(/^git\+/i, "");
 				for (const [key, value] of Object.entries(depsAfter)) {
 					if (typeof value === "string" && value.includes(needle)) {
 						resolved = key;

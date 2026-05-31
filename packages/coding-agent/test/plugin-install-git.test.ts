@@ -111,6 +111,55 @@ describe("PluginManager.install with git sources", () => {
 		expect(result.path).toBe(path.join(pluginsNodeModules, "real-name"));
 	});
 
+	test("normalizes non-GitHub shorthand before invoking bun install", async () => {
+		await Bun.write(
+			pluginsPkgJson,
+			JSON.stringify({ name: "omp-plugins", private: true, dependencies: {} }, null, 2),
+		);
+
+		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
+			expect(cmd[0]).toBe("bun");
+			expect(cmd[1]).toBe("install");
+			expect(cmd[2]).toBe("https://gitlab.com/group/sub/project#v1.0.0");
+
+			const prepare = (async () => {
+				await Bun.write(
+					pluginsPkgJson,
+					JSON.stringify(
+						{
+							name: "omp-plugins",
+							private: true,
+							dependencies: {
+								"gitlab-plugin": "git+https://gitlab.com/group/sub/project.git#v1.0.0",
+							},
+						},
+						null,
+						2,
+					),
+				);
+				const installedDir = path.join(pluginsNodeModules, "gitlab-plugin");
+				await fs.mkdir(installedDir, { recursive: true });
+				await Bun.write(
+					path.join(installedDir, "package.json"),
+					JSON.stringify({ name: "gitlab-plugin", version: "1.0.0" }, null, 2),
+				);
+			})();
+
+			return {
+				pid: 1,
+				stdout: emptyStream(),
+				stderr: emptyStream(),
+				exited: prepare.then(() => 0),
+			} as Subprocess;
+		}) as typeof Bun.spawn);
+
+		const mgr = new PluginManager(tmpRoot);
+		const result = await mgr.install("gitlab:group/sub/project#v1.0.0");
+
+		expect(result.name).toBe("gitlab-plugin");
+		expect(result.version).toBe("1.0.0");
+	});
+
 	test("rejects git specs containing shell metacharacters", async () => {
 		const mgr = new PluginManager(tmpRoot);
 		await expect(mgr.install("github:foo/bar; rm -rf /")).rejects.toThrow(/Invalid characters in plugin source/);
