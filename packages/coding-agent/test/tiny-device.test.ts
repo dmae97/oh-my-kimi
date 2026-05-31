@@ -10,20 +10,12 @@ import {
 	tinyModelDeviceSettingToEnv,
 } from "../src/tiny/device";
 
-function expectedDefaultDevice(): TinyModelDevice {
-	if (process.platform === "win32") return "dml";
-	if (process.platform === "linux" && process.arch === "x64") return "cuda";
-	return "cpu";
-}
-
 describe("tiny model device selection", () => {
-	it("defaults to the worker-safe accelerated provider for the platform", () => {
+	it("defaults to CPU-only inference on every platform", () => {
 		const preference = resolveTinyModelDevicePreference(undefined);
-		const expected = expectedDefaultDevice();
 
-		const expectedOrder: readonly TinyModelDevice[] = expected === "cpu" ? ["cpu"] : [expected, "cpu"];
-		expect(preference.device).toBe(expected);
-		expect(tinyModelDeviceLoadOrder(preference)).toEqual(expectedOrder);
+		expect(preference.device).toBe("cpu");
+		expect(tinyModelDeviceLoadOrder(preference)).toEqual(["cpu"]);
 	});
 
 	it("accepts metal as a WebGPU alias without enabling unsafe macOS worker teardown", () => {
@@ -46,7 +38,7 @@ describe("tiny model device selection", () => {
 });
 
 describe("tiny model device setting → PI_TINY_DEVICE mapping", () => {
-	it("returns undefined for the default sentinel so the worker keeps its platform default", () => {
+	it("returns undefined for the default sentinel so the worker keeps its CPU default", () => {
 		expect(tinyModelDeviceSettingToEnv(TINY_MODEL_DEVICE_DEFAULT)).toBeUndefined();
 		expect(tinyModelDeviceSettingToEnv(undefined)).toBeUndefined();
 		expect(tinyModelDeviceSettingToEnv("")).toBeUndefined();

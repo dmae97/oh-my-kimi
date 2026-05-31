@@ -52,7 +52,6 @@ import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "@oh-my-pi/pi-agent-core/
 import type {
 	AssistantMessage,
 	Context,
-	Effort,
 	ImageContent,
 	Message,
 	MessageAttribution,
@@ -69,6 +68,7 @@ import type {
 import {
 	calculateRateLimitBackoffMs,
 	clearAnthropicFastModeFallback,
+	Effort,
 	getSupportedEfforts,
 	isContextOverflow,
 	isUsageLimitError,
@@ -88,6 +88,7 @@ import {
 	Snowflake,
 } from "@oh-my-pi/pi-utils";
 import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../async";
+import { classifyDifficulty } from "../auto-thinking/classifier";
 import { reset as resetCapabilities } from "../capability";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry } from "../config/model-registry";
@@ -165,7 +166,14 @@ import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" w
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
 import { invalidateHostMetadata } from "../ssh/connection-manager";
-import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
+import {
+	AUTO_THINKING,
+	type ConfiguredThinkingLevel,
+	clampAutoThinkingEffort,
+	resolveProvisionalAutoLevel,
+	resolveThinkingLevelForModel,
+	toReasoningEffort,
+} from "../thinking";
 import { shutdownTinyTitleClient } from "../tiny/title-client";
 import {
 	buildDiscoverableToolSearchIndex,
@@ -241,7 +249,14 @@ export type AgentSessionEvent =
 	| { type: "todo_auto_clear" }
 	| { type: "irc_message"; message: CustomMessage }
 	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
-	| { type: "thinking_level_changed"; thinkingLevel: ThinkingLevel | undefined }
+	| {
+			type: "thinking_level_changed";
+			thinkingLevel: ThinkingLevel | undefined;
+			/** The user-configured selector when it differs from the effective level (e.g. `auto`). */
+			configured?: ConfiguredThinkingLevel;
+			/** The level `auto` resolved to this turn, once classified. */
+			resolved?: Effort;
+	  }
 	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState };
 
 /** Listener function for agent session events */
@@ -265,7 +280,7 @@ export interface AgentSessionConfig {
 	/** Models to cycle through with Ctrl+P (from --models flag) */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
-	thinkingLevel?: ThinkingLevel;
+	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Prompt templates for expansion */
 	promptTemplates?: PromptTemplate[];
 	/** File-based slash commands for expansion */
@@ -445,8 +460,8 @@ interface RetryFallbackSelector {
 interface ActiveRetryFallbackState {
 	role: string;
 	originalSelector: string;
-	originalThinkingLevel: ThinkingLevel | undefined;
-	lastAppliedFallbackThinkingLevel: ThinkingLevel | undefined;
+	originalThinkingLevel: ConfiguredThinkingLevel | undefined;
+	lastAppliedFallbackThinkingLevel: ConfiguredThinkingLevel | undefined;
 }
 
 function parseRetryFallbackSelector(selector: string): RetryFallbackSelector | undefined {
@@ -782,7 +797,12 @@ export class AgentSession {
 	readonly configWarnings: string[] = [];
 
 	#scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
+	/** Effective, metadata-clamped thinking level applied to the agent (never `auto`). */
 	#thinkingLevel: ThinkingLevel | undefined;
+	/** True when the user configured `auto`; the effective level is resolved per turn. */
+	#autoThinking: boolean = false;
+	/** The level `auto` last resolved to (for UI); undefined until a turn is classified. */
+	#autoResolvedLevel: Effort | undefined;
 	#promptTemplates: PromptTemplate[];
 	#slashCommands: FileSlashCommand[];
 
@@ -1041,7 +1061,15 @@ export class AgentSession {
 		this.#parentEvalSessionId = config.parentEvalSessionId;
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#scopedModels = config.scopedModels ?? [];
-		this.#thinkingLevel = config.thinkingLevel;
+		if (config.thinkingLevel === AUTO_THINKING) {
+			// `auto` is session-level: keep the flag and show a provisional concrete
+			// level (the agent's initial effort was already set by the caller) until
+			// the first user turn is classified.
+			this.#autoThinking = true;
+			this.#thinkingLevel = resolveProvisionalAutoLevel(this.model);
+		} else {
+			this.#thinkingLevel = config.thinkingLevel;
+		}
 		this.#promptTemplates = config.promptTemplates ?? [];
 		this.#slashCommands = config.slashCommands ?? [];
 		this.#extensionRunner = config.extensionRunner;
@@ -2935,9 +2963,24 @@ export class AgentSession {
 		return this.agent.state.model;
 	}
 
-	/** Current thinking level */
+	/** Effective thinking level applied to the agent (the resolved level when `auto`). */
 	get thinkingLevel(): ThinkingLevel | undefined {
 		return this.#thinkingLevel;
+	}
+
+	/** The selector the user configured: `auto` when auto mode is active, else the effective level. */
+	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined {
+		return this.#autoThinking ? AUTO_THINKING : this.#thinkingLevel;
+	}
+
+	/** True when `auto` thinking mode is active. */
+	get isAutoThinking(): boolean {
+		return this.#autoThinking;
+	}
+
+	/** The level `auto` resolved to for the current turn (undefined until classified). */
+	autoResolvedThinkingLevel(): Effort | undefined {
+		return this.#autoResolvedLevel;
 	}
 
 	get serviceTier(): ServiceTier | undefined {
@@ -4304,6 +4347,17 @@ export class AgentSession {
 				return;
 			}
 
+			// Auto thinking: classify this real user turn and set the effective level
+			// before the model request. Synthetic/tool-continuation turns (developer/
+			// custom roles) and non-auto sessions are skipped. Never blocks the turn —
+			// failures fall back to a concrete level inside the helper.
+			if (this.#autoThinking && message.role === "user") {
+				await this.#applyAutoThinkingLevel(expandedText, generation);
+				if (this.#promptGeneration !== generation) {
+					return;
+				}
+			}
+
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
 			await this.#promptAgentWithIdleRetry(messages, agentPromptOptions);
 			if (!options?.skipPostPromptRecoveryWait) {
@@ -5061,8 +5115,8 @@ export class AgentSession {
 		this.settings.getStorage()?.recordModelUsage(`${model.provider}/${model.id}`);
 
 		// Re-apply thinking for the newly selected model. Prefer the model's
-		// configured defaultLevel; otherwise preserve the current level.
-		this.setThinkingLevel(model.thinking?.defaultLevel ?? this.thinkingLevel);
+		// configured defaultLevel; otherwise preserve the current level (or auto).
+		this.#reapplyThinkingLevel(model.thinking?.defaultLevel);
 		await this.#syncEditToolModeAfterModelChange(previousEditMode);
 	}
 
@@ -5084,8 +5138,12 @@ export class AgentSession {
 		this.settings.getStorage()?.recordModelUsage(`${model.provider}/${model.id}`);
 
 		// Apply explicit thinking level if given; otherwise prefer the model's
-		// configured defaultLevel; otherwise re-clamp the current level.
-		this.setThinkingLevel(thinkingLevel ?? model.thinking?.defaultLevel ?? this.thinkingLevel);
+		// configured defaultLevel; otherwise re-clamp the current level (or auto).
+		if (thinkingLevel !== undefined) {
+			this.setThinkingLevel(thinkingLevel);
+		} else {
+			this.#reapplyThinkingLevel(model.thinking?.defaultLevel);
+		}
 		await this.#syncEditToolModeAfterModelChange(previousEditMode);
 	}
 
@@ -5233,8 +5291,8 @@ export class AgentSession {
 		this.settings.setModelRole("default", this.#formatRoleModelValue("default", next.model));
 		this.settings.getStorage()?.recordModelUsage(`${next.model.provider}/${next.model.id}`);
 
-		// Apply the scoped model's configured thinking level
-		this.setThinkingLevel(next.thinkingLevel);
+		// Apply the scoped model's configured thinking level, preserving auto.
+		this.setThinkingLevel(this.#autoThinking ? AUTO_THINKING : next.thinkingLevel);
 		await this.#syncEditToolModeAfterModelChange(previousEditMode);
 
 		return { model: next.model, thinkingLevel: this.thinkingLevel, isScoped: true };
@@ -5263,8 +5321,8 @@ export class AgentSession {
 		this.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);
 		this.settings.setModelRole("default", this.#formatRoleModelValue("default", nextModel));
 		this.settings.getStorage()?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);
-		// Re-apply the current thinking level for the newly selected model
-		this.setThinkingLevel(this.thinkingLevel);
+		// Re-apply the current thinking level (or auto) for the newly selected model
+		this.#reapplyThinkingLevel();
 		await this.#syncEditToolModeAfterModelChange(previousEditMode);
 
 		return { model: nextModel, thinkingLevel: this.thinkingLevel, isScoped: false };
@@ -5282,10 +5340,29 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Set thinking level.
-	 * Saves the effective metadata-clamped level to session and settings only if it changes.
+	 * Set the thinking level. `auto` enables per-turn classification (session-level,
+	 * never written to the session log); a concrete level clears auto. The effective
+	 * metadata-clamped level is saved to the session/settings only when it changes.
 	 */
-	setThinkingLevel(level: ThinkingLevel | undefined, persist: boolean = false): void {
+	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
+		if (level === AUTO_THINKING) {
+			const provisional = resolveProvisionalAutoLevel(this.model);
+			const wasAuto = this.#autoThinking;
+			this.#autoThinking = true;
+			this.#autoResolvedLevel = undefined;
+			this.#thinkingLevel = provisional;
+			this.agent.setThinkingLevel(toReasoningEffort(provisional));
+			if (persist) {
+				this.settings.set("defaultThinkingLevel", AUTO_THINKING);
+			}
+			if (!wasAuto || this.#thinkingLevel !== provisional) {
+				this.#emit({ type: "thinking_level_changed", thinkingLevel: provisional, configured: AUTO_THINKING });
+			}
+			return;
+		}
+
+		this.#autoThinking = false;
+		this.#autoResolvedLevel = undefined;
 		const effectiveLevel = resolveThinkingLevelForModel(this.model, level);
 		const isChanging = effectiveLevel !== this.#thinkingLevel;
 
@@ -5302,14 +5379,28 @@ export class AgentSession {
 	}
 
 	/**
-	 * Cycle to next thinking level.
-	 * @returns New level, or undefined if model doesn't support thinking
+	 * Re-apply the active thinking selection after a model change. Preserves `auto`
+	 * (re-clamping the provisional level to the new model); otherwise re-applies the
+	 * preferred default or the current effective level.
 	 */
-	cycleThinkingLevel(): ThinkingLevel | undefined {
+	#reapplyThinkingLevel(preferredDefault?: ThinkingLevel): void {
+		this.setThinkingLevel(this.#autoThinking ? AUTO_THINKING : (preferredDefault ?? this.#thinkingLevel));
+	}
+
+	/**
+	 * Cycle to next thinking level: off → auto → minimal..xhigh → off.
+	 * @returns New selector, or undefined if model doesn't support thinking
+	 */
+	cycleThinkingLevel(): ConfiguredThinkingLevel | undefined {
 		if (!this.model?.reasoning) return undefined;
 
-		const levels = [ThinkingLevel.Off, ...this.getAvailableThinkingLevels()];
-		const currentLevel = this.thinkingLevel === ThinkingLevel.Inherit ? ThinkingLevel.Off : this.thinkingLevel;
+		const levels: ConfiguredThinkingLevel[] = [
+			ThinkingLevel.Off,
+			AUTO_THINKING,
+			...this.getAvailableThinkingLevels(),
+		];
+		const configured = this.configuredThinkingLevel();
+		const currentLevel = configured === ThinkingLevel.Inherit ? ThinkingLevel.Off : configured;
 		const currentIndex = currentLevel ? levels.indexOf(currentLevel) : -1;
 		const nextIndex = (currentIndex + 1) % levels.length;
 		const nextLevel = levels[nextIndex];
@@ -5317,6 +5408,61 @@ export class AgentSession {
 
 		this.setThinkingLevel(nextLevel);
 		return nextLevel;
+	}
+
+	/** Timeout (ms) for per-turn auto-thinking classification before falling back. */
+	static readonly #AUTO_THINKING_TIMEOUT_MS = 4000;
+
+	/**
+	 * Classify the current user turn and set the effective thinking level for it.
+	 * Bounded by a timeout + abort; on any failure (no smol model, timeout, parse
+	 * error) it falls back to the provisional concrete level and continues. Never
+	 * throws into the turn, and never clears `#autoThinking` (auto stays active).
+	 */
+	async #applyAutoThinkingLevel(promptText: string, generation: number): Promise<void> {
+		const model = this.model;
+		if (!model?.reasoning) return;
+
+		let resolved: Effort | undefined;
+		if (containsUltrathink(promptText)) {
+			// The user explicitly asked for maximum thinking; bypass the classifier
+			// and jump straight to the highest auto-supported level for this model.
+			resolved = clampAutoThinkingEffort(model, Effort.XHigh);
+		} else {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), AgentSession.#AUTO_THINKING_TIMEOUT_MS);
+			try {
+				resolved = await classifyDifficulty(promptText, {
+					settings: this.settings,
+					registry: this.#modelRegistry,
+					model,
+					sessionId: this.sessionId,
+					signal: controller.signal,
+					metadataResolver: provider => this.agent.metadataForProvider(provider),
+				});
+			} catch (error) {
+				logger.debug("auto-thinking: classification failed; using fallback level", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			} finally {
+				clearTimeout(timer);
+			}
+		}
+
+		// Drop the result if the turn was aborted/superseded while classifying.
+		if (this.#promptGeneration !== generation || !this.#autoThinking) return;
+
+		const effort = resolved ?? resolveProvisionalAutoLevel(model);
+		if (effort === undefined) return;
+		this.#autoResolvedLevel = effort;
+		this.#thinkingLevel = effort;
+		this.agent.setThinkingLevel(toReasoningEffort(effort));
+		this.#emit({
+			type: "thinking_level_changed",
+			thinkingLevel: effort,
+			configured: AUTO_THINKING,
+			resolved: effort,
+		});
 	}
 
 	/**
@@ -7260,7 +7406,9 @@ export class AgentSession {
 			throw new Error(`No API key for retry fallback ${selector.raw}`);
 		}
 
-		const currentThinkingLevel = this.thinkingLevel;
+		// Capture the configured selector (auto-aware) so a fallback chain preserves
+		// `auto` instead of collapsing it to the level it resolved to this turn.
+		const currentThinkingLevel = this.configuredThinkingLevel();
 		const nextThinkingLevel = selector.thinkingLevel ?? currentThinkingLevel;
 
 		this.#setModelWithProviderSessionReset(candidate);
@@ -7333,7 +7481,7 @@ export class AgentSession {
 		const apiKey = await this.#modelRegistry.getApiKey(primaryModel, this.sessionId);
 		if (!apiKey) return;
 
-		const currentThinkingLevel = this.thinkingLevel;
+		const currentThinkingLevel = this.configuredThinkingLevel();
 		const thinkingToApply =
 			currentThinkingLevel === lastAppliedFallbackThinkingLevel ? originalThinkingLevel : currentThinkingLevel;
 		this.#setModelWithProviderSessionReset(primaryModel);
@@ -8244,6 +8392,8 @@ export class AgentSession {
 		const previousScheduledHiddenNextTurnGeneration = this.#scheduledHiddenNextTurnGeneration;
 		const previousModel = this.model;
 		const previousThinkingLevel = this.#thinkingLevel;
+		const previousAutoThinking = this.#autoThinking;
+		const previousAutoResolvedLevel = this.#autoResolvedLevel;
 		const previousServiceTier = this.agent.serviceTier;
 		const previousSelectedMCPToolNames = new Set(this.#selectedMCPToolNames);
 		const previousTools = [...this.agent.state.tools];
@@ -8321,12 +8471,21 @@ export class AgentSession {
 				.some(entry => entry.type === "service_tier_change");
 			const defaultThinkingLevel = this.settings.get("defaultThinkingLevel");
 			const configuredServiceTier = this.settings.get("serviceTier");
-			const nextThinkingLevel = resolveThinkingLevelForModel(
-				this.model,
-				hasThinkingEntry ? (sessionContext.thinkingLevel as ThinkingLevel | undefined) : defaultThinkingLevel,
-			);
-			this.#thinkingLevel = nextThinkingLevel;
-			this.agent.setThinkingLevel(toReasoningEffort(nextThinkingLevel));
+			// Session log entries only ever store concrete levels (auto is never
+			// written), so `auto` can only arrive via the settings default.
+			const restoredThinkingLevel: ConfiguredThinkingLevel | undefined = hasThinkingEntry
+				? (sessionContext.thinkingLevel as ThinkingLevel | undefined)
+				: defaultThinkingLevel;
+			if (restoredThinkingLevel === AUTO_THINKING) {
+				this.#autoThinking = true;
+				this.#autoResolvedLevel = undefined;
+				this.#thinkingLevel = resolveProvisionalAutoLevel(this.model);
+			} else {
+				this.#autoThinking = false;
+				this.#autoResolvedLevel = undefined;
+				this.#thinkingLevel = resolveThinkingLevelForModel(this.model, restoredThinkingLevel);
+			}
+			this.agent.setThinkingLevel(toReasoningEffort(this.#thinkingLevel));
 			this.agent.serviceTier = hasServiceTierEntry
 				? sessionContext.serviceTier
 				: configuredServiceTier === "none"
@@ -8375,6 +8534,8 @@ export class AgentSession {
 				this.#syncToolCallBatchCap(undefined);
 			}
 			this.#thinkingLevel = previousThinkingLevel;
+			this.#autoThinking = previousAutoThinking;
+			this.#autoResolvedLevel = previousAutoResolvedLevel;
 			this.agent.setThinkingLevel(toReasoningEffort(previousThinkingLevel));
 			this.agent.serviceTier = previousServiceTier;
 			this.#syncTodoPhasesFromBranch();

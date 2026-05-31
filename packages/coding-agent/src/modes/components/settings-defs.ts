@@ -86,6 +86,13 @@ const CONDITIONS: Record<string, () => boolean> = {
 			return false;
 		}
 	},
+	autoThinkingActive: () => {
+		try {
+			return Settings.instance.get("defaultThinkingLevel") === "auto";
+		} catch {
+			return false;
+		}
+	},
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

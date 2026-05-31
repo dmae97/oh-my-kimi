@@ -1,5 +1,5 @@
 import { type ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { clampThinkingLevelForModel, type Effort, type Model, THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
+import { clampThinkingLevelForModel, Effort, getSupportedEfforts, type Model, THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 
 /**
  * Metadata used to render thinking selector values in the coding-agent UI.
@@ -84,4 +84,76 @@ export function resolveThinkingLevelForModel(
 		return ThinkingLevel.Off;
 	}
 	return clampThinkingLevelForModel(model, level);
+}
+
+/**
+ * Sentinel selector for the coding-agent "auto" thinking mode. Kept entirely
+ * inside the coding-agent layer: it is never an {@link Effort} or
+ * {@link ThinkingLevel}, so provider mapping/clamping keeps seeing concrete
+ * efforts. The session resolves `auto` to a concrete effort each turn.
+ */
+export const AUTO_THINKING = "auto" as const;
+
+/** A thinking selector as configured by the user — a concrete level or `auto`. */
+export type ConfiguredThinkingLevel = ThinkingLevel | typeof AUTO_THINKING;
+
+/** Metadata used to render the `auto` selector value alongside concrete levels. */
+export interface ConfiguredThinkingLevelMetadata {
+	value: ConfiguredThinkingLevel;
+	label: string;
+	description: string;
+}
+
+const AUTO_THINKING_METADATA: ConfiguredThinkingLevelMetadata = {
+	value: AUTO_THINKING,
+	label: "auto",
+	description: "Auto-detect per prompt (low–xhigh)",
+};
+
+/**
+ * Parses a configured thinking selector, accepting `auto` in addition to every
+ * value {@link parseThinkingLevel} accepts. {@link parseThinkingLevel} itself
+ * stays strict so model-suffix parsing (`model:high`) keeps rejecting `auto`.
+ */
+export function parseConfiguredThinkingLevel(value: string | null | undefined): ConfiguredThinkingLevel | undefined {
+	if (value === AUTO_THINKING) return AUTO_THINKING;
+	return parseThinkingLevel(value);
+}
+
+/** Returns display metadata for a configured selector, including `auto`. */
+export function getConfiguredThinkingLevelMetadata(level: ConfiguredThinkingLevel): ConfiguredThinkingLevelMetadata {
+	return level === AUTO_THINKING ? AUTO_THINKING_METADATA : getThinkingLevelMetadata(level);
+}
+
+/**
+ * Resolves an auto-classified effort against the active model's supported
+ * range. Unlike {@link clampThinkingLevelForModel}, `auto` never resolves below
+ * {@link Effort.Low}: the eligible pool is the model's supported efforts at or
+ * above Low (falling back to the full supported set only when the model maxes
+ * out below Low). Within that pool the request snaps to the highest level not
+ * exceeding it, or the pool minimum when the request is below the pool.
+ */
+export function clampAutoThinkingEffort(model: Model | undefined, effort: Effort): Effort {
+	const supported = model ? getSupportedEfforts(model) : THINKING_EFFORTS;
+	if (supported.length === 0) return effort;
+	const lowIndex = THINKING_EFFORTS.indexOf(Effort.Low);
+	const eligible = supported.filter(level => THINKING_EFFORTS.indexOf(level) >= lowIndex);
+	const pool = eligible.length > 0 ? eligible : supported;
+	const requestedIndex = THINKING_EFFORTS.indexOf(effort);
+	let chosen = pool[0];
+	for (const candidate of pool) {
+		if (THINKING_EFFORTS.indexOf(candidate) > requestedIndex) break;
+		chosen = candidate;
+	}
+	return chosen;
+}
+
+/**
+ * The provisional concrete level shown while `auto` is configured but before a
+ * turn has been classified. Prefers the model's `defaultLevel`, otherwise High,
+ * clamped into the auto range. Returns `undefined` for non-reasoning models.
+ */
+export function resolveProvisionalAutoLevel(model: Model | undefined): Effort | undefined {
+	if (!model?.reasoning) return undefined;
+	return clampAutoThinkingEffort(model, model.thinking?.defaultLevel ?? Effort.High);
 }

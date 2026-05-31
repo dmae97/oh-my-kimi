@@ -62,6 +62,7 @@ import type { AgentSession } from "./session/agent-session";
 import type { AuthStorage } from "./session/auth-storage";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
 import { resolvePromptInput } from "./system-prompt";
+import { AUTO_THINKING } from "./thinking";
 import type { LspStartupServerInfo } from "./tools";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
 import type { EventBus } from "./utils/event-bus";
@@ -643,7 +644,11 @@ async function buildSessionOptions(
 
 	// Scoped models for Ctrl+P cycling - fill in default thinking levels when not explicit
 	if (scopedModels.length > 0) {
-		const defaultThinkingLevel = activeSettings.get("defaultThinkingLevel");
+		// `auto` is a session-level concept only; per-scoped-model (Ctrl+P) thinking
+		// overrides stay concrete, so coerce the auto default to "unset" here.
+		const defaultThinkingLevelSetting = activeSettings.get("defaultThinkingLevel");
+		const defaultThinkingLevel =
+			defaultThinkingLevelSetting === AUTO_THINKING ? undefined : defaultThinkingLevelSetting;
 		options.scopedModels = scopedModels.map(scopedModel => ({
 			model: scopedModel.model,
 			thinkingLevel: scopedModel.explicitThinkingLevel

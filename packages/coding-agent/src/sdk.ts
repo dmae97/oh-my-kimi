@@ -112,7 +112,14 @@ import {
 	loadProjectContextFiles as loadContextFilesInternal,
 } from "./system-prompt";
 import { AgentOutputManager } from "./task/output-manager";
-import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } from "./thinking";
+import {
+	AUTO_THINKING,
+	type ConfiguredThinkingLevel,
+	parseThinkingLevel,
+	resolveProvisionalAutoLevel,
+	resolveThinkingLevelForModel,
+	toReasoningEffort,
+} from "./thinking";
 import {
 	collectDiscoverableTools,
 	type DiscoverableTool,
@@ -254,7 +261,7 @@ export interface CreateAgentSessionOptions {
 	 * Used when model lookup is deferred because extension-provided models aren't registered yet. */
 	modelPattern?: string;
 	/** Thinking selector. Default: from settings, else unset */
-	thinkingLevel?: ThinkingLevel;
+	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
@@ -1013,10 +1020,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (thinkingLevel === undefined) {
 		thinkingLevel = settings.get("defaultThinkingLevel");
 	}
+	const autoThinking = thinkingLevel === AUTO_THINKING;
+	// Concrete level the agent/session start with. With `auto` this is the
+	// provisional level shown until the first per-turn classification resolves;
+	// `auto` itself stays a session-only concept handled by AgentSession.
+	let effectiveThinkingLevel: ThinkingLevel | undefined = thinkingLevel === AUTO_THINKING ? undefined : thinkingLevel;
 	if (model) {
 		const resolvedModel = model;
-		thinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
-			resolveThinkingLevelForModel(resolvedModel, thinkingLevel),
+		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
+			autoThinking
+				? resolveProvisionalAutoLevel(resolvedModel)
+				: resolveThinkingLevelForModel(resolvedModel, effectiveThinkingLevel),
 		);
 		// Fire-and-forget TLS+H2 handshake to the model's host so it overlaps
 		// with the rest of session setup (extension/skill load, tool registry,
@@ -1838,7 +1852,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			initialState: {
 				systemPrompt,
 				model,
-				thinkingLevel: toReasoningEffort(thinkingLevel),
+				thinkingLevel: toReasoningEffort(effectiveThinkingLevel),
 				tools: initialTools,
 			},
 			convertToLlm: convertToLlmFinal,
@@ -1945,7 +1959,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (model) {
 				sessionManager.appendModelChange(`${model.provider}/${model.id}`);
 			}
-			sessionManager.appendThinkingLevelChange(thinkingLevel);
+			if (!autoThinking) {
+				// `auto` is never written to the session log; resume reads it from the
+				// `defaultThinkingLevel` setting instead, keeping `hasThinkingEntry` false.
+				sessionManager.appendThinkingLevelChange(effectiveThinkingLevel);
+			}
 			if (initialServiceTier) {
 				sessionManager.appendServiceTierChange(initialServiceTier);
 			}
@@ -1953,7 +1971,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		session = new AgentSession({
 			agent,
-			thinkingLevel,
+			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
 			sessionManager,
 			settings,
 			evalKernelOwnerId,

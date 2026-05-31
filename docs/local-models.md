@@ -10,17 +10,17 @@ default to `online`, so existing users incur no downloads or on-device inference
 
 - **Stack**: `@huggingface/transformers` (transformers.js) v4 running under Bun. In Bun the library
   loads the **native `onnxruntime-node` backend** (not the WASM build).
-- **Device policy**: local tiny models request a worker-safe accelerated ONNX execution provider when
-  one is available, and retry once on `device:"cpu"` if acceleration cannot initialize.
-  - Defaults: DirectML on Windows, CUDA on Linux x64, and CPU elsewhere. Pick a provider persistently
-    with the `providers.tinyModelDevice` setting (`default` keeps the platform pick); the
-    `PI_TINY_DEVICE` env var overrides the setting.
+- **Device policy**: local tiny models default to CPU-only inference and retry once on CPU if an
+  explicit accelerated provider cannot initialize.
+  - Pick a provider persistently with the `providers.tinyModelDevice` setting (`default` keeps CPU),
+    or per-run with the `PI_TINY_DEVICE` env var (which overrides the setting).
   - Direct `coreml` remains opt-in via `PI_TINY_DEVICE=coreml`; it is not part of the default because
     cached decoder-LLM ONNX loads can fail during session initialization.
   - WebGPU/Metal works for the single-process eval harness, but it is not enabled in the production
     worker on macOS because ONNX Runtime/Bun currently hard-crashes on worker teardown after WebGPU
     inference.
-  - Use `providers.tinyModelDevice: cpu` (or `PI_TINY_DEVICE=cpu`) for the old CPU-only path.
+  - Use `providers.tinyModelDevice` or `PI_TINY_DEVICE` only when explicitly opting out of the CPU
+    default.
 - **Quantization: q4 is the sweet spot** — smaller on disk, faster to load, and fast at inference.
   q8/int8 loads slower *and* infers slower on CPU. Every shipped model defaults to `q4`; override the
   precision persistently with the `providers.tinyModelDtype` setting (`default` keeps `q4`, e.g. `fp16`
