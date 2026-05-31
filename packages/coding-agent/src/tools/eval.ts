@@ -6,7 +6,8 @@ import { formatNumber, prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { settings } from "../config/settings";
 import { jsBackend, pythonBackend } from "../eval";
-import type { ExecutorBackend } from "../eval/backend";
+import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
+import { IdleTimeout } from "../eval/idle-timeout";
 import { defaultEvalSessionId } from "../eval/session-id";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -346,12 +347,20 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				for (let i = 0; i < cells.length; i++) {
 					const cell = cells[i];
 					const backend = cell.resolved.backend;
-					const timeoutSec = timeoutSecondsFromMs(cell.timeoutMs);
-					const deadlineMs = Date.now() + timeoutSec * 1000;
-					const timeoutSignal = AbortSignal.timeout(Math.max(0, deadlineMs - Date.now()));
+					// The per-cell `timeout` is an *inactivity* budget, not a hard
+					// wall-clock cap: it bounds the gap between progress signals
+					// (status events — agent() updates, log()/phase(), tool-bridge
+					// activity), so a long fanout that keeps reporting progress runs to
+					// completion while a genuinely stalled cell (no progress for the
+					// whole window) is still interrupted. Raw stdout deliberately does
+					// NOT re-arm it, so pure-compute runaway loops stay bounded. The
+					// watchdog drives `combinedSignal`; we pass no wall-clock deadline
+					// downstream so the backends never arm a competing fixed timer.
+					const idleTimeoutMs = timeoutSecondsFromMs(cell.timeoutMs) * 1000;
+					const idle = new IdleTimeout(idleTimeoutMs);
 					const combinedSignal = signal
-						? AbortSignal.any([signal, timeoutSignal, sessionAbortController.signal])
-						: AbortSignal.any([timeoutSignal, sessionAbortController.signal]);
+						? AbortSignal.any([signal, idle.signal, sessionAbortController.signal])
+						: AbortSignal.any([idle.signal, sessionAbortController.signal]);
 
 					const cellResult = cellResults[i];
 					cellResult.status = "running";
@@ -362,26 +371,32 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					pushUpdate();
 
 					const startTime = Date.now();
-					const result = await backend.execute(cell.code, {
-						cwd: session.cwd,
-						sessionId,
-						sessionFile: sessionFile ?? undefined,
-						kernelOwnerId,
-						signal: combinedSignal,
-						session,
-						deadlineMs,
-						reset: cell.reset,
-						artifactPath,
-						artifactId,
-						onChunk: chunk => {
-							outputSink!.push(chunk);
-						},
-						onStatus: event => {
-							cellResult.statusEvents ??= [];
-							upsertStatusEvent(cellResult.statusEvents, event);
-							pushUpdate();
-						},
-					});
+					let result: ExecutorBackendResult;
+					try {
+						result = await backend.execute(cell.code, {
+							cwd: session.cwd,
+							sessionId,
+							sessionFile: sessionFile ?? undefined,
+							kernelOwnerId,
+							signal: combinedSignal,
+							session,
+							idleTimeoutMs,
+							reset: cell.reset,
+							artifactPath,
+							artifactId,
+							onChunk: chunk => {
+								outputSink!.push(chunk);
+							},
+							onStatus: event => {
+								idle.bump();
+								cellResult.statusEvents ??= [];
+								upsertStatusEvent(cellResult.statusEvents, event);
+								pushUpdate();
+							},
+						});
+					} finally {
+						idle.dispose();
+					}
 					const durationMs = Date.now() - startTime;
 
 					const cellStatusEvents: EvalStatusEvent[] = [];

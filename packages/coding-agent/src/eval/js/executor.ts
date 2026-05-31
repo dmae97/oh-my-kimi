@@ -8,6 +8,12 @@ export interface JsExecutorOptions {
 	cwd?: string;
 	timeoutMs?: number;
 	deadlineMs?: number;
+	/**
+	 * Inactivity budget (ms). Used for worker cold-start headroom and
+	 * timeout-annotation text when the caller drives cancellation via an
+	 * idle-aware `signal` instead of `deadlineMs`/`timeoutMs`. Never arms a timer.
+	 */
+	idleTimeoutMs?: number;
 	onChunk?: (chunk: string) => Promise<void> | void;
 	onStatus?: (event: JsStatusEvent) => void;
 	signal?: AbortSignal;
@@ -46,6 +52,20 @@ function isAbortError(error: unknown): boolean {
 	);
 }
 
+function isTimeoutReason(reason: unknown): boolean {
+	return (
+		(reason instanceof DOMException && reason.name === "TimeoutError") ||
+		(reason instanceof Error && reason.name === "TimeoutError")
+	);
+}
+
+function formatJsTimeoutAnnotation(timeoutMs: number | undefined, idle: boolean): string {
+	const suffix = idle ? " of inactivity" : "";
+	if (timeoutMs === undefined) return "Command timed out";
+	const secs = Math.max(1, Math.round(timeoutMs / 1000));
+	return `Command timed out after ${secs} seconds${suffix}`;
+}
+
 export async function executeJs(code: string, options: JsExecutorOptions): Promise<JsResult> {
 	const displayOutputs: JsDisplayOutput[] = [];
 	const outputSink = new OutputSink({
@@ -56,15 +76,20 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 		maxColumns: resolveOutputMaxColumns(options.session.settings),
 		onChunk: chunk => options.onChunk?.(chunk),
 	});
-	const timeoutMs = getExecutionTimeoutMs(options);
+	const legacyTimeoutMs = getExecutionTimeoutMs(options);
 	const timeoutSignal =
-		typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-			? AbortSignal.timeout(timeoutMs)
+		typeof legacyTimeoutMs === "number" && Number.isFinite(legacyTimeoutMs) && legacyTimeoutMs > 0
+			? AbortSignal.timeout(legacyTimeoutMs)
 			: undefined;
 	const signal =
 		options.signal && timeoutSignal
 			? AbortSignal.any([options.signal, timeoutSignal])
 			: (options.signal ?? timeoutSignal);
+	// Idle mode: the eval tool drives cancellation via an idle-aware `signal` and
+	// passes only an inactivity budget. Use it for worker cold-start headroom and
+	// timeout-annotation text; never derive a competing fixed timer from it.
+	const idleMode = legacyTimeoutMs === undefined && options.idleTimeoutMs !== undefined;
+	const acquireBudgetMs = legacyTimeoutMs ?? options.idleTimeoutMs;
 
 	try {
 		await executeInVmContext({
@@ -75,7 +100,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 			reset: options.reset,
 			code,
 			filename: `js-cell-${crypto.randomUUID()}.js`,
-			timeoutMs,
+			timeoutMs: acquireBudgetMs,
 			runState: {
 				signal,
 				onText: chunk => outputSink.push(chunk),
@@ -100,9 +125,9 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 		};
 	} catch (error) {
 		if (signal?.aborted || isAbortError(error)) {
-			const timeoutReason = timeoutSignal?.aborted ? "Command timed out" : "";
-			if (timeoutReason) {
-				outputSink.push(timeoutReason);
+			const timedOut = Boolean(timeoutSignal?.aborted) || isTimeoutReason(options.signal?.reason);
+			if (timedOut) {
+				outputSink.push(formatJsTimeoutAnnotation(legacyTimeoutMs ?? options.idleTimeoutMs, idleMode));
 			}
 			const summary = await outputSink.dump();
 			return {

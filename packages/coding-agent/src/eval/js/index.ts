@@ -20,7 +20,7 @@ export default {
 	async execute(code: string, opts: ExecutorBackendExecOptions): Promise<ExecutorBackendResult> {
 		const result = await executeJs(code, {
 			cwd: opts.cwd,
-			deadlineMs: opts.deadlineMs,
+			idleTimeoutMs: opts.idleTimeoutMs,
 			signal: opts.signal,
 			sessionId: namespaceSessionId(opts.sessionId),
 			sessionFile: opts.sessionFile,

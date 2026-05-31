@@ -25,6 +25,12 @@ export interface PythonExecutorOptions {
 	timeoutMs?: number;
 	/** Absolute wall-clock deadline in milliseconds since epoch */
 	deadlineMs?: number;
+	/**
+	 * Inactivity budget (ms). Used only for timeout-annotation text when the
+	 * caller drives cancellation via an idle-aware `signal` instead of a
+	 * wall-clock `deadlineMs`/`timeoutMs`. Does not arm a timer.
+	 */
+	idleTimeoutMs?: number;
 	/** Callback for streaming output chunks (already sanitized) */
 	onChunk?: (chunk: string) => Promise<void> | void;
 	/** AbortSignal for cancellation */
@@ -225,18 +231,20 @@ async function waitForPromiseWithCancellation<T>(
 // Result formatting
 // ---------------------------------------------------------------------------
 
-function formatTimeoutAnnotation(timeoutMs?: number): string | undefined {
+function formatTimeoutAnnotation(timeoutMs?: number, idle = false): string | undefined {
+	const suffix = idle ? " of inactivity" : "";
 	if (timeoutMs === undefined) return "Command timed out";
 	const secs = Math.max(1, Math.round(timeoutMs / 1000));
-	return `Command timed out after ${secs} seconds`;
+	return `Command timed out after ${secs} seconds${suffix}`;
 }
 
-function formatKernelTimeoutAnnotation(timeoutMs: number | undefined, kernelKilled: boolean): string {
+function formatKernelTimeoutAnnotation(timeoutMs: number | undefined, kernelKilled: boolean, idle = false): string {
 	const secs = timeoutMs === undefined ? undefined : Math.max(1, Math.round(timeoutMs / 1000));
+	const suffix = idle ? " of inactivity" : "";
 	if (kernelKilled) {
-		return "eval cell timed out and the kernel was unresponsive to interrupt; the kernel has been killed and will be recreated on the next call.";
+		return `eval cell timed out${suffix} and the kernel was unresponsive to interrupt; the kernel has been killed and will be recreated on the next call.`;
 	}
-	const duration = secs === undefined ? "the configured timeout" : `${secs}s`;
+	const duration = secs === undefined ? "the configured timeout" : `${secs}s${suffix}`;
 	return `eval cell timed out after ${duration}; kernel interrupted but remains running. Reset the kernel via { reset: true } if state appears corrupted.`;
 }
 
@@ -480,6 +488,10 @@ async function executeWithKernel(
 	const displayOutputs: KernelDisplayOutput[] = [];
 	const deadlineMs = getExecutionDeadlineMs(options);
 	let executionTimeoutMs: number | undefined;
+	// Idle mode: the caller (eval tool) drives cancellation via an idle-aware
+	// signal and passes no wall-clock deadline, so annotate timeouts with the
+	// configured inactivity budget rather than a remaining-deadline figure.
+	const idleMode = deadlineMs === undefined && options?.idleTimeoutMs !== undefined;
 
 	// Collect every display output and, for status events, stream them live so
 	// long-running bridge helpers (e.g. `agent()`) surface progress mid-cell.
@@ -512,7 +524,11 @@ async function executeWithKernel(
 
 		if (result.cancelled) {
 			const annotation = result.timedOut
-				? formatKernelTimeoutAnnotation(executionTimeoutMs, result.kernelKilled ?? false)
+				? formatKernelTimeoutAnnotation(
+						executionTimeoutMs ?? options?.idleTimeoutMs,
+						result.kernelKilled ?? false,
+						idleMode,
+					)
 				: undefined;
 			return {
 				exitCode: undefined,
@@ -549,7 +565,9 @@ async function executeWithKernel(
 				cancelled: true,
 				displayOutputs,
 				stdinRequested: false,
-				...(await sink.dump(timedOut ? formatTimeoutAnnotation(executionTimeoutMs) : undefined)),
+				...(await sink.dump(
+					timedOut ? formatTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs, idleMode) : undefined,
+				)),
 			};
 		}
 		const error = err instanceof Error ? err : new Error(String(err));

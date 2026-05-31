@@ -20,6 +20,7 @@
 
 ### Changed
 
+- Changed the eval cell `timeout` from a hard wall-clock deadline to an inactivity (idle) budget: a cell is now interrupted only after going the full window with no progress signal, and every status event — `agent()` progress snapshots, `log()`/`phase()`, and tool-bridge activity — re-arms the watchdog. Long `agent()`/`parallel()` fanouts that keep reporting progress no longer time out mid-run (previously the kernel was killed at the fixed deadline even while subagents were actively progressing). Raw `print`/stdout does not reset the watchdog, so pure-compute runaway loops stay bounded; the timeout is driven entirely by the abort signal, so neither runtime arms a competing fixed timer.
 - Fixed turn-budget parsing to match `+Nk` directives only at token boundaries, preventing values like `version 1.2.3`, `c++`, and `+500kfoo` from triggering a budget rule
 - Changed overflowing provider, hook-option, branch-message, agent, extension, and session-tree pickers to support fuzzy type-to-filter search.
 - Changed Shift+Ctrl+P to cycle role models backward instead of cycling forward without persisting.

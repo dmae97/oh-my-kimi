@@ -154,6 +154,27 @@ describe("shared eval executors", () => {
 		expect(result.output.trim()).toBe("42");
 	});
 
+	it("treats idleTimeoutMs as an inactivity budget, not a fixed timer", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-js-idle-budget-");
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `js-idle-budget:${crypto.randomUUID()}`;
+		const session = createToolSession(tempDir.path(), sessionFile);
+
+		// With no wall-clock deadlineMs/timeoutMs and no aborting signal, a cell that
+		// runs well past idleTimeoutMs must still complete: the backend must never
+		// derive a competing fixed timer from the inactivity budget.
+		const result = await executeJs("await Bun.sleep(120); return 'done';", {
+			sessionId,
+			session,
+			sessionFile,
+			idleTimeoutMs: 30,
+		});
+
+		expect(result.cancelled).toBe(false);
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("done");
+	});
+
 	it("shares Python state across executePython calls with one session id", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-py-shared-");
 		const sessionFile = path.join(tempDir.path(), "session.jsonl");

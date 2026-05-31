@@ -9,7 +9,15 @@ export interface ExecutorBackendExecOptions {
 	kernelOwnerId: string | undefined;
 	signal?: AbortSignal;
 	session: ToolSession;
-	deadlineMs: number;
+	/**
+	 * Inactivity budget in milliseconds (the cell's `timeout`). Cancellation is
+	 * driven entirely by `signal`, which the eval tool arms as an idle watchdog
+	 * that fires a `TimeoutError` reason after this much time with no progress
+	 * (status) events. Backends use this value only for timeout-annotation text
+	 * and as cold-start headroom; they MUST NOT derive a competing wall-clock
+	 * timer from it.
+	 */
+	idleTimeoutMs: number;
 	reset: boolean;
 	artifactPath: string | undefined;
 	artifactId: string | undefined;
