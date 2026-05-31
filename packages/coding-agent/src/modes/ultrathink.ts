@@ -1,5 +1,6 @@
 import ultrathinkNotice from "../prompts/system/ultrathink-notice.md" with { type: "text" };
-import { createGradientHighlighter } from "./gradient-highlight";
+import { createGradientHighlighter, type KeywordHighlighter } from "./gradient-highlight";
+import { keywordInProse } from "./markdown-prose";
 
 /**
  * "ultrathink" keyword support, mirroring Claude Code's affordance.
@@ -7,19 +8,24 @@ import { createGradientHighlighter } from "./gradient-highlight";
  * Typing the standalone word in the input editor paints it with a rainbow
  * gradient ({@link highlightUltrathink}); submitting a message that mentions it
  * appends a hidden {@link ULTRATHINK_NOTICE} nudging the model toward careful
- * multi-step reasoning. Matching is word-bounded and case-insensitive, so
- * "ultrathinking"/"ultrathinks" never trigger either behavior.
+ * multi-step reasoning. Matching is whitespace-delimited and case-sensitive
+ * (lowercase only), so "ultrathinking", "Ultrathink", or "ultrathink.ts" never
+ * trigger either behavior.
  */
 
-// Detection: standalone keyword, any case. Non-global so `.test` stays stateless.
-const ULTRATHINK_WORD = /\bultrathink\b/i;
+// Detection: lowercase keyword flanked by whitespace or a string edge. Non-global so `.test` stays stateless.
+const ULTRATHINK_WORD = /(?<!\S)ultrathink(?!\S)/;
 
 /** Hidden system notice appended after a user message that mentions "ultrathink". */
 export const ULTRATHINK_NOTICE: string = ultrathinkNotice.trim();
 
-/** Whether `text` contains the standalone keyword "ultrathink" (any case). */
+/**
+ * Whether `text` contains the standalone keyword "ultrathink" (lowercase,
+ * whitespace-delimited) in prose — never inside a code block, inline code span,
+ * or XML/HTML section.
+ */
 export function containsUltrathink(text: string): boolean {
-	return ULTRATHINK_WORD.test(text);
+	return keywordInProse(text, ULTRATHINK_WORD);
 }
 
 /**
@@ -27,9 +33,9 @@ export function containsUltrathink(text: string): boolean {
  * Sweeps red→violet (hue 0..330), stopping short of the wrap back to red so the
  * gradient resolves smoothly regardless of casing or match length.
  */
-export const highlightUltrathink: (text: string) => string = createGradientHighlighter({
-	probe: /ultrathink/i,
-	highlight: /\bultrathink\b/gi,
+export const highlightUltrathink: KeywordHighlighter = createGradientHighlighter({
+	probe: /ultrathink/,
+	highlight: /(?<!\S)ultrathink(?!\S)/g,
 	stops: 14,
 	hue: t => t * 330,
 });

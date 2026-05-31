@@ -1,5 +1,6 @@
 import workflowNotice from "../prompts/system/workflow-notice.md" with { type: "text" };
-import { createGradientHighlighter } from "./gradient-highlight";
+import { createGradientHighlighter, type KeywordHighlighter } from "./gradient-highlight";
+import { keywordInProse } from "./markdown-prose";
 
 /**
  * "workflow" keyword support.
@@ -8,19 +9,24 @@ import { createGradientHighlighter } from "./gradient-highlight";
  * amber→green gradient ({@link highlightWorkflow}); submitting a message that
  * mentions it appends a hidden {@link WORKFLOW_NOTICE} that steers the model to
  * author a deterministic multi-subagent workflow in eval cells (agent/parallel/
- * pipeline). Matching is word-bounded and case-insensitive — the singular and
- * plural both trigger, but "workflowed"/"reworkflow" never do.
+ * pipeline). Matching is whitespace-delimited and case-sensitive (lowercase
+ * only) — "workflow"/"workflows" trigger, but "workflowed", "Workflow", and
+ * "workflow.ts" never do.
  */
 
-// Detection: standalone keyword (singular or plural), any case. Non-global so `.test` stays stateless.
-const WORKFLOW_WORD = /\bworkflows?\b/i;
+// Detection: lowercase keyword (singular or plural) flanked by whitespace or a string edge. Non-global so `.test` stays stateless.
+const WORKFLOW_WORD = /(?<!\S)workflows?(?!\S)/;
 
 /** Hidden system notice appended after a user message that mentions "workflow". */
 export const WORKFLOW_NOTICE: string = workflowNotice.trim();
 
-/** Whether `text` contains the standalone keyword "workflow"/"workflows" (any case). */
+/**
+ * Whether `text` contains the standalone keyword "workflow"/"workflows"
+ * (lowercase, whitespace-delimited) in prose — never inside a code block, inline
+ * code span, or XML/HTML section.
+ */
 export function containsWorkflow(text: string): boolean {
-	return WORKFLOW_WORD.test(text);
+	return keywordInProse(text, WORKFLOW_WORD);
 }
 
 /**
@@ -28,9 +34,9 @@ export function containsWorkflow(text: string): boolean {
  * with a warm amber→green gradient (hue 30..150), visually distinct from
  * ultrathink's rainbow and orchestrate's teal→violet.
  */
-export const highlightWorkflow: (text: string) => string = createGradientHighlighter({
-	probe: /workflow/i,
-	highlight: /\bworkflows?\b/gi,
+export const highlightWorkflow: KeywordHighlighter = createGradientHighlighter({
+	probe: /workflow/,
+	highlight: /(?<!\S)workflows?(?!\S)/g,
 	stops: 14,
 	hue: t => 30 + t * 120,
 });

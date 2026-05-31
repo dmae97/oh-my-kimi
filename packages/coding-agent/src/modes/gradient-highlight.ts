@@ -1,4 +1,10 @@
+import { maskNonProse } from "./markdown-prose";
 import { theme } from "./theme/theme";
+
+/** A gradient keyword highlighter. `resetTo` is the SGR foreground sequence
+ *  re-emitted after each painted keyword so surrounding text keeps its color;
+ *  it defaults to a plain foreground reset (editor / default-colored text). */
+export type KeywordHighlighter = (text: string, resetTo?: string) => string;
 
 const FG_RESET = "\x1b[39m";
 
@@ -25,7 +31,7 @@ export interface GradientHighlightSpec {
  * untouched when `probe` does not match. The palette is compiled lazily and
  * memoized per active color mode.
  */
-export function createGradientHighlighter(spec: GradientHighlightSpec): (text: string) => string {
+export function createGradientHighlighter(spec: GradientHighlightSpec): KeywordHighlighter {
 	const { probe, highlight, stops, hue, saturation = 90, lightness = 62 } = spec;
 
 	let cachedMode: string | undefined;
@@ -45,8 +51,8 @@ export function createGradientHighlighter(spec: GradientHighlightSpec): (text: s
 		return next;
 	};
 
-	/** Paint each character of `word` with the next gradient stop, resetting fg after. */
-	const paint = (word: string): string => {
+	/** Paint each character of `word` with the next gradient stop, restoring `resetTo` after. */
+	const paint = (word: string, resetTo: string): string => {
 		const stopsArr = palette();
 		const n = word.length;
 		let out = "";
@@ -60,11 +66,22 @@ export function createGradientHighlighter(spec: GradientHighlightSpec): (text: s
 			}
 			out += word[i];
 		}
-		return `${out}${FG_RESET}`;
+		return `${out}${resetTo}`;
 	};
 
-	return (text: string): string => {
+	return (text: string, resetTo: string = FG_RESET): string => {
 		if (!probe.test(text)) return text;
-		return text.replace(highlight, paint);
+		// Match against a code/markup-masked copy so keywords inside code spans,
+		// fenced blocks, or XML sections never paint; indices still address `text`.
+		const masked = maskNonProse(text);
+		let out = "";
+		let last = 0;
+		for (const m of masked.matchAll(highlight)) {
+			const start = m.index ?? 0;
+			const end = start + m[0].length;
+			out += text.slice(last, start) + paint(text.slice(start, end), resetTo);
+			last = end;
+		}
+		return out + text.slice(last);
 	};
 }
