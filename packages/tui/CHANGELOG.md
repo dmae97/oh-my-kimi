@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Rebuilt native scrollback for safe bottom-anchored offscreen edits instead of repainting only the viewport, preventing stale or duplicated rows above the live viewport.
 - Stripped internal cursor marker sentinels from all rendered lines so offscreen focus markers no longer leak into terminal output
 - Truncated all painted lines to terminal width during viewport repaints and append-tail updates so long content no longer overflows or wraps unexpectedly
 - Fixed `tui.select.cancel` handling in `SelectList` so pressing Escape or Ctrl+C closes the list even when no matches are currently shown

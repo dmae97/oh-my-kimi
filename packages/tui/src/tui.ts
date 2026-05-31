@@ -1393,17 +1393,22 @@ export class TUI extends Container {
 			return { kind: "shrink" };
 		}
 
-		// Offscreen edit: viewport repaint corrects shifted rows when the native
-		// viewport is at the tail. The append-tail prefix is only safe at the clean
-		// boundary (`#findAppendedTailStart === previousLines.length`); the guard above
-		// rebuilds the ambiguous cases when replay is possible. When it was not (no
-		// viewport proof), repaint visible rows only and mark history dirty so the next
-		// checkpoint rebuilds — scrolling a mis-located tail would splice stale rows or
-		// duplicate the viewport-top row into scrollback.
+		// Offscreen edit: repainting only the viewport leaves native history stale
+		// while the user is bottom-anchored. Rebuild whenever replay is safe. If
+		// replay is not safe, keep the viewport stable, mark history dirty, and only
+		// scroll a clean appended tail so newly streamed rows remain reachable until
+		// the next checkpoint rebuild.
 		if (diff.firstChanged < prevViewportTop) {
+			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			const cleanTailAppend =
 				diff.appendedLines && this.#findAppendedTailStart(newLines) === this.#previousLines.length;
-			if (diff.appendedLines && !cleanTailAppend) this.#markNativeScrollbackDirty();
+			if (
+				!isMultiplexerSession() &&
+				this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewportMutation)
+			) {
+				return { kind: "historyRebuild" };
+			}
+			this.#markNativeScrollbackDirty();
 			return { kind: "viewportRepaint", appendFrom: cleanTailAppend ? this.#previousLines.length : undefined };
 		}
 

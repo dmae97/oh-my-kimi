@@ -1281,9 +1281,8 @@ class StressDriver {
 	}
 
 	#assertCleanBufferWhenAligned(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
-		if (!this.#scenario.strictScrollback || !after.atBottom) return;
+		if (!this.#scenario.strictScrollback || !after.atBottom || op.geometryChanged) return;
 		if (this.#hasVisibleOverlay()) return;
-		if (before.redraws !== after.redraws) return;
 		if (!bufferReflectsFrame(before.buffer, before.frame, before.height)) return;
 		if (after.buffer.length !== Math.max(after.height, after.frame.length)) return;
 		if (!bufferReflectsFrame(after.buffer, after.frame, after.height)) {
