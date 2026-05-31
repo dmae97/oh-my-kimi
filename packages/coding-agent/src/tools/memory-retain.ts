@@ -30,16 +30,16 @@ export class MemoryRetainTool implements AgentTool<typeof memoryRetainSchema> {
 
 	static createIf(session: ToolSession): MemoryRetainTool | null {
 		const backend = session.settings.get("memory.backend");
-		if (backend !== "hindsight" && backend !== "mnemosyne") return null;
+		if (backend !== "hindsight" && backend !== "mnemopi") return null;
 		return new MemoryRetainTool(session);
 	}
 
 	async execute(_id: string, params: MemoryRetainParams): Promise<AgentToolResult> {
 		const backend = this.session.settings.get("memory.backend");
-		if (backend === "mnemosyne") {
-			const state = this.session.getMnemosyneSessionState?.();
+		if (backend === "mnemopi") {
+			const state = this.session.getMnemopiSessionState?.();
 			if (!state) {
-				throw new Error("Mnemosyne backend is not initialised for this session.");
+				throw new Error("Mnemopi backend is not initialised for this session.");
 			}
 
 			for (const item of params.items) {

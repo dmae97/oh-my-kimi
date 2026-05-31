@@ -88,7 +88,7 @@ import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./mcp";
 import { resolveMemoryBackend } from "./memory-backend";
-import { getMnemosyneSessionState, type MnemosyneSessionState } from "./mnemosyne/state";
+import { getMnemopiSessionState, type MnemopiSessionState } from "./mnemopi/state";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
@@ -321,8 +321,8 @@ export interface CreateAgentSessionOptions {
 	taskDepth?: number;
 	/** Parent Hindsight state to alias for subagent memory tools. */
 	parentHindsightSessionState?: HindsightSessionState;
-	/** Parent Mnemosyne state to alias for subagent memory tools. */
-	parentMnemosyneSessionState?: MnemosyneSessionState;
+	/** Parent Mnemopi state to alias for subagent memory tools. */
+	parentMnemopiSessionState?: MnemopiSessionState;
 	/** Pre-allocated agent identity for IRC routing. Default: "0-Main" for top-level, parentTaskPrefix-derived for sub. */
 	agentId?: string;
 	/** Display name for the agent in IRC. Default: "main" or "sub". */
@@ -1231,7 +1231,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				session ? session.trackEvalExecution(execution, abortController) : execution,
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
-			getMnemosyneSessionState: () => getMnemosyneSessionState(session),
+			getMnemopiSessionState: () => getMnemopiSessionState(session),
 			getAgentId: () => resolvedAgentId,
 			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,
@@ -2162,7 +2162,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					agentDir,
 					taskDepth,
 					parentHindsightSessionState: options.parentHindsightSessionState,
-					parentMnemosyneSessionState: options.parentMnemosyneSessionState,
+					parentMnemopiSessionState: options.parentMnemopiSessionState,
 				}),
 			),
 		);

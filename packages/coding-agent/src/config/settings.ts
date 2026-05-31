@@ -692,6 +692,18 @@ export class Settings {
 			raw.memory = memoryRoot;
 		}
 
+		// Rename the legacy local `mnemosyne` memory backend to `mnemopi`.
+		// - `memory.backend: "mnemosyne"` now selects the renamed backend.
+		// - the top-level `mnemosyne` settings object becomes `mnemopi`.
+		// Idempotent: skips the object move once `mnemopi` is materialised.
+		if (memoryBackendObj && memoryBackendObj.backend === "mnemosyne") {
+			memoryBackendObj.backend = "mnemopi";
+		}
+		if ("mnemosyne" in raw && !("mnemopi" in raw)) {
+			raw.mnemopi = raw.mnemosyne;
+			delete raw.mnemosyne;
+		}
+
 		// hindsight: dynamicBankId/agentName -> scoping enum + bankId
 		// - dynamicBankId=true  → scoping="per-project" (closest semantic match;
 		//   the legacy `agent::project::channel::user` tuple was per-project in

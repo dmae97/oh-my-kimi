@@ -1,7 +1,7 @@
 # Embedded Local Tiny-Model Experiments
 
 This document summarizes the experiments behind the optional **local** tiny-model paths for
-session-title generation (`providers.tinyModel`), Mnemosyne memory extraction/consolidation
+session-title generation (`providers.tinyModel`), Mnemopi memory extraction/consolidation
 (`providers.memoryModel`), and the `auto` thinking-level difficulty classifier
 (`providers.autoThinkingModel`, which reuses the memory-model registry). It is a factual engineering
 record for maintainers: what we measured, which recipes won, and which models we shipped. All three
@@ -77,9 +77,9 @@ they opt in.
 **Shipped local options**: `lfm2-350m`, `qwen3-0.6b`, `gemma-270m`, `qwen2.5-0.5b`, `lfm2-700m`.
 **Default**: `online` (pi/smol).
 
-## Task 2: Mnemosyne memory (`providers.memoryModel`)
+## Task 2: Mnemopi memory (`providers.memoryModel`)
 
-Mnemosyne runs two small-LLM tasks:
+Mnemopi runs two small-LLM tasks:
 
 1. **Extraction** — pull durable, structured items from a single message.
 2. **Consolidation** — summarize a list of memories into 1–3 faithful sentences.
@@ -92,10 +92,10 @@ and gemma-3-1b (q4, CPU) via four parallel agents each running 27–31 experimen
 The stock 5-category JSON prompt fails on small models in two ways:
 
 1. The all-empty example `{"facts":[],...}` gets **copied verbatim** → 0 facts extracted.
-2. Capable models emit **JSON objects inside arrays**, which Mnemosyne's `String(item)` coerces into
+2. Capable models emit **JSON objects inside arrays**, which Mnemopi's `String(item)` coerces into
    the literal string `[object Object]`.
 
-The robust fix is a **one-item-per-line output format** (consumed by Mnemosyne's parser line-fallback)
+The robust fix is a **one-item-per-line output format** (consumed by Mnemopi's parser line-fallback)
 or a **flat JSON array of strings**. Every model also over-extracts pure small talk; an explicit
 chit-chat → NONE example is the best mitigation.
 
@@ -130,7 +130,7 @@ wins that task.
 **Shipped local options**: `qwen3-1.7b` (recommended), `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`.
 **Default**: `online` (the configured smol model).
 
-### Known Mnemosyne parser bugs (surfaced by these experiments)
+### Known Mnemopi parser bugs (surfaced by these experiments)
 
 - `String(item)` produces `[object Object]` on object array items.
 - The line-fallback drops items `<=10` chars, so a correct short fact like `Name: Can` is discarded.
@@ -142,6 +142,6 @@ wins that task.
 - Local inference runs **in a worker** (off the main thread); models are cached on disk and
   downloaded on first use.
 - The memory local path applies the refined recipes (line-format + small-talk-guarded extraction
-  prompt, hardened consolidation prompt) via Mnemosyne prompt overrides; the **online path is
+  prompt, hardened consolidation prompt) via Mnemopi prompt overrides; the **online path is
   unchanged**.
 - `providers.autoThinkingModel` uses the same shipped local options as `providers.memoryModel`.

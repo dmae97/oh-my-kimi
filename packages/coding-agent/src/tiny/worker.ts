@@ -472,8 +472,8 @@ function buildCompletionPrompt(generator: TextGenerationPipeline, promptText: st
 }
 
 /**
- * Generic single-turn completion used by Mnemosyne memory tasks (fact extraction
- * and consolidation). The caller (Mnemosyne) supplies the full task prompt; we
+ * Generic single-turn completion used by Mnemopi memory tasks (fact extraction
+ * and consolidation). The caller (Mnemopi) supplies the full task prompt; we
  * wrap it as the user turn, decode greedily, and return the raw text for the
  * caller's own parser. Output is capped to keep local inference latency bounded.
  */

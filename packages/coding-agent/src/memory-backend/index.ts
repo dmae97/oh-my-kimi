@@ -1,4 +1,4 @@
-export * from "../mnemosyne";
+export * from "../mnemopi";
 export * from "./local-backend";
 export * from "./off-backend";
 export * from "./resolve";

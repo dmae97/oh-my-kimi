@@ -930,7 +930,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						localProtocolOptions,
 						parentArtifactManager,
 						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
-						parentMnemosyneSessionState: this.session.getMnemosyneSessionState?.(),
+						parentMnemopiSessionState: this.session.getMnemopiSessionState?.(),
 						parentTelemetry: this.session.getTelemetry?.(),
 						parentEvalSessionId,
 					});
@@ -987,7 +987,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						localProtocolOptions,
 						parentArtifactManager,
 						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
-						parentMnemosyneSessionState: this.session.getMnemosyneSessionState?.(),
+						parentMnemopiSessionState: this.session.getMnemopiSessionState?.(),
 						parentTelemetry: this.session.getTelemetry?.(),
 						parentEvalSessionId,
 					});

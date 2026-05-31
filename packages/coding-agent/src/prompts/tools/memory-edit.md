@@ -1,4 +1,4 @@
-Edit Mnemosyne long-term memories by id.
+Edit Mnemopi long-term memories by id.
 
 Use only with ids returned by the `recall` tool. Operations:
 - `update`: replace content and/or importance for a working memory.

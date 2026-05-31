@@ -26,7 +26,7 @@ const allToolsSettings = Settings.isolated({
 	"browser.enabled": true,
 	"checkpoint.enabled": true,
 	"todo.enabled": true,
-	"memory.backend": "mnemosyne",
+	"memory.backend": "mnemopi",
 	"tools.discoveryMode": "all",
 });
 

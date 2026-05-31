@@ -26,17 +26,17 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema> 
 
 	static createIf(session: ToolSession): MemoryReflectTool | null {
 		const backend = session.settings.get("memory.backend");
-		if (backend !== "hindsight" && backend !== "mnemosyne") return null;
+		if (backend !== "hindsight" && backend !== "mnemopi") return null;
 		return new MemoryReflectTool(session);
 	}
 
 	async execute(_id: string, params: MemoryReflectParams, signal?: AbortSignal): Promise<AgentToolResult> {
 		return untilAborted(signal, async () => {
 			const backend = this.session.settings.get("memory.backend");
-			if (backend === "mnemosyne") {
-				const state = this.session.getMnemosyneSessionState?.();
+			if (backend === "mnemopi") {
+				const state = this.session.getMnemopiSessionState?.();
 				if (!state) {
-					throw new Error("Mnemosyne backend is not initialised for this session.");
+					throw new Error("Mnemopi backend is not initialised for this session.");
 				}
 
 				try {
@@ -56,7 +56,7 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema> 
 						details: {},
 					};
 				} catch (err) {
-					logger.warn("reflect failed", { backend: "mnemosyne", bank: state.config.bank, error: String(err) });
+					logger.warn("reflect failed", { backend: "mnemopi", bank: state.config.bank, error: String(err) });
 					throw err instanceof Error ? err : new Error(String(err));
 				}
 			}

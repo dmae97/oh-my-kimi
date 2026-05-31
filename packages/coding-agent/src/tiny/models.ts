@@ -108,7 +108,7 @@ export const ONLINE_MEMORY_MODEL_KEY = "online";
 export const DEFAULT_MEMORY_LOCAL_MODEL_KEY = "qwen3-1.7b";
 
 /**
- * Local models for Mnemosyne memory tasks (fact extraction + consolidation).
+ * Local models for Mnemopi memory tasks (fact extraction + consolidation).
  * These are larger (1B-1.7B) than the title models: structured extraction and
  * faithful summarization need more capacity than 3-6 word titles. All q4.
  * Ranking/recipe rationale lives in docs/local-models.md.
@@ -177,7 +177,7 @@ export const TINY_MEMORY_MODEL_OPTIONS = [
 		value: ONLINE_MEMORY_MODEL_KEY,
 		label: "Online (smol/remote)",
 		description:
-			"Use the configured Mnemosyne LLM mode (smol or remote); no local model download or on-device inference.",
+			"Use the configured Mnemopi LLM mode (smol or remote); no local model download or on-device inference.",
 	},
 	...TINY_MEMORY_LOCAL_MODELS.map(model => ({
 		value: model.key,

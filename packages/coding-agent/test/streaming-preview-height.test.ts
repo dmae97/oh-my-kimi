@@ -107,6 +107,112 @@ describe("streaming edit preview height (monotonic while streaming)", () => {
 		expect(finalHeight).toBeLessThanOrEqual(Math.max(...heights));
 	});
 
+	test("real TUI finalization replaces streaming edit preview throughout native scrollback", async () => {
+		const previewPrefix = "PREVIEW_ONLY_STREAM_SENTINEL_";
+		const finalSentinel = "FINAL_RESULT_SENTINEL_committed_edit";
+		const streamedReplacements = Array.from({ length: 18 }, (_unused, i) =>
+			[
+				"function foo() {",
+				"  const x = 1;",
+				...Array.from({ length: 10 + (i % 5) }, (_value, j) => `  const p${j} = "${previewPrefix}${i}_${j}";`),
+				`  return "${previewPrefix}${i}_tail";`,
+				"}",
+			].join("\n"),
+		);
+		const finalDiff = [
+			"@@ -1,4 +1,5 @@",
+			" function foo() {",
+			"   const x = 1;",
+			"-  return x;",
+			`+  const finalValue = "${finalSentinel}";`,
+			"+  return finalValue;",
+			" }",
+		].join("\n");
+		const { component, term, tui } = makeTuiComponent();
+
+		try {
+			tui.start();
+			await settleTerminal(term);
+
+			let maxStreamingHeight = 0;
+			let sawPreviewSentinel = false;
+			const streamingStepCount = streamedReplacements.length;
+			const lifecycleSteps = [
+				...streamedReplacements.map((newText, i) => () => {
+					component.updateArgs({ path: file, edits: [{ old_text: oldBlock, new_text: newText }] });
+					if (i % 4 === 1) {
+						component.setExpanded(true);
+					} else if (i % 4 === 3) {
+						component.setExpanded(false);
+					}
+					if (i % 5 === 2) {
+						term.resize(68, 7);
+					} else if (i % 5 === 4) {
+						term.resize(72, 8);
+					}
+				}),
+				() => {
+					component.setArgsComplete();
+				},
+				() => {
+					component.updateResult(
+						{
+							content: [{ type: "text", text: finalSentinel }],
+							details: { path: file, diff: finalDiff, firstChangedLine: 3 },
+						},
+						false,
+					);
+					component.setExpanded(true);
+					term.resize(70, 9);
+				},
+			];
+
+			for (const [i, applyStep] of lifecycleSteps.entries()) {
+				applyStep();
+				term.scrollLines(1_000);
+				tui.requestRender(i % 3 === 0 || i >= streamingStepCount);
+				await settleTerminal(term);
+
+				if (i < streamingStepCount) {
+					const rows = normalizedBufferRows(term);
+					sawPreviewSentinel ||= rows.some(row => row.includes(previewPrefix));
+					maxStreamingHeight = Math.max(maxStreamingHeight, component.render(term.columns).length);
+					expect(term.isNativeViewportAtBottom()).toBe(true);
+				}
+			}
+
+			expect(sawPreviewSentinel).toBe(true);
+			expect(maxStreamingHeight).toBeGreaterThan(term.rows);
+
+			const preCheckpointBufferText = normalizedBufferRows(term).join("\n");
+			const stalePreviewRowsExistedBeforeCheckpoint = preCheckpointBufferText.includes(previewPrefix);
+			term.scrollLines(1_000);
+			const checkpointRefreshed = tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true });
+			await settleTerminal(term);
+
+			const finalBufferText = normalizedBufferRows(term).join("\n");
+			expect(finalBufferText).toContain(finalSentinel);
+			expect(finalBufferText).not.toContain(previewPrefix);
+			if (stalePreviewRowsExistedBeforeCheckpoint) {
+				expect(checkpointRefreshed).toBe(true);
+			}
+
+			term.scrollLines(-1_000);
+			await term.flush();
+			const scrolledViewportText = term
+				.getViewport()
+				.map(row => row.trimEnd())
+				.join("\n");
+			expect(scrolledViewportText).not.toContain(previewPrefix);
+			term.scrollLines(1_000);
+			await term.flush();
+		} finally {
+			component.stopAnimation();
+			tui.stop();
+			await term.flush();
+		}
+	});
+
 	test("the underlying diff genuinely oscillates (guard against a vacuous test)", async () => {
 		const ctx = {
 			cwd: tmpDir,

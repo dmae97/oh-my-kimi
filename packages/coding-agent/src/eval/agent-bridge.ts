@@ -256,7 +256,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		localProtocolOptions,
 		parentArtifactManager,
 		parentHindsightSessionState: options.session.getHindsightSessionState?.(),
-		parentMnemosyneSessionState: options.session.getMnemosyneSessionState?.(),
+		parentMnemopiSessionState: options.session.getMnemopiSessionState?.(),
 		parentTelemetry: options.session.getTelemetry?.(),
 		parentEvalSessionId,
 	});

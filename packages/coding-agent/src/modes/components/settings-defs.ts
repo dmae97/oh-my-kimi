@@ -79,9 +79,9 @@ const CONDITIONS: Record<string, () => boolean> = {
 			return false;
 		}
 	},
-	mnemosyneActive: () => {
+	mnemopiActive: () => {
 		try {
-			return Settings.instance.get("memory.backend") === "mnemosyne";
+			return Settings.instance.get("memory.backend") === "mnemopi";
 		} catch {
 			return false;
 		}

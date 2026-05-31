@@ -1341,70 +1341,70 @@ export const SETTINGS_SCHEMA = {
 	"memories.summaryInjectionTokenLimit": { type: "number", default: 5000 },
 
 	// Memory backend selector — picks between local memories pipeline,
-	// Mnemosyne local SQLite, Hindsight remote memory, or off. Legacy
+	// Mnemopi local SQLite, Hindsight remote memory, or off. Legacy
 	// `memories.enabled` keeps gating the local backend; see config/settings.ts
 	// migration for details.
 	"memory.backend": {
 		type: "enum",
-		values: ["off", "local", "hindsight", "mnemosyne"] as const,
+		values: ["off", "local", "hindsight", "mnemopi"] as const,
 		default: "off",
 		ui: {
 			tab: "memory",
 			label: "Memory Backend",
-			description: "Off, local summary pipeline, Mnemosyne SQLite, or Hindsight remote memory",
+			description: "Off, local summary pipeline, Mnemopi SQLite, or Hindsight remote memory",
 			options: [
 				{ value: "off", label: "Off", description: "No memory subsystem runs" },
 				{ value: "local", label: "Local", description: "Local rollout summarisation pipeline (memory_summary.md)" },
 				{ value: "hindsight", label: "Hindsight", description: "Vectorize Hindsight remote memory service" },
 				{
-					value: "mnemosyne",
-					label: "Mnemosyne",
+					value: "mnemopi",
+					label: "Mnemopi",
 					description: "Local SQLite recall/retain backend with optional embeddings",
 				},
 			],
 		},
 	},
 
-	// Mnemosyne local SQLite memory backend.
-	"mnemosyne.dbPath": {
+	// Mnemopi local SQLite memory backend.
+	"mnemopi.dbPath": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne DB Path",
+			label: "Mnemopi DB Path",
 			description: "Optional SQLite DB path. Defaults to the agent memories directory.",
-			condition: "mnemosyneActive",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.bank": {
+	"mnemopi.bank": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Bank",
+			label: "Mnemopi Bank",
 			description: "Optional shared bank base name. Per-project modes derive project-local banks from it.",
-			condition: "mnemosyneActive",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.scoping": {
+	"mnemopi.scoping": {
 		type: "enum",
 		values: ["global", "per-project", "per-project-tagged"] as const,
 		default: "per-project",
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Scoping",
+			label: "Mnemopi Scoping",
 			description:
 				"global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = project-local writes plus global recall visibility",
 			options: [
 				{
 					value: "global",
 					label: "Global",
-					description: "One shared Mnemosyne bank for every project",
+					description: "One shared Mnemopi bank for every project",
 				},
 				{
 					value: "per-project",
 					label: "Per project",
-					description: "Project-local Mnemosyne bank per cwd basename",
+					description: "Project-local Mnemopi bank per cwd basename",
 				},
 				{
 					value: "per-project-tagged",
@@ -1412,121 +1412,121 @@ export const SETTINGS_SCHEMA = {
 					description: "Write to a project-local bank but merge project + shared recall results",
 				},
 			],
-			condition: "mnemosyneActive",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.autoRecall": {
+	"mnemopi.autoRecall": {
 		type: "boolean",
 		default: true,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Auto Recall",
+			label: "Mnemopi Auto Recall",
 			description: "Recall local memories into the first turn of each session",
-			condition: "mnemosyneActive",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.autoRetain": {
+	"mnemopi.autoRetain": {
 		type: "boolean",
 		default: true,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Auto Retain",
-			description: "Retain completed conversation turns into local Mnemosyne memory",
-			condition: "mnemosyneActive",
+			label: "Mnemopi Auto Retain",
+			description: "Retain completed conversation turns into local Mnemopi memory",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.noEmbeddings": {
+	"mnemopi.noEmbeddings": {
 		type: "boolean",
 		default: false,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Disable Embeddings",
+			label: "Mnemopi Disable Embeddings",
 			description: "Force deterministic FTS-only recall instead of vector embeddings",
-			condition: "mnemosyneActive",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.embeddingModel": {
+	"mnemopi.embeddingModel": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Embedding Model",
-			description: "Optional embedding model override passed to Mnemosyne",
-			condition: "mnemosyneActive",
+			label: "Mnemopi Embedding Model",
+			description: "Optional embedding model override passed to Mnemopi",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.embeddingApiUrl": {
+	"mnemopi.embeddingApiUrl": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Embedding API URL",
-			description: "Optional OpenAI-compatible embedding endpoint passed to Mnemosyne",
-			condition: "mnemosyneActive",
+			label: "Mnemopi Embedding API URL",
+			description: "Optional OpenAI-compatible embedding endpoint passed to Mnemopi",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.embeddingApiKey": {
+	"mnemopi.embeddingApiKey": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne Embedding API Key",
-			description: "Optional embedding API key passed to Mnemosyne",
-			condition: "mnemosyneActive",
+			label: "Mnemopi Embedding API Key",
+			description: "Optional embedding API key passed to Mnemopi",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.llmMode": {
+	"mnemopi.llmMode": {
 		type: "enum",
 		values: ["none", "smol", "remote"] as const,
 		default: "smol",
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne LLM Mode",
+			label: "Mnemopi LLM Mode",
 			description: "Use no LLM, the configured smol model, or a remote OpenAI-compatible endpoint",
-			condition: "mnemosyneActive",
+			condition: "mnemopiActive",
 			options: [
-				{ value: "none", label: "None", description: "Disable Mnemosyne LLM-backed extraction" },
+				{ value: "none", label: "None", description: "Disable Mnemopi LLM-backed extraction" },
 				{ value: "smol", label: "Smol", description: "Use the configured pi-ai smol model" },
-				{ value: "remote", label: "Remote", description: "Use the Mnemosyne remote LLM settings below" },
+				{ value: "remote", label: "Remote", description: "Use the Mnemopi remote LLM settings below" },
 			],
 		},
 	},
-	"mnemosyne.llmBaseUrl": {
+	"mnemopi.llmBaseUrl": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne LLM Base URL",
-			description: "Optional OpenAI-compatible LLM endpoint for Mnemosyne remote mode",
-			condition: "mnemosyneActive",
+			label: "Mnemopi LLM Base URL",
+			description: "Optional OpenAI-compatible LLM endpoint for Mnemopi remote mode",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.llmApiKey": {
+	"mnemopi.llmApiKey": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne LLM API Key",
-			description: "Optional LLM API key for Mnemosyne remote mode",
-			condition: "mnemosyneActive",
+			label: "Mnemopi LLM API Key",
+			description: "Optional LLM API key for Mnemopi remote mode",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.llmModel": {
+	"mnemopi.llmModel": {
 		type: "string",
 		default: undefined,
 		ui: {
 			tab: "memory",
-			label: "Mnemosyne LLM Model",
-			description: "Optional LLM model name for Mnemosyne remote mode",
-			condition: "mnemosyneActive",
+			label: "Mnemopi LLM Model",
+			description: "Optional LLM model name for Mnemopi remote mode",
+			condition: "mnemopiActive",
 		},
 	},
-	"mnemosyne.retainEveryNTurns": { type: "number", default: 4 },
-	"mnemosyne.recallLimit": { type: "number", default: 8 },
-	"mnemosyne.recallContextTurns": { type: "number", default: 3 },
-	"mnemosyne.recallMaxQueryChars": { type: "number", default: 4000 },
-	"mnemosyne.injectionTokenLimit": { type: "number", default: 5000 },
-	"mnemosyne.debug": { type: "boolean", default: false },
+	"mnemopi.retainEveryNTurns": { type: "number", default: 4 },
+	"mnemopi.recallLimit": { type: "number", default: 8 },
+	"mnemopi.recallContextTurns": { type: "number", default: 3 },
+	"mnemopi.recallMaxQueryChars": { type: "number", default: 4000 },
+	"mnemopi.injectionTokenLimit": { type: "number", default: 5000 },
+	"mnemopi.debug": { type: "boolean", default: false },
 
 	// Hindsight (https://hindsight.vectorize.io)
 	"hindsight.apiUrl": {
@@ -2998,8 +2998,8 @@ export const SETTINGS_SCHEMA = {
 			tab: "memory",
 			label: "Memory Model",
 			description:
-				"Mnemosyne LLM for fact extraction + consolidation: online (smol/remote) by default, or a local on-device model",
-			condition: "mnemosyneActive",
+				"Mnemopi LLM for fact extraction + consolidation: online (smol/remote) by default, or a local on-device model",
+			condition: "mnemopiActive",
 			options: TINY_MEMORY_MODEL_OPTIONS,
 		},
 	},

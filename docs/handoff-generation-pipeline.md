@@ -113,7 +113,7 @@ If text was generated and not aborted:
 3. Start a brand-new session with `parentSession` pointing at the previous session file when one exists.
 4. Reset in-memory agent state (`agent.reset()`).
 5. Rebind `agent.sessionId` to the new session id.
-6. Rekey/reset Hindsight and Mnemosyne memory session tracking for the new session.
+6. Rekey/reset Hindsight and Mnemopi memory session tracking for the new session.
 7. Clear queued context arrays (`#steeringMessages`, `#followUpMessages`, `#pendingNextTurnMessages`) and any scheduled hidden next-turn generation.
 8. Reset todo reminder counter.
 

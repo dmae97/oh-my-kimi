@@ -21,20 +21,20 @@ export class MemoryEditTool implements AgentTool<typeof memoryEditSchema> {
 	readonly parameters = memoryEditSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
-	readonly summary = "Update, forget, or invalidate Mnemosyne memories";
+	readonly summary = "Update, forget, or invalidate Mnemopi memories";
 
 	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): MemoryEditTool | null {
 		const backend = session.settings.get("memory.backend");
-		if (backend !== "mnemosyne") return null;
+		if (backend !== "mnemopi") return null;
 		return new MemoryEditTool(session);
 	}
 
 	async execute(_id: string, params: MemoryEditParams): Promise<AgentToolResult> {
-		const state = this.session.getMnemosyneSessionState?.();
+		const state = this.session.getMnemopiSessionState?.();
 		if (!state) {
-			throw new Error("Mnemosyne backend is not initialised for this session.");
+			throw new Error("Mnemopi backend is not initialised for this session.");
 		}
 		if (params.op === "update" && params.content === undefined && params.importance === undefined) {
 			throw new Error("memory_edit update requires content or importance.");
