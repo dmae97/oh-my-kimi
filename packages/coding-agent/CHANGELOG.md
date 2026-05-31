@@ -37,7 +37,6 @@
 
 ### Fixed
 
-- Fixed streaming edit previews during active tool streaming to keep the live diff box full by rendering a fixed trailing window of the most recent diff lines
 - Fixed final `agent()` completion status emissions in eval cells so the last live progress snapshot now preserves accumulated subagent metrics such as tool count and cost
 - Fixed `agent()` in eval to enforce plan-mode, spawn allowlist, and disabled-agent checks before launching subagents
 - Fixed recursive `agent()` calls from eval by enforcing the existing max subagent depth limit
@@ -48,7 +47,7 @@
 - Fixed auto-thinking sessions to persist the concrete resolved effort after classification, so resuming the session restores that level instead of returning to pending `auto`.
 - Fixed extension-registered CLI flags (e.g. `--spawn-peer <value>`) leaking into the initial prompt: argv is re-parsed once the extension flag set is known so flag values are consumed instead of becoming messages or being misread as `@file` arguments. Registered flags shadow same-named built-ins, so a colliding flag (e.g. plan-mode's `--plan`) is parsed with the extension's semantics rather than being consumed by the built-in branch (which would otherwise eat the following message and corrupt the built-in field). Extension flags and `@file` arguments are now resolved before the session is created, so an unreadable initial `@file` exits without leaving a junk session/terminal breadcrumb behind. ([#1503](https://github.com/can1357/oh-my-pi/pull/1503))
 - Fixed footer status-line truncation: the left stats and right model segments now truncate by terminal cell width (via `truncateToWidth`) and strip all VT/ANSI escapes (via `stripVTControlCharacters`) instead of a SGR-only regex plus code-point `substring`, so wide glyphs, OSC hyperlinks, and non-SGR sequences can no longer overflow the line.
-- Fixed the streaming edit diff preview "box grows and shrinks repeatedly" stutter. A whole-file Myers re-diff is recomputed on every streamed chunk and its alignment is not monotonic in payload length — a partial or just-completed line transiently matches a duplicated line further down the file (a brace, a blank line, a repeated token), so the rendered change region gains and loses rows tick to tick. The streaming preview now reserves its high-water rendered height (measured at the real layout width, so soft-wrapped diff lines count exactly), so the box only ever grows mid-stream and collapses once when the edit finalizes.
+- Fixed the streaming edit diff preview rendering a tall, half-empty box (and the earlier "box grows and shrinks repeatedly" stutter). A whole-file Myers re-diff is recomputed on every streamed chunk and its alignment is not monotonic in payload length, so a hunk-aware window that kept whole change segments gained and lost rows tick to tick; the prior high-water row reservation hid that stutter but padded the reserved height with blank rows, leaving a large empty rectangle whenever the diff shrank below its peak. The preview now pins a fixed-height trailing window to the bottom of the diff ("accept from the back"), so the box stays a steady, full window of real diff context instead of blank padding.
 
 ## [15.7.2] - 2026-05-31
 ### Added

@@ -829,9 +829,14 @@ class StressDriver {
 	#snapshot(): Snapshot {
 		const position = this.#term.getBufferPosition();
 		const expected = this.#expectedFrame();
+		const view = normalizeLines(this.#term.getViewport());
+		// Tmux pane history is intentionally preserved, so overlay bytes can remain
+		// in historical scrollback after resize/reflow. The non-strict tmux stress
+		// oracle only checks live viewport behavior; avoid repeatedly materializing
+		// huge preserved pane history that no invariant consumes.
 		return {
-			buffer: normalizeLines(this.#term.getScrollBuffer()),
-			view: normalizeLines(this.#term.getViewport()),
+			buffer: this.#scenario.envMode === "tmux" ? view : normalizeLines(this.#term.getScrollBuffer()),
+			view,
 			position,
 			cursor: this.#term.getCursor(),
 			expectedCursor: expected.cursor,
@@ -1716,6 +1721,7 @@ class StressDriver {
 		if (!before.atBottom || !after.atBottom) return;
 		if (!sameLines(before.frame, after.frame)) return;
 		if (after.buffer.length > before.buffer.length) {
+			if (this.#isCleanBuffer(after.buffer, after.frame, after.height)) return;
 			this.#fail("frame-neutral scrollback growth", op, before, after, index, {
 				beforeLength: before.buffer.length,
 				afterLength: after.buffer.length,

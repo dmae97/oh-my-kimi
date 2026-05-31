@@ -10,15 +10,16 @@ import { TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { ToolExecutionComponent } from "../src/modes/components/tool-execution";
 
-// Reproduces the streaming-edit "box grows and shrinks repeatedly" stutter and
-// proves the render-level high-water reservation holds the box height steady.
+// The streaming edit preview is a fixed-height tail window ("cursor"): the last
+// EDIT_STREAMING_PREVIEW_LINES rows of the recomputed diff are pinned to the
+// bottom, so the box stays a steady, full window of real diff context.
 //
 // A whole-file Myers re-diff is recomputed on every streamed chunk; its optimal
-// alignment is not monotonic in payload length, so the visible change region
-// gains and loses rows as a partial/just-completed line transiently matches a
-// duplicated line further down the file (here, the downstream `}` braces).
-describe("streaming edit preview height (monotonic while streaming)", () => {
-	const RENDER_WIDTH = 80;
+// alignment is not monotonic in payload length, so a hunk-aware window that kept
+// whole change segments grew and shrank tick to tick (the stutter), and the
+// earlier high-water fix padded the deficit with blank rows (the "large
+// rectangle that is half empty" regression). The tail window has neither.
+describe("streaming edit preview height (stable, full tail window)", () => {
 	const oldBlock = ["function foo() {", "  const x = 1;", "  return x;", "}"].join("\n");
 	const tail = ["", "function bar() {", "  return 2;", "}", "", "function baz() {", "  return 3;", "}", ""].join("\n");
 	const fileContent = `${oldBlock}\n${tail}`;
@@ -55,31 +56,6 @@ describe("streaming edit preview height (monotonic while streaming)", () => {
 	// Char-by-char partials of the new function body.
 	const partials = Array.from({ length: fullNew.length }, (_, i) => fullNew.slice(0, i + 1));
 
-	function makeComponent(): { component: ToolExecutionComponent; settle: () => Promise<void> } {
-		let resolveRender: (() => void) | null = null;
-		const uiStub = {
-			requestRender() {
-				const r = resolveRender;
-				resolveRender = null;
-				r?.();
-			},
-		} as unknown as TUI;
-		const tool = { mode: "replace" } as unknown as AgentTool;
-		const component = new ToolExecutionComponent(
-			"edit",
-			{ path: file, edits: [{ old_text: oldBlock, new_text: fullNew.slice(0, 1) }] },
-			{},
-			tool,
-			uiStub,
-			tmpDir,
-		);
-		// Resolve once the next async preview compute lands (or a short cap, so a
-		// deduped/no-op tick that never re-renders cannot hang the loop).
-		const settle = () =>
-			Promise.race([new Promise<void>(res => (resolveRender = res)), Bun.sleep(250).then(() => undefined)]);
-		return { component, settle };
-	}
-
 	// Real TUI + virtual terminal harness: drives the component through the
 	// actual differential renderer so native scrollback (not just the in-memory
 	// component height) is exercised. Mirrors makeComponent's construction but
@@ -110,32 +86,85 @@ describe("streaming edit preview height (monotonic while streaming)", () => {
 		return term.getScrollBuffer().map(row => row.trimEnd());
 	}
 
-	test("rendered height never shrinks across streamed chunks, then collapses on finalize", async () => {
-		const { component, settle } = makeComponent();
+	test("stays a stable, full window (no half-empty padded box) while streaming", async () => {
+		// A large oscillating diff: replace a block of duplicate-ish lines so the
+		// recomputed alignment gains and loses rows tick to tick. The diff outgrows
+		// the window from the first chunk, so the tail window stays saturated and
+		// the box height must hold steady — without padding the deficit with blanks.
+		const RENDER_WIDTH_WIDE = 100;
+		const dup = Array.from({ length: 24 }, () => "\tstep();").join("\n");
+		const bigOld = `function gen() {\n${dup}\n\treturn out;\n}`;
+		const bigTail = `\nfunction other() {\n${dup}\n\treturn 0;\n}\n`;
+		const bigFile = path.join(tmpDir, "big.ts");
+		await fs.writeFile(bigFile, `${bigOld}\n${bigTail}`);
+		const bigNew = [
+			"function gen() {",
+			...Array.from({ length: 24 }, (_v, i) => `\tconst k${i} = ${i};`),
+			"\treturn out;",
+			"}",
+		].join("\n");
+		// Stream a line at a time ("as lines come in"): each chunk recomputes the
+		// whole-file diff, which the tail window pins to its last rows.
+		const bigLines = bigNew.split("\n");
+		const bigPartials = bigLines.map((_v, i) => bigLines.slice(0, i + 1).join("\n"));
+
+		let resolveRender: (() => void) | null = null;
+		const uiStub = {
+			requestRender() {
+				const r = resolveRender;
+				resolveRender = null;
+				r?.();
+			},
+		} as unknown as TUI;
+		const tool = { mode: "replace" } as unknown as AgentTool;
+		const component = new ToolExecutionComponent(
+			"edit",
+			{ path: bigFile, edits: [{ old_text: bigOld, new_text: bigNew.slice(0, 1) }] },
+			{},
+			tool,
+			uiStub,
+			tmpDir,
+		);
+		const settle = () =>
+			Promise.race([new Promise<void>(res => (resolveRender = res)), Bun.sleep(250).then(() => undefined)]);
 		await settle();
+
+		const trailingBlankRows = (rows: string[]): number => {
+			let n = 0;
+			for (let i = rows.length - 1; i >= 0; i--) {
+				if (rows[i].replace(/\x1b\[[0-9;]*m/gu, "").trimEnd() === "") n++;
+				else break;
+			}
+			return n;
+		};
 
 		const heights: number[] = [];
-		for (const newText of partials) {
+		let maxTrailingBlank = 0;
+		for (const newText of bigPartials) {
 			const next = settle();
-			component.updateArgs({ path: file, edits: [{ old_text: oldBlock, new_text: newText }] });
+			component.updateArgs({ path: bigFile, edits: [{ old_text: bigOld, new_text: newText }] });
 			await next;
-			heights.push(component.render(RENDER_WIDTH).length);
+			const rows = component.render(RENDER_WIDTH_WIDE);
+			heights.push(rows.length);
+			maxTrailingBlank = Math.max(maxTrailingBlank, trailingBlankRows(rows));
 		}
 
-		// A real diff is on screen for the whole stream (not just the title row).
-		expect(Math.max(...heights)).toBeGreaterThan(5);
+		// The tail window saturates immediately and the box height holds dead
+		// steady for the rest of the stream — it neither stutters larger/smaller
+		// (the pre-fix overshoot) nor balloons to a high-water peak. Only the very
+		// first chunk is a warmup (the unbalanced-removal stabilizer trims the
+		// removals-only diff before any addition arrives).
+		const steady = heights.slice(1);
+		expect(steady.length).toBeGreaterThan(5);
+		expect(Math.min(...steady)).toBeGreaterThan(12); // a full window of real diff
+		expect(Math.max(...steady) - Math.min(...steady)).toBe(0);
+		// And it is never padded into a half-empty rectangle (the regression).
+		expect(maxTrailingBlank).toBeLessThanOrEqual(1);
 
-		// Core contract: the box only ever grows while args stream.
-		for (let i = 1; i < heights.length; i++) {
-			expect(heights[i]).toBeGreaterThanOrEqual(heights[i - 1]);
-		}
-
-		// Finalize: args complete → unwrapped render path → the one allowed collapse.
+		// Finalize still renders a real diff.
 		component.setArgsComplete();
 		await settle();
-		const finalHeight = component.render(RENDER_WIDTH).length;
-		expect(finalHeight).toBeGreaterThan(1); // still shows a real diff
-		expect(finalHeight).toBeLessThanOrEqual(Math.max(...heights));
+		expect(component.render(RENDER_WIDTH_WIDE).length).toBeGreaterThan(1);
 	});
 
 	test("real TUI finalization replaces streaming edit preview throughout native scrollback", async () => {

@@ -1469,7 +1469,8 @@ export class TUI extends Container {
 		}
 
 		if (forceViewportRepaint) {
-			if (pureAppend && contentGrew && this.#previousLines.length > 0) {
+			if (isMultiplexerSession()) return { kind: "viewportRepaint" };
+			if (pureAppend && contentGrew && this.#previousLines.length >= height) {
 				return { kind: "viewportRepaint", appendFrom: this.#previousLines.length };
 			}
 			if (newLines.length === this.#previousLines.length && diff.firstChanged >= prevViewportTop) {
