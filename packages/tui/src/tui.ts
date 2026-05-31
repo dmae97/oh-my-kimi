@@ -1294,7 +1294,7 @@ export class TUI extends Container {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (
 				this.#nativeScrollbackDirty &&
-				this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewportMutation)
+				this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, allowUnknownViewportMutation)
 			) {
 				return { kind: "overlayRebuild" };
 			}
@@ -1326,7 +1326,7 @@ export class TUI extends Container {
 				this.#markNativeScrollbackDirty();
 				return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 			}
-			if (this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewportMutation)) {
+			if (this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();
@@ -1357,7 +1357,7 @@ export class TUI extends Container {
 				return { kind: "viewportRepaint" };
 			}
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
-			if (this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewportMutation)) {
+			if (this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();
@@ -1410,7 +1410,7 @@ export class TUI extends Container {
 			if (
 				contentGrew &&
 				diff.firstChanged < prevViewportTop &&
-				this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, false)
+				this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, false)
 			) {
 				const appendedTailStart = diff.appendedLines ? this.#findAppendedTailStart(newLines) : newLines.length;
 				const tailAppendCount = newLines.length - appendedTailStart;
@@ -1422,7 +1422,7 @@ export class TUI extends Container {
 			if (
 				newLines.length !== this.#previousLines.length &&
 				this.#scrollbackHighWater > 0 &&
-				this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewportMutation)
+				this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, allowUnknownViewportMutation)
 			) {
 				return { kind: "historyRebuild" };
 			}
@@ -1457,7 +1457,7 @@ export class TUI extends Container {
 				diff.appendedLines && this.#findAppendedTailStart(newLines) === this.#previousLines.length;
 			if (
 				!isMultiplexerSession() &&
-				this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewportMutation)
+				this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, allowUnknownViewportMutation)
 			) {
 				return { kind: "historyRebuild" };
 			}
@@ -1561,6 +1561,33 @@ export class TUI extends Container {
 		return (
 			nativeViewportAtBottom === true ||
 			(nativeViewportAtBottom === undefined && (allowUnknownViewport || process.platform !== "win32"))
+		);
+	}
+
+	/**
+	 * Live-frame counterpart to {@link #canReplayNativeScrollbackAtCheckpoint}.
+	 * Decides whether a destructive native scrollback rebuild
+	 * (`historyRebuild`/`overlayRebuild`, which clear scrollback and snap the
+	 * viewport to the tail) is safe to emit *during ordinary rendering*. POSIX
+	 * terminals cannot report whether the user has scrolled up
+	 * (`isNativeViewportAtBottom()` is `undefined`), so an unknown position is
+	 * treated as unsafe: defer to a non-destructive viewport repaint, mark
+	 * scrollback dirty, and reconcile history at the next explicit checkpoint
+	 * ({@link refreshNativeScrollbackIfDirty} on prompt submit) where the
+	 * editor keystroke has already pinned the terminal to the bottom. Without
+	 * this, every offscreen transcript edit while streaming wiped scrollback and
+	 * yanked a scrolled-up reader back down. `allowUnknownViewportMutation`
+	 * (autocomplete/IME) opts directly user-driven frames back into the rebuild.
+	 * Unlike the checkpoint predicate this carries no `process.platform`
+	 * optimism — resize and checkpoint replays keep using that one.
+	 */
+	#canRebuildNativeScrollbackLive(
+		nativeViewportAtBottom: boolean | undefined,
+		allowUnknownViewportMutation: boolean,
+	): boolean {
+		return (
+			nativeViewportAtBottom === true ||
+			(nativeViewportAtBottom === undefined && allowUnknownViewportMutation)
 		);
 	}
 
