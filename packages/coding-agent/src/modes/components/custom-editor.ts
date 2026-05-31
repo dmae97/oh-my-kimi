@@ -61,7 +61,6 @@ export class CustomEditor extends Editor {
 	onExternalEditor?: () => void;
 	onHistorySearch?: () => void;
 	onSuspend?: () => void;
-	onShowHotkeys?: () => void;
 	onSelectModelTemporary?: () => void;
 	/** Called when the configured copy-prompt shortcut is pressed. */
 	onCopyPrompt?: () => void;
@@ -218,12 +217,6 @@ export class CustomEditor extends Editor {
 		// Intercept configured copy-prompt shortcut
 		if (this.#matchesAction(data, "app.clipboard.copyPrompt") && this.onCopyPrompt) {
 			this.onCopyPrompt();
-			return;
-		}
-
-		// Intercept ? when editor is empty to show hotkeys
-		if (data === "?" && this.getText().length === 0 && this.onShowHotkeys) {
-			this.onShowHotkeys();
 			return;
 		}
 

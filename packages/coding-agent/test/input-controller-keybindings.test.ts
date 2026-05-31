@@ -14,7 +14,6 @@ type FakeEditor = {
 	onSelectModelTemporary?: () => void;
 	onSelectModel?: () => void;
 	onHistorySearch?: () => void;
-	onShowHotkeys?: () => void;
 	onPasteImage?: () => Promise<boolean>;
 	onCopyPrompt?: () => void;
 	onExpandTools?: () => void;

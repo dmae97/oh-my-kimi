@@ -10,6 +10,7 @@
 ### Changed
 
 - Changed Shift+Ctrl+P to cycle role models backward instead of cycling forward without persisting.
+- Changed empty prompt input so `?` inserts a literal question mark instead of opening `/hotkeys`; use `/hotkeys` explicitly for the shortcut reference.
 - Changed `search` output to preserve full virtual and internal URL paths in grouped results and `details.files` instead of collapsing them to file basenames
 - Changed `/omfg` to run up to three generation attempts with validation feedback and only prompt saving when no draft matches assistant history
 - Changed `/omfg` to show a live draft panel with generation/validation/saving status and allow canceling an active rule request with `Esc`

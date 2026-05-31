@@ -183,7 +183,6 @@ export class InputController {
 		this.ctx.editor.onToggleThinking = () => this.ctx.toggleThinkingBlockVisibility();
 		this.ctx.editor.setActionKeys("app.editor.external", this.ctx.keybindings.getKeys("app.editor.external"));
 		this.ctx.editor.onExternalEditor = () => void this.openExternalEditor();
-		this.ctx.editor.onShowHotkeys = () => this.ctx.handleHotkeysCommand();
 		this.ctx.editor.setActionKeys(
 			"app.clipboard.pasteImage",
 			this.ctx.keybindings.getKeys("app.clipboard.pasteImage"),
