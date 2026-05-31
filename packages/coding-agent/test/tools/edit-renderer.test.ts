@@ -22,6 +22,21 @@ async function getUiTheme() {
 	return theme!;
 }
 
+async function waitForRenderedText(
+	component: ToolExecutionComponent,
+	width: number,
+	expectedText: string,
+): Promise<string> {
+	const deadline = Date.now() + 1_000;
+	let rendered = "";
+	while (Date.now() < deadline) {
+		rendered = Bun.stripANSI(component.render(width).join("\n"));
+		if (rendered.includes(expectedText)) return rendered;
+		await Bun.sleep(10);
+	}
+	return rendered;
+}
+
 describe("editToolRenderer", () => {
 	it("shows the target path from partial JSON while edit args stream", async () => {
 		const uiTheme = await getUiTheme();
@@ -179,5 +194,56 @@ describe("editToolRenderer", () => {
 		} finally {
 			await fs.rm(tmpDir, { recursive: true, force: true });
 		}
+	});
+
+	it("renders raw custom hashline input carried only in partialJson", async () => {
+		await getUiTheme();
+		const uiStub = { requestRender() {} } as unknown as TUI;
+		const hashlineTool = { name: "edit", label: "Edit", mode: "hashline" } as unknown as AgentTool;
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "hashline-custom-stream-preview-"));
+		try {
+			const content = "export const a = 1;\nexport const b = 2;\n";
+			const filePath = path.join(tmpDir, "memory.ts");
+			await Bun.write(filePath, content);
+
+			const snapshots = new InMemorySnapshotStore();
+			const tag = snapshots.record(filePath, content);
+			const input = `¶memory.ts#${tag}\nreplace 2..2:\n+export const b = 22;\n`;
+			const component = new ToolExecutionComponent(
+				"edit",
+				{ __partialJson: input },
+				{ snapshots },
+				hashlineTool,
+				uiStub,
+				tmpDir,
+			);
+
+			const rendered = await waitForRenderedText(component, 160, "export const b = 22;");
+			expect(rendered).toContain("memory.ts");
+			expect(rendered).toContain("export const b = 22;");
+			expect(rendered).not.toContain(" …");
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("renders raw custom apply_patch input carried only in partialJson", async () => {
+		await getUiTheme();
+		const uiStub = { requestRender() {} } as unknown as TUI;
+		const input = [
+			"*** Begin Patch",
+			"*** Update File: src/demo.ts",
+			"@@",
+			"-const value = 1;",
+			"+const value = 2;",
+			"*** End Patch",
+		].join("\n");
+
+		const component = new ToolExecutionComponent("apply_patch", { __partialJson: input }, {}, undefined, uiStub);
+		const rendered = await waitForRenderedText(component, 160, "const value = 2;");
+
+		expect(rendered).toContain("src/demo.ts");
+		expect(rendered).toContain("const value = 2;");
+		expect(rendered).not.toContain(" …");
 	});
 });

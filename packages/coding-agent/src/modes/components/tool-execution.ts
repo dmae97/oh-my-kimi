@@ -107,6 +107,29 @@ function resolveEditModeForTool(toolName: string, tool: AgentTool | undefined): 
 	return (tool as { mode?: EditMode } | undefined)?.mode;
 }
 
+function rawFreeformEditInputFromPartialJson(partialJson: unknown): string | undefined {
+	if (typeof partialJson !== "string") return undefined;
+	if (partialJson.length === 0) return undefined;
+	const trimmed = partialJson.trimStart();
+	if (trimmed.length === 0) return undefined;
+	const first = trimmed[0];
+	// Function-tool arguments stream as JSON. Custom/free-form edit tools stream
+	// the raw patch/hashline payload in the same transport field; only the raw
+	// form is a valid fallback for `input`.
+	if (first === "{" || first === "[" || first === '"') return undefined;
+	return partialJson;
+}
+
+function getEditArgsForPreview(args: unknown, editMode: EditMode | undefined): unknown {
+	if ((editMode !== "hashline" && editMode !== "apply_patch") || args == null || typeof args !== "object") {
+		return args;
+	}
+	const record = args as Record<string, unknown>;
+	if (typeof record.input === "string") return args;
+	const input = rawFreeformEditInputFromPartialJson(record.__partialJson);
+	return input === undefined ? args : { ...record, input };
+}
+
 export interface ToolExecutionOptions {
 	snapshots?: SnapshotStore;
 	showImages?: boolean; // default: true (only used if terminal supports images)
@@ -247,12 +270,13 @@ export class ToolExecutionComponent extends Container {
 		const args = this.#args;
 		if (args == null || typeof args !== "object") return;
 
-		const partialJson = (args as { __partialJson?: string }).__partialJson;
+		const previewArgs = getEditArgsForPreview(args, editMode);
+		const partialJson = (previewArgs as { __partialJson?: string }).__partialJson;
 		let effectiveArgs: unknown;
 		try {
-			effectiveArgs = strategy.extractCompleteEdits(args, partialJson);
+			effectiveArgs = strategy.extractCompleteEdits(previewArgs, partialJson);
 		} catch {
-			effectiveArgs = args;
+			effectiveArgs = previewArgs;
 		}
 
 		// Coalesce duplicate computes for identical args. The key pairs the
@@ -720,17 +744,18 @@ export class ToolExecutionComponent extends Container {
 		if (!isEditLikeToolName(this.#toolName)) {
 			return this.#args;
 		}
+		const renderArgs = getEditArgsForPreview(this.#args, this.#editMode);
 		const previews = this.#editDiffPreview;
 		if (!previews || previews.length === 0) {
-			return this.#args;
+			return renderArgs;
 		}
 		// Single-file previews feed the existing `previewDiff` channel consumed
 		// by `formatStreamingDiff` in the renderer.
 		const first = previews[0];
 		if (!first?.diff) {
-			return this.#args;
+			return renderArgs;
 		}
-		return { ...(this.#args as Record<string, unknown>), previewDiff: first.diff };
+		return { ...(renderArgs as Record<string, unknown>), previewDiff: first.diff };
 	}
 
 	/**
@@ -781,7 +806,7 @@ export class ToolExecutionComponent extends Container {
 			if (!previews?.some(preview => preview.diff)) {
 				const editMode = this.#editMode;
 				const strategy = editMode ? EDIT_MODE_STRATEGIES[editMode] : undefined;
-				const fallback = strategy?.renderStreamingFallback(this.#args, theme);
+				const fallback = strategy?.renderStreamingFallback(getEditArgsForPreview(this.#args, editMode), theme);
 				if (fallback) context.editStreamingFallback = fallback;
 			}
 			context.renderDiff = renderDiff;
