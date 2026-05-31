@@ -2,10 +2,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { AssistantThinkingRenderer } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { clearMermaidCache } from "@oh-my-pi/pi-coding-agent/modes/theme/mermaid-cache";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
+import { ImageProtocol, setTerminalImageProtocol, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 
 const originalImageProtocol = TERMINAL.imageProtocol;
 
@@ -29,8 +30,8 @@ function createAssistantMessage(markdown: string): AssistantMessage {
 	};
 }
 
-function renderAssistantMessage(markdown: string): string {
-	const component = new AssistantMessageComponent(createAssistantMessage(markdown));
+function renderAssistantMessage(markdown: string, renderers: readonly AssistantThinkingRenderer[] = []): string {
+	const component = new AssistantMessageComponent(createAssistantMessage(markdown), false, undefined, renderers);
 	return Bun.stripANSI(component.render(120).join("\n"))
 		.split("\n")
 		.map(line => line.trimEnd())
@@ -71,6 +72,44 @@ describe("AssistantMessageComponent mermaid markdown", () => {
 		expect(TERMINAL.imageProtocol).toBeNull();
 		expect(rendered).toContain("```mermaid");
 		expect(rendered).toContain("this is not mermaid");
+	});
+});
+
+describe("AssistantMessageComponent thinking renderers", () => {
+	it("renders extension output below visible thinking blocks", () => {
+		const component = new AssistantMessageComponent(
+			{
+				...createAssistantMessage(""),
+				content: [{ type: "thinking", thinking: "I should inspect the input." }],
+			},
+			false,
+			undefined,
+			[() => new Text("translated note", 1, 0)],
+		);
+
+		const rendered = Bun.stripANSI(component.render(120).join("\n"));
+		expect(rendered).toContain("I should inspect the input.");
+		expect(rendered).toContain("translated note");
+	});
+
+	it("keeps original thinking visible when an extension renderer throws", () => {
+		const component = new AssistantMessageComponent(
+			{
+				...createAssistantMessage(""),
+				content: [{ type: "thinking", thinking: "I should inspect the input." }],
+			},
+			false,
+			undefined,
+			[
+				() => {
+					throw new Error("renderer failed");
+				},
+			],
+		);
+
+		const rendered = Bun.stripANSI(component.render(120).join("\n"));
+		expect(rendered).toContain("I should inspect the input.");
+		expect(rendered).not.toContain("renderer failed");
 	});
 });
 

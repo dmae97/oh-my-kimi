@@ -112,7 +112,7 @@ Core methods:
 
 - `on(event, handler)`
 - `registerTool`, `registerCommand`, `registerShortcut`, `registerFlag`
-- `registerMessageRenderer`
+- `registerMessageRenderer`, `registerAssistantThinkingRenderer`
 - `setLabel`, `getFlag`
 - `sendMessage`, `sendUserMessage`, `appendEntry`, `exec`
 - `getActiveTools`, `getAllTools`, `setActiveTools`
@@ -358,6 +358,20 @@ pi.registerMessageRenderer("my-type", (message, { expanded }, theme) => {
 ```
 
 Used by interactive rendering when custom messages are displayed.
+
+## Assistant thinking renderer
+
+```ts
+import { Container, Text } from "@oh-my-pi/pi-tui";
+
+pi.registerAssistantThinkingRenderer((context, theme) => {
+  const container = new Container();
+  container.addChild(new Text(theme.fg("dim", `thinking chars: ${context.text.length}`), 1, 0));
+  return container;
+});
+```
+
+Used by interactive rendering to add display-only supplemental UI below each visible assistant thinking block. The renderer receives the original thinking text plus message/content indexes and a `requestRender()` callback for async renderers. It must not mutate messages; the original thinking block remains the provider/session source of truth.
 
 ## Tool call/result renderer
 
