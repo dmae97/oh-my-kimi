@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed Anthropic stream idle-timeout retries after the provider stream has already begun.
+- Fixed Xiaomi MiMo `/login` rejecting token-plan (`tp-`) keys with `401 Invalid API Key`. The validation request was still sending the legacy Anthropic `x-api-key` header against the OpenAI-compatible `/v1/chat/completions` endpoint; switched to `Authorization: Bearer`, matching the runtime path. ([#1580](https://github.com/can1357/oh-my-pi/issues/1580))
 
 ## [15.7.3] - 2026-05-31
 
