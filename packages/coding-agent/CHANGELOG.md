@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the JavaScript `eval` kernel crashing the whole process with a segfault (`SIGTRAP`, `getImportedModule` on a null record) when imported code reached a local module whose relative-import graph contains a cycle — e.g. `await import("…/edit/streaming.ts")`, or any workspace path with cyclic re-exports. The `LocalModuleLoader` linked and evaluated each local module individually inside the recursive `vm.SourceTextModule` linker callback, which re-entered Bun's `node:vm` module linker mid-instantiation and detonated JSC on the first cycle. The loader now constructs the entire local module graph first and drives a single `link()` + `evaluate()` from the graph root, so cyclic graphs instantiate in one pass; external (`node_modules`) modules stay eagerly loaded since they carry no imports and cannot form a cycle.
+- Fixed the streaming `edit` preview rendering a blank box for hashline edits whose payload sits on the trailing in-flight line (the common single-op `replace`/`insert` case). The preview path trimmed that still-typing line before diffing, so a single-payload op collapsed to a "No changes" result — shown as an empty box — for almost the entire stream. Hashline previews now feed the raw in-flight text through `applyPartialTo`, whose streaming-tolerant parser drops a payload-less trailing op and projects a partially-typed payload line as it grows, so the diff appears and fills in live. Transient errors from the actively-typed trailing section are also suppressed while streaming (regardless of section count) so a mid-typed op can't wipe an already-good preview frame; real errors still surface once args are complete.
+
 ## [15.7.0] - 2026-05-31
 
 ### Added

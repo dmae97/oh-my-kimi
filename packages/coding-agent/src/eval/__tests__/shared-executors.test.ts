@@ -492,6 +492,38 @@ display({"label": "A"})`,
 		expect(reloaded.output.trim()).toBe("2");
 	});
 
+	it("links a cyclic local module graph without crashing", async () => {
+		// Regression: the loader used to link()+evaluate() each local module individually
+		// inside the recursive linker callback. On any import cycle that re-entered Bun's
+		// node:vm linker mid-instantiation and segfaulted the process (SIGTRAP,
+		// getImportedModule on a null record) — e.g. `await import("…/edit/streaming.ts")`,
+		// whose relative-import subtree is cyclic. The graph must now link in a single pass.
+		using tempDir = TempDir.createSync("@omp-eval-js-cycle-");
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `js-cycle:${crypto.randomUUID()}`;
+		const session = createToolSession(tempDir.path(), sessionFile);
+		const alphaPath = path.join(tempDir.path(), "alpha.ts");
+		const betaPath = path.join(tempDir.path(), "beta.ts");
+		const alphaSpec = JSON.stringify(alphaPath);
+		const betaSpec = JSON.stringify(betaPath);
+		await Bun.write(
+			alphaPath,
+			'import { betaName } from "./beta.ts";\nexport const alphaName = "alpha";\nexport function combined() { return alphaName + ":" + betaName; }\n',
+		);
+		await Bun.write(
+			betaPath,
+			'import { alphaName } from "./alpha.ts";\nexport const betaName = "beta";\nexport function viaAlpha() { return alphaName; }\n',
+		);
+
+		const result = await executeJs(
+			`const a = await import(${alphaSpec});\nconst b = await import(${betaSpec});\nreturn [a.combined(), b.viaAlpha()].join("|");`,
+			{ sessionId, session, sessionFile },
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("alpha:beta|alpha");
+	});
+
 	it("loads TypeScript type-only imports in cells and local modules", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-js-type-imports-");
 		const sessionFile = path.join(tempDir.path(), "session.jsonl");
