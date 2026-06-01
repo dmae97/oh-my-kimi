@@ -379,7 +379,7 @@ function findBoundaryEcho(group: ReplacementGroup, fileLines: readonly string[])
 	let best: BoundaryEcho | undefined;
 	for (let leading = 1; leading <= leadingMax; leading++) {
 		for (let trailing = 1; trailing <= trailingMax; trailing++) {
-			if (leading + trailing > group.payload.length) continue;
+			if (leading + trailing >= group.payload.length) continue;
 			if (!best || leading + trailing > best.leading + best.trailing) best = { leading, trailing };
 		}
 	}
