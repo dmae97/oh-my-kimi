@@ -113,6 +113,16 @@ describe("boundary-balance repair", () => {
 		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
 	});
 
+	it("preserves payloads where multi-line boundary echoes cover every line", () => {
+		const file = ["A", "B", "old", "C", "D"].join("\n");
+		const diff = ["replace 3..3:", "+A", "+B", "+C", "+D"].join("\n");
+
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(["A", "B", "A", "B", "C", "D", "C", "D"].join("\n"));
+		expect(warnings).toHaveLength(0);
+	});
+
 	it("preserves payloads made only of lines matching both replacement neighbors", () => {
 		const file = ["a", "old", "c"].join("\n");
 		const diff = ["replace 2..2:", "+a", "+c"].join("\n");

@@ -375,15 +375,11 @@ function findBoundaryEcho(group: ReplacementGroup, fileLines: readonly string[])
 	if (leadingMax === 0) return undefined;
 	const trailingMax = countDuplicateTrailingBoundaryLines(group, fileLines);
 	if (trailingMax === 0) return undefined;
-
-	let best: BoundaryEcho | undefined;
-	for (let leading = 1; leading <= leadingMax; leading++) {
-		for (let trailing = 1; trailing <= trailingMax; trailing++) {
-			if (leading + trailing >= group.payload.length) continue;
-			if (!best || leading + trailing > best.leading + best.trailing) best = { leading, trailing };
-		}
-	}
-	return best;
+	// Bail when every payload line could be claimed by a boundary echo: any
+	// repair would strip explicit replacement content with no signal that the
+	// payload was a mistake rather than an intentional duplication.
+	if (leadingMax + trailingMax >= group.payload.length) return undefined;
+	return { leading: leadingMax, trailing: trailingMax };
 }
 
 function describeBoundaryEchoRepair(group: ReplacementGroup, echo: BoundaryEcho): string {
