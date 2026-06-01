@@ -121,6 +121,31 @@ describe("HookSelectorComponent", () => {
 		expect(plain).toContain("(1/4)");
 	});
 
+	it("counts wrapped outlined rows toward the visible row cap", () => {
+		const options = [
+			"Option A: Use the existing terminal session and preserve the current credentials while the setup prompt remains open for the editor.",
+			"Option B: Open a browser authorization flow and wait for the provider callback before returning to the editor.",
+			"Option C: Edit the local provider configuration file manually and retry the current request afterward.",
+			"Option D: Continue without provider access and keep only offline tools enabled for the session.",
+		];
+		const component = new HookSelectorComponent(
+			"Which setup path should be used?",
+			options,
+			() => {},
+			() => {},
+			{ outline: true, initialIndex: 0, maxVisible: 3 },
+		);
+
+		const plainLines = component.render(50).map(line => Bun.stripANSI(line));
+		const plain = plainLines.join("\n");
+		expect(plain).toContain("Option A");
+		expect(plain).not.toContain("Option B");
+		expect(plain).toContain("(1/4)");
+		for (const line of plainLines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(50);
+		}
+	});
+
 	it("filters options by description text", () => {
 		const component = new HookSelectorComponent(
 			"Which setup path should be used?",

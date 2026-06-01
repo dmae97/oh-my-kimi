@@ -7,6 +7,7 @@ import {
 	extractPrintableText,
 	fuzzyFilter,
 	Markdown,
+	type MarkdownTheme,
 	matchesKey,
 	padding,
 	renderInlineMarkdown,
@@ -145,6 +146,7 @@ export class HookSelectorComponent extends Container {
 	#slider: HookSelectorSlider | undefined;
 	#sliderIndex: number = 0;
 	#sliderComponent: Text | undefined;
+	#lastRenderWidth: number | undefined;
 	constructor(
 		title: string,
 		options: HookSelectorOptionInput[],
@@ -215,31 +217,71 @@ export class HookSelectorComponent extends Container {
 		this.#updateList();
 	}
 
-	#optionRowCount(option: HookSelectorOption): number {
-		return option.description ? 2 : 1;
+	#renderOptionLines(option: HookSelectorOption, isSelected: boolean, mdTheme: MarkdownTheme): string[] {
+		const label = isSelected
+			? renderInlineMarkdown(option.label, mdTheme, t => theme.fg("accent", t))
+			: renderInlineMarkdown(option.label, mdTheme, t => theme.fg("text", t));
+		const prefix = isSelected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
+		const lines = [prefix + label];
+		if (option.description) {
+			const description = renderInlineMarkdown(option.description, mdTheme, t => theme.fg("muted", t));
+			lines.push(`    ${description}`);
+		}
+		return lines;
 	}
 
-	#totalOptionRows(options: HookSelectorOption[]): number {
+	#renderedLineRowCount(line: string, renderWidth: number): number {
+		const normalized = replaceTabs(line);
+		if (this.#outlinedList) {
+			const innerWidth = Math.max(1, renderWidth - 2);
+			const { indent, body } = splitLeadingSpacesForWrap(normalized, innerWidth);
+			const wrapped = wrapTextWithAnsi(body, Math.max(1, innerWidth - visibleWidth(indent)));
+			return Math.max(1, wrapped.length);
+		}
+		const wrapped = wrapTextWithAnsi(normalized, Math.max(1, renderWidth - 2));
+		return Math.max(1, wrapped.length);
+	}
+
+	#optionRowCount(
+		option: HookSelectorOption,
+		renderWidth: number | undefined,
+		isSelected: boolean,
+		mdTheme: MarkdownTheme,
+	): number {
+		if (renderWidth === undefined) return option.description ? 2 : 1;
 		let rows = 0;
-		for (const option of options) {
-			rows += this.#optionRowCount(option);
+		for (const line of this.#renderOptionLines(option, isSelected, mdTheme)) {
+			rows += this.#renderedLineRowCount(line, renderWidth);
 		}
 		return rows;
 	}
 
-	#getVisibleOptionRange(total: number): { startIndex: number; endIndex: number } {
+	#totalOptionRows(options: HookSelectorOption[], renderWidth?: number, mdTheme?: MarkdownTheme): number {
+		const themeForRows = mdTheme ?? getMarkdownTheme();
+		let rows = 0;
+		for (const option of options) {
+			rows += this.#optionRowCount(option, renderWidth, false, themeForRows);
+		}
+		return rows;
+	}
+
+	#getVisibleOptionRange(
+		total: number,
+		renderWidth?: number,
+		mdTheme: MarkdownTheme = getMarkdownTheme(),
+	): { startIndex: number; endIndex: number } {
 		if (total === 0) return { startIndex: 0, endIndex: 0 };
 
 		const rowBudget = Math.max(1, this.#maxVisible);
 		const selectedIndex = Math.max(0, Math.min(this.#selectedIndex, total - 1));
 		let startIndex = selectedIndex;
 		let endIndex = selectedIndex + 1;
-		let rows = this.#optionRowCount(this.#filteredOptions[selectedIndex]!);
+		let rows = this.#optionRowCount(this.#filteredOptions[selectedIndex]!, renderWidth, true, mdTheme);
 		let beforeRows = 0;
 		const targetBeforeRows = Math.max(0, Math.floor((rowBudget - rows) / 2));
 
 		while (startIndex > 0) {
-			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!);
+			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!, renderWidth, false, mdTheme);
 			if (beforeRows + cost > targetBeforeRows || rows + cost > rowBudget) break;
 			startIndex--;
 			beforeRows += cost;
@@ -247,14 +289,14 @@ export class HookSelectorComponent extends Container {
 		}
 
 		while (endIndex < total) {
-			const cost = this.#optionRowCount(this.#filteredOptions[endIndex]!);
+			const cost = this.#optionRowCount(this.#filteredOptions[endIndex]!, renderWidth, false, mdTheme);
 			if (rows + cost > rowBudget) break;
 			endIndex++;
 			rows += cost;
 		}
 
 		while (startIndex > 0) {
-			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!);
+			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!, renderWidth, false, mdTheme);
 			if (rows + cost > rowBudget) break;
 			startIndex--;
 			rows += cost;
@@ -263,32 +305,23 @@ export class HookSelectorComponent extends Container {
 		return { startIndex, endIndex };
 	}
 
-	#updateList(): void {
+	#updateList(renderWidth = this.#lastRenderWidth): void {
 		const lines: string[] = [];
 		const total = this.#filteredOptions.length;
-		const { startIndex, endIndex } = this.#getVisibleOptionRange(total);
-
 		const mdTheme = getMarkdownTheme();
+		const { startIndex, endIndex } = this.#getVisibleOptionRange(total, renderWidth, mdTheme);
+
 		for (let i = startIndex; i < endIndex; i++) {
 			const option = this.#filteredOptions[i];
 			if (option === undefined) continue;
-			const isSelected = i === this.#selectedIndex;
-			const label = isSelected
-				? renderInlineMarkdown(option.label, mdTheme, t => theme.fg("accent", t))
-				: renderInlineMarkdown(option.label, mdTheme, t => theme.fg("text", t));
-			const prefix = isSelected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
-			lines.push(prefix + label);
-			if (option.description) {
-				const description = renderInlineMarkdown(option.description, mdTheme, t => theme.fg("muted", t));
-				lines.push(`    ${description}`);
-			}
+			lines.push(...this.#renderOptionLines(option, i === this.#selectedIndex, mdTheme));
 		}
 
 		if (total === 0) {
 			lines.push(theme.fg("dim", "  No matching options"));
 		}
 
-		if (startIndex > 0 || endIndex < total || this.#shouldRenderSearchStatus()) {
+		if (startIndex > 0 || endIndex < total || this.#shouldRenderSearchStatus(renderWidth, mdTheme)) {
 			lines.push(this.#renderStatusLine(total));
 		}
 		if (this.#outlinedList) {
@@ -336,12 +369,12 @@ export class HookSelectorComponent extends Container {
 		slider.onChange?.(next);
 	}
 
-	#isSearchEnabled(): boolean {
-		return this.#totalOptionRows(this.#options) > this.#maxVisible;
+	#isSearchEnabled(renderWidth = this.#lastRenderWidth, mdTheme?: MarkdownTheme): boolean {
+		return this.#totalOptionRows(this.#options, renderWidth, mdTheme) > this.#maxVisible;
 	}
 
-	#shouldRenderSearchStatus(): boolean {
-		return this.#isSearchEnabled() || this.#searchQuery.length > 0;
+	#shouldRenderSearchStatus(renderWidth = this.#lastRenderWidth, mdTheme?: MarkdownTheme): boolean {
+		return this.#isSearchEnabled(renderWidth, mdTheme) || this.#searchQuery.length > 0;
 	}
 
 	#renderStatusLine(total: number): string {
@@ -417,6 +450,15 @@ export class HookSelectorComponent extends Container {
 		} else if (this.#onExternalEditorCallback && matchesAppExternalEditor(keyData)) {
 			this.#onExternalEditorCallback();
 		}
+	}
+
+	override render(width: number): string[] {
+		const renderWidth = Math.max(1, width);
+		if (this.#lastRenderWidth !== renderWidth) {
+			this.#lastRenderWidth = renderWidth;
+			this.#updateList(renderWidth);
+		}
+		return super.render(renderWidth);
 	}
 
 	dispose(): void {
