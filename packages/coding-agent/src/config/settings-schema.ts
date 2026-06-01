@@ -1966,6 +1966,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"lsp.diagnosticsDeduplicate": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "editing",
+			label: "Deduplicate Diagnostics",
+			description: "Suppress post-edit LSP diagnostics already shown for a file; only surface new or changed ones",
+		},
+	},
+
 	// Bash interceptor
 	"bashInterceptor.enabled": {
 		type: "boolean",

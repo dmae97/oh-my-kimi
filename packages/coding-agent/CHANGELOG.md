@@ -5,6 +5,7 @@
 
 - Added `ask` option descriptions so agents can keep short labels and render explanatory text as separate muted rows in the selector.
 - Added an extension API for rendering supplemental UI below visible assistant thinking blocks.
+- Added default-on `lsp.diagnosticsDeduplicate` support so post-edit LSP diagnostics already shown for a file are suppressed within the session and only new or changed diagnostics are surfaced.
  
 ### Fixed
 

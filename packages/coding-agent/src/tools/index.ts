@@ -257,6 +257,10 @@ export interface ToolSession {
 	 *  by `getConflictHistory`. */
 	conflictHistory?: import("./conflict-detect").ConflictHistory;
 
+	/** Per-session ledger of post-edit LSP diagnostics already surfaced to the
+	 *  model for each file. Lazily initialized by `getDiagnosticsLedger`. */
+	diagnosticsLedger?: import("../lsp/diagnostics-ledger").DiagnosticsLedger;
+
 	/** Queue a hidden message to be injected at the next agent turn. */
 	queueDeferredMessage?(message: CustomMessage): void;
 	/** Get the active OpenTelemetry config so subagent dispatch can forward
