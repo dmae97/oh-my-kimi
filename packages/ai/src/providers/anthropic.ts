@@ -47,6 +47,7 @@ import type {
 	StreamOptions,
 	TextContent,
 	ThinkingContent,
+	TokenTaskBudget,
 	Tool,
 	ToolCall,
 	ToolResultMessage,
@@ -123,6 +124,7 @@ const claudeCodeBetaDefaults = [
 const fineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14";
 const interleavedThinkingBeta = "interleaved-thinking-2025-05-14";
 const fastModeBeta = "fast-mode-2026-02-01";
+const taskBudgetBeta = "task-budgets-2026-03-13";
 
 function getHeaderCaseInsensitive(headers: Record<string, string> | undefined, headerName: string): string | undefined {
 	if (!headers) return undefined;
@@ -216,6 +218,16 @@ type AnthropicSamplingParams = MessageCreateParamsStreaming & {
 	top_p?: number;
 	top_k?: number;
 };
+
+type AnthropicOutputConfig = NonNullable<MessageCreateParamsStreaming["output_config"]> & {
+	task_budget?: TokenTaskBudget | null;
+};
+
+function getAnthropicOutputConfig(params: MessageCreateParamsStreaming): AnthropicOutputConfig {
+	const outputConfig = (params.output_config ?? {}) as AnthropicOutputConfig;
+	params.output_config = outputConfig as typeof params.output_config;
+	return outputConfig;
+}
 
 const ANTHROPIC_STOP_SEQUENCES_MAX = 4;
 let warnedStopSequencesTrim = false;
@@ -1150,6 +1162,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				if (wantsAnthropicPriority && !extraBetas.includes(fastModeBeta)) {
 					extraBetas.push(fastModeBeta);
 				}
+				if (options?.taskBudget && !extraBetas.includes(taskBudgetBeta)) {
+					extraBetas.push(taskBudgetBeta);
+				}
 
 				const created = createClient(model, {
 					model,
@@ -1779,8 +1794,14 @@ function createClient(
 function disableThinkingIfToolChoiceForced(params: MessageCreateParamsStreaming): void {
 	const toolChoice = params.tool_choice;
 	if (!toolChoice) return;
-	if (toolChoice.type === "any" || toolChoice.type === "tool") {
-		delete params.thinking;
+	if (toolChoice.type !== "any" && toolChoice.type !== "tool") return;
+
+	delete params.thinking;
+	const outputConfig = params.output_config as AnthropicOutputConfig | undefined;
+	if (!outputConfig) return;
+
+	delete outputConfig.effort;
+	if (Object.keys(outputConfig).length === 0) {
 		delete params.output_config;
 	}
 }
@@ -2107,7 +2128,7 @@ function buildParams(
 				if (effort) {
 					// SDK's OutputConfig.effort type is not yet widened to include the new "xhigh"
 					// level introduced with Claude Opus 4.7. Cast until the SDK catches up.
-					params.output_config = { effort } as typeof params.output_config;
+					getAnthropicOutputConfig(params).effort = effort;
 				}
 			} else {
 				params.thinking = {
@@ -2116,7 +2137,7 @@ function buildParams(
 					display: options.thinkingDisplay ?? "summarized",
 				} as typeof params.thinking;
 				if (mode === "anthropic-budget-effort" && effort) {
-					params.output_config = { effort } as typeof params.output_config;
+					getAnthropicOutputConfig(params).effort = effort;
 				}
 			}
 		} else if (options?.thinkingEnabled === false) {
@@ -2124,6 +2145,9 @@ function buildParams(
 		}
 	}
 
+	if (options?.taskBudget) {
+		getAnthropicOutputConfig(params).task_budget = options.taskBudget;
+	}
 	const metadataUserId = resolveAnthropicMetadataUserId(options?.metadata?.user_id, isOAuthToken);
 	if (metadataUserId) {
 		params.metadata = { user_id: metadataUserId };

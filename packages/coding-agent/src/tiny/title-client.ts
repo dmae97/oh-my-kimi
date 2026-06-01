@@ -1,4 +1,6 @@
+import * as path from "node:path";
 import { $env, isCompiledBinary, logger } from "@oh-my-pi/pi-utils";
+import type { Subprocess } from "bun";
 import { settings } from "../config/settings";
 import { tinyModelDeviceSettingToEnv } from "./device";
 import { tinyModelDtypeSettingToEnv } from "./dtype";
@@ -12,6 +14,14 @@ import {
 } from "./models";
 import type { TinyTitleProgressEvent, TinyTitleWorkerInbound, TinyTitleWorkerOutbound } from "./title-protocol";
 
+/**
+ * Abstraction over the tiny-model subprocess. Modelled as a worker interface
+ * so existing callers (titles, memory completions, downloads) compose the
+ * same way; the runtime implementation is a Bun child process so
+ * `onnxruntime-node`'s NAPI finalizer never runs inside the main agent
+ * address space — that destructor segfaults Bun on Windows during shutdown
+ * (issue #1606).
+ */
 interface WorkerHandle {
 	send(message: TinyTitleWorkerInbound): void;
 	onMessage(handler: (message: TinyTitleWorkerOutbound) => void): () => void;
@@ -30,6 +40,12 @@ export interface TinyTitleDownloadOptions {
 }
 
 const SMOKE_TEST_TIMEOUT_MS = 5_000;
+
+/**
+ * Hidden subcommand on the main CLI that boots the tiny-model worker in the
+ * spawned subprocess. Kept in sync with the dispatch in `cli.ts`.
+ */
+export const TINY_WORKER_ARG = "--tiny-worker";
 
 function readTinyModelSetting(path: "providers.tinyModelDevice" | "providers.tinyModelDtype"): string | undefined {
 	try {
@@ -66,49 +82,128 @@ export function tinyWorkerEnvOverlay(
 }
 
 /**
- * Env handed to the tiny-model worker. The `PI_TINY_DEVICE` / `PI_TINY_DTYPE` env
- * vars win; otherwise the persisted `providers.tinyModelDevice` /
- * `providers.tinyModelDtype` settings are mapped onto those vars so the worker's
- * env-based resolution picks them up. Resolved once at spawn (pipelines are cached).
+ * Env handed to the tiny-model subprocess. The `PI_TINY_DEVICE` / `PI_TINY_DTYPE`
+ * env vars win; otherwise the persisted `providers.tinyModelDevice` /
+ * `providers.tinyModelDtype` settings are mapped onto those vars so the
+ * subprocess's env-based resolution picks them up. Resolved once at spawn
+ * (pipelines are cached for the lifetime of the subprocess).
  */
-function tinyWorkerEnv(): Record<string, string> | undefined {
+function tinyWorkerEnv(): Record<string, string> {
 	const overlay = tinyWorkerEnvOverlay(
 		$env,
 		readTinyModelSetting("providers.tinyModelDevice"),
 		readTinyModelSetting("providers.tinyModelDtype"),
 	);
-	if (Object.keys(overlay).length === 0) return undefined;
-	return { ...($env as Record<string, string>), ...overlay };
+	const base = $env as Record<string, string | undefined>;
+	const merged: Record<string, string> = {};
+	for (const key in base) {
+		const value = base[key];
+		if (typeof value === "string") merged[key] = value;
+	}
+	for (const key in overlay) merged[key] = overlay[key];
+	return merged;
 }
 
-export function createTinyTitleWorker(): Worker {
-	const env = tinyWorkerEnv();
-	const options: WorkerOptions = env ? { type: "module", env } : { type: "module" };
-	return isCompiledBinary()
-		? new Worker("./packages/coding-agent/src/tiny/worker.ts", options)
-		: new Worker(new URL("./worker.ts", import.meta.url).href, options);
+/**
+ * Resolve the argv used to relaunch the agent CLI into tiny-worker mode. In a
+ * compiled binary the entry point is the binary itself; in dev/source the
+ * spawned `bun` needs the absolute path to `cli.ts` so it can resolve module
+ * imports against the on-disk source tree.
+ */
+function tinyWorkerSpawnCmd(): string[] {
+	if (isCompiledBinary()) return [process.execPath, TINY_WORKER_ARG];
+	const cliPath = path.resolve(import.meta.dir, "..", "cli.ts");
+	return [process.execPath, cliPath, TINY_WORKER_ARG];
 }
 
-function wrapBunWorker(worker: Worker): WorkerHandle {
-	(worker as Worker & { unref?: () => void }).unref?.();
+interface SpawnedSubprocess {
+	proc: Subprocess<"ignore", "inherit", "inherit">;
+	inbound: Set<(message: TinyTitleWorkerOutbound) => void>;
+	errors: Set<(error: Error) => void>;
+	/**
+	 * Flipped to `true` by {@link wrapSubprocess}'s `terminate()` right
+	 * before it SIGKILLs the child so `onExit` can distinguish the
+	 * expected hard-kill from a crash/OOM/external signal. Only the
+	 * latter is surfaced as a worker error.
+	 */
+	intentionalExit: { value: boolean };
+}
+
+/**
+ * Spawn the tiny-model worker as a subprocess. Exported for tests and the
+ * smoke probe; production callers go through {@link spawnTinyTitleWorker}
+ * which wraps the result in a {@link WorkerHandle}.
+ */
+export function createTinyTitleSubprocess(): SpawnedSubprocess {
+	const inbound = new Set<(message: TinyTitleWorkerOutbound) => void>();
+	const errors = new Set<(error: Error) => void>();
+	const intentionalExit = { value: false };
+	const proc = Bun.spawn({
+		cmd: tinyWorkerSpawnCmd(),
+		env: tinyWorkerEnv(),
+		stdin: "ignore",
+		stdout: "inherit",
+		stderr: "inherit",
+		serialization: "advanced",
+		windowsHide: true,
+		ipc(message) {
+			for (const handler of inbound) handler(message as TinyTitleWorkerOutbound);
+		},
+		onExit(_proc, exitCode, signalCode) {
+			// Clean exit. The child only exits via SIGKILL in practice, but
+			// treat code 0 as a no-op for symmetry.
+			if (exitCode === 0) return;
+			// `exitCode === null` + non-null `signalCode` covers both the
+			// expected SIGKILL from `terminate()` AND external kills
+			// (SIGSEGV from a native crash, SIGKILL from the OOM killer, an
+			// operator `kill -9`, etc.). Swallow only the expected one;
+			// every other signal exit is a real worker death that must
+			// fault every in-flight request so callers don't await forever.
+			if (exitCode === null && intentionalExit.value) return;
+			const reason = exitCode !== null ? `code ${exitCode}` : `signal ${signalCode ?? "unknown"}`;
+			const err = new Error(`tiny model subprocess exited with ${reason}`);
+			for (const handler of errors) handler(err);
+		},
+	});
+	// Don't keep the parent event loop alive on account of an idle worker; the
+	// agent dispose path calls `terminate()` explicitly when shutting down.
+	proc.unref();
+	return { proc, inbound, errors, intentionalExit };
+}
+
+function wrapSubprocess({ proc, inbound, errors, intentionalExit }: SpawnedSubprocess): WorkerHandle {
 	return {
 		send(message) {
-			worker.postMessage(message);
+			try {
+				proc.send(message);
+			} catch (error) {
+				logger.debug("tiny-title: send to subprocess failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
 		},
 		onMessage(handler) {
-			const wrap = (event: MessageEvent): void => handler(event.data as TinyTitleWorkerOutbound);
-			worker.addEventListener("message", wrap);
-			return () => worker.removeEventListener("message", wrap);
+			inbound.add(handler);
+			return () => inbound.delete(handler);
 		},
 		onError(handler) {
-			const wrap = (event: ErrorEvent): void => {
-				handler(event.error instanceof Error ? event.error : new Error(event.message || "tiny title worker error"));
-			};
-			worker.addEventListener("error", wrap);
-			return () => worker.removeEventListener("error", wrap);
+			errors.add(handler);
+			return () => errors.delete(handler);
 		},
 		async terminate() {
-			worker.terminate();
+			// SIGKILL: the whole point of the subprocess isolation is that the
+			// parent never runs `onnxruntime-node`'s NAPI finalizer. A polite
+			// SIGTERM lets the subprocess try to clean up, which is exactly the
+			// codepath that crashes Bun on Windows. Hard-kill instead — the
+			// model lives in process memory and the OS reclaims everything.
+			// Flip the intentional-exit flag *before* killing so `onExit` can
+			// tell this apart from a crash or external SIGKILL.
+			intentionalExit.value = true;
+			try {
+				proc.kill("SIGKILL");
+			} catch {
+				// Already gone.
+			}
 		},
 	};
 }
@@ -124,10 +219,6 @@ function spawnInlineUnavailableWorker(error: unknown): WorkerHandle {
 			queueMicrotask(() => {
 				if (message.type === "ping") {
 					emit({ type: "pong", id: message.id });
-					return;
-				}
-				if (message.type === "close") {
-					emit({ type: "closed" });
 					return;
 				}
 				emit({ type: "error", id: message.id, error: errorMessage });
@@ -148,9 +239,9 @@ function spawnInlineUnavailableWorker(error: unknown): WorkerHandle {
 
 function spawnTinyTitleWorker(): WorkerHandle {
 	try {
-		return wrapBunWorker(createTinyTitleWorker());
+		return wrapSubprocess(createTinyTitleSubprocess());
 	} catch (error) {
-		logger.warn("Tiny title Worker spawn failed; local titles disabled", {
+		logger.warn("Tiny title worker spawn failed; local titles disabled", {
 			error: error instanceof Error ? error.message : String(error),
 		});
 		return spawnInlineUnavailableWorker(error);
@@ -293,9 +384,9 @@ export class TinyTitleClient {
 		}
 		this.#pending.clear();
 		try {
-			worker?.send({ type: "close" });
+			await worker?.terminate();
 		} catch {
-			// Worker may already be gone.
+			// Already gone.
 		}
 	}
 
@@ -317,7 +408,6 @@ export class TinyTitleClient {
 			this.#emitProgress(message.event);
 			return;
 		}
-		if (message.type === "closed") return;
 		if (message.type === "pong") return;
 
 		const pending = this.#pending.get(message.id);
@@ -371,25 +461,25 @@ export async function smokeTestTinyTitleWorker({
 }: {
 	timeoutMs?: number;
 } = {}): Promise<void> {
-	const worker = createTinyTitleWorker();
+	const handle = wrapSubprocess(createTinyTitleSubprocess());
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	const timer = setTimeout(() => reject(new Error(`tiny title worker did not pong within ${timeoutMs}ms`)), timeoutMs);
-	worker.onmessage = (event: MessageEvent<TinyTitleWorkerOutbound>) => {
-		const message = event.data;
+	const unsubscribeMessage = handle.onMessage(message => {
 		if (message.type === "pong") {
 			resolve();
 			return;
 		}
+		if (message.type === "log") return;
 		reject(new Error(`tiny title worker: expected pong, got ${JSON.stringify(message)}`));
-	};
-	worker.onerror = (event: ErrorEvent) => {
-		reject(event.error instanceof Error ? event.error : new Error(event.message || "tiny title worker error"));
-	};
+	});
+	const unsubscribeError = handle.onError(reject);
 	try {
-		worker.postMessage({ type: "ping", id: "smoke" } satisfies TinyTitleWorkerInbound);
+		handle.send({ type: "ping", id: "smoke" } satisfies TinyTitleWorkerInbound);
 		await promise;
 	} finally {
 		clearTimeout(timer);
-		worker.terminate();
+		unsubscribeMessage();
+		unsubscribeError();
+		await handle.terminate();
 	}
 }

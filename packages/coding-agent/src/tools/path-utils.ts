@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { InternalUrlRouter } from "../internal-urls";
+import { InternalUrlRouter, type LocalProtocolOptions } from "../internal-urls";
 import { ToolError } from "./tool-errors";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
@@ -740,6 +740,12 @@ export interface ToolScopeOptions {
 	surfaceExactFilePaths?: boolean;
 	/** Extra hint appended to "Path not found" when stat fails and the user supplied multiple paths. */
 	multipathStatHint?: string;
+	/** Calling session's settings — forwarded to the internal-URL router so caller-aware handlers (issue://, pr://) honor it. */
+	settings?: unknown;
+	/** Caller's abort signal — forwarded to the internal-URL router. */
+	signal?: AbortSignal;
+	/** Calling session's `local://` root mapping — pins resolutions to the calling session. */
+	localProtocolOptions?: LocalProtocolOptions;
 }
 
 export interface ToolScopeResolution {
@@ -778,7 +784,12 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 		if (hasGlobPathChars(rawPath)) {
 			throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
 		}
-		const resource = await internalRouter.resolve(rawPath);
+		const resource = await internalRouter.resolve(rawPath, {
+			cwd,
+			settings: opts.settings,
+			signal: opts.signal,
+			localProtocolOptions: opts.localProtocolOptions,
+		});
 		if (!resource.sourcePath) {
 			throw new ToolError(`Cannot ${internalUrlAction} internal URL without a backing file: ${rawPath}`);
 		}

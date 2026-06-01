@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [15.7.5] - 2026-06-01
+
+### Added
+
+- Added Anthropic task budget support, forwarding `taskBudget` as `output_config.task_budget` with the required `task-budgets-2026-03-13` beta header and accepting Anthropic gateway requests that send `output_config.task_budget`.
+
+### Fixed
+
+- Fixed OpenAI-family first-event timeouts so `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS` cannot be undercut by a lower generic `PI_STREAM_FIRST_EVENT_TIMEOUT_MS` while local OpenAI-compatible servers are still processing large prompts. `PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS` is now available for an explicit OpenAI-specific first-event override. ([#1603](https://github.com/can1357/oh-my-pi/issues/1603))
+
 ## [15.7.4] - 2026-05-31
 
 ### Fixed

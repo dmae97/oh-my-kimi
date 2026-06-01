@@ -55,7 +55,7 @@ function createFixture(opts: {
 	const ctx = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
-		ui: { requestRender },
+		ui: { requestRender, setEagerNativeScrollbackRebuild: vi.fn() },
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		streamingComponent,

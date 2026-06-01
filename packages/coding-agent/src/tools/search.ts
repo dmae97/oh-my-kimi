@@ -10,6 +10,7 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { recordFileSnapshot } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import type { LocalProtocolOptions } from "../internal-urls/local-protocol";
 import { InternalUrlRouter } from "../internal-urls/router";
 import type { InternalResource, ResolveContext } from "../internal-urls/types";
 import type { Theme } from "../modes/theme/theme";
@@ -543,6 +544,7 @@ async function resolveInternalSearchInputs(opts: {
 	settings: unknown;
 	signal?: AbortSignal;
 	archiveDisplayMap: ReadonlyMap<string, string>;
+	localProtocolOptions?: LocalProtocolOptions;
 }): Promise<InternalSearchInputResolution> {
 	const internalRouter = InternalUrlRouter.instance();
 	const paths = opts.resolvedPaths.slice();
@@ -551,7 +553,12 @@ async function resolveInternalSearchInputs(opts: {
 	const virtualInputIndexes = new Set<number>();
 	const immutableSourcePaths = new Set<string>();
 	let virtualScopePath: string | undefined;
-	const context: ResolveContext = { cwd: opts.cwd, settings: opts.settings, signal: opts.signal };
+	const context: ResolveContext = {
+		cwd: opts.cwd,
+		settings: opts.settings,
+		signal: opts.signal,
+		localProtocolOptions: opts.localProtocolOptions,
+	};
 
 	for (let idx = 0; idx < paths.length; idx++) {
 		const rawPath = paths[idx];
@@ -674,6 +681,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					settings: this.session.settings,
 					signal,
 					archiveDisplayMap,
+					localProtocolOptions: this.session.localProtocolOptions,
 				});
 				const searchablePaths = internalResolution.paths;
 				const { virtualResources, virtualPathSet, virtualInputIndexes } = internalResolution;
@@ -738,6 +746,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						trackImmutableSources: true,
 						surfaceExactFilePaths: true,
 						multipathStatHint: " (`paths` entries must each exist relative to cwd)",
+						settings: this.session.settings,
+						signal,
+						localProtocolOptions: this.session.localProtocolOptions,
 					});
 					searchPath = scope.searchPath;
 					isDirectory = scope.isDirectory;

@@ -19,7 +19,7 @@ export interface OutputBlockOptions {
 	animate?: boolean;
 }
 
-const BORDER_SHIMMER_TICK_MS = 50;
+const BORDER_SHIMMER_TICK_MS = 16;
 /** Duration of one full left↔right↔left bounce of the bottom-edge segment, in
  * ms. Position is derived from the wall clock against this fixed cycle so a
  * resize only nudges the segment proportionally instead of teleporting it. */
@@ -28,9 +28,10 @@ const BORDER_BOUNCE_MS = 3000;
 const BORDER_SEGMENT_LEN = 8;
 
 /**
- * Monotonic frame counter for animated borders. Quantized coarse enough to
- * coalesce multiple render passes inside one frame, fine enough to advance on
- * every spinner interval so cached blocks re-render while the segment travels.
+ * Monotonic frame counter for animated borders, quantized to the TUI's ~16ms
+ * render cap so the cache key advances once per ~60fps frame — fine enough for a
+ * smooth segment sweep, coarse enough to coalesce multiple render passes that
+ * land inside the same frame.
  */
 export function borderShimmerTick(): number {
 	return Math.floor(Date.now() / BORDER_SHIMMER_TICK_MS);

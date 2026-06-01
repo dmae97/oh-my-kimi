@@ -5,6 +5,8 @@
  * providing access to agent outputs and server resources without exposing filesystem paths.
  */
 
+import type { LocalProtocolOptions } from "./local-protocol";
+
 /**
  * Raw resource payload returned by protocol handlers. The `immutable` flag is
  * applied by the router from {@link ProtocolHandler.immutable}, so handlers do
@@ -77,6 +79,17 @@ export interface ResolveContext {
 	settings?: unknown;
 	/** Caller's abort signal. */
 	signal?: AbortSignal;
+	/**
+	 * Calling session's `local://` root mapping. When present, the local-protocol
+	 * handler resolves the URL against THIS session's artifacts dir instead of
+	 * picking the first `main`-kind session from the global `AgentRegistry`.
+	 *
+	 * Required for correctness in multi-session hosts (cmux/ACP, embedded SDK
+	 * consumers) where multiple sessions are registered as `main` and the
+	 * "first one wins" lookup picks the wrong artifacts directory — see
+	 * [#1608](https://github.com/can1357/oh-my-pi/issues/1608).
+	 */
+	localProtocolOptions?: LocalProtocolOptions;
 }
 
 /**
@@ -89,6 +102,8 @@ export interface WriteContext {
 	cwd?: string;
 	/** Caller's abort signal. */
 	signal?: AbortSignal;
+	/** Calling session's `local://` root mapping — see {@link ResolveContext.localProtocolOptions}. */
+	localProtocolOptions?: LocalProtocolOptions;
 }
 
 /**

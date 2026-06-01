@@ -344,6 +344,9 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 				break;
 		}
 	}
+	if (data.output_config?.task_budget) {
+		options.taskBudget = data.output_config.task_budget;
+	}
 	const cacheRetention = deriveCacheRetention(data);
 	if (cacheRetention !== undefined) options.cacheRetention = cacheRetention;
 	// Anthropic clients commonly send `metadata: { user_id }`; forward verbatim

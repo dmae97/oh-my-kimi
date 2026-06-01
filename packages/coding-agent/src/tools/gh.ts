@@ -75,6 +75,7 @@ const GH_PR_FIELDS = [
 	"labels",
 	"mergeStateStatus",
 	"number",
+	"reviews",
 	"reviewDecision",
 	"state",
 	"title",

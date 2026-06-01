@@ -104,6 +104,16 @@ async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
 	}
 }
 
+function createEmptyWorkspaceTree(rootPath: string) {
+	return {
+		rootPath,
+		rendered: "",
+		truncated: false,
+		totalLines: 0,
+		agentsMdFiles: [],
+	};
+}
+
 describe("system Handlebars prompt templates", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -181,11 +191,11 @@ describe("system Handlebars prompt templates", () => {
 			assignment: "Do the task.",
 		});
 
-		expect(subagentSystem).toContain("[CONTEXT]\nShared task background\n[/CONTEXT]");
-		expect(subagentSystem).toContain("[ROLE]");
+		expect(subagentSystem).toMatch(/CONTEXT\n=+\n\nShared task background/);
+		expect(subagentSystem).toMatch(/ROLE\n=+/);
 		expect(subagentUser).toContain("Complete the assignment below, thoroughly:");
 		expect(subagentUser).toContain("Do the task.");
-		expect(subagentUser).not.toContain("[CONTEXT]");
+		expect(subagentUser).not.toMatch(/CONTEXT\n=+/);
 		expect(subagentUser).not.toContain("Shared task background");
 	});
 	test("system-prompt renders MCP discovery hint when enabled", async () => {
@@ -212,6 +222,7 @@ describe("system Handlebars prompt templates", () => {
 			skills: [],
 			rules: [],
 			toolNames: ["read"],
+			workspaceTree: createEmptyWorkspaceTree(os.tmpdir()),
 		};
 
 		const enabled = await buildSystemPrompt({
@@ -247,7 +258,7 @@ describe("system Handlebars prompt templates", () => {
 			});
 
 			expect(systemPrompt).toHaveLength(2);
-			expect(systemPrompt[0]).toContain("[CONTRACT]");
+			expect(systemPrompt[0]).toMatch(/CONTRACT\n=+/);
 			expect(systemPrompt[0]).not.toContain("current working directory");
 			expect(systemPrompt[1]).toContain("<workstation>");
 			expect(systemPrompt[1]).toContain("<workspace-tree>");
@@ -300,6 +311,7 @@ describe("system Handlebars prompt templates", () => {
 				skills: [],
 				rules: [],
 				toolNames: ["read"],
+				workspaceTree: createEmptyWorkspaceTree(dir),
 				customPrompt: "Custom prompt body",
 				alwaysApplyRules: [
 					{ name: "no-dynamic-loading", content: duplicateRule, path: "/tmp/no-dynamic-loading.md" },
@@ -325,6 +337,7 @@ describe("system Handlebars prompt templates", () => {
 			skills: [],
 			rules: [],
 			toolNames: ["read"],
+			workspaceTree: createEmptyWorkspaceTree(os.tmpdir()),
 			customPrompt: ["Custom guidance", "", duplicateRule, "", "More custom guidance"].join("\n"),
 			alwaysApplyRules: [
 				{ name: "small-functions", content: duplicateRule, path: "/tmp/small-functions.md" },
@@ -361,6 +374,7 @@ describe("system Handlebars prompt templates", () => {
 			skills: [],
 			rules: [],
 			toolNames: ["read", "search", "find", "edit", "lsp", "bash", "eval"],
+			workspaceTree: createEmptyWorkspaceTree(os.tmpdir()),
 			tools: new Map([
 				["read", { label: "Read", description: "Reads files" }],
 				["search", { label: "Search", description: "Searches files" }],
@@ -390,6 +404,7 @@ describe("system Handlebars prompt templates", () => {
 			skills: [],
 			rules: [],
 			toolNames: ["read"],
+			workspaceTree: createEmptyWorkspaceTree(os.tmpdir()),
 		});
 
 		const projectPrompt = systemPrompt[1] ?? "";
