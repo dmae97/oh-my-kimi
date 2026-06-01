@@ -83,6 +83,36 @@ describe("boundary-balance repair", () => {
 		expect(warnings.some(w => /delimiter-balance/.test(w))).toBe(true);
 	});
 
+	it("drops duplicated leading and trailing boundary lines around a range replacement", () => {
+		const file = [
+			"func _cmd_travel_homeworld():",
+			"\tvar destination = get_homeworld()",
+			"\ttravel_to(destination)",
+			"\tprint_status()",
+		].join("\n");
+		const diff = [
+			"replace 2..3:",
+			"+func _cmd_travel_homeworld():",
+			"+\tvar destination = find_homeworld()",
+			"+\ttravel_to(destination)",
+			"+\tprint_status()",
+		].join("\n");
+
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(
+			[
+				"func _cmd_travel_homeworld():",
+				"\tvar destination = find_homeworld()",
+				"\ttravel_to(destination)",
+				"\tprint_status()",
+			].join("\n"),
+		);
+		expect(text.split("\n").filter(line => line === "func _cmd_travel_homeworld():")).toHaveLength(1);
+		expect(text.split("\n").filter(line => line === "\tprint_status()")).toHaveLength(1);
+		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
+	});
+
 	// Balance-preserving edits are never touched, even when the payload's last
 	// line coincidentally equals the line just below the range.
 	it("leaves a balance-preserving replacement alone (no false positive)", () => {
