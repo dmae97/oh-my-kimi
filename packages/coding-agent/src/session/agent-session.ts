@@ -159,6 +159,7 @@ import { containsOrchestrate, ORCHESTRATE_NOTICE } from "../modes/orchestrate";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
+import { computeNonMessageTokens } from "../modes/utils/context-usage";
 import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
 import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
@@ -6097,8 +6098,7 @@ export class AgentSession {
 	}
 
 	#estimatePendingPromptTokens(messages: AgentMessage[]): number {
-		const systemPrompt = this.agent.state.systemPrompt;
-		let tokens = systemPrompt.length === 0 ? 0 : countTokens(systemPrompt);
+		let tokens = computeNonMessageTokens(this);
 		for (const message of this.messages) {
 			tokens += estimateTokens(message);
 		}
