@@ -1,0 +1,14 @@
+Tired of typing "keep going"? Just send a '.'
+You can /btw to ask a side question
+Ctrl+D can be used to exit, but with your draft saved!
+Find out which model you emotionally abuse the most with `omp stats`
+Try task isolation to create CoW worktrees
+Your LLM can call an LLM using `llm(x...)`. Have a big batch of tasks? Ask clanker to use it!
+Spaghetti code? Try complaining with /omfg
+Did you know? Each kitty/tmux split keeps its own session — `omp -c` resumes the right one
+Drop the word `ultrathink` in your message for harder multi-step reasoning — watch it glow rainbow as you type
+Say `orchestrate` in your message to drive a multi-phase task with parallel subagents — watch it glow as you type
+Say `workflow` in your message to drive the task with parallel subagents in eval — watch it glow as you type
+Log in to several accounts of the same provider — `/login` again — and omp load-balances across them automatically
+Run `omp auth-broker serve` once and every machine pulls live tokens over the wire — refresh keys never leave the host; `omp auth-gateway` fronts it as a drop-in proxy any OpenAI-compatible client can hit
+Press alt+p (or /switch) to switch provider, and ctrl+p to cycle role models smol -> slow -> etc

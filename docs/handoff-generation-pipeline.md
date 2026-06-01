@@ -54,7 +54,7 @@ The same minimum-content guard exists again inside `AgentSession.handoff()` and 
   - the live tool array (`agent.state.tools`),
   - optional focus instructions,
   - coding-agent message conversion (`convertToLlm`),
-  - provider metadata and `initiatorOverride: "agent"`.
+  - provider metadata, current thinking level, and `initiatorOverride: "agent"`.
 
 `generateHandoff(...)` lives in `packages/agent/src/compaction/compaction.ts` next to summarization. It renders `packages/agent/src/compaction/prompts/handoff-document.md` via `renderHandoffPrompt(...)` with optional `additionalFocus`.
 
@@ -75,7 +75,7 @@ await completeSimple(
   {
     apiKey,
     signal,
-    reasoning: Effort.High,
+    reasoning: resolveCompactionEffort(model, options.thinkingLevel),
     toolChoice: "none",
     initiatorOverride,
     metadata,
@@ -113,7 +113,7 @@ If text was generated and not aborted:
 3. Start a brand-new session with `parentSession` pointing at the previous session file when one exists.
 4. Reset in-memory agent state (`agent.reset()`).
 5. Rebind `agent.sessionId` to the new session id.
-6. Rekey/reset hindsight state for the new session.
+6. Rekey/reset Hindsight and Mnemopi memory session tracking for the new session.
 7. Clear queued context arrays (`#steeringMessages`, `#followUpMessages`, `#pendingNextTurnMessages`) and any scheduled hidden next-turn generation.
 8. Reset todo reminder counter.
 
@@ -132,7 +132,13 @@ The above is a handoff document from a previous session. Use this context to con
 Insertion call:
 
 ```ts
-this.sessionManager.appendCustomMessageEntry("handoff", handoffContent, true, undefined, "agent");
+this.sessionManager.appendCustomMessageEntry(
+  "handoff",
+  handoffContent,
+  true,
+  undefined,
+  "agent",
+);
 ```
 
 Semantics:
@@ -233,7 +239,7 @@ High-level state flow:
 1. Interactive slash command intercepted.
 2. Preflight message-count guard.
 3. `#handoffAbortController` created (`isGeneratingHandoff = true`).
-4. `generateHandoff(...)` issues one `completeSimple(...)` request with live system prompt, tools, message history, and trailing handoff prompt.
+4. `generateHandoff(...)` issues one `completeSimple(...)` request with live system prompt, tools, message history, current thinking level, and trailing handoff prompt.
 5. Assistant response text blocks are joined; tool-call blocks are discarded.
 6. If missing text → return `undefined`; if aborted → cancellation error path.
 7. If present:

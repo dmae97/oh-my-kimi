@@ -74,17 +74,16 @@ In practice MCP servers also come from higher-priority providers (for example na
 Key behavior:
 
 - transport inferred as `server.transport ?? (command ? "stdio" : url ? "http" : "stdio")`
-- disabled servers (`enabled === false`) are dropped before connection
+- disabled servers (`enabled === false`) and names in the user `disabledServers` list are dropped before connection
 - optional fields are preserved when present
 
 ### Environment expansion during discovery
 
-`mcp-json.ts` expands env placeholders in string fields with `expandEnvVarsDeep()`:
+OMP-native MCP config (`.omp/mcp.json`, `~/.omp/agent/mcp.json`, plus their `.mcp.json` variants) expands `${VAR}` and `${VAR:-default}` placeholders recursively before converting to runtime config. It also accepts boolean/string forms for `enabled` (`true`, `false`, `1`, `0`) and numeric strings for `timeout`.
 
-- supports `${VAR}` and `${VAR:-default}`
-- unresolved values remain literal `${VAR}` strings
+The standalone fallback provider in `src/discovery/mcp-json.ts` reads project-root `mcp.json` and `.mcp.json`, expands the same `${...}` placeholders, and type-checks `enabled`/`timeout` without coercing string values.
 
-`mcp-json.ts` also performs runtime type checks for user JSON and logs warnings for invalid `enabled`/`timeout` values instead of hard-failing the whole file.
+Invalid `enabled`/`timeout` values are ignored with warnings rather than failing the whole file.
 
 ## 3) Auth and runtime value resolution
 
@@ -138,7 +137,7 @@ This avoids many collisions, but not all. Different raw names can still sanitize
 
 ### Schema mapping
 
-`tool-bridge.ts` passes each MCP `inputSchema` through `sanitizeSchemaForMCP()` before registering it as a `CustomTool` schema.
+`tool-bridge.ts` passes each MCP `inputSchema` through `normalizeSchemaForMCP()` before registering it as a `CustomTool` schema.
 
 ### Execution mapping
 

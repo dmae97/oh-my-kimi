@@ -24,8 +24,8 @@ It follows the architecture terms from `docs/natives-architecture.md`:
 
 `packages/natives/package.json` scripts:
 
-- `bun scripts/build-native.ts` (`build`) → N-API build, addon install, generated declarations install, enum export patch.
-- `bun scripts/embed-native.ts` (`embed:native`) → generate `native/embedded-addon.js` from built files.
+- `bun scripts/build-native.ts` (`build`) → N-API build, addon install, generated declarations install, explicit ESM export and enum runtime patch.
+- `bun scripts/embed-native.ts` (`embed:native`) → generate `native/embedded-addon.js` plus `native/embedded-addons.<tag>.tar.gz` from built files.
 
 Root scripts include `build:native` as `bun --cwd=packages/natives run build`.
 
@@ -51,10 +51,10 @@ After napi-rs succeeds, `build-native.ts`:
 1. resolves the built addon in the isolated output directory;
 2. normalizes its name to `pi_natives.<platform>-<arch>(-variant).node` when needed;
 3. installs the addon into `packages/natives/native/` with temp-file + rename semantics;
-4. copies generated `index.js` and `index.d.ts` into `packages/natives/native/` when present;
-5. runs `generateEnumExports()` to append enum runtime objects to `native/index.js`.
+4. copies generated `index.d.ts` into `packages/natives/native/`;
+5. runs `generateEnumExports()` to render explicit named ESM exports for classes/functions and runtime enum objects in the checked-in `native/index.js`.
 
-Windows locked-DLL replacement failures are reported with an explicit close-running-processes hint.
+Windows locked-DLL update failures are handled at runtime by staging install candidates into the versioned native cache; install/rename failures during local builds still include explicit file-operation diagnostics.
 
 ## Target/variant model and naming conventions
 
@@ -85,7 +85,7 @@ Runtime x64 candidate order also includes the unsuffixed default filename after 
 ## Runtime flags
 
 - `PI_NATIVE_VARIANT`: x64 runtime override; valid values are `modern` and `baseline`.
-- `PI_COMPILED`: legacy compiled-mode signal. A populated embedded-addon manifest is also a compiled-mode signal and is the authoritative signal for Bun standalone builds that do not preserve `process.env.PI_COMPILED`.
+- `PI_COMPILED`: legacy compiled-mode signal. A populated embedded-addon manifest is also a compiled-mode signal; compiled release builds additionally define `process.env.PI_COMPILED="true"` during `bun build --compile`.
 
 ## Build-time flags/options
 
@@ -115,11 +115,11 @@ Runtime x64 candidate order also includes the unsuffixed default filename after 
 4. **Compile**: run napi-rs against `crates/pi-natives` into an isolated output directory.
 5. **Locate artifact**: accept the canonical filename or a single napi-rs-generated `pi_natives.<platform>-<arch>*.node` candidate.
 6. **Install**: copy/rename addon into `packages/natives/native`.
-7. **Install generated bindings**: copy `index.js`/`index.d.ts` if needed.
-8. **Patch enums**: append generated enum runtime exports.
+7. **Install generated declarations**: copy `index.d.ts`.
+8. **Patch exports/enums**: regenerate explicit ESM exports and enum runtime objects.
 9. **Cleanup**: remove the temporary build output directory.
 
-Failure exits have explicit error text for invalid variants, failed napi build, missing/multiple output artifacts, generated binding install failure, and install/rename failure.
+Failure exits have explicit error text for invalid variants, failed napi build, missing/multiple output artifacts, generated binding install failure, stripped CI ELF artifacts that still contain forbidden symbol/string-table sections, and install/rename failure.
 
 ### Embed lifecycle (`embed-native.ts`)
 
@@ -128,7 +128,7 @@ Failure exits have explicit error text for invalid variants, failed napi build, 
    - x64 looks for `modern` and `baseline` files;
    - non-x64 looks for one default file.
 3. **Validate availability**: at least one expected file must exist in `packages/natives/native`.
-4. **Generate manifest** (`native/embedded-addon.js`) with Bun `file` imports and package version.
+4. **Generate archive + manifest**: write `native/embedded-addons.<platform>-<arch>.tar.gz` containing all available target addon files and `native/embedded-addon.js` with package version, archive metadata, and file sizes.
 5. **Runtime extraction ready** for compiled mode.
 
 `--reset` writes the null manifest stub (`embeddedAddon = null`) without validating addon availability.
@@ -148,12 +148,13 @@ Typical local loop:
 In compiled mode (`PI_COMPILED`, Bun embedded URL markers, or populated embedded manifest):
 
 1. Loader computes versioned cache dir: `<getNativesDir()>/<packageVersion>`.
-2. If embedded manifest matches current platform+version, loader may extract the selected embedded file into that versioned dir.
+2. If embedded manifest matches current platform+version, loader extracts the selected file from `embedded-addons.<tag>.tar.gz` into that versioned dir when the cached file is absent or has the wrong size.
 3. Runtime candidate order includes:
+   - extracted versioned cache path, if available,
    - versioned cache dir,
    - legacy compiled-binary dir (`%LOCALAPPDATA%/omp` on Windows, `~/.local/bin` elsewhere),
    - package/executable directories.
-4. First successfully loaded addon is returned.
+4. First successfully loaded addon with the expected version sentinel is returned.
 
 This is why packaging + runtime loader expectations must align: filenames, platform tags, CPU variants, and embedded manifest version must match what `native/index.js` probes.
 
@@ -161,13 +162,13 @@ This is why packaging + runtime loader expectations must align: filenames, platf
 
 Generated declarations currently include exports from these Rust modules:
 
-| Area                   | Representative JS exports                                                                         | Rust source                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Search                 | `grep`, `search`, `hasMatch`, `fuzzyFind`, `glob`, `invalidateFsScanCache`                        | `grep.rs`, `fd.rs`, `glob.rs`, `fs_cache.rs`                                            |
-| AST                    | `astGrep`, `astEdit`                                                                              | `ast.rs`                                                                                |
-| Text/highlight/tokens  | `visibleWidth`, `truncateToWidth`, `highlightCode`, `countTokens`                                 | `text.rs`, `highlight.rs`, `tokens.rs`                                                  |
-| Shell/PTY/process/keys | `executeShell`, `Shell`, `PtySession`, `killTree`, `parseKey`                                     | `shell.rs`, `pty.rs`, `ps.rs`, `keys.rs`                                                |
-| Media/system           | `PhotonImage`, `encodeSixel`, clipboard, macOS appearance/power, `getWorkProfile`, ProjFS helpers | `image.rs`, `clipboard.rs`, `appearance.rs`, `power.rs`, `prof.rs`, `projfs_overlay.rs` |
+| Area                   | Representative JS exports                                                                               | Rust source                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Search/workspace       | `grep`, `search`, `hasMatch`, `fuzzyFind`, `glob`, `listWorkspace`, `invalidateFsScanCache`             | `grep.rs`, `fd.rs`, `glob.rs`, `workspace.rs`, `fs_cache.rs`                 |
+| AST/block/summary      | `astGrep`, `astEdit`, `blockRangeAt`, `summarizeCode`                                                   | `ast.rs`, `block.rs`, `summary.rs`                                           |
+| Text/highlight/tokens  | `visibleWidth`, `truncateToWidth`, `highlightCode`, `countTokens`                                       | `text.rs`, `highlight.rs`, `tokens.rs`                                       |
+| Shell/PTY/process/keys | `executeShell`, `Shell`, `PtySession`, `Process`, `parseKey`, `applyBashFixups`                         | `shell.rs`, `pty.rs`, `ps.rs`, `keys.rs`                                     |
+| Media/system/iso       | `encodeSixel`, clipboard, macOS appearance/power, `getWorkProfile`, `isoBackend`, `isoStart`, `isoDiff` | `sixel.rs`, `clipboard.rs`, `appearance.rs`, `power.rs`, `prof.rs`, `iso.rs` |
 
 ## Failure behavior and diagnostics
 
@@ -186,18 +187,19 @@ Generated declarations currently include exports from these Rust modules:
 
 - Unsupported platform tag: throws with supported platform list after probing fails.
 - No candidate could load: throws with full candidate error list and mode-specific remediation hints.
-- Embedded extraction problems: extraction mkdir/write errors are recorded and included in final diagnostics if load fails.
+- Embedded extraction and Windows staging problems: archive/mkdir/write/copy errors are recorded and included in final diagnostics if load fails.
+- Version mismatch: install/compiled loads that lack the package-version sentinel are rejected during candidate probing.
 
 ## Troubleshooting matrix
 
-| Symptom                                                                | Likely cause                                                                                | Verify                                                            | Fix                                                                                           |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `Cannot find module` or dynamic library load error for every candidate | Missing release artifact, wrong platform tag, or stale compiled cache                       | Inspect loader error list and `packages/natives/native` filenames | Build correct target/variant; delete stale cache for the package version                      |
-| Export is missing at runtime but present in TypeScript                 | Stale `.node` loaded, generated declarations newer than binary, or Rust export not compiled | Require the actual candidate and inspect `Object.keys(mod)`       | Rebuild native package and remove stale candidate/cache paths                                 |
-| x64 machine loads baseline when modern expected                        | `PI_NATIVE_VARIANT=baseline`, no AVX2 detected, or modern file unavailable                  | Check env and filenames in `native/`                              | Build modern variant (`TARGET_VARIANT=modern ... build`) and ship it                          |
-| Cross-build produces wrong-labeled binary                              | Mismatch between `CROSS_TARGET` and `TARGET_PLATFORM`/`TARGET_ARCH`, or missing x64 variant | Confirm env tuple and output filename                             | Re-run with consistent env values and explicit x64 `TARGET_VARIANT`                           |
-| Compiled binary fails after upgrade                                    | Stale extracted cache or embedded manifest version mismatch                                 | Inspect `<getNativesDir()>/<version>` and loader error list       | Delete versioned cache for the package version; regenerate embedded manifest during packaging |
-| `embed:native` fails with `No native addons found`                     | Required platform artifact was not built before embedding                                   | Check expected list in error text                                 | Build at least one expected artifact for the target, then rerun `embed:native`                |
+| Symptom                                                                | Likely cause                                                                                | Verify                                                            | Fix                                                                                                   |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `Cannot find module` or dynamic library load error for every candidate | Missing release artifact, wrong platform tag, or stale compiled cache                       | Inspect loader error list and `packages/natives/native` filenames | Build correct target/variant; delete stale cache for the package version                              |
+| Export is missing at runtime but present in TypeScript                 | Stale `.node` loaded, generated declarations newer than binary, or Rust export not compiled | Require the actual candidate and inspect `Object.keys(mod)`       | Rebuild native package and remove stale candidate/cache paths                                         |
+| x64 machine loads baseline when modern expected                        | `PI_NATIVE_VARIANT=baseline`, no AVX2 detected, or modern file unavailable                  | Check env and filenames in `native/`                              | Build modern variant (`TARGET_VARIANT=modern ... build`) and ship it                                  |
+| Cross-build produces wrong-labeled binary                              | Mismatch between `CROSS_TARGET` and `TARGET_PLATFORM`/`TARGET_ARCH`, or missing x64 variant | Confirm env tuple and output filename                             | Re-run with consistent env values and explicit x64 `TARGET_VARIANT`                                   |
+| Compiled binary fails after upgrade                                    | Stale extracted cache, embedded archive mismatch, or embedded manifest version mismatch     | Inspect `<getNativesDir()>/<version>` and loader error list       | Delete versioned cache for the package version; regenerate embedded archive/manifest during packaging |
+| `embed:native` fails with `No native addons found`                     | Required platform artifact was not built before embedding                                   | Check expected list in error text                                 | Build at least one expected artifact for the target, then rerun `embed:native`                        |
 
 ## Operational commands
 
@@ -211,6 +213,7 @@ TARGET_VARIANT=baseline bun --cwd=packages/natives run build
 
 # Generate embedded addon manifest from built native files
 bun --cwd=packages/natives run embed:native
+# Output archive: packages/natives/native/embedded-addons.<platform>-<arch>.tar.gz
 
 # Reset embedded manifest to null stub
 bun --cwd=packages/natives run embed:native -- --reset
@@ -270,13 +273,13 @@ Workspaces that hardlinked a `.node` before GC retain access via the kernel inod
 
 ### Configuration (settings on `robomp.config.Settings`)
 
-| Env var                                      | Default                  | Effect                                                        |
-| -------------------------------------------- | ------------------------ | ------------------------------------------------------------- |
-| `ROBOMP_NATIVES_CACHE_ENABLED`               | `true`                   | Master switch. When false the populate/capture hooks no-op and every workspace builds from scratch. |
-| `ROBOMP_NATIVES_CACHE_ROOT`                  | `/data/cache/pi-natives` | Cache root directory. Must be `root:omp 02770` for cross-slot reads.                                  |
-| `ROBOMP_NATIVES_CACHE_MAX_ENTRIES_PER_REPO`  | `8`                      | LRU entry-count cap, per repo slug.                                                                  |
-| `ROBOMP_NATIVES_CACHE_MAX_BYTES`             | `4294967296` (4 GiB)     | LRU byte cap, per repo slug.                                                                          |
-| `ROBOMP_NATIVES_CACHE_GC_INTERVAL_SECONDS`   | `3600`                   | Period of the background GC loop in `WorkerPool`.                                                    |
+| Env var                                     | Default                  | Effect                                                                                              |
+| ------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------- |
+| `ROBOMP_NATIVES_CACHE_ENABLED`              | `true`                   | Master switch. When false the populate/capture hooks no-op and every workspace builds from scratch. |
+| `ROBOMP_NATIVES_CACHE_ROOT`                 | `/data/cache/pi-natives` | Cache root directory. Must be `root:omp 02770` for cross-slot reads.                                |
+| `ROBOMP_NATIVES_CACHE_MAX_ENTRIES_PER_REPO` | `8`                      | LRU entry-count cap, per repo slug.                                                                 |
+| `ROBOMP_NATIVES_CACHE_MAX_BYTES`            | `4294967296` (4 GiB)     | LRU byte cap, per repo slug.                                                                        |
+| `ROBOMP_NATIVES_CACHE_GC_INTERVAL_SECONDS`  | `3600`                   | Period of the background GC loop in `WorkerPool`.                                                   |
 
 ### Manual invalidation
 

@@ -177,7 +177,8 @@ export function formatMeta(meta: string[], theme: Theme): string {
 
 export function formatErrorMessage(message: string | undefined, theme: Theme): string {
 	const clean = (message ?? "").replace(/^Error:\s*/, "").trim();
-	return `${theme.styledSymbol("status.error", "error")} ${theme.fg("error", `Error: ${clean || "Unknown error"}`)}`;
+	const safe = clean ? replaceTabs(truncateToWidth(clean, TRUNCATE_LENGTHS.LINE)) : "Unknown error";
+	return `${theme.styledSymbol("status.error", "error")} ${theme.fg("error", `Error: ${safe}`)}`;
 }
 
 export function formatEmptyMessage(message: string, theme: Theme): string {

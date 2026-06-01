@@ -96,6 +96,7 @@ All non-header entries include:
 
 - `message`
 - `thinking_level_change`
+- `model_change`
 - `service_tier_change`
 - `compaction`
 - `branch_summary`
@@ -460,12 +461,13 @@ Implementations:
 
 Defined in `session-manager.ts`:
 
-- `getRecentSessions(sessionDir, limit)` -> lightweight metadata for UI/session picker
+- `getRecentSessions(sessionDir, limit)` -> lightweight metadata for UI/session picker, capped by `limit`
 - `findMostRecentSession(sessionDir)` -> newest by mtime
 - `list(cwd, sessionDir?)` -> sessions in one project scope
 - `listAll()` -> sessions across all project scopes under `~/.omp/agent/sessions`
+- `resolveResumableSession(sessionArg, cwd, sessionDir?)` -> local then global resume/fork target lookup
 
-Metadata extraction reads only a prefix (`readTextPrefix(..., 4096)`) where possible.
+Metadata extraction for `list`/`listAll` and `getRecentSessions` reads only a prefix (`readTextPrefix(..., 4096)` or an equivalent direct 4KB read for file storage). Resume matching is case-insensitive and accepts session id prefixes, full filename prefixes, or the id suffix after the timestamp in `<timestamp>_<sessionId>.jsonl`.
 
 ## Related but Distinct: Prompt History Storage
 

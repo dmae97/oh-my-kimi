@@ -7,7 +7,7 @@ import { type ThemeColor, theme } from "../../../modes/theme/theme";
 import { shortenPath } from "../../../tools/render-utils";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../../utils/session-color";
 import { sanitizeStatusText } from "../../shared";
-import { getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
+import { formatContextUsage, getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
 import type { RenderedSegment, SegmentContext, StatusLineSegment, StatusLineSegmentId } from "./types";
 
 export type { SegmentContext } from "./types";
@@ -90,11 +90,19 @@ const modelSegment: StatusLineSegment = {
 
 		// Add thinking level with dot separator
 		if (opts.showThinkingLevel !== false && state.model?.thinking) {
-			const level = state.thinkingLevel ?? ThinkingLevel.Off;
-			if (level !== ThinkingLevel.Off) {
-				const thinkingText = theme.thinking[level as keyof typeof theme.thinking];
-				if (thinkingText) {
-					content += `${theme.sep.dot}${thinkingText}`;
+			if (ctx.session.isAutoThinking) {
+				// Pending (no turn classified yet / classifying) shows a symbol-theme
+				// question-box marker; once resolved it shows `<level>`.
+				const resolved = ctx.session.autoResolvedThinkingLevel();
+				const resolvedText = resolved ? (theme.thinking[resolved as keyof typeof theme.thinking] ?? resolved) : "";
+				content += `${theme.sep.dot}${resolved ? resolvedText : `${theme.thinking.autoPending} auto`}`;
+			} else {
+				const level = state.thinkingLevel ?? ThinkingLevel.Off;
+				if (level !== ThinkingLevel.Off) {
+					const thinkingText = theme.thinking[level as keyof typeof theme.thinking];
+					if (thinkingText) {
+						content += `${theme.sep.dot}${thinkingText}`;
+					}
 				}
 			}
 		}
@@ -350,7 +358,7 @@ const contextPctSegment: StatusLineSegment = {
 		const window = ctx.contextWindow;
 
 		const autoIcon = ctx.autoCompactEnabled && theme.icon.auto ? ` ${theme.icon.auto}` : "";
-		const text = `${pct.toFixed(1)}%/${formatNumber(window)}${autoIcon}`;
+		const text = `${formatContextUsage(pct, window)}${autoIcon}`;
 
 		const color = getContextUsageThemeColor(getContextUsageLevel(pct, window));
 		const content = withIcon(theme.icon.context, theme.fg(color, text));

@@ -1,0 +1,220 @@
+import type { Database } from "bun:sqlite";
+import { afterEach, describe, expect, it } from "bun:test";
+import {
+	consolidateToEpisodic,
+	degradeEpisodic,
+	extractAndStoreFacts,
+	getConsolidationLog,
+	getContaminated,
+	getEpisodicStats,
+	getMemoriaStats,
+	memoriaRetrieve,
+	sleep,
+	sleepAllSessions,
+} from "../src/core/beam/consolidate";
+import { initBeam } from "../src/core/beam/index";
+import type { BeamMemoryState } from "../src/core/beam/types";
+import { closeQuietly, openDatabase } from "../src/db";
+
+function state(sessionId = "s1"): BeamMemoryState {
+	const db = openDatabase(":memory:", { create: true, readwrite: true });
+	initBeam(db);
+	return {
+		db,
+		dbPath: ":memory:",
+		sessionId,
+		authorId: "author-1",
+		authorType: "user",
+		channelId: sessionId,
+		useCloud: false,
+		eventEmitter: undefined,
+		pluginManager: null,
+		annotations: null,
+		triples: null,
+		episodicGraph: null,
+		veracityConsolidator: null,
+		caches: { timestampParse: new Map(), extractionBuffer: [] },
+		config: {
+			workingMemoryLimit: 1000,
+			workingMemoryTtlHours: 24,
+			recencyHalflifeHours: 72,
+			vecWeight: 0.5,
+			ftsWeight: 0.3,
+			importanceWeight: 0.2,
+			useCloud: false,
+			localLlmEnabled: false,
+		},
+	};
+}
+
+function oldIso(hours = 20): string {
+	return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+}
+
+function insertWorking(db: Database, id: string, sessionId: string, content: string, source = "conversation"): void {
+	db.run(
+		`INSERT INTO working_memory (id, content, source, timestamp, session_id, importance, veracity, scope, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		[id, content, source, oldIso(), sessionId, 0.7, "true", "session", oldIso()],
+	);
+}
+
+const opened: Database[] = [];
+
+function trackedState(sessionId = "s1"): BeamMemoryState {
+	const beam = state(sessionId);
+	opened.push(beam.db);
+	return beam;
+}
+
+afterEach(() => {
+	while (opened.length > 0) {
+		const db = opened.pop();
+		if (db !== undefined) closeQuietly(db);
+	}
+});
+
+describe("beam consolidation free functions", () => {
+	it("consolidates working ids into a real episodic row with stats", () => {
+		const beam = trackedState();
+		insertWorking(beam.db, "wm1", "s1", "User likes dark mode");
+
+		const id = consolidateToEpisodic(beam, "User likes dark mode", ["wm1"], "consolidation", 0.8, {
+			metadata: { reason: "unit" },
+			veracity: "true",
+		});
+
+		const row = beam.db.query("SELECT * FROM episodic_memory WHERE id = ?").get(id) as Record<string, unknown> | null;
+		expect(row).not.toBeNull();
+		expect(row?.content).toBe("User likes dark mode");
+		expect(row?.summary_of).toBe("wm1");
+		expect(row?.session_id).toBe("s1");
+		expect(row?.veracity).toBe("true");
+		expect(getEpisodicStats(beam).total).toBe(1);
+	});
+
+	it("sleep dry-run is side-effect-free and real sleep marks originals, writes summary and log", () => {
+		const beam = trackedState();
+		insertWorking(beam.db, "wm1", "s1", "task alpha", "conversation");
+		insertWorking(beam.db, "wm2", "s1", "task beta", "conversation");
+
+		const dry = sleep(beam, true);
+		expect(dry.status).toBe("dry_run");
+		expect(dry.items_consolidated).toBe(2);
+		expect(beam.db.query("SELECT COUNT(*) AS count FROM episodic_memory").get()).toEqual({
+			count: 0,
+		});
+		expect(
+			beam.db.query("SELECT COUNT(*) AS count FROM working_memory WHERE consolidated_at IS NOT NULL").get(),
+		).toEqual({ count: 0 });
+
+		const real = sleep(beam, false);
+		expect(real.status).toBe("consolidated");
+		expect(real.items_consolidated).toBe(2);
+		expect(beam.db.query("SELECT COUNT(*) AS count FROM working_memory").get()).toEqual({
+			count: 2,
+		});
+		expect(
+			beam.db.query("SELECT COUNT(*) AS count FROM working_memory WHERE consolidated_at IS NOT NULL").get(),
+		).toEqual({ count: 2 });
+		expect(beam.db.query("SELECT COUNT(*) AS count FROM episodic_memory").get()).toEqual({
+			count: 1,
+		});
+		expect(getConsolidationLog(beam, 1)[0]?.items_consolidated).toBe(2);
+	});
+
+	it("sleepAllSessions consolidates eligible rows outside the caller session", () => {
+		const beam = trackedState("maintenance");
+		insertWorking(beam.db, "wm-a", "a", "alpha session task");
+		insertWorking(beam.db, "wm-b", "b", "beta session task");
+
+		const result = sleepAllSessions(beam, false);
+		expect(result.status).toBe("consolidated");
+		expect(result.sessions_scanned).toBe(2);
+		expect(result.items_consolidated).toBe(2);
+		expect(beam.db.query("SELECT COUNT(*) AS count FROM episodic_memory").get()).toEqual({
+			count: 2,
+		});
+	});
+
+	it("degradation marks old tier transitions without deleting memories", () => {
+		const beam = trackedState();
+		const id1 = consolidateToEpisodic(beam, "A detailed tier one memory", ["wm1"]);
+		const id2 = consolidateToEpisodic(
+			beam,
+			"B detailed tier two memory with Project Phoenix deadline and important release facts.".repeat(12),
+			["wm2"],
+		);
+		beam.db.run("UPDATE episodic_memory SET tier = 1, created_at = ? WHERE id = ?", [oldIso(31 * 24), id1]);
+		beam.db.run("UPDATE episodic_memory SET tier = 2, created_at = ? WHERE id = ?", [oldIso(181 * 24), id2]);
+
+		const dry = degradeEpisodic(beam, true);
+		expect(dry.tier1_to_tier2).toBe(1);
+		expect(dry.tier2_to_tier3).toBe(1);
+		expect((beam.db.query("SELECT tier FROM episodic_memory WHERE id = ?").get(id1) as { tier: number }).tier).toBe(
+			1,
+		);
+
+		const real = degradeEpisodic(beam, false);
+		expect(real.status).toBe("degraded");
+		expect((beam.db.query("SELECT tier FROM episodic_memory WHERE id = ?").get(id1) as { tier: number }).tier).toBe(
+			2,
+		);
+		expect((beam.db.query("SELECT tier FROM episodic_memory WHERE id = ?").get(id2) as { tier: number }).tier).toBe(
+			3,
+		);
+		expect(beam.db.query("SELECT COUNT(*) AS count FROM episodic_memory").get()).toEqual({
+			count: 2,
+		});
+	});
+
+	it("returns contaminated episodic memories by veracity and importance", () => {
+		const beam = trackedState();
+		consolidateToEpisodic(beam, "High stakes inferred memory", ["wm1"], "test", 0.9, {
+			veracity: "inferred",
+		});
+		consolidateToEpisodic(beam, "High stakes unknown memory", ["wm2"], "test", 0.8, {
+			veracity: "unknown",
+		});
+		consolidateToEpisodic(beam, "High stakes false memory", ["wm3"], "test", 0.85, {
+			veracity: "false",
+		});
+		consolidateToEpisodic(beam, "Low stakes unknown memory", ["wm4"], "test", 0.1, {
+			veracity: "unknown",
+		});
+		consolidateToEpisodic(beam, "Clean true memory", ["wm5"], "test", 0.95, { veracity: "true" });
+
+		const rows = getContaminated(beam, 10, 0.5);
+		expect(rows.map(row => row.content)).toEqual([
+			"High stakes inferred memory",
+			"High stakes false memory",
+			"High stakes unknown memory",
+		]);
+	});
+
+	it("extracts/stores MEMORIA facts and retrieves them with stats", () => {
+		const beam = trackedState();
+		const counts = extractAndStoreFacts(
+			beam,
+			"My name is Ada. I prefer Rust. Dashboard API latency is 250ms. Release is v1.2.3 on 2026-05-30. ProjectX uses SQLite.",
+			7,
+			"wm-facts",
+		);
+
+		expect(counts.metric).toBeGreaterThanOrEqual(1);
+		expect(counts.version).toBeGreaterThanOrEqual(1);
+		expect(counts.date).toBeGreaterThanOrEqual(1);
+		expect(counts.entity).toBeGreaterThanOrEqual(1);
+		const stats = getMemoriaStats(beam);
+		expect(stats.memoria_facts).toBeGreaterThanOrEqual(4);
+		expect(stats.memoria_preferences).toBeGreaterThanOrEqual(1);
+		expect(stats.memoria_kg).toBeGreaterThanOrEqual(1);
+
+		const metrics = memoriaRetrieve(beam, "what was dashboard api latency", "IE", 5);
+		expect(metrics.results.some(row => String((row as Record<string, unknown>).value).includes("250ms"))).toBe(true);
+		const facts = beam.db.query("SELECT COUNT(*) AS count FROM facts WHERE source_msg_id = ?").get("wm-facts") as {
+			count: number;
+		};
+		expect(facts.count).toBeGreaterThanOrEqual(4);
+	});
+});

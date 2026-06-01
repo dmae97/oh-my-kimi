@@ -15,11 +15,12 @@ This document covers the runtime loader shipped by `@oh-my-pi/pi-natives`: how `
 The loader is intentionally narrow:
 
 - Build a platform/CPU-aware candidate list for addon filenames and directories.
-- Treat an embedded-addon manifest as the authoritative compiled-binary signal when present.
-- Optionally materialize an embedded addon into a versioned per-user cache directory.
-- Attempt candidates in deterministic order and return the first addon that `require(...)` loads.
+- Treat an embedded-addon manifest as a compiled-binary signal when present.
+- Optionally materialize embedded addon archive contents into a versioned per-user cache directory.
+- On Windows `node_modules` installs, stage addon files into the versioned cache to avoid locked-DLL update failures.
+- Attempt candidates in deterministic order and return the first addon that `require(...)` loads and validates.
 
-The current loader does **not** run a separate `validateNative(...)` export-presence gate. API shape is provided by the generated N-API binding file (`native/index.d.ts`) and the loaded addon itself. A stale binary therefore normally fails as a missing property or native load error rather than as a custom "missing exports" validation error.
+For install and compiled-binary paths, the loader verifies a release sentinel export named from `package.json#version` (for example `__piNativesV15_7_2`). Workspace-dev loads skip this validation so a local checkout can rebuild after a pull. The loader does not validate the full export surface; stale same-version or incomplete binaries still surface as missing members or native errors at use sites.
 
 ## Runtime inputs and derived state
 
@@ -28,6 +29,7 @@ At module initialization, `native/index.js` computes:
 - **Platform tag**: `${process.platform}-${process.arch}` (for example `darwin-arm64`).
 - **Package version**: from `packages/natives/package.json`.
 - **Core directories**:
+  - `leafPackageDir`: directory of the platform leaf package, resolved via `require.resolve("@oh-my-pi/pi-natives-<tag>/package.json")`; `null` when no leaf is installed (e.g. local dev).
   - `nativeDir`: package-local `packages/natives/native`.
   - `execDir`: directory containing `process.execPath`.
   - `versionedDir`: `<getNativesDir()>/<packageVersion>`.
@@ -41,6 +43,7 @@ At module initialization, `native/index.js` computes:
   - embedded-addon manifest is non-null,
   - `PI_COMPILED` env var is set,
   - `import.meta.url` contains Bun embedded markers (`$bunfs`, `~BUN`, `%7EBUN`).
+- **Windows staging mode** (`shouldStageNodeModulesAddon`): true only on Windows, in non-compiled mode, when `nativeDir` is inside `node_modules`.
 - **Variant override**: `PI_NATIVE_VARIANT` (`modern`/`baseline` only; invalid values ignored).
 - **Selected variant**: explicit override, otherwise runtime AVX2 detection on x64 (`modern` if AVX2, else `baseline`).
 
@@ -92,10 +95,15 @@ The default unsuffixed fallback remains part of the x64 candidate list.
 
 ### Non-compiled runtime
 
-For each filename, candidates are:
+For each filename, candidates are, in order:
 
-1. `<nativeDir>/<filename>`
-2. `<execDir>/<filename>`
+1. `<leafPackageDir>/<filename>` (omitted when `leafPackageDir` is `null`)
+2. `<nativeDir>/<filename>`
+3. `<execDir>/<filename>`
+
+The leaf package dir comes first so the optional-dependency binary published with the release is preferred over any `.node` left in the core package's `native/` (e.g. a stale local-dev build).
+
+On Windows installs where `nativeDir` is inside a `node_modules` segment (`shouldStageNodeModulesAddon`), `<versionedDir>/<filename>` staging candidates are prepended ahead of the leaf candidates so a locked `node_modules` binary can be sidestepped during `bun install -g` updates. The staged file is copied from `leafPackageDir ?? nativeDir` before probing.
 
 ### Compiled runtime
 
@@ -106,7 +114,7 @@ For each filename, candidates are:
 3. `<nativeDir>/<filename>`
 4. `<execDir>/<filename>`
 
-At load time, an extracted embedded candidate, when produced, is prepended ahead of these de-duplicated candidates.
+At load time, an extracted embedded candidate, or a staged Windows candidate when no embedded candidate exists, is prepended ahead of these de-duplicated candidates.
 
 ## Embedded addon extraction lifecycle
 
@@ -114,7 +122,8 @@ At load time, an extracted embedded candidate, when produced, is prepended ahead
 
 - `platformTag`
 - `version`
-- `files[]` entries with `variant`, `filename`, and `filePath`
+- `archive`: `{ format: "tar.gz", filename, filePath }`
+- `files[]` entries with `variant`, `filename`, and `size`
 
 Extraction (`maybeExtractEmbeddedAddon`) runs only when:
 
@@ -133,11 +142,12 @@ Variant file selection:
 Materialization:
 
 1. Ensure `<versionedDir>` exists.
-2. Reuse `<versionedDir>/<selected filename>` if it already exists.
-3. Otherwise read `selectedEmbeddedFile.filePath` and write the target path.
-4. Return the target path as the first candidate.
+2. Select `<versionedDir>/<selected filename>`.
+3. If the current cached file exists and its size matches manifest metadata, reuse it.
+4. Otherwise extract `embeddedAddon.archive.filePath` into `<versionedDir>` using the manifest `files[]` allowlist.
+5. Verify the selected target by size and return it as the first candidate.
 
-Directory creation or write failures are appended to the loader error list; probing continues through normal candidates.
+Archive, directory, or write failures are appended to the loader error list; probing continues through normal candidates.
 
 ## Lifecycle and state transitions
 
@@ -146,11 +156,14 @@ Init
   -> Load package metadata and embedded-addon manifest
   -> Compute platform/version/variant/filenames/candidate paths
   -> (compiled + embedded manifest matches?)
-       yes -> try extract to versionedDir (record errors, continue)
+       yes -> extract archive to versionedDir when needed (record errors, continue)
        no  -> skip extraction
+  -> (Windows non-compiled node_modules install and no embedded candidate?)
+       yes -> stage leaf/core addon to versionedDir (record errors, continue)
+       no  -> skip staging
   -> For each runtime candidate in order:
        require(candidate)
-       -> success: return addon exports (READY)
+       -> sentinel validation passes or is workspace-dev: return addon exports (READY)
        -> failure: record error, continue
   -> none loaded:
        if unsupported platform tag -> throw Unsupported platform
@@ -172,7 +185,7 @@ If all candidates fail and `platformTag` is not supported, the loader throws:
 If the platform is supported but no candidate can be loaded, the final error includes:
 
 - `Failed to load pi_natives native addon for <platformTag>` or `<platformTag> (<variant>)`
-- every attempted path with the corresponding `require(...)` error
+- every attempted path with the corresponding `require(...)` or sentinel-validation error
 - mode-specific remediation hints
 
 ### Compiled-binary startup failures
@@ -182,6 +195,7 @@ Compiled mode diagnostics include:
 - expected versioned cache target paths (`<versionedDir>/<filename>`),
 - remediation to delete the versioned cache and rerun,
 - direct release download `curl` commands for each expected filename.
+- release sentinel mismatch details when a loadable `.node` belongs to another `@oh-my-pi/pi-natives` version.
 
 ### Non-compiled startup failures
 

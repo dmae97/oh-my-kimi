@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, test, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { getBundledModel, type Model } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -7,14 +8,7 @@ import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/mode
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 function normalizeRenderedText(text: string): string {
-	return (
-		text
-			// strip ANSI escapes
-			.replace(/\x1b\[[0-9;]*m/g, "")
-			// collapse whitespace
-			.replace(/\s+/g, " ")
-			.trim()
-	);
+	return stripVTControlCharacters(text).replace(/\s+/g, " ").trim();
 }
 
 function createSelector(model: Model, settings: Settings): ModelSelectorComponent {

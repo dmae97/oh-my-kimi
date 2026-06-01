@@ -5,7 +5,7 @@
  * - rule://<name> - Reads rule content
  */
 import { getActiveRules } from "../capability/rule";
-import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
+import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 export class RuleProtocolHandler implements ProtocolHandler {
 	readonly scheme = "rule";
@@ -34,5 +34,12 @@ export class RuleProtocolHandler implements ProtocolHandler {
 			sourcePath: rule.path,
 			notes: [],
 		};
+	}
+
+	async complete(): Promise<UrlCompletion[]> {
+		return getActiveRules().map(rule => ({
+			value: rule.name,
+			...(rule.description ? { description: rule.description } : {}),
+		}));
 	}
 }

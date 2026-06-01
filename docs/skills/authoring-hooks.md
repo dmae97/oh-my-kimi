@@ -123,8 +123,8 @@ Contract:
 - Handlers run in registration order. For `HookAPI`, each handler receives the original tool result event, and the last returned override wins.
 - `content` replaces the full content array for the LLM.
 - `details` replaces the structured details object.
-- `isError` overrides the error flag (typed, but note: `HookToolWrapper` behavior for error path rethrows regardless).
-- On a tool failure, `tool_result` is still emitted with `isError: true`; the original error is rethrown after handlers complete.
+- `isError` exists on the shared result type, but `HookToolWrapper` does not propagate it into a successful tool result; on a tool failure, the original error is rethrown after handlers complete.
+- On a tool failure, `tool_result` is still emitted with `isError: true`.
 
 ## Context modification contract
 

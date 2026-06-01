@@ -53,12 +53,13 @@ Those custom roles are then transformed into LLM-facing user messages in `conver
 
 ### Triggers
 
-Compaction/context maintenance can run in four ways:
+Compaction/context maintenance can run in five ways:
 
 1. **Manual context compaction**: `/compact [instructions]` calls `AgentSession.compact(...)`.
 2. **Automatic overflow recovery**: after a same-model assistant error that matches context overflow.
-3. **Automatic threshold maintenance**: after a successful turn when context exceeds the resolved threshold.
-4. **Idle maintenance**: `runIdleCompaction()` can invoke the same auto-maintenance path with reason `"idle"`.
+3. **Automatic incomplete-output recovery**: after a same-model assistant message ends with `stopReason === "length"` (OpenAI/Codex `response.incomplete`).
+4. **Automatic threshold maintenance**: after a successful turn when context exceeds the resolved threshold.
+5. **Idle maintenance**: `runIdleCompaction()` can invoke the same auto-maintenance path with reason `"idle"`.
 
 ### Compaction shape (visual)
 
@@ -94,7 +95,7 @@ What the LLM sees:
     prompt   from cmp          messages from firstKeptEntryId
 ```
 
-### Overflow-retry vs threshold/idle maintenance
+### Overflow/incomplete recovery vs threshold/idle maintenance
 
 The automatic paths are intentionally different:
 
@@ -102,15 +103,23 @@ The automatic paths are intentionally different:
   - Trigger: current-model assistant error is detected as context overflow and the error is not older than the latest compaction.
   - The failing assistant error message is removed from active agent state before retry.
   - Context promotion is tried first; if a configured larger model is available, the agent switches model and retries without compacting.
-  - If promotion is unavailable and compaction is enabled, context-full compaction runs with `reason: "overflow"` and `willRetry: true`; handoff strategy is not used for overflow.
-  - On success, agent auto-continues (`agent.continue()`) after compaction.
+  - If promotion is unavailable and compaction is enabled, context-full compaction runs with `reason: "overflow"` and `willRetry: true`; handoff strategy is not used for overflow because the handoff request would reuse the overflowing input.
+  - On success, `agent.continue()` is scheduled to retry the turn.
+
+- **Incomplete-output recovery**
+  - Trigger: same-model assistant message ends with `stopReason === "length"` and the message is not older than the latest compaction.
+  - The incomplete assistant message is removed from active agent state before recovery.
+  - Context promotion is tried first.
+  - If promotion is unavailable and compaction is enabled, auto maintenance runs with `reason: "incomplete"` and `willRetry: true`.
+  - Unlike overflow, `compaction.strategy: "handoff"` is allowed for incomplete-output recovery because the input context is still usable.
+  - On context-full success, `agent.continue()` is scheduled to retry the turn.
 
 - **Threshold maintenance**
   - Trigger: successful, non-error assistant message whose adjusted context tokens exceed `resolveThresholdTokens(...)`.
   - Tool-output pruning can reduce the measured token count before threshold comparison.
   - Context promotion is tried before compaction.
   - If promotion is unavailable, auto maintenance runs with `reason: "threshold"` and `willRetry: false`.
-  - With `compaction.strategy: "handoff"`, threshold maintenance starts a new handoff session instead of writing a compaction entry; if handoff returns no document without aborting, it falls back to context-full compaction.
+  - With `compaction.strategy: "handoff"`, threshold maintenance normally schedules a post-prompt auto-handoff task instead of writing a compaction entry; pre-prompt checks run it inline to avoid racing the next turn. If handoff returns no document without aborting, it falls back to context-full compaction.
   - On success, if `compaction.autoContinue !== false`, schedules an agent-authored developer auto-continue prompt from `prompts/system/auto-continue.md`.
 
 - **Idle maintenance**
@@ -188,7 +197,7 @@ Final stored summary is merged as:
 2. Serialize with `serializeConversation()`.
 3. Wrap in `<conversation>...</conversation>`.
 4. Optionally include `<previous-summary>...</previous-summary>`.
-5. Optionally inject hook context as `<additional-context>` list.
+5. Optionally inject extension hook context and active memory-backend compaction context as `<additional-context>` entries.
 6. Execute summarization prompt with `SUMMARIZATION_SYSTEM_PROMPT`.
 
 Prompt selection:
@@ -244,7 +253,8 @@ After summary generation (or hook-provided summary), agent session:
 1. Appends `CompactionEntry` with `appendCompaction(...)` for context-full maintenance; handoff strategy creates a new session and injects a handoff `custom_message` instead.
 2. Rebuilds display context from the active leaf via `buildDisplaySessionContext()`.
 3. Replaces live agent messages with rebuilt context.
-4. Emits `session_compact` hook event.
+4. Synchronizes active todo phases from the rebuilt branch and closes provider sessions whose history was rewritten.
+5. Emits `session_compact` hook event.
 
 ## Branch summarization pipeline
 
@@ -348,13 +358,14 @@ Post-navigation event exposing new/old leaf and optional summary entry.
 ## Runtime behavior and failure semantics
 
 - Manual compaction aborts current agent operation first.
-- `abortCompaction()` cancels both manual and auto-compaction controllers.
+- `abortCompaction()` cancels manual compaction, auto-compaction, and handoff generation controllers.
 - Auto compaction emits start/end session events for UI/state updates.
 - Auto compaction can try multiple model candidates and retry transient failures; long retry delays prefer the next candidate when one is available.
 - Overflow errors are excluded from generic retry path because they are handled by context promotion/compaction.
 - If auto-compaction fails:
   - overflow path emits `Context overflow recovery failed: ...`
-  - threshold path emits `Auto-compaction failed: ...`
+  - incomplete-output path emits `Incomplete response recovery failed: ...`
+  - threshold/idle paths emit `Auto-compaction failed: ...`
 - Branch summarization can be cancelled via abort signal (e.g., Escape), returning canceled/aborted navigation result.
 
 ## Settings and defaults
@@ -369,7 +380,9 @@ From `settings-schema.ts`:
 - `compaction.remoteEnabled` = `true`
 - `compaction.remoteEndpoint` = `undefined`
 - `compaction.thresholdPercent` = `-1` and `compaction.thresholdTokens` = `-1`; when no positive override is set, the threshold is `contextWindow - max(15% of contextWindow, reserveTokens)`
-- `compaction.idleEnabled` = `true`
+- `compaction.idleEnabled` = `false`
+- `compaction.idleThresholdTokens` = `200000`
+- `compaction.idleTimeoutSeconds` = `300`
 - `branchSummary.enabled` = `false`
 - `branchSummary.reserveTokens` = `16384`
 

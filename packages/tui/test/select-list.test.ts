@@ -168,4 +168,39 @@ describe("SelectList", () => {
 
 		expect(selectedValue).toBe("run");
 	});
+
+	it("fuzzy-filters overflowing lists from typed input", () => {
+		const items = [
+			{ value: "ollama", label: "Ollama" },
+			{ value: "kagi", label: "Kagi" },
+			{ value: "opencode-go", label: "OpenCode Go" },
+			{ value: "tavily", label: "Tavily" },
+		];
+		const list = new SelectList(items, 3, testTheme);
+
+		list.handleInput("o");
+		list.handleInput("g");
+
+		const rendered = list.render(80).join("\n");
+		expect(rendered).toContain("OpenCode Go");
+		expect(rendered).not.toContain("Ollama");
+		expect(rendered).toContain("Search: og");
+		expect(list.getSelectedItem()?.value).toBe("opencode-go");
+	});
+
+	it("keeps printable keys inert when the list does not overflow", () => {
+		const items = [
+			{ value: "alpha", label: "Alpha" },
+			{ value: "beta", label: "Beta" },
+		];
+		const list = new SelectList(items, 2, testTheme);
+
+		list.handleInput("b");
+
+		const rendered = list.render(80).join("\n");
+		expect(rendered).toContain("Alpha");
+		expect(rendered).toContain("Beta");
+		expect(rendered).not.toContain("Search:");
+		expect(list.getSelectedItem()?.value).toBe("alpha");
+	});
 });

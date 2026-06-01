@@ -314,8 +314,14 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 	},
 	async computeDiffPreview(args, ctx) {
 		if (typeof args.input !== "string" || args.input.length === 0) return null;
-		const input = trimTrailingPartialLine(args.input, ctx.isStreaming);
-		if (input.length === 0) return null;
+		// Unlike apply_patch, hashline previews flow through `applyPartialTo`,
+		// whose streaming-tolerant parser (`parsePatchStreaming` → `endStreaming`)
+		// drops a payload-less trailing op and projects a partially-typed payload
+		// line onto the file as it grows. Trimming the trailing partial line here
+		// would instead strip the sole payload of a single-op `replace`/`insert`
+		// for almost the entire stream, collapsing the preview to "No changes" and
+		// rendering a blank box. Feed the raw in-flight text straight through.
+		const input = args.input;
 		ctx.signal.throwIfAborted();
 
 		let sections: readonly HashlineInputSection[];
@@ -347,12 +353,17 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 			const section = sectionsToProcess[i];
 			const result = await computeHashlineSectionDiff(section, ctx.cwd, ctx.snapshots, {
 				streaming: ctx.isStreaming,
+				skipHashValidation: ctx.isStreaming === true,
 			});
 			ctx.signal.throwIfAborted();
-			// In a multi-section preview, ignore parse/apply errors from the
-			// last section: it's still streaming and the partial op may not
-			// parse yet. Earlier sections are stable and stay rendered.
-			if (sectionsToProcess.length > 1 && i === trailingProcessedIndex && "error" in result) {
+			// Ignore parse/apply errors from the trailing (actively-typed)
+			// section while streaming: a mid-typed op may transiently resolve to
+			// "No changes" or an out-of-bounds anchor, and surfacing that would
+			// wipe the already-stable previews (or, for a lone section, the prior
+			// good frame). Returning no entry preserves the last preview. Earlier
+			// sections, and every section once args are complete, stay rendered so
+			// real errors still reach the model.
+			if ((ctx.isStreaming || sectionsToProcess.length > 1) && i === trailingProcessedIndex && "error" in result) {
 				continue;
 			}
 			previews.push(toPerFilePreview(section.path, result));

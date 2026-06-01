@@ -49,11 +49,11 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
+	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
-import { parseStreamingJson } from "../utils/json-parse";
+import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
@@ -170,7 +170,7 @@ function createCodexWebSocketTimeoutMessage(reason: string, details: CodexWebSoc
 
 type CodexTransport = "sse" | "websocket";
 type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
-type CodexOutputBlock = ThinkingContent | TextContent | (ToolCall & { partialJson: string });
+type CodexOutputBlock = ThinkingContent | TextContent | (ToolCall & { partialJson: string; lastParseLen?: number });
 
 export interface OpenAICodexWebSocketDebugStats {
 	fullContextRequests: number;
@@ -603,7 +603,7 @@ function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): C
 		: requestAbortController.signal;
 	const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 	const websocketIdleTimeoutMs = options?.streamIdleTimeoutMs ?? getCodexWebSocketIdleTimeoutMs();
-	const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+	const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 	const websocketFirstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getCodexWebSocketFirstEventTimeoutMs();
 	const wrapCodexSseStream = (
 		source: AsyncGenerator<Record<string, unknown>>,
@@ -1216,7 +1216,11 @@ function handleToolCallArgumentsDelta(
 	if (currentItem?.type !== "function_call" || currentBlock?.type !== "toolCall") return;
 	const delta = (rawEvent as { delta?: string }).delta || "";
 	currentBlock.partialJson += delta;
-	currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+	const throttled = parseStreamingJsonThrottled(currentBlock.partialJson, currentBlock.lastParseLen ?? 0);
+	if (throttled) {
+		currentBlock.arguments = throttled.value;
+		currentBlock.lastParseLen = throttled.parsedLen;
+	}
 	stream.push({ type: "toolcall_delta", contentIndex: blockIndex(), delta, partial: output });
 }
 
@@ -1230,6 +1234,8 @@ function handleToolCallArgumentsDone(
 	if (typeof args === "string") {
 		currentBlock.partialJson = args;
 		currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+		delete (currentBlock as { partialJson?: string }).partialJson;
+		delete (currentBlock as { lastParseLen?: number }).lastParseLen;
 	}
 }
 
@@ -1308,6 +1314,13 @@ function handleOutputItemDone(
 			name: item.name,
 			arguments: parseStreamingJson(item.arguments || "{}"),
 		};
+		if (runtime.currentBlock?.type === "toolCall") {
+			// Persist the authoritative final args on the stored block; the throttled
+			// delta parser may have left currentBlock.arguments stale (often `{}`).
+			runtime.currentBlock.arguments = toolCall.arguments;
+			delete (runtime.currentBlock as { partialJson?: string }).partialJson;
+			delete (runtime.currentBlock as { lastParseLen?: number }).lastParseLen;
+		}
 		runtime.canSafelyReplayWebsocketOverSse = false;
 		stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
 		return;

@@ -10,6 +10,7 @@ import type {
 	ExtensionError,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUISelectItem,
 	ExtensionUiComponent,
 	ExtensionWidgetContent,
 	ExtensionWidgetOptions,
@@ -19,7 +20,7 @@ import type {
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
 import { HookEditorComponent } from "../../modes/components/hook-editor";
 import { HookInputComponent } from "../../modes/components/hook-input";
-import { HookSelectorComponent } from "../../modes/components/hook-selector";
+import { HookSelectorComponent, type HookSelectorSlider } from "../../modes/components/hook-selector";
 import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import { setSessionTerminalTitle, setTerminalTitle } from "../../utils/title-generator";
@@ -483,7 +484,7 @@ export class ExtensionUiController {
 
 	createBackgroundUiContext(): ExtensionUIContext {
 		return {
-			select: async (_title: string, _options: string[], _dialogOptions) => undefined,
+			select: async (_title: string, _options: ExtensionUISelectItem[], _dialogOptions) => undefined,
 			confirm: async (_title: string, _message: string, _dialogOptions) => false,
 			input: async (_title: string, _placeholder?: string, _dialogOptions?: unknown) => undefined,
 			notify: () => {},
@@ -581,8 +582,9 @@ export class ExtensionUiController {
 	 */
 	showHookSelector(
 		title: string,
-		options: string[],
+		options: ExtensionUISelectItem[],
 		dialogOptions?: ExtensionUIDialogOptions,
+		extra?: { slider?: HookSelectorSlider },
 	): Promise<string | undefined> {
 		const { promise, finish, attachAbort } = this.#createHookDialogState(
 			() => this.hideHookSelector(),
@@ -623,6 +625,7 @@ export class ExtensionUiController {
 				tui: this.ctx.ui,
 				outline: dialogOptions?.outline,
 				maxVisible,
+				slider: extra?.slider,
 			},
 		);
 		this.ctx.editorContainer.clear();

@@ -38,6 +38,7 @@ import { type AsyncJob, AsyncJobManager, isBackgroundJobSupportEnabled } from ".
 import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
+import { bucketRules } from "./capability/rule-buckets";
 import { ModelRegistry } from "./config/model-registry";
 import {
 	formatModelString,
@@ -86,8 +87,8 @@ import type { HindsightSessionState } from "./hindsight/state";
 import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./mcp";
-
 import { resolveMemoryBackend } from "./memory-backend";
+import { getMnemopiSessionState, type MnemopiSessionState } from "./mnemopi/state";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
@@ -111,7 +112,14 @@ import {
 	loadProjectContextFiles as loadContextFilesInternal,
 } from "./system-prompt";
 import { AgentOutputManager } from "./task/output-manager";
-import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } from "./thinking";
+import {
+	AUTO_THINKING,
+	type ConfiguredThinkingLevel,
+	parseThinkingLevel,
+	resolveProvisionalAutoLevel,
+	resolveThinkingLevelForModel,
+	toReasoningEffort,
+} from "./thinking";
 import {
 	collectDiscoverableTools,
 	type DiscoverableTool,
@@ -253,7 +261,7 @@ export interface CreateAgentSessionOptions {
 	 * Used when model lookup is deferred because extension-provided models aren't registered yet. */
 	modelPattern?: string;
 	/** Thinking selector. Default: from settings, else unset */
-	thinkingLevel?: ThinkingLevel;
+	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
@@ -313,6 +321,8 @@ export interface CreateAgentSessionOptions {
 	taskDepth?: number;
 	/** Parent Hindsight state to alias for subagent memory tools. */
 	parentHindsightSessionState?: HindsightSessionState;
+	/** Parent Mnemopi state to alias for subagent memory tools. */
+	parentMnemopiSessionState?: MnemopiSessionState;
 	/** Pre-allocated agent identity for IRC routing. Default: "0-Main" for top-level, parentTaskPrefix-derived for sub. */
 	agentId?: string;
 	/** Display name for the agent in IRC. Default: "main" or "sub". */
@@ -452,6 +462,44 @@ export async function discoverExtensions(cwd?: string): Promise<LoadExtensionsRe
 	const resolvedCwd = cwd ?? getProjectDir();
 
 	return discoverAndLoadExtensions([], resolvedCwd);
+}
+
+/**
+ * Load the discovered/configured extensions for a session — everything {@link
+ * createAgentSession} would load except the inline factory extensions it appends
+ * itself. Extracted so the CLI can resolve extension-registered flags (and thus
+ * classify `@file` arguments extension-aware) *before* a session — and its
+ * terminal breadcrumb — is created, then hand the result back through
+ * {@link CreateAgentSessionOptions.preloadedExtensions} so the work is not
+ * repeated. Keep this the single source of the discovery branch logic.
+ */
+export async function loadSessionExtensions(
+	options: Pick<CreateAgentSessionOptions, "disableExtensionDiscovery" | "additionalExtensionPaths">,
+	cwd: string,
+	settings: Settings,
+	eventBus: EventBus,
+): Promise<LoadExtensionsResult> {
+	let result: LoadExtensionsResult;
+	if (options.disableExtensionDiscovery) {
+		const configuredPaths = options.additionalExtensionPaths ?? [];
+		result = await logger.time("loadExtensions", loadExtensions, configuredPaths, cwd, eventBus);
+	} else {
+		// Merge CLI extension paths with settings extension paths.
+		const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])];
+		const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
+		result = await logger.time(
+			"discoverAndLoadExtensions",
+			discoverAndLoadExtensions,
+			configuredPaths,
+			cwd,
+			eventBus,
+			disabledExtensionIds,
+		);
+	}
+	for (const { path, error } of result.errors) {
+		logger.error("Failed to load extension", { path, error });
+	}
+	return result;
 }
 
 /**
@@ -1010,10 +1058,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (thinkingLevel === undefined) {
 		thinkingLevel = settings.get("defaultThinkingLevel");
 	}
+	const autoThinking = thinkingLevel === AUTO_THINKING;
+	// Concrete level the agent/session start with. With `auto` this is the
+	// provisional level shown until the first per-turn classification resolves;
+	// `auto` itself stays a session-only concept handled by AgentSession.
+	let effectiveThinkingLevel: ThinkingLevel | undefined = thinkingLevel === AUTO_THINKING ? undefined : thinkingLevel;
 	if (model) {
 		const resolvedModel = model;
-		thinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
-			resolveThinkingLevelForModel(resolvedModel, thinkingLevel),
+		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
+			autoThinking
+				? resolveProvisionalAutoLevel(resolvedModel)
+				: resolveThinkingLevelForModel(resolvedModel, effectiveThinkingLevel),
 		);
 		// Fire-and-forget TLS+H2 handshake to the model's host so it overlaps
 		// with the rest of session setup (extension/skill load, tool registry,
@@ -1043,21 +1098,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			options.rules !== undefined
 				? { items: options.rules, warnings: undefined }
 				: await loadCapability<Rule>(ruleCapability.id, { cwd });
-		const rulebookRules: Rule[] = [];
-		const alwaysApplyRules: Rule[] = [];
-		for (const rule of rulesResult.items) {
-			const isTtsrRule = rule.condition && rule.condition.length > 0 ? ttsrManager.addRule(rule) : false;
-			if (isTtsrRule) {
-				continue;
-			}
-			if (rule.alwaysApply === true) {
-				alwaysApplyRules.push(rule);
-				continue;
-			}
-			if (rule.description) {
-				rulebookRules.push(rule);
-			}
-		}
+		const { rulebookRules, alwaysApplyRules } = bucketRules(rulesResult.items, ttsrManager, {
+			builtinRules: ttsrSettings.builtinRules,
+			disabledRules: ttsrSettings.disabledRules,
+		});
 		if (existingSession.injectedTtsrRules.length > 0) {
 			ttsrManager.restoreInjected(existingSession.injectedTtsrRules);
 		}
@@ -1187,6 +1231,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				session ? session.trackEvalExecution(execution, abortController) : execution,
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
+			getMnemopiSessionState: () => getMnemopiSessionState(session),
 			getAgentId: () => resolvedAgentId,
 			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,
@@ -1196,6 +1241,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getPlanModeState: () => session?.getPlanModeState(),
 			getGoalModeState: () => session?.getGoalModeState(),
 			getGoalRuntime: () => session?.goalRuntime,
+			getUsageStatistics: () => sessionManager.getUsageStatistics(),
+			getTurnBudget: () => sessionManager.getTurnBudget(),
+			recordEvalSubagentUsage: output => sessionManager.recordEvalSubagentOutput(output),
 			getClientBridge: () => session?.clientBridge,
 			getCompactContext: () => session.formatCompactContext(),
 			getTodoPhases: () => session.getTodoPhases(),
@@ -1255,10 +1303,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			setActiveRules([...rulebookRules, ...alwaysApplyRules]);
 			if (asyncJobManager) AsyncJobManager.setInstance(asyncJobManager);
 		}
+		const localProtocolOptions = options.localProtocolOptions ?? {
+			getArtifactsDir,
+			getSessionId: () => sessionManager.getSessionId?.() ?? null,
+		};
 		if (options.localProtocolOptions) {
 			LocalProtocolHandler.setOverride(options.localProtocolOptions);
 		}
 		toolSession.getArtifactsDir = getArtifactsDir;
+		toolSession.localProtocolOptions = localProtocolOptions;
 		toolSession.agentOutputManager = new AgentOutputManager(
 			getArtifactsDir,
 			options.parentTaskPrefix ? { parentPrefix: options.parentTaskPrefix } : undefined,
@@ -1269,6 +1322,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		// Discover MCP tools from .mcp.json files
 		let mcpManager: MCPManager | undefined = options.mcpManager;
+		toolSession.mcpManager = mcpManager;
 		const enableMCP = options.enableMCP ?? true;
 		const customTools: CustomTool[] = [];
 		if (enableMCP && !mcpManager) {
@@ -1287,6 +1341,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				authStorage,
 			});
 			mcpManager = mcpResult.manager;
+			toolSession.mcpManager = mcpManager;
 
 			if (settings.get("mcp.notifications")) {
 				mcpManager.setNotificationsEnabled(true);
@@ -1350,32 +1405,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}
 
-		// Load extensions (discovers from standard locations + configured paths)
-		let extensionsResult: LoadExtensionsResult;
-		if (options.disableExtensionDiscovery) {
-			const configuredPaths = options.additionalExtensionPaths ?? [];
-			extensionsResult = await logger.time("loadExtensions", loadExtensions, configuredPaths, cwd, eventBus);
-			for (const { path, error } of extensionsResult.errors) {
-				logger.error("Failed to load extension", { path, error });
-			}
-		} else if (options.preloadedExtensions) {
-			extensionsResult = options.preloadedExtensions;
-		} else {
-			// Merge CLI extension paths with settings extension paths
-			const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])];
-			const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
-			extensionsResult = await logger.time(
-				"discoverAndLoadExtensions",
-				discoverAndLoadExtensions,
-				configuredPaths,
-				cwd,
-				eventBus,
-				disabledExtensionIds,
-			);
-			for (const { path, error } of extensionsResult.errors) {
-				logger.error("Failed to load extension", { path, error });
-			}
-		}
+		// Load extensions. A preloaded result (e.g. resolved by the CLI before
+		// session creation so it can classify `@file` args extension-aware without
+		// a session/breadcrumb existing yet) is reused as-is; otherwise discover now
+		// through the shared helper. Preloaded wins over `disableExtensionDiscovery`
+		// because the preloaded result already reflects that choice — re-running the
+		// loader here would double-load.
+		const extensionsResult: LoadExtensionsResult =
+			options.preloadedExtensions ?? (await loadSessionExtensions(options, cwd, settings, eventBus));
 
 		// Load inline extensions from factories
 		if (inlineExtensions.length > 0) {
@@ -1593,11 +1630,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const promptTools = buildSystemPromptToolMetadata(tools, {
 				search_tool_bm25: { description: renderSearchToolBm25Description(discoverableToolsForDesc) },
 			});
-			const memoryInstructions = await resolveMemoryBackend(settings).buildDeveloperInstructions(
-				agentDir,
-				settings,
-				session,
-			);
+			const memoryBackend = resolveMemoryBackend(settings);
+			const memoryInstructions = await memoryBackend.buildDeveloperInstructions(agentDir, settings, session);
 
 			// Build combined append prompt: memory instructions + MCP server instructions
 			const serverInstructions = mcpManager?.getServerInstructions();
@@ -1634,6 +1668,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				eagerTasks,
 				secretsEnabled,
 				workspaceTree: workspaceTreePromise,
+				memoryRootEnabled: memoryBackend.id === "local",
 			});
 
 			if (options.systemPrompt === undefined) {
@@ -1847,7 +1882,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			initialState: {
 				systemPrompt,
 				model,
-				thinkingLevel: toReasoningEffort(thinkingLevel),
+				thinkingLevel: toReasoningEffort(effectiveThinkingLevel),
 				tools: initialTools,
 			},
 			convertToLlm: convertToLlmFinal,
@@ -1954,7 +1989,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (model) {
 				sessionManager.appendModelChange(`${model.provider}/${model.id}`);
 			}
-			sessionManager.appendThinkingLevelChange(thinkingLevel);
+			if (!autoThinking) {
+				// Do not write the `auto` selector before the first turn resolves; auto
+				// classification persists its concrete effort once a real user turn runs.
+				sessionManager.appendThinkingLevelChange(effectiveThinkingLevel);
+			}
 			if (initialServiceTier) {
 				sessionManager.appendServiceTierChange(initialServiceTier);
 			}
@@ -1962,7 +2001,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		session = new AgentSession({
 			agent,
-			thinkingLevel,
+			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
 			sessionManager,
 			settings,
 			evalKernelOwnerId,
@@ -2123,6 +2162,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					agentDir,
 					taskDepth,
 					parentHindsightSessionState: options.parentHindsightSessionState,
+					parentMnemopiSessionState: options.parentMnemopiSessionState,
 				}),
 			),
 		);

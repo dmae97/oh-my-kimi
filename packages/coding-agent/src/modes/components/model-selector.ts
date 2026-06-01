@@ -18,7 +18,8 @@ import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS, MODEL_ROLES } from "../..
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import { type ThemeColor, theme } from "../../modes/theme/theme";
-import { getThinkingLevelMetadata } from "../../thinking";
+import { matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
+import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../../thinking";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
 
@@ -82,10 +83,15 @@ interface ScopedModelItem {
 
 interface RoleAssignment {
 	model: Model;
-	thinkingLevel: ThinkingLevel;
+	thinkingLevel: ConfiguredThinkingLevel;
 }
 
-type RoleSelectCallback = (model: Model, role: string | null, thinkingLevel?: ThinkingLevel, selector?: string) => void;
+type RoleSelectCallback = (
+	model: Model,
+	role: string | null,
+	thinkingLevel?: ConfiguredThinkingLevel,
+	selector?: string,
+) => void;
 type CancelCallback = () => void;
 interface MenuRoleAction {
 	label: string;
@@ -164,7 +170,7 @@ export class ModelSelectorComponent extends Container {
 		settings: Settings,
 		modelRegistry: ModelRegistry,
 		scopedModels: ReadonlyArray<ScopedModelItem>,
-		onSelect: (model: Model, role: string | null, thinkingLevel?: ThinkingLevel, selector?: string) => void,
+		onSelect: RoleSelectCallback,
 		onCancel: () => void,
 		options?: { temporaryOnly?: boolean; initialSearchInput?: string },
 	) {
@@ -789,7 +795,7 @@ export class ModelSelectorComponent extends Container {
 				if (!tag || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
 
 				const badge = makeInvertedBadge(tag, color ?? "success");
-				const thinkingLabel = getThinkingLevelMetadata(assigned.thinkingLevel).label;
+				const thinkingLabel = getConfiguredThinkingLevelMetadata(assigned.thinkingLevel).label;
 				roleBadgeTokens.push(`${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`);
 			}
 			// Custom role badges
@@ -798,7 +804,7 @@ export class ModelSelectorComponent extends Container {
 				const roleInfo = getRoleInfo(role, this.#settings);
 				const badgeLabel = roleInfo.tag ?? roleInfo.name;
 				const badge = makeInvertedBadge(badgeLabel, roleInfo.color ?? "muted");
-				const thinkingLabel = getThinkingLevelMetadata(assigned.thinkingLevel).label;
+				const thinkingLabel = getConfiguredThinkingLevelMetadata(assigned.thinkingLevel).label;
 				roleBadgeTokens.push(`${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`);
 			}
 			const badgeText = roleBadgeTokens.length > 0 ? ` ${roleBadgeTokens.join(" ")}` : "";
@@ -862,11 +868,11 @@ export class ModelSelectorComponent extends Container {
 			);
 		}
 	}
-	#getThinkingLevelsForModel(model: Model): ReadonlyArray<ThinkingLevel> {
-		return [ThinkingLevel.Inherit, ThinkingLevel.Off, ...getSupportedEfforts(model)];
+	#getThinkingLevelsForModel(model: Model): ReadonlyArray<ConfiguredThinkingLevel> {
+		return [ThinkingLevel.Inherit, ThinkingLevel.Off, AUTO_THINKING, ...getSupportedEfforts(model)];
 	}
 
-	#getCurrentRoleThinkingLevel(role: string): ThinkingLevel {
+	#getCurrentRoleThinkingLevel(role: string): ConfiguredThinkingLevel {
 		return this.#roles[role]?.thinkingLevel ?? ThinkingLevel.Inherit;
 	}
 
@@ -911,7 +917,7 @@ export class ModelSelectorComponent extends Container {
 		const optionLines = showingThinking
 			? thinkingOptions.map((thinkingLevel, index) => {
 					const prefix = index === this.#menuSelectedIndex ? `  ${theme.nav.cursor} ` : "    ";
-					const label = getThinkingLevelMetadata(thinkingLevel).label;
+					const label = getConfiguredThinkingLevelMetadata(thinkingLevel).label;
 					return `${prefix}${label}`;
 				})
 			: this.#menuRoleActions.map((action, index) => {
@@ -971,7 +977,7 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		// Up arrow - navigate list (wrap to bottom when at top)
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			const itemCount = this.#isCanonicalTab() ? this.#filteredCanonicalModels.length : this.#filteredModels.length;
 			if (itemCount === 0) return;
 			this.#selectedIndex = this.#selectedIndex === 0 ? itemCount - 1 : this.#selectedIndex - 1;
@@ -980,7 +986,7 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		// Down arrow - navigate list (wrap to top when at bottom)
-		if (matchesKey(keyData, "down")) {
+		if (matchesSelectDown(keyData)) {
 			const itemCount = this.#isCanonicalTab() ? this.#filteredCanonicalModels.length : this.#filteredModels.length;
 			if (itemCount === 0) return;
 			this.#selectedIndex = this.#selectedIndex === itemCount - 1 ? 0 : this.#selectedIndex + 1;
@@ -1022,13 +1028,13 @@ export class ModelSelectorComponent extends Container {
 				: this.#menuRoleActions.length;
 		if (optionCount === 0) return;
 
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			this.#menuSelectedIndex = (this.#menuSelectedIndex - 1 + optionCount) % optionCount;
 			this.#updateMenu();
 			return;
 		}
 
-		if (matchesKey(keyData, "down")) {
+		if (matchesSelectDown(keyData)) {
 			this.#menuSelectedIndex = (this.#menuSelectedIndex + 1) % optionCount;
 			this.#updateMenu();
 			return;
@@ -1068,7 +1074,11 @@ export class ModelSelectorComponent extends Container {
 		}
 	}
 
-	#handleSelect(item: ModelItem | CanonicalModelItem, role: string | null, thinkingLevel?: ThinkingLevel): void {
+	#handleSelect(
+		item: ModelItem | CanonicalModelItem,
+		role: string | null,
+		thinkingLevel?: ConfiguredThinkingLevel,
+	): void {
 		// For temporary role, don't save to settings - just notify caller
 		if (role === null) {
 			this.#onSelectCallback(item.model, null, undefined, item.selector);

@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [15.7.4] - 2026-05-31
+
+### Removed
+
+- Removed the local-model `summarizeShakeRegions` compressor and related shake-summary prompt/types; shake now only provides mechanical artifact-backed elision primitives.
+
+## [15.7.3] - 2026-05-31
+
+### Added
+
+- Added `shake` compaction primitives (`collectShakeRegions`, `applyShakeRegion`, `applyShakeRegions`, `summarizeShakeRegions`, `DEFAULT_SHAKE_CONFIG`, `AGGRESSIVE_SHAKE_CONFIG`, plus the `ShakeRegion`/`ShakeConfig`/`ShakeSummaryItem`/`ShakeSummaryComplete`/`ProtectedToolMatcher` types) under `@oh-my-pi/pi-agent-core/compaction`. These detect heavy context regions — whole tool-call results plus large fenced/XML blocks — and either elide them with placeholders or extractively compress them through an injected completion backend (no LLM summary cut-point). The compressor is provider-agnostic: callers wire it to a local on-device model. Pure detection/mutation; no I/O.
+
+### Fixed
+
+- Fixed tool-output pruning and shake protection for `read`: ordinary file/URL reads are now eligible for compaction, while `read` calls whose `path` starts with `skill://` remain protected like native `skill` results.
+
 ## [15.5.15] - 2026-05-30
 ### Added
 
@@ -22,6 +38,10 @@
 ### Fixed
 
 - Fixed compaction summarizer throws losing the provider's HTTP status. `generateSummary`, `generateHandoff`, `generateShortSummary`, and `generateTurnPrefixSummary` now route their `stopReason === "error"` throws through a `createSummarizationError` helper that copies `AssistantMessage.errorStatus` onto the thrown `Error` as `.status`, letting downstream consumers (e.g. `AgentSession.#isCompactionAuthFailure` in `@oh-my-pi/pi-coding-agent`) branch on real provider 401/403s without regex-scraping the message body.
+
+### Changed
+
+- Changed `Agent.appendMessage`, `popMessage`, `clearMessages`, and `reset` to mutate `state.messages` and `state.pendingToolCalls` in place instead of allocating a fresh array/Set on every transition. Subscribers that capture `state.messages` by reference now observe updates without needing to re-read `state` after each event. The public type signature is unchanged (always `AgentMessage[]` / `Set<string>`).
 
 ## [15.5.0] - 2026-05-26
 ### Added

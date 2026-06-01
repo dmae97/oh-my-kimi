@@ -14,20 +14,6 @@ export interface ShellConfig {
 let cachedShellConfig: ShellConfig | null = null;
 
 /**
- * Strip disabled macOS malloc-stack-logging vars from `process.env` in place.
- *
- * macOS leaves `MallocStackLogging=0` (or similar) inherited by debug-attached
- * shells. Bun's libc init then prints `MallocStackLogging: can't turn off
- * malloc stack logging because it was not enabled.` to stderr for every
- * subprocess. Scrubbing once at startup means every child we spawn — bash,
- * bun subagents, plugin installs, ptree commands — inherits a clean env.
- */
-export function scrubProcessEnv(): void {
-	delete process.env.MallocStackLogging;
-	delete process.env.MallocStackLoggingNoCompact;
-}
-
-/**
  * Check if a shell binary is executable.
  */
 function isExecutable(path: string): boolean {

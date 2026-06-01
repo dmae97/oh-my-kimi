@@ -251,6 +251,6 @@ describe("subagent LSP availability", () => {
 		await tool.execute("tool-call", TEST_TASK);
 
 		expect(getOptions()?.enableLsp).toBe(true);
-		expect(getOptions()?.toolNames).toEqual(["read", "search", "find", "lsp", "web_search"]);
+		expect(getOptions()?.toolNames).toEqual(["read", "search", "find", "lsp", "web_search", "irc"]);
 	});
 });

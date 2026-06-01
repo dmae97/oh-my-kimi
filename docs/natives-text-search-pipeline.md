@@ -77,9 +77,8 @@ Terminology follows `docs/natives-architecture.md`:
 - Output modes:
   - `content` -> one `GrepMatch` per hit.
   - `count` and `filesWithMatches` map to count-style entries (`lineNumber=0`, `line=""`, `matchCount` set).
-- Limits:
-  - Global `offset` and `maxCount` apply across files.
-  - Parallel path is used only when `maxCount` is unset and `offset == 0`; otherwise sequential path preserves deterministic global offset/limit semantics.
+  - `offset` and `maxCount` are applied during aggregation across sorted file results.
+  - Directory searches use parallel filesystem walking/searching, then aggregate per-file results to preserve global offset/limit semantics in the returned result and callback stream.
 
 ### Result shaping back to JS
 
@@ -158,11 +157,15 @@ These exports are direct native APIs used by tooling; they are not mediated by a
 
 ## 4) Shared scan/cache lifecycle (`fs_cache`)
 
-`fs_cache` stores scan results as normalized relative entries (`path`, `fileType`, optional `mtime`) keyed by:
+`fs_cache` stores scan results as normalized relative entries (`path`, `fileType`, optional `mtime` and regular-file `size`) keyed by:
 
 - canonical search root,
 - `include_hidden`,
-- `use_gitignore`.
+- `use_gitignore`,
+- `skip_node_modules`,
+- scan detail (`Minimal` vs `Full`).
+
+`follow_links` affects a fresh scan but is not currently part of the cache key.
 
 ### Cache state transitions
 
@@ -193,7 +196,7 @@ These are pure, in-memory utilities.
 - `text.rs` owns terminal-cell semantics:
   - ANSI sequence parsing,
   - grapheme-aware width and slicing,
-  - wrap/truncate/sanitize behavior,
+  - wrap/truncate/slice behavior,
   - explicit tab-width parameter on width-sensitive APIs.
 - `grep.rs` line truncation (`maxColumns`) is separate:
   - simple character-boundary truncation of matched lines with `...`,
@@ -242,7 +245,7 @@ Text functions generally return deterministic transformed output; errors are lim
 | Flow                         | Filesystem access | Shared cache         | Notes                                         |
 | ---------------------------- | ----------------- | -------------------- | --------------------------------------------- |
 | `search` / `hasMatch`        | No                | No                   | regex on provided bytes/string only           |
-| `text` module functions      | No                | No                   | ANSI/width/sanitization only                  |
+| `text` module functions      | No                | No                   | ANSI/width utilities only                     |
 | `highlight` module functions | No                | No                   | syntax + ANSI coloring only                   |
 | `countTokens`                | No                | No                   | tokenization only                             |
 | `astGrep` / `astEdit`        | Yes               | No                   | syntax-aware file search/edit                 |

@@ -1,83 +1,64 @@
 # Natives media + system utilities
 
-This document covers the media/system/conversion exports in `@oh-my-pi/pi-natives`: image processing, HTML conversion, clipboard access, token counting, macOS appearance/power helpers, ProjFS helpers, and work profiling.
+This document covers the media/system/conversion exports currently present in `@oh-my-pi/pi-natives`: terminal SIXEL image encoding, HTML conversion, clipboard access, token counting, macOS appearance/power helpers, and work profiling.
 
 ## Implementation files
 
-- `crates/pi-natives/src/image.rs`
+- `crates/pi-natives/src/sixel.rs`
 - `crates/pi-natives/src/html.rs`
 - `crates/pi-natives/src/clipboard.rs`
 - `crates/pi-natives/src/tokens.rs`
 - `crates/pi-natives/src/appearance.rs`
 - `crates/pi-natives/src/power.rs`
-- `crates/pi-natives/src/projfs_overlay.rs`
 - `crates/pi-natives/src/prof.rs`
 - `crates/pi-natives/src/task.rs`
 - `packages/natives/native/index.d.ts`
 
-> Note: there is no `crates/pi-natives/src/work.rs`; work profiling is implemented in `prof.rs` and fed by instrumentation in `task.rs`.
+There is no native `PhotonImage` class, `image.rs`, or ProjFS overlay helper module in the current `pi-natives` addon. General-purpose image decode/resize/encode is expected to live outside this native surface; the native image export here is only terminal SIXEL encoding.
 
 ## JS API ↔ Rust export/module mapping
 
-| JS export                                           | Rust N-API export              | Rust module         |
-| --------------------------------------------------- | ------------------------------ | ------------------- |
-| `PhotonImage.parse(bytes)`                          | `PhotonImage::parse`           | `image.rs`          |
-| `PhotonImage#resize(width, height, filter)`         | `PhotonImage::resize`          | `image.rs`          |
-| `PhotonImage#encode(format, quality)`               | `PhotonImage::encode`          | `image.rs`          |
-| `encodeSixel(bytes, targetWidthPx, targetHeightPx)` | `encode_sixel`                 | `image.rs`          |
-| `htmlToMarkdown(html, options?)`                    | `html_to_markdown`             | `html.rs`           |
-| `copyToClipboard(text)`                             | `copy_to_clipboard`            | `clipboard.rs`      |
-| `readImageFromClipboard()`                          | `read_image_from_clipboard`    | `clipboard.rs`      |
-| `countTokens(input, encoding?)`                     | `count_tokens`                 | `tokens.rs`         |
-| `detectMacOSAppearance()`                           | `detect_mac_os_appearance`     | `appearance.rs`     |
-| `MacAppearanceObserver.start(callback)`             | `MacAppearanceObserver::start` | `appearance.rs`     |
-| `MacOSPowerAssertion.start(options?)`               | `MacOSPowerAssertion::start`   | `power.rs`          |
-| `projfsOverlayProbe/start/stop`                     | ProjFS exports                 | `projfs_overlay.rs` |
-| `getWorkProfile(lastSeconds)`                       | `get_work_profile`             | `prof.rs`           |
+| JS export                             | Rust N-API export              | Rust module     |
+| ------------------------------------- | ------------------------------ | --------------- |
+| `encodeSixel(bytes, width, height)`   | `encode_sixel`                 | `sixel.rs`      |
+| `htmlToMarkdown(html, options?)`      | `html_to_markdown`             | `html.rs`       |
+| `copyToClipboard(text)`               | `copy_to_clipboard`            | `clipboard.rs`  |
+| `readImageFromClipboard()`            | `read_image_from_clipboard`    | `clipboard.rs`  |
+| `countTokens(input, encoding?)`       | `count_tokens`                 | `tokens.rs`     |
+| `detectMacOSAppearance()`             | `detect_mac_os_appearance`     | `appearance.rs` |
+| `MacAppearanceObserver.start(cb)`     | `MacAppearanceObserver::start` | `appearance.rs` |
+| `MacOSPowerAssertion.start(options?)` | `MacOSPowerAssertion::start`   | `power.rs`      |
+| `getWorkProfile(lastSeconds)`         | `get_work_profile`             | `prof.rs`       |
 
 ## Data format boundaries and conversions
 
-### Image (`image`)
+### SIXEL image encoding (`sixel`)
 
-- **JS input boundary**: `Uint8Array` encoded image bytes for `PhotonImage.parse` and `encodeSixel`.
-- **Rust decode boundary**: bytes are copied/read, format is guessed with `ImageReader::with_guessed_format()`, then decoded to `DynamicImage`.
-- **In-memory state**: `PhotonImage` stores `Arc<DynamicImage>`.
-- **Output boundary**:
-  - `PhotonImage#encode(format, quality)` returns a promise for encoded bytes (`Vec<u8>` in Rust; generated TS currently declares `Promise<Array<number>>`).
-  - `encodeSixel(...)` returns a SIXEL escape string synchronously.
+- **JS input boundary**: `Uint8Array` containing encoded image bytes.
+- **Rust decode boundary**: format is guessed with `ImageReader::with_guessed_format()`, then decoded to `DynamicImage`.
+- **Resize boundary**: image is resized with `resize_exact(..., FilterType::Lanczos3)` only when source dimensions differ from `targetWidthPx`/`targetHeightPx`.
+- **Output boundary**: `encodeSixel(...)` returns a SIXEL escape string synchronously.
 
-Format IDs:
-
-- `0`: PNG
-- `1`: JPEG
-- `2`: WebP
-- `3`: GIF
-
-Encoding behavior:
-
-- JPEG uses the provided `quality` with `JpegEncoder::new_with_quality`.
-- WebP uses the `webp` crate encoder with `quality` as `f32` in the same 0..=100 range.
-- PNG/GIF ignore `quality`.
-- Invalid dimensions for SIXEL (`0` width or height) fail with `Target SIXEL dimensions must be greater than zero`.
+Supported decode formats are whatever the compiled `image` crate supports for `ImageReader` in this build (commonly PNG/JPEG/WebP/GIF). Invalid target dimensions (`0` width or height) fail with `Target SIXEL dimensions must be greater than zero`.
 
 ### HTML conversion (`html`)
 
 - **JS input boundary**: HTML `string` + optional `{ cleanContent?: boolean; skipImages?: boolean }`.
-- **Rust conversion boundary**: conversion is scheduled through `task::blocking("html_to_markdown", (), ...)`.
+- **Rust conversion boundary**: conversion is scheduled through `task::blocking("html_to_markdown", (), ...)`; there is no timeout/abort option on this export.
 - **Output boundary**: Markdown `string` promise.
 
 Conversion behavior:
 
 - `cleanContent` defaults to `false`.
-- When `cleanContent=true`, preprocessing uses `PreprocessingPreset::Aggressive` and hard-removal flags for navigation/forms.
-- `skipImages` defaults to `false`.
+- When `cleanContent=true`, preprocessing is enabled with `PreprocessingPreset::Aggressive`, `remove_navigation=true`, and `remove_forms=true`.
+- `skipImages` defaults to `false` and is passed to `html_to_markdown_rs::ConversionOptions`.
 
 ### Clipboard (`clipboard`)
 
 - `copyToClipboard(text)` is a synchronous native call using `arboard::Clipboard::set_text`.
 - `readImageFromClipboard()` runs in `task::blocking("clipboard.read_image", (), ...)`.
 - Image read returns `null`/`undefined` when `arboard` reports `ContentNotAvailable`.
-- Successful image read re-encodes clipboard RGBA data as PNG and returns `{ data: Uint8Array, mimeType: "image/png" }`.
+- Successful image read converts clipboard RGBA data into PNG bytes and returns `{ data: Uint8Array, mimeType: "image/png" }`.
 - Clipboard access or image encoding failures reject/throw as native errors.
 
 There is no current `packages/natives` TS wrapper that emits OSC52, handles Termux, or suppresses native clipboard failures. Any best-effort clipboard policy must live in consumers.
@@ -85,25 +66,19 @@ There is no current `packages/natives` TS wrapper that emits OSC52, handles Term
 ### Tokens (`tokens`)
 
 - `countTokens(input, encoding?)` accepts a single string or an array of strings.
-- Arrays return one aggregate token count; encoding work is parallelized in Rust.
+- Arrays return one aggregate token count; array elements are encoded in parallel via rayon.
 - Default encoding is `O200kBase`; `Cl100kBase` is also exported.
-- The implementation uses ordinary encoding, not special-token handling.
+- The implementation uses `encode_ordinary`, not special-token handling.
+- BPE tables are initialized once through `LazyLock` and reused.
 
 ### macOS appearance and power helpers
 
 - `detectMacOSAppearance()` returns `"dark"`, `"light"`, or `null` on non-macOS.
 - `MacAppearanceObserver.start(callback)` returns a handle with `stop()`; on macOS it uses distributed notifications plus a 2-second polling fallback, and on non-macOS it is a no-op observer.
-- `MacOSPowerAssertion.start(options?)` returns a handle with `stop()`; on macOS it acquires an IOKit assertion, and on other platforms it is a no-op handle.
+- `MacOSPowerAssertion.start(options?)` returns a handle with `stop()`; on macOS it acquires one or more IOKit assertions, and on other platforms it is a no-op handle.
+- Power assertion options are `{ reason?, idle?, system?, user?, display? }`. If every boolean is unset or omitted, `idle` behavior is used by default.
 
-### Windows ProjFS helpers
-
-- `projfsOverlayProbe()` reports whether ProjFS APIs are available.
-- `projfsOverlayStart(lowerRoot, projectionRoot)` starts an overlay.
-- `projfsOverlayStop(projectionRoot)` stops an overlay session.
-
-These helpers are platform-specific; availability must be checked before relying on overlay behavior.
-
-### Work profiling (`work`)
+### Work profiling (`prof`)
 
 - **Collection boundary**: profiling samples are produced by `profile_region(tag)` guards in `task::blocking` and `task::future`.
 - **Storage format**: fixed-size circular buffer (`MAX_SAMPLES = 10_000`) storing stack path, duration, and timestamp.
@@ -115,25 +90,25 @@ These helpers are platform-specific; availability must be checked before relying
 
 ## Lifecycle and state transitions
 
-### Image lifecycle
+### SIXEL lifecycle
 
-1. `PhotonImage.parse(bytes)` schedules a blocking decode task (`image.decode`).
-2. On success, a native `PhotonImage` handle exists in JS.
-3. `resize(...)` creates a new native handle (`image.resize`); old and new handles can coexist.
-4. `encode(...)` schedules `image.encode` and materializes bytes without mutating image dimensions.
-5. `encodeSixel(...)` decodes, optionally resizes to exact target dimensions with Lanczos3, and returns SIXEL text synchronously.
+1. `encodeSixel(bytes, targetWidthPx, targetHeightPx)` validates target dimensions.
+2. Rust guesses and decodes the encoded image.
+3. Image is resized exactly to the target dimensions when needed.
+4. Pixels are converted to RGBA8 and encoded with `icy_sixel::sixel_encode`.
+5. The SIXEL escape string is returned synchronously.
 
 Failure transitions:
 
-- Format detection/decode failure rejects parse promise or throws from SIXEL encoding.
-- Encode failure rejects encode promise.
-- Invalid SIXEL dimensions throw.
+- Format detection/decode failure throws.
+- Invalid target dimensions throw.
+- SIXEL encoding failure throws with `Failed to encode SIXEL: ...`.
 
 ### HTML lifecycle
 
 1. `htmlToMarkdown(html, options)` schedules a blocking conversion task.
 2. Conversion runs with defaulted options (`cleanContent=false`, `skipImages=false`) unless specified.
-3. Returns markdown string or rejects.
+3. Returns markdown string or rejects with `Conversion error: ...`.
 
 ### Clipboard lifecycle
 
@@ -154,11 +129,11 @@ Failure transitions:
 
 ## Unsupported operations and error propagation
 
-### Image
+### SIXEL
 
-- Unsupported decode input or corrupted bytes: strict failure.
-- Invalid SIXEL target dimensions: strict failure.
-- No JS fallback path in the natives package.
+- Unsupported or corrupted image input is a strict failure.
+- Invalid SIXEL target dimensions are a strict failure.
+- No JS fallback path is exposed by the natives package.
 
 ### HTML
 
@@ -180,4 +155,4 @@ Failure transitions:
 
 - Clipboard access depends on OS/session support exposed through `arboard`.
 - macOS appearance and power helpers intentionally return no-op/null behavior on unsupported platforms.
-- ProjFS helpers are Windows-specific and should be gated by `projfsOverlayProbe()`.
+- ProjFS is not exposed by this media/system native utility surface. Isolation backend selection, including any ProjFS support, lives in the separate `iso` subsystem.

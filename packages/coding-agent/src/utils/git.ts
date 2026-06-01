@@ -1261,9 +1261,15 @@ export async function clone(url: string, targetDir: string, options: CloneOption
 	const absoluteTarget = path.resolve(targetDir);
 	await fs.promises.mkdir(path.dirname(absoluteTarget), { recursive: true });
 
-	const args = ["clone", "--depth", "1"];
+	// `git clone --depth 1 --single-branch` only fetches the tip of the target
+	// branch, so any subsequent `git checkout <sha>` for a non-tip commit fails
+	// with "reference is not a tree". When the caller pinned a specific SHA we
+	// fall back to a full clone so the object is guaranteed to be present.
+	const shallow = !options.sha;
+	const args = ["clone"];
+	if (shallow) args.push("--depth", "1");
 	if (options.ref) args.push("--branch", options.ref, "--single-branch");
-	else args.push("--single-branch");
+	else if (shallow) args.push("--single-branch");
 	args.push(url, absoluteTarget);
 
 	try {
@@ -1273,7 +1279,7 @@ export async function clone(url: string, targetDir: string, options: CloneOption
 				await checkout(absoluteTarget, options.sha, options.signal);
 			} catch {
 				await fs.promises.rm(absoluteTarget, { force: true, recursive: true });
-				throw new Error(`Failed to checkout SHA ${options.sha} - shallow clone may not contain this commit`);
+				throw new Error(`Failed to checkout SHA ${options.sha} in cloned repository ${url}`);
 			}
 		}
 	} catch (err) {

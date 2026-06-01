@@ -192,7 +192,12 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				if (hasGlobPathChars(rawPattern)) {
 					throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPattern}`);
 				}
-				const resource = await internalRouter.resolve(rawPattern);
+				const resource = await internalRouter.resolve(rawPattern, {
+					cwd: this.session.cwd,
+					settings: this.session.settings,
+					signal,
+					localProtocolOptions: this.session.localProtocolOptions,
+				});
 				if (!resource.sourcePath) {
 					throw new ToolError(`Cannot find internal URL without a backing file: ${rawPattern}`);
 				}
@@ -443,8 +448,12 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 // =============================================================================
 
 interface FindRenderArgs {
-	paths?: string[];
+	paths?: string | string[];
 	limit?: number;
+}
+
+function formatFindRenderPaths(paths: FindRenderArgs["paths"]): string | undefined {
+	return Array.isArray(paths) ? paths.join(", ") : paths;
 }
 
 const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
@@ -456,7 +465,7 @@ export const findToolRenderer = {
 		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 
 		const text = renderStatusLine(
-			{ icon: "pending", title: "Find", description: args.paths?.join(", ") || "*", meta },
+			{ icon: "pending", title: "Find", description: formatFindRenderPaths(args.paths) || "*", meta },
 			uiTheme,
 		);
 		return new Text(text, 0, 0);
@@ -493,7 +502,7 @@ export const findToolRenderer = {
 				{
 					icon: "success",
 					title: "Find",
-					description: args?.paths?.join(", "),
+					description: formatFindRenderPaths(args?.paths),
 					meta: [formatCount("file", lines.length)],
 				},
 				uiTheme,
@@ -528,7 +537,7 @@ export const findToolRenderer = {
 
 		if (fileCount === 0) {
 			const header = renderStatusLine(
-				{ icon: "warning", title: "Find", description: args?.paths?.join(", "), meta: ["0 files"] },
+				{ icon: "warning", title: "Find", description: formatFindRenderPaths(args?.paths), meta: ["0 files"] },
 				uiTheme,
 			);
 			const lines = [header, formatEmptyMessage("No files found", uiTheme)];
@@ -539,7 +548,12 @@ export const findToolRenderer = {
 		if (details?.scopePath) meta.push(`in ${details.scopePath}`);
 		if (truncated) meta.push(uiTheme.fg("warning", "truncated"));
 		const header = renderStatusLine(
-			{ icon: truncated ? "warning" : "success", title: "Find", description: args?.paths?.join(", "), meta },
+			{
+				icon: truncated ? "warning" : "success",
+				title: "Find",
+				description: formatFindRenderPaths(args?.paths),
+				meta,
+			},
 			uiTheme,
 		);
 

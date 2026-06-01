@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
 export interface FileLockOptions {
 	staleMs?: number;
@@ -16,14 +17,15 @@ const DEFAULT_OPTIONS: Required<FileLockOptions> = {
 interface LockInfo {
 	pid: number;
 	timestamp: number;
+	token: string;
 }
 
 function getLockPath(filePath: string): string {
 	return `${filePath}.lock`;
 }
 
-async function writeLockInfo(lockPath: string): Promise<void> {
-	const info: LockInfo = { pid: process.pid, timestamp: Date.now() };
+async function writeLockInfo(lockPath: string, token: string): Promise<void> {
+	const info: LockInfo = { pid: process.pid, timestamp: Date.now(), token };
 	await Bun.write(`${lockPath}/info`, JSON.stringify(info));
 }
 
@@ -47,33 +49,58 @@ function isProcessAlive(pid: number): boolean {
 
 async function isLockStale(lockPath: string, staleMs: number): Promise<boolean> {
 	const info = await readLockInfo(lockPath);
-	if (!info) return true;
+	if (info) {
+		if (!isProcessAlive(info.pid)) return true;
+		if (Date.now() - info.timestamp > staleMs) return true;
+		return false;
+	}
 
-	if (!isProcessAlive(info.pid)) return true;
-
-	if (Date.now() - info.timestamp > staleMs) return true;
-
-	return false;
+	// No info file. Either the lock holder is between mkdir and writeLockInfo
+	// (fresh dir, do not reap) or the dir was already removed (also do not
+	// reap — there is nothing to clean up, and an unguarded fs.rm here would
+	// race with another contender's successful mkdir and wipe their dir).
+	try {
+		const stat = await fs.stat(lockPath);
+		return Date.now() - stat.mtimeMs > staleMs;
+	} catch (err) {
+		if (isEnoent(err)) return false;
+		throw err;
+	}
 }
 
-async function tryAcquireLock(lockPath: string): Promise<boolean> {
+async function tryAcquireLock(lockPath: string): Promise<string | null> {
 	try {
 		await fs.mkdir(lockPath);
-		await writeLockInfo(lockPath);
-		return true;
+		const token = randomUUID();
+		await writeLockInfo(lockPath, token);
+		return token;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-			return false;
+			return null;
 		}
 		throw error;
 	}
 }
 
-async function releaseLock(lockPath: string): Promise<void> {
+async function releaseLock(lockPath: string, expectedToken?: string): Promise<void> {
 	try {
+		if (expectedToken !== undefined) {
+			const info = await readLockInfo(lockPath);
+			if (!info || info.token !== expectedToken) {
+				// We are not the owner. The lock either expired and was reaped
+				// or another process has reclaimed it. Do nothing — releasing
+				// here would wipe the rightful owner's lock.
+				logger.debug("file-lock: skipping release for non-owned lock", {
+					lockPath,
+					expectedToken,
+					actualToken: info?.token,
+				});
+				return;
+			}
+		}
 		await fs.rm(lockPath, { recursive: true });
 	} catch {
-		// Ignore errors on release
+		// Ignore errors on release.
 	}
 }
 
@@ -92,11 +119,14 @@ async function acquireLock(filePath: string, options: FileLockOptions = {}): Pro
 	const lockPath = getLockPath(filePath);
 
 	for (let attempt = 0; attempt < opts.retries; attempt++) {
-		if (await tryAcquireLock(lockPath)) {
-			return () => releaseLock(lockPath);
+		const token = await tryAcquireLock(lockPath);
+		if (token !== null) {
+			return () => releaseLock(lockPath, token);
 		}
 
 		if ((await lockExists(lockPath)) && (await isLockStale(lockPath, opts.staleMs))) {
+			// Reaping a stale lock — no token because we didn't acquire it. The
+			// rightful owner is presumed dead; rm without ownership check.
 			await releaseLock(lockPath);
 			continue;
 		}
@@ -119,3 +149,16 @@ export async function withFileLock<T>(
 		await release();
 	}
 }
+
+/**
+ * Test-only handles for the internal lock primitives. These are NOT part of
+ * the public API — they exist so the contract tests can validate token-keyed
+ * release semantics and the mkdir-race window without re-implementing them.
+ */
+export const __internalsForTesting = {
+	tryAcquireLock,
+	releaseLock,
+	readLockInfo,
+	isLockStale,
+	getLockPath,
+};

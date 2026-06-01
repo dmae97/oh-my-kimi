@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [15.7.0] - 2026-05-31
+### Added
+
+- Added `replace block N:` and `delete block N` patch syntax to replace or delete the entire syntactic block that begins on line N using tree-sitter-resolved spans
+- Added `BlockResolver` support in `Patcher` and `PatchSection.applyTo`/`applyPartialTo` to wire language-specific block-resolution at apply time
+- Added `resolveBlockEdits` and block edit type definitions to the package API for resolving deferred `replace block` / `delete block` edits
+
 ## [15.5.13] - 2026-05-29
 ### Breaking Changes
 

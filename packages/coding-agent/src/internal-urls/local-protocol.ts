@@ -5,7 +5,7 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import { AgentRegistry } from "../registry/agent-registry";
 import { parseInternalUrl } from "./parse";
 import { validateRelativePath } from "./skill-protocol";
-import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
+import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
 
 export interface LocalProtocolOptions {
 	getArtifactsDir?: () => string | null;
@@ -164,13 +164,25 @@ export class LocalProtocolHandler implements ProtocolHandler {
 	 * Returns the active local-protocol options.
 	 *
 	 * Resolution order:
-	 * 1. Explicit override installed via {@link setOverride} (used by subagents
-	 *    that share their parent's root and by SDK consumers with a custom
-	 *    artifacts/session id mapping).
-	 * 2. The main session in `AgentRegistry.global()`. Its `SessionManager`
-	 *    supplies both `getArtifactsDir` and `getSessionId`.
+	 * 1. **Caller-supplied** `context.localProtocolOptions` (the actual session
+	 *    that initiated the `read`/`find`/`search`/`router.resolve` call). This
+	 *    is what keeps `local://` reads pinned to the calling session in
+	 *    multi-session hosts (cmux/ACP, embedded SDK consumers) where every
+	 *    session registers as `kind: "main"` and "first one wins" would route
+	 *    to the wrong artifacts directory.
+	 * 2. Explicit process-global override installed via {@link setOverride}
+	 *    (used by SDK consumers with a custom artifacts/session-id mapping and
+	 *    by code paths that do not have a calling session, e.g. TUI hyperlink
+	 *    resolution).
+	 * 3. The first `main`-kind session in `AgentRegistry.global()`. Its
+	 *    `SessionManager` supplies both `getArtifactsDir` and `getSessionId`.
+	 *    Last-resort fallback — every caller that has a session reference
+	 *    SHOULD thread it through `context` so this branch is never taken in
+	 *    multi-session setups.
 	 */
-	static resolveOptions(): LocalProtocolOptions | undefined {
+	static resolveOptions(context?: ResolveContext): LocalProtocolOptions | undefined {
+		const fromContext = context?.localProtocolOptions;
+		if (fromContext) return fromContext;
 		const override = LocalProtocolHandler.#override;
 		if (override) return override;
 		const main = AgentRegistry.global()
@@ -184,8 +196,8 @@ export class LocalProtocolHandler implements ProtocolHandler {
 		};
 	}
 
-	async resolve(url: InternalUrl): Promise<InternalResource> {
-		const opts = LocalProtocolHandler.resolveOptions();
+	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
+		const opts = LocalProtocolHandler.resolveOptions(context);
 		if (!opts) {
 			throw new Error("No session - local:// unavailable");
 		}
@@ -245,5 +257,18 @@ export class LocalProtocolHandler implements ProtocolHandler {
 			sourcePath: realTargetPath,
 			notes: ["Use write path local://<file> to persist large intermediate artifacts across turns."],
 		};
+	}
+
+	async complete(_query?: string, context?: ResolveContext): Promise<UrlCompletion[]> {
+		const opts = LocalProtocolHandler.resolveOptions(context);
+		if (!opts) return [];
+		const localRoot = path.resolve(resolveLocalRoot(opts));
+		try {
+			const files = await listFilesRecursively(localRoot);
+			return files.map(value => ({ value }));
+		} catch (err) {
+			if (isEnoent(err)) return [];
+			throw err;
+		}
 	}
 }

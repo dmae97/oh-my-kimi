@@ -26,7 +26,7 @@ console.log("Session with default auth storage and model registry");
 
 // Custom auth storage location
 const customAuthStorage = await AuthStorage.create("/tmp/my-app/agent.db");
-const customModelRegistry = new ModelRegistry(customAuthStorage, "/tmp/my-app/models.json");
+const customModelRegistry = await ModelRegistry.create(customAuthStorage, "/tmp/my-app/models.json");
 
 await createAgentSession({
 	sessionManager: SessionManager.inMemory(),
@@ -45,7 +45,7 @@ await createAgentSession({
 console.log("Session with runtime API key override");
 
 // No models.json - only built-in models
-const simpleRegistry = new ModelRegistry(authStorage); // null = no models.json
+const simpleRegistry = await ModelRegistry.create(authStorage); // null = no models.json
 await createAgentSession({
 	sessionManager: SessionManager.inMemory(),
 	authStorage,

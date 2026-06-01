@@ -1,4 +1,5 @@
 export * from "./apply";
+export * from "./block";
 export * from "./diff-preview";
 export * from "./format";
 export * from "./fs";

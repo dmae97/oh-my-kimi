@@ -232,6 +232,31 @@ describe("TUI overlays", () => {
 			tui.stop();
 		});
 	});
+	it("keeps hidden tmux overlays out of the viewport while preserving pane history", async () => {
+		await withEnv("TMUX", "1", async () => {
+			const term = new VirtualTerminal(16, 4);
+			const tui = new TUI(term);
+			tui.addChild(new MutableContentComponent(buildRows(80)));
+			try {
+				tui.start();
+				await flushRender(term);
+
+				const handle = tui.showOverlay(new LineComponent("OV_SENTINEL_", 2), { anchor: "top-left" });
+				await flushRender(term);
+				term.resize(14, 4);
+				await flushRender(term);
+
+				handle.hide();
+				await flushRender(term);
+
+				expect(term.getViewport().join("\n").includes("OV_SENTINEL_")).toBeFalsy();
+				expect(term.getScrollBuffer().join("\n").includes("row-0")).toBeTruthy();
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
 	it("does not duplicate transcript into scrollback on repeated forced redraws", async () => {
 		const term = new VirtualTerminal(40, 4);
 		const tui = new TUI(term);

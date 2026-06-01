@@ -88,21 +88,27 @@ This keeps key parsing/editor mechanics in `packages/tui` and mode semantics in 
 
 ## Render loop and diffing strategy
 
-`TUI.requestRender()` is debounced to one render per tick using `process.nextTick`. Multiple state changes in the same turn coalesce.
+`TUI.requestRender()` coalesces render requests and rate-limits ordinary frames:
+
+- forced renders (`requestRender(true, ...)`) reset cached frame/viewport state and run on `process.nextTick`
+- ordinary renders schedule through `#scheduleRender()` and respect `TUI.#MIN_RENDER_INTERVAL_MS`
+- repeated requests while a render is pending collapse into the same scheduled frame
 
 `#doRender()` pipeline:
 
 1. Render root component tree to `newLines`.
 2. Composite visible overlays (if any).
-3. Extract and strip `CURSOR_MARKER` from visible viewport lines.
-4. Append segment reset suffixes for non-image lines.
-5. Choose full repaint vs differential patch:
-   - first frame
-   - width change
-   - shrink with `clearOnShrink` enabled and no overlays
-   - edits above previous viewport
-6. For differential updates, patch only changed line range and clear stale trailing lines when needed.
-7. Reposition hardware cursor for IME support.
+3. Extract and strip `CURSOR_MARKER` from the visible viewport.
+4. Normalize non-image lines and append reset/hyperlink terminators.
+5. Classify the frame into a render intent:
+   - initial paint / forced viewport repaint
+   - explicit session replacement or native scrollback rebuild
+   - viewport repaint for width/height/offscreen mutations
+   - deferred mutation/shrink when native scrollback is scrolled
+   - trailing shrink
+   - changed-line diff
+   - noop
+6. Emit only the bytes required by the intent and commit cached frame/cursor/viewport state.
 
 Render writes use synchronized output mode (`CSI ? 2026 h/l`) to reduce flicker/tearing.
 
@@ -112,7 +118,7 @@ Critical safety checks in `TUI`:
 
 - Non-image rendered lines are expected to fit terminal width; the differential path truncates overwide lines as a last-resort guard and can write debug diagnostics when redraw debugging is enabled.
 - Overlay compositing includes defensive truncation and post-composite width guarding.
-- Width changes force full redraw because wrapping semantics change.
+- Width changes force repaint/rebuild planning because wrapping semantics change.
 - Cursor position is clamped before movement.
 
 These constraints are runtime guards plus component conventions; renderers should still return width-safe lines rather than rely on truncation.
@@ -123,9 +129,9 @@ Resize events are event-driven from `ProcessTerminal` to `TUI.requestRender()`.
 
 Effects:
 
-- Width changes trigger full redraw.
-- Height changes trigger full redraw except in Termux and terminal multiplexers, where the renderer avoids scrollback-hostile full replays.
-- Viewport/top tracking (`#previousViewportTop`, `#maxLinesRendered`) avoids invalid relative cursor math when content or terminal size changes.
+- Width changes repaint or rebuild because wrapping semantics change.
+- Height-only changes repaint the viewport when needed, but skip repaint in Termux and terminal multiplexers where replays are scrollback-hostile.
+- Viewport/top tracking (`#viewportTopRow`, `#maxLinesRendered`, scrollback high-water state) avoids invalid relative cursor math and defers destructive native scrollback rewrites while the user is scrolled into history.
 - Overlay visibility can depend on terminal dimensions (`OverlayOptions.visible`); focus is corrected when overlays become non-visible after resize.
 
 ## Streaming and incremental UI updates

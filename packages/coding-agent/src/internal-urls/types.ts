@@ -5,6 +5,8 @@
  * providing access to agent outputs and server resources without exposing filesystem paths.
  */
 
+import type { LocalProtocolOptions } from "./local-protocol";
+
 /**
  * Raw resource payload returned by protocol handlers. The `immutable` flag is
  * applied by the router from {@link ProtocolHandler.immutable}, so handlers do
@@ -30,6 +32,22 @@ export interface InternalResource {
 	 * resources. Mutable resources (e.g. local://) behave like editable files.
 	 */
 	immutable?: boolean;
+}
+
+/**
+ * A single autocomplete candidate for the host/path portion of a `scheme://`
+ * URL, produced by {@link ProtocolHandler.complete}.
+ */
+export interface UrlCompletion {
+	/**
+	 * The text that follows `scheme://` for this candidate (e.g. `humanizer`,
+	 * `subdir/data.json`, `root`). The caller renders it as `scheme://<value>`.
+	 */
+	value: string;
+	/** Human-facing label for the dropdown. Defaults to {@link value}. */
+	label?: string;
+	/** Optional one-line description shown beside the candidate. */
+	description?: string;
 }
 
 /**
@@ -61,6 +79,17 @@ export interface ResolveContext {
 	settings?: unknown;
 	/** Caller's abort signal. */
 	signal?: AbortSignal;
+	/**
+	 * Calling session's `local://` root mapping. When present, the local-protocol
+	 * handler resolves the URL against THIS session's artifacts dir instead of
+	 * picking the first `main`-kind session from the global `AgentRegistry`.
+	 *
+	 * Required for correctness in multi-session hosts (cmux/ACP, embedded SDK
+	 * consumers) where multiple sessions are registered as `main` and the
+	 * "first one wins" lookup picks the wrong artifacts directory — see
+	 * [#1608](https://github.com/can1357/oh-my-pi/issues/1608).
+	 */
+	localProtocolOptions?: LocalProtocolOptions;
 }
 
 /**
@@ -73,6 +102,8 @@ export interface WriteContext {
 	cwd?: string;
 	/** Caller's abort signal. */
 	signal?: AbortSignal;
+	/** Calling session's `local://` root mapping — see {@link ResolveContext.localProtocolOptions}. */
+	localProtocolOptions?: LocalProtocolOptions;
 }
 
 /**
@@ -107,4 +138,15 @@ export interface ProtocolHandler {
 	 * surfaces a clear "not writable" error when invoked against them.
 	 */
 	write?(url: InternalUrl, content: string, context?: WriteContext): Promise<void>;
+	/**
+	 * Optional autocomplete hook. Returns candidate completions for the
+	 * host/path portion of a `scheme://` URL while the user composes a prompt.
+	 *
+	 * Implementations **MUST** be fast and local — this runs on every keystroke.
+	 * Schemes backed by network or external CLIs (issue://, pr://, vault://,
+	 * mcp://) omit it. The caller fuzzy-filters the returned set against the
+	 * partially typed `query`, so handlers return their full (bounded) candidate
+	 * list; `query` is provided only so handlers can scope expensive enumeration.
+	 */
+	complete?(query: string): Promise<UrlCompletion[]>;
 }

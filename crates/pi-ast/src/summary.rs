@@ -208,7 +208,7 @@ pub fn summarize_code(options: SummaryOptions) -> Result<SummaryResult> {
 	})
 }
 
-fn resolve_language(lang: Option<&str>, path: Option<&str>) -> Option<SupportLang> {
+pub(crate) fn resolve_language(lang: Option<&str>, path: Option<&str>) -> Option<SupportLang> {
 	if let Some(lang) = lang.map(str::trim).filter(|lang| !lang.is_empty()) {
 		return SupportLang::from_alias(lang);
 	}
@@ -354,7 +354,7 @@ fn flush_groupable_run(
 	}
 }
 
-fn node_start_line(node: Node<'_>) -> u32 {
+pub(crate) fn node_start_line(node: Node<'_>) -> u32 {
 	node
 		.start_position()
 		.row
@@ -376,7 +376,7 @@ fn node_end_line(node: Node<'_>) -> u32 {
 /// When that byte is a newline, the resulting position lands at column 0 of
 /// the next row, which makes the naive `row + 1` answer one greater than the
 /// row of the last visible content. This helper subtracts that off.
-fn node_content_end_line(node: Node<'_>) -> u32 {
+pub(crate) fn node_content_end_line(node: Node<'_>) -> u32 {
 	let pos = node.end_position();
 	let row = if pos.column == 0 && pos.row > 0 {
 		pos.row - 1

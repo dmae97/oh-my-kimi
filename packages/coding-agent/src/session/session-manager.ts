@@ -1837,6 +1837,12 @@ export class SessionManager {
 		premiumRequests: 0,
 		cost: 0,
 	} satisfies UsageStatistics;
+	/** Per-turn output-token budget set by a `+Nk` directive (total null when none this turn). */
+	#turnBudget: { total: number | null; hard: boolean } = { total: null, hard: false };
+	/** Cumulative `output` snapshot captured when the current turn budget window opened. */
+	#turnBaselineOutput = 0;
+	/** Output tokens consumed by eval-spawned subagents in the current turn window. */
+	#turnEvalOutput = 0;
 	#persistWriter: NdjsonFileWriter | undefined;
 	#persistWriterPath: string | undefined;
 	#persistChain: Promise<void> = Promise.resolve();
@@ -2395,6 +2401,32 @@ export class SessionManager {
 	/** Get usage statistics across all assistant messages in the session. */
 	getUsageStatistics(): UsageStatistics {
 		return this.#usageStatistics;
+	}
+
+	/**
+	 * Open a new per-turn budget window: snapshot the cumulative output baseline,
+	 * reset the eval-subagent counter, and set the (optional) ceiling. Called once
+	 * per real user message; `total` is null when no `+Nk` directive was present.
+	 */
+	beginTurnBudget(total: number | null, hard: boolean): void {
+		this.#turnBudget = { total, hard };
+		this.#turnBaselineOutput = this.#usageStatistics.output;
+		this.#turnEvalOutput = 0;
+	}
+
+	/** Record output tokens consumed by an eval-spawned subagent in the current turn. */
+	recordEvalSubagentOutput(output: number): void {
+		if (Number.isFinite(output) && output > 0) this.#turnEvalOutput += output;
+	}
+
+	/**
+	 * Current turn budget for the eval `budget` helper: the ceiling (null = none),
+	 * output tokens spent this turn (main loop + eval-spawned subagents, no
+	 * double-count), and whether the ceiling is hard.
+	 */
+	getTurnBudget(): { total: number | null; spent: number; hard: boolean } {
+		const mainDelta = Math.max(0, this.#usageStatistics.output - this.#turnBaselineOutput);
+		return { total: this.#turnBudget.total, spent: mainDelta + this.#turnEvalOutput, hard: this.#turnBudget.hard };
 	}
 
 	getSessionDir(): string {

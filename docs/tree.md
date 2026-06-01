@@ -80,12 +80,14 @@ Filter modes (`TreeList`):
 
 ### `default`
 
-Shows most conversational nodes, but hides bookkeeping entry types:
+Shows conversational nodes plus any entry types not explicitly suppressed. It hides these setting/bookkeeping entry types:
 
 - `label`
 - `custom`
 - `model_change`
 - `thinking_level_change`
+
+Other internal entry types that are not rendered specially may appear as blank rows in current code.
 
 ### `no-tools`
 

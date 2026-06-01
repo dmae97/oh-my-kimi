@@ -2,8 +2,8 @@
 
 The auth broker and auth gateway are two cooperating HTTP services that move OAuth refresh tokens and provider access tokens off developer laptops and into a single broker host.
 
-- **`omp auth-broker serve`** holds the canonical SQLite credential vault, performs OAuth refreshes, and exposes a small REST API (`/v1/snapshot`, `/v1/credential/:id/refresh`, `/v1/credential/:id/disable`, `/v1/credential`, `/v1/usage`, `/v1/healthz`).
-- **`omp auth-gateway serve`** is a forward-proxy. It accepts OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses requests, injects the broker-resolved access token, and forwards the bytes to the real provider. Clients (containerised omp, llm-git, the macOS usage widget, …) never see the access token.
+- **`omp auth-broker serve`** holds the canonical SQLite credential vault, performs OAuth refreshes, and exposes a small REST API (`/v1/snapshot`, `/v1/snapshot/stream`, `/v1/credential/:id/refresh`, `/v1/credential/:id/disable`, `/v1/credential`, `/v1/usage`, `/v1/healthz`).
+- **`omp auth-gateway serve`** is a forward-proxy. It accepts OpenAI Chat Completions, Anthropic Messages, OpenAI Responses, and pi-native stream requests, resolves the broker-backed credential, and dispatches through `pi-ai` provider logic. Clients (containerised omp, llm-git, the macOS usage widget, …) never see the access token.
 
 Transport security between operator, broker, and gateway is delegated to the operator (Tailscale / Wireguard / reverse proxy + TLS). Every endpoint except `/v1/healthz` (broker) and `/healthz` (gateway) requires a bearer token.
 
@@ -25,20 +25,21 @@ Source: `packages/ai/src/auth-broker/`, `packages/ai/src/auth-gateway/`, `packag
                 │            ▼                                               │
                 │  ┌──────────────────────────┐                              │
                 │  │  omp auth-gateway serve  │  RemoteAuthCredentialStore   │
-                │  │  /v1/{chat,messages,…}   │  pulls /v1/snapshot at boot, │
-                │  │  /v1/usage, /v1/models   │  refreshes credentials by id │
-                │  └─────────┬────────────────┘  via the broker on expiry    │
+                │  │  /v1/{chat,messages,…}   │  receives snapshot stream,   │
+                │  │  /v1/usage,/v1/models    │  refreshes credentials by id │
+                │  │  /v1/credentials/check   │  via the broker on expiry    │
+                │  └─────────┬────────────────┘                              │
                 └────────────┼───────────────────────────────────────────────┘
                              │  bearer ($CONFIG_DIR/auth-gateway.token)
                              ▼
-                  unauthenticated clients
+                  gateway clients
                   (llm-git, macOS widget, robomp containers, IDE plugins, …)
                                 │
-                                ▼ same path is forwarded with Authorization
+                                ▼ provider request with broker-resolved credential
                   api.anthropic.com / api.openai.com / …
 ```
 
-The broker is the only writer of OAuth refresh tokens. Clients (including the gateway itself) load a redacted snapshot in which every `refresh` field has been replaced with `REMOTE_REFRESH_SENTINEL`; when an access token expires the client calls `POST /v1/credential/:id/refresh` and the broker performs the refresh server-side. `RemoteAuthCredentialStore` rejects any local code path that tries to write through it, with an error pointing at `omp auth-broker login` / `omp auth-broker logout`.
+The broker is the only writer of OAuth refresh tokens. Clients (including the gateway itself) load a redacted snapshot in which every `refresh` field has been replaced with `REMOTE_REFRESH_SENTINEL`; when an access token expires the client calls `POST /v1/credential/:id/refresh` and the broker performs the refresh server-side. `RemoteAuthCredentialStore` rejects local replace/upsert/delete-by-provider mutations, with errors pointing at `omp auth-broker login` / `omp auth-broker logout`.
 
 ## auth-broker
 
@@ -51,7 +52,7 @@ omp auth-broker login     [<provider>] [--via=user@host] [--dry-run]
 omp auth-broker logout    [<provider>]
 omp auth-broker list      [--json]
 omp auth-broker import    <file|dir> [--provider=<id>] [--include-disabled] [--dry-run] [--json]
-omp auth-broker migrate   --from-local [--dry-run] [--json]
+omp auth-broker migrate   --from-local [--include-oauth] [--include-env] [--dry-run] [--json]
 omp auth-broker status    [--json]
 ```
 
@@ -61,19 +62,20 @@ omp auth-broker status    [--json]
 - `logout [<provider>]` deletes every credential row for `<provider>`. With no argument it shows an interactive numbered picker of currently-stored providers.
 - `list` enumerates every registered OAuth provider id/name (the union of built-ins + `registerOAuthProvider` custom providers). `--json` emits a machine-readable array.
 - `import <file|dir>` imports CLIProxyAPI-style JSON credentials into the local SQLite store. Maps `type` field → omp provider (`claude → anthropic`, `codex → openai-codex`, `gemini → google-gemini-cli`, `antigravity → google-antigravity`, `gemini-cli → google-gemini-cli`).
-- `migrate --from-local` walks the local SQLite store + env-derived credentials and idempotently uploads them to the configured broker (`POST /v1/credential`).
+- `migrate --from-local` uploads local SQLite credentials to the configured broker (`POST /v1/credential`). Local API keys are included by default; local OAuth rows are skipped unless `--include-oauth` is set; environment-derived API keys are skipped unless `--include-env` is set. Re-runs are idempotent against the broker snapshot.
 - `status` health-pings the configured remote broker.
 
 ### Endpoints
 
-| Method | Path | Auth | Purpose |
-| ------ | ---- | ---- | ------- |
-| `GET`  | `/v1/healthz` | none | Liveness + version |
-| `GET`  | `/v1/snapshot` | bearer | Redacted snapshot (refresh tokens replaced by sentinel) |
-| `POST` | `/v1/credential` | bearer | Upsert one OAuth or API-key credential |
-| `POST` | `/v1/credential/:id/refresh` | bearer | Force-refresh one OAuth credential |
-| `POST` | `/v1/credential/:id/disable` | bearer | Disable one credential with a recorded cause |
-| `GET`  | `/v1/usage` | bearer | Aggregate `UsageReport[]` across credentials |
+| Method | Path                         | Auth   | Purpose                                                 |
+| ------ | ---------------------------- | ------ | ------------------------------------------------------- |
+| `GET`  | `/v1/healthz`                | none   | Liveness + version                                      |
+| `GET`  | `/v1/snapshot`               | bearer | Redacted snapshot (refresh tokens replaced by sentinel) |
+| `GET`  | `/v1/snapshot/stream`        | bearer | SSE snapshot stream with delta events and keepalives    |
+| `POST` | `/v1/credential`             | bearer | Upsert one OAuth or API-key credential                  |
+| `POST` | `/v1/credential/:id/refresh` | bearer | Force-refresh one OAuth credential                      |
+| `POST` | `/v1/credential/:id/disable` | bearer | Disable one credential with a recorded cause            |
+| `GET`  | `/v1/usage`                  | bearer | Aggregate `UsageReport[]` across credentials            |
 
 Requests use `Authorization: Bearer <token>`. The server compares against an in-memory token allow-list; the gateway’s implementation uses a timing-safe comparison.
 
@@ -92,26 +94,29 @@ Requests use `Authorization: Bearer <token>`. The server compares against an in-
 omp auth-gateway serve   [--bind=host:port] [--no-auth]
 omp auth-gateway token   [--regenerate] [--json]
 omp auth-gateway status  [--json]
+omp auth-gateway check   [--strict] [--json]
 ```
 
 - `serve` requires `OMP_AUTH_BROKER_URL` (or `auth.broker.url` in `config.yml`) — the gateway is itself a broker client. It calls `AuthBrokerClient.fetchSnapshot()`, wraps it in `RemoteAuthCredentialStore`, and constructs an `AuthStorage` that resolves access tokens through the broker. Default bind is `127.0.0.1:4000`. The gateway token is stored at `<config-dir>/auth-gateway.token` (`0600`); `--no-auth` disables the bearer check entirely (loopback-only use).
-- `token` / `status` mirror the broker’s equivalents.
+- `token` / `status` manage and inspect the gateway bearer token and upstream broker readiness.
+- `check` probes broker-backed credentials through the gateway store. Without `--strict` it uses provider usage probes; `--strict` also exercises each credential against its chat-completion endpoint and can consume a small amount of quota.
 
 ### Endpoints
 
-| Method | Path | Auth | Purpose |
-| ------ | ---- | ---- | ------- |
-| `GET`  | `/healthz` | none | Liveness + version |
-| `GET`  | `/v1/usage` | bearer | Aggregate `UsageReport[]` (proxied through `AuthStorage`) |
-| `GET`  | `/v1/models` | bearer | Bundled-model catalog filtered to providers with credentials |
-| `POST` | `/v1/chat/completions` | bearer | OpenAI Chat Completions wire format |
-| `POST` | `/v1/messages` | bearer | Anthropic Messages wire format |
-| `POST` | `/v1/responses` | bearer | OpenAI Responses wire format |
+| Method | Path                    | Auth   | Purpose                                                      |
+| ------ | ----------------------- | ------ | ------------------------------------------------------------ |
+| `GET`  | `/healthz`              | none   | Liveness + version                                           |
+| `GET`  | `/v1/usage`             | bearer | Aggregate `UsageReport[]` (proxied through `AuthStorage`)    |
+| `GET`  | `/v1/models`            | bearer | Bundled-model catalog filtered to providers with credentials |
+| `GET`  | `/v1/credentials/check` | bearer | Per-credential auth health probe                             |
+| `POST` | `/v1/chat/completions`  | bearer | OpenAI Chat Completions wire format                          |
+| `POST` | `/v1/messages`          | bearer | Anthropic Messages wire format                               |
+| `POST` | `/v1/responses`         | bearer | OpenAI Responses wire format                                 |
+| `POST` | `/v1/pi/stream`         | bearer | Native `pi-ai` stream wire format                            |
 
-The model id is read from the top-level `model` field. The gateway picks the first bundled `Model<Api>` matching that id and:
+The model id is read from the top-level `model` field for foreign wire formats and from the pi-native request body for `/v1/pi/stream`. The gateway picks the first bundled `Model<Api>` matching that id, parses the inbound wire format into an omp `Context`, resolves the provider credential from broker-backed `AuthStorage`, dispatches through `streamSimple()`, and re-encodes the result to the inbound format (SSE for streamed responses).
 
-- **Passthrough fast-path** — when the inbound wire format matches the model’s native API (`openai-chat → openai-completions`, `anthropic-messages → anthropic-messages`, `openai-responses → openai-responses`), the request body is forwarded byte-for-byte with the client `Authorization`/`x-api-key` stripped and replaced by `Authorization: Bearer <resolved-access-token>`. Provider-specific fields (`cache_control`, `service_tier`, tool-choice extensions, …) flow through unmodified. Hop-by-hop headers (RFC 7230) plus `Content-Encoding`/`Content-Length` are stripped from the upstream response.
-- **Translate path** — when the inbound format and the resolved model’s API differ (e.g. `/v1/chat/completions` targeting an Anthropic model, or `/v1/responses` targeting `openai-codex-responses` which runs over a websocket transport), the request is parsed against the wire schema, rebuilt into an omp `Context`, dispatched through `streamSimple()`, and re-encoded back to the inbound format (SSE for streamed responses).
+There is no raw provider passthrough path. All supported routes go through `pi-ai` provider logic so credential-specific request shaping, OAuth refresh-on-auth-error, and provider quirks stay centralized.
 
 `idleTimeout` on the underlying `Bun.serve` is set to `255 s` so long thinking-budget calls do not get killed by Bun’s default idle timeout.
 
@@ -141,14 +146,14 @@ The broker is **off** unless `OMP_AUTH_BROKER_URL` (or `auth.broker.url` in `con
 
 ### Environment variables
 
-| Variable | Purpose | Required when |
-| -------- | ------- | ------------- |
-| `OMP_AUTH_BROKER_URL`   | Base URL of the remote auth-broker (e.g. `https://broker.tailnet:8765`). Selecting this puts the client in broker mode — local SQLite is bypassed. | Any time the omp client should resolve credentials through a broker (and required by `omp auth-gateway serve`). |
-| `OMP_AUTH_BROKER_TOKEN` | Bearer token used for every broker endpoint except `/v1/healthz`. | When `OMP_AUTH_BROKER_URL` is set and no token is available from `auth.broker.token` or `<config-dir>/auth-broker.token`. |
+| Variable                | Purpose                                                                                                                                            | Required when                                                                                                             |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `OMP_AUTH_BROKER_URL`   | Base URL of the remote auth-broker (e.g. `https://broker.tailnet:8765`). Selecting this puts the client in broker mode — local SQLite is bypassed. | Any time the omp client should resolve credentials through a broker (and required by `omp auth-gateway serve`).           |
+| `OMP_AUTH_BROKER_TOKEN` | Bearer token used for every broker endpoint except `/v1/healthz`.                                                                                  | When `OMP_AUTH_BROKER_URL` is set and no token is available from `auth.broker.token` or `<config-dir>/auth-broker.token`. |
 
 Resolution order in `resolveAuthBrokerConfig()`:
 
-1. `OMP_AUTH_BROKER_URL` env (else `auth.broker.url` from `config.yml`, with `$ENV_NAME` resolution);
+1. `OMP_AUTH_BROKER_URL` env (else `auth.broker.url` from `config.yml`, resolved through `resolveConfigValue`);
 2. `OMP_AUTH_BROKER_TOKEN` env (else `auth.broker.token` from `config.yml`, else `<config-dir>/auth-broker.token`);
 3. URL set but no token resolvable → hard error pointing at the token file path.
 
@@ -156,16 +161,16 @@ The gateway has no dedicated env vars — it inherits `OMP_AUTH_BROKER_*` becaus
 
 ### `config.yml` keys
 
-| Key | Default | Purpose |
-| --- | ------- | ------- |
-| `auth.broker.url`   | unset | Same as `OMP_AUTH_BROKER_URL`; env wins. Hidden from the settings UI. |
-| `auth.broker.token` | unset | Same as `OMP_AUTH_BROKER_TOKEN`; env wins. Values may be the literal token or `$ENV_NAME` to indirect through env. |
+| Key                 | Default | Purpose                                                                                                                                                                            |
+| ------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth.broker.url`   | unset   | Same as `OMP_AUTH_BROKER_URL`; env wins. Hidden from the settings UI. Values are resolved as a literal, an environment variable name, or `!<shell command>` to use trimmed stdout. |
+| `auth.broker.token` | unset   | Same as `OMP_AUTH_BROKER_TOKEN`; env wins. Values are resolved the same way.                                                                                                       |
 
 ### Token files
 
-| Path | Owner | Mode |
-| ---- | ----- | ---- |
-| `<config-dir>/auth-broker.token`  | `omp auth-broker serve` (created at first start) | `0600` in a `0700` parent dir |
+| Path                              | Owner                                                | Mode                          |
+| --------------------------------- | ---------------------------------------------------- | ----------------------------- |
+| `<config-dir>/auth-broker.token`  | `omp auth-broker serve` (created at first start)     | `0600` in a `0700` parent dir |
 | `<config-dir>/auth-gateway.token` | `omp auth-gateway serve` (skipped under `--no-auth`) | `0600` in a `0700` parent dir |
 
 `<config-dir>` resolves to `~/.omp/` (respecting `PI_CONFIG_DIR`).
@@ -178,6 +183,6 @@ The broker only owns OAuth credentials and provider-API-key credentials that wer
 
 ## See also
 
-- [`secrets.md`](./secrets.md) — secret obfuscation around tokens that *do* leak through (e.g. `OMP_AUTH_BROKER_TOKEN` in shell output).
+- [`secrets.md`](./secrets.md) — secret obfuscation around tokens that _do_ leak through (e.g. `OMP_AUTH_BROKER_TOKEN` in shell output).
 - [`models.md`](./models.md) — provider auth resolution order; the broker plugs in at layers 2–3 (stored credentials).
 - [`environment-variables.md`](./environment-variables.md) — full env reference including `OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN`.

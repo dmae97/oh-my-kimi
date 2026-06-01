@@ -1,3 +1,4 @@
+import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { ThemeColor } from "../../../modes/theme/theme";
 
 export type ContextUsageLevel = "normal" | "warning" | "purple" | "error";
@@ -52,6 +53,16 @@ export function getContextUsageLevel(contextPercent: number, contextWindow: numb
 	}
 
 	return "normal";
+}
+
+/**
+ * Format context usage as `<percent>%/<window>` (e.g. `5.1%/1M`), matching the
+ * status line's context gauge so subagent and footer renderers stay in sync.
+ * A `null`/`undefined` percent (unknown, e.g. right after compaction) renders as `?`.
+ */
+export function formatContextUsage(contextPercent: number | null | undefined, contextWindow: number): string {
+	const pct = contextPercent === null || contextPercent === undefined ? "?" : `${contextPercent.toFixed(1)}%`;
+	return `${pct}/${formatNumber(contextWindow)}`;
 }
 
 export function getContextUsageThemeColor(level: ContextUsageLevel): ThemeColor {

@@ -10,6 +10,16 @@ function createEditor() {
 	return new CustomEditor(defaultEditorTheme);
 }
 
+describe("CustomEditor literal question mark input", () => {
+	it("does not reserve ? as a hotkeys shortcut when the editor is empty", () => {
+		const editor = createEditor();
+
+		editor.handleInput("?");
+
+		expect(editor.getText()).toBe("?");
+	});
+});
+
 describe("CustomEditor temporary model selector keybinding", () => {
 	it("triggers the temporary selector from a remapped action key instead of Alt+P", () => {
 		const editor = createEditor();

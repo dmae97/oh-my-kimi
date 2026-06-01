@@ -147,6 +147,11 @@ function resolveMode(): ShimmerMode {
 	return settings.get("display.shimmer");
 }
 
+/** Whether shimmer animations are active (any mode other than `disabled`). */
+export function shimmerEnabled(): boolean {
+	return resolveMode() !== "disabled";
+}
+
 /**
  * Apply a shimmer sweep across one or more segments, treating them as a
  * single continuous string for band positioning. Each segment can supply
