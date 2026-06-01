@@ -366,7 +366,7 @@ async function flushChangelogVersion(): Promise<void> {
 	}
 }
 
-async function createSessionManager(
+export async function createSessionManager(
 	parsed: Args,
 	cwd: string,
 	activeSettings: Settings = settings,
@@ -404,7 +404,10 @@ async function createSessionManager(
 			if (normalizedCwd !== normalizedMatchCwd) {
 				const shouldFork = await promptForkSession(match.session);
 				if (!shouldFork) {
-					throw new Error(`Session "${sessionArg}" is in another project (${match.session.cwd}).`);
+					// User declined the cross-project fork prompt. Caller distinguishes
+					// this cancellation from the "default new session" undefined return
+					// by checking `typeof parsed.resume === "string"`.
+					return undefined;
 				}
 				return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir);
 			}
@@ -845,6 +848,14 @@ export async function runRootCommand(
 		cwd,
 		settingsInstance,
 	);
+
+	// User declined the cross-project fork prompt — exit cleanly with a friendly
+	// message rather than letting the deprecated throw bubble up as an uncaught
+	// exception (see issue #1668).
+	if (typeof parsedArgs.resume === "string" && !sessionManager) {
+		process.stdout.write(`${chalk.dim("Resume cancelled: session is in another project.")}\n`);
+		return;
+	}
 
 	// Handle --resume (no value): show session picker
 	if (parsedArgs.resume === true && !parsedArgs.fork) {
