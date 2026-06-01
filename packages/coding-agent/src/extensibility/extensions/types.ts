@@ -90,6 +90,17 @@ export type { AgentToolResult, AgentToolUpdateCallback };
 // UI Context
 // ============================================================================
 
+export interface ExtensionUISelectOption {
+	label: string;
+	description?: string;
+}
+
+export type ExtensionUISelectItem = string | ExtensionUISelectOption;
+
+export function getExtensionUISelectOptionLabel(option: ExtensionUISelectItem): string {
+	return typeof option === "string" ? option : option.label;
+}
+
 /**
  * UI dialog options for extensions.
  */
@@ -135,8 +146,12 @@ export type ExtensionWidgetContent = string[] | ExtensionUiComponentFactory | un
 // and may be invoked from event handlers that have already taken the agent
 // loop's lock — hooks intentionally cannot.
 export interface ExtensionUIContext {
-	/** Show a selector and return the user's choice. */
-	select(title: string, options: string[], dialogOptions?: ExtensionUIDialogOptions): Promise<string | undefined>;
+	/** Show a selector and return the selected label, even when an option also includes a description. */
+	select(
+		title: string,
+		options: ExtensionUISelectItem[],
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<string | undefined>;
 
 	/** Show a confirmation dialog. */
 	confirm(title: string, message: string, dialogOptions?: ExtensionUIDialogOptions): Promise<boolean>;

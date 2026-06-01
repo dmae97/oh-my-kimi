@@ -14,8 +14,8 @@ import {
 	Spacer,
 	Text,
 	type TUI,
-	truncateToWidth,
 	visibleWidth,
+	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import { getMarkdownTheme, type ThemeColor, theme } from "../../modes/theme/theme";
 import {
@@ -69,6 +69,34 @@ export interface HookSelectorOptions {
 	slider?: HookSelectorSlider;
 }
 
+export interface HookSelectorOption {
+	label: string;
+	description?: string;
+}
+
+export type HookSelectorOptionInput = string | HookSelectorOption;
+
+function normalizeHookSelectorOption(option: HookSelectorOptionInput): HookSelectorOption {
+	if (typeof option === "string") return { label: option };
+	if (option.description?.trim()) {
+		return { label: option.label, description: option.description.trim() };
+	}
+	return { label: option.label };
+}
+
+function splitLeadingSpacesForWrap(line: string, width: number): { indent: string; body: string } {
+	let indentLength = 0;
+	while (indentLength < line.length && line.charCodeAt(indentLength) === 32) {
+		indentLength += 1;
+	}
+	const maxIndentLength = Math.max(0, width - 1);
+	const clampedIndentLength = Math.min(indentLength, maxIndentLength);
+	return {
+		indent: line.slice(0, clampedIndentLength),
+		body: line.slice(indentLength),
+	};
+}
+
 class OutlinedList extends Container {
 	#lines: string[] = [];
 
@@ -81,19 +109,26 @@ class OutlinedList extends Container {
 		const borderColor = (text: string) => theme.fg("border", text);
 		const horizontal = borderColor(theme.boxSharp.horizontal.repeat(Math.max(1, width)));
 		const innerWidth = Math.max(1, width - 2);
-		const content = this.#lines.map(line => {
+		const content: string[] = [];
+		for (const line of this.#lines) {
 			const normalized = replaceTabs(line);
-			const fitted = truncateToWidth(normalized, innerWidth);
-			const pad = Math.max(0, innerWidth - visibleWidth(fitted));
-			return `${borderColor(theme.boxSharp.vertical)}${fitted}${padding(pad)}${borderColor(theme.boxSharp.vertical)}`;
-		});
+			const { indent, body } = splitLeadingSpacesForWrap(normalized, innerWidth);
+			const wrapped = wrapTextWithAnsi(body, Math.max(1, innerWidth - visibleWidth(indent)));
+			for (const wrappedBody of wrapped.length > 0 ? wrapped : [""]) {
+				const wrappedLine = `${indent}${wrappedBody}`;
+				const pad = Math.max(0, innerWidth - visibleWidth(wrappedLine));
+				content.push(
+					`${borderColor(theme.boxSharp.vertical)}${wrappedLine}${padding(pad)}${borderColor(theme.boxSharp.vertical)}`,
+				);
+			}
+		}
 		return [horizontal, ...content, horizontal];
 	}
 }
 
 export class HookSelectorComponent extends Container {
-	#options: string[];
-	#filteredOptions: string[];
+	#options: HookSelectorOption[];
+	#filteredOptions: HookSelectorOption[];
 	#searchQuery = "";
 	#selectedIndex: number;
 	#maxVisible: number;
@@ -112,15 +147,15 @@ export class HookSelectorComponent extends Container {
 	#sliderComponent: Text | undefined;
 	constructor(
 		title: string,
-		options: string[],
+		options: HookSelectorOptionInput[],
 		onSelect: (option: string) => void,
 		onCancel: () => void,
 		opts?: HookSelectorOptions,
 	) {
 		super();
 
-		this.#options = options;
-		this.#filteredOptions = options;
+		this.#options = options.map(normalizeHookSelectorOption);
+		this.#filteredOptions = this.#options;
 		this.#selectedIndex = Math.min(opts?.initialIndex ?? 0, this.#filteredOptions.length - 1);
 		this.#maxVisible = Math.max(3, opts?.maxVisible ?? 12);
 		this.#onSelectCallback = onSelect;
@@ -156,7 +191,7 @@ export class HookSelectorComponent extends Container {
 					opts?.onTimeout?.();
 					const selected = this.#filteredOptions[this.#selectedIndex];
 					if (selected) {
-						this.#onSelectCallback(selected);
+						this.#onSelectCallback(selected.label);
 					} else {
 						this.#onCancelCallback();
 					}
@@ -195,10 +230,14 @@ export class HookSelectorComponent extends Container {
 			if (option === undefined) continue;
 			const isSelected = i === this.#selectedIndex;
 			const label = isSelected
-				? renderInlineMarkdown(option, mdTheme, t => theme.fg("accent", t))
-				: renderInlineMarkdown(option, mdTheme, t => theme.fg("text", t));
+				? renderInlineMarkdown(option.label, mdTheme, t => theme.fg("accent", t))
+				: renderInlineMarkdown(option.label, mdTheme, t => theme.fg("text", t));
 			const prefix = isSelected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
 			lines.push(prefix + label);
+			if (option.description) {
+				const description = renderInlineMarkdown(option.description, mdTheme, t => theme.fg("muted", t));
+				lines.push(`    ${description}`);
+			}
 		}
 
 		if (total === 0) {
@@ -273,7 +312,9 @@ export class HookSelectorComponent extends Container {
 
 	#setSearchQuery(query: string): void {
 		this.#searchQuery = query;
-		this.#filteredOptions = query.trim() ? fuzzyFilter(this.#options, query, option => option) : this.#options;
+		this.#filteredOptions = query.trim()
+			? fuzzyFilter(this.#options, query, option => `${option.label} ${option.description ?? ""}`)
+			: this.#options;
 		this.#selectedIndex = 0;
 		this.#updateList();
 	}
@@ -322,7 +363,7 @@ export class HookSelectorComponent extends Container {
 			}
 		} else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			const selected = this.#filteredOptions[this.#selectedIndex];
-			if (selected) this.#onSelectCallback(selected);
+			if (selected) this.#onSelectCallback(selected.label);
 		} else if (matchesKey(keyData, "left") || (this.#slider && !this.#isSearchEnabled() && keyData === "h")) {
 			if (this.#slider) this.#moveSlider(-1);
 			else this.#onLeftCallback?.();
