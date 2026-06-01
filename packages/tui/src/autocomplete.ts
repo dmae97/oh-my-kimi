@@ -736,7 +736,9 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				}
 				return lowerQuery.length === 0 || fuzzyMatch(lowerQuery, normalized.toLowerCase());
 			});
-			const topEntries = filteredMatches.slice(0, 20);
+			// `fuzzyFind` is already capped via `maxResults` in
+			// `buildAutocompleteFuzzyDiscoveryProfile`; no extra slice here.
+			const topEntries = filteredMatches;
 			const suggestions: AutocompleteItem[] = [];
 			for (const { path: entryPath, isDirectory } of topEntries) {
 				const pathWithoutSlash = isDirectory ? entryPath.slice(0, -1) : entryPath;

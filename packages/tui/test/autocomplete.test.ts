@@ -98,6 +98,23 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(values).toContain("@.github/");
 			expect(values.some(value => value === "@.git" || value.startsWith("@.git/"))).toBe(false);
 		});
+
+		it("returns more than 20 fuzzy matches when the project contains them", async () => {
+			// Regression: previously hard-capped at 20 by `slice(0, 20)`.
+			const total = 30;
+			for (let i = 0; i < total; i += 1) {
+				fs.writeFileSync(path.join(baseDir, `controller-${i}.ts`), "export {};\n");
+			}
+
+			const provider = new CombinedAutocompleteProvider([], baseDir);
+			const line = "@controller";
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			expect(result).not.toBeNull();
+			const values = result?.items.map(item => item.value) ?? [];
+			expect(values.length).toBeGreaterThan(20);
+			expect(values.length).toBeGreaterThanOrEqual(total);
+		});
 	});
 
 	describe("@ paths outside cwd", () => {
