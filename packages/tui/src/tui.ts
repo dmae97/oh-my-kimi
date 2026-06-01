@@ -1439,14 +1439,32 @@ export class TUI extends Container {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				this.#markNativeScrollbackDirty();
-				return { kind: "deferredMutation" };
+				// Confirmed scrolled (probe returned `false`): the reader is parked in
+				// scrollback and writing the live frame is wasted bytes — defer until
+				// the next checkpoint reconciles. Unknown viewport (e.g. native Windows
+				// Terminal where the probe cannot see WT host scrollback) is a
+				// different case: a no-op there freezes the editor on the keystroke
+				// that grows `lines.length` past the viewport (the wrap keystroke).
+				// Fall through to a non-destructive viewport repaint instead so the
+				// live UI keeps updating without yanking a possibly-scrolled reader.
+				if (this.#nativeViewportIsKnownScrolled(nativeViewportAtBottom)) {
+					return { kind: "deferredMutation" };
+				}
+				return { kind: "viewportRepaint" };
 			}
 		}
 		if (!pureAppend && structuralMutation && !isMultiplexerSession()) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				this.#markNativeScrollbackDirty();
-				return { kind: "deferredMutation" };
+				// See the matching comment on the pure-append branch above: confirmed
+				// scrolled stays a no-op; unknown viewport repaints the visible window
+				// so slash-command transitions and offscreen chrome edits paint on the
+				// same frame instead of stalling until the next prompt submit.
+				if (this.#nativeViewportIsKnownScrolled(nativeViewportAtBottom)) {
+					return { kind: "deferredMutation" };
+				}
+				return { kind: "viewportRepaint" };
 			}
 			// The append-tail path can only scroll a clean pure-tail append over an
 			// offscreen edit into history: the rows it pushes must equal the net
@@ -1619,6 +1637,10 @@ export class TUI extends Container {
 			nativeViewportAtBottom === false ||
 			(nativeViewportAtBottom === undefined && process.platform === "win32" && !allowUnknownViewportMutation)
 		);
+	}
+
+	#nativeViewportIsKnownScrolled(nativeViewportAtBottom: boolean | undefined): boolean {
+		return nativeViewportAtBottom === false;
 	}
 
 	#nativeViewportIsAtBottom(nativeViewportAtBottom: boolean | undefined): boolean {
