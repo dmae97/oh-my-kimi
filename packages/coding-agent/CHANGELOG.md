@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed auto context maintenance to include the pending prompt in the pre-send token estimate, so large user turns compact history before the provider rejects an over-limit request ([#1618](https://github.com/can1357/oh-my-pi/issues/1618)).
+
 ## [15.7.4] - 2026-05-31
 
 ### Removed

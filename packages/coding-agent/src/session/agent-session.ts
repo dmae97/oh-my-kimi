@@ -4279,7 +4279,7 @@ export class AgentSession {
 			// next microtask alongside the new turn.
 			const lastAssistant = this.#findLastAssistantMessage();
 			if (lastAssistant && !options?.skipCompactionCheck) {
-				await this.#checkCompaction(lastAssistant, false, false);
+				await this.#checkCompaction(lastAssistant, false, false, false);
 			}
 
 			// Build messages array (session context, eager todo prelude, then active prompt message)
@@ -4379,6 +4379,11 @@ export class AgentSession {
 				if (this.#promptGeneration !== generation) {
 					return;
 				}
+			}
+
+			await this.#runPrePromptCompactionIfNeeded(messages);
+			if (this.#promptGeneration !== generation) {
+				return;
 			}
 
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
@@ -6091,6 +6096,35 @@ export class AgentSession {
 		}
 	}
 
+	#estimatePendingPromptTokens(messages: AgentMessage[]): number {
+		const systemPrompt = this.agent.state.systemPrompt;
+		let tokens = systemPrompt.length === 0 ? 0 : countTokens(systemPrompt);
+		for (const message of this.messages) {
+			tokens += estimateTokens(message);
+		}
+		for (const message of messages) {
+			tokens += estimateTokens(message);
+		}
+		return tokens;
+	}
+
+	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
+		const model = this.model;
+		if (!model) return;
+		const contextWindow = model.contextWindow ?? 0;
+		if (contextWindow <= 0) return;
+		const compactionSettings = this.settings.getGroup("compaction");
+		const contextTokens = this.#estimatePendingPromptTokens(messages);
+		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
+
+		logger.debug("Pre-prompt context maintenance triggered by pending prompt size", {
+			contextTokens,
+			contextWindow,
+			model: `${model.provider}/${model.id}`,
+		});
+		await this.#runAutoCompaction("threshold", false, false, false, { autoContinue: false });
+	}
+
 	/**
 	 * Check if context maintenance or promotion is needed and run it.
 	 * Called after agent_end and before prompt submission.
@@ -6111,6 +6145,7 @@ export class AgentSession {
 	 *   `agent_end` handler set this to true so `session.prompt()` resolves cleanly; callers
 	 *   on the pre-prompt path (where the next agent turn is about to start) set it to false
 	 *   to avoid racing the deferred handoff against the new turn.
+	 * @param autoContinue Whether maintenance may schedule the agent-authored continuation prompt.
 	 * @returns true when a deferred handoff was scheduled. Callers MUST then skip any
 	 *   subsequent `#scheduleAgentContinue` / reminder appends for this turn — the
 	 *   handoff will replace session state and a concurrent `agent.continue()` would
@@ -6120,6 +6155,7 @@ export class AgentSession {
 		assistantMessage: AssistantMessage,
 		skipAbortedCheck = true,
 		allowDefer = true,
+		autoContinue = true,
 	): Promise<boolean> {
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return false;
@@ -6157,7 +6193,7 @@ export class AgentSession {
 			// No promotion target available fall through to compaction
 			const compactionSettings = this.settings.getGroup("compaction");
 			if (compactionSettings.enabled && compactionSettings.strategy !== "off") {
-				await this.#runAutoCompaction("overflow", true, false, allowDefer);
+				await this.#runAutoCompaction("overflow", true, false, allowDefer, { autoContinue });
 			}
 			return false;
 		}
@@ -6189,7 +6225,7 @@ export class AgentSession {
 					model: `${assistantMessage.provider}/${assistantMessage.model}`,
 					strategy: incompleteCompactionSettings.strategy,
 				});
-				await this.#runAutoCompaction("incomplete", true, false, allowDefer);
+				await this.#runAutoCompaction("incomplete", true, false, allowDefer, { autoContinue });
 			} else {
 				// Neither promotion nor compaction is available — surface the dead-end so
 				// the user understands why the turn yielded with nothing.
@@ -6215,7 +6251,7 @@ export class AgentSession {
 			// Try promotion first — if a larger model is available, switch instead of compacting
 			const promoted = await this.#tryContextPromotion(assistantMessage);
 			if (!promoted) {
-				return await this.#runAutoCompaction("threshold", false, false, allowDefer);
+				return await this.#runAutoCompaction("threshold", false, false, allowDefer, { autoContinue });
 			}
 		}
 		return false;
@@ -6939,17 +6975,18 @@ export class AgentSession {
 		willRetry: boolean,
 		deferred = false,
 		allowDefer = true,
+		options: { autoContinue?: boolean } = {},
 	): Promise<boolean> {
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (compactionSettings.strategy === "off") return false;
 		if (reason !== "idle" && !compactionSettings.enabled) return false;
 		const generation = this.#promptGeneration;
-
+		const shouldAutoContinue = options.autoContinue !== false && compactionSettings.autoContinue !== false;
 		// Shake runs inline (cheap, no remote LLM). On overflow recovery, if shake
 		// reclaims nothing we fall through to the summary-compaction body below so
 		// the oversized input still gets resolved.
 		if (compactionSettings.strategy === "shake") {
-			const outcome = await this.#runAutoShake(reason, willRetry, generation);
+			const outcome = await this.#runAutoShake(reason, willRetry, generation, shouldAutoContinue);
 			if (outcome !== "fallback") return false;
 		}
 		// "overflow" and "incomplete" force inline execution because they are recovery
@@ -7018,7 +7055,7 @@ export class AgentSession {
 						aborted: false,
 						willRetry: false,
 					});
-					if (!autoCompactionSignal.aborted && reason !== "idle" && compactionSettings.autoContinue !== false) {
+					if (!autoCompactionSignal.aborted && reason !== "idle" && shouldAutoContinue) {
 						this.#scheduleAutoContinuePrompt(generation);
 					}
 					return false;
@@ -7270,7 +7307,7 @@ export class AgentSession {
 			};
 			await this.#emitSessionEvent({ type: "auto_compaction_end", action, result, aborted: false, willRetry });
 
-			if (!willRetry && reason !== "idle" && compactionSettings.autoContinue !== false) {
+			if (!willRetry && reason !== "idle" && shouldAutoContinue) {
 				this.#scheduleAutoContinuePrompt(generation);
 			}
 
@@ -7348,6 +7385,7 @@ export class AgentSession {
 		reason: "overflow" | "threshold" | "idle" | "incomplete",
 		willRetry: boolean,
 		generation: number,
+		autoContinue: boolean,
 	): Promise<"handled" | "fallback"> {
 		const action = "shake";
 		await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
@@ -7355,7 +7393,6 @@ export class AgentSession {
 		const controller = new AbortController();
 		this.#autoCompactionAbortController = controller;
 		const signal = controller.signal;
-		const compactionSettings = this.settings.getGroup("compaction");
 		try {
 			const result = await this.shake("elide", { config: DEFAULT_SHAKE_CONFIG, signal });
 			if (signal.aborted) {
@@ -7391,7 +7428,7 @@ export class AgentSession {
 				skipped: !reclaimed,
 			});
 
-			if (!willRetry && reason !== "idle" && compactionSettings.autoContinue !== false) {
+			if (!willRetry && reason !== "idle" && autoContinue) {
 				this.#scheduleAutoContinuePrompt(generation);
 			}
 			if (willRetry) {
