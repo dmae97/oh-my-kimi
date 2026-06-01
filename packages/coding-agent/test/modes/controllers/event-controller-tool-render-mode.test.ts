@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -6,11 +7,15 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-
 function createContext() {
 	const setEagerNativeScrollbackRebuild = vi.fn();
 	const pendingTools = new Map<string, unknown>();
+	const chatContainer = { addChild: vi.fn() };
 	const ctx = {
 		isInitialized: true,
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		pendingTools,
+		chatContainer,
+		hideThinkingBlock: false,
+		session: { isTtsrAbortPending: false, retryAttempt: 0 },
 		ui: { setEagerNativeScrollbackRebuild, requestRender: vi.fn() },
 	} as unknown as InteractiveModeContext;
 	return { ctx, pendingTools, setEagerNativeScrollbackRebuild };
@@ -26,7 +31,13 @@ const REFRESH_TRIGGER = {
 } as unknown as AgentSessionEvent;
 
 describe("EventController tool render mode", () => {
+	beforeEach(async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true });
+	});
+
 	afterEach(() => {
+		resetSettingsForTest();
 		vi.restoreAllMocks();
 	});
 
@@ -40,6 +51,33 @@ describe("EventController tool render mode", () => {
 
 		pendingTools.clear();
 		await controller.handleEvent(REFRESH_TRIGGER);
+		expect(setEagerNativeScrollbackRebuild).toHaveBeenLastCalledWith(false);
+	});
+	it("enables eager native scrollback rebuild while assistant text is streaming", async () => {
+		const { ctx, setEagerNativeScrollbackRebuild } = createContext();
+		const controller = new EventController(ctx);
+		const message = {
+			role: "assistant",
+			content: [{ type: "text", text: "" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 0,
+		} as const;
+
+		await controller.handleEvent({ type: "message_start", message } as unknown as AgentSessionEvent);
+		expect(setEagerNativeScrollbackRebuild).toHaveBeenLastCalledWith(true);
+
+		await controller.handleEvent({ type: "message_end", message } as unknown as AgentSessionEvent);
 		expect(setEagerNativeScrollbackRebuild).toHaveBeenLastCalledWith(false);
 	});
 });
