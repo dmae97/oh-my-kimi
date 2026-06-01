@@ -52,6 +52,27 @@ export interface BashResult {
 
 const shellSessions = new Map<string, Shell>();
 const brokenShellSessions = new Set<string>();
+const shellSessionQuarantines = new Map<string, Promise<unknown>>();
+
+function quarantineShellSession(
+	sessionKey: string,
+	runPromise: Promise<ShellRunResult>,
+	abortCleanupPromise: Promise<void> | undefined,
+): void {
+	brokenShellSessions.add(sessionKey);
+	const cleanup = abortCleanupPromise
+		? Promise.allSettled([runPromise, abortCleanupPromise])
+		: Promise.allSettled([runPromise]);
+	shellSessionQuarantines.set(sessionKey, cleanup);
+	void cleanup
+		.finally(() => {
+			if (shellSessionQuarantines.get(sessionKey) === cleanup) {
+				shellSessionQuarantines.delete(sessionKey);
+				brokenShellSessions.delete(sessionKey);
+			}
+		})
+		.catch(() => undefined);
+}
 
 async function resolveShellCwd(cwd: string | undefined): Promise<string | undefined> {
 	if (!cwd) return undefined;
@@ -134,13 +155,13 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	}
 	const userSignal = options?.signal;
 	const runAbortController = new AbortController();
+	let abortCleanupPromise: Promise<void> | undefined;
 	const abortCurrentExecution = () => {
 		if (!runAbortController.signal.aborted) {
 			runAbortController.abort();
 		}
-		if (shellSession) {
-			// Native abort is async; fire-and-forget because the caller races the command separately.
-			void shellSession.abort();
+		if (shellSession && !abortCleanupPromise) {
+			abortCleanupPromise = shellSession.abort().catch(() => undefined);
 		}
 	};
 	const abortDeferred = Promise.withResolvers<"abort">();
@@ -209,8 +230,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			acceptingChunks = false;
 			if (shellSession) {
 				resetSession = true;
-				brokenShellSessions.add(sessionKey);
-				void runPromise.finally(() => brokenShellSessions.delete(sessionKey)).catch(() => undefined);
+				quarantineShellSession(sessionKey, runPromise, abortCleanupPromise);
 			} else {
 				void runPromise.catch(() => undefined);
 			}
@@ -235,6 +255,9 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 				? `Command timed out after ${Math.round(options.timeout / 1000)} seconds`
 				: "Command timed out";
 			resetSession = true;
+			if (shellSession) {
+				quarantineShellSession(sessionKey, runPromise, abortCleanupPromise);
+			}
 			return {
 				exitCode: undefined,
 				cancelled: true,
@@ -245,6 +268,9 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		// Handle cancellation
 		if (winner.result.cancelled) {
 			resetSession = true;
+			if (shellSession) {
+				quarantineShellSession(sessionKey, runPromise, abortCleanupPromise);
+			}
 			return {
 				exitCode: undefined,
 				cancelled: true,

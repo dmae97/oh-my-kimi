@@ -67,7 +67,7 @@ describe("issue #1528 discovery maxTokens default", () => {
 		expect(model?.maxTokens).toBe(32_768);
 	});
 
-	test("proxy (anthropic+openai) discovery returns maxTokens=32768 for openai-routed models", async () => {
+	test("proxy (anthropic+openai) discovery returns maxTokens=32768 for openai-routed models without bundled limits", async () => {
 		fs.writeFileSync(
 			modelsPath,
 			[
@@ -89,7 +89,7 @@ describe("issue #1528 discovery maxTokens default", () => {
 			}
 			return new Response(
 				JSON.stringify({
-					data: [{ id: "deepseek-v4-pro", supported_endpoint_types: ["openai"] }],
+					data: [{ id: "newapi-private-openai-model", supported_endpoint_types: ["openai"] }],
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
@@ -98,7 +98,7 @@ describe("issue #1528 discovery maxTokens default", () => {
 		const registry = new ModelRegistry(authStorage, modelsPath);
 		await registry.refreshProvider("newapi-proxy");
 
-		const model = registry.find("newapi-proxy", "deepseek-v4-pro");
+		const model = registry.find("newapi-proxy", "newapi-private-openai-model");
 		expect(model?.maxTokens).toBe(32_768);
 	});
 

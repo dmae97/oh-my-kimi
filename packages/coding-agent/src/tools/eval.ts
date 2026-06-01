@@ -20,8 +20,9 @@ import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
 import { borderShimmerTick, renderCodeCell } from "../tui";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
-import { resolveEvalBackends, type ToolSession } from ".";
+import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
+import { resolveEvalBackends } from "./eval-backends";
 import {
 	JSON_TREE_MAX_DEPTH_COLLAPSED,
 	JSON_TREE_MAX_DEPTH_EXPANDED,
