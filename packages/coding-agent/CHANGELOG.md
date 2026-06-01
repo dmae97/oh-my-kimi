@@ -8,6 +8,7 @@
  
 ### Fixed
 
+- Fixed Claude Code slash command discovery to load subdirectory commands recursively while preserving basename commands (e.g. `/apply`) and adding namespace aliases (e.g. `/opsx:apply`) for tools that install colon-namespaced workflows ([#1523](https://github.com/can1357/oh-my-pi/issues/1523)).
 - Fixed the `eval` tool's per-cell `timeout` killing cells that were not stalled. The timeout is now a plain wall-clock budget on the cell's **own** work that is **paused only while a host-side `agent()`/`parallel()`/`llm()` bridge call is in flight** — those calls pump a heartbeat that re-arms the watchdog, so a long fanout or a slow (e.g. reasoning-tier) completion runs to completion instead of being aborted mid-flight (a subagent's time-to-first-token, a long quiet nested tool, or an entire oneshot `llm()` request no longer trip it). Nothing else re-arms the budget: ordinary compute, `print`/stdout, `log()`/`phase()`, and non-agent tool calls all count against it, so a cell that is not delegating to an agent/llm is bounded by the regular wall-clock timeout (and the timeout message no longer says "of inactivity"). The heartbeat is a pure keepalive — never persisted or rendered.
 
 ## [15.7.5] - 2026-06-01
