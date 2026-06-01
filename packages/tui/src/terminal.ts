@@ -114,6 +114,27 @@ function isWindowsSubsystemForLinux(): boolean {
 }
 
 /**
+ * Whether the native console viewport-position probe should be consulted.
+ *
+ * Returns `true` only on native Windows that is *not* fronted by Windows
+ * Terminal. The kernel32 `GetConsoleScreenBufferInfo` API answers about the
+ * ConPTY pseudo-console — which is always pinned to its tail — and not about
+ * the user-visible scrollback in modern hosts. Treat any such host as
+ * unreportable so the renderer falls back to the deferred-rebuild path.
+ *
+ * Pure helper for unit testing; the runtime call site reads `$env` /
+ * `process.platform`. See #1635.
+ */
+export function shouldTrustNativeViewportProbe(
+	env: { WT_SESSION?: string | undefined } = $env,
+	platform: NodeJS.Platform = process.platform,
+): boolean {
+	if (platform !== "win32") return false;
+	if (env.WT_SESSION) return false;
+	return true;
+}
+
+/**
  * Real terminal using process.stdin/stdout
  */
 export class ProcessTerminal implements Terminal {
@@ -214,9 +235,18 @@ export class ProcessTerminal implements Terminal {
 	/**
 	 * Returns true when Windows' active console viewport is at the scrollback tail.
 	 * POSIX terminals do not expose native scrollback position through a standard API.
+	 *
+	 * On native Windows running under Windows Terminal (the default modern
+	 * host), the `kernel32` probe answers about the ConPTY pseudo-console — not
+	 * the user-visible WT viewport — so it would always read "at bottom" while
+	 * the user is scrolled up. Return `undefined` there so the renderer falls
+	 * back to the POSIX-style deferred-rebuild path: streaming mutations stay
+	 * non-destructive (no `\x1b[3J`), and the rebuild fires at the next prompt
+	 * checkpoint via {@link TUI.refreshNativeScrollbackIfDirty} where the user
+	 * is already pinned to the bottom by the editor keystroke. See #1635.
 	 */
 	isNativeViewportAtBottom(): boolean | undefined {
-		if (process.platform !== "win32") return undefined;
+		if (!shouldTrustNativeViewportProbe()) return undefined;
 		try {
 			const kernel32 = dlopen("kernel32.dll", {
 				GetStdHandle: { args: [FFIType.i32], returns: FFIType.ptr },
