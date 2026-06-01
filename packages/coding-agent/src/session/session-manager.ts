@@ -260,7 +260,7 @@ export function getRestorableSessionModels(
 	lastModelChangeRole: string | undefined,
 ): string[] {
 	const defaultModel = models.default;
-	if (!lastModelChangeRole || lastModelChangeRole === "default") {
+	if (!lastModelChangeRole || lastModelChangeRole === "default" || lastModelChangeRole === "temporary") {
 		return defaultModel ? [defaultModel] : [];
 	}
 

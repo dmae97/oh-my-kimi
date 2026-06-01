@@ -41,7 +41,11 @@ describe("AgentSession model persistence", () => {
 		return `${model.provider}/${model.id}`;
 	}
 
-	async function writeRoleModelSession(defaultRoleValue: string, smolRoleValue: string): Promise<string> {
+	async function writeRoleModelSession(
+		defaultRoleValue: string,
+		smolRoleValue: string,
+		lastRole = "smol",
+	): Promise<string> {
 		const targetSessionFile = path.join(tempDir.path(), `target-${Bun.nanoseconds()}.jsonl`);
 		const timestamp = "2026-06-01T00:00:00.000Z";
 		await Bun.write(
@@ -62,7 +66,7 @@ describe("AgentSession model persistence", () => {
 					parentId: "default-model",
 					timestamp,
 					model: smolRoleValue,
-					role: "smol",
+					role: lastRole,
 				},
 			]
 				.map(entry => JSON.stringify(entry))
@@ -298,6 +302,22 @@ describe("AgentSession model persistence", () => {
 		expect(created.session.model?.id).toBe(defaultModel.id);
 	});
 
+	it("restores the saved default model when switch-session last role is temporary", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const temporaryModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const defaultRoleValue = modelValue(defaultModel);
+		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, modelValue(temporaryModel), "temporary");
+
+		const created = await createSession({
+			initialModel: temporaryModel,
+			modelRoles: { default: defaultRoleValue },
+			persist: true,
+		});
+
+		await expect(created.session.switchSession(targetSessionFile)).resolves.toBe(true);
+		expect(created.session.model?.id).toBe(defaultModel.id);
+	});
+
 	it("falls back to the saved default model when startup role restore is unavailable", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const settingsFallbackModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
@@ -305,6 +325,19 @@ describe("AgentSession model persistence", () => {
 		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, "anthropic/not-loaded-anymore");
 		const settings = Settings.isolated();
 		settings.setModelRole("default", modelValue(settingsFallbackModel));
+
+		const result = await createStartupResumeSession(targetSessionFile, settings);
+
+		expect(result.session.model?.id).toBe(defaultModel.id);
+	});
+
+	it("restores the saved default model when startup last role is temporary", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const temporaryModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const defaultRoleValue = modelValue(defaultModel);
+		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, modelValue(temporaryModel), "temporary");
+		const settings = Settings.isolated();
+		settings.setModelRole("default", modelValue(temporaryModel));
 
 		const result = await createStartupResumeSession(targetSessionFile, settings);
 
