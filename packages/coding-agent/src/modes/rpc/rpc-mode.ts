@@ -12,10 +12,12 @@
  */
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import { $env, readJsonl, Snowflake } from "@oh-my-pi/pi-utils";
-import type {
-	ExtensionUIContext,
-	ExtensionUIDialogOptions,
-	ExtensionWidgetOptions,
+import {
+	type ExtensionUIContext,
+	type ExtensionUIDialogOptions,
+	type ExtensionUISelectItem,
+	type ExtensionWidgetOptions,
+	getExtensionUISelectOptionLabel,
 } from "../../extensibility/extensions";
 import { type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
@@ -256,11 +258,20 @@ export async function runRpcMode(
 			return promise;
 		}
 
-		select(title: string, options: string[], dialogOptions?: ExtensionUIDialogOptions): Promise<string | undefined> {
+		select(
+			title: string,
+			options: ExtensionUISelectItem[],
+			dialogOptions?: ExtensionUIDialogOptions,
+		): Promise<string | undefined> {
 			return this.#createDialogPromise(
 				dialogOptions,
 				undefined,
-				{ method: "select", title, options, timeout: dialogOptions?.timeout },
+				{
+					method: "select",
+					title,
+					options: options.map(getExtensionUISelectOptionLabel),
+					timeout: dialogOptions?.timeout,
+				},
 				response => parseValueDialogResponse(response, dialogOptions),
 			);
 		}

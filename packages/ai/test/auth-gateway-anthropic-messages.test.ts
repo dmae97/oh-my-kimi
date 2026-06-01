@@ -62,6 +62,7 @@ describe("anthropic-messages parseRequest", () => {
 			stop_sequences: ["\n\n"],
 			tool_choice: { type: "any" },
 			thinking: { type: "enabled", budget_tokens: 2048 },
+			output_config: { task_budget: { type: "tokens", total: 64_000, remaining: 60_000 } },
 			system: [
 				{ type: "text", text: "You are X" },
 				{ type: "text", text: "Be brief." },
@@ -119,6 +120,7 @@ describe("anthropic-messages parseRequest", () => {
 		expect(parsed.options.stopSequences).toEqual(["\n\n"]);
 		expect(parsed.options.toolChoice).toBe("required");
 		expect(parsed.options.explicitThinkingBudgetTokens).toBe(2048);
+		expect(parsed.options.taskBudget).toEqual({ type: "tokens", total: 64_000, remaining: 60_000 });
 		expect(parsed.options.extra).toBeUndefined();
 
 		expect(parsed.context.tools).toHaveLength(1);

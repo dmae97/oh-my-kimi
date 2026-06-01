@@ -59,6 +59,27 @@ type TrackedPromise<T> = {
 
 const STARTUP_TIMEOUT_MS = 250;
 
+/**
+ * Per-server reconnect-storm circuit breaker.
+ *
+ * `transport.onClose` (wired in {@link MCPManager.connectServers} and
+ * {@link MCPManager.#connectAndWireServer}) fires `reconnectServer` on every
+ * clean process exit, so a stdio MCP server that completes the
+ * `initialize` + `tools/list` handshake and then exits will pull the agent
+ * into a fork loop with no rate limit. That pathology shipped in issue #1592
+ * (a `php`-shebang MCP fork-bombing macOS, parented directly to the agent's
+ * `bun` PID via shebang exec).
+ *
+ * We keep the sliding window short — older crashes age out so a single
+ * transient failure stays cheap — but cap the burst tightly enough that the
+ * agent never spawns more than `RECONNECT_BURST_LIMIT * #doReconnect retries`
+ * (≤ 25) processes per stuck server per window. Manual `/mcp reconnect`
+ * resets the window so users can recover after fixing the underlying
+ * misconfiguration.
+ */
+const RECONNECT_BURST_WINDOW_MS = 30_000;
+const RECONNECT_BURST_LIMIT = 5;
+
 function trackPromise<T>(promise: Promise<T>): TrackedPromise<T> {
 	const tracked: TrackedPromise<T> = { promise, status: "pending" };
 	promise.then(
@@ -166,6 +187,11 @@ export class MCPManager {
 	#pendingReconnections = new Map<string, Promise<MCPServerConnection | null>>();
 	/** Preserved configs for reconnection after connection loss. */
 	#serverConfigs = new Map<string, MCPServerConfig>();
+	/**
+	 * Timestamps of recent `reconnectServer` invocations per server, used by the
+	 * crash-storm circuit breaker (see {@link RECONNECT_BURST_LIMIT}).
+	 */
+	#reconnectHistory = new Map<string, number[]>();
 	/** Monotonic epoch incremented on disconnectAll to invalidate stale reconnections. */
 	#epoch = 0;
 
@@ -666,6 +692,7 @@ export class MCPManager {
 		this.#sources.delete(name);
 		this.#serverConfigs.delete(name);
 		this.#pendingResourceRefresh.delete(name);
+		this.#reconnectHistory.delete(name);
 
 		const connection = this.#connections.get(name);
 
@@ -714,22 +741,78 @@ export class MCPManager {
 		this.#connections.clear();
 		this.#tools = [];
 		this.#subscribedResources.clear();
+		this.#reconnectHistory.clear();
 	}
 
 	/**
 	 * Reconnect to a server after a connection failure.
+	 *
 	 * Tears down the stale connection, re-resolves auth, establishes a new
-	 * connection, reloads tools, and notifies consumers.
-	 * Concurrent calls for the same server share one reconnection attempt.
-	 * Returns the new connection, or null if reconnection failed.
+	 * connection, reloads tools, and notifies consumers. Concurrent calls for
+	 * the same server share one reconnection attempt. Returns the new
+	 * connection, or `null` if reconnection failed or the per-server crash
+	 * burst limit (see {@link RECONNECT_BURST_LIMIT}) is exceeded.
+	 *
+	 * @param options.manual - When `true`, resets the crash-burst window so a
+	 *   user-driven retry (e.g. `/mcp reconnect`) is never blocked by an
+	 *   earlier storm. Defaults to `false`; the transport `onClose` callback
+	 *   and the per-tool-call retry path in `tool-bridge` MUST NOT set it.
 	 */
-	async reconnectServer(name: string): Promise<MCPServerConnection | null> {
+	async reconnectServer(name: string, options?: { manual?: boolean }): Promise<MCPServerConnection | null> {
+		if (options?.manual) {
+			this.#reconnectHistory.delete(name);
+		}
+
 		const pending = this.#pendingReconnections.get(name);
 		if (pending) return pending;
+
+		if (this.#tripReconnectBreaker(name)) {
+			return null;
+		}
 
 		const attempt = this.#doReconnect(name);
 		this.#pendingReconnections.set(name, attempt);
 		return attempt.finally(() => this.#pendingReconnections.delete(name));
+	}
+
+	/**
+	 * Record a reconnect attempt against the per-server crash window and report
+	 * whether the circuit breaker is now open. Sliding window: entries older
+	 * than {@link RECONNECT_BURST_WINDOW_MS} are pruned before the new
+	 * timestamp is appended, so a single transient failure ages out cheaply
+	 * but repeated rapid crashes accumulate until the limit is hit.
+	 */
+	#tripReconnectBreaker(name: string): boolean {
+		const now = Date.now();
+		const previous = this.#reconnectHistory.get(name) ?? [];
+		const recent = previous.filter(ts => now - ts < RECONNECT_BURST_WINDOW_MS);
+		recent.push(now);
+		this.#reconnectHistory.set(name, recent);
+
+		if (recent.length > RECONNECT_BURST_LIMIT) {
+			logger.error("MCP server crashed too many times; suspending automatic reconnects", {
+				path: `mcp:${name}`,
+				crashes: recent.length,
+				windowMs: RECONNECT_BURST_WINDOW_MS,
+			});
+			// Tear down the stale connection so `getConnectionStatus()` no
+			// longer reports it as "connected" and `waitForConnection()` does
+			// not hand a closed transport to callers. Tools stay registered
+			// in `#tools` — the user can recover with `/mcp reconnect <name>`
+			// once they've fixed the underlying misconfiguration. Mirrors the
+			// teardown in `#doReconnect`: detach `onClose` first so the
+			// transport's own `close()` cannot re-arm this path.
+			const stale = this.#connections.get(name);
+			if (stale) {
+				stale.transport.onClose = undefined;
+				void stale.transport.close().catch(() => {});
+				this.#connections.delete(name);
+			}
+			this.#pendingConnections.delete(name);
+			this.#pendingToolLoads.delete(name);
+			return true;
+		}
+		return false;
 	}
 
 	async #doReconnect(name: string): Promise<MCPServerConnection | null> {

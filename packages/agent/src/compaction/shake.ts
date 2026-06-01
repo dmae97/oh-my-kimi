@@ -1,23 +1,20 @@
 /**
  * Context-reducing surgical compaction ("shake").
  *
- * `shake` drops heavy content out of the live context mechanically rather than
- * via an LLM summary: whole tool-call results and large fenced/XML blocks are
- * replaced with short placeholders (elide) or extractive compressions
- * (summary). This module is the pure layer — region detection and in-place
- * mutation only. Artifact offload, LLM calls, persistence, and provider-session
- * teardown are orchestrated by the caller (`AgentSession.shake`).
+ * `shake` drops heavy content out of the live context mechanically: whole
+ * tool-call results and large fenced/XML blocks are replaced with short
+ * placeholders. This module is the pure layer — region detection and in-place
+ * mutation only. Artifact offload, persistence, and provider-session teardown
+ * are orchestrated by the caller (`AgentSession.shake`).
  *
  * Layering mirrors `pruning.ts`: no I/O here.
  */
 
 import type { TextContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { countTokens } from "@oh-my-pi/pi-natives";
-import { prompt } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "../types";
 import { estimateTokens } from "./compaction";
 import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "./entries";
-import shakeSummaryPrompt from "./prompts/shake-summary.md" with { type: "text" };
 import {
 	collectToolCallsById,
 	isProtectedToolResult,
@@ -406,108 +403,4 @@ export function applyShakeRegions(items: Array<{ region: ShakeRegion; replacemen
 		return bStart - aStart;
 	});
 	for (const { region, replacement } of ordered) applyShakeRegion(region, replacement);
-}
-
-// ============================================================================
-// Summary-mode compressor
-// ============================================================================
-
-const SHAKE_SUMMARY_PROMPT = prompt.render(shakeSummaryPrompt);
-
-/** One region handed to the summary compressor. */
-export interface ShakeSummaryItem {
-	index: number;
-	label: string;
-	text: string;
-}
-
-/**
- * Completion backend for shake summary. Mirrors the on-device local client
- * (`tinyModelClient.complete`): a single prompt in, text out, or `null` when
- * the model is unavailable / produced nothing. Injected by the caller so this
- * module stays I/O-free and provider-agnostic — shake summary runs on a local
- * model, never a remote/cloud LLM.
- */
-export type ShakeSummaryComplete = (
-	prompt: string,
-	options: { maxTokens: number; signal?: AbortSignal },
-) => Promise<string | null>;
-
-export interface ShakeSummaryOptions {
-	signal?: AbortSignal;
-	/** Approximate input-token budget per completion call. */
-	batchTokenBudget?: number;
-}
-
-// Local models run small context windows; keep batches modest.
-const DEFAULT_BATCH_TOKEN_BUDGET = 4_000;
-
-function buildSummaryPrompt(items: ShakeSummaryItem[]): string {
-	const parts: string[] = [SHAKE_SUMMARY_PROMPT, "", "<regions>"];
-	for (const item of items) {
-		parts.push(`<region index="${item.index}" label="${item.label}">`, item.text, "</region>");
-	}
-	parts.push("</regions>");
-	return parts.join("\n");
-}
-
-function parseSummaryResponse(responseText: string, indices: number[]): Map<number, string> {
-	const result = new Map<number, string>();
-	for (const index of indices) {
-		const pattern = new RegExp(`<region\\s+index="${index}"[^>]*>([\\s\\S]*?)</region>`);
-		const match = pattern.exec(responseText);
-		if (!match) continue;
-		const text = match[1].trim();
-		if (text.length > 0) result.set(index, text);
-	}
-	return result;
-}
-
-/**
- * Extractively compress shake regions with a local model.
- *
- * Batches regions by `batchTokenBudget`, issues one `complete` call per batch,
- * and parses the delimited `<region index="N">…</region>` output leniently.
- * Regions the backend omits/empties — and every region in a batch the backend
- * returns `null` for (model unavailable / nothing produced) — are simply absent
- * from the returned map, so the caller falls back to an elide placeholder.
- * Propagates whatever `complete` throws.
- */
-export async function summarizeShakeRegions(
-	items: ShakeSummaryItem[],
-	complete: ShakeSummaryComplete,
-	options: ShakeSummaryOptions = {},
-): Promise<Map<number, string>> {
-	const budget = options.batchTokenBudget ?? DEFAULT_BATCH_TOKEN_BUDGET;
-	const summaries = new Map<number, string>();
-	if (items.length === 0) return summaries;
-
-	const batches: ShakeSummaryItem[][] = [];
-	let current: ShakeSummaryItem[] = [];
-	let currentTokens = 0;
-	for (const item of items) {
-		const itemTokens = item.text.length === 0 ? 0 : countTokens(item.text);
-		if (current.length > 0 && currentTokens + itemTokens > budget) {
-			batches.push(current);
-			current = [];
-			currentTokens = 0;
-		}
-		current.push(item);
-		currentTokens += itemTokens;
-	}
-	if (current.length > 0) batches.push(current);
-
-	for (const batch of batches) {
-		const batchTokens = batch.reduce((sum, item) => sum + (item.text.length === 0 ? 0 : countTokens(item.text)), 0);
-		const maxTokens = Math.min(2_048, Math.max(256, Math.floor(batchTokens / 2)));
-		const text = await complete(buildSummaryPrompt(batch), { maxTokens, signal: options.signal });
-		if (!text) continue;
-		const parsed = parseSummaryResponse(
-			text,
-			batch.map(item => item.index),
-		);
-		for (const [index, value] of parsed) summaries.set(index, value);
-	}
-
-	return summaries;
 }

@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { parentPort } from "node:worker_threads";
 import type {
 	ProgressInfo,
 	TextGenerationPipeline,
@@ -20,12 +19,7 @@ import {
 	type TinyTitleLocalModelSpec,
 } from "./models";
 import { formatTitleUserMessage, normalizeGeneratedTitle } from "./text";
-import type {
-	TinyTitleProgressEvent,
-	TinyTitleTransport,
-	TinyTitleWorkerInbound,
-	TinyTitleWorkerOutbound,
-} from "./title-protocol";
+import type { TinyTitleProgressEvent, TinyTitleTransport, TinyTitleWorkerInbound } from "./title-protocol";
 
 const TITLE_PREFILL = "<title>";
 const TITLE_CLOSE = "</title>";
@@ -461,15 +455,14 @@ async function generateTitle(
 	return extractTinyTitle(output[0]?.generated_text ?? "");
 }
 
-function buildCompletionPrompt(generator: TextGenerationPipeline, promptText: string, prefill?: string): string {
+function buildCompletionPrompt(generator: TextGenerationPipeline, promptText: string): string {
 	const chat = [{ role: "user", content: promptText }];
 	const chatTemplateOptions = {
 		add_generation_prompt: true,
 		tokenize: false,
 		enable_thinking: false,
 	};
-	const base = generator.tokenizer.apply_chat_template(chat, chatTemplateOptions) as string;
-	return prefill ? `${base}${prefill}` : base;
+	return `${generator.tokenizer.apply_chat_template(chat, chatTemplateOptions)}`;
 }
 
 /**
@@ -484,37 +477,18 @@ async function generateCompletion(
 	modelKey: TinyLocalModelKey,
 	promptText: string,
 	maxTokens: number | undefined,
-	prefill?: string,
-	stop?: string,
 ): Promise<string | null> {
 	const generator = await loadPipeline(modelKey, transport, requestId);
-	const text = buildCompletionPrompt(generator, promptText, prefill);
+	const text = buildCompletionPrompt(generator, promptText);
 	const requested = maxTokens ?? MEMORY_COMPLETION_MAX_NEW_TOKENS;
 	const maxNewTokens = Math.min(Math.max(1, requested), MEMORY_COMPLETION_MAX_NEW_TOKENS);
-	const transformers = stop ? await loadTransformers(transport, requestId, modelKey) : undefined;
 	const output = (await generator(text, {
 		max_new_tokens: maxNewTokens,
 		do_sample: false,
 		return_full_text: false,
-		...(transformers && stop
-			? { stopping_criteria: createStopOnTextCriteria(transformers, generator.tokenizer, stop) }
-			: {}),
 	})) as TextGenerationStringOutput;
-	const generated = output[0]?.generated_text ?? "";
-	// Re-attach the forced prefix so the caller's parser sees the full assistant turn,
-	// including the opening tag it pinned via `prefill`.
-	const full = `${prefill ?? ""}${generated}`.trim();
-	return full === "" ? null : full;
-}
-
-function releasePipelines(): void {
-	// Intentionally NOT calling `pipeline.dispose()`. transformers.js disposes the
-	// underlying onnxruntime InferenceSession, freeing native memory that Bun's
-	// worker/NAPI teardown then frees a second time — a double-free that aborts the
-	// process on quit ("malloc: pointer being freed was not allocated" /
-	// "NAPI FATAL ERROR"). The worker is torn down immediately after `close`, so the
-	// OS reclaims the model memory regardless; skipping dispose avoids the crash.
-	pipelines.clear();
+	const generated = (output[0]?.generated_text ?? "").trim();
+	return generated === "" ? null : generated;
 }
 
 function enqueueRequest(
@@ -548,8 +522,6 @@ async function handleQueuedRequest(
 				request.modelKey,
 				request.prompt,
 				request.maxTokens,
-				request.prefill,
-				request.stop,
 			);
 			transport.send({ type: "completion", id: request.id, text });
 			return;
@@ -567,33 +539,6 @@ export function startTinyTitleWorker(transport: TinyTitleTransport): void {
 			transport.send({ type: "pong", id: message.id });
 			return;
 		}
-		if (message.type === "close") {
-			releasePipelines();
-			transport.send({ type: "closed" });
-			transport.close();
-			return;
-		}
 		enqueueRequest(transport, message);
 	});
 }
-
-if (!parentPort) throw new Error("tiny-title-worker: missing parentPort");
-
-const port = parentPort;
-const transport: TinyTitleTransport = {
-	send: (message: TinyTitleWorkerOutbound) => port.postMessage(message),
-	onMessage: handler => {
-		const wrap = (data: unknown): void => handler(data as TinyTitleWorkerInbound);
-		port.on("message", wrap);
-		return () => port.off("message", wrap);
-	},
-	close: () => {
-		try {
-			port.close();
-		} catch {
-			// Already closed.
-		}
-	},
-};
-
-startTinyTitleWorker(transport);

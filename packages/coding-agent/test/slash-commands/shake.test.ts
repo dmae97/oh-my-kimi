@@ -44,7 +44,7 @@ describe("/shake dispatch (ACP)", () => {
 	});
 
 	it("parses each explicit mode", async () => {
-		for (const mode of ["elide", "summary", "images"] as const) {
+		for (const mode of ["elide", "images"] as const) {
 			const h = acpRuntime();
 			await executeAcpBuiltinSlashCommand(`/shake ${mode}`, h.runtime);
 			expect(h.shake).toHaveBeenCalledWith(mode);
@@ -62,7 +62,7 @@ describe("/shake dispatch (ACP)", () => {
 	it("is advertised to ACP clients with the mode hint", () => {
 		const advertised = ACP_BUILTIN_SLASH_COMMANDS.find(c => c.name === "shake");
 		expect(advertised).toBeDefined();
-		expect(advertised?.input?.hint).toBe("[elide|summary|images]");
+		expect(advertised?.input?.hint).toBe("[elide|images]");
 	});
 
 	it("advertises /shake images as the image-stripping path and no longer advertises /drop-images", () => {
@@ -74,10 +74,10 @@ describe("/shake dispatch (ACP)", () => {
 describe("/shake dispatch (TUI)", () => {
 	it("routes the parsed mode to handleShakeCommand and clears the editor", async () => {
 		const h = tuiRuntime();
-		const handled = await executeBuiltinSlashCommand("/shake summary", h.runtime);
+		const handled = await executeBuiltinSlashCommand("/shake images", h.runtime);
 		expect(handled).toBe(true);
 		expect(h.setText).toHaveBeenCalledWith("");
-		expect(h.handleShakeCommand).toHaveBeenCalledWith("summary");
+		expect(h.handleShakeCommand).toHaveBeenCalledWith("images");
 	});
 
 	it("defaults to elide for a bare /shake", async () => {

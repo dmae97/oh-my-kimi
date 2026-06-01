@@ -51,7 +51,7 @@ async function validateXiaomiApiKey(apiKey: string, signal?: AbortSignal): Promi
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
-					"x-api-key": apiKey,
+					Authorization: `Bearer ${apiKey}`,
 				},
 				body: JSON.stringify({
 					model: ep.model,

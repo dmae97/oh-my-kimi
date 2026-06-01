@@ -16,6 +16,7 @@ import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition, AgentProgress } from "../task/types";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
+import { withBridgeHeartbeat } from "./heartbeat";
 import type { JsStatusEvent } from "./js/shared/types";
 // Import review tools for side effects (registers subagent tool handlers).
 import "../tools/review";
@@ -231,44 +232,49 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	const id = await outputManager.allocate(outputIdBase(parsed.label, agentName));
 	const assignment = parsed.prompt.trim();
 	const context = trimToUndefined(parsed.context);
-	const result = await taskExecutor.runSubprocess({
-		cwd: options.session.cwd,
-		agent: effectiveAgent,
-		task: renderSubagentPrompt(assignment),
-		assignment,
-		context,
-		description: trimToUndefined(parsed.label),
-		index: 0,
-		id,
-		taskDepth: options.session.taskDepth ?? 0,
-		modelOverride,
-		parentActiveModelPattern,
-		thinkingLevel: effectiveAgent.thinkingLevel,
-		outputSchema: structured ? parsed.schema : undefined,
-		sessionFile,
-		persistArtifacts: Boolean(sessionFile),
-		artifactsDir,
-		contextFile,
-		enableLsp: (options.session.enableLsp ?? true) && options.session.settings.get("task.enableLsp"),
-		signal: options.signal,
-		eventBus: options.session.eventBus,
-		onProgress: progress => emitProgressStatus(options.emitStatus, progress),
-		authStorage: options.session.authStorage,
-		modelRegistry: options.session.modelRegistry,
-		settings: options.session.settings,
-		mcpManager,
-		contextFiles,
-		skills: availableSkills,
-		autoloadSkills: resolvedAutoloadSkills,
-		workspaceTree: options.session.workspaceTree,
-		promptTemplates: options.session.promptTemplates,
-		localProtocolOptions,
-		parentArtifactManager,
-		parentHindsightSessionState: options.session.getHindsightSessionState?.(),
-		parentMnemopiSessionState: options.session.getMnemopiSessionState?.(),
-		parentTelemetry: options.session.getTelemetry?.(),
-		parentEvalSessionId,
-	});
+	// Pump a heartbeat while the subagent runs so the eval idle watchdog stays
+	// armed across quiet stretches (time-to-first-token, long nested tools)
+	// where `onProgress` would otherwise emit no status to re-arm it.
+	const result = await withBridgeHeartbeat(options.emitStatus, () =>
+		taskExecutor.runSubprocess({
+			cwd: options.session.cwd,
+			agent: effectiveAgent,
+			task: renderSubagentPrompt(assignment),
+			assignment,
+			context,
+			description: trimToUndefined(parsed.label),
+			index: 0,
+			id,
+			taskDepth: options.session.taskDepth ?? 0,
+			modelOverride,
+			parentActiveModelPattern,
+			thinkingLevel: effectiveAgent.thinkingLevel,
+			outputSchema: structured ? parsed.schema : undefined,
+			sessionFile,
+			persistArtifacts: Boolean(sessionFile),
+			artifactsDir,
+			contextFile,
+			enableLsp: (options.session.enableLsp ?? true) && options.session.settings.get("task.enableLsp"),
+			signal: options.signal,
+			eventBus: options.session.eventBus,
+			onProgress: progress => emitProgressStatus(options.emitStatus, progress),
+			authStorage: options.session.authStorage,
+			modelRegistry: options.session.modelRegistry,
+			settings: options.session.settings,
+			mcpManager,
+			contextFiles,
+			skills: availableSkills,
+			autoloadSkills: resolvedAutoloadSkills,
+			workspaceTree: options.session.workspaceTree,
+			promptTemplates: options.session.promptTemplates,
+			localProtocolOptions,
+			parentArtifactManager,
+			parentHindsightSessionState: options.session.getHindsightSessionState?.(),
+			parentMnemopiSessionState: options.session.getMnemopiSessionState?.(),
+			parentTelemetry: options.session.getTelemetry?.(),
+			parentEvalSessionId,
+		}),
+	);
 
 	if (result.exitCode !== 0 || result.error) {
 		const failureMessage =

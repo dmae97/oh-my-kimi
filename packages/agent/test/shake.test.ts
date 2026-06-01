@@ -1,12 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type {
-	SessionEntry,
-	SessionMessageEntry,
-	ShakeConfig,
-	ShakeSummaryComplete,
-	ShakeSummaryItem,
-} from "@oh-my-pi/pi-agent-core/compaction";
+import type { SessionEntry, SessionMessageEntry, ShakeConfig } from "@oh-my-pi/pi-agent-core/compaction";
 import {
 	AGGRESSIVE_SHAKE_CONFIG,
 	applyShakeRegion,
@@ -14,7 +8,6 @@ import {
 	collectShakeRegions,
 	DEFAULT_SHAKE_CONFIG,
 	estimateTokens,
-	summarizeShakeRegions,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, TextContent, ToolCall, ToolResultMessage } from "@oh-my-pi/pi-ai";
 
@@ -224,64 +217,5 @@ describe("shake config presets", () => {
 
 	test("empty branch yields no regions", () => {
 		expect(collectShakeRegions([] as SessionEntry[], AGGRESSIVE_SHAKE_CONFIG)).toHaveLength(0);
-	});
-});
-
-describe("summarizeShakeRegions — local-model compressor", () => {
-	const items: ShakeSummaryItem[] = [
-		{ index: 0, label: "bash", text: "alpha ".repeat(40) },
-		{ index: 1, label: "read", text: "beta ".repeat(40) },
-	];
-
-	test("parses delimited per-region output from the local backend", async () => {
-		const complete: ShakeSummaryComplete = async () =>
-			'<region index="0">compressed A</region>\n<region index="1">compressed B</region>';
-		const summaries = await summarizeShakeRegions(items, complete);
-		expect(summaries.get(0)).toBe("compressed A");
-		expect(summaries.get(1)).toBe("compressed B");
-	});
-
-	test("omits regions the model did not emit (caller elides them)", async () => {
-		const complete: ShakeSummaryComplete = async () => '<region index="0">only A</region>';
-		const summaries = await summarizeShakeRegions(items, complete);
-		expect(summaries.get(0)).toBe("only A");
-		expect(summaries.has(1)).toBe(false);
-	});
-
-	test("returns an empty map when the local model is unavailable (null)", async () => {
-		const complete: ShakeSummaryComplete = async () => null;
-		const summaries = await summarizeShakeRegions(items, complete);
-		expect(summaries.size).toBe(0);
-	});
-
-	test("feeds the configured maxTokens and the rendered region prompt to the backend", async () => {
-		let seenPrompt = "";
-		let seenMaxTokens = 0;
-		const complete: ShakeSummaryComplete = async (prompt, opts) => {
-			seenPrompt = prompt;
-			seenMaxTokens = opts.maxTokens;
-			return '<region index="0">x</region>\n<region index="1">y</region>';
-		};
-		await summarizeShakeRegions(items, complete);
-		expect(seenPrompt).toContain('<region index="0" label="bash">');
-		expect(seenPrompt).toContain('<region index="1" label="read">');
-		expect(seenMaxTokens).toBeGreaterThanOrEqual(256);
-	});
-
-	test("splits regions across batches by token budget (one call per batch)", async () => {
-		const big: ShakeSummaryItem[] = [
-			{ index: 0, label: "bash", text: "word ".repeat(400) },
-			{ index: 1, label: "read", text: "word ".repeat(400) },
-		];
-		let calls = 0;
-		const complete: ShakeSummaryComplete = async prompt => {
-			calls++;
-			// Echo back whichever index this batch carried.
-			return /index="0"/.test(prompt) ? '<region index="0">a</region>' : '<region index="1">b</region>';
-		};
-		const summaries = await summarizeShakeRegions(big, complete, { batchTokenBudget: 200 });
-		expect(calls).toBe(2);
-		expect(summaries.get(0)).toBe("a");
-		expect(summaries.get(1)).toBe("b");
 	});
 });

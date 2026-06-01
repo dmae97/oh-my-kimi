@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { borderSegmentHead, renderOutputBlock } from "@oh-my-pi/pi-coding-agent/tui";
+import { borderSegmentHeadCol, renderOutputBlock } from "@oh-my-pi/pi-coding-agent/tui";
 
 // Matches both truecolor (38;2;r;g;b) and 256-color (38;5;n) foreground escapes
 // so the assertions hold regardless of the detected terminal color mode.
@@ -15,28 +15,31 @@ describe("renderOutputBlock animated border", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("paints a dark traversing segment distinct from the accent border while running", async () => {
+	it("paints a dark traversing segment on the bottom edge distinct from the accent border", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const accent = theme.getFgAnsi("accent");
-		// Pin the clock so the segment head sits at perimeter index 0 (top-left).
+		// Pin the clock so the segment sits at the left wall of the bottom edge.
 		vi.spyOn(Date, "now").mockReturnValue(0);
 
 		const lines = renderOutputBlock(
 			{ state: "running", sections: [{ lines: ["hello"] }], width: 30, animate: true },
 			theme,
 		);
-		const [topLine, contentLine] = lines;
+		const topLine = lines[0]!;
+		const bottomLine = lines[lines.length - 1]!;
 
-		// The top edge carries the base accent plus a second (segment) color.
-		const topColors = new Set(fgEscapes(topLine!));
-		expect(topColors.has(accent)).toBe(true);
-		const segColor = [...topColors].find(c => c !== accent);
+		// The bottom edge carries the base accent plus a second (segment) color.
+		const bottomColors = new Set(fgEscapes(bottomLine));
+		expect(bottomColors.has(accent)).toBe(true);
+		const segColor = [...bottomColors].find(c => c !== accent);
 		expect(segColor).toBeDefined();
 
-		// With the head at the top-left, the segment must not leak onto the side
-		// borders of an interior row — only the outer edge animates.
-		expect(contentLine).toContain(accent);
-		expect(contentLine).not.toContain(segColor!);
+		// Only the bottom edge animates — the top edge and interior rows stay accent.
+		expect(topLine).toContain(accent);
+		expect(topLine).not.toContain(segColor!);
+		for (const line of lines.slice(1, -1)) {
+			expect(line).not.toContain(segColor!);
+		}
 	});
 
 	it("keeps the border a single accent color when animation is off", async () => {
@@ -64,41 +67,33 @@ describe("renderOutputBlock animated border", () => {
 	});
 });
 
-describe("borderSegmentHead", () => {
-	it("does not teleport when the box grows a row (no reset on new output/resize)", () => {
-		// At a fixed instant, adding one content row (H+1, perimeter +2) must shift
-		// the head by at most a couple of cells — the bug was a modulo remap that
-		// flung the segment across the border whenever new data arrived.
-		const W = 20;
-		const now = 1830; // arbitrary mid-lap instant
-		for (let H = 4; H < 12; H++) {
-			const a = borderSegmentHead(W, H, now);
-			const b = borderSegmentHead(W, H + 1, now);
-			expect(Math.abs(b - a)).toBeLessThanOrEqual(2);
+describe("borderSegmentHeadCol", () => {
+	it("does not teleport when the box grows a column (smooth on resize)", () => {
+		// At a fixed instant, widening by one column must nudge the center by at
+		// most one cell — position is derived from the clock, not remapped.
+		const now = 1830; // arbitrary mid-cycle instant
+		for (let W = 10; W < 40; W++) {
+			const a = borderSegmentHeadCol(W, now);
+			const b = borderSegmentHeadCol(W + 1, now);
+			expect(Math.abs(b - a)).toBeLessThanOrEqual(1);
 		}
 	});
 
-	it("moves non-linearly — slower at corners than mid-edge", () => {
-		const W = 20;
-		const H = 6;
-		const P = 2 * W + 2 * H - 4;
+	it("bounces the full width and eases at each wall", () => {
+		const W = 30;
+		const centers: number[] = [];
+		// 6000ms spans at least one full there-and-back bounce.
+		for (let ms = 0; ms <= 6000; ms += 50) centers.push(borderSegmentHeadCol(W, ms));
+		// Sweeps the whole bottom edge: reaches both walls.
+		expect(Math.min(...centers)).toBeLessThan(1);
+		expect(Math.max(...centers)).toBeGreaterThan(W - 2);
+		// Eased: per-step speed varies (near-stationary at the walls, faster mid-sweep).
 		const steps: number[] = [];
-		let prev = borderSegmentHead(W, H, 0);
-		for (let ms = 80; ms <= 4000; ms += 80) {
-			const cur = borderSegmentHead(W, H, ms);
-			const d = (((cur - prev) % P) + P) % P;
-			steps.push(d);
-			prev = cur;
-		}
-		// A linear sweep would land on one constant step; easing yields a spread
-		// (near-stationary frames at corners, faster frames mid-edge).
+		for (let i = 1; i < centers.length; i++) steps.push(Math.abs(centers[i]! - centers[i - 1]!));
 		expect(Math.min(...steps)).toBeLessThan(Math.max(...steps));
-		expect(Math.min(...steps)).toBe(0);
-		// One eased lap covers the whole perimeter exactly once.
-		expect(steps.reduce((a, b) => a + b, 0)).toBe(P);
 	});
 
-	it("starts at the top-left corner at lap origin", () => {
-		expect(borderSegmentHead(20, 6, 0)).toBe(0);
+	it("starts at the left wall at cycle origin", () => {
+		expect(borderSegmentHeadCol(20, 0)).toBe(0);
 	});
 });

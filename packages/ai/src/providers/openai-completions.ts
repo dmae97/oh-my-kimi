@@ -46,8 +46,8 @@ import {
 	rewriteCopilotError,
 } from "../utils/http-inspector";
 import {
+	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
@@ -421,10 +421,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const idleTimeoutMs =
-				options?.streamIdleTimeoutMs ??
-				getOpenAIStreamIdleTimeoutMs(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model));
-			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+			const idleTimeoutFallbackMs = getOpenAICompletionsStreamIdleTimeoutFallbackMs(model);
+			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs(idleTimeoutFallbackMs);
+			const firstEventTimeoutMs =
+				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			const {
@@ -1582,10 +1582,9 @@ export function convertMessages(
 				});
 			}
 		} else if (msg.role === "assistant") {
-			// Some providers (e.g. Mistral) don't accept null content, use empty string instead
 			const assistantMsg: ChatCompletionAssistantMessageParam = {
 				role: "assistant",
-				content: compat.requiresAssistantAfterToolResult ? "" : null,
+				content: null,
 			};
 
 			const textBlocks = msg.content.filter(b => b.type === "text") as TextContent[];
@@ -1757,8 +1756,10 @@ export function convertMessages(
 					(assistantMsg as any).reasoning_details = reasoningDetails;
 				}
 			}
-			// DeepSeek requires non-null content when reasoning_content is present
-			if (assistantMsg.content === null && hasReasoningField) {
+			// Some OpenAI-compatible backends concatenate assistant content as a
+			// string even for tool-call replay. OpenAI accepts an empty string here;
+			// null trips strict/proxy implementations before the tool result is read.
+			if (assistantMsg.content === null && (hasReasoningField || assistantMsg.tool_calls)) {
 				assistantMsg.content = "";
 			}
 			// Skip assistant messages that have no content, no tool calls, and no reasoning payload.

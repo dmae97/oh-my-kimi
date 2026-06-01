@@ -10,6 +10,8 @@ import { AgentOutputManager } from "../../task/output-manager";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../task/types";
 import type { ToolSession } from "../../tools";
 import { EVAL_AGENT_MAX_DEPTH, runEvalAgent } from "../agent-bridge";
+import { setBridgeHeartbeatIntervalMs } from "../heartbeat";
+import { IdleTimeout } from "../idle-timeout";
 import { disposeAllVmContexts } from "../js/context-manager";
 import { executeJs } from "../js/executor";
 import { disposeAllKernelSessions, executePython } from "../py/executor";
@@ -232,6 +234,7 @@ describe("runEvalAgent", () => {
 describe("agent() through eval runtimes", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+		setBridgeHeartbeatIntervalMs();
 	});
 
 	afterAll(async () => {
@@ -429,5 +432,33 @@ describe("agent() through eval runtimes", () => {
 			(output): output is Extract<typeof output, { type: "status" }> => output.type === "status",
 		);
 		expect(displayAgentEvents.length).toBe(2);
+	});
+
+	it("keeps the idle watchdog armed while a quiet agent() runs past the budget", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-heartbeat-");
+		const { session } = makeEvalSession(tempDir, "js-agent-heartbeat");
+		mockAgents();
+		// Heartbeat cadence well under the idle budget so a working-but-silent
+		// subagent re-arms the watchdog several times before it could expire.
+		setBridgeHeartbeatIntervalMs(15);
+
+		// runSubprocess runs far past the budget and emits NO progress of its own
+		// — the only thing standing between the subagent and a spurious idle abort
+		// is the heartbeat keepalive the bridge pumps while it awaits.
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			await Bun.sleep(200);
+			return singleResult(options, { output: "done" });
+		});
+
+		// Mirror the eval tool's wiring: an IdleTimeout drives cancellation and
+		// every status event re-arms it.
+		using idle = new IdleTimeout(60);
+		const result = await runEvalAgent(
+			{ prompt: "investigate" },
+			{ session, signal: idle.signal, emitStatus: () => idle.bump() },
+		);
+
+		expect(idle.signal.aborted).toBe(false);
+		expect(result.text).toBe("done");
 	});
 });
