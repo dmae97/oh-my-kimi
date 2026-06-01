@@ -11,18 +11,20 @@
  * Endpoints:
  *   GET  /healthz                          → unauth; ok + version
  *   GET  /v1/usage                         → aggregated provider usage (5-min per-credential cache via AuthStorage)
+ *   GET  /v1/credentials/check             → per-credential auth probe (diagnose 401s in a multi-account pool)
  *   GET  /v1/models                        → list known models from the registry
  *   POST /v1/chat/completions              → OpenAI chat-completions in/out
  *   POST /v1/messages                      → Anthropic messages in/out
  *   POST /v1/responses                     → OpenAI Responses in/out
  */
-import { logger } from "@oh-my-pi/pi-utils";
+import { extractRetryHint, logger } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../auth-storage";
 import { Effort } from "../model-thinking";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
 import * as piNative from "../providers/pi-native-server";
+import { isUsageLimitError } from "../rate-limit-utils";
 import { streamSimple } from "../stream";
 import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
 import { parseBind } from "../utils/parse-bind";
@@ -139,12 +141,15 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 	if (options.reasoning !== undefined) opts.reasoning = options.reasoning;
 	if (options.disableReasoning !== undefined) opts.disableReasoning = options.disableReasoning;
 	if (options.hideThinkingSummary !== undefined) opts.hideThinkingSummary = options.hideThinkingSummary;
+	if (options.taskBudget !== undefined) opts.taskBudget = options.taskBudget;
 	if (options.serviceTier !== undefined) opts.serviceTier = options.serviceTier;
 	if (options.cacheRetention !== undefined) opts.cacheRetention = options.cacheRetention;
 	// Client-supplied `prompt_cache_key` wins; otherwise derive a stable
 	// key from the model + system + tools so prefix caching engages on
 	// Codex-class backends across turns of the same logical conversation.
-	opts.sessionId = options.promptCacheKey ?? deriveSessionId(parsed.modelId, parsed.context);
+	const promptCacheKey = options.promptCacheKey ?? deriveSessionId(parsed.modelId, parsed.context);
+	opts.promptCacheKey = promptCacheKey;
+	opts.sessionId = promptCacheKey;
 	if (options.thinkingBudgets) {
 		opts.thinkingBudgets = { ...(opts.thinkingBudgets ?? {}), ...options.thinkingBudgets };
 	}
@@ -188,52 +193,117 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 
 /**
  * Classify an upstream / gateway-internal error into a status code and a
- * provider-style error type tag. Used by `handleFormatEndpoint` /
- * `handlePassthrough` to drive `route.module.formatError` so every wire
- * format emits its native envelope shape.
+ * format-neutral type. The order is intentional:
+ *
+ *  1. Honour an explicit numeric `status` property on the thrown error.
+ *  2. Parse a status code embedded in the message string. Provider errors
+ *     virtually always carry one (`Google API error (400): …`, `HTTP 429`,
+ *     `status=503`) and the embedded value is authoritative.
+ *  3. Fall through to **word-boundaried** substring heuristics. The old
+ *     `lower.includes("rate")` test famously matched
+ *     `GenerateContentRequest`, surfacing every Google 400 as a 429
+ *     `rate_limit_error`. The patterns here all require boundaries so they
+ *     don't collide with provider field names.
  */
-function classifyGatewayError(err: unknown): { status: number; type: string; message: string } {
+export function classifyGatewayError(err: unknown): { status: number; type: string; message: string } {
 	const message = err instanceof Error ? err.message : String(err);
-	const lower = message.toLowerCase();
 
-	// Custom pi-ai errors may attach a numeric `status` property; honor it
-	// when present and pick the matching tag.
+	// 1. Custom pi-ai errors may attach a numeric `status` property.
 	const statusProp =
 		typeof err === "object" && err !== null && typeof (err as { status?: unknown }).status === "number"
 			? (err as { status: number }).status | 0
 			: undefined;
-	if (statusProp !== undefined) {
-		if (statusProp === 401 || statusProp === 403)
-			return { status: statusProp, type: "authentication_error", message };
-		if (statusProp === 429) return { status: 429, type: "rate_limit_error", message };
-		if (statusProp >= 400 && statusProp < 500) return { status: statusProp, type: "invalid_request_error", message };
-		if (statusProp >= 500) return { status: statusProp, type: "upstream_error", message };
-	}
+	if (statusProp !== undefined) return bucketStatus(statusProp, message);
 
 	if (err instanceof Error && err.name === "AbortError") return { status: 499, type: "request_aborted", message };
-	if (lower.includes("aborted") || lower.includes("abortsignal")) {
+
+	// 2. Status code embedded in the message. Requires a contextual keyword
+	// (`HTTP`, `API error`, `status`, …) or a leading `(NNN)` token so we
+	// don't trip on incidental three-digit numbers ("took 200ms").
+	const embedded = extractEmbeddedStatus(message);
+	if (embedded !== undefined) return bucketStatus(embedded, message);
+
+	// 3. Word-boundaried substring heuristics.
+	if (/\baborted\b|\babort signal\b/i.test(message)) {
 		return { status: 499, type: "request_aborted", message };
 	}
-	if (
-		lower.includes("401") ||
-		lower.includes("403") ||
-		lower.includes("unauthorized") ||
-		lower.includes("forbidden")
-	) {
+	if (/\b(?:unauthorized|forbidden)\b/i.test(message)) {
 		return { status: 401, type: "authentication_error", message };
 	}
-	if (lower.includes("429") || lower.includes("rate") || lower.includes("quota")) {
+	if (
+		// Match rate-limit phrasings without colliding with
+		// `GenerateContentRequest`, `accelerate`, `iterate`, `deprecated`, etc.
+		/\brate[- _]?limit(?:s|ed|ing)?\b|\bquota(?:_exceeded| exceeded)?\b|\btoo[- _]many[- _]requests\b/i.test(
+			message,
+		) ||
+		// Usage-limit phrasings emit no embedded status. Codex friendly text
+		// reads "You have hit your ChatGPT usage limit … Try again in ~158
+		// min."; pi-ai's central `isUsageLimitError` already encodes every
+		// known provider variant, so reuse it instead of forking the regex.
+		// Without this branch the classifier falls through to the default
+		// 502/upstream_error, which is what callers were seeing when their
+		// account hit its cap.
+		isUsageLimitError(message)
+	) {
 		return { status: 429, type: "rate_limit_error", message };
 	}
-	if (lower.includes("unsupported") || lower.includes("invalid")) {
+	if (/\b(?:unsupported|invalid_request|invalid request|bad request|malformed)\b/i.test(message)) {
 		return { status: 400, type: "invalid_request_error", message };
 	}
 	return { status: 502, type: "upstream_error", message };
 }
 
+function bucketStatus(status: number, message: string): { status: number; type: string; message: string } {
+	if (status === 401 || status === 403) return { status, type: "authentication_error", message };
+	if (status === 429) return { status, type: "rate_limit_error", message };
+	if (status >= 400 && status < 500) return { status, type: "invalid_request_error", message };
+	if (status >= 500) return { status, type: "upstream_error", message };
+	return { status: 502, type: "upstream_error", message };
+}
+
+/**
+ * Pull a status code from common error-message shapes. Returns undefined when
+ * no contextual keyword is present, so we never guess at incidental numbers.
+ */
+function extractEmbeddedStatus(message: string): number | undefined {
+	// `Google API error (400)`, `OpenAI API error (429): …`, `(503)`
+	// `HTTP 429: too many requests`
+	// `status: 503`, `status_code=429`, `status=400`
+	const re = /(?:\bHTTP\b|\bAPI error\b|\bstatus(?:[- _]?code)?\b)\s*[:=]?\s*\(?\s*(\d{3})\b|\((\d{3})\)/i;
+	const m = message.match(re);
+	if (!m) return undefined;
+	const raw = m[1] ?? m[2];
+	if (!raw) return undefined;
+	const code = Number.parseInt(raw, 10);
+	return Number.isFinite(code) && code >= 100 && code < 600 ? code : undefined;
+}
+
+/**
+ * Hook fired by {@link streamSimple} when the upstream request fails in a
+ * way that's rotatable — today that's HTTP 401 (credential is bad) and
+ * usage-limit phrasing matched by {@link isUsageLimitError} (Codex's
+ * `usage_limit_reached`, Anthropic's `usage_limit_reached`, Google's
+ * `resource_exhausted`, …). The two cases need different storage actions:
+ *
+ * - **usage-limit** → {@link AuthStorage.markUsageLimitReached}. Marks just
+ *   the current session's credential as temporarily blocked (honouring
+ *   `retry-after` / `resets_at` hints when present) and returns `true` only
+ *   when a sibling credential is still available. Burning the credential
+ *   with `invalidateCredentialMatching` here would orphan accounts whose
+ *   reset window is several hours away — exactly the bug this helper exists
+ *   to avoid.
+ * - **auth-failure** → {@link AuthStorage.invalidateCredentialMatching}.
+ *   Suspect/delete the row so it doesn't get re-picked next request.
+ *
+ * In both branches we return the next `getApiKey` result (sticky on the
+ * same `sessionId`) so streamSimple can transparently retry the pre-emit
+ * failure with a fresh credential. Returning `undefined` aborts the retry
+ * and surfaces the original error to the caller.
+ */
 async function refreshGatewayApiKeyAfterAuthError(
 	storage: AuthStorage,
 	model: Model<Api>,
+	sessionId: string,
 	provider: string,
 	oldKey: string,
 	error: unknown,
@@ -241,14 +311,33 @@ async function refreshGatewayApiKeyAfterAuthError(
 	format: string,
 	peer: string,
 ): Promise<string | undefined> {
-	await storage.invalidateCredentialMatching(provider, oldKey, signal);
+	const message = error instanceof Error ? error.message : String(error);
+	if (isUsageLimitError(message)) {
+		const retryAfterMs = extractRetryHint(undefined, message);
+		const switched = await storage.markUsageLimitReached(provider, sessionId, {
+			retryAfterMs,
+			baseUrl: model.baseUrl,
+			signal,
+		});
+		logger.debug("auth-gateway retrying provider request after usage-limit block", {
+			format,
+			provider,
+			peer,
+			switched,
+			retryAfterMs,
+			error: message,
+		});
+		if (!switched) return undefined;
+		return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
+	}
+	await storage.invalidateCredentialMatching(provider, oldKey, { sessionId, signal });
 	logger.debug("auth-gateway retrying provider request after credential invalidation", {
 		format,
 		provider,
 		peer,
-		error: error instanceof Error ? error.message : String(error),
+		error: message,
 	});
-	return storage.getApiKey(provider, undefined, { modelId: model.id, signal });
+	return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
 }
 
 function clientClosedResponse(route: { module: FormatModule }): Response {
@@ -301,37 +390,12 @@ async function handleFormatEndpoint(
 		return route.module.formatError(404, "invalid_request_error", `Unknown model: ${modelId}`);
 	}
 
-	// pi-ai's stream() does NOT consult AuthStorage — the caller (us) is
-	// expected to resolve the credential and pass it as `options.apiKey`.
-	// For OAuth providers this returns the access token (refreshed via the
-	// broker override on AuthStorage when needed).
-	let apiKey: string | undefined;
-	try {
-		apiKey = await bootOpts.storage.getApiKey(model.provider, undefined, {
-			modelId: model.id,
-			signal: controller.signal,
-		});
-	} catch (error) {
-		if (controller.signal.aborted) return clientClosedResponse(route);
-		const classified = classifyGatewayError(error);
-		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
-		return route.module.formatError(classified.status, classified.type, classified.message);
-	}
-	if (controller.signal.aborted) return clientClosedResponse(route);
-	if (!apiKey) {
-		return route.module.formatError(
-			401,
-			"authentication_error",
-			`No credential available for provider ${model.provider}`,
-		);
-	}
-
-	// Parse + validate against the strict format schema, rebuild as omp's
-	// canonical Context, dispatch through pi-ai's streamSimple, encode the
-	// canonical event stream back to the inbound format. There is no
-	// passthrough fast-path — every request flows through pi-ai so that
-	// credential-specific request shaping (OAuth Claude-Code prefix, beta
-	// headers, codex websocket transport, …) always applies.
+	// Parse the wire-format request BEFORE resolving the credential so we
+	// have a stable per-conversation `sessionId` to thread into AuthStorage.
+	// Sticky-credential tracking and `markUsageLimitReached` both key off
+	// this id; without it `getApiKey` would re-roundrobin every request
+	// and `markUsageLimitReached` would no-op (it can only mark the
+	// credential it last handed out to that session).
 	let parsed: ParsedFormatRequest;
 	try {
 		parsed = route.module.parseRequest(body, req.headers);
@@ -350,12 +414,45 @@ async function handleFormatEndpoint(
 	}
 	if (controller.signal.aborted) return clientClosedResponse(route);
 
+	// Sticky credential id: honour the client's `prompt_cache_key` when
+	// supplied (so external session ids align), otherwise derive from
+	// modelId + system + tools + first message. Mirrored into
+	// streamOpts.sessionId / promptCacheKey by `buildStreamOptions`.
+	const sessionId = parsed.options.promptCacheKey ?? deriveSessionId(parsed.modelId, parsed.context);
+	parsed.options.promptCacheKey ??= sessionId;
+
+	// pi-ai's stream() does NOT consult AuthStorage — the caller (us) is
+	// expected to resolve the credential and pass it as `options.apiKey`.
+	// For OAuth providers this returns the access token (refreshed via the
+	// broker override on AuthStorage when needed).
+	let apiKey: string | undefined;
+	try {
+		apiKey = await bootOpts.storage.getApiKey(model.provider, sessionId, {
+			modelId: model.id,
+			signal: controller.signal,
+		});
+	} catch (error) {
+		if (controller.signal.aborted) return clientClosedResponse(route);
+		const classified = classifyGatewayError(error);
+		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
+		return route.module.formatError(classified.status, classified.type, classified.message);
+	}
+	if (controller.signal.aborted) return clientClosedResponse(route);
+	if (!apiKey) {
+		return route.module.formatError(
+			401,
+			"authentication_error",
+			`No credential available for provider ${model.provider}`,
+		);
+	}
+
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
 	streamOpts.apiKey = apiKey;
 	streamOpts.onAuthError = (provider, oldKey, error) =>
 		refreshGatewayApiKeyAfterAuthError(
 			bootOpts.storage,
 			model,
+			sessionId,
 			provider,
 			oldKey,
 			error,
@@ -473,10 +570,17 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	if (!model) {
 		return piNative.formatError(404, "invalid_request_error", `Unknown model: ${parsed.modelId}`);
 	}
+	// Pi-native already parsed `streamOpts.sessionId` (when set by the
+	// client); fall back to the derived key so credential-stickiness lines
+	// up with cache-prefix stickiness — same identity used for both means
+	// the next turn of this conversation reuses the same credential until
+	// it hits a usage cap, then markUsageLimitReached can hand off.
+	const sessionId = parsed.options.sessionId ?? deriveSessionId(parsed.modelId, parsed.context);
+	parsed.options.sessionId ??= sessionId;
 
 	let apiKey: string | undefined;
 	try {
-		apiKey = await bootOpts.storage.getApiKey(model.provider, undefined, {
+		apiKey = await bootOpts.storage.getApiKey(model.provider, sessionId, {
 			modelId: model.id,
 			signal: controller.signal,
 		});
@@ -504,6 +608,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 		refreshGatewayApiKeyAfterAuthError(
 			bootOpts.storage,
 			model,
+			sessionId,
 			provider,
 			oldKey,
 			error,
@@ -519,10 +624,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	// headers — the client's values win when they collide.
 	const captured = captureRequestHeaders(req.headers);
 	streamOpts.headers = { ...captured, ...(streamOpts.headers ?? {}) };
-	// Cache identity: explicit `sessionId` wins, then derive a stable key
-	// from model + system + tools + first message so Codex prefix caching
-	// engages on the same logical conversation across turns.
-	streamOpts.sessionId ??= deriveSessionId(parsed.modelId, parsed.context);
+	streamOpts.sessionId ??= sessionId;
 
 	logger.info("auth-gateway request", {
 		format: "pi-native",
@@ -600,6 +702,22 @@ async function handleUsage(storage: AuthStorage, signal: AbortSignal): Promise<R
 	return json(200, { generatedAt: Date.now(), reports: trimmed });
 }
 
+/**
+ * Per-credential health probe surfaced on `GET /v1/credentials/check`. Tells
+ * the caller exactly which row in their broker is producing 401s — the
+ * aggregate `/v1/usage` endpoint silently drops failed credentials, which is
+ * the wrong shape when you're diagnosing auth.
+ *
+ * The probe is sequential (one credential at a time) to avoid synchronized
+ * N-account fan-out tripping per-IP rate limits on provider `/usage`
+ * endpoints. For multi-account pools that's the difference between getting
+ * a clean diagnosis and getting a 429 storm.
+ */
+async function handleCredentialsCheck(storage: AuthStorage, signal: AbortSignal): Promise<Response> {
+	const credentials = await storage.checkCredentials({ signal });
+	return json(200, { generatedAt: Date.now(), credentials });
+}
+
 function handleModelsList(opts: AuthGatewayBootOptions): Response {
 	const list = opts.listModels ? Array.from(opts.listModels()) : [];
 	const data = list.map(model => ({
@@ -643,6 +761,13 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 				// same client struct.
 				if (req.method === "GET" && pathname === "/v1/usage") {
 					return withCors(await handleUsage(opts.storage, req.signal), req);
+				}
+
+				// Per-credential auth probe — diagnoses which row in a multi-account
+				// pool is producing 401s. Aggregated `/v1/usage` silently drops failed
+				// credentials, so we need a separate endpoint that captures errors.
+				if (req.method === "GET" && pathname === "/v1/credentials/check") {
+					return withCors(await handleCredentialsCheck(opts.storage, req.signal), req);
 				}
 
 				// Provider-format dispatch.

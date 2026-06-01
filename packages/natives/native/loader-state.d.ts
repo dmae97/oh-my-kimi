@@ -1,6 +1,13 @@
 export interface EmbeddedAddonFile {
 	variant: "modern" | "baseline" | "default";
 	filename: string;
+	size?: number;
+	filePath?: string;
+}
+
+export interface EmbeddedAddonArchive {
+	format: "tar.gz";
+	filename: string;
 	filePath: string;
 }
 
@@ -8,6 +15,7 @@ export interface EmbeddedAddon {
 	platformTag: string;
 	version: string;
 	files: EmbeddedAddonFile[];
+	archive?: EmbeddedAddonArchive;
 }
 
 export interface DetectCompiledBinaryInput {
@@ -39,6 +47,7 @@ export interface ResolveLoaderCandidatesInput {
 	isCompiledBinary: boolean;
 	stageFromNodeModules?: boolean;
 	nativeDir: string;
+	leafPackageDir?: string | null;
 	execDir: string;
 	versionedDir: string;
 	userDataDir: string;
@@ -46,4 +55,11 @@ export interface ResolveLoaderCandidatesInput {
 
 export function resolveLoaderCandidates(input: ResolveLoaderCandidatesInput): string[];
 
+export interface ExtractEmbeddedAddonArchiveInput {
+	archivePath: string;
+	files: EmbeddedAddonFile[];
+	targetDir: string;
+}
+
+export function extractEmbeddedAddonArchive(input: ExtractEmbeddedAddonArchiveInput): string[];
 export function loadNative(): Record<string, unknown>;

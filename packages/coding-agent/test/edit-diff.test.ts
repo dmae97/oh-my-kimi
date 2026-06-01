@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { formatHashlineHeader, InMemorySnapshotStore, missingSnapshotTagMessage } from "@oh-my-pi/hashline";
 import {
 	adjustIndentation,
 	computeEditDiff,
 	computeHashlineDiff,
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
-	formatLineHash,
 } from "@oh-my-pi/pi-coding-agent/edit";
 
 describe("findMatch", () => {
@@ -236,11 +236,13 @@ describe("computeHashlineDiff", () => {
 		const line = "unchanged content";
 		await Bun.write(sourcePath, `${line}\n`);
 
-		// `≔1<hash>` with the same line as payload is a true no-op: the edit
+		// `replace 1..1:` with the same line in the body is a true no-op: the edit
 		// fires through computeHashlineDiff but produces identical content.
-		const anchor = formatLineHash(1, line);
-		const input = `§${sourcePath}\n≔${anchor}\n${line}\n`;
-		const result = await computeHashlineDiff({ input }, tempDir);
+		const text = `${line}\n`;
+		const snapshotStore = new InMemorySnapshotStore();
+		const tag = snapshotStore.record(sourcePath, text);
+		const input = `${formatHashlineHeader(sourcePath, tag)}\nreplace 1..1:\n+${line}\n`;
+		const result = await computeHashlineDiff({ input }, tempDir, snapshotStore);
 		expect("error" in result).toBe(true);
 		if ("error" in result) {
 			expect(result.error).toContain("No changes would be made");
@@ -249,16 +251,46 @@ describe("computeHashlineDiff", () => {
 
 	test("accepts hashline input edits", async () => {
 		const sourcePath = path.join(tempDir, "source.txt");
-		await Bun.write(sourcePath, "first\n");
+		const text = "first\n";
+		await Bun.write(sourcePath, text);
 
-		const result = await computeHashlineDiff({ input: `§${sourcePath}\n»EOF\nsecond` }, tempDir);
+		const snapshotStore = new InMemorySnapshotStore();
+		const tag = snapshotStore.record(sourcePath, text);
+		const result = await computeHashlineDiff(
+			{ input: `${formatHashlineHeader(sourcePath, tag)}\ninsert tail:\n+second` },
+			tempDir,
+			snapshotStore,
+		);
 		expect("diff" in result).toBe(true);
 		if ("diff" in result) {
 			expect(result.diff).toContain("second");
 		}
 	});
+
+	test("rejects a tagless head/tail insert in the preview path, matching apply", async () => {
+		const relativePath = "source.txt";
+		await Bun.write(path.join(tempDir, relativePath), "first\n");
+
+		// A tagless `insert tail:` carries no anchored edit, yet the apply path
+		// (Patcher.prepare) rejects it for the missing mandatory tag. The
+		// preview/diff path MUST emit the SAME rejection so a successful preview
+		// never precedes a failing apply.
+		const result = await computeHashlineDiff(
+			{ input: `¶${relativePath}\ninsert tail:\n+second` },
+			tempDir,
+			new InMemorySnapshotStore(),
+		);
+		expect("error" in result).toBe(true);
+		if ("error" in result) {
+			expect(result.error).toBe(missingSnapshotTagMessage(relativePath));
+		}
+	});
 	test("returns a handled error when the source path is a local URL", async () => {
-		const result = await computeHashlineDiff({ input: "§local://PLAN.md\n»EOF\n" }, tempDir);
+		const result = await computeHashlineDiff(
+			{ input: "¶local://PLAN.md\ninsert tail:\n+x" },
+			tempDir,
+			new InMemorySnapshotStore(),
+		);
 
 		expect("error" in result).toBe(true);
 		if ("error" in result) {

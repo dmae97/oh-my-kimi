@@ -100,7 +100,6 @@ function setByPath(obj: RawSettings, segments: string[], value: unknown): void {
 }
 
 const PATH_SCOPED_ARRAY_SETTINGS = new Set<SettingPath>(["enabledModels", "disabledProviders"]);
-
 type PathScopedStringArrayEntry = {
 	path?: unknown;
 	paths?: unknown;
@@ -218,6 +217,8 @@ export class Settings {
 			for (const [key, value] of Object.entries(options.overrides)) {
 				setByPath(this.#overrides, key.split("."), value);
 			}
+
+			this.#overrides = this.#migrateRawSettings(this.#overrides);
 		}
 	}
 
@@ -408,7 +409,7 @@ export class Settings {
 
 	/**
 	 * Get the edit variant for a specific model.
-	 * Returns "patch", "replace", "hashline", "vim", "apply_patch", or null (use global default).
+	 * Returns "patch", "replace", "hashline", "apply_patch", or null (use global default).
 	 */
 	getEditVariantForModel(model: string | undefined): EditMode | null {
 		if (!model) return null;
@@ -643,23 +644,33 @@ export class Settings {
 			}
 		}
 
-		// edit.mode: removed "atom" variant is now "hashline"
+		// edit.mode: removed "atom" and "vim" variants map back to "hashline"
 		const editObj = raw.edit as Record<string, unknown> | undefined;
 		if (editObj) {
-			if (editObj.mode === "atom") {
+			if (editObj.mode === "atom" || editObj.mode === "vim") {
 				editObj.mode = "hashline";
 			}
 			const modelVariants = editObj.modelVariants as Record<string, unknown> | undefined;
 			if (modelVariants && typeof modelVariants === "object" && !Array.isArray(modelVariants)) {
 				for (const [pattern, variant] of Object.entries(modelVariants)) {
-					if (variant === "atom") {
+					if (variant === "atom" || variant === "vim") {
 						modelVariants[pattern] = "hashline";
 					}
 				}
 			}
 		}
-		if (raw["edit.mode"] === "atom") {
+		if (raw["edit.mode"] === "atom" || raw["edit.mode"] === "vim") {
 			raw["edit.mode"] = "hashline";
+		}
+
+		// compaction.strategy: removed local-model shake-summary mode; plain shake
+		// keeps the same mechanical artifact-backed reduction without background CPU.
+		const compactionObj = raw.compaction as Record<string, unknown> | undefined;
+		if (compactionObj?.strategy === "shake-summary") {
+			compactionObj.strategy = "shake";
+		}
+		if (raw["compaction.strategy"] === "shake-summary") {
+			raw["compaction.strategy"] = "shake";
 		}
 
 		// statusLine: rename "plan_mode" segment to "mode"
@@ -689,6 +700,18 @@ export class Settings {
 			const memoryRoot = (memoryBackendObj ?? {}) as Record<string, unknown>;
 			memoryRoot.backend = next;
 			raw.memory = memoryRoot;
+		}
+
+		// Rename the legacy local `mnemosyne` memory backend to `mnemopi`.
+		// - `memory.backend: "mnemosyne"` now selects the renamed backend.
+		// - the top-level `mnemosyne` settings object becomes `mnemopi`.
+		// Idempotent: skips the object move once `mnemopi` is materialised.
+		if (memoryBackendObj && memoryBackendObj.backend === "mnemosyne") {
+			memoryBackendObj.backend = "mnemopi";
+		}
+		if ("mnemosyne" in raw && !("mnemopi" in raw)) {
+			raw.mnemopi = raw.mnemosyne;
+			delete raw.mnemosyne;
 		}
 
 		// hindsight: dynamicBankId/agentName -> scoping enum + bankId
@@ -856,7 +879,26 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 			setDefaultTabWidth(value);
 		}
 	},
+	"provider.appendOnlyContext": value => {
+		if (typeof value === "string") {
+			for (const cb of appendOnlyModeCallbacks) cb(value);
+		}
+	},
 };
+/** Callbacks invoked when `provider.appendOnlyContext` changes at runtime. */
+const appendOnlyModeCallbacks = new Set<(value: string) => void>();
+
+/**
+ * Subscribe to append-only mode setting changes.
+ * Returns an unsubscribe function. Multiple sessions (main + subagents)
+ * can register independently without overwriting each other.
+ */
+export function onAppendOnlyModeChanged(cb: (value: string) => void): () => void {
+	appendOnlyModeCallbacks.add(cb);
+	return () => {
+		appendOnlyModeCallbacks.delete(cb);
+	};
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Global Singleton

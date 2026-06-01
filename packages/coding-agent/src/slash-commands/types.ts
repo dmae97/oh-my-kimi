@@ -116,11 +116,5 @@ export interface SlashCommandSpec extends BuiltinSlashCommand {
 	) => Promise<SlashCommandResult> | SlashCommandResult;
 }
 
-/**
- * @deprecated Use `SlashCommandRuntime` directly. Retained as an alias so
- * downstream code that imported the ACP-specific name keeps compiling.
- */
-export type AcpBuiltinCommandRuntime = SlashCommandRuntime;
-
 /** Result returned by `executeAcpBuiltinSlashCommand`. */
 export type AcpBuiltinSlashCommandResult = false | { consumed: true } | { prompt: string };

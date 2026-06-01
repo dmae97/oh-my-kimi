@@ -13,6 +13,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { hookFetch } from "@oh-my-pi/pi-utils";
+import type { AgentStorage } from "../../../src/session/agent-storage";
 import type { ToolSession } from "../../../src/tools";
 import { ToolAbortError } from "../../../src/tools/tool-errors";
 import { WebSearchTool } from "../../../src/web/search";
@@ -24,6 +25,13 @@ import { withHardTimeout } from "../../../src/web/search/providers/utils";
 import type { SearchProviderId, SearchResponse } from "../../../src/web/search/types";
 
 const FAKE_SESSION = {} as ToolSession;
+const fakeStorage = {
+	listAuthCredentials: () => [],
+	updateAuthCredential: () => undefined,
+	get authStore() {
+		return null as never;
+	},
+} as unknown as AgentStorage;
 
 describe("withHardTimeout", () => {
 	it("returns a signal that aborts on the hard timeout when no caller signal is supplied", async () => {
@@ -66,7 +74,7 @@ describe("Anthropic provider hard-timeout wiring", () => {
 			});
 		});
 
-		await searchAnthropic({ query: "ping", system_prompt: "" });
+		await searchAnthropic({ query: "ping", system_prompt: "" }, fakeStorage);
 
 		// Without the hard-timeout wrapper, init.signal would be undefined when
 		// the caller didn't supply one — leaving fetch with no cancellation at
@@ -88,7 +96,7 @@ describe("Anthropic provider hard-timeout wiring", () => {
 			});
 		});
 
-		await searchAnthropic({ query: "ping", system_prompt: "", signal: ac.signal });
+		await searchAnthropic({ query: "ping", system_prompt: "", signal: ac.signal }, fakeStorage);
 
 		// The signal handed to fetch must be a *composed* one, not the raw
 		// caller signal: that's what guarantees the hard timeout fires even

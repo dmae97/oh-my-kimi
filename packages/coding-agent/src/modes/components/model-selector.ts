@@ -18,7 +18,8 @@ import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS, MODEL_ROLES } from "../..
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import { type ThemeColor, theme } from "../../modes/theme/theme";
-import { getThinkingLevelMetadata } from "../../thinking";
+import { matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
+import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../../thinking";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
 
@@ -82,19 +83,43 @@ interface ScopedModelItem {
 
 interface RoleAssignment {
 	model: Model;
-	thinkingLevel: ThinkingLevel;
+	thinkingLevel: ConfiguredThinkingLevel;
 }
 
-type RoleSelectCallback = (model: Model, role: string | null, thinkingLevel?: ThinkingLevel, selector?: string) => void;
+type RoleSelectCallback = (
+	model: Model,
+	role: string | null,
+	thinkingLevel?: ConfiguredThinkingLevel,
+	selector?: string,
+) => void;
 type CancelCallback = () => void;
 interface MenuRoleAction {
 	label: string;
 	role: string; // now accepts custom role strings
 }
 
+interface ProviderTabState {
+	id: string;
+	label: string;
+	providerId?: string;
+}
 const ALL_TAB = "ALL";
 const CANONICAL_TAB = "CANONICAL";
 
+const STATIC_PROVIDER_TABS: ProviderTabState[] = [
+	{ id: ALL_TAB, label: ALL_TAB },
+	{ id: CANONICAL_TAB, label: CANONICAL_TAB },
+];
+
+const MODEL_TAB_REFRESH_DEBOUNCE_MS = 120;
+
+function formatProviderTabLabel(providerId: string): string {
+	return providerId.replace(/[-_]+/g, " ").toUpperCase();
+}
+
+function createProviderTab(providerId: string): ProviderTabState {
+	return { id: providerId, label: formatProviderTabLabel(providerId), providerId };
+}
 /**
  * Component that renders a model selector with provider tabs and context menu.
  * - Tab/Arrow Left/Right: Switch between provider tabs
@@ -126,8 +151,12 @@ export class ModelSelectorComponent extends Container {
 	#menuRoleActions: MenuRoleAction[] = [];
 
 	// Tab state
-	#providers: string[] = [ALL_TAB];
+	#providers: ProviderTabState[] = STATIC_PROVIDER_TABS;
 	#activeTabIndex: number = 0;
+	#refreshingProviders: Set<string> = new Set();
+	#scheduledProviderRefreshes: Map<string, ReturnType<typeof setTimeout>> = new Map();
+	#refreshSpinnerFrame: number = 0;
+	#refreshSpinnerInterval?: NodeJS.Timeout;
 
 	// Context menu state
 	#isMenuOpen: boolean = false;
@@ -141,7 +170,7 @@ export class ModelSelectorComponent extends Container {
 		settings: Settings,
 		modelRegistry: ModelRegistry,
 		scopedModels: ReadonlyArray<ScopedModelItem>,
-		onSelect: (model: Model, role: string | null, thinkingLevel?: ThinkingLevel, selector?: string) => void,
+		onSelect: RoleSelectCallback,
 		onCancel: () => void,
 		options?: { temporaryOnly?: boolean; initialSearchInput?: string },
 	) {
@@ -260,7 +289,12 @@ export class ModelSelectorComponent extends Container {
 		}
 	}
 
-	#sortModels(models: ModelItem[]): void {
+	/**
+	 * @param skipRoleRank When a search query is narrowing the list, role assignments
+	 *   should NOT promote a weakly-matching default model above a perfect text
+	 *   match — defer to MRU/version instead so user affinity drives the order.
+	 */
+	#sortModels(models: ModelItem[], { skipRoleRank = false }: { skipRoleRank?: boolean } = {}): void {
 		// Sort: tagged models (default/smol/slow/plan) first, then MRU, then alphabetical
 		const mruOrder = this.#settings.getStorage()?.getModelUsageOrder() ?? [];
 		const mruIndex = new Map(mruOrder.map((key, i) => [key, i]));
@@ -274,9 +308,11 @@ export class ModelSelectorComponent extends Container {
 			const aKey = a.selector;
 			const bKey = b.selector;
 
-			const aRank = modelRank(a);
-			const bRank = modelRank(b);
-			if (aRank !== bRank) return aRank - bRank;
+			if (!skipRoleRank) {
+				const aRank = modelRank(a);
+				const bRank = modelRank(b);
+				if (aRank !== bRank) return aRank - bRank;
+			}
 
 			// Then MRU order (models in mruIndex come before those not in it)
 			const aMru = mruIndex.get(aKey) ?? Number.MAX_SAFE_INTEGER;
@@ -323,16 +359,18 @@ export class ModelSelectorComponent extends Container {
 		});
 	}
 
-	#sortCanonicalModels(models: CanonicalModelItem[]): void {
+	#sortCanonicalModels(models: CanonicalModelItem[], { skipRoleRank = false }: { skipRoleRank?: boolean } = {}): void {
 		const mruOrder = this.#settings.getStorage()?.getModelUsageOrder() ?? [];
 		const mruIndex = new Map(mruOrder.map((key, i) => [key, i]));
 
 		const modelRank = (item: CanonicalModelItem) => computeModelRank(item.model, this.#roles);
 
 		models.sort((a, b) => {
-			const aRank = modelRank(a);
-			const bRank = modelRank(b);
-			if (aRank !== bRank) return aRank - bRank;
+			if (!skipRoleRank) {
+				const aRank = modelRank(a);
+				const bRank = modelRank(b);
+				if (aRank !== bRank) return aRank - bRank;
+			}
 
 			const aMru = mruIndex.get(`${a.model.provider}/${a.model.id}`) ?? Number.MAX_SAFE_INTEGER;
 			const bMru = mruIndex.get(`${b.model.provider}/${b.model.id}`) ?? Number.MAX_SAFE_INTEGER;
@@ -345,10 +383,8 @@ export class ModelSelectorComponent extends Container {
 		});
 	}
 
-	async #loadModels(): Promise<void> {
+	#loadModelsFromCurrentRegistryState(): void {
 		let models: ModelItem[];
-
-		// Use scoped models if provided via --models flag
 		if (this.#scopedModels.length > 0) {
 			models = this.#scopedModels.map(scoped => ({
 				kind: "provider",
@@ -358,10 +394,6 @@ export class ModelSelectorComponent extends Container {
 				selector: `${scoped.model.provider}/${scoped.model.id}`,
 			}));
 		} else {
-			// Reload config and cached discovery state without blocking on live provider refresh
-			await this.#modelRegistry.refresh("offline");
-
-			// Check for models.json errors
 			const loadError = this.#modelRegistry.getError();
 			if (loadError) {
 				this.#errorMessage = loadError;
@@ -369,7 +401,6 @@ export class ModelSelectorComponent extends Container {
 				this.#errorMessage = undefined;
 			}
 
-			// Load available models (built-in models still work even if models.json failed)
 			try {
 				const availableModels = this.#modelRegistry.getAvailable();
 				models = availableModels.map((model: Model) => ({
@@ -389,15 +420,16 @@ export class ModelSelectorComponent extends Container {
 			}
 		}
 
+		const candidates = models.map(item => item.model);
 		const canonicalRecords = this.#modelRegistry.getCanonicalModels({
 			availableOnly: this.#scopedModels.length === 0,
-			candidates: models.map(item => item.model),
+			candidates,
 		});
 		const canonicalModels = canonicalRecords
 			.map(record => {
 				const selectedModel = this.#modelRegistry.resolveCanonicalModel(record.id, {
 					availableOnly: this.#scopedModels.length === 0,
-					candidates: models.map(item => item.model),
+					candidates,
 				});
 				if (!selectedModel) return undefined;
 				const searchText = [
@@ -431,73 +463,185 @@ export class ModelSelectorComponent extends Container {
 		this.#selectedIndex = Math.min(this.#selectedIndex, Math.max(0, models.length - 1));
 	}
 
-	#buildProviderTabs(): void {
-		const providerSet = new Set<string>();
-		for (const item of this.#allModels) {
-			providerSet.add(item.provider.toUpperCase());
+	async #loadModels(): Promise<void> {
+		if (this.#scopedModels.length === 0) {
+			// Reload config and cached discovery state without blocking on live provider refresh
+			await this.#modelRegistry.refresh("offline");
 		}
-		for (const provider of this.#modelRegistry.getDiscoverableProviders()) {
-			providerSet.add(provider.toUpperCase());
-		}
-		const sortedProviders = Array.from(providerSet).sort();
-		this.#providers = [ALL_TAB, CANONICAL_TAB, ...sortedProviders];
+		this.#loadModelsFromCurrentRegistryState();
 	}
 
-	async #refreshSelectedProvider(): Promise<void> {
-		const activeProvider = this.#getActiveProvider();
-		if (this.#scopedModels.length > 0 || activeProvider === ALL_TAB || activeProvider === CANONICAL_TAB) {
+	#buildProviderTabs(): void {
+		const activeTabId = this.#getActiveTab().id;
+		const providerSet = new Set<string>();
+		for (const item of this.#allModels) {
+			providerSet.add(item.provider);
+		}
+		for (const provider of this.#modelRegistry.getDiscoverableProviders()) {
+			providerSet.add(provider);
+		}
+		const sortedProviderIds = Array.from(providerSet).sort((left, right) =>
+			formatProviderTabLabel(left).localeCompare(formatProviderTabLabel(right)),
+		);
+		this.#providers = [...STATIC_PROVIDER_TABS, ...sortedProviderIds.map(createProviderTab)];
+		const activeIndex = this.#providers.findIndex(tab => tab.id === activeTabId);
+		this.#activeTabIndex =
+			activeIndex >= 0 ? activeIndex : Math.min(this.#activeTabIndex, this.#providers.length - 1);
+	}
+
+	#getActiveProviderRefreshStatusText(): string | undefined {
+		const providerId = this.#getActiveProviderId();
+		if (!providerId || !this.#refreshingProviders.has(providerId)) {
+			return undefined;
+		}
+		const spinnerFrames = theme.spinnerFrames;
+		const spinner =
+			spinnerFrames.length > 0
+				? spinnerFrames[this.#refreshSpinnerFrame % spinnerFrames.length]
+				: theme.status.pending;
+		return theme.fg("warning", `  ${spinner} Refreshing ${formatProviderTabLabel(providerId)} in background...`);
+	}
+
+	#startRefreshSpinner(): void {
+		if (this.#refreshSpinnerInterval) {
 			return;
 		}
-		await this.#modelRegistry.refreshProvider(activeProvider.toLowerCase());
-		await this.#loadModels();
-		this.#buildProviderTabs();
-		this.#updateTabBar();
-		this.#applyTabFilter();
-		this.#tui.requestRender();
+		this.#refreshSpinnerInterval = setInterval(() => {
+			const frameCount = theme.spinnerFrames.length;
+			if (frameCount > 0) {
+				this.#refreshSpinnerFrame = (this.#refreshSpinnerFrame + 1) % frameCount;
+			}
+			this.#updateTabBar();
+			this.#tui.requestRender();
+		}, 80);
+	}
+
+	#stopRefreshSpinner(): void {
+		if (this.#refreshingProviders.size > 0) {
+			return;
+		}
+		if (this.#refreshSpinnerInterval) {
+			clearInterval(this.#refreshSpinnerInterval);
+			this.#refreshSpinnerInterval = undefined;
+		}
+		this.#refreshSpinnerFrame = 0;
+	}
+
+	#setProviderRefreshing(providerId: string, refreshing: boolean): void {
+		if (refreshing) {
+			this.#refreshingProviders.add(providerId);
+			this.#startRefreshSpinner();
+		} else {
+			this.#refreshingProviders.delete(providerId);
+			this.#stopRefreshSpinner();
+		}
+	}
+
+	#cancelScheduledProviderRefreshesExcept(keepProviderId?: string): void {
+		for (const [providerId, timer] of this.#scheduledProviderRefreshes) {
+			if (providerId === keepProviderId) {
+				continue;
+			}
+			clearTimeout(timer);
+			this.#scheduledProviderRefreshes.delete(providerId);
+			this.#setProviderRefreshing(providerId, false);
+		}
+	}
+
+	#scheduleSelectedProviderRefresh(): void {
+		const providerId = this.#getActiveProviderId();
+		if (this.#scopedModels.length > 0 || !providerId) {
+			return;
+		}
+		if (this.#scheduledProviderRefreshes.has(providerId) || this.#refreshingProviders.has(providerId)) {
+			return;
+		}
+		this.#setProviderRefreshing(providerId, true);
+		const timer = setTimeout(() => {
+			this.#scheduledProviderRefreshes.delete(providerId);
+			void this.#refreshProviderInBackground(providerId);
+		}, MODEL_TAB_REFRESH_DEBOUNCE_MS);
+		this.#scheduledProviderRefreshes.set(providerId, timer);
+	}
+
+	async #refreshProviderInBackground(providerId: string): Promise<void> {
+		try {
+			await this.#modelRegistry.refreshProvider(providerId, "online");
+			// Provider refresh already updated the registry snapshot. Re-reading it
+			// here must stay purely in-memory — do not call modelRegistry.refresh()
+			// again or tab switches will pay an extra whole-registry reload after the
+			// network round-trip completes.
+			this.#loadModelsFromCurrentRegistryState();
+			this.#buildProviderTabs();
+			this.#updateTabBar();
+			this.#applyTabFilter();
+		} catch (error) {
+			this.#errorMessage = error instanceof Error ? error.message : String(error);
+			this.#updateList();
+		} finally {
+			this.#setProviderRefreshing(providerId, false);
+			this.#updateTabBar();
+			this.#tui.requestRender();
+		}
 	}
 
 	#updateTabBar(): void {
 		this.#headerContainer.clear();
 
-		const tabs: Tab[] = this.#providers.map(provider => ({ id: provider, label: provider }));
+		const tabs: Tab[] = this.#providers.map(provider => ({ id: provider.id, label: provider.label }));
 		const tabBar = new TabBar("Models", tabs, getTabBarTheme(), this.#activeTabIndex);
 		tabBar.onTabChange = (_tab, index) => {
 			this.#activeTabIndex = index;
 			this.#selectedIndex = 0;
+			this.#cancelScheduledProviderRefreshesExcept(this.#getActiveProviderId());
 			this.#applyTabFilter();
-			void this.#refreshSelectedProvider().catch(error => {
-				this.#errorMessage = error instanceof Error ? error.message : String(error);
-				this.#updateList();
-				this.#tui.requestRender();
-			});
+			this.#scheduleSelectedProviderRefresh();
+			this.#updateTabBar();
+			// Let TUI's normal post-input render paint the new tab immediately.
+			// The live refresh is debounced onto a later timer so tab cycling never
+			// shares a stack frame with provider refresh work.
+			this.#tui.requestRender();
 		};
 		this.#tabBar = tabBar;
 		this.#headerContainer.addChild(tabBar);
+		const refreshStatusText = this.#getActiveProviderRefreshStatusText();
+		if (refreshStatusText) {
+			this.#headerContainer.addChild(new Text(refreshStatusText, 0, 0));
+		}
 	}
 
-	#getActiveProvider(): string {
-		return this.#providers[this.#activeTabIndex] ?? ALL_TAB;
+	#getActiveTab(): ProviderTabState {
+		return this.#providers[this.#activeTabIndex] ?? STATIC_PROVIDER_TABS[0]!;
+	}
+
+	#getActiveTabId(): string {
+		return this.#getActiveTab().id;
+	}
+
+	#getActiveProviderId(): string | undefined {
+		return this.#getActiveTab().providerId;
 	}
 
 	#isCanonicalTab(): boolean {
-		return this.#getActiveProvider() === CANONICAL_TAB;
+		return this.#getActiveTabId() === CANONICAL_TAB;
 	}
 
 	#filterModels(query: string): void {
-		const activeProvider = this.#getActiveProvider();
-		const isCanonicalTab = activeProvider === CANONICAL_TAB;
+		const activeTabId = this.#getActiveTabId();
+		const activeProviderId = this.#getActiveProviderId();
+		const isCanonicalTab = activeTabId === CANONICAL_TAB;
 
 		// Start with all models or filter by provider/canonical view
 		let baseModels = this.#allModels;
 		const baseCanonicalModels = this.#canonicalModels;
-		if (!isCanonicalTab && activeProvider !== ALL_TAB) {
-			baseModels = this.#allModels.filter(m => m.provider.toUpperCase() === activeProvider);
+		if (activeProviderId) {
+			baseModels = this.#allModels.filter(m => m.provider === activeProviderId);
 		}
 
 		// Apply fuzzy filter if query is present
 		if (query.trim()) {
 			// If user is searching from a provider tab, auto-switch to ALL to show global provider results.
-			if (activeProvider !== ALL_TAB && !isCanonicalTab) {
+			if (activeProviderId && !isCanonicalTab) {
 				this.#activeTabIndex = 0;
 				if (this.#tabBar && this.#tabBar.getActiveIndex() !== 0) {
 					this.#tabBar.setActiveIndex(0);
@@ -526,12 +670,25 @@ export class ModelSelectorComponent extends Container {
 						: alphaFiltered.length > 0
 							? alphaFiltered
 							: baseCanonicalModels;
+				// Fuzzy provides the candidate set, but `${provider}/${id}` scoring
+				// is biased by provider-prefix length (e.g. `openai/X` beats
+				// `openai-codex/X` purely because the prefix is shorter). Re-sort by
+				// affinity — MRU then version — so the user's actually-used model
+				// wins. Role rank is skipped: when narrowing by query, a weakly
+				// matching default model should not be promoted above a stronger
+				// non-default match.
 				const fuzzyMatches = fuzzyFilter(fuzzySource, query, ({ searchText }) => searchText);
-				this.#sortCanonicalModels(fuzzyMatches);
+				this.#sortCanonicalModels(fuzzyMatches, { skipRoleRank: true });
 				this.#filteredCanonicalModels = fuzzyMatches;
 			} else {
-				const fuzzyMatches = fuzzyFilter(baseModels, query, ({ id, provider }) => `${id} ${provider}`);
-				this.#sortModels(fuzzyMatches);
+				// Match against the displayed "provider/id" string so the user can
+				// type what they see: bare names (`mimo`, `kimi`), provider prefixes
+				// (`openrouter`), or scoped queries (`openrouter/mimo`) all flow
+				// through the same fuzzy matcher. The score is biased by provider-
+				// prefix length, so re-sort by MRU/version afterwards; skip role
+				// rank so a weakly matching default doesn't trump a stronger match.
+				const fuzzyMatches = fuzzyFilter(baseModels, query, ({ id, provider }) => `${provider}/${id}`);
+				this.#sortModels(fuzzyMatches, { skipRoleRank: true });
 				this.#filteredModels = fuzzyMatches;
 			}
 		} else {
@@ -577,11 +734,11 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#getProviderEmptyStateMessage(): string | undefined {
-		const activeProvider = this.#getActiveProvider();
-		if (activeProvider === ALL_TAB || activeProvider === CANONICAL_TAB || this.#searchInput.getValue().trim()) {
+		const activeProviderId = this.#getActiveProviderId();
+		if (!activeProviderId || this.#searchInput.getValue().trim()) {
 			return undefined;
 		}
-		const state = this.#modelRegistry.getProviderDiscoveryState(activeProvider.toLowerCase());
+		const state = this.#modelRegistry.getProviderDiscoveryState(activeProviderId);
 		if (!state) {
 			return undefined;
 		}
@@ -619,8 +776,7 @@ export class ModelSelectorComponent extends Container {
 		);
 		const endIndex = Math.min(startIndex + maxVisible, visibleItems.length);
 
-		const activeProvider = this.#getActiveProvider();
-		const showProvider = activeProvider === ALL_TAB;
+		const showProvider = this.#getActiveTabId() === ALL_TAB;
 
 		// Show visible slice of filtered models
 		for (let i = startIndex; i < endIndex; i++) {
@@ -639,7 +795,7 @@ export class ModelSelectorComponent extends Container {
 				if (!tag || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
 
 				const badge = makeInvertedBadge(tag, color ?? "success");
-				const thinkingLabel = getThinkingLevelMetadata(assigned.thinkingLevel).label;
+				const thinkingLabel = getConfiguredThinkingLevelMetadata(assigned.thinkingLevel).label;
 				roleBadgeTokens.push(`${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`);
 			}
 			// Custom role badges
@@ -648,7 +804,7 @@ export class ModelSelectorComponent extends Container {
 				const roleInfo = getRoleInfo(role, this.#settings);
 				const badgeLabel = roleInfo.tag ?? roleInfo.name;
 				const badge = makeInvertedBadge(badgeLabel, roleInfo.color ?? "muted");
-				const thinkingLabel = getThinkingLevelMetadata(assigned.thinkingLevel).label;
+				const thinkingLabel = getConfiguredThinkingLevelMetadata(assigned.thinkingLevel).label;
 				roleBadgeTokens.push(`${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`);
 			}
 			const badgeText = roleBadgeTokens.length > 0 ? ` ${roleBadgeTokens.join(" ")}` : "";
@@ -712,11 +868,11 @@ export class ModelSelectorComponent extends Container {
 			);
 		}
 	}
-	#getThinkingLevelsForModel(model: Model): ReadonlyArray<ThinkingLevel> {
-		return [ThinkingLevel.Inherit, ThinkingLevel.Off, ...getSupportedEfforts(model)];
+	#getThinkingLevelsForModel(model: Model): ReadonlyArray<ConfiguredThinkingLevel> {
+		return [ThinkingLevel.Inherit, ThinkingLevel.Off, AUTO_THINKING, ...getSupportedEfforts(model)];
 	}
 
-	#getCurrentRoleThinkingLevel(role: string): ThinkingLevel {
+	#getCurrentRoleThinkingLevel(role: string): ConfiguredThinkingLevel {
 		return this.#roles[role]?.thinkingLevel ?? ThinkingLevel.Inherit;
 	}
 
@@ -761,7 +917,7 @@ export class ModelSelectorComponent extends Container {
 		const optionLines = showingThinking
 			? thinkingOptions.map((thinkingLevel, index) => {
 					const prefix = index === this.#menuSelectedIndex ? `  ${theme.nav.cursor} ` : "    ";
-					const label = getThinkingLevelMetadata(thinkingLevel).label;
+					const label = getConfiguredThinkingLevelMetadata(thinkingLevel).label;
 					return `${prefix}${label}`;
 				})
 			: this.#menuRoleActions.map((action, index) => {
@@ -821,7 +977,7 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		// Up arrow - navigate list (wrap to bottom when at top)
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			const itemCount = this.#isCanonicalTab() ? this.#filteredCanonicalModels.length : this.#filteredModels.length;
 			if (itemCount === 0) return;
 			this.#selectedIndex = this.#selectedIndex === 0 ? itemCount - 1 : this.#selectedIndex - 1;
@@ -830,7 +986,7 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		// Down arrow - navigate list (wrap to top when at bottom)
-		if (matchesKey(keyData, "down")) {
+		if (matchesSelectDown(keyData)) {
 			const itemCount = this.#isCanonicalTab() ? this.#filteredCanonicalModels.length : this.#filteredModels.length;
 			if (itemCount === 0) return;
 			this.#selectedIndex = this.#selectedIndex === itemCount - 1 ? 0 : this.#selectedIndex + 1;
@@ -872,13 +1028,13 @@ export class ModelSelectorComponent extends Container {
 				: this.#menuRoleActions.length;
 		if (optionCount === 0) return;
 
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			this.#menuSelectedIndex = (this.#menuSelectedIndex - 1 + optionCount) % optionCount;
 			this.#updateMenu();
 			return;
 		}
 
-		if (matchesKey(keyData, "down")) {
+		if (matchesSelectDown(keyData)) {
 			this.#menuSelectedIndex = (this.#menuSelectedIndex + 1) % optionCount;
 			this.#updateMenu();
 			return;
@@ -918,7 +1074,11 @@ export class ModelSelectorComponent extends Container {
 		}
 	}
 
-	#handleSelect(item: ModelItem | CanonicalModelItem, role: string | null, thinkingLevel?: ThinkingLevel): void {
+	#handleSelect(
+		item: ModelItem | CanonicalModelItem,
+		role: string | null,
+		thinkingLevel?: ConfiguredThinkingLevel,
+	): void {
 		// For temporary role, don't save to settings - just notify caller
 		if (role === null) {
 			this.#onSelectCallback(item.model, null, undefined, item.selector);

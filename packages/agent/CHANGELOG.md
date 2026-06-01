@@ -2,6 +2,64 @@
 
 ## [Unreleased]
 
+## [15.7.4] - 2026-05-31
+
+### Removed
+
+- Removed the local-model `summarizeShakeRegions` compressor and related shake-summary prompt/types; shake now only provides mechanical artifact-backed elision primitives.
+
+## [15.7.3] - 2026-05-31
+
+### Added
+
+- Added `shake` compaction primitives (`collectShakeRegions`, `applyShakeRegion`, `applyShakeRegions`, `summarizeShakeRegions`, `DEFAULT_SHAKE_CONFIG`, `AGGRESSIVE_SHAKE_CONFIG`, plus the `ShakeRegion`/`ShakeConfig`/`ShakeSummaryItem`/`ShakeSummaryComplete`/`ProtectedToolMatcher` types) under `@oh-my-pi/pi-agent-core/compaction`. These detect heavy context regions — whole tool-call results plus large fenced/XML blocks — and either elide them with placeholders or extractively compress them through an injected completion backend (no LLM summary cut-point). The compressor is provider-agnostic: callers wire it to a local on-device model. Pure detection/mutation; no I/O.
+
+### Fixed
+
+- Fixed tool-output pruning and shake protection for `read`: ordinary file/URL reads are now eligible for compaction, while `read` calls whose `path` starts with `skill://` remain protected like native `skill` results.
+
+## [15.5.15] - 2026-05-30
+### Added
+
+- Added `maxToolCallsPerTurn` to `AgentLoopConfig`/`AgentOptions`, allowing callers to cut a streamed assistant turn after a completed tool-call batch and execute the runnable partial turn instead of waiting for the provider to yield.
+
+### Fixed
+
+- Normalized `maxToolCallsPerTurn` to accept only positive integer limits, with non-finite or non-positive values treated as disabled
+
+## [15.5.14] - 2026-05-29
+
+### Fixed
+
+- Fixed the agent loop abandoning tool calls that Anthropic adaptive/interleaved-thinking models (e.g. Opus) emit under `stop_reason: "end_turn"`. The previous gate only ran tools when `stopReason === "toolUse"`, so an `end_turn`+tool_use turn produced "Tool call was not executed because the assistant ended its turn" placeholders, made no progress, and could trap the model in a re-emit/abandon loop. `stop_reason` is never replayed on the wire and (verified against the live Anthropic Messages API) does not gate continuation validity, so `stop`/`end_turn` turns carrying tool_use blocks are now executed and the loop continues — exactly like `toolUse`. Only `length` (max_tokens truncation) still abandons, since the trailing tool call may have incomplete arguments. The continuation stays valid because `transformMessages` strips the now-untrustworthy thinking signature and the encoder downgrades the block to text.
+
+## [15.5.10] - 2026-05-28
+
+### Fixed
+
+- Fixed compaction summarizer throws losing the provider's HTTP status. `generateSummary`, `generateHandoff`, `generateShortSummary`, and `generateTurnPrefixSummary` now route their `stopReason === "error"` throws through a `createSummarizationError` helper that copies `AssistantMessage.errorStatus` onto the thrown `Error` as `.status`, letting downstream consumers (e.g. `AgentSession.#isCompactionAuthFailure` in `@oh-my-pi/pi-coding-agent`) branch on real provider 401/403s without regex-scraping the message body.
+
+### Changed
+
+- Changed `Agent.appendMessage`, `popMessage`, `clearMessages`, and `reset` to mutate `state.messages` and `state.pendingToolCalls` in place instead of allocating a fresh array/Set on every transition. Subscribers that capture `state.messages` by reference now observe updates without needing to re-read `state` after each event. The public type signature is unchanged (always `AgentMessage[]` / `Set<string>`).
+
+## [15.5.0] - 2026-05-26
+### Added
+
+- Added `approval` support to `AgentTool` declarations with the new `ToolTier` and `ToolApproval` APIs, allowing tools to declare capability tiers (`read`, `write`, or `exec`) and optional override/reason metadata for approval gating
+- Added `formatApprovalDetails` on `AgentTool` to append custom detail text or lines to approval prompts
+- Added exported `ToolTier` and `ToolApproval` type aliases for tool approval declarations
+
+### Fixed
+
+- Fixed chat-request telemetry storing the raw scoped `serviceTier` value (`"openai-only"`/`"claude-only"`) in `OpenAIAttr.RequestServiceTier` instead of the resolved wire value (`"priority"`). Dashboards and alerts filtering on the concrete tier name (`service_tier == "priority"`) were broken by the scoped placeholder; `buildChatRequestAttributes` now runs the tier through `resolveServiceTier(serviceTier, provider)` before recording, keeping the `shouldSendServiceTier` gate intact so non-OpenAI providers continue to omit the attribute entirely.
+
+## [15.3.0] - 2026-05-25
+### Fixed
+
+- Fixed `transformContext` receiving the loop config object as the `signal` argument instead of the actual `AbortSignal`, so hooks that check `signal.aborted` or call `signal.addEventListener` now work correctly under abort/timeout conditions
+- Fixed `appendOnlyContext` not being re-evaluated after `setModel()` — the mode was decided once at session construction based on the initial model's provider, so switching from/to DeepSeek (or changing `provider.appendOnlyContext`) mid-session produced incorrect mode behavior
+
 ## [15.2.3] - 2026-05-22
 ### Added
 

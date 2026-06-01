@@ -244,4 +244,131 @@ describe("streamSimple auth retry", () => {
 		expect(keys).toEqual(["old-key", "new-key"]);
 		expect(authCalls).toBe(1);
 	});
+
+	it("retries on a thrown usage_limit_reached error before any event has been emitted", async () => {
+		const keys: Array<string | undefined> = [];
+		const errors: unknown[] = [];
+		registerCustomApi(
+			API,
+			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+				keys.push(options?.apiKey);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					if (keys.length === 1) {
+						stream.fail(
+							Object.assign(
+								new Error("You have hit your ChatGPT usage limit (pro plan). Try again in ~158 min."),
+								{ status: 429 },
+							),
+						);
+						return;
+					}
+					const message = assistant(["ok"]);
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
+			},
+			SOURCE_ID,
+		);
+
+		const stream = streamSimple(model(), context, {
+			apiKey: "old-key",
+			onAuthError: async (_provider, _oldKey, error) => {
+				errors.push(error);
+				return "new-key";
+			},
+		});
+
+		for await (const _event of stream) {
+			// drain
+		}
+
+		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
+		expect(keys).toEqual(["old-key", "new-key"]);
+		expect(errors).toHaveLength(1);
+		// The error surfaced to onAuthError carries the original 429 status so
+		// the gateway's refresh hook can branch on it.
+		expect((errors[0] as { status?: number }).status).toBe(429);
+		expect((errors[0] as Error).message).toMatch(/usage limit/i);
+	});
+
+	it("retries when a provider emits a usage_limit_reached error event before content", async () => {
+		const keys: Array<string | undefined> = [];
+		registerCustomApi(
+			API,
+			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+				keys.push(options?.apiKey);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					if (keys.length === 1) {
+						stream.push({ type: "start", partial: assistant() });
+						stream.push({
+							type: "error",
+							reason: "error",
+							// errorStatus deliberately omitted: matches how the codex
+							// provider serializes the message-only path that used to
+							// 502 in the gateway.
+							error: assistantError("You have hit your ChatGPT usage limit (pro plan). Try again in ~158 min."),
+						});
+						return;
+					}
+					const message = assistant(["ok"]);
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
+			},
+			SOURCE_ID,
+		);
+
+		const stream = streamSimple(model(), context, {
+			apiKey: "old-key",
+			onAuthError: async () => "new-key",
+		});
+
+		for await (const _event of stream) {
+			// drain
+		}
+
+		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
+		expect(keys).toEqual(["old-key", "new-key"]);
+	});
+
+	it("surfaces the original usage_limit error when the retry callback declines", async () => {
+		const keys: Array<string | undefined> = [];
+		const original = Object.assign(new Error("You have hit your ChatGPT usage limit (pro plan)."), { status: 429 });
+		registerCustomApi(
+			API,
+			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+				keys.push(options?.apiKey);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => stream.fail(original));
+				return stream;
+			},
+			SOURCE_ID,
+		);
+
+		// Callback returns undefined → no sibling credential to rotate to.
+		// The original failure must reach the caller untouched so the client
+		// can decide what to do (back off, surface to user, …).
+		const stream = streamSimple(model(), context, {
+			apiKey: "old-key",
+			onAuthError: async () => undefined,
+		});
+
+		let caught: unknown;
+		try {
+			for await (const _event of stream) {
+				// drain
+			}
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBe(original);
+		// Single attempt — the inner stream is only re-invoked when a new key
+		// is provided.
+		expect(keys).toEqual(["old-key"]);
+	});
 });

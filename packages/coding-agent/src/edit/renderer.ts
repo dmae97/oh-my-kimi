@@ -2,11 +2,11 @@
  * Edit tool renderer and LSP batching helpers.
  */
 
+import { HL_FILE_PREFIX } from "@oh-my-pi/hashline";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { HL_FILE_PREFIX } from "../hashline/hash";
 import type { FileDiagnosticsResult } from "../lsp";
 import { renderDiff as renderDiffColored } from "../modes/components/diff";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
@@ -25,10 +25,8 @@ import {
 	shortenPath,
 	truncateDiffByHunk,
 } from "../tools/render-utils";
-import { type VimRenderArgs, vimToolRenderer } from "../tools/vim";
 import { fileHyperlink, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
 import type { EditMode } from "../utils/edit-mode";
-import type { VimToolDetails } from "../vim/types";
 import type { DiffError, DiffResult } from "./diff";
 import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
 import type { Operation } from "./modes/patch";
@@ -125,31 +123,6 @@ interface HashlineInputRenderSummary {
 interface ApplyPatchRenderSummary {
 	entries: ApplyPatchEntry[];
 	error?: string;
-}
-
-function isVimRenderArgs(args: EditRenderArgs | VimRenderArgs): args is VimRenderArgs {
-	return (
-		typeof args === "object" &&
-		args !== null &&
-		typeof (args as { file?: unknown }).file === "string" &&
-		!("path" in args) &&
-		!("file_path" in args) &&
-		!("edits" in args)
-	);
-}
-
-function isVimToolDetails(details: unknown): details is VimToolDetails {
-	if (!details || typeof details !== "object" || Array.isArray(details)) {
-		return false;
-	}
-	const cursor = (details as { cursor?: unknown }).cursor;
-	const viewportLines = (details as { viewportLines?: unknown }).viewportLines;
-	return (
-		typeof (details as { file?: unknown }).file === "string" &&
-		typeof cursor === "object" &&
-		cursor !== null &&
-		Array.isArray(viewportLines)
-	);
 }
 
 /** Extended context for edit tool rendering */
@@ -262,17 +235,28 @@ function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string)
 
 function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, label = "streaming"): string {
 	if (!diff) return "";
-	const lines = diff.split("\n");
-	const total = lines.length;
-	const displayLines = lines.slice(-EDIT_STREAMING_PREVIEW_LINES);
-	const hidden = total - displayLines.length;
+	// "Cursor" tail window: pin the last EDIT_STREAMING_PREVIEW_LINES rows to the
+	// bottom of the diff so freshly streamed changes stay on screen, and accept
+	// the trailing rows "from the back" once the diff outgrows the window. The
+	// whole-file diff is recomputed on every streamed chunk and its Myers
+	// alignment is not monotonic in payload length, so a hunk-aware window that
+	// kept whole change segments gained and lost rows tick to tick — the box
+	// stuttered, and the earlier high-water fix traded that for a half-empty
+	// rectangle. A strict fixed-height window keeps the box steady and always
+	// full of real diff context instead of blank padding.
+	const allLines = diff.replace(/\n+$/u, "").split("\n");
+	const hiddenLines = Math.max(0, allLines.length - EDIT_STREAMING_PREVIEW_LINES);
+	const visible = hiddenLines > 0 ? allLines.slice(hiddenLines) : allLines;
 	let text = "\n\n";
-	text += renderDiffColored(displayLines.join("\n"), { filePath: rawPath });
-	if (hidden > 0) {
-		text += uiTheme.fg("dim", `\n… (${label} +${hidden} lines)`);
-	} else {
-		text += uiTheme.fg("dim", `\n(${label})`);
+	if (hiddenLines > 0) {
+		const hiddenHunks = getDiffStats(allLines.slice(0, hiddenLines).join("\n")).hunks;
+		const remainder: string[] = [];
+		if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
+		remainder.push(`${hiddenLines} more lines`);
+		text += `${uiTheme.fg("dim", `… (${remainder.join(", ")} above)`)}\n`;
 	}
+	text += renderDiffColored(visible.join("\n"), { filePath: rawPath });
+	text += uiTheme.fg("dim", `\n(${label})`);
 	return text;
 }
 
@@ -332,19 +316,21 @@ const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** E
 
 function normalizeHashlineInputPreviewPath(rawPath: string): string {
 	const trimmed = rawPath.trim();
-	if (trimmed.length < 2) return trimmed;
-	const first = trimmed[0];
-	const last = trimmed[trimmed.length - 1];
+	const hashStart = /#[0-9a-fA-F]{4}$/u.exec(trimmed)?.index;
+	const withoutHash = hashStart === undefined ? trimmed : trimmed.slice(0, hashStart);
+	if (withoutHash.length < 2) return withoutHash;
+	const first = withoutHash[0];
+	const last = withoutHash[withoutHash.length - 1];
 	if ((first === '"' || first === "'") && first === last) {
-		return trimmed.slice(1, -1);
+		return withoutHash.slice(1, -1);
 	}
-	return trimmed;
+	return withoutHash;
 }
 
 function parseHashlineInputPreviewHeader(line: string): string | null {
 	if (!line.startsWith(HL_FILE_PREFIX)) return null;
 	// Mirror hashline/input.ts: strip every leading file marker so canonical
-	// `§ PATH` headers and stray `§§ PATH` / `§§§PATH` runs render clean paths.
+	// `¶ PATH` headers and stray `¶¶ PATH` / `¶¶¶PATH` runs render clean paths.
 	let prefixEnd = 0;
 	while (prefixEnd < line.length && line[prefixEnd] === HL_FILE_PREFIX) prefixEnd++;
 	const body = line.slice(prefixEnd).trim();
@@ -460,16 +446,11 @@ export const editToolRenderer = {
 	mergeCallAndResult: true,
 
 	renderCall(
-		args: EditRenderArgs | VimRenderArgs,
+		args: EditRenderArgs,
 		options: RenderResultOptions & { renderContext?: EditRenderContext },
 		uiTheme: Theme,
 	): Component {
 		const renderContext = options.renderContext;
-		// Dispatch on the explicit editMode when available; fall back to the
-		// shape probe for legacy call sites that don't thread renderContext.
-		if (renderContext?.editMode === "vim" || isVimRenderArgs(args)) {
-			return vimToolRenderer.renderCall(args as VimRenderArgs, options, uiTheme);
-		}
 
 		const editArgs = args as EditRenderArgs;
 		const hashlineInputSummary = getHashlineInputRenderSummary(editArgs, renderContext?.editMode);
@@ -514,14 +495,6 @@ export const editToolRenderer = {
 		uiTheme: Theme,
 		args?: EditRenderArgs,
 	): Component {
-		if (options.renderContext?.editMode === "vim" || isVimToolDetails(result.details)) {
-			return vimToolRenderer.renderResult(
-				result as { content: Array<{ type: string; text?: string }>; details?: VimToolDetails; isError?: boolean },
-				options,
-				uiTheme,
-			);
-		}
-
 		const perFileResults = result.details?.perFileResults;
 		const totalFiles = args?.edits ? countEditFiles(args.edits) : 0;
 		if (perFileResults && (perFileResults.length > 1 || totalFiles > 1)) {

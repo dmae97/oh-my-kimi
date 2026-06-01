@@ -79,6 +79,20 @@ const CONDITIONS: Record<string, () => boolean> = {
 			return false;
 		}
 	},
+	mnemopiActive: () => {
+		try {
+			return Settings.instance.get("memory.backend") === "mnemopi";
+		} catch {
+			return false;
+		}
+	},
+	autoThinkingActive: () => {
+		try {
+			return Settings.instance.get("defaultThinkingLevel") === "auto";
+		} catch {
+			return false;
+		}
+	},
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

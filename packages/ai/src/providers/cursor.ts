@@ -28,6 +28,7 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
+import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import { toolWireSchema } from "../utils/schema/wire";
 import type { McpToolDefinition } from "./cursor/gen/agent_pb";
@@ -103,6 +104,9 @@ import {
 	RequestContextResultSchema,
 	RequestContextSchema,
 	RequestContextSuccessSchema,
+	ResumeActionSchema,
+	SelectedContextSchema,
+	SelectedImageSchema,
 	SetBlobResultSchema,
 	type ShellArgs,
 	ShellFailureSchema,
@@ -328,6 +332,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 		let h2Client: http2.ClientHttp2Session | null = null;
 		let h2Request: http2.ClientHttp2Stream | null = null;
 		let heartbeatTimer: NodeJS.Timeout | null = null;
+		let debugResponseLogPromise: Promise<RequestDebugResponseLog | undefined> | undefined;
 
 		try {
 			const apiKey = options?.apiKey;
@@ -348,11 +353,10 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			const requestContextTools = buildMcpToolDefinitions(context.tools);
 
 			const baseUrl = model.baseUrl || CURSOR_API_URL;
-			h2Client = http2.connect(baseUrl);
-
-			h2Request = h2Client.request({
+			const requestPath = "/agent.v1.AgentService/Run";
+			const requestHeaders = {
 				":method": "POST",
-				":path": "/agent.v1.AgentService/Run",
+				":path": requestPath,
 				"content-type": "application/connect+proto",
 				"connect-protocol-version": "1",
 				te: "trailers",
@@ -361,7 +365,20 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				"x-cursor-client-version": CURSOR_CLIENT_VERSION,
 				"x-cursor-client-type": "cli",
 				"x-request-id": crypto.randomUUID(),
-			});
+			};
+			const debugSession = isRequestDebugEnabled()
+				? await createRequestDebugSession({
+						protocol: "http2",
+						method: "POST",
+						url: new URL(requestPath, baseUrl).toString(),
+						headers: requestHeaders,
+						bodyBase64: Buffer.from(requestBytes).toString("base64"),
+					})
+				: undefined;
+
+			h2Client = http2.connect(baseUrl);
+
+			h2Request = h2Client.request(requestHeaders);
 
 			stream.push({ type: "start", partial: output });
 
@@ -405,7 +422,19 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			let resolveH2: (() => void) | undefined;
 
+			h2Request.on("response", headers => {
+				debugResponseLogPromise = debugSession?.openResponseLog(
+					`HTTP/2 ${headers[":status"] ?? ""}`.trim(),
+					headers,
+				);
+			});
+
 			h2Request.on("data", (chunk: Buffer) => {
+				if (debugResponseLogPromise) {
+					void debugResponseLogPromise.then(log => {
+						log?.write(chunk);
+					});
+				}
 				pendingBuffer = Buffer.concat([pendingBuffer, chunk]);
 
 				while (pendingBuffer.length >= 5) {
@@ -477,29 +506,44 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			await new Promise<void>((resolve, reject) => {
 				resolveH2 = resolve;
 
+				const closeDebugLog = async (): Promise<void> => {
+					const log = await debugResponseLogPromise;
+					await log?.close();
+				};
+
 				h2Request!.on("trailers", trailers => {
 					const status = trailers["grpc-status"];
 					const msg = trailers["grpc-message"];
 					if (status && status !== "0") {
-						reject(new Error(`gRPC error ${status}: ${decodeURIComponent(String(msg || ""))}`));
+						void closeDebugLog().finally(() => {
+							reject(new Error(`gRPC error ${status}: ${decodeURIComponent(String(msg || ""))}`));
+						});
 					}
 				});
 
 				h2Request!.on("end", () => {
 					resolveH2 = undefined;
-					if (endStreamError) {
-						reject(endStreamError);
-						return;
-					}
-					resolve();
+					void closeDebugLog()
+						.then(() => {
+							if (endStreamError) {
+								reject(endStreamError);
+								return;
+							}
+							resolve();
+						})
+						.catch(reject);
 				});
 
-				h2Request!.on("error", reject);
+				h2Request!.on("error", error => {
+					void closeDebugLog().finally(() => reject(error));
+				});
 
 				if (options?.signal) {
 					options.signal.addEventListener("abort", () => {
 						h2Request?.close();
-						reject(new Error("Request was aborted"));
+						void closeDebugLog().finally(() => {
+							reject(new Error("Request was aborted"));
+						});
 					});
 				}
 			});
@@ -554,6 +598,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		} finally {
+			const log = await debugResponseLogPromise;
+			await log?.close();
 			if (heartbeatTimer) {
 				clearInterval(heartbeatTimer);
 				heartbeatTimer = null;
@@ -2055,6 +2101,14 @@ function storeCursorBlob(blobStore: Map<string, Uint8Array>, data: Uint8Array): 
 	return blobId;
 }
 
+function readCursorBlob(blobStore: Map<string, Uint8Array>, blobId: Uint8Array): Uint8Array {
+	const data = blobStore.get(Buffer.from(blobId).toString("hex"));
+	if (!data) {
+		throw new Error("Cursor blob not found");
+	}
+	return data;
+}
+
 const CURSOR_NATIVE_TOOL_NAMES = new Set(["bash", "read", "write", "delete", "ls", "grep", "lsp", "todo_write"]);
 
 function buildMcpToolDefinitions(tools: Tool[] | undefined): McpToolDefinition[] {
@@ -2098,6 +2152,52 @@ function extractUserMessageText(msg: Message): string {
 	return text.trim();
 }
 
+function hasUserMessageImages(msg: Message): boolean {
+	return (
+		(msg.role === "user" || msg.role === "developer") &&
+		Array.isArray(msg.content) &&
+		msg.content.some(item => item.type === "image")
+	);
+}
+
+type CursorRootPromptContentPart = { type: "text"; text: string } | { type: "image"; image: string; mediaType: string };
+
+function buildCursorRootPromptContent(content: string | (TextContent | ImageContent)[]): CursorRootPromptContentPart[] {
+	if (typeof content === "string") {
+		const text = content.trim();
+		return text ? [{ type: "text", text }] : [];
+	}
+	const parts: CursorRootPromptContentPart[] = [];
+	for (const item of content) {
+		if (item.type === "text") {
+			const text = item.text.trim();
+			if (text) {
+				parts.push({ type: "text", text });
+			}
+		} else {
+			parts.push({ type: "image", image: item.data, mediaType: item.mimeType });
+		}
+	}
+	return parts;
+}
+
+function cursorUserContentKey(content: string | (TextContent | ImageContent)[]): string {
+	if (typeof content === "string") {
+		return content.trim();
+	}
+	const hash = createHash("sha256");
+	for (const item of content) {
+		hash.update(item.type);
+		if (item.type === "text") {
+			hash.update(item.text);
+		} else {
+			hash.update(item.mimeType);
+			hash.update(item.data);
+		}
+	}
+	return hash.digest("hex");
+}
+
 /**
  * Extract text content from an assistant message.
  */
@@ -2116,7 +2216,9 @@ function extractAssistantMessageText(msg: Message): string {
  * requests, so `conversationBlobStores` does not grow unboundedly and
  * unchanged history reuses existing blob IDs.
  */
-function deterministicMessageId(key: string): string {
+type CursorMessageId = `${string}-${string}-${string}-${string}-${string}`;
+
+function deterministicMessageId(key: string): CursorMessageId {
 	const hex = createHash("sha256").update(key).digest("hex");
 	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
@@ -2181,9 +2283,9 @@ function buildRootPromptMessagesJson(
 		if (i === lastUserIdx) break;
 		const msg = messages[i];
 		if (msg.role === "user" || msg.role === "developer") {
-			const text = extractUserMessageText(msg);
-			if (!text) continue;
-			pushJson({ role: "user", content: [{ type: "text", text }] });
+			const content = buildCursorRootPromptContent(msg.content);
+			if (content.length === 0) continue;
+			pushJson({ role: "user", content });
 		} else if (msg.role === "assistant") {
 			const text = extractAssistantMessageText(msg);
 			if (!text) continue;
@@ -2237,15 +2339,16 @@ function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint
 
 		// Create and serialize user message
 		const userText = extractUserMessageText(msg);
-		if (!userText || userText.length === 0) {
+		if (userText.length === 0 && !hasUserMessageImages(msg)) {
 			i++;
 			continue;
 		}
 
-		const userMessage = create(UserMessageSchema, {
-			text: userText,
-			messageId: deterministicMessageId(`u:${turns.length}:${userText}`),
-		});
+		const userMessage = createCursorUserMessage(
+			msg.content,
+			userText,
+			deterministicMessageId(`u:${turns.length}:${cursorUserContentKey(msg.content)}`),
+		);
 		const userMessageBytes = toBinary(UserMessageSchema, userMessage);
 		const userMessageBlobId = storeCursorBlob(blobStore, userMessageBytes);
 
@@ -2302,6 +2405,60 @@ function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint
 	return turns;
 }
 
+/** Exported for tests: decodes Cursor history blobs built from conversation messages. */
+export function buildCursorHistoryForTest(messages: Message[]): {
+	rootPromptMessagesJson: unknown[];
+	turnUserMessagesJson: JsonValue[];
+} {
+	const blobStore = new Map<string, Uint8Array>();
+	const rootPromptMessagesJson = buildRootPromptMessagesJson(messages, [], blobStore).map(blobId =>
+		JSON.parse(new TextDecoder().decode(readCursorBlob(blobStore, blobId))),
+	);
+	const turnUserMessagesJson: JsonValue[] = [];
+	for (const turnBlobId of buildConversationTurns(messages, blobStore)) {
+		const turn = fromBinary(ConversationTurnStructureSchema, readCursorBlob(blobStore, turnBlobId));
+		if (turn.turn.case !== "agentConversationTurn") {
+			continue;
+		}
+		const userMessage = fromBinary(UserMessageSchema, readCursorBlob(blobStore, turn.turn.value.userMessage));
+		turnUserMessagesJson.push(toJson(UserMessageSchema, userMessage));
+	}
+	return { rootPromptMessagesJson, turnUserMessagesJson };
+}
+function createCursorUserMessage(
+	content: string | (TextContent | ImageContent)[],
+	text: string,
+	messageId = crypto.randomUUID(),
+) {
+	const images = typeof content === "string" ? [] : extractImages(content);
+	return create(UserMessageSchema, {
+		text,
+		messageId,
+		...(images.length > 0
+			? {
+					selectedContext: create(SelectedContextSchema, {
+						selectedImages: images,
+					}),
+				}
+			: {}),
+	});
+}
+
+function extractImages(content: (TextContent | ImageContent)[]) {
+	return content
+		.filter((item): item is ImageContent => item.type === "image")
+		.map(image =>
+			create(SelectedImageSchema, {
+				uuid: crypto.randomUUID(),
+				mimeType: image.mimeType,
+				dataOrBlobId: {
+					case: "data",
+					value: Uint8Array.from(Buffer.from(image.data, "base64")),
+				},
+			}),
+		);
+}
+
 function buildGrpcRequest(
 	model: Model<"cursor-agent">,
 	context: Context,
@@ -2324,28 +2481,32 @@ function buildGrpcRequest(
 
 	const lastUserIdx = findLastUserMessageIndex(context.messages);
 	const lastMessage = lastUserIdx >= 0 ? context.messages[lastUserIdx] : undefined;
-	const userText =
-		lastMessage?.role === "user" || lastMessage?.role === "developer"
-			? typeof lastMessage.content === "string"
-				? lastMessage.content.trim()
-				: extractText(lastMessage.content)
-			: "";
-
-	// Validate that we have non-empty user text for the action
-	if (!userText || userText.trim().length === 0) {
-		throw new Error("Cannot send empty user message to Cursor API");
+	let userContent: string | (TextContent | ImageContent)[] | undefined;
+	let userText = "";
+	let hasUserImages = false;
+	if (lastMessage?.role === "user" || lastMessage?.role === "developer") {
+		userContent = lastMessage.content;
+		if (typeof userContent === "string") {
+			userText = userContent.trim();
+		} else {
+			userText = extractText(userContent);
+			hasUserImages = hasImages(userContent);
+		}
 	}
 
-	const userMessage = create(UserMessageSchema, {
-		text: userText,
-		messageId: crypto.randomUUID(),
-	});
-
 	const action = create(ConversationActionSchema, {
-		action: {
-			case: "userMessageAction",
-			value: create(UserMessageActionSchema, { userMessage }),
-		},
+		action:
+			userContent && (userText.trim().length > 0 || hasUserImages)
+				? {
+						case: "userMessageAction",
+						value: create(UserMessageActionSchema, {
+							userMessage: createCursorUserMessage(userContent, userText),
+						}),
+					}
+				: {
+						case: "resumeAction",
+						value: create(ResumeActionSchema, {}),
+					},
 	});
 
 	// Build conversation turns from prior messages (excluding the last user message).
@@ -2433,6 +2594,9 @@ function buildGrpcRequest(
 	return { requestBytes, blobStore, conversationState };
 }
 
+function hasImages(content: (TextContent | ImageContent)[]): boolean {
+	return content.some(item => item.type === "image");
+}
 function extractText(content: (TextContent | ImageContent)[]): string {
 	return content
 		.filter((c): c is TextContent => c.type === "text")

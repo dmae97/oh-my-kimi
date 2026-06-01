@@ -19,6 +19,12 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
 import { toolWireSchema } from "../utils/schema/wire";
+import {
+	getStreamMarkupHealingPattern,
+	type HealedToolCall,
+	StreamMarkupHealing,
+	type StreamMarkupHealingEvent,
+} from "../utils/stream-markup-healing";
 import { transformMessages } from "./transform-messages";
 
 export interface OllamaChatOptions extends StreamOptions {
@@ -373,6 +379,97 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 		let activeThinkingIndex: number | undefined;
 		let activeTextIndex: number | undefined;
 		const activeToolIndices = new Set<number>();
+		const streamMarkupHealingPattern = getStreamMarkupHealingPattern(model.provider, model.id);
+		const streamMarkupHealing = streamMarkupHealingPattern
+			? new StreamMarkupHealing({ pattern: streamMarkupHealingPattern })
+			: undefined;
+		let healedToolCallEmitted = false;
+		const endActiveTextBlock = (): void => {
+			if (activeTextIndex === undefined) return;
+			endTextBlock(stream, output, activeTextIndex);
+			activeTextIndex = undefined;
+		};
+		const endActiveThinkingBlock = (): void => {
+			if (activeThinkingIndex === undefined) return;
+			endThinkingBlock(stream, output, activeThinkingIndex);
+			activeThinkingIndex = undefined;
+		};
+		const appendVisibleText = (text: string): void => {
+			if (text.length === 0) return;
+			endActiveThinkingBlock();
+			if (activeTextIndex === undefined) {
+				output.content.push({ type: "text", text: "" });
+				activeTextIndex = output.content.length - 1;
+				stream.push({ type: "text_start", contentIndex: activeTextIndex, partial: output });
+			}
+			const block = output.content[activeTextIndex];
+			if (block?.type === "text") {
+				block.text += text;
+				stream.push({
+					type: "text_delta",
+					contentIndex: activeTextIndex,
+					delta: text,
+					partial: output,
+				});
+			}
+			if (!firstTokenTime) firstTokenTime = Date.now();
+		};
+		const appendVisibleThinking = (thinking: string): void => {
+			if (thinking.length === 0) return;
+			endActiveTextBlock();
+			if (activeThinkingIndex === undefined) {
+				output.content.push({ type: "thinking", thinking: "" });
+				activeThinkingIndex = output.content.length - 1;
+				stream.push({ type: "thinking_start", contentIndex: activeThinkingIndex, partial: output });
+			}
+			const block = output.content[activeThinkingIndex];
+			if (block?.type === "thinking") {
+				block.thinking += thinking;
+				stream.push({
+					type: "thinking_delta",
+					contentIndex: activeThinkingIndex,
+					delta: thinking,
+					partial: output,
+				});
+			}
+			if (!firstTokenTime) firstTokenTime = Date.now();
+		};
+		const emitHealedToolCall = (call: HealedToolCall): void => {
+			endActiveThinkingBlock();
+			endActiveTextBlock();
+			const toolCall: InternalToolCallBlock = {
+				type: "toolCall",
+				id: call.id,
+				name: call.name,
+				arguments: parseStreamingJson<Record<string, unknown>>(call.arguments),
+				partialJson: call.arguments,
+			};
+			output.content.push(toolCall);
+			const index = output.content.length - 1;
+			stream.push({ type: "toolcall_start", contentIndex: index, partial: output });
+			stream.push({
+				type: "toolcall_delta",
+				contentIndex: index,
+				delta: call.arguments,
+				partial: output,
+			});
+			endToolCallBlock(stream, output, index);
+			healedToolCallEmitted = true;
+			if (!firstTokenTime) firstTokenTime = Date.now();
+		};
+		const emitHealingEvent = (event: StreamMarkupHealingEvent): void => {
+			if (event.type === "text") {
+				appendVisibleText(event.text);
+			} else if (event.type === "thinking") {
+				appendVisibleThinking(event.thinking);
+			} else {
+				emitHealedToolCall(event.call);
+			}
+		};
+		const drainHealedToolCalls = (): void => {
+			if (!streamMarkupHealing) return;
+			for (const call of streamMarkupHealing.drainCompleted()) emitHealedToolCall(call);
+		};
 		try {
 			const apiKey = options.apiKey || getEnvApiKey(model.provider);
 			if (!apiKey) {
@@ -414,10 +511,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 			stream.push({ type: "start", partial: output });
 			for await (const chunk of iterateNdjson(response.body)) {
 				if (chunk.message?.thinking) {
-					if (activeTextIndex !== undefined) {
-						endTextBlock(stream, output, activeTextIndex);
-						activeTextIndex = undefined;
-					}
+					endActiveTextBlock();
 					if (activeThinkingIndex === undefined) {
 						output.content.push({ type: "thinking", thinking: "" });
 						activeThinkingIndex = output.content.length - 1;
@@ -437,40 +531,25 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 						firstTokenTime = Date.now();
 					}
 				}
-				if (chunk.message?.content) {
-					if (activeThinkingIndex !== undefined) {
-						endThinkingBlock(stream, output, activeThinkingIndex);
-						activeThinkingIndex = undefined;
-					}
-					if (activeTextIndex === undefined) {
-						output.content.push({ type: "text", text: "" });
-						activeTextIndex = output.content.length - 1;
-						stream.push({ type: "text_start", contentIndex: activeTextIndex, partial: output });
-					}
-					const block = output.content[activeTextIndex];
-					if (block?.type === "text") {
-						block.text += chunk.message.content;
-						stream.push({
-							type: "text_delta",
-							contentIndex: activeTextIndex,
-							delta: chunk.message.content,
-							partial: output,
-						});
-					}
-					if (!firstTokenTime) {
-						firstTokenTime = Date.now();
+				const chunkContent = chunk.message?.content;
+				const structuredCalls = chunk.message?.tool_calls?.length ? chunk.message.tool_calls : undefined;
+				if (chunkContent) {
+					if (streamMarkupHealing) {
+						if (structuredCalls) {
+							appendVisibleText(streamMarkupHealing.consumeWithoutCalls(chunkContent));
+						} else {
+							for (const event of streamMarkupHealing.feedEvents(chunkContent)) {
+								emitHealingEvent(event);
+							}
+						}
+					} else {
+						appendVisibleText(chunkContent);
 					}
 				}
-				if (chunk.message?.tool_calls?.length) {
-					if (activeThinkingIndex !== undefined) {
-						endThinkingBlock(stream, output, activeThinkingIndex);
-						activeThinkingIndex = undefined;
-					}
-					if (activeTextIndex !== undefined) {
-						endTextBlock(stream, output, activeTextIndex);
-						activeTextIndex = undefined;
-					}
-					for (const call of chunk.message.tool_calls) {
+				if (structuredCalls) {
+					endActiveThinkingBlock();
+					endActiveTextBlock();
+					for (const call of structuredCalls) {
 						const name = call.function?.name ?? "unknown_tool";
 						const rawArgs = call.function?.arguments;
 						const partialJson = typeof rawArgs === "string" ? rawArgs : JSON.stringify(rawArgs ?? {});
@@ -497,23 +576,44 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 					}
 				}
 				if (chunk.done) {
-					if (activeThinkingIndex !== undefined) {
-						endThinkingBlock(stream, output, activeThinkingIndex);
-						activeThinkingIndex = undefined;
+					if (streamMarkupHealing) {
+						for (const event of streamMarkupHealing.flushEvents()) {
+							emitHealingEvent(event);
+						}
+						drainHealedToolCalls();
 					}
-					if (activeTextIndex !== undefined) {
-						endTextBlock(stream, output, activeTextIndex);
-						activeTextIndex = undefined;
-					}
+					endActiveThinkingBlock();
+					endActiveTextBlock();
 					for (const index of activeToolIndices) {
 						endToolCallBlock(stream, output, index);
 					}
 					activeToolIndices.clear();
 					output.stopReason = mapDoneReason(chunk.done_reason, output);
+					if (healedToolCallEmitted && output.stopReason === "stop") {
+						output.stopReason = "toolUse";
+					}
 					output.usage.input = chunk.prompt_eval_count ?? 0;
 					output.usage.output = chunk.eval_count ?? 0;
 					output.usage.totalTokens = output.usage.input + output.usage.output;
 				}
+			}
+			if (streamMarkupHealing) {
+				for (const event of streamMarkupHealing.flushEvents()) {
+					emitHealingEvent(event);
+				}
+				drainHealedToolCalls();
+				if (healedToolCallEmitted && output.stopReason === "stop") {
+					output.stopReason = "toolUse";
+				}
+			}
+			endActiveThinkingBlock();
+			endActiveTextBlock();
+			// Tool calls always mean "execute and continue" in the OpenAI/Ollama contract.
+			// If the turn produced tool-call blocks but reported a natural `stop`, promote
+			// to `toolUse` so the agent loop runs them (it gates execution on the stop
+			// reason). `length`/`aborted`/`error` are intentionally left untouched.
+			if (output.stopReason === "stop" && output.content.some(block => block.type === "toolCall")) {
+				output.stopReason = "toolUse";
 			}
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) {

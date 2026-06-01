@@ -37,7 +37,7 @@ export interface ContextBreakdown {
 	freeTokens: number;
 }
 
-function estimateSkillsTokens(skills: readonly Skill[]): number {
+export function estimateSkillsTokens(skills: readonly Skill[]): number {
 	const fragments: string[] = [];
 	for (const skill of skills) {
 		// "- name: description\n" wire framing tokenizes ~identically to the
@@ -47,7 +47,9 @@ function estimateSkillsTokens(skills: readonly Skill[]): number {
 	return countTokens(fragments);
 }
 
-function estimateToolSchemaTokens(tools: ReadonlyArray<Pick<Tool, "name" | "description" | "parameters">>): number {
+export function estimateToolSchemaTokens(
+	tools: ReadonlyArray<Pick<Tool, "name" | "description" | "parameters">>,
+): number {
 	const fragments: string[] = [];
 	for (const tool of tools) {
 		fragments.push(tool.name, tool.description);
@@ -61,15 +63,49 @@ function estimateToolSchemaTokens(tools: ReadonlyArray<Pick<Tool, "name" | "desc
 }
 
 /**
+ * Compute just the NON-MESSAGE token total: system prompt (with its skills
+ * section subtracted, since skills are tokenized separately) + system context
+ * (the rest of the system-prompt array) + tools + skills.
+ *
+ * Exposed so callers like `StatusLineComponent` can cache the non-message
+ * total separately from the message total. Non-message inputs (skills,
+ * tools, system prompt) change rarely; the message list grows on every
+ * streaming turn. Splitting the two lets the caller refresh each on its own
+ * cadence — non-message recomputed only when the inputs identity changes,
+ * messages walked incrementally as new entries append.
+ */
+export function computeNonMessageTokens(session: AgentSession): number {
+	const parts = computeNonMessageBreakdown(session);
+	return parts.systemPromptTokens + parts.systemContextTokens + parts.toolsTokens + parts.skillsTokens;
+}
+
+/**
+ * Shared helper for the four non-message token totals. Single source of truth
+ * for both `computeNonMessageTokens` (status-line incremental cache) and
+ * `computeContextBreakdown` (/context panel). The split avoids drift between
+ * the two surfaces — they MUST report the same numbers.
+ */
+function computeNonMessageBreakdown(session: AgentSession): {
+	skillsTokens: number;
+	toolsTokens: number;
+	systemContextTokens: number;
+	systemPromptTokens: number;
+} {
+	const skillsTokens = estimateSkillsTokens(session.skills ?? []);
+	const toolsTokens = estimateToolSchemaTokens(session.agent?.state?.tools ?? []);
+	const systemPromptParts = session.systemPrompt ?? [];
+	const systemContextTokens = countTokens(systemPromptParts.slice(1));
+	const systemPromptTokens = Math.max(0, countTokens(systemPromptParts[0] ?? "") - skillsTokens);
+	return { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens };
+}
+
+/**
  * Compute a breakdown of estimated context usage by category for the active
  * session and model.
  */
 export function computeContextBreakdown(session: AgentSession): ContextBreakdown {
 	const model = session.model;
 	const contextWindow = model?.contextWindow ?? 0;
-
-	const skillsTokens = estimateSkillsTokens(session.skills ?? []);
-	const toolsTokens = estimateToolSchemaTokens(session.agent?.state?.tools ?? []);
 
 	let messagesTokens = 0;
 	const convo = session.messages;
@@ -85,9 +121,7 @@ export function computeContextBreakdown(session: AgentSession): ContextBreakdown
 	//   Tools         = JSON tool schema sent separately on the wire
 	//   Skills        = the skill list embedded in the system prompt
 	//   Messages      = conversation messages
-	const systemPromptParts = session.systemPrompt;
-	const systemPromptTokens = Math.max(0, countTokens(systemPromptParts?.[0] ?? "") - skillsTokens);
-	const systemContextTokens = countTokens(systemPromptParts?.slice(1) ?? []);
+	const { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens } = computeNonMessageBreakdown(session);
 
 	const categories: CategoryInfo[] = [
 		{ id: "systemPrompt", label: "System prompt", tokens: systemPromptTokens, color: "accent", glyph: CELL_FILLED },

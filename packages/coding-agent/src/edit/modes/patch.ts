@@ -1763,7 +1763,7 @@ export async function executePatchSingle(
 			postEditContent.length === preEditContent.length &&
 			postEditContent.every((b, i) => b === preEditContent[i]);
 		if (unchanged) {
-			throw new ToolError(`edit appeared successful but file content did not change on disk: ${resolvedPath}`, {
+			throw new ToolError(`edit appeared successful but file content did not change on disk: ${path}`, {
 				path: resolvedPath,
 			});
 		}

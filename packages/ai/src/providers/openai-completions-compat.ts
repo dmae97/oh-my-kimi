@@ -51,6 +51,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 
 	const isCerebras = provider === "cerebras" || baseUrl.includes("cerebras.ai");
 	const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
+	const isZhipu = provider === "zhipu-coding-plan" || baseUrl.includes("open.bigmodel.cn");
 	const isKilo = provider === "kilo" || baseUrl.includes("api.kilo.ai");
 	const isKimiModel = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
 	const isMoonshotKimi =
@@ -74,11 +75,16 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 	// applies when thinking mode is actually engaged.
 	const lowerId = model.id.toLowerCase();
 	const lowerName = (model.name ?? "").toLowerCase();
+	// OpenCode Zen's `big-pickle` is a DeepSeek reasoning alias; the upstream
+	// 400s come from DeepSeek and require exact reasoning_content replay.
+	const isOpenCodeDeepseekAlias =
+		provider === "opencode-zen" && (lowerId === "big-pickle" || lowerName === "big pickle");
 	const isDeepseekFamily =
 		provider === "deepseek" ||
 		baseUrl.includes("deepseek.com") ||
 		lowerId.includes("deepseek") ||
-		lowerName.includes("deepseek");
+		lowerName.includes("deepseek") ||
+		isOpenCodeDeepseekAlias;
 	const isDirectDeepseekApi = provider === "deepseek" || baseUrl.includes("api.deepseek.com");
 	const isDirectDeepseekReasoning = isDirectDeepseekApi && isDeepseekFamily && Boolean(model.reasoning);
 	const isNonStandard =
@@ -92,6 +98,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		baseUrl.includes("fireworks.ai") ||
 		isAlibaba ||
 		isZai ||
+		isZhipu ||
 		isKilo ||
 		isQwen ||
 		provider === "opencode-zen" ||
@@ -151,6 +158,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 			isMistral ||
 			isGrok ||
 			isZai ||
+			isZhipu ||
 			isCopilotHost ||
 			isZenmuxHost);
 
@@ -181,9 +189,15 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 
 	return {
 		supportsStore: !isNonStandard,
-		supportsDeveloperRole: !isNonStandard,
+		// `developer` is an OpenAI-Responses-era extension to the chat-completions schema. Almost
+		// every OpenAI-compatible host other than OpenAI itself (and Azure OpenAI, which mirrors
+		// the schema exactly) treats it as an unknown role: Moonshot returns a 400 "tokenization
+		// failed", Groq/Cerebras/etc. error or silently misroute. Default to `system` and require
+		// callers to opt in via `compat.supportsDeveloperRole: true` for hosts known to mirror
+		// OpenAI's reasoning-API surface.
+		supportsDeveloperRole: isOpenAIHost || isAzureHost,
 		supportsMultipleSystemMessages: supportsMultipleSystemMessagesDefault,
-		supportsReasoningEffort: !isGrok && !isZai,
+		supportsReasoningEffort: !isGrok && !isZai && !isZhipu,
 		reasoningEffortMap,
 		supportsUsageInStreaming: !isCerebras,
 		disableReasoningOnForcedToolChoice: isKimiModel || isAnthropicModel,
@@ -194,8 +208,13 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		requiresAssistantAfterToolResult: false,
 		requiresThinkingAsText: isMistral,
 		requiresMistralToolIds: isMistral,
+		// Only Kimi's native hosts (Moonshot / Kimi-code, matched by `isMoonshotKimi`)
+		// speak the z.ai binary `thinking: { type }` field. Kimi reached through
+		// OpenAI-compatible proxies — Fireworks' Fire Pass router, OpenCode's gateway,
+		// etc. — drives reasoning via OpenAI-style `reasoning_effort`
+		// (low|medium|high|xhigh|max|none), so those stay on the "openai" path.
 		thinkingFormat:
-			isZai || isMoonshotKimi
+			isZai || isZhipu || isMoonshotKimi
 				? "zai"
 				: provider === "openrouter" || baseUrl.includes("openrouter.ai")
 					? "openrouter"
@@ -205,12 +224,14 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		reasoningContentField: "reasoning_content",
 		// Backends that 400 follow-up requests when prior assistant tool-call turns lack `reasoning_content`:
 		//   - Kimi: documented invariant on its native API.
-		//   - Any reasoning-capable model reached through OpenRouter: DeepSeek V4 Pro and similar enforce
-		//     this server-side whenever the request is in thinking mode. We can't translate Anthropic's
-		//     redacted/encrypted reasoning into DeepSeek's plaintext form, so cross-provider continuations
-		//     rely on a placeholder — see `convertMessages` for the placeholder injection.
-		//   - OpenCode-Go and OpenCode-Zen handle reasoning content internally and reject
-		//     `reasoning_content` in client-sent messages — exclude them even for Kimi models.
+		//   - DeepSeek-family reasoning models, including aliased OpenCode Zen models
+		//     like `big-pickle`, validate exact thinking-mode replay.
+		//   - Any reasoning-capable model reached through OpenRouter can enforce this
+		//     server-side whenever the request is in thinking mode. We can't translate
+		//     Anthropic's redacted/encrypted reasoning into provider-native plaintext,
+		//     so cross-provider continuations rely on a placeholder.
+		// OpenCode Kimi aliases handle reasoning content internally and reject
+		// client-sent `reasoning_content`, so exclude only that Kimi-on-OpenCode path.
 		requiresReasoningContentForToolCalls:
 			(isKimiModel && !isOpenCodeProvider) ||
 			(isDeepseekFamily && Boolean(model.reasoning)) ||

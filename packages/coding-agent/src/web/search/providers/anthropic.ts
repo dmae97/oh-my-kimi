@@ -7,10 +7,11 @@
 import {
 	type AnthropicAuthConfig,
 	type AnthropicSystemBlock,
+	type AuthStorage,
+	buildAnthropicAuthConfig,
 	buildAnthropicSearchHeaders,
 	buildAnthropicSystemBlocks,
 	buildAnthropicUrl,
-	findAnthropicAuth,
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
@@ -34,9 +35,7 @@ export interface AnthropicSearchParams {
 	query: string;
 	system_prompt?: string;
 	num_results?: number;
-	/** Maximum output tokens. Defaults to 4096. */
 	max_tokens?: number;
-	/** Sampling temperature (0–1). Lower = more focused/factual. */
 	temperature?: number;
 	signal?: AbortSignal;
 }
@@ -242,30 +241,47 @@ function parseResponse(response: AnthropicApiResponse): SearchResponse {
  * @returns Search response with synthesized answer, sources, and citations
  * @throws {Error} If no Anthropic credentials are configured
  */
-export async function searchAnthropic(params: AnthropicSearchParams): Promise<SearchResponse> {
-	const auth = await findAnthropicAuth();
+export async function searchAnthropic(
+	params: SearchParams | AnthropicSearchParams,
+	_legacyStorage?: unknown,
+): Promise<SearchResponse> {
+	const searchApiKey = $env.ANTHROPIC_SEARCH_API_KEY;
+	const searchBaseUrl = $env.ANTHROPIC_SEARCH_BASE_URL;
+	let auth: AnthropicAuthConfig | undefined;
+
+	if (searchApiKey) {
+		auth = buildAnthropicAuthConfig(searchApiKey, searchBaseUrl);
+	} else if ("authStorage" in params) {
+		const apiKey = await params.authStorage.getApiKey("anthropic", params.sessionId, {
+			signal: params.signal,
+		});
+		if (apiKey) auth = buildAnthropicAuthConfig(apiKey);
+	}
+
 	if (!auth) {
 		throw new Error(
-			"No Anthropic credentials found. Set ANTHROPIC_API_KEY or configure OAuth in ~/.omp/agent/agent.db",
+			"No Anthropic credentials found. Set ANTHROPIC_SEARCH_API_KEY or ANTHROPIC_API_KEY, or configure Anthropic OAuth.",
 		);
 	}
 
 	const model = getModel();
+	const systemPrompt = "authStorage" in params ? params.systemPrompt : params.system_prompt;
+	const maxTokens = "authStorage" in params ? params.maxOutputTokens : params.max_tokens;
 	const response = await callSearch(
 		auth,
 		model,
 		params.query,
-		params.system_prompt,
-		params.max_tokens,
+		systemPrompt,
+		maxTokens,
 		params.temperature,
 		params.signal,
 	);
 
 	const result = parseResponse(response);
 
-	// Apply num_results limit if specified
-	if (params.num_results && result.sources.length > params.num_results) {
-		result.sources = result.sources.slice(0, params.num_results);
+	const numResults = "authStorage" in params ? (params.numSearchResults ?? params.limit) : params.num_results;
+	if (numResults && result.sources.length > numResults) {
+		result.sources = result.sources.slice(0, numResults);
 	}
 
 	return result;
@@ -276,18 +292,11 @@ export class AnthropicProvider extends SearchProvider {
 	readonly id = "anthropic";
 	readonly label = "Anthropic";
 
-	isAvailable() {
-		return findAnthropicAuth().then(Boolean);
+	isAvailable(authStorage: AuthStorage): Promise<boolean> | boolean {
+		return Boolean($env.ANTHROPIC_SEARCH_API_KEY) || authStorage.hasAuth("anthropic");
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
-		return searchAnthropic({
-			query: params.query,
-			system_prompt: params.systemPrompt,
-			num_results: params.numSearchResults ?? params.limit,
-			max_tokens: params.maxOutputTokens,
-			temperature: params.temperature,
-			signal: params.signal,
-		});
+		return searchAnthropic(params);
 	}
 }

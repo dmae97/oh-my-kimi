@@ -15,6 +15,7 @@ import { isRecord } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { Theme, ThemeColor } from "../modes/theme/theme";
 import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
+import type { ReviewFinding } from "../task/types";
 export type FindingPriority = "P0" | "P1" | "P2" | "P3";
 
 export interface FindingPriorityInfo {
@@ -121,6 +122,7 @@ export function parseReportFindingDetails(value: unknown): ReportFindingDetails 
 export const reportFindingTool: AgentTool<typeof ReportFindingParams, ReportFindingDetails, Theme> = {
 	name: "report_finding",
 	label: "Report Finding",
+	approval: "read",
 	description: "Report a code review finding. Use this for each issue found. Call yield when done.",
 	parameters: ReportFindingParams,
 	intent: "omit",
@@ -186,6 +188,28 @@ export interface SubmitReviewDetails {
 
 // Re-export types for external use
 export type { ReportFindingDetails };
+/**
+ * Coerce a tool-side `ReportFindingDetails` into the cross-boundary
+ * `ReviewFinding` shape consumed by the reviewer agent's JTD output schema.
+ *
+ * The `report_finding` tool exposes `priority` as a string enum (`"P0".."P3"`)
+ * for ergonomics, but the bundled reviewer schema (and every custom review
+ * agent that mirrors it) declares `priority: number`. Without this coercion
+ * the auto-populated `findings[]` fails JTD validation and every review run
+ * that surfaces a finding is rejected with `findings.0.priority: expected
+ * number, received string`.
+ */
+export function toReviewFinding(details: ReportFindingDetails): ReviewFinding {
+	return {
+		title: details.title,
+		body: details.body,
+		priority: getPriorityInfo(details.priority).ord,
+		confidence: details.confidence,
+		file_path: details.file_path,
+		line_start: details.line_start,
+		line_end: details.line_end,
+	};
+}
 
 // Register report_finding handler
 subprocessToolRegistry.register<ReportFindingDetails>("report_finding", {

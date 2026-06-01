@@ -10,7 +10,8 @@ import type {
 	UsageWindow,
 } from "../usage";
 import { isRecord } from "../utils";
-import { getKimiCommonHeaders, refreshKimiToken } from "../utils/oauth/kimi";
+import { getKimiCommonHeaders } from "../utils/oauth/kimi";
+// (Refresh is the sole responsibility of AuthStorage; no provider-direct refresh here.)
 import { toNumber } from "./shared";
 
 const DEFAULT_BASE_URL = "https://api.kimi.com/coding/v1";
@@ -213,23 +214,17 @@ export const kimiUsageProvider: UsageProvider = {
 		const { credential } = params;
 		if (credential.type !== "oauth") return null;
 
-		let accessToken = credential.accessToken;
+		const accessToken = credential.accessToken;
 		if (!accessToken) return null;
 
 		const nowMs = Date.now();
+		// AuthStorage refreshes OAuth credentials pre-emptively (60s skew). If the
+		// usage probe lands with an expired token, short-circuit rather than POST
+		// the broker sentinel back to Kimi — the next cycle will carry a freshly
+		// refreshed credential.
 		if (credential.expiresAt !== undefined && credential.expiresAt <= nowMs) {
-			if (!credential.refreshToken) {
-				ctx.logger?.warn("Kimi usage token expired, no refresh token", { provider: params.provider });
-				return null;
-			}
-			try {
-				ctx.logger?.debug("Kimi usage token expired, refreshing", { provider: params.provider });
-				const refreshed = await refreshKimiToken(credential.refreshToken);
-				accessToken = refreshed.access;
-			} catch (error) {
-				ctx.logger?.warn("Kimi usage token refresh failed", { provider: params.provider, error: String(error) });
-				return null;
-			}
+			ctx.logger?.debug("Kimi usage token expired; skipping probe", { provider: params.provider });
+			return null;
 		}
 
 		const baseUrl = normalizeBaseUrl(params.baseUrl);

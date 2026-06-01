@@ -271,8 +271,32 @@ def test_parse_issue_ref_accepts_owner_repo_hash_number() -> None:
     assert parse_issue_ref("  octo/widget#42  ") == ("octo/widget", 42)
 
 
+def test_parse_issue_ref_accepts_github_issue_urls() -> None:
+    cases = (
+        "https://github.com/can1357/oh-my-pi/issues/1348",
+        "http://github.com/can1357/oh-my-pi/issues/1348",
+        "github.com/can1357/oh-my-pi/issues/1348",
+        "https://www.github.com/can1357/oh-my-pi/issues/1348",
+        "https://github.com/can1357/oh-my-pi/issues/1348/",
+        "https://github.com/can1357/oh-my-pi/issues/1348?foo=bar",
+        "https://github.com/can1357/oh-my-pi/issues/1348#issuecomment-99",
+        "  https://github.com/can1357/oh-my-pi/issues/1348  ",
+    )
+    for case in cases:
+        assert parse_issue_ref(case) == ("can1357/oh-my-pi", 1348), case
+
+
 def test_parse_issue_ref_rejects_garbage() -> None:
-    for bad in ("widget#1", "octo/widget", "octo/widget#abc", "octo widget#1", ""):
+    for bad in (
+        "widget#1",
+        "octo/widget",
+        "octo/widget#abc",
+        "octo widget#1",
+        "",
+        "https://github.com/octo/widget/pull/1",
+        "https://github.com/octo/widget/issues/",
+        "https://gitlab.com/octo/widget/issues/1",
+    ):
         with pytest.raises(InvalidIssueRef):
             parse_issue_ref(bad)
 
@@ -1586,7 +1610,7 @@ async def test_handle_pr_conversation_unmapped_bot_pr_uses_pr_branch(
     settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
 ) -> None:
     from robomp import tasks
-    from robomp.github_client import IssueInfo, PullRequestInfo, RepoInfo
+    from robomp.github_client import CommentInfo, IssueInfo, PullRequestInfo, RepoInfo
 
     sandbox = _RecordingSandbox(tmp_path)
     db = get_database(settings.sqlite_path)
@@ -1628,9 +1652,27 @@ async def test_handle_pr_conversation_unmapped_bot_pr_uses_pr_branch(
         assert number == 900
         return pr_issue
 
+    async def _list_comments(self, repo_full: str, number: int):
+        assert repo_full == "octo/widget"
+        assert number == 900
+        return [CommentInfo(id=77, author="can1357", body="prior PR context", created_at="2026-05-14T00:00:00Z")]
+
+    async def _list_review_comments(self, repo_full: str, number: int):
+        assert repo_full == "octo/widget"
+        assert number == 900
+        return []
+
+    async def _list_pr_reviews(self, repo_full: str, number: int):
+        assert repo_full == "octo/widget"
+        assert number == 900
+        return []
+
     monkeypatch.setattr(GitHubClient, "get_pull_request", _get_pull_request)
     monkeypatch.setattr(GitHubClient, "get_repo", _get_repo)
     monkeypatch.setattr(GitHubClient, "get_issue", _get_issue)
+    monkeypatch.setattr(GitHubClient, "list_comments", _list_comments)
+    monkeypatch.setattr(GitHubClient, "list_review_comments", _list_review_comments)
+    monkeypatch.setattr(GitHubClient, "list_pr_reviews", _list_pr_reviews)
 
     payload = {
         "action": "created",
@@ -1653,6 +1695,10 @@ async def test_handle_pr_conversation_unmapped_bot_pr_uses_pr_branch(
     assert call["task_kind"] == "handle_comment"
     assert call["pr_number"] == 900
     assert call["inputs"].issue.is_pull_request is True
+    assert [(m.kind, m.author, m.body) for m in call["thread"]] == [
+        ("pr_body", settings.bot_login, "PR body"),
+        ("comment", "can1357", "prior PR context"),
+    ]
     assert sandbox.ensure_calls[0]["number"] == 900
     assert sandbox.ensure_calls[0]["existing_branch"] == "farm/abc12345/fix-flaky-parser"
     row = db.get_issue("octo/widget#900")
@@ -1666,7 +1712,7 @@ async def test_handle_pr_conversation_repairs_missing_pr_mapping_from_branch(
     settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
 ) -> None:
     from robomp import tasks
-    from robomp.github_client import IssueInfo, PullRequestInfo, RepoInfo
+    from robomp.github_client import CommentInfo, IssueInfo, PullRequestInfo, RepoInfo
 
     sandbox = _RecordingSandbox(tmp_path)
     db = get_database(settings.sqlite_path)
@@ -1684,6 +1730,16 @@ async def test_handle_pr_conversation_repairs_missing_pr_mapping_from_branch(
         author="alice",
         labels=(),
         is_pull_request=False,
+    )
+    pr_issue = IssueInfo(
+        repo="octo/widget",
+        number=900,
+        title="Fix flaky parser",
+        body="PR body",
+        state="open",
+        author=settings.bot_login,
+        labels=(),
+        is_pull_request=True,
     )
     pr_info = PullRequestInfo(
         repo="octo/widget",
@@ -1707,12 +1763,33 @@ async def test_handle_pr_conversation_repairs_missing_pr_mapping_from_branch(
 
     async def _get_issue(self, repo_full: str, number: int):
         assert repo_full == "octo/widget"
-        assert number == 42
-        return issue
+        if number == 42:
+            return issue
+        if number == 900:
+            return pr_issue
+        raise AssertionError(number)
+
+    async def _list_comments(self, repo_full: str, number: int):
+        assert repo_full == "octo/widget"
+        assert number == 900
+        return [CommentInfo(id=78, author="can1357", body="prior PR context", created_at="2026-05-14T00:00:00Z")]
+
+    async def _list_review_comments(self, repo_full: str, number: int):
+        assert repo_full == "octo/widget"
+        assert number == 900
+        return []
+
+    async def _list_pr_reviews(self, repo_full: str, number: int):
+        assert repo_full == "octo/widget"
+        assert number == 900
+        return []
 
     monkeypatch.setattr(GitHubClient, "get_pull_request", _get_pull_request)
     monkeypatch.setattr(GitHubClient, "get_repo", _get_repo)
     monkeypatch.setattr(GitHubClient, "get_issue", _get_issue)
+    monkeypatch.setattr(GitHubClient, "list_comments", _list_comments)
+    monkeypatch.setattr(GitHubClient, "list_review_comments", _list_review_comments)
+    monkeypatch.setattr(GitHubClient, "list_pr_reviews", _list_pr_reviews)
 
     payload = {
         "action": "created",
@@ -1734,6 +1811,10 @@ async def test_handle_pr_conversation_repairs_missing_pr_mapping_from_branch(
     call = stub_run_task[0]
     assert call["inputs"].issue.number == 42
     assert call["pr_number"] == 900
+    assert [(m.kind, m.author, m.body) for m in call["thread"]] == [
+        ("pr_body", settings.bot_login, "PR body"),
+        ("comment", "can1357", "prior PR context"),
+    ]
     assert sandbox.ensure_calls[0]["number"] == 42
     assert sandbox.ensure_calls[0]["existing_branch"] == branch
     row = db.get_issue("octo/widget#42")

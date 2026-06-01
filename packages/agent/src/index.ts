@@ -2,6 +2,8 @@
 export * from "./agent";
 // Loop functions
 export * from "./agent-loop";
+// Append-only context mode
+export * from "./append-only-context";
 // Compaction
 export * from "./compaction";
 export * from "./harmony-leak";
@@ -15,3 +17,5 @@ export * from "./telemetry";
 export * from "./thinking";
 // Types
 export * from "./types";
+// Yield utilities for Bun event-loop busy-wait prevention
+export * from "./utils/yield";

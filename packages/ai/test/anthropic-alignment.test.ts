@@ -18,7 +18,7 @@ import {
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
-import type { Context, Model, TJsonSchema, Tool } from "@oh-my-pi/pi-ai/types";
+import type { Context, Model, TJsonSchema, TokenTaskBudget, Tool } from "@oh-my-pi/pi-ai/types";
 import * as z from "zod/v4";
 import { withEnv } from "./helpers";
 
@@ -57,6 +57,8 @@ type CaptureAnthropicOptions = {
 	temperature?: number;
 	topP?: number;
 	topK?: number;
+	taskBudget?: TokenTaskBudget;
+	toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
 };
 
 function captureAnthropicPayload(
@@ -75,6 +77,8 @@ function captureAnthropicPayload(
 		temperature: options?.temperature,
 		topP: options?.topP,
 		topK: options?.topK,
+		taskBudget: options?.taskBudget,
+		toolChoice: options?.toolChoice,
 		onPayload: payload => resolve(payload),
 	});
 	return promise;
@@ -1044,7 +1048,84 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.top_p).toBeUndefined();
 		expect(payload.top_k).toBeUndefined();
 		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
-		expect(payload.output_config).toEqual({ effort: "high" });
+		expect(payload.output_config).toEqual({ effort: "xhigh" });
+	});
+
+	it("sends task budgets through Anthropic output_config without dropping adaptive effort", async () => {
+		const payload = (await captureAnthropicPayload(
+			{
+				...ANTHROPIC_MODEL,
+				id: "claude-opus-4-7",
+				name: "Claude Opus 4.7",
+				thinking: {
+					mode: "anthropic-adaptive",
+					minLevel: Effort.Minimal,
+					maxLevel: Effort.XHigh,
+				},
+			},
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Review this repo", timestamp: Date.now() }],
+			},
+			{
+				thinkingEnabled: true,
+				reasoning: Effort.High,
+				taskBudget: { type: "tokens", total: 64_000, remaining: 48_000 },
+			},
+		)) as {
+			output_config?: {
+				effort?: string;
+				task_budget?: TokenTaskBudget;
+			};
+		};
+
+		expect(payload.output_config).toEqual({
+			effort: "xhigh",
+			task_budget: { type: "tokens", total: 64_000, remaining: 48_000 },
+		});
+	});
+
+	it("preserves task budget when forced tool choice disables thinking", async () => {
+		const payload = (await captureAnthropicPayload(
+			{
+				...ANTHROPIC_MODEL,
+				id: "claude-opus-4-7",
+				name: "Claude Opus 4.7",
+				thinking: {
+					mode: "anthropic-adaptive",
+					minLevel: Effort.Minimal,
+					maxLevel: Effort.XHigh,
+				},
+			},
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Use the tool", timestamp: Date.now() }],
+				tools: [
+					{
+						name: "lookup",
+						description: "Lookup a value",
+						parameters: { type: "object", properties: {}, additionalProperties: false },
+					},
+				],
+			},
+			{
+				thinkingEnabled: true,
+				reasoning: Effort.High,
+				taskBudget: { type: "tokens", total: 64_000 },
+				toolChoice: "any",
+			},
+		)) as {
+			thinking?: unknown;
+			output_config?: {
+				effort?: string;
+				task_budget?: TokenTaskBudget;
+			};
+		};
+
+		expect(payload.thinking).toBeUndefined();
+		expect(payload.output_config).toEqual({
+			task_budget: { type: "tokens", total: 64_000 },
+		});
 	});
 
 	it("treats tool prefix helpers as no-ops when prefix is empty", () => {

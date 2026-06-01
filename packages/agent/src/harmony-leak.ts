@@ -38,7 +38,7 @@ const SCRIPT_CLASS =
 const SCRIPT_RUN_RE = new RegExp(`[${SCRIPT_CLASS}]{2,}`, "u");
 
 // Recovery registry. Each entry's parser must recognize the configured
-// sentinel (per-tool, see eval/parse.ts and hashline/parser.ts) and surface
+// sentinel (per-tool, see eval/parse.ts and hashline/executor.ts) and surface
 // a warning to the model so it knows to re-issue any remaining work.
 // `accepts` gates on input shape: tools whose contaminated input doesn't
 // match the parser's expected DSL fall through to abort-and-retry.
@@ -230,7 +230,7 @@ export function recoverHarmonyToolCall(
 ): HarmonyRecoveredToolCall | undefined {
 	if (detection.surface !== "tool_arg" || detection.contentIndex === undefined) return undefined;
 	const block = message.content[detection.contentIndex];
-	if (!block || block.type !== "toolCall") return undefined;
+	if (block?.type !== "toolCall") return undefined;
 
 	const config = RECOVERY_REGISTRY[block.name];
 	if (!config) return undefined;

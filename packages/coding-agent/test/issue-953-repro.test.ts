@@ -40,6 +40,7 @@ function createCtx(usage: Partial<SegmentContext["usageStats"]>): SegmentContext
 			status: null,
 			pr: null,
 		},
+		usage: null,
 	};
 }
 
@@ -57,5 +58,44 @@ describe("issue #953 cache status line icons", () => {
 		expect(cacheWrite.content).toContain(theme.icon.cache);
 		expect(cacheWrite.content).toContain(theme.icon.input);
 		expect(cacheWrite.content).not.toContain(theme.icon.output);
+	});
+});
+
+describe("cache_hit segment", () => {
+	it("shows hit rate from cacheRead / (cacheRead + cacheWrite) when cacheWrite > 0", () => {
+		const segment = renderSegment("cache_hit", createCtx({ cacheRead: 7_500, cacheWrite: 2_500 }));
+
+		expect(segment.visible).toBe(true);
+		expect(segment.content).toContain(theme.icon.cache);
+		// 7500 / (7500 + 2500) = 75%
+		expect(segment.content).toContain("75.00%");
+	});
+
+	it("shows hit rate from cacheRead / (cacheRead + input) when cacheWrite = 0 (DeepSeek fallback)", () => {
+		// DeepSeek: cacheWrite=0, input=miss_tokens
+		const segment = renderSegment("cache_hit", createCtx({ cacheRead: 6_000, cacheWrite: 0, input: 4_000 }));
+
+		expect(segment.visible).toBe(true);
+		// 6000 / (6000 + 4000) = 60%
+		expect(segment.content).toContain("60.00%");
+	});
+
+	it("shows 100% when all input was cached (cacheWrite=0, input=0)", () => {
+		const segment = renderSegment("cache_hit", createCtx({ cacheRead: 5_000, cacheWrite: 0, input: 0 }));
+
+		expect(segment.visible).toBe(true);
+		expect(segment.content).toContain("100.00%");
+	});
+
+	it("is hidden when cacheRead is 0", () => {
+		const segment = renderSegment("cache_hit", createCtx({ cacheRead: 0, cacheWrite: 5_000 }));
+
+		expect(segment.visible).toBe(false);
+	});
+
+	it("is hidden when there is no cache activity at all", () => {
+		const segment = renderSegment("cache_hit", createCtx({ cacheRead: 0, cacheWrite: 0, input: 1_000 }));
+
+		expect(segment.visible).toBe(false);
 	});
 });

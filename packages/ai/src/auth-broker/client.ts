@@ -5,6 +5,7 @@
  * `omp auth-broker status` (liveness checks). All endpoints except
  * `/v1/healthz` require a bearer token.
  */
+import { readSseEvents } from "@oh-my-pi/pi-utils";
 import type { ZodType, infer as zInfer } from "zod/v4";
 import type { AuthCredential } from "../auth-storage";
 import type {
@@ -15,6 +16,7 @@ import type {
 	CredentialUploadResponse,
 	HealthzResponse,
 	SnapshotResponse,
+	SnapshotStreamEvent,
 	UsageResponse,
 } from "./types";
 import {
@@ -23,6 +25,7 @@ import {
 	credentialUploadResponseSchema,
 	healthzResponseSchema,
 	snapshotResponseSchema,
+	snapshotStreamEventSchema,
 	usageResponseSchema,
 } from "./wire-schemas";
 
@@ -47,6 +50,18 @@ export class AuthBrokerError extends Error {
 		this.name = "AuthBrokerError";
 		this.status = opts.status;
 		this.body = opts.body;
+	}
+}
+
+/**
+ * Thrown when a broker responds 404 to `GET /v1/snapshot/stream` — old
+ * brokers that predate the SSE endpoint. Callers (`RemoteAuthCredentialStore`)
+ * detect this sentinel to fall back to long-polling permanently.
+ */
+export class AuthBrokerStreamUnsupportedError extends AuthBrokerError {
+	constructor(message = "Auth broker does not support /v1/snapshot/stream") {
+		super(message, { status: 404 });
+		this.name = "AuthBrokerStreamUnsupportedError";
 	}
 }
 
@@ -126,6 +141,88 @@ export class AuthBrokerClient {
 		}
 		const snapshot = validated.data as SnapshotResponse;
 		return { status: 200, snapshot, generation: etagGeneration ?? snapshot.generation };
+	}
+
+	/**
+	 * Subscribe to the broker's SSE snapshot stream. The first frame is always
+	 * a full `snapshot`; subsequent frames are `entry` upserts / refreshes or
+	 * `removed` deletes. Caller controls lifecycle via `opts.signal`.
+	 *
+	 * Throws {@link AuthBrokerStreamUnsupportedError} when the broker responds
+	 * 404 — older brokers predate this endpoint and the caller should fall back
+	 * to long-polling for the remainder of its lifetime.
+	 */
+	async *openSnapshotStream(opts: { signal?: AbortSignal } = {}): AsyncGenerator<SnapshotStreamEvent> {
+		const url = `${this.#baseUrl}/v1/snapshot/stream`;
+		const headers: Record<string, string> = {
+			Accept: "text/event-stream",
+			Authorization: `Bearer ${this.#token}`,
+		};
+		if (opts.signal?.aborted) {
+			throw new AuthBrokerError("Auth broker request aborted", { cause: opts.signal.reason });
+		}
+		// No timeout: this connection is intentionally long-lived. Caller's signal
+		// is the only cancel path.
+		const response = await this.#fetch(url, { method: "GET", headers, signal: opts.signal });
+		if (response.status === 404) {
+			// Drain the body so the socket can be reused; tiny payload.
+			await response.text().catch(() => {});
+			throw new AuthBrokerStreamUnsupportedError();
+		}
+		if (!response.ok) {
+			const text = await response.text().catch(() => "");
+			throw new AuthBrokerError(`Auth broker stream failed: ${response.status} ${response.statusText}`, {
+				status: response.status,
+				body: text,
+			});
+		}
+		if (!response.body) {
+			throw new AuthBrokerError("Auth broker stream response had no body", { status: response.status });
+		}
+		const contentType = response.headers.get("content-type")?.toLowerCase();
+		if (contentType?.split(";", 1)[0].trim() !== "text/event-stream") {
+			await response.body.cancel().catch(() => {});
+			throw new AuthBrokerError("Auth broker stream returned non-SSE response", {
+				status: response.status,
+				body: contentType ?? "",
+			});
+		}
+
+		let sawFirstEvent = false;
+		for await (const sse of readSseEvents(response.body, opts.signal)) {
+			if (sse.event === null && sse.data === "") continue; // keepalive comment frames
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(sse.data);
+			} catch (err) {
+				throw new AuthBrokerError("Auth broker stream returned malformed JSON", {
+					body: sse.data,
+					cause: err,
+				});
+			}
+			const validated = snapshotStreamEventSchema.safeParse(parsed);
+			if (!validated.success) {
+				throw new AuthBrokerError("Auth broker stream event failed schema validation", {
+					body: validated.error.message,
+				});
+			}
+			const event = validated.data;
+			if (!sawFirstEvent) {
+				sawFirstEvent = true;
+				if (event.kind !== "snapshot") {
+					throw new AuthBrokerError("Auth broker stream did not start with snapshot", { body: sse.data });
+				}
+			}
+			yield event;
+		}
+		if (!opts.signal?.aborted) {
+			throw new AuthBrokerError(
+				sawFirstEvent
+					? "Auth broker stream ended unexpectedly"
+					: "Auth broker stream ended before initial snapshot",
+				{ status: response.status },
+			);
+		}
 	}
 
 	fetchUsage(signal?: AbortSignal): Promise<UsageResponse> {

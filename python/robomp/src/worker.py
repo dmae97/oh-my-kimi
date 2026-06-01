@@ -369,6 +369,7 @@ def _build_prompt(
     pr_number: int | None,
     review_payload: dict[str, Any] | None,
     directive: DirectiveInfo | None = None,
+    thread: tuple[ThreadMessage, ...] = (),
     resuming: bool = False,
 ) -> str:
     if task_kind == "triage_issue":
@@ -412,6 +413,7 @@ def _build_prompt(
             comment=comment,
             pr_status=pr_status,
             pr_number=pr_number,
+            thread=thread,
         )
     if task_kind == "handle_review":
         assert review_payload is not None
@@ -652,6 +654,7 @@ async def run_task(
     pr_number: int | None = None,
     review_payload: dict[str, Any] | None = None,
     directive: DirectiveInfo | None = None,
+    thread: tuple[ThreadMessage, ...] = (),
 ) -> str | None:
     """Async wrapper that runs the synchronous RPC driver on a worker thread."""
     loop = asyncio.get_running_loop()
@@ -679,6 +682,7 @@ async def run_task(
         pr_number=pr_number,
         review_payload=review_payload,
         directive=directive,
+        thread=thread,
         resuming=resuming,
     )
     try:

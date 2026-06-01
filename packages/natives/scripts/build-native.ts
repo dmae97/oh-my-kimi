@@ -145,6 +145,134 @@ async function installGeneratedBindings(outputDir: string): Promise<void> {
 	}
 }
 
+async function isElfFile(filePath: string): Promise<boolean> {
+	const handle = await fs.open(filePath, "r");
+	try {
+		const buffer = Buffer.alloc(4);
+		const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+		return bytesRead === 4 && buffer[0] === 0x7f && buffer[1] === 0x45 && buffer[2] === 0x4c && buffer[3] === 0x46;
+	} finally {
+		await handle.close();
+	}
+}
+
+function readElfUint(buffer: Buffer, offset: number, byteLength: 2 | 4 | 8, littleEndian: boolean): number {
+	if (offset < 0 || offset + byteLength > buffer.length) {
+		throw new Error("ELF section table is truncated.");
+	}
+	if (byteLength === 2) return littleEndian ? buffer.readUInt16LE(offset) : buffer.readUInt16BE(offset);
+	if (byteLength === 4) return littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
+	const value = littleEndian ? buffer.readBigUInt64LE(offset) : buffer.readBigUInt64BE(offset);
+	const numberValue = Number(value);
+	if (!Number.isSafeInteger(numberValue)) {
+		throw new Error(`ELF integer exceeds JavaScript's safe range: ${value}`);
+	}
+	return numberValue;
+}
+
+function readCString(buffer: Buffer, offset: number): string {
+	if (offset < 0 || offset >= buffer.length) return "";
+	let end = offset;
+	while (end < buffer.length && buffer[end] !== 0) end++;
+	return buffer.toString("utf8", offset, end);
+}
+
+function readElfSectionNames(buffer: Buffer): string[] {
+	if (buffer.length < 0x40 || buffer[0] !== 0x7f || buffer[1] !== 0x45 || buffer[2] !== 0x4c || buffer[3] !== 0x46) {
+		return [];
+	}
+	const elfClass = buffer[4];
+	const endian = buffer[5];
+	if (elfClass !== 1 && elfClass !== 2) throw new Error(`Unsupported ELF class: ${elfClass}`);
+	if (endian !== 1 && endian !== 2) throw new Error(`Unsupported ELF endian marker: ${endian}`);
+
+	const is64Bit = elfClass === 2;
+	const littleEndian = endian === 1;
+	const sectionHeaderOffset = is64Bit
+		? readElfUint(buffer, 0x28, 8, littleEndian)
+		: readElfUint(buffer, 0x20, 4, littleEndian);
+	const sectionHeaderEntrySize = readElfUint(buffer, is64Bit ? 0x3a : 0x2e, 2, littleEndian);
+	const sectionHeaderCount = readElfUint(buffer, is64Bit ? 0x3c : 0x30, 2, littleEndian);
+	const sectionNameTableIndex = readElfUint(buffer, is64Bit ? 0x3e : 0x32, 2, littleEndian);
+	if (sectionHeaderOffset === 0 || sectionHeaderCount === 0) return [];
+	if (sectionNameTableIndex >= sectionHeaderCount) {
+		throw new Error("ELF section name table index is out of bounds.");
+	}
+
+	const sectionHeadersEnd = sectionHeaderOffset + sectionHeaderEntrySize * sectionHeaderCount;
+	if (sectionHeadersEnd > buffer.length) {
+		throw new Error("ELF section headers extend past the end of the file.");
+	}
+
+	const sectionHeader = (index: number) => sectionHeaderOffset + sectionHeaderEntrySize * index;
+	const sectionNameTableHeader = sectionHeader(sectionNameTableIndex);
+	const nameTableOffset = readElfUint(
+		buffer,
+		sectionNameTableHeader + (is64Bit ? 0x18 : 0x10),
+		is64Bit ? 8 : 4,
+		littleEndian,
+	);
+	const nameTableSize = readElfUint(
+		buffer,
+		sectionNameTableHeader + (is64Bit ? 0x20 : 0x14),
+		is64Bit ? 8 : 4,
+		littleEndian,
+	);
+	if (nameTableOffset + nameTableSize > buffer.length) {
+		throw new Error("ELF section name table extends past the end of the file.");
+	}
+
+	const names: string[] = [];
+	const nameTable = buffer.subarray(nameTableOffset, nameTableOffset + nameTableSize);
+	for (let index = 0; index < sectionHeaderCount; index++) {
+		const nameOffset = readElfUint(buffer, sectionHeader(index), 4, littleEndian);
+		names.push(readCString(nameTable, nameOffset));
+	}
+	return names;
+}
+
+const forbiddenStrippedElfSections = new Set([".symtab", ".strtab"]);
+
+function getForbiddenElfSections(sectionNames: string[]): string[] {
+	return sectionNames.filter(
+		sectionName =>
+			forbiddenStrippedElfSections.has(sectionName) ||
+			sectionName.startsWith(".debug_") ||
+			sectionName.startsWith(".zdebug_"),
+	);
+}
+
+async function runStripTool(addonPath: string): Promise<void> {
+	const toolSpecs = [
+		{ command: "llvm-strip", args: ["--strip-unneeded"] },
+		{ command: "strip", args: ["--strip-unneeded"] },
+	];
+	for (const tool of toolSpecs) {
+		const executable = Bun.which(tool.command);
+		if (!executable) continue;
+		const proc = Bun.spawn([executable, ...tool.args, addonPath], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const exitCode = await proc.exited;
+		if (exitCode === 0) return;
+	}
+}
+
+async function stripAndVerifyNativeAddon(addonPath: string): Promise<void> {
+	if (profileLabel !== "ci") return;
+	if (!(await isElfFile(addonPath))) return;
+
+	await runStripTool(addonPath);
+	const sectionNames = readElfSectionNames(await fs.readFile(addonPath));
+	const forbiddenSections = getForbiddenElfSections(sectionNames);
+	if (forbiddenSections.length > 0) {
+		throw new Error(
+			`Native addon ${path.basename(addonPath)} still contains stripped-release forbidden ELF sections: ${forbiddenSections.join(", ")}`,
+		);
+	}
+}
+
 const isCI = Boolean(Bun.env.CI);
 const useLocalProfile = !isCI && !isCrossCompile;
 const profileLabel = useLocalProfile ? "local" : "ci";
@@ -169,7 +297,21 @@ const napiArgs = [
 	profileLabel,
 ];
 
-if (crossTarget) napiArgs.push("--target", crossTarget);
+if (crossTarget) {
+	napiArgs.push("--target", crossTarget);
+	// Route through `cargo-zigbuild` (non-MSVC targets) or `cargo-xwin`
+	// (MSVC targets). The napi CLI picks the right backend from the target.
+	napiArgs.push("--cross-compile");
+	// `zig cc` enables `NDEBUG` at `-O3`, which trips tree-sitter-just's
+	// scanner.c (`#error "expected assertions to be enabled"`). cc-rs reads
+	// CFLAGS_<target> with dashes replaced by underscores; preserve any
+	// caller-supplied flags and append `-UNDEBUG` for zig-driven builds.
+	if (!crossTarget.endsWith("-msvc")) {
+		const envKey = `CFLAGS_${crossTarget.replace(/-/g, "_")}`;
+		const existing = process.env[envKey] ?? "";
+		process.env[envKey] = existing ? `${existing} -UNDEBUG` : "-UNDEBUG";
+	}
+}
 
 const canonicalAddonFilename = `pi_natives.${targetPlatform}-${targetArch}${variantSuffix}.node`;
 const canonicalAddonPath = path.join(nativeDir, canonicalAddonFilename);
@@ -199,6 +341,7 @@ try {
 	}
 
 	const builtAddonPath = await resolveBuiltAddonPath(buildOutputDir, canonicalAddonFilename);
+	await stripAndVerifyNativeAddon(builtAddonPath);
 	if (builtAddonPath !== canonicalAddonPath) {
 		console.log(`Normalizing native addon filename: ${path.basename(builtAddonPath)} → ${canonicalAddonFilename}`);
 		await installBinary(builtAddonPath, canonicalAddonPath);

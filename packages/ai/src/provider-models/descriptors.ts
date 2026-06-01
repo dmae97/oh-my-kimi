@@ -6,7 +6,7 @@
 import type { ModelManagerOptions } from "../model-manager";
 import type { Api, KnownProvider } from "../types";
 import type { OAuthProvider } from "../utils/oauth/types";
-import { googleModelManagerOptions } from "./google";
+import { googleModelManagerOptions, googleVertexModelManagerOptions } from "./google";
 import { ollamaCloudModelManagerOptions } from "./ollama";
 import {
 	alibabaCodingPlanModelManagerOptions,
@@ -39,9 +39,13 @@ import {
 	veniceModelManagerOptions,
 	vercelAiGatewayModelManagerOptions,
 	vllmModelManagerOptions,
+	waferPassModelManagerOptions,
+	waferServerlessModelManagerOptions,
 	xaiModelManagerOptions,
+	xaiOAuthModelManagerOptions,
 	xiaomiModelManagerOptions,
 	zenmuxModelManagerOptions,
+	zhipuCodingPlanModelManagerOptions,
 } from "./openai-compat";
 import { cursorModelManagerOptions, zaiModelManagerOptions } from "./special";
 
@@ -65,6 +69,8 @@ export interface ProviderDescriptor {
 	defaultModel: string;
 	/** When true, the runtime creates a model manager even without a valid API key (e.g. ollama). */
 	allowUnauthenticated?: boolean;
+	/** When true, successful runtime discovery replaces bundled provider models instead of merging fallback-only IDs. */
+	dynamicModelsAuthoritative?: boolean;
 	/** Catalog discovery configuration. Only providers with this field participate in generate-models.ts. */
 	catalogDiscovery?: CatalogDiscoveryConfig;
 }
@@ -86,7 +92,7 @@ function descriptor(
 	providerId: KnownProvider,
 	defaultModel: string,
 	createModelManagerOptions: ProviderDescriptor["createModelManagerOptions"],
-	options: Pick<ProviderDescriptor, "allowUnauthenticated"> = {},
+	options: Pick<ProviderDescriptor, "allowUnauthenticated" | "dynamicModelsAuthoritative"> = {},
 ): ProviderDescriptor {
 	return {
 		providerId,
@@ -113,7 +119,7 @@ function catalogDescriptor(
 	defaultModel: string,
 	createModelManagerOptions: ProviderDescriptor["createModelManagerOptions"],
 	catalogDiscovery: CatalogDiscoveryConfig,
-	options: Pick<ProviderDescriptor, "allowUnauthenticated"> = {},
+	options: Pick<ProviderDescriptor, "allowUnauthenticated" | "dynamicModelsAuthoritative"> = {},
 ): ProviderDescriptor {
 	return {
 		...descriptor(providerId, defaultModel, createModelManagerOptions, options),
@@ -153,8 +159,39 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		config => fireworksModelManagerOptions(config),
 		catalog("Fireworks", ["FIREWORKS_API_KEY"]),
 	),
+	// Fire Pass does not expose a /v1/models endpoint — the API returns HTTP 403
+	// on any catalog-discovery request, so dynamic model listing is not feasible.
+	//
+	// The single model `kimi-k2.6-turbo` is seeded via the `prevModelsJson`
+	// fallback in `generate-models.ts`, which preserves entries from the previous
+	// catalog snapshot when a provider does not surface them dynamically.
+	//
+	// IMPORTANT: Do NOT delete the firepass section from models.json. No
+	// descriptor here produces that entry dynamically — removing it from
+	// models.json would permanently drop the model from the catalog with no
+	// automated mechanism to restore it.
 	descriptor("firepass", "kimi-k2.6-turbo", config => firepassModelManagerOptions(config)),
+	catalogDescriptor(
+		"wafer-pass",
+		"GLM-5.1",
+		config => waferPassModelManagerOptions(config),
+		catalog("Wafer Pass", ["WAFER_PASS_API_KEY"], { oauthProvider: "wafer-pass" }),
+	),
+	catalogDescriptor(
+		"wafer-serverless",
+		"GLM-5.1",
+		config => waferServerlessModelManagerOptions(config),
+		catalog("Wafer Serverless", ["WAFER_SERVERLESS_API_KEY"], { oauthProvider: "wafer-serverless" }),
+	),
 	descriptor("xai", "grok-4-fast-non-reasoning", config => xaiModelManagerOptions(config)),
+	catalogDescriptor(
+		"xai-oauth",
+		"grok-4.3",
+		config => xaiOAuthModelManagerOptions(config),
+		catalog("xAI Grok OAuth (SuperGrok)", ["XAI_OAUTH_TOKEN", "XAI_API_KEY"], {
+			oauthProvider: "xai-oauth",
+		}),
+	),
 	catalogDescriptor(
 		"deepseek",
 		"deepseek-v4-pro",
@@ -227,9 +264,10 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 	),
 	catalogDescriptor(
 		"synthetic",
-		"hf:moonshotai/Kimi-K2.5",
+		"hf:zai-org/GLM-5.1",
 		config => syntheticModelManagerOptions(config),
 		catalog("Synthetic", ["SYNTHETIC_API_KEY"]),
+		{ dynamicModelsAuthoritative: true },
 	),
 	catalogDescriptor(
 		"venice",
@@ -281,8 +319,17 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		catalog("ZenMux", ["ZENMUX_API_KEY"]),
 	),
 	catalogDescriptor("zai", "glm-5.1", config => zaiModelManagerOptions(config), catalog("zAI", ["ZAI_API_KEY"])),
+	catalogDescriptor(
+		"zhipu-coding-plan",
+		"glm-5.1",
+		config => zhipuCodingPlanModelManagerOptions(config),
+		catalog("Zhipu Coding Plan", ["ZHIPU_API_KEY"]),
+	),
 	descriptor("github-copilot", "gpt-4o", config => githubCopilotModelManagerOptions(config)),
 	descriptor("google", "gemini-2.5-pro", config => googleModelManagerOptions(config)),
+	descriptor("google-vertex", "gemini-3-pro-preview", config => googleVertexModelManagerOptions(config), {
+		allowUnauthenticated: true,
+	}),
 	catalogDescriptor(
 		"cursor",
 		"claude-sonnet-4-6",

@@ -21,6 +21,7 @@ import {
 	type BenchmarkResult,
 	buildBenchmarkResult,
 	type ProgressEvent,
+	percentile,
 	runBenchmark,
 } from "./runner";
 import { type EditTask, loadTasksFromDir, validateFixturesFromDir } from "./tasks";
@@ -513,8 +514,15 @@ async function main(): Promise<void> {
 
 	console.log("");
 	console.log("Benchmark complete!");
-	console.log(`  Success rate: ${(result.summary.overallSuccessRate * 100).toFixed(1)}%`);
-	console.log(`  Total tokens: ${result.summary.totalTokens.input} in / ${result.summary.totalTokens.output} out`);
+	console.log(
+		`  Task success rate (best of ${config.runsPerTask}): ${(result.summary.taskSuccessRate * 100).toFixed(1)}% (${result.summary.successfulTasks}/${result.summary.totalTasks})`,
+	);
+	console.log(
+		`  Total tokens (best): ${result.summary.totalTokens.input} in / ${result.summary.totalTokens.output} out`,
+	);
+	console.log(
+		`  Tokens/task (best total): mean=${result.summary.avgTokensPerTask.total} median=${result.summary.medianTokensPerTask.total} p1=${result.summary.p1TokensPerTask.total} p99=${result.summary.p99TokensPerTask.total}`,
+	);
 	if (result.summary.ghostRuns > 0) {
 		console.log(`  Ghost runs (0/0/0): ${result.summary.ghostRuns}`);
 	}
@@ -529,6 +537,11 @@ async function main(): Promise<void> {
 	if (cleanup) {
 		await cleanup();
 	}
+
+	// In-process benchmark runs can leave provider keep-alive sockets and
+	// background AgentSession timers alive after the report is written. Treat the
+	// final report as the CLI boundary so the command returns to the shell.
+	await postmortem.quit(0);
 }
 
 class LiveProgress {
@@ -547,6 +560,9 @@ class LiveProgress {
 	#totalEditSuccesses = 0;
 	#totalToolInputChars = 0;
 	#indentScores: number[] = [];
+	#inputTokens: number[] = [];
+	#outputTokens: number[] = [];
+	#totalTokens: number[] = [];
 	#lastLineLength = 0;
 
 	constructor(totalRuns: number, runsPerTask: number) {
@@ -572,6 +588,9 @@ class LiveProgress {
 			}
 			this.#totalInput += event.result.tokens.input;
 			this.#totalOutput += event.result.tokens.output;
+			this.#inputTokens.push(event.result.tokens.input);
+			this.#outputTokens.push(event.result.tokens.output);
+			this.#totalTokens.push(event.result.tokens.total);
 			this.#totalDuration += event.result.duration;
 			this.#totalReads += event.result.toolCalls.read;
 			this.#totalEdits += event.result.toolCalls.edit;
@@ -656,9 +675,15 @@ class LiveProgress {
 		console.log(`  Avg indent score: ${avgIndent.toFixed(2)}`);
 		console.log(`  Tool calls:       read=${this.#totalReads} edit=${this.#totalEdits} write=${this.#totalWrites}`);
 		console.log(`  Tool input chars: ${this.#totalToolInputChars.toLocaleString()}`);
-		console.log(
-			`  Avg tokens/task:  ${Math.round(this.#totalInput / denom)} in / ${Math.round(this.#totalOutput / denom)} out`,
-		);
+		const fmtTokens = (samples: number[]): string => {
+			if (samples.length === 0) return "mean=0 median=0 p1=0 p99=0";
+			const sorted = [...samples].sort((a, b) => a - b);
+			const mean = Math.round(sorted.reduce((a, b) => a + b, 0) / sorted.length);
+			return `mean=${mean} median=${Math.round(percentile(sorted, 50))} p1=${Math.round(percentile(sorted, 1))} p99=${Math.round(percentile(sorted, 99))}`;
+		};
+		console.log(`  Tokens/task in:   ${fmtTokens(this.#inputTokens)}`);
+		console.log(`  Tokens/task out:  ${fmtTokens(this.#outputTokens)}`);
+		console.log(`  Tokens/task tot:  ${fmtTokens(this.#totalTokens)}`);
 		console.log(`  Avg time/task:    ${Math.round(this.#totalDuration / denom)}ms`);
 	}
 
@@ -711,7 +736,7 @@ class LiveProgress {
 	}
 }
 
-main().catch(err => {
+main().catch(async err => {
 	console.error("Benchmark failed:", err);
-	process.exit(1);
+	await postmortem.quit(1);
 });

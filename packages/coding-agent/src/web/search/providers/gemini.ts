@@ -2,15 +2,20 @@
  * Google Gemini Web Search Provider
  *
  * Uses Gemini's Google Search grounding via Cloud Code Assist API.
- * Requires OAuth credentials stored in agent.db for provider "google-gemini-cli" or "google-antigravity".
- * Returns synthesized answers with citations and source metadata from grounding chunks.
+ * Auth is resolved through `AuthStorage.getOAuthAccess(...)` for both
+ * `google-gemini-cli` (stable prod) and `google-antigravity` (daily sandbox)
+ * — the broker is the sole refresh authority, so this module never opens a
+ * sibling SQLite store and never POSTs the broker sentinel to a Google token
+ * endpoint.
  */
-import { ANTIGRAVITY_SYSTEM_INSTRUCTION, getAntigravityUserAgent, getGeminiCliHeaders } from "@oh-my-pi/pi-ai";
-import { refreshAntigravityToken } from "@oh-my-pi/pi-ai/utils/oauth/google-antigravity";
-import { refreshGoogleCloudToken } from "@oh-my-pi/pi-ai/utils/oauth/google-gemini-cli";
-import { fetchWithRetry, getAgentDbPath } from "@oh-my-pi/pi-utils";
+import {
+	ANTIGRAVITY_SYSTEM_INSTRUCTION,
+	type AuthStorage,
+	getAntigravityUserAgent,
+	getGeminiCliHeaders,
+} from "@oh-my-pi/pi-ai";
+import { fetchWithRetry } from "@oh-my-pi/pi-utils";
 
-import { AgentStorage } from "../../../session/agent-storage";
 import type { SearchCitation, SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
@@ -25,6 +30,9 @@ const DEFAULT_MODEL = "gemini-2.5-flash";
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 const RATE_LIMIT_BUDGET_MS = 5 * 60 * 1000;
+
+const GEMINI_PROVIDERS = ["google-gemini-cli", "google-antigravity"] as const;
+type GeminiProviderId = (typeof GEMINI_PROVIDERS)[number];
 
 interface GeminiToolParams {
 	google_search?: Record<string, unknown>;
@@ -41,6 +49,8 @@ export interface GeminiSearchParams extends GeminiToolParams {
 	/** Sampling temperature (0–1). Lower = more focused/factual. */
 	temperature?: number;
 	signal?: AbortSignal;
+	authStorage: AuthStorage;
+	sessionId?: string;
 }
 
 export function buildGeminiRequestTools(params: GeminiToolParams): Array<Record<string, Record<string, unknown>>> {
@@ -54,129 +64,38 @@ export function buildGeminiRequestTools(params: GeminiToolParams): Array<Record<
 	return tools;
 }
 
-/** OAuth credential stored in agent.db */
-interface GeminiOAuthCredential {
-	type: "oauth";
-	access: string;
-	refresh?: string;
-	expires: number;
-	projectId?: string;
-}
-
-/** Auth info for Gemini API requests */
+/** Resolved auth for a Gemini API request. */
 interface GeminiAuth {
 	accessToken: string;
-	refreshToken?: string;
 	projectId: string;
 	isAntigravity: boolean;
-	storage: AgentStorage;
-	credentialId: number;
-	credential: GeminiOAuthCredential;
-}
-
-async function refreshGeminiAuth(auth: GeminiAuth): Promise<boolean> {
-	if (!auth.refreshToken) return false;
-	try {
-		const refreshed = auth.isAntigravity
-			? await refreshAntigravityToken(auth.refreshToken, auth.projectId)
-			: await refreshGoogleCloudToken(auth.refreshToken, auth.projectId);
-		auth.accessToken = refreshed.access;
-		auth.refreshToken = refreshed.refresh ?? auth.refreshToken;
-		auth.storage.updateAuthCredential(auth.credentialId, {
-			...auth.credential,
-			access: auth.accessToken,
-			refresh: auth.refreshToken,
-			expires: refreshed.expires,
-		});
-		auth.credential.access = auth.accessToken;
-		auth.credential.refresh = auth.refreshToken;
-		auth.credential.expires = refreshed.expires;
-		return true;
-	} catch {
-		return false;
-	}
 }
 
 /**
- * Finds valid Gemini OAuth credentials from agent.db.
- * Checks google-gemini-cli first (stable prod), then google-antigravity (daily sandbox).
- * @returns OAuth credential with access token and project ID, or null if none found
+ * Walks the configured Gemini OAuth providers in deterministic order and
+ * returns the first one that yields a usable access token + projectId via
+ * {@link AuthStorage.getOAuthAccess}. AuthStorage handles refresh + broker
+ * routing internally; this helper never touches refresh tokens directly.
  */
-export async function findGeminiAuth(): Promise<GeminiAuth | null> {
-	const expiryBuffer = 5 * 60 * 1000; // 5 minutes
-	const now = Date.now();
-
-	// Try providers in deterministic order: gemini-cli first, then antigravity
-	const providers = ["google-gemini-cli", "google-antigravity"] as const;
-
-	try {
-		const storage = await AgentStorage.open(getAgentDbPath());
-
-		for (const provider of providers) {
-			const records = storage.listAuthCredentials(provider);
-
-			for (const record of records) {
-				const credential = record.credential;
-				if (credential.type !== "oauth") continue;
-
-				const oauthCred = credential as GeminiOAuthCredential;
-				if (!oauthCred.access) continue;
-
-				// Get projectId from credential
-				const projectId = oauthCred.projectId;
-				if (!projectId) continue;
-
-				// Check if token is expired (or about to expire)
-				if (oauthCred.expires <= now + expiryBuffer) {
-					// Try to refresh if we have a refresh token
-					if (oauthCred.refresh) {
-						try {
-							const refreshed =
-								provider === "google-antigravity"
-									? await refreshAntigravityToken(oauthCred.refresh, projectId)
-									: await refreshGoogleCloudToken(oauthCred.refresh, projectId);
-							// Update the credential in storage
-							const updated = {
-								...oauthCred,
-								access: refreshed.access,
-								refresh: refreshed.refresh ?? oauthCred.refresh,
-								expires: refreshed.expires,
-							};
-							storage.updateAuthCredential(record.id, updated);
-							return {
-								accessToken: refreshed.access,
-								refreshToken: refreshed.refresh ?? oauthCred.refresh,
-								projectId,
-								isAntigravity: provider === "google-antigravity",
-								storage,
-								credentialId: record.id,
-								credential: updated,
-							};
-						} catch {
-							// Refresh failed, skip this credential
-							continue;
-						}
-					}
-					// No refresh token or refresh failed
-					continue;
-				}
-
-				return {
-					accessToken: oauthCred.access,
-					refreshToken: oauthCred.refresh,
-					projectId,
-					isAntigravity: provider === "google-antigravity",
-					storage,
-					credentialId: record.id,
-					credential: oauthCred,
-				};
-			}
-		}
-	} catch {
-		return null;
+export async function findGeminiAuth(
+	authStorage: AuthStorage,
+	sessionId: string | undefined,
+	signal: AbortSignal | undefined,
+): Promise<GeminiAuth | null> {
+	for (const provider of GEMINI_PROVIDERS) {
+		const access = await authStorage.getOAuthAccess(provider, sessionId, { signal });
+		if (!access?.accessToken || !access.projectId) continue;
+		return {
+			accessToken: access.accessToken,
+			projectId: access.projectId,
+			isAntigravity: provider === "google-antigravity",
+		};
 	}
-
 	return null;
+}
+
+function hasGeminiOAuth(authStorage: AuthStorage): boolean {
+	return GEMINI_PROVIDERS.some((provider: GeminiProviderId) => authStorage.hasOAuth(provider));
 }
 
 /** Cloud Code Assist API response types */
@@ -224,20 +143,20 @@ interface CloudCodeResponseChunk {
 
 /**
  * Calls the Cloud Code Assist API with Google Search grounding enabled.
- * @param auth - Authentication info (access token and project ID)
- * @param query - Search query from the user
- * @param systemPrompt - Optional system prompt
- * @returns Parsed response with answer, sources, and usage
- * @throws {SearchProviderError} If the API request fails
+ *
+ * If a request returns a refreshable auth failure (401/403/auth-flavoured 400),
+ * we ask AuthStorage to invalidate + refresh the credential and retry once.
+ * Provider-direct refresh helpers are intentionally not used: AuthStorage owns
+ * the single-flight refresh and broker round-trip.
  */
 async function callGeminiSearch(
 	auth: GeminiAuth,
 	query: string,
-	systemPrompt?: string,
-	maxOutputTokens?: number,
-	temperature?: number,
-	toolParams: GeminiToolParams = {},
-	signal?: AbortSignal,
+	systemPrompt: string | undefined,
+	maxOutputTokens: number | undefined,
+	temperature: number | undefined,
+	toolParams: GeminiToolParams,
+	signal: AbortSignal | undefined,
 ): Promise<{
 	answer: string;
 	sources: SearchSource[];
@@ -316,28 +235,12 @@ async function callGeminiSearch(
 	const urlFor = (attempt: number) =>
 		`${endpoints[Math.min(attempt, endpoints.length - 1)]}/v1internal:streamGenerateContent?alt=sse`;
 
-	let response = await fetchWithRetry(urlFor, {
+	const response = await fetchWithRetry(urlFor, {
 		...buildInit(),
 		maxAttempts: MAX_RETRIES + 1,
 		defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
 		maxDelayMs: RATE_LIMIT_BUDGET_MS,
 	});
-
-	if (!response.ok) {
-		const errorText = await response.clone().text();
-		const canRefreshAuth =
-			response.status === 401 ||
-			response.status === 403 ||
-			(response.status === 400 && /api key not valid|invalid credentials|invalid authentication/i.test(errorText));
-		if (canRefreshAuth && (await refreshGeminiAuth(auth))) {
-			response = await fetchWithRetry(urlFor, {
-				...buildInit(),
-				maxAttempts: MAX_RETRIES + 1,
-				defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
-				maxDelayMs: RATE_LIMIT_BUDGET_MS,
-			});
-		}
-	}
 
 	if (!response.ok) {
 		const errorText = await response.text();
@@ -482,13 +385,9 @@ async function callGeminiSearch(
 
 /**
  * Executes a web search using Google Gemini with Google Search grounding.
- * Requires OAuth credentials stored in agent.db for provider "google-gemini-cli" or "google-antigravity".
- * @param params - Search parameters including query and optional settings
- * @returns Search response with synthesized answer, sources, and citations
- * @throws {Error} If no Gemini OAuth credentials are configured
  */
 export async function searchGemini(params: GeminiSearchParams): Promise<SearchResponse> {
-	const auth = await findGeminiAuth();
+	const auth = await findGeminiAuth(params.authStorage, params.sessionId, params.signal);
 	if (!auth) {
 		throw new Error(
 			"No Gemini OAuth credentials found. Login with 'omp /login google-gemini-cli' or 'omp /login google-antigravity' to enable Gemini web search.",
@@ -511,7 +410,6 @@ export async function searchGemini(params: GeminiSearchParams): Promise<SearchRe
 
 	let sources = result.sources;
 
-	// Apply num_results limit if specified
 	if (params.num_results && sources.length > params.num_results) {
 		sources = sources.slice(0, params.num_results);
 	}
@@ -532,8 +430,11 @@ export class GeminiProvider extends SearchProvider {
 	readonly id = "gemini";
 	readonly label = "Gemini";
 
-	isAvailable() {
-		return findGeminiAuth().then(Boolean);
+	isAvailable(authStorage: AuthStorage): boolean {
+		// Cheap, in-memory check — avoids driving the refresh pipeline during
+		// the provider-chain probe. `searchGemini` calls `getOAuthAccess` which
+		// will refresh lazily on the actual request.
+		return hasGeminiOAuth(authStorage);
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
@@ -547,6 +448,8 @@ export class GeminiProvider extends SearchProvider {
 			code_execution: params.codeExecution,
 			url_context: params.urlContext,
 			signal: params.signal,
+			authStorage: params.authStorage,
+			sessionId: params.sessionId,
 		});
 	}
 }

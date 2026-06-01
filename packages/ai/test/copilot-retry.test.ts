@@ -148,6 +148,25 @@ describe("isRetryableError transport failures", () => {
 			),
 		).toBe(true);
 	});
+	it("retries Bun HTTP/2 stream reset errors", () => {
+		// Bun's fetch surfaces `@errorName` from its h2 client verbatim in the
+		// message — see oven-sh/bun src/http/h2_client/dispatch.zig (HTTP2StreamReset,
+		// HTTP2RefusedStream) and FetchTasklet.zig's "{s} fetching \"...\"" template.
+		expect(
+			isRetryableError(
+				new Error(
+					'HTTP2StreamReset fetching "https://chatgpt.com/backend-api/codex/responses". For more information, pass `verbose: true` in the second argument to fetch()',
+				),
+			),
+		).toBe(true);
+		expect(
+			isRetryableError(
+				new Error(
+					'HTTP2RefusedStream fetching "https://api.example.com/x". For more information, pass `verbose: true` in the second argument to fetch()',
+				),
+			),
+		).toBe(true);
+	});
 });
 
 describe("isRetryableError does not treat 4xx as retryable", () => {

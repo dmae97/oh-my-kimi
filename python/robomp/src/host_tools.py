@@ -1093,20 +1093,6 @@ def _build_classify_issue(bindings: ToolBindings) -> HostTool[Any, Any]:
             labels.append(platform)
         labels.append("triaged")
 
-        try:
-            applied = _run_coro(
-                bindings.loop,
-                bindings.github.add_issue_labels(
-                    bindings.repo.full_name,
-                    bindings.issue.number,
-                    labels,
-                ),
-            )
-        except GitHubError as exc:
-            _audit(bindings, "classify_issue", args, error=str(exc))
-            _raise_command(f"GitHub rejected labels: {exc.status} {exc.message}")
-
-        bindings.db.set_issue_classification(bindings.issue_key, primary)
         renamed_to: str | None = None
         if branch_slug:
             try:
@@ -1128,6 +1114,21 @@ def _build_classify_issue(bindings: ToolBindings) -> HostTool[Any, Any]:
                 # refactor of that helper still surfaces the mismatch.
                 _raise_command("classify_issue internal: branch rename inconsistent.")
             bindings.db.set_issue_branch(bindings.issue_key, renamed_to)
+
+        try:
+            applied = _run_coro(
+                bindings.loop,
+                bindings.github.add_issue_labels(
+                    bindings.repo.full_name,
+                    bindings.issue.number,
+                    labels,
+                ),
+            )
+        except GitHubError as exc:
+            _audit(bindings, "classify_issue", args, error=str(exc))
+            _raise_command(f"GitHub rejected labels: {exc.status} {exc.message}")
+
+        bindings.db.set_issue_classification(bindings.issue_key, primary)
         _audit(
             bindings,
             "classify_issue",

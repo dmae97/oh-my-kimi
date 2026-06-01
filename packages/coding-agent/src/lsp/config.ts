@@ -1,10 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $which, isRecord, logger } from "@oh-my-pi/pi-utils";
+import { $which, isRecord, logger, pathIsWithin } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { getConfigDirPaths } from "../config";
-import { getPreloadedPluginRoots } from "../discovery/helpers";
+import { type ClaudePluginRoot, getPreloadedPluginRoots } from "../discovery/helpers";
 import { BiomeClient } from "./clients/biome-client";
 import { SwiftLintClient } from "./clients/swiftlint-client";
 import DEFAULTS from "./defaults.json" with { type: "json" };
@@ -22,8 +22,13 @@ export interface LspConfig {
 
 const PID_TOKEN = "$PID";
 
+interface RawServerConfig extends Partial<ServerConfig> {
+	extensionToLanguage?: unknown;
+	initializationOptions?: unknown;
+}
+
 interface NormalizedConfig {
-	servers: Record<string, Partial<ServerConfig>>;
+	servers: Record<string, RawServerConfig>;
 	idleTimeoutMs?: number;
 }
 
@@ -42,12 +47,12 @@ function normalizeConfig(value: unknown): NormalizedConfig | null {
 	const rawServers = value.servers;
 
 	if (isRecord(rawServers)) {
-		return { servers: rawServers as Record<string, Partial<ServerConfig>>, idleTimeoutMs };
+		return { servers: rawServers as Record<string, RawServerConfig>, idleTimeoutMs };
 	}
 
 	const servers = Object.fromEntries(Object.entries(value).filter(([key]) => key !== "idleTimeoutMs")) as Record<
 		string,
-		Partial<ServerConfig>
+		RawServerConfig
 	>;
 
 	return { servers, idleTimeoutMs };
@@ -58,11 +63,17 @@ function normalizeStringArray(value: unknown): string[] | null {
 	const items = value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
 	return items.length > 0 ? items : null;
 }
+function normalizeExtensionToFileTypes(value: unknown): string[] | null {
+	if (!isRecord(value)) return null;
+	const extensions = Object.keys(value).filter(extension => extension.length > 0);
+	return extensions.length > 0 ? extensions : null;
+}
 
-function normalizeServerConfig(name: string, config: Partial<ServerConfig>): ServerConfig | null {
+function normalizeServerConfig(name: string, config: RawServerConfig): ServerConfig | null {
 	const command = typeof config.command === "string" && config.command.length > 0 ? config.command : null;
-	const fileTypes = normalizeStringArray(config.fileTypes);
-	const rootMarkers = normalizeStringArray(config.rootMarkers);
+	const fileTypes =
+		normalizeStringArray(config.fileTypes) ?? normalizeExtensionToFileTypes(config.extensionToLanguage);
+	const rootMarkers = normalizeStringArray(config.rootMarkers) ?? (config.extensionToLanguage ? ["."] : null);
 
 	if (!command || !fileTypes || !rootMarkers) {
 		logger.warn("Ignoring invalid LSP server config (missing required fields).", { name });
@@ -72,6 +83,11 @@ function normalizeServerConfig(name: string, config: Partial<ServerConfig>): Ser
 	const args = Array.isArray(config.args)
 		? config.args.filter((entry): entry is string => typeof entry === "string")
 		: undefined;
+	const initOptions = isRecord(config.initOptions)
+		? config.initOptions
+		: isRecord(config.initializationOptions)
+			? config.initializationOptions
+			: undefined;
 
 	return {
 		...config,
@@ -79,6 +95,7 @@ function normalizeServerConfig(name: string, config: Partial<ServerConfig>): Ser
 		args,
 		fileTypes,
 		rootMarkers,
+		...(initOptions ? { initOptions } : {}),
 	};
 }
 
@@ -92,7 +109,7 @@ function readConfigFile(filePath: string): NormalizedConfig | null {
 	}
 }
 
-function coerceServerConfigs(servers: Record<string, Partial<ServerConfig>>): Record<string, ServerConfig> {
+function coerceServerConfigs(servers: Record<string, RawServerConfig>): Record<string, ServerConfig> {
 	const result: Record<string, ServerConfig> = {};
 	for (const [name, config] of Object.entries(servers)) {
 		const normalized = normalizeServerConfig(name, config);
@@ -105,7 +122,7 @@ function coerceServerConfigs(servers: Record<string, Partial<ServerConfig>>): Re
 
 function mergeServers(
 	base: Record<string, ServerConfig>,
-	overrides: Record<string, Partial<ServerConfig>>,
+	overrides: Record<string, RawServerConfig>,
 ): Record<string, ServerConfig> {
 	const merged: Record<string, ServerConfig> = { ...base };
 	for (const [name, config] of Object.entries(overrides)) {
@@ -245,24 +262,71 @@ export function resolveCommand(command: string, cwd: string): string | null {
 	return $which(command);
 }
 
+interface ConfigSource {
+	read(): NormalizedConfig | null;
+}
+
+function fileConfigSource(filePath: string): ConfigSource {
+	return {
+		read: () => readConfigFile(filePath),
+	};
+}
+
+function readMarketplaceLspConfig(root: ClaudePluginRoot): NormalizedConfig | null {
+	const catalogPaths = [
+		path.resolve(root.path, "..", "..", "marketplace.json"),
+		path.resolve(root.path, "..", "..", ".claude-plugin", "marketplace.json"),
+	];
+
+	for (const catalogPath of catalogPaths) {
+		try {
+			const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf-8")) as unknown;
+			if (!isRecord(catalog) || !Array.isArray(catalog.plugins)) continue;
+
+			for (const plugin of catalog.plugins) {
+				if (!isRecord(plugin) || plugin.name !== root.plugin) continue;
+
+				const lspServers = plugin.lspServers;
+				if (typeof lspServers === "string") {
+					const configPath = path.resolve(root.path, lspServers);
+					if (!pathIsWithin(root.path, configPath)) return null;
+					return readConfigFile(configPath);
+				}
+				if (isRecord(lspServers)) {
+					return normalizeConfig({ servers: lspServers });
+				}
+				return null;
+			}
+		} catch {}
+	}
+
+	return null;
+}
+
+function marketplaceConfigSource(root: ClaudePluginRoot): ConfigSource {
+	return {
+		read: () => readMarketplaceLspConfig(root),
+	};
+}
+
 /**
- * Configuration file search paths (in priority order).
+ * Configuration sources in priority order.
  * Supports both visible and hidden variants at each config location.
  */
-function getConfigPaths(cwd: string): string[] {
+function getConfigSources(cwd: string): ConfigSource[] {
 	const filenames = ["lsp.json", ".lsp.json", "lsp.yaml", ".lsp.yaml", "lsp.yml", ".lsp.yml"];
-	const paths: string[] = [];
+	const sources: ConfigSource[] = [];
 
 	// Project root files (highest priority)
 	for (const filename of filenames) {
-		paths.push(path.join(cwd, filename));
+		sources.push(fileConfigSource(path.join(cwd, filename)));
 	}
 
 	// Project config directories (.omp/, .pi/, .claude/)
 	const projectDirs = getConfigDirPaths("", { user: false, project: true, cwd });
 	for (const dir of projectDirs) {
 		for (const filename of filenames) {
-			paths.push(path.join(dir, filename));
+			sources.push(fileConfigSource(path.join(dir, filename)));
 		}
 	}
 
@@ -270,7 +334,7 @@ function getConfigPaths(cwd: string): string[] {
 	const userDirs = getConfigDirPaths("", { user: true, project: false });
 	for (const dir of userDirs) {
 		for (const filename of filenames) {
-			paths.push(path.join(dir, filename));
+			sources.push(fileConfigSource(path.join(dir, filename)));
 		}
 	}
 
@@ -278,16 +342,17 @@ function getConfigPaths(cwd: string): string[] {
 	const pluginRoots = getPreloadedPluginRoots();
 	for (const root of pluginRoots) {
 		for (const filename of filenames) {
-			paths.push(path.join(root.path, filename));
+			sources.push(fileConfigSource(path.join(root.path, filename)));
 		}
+		sources.push(marketplaceConfigSource(root));
 	}
 
 	// User home root files (lowest priority fallback)
 	for (const filename of filenames) {
-		paths.push(path.join(os.homedir(), filename));
+		sources.push(fileConfigSource(path.join(os.homedir(), filename)));
 	}
 
-	return paths;
+	return sources;
 }
 
 /**
@@ -324,12 +389,12 @@ function getConfigPaths(cwd: string): string[] {
 export function loadConfig(cwd: string): LspConfig {
 	let mergedServers = coerceServerConfigs(DEFAULTS);
 
-	const configPaths = getConfigPaths(cwd).reverse();
+	const configSources = getConfigSources(cwd).reverse();
 	let hasOverrides = false;
 
 	let idleTimeoutMs: number | undefined;
-	for (const configPath of configPaths) {
-		const parsed = readConfigFile(configPath);
+	for (const source of configSources) {
+		const parsed = source.read();
 		if (!parsed) continue;
 		const hasServerOverrides = Object.keys(parsed.servers).length > 0;
 		if (hasServerOverrides) {

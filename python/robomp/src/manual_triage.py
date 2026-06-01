@@ -14,6 +14,11 @@ from robomp.db import INACTIVE_EVENT_STATES, Database, EventRow, issue_key
 from robomp.github_backend import GitHubBackend
 
 _ISSUE_REF = re.compile(r"^(?P<owner>[^/\s]+)/(?P<repo>[^#\s]+)#(?P<number>\d+)$")
+_ISSUE_URL = re.compile(
+    r"^(?:https?://)?(?:www\.)?github\.com/"
+    r"(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+)/issues/(?P<number>\d+)"
+    r"(?:[/?#].*)?$"
+)
 
 
 class InvalidIssueRef(ValueError):
@@ -44,10 +49,13 @@ class ManualTriageTimeout(TimeoutError):
 
 
 def parse_issue_ref(ref: str) -> tuple[str, int]:
-    """Parse `owner/repo#NN` into `("owner/repo", NN)`."""
-    match = _ISSUE_REF.match(ref.strip())
+    """Parse `owner/repo#NN` or a github issue url into `("owner/repo", NN)`."""
+    cleaned = ref.strip()
+    match = _ISSUE_REF.match(cleaned) or _ISSUE_URL.match(cleaned)
     if match is None:
-        raise InvalidIssueRef(f"expected owner/repo#NN, got {ref!r}")
+        raise InvalidIssueRef(
+            f"expected owner/repo#NN or https://github.com/owner/repo/issues/NN, got {ref!r}"
+        )
     return f"{match.group('owner')}/{match.group('repo')}", int(match.group("number"))
 
 

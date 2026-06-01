@@ -35,7 +35,7 @@ function createTask(id: string): EditTask {
 	};
 }
 
-function createRun(runIndex: number, success: boolean): TaskRunResult {
+function createRun(runIndex: number, success: boolean, overrides: Partial<TaskRunResult> = {}): TaskRunResult {
 	return {
 		runIndex,
 		success,
@@ -56,6 +56,7 @@ function createRun(runIndex: number, success: boolean): TaskRunResult {
 		editFailures: [],
 		editWarnings: [],
 		editAutocorrectCount: 0,
+		...overrides,
 	};
 }
 
@@ -176,6 +177,134 @@ describe("buildBenchmarkResult", () => {
 		const report = generateReport(result);
 		expect(report).toContain("| range-continuation | 1 | 100.0% |");
 		expect(report).toContain("- Category: range-continuation");
+	});
+
+	it("picks the successful run with the lowest tokens as the task best", () => {
+		const task = createTask("best");
+		const losing = createRun(0, false, { tokens: { input: 5, output: 5, total: 10 } });
+		const winning = createRun(1, true, { tokens: { input: 100, output: 50, total: 150 } });
+		const expensive = createRun(2, true, { tokens: { input: 500, output: 250, total: 750 } });
+		const result = buildBenchmarkResult({
+			tasks: [task],
+			config: {
+				provider: "anthropic",
+				model: "claude",
+				runsPerTask: 3,
+				timeout: 1000,
+				taskConcurrency: 1,
+			},
+			resultsByTask: new Map([[task.id, [losing, winning, expensive]]]),
+			startTime: "2026-04-28T00:00:00.000Z",
+			endTime: "2026-04-28T00:00:01.000Z",
+		});
+
+		const taskResult = result.tasks[0]!;
+		expect(taskResult.success).toBe(true);
+		expect(taskResult.bestRunIndex).toBe(1);
+		expect(taskResult.tokens.total).toBe(150);
+		expect(result.summary.successfulTasks).toBe(1);
+		expect(result.summary.successfulRuns).toBe(2);
+		expect(result.summary.totalTokens.total).toBe(150);
+		expect(result.summary.taskSuccessRate).toBe(1);
+		expect(result.summary.flakyTasks).toBe(1);
+		expect(result.summary.consistentlyPassingTasks).toBe(0);
+	});
+
+	it("falls back to the cheapest failure when no run succeeded", () => {
+		const task = createTask("none");
+		const expensiveFail = createRun(0, false, { tokens: { input: 200, output: 100, total: 300 } });
+		const cheapFail = createRun(1, false, { tokens: { input: 20, output: 10, total: 30 } });
+		const result = buildBenchmarkResult({
+			tasks: [task],
+			config: {
+				provider: "anthropic",
+				model: "claude",
+				runsPerTask: 2,
+				timeout: 1000,
+				taskConcurrency: 1,
+			},
+			resultsByTask: new Map([[task.id, [expensiveFail, cheapFail]]]),
+			startTime: "2026-04-28T00:00:00.000Z",
+			endTime: "2026-04-28T00:00:01.000Z",
+		});
+
+		const taskResult = result.tasks[0]!;
+		expect(taskResult.success).toBe(false);
+		expect(taskResult.bestRunIndex).toBe(1);
+		expect(taskResult.tokens.total).toBe(30);
+		expect(result.summary.successfulTasks).toBe(0);
+		expect(result.summary.taskSuccessRate).toBe(0);
+	});
+
+	it("ignores ghost runs when picking the best non-successful run", () => {
+		const task = createTask("ghost");
+		const ghostRun = createRun(0, false, {
+			tokens: { input: 0, output: 0, total: 0 },
+			toolCalls: {
+				read: 0,
+				edit: 0,
+				write: 0,
+				editSuccesses: 0,
+				editFailures: 0,
+				editWarnings: 0,
+				editAutocorrects: 0,
+				totalInputChars: 0,
+			},
+		});
+		const realFailure = createRun(1, false, { tokens: { input: 40, output: 20, total: 60 } });
+		const result = buildBenchmarkResult({
+			tasks: [task],
+			config: {
+				provider: "anthropic",
+				model: "claude",
+				runsPerTask: 2,
+				timeout: 1000,
+				taskConcurrency: 1,
+			},
+			resultsByTask: new Map([[task.id, [ghostRun, realFailure]]]),
+			startTime: "2026-04-28T00:00:00.000Z",
+			endTime: "2026-04-28T00:00:01.000Z",
+		});
+
+		const taskResult = result.tasks[0]!;
+		expect(taskResult.bestRunIndex).toBe(1);
+		expect(taskResult.tokens.total).toBe(60);
+		expect(result.summary.ghostRuns).toBe(1);
+	});
+
+	it("reports median, p1, and p99 token stats across best runs", () => {
+		// Five tasks, each a single successful best run with a distinct token cost.
+		const totals = [110, 220, 330, 440, 550];
+		const tasks = totals.map((_, i) => createTask(`t${i}`));
+		const resultsByTask = new Map(
+			totals.map((total, i) => [
+				tasks[i]!.id,
+				[createRun(0, true, { tokens: { input: (i + 1) * 100, output: (i + 1) * 10, total } })],
+			]),
+		);
+
+		const result = buildBenchmarkResult({
+			tasks,
+			config: {
+				provider: "anthropic",
+				model: "claude",
+				runsPerTask: 1,
+				timeout: 1000,
+				taskConcurrency: 1,
+			},
+			resultsByTask,
+			startTime: "2026-04-28T00:00:00.000Z",
+			endTime: "2026-04-28T00:00:01.000Z",
+		});
+
+		const { summary } = result;
+		// Mean is unchanged by the new fields: total sum 1650 / 5 tasks = 330.
+		expect(summary.avgTokensPerTask.total).toBe(330);
+		// Median = the middle sample (linear interpolation at rank 2 of [110..550]).
+		expect(summary.medianTokensPerTask).toEqual({ input: 300, output: 30, total: 330 });
+		// p1/p99 interpolate near the extremes (ranks 0.04 and 3.96 over 5 samples).
+		expect(summary.p1TokensPerTask).toEqual({ input: 104, output: 10, total: 114 });
+		expect(summary.p99TokensPerTask).toEqual({ input: 496, output: 50, total: 546 });
 	});
 });
 

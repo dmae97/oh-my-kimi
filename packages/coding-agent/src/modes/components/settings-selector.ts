@@ -13,7 +13,7 @@ import {
 	TabBar,
 	Text,
 } from "@oh-my-pi/pi-tui";
-import { type SettingPath, settings } from "../../config/settings";
+import { getDefault, type SettingPath, settings } from "../../config/settings";
 import type {
 	SettingTab,
 	StatusLinePreset,
@@ -23,6 +23,7 @@ import type {
 import { SETTING_TABS, TAB_METADATA } from "../../config/settings-schema";
 import { getCurrentThemeName, getSelectListTheme, getSettingsListTheme, theme } from "../../modes/theme/theme";
 import { matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
+import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
 import { handleInputOrEscape, PluginSettingsComponent } from "./plugin-settings";
@@ -294,6 +295,7 @@ export class SettingsSelectorComponent extends Container {
 		}
 
 		const currentValue = this.#getCurrentValue(def);
+		const changed = this.#isChanged(def, currentValue);
 
 		switch (def.type) {
 			case "boolean":
@@ -303,6 +305,7 @@ export class SettingsSelectorComponent extends Container {
 					description: def.description,
 					currentValue: currentValue ? "true" : "false",
 					values: ["true", "false"],
+					changed,
 				};
 
 			case "enum":
@@ -312,6 +315,7 @@ export class SettingsSelectorComponent extends Container {
 					description: def.description,
 					currentValue: currentValue as string,
 					values: [...def.values],
+					changed,
 				};
 
 			case "submenu":
@@ -321,6 +325,7 @@ export class SettingsSelectorComponent extends Container {
 					description: def.description,
 					currentValue: this.#getSubmenuCurrentValue(def.path, currentValue),
 					submenu: (cv, done) => this.#createSubmenu(def, cv, done),
+					changed,
 				};
 
 			case "text":
@@ -330,6 +335,7 @@ export class SettingsSelectorComponent extends Container {
 					description: def.description,
 					currentValue: (currentValue as string) ?? "",
 					submenu: (cv, done) => this.#createTextInput(def, cv, done),
+					changed,
 				};
 		}
 	}
@@ -339,6 +345,10 @@ export class SettingsSelectorComponent extends Container {
 	 */
 	#getCurrentValue(def: SettingDef): unknown {
 		return settings.get(def.path);
+	}
+
+	#isChanged(def: SettingDef, currentValue: unknown): boolean {
+		return !Object.is(currentValue, getDefault(def.path));
 	}
 
 	#getSubmenuCurrentValue(path: SettingPath, value: unknown): string {
@@ -364,7 +374,9 @@ export class SettingsSelectorComponent extends Container {
 
 		// Special case: inject runtime options for thinking level
 		if (def.path === "defaultThinkingLevel") {
-			options = this.context.availableThinkingLevels.map(level => {
+			// Prepend `auto`; the rest are the model's runtime-supported efforts.
+			const levels: ConfiguredThinkingLevel[] = [AUTO_THINKING, ...this.context.availableThinkingLevels];
+			options = levels.map(level => {
 				const baseOpt = options.find(o => o.value === level);
 				return baseOpt || { value: level, label: level };
 			});

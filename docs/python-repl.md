@@ -10,21 +10,26 @@ It covers tool behavior, runner lifecycle, environment handling, execution seman
 - Subprocess kernel client: `src/eval/py/kernel.ts`
 - Python wrapper / NDJSON server: `src/eval/py/runner.py`
 - Prelude helpers loaded into every kernel: `src/eval/py/prelude.py`
+- Host-side subagent helper bridge: `src/eval/agent-bridge.ts`
 - MIME bundle renderer (text + structured outputs): `src/eval/py/display.ts`
 - Interactive-mode renderer for user-triggered Python runs: `src/modes/components/eval-execution.ts`
 - Runtime/env filtering and Python resolution: `src/eval/py/runtime.ts`
 
 ## What eval's Python backend is
 
-The `eval` tool executes one or more Python cells inside a long-lived `python3` subprocess that speaks NDJSON over stdin/stdout. No Jupyter, no kernel gateway, no extra pip dependencies — a vanilla Python 3.8+ interpreter is enough. Rich `display()` output (PIL, pandas, plotly, matplotlib figures) keeps working because the wrapper reimplements the MIME-bundle dispatch that IPython previously provided.
+The `eval` tool executes one or more Python cells inside a retained `python` subprocess that speaks NDJSON over stdin/stdout. No Jupyter gateway and no extra pip dependencies are required — a vanilla Python 3.8+ interpreter is enough. Rich `display()` output (PIL, pandas, plotly, matplotlib figures) keeps working because the wrapper implements MIME-bundle dispatch.
 
 Tool params:
 
 ```ts
 {
-  cells: Array<{ code: string; title?: string }>;
-  timeout?: number; // seconds, clamped to 1..600, default 30
-  reset?: boolean; // reset selected runtime before the first cell only
+  cells: Array<{
+    language: "py" | "js";
+    code: string;
+    title?: string;
+    timeout?: number; // seconds, clamped to 1..600, default 30. Inactivity budget — see "Cell timeout".
+    reset?: boolean; // reset this cell's selected runtime before execution
+  }>;
 }
 ```
 
@@ -32,7 +37,7 @@ The tool is `concurrency = "exclusive"` for a session, so calls do not overlap.
 
 ## Kernel lifecycle
 
-Each kernel is a single Python subprocess: `python -u <runner.py>`. The runner is bundled with the host binary (Bun text import), written to `~/.omp/python-env`-adjacent tmp cache once per script-hash, and reused by every subsequent spawn.
+Each Python kernel is a single subprocess: `<resolved-python> -u <runner.py>`. The runner is bundled with the host binary (Bun text import), written to an `omp-python-runner` cache under the OS temp directory once per script hash, and reused by subsequent spawns.
 
 Kernel startup sequence:
 
@@ -76,25 +81,25 @@ Status events the prelude emits (e.g. `_emit_status("find", count=…)`) ship in
 
 The runner's source transformer rewrites IPython-style magics to plain Python calls before parsing. Supported set:
 
-| Magic | Effect |
-| --- | --- |
-| `%pip <args>` | `python -m pip <args>` with live streaming output. Newly installed packages are evicted from `sys.modules` so the next `import` picks up the fresh install. |
-| `%cd <path>` | `os.chdir(path)` (with `~` expansion); emits status event. |
-| `%pwd` | Returns `os.getcwd()`. |
-| `%ls [path]` | Returns `sorted(os.listdir(path))`. |
-| `%env [KEY[=VAL]]` | List, read, or set env vars (matches prelude `env()` semantics). |
-| `%set_env KEY VALUE` | Set `os.environ[KEY]`. |
-| `%time <expr>` / `%timeit <expr>` | Time the expression; emits status event with elapsed ms. |
-| `%who` / `%whos` | List user-namespace names. |
-| `%reset` | Clear user globals and re-inject prelude. |
-| `%load <path>` | Read a file into a fresh cell and execute. |
-| `%run <path>` | `runpy.run_path` and merge globals back. |
-| `%%bash` / `%%sh` | Run the cell body via `bash`/`sh`. |
-| `%%capture [name]` | Run body with stdout/stderr captured into `name`. |
-| `%%timeit` | Time the cell body. |
-| `%%writefile <path>` | Write body to file. |
-| `!cmd` / `var = !cmd` | Run command via subprocess shell; returns an SList-style result with `.n` / `.s` helpers. |
-| `var = %name args` | Assignment forms work for line magics and `!cmd`. |
+| Magic                             | Effect                                                                                                                                                      |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `%pip <args>`                     | `python -m pip <args>` with live streaming output. Newly installed packages are evicted from `sys.modules` so the next `import` picks up the fresh install. |
+| `%cd <path>`                      | `os.chdir(path)` (with `~` expansion); emits status event.                                                                                                  |
+| `%pwd`                            | Returns `os.getcwd()`.                                                                                                                                      |
+| `%ls [path]`                      | Returns `sorted(os.listdir(path))`.                                                                                                                         |
+| `%env [KEY[=VAL]]`                | List, read, or set env vars (matches prelude `env()` semantics).                                                                                            |
+| `%set_env KEY VALUE`              | Set `os.environ[KEY]`.                                                                                                                                      |
+| `%time <expr>` / `%timeit <expr>` | Time the expression; emits status event with elapsed ms.                                                                                                    |
+| `%who` / `%whos`                  | List user-namespace names.                                                                                                                                  |
+| `%reset`                          | Clear user globals and re-inject prelude.                                                                                                                   |
+| `%load <path>`                    | Read a file into a fresh cell and execute.                                                                                                                  |
+| `%run <path>`                     | `runpy.run_path` and merge globals back.                                                                                                                    |
+| `%%bash` / `%%sh`                 | Run the cell body via `bash`/`sh`.                                                                                                                          |
+| `%%capture [name]`                | Run body with stdout/stderr captured into `name`.                                                                                                           |
+| `%%timeit`                        | Time the cell body.                                                                                                                                         |
+| `%%writefile <path>`              | Write body to file.                                                                                                                                         |
+| `!cmd` / `var = !cmd`             | Run command via subprocess shell; returns an SList-style result with `.n` / `.s` helpers.                                                                   |
+| `var = %name args`                | Assignment forms work for line magics and `!cmd`.                                                                                                           |
 
 Unknown magic names raise `NameError: UsageError: ...` inside the cell.
 
@@ -103,12 +108,11 @@ Unknown magic names raise `NameError: UsageError: ...` inside the cell.
 `python.kernelMode` controls retained kernel reuse:
 
 - `session` (default)
-  - Reuses kernel sessions keyed by session file plus cwd when a session file exists; otherwise by cwd.
-  - Execution is serialized per session via a queue.
-  - Idle sessions are evicted after 5 minutes.
-  - At most 4 sessions; oldest is evicted on overflow.
-  - Heartbeat checks detect dead kernels.
-  - Auto-restart allowed once; repeated crash ⇒ hard failure.
+  - Reuses kernel sessions keyed by namespaced eval session id plus cwd.
+  - Multiple owners can share the same retained kernel for that key.
+  - Calls through the tool are exclusive, so tool invocations do not overlap.
+  - A dead retained subprocess is replaced before execution.
+  - If the subprocess dies during execution, it is replaced and the cell is retried once.
 - `per-call`
   - Spawns a fresh subprocess for each request.
   - Shuts the subprocess down after the request.
@@ -116,7 +120,7 @@ Unknown magic names raise `NameError: UsageError: ...` inside the cell.
 
 ### Multi-cell behavior in a single tool call
 
-Cells run sequentially in the same kernel instance for that tool call.
+Python cells run sequentially in the same selected Python kernel instance for that tool call.
 
 If an intermediate cell fails:
 
@@ -124,7 +128,7 @@ If an intermediate cell fails:
 - Tool returns a targeted error indicating which cell failed.
 - Later cells are not executed.
 
-`reset=true` only applies to the first cell execution in that call.
+`reset=true` is per cell and resets that language runtime before the cell executes.
 
 ## Environment filtering and runtime resolution
 
@@ -146,25 +150,25 @@ The runner additionally receives `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-
 
 ## Tool availability and mode selection
 
-`eval.py` / `eval.js` (both default `true`) plus optional `PI_PY` override controls eval backend exposure:
+`eval.py` / `eval.js` (both default `true`) plus optional boolean env flags `PI_PY` / `PI_JS` control eval backend exposure:
 
-- Python backend only (`eval.py=true`, `eval.js=false`)
-- JavaScript backend only (`eval.py=false`, `eval.js=true`)
-- both backends
+- Python backend only (`eval.py=true`, `eval.js=false`, or `PI_PY=1 PI_JS=0`)
+- JavaScript backend only (`eval.py=false`, `eval.js=true`, or `PI_PY=0 PI_JS=1`)
+- both backends (`eval.py=true`, `eval.js=true`, or `PI_PY=1 PI_JS=1`)
 
-`PI_PY` accepted values:
+`PI_PY` and `PI_JS` use normal boolean flag parsing. If either env var is set, the env pair overrides the per-key settings; an unset member of the pair defaults to enabled.
 
-- `0` / `bash` → JavaScript backend only
-- `1` / `py` → Python backend only
-- `mix` / `both` → both backends
+If Python preflight fails and `eval.js` is enabled, `eval` remains available for `js` cells; `py` cells fail with a Python-backend availability error.
 
-If Python preflight fails and `eval.js` is enabled, `eval` remains available and dispatches to JavaScript unless `language: "python"` is explicitly requested.
+Python prelude helpers include `agent(prompt, *, agent_type="task", model=None, context=None, label=None, schema=None)`. It synchronously calls the host bridge, runs one subagent through the task executor, and returns the final text. When `schema` is supplied, the helper parses the subagent's JSON output and returns the object.
 
 ## Execution flow and cancellation/timeout
 
-### Tool-level timeout
+### Cell timeout
 
-`eval` timeout is in seconds, default 30, clamped to `1..600`. The tool combines caller abort signal and timeout signal with `AbortSignal.any(...)`.
+Each eval cell `timeout` is in seconds, defaults to 30, and is clamped to `1..600`. It is a **wall-clock budget on the cell's own work** that the watchdog (`IdleTimeout`, `src/eval/idle-timeout.ts`) enforces, **but it is paused while a host-side `agent()`/`parallel()`/`llm()` bridge call is in flight**: those calls pump a heartbeat (`withBridgeHeartbeat`, `src/eval/heartbeat.ts`) that re-arms the watchdog, so a long fanout or a slow completion runs to completion instead of being killed mid-stream.
+
+The heartbeat is the **sole** signal that extends the budget. Everything else the cell does — compute, `stdout`/`stderr`, `log()`/`phase()`, and ordinary (non-agent) tool calls — counts against `timeout`, so a cell that is not delegating to an agent/llm is bounded by a plain wall-clock timeout. The tool combines the caller abort signal, the session abort signal, and the watchdog's signal with `AbortSignal.any(...)`; no wall-clock deadline is passed to the backend, so neither runtime arms a competing fixed timer.
 
 ### Kernel execution cancellation
 
@@ -172,7 +176,7 @@ On abort/timeout:
 
 - The host sends `kill("SIGINT")` to the runner subprocess.
 - The runner's exec-time signal handler raises `KeyboardInterrupt` inside the user code.
-- Result includes `cancelled=true`; timeout path annotates output as `Command timed out after <n> seconds`.
+- Result includes `cancelled=true`; the timeout path annotates output as `Command timed out after <n> seconds`.
 - Between requests the runner installs `SIG_IGN` for SIGINT so a stray cancel does not tear down the kernel.
 
 If a second cancel is required (runner stuck in C code), the host escalates to `SIGTERM` and the session restarts on the next call.
@@ -217,7 +221,7 @@ Output is streamed through `OutputSink` and may be persisted to artifact storage
 - Tool renderer (`eval.ts`):
   - shows code-cell blocks with per-cell status
   - collapsed preview defaults to 10 lines
-  - supports expanded mode for full output and richer status detail
+  - supports expanded mode for all output retained in the tool result
 - Interactive renderer (`eval-execution.ts`):
   - used for user-triggered Python execution in TUI
   - collapsed preview defaults to 20 lines
@@ -226,7 +230,7 @@ Output is streamed through `OutputSink` and may be persisted to artifact storage
 
 ## Operational troubleshooting
 
-- **Python backend not available** — Check `eval.py`, `PI_PY`, and that `python`/`python3` is on PATH. If preflight fails and `eval.js` is enabled, omit `language` or pass `language: "js"` to use JavaScript.
+- **Python backend not available** — Check `eval.py`, `PI_PY`, and that `python`/`python3` is on PATH. If preflight fails and `eval.js` is enabled, use a `js` cell.
 - **No Python on PATH** — Install a system Python 3.8+ or place a venv at `~/.omp/python-env`. `omp setup python --check` reports the resolved interpreter.
 - **Execution hangs then times out** — Increase tool `timeout` (max 600s) if workload is legitimate. For stuck native code, cancellation triggers `SIGINT` first then escalates; the session restarts on the next request.
 - **stdin/input prompts in Python code** — `input()` is not supported; pass data programmatically.
@@ -234,7 +238,7 @@ Output is streamed through `OutputSink` and may be persisted to artifact storage
 
 ## Relevant environment variables
 
-- `PI_PY` — tool exposure override
+- `PI_PY` / `PI_JS` — eval backend exposure overrides
 - `PI_PYTHON_SKIP_CHECK=1` — bypass Python preflight/warm checks
 - `PI_PYTHON_INTEGRATION=1` — enable gated integration tests that spawn a real Python
 - `PI_PYTHON_IPC_TRACE=1` — log NDJSON frames exchanged with the runner subprocess

@@ -48,10 +48,11 @@ The tool returns a single-shot `AgentToolResult`:
   - Empty final state with no errors: `Todo list cleared.`
   - Non-empty final state: remaining-item list, current phase progress, then a per-phase tree.
   - If the active `in_progress` task has notes, the summary includes the note bodies inline.
-  - If any op produced validation/runtime errors, the summary starts with `Errors: ...` but still returns the mutated state.
+  - If any op produced validation/runtime errors, the summary starts with `Errors: ...`; the returned tool result is marked `isError: true` and still includes the mutated state.
 - `details`:
   - `phases: TodoPhase[]`
   - `storage: "session" | "memory"`
+  - `completedTasks?: TodoCompletionTransition[]` when a task changed from non-completed to `completed` during the batch
 
 `TodoPhase` / `TodoItem` state model:
 
@@ -75,8 +76,9 @@ The TUI renderer (`todoWriteToolRenderer`) merges call and result into one trans
    - if multiple tasks are `in_progress`, only the first stays active and the rest become `pending`;
    - if none are `in_progress`, the first `pending` task in phase/task order is auto-promoted to `in_progress`.
 6. `execute(...)` stores the normalized phases with `session.setTodoPhases?.(...)` and reports `storage` as `"session"` when `session.getSessionFile()` exists, else `"memory"`.
-7. The agent runtime also watches `todo_write` tool results in `packages/coding-agent/src/session/agent-session.ts`; successful results refresh cached todos, failed results inject a hidden next-turn reminder telling the model that todo progress is not visible until it retries.
-8. The event controller updates the visible todo UI from `result.details.phases` on success, or shows a warning on error (`packages/coding-agent/src/modes/controllers/event-controller.ts`).
+7. `getCompletionTransitions(...)` compares the previous and updated phases; newly completed tasks are returned in `details.completedTasks`.
+8. The agent runtime also watches `todo_write` tool results in `packages/coding-agent/src/session/agent-session.ts`; successful results refresh cached todos, failed results inject a hidden next-turn reminder telling the model that todo progress is not visible until it retries.
+9. The event controller updates the visible todo UI from `result.details.phases` on success, or shows a warning on error (`packages/coding-agent/src/modes/controllers/event-controller.ts`).
 
 ## Modes / Variants
 ### State transitions
@@ -128,7 +130,7 @@ The same file also exposes non-tool helpers used by `/todo`:
 - Tool execution mode: `concurrency = "exclusive"`, `strict = true`, `loadMode = "discoverable"`.
 
 ## Errors
-- The tool does not throw for ordinary bad op payloads; it accumulates human-readable strings in `errors` and still returns success with the mutated state.
+- Ordinary bad op payloads are accumulated as human-readable strings in `errors`; the tool still returns the mutated state, but marks the result `isError: true`.
 - Error strings come from the helpers in `packages/coding-agent/src/tools/todo-write.ts`, including:
   - `Missing list for init operation`
   - `Missing task content`

@@ -79,10 +79,13 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		terminal.stop();
 	});
 
-	it("queues overlapping OSC 11 queries until the in-flight DA1 sentinel is consumed", () => {
+	it("queues overlapping OSC 11 queries until both in-flight DA1 sentinels are consumed", () => {
 		vi.useFakeTimers();
 		const { terminal, queryCount, sentinelCount } = setupTerminal();
 
+		// Startup writes one OSC 11 query and one OSC 11 DA1 sentinel; the kitty
+		// keyboard probe's sentinel is fused into a combined `\x1b[?u\x1b[c` write,
+		// so it does not appear under the bare `\x1b[c` filter.
 		expect(queryCount()).toBe(1);
 		expect(sentinelCount()).toBe(1);
 
@@ -92,8 +95,12 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		expect(queryCount()).toBe(1);
 		expect(sentinelCount()).toBe(1);
 
+		// First DA1 drains the keyboard sentinel; OSC 11 still pending.
 		process.stdin.emit("data", "\x1b[?1;2c");
+		expect(queryCount()).toBe(1);
 
+		// Second DA1 drains the OSC 11 sentinel and kicks the queued re-query.
+		process.stdin.emit("data", "\x1b[?1;2c");
 		expect(queryCount()).toBe(2);
 		expect(sentinelCount()).toBe(2);
 
@@ -146,8 +153,9 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		vi.useFakeTimers();
 		const { terminal, queryCount } = setupTerminal();
 
-		// Complete the initial OSC 11 + DA1 cycle
+		// Complete the initial OSC 11 + DA1 cycle (2 startup DA1 sentinels: keyboard + OSC 11)
 		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
+		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 
 		const baseline = queryCount();
@@ -170,8 +178,10 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		vi.useFakeTimers();
 		const { terminal, queryCount } = setupTerminal();
 
-		// Complete initial OSC 11 + DA1 cycle
+		// Complete initial OSC 11 + DA1 cycle. Two DA1 sentinels are in flight at
+		// startup (keyboard probe + OSC 11), so emit two DA1 replies.
 		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
+		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 
 		const afterInitial = queryCount();
@@ -180,7 +190,7 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		vi.advanceTimersByTime(2000);
 		expect(queryCount()).toBe(afterInitial + 1);
 
-		// Complete poll's OSC 11 + DA1
+		// Complete poll's OSC 11 + DA1 (only one DA1 sentinel — keyboard probe is one-shot)
 		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		// Send Mode 2031 notification — this activates push mode and stops polling
@@ -207,6 +217,7 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		const { terminal, queryCount } = setupTerminal();
 
 		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
+		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		const afterInitial = queryCount();
 
@@ -255,7 +266,9 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		// Advance past debounce timer
 		vi.advanceTimersByTime(100);
 
-		// Step 4: Complete initial DA1 — should start queued query
+		// Step 4: Complete both initial DA1 sentinels — keyboard probe first, then OSC 11.
+		// The keyboard sentinel doesn't kick the queued OSC 11 query; the OSC 11 one does.
+		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 
 		expect(queryCount()).toBe(2);
@@ -328,5 +341,58 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		expect(received.some(seq => seq.includes("?62"))).toBe(false);
 
 		terminal.stop();
+	});
+
+	it("kitty keyboard probe owns its own DA1 sentinel — does not consume OSC 11's", () => {
+		const { terminal, writes, received } = setupTerminal();
+
+		// The probe must use `\x1b[?u` (query only). Pushing `\x1b[>31u` would
+		// leak a frame onto the kitty stack that shutdown's single pop cannot balance.
+		expect(writes.some(w => w.includes("\x1b[>31u"))).toBe(false);
+		expect(writes).toContain("\x1b[?u\x1b[c");
+
+		// Two DA1 sentinels are in flight at startup (keyboard probe + OSC 11).
+		// Consume them in send-order and verify neither leaks to the input handler.
+		process.stdin.emit("data", "\x1b[?1;2c");
+		process.stdin.emit("data", "\x1b[?1;2c");
+		expect(received).toEqual([]);
+
+		// A third stray DA1 has no owner and must reach the input handler — it is
+		// no longer ours to swallow.
+		process.stdin.emit("data", "\x1b[?1;2c");
+		expect(received).toEqual(["\x1b[?1;2c"]);
+
+		terminal.stop();
+	});
+
+	it("keyboard DA1 arriving before OSC 11 reply does not falsely mark OSC 11 unsupported", () => {
+		const { terminal } = setupTerminal();
+
+		// Keyboard's DA1 arrives first (sent-order). OSC 11 must remain pending.
+		process.stdin.emit("data", "\x1b[?1;2c");
+
+		// OSC 11 reply still arrives after — its handler should still parse it
+		// (osc11Pending must not have been cleared by the keyboard DA1).
+		process.stdin.emit("data", "\x1b]11;rgb:0000/0000/0000\x07");
+		expect(terminal.appearance).toBe("dark");
+
+		// OSC 11's own DA1 sentinel drains the FIFO without re-entering the bug path.
+		process.stdin.emit("data", "\x1b[?1;2c");
+
+		terminal.stop();
+	});
+
+	it("shutdown balances the single kitty push performed on detection", () => {
+		const { terminal, writes } = setupTerminal();
+
+		// Simulate kitty-capable terminal reply (level >=1).
+		process.stdin.emit("data", "\x1b[?1u");
+
+		const pushes = writes.filter(w => w === "\x1b[>1u" || w === "\x1b[>7u" || w === "\x1b[>31u").length;
+		expect(pushes).toBe(1);
+
+		terminal.stop();
+		const pops = writes.filter(w => w === "\x1b[<u").length;
+		expect(pops).toBe(1);
 	});
 });

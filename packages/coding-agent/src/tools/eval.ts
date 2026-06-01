@@ -1,31 +1,26 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Markdown, Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { jsBackend, pythonBackend } from "../eval";
-import type { ExecutorBackend } from "../eval/backend";
+import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
+import { EVAL_HEARTBEAT_OP } from "../eval/heartbeat";
+import { IdleTimeout } from "../eval/idle-timeout";
+import { defaultEvalSessionId } from "../eval/session-id";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
-import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { truncateToVisualLines } from "../modes/components/visual-truncate";
-import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
 import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
-import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
-import { resolveEvalBackends, type ToolSession } from ".";
-import {
-	formatStyledTruncationWarning,
-	resolveOutputMaxColumns,
-	resolveOutputSinkHeadBytes,
-	stripOutputNotice,
-} from "./output-meta";
-import { formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
+import { formatDimensionNote, resizeImage } from "../utils/image-resize";
+import type { ToolSession } from ".";
+import { truncateForPrompt } from "./approval";
+import { resolveEvalBackends } from "./eval-backends";
+import { upsertStatusEvent } from "./eval-render";
+import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "./output-meta";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
 
-export const EVAL_DEFAULT_PREVIEW_LINES = 10;
+export { EVAL_DEFAULT_PREVIEW_LINES, evalToolRenderer } from "./eval-render";
 
 /**
  * Per-cell input. Each cell runs in order; state persists within a language
@@ -58,15 +53,6 @@ export type EvalToolResult = {
 
 export type EvalProxyExecutor = (params: EvalToolParams, signal?: AbortSignal) => Promise<EvalToolResult>;
 
-function formatJsonScalar(value: unknown): string {
-	if (value === null) return "null";
-	if (value === undefined) return "undefined";
-	if (typeof value === "string") return JSON.stringify(value);
-	if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
-	if (typeof value === "function") return "[function]";
-	return "[object]";
-}
-
 /** Cap per `display()` value sent back to the model. */
 const MAX_DISPLAY_TEXT_BYTES = 8000;
 
@@ -97,41 +83,6 @@ function formatDisplayOutputsForText(outputs: EvalDisplayOutput[]): string {
 		chunks.push(`display[${displayIndex}]:\n${formatDisplayJsonForText(output.data)}`);
 	}
 	return chunks.join("\n\n");
-}
-
-function renderJsonTree(value: unknown, theme: Theme, expanded: boolean, maxDepth = expanded ? 6 : 2): string[] {
-	const maxItems = expanded ? 20 : 5;
-
-	const renderNode = (node: unknown, prefix: string, depth: number, isLast: boolean, label?: string): string[] => {
-		const branch = getTreeBranch(isLast, theme);
-		const displayLabel = label ? `${label}: ` : "";
-
-		if (depth >= maxDepth || node === null || typeof node !== "object") {
-			return [`${prefix}${branch} ${displayLabel}${formatJsonScalar(node)}`];
-		}
-
-		const isArray = Array.isArray(node);
-		const entries = isArray
-			? node.map((val, index) => [String(index), val] as const)
-			: Object.entries(node as object);
-		const header = `${prefix}${branch} ${displayLabel}${isArray ? `Array(${entries.length})` : `Object(${entries.length})`}`;
-		const lines = [header];
-
-		const childPrefix = prefix + getTreeContinuePrefix(isLast, theme);
-		const visible = entries.slice(0, maxItems);
-		for (let i = 0; i < visible.length; i++) {
-			const [key, val] = visible[i];
-			const childLast = i === visible.length - 1 && (expanded || entries.length <= maxItems);
-			lines.push(...renderNode(val, childPrefix, depth + 1, childLast, isArray ? `[${key}]` : key));
-		}
-		if (!expanded && entries.length > maxItems) {
-			const moreBranch = theme.tree.last;
-			lines.push(`${childPrefix}${moreBranch} ${entries.length - maxItems} more item(s)`);
-		}
-		return lines;
-	};
-
-	return renderNode(value, "", 0, true);
 }
 
 export interface EvalToolDescriptionOptions {
@@ -174,10 +125,6 @@ function detailsNotice(cells: ResolvedEvalCell[]): string | undefined {
 	return notices.length > 0 ? notices.join(" ") : undefined;
 }
 
-function languageForHighlighter(language: EvalLanguage | undefined): "python" | "javascript" {
-	return language === "js" ? "javascript" : "python";
-}
-
 function timeoutSecondsFromMs(timeoutMs: number): number {
 	return clampTimeout("eval", timeoutMs / 1000);
 }
@@ -201,6 +148,20 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 
 export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly name = "eval";
+	readonly approval = "exec" as const;
+	readonly formatApprovalDetails = (args: unknown): string[] => {
+		const params = args as Partial<EvalToolParams>;
+		const cells = Array.isArray(params.cells) ? params.cells : [];
+		const firstCell = cells[0] as Partial<EvalCellInput> | undefined;
+		if (!firstCell) return [];
+		const language = typeof firstCell.language === "string" ? firstCell.language : "(missing)";
+		const code = typeof firstCell.code === "string" ? firstCell.code : "";
+		const lines = [`Language: ${language}`, `Code:\n${truncateForPrompt(code)}`];
+		if (cells.length > 1) {
+			lines.push(`+${cells.length - 1} more cell${cells.length === 2 ? "" : "s"}`);
+		}
+		return lines;
+	};
 	readonly summary = "Execute Python or JavaScript code in an in-process eval backend";
 	readonly loadMode = "discoverable";
 	readonly label = "Eval";
@@ -347,17 +308,26 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						pushUpdate();
 					},
 				});
-				const sessionId = sessionFile ? `session:${sessionFile}:cwd:${session.cwd}` : `cwd:${session.cwd}`;
+				const sessionId = session.getEvalSessionId?.() ?? defaultEvalSessionId(session);
 
 				for (let i = 0; i < cells.length; i++) {
 					const cell = cells[i];
 					const backend = cell.resolved.backend;
-					const timeoutSec = timeoutSecondsFromMs(cell.timeoutMs);
-					const deadlineMs = Date.now() + timeoutSec * 1000;
-					const timeoutSignal = AbortSignal.timeout(Math.max(0, deadlineMs - Date.now()));
+					// The per-cell `timeout` is a wall-clock budget on the cell's *own*
+					// work, but it is paused while a host-side `agent()`/`llm()` bridge
+					// call is in flight: those calls pump a heartbeat (see
+					// `withBridgeHeartbeat`) that re-arms the watchdog, so a long fanout
+					// or a slow completion runs to completion. Nothing else re-arms it —
+					// compute, stdout, `log()`/`phase()`, and ordinary tool calls all
+					// count against the budget — so a cell that is not delegating to an
+					// agent/llm is bounded by a plain wall-clock timeout. The watchdog
+					// drives `combinedSignal`; we pass no wall-clock deadline downstream
+					// so the backends never arm a competing fixed timer.
+					const idleTimeoutMs = timeoutSecondsFromMs(cell.timeoutMs) * 1000;
+					const idle = new IdleTimeout(idleTimeoutMs);
 					const combinedSignal = signal
-						? AbortSignal.any([signal, timeoutSignal, sessionAbortController.signal])
-						: AbortSignal.any([timeoutSignal, sessionAbortController.signal]);
+						? AbortSignal.any([signal, idle.signal, sessionAbortController.signal])
+						: AbortSignal.any([idle.signal, sessionAbortController.signal]);
 
 					const cellResult = cellResults[i];
 					cellResult.status = "running";
@@ -368,25 +338,46 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					pushUpdate();
 
 					const startTime = Date.now();
-					const result = await backend.execute(cell.code, {
-						cwd: session.cwd,
-						sessionId,
-						sessionFile: sessionFile ?? undefined,
-						kernelOwnerId,
-						signal: combinedSignal,
-						session,
-						deadlineMs,
-						reset: cell.reset,
-						artifactPath,
-						artifactId,
-						onChunk: chunk => {
-							outputSink!.push(chunk);
-						},
-					});
+					let result: ExecutorBackendResult;
+					try {
+						result = await backend.execute(cell.code, {
+							cwd: session.cwd,
+							sessionId,
+							sessionFile: sessionFile ?? undefined,
+							kernelOwnerId,
+							signal: combinedSignal,
+							session,
+							idleTimeoutMs,
+							reset: cell.reset,
+							artifactPath,
+							artifactId,
+							onChunk: chunk => {
+								outputSink!.push(chunk);
+							},
+							onStatus: event => {
+								// Only a bridge heartbeat re-arms the watchdog: it is the
+								// keepalive `agent()`/`llm()` pump while a host-side call is
+								// in flight, so those calls effectively pause the budget. It
+								// carries no payload — bump and drop it. Every other event
+								// (compute helpers, log()/phase(), tool results) renders but
+								// counts against the plain wall-clock budget.
+								if (event.op === EVAL_HEARTBEAT_OP) {
+									idle.bump();
+									return;
+								}
+								cellResult.statusEvents ??= [];
+								upsertStatusEvent(cellResult.statusEvents, event);
+								pushUpdate();
+							},
+						});
+					} finally {
+						idle.dispose();
+					}
 					const durationMs = Date.now() - startTime;
 
 					const cellStatusEvents: EvalStatusEvent[] = [];
 					const cellDisplayOutputs: EvalDisplayOutput[] = [];
+					const cellImageNotes: string[] = [];
 					let cellHasMarkdown = false;
 					for (const output of result.displayOutputs) {
 						if (output.type === "json") {
@@ -394,12 +385,30 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 							cellDisplayOutputs.push(output);
 						}
 						if (output.type === "image") {
-							images.push({ type: "image", data: output.data, mimeType: output.mimeType });
-							cellDisplayOutputs.push(output);
+							const resized = await resizeImage({
+								type: "image",
+								data: output.data,
+								mimeType: output.mimeType,
+							});
+							const image: ImageContent = {
+								type: "image",
+								data: resized.data,
+								mimeType: resized.mimeType,
+							};
+							images.push(image);
+							cellDisplayOutputs.push({
+								type: "image",
+								data: image.data,
+								mimeType: image.mimeType,
+							});
+							const dimensionNote = formatDimensionNote(resized);
+							if (dimensionNote) {
+								cellImageNotes.push(`display image ${cellImageNotes.length + 1}: ${dimensionNote}`);
+							}
 						}
 						if (output.type === "status") {
-							statusEvents.push(output.event);
-							cellStatusEvents.push(output.event);
+							upsertStatusEvent(statusEvents, output.event);
+							upsertStatusEvent(cellStatusEvents, output.event);
 						}
 						if (output.type === "markdown") {
 							cellHasMarkdown = true;
@@ -407,9 +416,14 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					}
 
 					const stdoutTrimmed = result.output.trim();
+					const imageText = cellImageNotes.join("\n");
 					const displayText = formatDisplayOutputsForText(cellDisplayOutputs);
+					const visibleDisplayText =
+						displayText && imageText ? `${displayText}\n\n${imageText}` : displayText || imageText;
 					const cellOutput =
-						stdoutTrimmed && displayText ? `${stdoutTrimmed}\n\n${displayText}` : stdoutTrimmed || displayText;
+						stdoutTrimmed && visibleDisplayText
+							? `${stdoutTrimmed}\n\n${visibleDisplayText}`
+							: stdoutTrimmed || visibleDisplayText;
 					cellResult.output = cellOutput;
 					cellResult.exitCode = result.exitCode;
 					cellResult.durationMs = durationMs;
@@ -556,546 +570,3 @@ async function summarizeFinal(
 		artifactId: rawSummary.artifactId,
 	};
 }
-
-interface EvalRenderCellArg {
-	language?: string;
-	code?: string;
-	title?: string;
-}
-
-interface EvalRenderArgs {
-	cells?: EvalRenderCellArg[];
-	__partialJson?: string;
-}
-
-interface EvalRenderContext {
-	output?: string;
-	expanded?: boolean;
-	previewLines?: number;
-	timeout?: number;
-}
-
-interface EvalRenderCell {
-	language: EvalLanguage;
-	code: string;
-	title?: string;
-}
-
-function normalizeRenderLanguage(value: string | undefined): EvalLanguage {
-	return value === "js" ? "js" : "python";
-}
-
-function getRenderCells(args: EvalRenderArgs | undefined): EvalRenderCell[] {
-	const raw = args?.cells;
-	if (!Array.isArray(raw)) return [];
-	const out: EvalRenderCell[] = [];
-	for (const cell of raw) {
-		if (!cell || typeof cell !== "object") continue;
-		const code = typeof cell.code === "string" ? cell.code : "";
-		out.push({
-			language: normalizeRenderLanguage(typeof cell.language === "string" ? cell.language : undefined),
-			code,
-			title: typeof cell.title === "string" ? cell.title : undefined,
-		});
-	}
-	return out;
-}
-
-/** Format a status event as a single line for display. */
-function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
-	const { op, ...data } = event;
-
-	type AvailableIcon = "icon.file" | "icon.folder" | "icon.git" | "icon.package";
-	const opIcons: Record<string, AvailableIcon> = {
-		read: "icon.file",
-		write: "icon.file",
-		append: "icon.file",
-		cat: "icon.file",
-		touch: "icon.file",
-		ls: "icon.folder",
-		cd: "icon.folder",
-		pwd: "icon.folder",
-		mkdir: "icon.folder",
-		tree: "icon.folder",
-		git_status: "icon.git",
-		git_diff: "icon.git",
-		git_log: "icon.git",
-		git_show: "icon.git",
-		git_branch: "icon.git",
-		git_file_at: "icon.git",
-		git_has_changes: "icon.git",
-		run: "icon.package",
-		sh: "icon.package",
-		env: "icon.package",
-		batch: "icon.package",
-	};
-
-	const iconKey = opIcons[op] ?? "icon.file";
-	const icon = theme.styledSymbol(iconKey, "muted");
-
-	const parts: string[] = [];
-
-	if (data.error) {
-		return `${icon} ${theme.fg("warning", op)}: ${theme.fg("dim", String(data.error))}`;
-	}
-
-	switch (op) {
-		case "read":
-			parts.push(`${data.chars ?? data.bytes ?? 0} chars`);
-			if (data.path) parts.push(`from ${shortenPath(String(data.path))}`);
-			break;
-		case "write":
-		case "append":
-			parts.push(`${data.chars ?? data.bytes ?? 0} chars`);
-			if (data.path) parts.push(`to ${shortenPath(String(data.path))}`);
-			break;
-		case "cat":
-			parts.push(`${data.files} file${(data.files as number) !== 1 ? "s" : ""}`);
-			parts.push(`${data.chars} chars`);
-			break;
-		case "ls":
-			parts.push(`${data.count} entr${(data.count as number) !== 1 ? "ies" : "y"}`);
-			break;
-		case "env":
-			if (data.action === "set") {
-				parts.push(`set ${data.key}=${truncateToWidth(String(data.value ?? ""), 30)}`);
-			} else if (data.action === "get") {
-				parts.push(`${data.key}=${truncateToWidth(String(data.value ?? ""), 30)}`);
-			} else {
-				parts.push(`${data.count} variable${(data.count as number) !== 1 ? "s" : ""}`);
-			}
-			break;
-		case "git_status":
-			if (data.clean) {
-				parts.push("clean");
-			} else {
-				const statusParts: string[] = [];
-				if (data.staged) statusParts.push(`${data.staged} staged`);
-				if (data.modified) statusParts.push(`${data.modified} modified`);
-				if (data.untracked) statusParts.push(`${data.untracked} untracked`);
-				parts.push(statusParts.join(", ") || "unknown");
-			}
-			if (data.branch) parts.push(`on ${data.branch}`);
-			break;
-		case "git_log":
-			parts.push(`${data.commits} commit${(data.commits as number) !== 1 ? "s" : ""}`);
-			break;
-		case "git_diff":
-			parts.push(`${data.lines} line${(data.lines as number) !== 1 ? "s" : ""}`);
-			if (data.staged) parts.push("(staged)");
-			break;
-		case "diff":
-			if (data.identical) {
-				parts.push("files identical");
-			} else {
-				parts.push("files differ");
-			}
-			break;
-		case "batch":
-			parts.push(`${data.files} file${(data.files as number) !== 1 ? "s" : ""} processed`);
-			break;
-		case "wc":
-			parts.push(`${data.lines}L ${data.words}W ${data.chars}C`);
-			break;
-		case "cd":
-		case "pwd":
-		case "mkdir":
-		case "touch":
-			if (data.path) parts.push(shortenPath(String(data.path)));
-			break;
-		default:
-			if (data.count !== undefined) {
-				parts.push(String(data.count));
-			}
-			if (data.path) {
-				parts.push(shortenPath(String(data.path)));
-			}
-	}
-
-	const desc = parts.length > 0 ? parts.join(" · ") : "";
-	return `${icon} ${theme.fg("muted", op)}${desc ? ` ${theme.fg("dim", desc)}` : ""}`;
-}
-
-/** Format status event with expanded detail lines. */
-function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme): string[] {
-	const lines: string[] = [];
-	const { op, ...data } = event;
-
-	lines.push(formatStatusEvent(event, theme));
-
-	const addItems = (items: unknown[], formatter: (item: unknown) => string, max = 5) => {
-		const arr = Array.isArray(items) ? items : [];
-		for (let i = 0; i < Math.min(arr.length, max); i++) {
-			lines.push(`   ${theme.fg("dim", formatter(arr[i]))}`);
-		}
-		if (arr.length > max) {
-			lines.push(`   ${theme.fg("dim", `… ${arr.length - max} more`)}`);
-		}
-	};
-
-	const addPreview = (preview: string, maxLines = 3) => {
-		const previewLines = String(preview).split("\n").slice(0, maxLines);
-		for (const line of previewLines) {
-			lines.push(`   ${theme.fg("toolOutput", truncateToWidth(replaceTabs(line), 80))}`);
-		}
-		const totalLines = String(preview).split("\n").length;
-		if (totalLines > maxLines) {
-			lines.push(`   ${theme.fg("dim", `… ${totalLines - maxLines} more lines`)}`);
-		}
-	};
-
-	switch (op) {
-		case "ls":
-			if (data.items) addItems(data.items as unknown[], m => String(m));
-			break;
-		case "env":
-			if (data.keys) addItems(data.keys as unknown[], k => String(k), 10);
-			break;
-		case "git_log":
-			if (data.entries) {
-				addItems(data.entries as unknown[], e => {
-					const entry = e as { sha: string; subject: string };
-					return `${entry.sha} ${truncateToWidth(entry.subject, 50)}`;
-				});
-			}
-			break;
-		case "git_status":
-			if (data.files) addItems(data.files as unknown[], f => String(f));
-			break;
-		case "git_branch":
-			if (data.branches) addItems(data.branches as unknown[], b => String(b));
-			break;
-		case "read":
-		case "cat":
-		case "head":
-		case "tail":
-		case "tree":
-		case "diff":
-		case "git_diff":
-		case "sh":
-			if (data.preview) addPreview(String(data.preview));
-			break;
-	}
-
-	return lines;
-}
-
-/** Render status events as tree lines. */
-function renderStatusEvents(events: EvalStatusEvent[], theme: Theme, expanded: boolean): string[] {
-	if (events.length === 0) return [];
-
-	const maxCollapsed = 3;
-	const maxExpanded = 10;
-	const displayCount = expanded ? Math.min(events.length, maxExpanded) : Math.min(events.length, maxCollapsed);
-
-	const lines: string[] = [];
-	for (let i = 0; i < displayCount; i++) {
-		const isLast = i === displayCount - 1 && (expanded || events.length <= maxCollapsed);
-		const branch = isLast ? theme.tree.last : theme.tree.branch;
-
-		if (expanded) {
-			const eventLines = formatStatusEventExpanded(events[i], theme);
-			lines.push(`${theme.fg("dim", branch)} ${eventLines[0]}`);
-			const continueBranch = isLast ? "   " : `${theme.tree.vertical}  `;
-			for (let j = 1; j < eventLines.length; j++) {
-				lines.push(`${theme.fg("dim", continueBranch)}${eventLines[j]}`);
-			}
-		} else {
-			lines.push(`${theme.fg("dim", branch)} ${formatStatusEvent(events[i], theme)}`);
-		}
-	}
-
-	if (!expanded && events.length > maxCollapsed) {
-		lines.push(`${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", `… ${events.length - maxCollapsed} more`)}`);
-	} else if (expanded && events.length > maxExpanded) {
-		lines.push(`${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", `… ${events.length - maxExpanded} more`)}`);
-	}
-
-	return lines;
-}
-
-function formatCellOutputLines(
-	cell: EvalCellResult,
-	expanded: boolean,
-	previewLines: number,
-	theme: Theme,
-	width: number,
-): { lines: string[]; hiddenCount: number } {
-	if (!cell.output) {
-		return { lines: [], hiddenCount: 0 };
-	}
-
-	if (cell.hasMarkdown && cell.status !== "error") {
-		const md = new Markdown(cell.output, 0, 0, getMarkdownTheme());
-		const allLines = md.render(width);
-		const displayLines = expanded ? allLines : allLines.slice(-previewLines);
-		const hiddenCount = allLines.length - displayLines.length;
-		return { lines: displayLines, hiddenCount };
-	}
-
-	const rawLines = cell.output.split("\n");
-	const displayLines = expanded ? rawLines : rawLines.slice(-previewLines);
-	const hiddenCount = rawLines.length - displayLines.length;
-	const outputLines = displayLines.map(line => {
-		const cleaned = replaceTabs(line);
-		return cell.status === "error" ? theme.fg("error", cleaned) : theme.fg("toolOutput", cleaned);
-	});
-
-	return { lines: outputLines, hiddenCount };
-}
-
-export const evalToolRenderer = {
-	renderCall(args: EvalRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const cells = getRenderCells(args);
-
-		if (cells.length === 0) {
-			const promptSym = uiTheme.fg("accent", ">>>");
-			const text = formatTitle(`${promptSym} …`, uiTheme);
-			return new Text(text, 0, 0);
-		}
-
-		let cached: { key: string; width: number; result: string[] } | undefined;
-
-		return {
-			render: (width: number): string[] => {
-				const key = cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|");
-				if (cached && cached.key === key && cached.width === width) {
-					return cached.result;
-				}
-
-				const lines: string[] = [];
-				for (let i = 0; i < cells.length; i++) {
-					const cell = cells[i];
-					const cellLines = renderCodeCell(
-						{
-							code: cell.code,
-							language: languageForHighlighter(cell.language),
-							index: i,
-							total: cells.length,
-							title: cell.title,
-							status: "pending",
-							width,
-							codeMaxLines: EVAL_DEFAULT_PREVIEW_LINES,
-							expanded: true,
-						},
-						uiTheme,
-					);
-					lines.push(...cellLines);
-					if (i < cells.length - 1) {
-						lines.push("");
-					}
-				}
-				cached = { key, width, result: lines };
-				return lines;
-			},
-			invalidate: () => {
-				cached = undefined;
-			},
-		};
-	},
-
-	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: EvalToolDetails },
-		options: RenderResultOptions & { renderContext?: EvalRenderContext },
-		uiTheme: Theme,
-		_args?: EvalRenderArgs,
-	): Component {
-		const details = result.details;
-
-		const rawOutput =
-			options.renderContext?.output ?? (result.content?.find(c => c.type === "text")?.text ?? "").trimEnd();
-		// Strip the LLM-facing notice (appended by wrappedExecute) before display;
-		// the styled `warningLine` below carries the same text in ⟨…⟩ form.
-		const output = stripOutputNotice(rawOutput, details?.meta).trimEnd();
-
-		const jsonOutputs = details?.jsonOutputs ?? [];
-		const jsonLines = jsonOutputs.flatMap((value, index) => {
-			const header = `JSON output ${index + 1}`;
-			const treeLines = renderJsonTree(value, uiTheme, options.renderContext?.expanded ?? options.expanded);
-			return [header, ...treeLines];
-		});
-
-		const timeoutSeconds = options.renderContext?.timeout;
-		const timeoutLine =
-			typeof timeoutSeconds === "number"
-				? uiTheme.fg("dim", wrapBrackets(`Timeout: ${timeoutSeconds}s`, uiTheme))
-				: undefined;
-		let warningLine: string | undefined;
-		if (details?.meta?.truncation) {
-			warningLine = formatStyledTruncationWarning(details.meta, uiTheme) ?? undefined;
-		}
-		const noticeLine = details?.notice ? uiTheme.fg("dim", wrapBrackets(details.notice, uiTheme)) : undefined;
-
-		const cellResults = details?.cells;
-		if (cellResults && cellResults.length > 0) {
-			let cached: { key: string; width: number; result: string[] } | undefined;
-
-			return {
-				render: (width: number): string[] => {
-					const expanded = options.renderContext?.expanded ?? options.expanded;
-					const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
-					const key = `${expanded}|${previewLines}|${options.spinnerFrame}`;
-					if (cached && cached.key === key && cached.width === width) {
-						return cached.result;
-					}
-
-					const lines: string[] = [];
-					for (let i = 0; i < cellResults.length; i++) {
-						const cell = cellResults[i];
-						const statusLines = renderStatusEvents(cell.statusEvents ?? [], uiTheme, expanded);
-						const outputContent = formatCellOutputLines(cell, expanded, previewLines, uiTheme, width);
-						const outputLines = [...outputContent.lines];
-						if (!expanded && outputContent.hiddenCount > 0) {
-							outputLines.push(
-								uiTheme.fg("dim", `… ${outputContent.hiddenCount} more lines (ctrl+o to expand)`),
-							);
-						}
-						if (statusLines.length > 0) {
-							if (outputLines.length > 0) {
-								outputLines.push(uiTheme.fg("dim", "Status"));
-							}
-							outputLines.push(...statusLines);
-						}
-						const cellLines = renderCodeCell(
-							{
-								code: cell.code,
-								language: languageForHighlighter(cell.language ?? details?.language),
-								index: i,
-								total: cellResults.length,
-								title: cell.title,
-								status: cell.status,
-								spinnerFrame: options.spinnerFrame,
-								duration: cell.durationMs,
-								output: outputLines.length > 0 ? outputLines.join("\n") : undefined,
-								outputMaxLines: outputLines.length,
-								codeMaxLines: expanded ? Number.POSITIVE_INFINITY : EVAL_DEFAULT_PREVIEW_LINES,
-								expanded,
-								width,
-							},
-							uiTheme,
-						);
-						lines.push(...cellLines);
-						if (i < cellResults.length - 1) {
-							lines.push("");
-						}
-					}
-					if (jsonLines.length > 0) {
-						if (lines.length > 0) {
-							lines.push("");
-						}
-						lines.push(...jsonLines);
-					}
-					if (timeoutLine) {
-						lines.push(timeoutLine);
-					}
-					if (noticeLine) {
-						lines.push(noticeLine);
-					}
-					if (warningLine) {
-						lines.push(warningLine);
-					}
-					cached = { key, width, result: lines };
-					return lines;
-				},
-				invalidate: () => {
-					cached = undefined;
-				},
-			};
-		}
-
-		const displayOutput = output;
-		const combinedOutput = [displayOutput, ...jsonLines].filter(Boolean).join("\n");
-
-		const statusEvents = details?.statusEvents ?? [];
-		const statusLines = renderStatusEvents(
-			statusEvents,
-			uiTheme,
-			options.renderContext?.expanded ?? options.expanded,
-		);
-
-		if (!combinedOutput && statusLines.length === 0) {
-			const lines = [timeoutLine, noticeLine, warningLine].filter(Boolean) as string[];
-			return new Text(lines.join("\n"), 0, 0);
-		}
-
-		if (!combinedOutput && statusLines.length > 0) {
-			const lines = [uiTheme.fg("dim", "Status"), ...statusLines, timeoutLine, noticeLine, warningLine].filter(
-				Boolean,
-			) as string[];
-			return new Text(lines.join("\n"), 0, 0);
-		}
-
-		if (options.renderContext?.expanded ?? options.expanded) {
-			const styledOutput = combinedOutput
-				.split("\n")
-				.map(line => uiTheme.fg("toolOutput", line))
-				.join("\n");
-			const lines = [
-				styledOutput,
-				...(statusLines.length > 0 ? [uiTheme.fg("dim", "Status"), ...statusLines] : []),
-				timeoutLine,
-				noticeLine,
-				warningLine,
-			].filter(Boolean) as string[];
-			return new Text(lines.join("\n"), 0, 0);
-		}
-
-		const styledOutput = combinedOutput
-			.split("\n")
-			.map(line => uiTheme.fg("toolOutput", line))
-			.join("\n");
-		const textContent = `\n${styledOutput}`;
-
-		let cachedWidth: number | undefined;
-		let cachedLines: string[] | undefined;
-		let cachedSkipped: number | undefined;
-		let cachedPreviewLines: number | undefined;
-
-		return {
-			render: (width: number): string[] => {
-				const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
-				if (cachedLines === undefined || cachedWidth !== width || cachedPreviewLines !== previewLines) {
-					const result = truncateToVisualLines(textContent, previewLines, width);
-					cachedLines = result.visualLines;
-					cachedSkipped = result.skippedCount;
-					cachedWidth = width;
-					cachedPreviewLines = previewLines;
-				}
-				const outputLines: string[] = [];
-				if (cachedSkipped && cachedSkipped > 0) {
-					outputLines.push("");
-					const skippedLine = uiTheme.fg(
-						"dim",
-						`… (${cachedSkipped} earlier lines, showing ${cachedLines.length} of ${cachedSkipped + cachedLines.length}) (ctrl+o to expand)`,
-					);
-					outputLines.push(truncateToWidth(skippedLine, width));
-				}
-				outputLines.push(...cachedLines);
-				if (statusLines.length > 0) {
-					outputLines.push(truncateToWidth(uiTheme.fg("dim", "Status"), width));
-					for (const statusLine of statusLines) {
-						outputLines.push(truncateToWidth(statusLine, width));
-					}
-				}
-				if (timeoutLine) {
-					outputLines.push(truncateToWidth(timeoutLine, width));
-				}
-				if (noticeLine) {
-					outputLines.push(truncateToWidth(noticeLine, width));
-				}
-				if (warningLine) {
-					outputLines.push(truncateToWidth(warningLine, width));
-				}
-				return outputLines;
-			},
-			invalidate: () => {
-				cachedWidth = undefined;
-				cachedLines = undefined;
-				cachedSkipped = undefined;
-				cachedPreviewLines = undefined;
-			},
-		};
-	},
-	mergeCallAndResult: true,
-	inline: true,
-};

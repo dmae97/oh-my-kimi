@@ -19,7 +19,7 @@ import { analyzeAuthError, discoverOAuthEndpoints } from "../../mcp/oauth-discov
 import type { MCPHttpServerConfig, MCPServerConfig, MCPSseServerConfig, MCPStdioServerConfig } from "../../mcp/types";
 import { shortenPath } from "../../tools/render-utils";
 import { theme } from "../theme/theme";
-import { matchesAppInterrupt } from "../utils/keybinding-matchers";
+import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
 
 type TransportType = "stdio" | "http" | "sse";
@@ -501,11 +501,11 @@ export class MCPAddWizard extends Container {
 		}
 
 		// Handle up/down arrows for selectors
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			this.#moveSelection(-1);
 			return;
 		}
-		if (matchesKey(keyData, "down")) {
+		if (matchesSelectDown(keyData)) {
 			this.#moveSelection(1);
 			return;
 		}
@@ -965,14 +965,18 @@ export class MCPAddWizard extends Container {
 			}, 1000);
 		} catch (error) {
 			// Connection failed - check if it's an auth error
-			const authResult = analyzeAuthError(error as Error);
+			const authResult = analyzeAuthError(error as Error, this.#state.url);
 
 			if (authResult.requiresAuth) {
 				// Prefer OAuth first: use error metadata, then well-known discovery fallback.
 				let oauth = authResult.authType === "oauth" ? (authResult.oauth ?? null) : null;
 				if (!oauth && this.#state.transport !== "stdio" && this.#state.url) {
 					try {
-						oauth = await discoverOAuthEndpoints(this.#state.url, authResult.authServerUrl);
+						oauth = await discoverOAuthEndpoints(
+							this.#state.url,
+							authResult.authServerUrl,
+							authResult.resourceMetadataUrl,
+						);
 					} catch {
 						// Ignore discovery failures and fallback to manual auth.
 					}

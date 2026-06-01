@@ -14,15 +14,14 @@ Permission model
 There are four ownership zones on disk; do not let them blur:
 
 1. **Workspace tree** (`/data/workspaces/<key>/`, including `repo/`,
-   `.omp-session/`, `context/`, `artifacts/`, `.omp-tmp/`, `.omp-xdg/`):
-   single-owner. Owned by the active slot UID/GID (`omp-N`) with mode
-   `u=rwX,g=rwX,o=` (effectively `0770` dirs / `0660` files; the group is
-   the slot's own private gid so group bits are functionally identical to
-   owner-only). The orchestrator (root) reads/writes via uid-0 bypass when
-   it must, and drops to the slot for any subprocess that touches paths the
-   agent will revisit. `ensure_workspace` + `_chown_workspace` are the
-   single point of truth for this zone — no other helper sets ownership
-   inside `ws_root`.
+   `.omp-session/`, `context/`, `artifacts/`, `.omp-tmp/`, `.omp-xdg`):
+   single-owner. Owned by the active slot UID/GID (`omp-N`) when slot
+   isolation is enabled, otherwise by the orchestrator's own UID/GID. Modes
+   stay `u=rwX,g=rwX,o=` (effectively `0770` dirs / `0660` files). The
+   orchestrator (root) reads/writes via uid-0 bypass when it must, and drops
+   to the slot for any subprocess that touches paths the agent will revisit.
+   `ensure_workspace` + `_chown_workspace` are the single point of truth for
+   this zone — no other helper sets ownership inside `ws_root`.
 2. **Clone pool** (`/data/workspaces/_pool/<owner>__<repo>/`): genuinely
    multi-slot. Owned by `root:omp` (gid 2000) with setgid `02770`; cross-slot
    writes are bridged by `_share_git_metadata_with_slots`.
@@ -194,6 +193,7 @@ def rename_workspace_branch(
     proc = _safe_run(
         ["git", "branch", "-m", workspace.branch, new_branch],
         cwd=workspace.repo_dir,
+        env=_git_env_for_repo(workspace.repo_dir),
         **_slot_subprocess_kwargs(slot_uid),
     )
     if proc.returncode != 0:
@@ -572,30 +572,31 @@ def _share_git_metadata_with_slots(repo_dir: Path, slot_uid: int | None) -> None
 
 
 def _chown_workspace(ws_root: Path, slot_uid: int | None) -> None:
-    """Hand the entire workspace tree to the active slot UID/GID.
+    """Hand the workspace tree to the identity that will run repo-local git.
+
+    With slot isolation enabled, that identity is ``slot_uid:slot_uid``.
+    Without slots, the agent and host-side repo commands run as the
+    orchestrator user itself. Existing workspaces may still be owned by an
+    old slot UID from a prior deploy; normalizing them back to the current
+    euid/egid keeps Git's ownership check satisfied without persistent
+    ``safe.directory`` config.
 
     Single-ownership invariant: every file under ``ws_root`` ends up owned by
-    ``slot_uid:slot_uid`` with mode ``u=rwX,g=rwX,o=`` (``0770`` dirs / ``0660``
-    files). The slot's GID is its own private gid (created by entrypoint.sh),
-    so the group bits are functionally identical to owner-only — they exist
-    for parity with the existing pattern and to make accidental future
-    ``setgid`` use safe.
+    the active runner with mode ``u=rwX,g=rwX,o=`` (``0770`` dirs / ``0660``
+    files).
 
     The orchestrator (root) keeps read/write access via uid-0 bypass; any
-    subprocess that touches paths the agent will revisit MUST drop to the slot
-    via ``_slot_subprocess_kwargs`` so tools like bun/biome/cargo (which
-    chmod/utime their own cache state) never encounter a non-owner file.
-
-    Self-healing on re-entry: an existing workspace left over from the old
-    ``root:slot`` model gets re-chown'd on the next ``ensure_workspace`` call.
+    subprocess that touches paths the agent will revisit MUST either run as
+    the same owner or call this helper before invoking Git/tools that enforce
+    owner-sensitive state.
     """
-    if slot_uid is None:
-        return
     if platform.system() != "Linux":
         return
     if os.geteuid() != 0:
         return
-    subprocess.run(["chown", "-R", f"{slot_uid}:{slot_uid}", str(ws_root)], check=True)
+    uid = slot_uid if slot_uid is not None else os.geteuid()
+    gid = slot_uid if slot_uid is not None else os.getegid()
+    subprocess.run(["chown", "-R", f"{uid}:{gid}", str(ws_root)], check=True)
     subprocess.run(["chmod", "-R", "u=rwX,g=rwX,o=", str(ws_root)], check=True)
 
 

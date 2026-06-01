@@ -6,6 +6,8 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { executeBash } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
+import type { Shell } from "@oh-my-pi/pi-natives";
+import * as piNatives from "@oh-my-pi/pi-natives";
 
 // Matches the schema default for `tools.artifactHeadBytes` (20 KB) used by
 // OutputSink when bash-executor pulls settings via resolveOutputSinkHeadBytes.
@@ -164,6 +166,127 @@ describe("executeBash", () => {
 		expect(result.output).toContain("Command cancelled");
 	});
 
+	it("returns promptly and quarantines the session key when native abort cleanup stalls", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+
+		const originalRun = piNatives.Shell.prototype.run;
+		let runCalls = 0;
+		const dispatched = Promise.withResolvers<void>();
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(function (this: Shell, options, onChunk) {
+			runCalls++;
+			if (runCalls === 1) {
+				onChunk?.(null, "started\n");
+				dispatched.resolve();
+				return new Promise(() => {});
+			}
+			return originalRun.call(this, options, onChunk);
+		});
+		const abortSpy = vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+
+		const controller = new AbortController();
+		const promise = executeBash("sleep 10", {
+			cwd: tempDir,
+			timeout: 5000,
+			signal: controller.signal,
+			sessionKey: "hung-native-abort",
+		});
+		await dispatched.promise;
+		controller.abort();
+
+		const raced = await Promise.race([
+			promise.then(result => ({ type: "result" as const, result })),
+			Bun.sleep(750).then(() => ({ type: "timeout" as const })),
+		]);
+
+		expect(raced.type).toBe("result");
+		if (raced.type === "result") {
+			expect(raced.result.cancelled).toBe(true);
+			expect(raced.result.output).toContain("Command cancelled");
+		}
+		expect(abortSpy).toHaveBeenCalled();
+
+		const next = await executeBash("echo next", {
+			cwd: tempDir,
+			timeout: 5000,
+			sessionKey: "hung-native-abort",
+		});
+		expect(next.output.trim()).toBe("next");
+		expect(runCalls).toBe(1);
+	});
+
+	it("restores persistent sessions after native abort cleanup settles", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+
+		const nativeResult = Promise.withResolvers<{ exitCode: undefined; cancelled: true; timedOut: false }>();
+		const dispatched = Promise.withResolvers<void>();
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
+			onChunk?.(null, "started\n");
+			dispatched.resolve();
+			return nativeResult.promise;
+		});
+		vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+
+		const controller = new AbortController();
+		const promise = executeBash("sleep 10", {
+			cwd: tempDir,
+			timeout: 5000,
+			signal: controller.signal,
+			sessionKey: "settled-native-abort",
+		});
+		await dispatched.promise;
+		controller.abort();
+		await promise;
+
+		nativeResult.resolve({ exitCode: undefined, cancelled: true, timedOut: false });
+		await Bun.sleep(0);
+		vi.restoreAllMocks();
+
+		await executeBash("export PI_AFTER_ABORT=still_persistent", {
+			cwd: tempDir,
+			timeout: 5000,
+			sessionKey: "settled-native-abort",
+		});
+		const next = await executeBash("printf '%s\n' \"$PI_AFTER_ABORT\"", {
+			cwd: tempDir,
+			timeout: 5000,
+			sessionKey: "settled-native-abort",
+		});
+		expect(next.output.trim()).toBe("still_persistent");
+	});
+
+	it("returns at the JavaScript timeout when native timeout cleanup stalls", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
+			onChunk?.(null, "started\n");
+			return new Promise(() => {});
+		});
+		const abortSpy = vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+
+		const promise = executeBash("sleep 10", {
+			cwd: tempDir,
+			timeout: 1000,
+			sessionKey: "hung-native-timeout",
+		});
+		const raced = await Promise.race([
+			promise.then(result => ({ type: "result" as const, result })),
+			Bun.sleep(1500).then(() => ({ type: "timeout" as const })),
+		]);
+
+		expect(raced.type).toBe("result");
+		if (raced.type === "result") {
+			expect(raced.result.cancelled).toBe(true);
+			expect(raced.result.output).toContain("Command timed out after 1 seconds");
+		}
+		expect(abortSpy).toHaveBeenCalled();
+	});
+
 	it("aborts before follow-up output", async () => {
 		if (process.platform === "win32") {
 			return;
@@ -193,13 +316,22 @@ describe("executeBash", () => {
 		expect(beforeAbort.output.trim()).toBe("alive");
 
 		const controller = new AbortController();
-		const abortPromise = executeBash("sleep 10", {
+		// Abort only once the command is actually running in the persistent
+		// session. Aborting on a fixed timer races executeBash's async setup
+		// (settings + snapshot load); under load the abort can land in the
+		// early-abort short-circuit before the shell ever runs, leaving the
+		// session unreset — the source of the flaky "alive" result here.
+		const startMarker = path.join(tempDir, "reset-on-abort.started");
+		const abortPromise = executeBash(`touch ${startMarker}; sleep 10`, {
 			cwd: tempDir,
 			timeout: 5000,
 			signal: controller.signal,
 			sessionKey,
 		});
-		await Bun.sleep(50);
+		const startDeadline = Date.now() + 4000;
+		while (!fs.existsSync(startMarker) && Date.now() < startDeadline) {
+			await Bun.sleep(2);
+		}
 		controller.abort();
 		const aborted = await abortPromise;
 		expect(aborted.cancelled).toBe(true);

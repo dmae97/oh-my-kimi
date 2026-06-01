@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as zlib from "node:zlib";
 import packageJson from "../package.json" with { type: "json" };
 import { embeddedAddon } from "./embedded-addon.js";
 
@@ -38,6 +39,15 @@ function getNativesDir() {
 		return path.join(xdgDataHome, "omp", "natives");
 	}
 	return path.join(os.homedir(), ".omp", "natives");
+}
+
+function resolveLeafPackageDir(platformTag) {
+	try {
+		const require_ = createRequire(import.meta.url);
+		return path.dirname(require_.resolve(`@oh-my-pi/pi-natives-${platformTag}/package.json`));
+	} catch {
+		return null;
+	}
 }
 
 // =========================================================================
@@ -113,6 +123,7 @@ export function shouldStageNodeModulesAddon({ platform, isCompiledBinary, native
  *   isCompiledBinary: boolean;
  *   stageFromNodeModules?: boolean;
  *   nativeDir: string;
+ *   leafPackageDir?: string | null;
  *   execDir: string;
  *   versionedDir: string;
  *   userDataDir: string;
@@ -124,6 +135,7 @@ export function resolveLoaderCandidates({
 	isCompiledBinary,
 	stageFromNodeModules = false,
 	nativeDir,
+	leafPackageDir = null,
 	execDir,
 	versionedDir,
 	userDataDir,
@@ -132,6 +144,7 @@ export function resolveLoaderCandidates({
 		path.join(nativeDir, filename),
 		path.join(execDir, filename),
 	]);
+	const leafCandidates = leafPackageDir ? addonFilenames.map(filename => path.join(leafPackageDir, filename)) : [];
 	const compiledCandidates = addonFilenames.flatMap(filename => [
 		path.join(versionedDir, filename),
 		path.join(userDataDir, filename),
@@ -141,9 +154,9 @@ export function resolveLoaderCandidates({
 	if (isCompiledBinary) {
 		releaseCandidates = [...compiledCandidates, ...baseReleaseCandidates];
 	} else if (stageFromNodeModules) {
-		releaseCandidates = [...stagedCandidates, ...baseReleaseCandidates];
+		releaseCandidates = [...stagedCandidates, ...leafCandidates, ...baseReleaseCandidates];
 	} else {
-		releaseCandidates = baseReleaseCandidates;
+		releaseCandidates = [...leafCandidates, ...baseReleaseCandidates];
 	}
 	return [...new Set(releaseCandidates)];
 }
@@ -228,6 +241,123 @@ function selectEmbeddedAddonFile(selectedVariant) {
 	return embeddedAddon.files.find(file => file.variant === "baseline") || null;
 }
 
+function readTarString(buffer, offset, length) {
+	const end = Math.min(offset + length, buffer.length);
+	let stringEnd = offset;
+	while (stringEnd < end && buffer[stringEnd] !== 0) stringEnd++;
+	return buffer.toString("utf8", offset, stringEnd);
+}
+
+function readTarOctal(buffer, offset, length) {
+	const value = readTarString(buffer, offset, length).trim();
+	if (!value) return 0;
+	const parsed = Number.parseInt(value, 8);
+	if (!Number.isFinite(parsed)) {
+		throw new Error(`Invalid tar octal value: ${value}`);
+	}
+	return parsed;
+}
+
+function isZeroTarBlock(buffer, offset) {
+	for (let index = 0; index < 512; index++) {
+		if (buffer[offset + index] !== 0) return false;
+	}
+	return true;
+}
+
+function getTarEntryName(header) {
+	const name = readTarString(header, 0, 100);
+	const prefix = readTarString(header, 345, 155);
+	return prefix ? `${prefix}/${name}` : name;
+}
+
+function isSafeEmbeddedAddonFilename(filename) {
+	return filename.length > 0 && path.basename(filename) === filename && !filename.includes("/") && !filename.includes("\\");
+}
+
+function isEmbeddedAddonFileCurrent(targetPath, file) {
+	try {
+		const stat = fs.statSync(targetPath);
+		if (!stat.isFile()) return false;
+		return typeof file.size !== "number" || stat.size === file.size;
+	} catch (err) {
+		if (err && err.code === "ENOENT") return false;
+		throw err;
+	}
+}
+
+function writeEmbeddedAddonFile(targetPath, content) {
+	const tempPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`;
+	try {
+		fs.writeFileSync(tempPath, content, { mode: 0o755 });
+		fs.renameSync(tempPath, targetPath);
+	} catch (err) {
+		try {
+			fs.unlinkSync(tempPath);
+		} catch {
+			// Best-effort cleanup only.
+		}
+		throw err;
+	}
+}
+
+export function extractEmbeddedAddonArchive({ archivePath, files, targetDir }) {
+	const pending = new Map();
+	for (const file of files) {
+		if (!isSafeEmbeddedAddonFilename(file.filename)) {
+			throw new Error(`Unsafe embedded addon filename: ${file.filename}`);
+		}
+		const targetPath = path.join(targetDir, file.filename);
+		if (!isEmbeddedAddonFileCurrent(targetPath, file)) {
+			pending.set(file.filename, file);
+		}
+	}
+	if (pending.size === 0) return [];
+
+	const archive = zlib.gunzipSync(fs.readFileSync(archivePath));
+	const writtenPaths = [];
+	let offset = 0;
+
+	while (offset + 512 <= archive.length) {
+		if (isZeroTarBlock(archive, offset)) break;
+		const header = archive.subarray(offset, offset + 512);
+		const filename = getTarEntryName(header);
+		const size = readTarOctal(header, 124, 12);
+		const typeflag = header[156] === 0 ? "0" : String.fromCharCode(header[156]);
+		offset += 512;
+
+		if (offset + size > archive.length) {
+			throw new Error(`Truncated embedded addon archive entry: ${filename}`);
+		}
+
+		if (!isSafeEmbeddedAddonFilename(filename)) {
+			throw new Error(`Unsafe embedded addon archive entry: ${filename}`);
+		}
+		if (typeflag !== "0") {
+			throw new Error(`Unsupported embedded addon archive entry type ${typeflag}: ${filename}`);
+		}
+
+		const file = pending.get(filename);
+		if (file) {
+			if (typeof file.size === "number" && file.size !== size) {
+				throw new Error(`Embedded addon size mismatch for ${filename}: expected ${file.size}, got ${size}`);
+			}
+			const targetPath = path.join(targetDir, filename);
+			writeEmbeddedAddonFile(targetPath, archive.subarray(offset, offset + size));
+			pending.delete(filename);
+			writtenPaths.push(targetPath);
+		}
+
+		offset += Math.ceil(size / 512) * 512;
+	}
+
+	if (pending.size > 0) {
+		throw new Error(`Embedded addon archive missing: ${[...pending.keys()].join(", ")}`);
+	}
+
+	return writtenPaths;
+}
+
 function maybeExtractEmbeddedAddon(ctx, errors) {
 	if (!ctx.isCompiledBinary || !embeddedAddon) return null;
 	if (embeddedAddon.platformTag !== ctx.platformTag || embeddedAddon.version !== ctx.packageVersion) return null;
@@ -244,8 +374,31 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
 		return null;
 	}
 
-	if (fs.existsSync(targetPath)) {
+	if (embeddedAddon.archive) {
+		try {
+			extractEmbeddedAddonArchive({
+				archivePath: embeddedAddon.archive.filePath,
+				files: embeddedAddon.files,
+				targetDir: ctx.versionedDir,
+			});
+			if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) {
+				return targetPath;
+			}
+			errors.push(`embedded addon archive (${embeddedAddon.archive.filename}): missing ${selectedEmbeddedFile.filename}`);
+			return null;
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			errors.push(`embedded addon archive (${embeddedAddon.archive.filename}): ${message}`);
+			return null;
+		}
+	}
+
+	if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) {
 		return targetPath;
+	}
+	if (!selectedEmbeddedFile.filePath) {
+		errors.push(`embedded addon metadata missing file path for ${selectedEmbeddedFile.filename}`);
+		return null;
 	}
 
 	try {
@@ -260,8 +413,8 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
 }
 
 /**
- * Mirror `nativeDir/<filename>.node` to `versionedDir/<filename>.node` on Windows
- * installs so the running process keeps its OS-level handle on a versioned
+ * Mirror `leafPackageDir ?? nativeDir` addon binaries to
+ * `versionedDir/<filename>.node` on Windows installs so the running process
  * cache path, never on the `node_modules` copy that bun must overwrite on
  * update. No-op on non-Windows, in workspace dev, and for compiled binaries —
  * see `shouldStageNodeModulesAddon` for the gating rules.
@@ -271,7 +424,7 @@ function maybeStageNodeModulesAddon(ctx, errors) {
 
 	let stagedPath = null;
 	for (const filename of ctx.addonFilenames) {
-		const sourcePath = path.join(ctx.nativeDir, filename);
+		const sourcePath = path.join(ctx.leafPackageDir ?? ctx.nativeDir, filename);
 		const targetPath = path.join(ctx.versionedDir, filename);
 
 		if (fs.existsSync(targetPath)) {
@@ -360,6 +513,7 @@ function initLoaderContext() {
 		env: process.env,
 		importMetaUrl: import.meta.url,
 	});
+	const leafPackageDir = isCompiledBinary ? null : resolveLeafPackageDir(platformTag);
 	const stageFromNodeModules = shouldStageNodeModulesAddon({
 		platform: process.platform,
 		isCompiledBinary,
@@ -375,6 +529,7 @@ function initLoaderContext() {
 		isCompiledBinary,
 		stageFromNodeModules,
 		nativeDir,
+		leafPackageDir,
 		execDir,
 		versionedDir,
 		userDataDir,
@@ -395,6 +550,7 @@ function initLoaderContext() {
 		platformTag,
 		packageVersion,
 		nativeDir,
+		leafPackageDir,
 		versionedDir,
 		isCompiledBinary,
 		stageFromNodeModules,

@@ -379,6 +379,18 @@ const fn ascii_cell_width_u16(u: u16, tab_width: usize) -> usize {
 }
 
 #[inline]
+fn char_width_corrected(c: char) -> Option<usize> {
+	// Hangul Compatibility Jamo U+3131..=U+318E render as 1 cell on macOS
+	// terminals (Ghostty, Terminal.app, iTerm2), but follow UAX#11 at 2
+	// cells on WezTerm and most Linux terminals. Only force 1 on macOS.
+	let cp = c as u32;
+	if cfg!(target_os = "macos") && (0x3131..=0x318e).contains(&cp) {
+		return Some(1);
+	}
+	UnicodeWidthChar::width(c)
+}
+
+#[inline]
 fn grapheme_width_str(g: &str, tab_width: usize) -> usize {
 	if g == "\t" {
 		return tab_width;
@@ -388,9 +400,15 @@ fn grapheme_width_str(g: &str, tab_width: usize) -> usize {
 		return 0;
 	};
 	if it.next().is_none() {
-		return UnicodeWidthChar::width(c0).unwrap_or(0);
+		return char_width_corrected(c0).unwrap_or(0);
 	}
-	UnicodeWidthStr::width(g)
+	if cfg!(target_os = "macos") {
+		g.chars()
+			.map(|c| char_width_corrected(c).unwrap_or(0))
+			.sum()
+	} else {
+		UnicodeWidthStr::width(g)
+	}
 }
 
 thread_local! {

@@ -849,6 +849,43 @@ def test_classify_issue_rejects_invalid_branch_slug(db: Database, tmp_path: Path
     assert bindings.workspace.branch == "farm/abc12345/some-issue"
 
 
+def test_classify_issue_rename_failure_does_not_apply_labels_or_classification(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(200, json=[])
+
+    def fail_rename(*_args: object, **_kwargs: object) -> str:
+        raise host_tools.GitCommandError(["git", "branch", "-m"], 128, "", "fatal: detected dubious ownership")
+
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(handler))
+    monkeypatch.setattr(host_tools, "rename_workspace_branch", fail_rename)
+    try:
+        tool = next(x for x in build(bindings) if x.name == "classify_issue")
+        with pytest.raises(RpcCommandError):
+            tool.execute(
+                {
+                    "primary": "bug",
+                    "priority": "prio:p1",
+                    "rationale": "x",
+                    "branch_slug": "fix-orphan-tool-output",
+                },
+                _ctx(),
+            )
+    finally:
+        _stop_loop(loop, t)
+
+    assert requests == []
+    row = db.get_issue(bindings.issue_key)
+    assert row is not None
+    assert row.classification is None
+    assert row.branch == "farm/abc12345/some-issue"
+    assert bindings.workspace.branch == "farm/abc12345/some-issue"
+
+
 def test_classify_issue_omitting_branch_slug_is_a_noop(db: Database, tmp_path: Path) -> None:
     """Existing callers that don't pass branch_slug must keep the original branch."""
     bindings, loop, t = _bindings(

@@ -16,8 +16,19 @@ export function matchesAppInterrupt(data: string): boolean {
 	return matchesKey(data, "escape") || matchesKey(data, "esc");
 }
 
+/** Match the generic selector cancel keybinding. */
 export function matchesSelectCancel(data: string): boolean {
 	return getKeybindings().matches(data, "tui.select.cancel");
+}
+
+/** Match the generic selector up-navigation keybinding. */
+export function matchesSelectUp(data: string): boolean {
+	return getKeybindings().matches(data, "tui.select.up");
+}
+
+/** Match the generic selector down-navigation keybinding. */
+export function matchesSelectDown(data: string): boolean {
+	return getKeybindings().matches(data, "tui.select.down");
 }
 
 export function matchesAppExternalEditor(data: string): boolean {

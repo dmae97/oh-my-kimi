@@ -111,4 +111,30 @@ describe("InteractiveMode loop auto-submit", () => {
 		expect(resolved).toHaveLength(1);
 		expect(resolved[0].text).toBe("repeat after compact");
 	});
+
+	it("does not resolve the next loop prompt while post-prompt background work is pending", async () => {
+		vi.useFakeTimers();
+		let hasPendingWork = true;
+		Object.defineProperty(session, "isCompacting", { configurable: true, get: () => false });
+		Object.defineProperty(session, "isStreaming", { configurable: true, get: () => false });
+		Object.defineProperty(session, "hasPostPromptWork", { configurable: true, get: () => hasPendingWork });
+
+		mode.loopModeEnabled = true;
+		mode.loopPrompt = "deliver this";
+		const resolved: SubmittedUserInput[] = [];
+		void mode.getUserInput().then(input => resolved.push(input));
+
+		// Loop timer fires while an idle-flush / delivery turn is still pending.
+		vi.advanceTimersByTime(800);
+		await flushMicrotasks();
+		expect(resolved).toHaveLength(0);
+
+		// Background delivery completes; loop may now fire.
+		hasPendingWork = false;
+		vi.advanceTimersByTime(800);
+		await flushMicrotasks();
+
+		expect(resolved).toHaveLength(1);
+		expect(resolved[0].text).toBe("deliver this");
+	});
 });

@@ -35,13 +35,3 @@ export interface BashFixupResult {
 export function applyBashFixups(command: string): BashFixupResult {
 	return nativeApplyBashFixups(command);
 }
-
-/**
- * Human-readable notice for the fixups that fired. Mirrors the shape of
- * `formatTimeoutClampNotice` so it can ride alongside the other bash notices.
- */
-export function formatBashFixupNotice(stripped: readonly string[]): string | undefined {
-	if (!stripped.length) return undefined;
-	const quoted = stripped.map(s => `\`${s}\``).join(", ");
-	return `<system-warning>Stripped redundant ${quoted} — bash output is already truncated and stderr is already merged into stdout. NEVER use these patterns.</system-warning>`;
-}

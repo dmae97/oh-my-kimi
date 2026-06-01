@@ -532,6 +532,27 @@ describe("pi-natives", () => {
 			await Bun.sleep(500);
 			expect(await Bun.file(markerPath).exists()).toBe(false);
 		});
+
+		it("should SIGKILL workloads that ignore SIGTERM on timeout", async () => {
+			if (process.platform === "win32") {
+				return;
+			}
+
+			const markerPath = path.join(testDir, "shell-timeout-sigkill-marker.txt");
+			const markerEscaped = markerPath.replace(/'/g, "'\\''");
+			await fs.rm(markerPath, { force: true });
+
+			const result = await executeShell({
+				command: `trap '' TERM; sleep 0.3; echo done > '${markerEscaped}'`,
+				cwd: testDir,
+				timeoutMs: 50,
+			});
+
+			expect(result.timedOut).toBe(true);
+
+			await Bun.sleep(600);
+			expect(await Bun.file(markerPath).exists()).toBe(false);
+		});
 	});
 	describe("htmlToMarkdown", () => {
 		it("should convert basic HTML to markdown", async () => {

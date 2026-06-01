@@ -58,6 +58,7 @@ const ALLOWED_OPTION_KEYS: ReadonlySet<keyof SimpleStreamOptions> = new Set([
 	"maxRetryDelayMs",
 	"metadata",
 	"sessionId",
+	"promptCacheKey",
 	"streamFirstEventTimeoutMs",
 	"streamIdleTimeoutMs",
 	"reasoning",
@@ -69,6 +70,7 @@ const ALLOWED_OPTION_KEYS: ReadonlySet<keyof SimpleStreamOptions> = new Set([
 	"kimiApiFormat",
 	"syntheticApiFormat",
 	"preferWebsockets",
+	"openrouterVariant",
 ] as const satisfies readonly (keyof SimpleStreamOptions)[]);
 
 // ---------------------------------------------------------------------------

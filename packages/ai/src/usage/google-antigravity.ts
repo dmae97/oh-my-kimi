@@ -9,7 +9,8 @@ import type {
 	UsageStatus,
 	UsageWindow,
 } from "../usage";
-import { refreshAntigravityToken } from "../utils/oauth/google-antigravity";
+
+// (Refresh is the sole responsibility of AuthStorage; no provider-direct refresh here.)
 
 interface AntigravityQuotaInfo {
 	remainingFraction?: number;
@@ -101,19 +102,19 @@ function normalizeQuotaInfos(info: AntigravityModelInfo): AntigravityQuotaInfo[]
 	return results;
 }
 
-async function resolveAccessToken(params: UsageFetchParams, ctx: UsageFetchContext): Promise<string | undefined> {
+/**
+ * Return the OAuth access token to use against `/v1internal:*`. AuthStorage is
+ * the sole refresh authority (broker-aware, single-flighted, rotation-safe);
+ * an expired token short-circuits the probe rather than POSTing the broker
+ * sentinel back to Google.
+ */
+function resolveAccessToken(params: UsageFetchParams): string | undefined {
 	const { credential } = params;
-	if (credential.accessToken && (!credential.expiresAt || credential.expiresAt > Date.now() + 60_000)) {
-		return credential.accessToken;
-	}
-	if (!credential.refreshToken || !credential.projectId) return undefined;
-	try {
-		const refreshed = await refreshAntigravityToken(credential.refreshToken, credential.projectId);
-		return refreshed.access;
-	} catch (error) {
-		ctx.logger?.warn("Antigravity usage token refresh failed", { error: String(error) });
+	if (!credential.accessToken) return undefined;
+	if (credential.expiresAt !== undefined && credential.expiresAt <= Date.now()) {
 		return undefined;
 	}
+	return credential.accessToken;
 }
 
 async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchContext): Promise<UsageReport | null> {
@@ -122,7 +123,7 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 
 	const nowMs = Date.now();
 
-	const accessToken = await resolveAccessToken(params, ctx);
+	const accessToken = resolveAccessToken(params);
 	if (!accessToken) return null;
 
 	const baseUrl = params.baseUrl?.replace(/\/+$/, "") || DEFAULT_ENDPOINT;

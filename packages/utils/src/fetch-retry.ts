@@ -6,8 +6,10 @@ const QUOTA_RESET_PATTERN = /reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/
 const PLEASE_RETRY_PATTERN = /Please retry in ([0-9.]+)(ms|s)/i;
 // JSON field: "retryDelay": "34.074824224s"
 const RETRY_DELAY_FIELD_PATTERN = /"retryDelay":\s*"([0-9.]+)(ms|s)"/i;
-// "try again in 250ms" / "try again in 12s" / "try again in 12sec"
-const TRY_AGAIN_PATTERN = /try again in\s+(\d+(?:\.\d+)?)\s*(ms|s)(?:ec)?/i;
+// "try again in 250ms" / "try again in 12s" / "try again in 12sec" /
+// "try again in 5 min" / "try again in ~158 min." / "try again in 2h" /
+// "try again in 90 minutes" / "try again in 1 hour"
+const TRY_AGAIN_PATTERN = /try again in\s+~?\s*([0-9.]+)\s*(ms|sec|s|minutes?|mins?|m|hours?|hrs?|h)\b/i;
 
 /**
  * Server-suggested retry delay extraction. Merges the patterns historically used
@@ -22,7 +24,7 @@ const TRY_AGAIN_PATTERN = /try again in\s+(\d+(?:\.\d+)?)\s*(ms|s)(?:ec)?/i;
  *  - `Your quota will reset after 18h31m10s` / `10m15s` / `39s`
  *  - `Please retry in 250ms` / `Please retry in 12s`
  *  - `"retryDelay": "34.074824224s"` (JSON error detail field)
- *  - `try again in 250ms` / `try again in 12s` / `try again in 12sec`
+ *  - `try again in 250ms` / `try again in 12s` / `try again in 5 min` / `try again in ~158 min`
  *
  * Returns `undefined` if no signal is found.
  */
@@ -68,11 +70,36 @@ export function extractRetryHint(source: Response | Headers | null | undefined, 
 		if (match?.[1]) {
 			const value = Number.parseFloat(match[1]);
 			if (Number.isFinite(value) && value > 0) {
-				return match[2]!.toLowerCase() === "ms" ? value : value * 1000;
+				const unitMs = unitToMs(match[2]!);
+				if (unitMs !== undefined) return value * unitMs;
 			}
 		}
 	}
 	return undefined;
+}
+
+function unitToMs(unit: string): number | undefined {
+	switch (unit.toLowerCase()) {
+		case "ms":
+			return 1;
+		case "s":
+		case "sec":
+			return 1000;
+		case "m":
+		case "min":
+		case "mins":
+		case "minute":
+		case "minutes":
+			return 60_000;
+		case "h":
+		case "hr":
+		case "hrs":
+		case "hour":
+		case "hours":
+			return 60 * 60_000;
+		default:
+			return undefined;
+	}
 }
 
 export interface FetchWithRetryOptions extends RequestInit {
@@ -270,7 +297,7 @@ export function isUnexpectedSocketCloseMessage(message: string): boolean {
 }
 
 const TRANSIENT_MESSAGE_PATTERN =
-	/overloaded|rate.?limit|too many requests|service.?unavailable|server error|internal error|connection.?error|unable to connect|fetch failed|network error|stream stall|other side closed/i;
+	/overloaded|rate.?limit|too many requests|service.?unavailable|server error|internal error|connection.?error|unable to connect|fetch failed|network error|stream stall|other side closed|HTTP2(?:StreamReset|RefusedStream|EnhanceYourCalm)/i;
 
 const VALIDATION_MESSAGE_PATTERN =
 	/invalid|validation|bad request|unsupported|schema|missing required|not found|unauthorized|forbidden/i;

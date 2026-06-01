@@ -17,7 +17,7 @@ import { Settings } from "../../config/settings";
 import { type KernelDisplayOutput, renderKernelDisplay } from "./display";
 import { PYTHON_PRELUDE } from "./prelude";
 import RUNNER_SCRIPT from "./runner.py" with { type: "text" };
-import { filterEnv, resolvePythonRuntime } from "./runtime";
+import { enumeratePythonRuntimes, filterEnv, type PythonRuntime, resolvePythonRuntime } from "./runtime";
 
 export type { KernelDisplayOutput, PythonStatusEvent } from "./display";
 export { renderKernelDisplay } from "./display";
@@ -51,7 +51,14 @@ const STARTUP_TIMEOUT_MS = 10_000;
 // kernel's state, so we only kill as a last-resort recovery path.
 const INTERRUPT_ESCALATION_MS = 5_000;
 
+export type KernelRuntimeEnv = Record<string, string | null>;
+
 export interface KernelExecuteOptions {
+	id?: string;
+	/** Runtime working directory applied immediately before this request executes. */
+	cwd?: string;
+	/** Managed runtime environment variables applied immediately before this request executes. */
+	env?: KernelRuntimeEnv;
 	signal?: AbortSignal;
 	onChunk?: (text: string) => Promise<void> | void;
 	onDisplay?: (output: KernelDisplayOutput) => Promise<void> | void;
@@ -99,6 +106,8 @@ export interface PythonKernelAvailability {
 	ok: boolean;
 	pythonPath?: string;
 	reason?: string;
+	/** The probed-working runtime, when one was found. */
+	runtime?: PythonRuntime;
 }
 
 function getRemainingTimeMs(deadlineMs?: number): number | undefined {
@@ -127,19 +136,34 @@ export async function checkPythonKernelAvailability(cwd: string): Promise<Python
 		const settings = await Settings.init();
 		const { env } = settings.getShellConfig();
 		const baseEnv = filterEnv(env);
-		const runtime = resolvePythonRuntime(cwd, baseEnv);
-		const probe = await $`${runtime.pythonPath} -c "import sys;sys.exit(0)"`
-			.quiet()
-			.nothrow()
-			.cwd(cwd)
-			.env(runtime.env);
-		if (probe.exitCode === 0) {
-			return { ok: true, pythonPath: runtime.pythonPath };
+		const runtimes = enumeratePythonRuntimes(cwd, baseEnv);
+		if (runtimes.length === 0) {
+			return { ok: false, reason: "Python executable not found on PATH" };
+		}
+		// Probe each candidate in priority order and use the first that actually
+		// runs. A managed env left behind by a removed `uv` install can exist on
+		// disk yet fail to execute; falling through to the next candidate lets a
+		// working system Python take over instead of failing the whole session.
+		const failures: string[] = [];
+		for (const runtime of runtimes) {
+			try {
+				const probe = await $`${runtime.pythonPath} -c "import sys;sys.exit(0)"`
+					.quiet()
+					.nothrow()
+					.cwd(cwd)
+					.env(runtime.env);
+				if (probe.exitCode === 0) {
+					return { ok: true, pythonPath: runtime.pythonPath, runtime };
+				}
+				failures.push(`${runtime.pythonPath} (exit code ${probe.exitCode})`);
+			} catch (err) {
+				failures.push(`${runtime.pythonPath} (${err instanceof Error ? err.message : String(err)})`);
+			}
 		}
 		return {
 			ok: false,
-			pythonPath: runtime.pythonPath,
-			reason: `Python interpreter at ${runtime.pythonPath} returned exit code ${probe.exitCode}`,
+			pythonPath: runtimes[0].pythonPath,
+			reason: `No working Python interpreter found. Tried: ${failures.join("; ")}`,
 		};
 	} catch (err) {
 		return { ok: false, reason: err instanceof Error ? err.message : String(err) };
@@ -200,10 +224,15 @@ export class PythonKernel {
 			throw new Error(availability.reason ?? "Python kernel unavailable");
 		}
 
-		const settings = await Settings.init();
-		const { env: shellEnv } = settings.getShellConfig();
-		const baseEnv = filterEnv(shellEnv);
-		const runtime = resolvePythonRuntime(options.cwd, baseEnv);
+		// Reuse the interpreter the availability probe selected so the spawned
+		// kernel matches what we verified actually runs. The fallback computes a
+		// runtime only for the skip-check fast path (test runtime /
+		// PI_PYTHON_SKIP_CHECK), where no candidate was probed.
+		let runtime = availability.runtime;
+		if (!runtime) {
+			const { env: shellEnv } = (await Settings.init()).getShellConfig();
+			runtime = resolvePythonRuntime(options.cwd, filterEnv(shellEnv));
+		}
 		const spawnEnv: Record<string, string> = {};
 		for (const [key, value] of Object.entries(runtime.env)) {
 			if (typeof value === "string") spawnEnv[key] = value;
@@ -260,7 +289,7 @@ export class PythonKernel {
 			throw new Error("Python kernel is not running");
 		}
 
-		const msgId = Snowflake.next();
+		const msgId = options?.id ?? Snowflake.next();
 		const { promise, resolve } = Promise.withResolvers<KernelExecuteResult>();
 		const pending: PendingExecution = {
 			resolve,
@@ -345,6 +374,8 @@ export class PythonKernel {
 		const payload = JSON.stringify({
 			id: msgId,
 			code,
+			cwd: options?.cwd,
+			env: options?.env,
 			silent: options?.silent ?? false,
 			storeHistory: options?.storeHistory ?? !(options?.silent ?? false),
 		});

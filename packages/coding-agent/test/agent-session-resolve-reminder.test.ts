@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-ai";
-import { createMockModel, type MockModelHandle } from "@oh-my-pi/pi-ai/providers/mock";
+import { createMockModel, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -18,7 +18,7 @@ import { Snowflake } from "@oh-my-pi/pi-utils";
 describe("AgentSession resolve reminder", () => {
 	let session: AgentSession;
 	let tempDir: string;
-	let mock: MockModelHandle;
+	let mock: MockModel;
 	let authStorage: AuthStorage | undefined;
 
 	beforeEach(async () => {

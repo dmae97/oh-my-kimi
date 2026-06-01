@@ -666,8 +666,19 @@ async def handle_pr_conversation(
         slot_uid=slot_uid,
         natives_cache=sandbox.natives_cache,
     )
-    directive = await _attach_thread(github, directive, repo_full, pr_number, is_pr=True)
-    await run_task(task_kind="handle_comment", inputs=inputs, comment=comment, pr_number=pr_number, directive=directive)
+    thread: tuple[ThreadMessage, ...] = ()
+    if directive is None:
+        thread = await _fetch_thread(github, repo_full, pr_number, is_pr=True)
+    else:
+        directive = await _attach_thread(github, directive, repo_full, pr_number, is_pr=True)
+    await run_task(
+        task_kind="handle_comment",
+        inputs=inputs,
+        comment=comment,
+        pr_number=pr_number,
+        directive=directive,
+        thread=thread,
+    )
 
 
 async def cleanup_workspace(

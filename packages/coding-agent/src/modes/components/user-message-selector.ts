@@ -1,6 +1,15 @@
-import { type Component, Container, matchesKey, Spacer, Text, truncateToWidth } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	Container,
+	extractPrintableText,
+	fuzzyFilter,
+	matchesKey,
+	Spacer,
+	Text,
+	truncateToWidth,
+} from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
-import { matchesSelectCancel } from "../../modes/utils/keybinding-matchers";
+import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
 
 interface UserMessageItem {
@@ -13,6 +22,8 @@ interface UserMessageItem {
  * Custom user message list component with selection
  */
 class UserMessageList implements Component {
+	#filteredMessages: UserMessageItem[];
+	#searchQuery = "";
 	#selectedIndex: number = 0;
 	onSelect?: (entryId: string) => void;
 	onCancel?: () => void;
@@ -20,12 +31,58 @@ class UserMessageList implements Component {
 
 	constructor(private readonly messages: UserMessageItem[]) {
 		// Store messages in chronological order (oldest to newest)
+		this.#filteredMessages = messages;
 		// Start with the last (most recent) message selected
-		this.#selectedIndex = Math.max(0, this.messages.length - 1);
+		this.#selectedIndex = Math.max(0, this.#filteredMessages.length - 1);
 	}
 
 	invalidate(): void {
 		// No cached state to invalidate currently
+	}
+
+	#isSearchEnabled(): boolean {
+		return this.messages.length > this.#maxVisible;
+	}
+
+	#shouldRenderSearchStatus(): boolean {
+		return this.#isSearchEnabled() || this.#searchQuery.length > 0;
+	}
+
+	#renderStatusLine(total: number): string {
+		const selectedCount = total === 0 ? 0 : this.#selectedIndex + 1;
+		const count =
+			this.#searchQuery.trim() && total !== this.messages.length
+				? `${selectedCount}/${total} of ${this.messages.length}`
+				: `${selectedCount}/${total}`;
+		const suffix = this.#searchQuery.trim() ? `  Search: ${this.#searchQuery}` : "  Type to search";
+		return theme.fg("muted", `  (${count})${suffix}`);
+	}
+
+	#setSearchQuery(query: string): void {
+		this.#searchQuery = query;
+		this.#filteredMessages = query.trim()
+			? fuzzyFilter(this.messages, query, message => `${message.text} ${message.timestamp ?? ""}`)
+			: this.messages;
+		this.#selectedIndex = query.trim() ? 0 : Math.max(0, this.#filteredMessages.length - 1);
+	}
+
+	#handleSearchInput(keyData: string): boolean {
+		if (!this.#isSearchEnabled()) return false;
+
+		if (matchesKey(keyData, "backspace")) {
+			if (this.#searchQuery.length === 0) return false;
+			const chars = [...this.#searchQuery];
+			chars.pop();
+			this.#setSearchQuery(chars.join(""));
+			return true;
+		}
+
+		const printableText = extractPrintableText(keyData);
+		if (printableText === undefined) return false;
+		if (this.#searchQuery.length === 0 && printableText.trim().length === 0) return false;
+
+		this.#setSearchQuery(this.#searchQuery + printableText);
+		return true;
 	}
 
 	render(width: number): string[] {
@@ -36,16 +93,19 @@ class UserMessageList implements Component {
 			return lines;
 		}
 
+		const total = this.#filteredMessages.length;
+
 		// Calculate visible range with scrolling
 		const startIndex = Math.max(
 			0,
-			Math.min(this.#selectedIndex - Math.floor(this.#maxVisible / 2), this.messages.length - this.#maxVisible),
+			Math.min(this.#selectedIndex - Math.floor(this.#maxVisible / 2), total - this.#maxVisible),
 		);
-		const endIndex = Math.min(startIndex + this.#maxVisible, this.messages.length);
+		const endIndex = Math.min(startIndex + this.#maxVisible, total);
 
 		// Render visible messages (2 lines per message + blank line)
 		for (let i = startIndex; i < endIndex; i++) {
-			const message = this.messages[i];
+			const message = this.#filteredMessages[i];
+			if (!message) continue;
 			const isSelected = i === this.#selectedIndex;
 
 			// Normalize message to single line
@@ -60,42 +120,57 @@ class UserMessageList implements Component {
 			lines.push(messageLine);
 
 			// Second line: metadata (position in history)
-			const position = i + 1;
+			const position = this.messages.indexOf(message) + 1;
 			const metadata = `  Message ${position} of ${this.messages.length}`;
 			const metadataLine = theme.fg("muted", metadata);
 			lines.push(metadataLine);
 			lines.push(""); // Blank line between messages
 		}
 
-		// Add scroll indicator if needed
-		if (startIndex > 0 || endIndex < this.messages.length) {
-			const scrollInfo = theme.fg("muted", `  (${this.#selectedIndex + 1}/${this.messages.length})`);
-			lines.push(scrollInfo);
+		if (total === 0) {
+			lines.push(theme.fg("muted", "  No matching messages"));
+		}
+
+		// Add scroll/search indicator if needed
+		if (startIndex > 0 || endIndex < total || this.#shouldRenderSearchStatus()) {
+			lines.push(this.#renderStatusLine(total));
 		}
 
 		return lines;
 	}
 
 	handleInput(keyData: string): void {
+		// Escape / cancel
+		if (matchesSelectCancel(keyData)) {
+			if (this.onCancel) {
+				this.onCancel();
+			}
+			return;
+		}
+
+		if (this.#handleSearchInput(keyData)) {
+			return;
+		}
+
 		// Up arrow - go to previous (older) message, wrap to bottom when at top
-		if (matchesKey(keyData, "up")) {
-			this.#selectedIndex = this.#selectedIndex === 0 ? this.messages.length - 1 : this.#selectedIndex - 1;
+		if (matchesSelectUp(keyData)) {
+			if (this.#filteredMessages.length > 0) {
+				this.#selectedIndex =
+					this.#selectedIndex === 0 ? this.#filteredMessages.length - 1 : this.#selectedIndex - 1;
+			}
 		}
 		// Down arrow - go to next (newer) message, wrap to top when at bottom
-		else if (matchesKey(keyData, "down")) {
-			this.#selectedIndex = this.#selectedIndex === this.messages.length - 1 ? 0 : this.#selectedIndex + 1;
+		else if (matchesSelectDown(keyData)) {
+			if (this.#filteredMessages.length > 0) {
+				this.#selectedIndex =
+					this.#selectedIndex === this.#filteredMessages.length - 1 ? 0 : this.#selectedIndex + 1;
+			}
 		}
 		// Enter - select message and branch
 		else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			const selected = this.messages[this.#selectedIndex];
+			const selected = this.#filteredMessages[this.#selectedIndex];
 			if (selected && this.onSelect) {
 				this.onSelect(selected.id);
-			}
-		}
-		// Escape / cancel
-		else if (matchesSelectCancel(keyData)) {
-			if (this.onCancel) {
-				this.onCancel();
 			}
 		}
 	}

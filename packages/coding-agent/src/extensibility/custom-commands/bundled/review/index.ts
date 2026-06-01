@@ -14,6 +14,8 @@
 import { prompt } from "@oh-my-pi/pi-utils";
 import type { CustomCommand, CustomCommandAPI } from "../../../../extensibility/custom-commands/types";
 import type { HookCommandContext } from "../../../../extensibility/hooks/types";
+import reviewCustomRequestTemplate from "../../../../prompts/review-custom-request.md" with { type: "text" };
+import reviewHeadlessRequestTemplate from "../../../../prompts/review-headless-request.md" with { type: "text" };
 import reviewRequestTemplate from "../../../../prompts/review-request.md" with { type: "text" };
 import * as git from "../../../../utils/git";
 
@@ -225,6 +227,14 @@ function buildReviewPrompt(mode: string, stats: DiffStats, rawDiff: string, addi
 	});
 }
 
+function buildCustomReviewPrompt(instructions: string): string {
+	return prompt.render(reviewCustomRequestTemplate, { instructions });
+}
+
+function buildHeadlessReviewPrompt(focus?: string): string {
+	return prompt.render(reviewHeadlessRequestTemplate, { focus });
+}
+
 export class ReviewCommand implements CustomCommand {
 	name = "review";
 	description = "Launch interactive code review";
@@ -233,8 +243,7 @@ export class ReviewCommand implements CustomCommand {
 
 	async execute(args: string[], ctx: HookCommandContext): Promise<string | undefined> {
 		if (!ctx.hasUI) {
-			const base = "Use the Task tool to run the 'reviewer' agent to review recent code changes.";
-			return args.length > 0 ? `${base} Focus: ${args.join(" ")}` : base;
+			return buildHeadlessReviewPrompt(args.length > 0 ? args.join(" ") : undefined);
 		}
 
 		// Inline args act as additional instructions appended to the generated prompt.
@@ -379,7 +388,12 @@ export class ReviewCommand implements CustomCommand {
 
 			case 4: {
 				// Custom instructions - still uses the old approach since user provides context
-				const instructions = await ctx.ui.editor("Enter custom review instructions", "Review the following:\n\n");
+				const instructions = await ctx.ui.editor(
+					"Enter custom review instructions",
+					"Review the following:\n\n",
+					undefined,
+					{ promptStyle: true },
+				);
 				if (!instructions?.trim()) return undefined;
 
 				// For custom, we still try to get current diff for context
@@ -402,17 +416,7 @@ export class ReviewCommand implements CustomCommand {
 					);
 				}
 
-				// No diff available, just pass instructions
-				return `## Code Review Request
-
-### Mode
-Custom review instructions
-
-### Instructions
-
-${instructions}
-
-Use the Task tool with \`agent: "reviewer"\` to execute this review.`;
+				return buildCustomReviewPrompt(instructions);
 			}
 
 			default:

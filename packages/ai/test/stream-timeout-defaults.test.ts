@@ -1,0 +1,230 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import {
+	getOpenAIStreamFirstEventTimeoutMs,
+	getOpenAIStreamIdleTimeoutMs,
+	getStreamFirstEventTimeoutMs,
+	getStreamIdleTimeoutMs,
+	iterateWithIdleTimeout,
+} from "../src/utils/idle-iterator";
+
+/**
+ * Per-provider fallback overrides on the stream-watchdog helpers.
+ *
+ * These are the gear that lets `google-gemini-cli` widen its first-event floor
+ * beyond the 100s global default without forcing every other provider to wait
+ * just as long. Tests pin the precedence contract callers depend on:
+ * caller option > env var > per-provider fallback > base default.
+ */
+
+const ENV_KEYS = [
+	"PI_STREAM_IDLE_TIMEOUT_MS",
+	"PI_OPENAI_STREAM_IDLE_TIMEOUT_MS",
+	"PI_STREAM_FIRST_EVENT_TIMEOUT_MS",
+	"PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS",
+] as const;
+
+const originalEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
+
+beforeEach(() => {
+	for (const key of ENV_KEYS) {
+		originalEnv[key] = Bun.env[key];
+		delete Bun.env[key];
+	}
+});
+
+afterEach(() => {
+	for (const key of ENV_KEYS) {
+		const prior = originalEnv[key];
+		if (prior === undefined) {
+			delete Bun.env[key];
+		} else {
+			Bun.env[key] = prior;
+		}
+	}
+});
+
+describe("getStreamIdleTimeoutMs(fallbackMs)", () => {
+	it("returns the per-provider fallback when env vars are unset", () => {
+		expect(getStreamIdleTimeoutMs(300_000)).toBe(300_000);
+	});
+
+	it("lets PI_STREAM_IDLE_TIMEOUT_MS override the per-provider fallback", () => {
+		Bun.env.PI_STREAM_IDLE_TIMEOUT_MS = "42";
+		expect(getStreamIdleTimeoutMs(300_000)).toBe(42);
+	});
+
+	it("treats PI_STREAM_IDLE_TIMEOUT_MS=0 as a watchdog disable", () => {
+		Bun.env.PI_STREAM_IDLE_TIMEOUT_MS = "0";
+		expect(getStreamIdleTimeoutMs(300_000)).toBeUndefined();
+	});
+});
+
+describe("getOpenAIStreamIdleTimeoutMs(fallbackMs)", () => {
+	it("returns the per-provider fallback when OpenAI env vars are unset", () => {
+		expect(getOpenAIStreamIdleTimeoutMs(600_000)).toBe(600_000);
+	});
+
+	it("lets PI_OPENAI_STREAM_IDLE_TIMEOUT_MS override the fallback before the generic env var", () => {
+		Bun.env.PI_STREAM_IDLE_TIMEOUT_MS = "42";
+		Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = "84";
+		expect(getOpenAIStreamIdleTimeoutMs(600_000)).toBe(84);
+	});
+
+	it("treats PI_OPENAI_STREAM_IDLE_TIMEOUT_MS=0 as a watchdog disable", () => {
+		Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = "0";
+		expect(getOpenAIStreamIdleTimeoutMs(600_000)).toBeUndefined();
+	});
+});
+
+describe("getStreamFirstEventTimeoutMs(idleTimeoutMs, fallbackMs)", () => {
+	it("returns the per-provider fallback when env unset and idle timeout is undefined", () => {
+		expect(getStreamFirstEventTimeoutMs(undefined, 300_000)).toBe(300_000);
+	});
+
+	it("floors the first-event timeout at the per-provider fallback even when idle is shorter", () => {
+		expect(getStreamFirstEventTimeoutMs(50_000, 300_000)).toBe(300_000);
+	});
+
+	it("never undershoots the steady-state idle timeout", () => {
+		expect(getStreamFirstEventTimeoutMs(500_000, 300_000)).toBe(500_000);
+	});
+
+	it("lets PI_STREAM_FIRST_EVENT_TIMEOUT_MS override the per-provider fallback", () => {
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "42";
+		expect(getStreamFirstEventTimeoutMs(undefined, 300_000)).toBe(42);
+	});
+
+	it("treats PI_STREAM_FIRST_EVENT_TIMEOUT_MS=0 as a watchdog disable", () => {
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "0";
+		expect(getStreamFirstEventTimeoutMs(undefined, 300_000)).toBeUndefined();
+	});
+
+	it("falls back to the 100s global default when no fallback or env is provided", () => {
+		expect(getStreamFirstEventTimeoutMs()).toBe(100_000);
+	});
+});
+
+describe("getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs, fallbackMs)", () => {
+	it("floors the first-event budget at the caller-resolved idle when the generic env is lower", () => {
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "20";
+		expect(getOpenAIStreamFirstEventTimeoutMs(1500, 100_000)).toBe(1500);
+	});
+
+	it("honors PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS even when caller pins per-call idle", () => {
+		Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS = "42";
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "20";
+		expect(getOpenAIStreamFirstEventTimeoutMs(5_000, 100_000)).toBe(42);
+	});
+
+	it("treats PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS=0 as an explicit watchdog disable", () => {
+		Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS = "0";
+		expect(getOpenAIStreamFirstEventTimeoutMs(1500, 100_000)).toBeUndefined();
+	});
+
+	it("falls back to the generic first-event env when OpenAI env vars are unset", () => {
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "42";
+		expect(getOpenAIStreamFirstEventTimeoutMs(undefined, 300_000)).toBe(42);
+	});
+
+	it("respects PI_STREAM_FIRST_EVENT_TIMEOUT_MS=0 disable when no OpenAI override is set", () => {
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "0";
+		expect(getOpenAIStreamFirstEventTimeoutMs(1500, 100_000)).toBeUndefined();
+	});
+});
+
+async function expectRejectsWithMessage(run: () => Promise<void>, message: string): Promise<void> {
+	let caught: unknown;
+	try {
+		await run();
+	} catch (err) {
+		caught = err;
+	}
+	expect(caught).toBeInstanceOf(Error);
+	expect((caught as Error).message).toBe(message);
+}
+
+describe("iterateWithIdleTimeout", () => {
+	it("does not reset the first-progress deadline for no-progress items", async () => {
+		const abortController = new AbortController();
+		const abortTimer = setTimeout(() => abortController.abort(new Error("fallback abort")), 150);
+		abortTimer.unref();
+
+		async function* noProgressItems(): AsyncGenerator<{ type: "keepalive" }> {
+			while (true) {
+				await Bun.sleep(2);
+				yield { type: "keepalive" };
+			}
+		}
+
+		try {
+			const run = async (): Promise<void> => {
+				for await (const _item of iterateWithIdleTimeout(noProgressItems(), {
+					firstItemTimeoutMs: 20,
+					idleTimeoutMs: 1_000,
+					errorMessage: "idle timeout",
+					firstItemErrorMessage: "first progress timeout",
+					abortSignal: abortController.signal,
+					isProgressItem: () => false,
+				})) {
+					// Consume until the watchdog fires.
+				}
+			};
+
+			await expectRejectsWithMessage(run, "first progress timeout");
+		} finally {
+			clearTimeout(abortTimer);
+		}
+	});
+
+	it("cleans first-item timers when the source throws before progress", async () => {
+		let firstItemTimedOut = false;
+
+		// biome-ignore lint/correctness/useYield: intentionally yields nothing — the test exercises the path where the source generator throws before its first yield.
+		async function* failingStream(): AsyncGenerator<string> {
+			throw new Error("stream failed");
+		}
+
+		await expectRejectsWithMessage(async () => {
+			for await (const _item of iterateWithIdleTimeout(failingStream(), {
+				firstItemTimeoutMs: 10,
+				errorMessage: "idle timeout",
+				firstItemErrorMessage: "first progress timeout",
+				onFirstItemTimeout: () => {
+					firstItemTimedOut = true;
+				},
+			})) {
+				// Unreachable.
+			}
+		}, "stream failed");
+
+		await Bun.sleep(20);
+		expect(firstItemTimedOut).toBe(false);
+	});
+
+	it("cleans first-item timers when the consumer returns before progress", async () => {
+		let firstItemTimedOut = false;
+
+		async function* noProgressItems(): AsyncGenerator<{ type: "keepalive" }> {
+			while (true) {
+				await Bun.sleep(2);
+				yield { type: "keepalive" };
+			}
+		}
+
+		for await (const _item of iterateWithIdleTimeout(noProgressItems(), {
+			firstItemTimeoutMs: 10,
+			idleTimeoutMs: 1_000,
+			errorMessage: "idle timeout",
+			firstItemErrorMessage: "first progress timeout",
+			onFirstItemTimeout: () => {
+				firstItemTimedOut = true;
+			},
+			isProgressItem: () => false,
+		})) {
+			break;
+		}
+
+		await Bun.sleep(20);
+		expect(firstItemTimedOut).toBe(false);
+	});
+});

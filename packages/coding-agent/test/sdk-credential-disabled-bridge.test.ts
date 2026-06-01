@@ -18,6 +18,10 @@ interface SessionDirs {
 	agentDir: string;
 }
 
+function emptyWorkspaceTree(cwd: string) {
+	return { rootPath: cwd, rendered: ".\n", truncated: false, totalLines: 1, agentsMdFiles: [] };
+}
+
 const expiredOAuth = () =>
 	({
 		type: "oauth" as const,
@@ -27,7 +31,10 @@ const expiredOAuth = () =>
 	}) as const;
 
 const failOAuthRefresh = (): void => {
-	vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async () => {
+	// AuthStorage refreshes through `refreshOAuthToken` before calling
+	// `getOAuthApiKey`. Mock the refresh path so the simulated invalid_grant
+	// failure actually reaches the disable classifier.
+	vi.spyOn(oauthUtils, "refreshOAuthToken").mockImplementation(async () => {
 		throw new Error('HTTP 400 invalid_grant {"error":"invalid_grant"}');
 	});
 };
@@ -92,6 +99,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 		skills: [],
 		contextFiles: [],
 		promptTemplates: [],
+		workspaceTree: emptyWorkspaceTree(dirs.cwd),
 		slashCommands: [],
 		enableMCP: false,
 		enableLsp: false,
@@ -411,6 +419,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 			skills: [],
 			contextFiles: [],
 			promptTemplates: [],
+			workspaceTree: emptyWorkspaceTree(dirs.cwd),
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
@@ -453,6 +462,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 				skills: [],
 				contextFiles: [],
 				promptTemplates: [],
+				workspaceTree: emptyWorkspaceTree(dirs.cwd),
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
@@ -483,6 +493,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 					],
 				]),
 				tools: new Map(),
+				assistantThinkingRenderers: [],
 				messageRenderers: new Map(),
 				commands: new Map(),
 				flags: new Map(),

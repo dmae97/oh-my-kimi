@@ -6,12 +6,12 @@ It does **not** cover TypeScript/JavaScript extension module loading (`extension
 
 ## Implementation files
 
-- [`../src/discovery/gemini.ts`](../packages/coding-agent/src/discovery/gemini.ts)
-- [`../src/discovery/builtin.ts`](../packages/coding-agent/src/discovery/builtin.ts)
-- [`../src/discovery/helpers.ts`](../packages/coding-agent/src/discovery/helpers.ts)
-- [`../src/capability/extension.ts`](../packages/coding-agent/src/capability/extension.ts)
-- [`../src/capability/index.ts`](../packages/coding-agent/src/capability/index.ts)
-- [`../src/extensibility/extensions/loader.ts`](../packages/coding-agent/src/extensibility/extensions/loader.ts)
+- [`packages/coding-agent/src/discovery/gemini.ts`](../packages/coding-agent/src/discovery/gemini.ts)
+- [`packages/coding-agent/src/discovery/builtin.ts`](../packages/coding-agent/src/discovery/builtin.ts)
+- [`packages/coding-agent/src/discovery/helpers.ts`](../packages/coding-agent/src/discovery/helpers.ts)
+- [`packages/coding-agent/src/capability/extension.ts`](../packages/coding-agent/src/capability/extension.ts)
+- [`packages/coding-agent/src/capability/index.ts`](../packages/coding-agent/src/capability/index.ts)
+- [`packages/coding-agent/src/extensibility/extensions/loader.ts`](../packages/coding-agent/src/extensibility/extensions/loader.ts)
 
 ---
 
@@ -169,7 +169,7 @@ For Gemini manifests specifically:
 
 `gemini-extension.json` discovery currently feeds capability metadata (`Extension` items). It does **not** directly load runnable TS/JS extension modules.
 
-Runtime module loading (`discoverAndLoadExtensions()` / `loadExtensions()`) uses `extension-modules` and explicit paths, and currently filters auto-discovered modules to provider `native` only.
+Runtime module loading (`discoverAndLoadExtensions()` / `loadExtensions()`) uses the `extension-module` capability and explicit paths, and currently filters auto-discovered modules to provider `native` only.
 
 Practical implication:
 

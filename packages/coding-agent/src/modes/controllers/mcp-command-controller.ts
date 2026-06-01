@@ -401,12 +401,16 @@ export class MCPCommandController {
 						);
 						return;
 					}
-					const authResult = analyzeAuthError(error as Error);
+					const authResult = analyzeAuthError(error as Error, finalConfig.url);
 					if (authResult.requiresAuth) {
 						let oauth = authResult.authType === "oauth" ? (authResult.oauth ?? null) : null;
 						if (!oauth && finalConfig.url) {
 							try {
-								oauth = await discoverOAuthEndpoints(finalConfig.url, authResult.authServerUrl);
+								oauth = await discoverOAuthEndpoints(
+									finalConfig.url,
+									authResult.authServerUrl,
+									authResult.resourceMetadataUrl,
+								);
 							} catch {
 								// Ignore discovery error and handle below.
 							}
@@ -742,11 +746,11 @@ export class MCPCommandController {
 		}
 
 		// Analyze the connection error to extract OAuth endpoints
-		const authResult = analyzeAuthError(connectionError!);
+		const authResult = analyzeAuthError(connectionError!, "url" in config ? config.url : undefined);
 		let oauth = authResult.authType === "oauth" ? (authResult.oauth ?? null) : null;
 
 		if (!oauth && (config.type === "http" || config.type === "sse") && config.url) {
-			oauth = await discoverOAuthEndpoints(config.url, authResult.authServerUrl);
+			oauth = await discoverOAuthEndpoints(config.url, authResult.authServerUrl, authResult.resourceMetadataUrl);
 		}
 
 		if (!oauth) {
@@ -1421,7 +1425,7 @@ export class MCPCommandController {
 		this.#showMessage(["", theme.fg("muted", `Reconnecting to "${name}"...`), ""].join("\n"));
 
 		try {
-			const connection = await this.ctx.mcpManager.reconnectServer(name);
+			const connection = await this.ctx.mcpManager.reconnectServer(name, { manual: true });
 			if (connection) {
 				// refreshMCPTools re-registers tools and preserves the user's prior
 				// MCP tool selection. No need to call activateDiscoveredMCPTools —

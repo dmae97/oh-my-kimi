@@ -7,10 +7,10 @@
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/ast-grep.md`
 - Key collaborators:
   - `crates/pi-natives/src/ast.rs` — native scan, parse, match engine
-  - `crates/pi-natives/src/language/mod.rs` — language aliases and extension inference
+  - `crates/pi-ast/src/language/mod.rs` — language aliases and extension inference used by the native wrapper.
   - `packages/coding-agent/src/tools/path-utils.ts` — path/glob parsing and multi-path resolution
   - `packages/coding-agent/src/tools/render-utils.ts` — parse-error dedupe and display caps
-  - `packages/coding-agent/src/tools/match-line-format.ts` — anchor-prefixed match rendering
+  - `packages/coding-agent/src/tools/match-line-format.ts` — hashline match rendering
   - `packages/coding-agent/src/utils/file-display-mode.ts` — hashline vs line-number output mode
   - `packages/natives/native/index.d.ts` — JS-visible native binding contract
 
@@ -30,13 +30,13 @@ Pattern grammar and language support exposed to the model:
 - Metavariable names must be uppercase and must stand for whole AST nodes, not partial tokens or string fragments.
 - Reusing the same metavariable requires identical code at each occurrence.
 - Patterns must parse as one valid AST node for the inferred target language.
-- Supported canonical languages come from `SupportLang::all_langs()` in `crates/pi-natives/src/language/mod.rs`: `astro`, `bash`, `c`, `cmake`, `cpp`, `csharp`, `dart`, `clojure`, `css`, `diff`, `dockerfile`, `elixir`, `erlang`, `go`, `graphql`, `haskell`, `hcl`, `html`, `ini`, `java`, `javascript`, `json`, `just`, `julia`, `kotlin`, `lua`, `make`, `markdown`, `nix`, `objc`, `ocaml`, `odin`, `perl`, `php`, `powershell`, `protobuf`, `python`, `r`, `regex`, `ruby`, `rust`, `scala`, `solidity`, `sql`, `starlark`, `svelte`, `swift`, `toml`, `tlaplus`, `tsx`, `typescript`, `verilog`, `vue`, `xml`, `yaml`, `zig`.
+- Supported canonical languages come from `SupportLang::all_langs()` in `crates/pi-ast/src/language/mod.rs`: `astro`, `bash`, `c`, `cmake`, `cpp`, `csharp`, `dart`, `clojure`, `css`, `diff`, `dockerfile`, `elixir`, `erlang`, `go`, `graphql`, `haskell`, `hcl`, `html`, `ini`, `java`, `javascript`, `json`, `just`, `julia`, `kotlin`, `lua`, `make`, `markdown`, `nix`, `objc`, `ocaml`, `odin`, `perl`, `php`, `powershell`, `protobuf`, `python`, `r`, `regex`, `ruby`, `rust`, `scala`, `solidity`, `sql`, `starlark`, `svelte`, `swift`, `toml`, `tlaplus`, `tsx`, `typescript`, `verilog`, `vue`, `xml`, `yaml`, `zig`.
 
 ## Outputs
 - Single-shot tool result.
 - Model-facing `content` is one text block:
   - grouped by file for directory/multi-file searches,
-  - match lines rendered as `*LINE+HASH|text` in hashline mode or `*LINE|text` otherwise,
+  - match lines rendered under `¶PATH#HASH` as `*LINE:text` in hashline mode or `*LINE|text` otherwise,
   - continuation lines for multi-line matches rendered with a leading space,
   - optional `meta: NAME=value` lines when ast-grep captured metavariables.
 - If no matches are found, text is `No matches found` or `No matches found. Parse issues mean the query may be mis-scoped; narrow paths before concluding absence.` plus formatted parse issues.

@@ -1,5 +1,9 @@
 # ERRATA — GPT-5 Harmony-Header Leakage
 
+Historical research note, not a current runtime contract. The statistics below
+come from the named local stats database snapshot, not from checked-in tests or
+runtime code.
+
 ## 1. The problem
 
 OpenAI frames tool calls in the Harmony chat protocol:
@@ -50,22 +54,22 @@ Source: `~/.omp/stats.db` (`ss_tool_calls`, `ss_assistant_msgs`), through
 
 ### 2.1 Rate
 
-| Model            | Leaks in tool args | Calls   | per million |
-|------------------|-------------------:|--------:|------------:|
-| gpt-5.4          | 37                 | 226,957 | 163         |
-| gpt-5.3-codex    | 17                 | 112,243 | 151         |
-| gpt-5.5          | 2                  |  80,750 |  25         |
-| gpt-5.2-codex    | 0                  |    —    |   —         |
+| Model         | Leaks in tool args |   Calls | per million |
+| ------------- | -----------------: | ------: | ----------: |
+| gpt-5.4       |                 37 | 226,957 |         163 |
+| gpt-5.3-codex |                 17 | 112,243 |         151 |
+| gpt-5.5       |                  2 |  80,750 |          25 |
+| gpt-5.2-codex |                  0 |       — |           — |
 
 Plus 15 hits in assistant visible text / thinking blobs.
 
 ### 2.2 Tool distribution
 
-| Tool                | Hits |
-|---------------------|-----:|
-| `edit`              | 38   |
-| `eval`              | 11   |
-| `report_tool_issue` | 3    |
+| Tool                           |   Hits |
+| ------------------------------ | -----: |
+| `edit`                         |     38 |
+| `eval`                         |     11 |
+| `report_tool_issue`            |      3 |
 | `grep`/`read`/`search`/`yield` | 1 each |
 
 Concentrated in tools with free-form (non-JSON-schema) argument formats.
@@ -83,8 +87,8 @@ JUNK_PREFIX  ::= (GLITCH_TOKEN | CHANNEL_WORD | NON_LATIN_RUN | "}" | "】【")+
 records, 39 contain ≥2 markers and 7 contain ≥3 — the model emits
 multiple fake `to=functions.X code …` blocks back-to-back, often with
 fake `code_output\nCell N:\n…` framing between them. Once the
-plain-text scaffolding is in the residual stream, the prefix now *looks
-like* a fresh tool envelope start, so the macro prior over continuations
+plain-text scaffolding is in the residual stream, the prefix now _looks
+like_ a fresh tool envelope start, so the macro prior over continuations
 keeps voting for more scaffolding. Self-amplifying.
 
 ### 2.4 Glitch tokens
@@ -93,13 +97,13 @@ Single-token identifiers in `o200k_base` whose embeddings appear to be
 near-init from underrepresentation in post-training. ASCII residue
 immediately before the marker in the natural corpus:
 
-| Surface string    | Single-token | Token ID | Hits in corpus |
-|-------------------|:-:|---------:|---:|
-| `Japgolly`        | ✅ | 199,745 | 1 |
-| `Jsii`            | ✅ | 114,318 | (subtoken of `Jsii_commentary`) |
-| `Jsii_commentary` | — (3 toks) | — | 2 |
-| `changedFiles`    | — (2 toks) | — | 8 |
-| `RTLU`            | — (2 toks) | — | 3 |
+| Surface string    | Single-token | Token ID |                  Hits in corpus |
+| ----------------- | :----------: | -------: | ------------------------------: |
+| `Japgolly`        |      ✅      |  199,745 |                               1 |
+| `Jsii`            |      ✅      |  114,318 | (subtoken of `Jsii_commentary`) |
+| `Jsii_commentary` |  — (3 toks)  |        — |                               2 |
+| `changedFiles`    |  — (2 toks)  |        — |                               8 |
+| `RTLU`            |  — (2 toks)  |        — |                               3 |
 
 `Japgolly` is in the last 0.13% of the vocabulary — the same family of
 GitHub-corpus residue that produced `SolidGoldMagikarp` in the 2023
@@ -136,17 +140,17 @@ reproduction (§7.3), independent of the prompt's natural language.
 
 The `edit` tool exists in two variants in the corpus:
 
-| Variant                  | Calls | Recovery |
-|--------------------------|------:|----------|
-| Patch-DSL (`§PATH`/anchor/`«»≔` ops) | 27 | **Recoverable** by op-truncation (§3.3) |
-| JSON-schema (`{path,edits:[…]}`)      | 11 | **Not recoverable** — contamination is escaped *inside* JSON strings, parser accepts it cleanly, content would be written verbatim into source files |
+| Variant                              | Calls | Recovery                                                                                                                                             |
+| ------------------------------------ | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Patch-DSL (`§PATH`/anchor/`«»≔` ops) |    27 | **Recoverable** by op-truncation (§3.3)                                                                                                              |
+| JSON-schema (`{path,edits:[…]}`)     |    11 | **Not recoverable** — contamination is escaped _inside_ JSON strings, parser accepts it cleanly, content would be written verbatim into source files |
 
 For Patch-DSL leaks specifically:
 
 - 20/27 cases: contamination on the last input line; nothing follows.
 - 7/27 cases: contamination mid-input; what follows is one of: a
   duplicate replay of an earlier file/anchor, intended content for a
-  *different* tool call (the model started its next call inline), or
+  _different_ tool call (the model started its next call inline), or
   pure hallucination. Post-contamination content is never trustworthy.
 
 ### 2.8 Mechanism (confirmed)
@@ -167,7 +171,7 @@ Step by step:
    merge corpus but barely in LM/RL training, so its **input embedding
    `e_g` ≈ near-init noise of small norm**.
 3. At position t+1, the residual update `h_{t+1} ≈ LN(h_t + e_g + Attn +
-   MLP)` is dominated by the prefix-derived terms; the just-emitted-token
+MLP)` is dominated by the prefix-derived terms; the just-emitted-token
    signal is effectively absent. Generation diversity normally comes
    from `e_x` steering the residual into different sub-regions —
    stripped here.
@@ -179,7 +183,7 @@ Step by step:
 5. The mask zeros the control-token IDs. Mass redistributes onto the
    **next-best continuation**: the un-bracketed surface-form spelling of
    the same protocol (`analysis`, `commentary`, ` to=functions.X`,
-   ` code `). This spelling is unmasked because those characters are
+   `code`). This spelling is unmasked because those characters are
    ordinary tokens.
 6. Once a few tokens of plain-text scaffolding land in the residual
    stream, the prefix now resembles a fresh envelope start. The macro
@@ -194,7 +198,7 @@ explained:**
 
 - **The brackets never appear** (§1, §2.5). The mask is what makes the
   leak land in plain text instead of as a real envelope-close.
-- **Counterintuitive grammar dependency** (§7.4). The leak is *worse* in
+- **Counterintuitive grammar dependency** (§7.4). The leak is _worse_ in
   formats closest to OpenAI's training distribution. Off-distribution
   custom grammars dampen the macro-prior basin; the official
   `*** Begin Patch` format is the strongest collapse target.

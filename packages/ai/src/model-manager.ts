@@ -34,6 +34,8 @@ export interface ModelManagerOptions<TApi extends Api = Api, TModelsDevPayload =
 	cacheDbPath?: string;
 	/** Maximum cache age in milliseconds before considered stale. Default: 24h. */
 	cacheTtlMs?: number;
+	/** When true, a successful dynamic fetch is the complete provider catalog and prunes static-only models. */
+	dynamicModelsAuthoritative?: boolean;
 	/** Optional dynamic endpoint fetcher. */
 	fetchDynamicModels?: () => Promise<readonly Model<TApi>[] | null>;
 	/** Optional models.dev fallback hook. */
@@ -110,30 +112,27 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		options.staticModels ?? getBundledModels(options.providerId as GeneratedProvider),
 	);
 	const cache = readModelCache<TApi>(options.providerId, ttlMs, now, dbPath);
+	const dynamicModelsAuthoritative = options.dynamicModelsAuthoritative ?? false;
+	const staticFingerprint = fingerprintStatic(staticModels, dynamicModelsAuthoritative);
+	const cacheFingerprintMatches = cache?.staticFingerprint === staticFingerprint && staticFingerprint.length > 0;
+	const hasUsableFreshCache = (cache?.fresh ?? false) && (!dynamicModelsAuthoritative || cacheFingerprintMatches);
 	const dynamicFetcher = options.fetchDynamicModels;
 	const hasDynamicFetcher = typeof dynamicFetcher === "function";
-	const hasAuthoritativeCache = (cache?.authoritative ?? false) || !hasDynamicFetcher;
+	const hasAuthoritativeCache = ((cache?.authoritative ?? false) && hasUsableFreshCache) || !hasDynamicFetcher;
 	const cacheAgeMs = cache ? now() - cache.updatedAt : Number.POSITIVE_INFINITY;
 	const shouldFetchFromNetwork = shouldFetchRemoteSources(
 		strategy,
-		cache?.fresh ?? false,
+		hasUsableFreshCache,
 		hasAuthoritativeCache,
 		cacheAgeMs,
 	);
-	const staticFingerprint = fingerprintStatic(staticModels);
 
 	// Cold-start fast path: when a fresh, authoritative cache exists, the network
 	// fetch is skipped, AND the static catalog slice is byte-identical to what
 	// was merged in last time, the cache row IS the authoritative merge result.
 	// Re-running `mergeDynamicModels(static, cache)` would just rebuild the same
 	// objects (~800ms in the steady-state cold-start profile for `omp -p hi`).
-	if (
-		!shouldFetchFromNetwork &&
-		cache?.fresh &&
-		hasAuthoritativeCache &&
-		cache.staticFingerprint === staticFingerprint &&
-		cache.staticFingerprint.length > 0
-	) {
+	if (!shouldFetchFromNetwork && cache?.fresh && hasAuthoritativeCache && cacheFingerprintMatches) {
 		return { models: passModelList<TApi>(cache.models), stale: false };
 	}
 
@@ -142,16 +141,21 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		: [null, null];
 	const modelsDevModels = normalizeModelList<TApi>(fetchedModelsDevModels ?? []);
 	const shouldUseFreshCacheAsAuthoritative =
-		strategy === "online-if-uncached" && (cache?.fresh ?? false) && hasAuthoritativeCache;
+		strategy === "online-if-uncached" && hasUsableFreshCache && hasAuthoritativeCache;
 	const dynamicFetchSucceeded = fetchedDynamicModels !== null;
 	const cacheModels = dynamicFetchSucceeded ? [] : normalizeModelList<TApi>(cache?.models ?? []);
 	const dynamicModels = fetchedDynamicModels ?? [];
 	const mergedWithCache = mergeDynamicModels(mergeModelSources(staticModels, modelsDevModels), cacheModels);
-	const models = mergeDynamicModels(mergedWithCache, dynamicModels);
+	const mergedModels = mergeDynamicModels(mergedWithCache, dynamicModels);
+	const models =
+		dynamicModelsAuthoritative && dynamicFetchSucceeded ? retainModelIds(mergedModels, dynamicModels) : mergedModels;
 	const dynamicAuthoritative = !hasDynamicFetcher || dynamicFetchSucceeded || shouldUseFreshCacheAsAuthoritative;
 	if (shouldFetchFromNetwork) {
 		if (dynamicFetchSucceeded) {
-			const snapshotModels = mergeDynamicModels(mergeModelSources(staticModels, modelsDevModels), dynamicModels);
+			const mergedSnapshot = mergeDynamicModels(mergeModelSources(staticModels, modelsDevModels), dynamicModels);
+			const snapshotModels = dynamicModelsAuthoritative
+				? retainModelIds(mergedSnapshot, dynamicModels)
+				: mergedSnapshot;
 			writeModelCache(options.providerId, now(), snapshotModels, true, staticFingerprint, dbPath);
 		} else {
 			// Dynamic fetch failed — update cache with a non-authoritative snapshot so
@@ -270,22 +274,37 @@ function mergeDynamicModels<TApi extends Api>(
 	return Array.from(merged.values());
 }
 
+function retainModelIds<TApi extends Api>(
+	models: readonly Model<TApi>[],
+	retainedModels: readonly Model<TApi>[],
+): Model<TApi>[] {
+	if (retainedModels.length === 0 || models.length === 0) return [];
+	const retainedIds = new Set(retainedModels.map(model => model.id));
+	return models.filter(model => retainedIds.has(model.id));
+}
+
 /**
  * Stable, low-collision fingerprint of a static catalog slice. Cached by
  * reference so repeat calls in the same process (e.g. multiple cold-start
  * arms calling `resolveProviderModels` with the same `staticModels` array)
  * skip the JSON+hash work after the first call.
  */
+const MODEL_CACHE_FINGERPRINT_VERSION = "merge-v2";
 const kStaticFingerprint = Symbol("model-manager.staticFingerprint");
 type ModelArrayWithFingerprint = readonly Model<Api>[] & { [kStaticFingerprint]?: string };
-function fingerprintStatic<TApi extends Api>(models: readonly Model<TApi>[]): string {
-	if (models.length === 0) return "empty";
+function fingerprintStatic<TApi extends Api>(
+	models: readonly Model<TApi>[],
+	dynamicModelsAuthoritative = false,
+): string {
+	if (models.length === 0) return `${MODEL_CACHE_FINGERPRINT_VERSION}:empty`;
+	if (dynamicModelsAuthoritative)
+		return `${MODEL_CACHE_FINGERPRINT_VERSION}:authoritative:${fingerprintStatic(models)}`;
 	const tagged = models as ModelArrayWithFingerprint;
 	const cached = tagged[kStaticFingerprint];
 	if (cached !== undefined) return cached;
 	// `Bun.hash` returns a `bigint`; base36 keeps the string short for the
 	// SQLite column without sacrificing distinguishability.
-	const fingerprint = Bun.hash(JSON.stringify(models)).toString(36);
+	const fingerprint = `${MODEL_CACHE_FINGERPRINT_VERSION}:${Bun.hash(JSON.stringify(models)).toString(36)}`;
 	tagged[kStaticFingerprint] = fingerprint;
 	return fingerprint;
 }

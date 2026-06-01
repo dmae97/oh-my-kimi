@@ -16,24 +16,26 @@ function normalizeIdleTimeoutMs(value: string | undefined, fallback: number): nu
  *
  * `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS` is accepted as a backward-compatible alias.
  * Set `PI_STREAM_IDLE_TIMEOUT_MS=0` to disable the watchdog.
+ *
+ * Providers that legitimately stream much slower than the global default can pass
+ * `fallbackMs` to widen the floor used when neither env var nor caller option is set.
+ * Caller options still take precedence; env overrides still trump the fallback.
  */
-export function getStreamIdleTimeoutMs(): number | undefined {
-	return normalizeIdleTimeoutMs(
-		$env.PI_STREAM_IDLE_TIMEOUT_MS ?? $env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS,
-		DEFAULT_STREAM_IDLE_TIMEOUT_MS,
-	);
+export function getStreamIdleTimeoutMs(fallbackMs: number = DEFAULT_STREAM_IDLE_TIMEOUT_MS): number | undefined {
+	return normalizeIdleTimeoutMs($env.PI_STREAM_IDLE_TIMEOUT_MS ?? $env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS, fallbackMs);
 }
 
 /**
  * Returns the idle timeout used for OpenAI-family streaming transports.
  *
+ * `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS` takes precedence over the generic
+ * `PI_STREAM_IDLE_TIMEOUT_MS` because some deployments tune OpenAI-compatible
+ * backends separately from Anthropic/Gemini-style transports.
+ *
  * Set `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS=0` to disable the watchdog.
  */
-export function getOpenAIStreamIdleTimeoutMs(): number | undefined {
-	return normalizeIdleTimeoutMs(
-		$env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS ?? $env.PI_STREAM_IDLE_TIMEOUT_MS,
-		DEFAULT_STREAM_IDLE_TIMEOUT_MS,
-	);
+export function getOpenAIStreamIdleTimeoutMs(fallbackMs: number = DEFAULT_STREAM_IDLE_TIMEOUT_MS): number | undefined {
+	return normalizeIdleTimeoutMs($env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS ?? $env.PI_STREAM_IDLE_TIMEOUT_MS, fallbackMs);
 }
 
 /**
@@ -42,33 +44,48 @@ export function getOpenAIStreamIdleTimeoutMs(): number | undefined {
  * so the default never undershoots the steady-state idle timeout.
  *
  * Set `PI_STREAM_FIRST_EVENT_TIMEOUT_MS=0` to disable the watchdog.
+ *
+ * Providers whose first response can legitimately take longer (heavy reasoning,
+ * slow cold-start proxies) can pass `fallbackMs` to widen the floor used when
+ * neither env var nor caller option is set. Caller options still take precedence;
+ * env overrides still trump the fallback.
  */
-export function getStreamFirstEventTimeoutMs(idleTimeoutMs?: number): number | undefined {
-	const fallback =
-		idleTimeoutMs === undefined
-			? DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS
-			: Math.max(DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS, idleTimeoutMs);
+export function getStreamFirstEventTimeoutMs(
+	idleTimeoutMs?: number,
+	fallbackMs: number = DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS,
+): number | undefined {
+	const fallback = idleTimeoutMs === undefined ? fallbackMs : Math.max(fallbackMs, idleTimeoutMs);
 	return normalizeIdleTimeoutMs($env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS, fallback);
 }
 
-export type Watchdog = NodeJS.Timeout | undefined;
-
-const dummyWatchdog = setTimeout(() => {}, 1);
-clearTimeout(dummyWatchdog);
-
 /**
- * Starts a watchdog that aborts a request if no first stream event arrives in time.
- * Call `markFirstEventReceived()` as soon as the first event is observed.
+ * Returns the first-event timeout used for OpenAI-family streaming transports.
+ *
+ * Precedence: explicit `PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS` (including a
+ * `"0"` disable) wins outright. Otherwise the resolved idle (caller-supplied
+ * `idleTimeoutMs` — which itself already encompasses per-call
+ * `streamIdleTimeoutMs` or `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS` resolved
+ * upstream) floors the first-event budget so slow local OpenAI-compatible
+ * servers are not undercut by a shorter `PI_STREAM_FIRST_EVENT_TIMEOUT_MS`
+ * or the global default during prompt processing.
+ *
+ * Returns `undefined` when an explicit env knob disables the watchdog.
  */
-export function createWatchdog(timeoutMs: number | undefined, onTimeout: () => void): Watchdog {
-	if (timeoutMs !== undefined && timeoutMs > 0) {
-		return setTimeout(onTimeout, timeoutMs);
+export function getOpenAIStreamFirstEventTimeoutMs(
+	idleTimeoutMs?: number,
+	fallbackMs: number = DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS,
+): number | undefined {
+	const openAIFirstEventRaw = $env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+	if (openAIFirstEventRaw !== undefined) {
+		return normalizeIdleTimeoutMs(openAIFirstEventRaw, fallbackMs);
 	}
-	return undefined;
+	const base = normalizeIdleTimeoutMs($env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS, fallbackMs);
+	if (base === undefined) return undefined;
+	if (idleTimeoutMs === undefined || idleTimeoutMs <= 0) return base;
+	return Math.max(base, idleTimeoutMs);
 }
 
 export interface IdleTimeoutIteratorOptions {
-	watchdog?: Watchdog;
 	idleTimeoutMs?: number;
 	firstItemTimeoutMs?: number;
 	errorMessage: string;
@@ -102,8 +119,9 @@ export async function* iterateWithIdleTimeout<T>(
 	iterable: AsyncIterable<T>,
 	options: IdleTimeoutIteratorOptions,
 ): AsyncGenerator<T> {
-	let watchdog = options.watchdog;
 	const firstItemTimeoutMs = options.firstItemTimeoutMs ?? options.idleTimeoutMs;
+	const firstItemDeadlineMs =
+		firstItemTimeoutMs !== undefined && firstItemTimeoutMs > 0 ? Date.now() + firstItemTimeoutMs : undefined;
 	const abortSignal = options.abortSignal;
 	const iterator = iterable[Symbol.asyncIterator]();
 
@@ -127,8 +145,6 @@ export async function* iterateWithIdleTimeout<T>(
 
 	let awaitingFirstItem = true;
 	const markFirstItemReceived = () => {
-		watchdog && clearTimeout(watchdog);
-		watchdog = undefined;
 		awaitingFirstItem = false;
 	};
 	const isProgressItem = (item: T): boolean => {
@@ -148,7 +164,14 @@ export async function* iterateWithIdleTimeout<T>(
 	while (true) {
 		let activeTimeoutMs: number | undefined;
 		if (awaitingFirstItem) {
-			activeTimeoutMs = firstItemTimeoutMs;
+			if (firstItemDeadlineMs !== undefined) {
+				activeTimeoutMs = firstItemDeadlineMs - Date.now();
+				if (activeTimeoutMs <= 0) {
+					options.onFirstItemTimeout?.();
+					closeIterator();
+					throw new Error(options.firstItemErrorMessage ?? options.errorMessage);
+				}
+			}
 		} else if (options.idleTimeoutMs !== undefined && options.idleTimeoutMs > 0) {
 			activeTimeoutMs = options.idleTimeoutMs - (Date.now() - lastProgressAt);
 			if (activeTimeoutMs <= 0) {

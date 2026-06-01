@@ -1,5 +1,4 @@
-import { getAgentDbPath } from "@oh-my-pi/pi-utils";
-import { AgentStorage } from "../../../session/agent-storage";
+import type { AgentStorage } from "../../../session/agent-storage";
 import { SearchProviderError, type SearchProviderId, type SearchSource } from "../../../web/search/types";
 import { dateToAgeSeconds } from "../utils";
 
@@ -7,17 +6,24 @@ import { dateToAgeSeconds } from "../utils";
  * Search for an API credential by checking an env-derived key first,
  * then falling back to agent.db stored credentials for the given providers.
  *
+ * The caller MUST supply an open {@link AgentStorage} handle so the helper
+ * never reaches out to global filesystem state; both the unified web_search
+ * chain and one-shot CLI calls open storage exactly once and thread it
+ * through every provider.
+ *
+ * @param storage - Open agent storage handle
  * @param envKey - Pre-resolved environment variable value (or null)
  * @param storageProviders - Provider names to look up in AgentStorage
  */
-export async function findCredential(
+export function findCredential(
+	storage: AgentStorage | null | undefined,
 	envKey: string | null | undefined,
 	...storageProviders: string[]
-): Promise<string | null> {
+): string | null {
 	if (envKey) return envKey;
+	if (!storage) return null;
 
 	try {
-		const storage = await AgentStorage.open(getAgentDbPath());
 		for (const provider of storageProviders) {
 			const records = storage.listAuthCredentials(provider);
 			for (const record of records) {
@@ -35,18 +41,6 @@ export async function findCredential(
 	}
 
 	return null;
-}
-
-/**
- * Probe whether a provider's API key lookup resolves to a truthy value.
- * Swallows lookup errors and reports unavailability.
- */
-export async function isApiKeyAvailable(findApiKey: () => string | null | Promise<string | null>) {
-	try {
-		return !!(await findApiKey());
-	} catch {
-		return false;
-	}
 }
 
 /**

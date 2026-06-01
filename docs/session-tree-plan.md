@@ -134,6 +134,7 @@ Tree selector behavior (`tree-selector.ts`):
 
 - Flattens tree for navigation, keeps active-path highlighting, and prioritizes displaying the active branch first.
 - Supports filter modes: `default`, `no-tools`, `user-only`, `labeled-only`, `all`.
+  - `default` suppresses `label`, `custom`, `model_change`, and `thinking_level_change`; it is not a complete "hide all internal entries" filter.
 - Supports free-text search over rendered semantic content.
 - `Shift+L` opens inline label editing and writes via `appendLabelChange`.
 
@@ -197,7 +198,7 @@ Naming source:
   - trims whitespace
   - capitalizes the first character
   - returns `""` for whitespace-only / separator-only input
-- The humanized name is applied with `sessionManager.setSessionName(name, "auto")`. Because `setSessionName` is a no-op when `titleSource === "user"`, the seeded name never overrides a name the user already chose (e.g. on the `preserveContext` path where the session continues with prior naming).
+- The humanized name is applied only when the current session has no name (`!sessionManager.getSessionName()`). It then calls `sessionManager.setSessionName(name, "auto")`, which also refuses to overwrite user-named sessions.
 - On successful apply, the terminal title (`setSessionTerminalTitle`) and the editor border color are refreshed to reflect the new name.
 
 Examples (from `humanizePlanTitle`):

@@ -10,7 +10,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger, pathIsWithin } from "@oh-my-pi/pi-utils";
 
 import { cachePlugin } from "./cache";
 import { classifySource, fetchMarketplace, parseMarketplaceCatalog, promoteCloneToCache } from "./fetcher";
@@ -290,6 +290,7 @@ export class MarketplaceManager {
 		try {
 			version = await this.#resolvePluginVersion(pluginEntry, sourcePath);
 			cachePath = await cachePlugin(sourcePath, this.#opts.pluginsCacheDir, marketplace, name, version);
+			await this.#writeEmbeddedLspConfig(pluginEntry, cachePath);
 		} finally {
 			// Clean up temp clone dirs created by resolvePluginSource; leave user-supplied local dirs alone
 			if (tempCloneRoot) {
@@ -340,6 +341,24 @@ export class MarketplaceManager {
 
 		logger.debug("Plugin installed", { pluginId, version, cachePath });
 		return installedEntry;
+	}
+
+	async #writeEmbeddedLspConfig(entry: MarketplacePluginEntry, cachePath: string): Promise<void> {
+		const lspServers = entry.lspServers;
+		if (!lspServers) return;
+
+		const targetPath = path.join(cachePath, ".lsp.json");
+		if (typeof lspServers === "string") {
+			const sourcePath = path.resolve(cachePath, lspServers);
+			if (!pathIsWithin(cachePath, sourcePath)) {
+				throw new Error(`Plugin "${entry.name}" lspServers path escapes the plugin directory`);
+			}
+			const content = await Bun.file(sourcePath).text();
+			await Bun.write(targetPath, content);
+			return;
+		}
+
+		await Bun.write(targetPath, `${JSON.stringify({ servers: lspServers }, null, 2)}\n`);
 	}
 
 	/**

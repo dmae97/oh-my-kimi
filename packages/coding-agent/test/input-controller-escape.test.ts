@@ -1,11 +1,12 @@
-import { describe, expect, it, vi } from "bun:test";
+import { describe, expect, it, type Mock, vi } from "bun:test";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext, SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 
+type Spy = Mock<(...args: unknown[]) => unknown>;
+type StartPendingSubmissionSpy = Mock<InteractiveModeContext["startPendingSubmission"]>;
 type FakeEditor = {
 	onEscape?: () => void;
 	onSubmit?: (text: string) => Promise<void>;
-	shouldBypassAutocompleteOnEscape?: () => boolean;
 	onClear?: () => void;
 	onExit?: () => void;
 	onSuspend?: () => void;
@@ -15,7 +16,6 @@ type FakeEditor = {
 	onSelectModelTemporary?: () => void;
 	onSelectModel?: () => void;
 	onHistorySearch?: () => void;
-	onShowHotkeys?: () => void;
 	onPasteImage?: () => void;
 	onCopyPrompt?: () => void;
 	onExpandTools?: () => void;
@@ -47,20 +47,22 @@ function createContext(): {
 	ctx: InteractiveModeContext;
 	editor: FakeEditor;
 	spies: {
-		abort: ReturnType<typeof vi.fn>;
-		abortBash: ReturnType<typeof vi.fn>;
-		abortEval: ReturnType<typeof vi.fn>;
-		addMessageToChat: ReturnType<typeof vi.fn>;
-		cancelPendingSubmission: ReturnType<typeof vi.fn>;
-		clearQueue: ReturnType<typeof vi.fn>;
-		ensureLoadingAnimation: ReturnType<typeof vi.fn>;
-		handleBtwCommand: ReturnType<typeof vi.fn>;
-		handleBtwEscape: ReturnType<typeof vi.fn>;
-		hasActiveBtw: ReturnType<typeof vi.fn>;
-		onInputCallback: ReturnType<typeof vi.fn>;
-		prompt: ReturnType<typeof vi.fn>;
-		requestRender: ReturnType<typeof vi.fn>;
-		startPendingSubmission: ReturnType<typeof vi.fn>;
+		abort: Spy;
+		abortBash: Spy;
+		abortEval: Spy;
+		addMessageToChat: Spy;
+		cancelPendingSubmission: Spy;
+		clearQueue: Spy;
+		ensureLoadingAnimation: Spy;
+		handleBtwCommand: Spy;
+		handleBtwEscape: Spy;
+		handleOmfgEscape: Spy;
+		hasActiveBtw: Spy;
+		hasActiveOmfg: Spy;
+		onInputCallback: Spy;
+		prompt: Spy;
+		requestRender: Spy;
+		startPendingSubmission: StartPendingSubmissionSpy;
 	};
 } {
 	let editorText = "";
@@ -76,6 +78,8 @@ function createContext(): {
 	const handleBtwCommand = vi.fn(async () => {});
 	const handleBtwEscape = vi.fn(() => true);
 	const hasActiveBtw = vi.fn(() => false);
+	const handleOmfgEscape = vi.fn(() => true);
+	const hasActiveOmfg = vi.fn(() => false);
 	const startPendingSubmission = vi.fn((input: { text: string; images?: InteractiveModeContext["pendingImages"] }) => {
 		ensureLoadingAnimation();
 		return createSubmission(input);
@@ -149,6 +153,8 @@ function createContext(): {
 		handleBtwEscape,
 		handleBtwCommand,
 		hasActiveBtw,
+		handleOmfgEscape,
+		hasActiveOmfg,
 		showTreeSelector: vi.fn(),
 		showUserMessageSelector: vi.fn(),
 		showSessionSelector: vi.fn(),
@@ -168,6 +174,8 @@ function createContext(): {
 			handleBtwCommand,
 			handleBtwEscape,
 			hasActiveBtw,
+			handleOmfgEscape,
+			hasActiveOmfg,
 			onInputCallback,
 			prompt,
 			requestRender,
@@ -191,7 +199,6 @@ describe("InputController escape behavior", () => {
 
 		expect(spies.startPendingSubmission).toHaveBeenCalledWith({ text: "hello", images: undefined });
 		expect(spies.onInputCallback).toHaveBeenCalledWith(submission);
-		expect(editor.shouldBypassAutocompleteOnEscape?.()).toBe(true);
 
 		editor.onEscape?.();
 		expect(spies.cancelPendingSubmission).toHaveBeenCalledTimes(1);
@@ -260,7 +267,6 @@ describe("InputController escape behavior", () => {
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
-		expect(editor.shouldBypassAutocompleteOnEscape?.()).toBe(true);
 		editor.onEscape?.();
 
 		expect(spies.handleBtwEscape).toHaveBeenCalledTimes(1);
@@ -274,7 +280,6 @@ describe("InputController escape behavior", () => {
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
-		expect(editor.shouldBypassAutocompleteOnEscape?.()).toBe(true);
 		editor.onEscape?.();
 
 		expect(spies.handleBtwEscape).toHaveBeenCalledTimes(1);
@@ -290,7 +295,6 @@ describe("InputController escape behavior", () => {
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
-		expect(editor.shouldBypassAutocompleteOnEscape?.()).toBe(true);
 		editor.onEscape?.();
 
 		expect(spies.handleBtwEscape).toHaveBeenCalledTimes(1);

@@ -115,12 +115,14 @@ export type KnownProvider =
 	| "cursor"
 	| "deepseek"
 	| "xai"
+	| "xai-oauth"
 	| "groq"
 	| "cerebras"
 	| "openrouter"
 	| "kilo"
 	| "vercel-ai-gateway"
 	| "zai"
+	| "zhipu-coding-plan"
 	| "mistral"
 	| "minimax"
 	| "opencode-go"
@@ -140,6 +142,8 @@ export type KnownProvider =
 	| "venice"
 	| "vllm"
 	| "xiaomi"
+	| "wafer-pass"
+	| "wafer-serverless"
 	| "zenmux"
 	| "lm-studio";
 export type Provider = KnownProvider | string;
@@ -148,6 +152,12 @@ import type { Effort } from "./model-thinking";
 
 /** Token budgets for each thinking level (token-based providers only) */
 export type ThinkingBudgets = { [key in Effort]?: number };
+
+export interface TokenTaskBudget {
+	type: "tokens";
+	total: number;
+	remaining?: number;
+}
 
 export type MessageAttribution = "user" | "agent";
 
@@ -316,11 +326,22 @@ export interface StreamOptions {
 	 */
 	metadata?: Record<string, unknown>;
 	/**
-	 * Optional session identifier for providers that support session-based caching.
-	 * Providers can use this to enable prompt caching, request routing, or other
-	 * session-aware features. Ignored by providers that don't support it.
+	 * Advisory token budget for a full agentic loop. Anthropic encodes this as
+	 * `output_config.task_budget` with the `task-budgets-2026-03-13` beta header.
+	 */
+	taskBudget?: TokenTaskBudget;
+	/**
+	 * Optional session identifier for providers that support session-based
+	 * routing, request affinity, or transport reuse. Providers may also use this
+	 * as the prompt-cache key when `promptCacheKey` is not set.
 	 */
 	sessionId?: string;
+	/**
+	 * Optional prompt-cache identity. When set, OpenAI Responses-compatible
+	 * providers use this for `prompt_cache_key` while keeping `sessionId` for
+	 * provider routing / conversation headers.
+	 */
+	promptCacheKey?: string;
 	/**
 	 * Provider-scoped mutable state store for this agent session.
 	 * Providers can use this to persist transport/session state between turns.
@@ -336,20 +357,42 @@ export interface StreamOptions {
 	 */
 	onResponse?: (response: ProviderResponseMetadata, model?: Model<Api>) => void | Promise<void>;
 	/**
-	 * Optional callback for raw Server-Sent Events as they arrive from HTTP streaming providers.
+	 * Optional callback for raw Server-Sent Events as they arrive from HTTP streaming providers,
+	 * plus synthesized SSE-shaped frames for the Codex WebSocket transport (one synthetic frame
+	 * per JSON request/response message). WebSocket frames are tagged with a leading
+	 * `: ws → <type>` (outbound) or `: ws ← <type>` (inbound) comment line in `RawSseEvent.raw`.
 	 *
 	 * Diagnostic only: provider implementations must ignore callback failures and must not
 	 * let observers alter stream contents.
 	 */
 	onSseEvent?: (event: RawSseEvent, model?: Model<Api>) => void;
 	/**
-	 * Optional override for the first streamed event watchdog in milliseconds.
-	 * Set to 0 to disable the first-event watchdog for this request.
+	 * Optional override for the first-event watchdog in milliseconds. Built-in
+	 * providers apply this budget twice when they can: once to the underlying
+	 * SDK/request while waiting for the HTTP stream object to exist, then again
+	 * in the iterator while waiting for the first semantic stream event. Set to
+	 * `0` to disable both layers for this request. After the first semantic
+	 * event arrives, `streamIdleTimeoutMs` governs inter-event stalls. Falls
+	 * back to `PI_STREAM_FIRST_EVENT_TIMEOUT_MS` and then to a 100s default.
+	 * OpenAI-family transports additionally honor
+	 * `PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS` as the most-specific override and
+	 * floor the first-event budget at the resolved idle (per-call
+	 * `streamIdleTimeoutMs` or `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS`) so slow local
+	 * OpenAI-compatible servers are not undercut during prompt processing.
+	 *
+	 * Iterator-level honored by: every built-in provider (via the lazy-stream
+	 * forwarder in `register-builtins`). SDK-request honored by:
+	 * `openai-completions`, `openai-responses`, `azure-openai-responses`,
+	 * `anthropic-messages`.
 	 */
 	streamFirstEventTimeoutMs?: number;
 	/**
-	 * Optional override for the maximum idle gap between streamed events in milliseconds.
-	 * Set to 0 to disable the inter-event idle watchdog for this request.
+	 * Optional override for the maximum idle gap between streamed events in
+	 * milliseconds. Once the first event arrives, this guards against silent
+	 * mid-stream stalls (broker dies, half-open socket, model produces no real
+	 * progress for too long). Set to `0` to disable. Falls back to
+	 * `PI_STREAM_IDLE_TIMEOUT_MS` (alias: `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS`)
+	 * and then to a 120s default.
 	 */
 	streamIdleTimeoutMs?: number;
 	/**
@@ -404,6 +447,16 @@ export interface SimpleStreamOptions extends StreamOptions {
 	syntheticApiFormat?: "openai" | "anthropic";
 	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
 	preferWebsockets?: boolean;
+	/**
+	 * OpenRouter routing-variant suffix automatically appended to model IDs when
+	 * the request targets OpenRouter (`model.provider === "openrouter"`). Common
+	 * values: `"nitro"` (throughput), `"floor"` (cheapest), `"online"` (web
+	 * search plugin), `"exacto"` (cherry-picked high-quality providers, only
+	 * defined for some models). Ignored when the resolved model id already
+	 * contains a `:<variant>` suffix (e.g. the user typed `:nitro` explicitly
+	 * or the catalog entry already names the variant).
+	 */
+	openrouterVariant?: string;
 }
 
 // Generic StreamFunction with typed options
@@ -791,6 +844,13 @@ export interface AnthropicCompat {
 	supportsEagerToolInputStreaming?: boolean;
 	/** Whether long prompt-cache retention (`ttl: "1h"`) is supported. Default: true for canonical Anthropic API. */
 	supportsLongCacheRetention?: boolean;
+	/**
+	 * Whether mid-conversation `role: "system"` messages are accepted in the
+	 * `messages` array (Claude Opus 4.8+ on the first-party Claude API and
+	 * Claude Platform on AWS). When unset, auto-detected from the model id and
+	 * base URL. Not available on Bedrock, Vertex AI, or Microsoft Foundry.
+	 */
+	supportsMidConversationSystem?: boolean;
 }
 
 /**

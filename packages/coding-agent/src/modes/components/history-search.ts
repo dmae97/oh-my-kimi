@@ -11,7 +11,7 @@ import {
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
-import { matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
+import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
 import type { HistoryEntry, HistoryStorage } from "../../session/history-storage";
 import { DynamicBorder } from "./dynamic-border";
 
@@ -116,14 +116,14 @@ export class HistorySearchComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			if (this.#results.length === 0) return;
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
 			this.#resultsList.setSelectedIndex(this.#selectedIndex);
 			return;
 		}
 
-		if (matchesKey(keyData, "down")) {
+		if (matchesSelectDown(keyData)) {
 			if (this.#results.length === 0) return;
 			this.#selectedIndex = Math.min(this.#results.length - 1, this.#selectedIndex + 1);
 			this.#resultsList.setSelectedIndex(this.#selectedIndex);

@@ -105,7 +105,7 @@ export async function acquireTab(
 					await runInTabWithSnapshot(
 						name,
 						{
-							code: `await tab.goto(${JSON.stringify(opts.url)}, { waitUntil: ${JSON.stringify(opts.waitUntil ?? "networkidle2")} });`,
+							code: `await tab.goto(${JSON.stringify(opts.url)}, { waitUntil: ${JSON.stringify(opts.waitUntil ?? "load")} });`,
 							timeoutMs: opts.timeoutMs,
 							signal: opts.signal,
 						},

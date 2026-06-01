@@ -16,7 +16,23 @@ import type {
 	MCPTransport,
 } from "../../mcp/types";
 import { toJsonRpcError } from "../../mcp/types";
+import { createMCPTimeout, getNeverAbortSignal, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 
+const HTTP_SSE_CONNECT_TIMEOUT_MS = 1_000;
+/**
+ * Best-effort startup deadline for the optional Streamable HTTP GET SSE listener.
+ *
+ * Returns `0` (disabled) when the operator has explicitly disabled MCP client-side
+ * timeouts via `timeout: 0` or `OMP_MCP_TIMEOUT_MS=0`, mirroring the rest of the
+ * MCP timeout surface. Otherwise caps the wait at one second and scales below
+ * short request timeouts so connect-time never exceeds the request budget.
+ */
+export function resolveSSEConnectTimeoutMs(configTimeout?: number): number {
+	const requestTimeout = resolveMCPTimeoutMs(configTimeout);
+	if (!isMCPTimeoutEnabled(requestTimeout)) return 0;
+	const boundedTimeout = Math.min(HTTP_SSE_CONNECT_TIMEOUT_MS, Math.floor(requestTimeout / 4));
+	return Math.max(1, boundedTimeout);
+}
 /**
  * HTTP transport for MCP servers.
  * Uses POST for requests, supports SSE responses.
@@ -72,6 +88,15 @@ export class HttpTransport implements MCPTransport {
 		}
 
 		let response: Response;
+		let timedOut = false;
+		const startupTimeoutMs = resolveSSEConnectTimeoutMs(this.config.timeout);
+		const timeoutId =
+			startupTimeoutMs > 0
+				? setTimeout(() => {
+						timedOut = true;
+						this.#sseConnection?.abort();
+					}, startupTimeoutMs)
+				: null;
 		try {
 			response = await fetch(this.config.url, {
 				method: "GET",
@@ -80,13 +105,16 @@ export class HttpTransport implements MCPTransport {
 			});
 		} catch (error) {
 			this.#sseConnection = null;
-			if (error instanceof Error && error.name !== "AbortError") {
+			if (error instanceof Error && error.name !== "AbortError" && !timedOut) {
 				this.onError?.(error);
 			}
 			return;
+		} finally {
+			if (timeoutId !== null) clearTimeout(timeoutId);
 		}
 
 		if (response.status === 405 || !response.ok || !response.body) {
+			await response.body?.cancel();
 			this.#sseConnection = null;
 			return;
 		}
@@ -180,23 +208,18 @@ export class HttpTransport implements MCPTransport {
 			headers["Mcp-Session-Id"] = this.#sessionId;
 		}
 
-		// Create AbortController for timeout
-		const timeout = this.config.timeout ?? 30000;
-		const abortController = new AbortController();
-		const timeoutId = setTimeout(() => abortController.abort(), timeout);
-		const operationSignal = options?.signal
-			? AbortSignal.any([options.signal, abortController.signal])
-			: abortController.signal;
+		const timeout = resolveMCPTimeoutMs(this.config.timeout);
+		const operation = createMCPTimeout(timeout, options?.signal);
 
 		try {
 			const response = await fetch(this.config.url, {
 				method: "POST",
 				headers,
 				body: JSON.stringify(body),
-				signal: operationSignal,
+				signal: operation.signal,
 			});
 
-			clearTimeout(timeoutId);
+			operation.clear();
 
 			// Check for session ID in response
 			const newSessionId = response.headers.get("Mcp-Session-Id");
@@ -234,11 +257,8 @@ export class HttpTransport implements MCPTransport {
 
 			return result.result as T;
 		} catch (error) {
-			clearTimeout(timeoutId);
-			if (error instanceof Error && error.name === "AbortError") {
-				if (options?.signal?.aborted) {
-					throw error;
-				}
+			operation.clear();
+			if (operation.isTimeoutAbort(error)) {
 				throw new Error(`Request timeout after ${timeout}ms`);
 			}
 			throw error;
@@ -250,12 +270,9 @@ export class HttpTransport implements MCPTransport {
 			throw new Error("No response body");
 		}
 
-		const timeout = this.config.timeout ?? 30000;
-		const abortController = new AbortController();
-		const timeoutId = setTimeout(() => abortController.abort(), timeout);
-		const operationSignal = options?.signal
-			? AbortSignal.any([options.signal, abortController.signal])
-			: abortController.signal;
+		const timeout = resolveMCPTimeoutMs(this.config.timeout);
+		const operation = createMCPTimeout(timeout, options?.signal);
+		const signal = operation.signal ?? getNeverAbortSignal();
 
 		const { promise, resolve, reject } = Promise.withResolvers<T>();
 		let captured = false;
@@ -268,7 +285,7 @@ export class HttpTransport implements MCPTransport {
 		// controller", so we must not exit the loop early.
 		const drain = async (): Promise<void> => {
 			try {
-				for await (const raw of readSseJson<JsonRpcMessage | JsonRpcMessage[]>(response.body!, operationSignal)) {
+				for await (const raw of readSseJson<JsonRpcMessage | JsonRpcMessage[]>(response.body!, signal)) {
 					const messages = Array.isArray(raw) ? raw : [raw];
 					for (const message of messages) {
 						if (
@@ -278,7 +295,7 @@ export class HttpTransport implements MCPTransport {
 							("result" in message || "error" in message)
 						) {
 							captured = true;
-							clearTimeout(timeoutId);
+							operation.clear();
 							if (message.error) {
 								reject(new Error(`MCP error ${message.error.code}: ${message.error.message}`));
 							} else {
@@ -295,17 +312,13 @@ export class HttpTransport implements MCPTransport {
 				}
 			} catch (error) {
 				if (captured) return;
-				if (error instanceof Error && error.name === "AbortError") {
-					if (options?.signal?.aborted) {
-						reject(error);
-					} else {
-						reject(new Error(`SSE response timeout after ${timeout}ms`));
-					}
+				if (operation.isTimeoutAbort(error)) {
+					reject(new Error(`SSE response timeout after ${timeout}ms`));
 				} else {
 					reject(error as Error);
 				}
 			} finally {
-				clearTimeout(timeoutId);
+				operation.clear();
 			}
 		};
 
@@ -340,13 +353,16 @@ export class HttpTransport implements MCPTransport {
 		if (this.#sessionId) {
 			headers["Mcp-Session-Id"] = this.#sessionId;
 		}
+		const timeout = resolveMCPTimeoutMs(this.config.timeout);
+		let operation = createMCPTimeout(timeout);
 		try {
 			const resp = await fetch(this.config.url, {
 				method: "POST",
 				headers,
 				body: JSON.stringify(body),
-				signal: AbortSignal.timeout(this.config.timeout ?? 30000),
+				signal: operation.signal,
 			});
+			operation.clear();
 			// Retry once on auth failure if onAuthError is wired
 			if (this.onAuthError && (resp.status === 401 || resp.status === 403)) {
 				await resp.body?.cancel();
@@ -355,18 +371,21 @@ export class HttpTransport implements MCPTransport {
 					this.config.headers ??= {};
 					Object.assign(this.config.headers, newHeaders);
 					Object.assign(headers, newHeaders);
+					operation = createMCPTimeout(timeout);
 					const retry = await fetch(this.config.url, {
 						method: "POST",
 						headers,
 						body: JSON.stringify(body),
-						signal: AbortSignal.timeout(this.config.timeout ?? 30000),
+						signal: operation.signal,
 					});
+					operation.clear();
 					await retry.body?.cancel();
 					return;
 				}
 			}
 			await resp.body?.cancel();
 		} catch {
+			operation.clear();
 			// Best-effort response delivery — server may have disconnected
 		}
 	}
@@ -392,20 +411,18 @@ export class HttpTransport implements MCPTransport {
 			headers["Mcp-Session-Id"] = this.#sessionId;
 		}
 
-		// Create AbortController for timeout
-		const timeout = this.config.timeout ?? 30000;
-		const abortController = new AbortController();
-		const timeoutId = setTimeout(() => abortController.abort(), timeout);
+		const timeout = resolveMCPTimeoutMs(this.config.timeout);
+		const operation = createMCPTimeout(timeout);
 
 		try {
 			const response = await fetch(this.config.url, {
 				method: "POST",
 				headers,
 				body: JSON.stringify(body),
-				signal: abortController.signal,
+				signal: operation.signal,
 			});
 
-			clearTimeout(timeoutId);
+			operation.clear();
 
 			// 202 Accepted is success for notifications
 			if (!response.ok && response.status !== 202) {
@@ -417,15 +434,20 @@ export class HttpTransport implements MCPTransport {
 			// on the notification response (MCP Streamable HTTP spec). Read them.
 			const contentType = response.headers.get("Content-Type") ?? "";
 			if (contentType.includes("text/event-stream") && response.body) {
-				// Use the SSE connection's signal if available, otherwise read until stream ends
-				const signal = this.#sseConnection?.signal ?? AbortSignal.timeout(this.config.timeout ?? 30000);
-				void this.#readSSEStream(response.body, signal);
+				// Use the SSE connection's signal if available; otherwise keep the existing finite read timeout.
+				if (this.#sseConnection) {
+					void this.#readSSEStream(response.body, this.#sseConnection.signal);
+				} else {
+					const readOperation = createMCPTimeout(timeout);
+					const signal = readOperation.signal ?? getNeverAbortSignal();
+					void this.#readSSEStream(response.body, signal).finally(() => readOperation.clear());
+				}
 			} else {
 				await response.body?.cancel();
 			}
 		} catch (error) {
-			clearTimeout(timeoutId);
-			if (error instanceof Error && error.name === "AbortError") {
+			operation.clear();
+			if (operation.isTimeoutAbort(error)) {
 				throw new Error(`Notify timeout after ${timeout}ms`);
 			}
 			throw error;
@@ -444,8 +466,9 @@ export class HttpTransport implements MCPTransport {
 
 		// Send session termination if we have a session
 		if (this.#sessionId) {
+			const timeout = resolveMCPTimeoutMs(this.config.timeout);
+			const operation = createMCPTimeout(timeout);
 			try {
-				const timeout = this.config.timeout ?? 30000;
 				const headers: Record<string, string> = {
 					...this.config.headers,
 					"Mcp-Session-Id": this.#sessionId,
@@ -454,9 +477,11 @@ export class HttpTransport implements MCPTransport {
 				await fetch(this.config.url, {
 					method: "DELETE",
 					headers,
-					signal: AbortSignal.timeout(timeout),
+					signal: operation.signal,
 				});
+				operation.clear();
 			} catch {
+				operation.clear();
 				// Ignore termination errors
 			}
 			this.#sessionId = null;

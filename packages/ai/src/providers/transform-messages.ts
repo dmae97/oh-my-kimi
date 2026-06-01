@@ -11,10 +11,25 @@ import type {
 } from "../types";
 
 const enum ToolCallStatus {
-	/** Tool call has received a result (real or synthetic for orphan) */
+	/** A tool result has already been emitted for this tool call; later duplicates must be skipped. */
 	Resolved = 1,
-	/** Tool call was from an aborted message; synthetic result injected, skip real results */
+	/** A synthetic aborted result was emitted; later real results must be skipped. */
 	Aborted = 2,
+}
+
+function shouldDropTruncatedThinkingOnlyAssistant(msg: AssistantMessage): boolean {
+	const isTruncatedStop = msg.stopReason === "length" || msg.stopReason === "error" || msg.stopReason === "aborted";
+	return isTruncatedStop && !msg.content.some(block => block.type === "toolCall" || block.type === "text");
+}
+
+function getLatestSurvivingAssistantIndex(messages: readonly Message[]): number {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const msg = messages[index]!;
+		if (msg.role === "assistant" && !shouldDropTruncatedThinkingOnlyAssistant(msg)) {
+			return index;
+		}
+	}
+	return -1;
 }
 
 /**
@@ -35,7 +50,7 @@ export function transformMessages<TApi extends Api>(
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
 
-	const latestAssistantIndex = messages.findLastIndex(msg => msg.role === "assistant");
+	const latestSurvivingAssistantIndex = getLatestSurvivingAssistantIndex(messages);
 	// First pass: transform messages (thinking blocks, tool call ID normalization)
 	const transformed = messages.map((msg, index) => {
 		// User and developer messages pass through unchanged
@@ -61,20 +76,36 @@ export function transformMessages<TApi extends Api>(
 				assistantMsg.model === model.id;
 
 			const mustPreserveLatestAnthropicThinking =
-				index === latestAssistantIndex &&
+				index === latestSurvivingAssistantIndex &&
 				model.api === "anthropic-messages" &&
 				assistantMsg.api === "anthropic-messages";
 			// Aborted/errored messages may have partially-streamed thinking signatures.
 			// A partial signature is invalid and will be rejected by the API, so we must
 			// strip signatures from thinking blocks in these messages.
-			const hasInvalidSignatures = assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error";
+			//
+			// Abandoned tool-use turns get the same treatment once they are no longer
+			// the latest assistant message. When a turn carries toolCall blocks but did
+			// NOT request tool execution (stopReason !== "toolUse" — e.g.
+			// adaptive-thinking Opus emitting tool calls and then ending the turn on
+			// `end_turn`/`stop`), the agent loop pairs those calls with placeholder
+			// tool_results to keep the tool_use/tool_result contract valid. Historical
+			// abandoned turns cannot safely replay their end_turn-bound signatures in
+			// that continuation, so stripping downgrades them to plain text downstream.
+			// Latest abandoned turns are exempt because Anthropic requires thinking
+			// blocks from its most recent response to remain byte-for-byte unmodified.
+			const invalidStopReason = assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error";
+			const abandonedToolUse =
+				!invalidStopReason &&
+				assistantMsg.stopReason !== "toolUse" &&
+				assistantMsg.content.some(b => b.type === "toolCall");
+			const hasInvalidSignatures = invalidStopReason || abandonedToolUse;
 
 			const transformedContent = assistantMsg.content.flatMap(block => {
 				if (block.type === "thinking") {
-					// Strip signature from aborted/errored messages — it's likely incomplete
+					// Strip untrustworthy signatures so the encoder can downgrade to text.
 					const sanitized =
 						hasInvalidSignatures && block.thinkingSignature ? { ...block, thinkingSignature: undefined } : block;
-					if (mustPreserveLatestAnthropicThinking) return sanitized;
+					if (mustPreserveLatestAnthropicThinking) return abandonedToolUse ? block : sanitized;
 					// For same model: keep thinking blocks with signatures (needed for replay)
 					// even if the thinking text is empty (OpenAI encrypted reasoning)
 					if (isSameModel && sanitized.thinkingSignature) return sanitized;
@@ -131,9 +162,12 @@ export function transformMessages<TApi extends Api>(
 		}
 		return msg;
 	});
-	const realToolResultIds = new Set(
-		transformed.filter((msg): msg is ToolResultMessage => msg.role === "toolResult").map(msg => msg.toolCallId),
-	);
+	const realToolResultsById = new Map<string, ToolResultMessage>();
+	for (const msg of transformed) {
+		if (msg.role === "toolResult" && !realToolResultsById.has(msg.toolCallId)) {
+			realToolResultsById.set(msg.toolCallId, msg);
+		}
+	}
 
 	// Anthropic rejects `tool_result` blocks whose `tool_use_id` does not appear in a prior
 	// `tool_use` block. After handoff/compaction folds an assistant turn into a summary
@@ -148,29 +182,35 @@ export function transformMessages<TApi extends Api>(
 		}
 	}
 
-	// Second pass: insert synthetic empty tool results for orphaned tool calls
-	// and preserve aborted/errored tool results when they were already persisted.
+	// Second pass: ensure each surviving assistant tool call is immediately
+	// followed by exactly one corresponding tool result.
 	const result: Message[] = [];
 	let pendingToolCalls: ToolCall[] = [];
 	let pendingAbortedToolCalls = new Map<string, ToolCall>();
 	let pendingAbortedTimestamp: number | undefined;
-	// Track tool call status: whether resolved (has result) or aborted (synthetic result injected, skip later real results)
+	// Track which tool calls already have an emitted result so delayed/duplicate
+	// toolResult messages cannot create a second provider-visible result.
 	const toolCallStatus = new Map<string, ToolCallStatus>();
 
 	const flushPendingToolCalls = (timestamp: number): void => {
 		if (pendingToolCalls.length === 0) return;
 		for (const tc of pendingToolCalls) {
-			if (!toolCallStatus.has(tc.id) && !realToolResultIds.has(tc.id)) {
-				result.push({
-					role: "toolResult",
-					toolCallId: tc.id,
-					toolName: tc.name,
-					content: [{ type: "text", text: "No result provided" }],
-					isError: true,
-					timestamp,
-				} as ToolResultMessage);
+			if (toolCallStatus.has(tc.id)) continue;
+			const realToolResult = realToolResultsById.get(tc.id);
+			if (realToolResult) {
+				result.push(realToolResult);
 				toolCallStatus.set(tc.id, ToolCallStatus.Resolved);
+				continue;
 			}
+			result.push({
+				role: "toolResult",
+				toolCallId: tc.id,
+				toolName: tc.name,
+				content: [{ type: "text", text: "No result provided" }],
+				isError: true,
+				timestamp,
+			} as ToolResultMessage);
+			toolCallStatus.set(tc.id, ToolCallStatus.Resolved);
 		}
 		pendingToolCalls = [];
 	};
@@ -178,17 +218,22 @@ export function transformMessages<TApi extends Api>(
 	const flushPendingAbortedToolCalls = (): void => {
 		if (pendingAbortedTimestamp === undefined) return;
 		for (const tc of pendingAbortedToolCalls.values()) {
-			if (!toolCallStatus.has(tc.id)) {
-				result.push({
-					role: "toolResult",
-					toolCallId: tc.id,
-					toolName: tc.name,
-					content: [{ type: "text", text: "aborted" }],
-					isError: true,
-					timestamp: pendingAbortedTimestamp,
-				} as ToolResultMessage);
-				toolCallStatus.set(tc.id, ToolCallStatus.Aborted);
+			if (toolCallStatus.has(tc.id)) continue;
+			const realToolResult = realToolResultsById.get(tc.id);
+			if (realToolResult) {
+				result.push(realToolResult);
+				toolCallStatus.set(tc.id, ToolCallStatus.Resolved);
+				continue;
 			}
+			result.push({
+				role: "toolResult",
+				toolCallId: tc.id,
+				toolName: tc.name,
+				content: [{ type: "text", text: "aborted" }],
+				isError: true,
+				timestamp: pendingAbortedTimestamp,
+			} as ToolResultMessage);
+			toolCallStatus.set(tc.id, ToolCallStatus.Aborted);
 		}
 		result.push({
 			role: "developer",
@@ -208,11 +253,35 @@ export function transformMessages<TApi extends Api>(
 			flushPendingAbortedToolCalls();
 
 			const assistantMsg = msg as AssistantMessage;
+
+			// Drop assistant turns that carry no actionable content (no `text`, no `toolCall`)
+			// AND were terminated by a truncating stop reason (`length` / `error` / `aborted`).
+			// These are produced when the provider returns `stop_reason: "max_tokens"` (or a
+			// stream error) mid-thinking, leaving a `[thinking]`-only message with a valid
+			// signature but nothing for the next turn to anchor on. Keeping it creates
+			// back-to-back assistant turns once the next response lands, which Anthropic
+			// rejects with "messages.X.content.Y: `thinking` blocks in the latest assistant
+			// message cannot be modified".
+			//
+			// `stopReason: "stop"` thinking-only messages are intentionally preserved: they
+			// represent reasoning-only assistant turns used for replay round-trips
+			// (OpenAI completions `reasoning_text`, Google signed thought parts).
+			const originalMsg = messages[i]!;
+			if (originalMsg.role === "assistant" && shouldDropTruncatedThinkingOnlyAssistant(originalMsg)) {
+				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+					// Still arm the aborted-turn note so downstream guidance fires.
+					pendingAbortedToolCalls = new Map();
+					pendingAbortedTimestamp = assistantMsg.timestamp;
+				}
+				continue;
+			}
+
 			const toolCalls = assistantMsg.content.filter(b => b.type === "toolCall") as ToolCall[];
 
 			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-				// Keep the assistant message with tool calls intact. If real tool results follow, preserve them;
-				// otherwise synthesize aborted results before the next turn boundary.
+				// Keep the assistant message with tool calls intact. Real tool results are
+				// emitted immediately if available; otherwise synthesize aborted results
+				// before the next turn boundary.
 				result.push(msg);
 				pendingAbortedToolCalls = new Map(toolCalls.map(toolCall => [toolCall.id, toolCall] as const));
 				pendingAbortedTimestamp = assistantMsg.timestamp;
@@ -225,6 +294,8 @@ export function transformMessages<TApi extends Api>(
 
 			result.push(msg);
 		} else if (msg.role === "toolResult") {
+			if (toolCallStatus.has(msg.toolCallId)) continue;
+
 			if (pendingAbortedToolCalls.has(msg.toolCallId)) {
 				pendingAbortedToolCalls.delete(msg.toolCallId);
 				toolCallStatus.set(msg.toolCallId, ToolCallStatus.Resolved);
@@ -232,7 +303,11 @@ export function transformMessages<TApi extends Api>(
 				continue;
 			}
 
-			if (toolCallStatus.get(msg.toolCallId) === ToolCallStatus.Aborted) continue;
+			if (pendingToolCalls.some(tc => tc.id === msg.toolCallId)) {
+				toolCallStatus.set(msg.toolCallId, ToolCallStatus.Resolved);
+				result.push(msg);
+				continue;
+			}
 
 			if (!validToolUseIds.has(msg.toolCallId)) {
 				// Orphan `tool_result`: the originating `tool_use` is not present in the
@@ -247,16 +322,13 @@ export function transformMessages<TApi extends Api>(
 				// * Anthropic requires the next message after an assistant `tool_use`
 				//   to be the matching `tool_result`. Inserting a developer message
 				//   would break that contiguity.
-				// * `flushPendingAbortedToolCalls` synthesizes "aborted" results
-				//   without checking whether a real result lands later in history
-				//   (unlike `flushPendingToolCalls`, which is gated by
-				//   `realToolResultIds`). Calling it here would convert a legitimate
-				//   later `tool_result` into a synthetic "aborted" one via the
-				//   `ToolCallStatus.Aborted` skip-guard.
+				// * Flushing pending aborted calls here would wedge synthetic results
+				//   between the assistant turn and a real result that may still arrive
+				//   inside the current contiguous result window.
 				//
-				// Drop the orphan silently in that case; the upcoming real
-				// `tool_result` will land normally on the next iteration.
-				if (pendingToolCalls.length > 0 || pendingAbortedToolCalls.size > 0) {
+				// Drop the orphan silently in that case; the pending calls will be
+				// resolved in their own contiguous result window or at the next boundary.
+				if (pendingToolCalls.some(tc => !toolCallStatus.has(tc.id)) || pendingAbortedToolCalls.size > 0) {
 					continue;
 				}
 				// No pending tool-call window: safe to preserve the text payload so the
@@ -286,11 +358,12 @@ export function transformMessages<TApi extends Api>(
 						timestamp: messageTimestamp,
 					} as UserMessage);
 				}
-				continue;
 			}
 
-			toolCallStatus.set(msg.toolCallId, ToolCallStatus.Resolved);
-			result.push(msg);
+			// The matching tool_use exists elsewhere, but this result is not in
+			// the currently open result window. Emitting it here would break the
+			// provider invariant; the first real result is pulled into the correct
+			// slot by the pending-call flush instead.
 		} else if (msg.role === "user" || msg.role === "developer") {
 			flushPendingToolCalls(messageTimestamp);
 			flushPendingAbortedToolCalls();

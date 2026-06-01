@@ -147,7 +147,7 @@ async execute(toolCallId, params, onUpdate, ctx, signal) {
 
 Custom tools and extension tools can return components from:
 
-- `renderCall(args, theme)`
+- `renderCall(args, options, theme)`
 - `renderResult(result, options, theme, args?)`
 
 `options` currently includes:

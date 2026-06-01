@@ -2,13 +2,54 @@ import { type Component, matchesKey, padding, replaceTabs, truncateToWidth, visi
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { theme } from "../modes/theme/theme";
 import { copyToClipboard } from "../utils/clipboard";
-import { formatRawSseIsoTime, type RawSseDebugBuffer, rawSseRecordLines } from "./raw-sse-buffer";
+import {
+	formatRawSseIsoTime,
+	type RawSseDebugBuffer,
+	type RawSseDebugRecord,
+	rawSseRecordLines,
+} from "./raw-sse-buffer";
 
 const MIN_VIEWER_WIDTH = 20;
 const VIEWER_FRAME_LINES = 5;
+// `data:` lines below this width render fine on a single row; anything wider gets pretty-printed
+// across multiple `data:` lines so streamed JSON blobs stop getting clipped by `truncateToWidth`.
+const PRETTY_PRINT_DATA_THRESHOLD = 100;
 
 function sanitizeFrameLine(line: string, width: number): string {
 	return truncateToWidth(replaceTabs(sanitizeText(line)), width);
+}
+
+// Walks the SSE wire lines and replaces single-line `data: <json>` payloads with
+// multi-line `data: <indented-json>` entries when the JSON is wide enough to clip.
+// Multi-line `data:` is still valid SSE (the spec joins lines with `\n`), so the
+// transformed view round-trips back to the same event when copied.
+/** @internal Exported for tests. */
+export function expandPrettyDataLines(raw: readonly string[]): string[] {
+	const out: string[] = [];
+	for (const line of raw) {
+		if (!line.startsWith("data: ") || line.length <= PRETTY_PRINT_DATA_THRESHOLD) {
+			out.push(line);
+			continue;
+		}
+		const body = line.slice("data: ".length);
+		const trimmed = body.trim();
+		if (trimmed.length === 0 || (trimmed[0] !== "{" && trimmed[0] !== "[")) {
+			out.push(line);
+			continue;
+		}
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(trimmed);
+		} catch {
+			out.push(line);
+			continue;
+		}
+		const pretty = JSON.stringify(parsed, null, 2);
+		for (const prettyLine of pretty.split("\n")) {
+			out.push(`data: ${prettyLine}`);
+		}
+	}
+	return out;
 }
 
 export interface RawSseViewerOptions {
@@ -30,6 +71,12 @@ export class RawSseViewerComponent implements Component {
 	#followTail = true;
 	#lastRenderWidth = MIN_VIEWER_WIDTH;
 	#statusMessage: string | undefined;
+	// Pretty-printed wire lines keyed by `record.sequence`. Pretty-printing is
+	// the JSON.parse + JSON.stringify per `data:` line, so we cache the result —
+	// the render path runs on every keypress and from `#maxScrollOffset()`.
+	// Sequences are monotonic; we prune entries below the oldest live record
+	// after each render so the cache tracks the buffer's eviction window.
+	readonly #prettyLinesCache = new Map<number, string[]>();
 
 	constructor(options: RawSseViewerOptions) {
 		this.#buffer = options.buffer;
@@ -131,8 +178,9 @@ export class RawSseViewerComponent implements Component {
 			);
 			lines.push("");
 		}
+		const firstSequence = snapshot.records[0]?.sequence;
 		for (const record of snapshot.records) {
-			for (const line of rawSseRecordLines(record)) {
+			for (const line of this.#prettyLinesFor(record)) {
 				lines.push(sanitizeFrameLine(line, innerWidth));
 			}
 			if (record.kind === "event" && record.truncated) {
@@ -140,14 +188,31 @@ export class RawSseViewerComponent implements Component {
 			}
 			lines.push("");
 		}
+		if (firstSequence !== undefined) this.#pruneCache(firstSequence);
 		return lines;
+	}
+
+	#prettyLinesFor(record: RawSseDebugRecord): string[] {
+		const cached = this.#prettyLinesCache.get(record.sequence);
+		if (cached) return cached;
+		const expanded = expandPrettyDataLines(rawSseRecordLines(record));
+		this.#prettyLinesCache.set(record.sequence, expanded);
+		return expanded;
+	}
+
+	#pruneCache(firstSequence: number): void {
+		// Bounded by the buffer eviction rate; with `MAX_RAW_SSE_EVENTS = 1000`
+		// this rarely runs and only walks freshly-evicted entries.
+		for (const key of this.#prettyLinesCache.keys()) {
+			if (key < firstSequence) this.#prettyLinesCache.delete(key);
+		}
 	}
 
 	#summaryText(): string {
 		const snapshot = this.#buffer.snapshot();
 		const last = snapshot.lastUpdatedAt ? ` last=${formatRawSseIsoTime(snapshot.lastUpdatedAt)}` : "";
 		const follow = this.#followTail ? "follow:on" : "follow:off";
-		return ` # raw SSE | events=${snapshot.totalEvents} records=${snapshot.records.length}${last} | ${follow} | Esc back Ctrl+C copy End follow`;
+		return ` # raw provider stream (SSE + WS) | events=${snapshot.totalEvents} records=${snapshot.records.length}${last} | ${follow} | Esc back Ctrl+C copy End follow`;
 	}
 
 	#statusText(): string {

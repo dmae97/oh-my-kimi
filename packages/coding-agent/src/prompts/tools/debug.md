@@ -17,6 +17,7 @@ Use for launching or attaching debuggers, setting breakpoints, stepping through 
 - Some adapters require a launched session to receive `configurationDone` before the target actually runs; if the tool says configuration is pending, set breakpoints and then call `continue`.
 - Adapter availability depends on local binaries. Common built-ins: `gdb`, `lldb-dap`, `python -m debugpy.adapter`, `dlv dap`.
 - `program` must be an executable file or debug target, not a directory or interpreter name that resolves to a workspace directory.
+- Python debugging requires `debugpy`; install with `pip install debugpy` if the adapter is unavailable.
 </caution>
 
 <examples>

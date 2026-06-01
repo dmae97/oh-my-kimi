@@ -1,11 +1,45 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
-import http2 from "node:http2";
-import { buildCursorSystemPromptJsons, resolveExecHandler, streamCursor } from "../src/providers/cursor";
+import { describe, expect, it } from "bun:test";
+import {
+	buildCursorHistoryForTest,
+	buildCursorSystemPromptJsons,
+	resolveExecHandler,
+	streamCursor,
+} from "../src/providers/cursor";
+import type { AgentRunRequest } from "../src/providers/cursor/gen/agent_pb";
 import type { Context, Model } from "../src/types";
 
-afterEach(() => {
-	vi.restoreAllMocks();
-});
+const cursorModel: Model<"cursor-agent"> = {
+	id: "cursor-composer-2.5",
+	name: "Cursor Composer 2.5",
+	api: "cursor-agent",
+	provider: "cursor",
+	baseUrl: "",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1,
+	maxTokens: 1,
+};
+
+function captureCursorPayload(context: Context): Promise<AgentRunRequest> {
+	const { promise, resolve, reject } = Promise.withResolvers<AgentRunRequest>();
+	streamCursor(cursorModel, context, {
+		apiKey: "test-token",
+		onPayload: payload => {
+			if (isAgentRunRequest(payload)) {
+				resolve(payload);
+			} else {
+				reject(new Error("Cursor payload was not an AgentRunRequest"));
+			}
+			throw new Error("stop after capturing Cursor payload");
+		},
+	});
+	return promise;
+}
+
+function isAgentRunRequest(payload: unknown): payload is AgentRunRequest {
+	return !!payload && typeof payload === "object" && "$typeName" in payload;
+}
 
 describe("Cursor resolveExecHandler execHandlers binding", () => {
 	it("invokes handler with correct this when passed as bound method", async () => {
@@ -71,28 +105,33 @@ describe("Cursor system prompt encoding", () => {
 		expect(JSON.parse(jsons[0])).toEqual({ role: "system", content: "You are a helpful assistant." });
 	});
 });
-describe("Cursor stream request assembly", () => {
+
+describe("Cursor request action encoding", () => {
+	it("uses a resume action for empty user turns", async () => {
+		const payload = await captureCursorPayload({
+			messages: [{ role: "user", content: "   ", timestamp: 0 }],
+		});
+
+		expect(payload.action?.action.case).toBe("resumeAction");
+	});
+
+	it("uses a user message action for non-empty user turns", async () => {
+		const payload = await captureCursorPayload({
+			messages: [{ role: "user", content: "continue", timestamp: 0 }],
+		});
+
+		expect(payload.action?.action.case).toBe("userMessageAction");
+	});
+
 	it("uses the latest user message when a tool result is the final context message", async () => {
-		const model: Model<"cursor-agent"> = {
-			id: "cursor-test",
-			name: "Cursor Test",
-			api: "cursor-agent",
-			provider: "cursor",
-			baseUrl: "https://cursor.invalid",
-			reasoning: false,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128_000,
-			maxTokens: 8_000,
-		};
-		const context: Context = {
+		const payload = await captureCursorPayload({
 			messages: [
 				{ role: "user", content: "Use the read tool.", timestamp: 1 },
 				{
 					role: "assistant",
 					api: "cursor-agent",
 					provider: "cursor",
-					model: "cursor-test",
+					model: "cursor-composer-2.5",
 					content: [
 						{
 							type: "toolCall",
@@ -121,20 +160,91 @@ describe("Cursor stream request assembly", () => {
 					timestamp: 3,
 				},
 			],
-		};
-
-		const connect = vi.spyOn(http2, "connect").mockImplementation(() => {
-			throw new Error("request built");
 		});
 
-		const result = await streamCursor(model, context, {
-			apiKey: "cursor-test-token",
-			sessionId: "cursor-last-user-regression",
-		}).result();
+		if (payload.action?.action.case !== "userMessageAction") {
+			throw new Error("Expected Cursor userMessageAction");
+		}
+		expect(payload.action.action.value.userMessage?.text).toBe("Use the read tool.");
+	});
 
-		expect(connect).toHaveBeenCalledTimes(1);
-		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("request built");
-		expect(result.errorMessage).not.toContain("Cannot send empty user message");
+	it("uses a user message action with selected context for image-only user turns", async () => {
+		const imageData = "aW1hZ2U=";
+		const payload = await captureCursorPayload({
+			messages: [
+				{
+					role: "user",
+					content: [{ type: "image", data: imageData, mimeType: "image/png" }],
+					timestamp: 0,
+				},
+			],
+		});
+
+		if (payload.action?.action.case !== "userMessageAction") {
+			throw new Error("Expected Cursor userMessageAction");
+		}
+		const userMessage = payload.action.action.value.userMessage;
+		expect(userMessage?.text).toBe("");
+		expect(userMessage?.selectedContext?.selectedImages).toHaveLength(1);
+		const selectedImage = userMessage?.selectedContext?.selectedImages[0];
+		expect(selectedImage?.mimeType).toBe("image/png");
+		if (selectedImage?.dataOrBlobId.case !== "data") {
+			throw new Error("Expected Cursor selected image data");
+		}
+		expect(Array.from(selectedImage.dataOrBlobId.value)).toEqual(Array.from(Buffer.from(imageData, "base64")));
+	});
+});
+
+describe("Cursor history encoding", () => {
+	it("preserves image-only user turns in root prompt history and conversation turns", () => {
+		const imageData = "aW1hZ2U=";
+		const history = buildCursorHistoryForTest([
+			{
+				role: "user",
+				content: [{ type: "image", data: imageData, mimeType: "image/png" }],
+				timestamp: 0,
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "I can see it." }],
+				api: "cursor-agent",
+				provider: "cursor",
+				model: "cursor-composer-2.5",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: 0,
+			},
+			{ role: "user", content: "what is in the image?", timestamp: 0 },
+		]);
+
+		expect(history.rootPromptMessagesJson).toEqual([
+			{
+				role: "user",
+				content: [{ type: "image", image: imageData, mediaType: "image/png" }],
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "I can see it." }],
+			},
+		]);
+		expect(history.turnUserMessagesJson).toEqual([
+			expect.objectContaining({
+				selectedContext: {
+					selectedImages: [
+						expect.objectContaining({
+							mimeType: "image/png",
+							data: imageData,
+						}),
+					],
+				},
+			}),
+		]);
 	});
 });

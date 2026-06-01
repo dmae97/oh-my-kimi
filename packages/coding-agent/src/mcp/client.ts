@@ -6,6 +6,7 @@
 import * as path from "node:path";
 import * as url from "node:url";
 import { getProjectDir, logger, withTimeout } from "@oh-my-pi/pi-utils";
+import { describeMCPTimeout, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "./timeout";
 import { createHttpTransport } from "./transports/http";
 import { createStdioTransport } from "./transports/stdio";
 import type {
@@ -38,9 +39,6 @@ import type {
 
 /** MCP protocol version we support */
 const PROTOCOL_VERSION = "2025-03-26";
-
-/** Default connection timeout in ms */
-const CONNECTION_TIMEOUT_MS = 30_000;
 
 /** Client info sent during initialization */
 const CLIENT_INFO = {
@@ -128,7 +126,8 @@ async function initializeConnection(
 
 /**
  * Connect to an MCP server.
- * Has a 30 second timeout to prevent blocking startup.
+ * Has a 30 second timeout by default to prevent blocking startup.
+ * Set OMP_MCP_TIMEOUT_MS=0 to disable MCP client-side timeouts.
  */
 export async function connectToServer(
 	name: string,
@@ -139,7 +138,7 @@ export async function connectToServer(
 		onRequest?: (method: string, params: unknown) => Promise<unknown>;
 	},
 ): Promise<MCPServerConnection> {
-	const timeoutMs = config.timeout ?? CONNECTION_TIMEOUT_MS;
+	const timeoutMs = resolveMCPTimeoutMs(config.timeout);
 	let transport: MCPTransport | undefined;
 
 	const connect = async (): Promise<MCPServerConnection> => {
@@ -180,10 +179,13 @@ export async function connectToServer(
 	};
 
 	try {
+		if (!isMCPTimeoutEnabled(timeoutMs)) {
+			return await connect();
+		}
 		return await withTimeout(
 			connect(),
 			timeoutMs,
-			`Connection to MCP server "${name}" timed out after ${timeoutMs}ms`,
+			`Connection to MCP server "${name}" timed out after ${describeMCPTimeout(timeoutMs)}`,
 			options?.signal,
 		);
 	} catch (error) {

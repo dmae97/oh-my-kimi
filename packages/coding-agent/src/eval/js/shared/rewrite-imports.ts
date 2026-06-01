@@ -57,6 +57,10 @@ type BabelExpressionStatement = {
 };
 
 type BabelProgramNode = BabelImportDeclaration | BabelLexicalDecl | BabelExpressionStatement | { type: string };
+type BabelModuleSourceDeclaration = {
+	type: "ImportDeclaration" | "ExportNamedDeclaration" | "ExportAllDeclaration";
+	source?: { value: string; start: number; end: number } | null;
+};
 
 type BabelNode = { type: string; start: number; end: number; [key: string]: unknown };
 
@@ -71,6 +75,7 @@ function parseProgram(code: string): { program: { body: ReadonlyArray<BabelProgr
 			allowSuperOutsideMethod: true,
 			allowUndeclaredExports: true,
 			errorRecovery: true,
+			plugins: ["typescript"],
 		}) as unknown as { program: { body: ReadonlyArray<BabelProgramNode> } };
 	} catch {
 		return null;
@@ -174,14 +179,86 @@ export function rewriteImports(code: string): string {
 		if (node.type !== "CallExpression") return;
 		const call = node as unknown as { callee?: { type?: string; start?: number; end?: number } };
 		const callee = call.callee;
-		if (!callee || callee.type !== "Import" || typeof callee.start !== "number" || typeof callee.end !== "number")
-			return;
+		if (callee?.type !== "Import" || typeof callee.start !== "number" || typeof callee.end !== "number") return;
 		edits.push({ start: callee.start, end: callee.end, text: "__omp_import__" });
 	});
 
 	if (edits.length === 0) return code;
 
 	// Splice from the back so earlier offsets stay valid.
+	edits.sort((a, b) => b.start - a.start);
+	let result = code;
+	for (const edit of edits) {
+		result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
+	}
+	return result;
+}
+export function collectModuleSourceSpecifiers(code: string): string[] {
+	const ast = parseProgram(code);
+	if (!ast) return [];
+	const sources: string[] = [];
+	for (const node of ast.program.body) {
+		if (
+			(node.type === "ImportDeclaration" ||
+				node.type === "ExportNamedDeclaration" ||
+				node.type === "ExportAllDeclaration") &&
+			typeof (node as BabelModuleSourceDeclaration).source?.value === "string"
+		) {
+			sources.push((node as BabelModuleSourceDeclaration).source!.value);
+		}
+	}
+	return sources;
+}
+
+export function rewriteModuleSourceSpecifiers(code: string, replacer: (source: string) => string): string {
+	const ast = parseProgram(code);
+	if (!ast) return code;
+
+	type Edit = { start: number; end: number; text: string };
+	const edits: Edit[] = [];
+
+	for (const node of ast.program.body) {
+		if (
+			node.type !== "ImportDeclaration" &&
+			node.type !== "ExportNamedDeclaration" &&
+			node.type !== "ExportAllDeclaration"
+		) {
+			continue;
+		}
+		const source = (node as BabelModuleSourceDeclaration).source;
+		if (!source || typeof source.value !== "string") continue;
+		const next = replacer(source.value);
+		if (next === source.value) continue;
+		edits.push({ start: source.start, end: source.end, text: JSON.stringify(next) });
+	}
+
+	if (edits.length === 0) return code;
+	edits.sort((a, b) => b.start - a.start);
+	let result = code;
+	for (const edit of edits) {
+		result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
+	}
+	return result;
+}
+
+export function rewriteDynamicImports(code: string, callee = "__omp_import__"): string {
+	if (!code.includes("import")) return code;
+	const ast = parseProgram(code);
+	if (!ast) return code;
+
+	type Edit = { start: number; end: number; text: string };
+	const edits: Edit[] = [];
+	walkNodes(ast, node => {
+		if (node.type !== "CallExpression") return;
+		const call = node as unknown as { callee?: { type?: string; start?: number; end?: number } };
+		const callCallee = call.callee;
+		if (callCallee?.type !== "Import" || typeof callCallee.start !== "number" || typeof callCallee.end !== "number") {
+			return;
+		}
+		edits.push({ start: callCallee.start, end: callCallee.end, text: callee });
+	});
+
+	if (edits.length === 0) return code;
 	edits.sort((a, b) => b.start - a.start);
 	let result = code;
 	for (const edit of edits) {
@@ -371,35 +448,48 @@ function requiresAsyncWrapper(code: string): boolean {
 }
 
 /**
- * Strip TypeScript syntax (type annotations, `interface`, `as`, `satisfies`, generics in
- * call expressions, etc.) before the import/lexical rewriters parse the code. We use Bun's
- * native transpiler in `ts` loader mode — fast, no JSX transforms, preserves `import`/
- * `export` declarations so the downstream Babel rewrites keep working.
+ * Strip TypeScript syntax (type annotations, type-only imports/exports, `interface`, `as`,
+ * `satisfies`, generics in call expressions, etc.) before the import/lexical rewriters parse
+ * the code. Bun's native transpiler preserves `import`/`export` declarations, so downstream
+ * Babel rewrites still control module resolution.
  *
- * Skipped when the code parses as plain JavaScript already (Babel can accept it), so the
- * common case avoids an extra transpile pass. We detect "looks like TS" with a cheap regex
- * before invoking the transpiler.
+ * Eval cells use a cheap "looks like TS" heuristic to avoid transpiling ordinary JS. Known
+ * TypeScript modules pass `force` because a file can contain TS-only module syntax such as
+ * `import type` without any value-level type annotations.
  */
-function stripTypeScript(code: string): string {
-	if (!LOOKS_LIKE_TS.test(code)) return code;
+type TypeScriptStripLoader = "ts" | "tsx";
+
+const TS_TRANSPILER = new Bun.Transpiler({ loader: "ts" });
+const TSX_TRANSPILER = new Bun.Transpiler({ loader: "tsx" });
+
+function stripTypeScript(code: string, options: { force?: boolean; loader?: TypeScriptStripLoader } = {}): string {
+	if (!options.force && !LOOKS_LIKE_TS.test(code)) return code;
 	try {
-		return new Bun.Transpiler({ loader: "ts" }).transformSync(code);
+		const transpiler = options.loader === "tsx" ? TSX_TRANSPILER : TS_TRANSPILER;
+		return transpiler.transformSync(code);
 	} catch {
 		// Transpiler failed (e.g. unrecoverable syntax). Hand the original source back so the
 		// downstream rewriter / VM surfaces the real error to the user.
 		return code;
 	}
 }
+export function stripTypeScriptSyntax(
+	code: string,
+	options: { force?: boolean; loader?: TypeScriptStripLoader } = {},
+): string {
+	return stripTypeScript(code, options);
+}
 
-// Heuristic: any of the obvious TS-only tokens. Plain JS using `as` only inside strings
-// won't match because we require a leading word boundary plus a colon/keyword neighbor.
+// Heuristic: obvious TS-only tokens, including type-only module syntax. Plain JS using `as`
+// only inside strings won't match because we require a leading word boundary plus a
+// colon/keyword neighbor.
 const LOOKS_LIKE_TS =
-	/(?:\binterface\s+\w|\btype\s+\w+\s*=|\b(?:as|satisfies)\s+(?:[A-Z]|\bconst\b)|:\s*(?:string|number|boolean|any|unknown|void|never|object|[A-Z]\w*)\b|<\s*[A-Z]\w*\s*[,>])/;
+	/(?:\bimport\s+type\b|\bexport\s+type\b|\b(?:import|export)\s*\{[^}\n]*\btype\s+\w|\binterface\s+\w|\btype\s+\w+\s*=|\b(?:as|satisfies)\s+(?:[A-Z]|\bconst\b)|:\s*(?:string|number|boolean|any|unknown|void|never|object|[A-Z]\w*)\b|<\s*[A-Z]\w*\s*[,>])/;
 
 export function wrapCode(code: string): { source: string; asyncWrapped: boolean; finalExpressionReturned: boolean } {
-	const stripped = stripTypeScript(code);
-	const finalExpression = returnFinalExpression(stripped);
-	const importsRewritten = rewriteImports(finalExpression.source);
+	const finalExpression = returnFinalExpression(code);
+	const stripped = stripTypeScript(finalExpression.source);
+	const importsRewritten = rewriteImports(stripped);
 	const needsAsyncWrapper = requiresAsyncWrapper(importsRewritten);
 	const rewritten = {
 		source: demoteTopLevelLexicals(importsRewritten, { publishGlobals: needsAsyncWrapper }),
