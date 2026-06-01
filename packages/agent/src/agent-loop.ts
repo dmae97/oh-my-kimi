@@ -959,6 +959,10 @@ async function streamAssistantResponse(
 			if (harmonyMitigationEnabled) {
 				const detection = detectHarmonyLeakInAssistantMessage(trailing);
 				if (detection) {
+					if (addedPartial) {
+						context.messages.pop();
+						addedPartial = false;
+					}
 					throw new HarmonyLeakInterruption(detection, extractHarmonyRemoved(trailing, detection));
 				}
 			}
