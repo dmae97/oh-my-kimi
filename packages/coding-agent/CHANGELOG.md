@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.7.5] - 2026-06-01
 ### Fixed
 
 - Fixed streaming assistant responses leaving duplicated tail rows in WSL/Windows Terminal scrollback by enabling eager native-scrollback rebuilds while assistant text is actively streaming ([#1615](https://github.com/can1357/oh-my-pi/issues/1615)).
