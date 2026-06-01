@@ -30,6 +30,7 @@ const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
 // IRC/notices/status refreshes do not toggle scrollback replay policy.
 const STREAM_RENDER_MODE_EVENTS: Record<string, true> = {
 	agent_start: true,
+	agent_end: true,
 	message_start: true,
 	message_end: true,
 	tool_execution_start: true,
@@ -606,8 +607,8 @@ export class EventController {
 			}
 		}
 	}
-
 	async #handleAgentEnd(_event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
+		this.#assistantMessageStreaming = false;
 		if (this.ctx.loadingAnimation) {
 			this.ctx.loadingAnimation.stop();
 			this.ctx.loadingAnimation = undefined;
