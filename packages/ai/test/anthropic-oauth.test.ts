@@ -20,7 +20,9 @@ describe("anthropic oauth alignment", () => {
 		const authUrl = new URL(url);
 
 		expect(authUrl.origin + authUrl.pathname).toBe("https://claude.ai/oauth/authorize");
-		expect(authUrl.searchParams.get("scope")).toBe("org:create_api_key user:profile user:inference");
+		expect(authUrl.searchParams.get("scope")).toBe(
+			"user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
+		);
 		expect(authUrl.searchParams.get("state")).toBe(state);
 		expect(authUrl.searchParams.get("redirect_uri")).toBe(redirectUri);
 		expect(authUrl.searchParams.get("code_challenge_method")).toBe("S256");
