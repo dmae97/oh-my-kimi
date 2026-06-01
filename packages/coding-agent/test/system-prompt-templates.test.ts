@@ -104,6 +104,16 @@ async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
 	}
 }
 
+function createEmptyWorkspaceTree(rootPath: string) {
+	return {
+		rootPath,
+		rendered: "",
+		truncated: false,
+		totalLines: 0,
+		agentsMdFiles: [],
+	};
+}
+
 describe("system Handlebars prompt templates", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -212,6 +222,7 @@ describe("system Handlebars prompt templates", () => {
 			skills: [],
 			rules: [],
 			toolNames: ["read"],
+			workspaceTree: createEmptyWorkspaceTree(os.tmpdir()),
 		};
 
 		const enabled = await buildSystemPrompt({
@@ -300,6 +311,7 @@ describe("system Handlebars prompt templates", () => {
 				skills: [],
 				rules: [],
 				toolNames: ["read"],
+				workspaceTree: createEmptyWorkspaceTree(dir),
 				customPrompt: "Custom prompt body",
 				alwaysApplyRules: [
 					{ name: "no-dynamic-loading", content: duplicateRule, path: "/tmp/no-dynamic-loading.md" },
@@ -325,6 +337,7 @@ describe("system Handlebars prompt templates", () => {
 			skills: [],
 			rules: [],
 			toolNames: ["read"],
+			workspaceTree: createEmptyWorkspaceTree(os.tmpdir()),
 			customPrompt: ["Custom guidance", "", duplicateRule, "", "More custom guidance"].join("\n"),
 			alwaysApplyRules: [
 				{ name: "small-functions", content: duplicateRule, path: "/tmp/small-functions.md" },
@@ -361,6 +374,7 @@ describe("system Handlebars prompt templates", () => {
 			skills: [],
 			rules: [],
 			toolNames: ["read", "search", "find", "edit", "lsp", "bash", "eval"],
+			workspaceTree: createEmptyWorkspaceTree(os.tmpdir()),
 			tools: new Map([
 				["read", { label: "Read", description: "Reads files" }],
 				["search", { label: "Search", description: "Searches files" }],
@@ -390,6 +404,7 @@ describe("system Handlebars prompt templates", () => {
 			skills: [],
 			rules: [],
 			toolNames: ["read"],
+			workspaceTree: createEmptyWorkspaceTree(os.tmpdir()),
 		});
 
 		const projectPrompt = systemPrompt[1] ?? "";
