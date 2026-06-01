@@ -7,6 +7,7 @@ import * as z from "zod/v4";
 import { settings } from "../config/settings";
 import { jsBackend, pythonBackend } from "../eval";
 import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
+import { EVAL_HEARTBEAT_OP } from "../eval/heartbeat";
 import { IdleTimeout } from "../eval/idle-timeout";
 import { defaultEvalSessionId } from "../eval/session-id";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
@@ -388,7 +389,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 								outputSink!.push(chunk);
 							},
 							onStatus: event => {
+								// Every status event re-arms the inactivity watchdog. A
+								// heartbeat is a pure keepalive emitted while a host-side
+								// bridge call (agent()/llm()) runs: it bumps the timer but
+								// carries no payload, so don't persist or render it.
 								idle.bump();
+								if (event.op === EVAL_HEARTBEAT_OP) return;
 								cellResult.statusEvents ??= [];
 								upsertStatusEvent(cellResult.statusEvents, event);
 								pushUpdate();

@@ -8,6 +8,8 @@ import type { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
 import type { ToolSession } from "../../tools";
 import { ToolError } from "../../tools/tool-errors";
+import { setBridgeHeartbeatIntervalMs } from "../heartbeat";
+import { IdleTimeout } from "../idle-timeout";
 import { disposeAllVmContexts } from "../js/context-manager";
 import { executeJs } from "../js/executor";
 import { runEvalLlm } from "../llm-bridge";
@@ -97,6 +99,7 @@ function assistant(opts: {
 describe("runEvalLlm", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+		setBridgeHeartbeatIntervalMs();
 	});
 
 	it("resolves each tier to its expected model", async () => {
@@ -212,6 +215,26 @@ describe("runEvalLlm", () => {
 		await expect(runEvalLlm({ prompt: "q", model: "smol" }, { session: makeSession() })).rejects.toBeInstanceOf(
 			ToolError,
 		);
+	});
+
+	it("keeps the idle watchdog armed while a slow llm() request is in flight", async () => {
+		// A oneshot completion emits no status until it returns; a slow request
+		// must not look like a stalled cell. The bridge pumps a heartbeat while it
+		// awaits, re-arming the watchdog through emitStatus.
+		setBridgeHeartbeatIntervalMs(15);
+		vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
+			await Bun.sleep(200);
+			return assistant({ text: "the answer" });
+		});
+
+		using idle = new IdleTimeout(60);
+		const result = await runEvalLlm(
+			{ prompt: "q", model: "smol" },
+			{ session: makeSession(), signal: idle.signal, emitStatus: () => idle.bump() },
+		);
+
+		expect(idle.signal.aborted).toBe(false);
+		expect(result.text).toBe("the answer");
 	});
 });
 

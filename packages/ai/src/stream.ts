@@ -727,6 +727,7 @@ function mapOptionsForApi<TApi extends Api>(
 		initiatorOverride: options?.initiatorOverride,
 		maxRetryDelayMs: options?.maxRetryDelayMs,
 		metadata: options?.metadata,
+		taskBudget: options?.taskBudget,
 		sessionId: options?.sessionId,
 		promptCacheKey: options?.promptCacheKey,
 		streamFirstEventTimeoutMs: options?.streamFirstEventTimeoutMs,

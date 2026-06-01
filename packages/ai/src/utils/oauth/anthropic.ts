@@ -11,7 +11,7 @@ const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";
 const CALLBACK_PORT = 54545;
 const CALLBACK_PATH = "/callback";
-const SCOPES = "org:create_api_key user:profile user:inference";
+const SCOPES = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 
 function formatErrorDetails(error: unknown): string {
 	if (error instanceof Error) {

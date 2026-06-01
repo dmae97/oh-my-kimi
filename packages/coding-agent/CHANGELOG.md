@@ -1,14 +1,42 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `ask` option descriptions so agents can keep short labels and render explanatory text as separate muted rows in the selector.
 
 ### Fixed
 
-- Fixed long outlined `ask` selector options wrapping instead of truncating their tails.
+- Fixed the `eval` tool aborting in-flight `agent()`/`parallel()` subagents and `llm()` requests by mistaking them for a stalled cell. The per-cell `timeout` is an *inactivity* budget that only re-arms on status events, but a host-side bridge call can legitimately run long stretches with no intermediate status (a subagent's time-to-first-token on a reasoning model, a long quiet nested tool, or an entire oneshot `llm()` request). Those calls now pump a lightweight heartbeat while they await, re-arming the idle watchdog through the existing status channel; the heartbeat is a pure keepalive and is never persisted or rendered, so a genuinely stalled cell is still interrupted once the call settles.
+
+## [15.7.5] - 2026-06-01
+### Fixed
+
+- Fixed streaming assistant responses leaving duplicated tail rows in WSL/Windows Terminal scrollback by enabling eager native-scrollback rebuilds while assistant text is actively streaming ([#1615](https://github.com/can1357/oh-my-pi/issues/1615)).
+
+### Fixed
+
+- Fixed the `task` tool mangling subagent prompts when a model double-JSON-encodes a string argument: `context` and each task's `assignment`/`description` are now repaired when they arrive uniformly double-escaped (literal `\n`, `\"`, `\uXXXX`), so the subagent receives the intended prose and the call preview renders real newlines. The repair is guarded by a JSON-string round-trip and a double-encode signature, so legitimate backslashes/quotes (Windows paths, regexes, embedded quotes) are left untouched, and it is scoped to these natural-language fields only (never code-bearing tools).
+
+### Fixed
+
+- Fixed `pr://` PR views omitting formal review submissions and approvals when comments are enabled ([#1600](https://github.com/can1357/oh-my-pi/issues/1600)).
+
+### Fixed
+
+- Fixed subagent yield-reminder loop logging benign user/compaction aborts as `ERROR`. The catch around `session.prompt`/`waitForIdle` in `task/executor.ts` now demotes `ToolAbortError` and signal-aborted exits to `debug` and keeps `ERROR` for genuine prompt failures only ([#1623](https://github.com/can1357/oh-my-pi/issues/1623)).
+
+### Fixed
+
+- Fixed `read local://<file>` resolving to the wrong session's artifacts directory in multi-session ACP hosts (e.g. cmux). `LocalProtocolHandler.resolve` now honors `context.localProtocolOptions` supplied by the calling tool before falling back to the process-wide override or the first `main`-kind session in the global `AgentRegistry`; `read`, `find`, `search`, `ast_grep`, and `ast_edit` thread their session's options through so a `local://PLAN.md` lookup hits the calling session's `local` root instead of a sibling session's ([#1608](https://github.com/can1357/oh-my-pi/issues/1608)).
+
+### Fixed
+
+- Fixed `omp` segfaulting on exit on Windows after the tiny title/memory model loaded `onnxruntime-node` (issue [#1606](https://github.com/can1357/oh-my-pi/issues/1606)). The tiny model now runs in a Bun subprocess instead of a Worker thread, so the NAPI finalizer that crashes during shutdown never executes in the agent's address space; the subprocess is `SIGKILL`'d on dispose to skip every native destructor on every platform.
+
+### Fixed
+
+- Fixed unbounded MCP reconnect loop that could fork-bomb the host when a stdio MCP server completes the `initialize`/`tools/list` handshake and then exits. `MCPManager` now enforces a per-server crash circuit breaker (5 reconnects per 30 s window) on the automatic `transport.onClose` path; manual `/mcp reconnect` resets the window so users can recover after fixing the misconfiguration ([#1592](https://github.com/can1357/oh-my-pi/issues/1592)).
 
 ## [15.7.4] - 2026-05-31
 

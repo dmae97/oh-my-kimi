@@ -58,6 +58,33 @@ export function getStreamFirstEventTimeoutMs(
 	return normalizeIdleTimeoutMs($env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS, fallback);
 }
 
+/**
+ * Returns the first-event timeout used for OpenAI-family streaming transports.
+ *
+ * Precedence: explicit `PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS` (including a
+ * `"0"` disable) wins outright. Otherwise the resolved idle (caller-supplied
+ * `idleTimeoutMs` — which itself already encompasses per-call
+ * `streamIdleTimeoutMs` or `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS` resolved
+ * upstream) floors the first-event budget so slow local OpenAI-compatible
+ * servers are not undercut by a shorter `PI_STREAM_FIRST_EVENT_TIMEOUT_MS`
+ * or the global default during prompt processing.
+ *
+ * Returns `undefined` when an explicit env knob disables the watchdog.
+ */
+export function getOpenAIStreamFirstEventTimeoutMs(
+	idleTimeoutMs?: number,
+	fallbackMs: number = DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS,
+): number | undefined {
+	const openAIFirstEventRaw = $env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+	if (openAIFirstEventRaw !== undefined) {
+		return normalizeIdleTimeoutMs(openAIFirstEventRaw, fallbackMs);
+	}
+	const base = normalizeIdleTimeoutMs($env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS, fallbackMs);
+	if (base === undefined) return undefined;
+	if (idleTimeoutMs === undefined || idleTimeoutMs <= 0) return base;
+	return Math.max(base, idleTimeoutMs);
+}
+
 export interface IdleTimeoutIteratorOptions {
 	idleTimeoutMs?: number;
 	firstItemTimeoutMs?: number;
