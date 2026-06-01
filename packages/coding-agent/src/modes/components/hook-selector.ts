@@ -215,14 +215,58 @@ export class HookSelectorComponent extends Container {
 		this.#updateList();
 	}
 
+	#optionRowCount(option: HookSelectorOption): number {
+		return option.description ? 2 : 1;
+	}
+
+	#totalOptionRows(options: HookSelectorOption[]): number {
+		let rows = 0;
+		for (const option of options) {
+			rows += this.#optionRowCount(option);
+		}
+		return rows;
+	}
+
+	#getVisibleOptionRange(total: number): { startIndex: number; endIndex: number } {
+		if (total === 0) return { startIndex: 0, endIndex: 0 };
+
+		const rowBudget = Math.max(1, this.#maxVisible);
+		const selectedIndex = Math.max(0, Math.min(this.#selectedIndex, total - 1));
+		let startIndex = selectedIndex;
+		let endIndex = selectedIndex + 1;
+		let rows = this.#optionRowCount(this.#filteredOptions[selectedIndex]!);
+		let beforeRows = 0;
+		const targetBeforeRows = Math.max(0, Math.floor((rowBudget - rows) / 2));
+
+		while (startIndex > 0) {
+			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!);
+			if (beforeRows + cost > targetBeforeRows || rows + cost > rowBudget) break;
+			startIndex--;
+			beforeRows += cost;
+			rows += cost;
+		}
+
+		while (endIndex < total) {
+			const cost = this.#optionRowCount(this.#filteredOptions[endIndex]!);
+			if (rows + cost > rowBudget) break;
+			endIndex++;
+			rows += cost;
+		}
+
+		while (startIndex > 0) {
+			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!);
+			if (rows + cost > rowBudget) break;
+			startIndex--;
+			rows += cost;
+		}
+
+		return { startIndex, endIndex };
+	}
+
 	#updateList(): void {
 		const lines: string[] = [];
 		const total = this.#filteredOptions.length;
-		const startIndex = Math.max(
-			0,
-			Math.min(this.#selectedIndex - Math.floor(this.#maxVisible / 2), total - this.#maxVisible),
-		);
-		const endIndex = Math.min(startIndex + this.#maxVisible, total);
+		const { startIndex, endIndex } = this.#getVisibleOptionRange(total);
 
 		const mdTheme = getMarkdownTheme();
 		for (let i = startIndex; i < endIndex; i++) {
@@ -293,7 +337,7 @@ export class HookSelectorComponent extends Container {
 	}
 
 	#isSearchEnabled(): boolean {
-		return this.#options.length > this.#maxVisible;
+		return this.#totalOptionRows(this.#options) > this.#maxVisible;
 	}
 
 	#shouldRenderSearchStatus(): boolean {

@@ -95,6 +95,32 @@ describe("HookSelectorComponent", () => {
 		}
 	});
 
+	it("counts description rows toward the visible row cap", () => {
+		const component = new HookSelectorComponent(
+			"Which setup path should be used?",
+			[
+				{ label: "Path A", description: "Reuse existing credentials." },
+				{ label: "Path B", description: "Authorize a provider in the browser." },
+				{ label: "Path C", description: "Edit provider keys manually." },
+				{ label: "Path D", description: "Continue with offline-only tools." },
+			],
+			() => {},
+			() => {},
+			{ outline: true, initialIndex: 0, maxVisible: 4 },
+		);
+
+		const plain = component
+			.render(76)
+			.map(line => Bun.stripANSI(line))
+			.join("\n");
+		expect(plain).toContain("Path A");
+		expect(plain).toContain("Reuse existing credentials.");
+		expect(plain).toContain("Path B");
+		expect(plain).toContain("Authorize a provider in the browser.");
+		expect(plain).not.toContain("Path C");
+		expect(plain).toContain("(1/4)");
+	});
+
 	it("filters options by description text", () => {
 		const component = new HookSelectorComponent(
 			"Which setup path should be used?",
