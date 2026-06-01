@@ -1008,16 +1008,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	);
 	let model = options.model;
 	let modelFallbackMessage: string | undefined;
-	// If session has data, try to restore model from it.
-	// Skip restore when an explicit model was requested.
-	const sessionModelStrings = getRestorableSessionModels(
-		existingSession.models,
-		sessionManager.getLastModelChangeRole(),
-	);
-	if (!hasExplicitModel && !model && hasExistingSession && sessionModelStrings.length > 0) {
+	// Identify session model strings to restore in fallback order. We do an
+	// initial pass here so model-dependent setup (thinking-level resolution,
+	// host preconnect) can use the restored model; extension-registered
+	// providers aren't visible yet, so we retry the preferred candidates once
+	// extensions register below.
+	const sessionModelStrings =
+		!hasExplicitModel && hasExistingSession
+			? getRestorableSessionModels(existingSession.models, sessionManager.getLastModelChangeRole())
+			: [];
+	let restoredSessionModelIndex = -1;
+	if (!hasExplicitModel && !model && sessionModelStrings.length > 0) {
 		await logger.time("restoreSessionModel", async () => {
 			let failedSessionModel: string | undefined;
-			for (const sessionModelStr of sessionModelStrings) {
+			for (let i = 0; i < sessionModelStrings.length; i++) {
+				const sessionModelStr = sessionModelStrings[i];
 				const parsedModel = parseModelString(sessionModelStr);
 				if (!parsedModel) {
 					failedSessionModel ??= sessionModelStr;
@@ -1027,6 +1032,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
 				if (restoredModel && (await hasModelApiKey(restoredModel))) {
 					model = restoredModel;
+					restoredSessionModelIndex = i;
 					break;
 				}
 				failedSessionModel ??= sessionModelStr;
@@ -1455,6 +1461,31 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			extensionsResult.runtime.pendingProviderRegistrations = [];
 		}
 
+		// Retry preferred session-model candidates now that extension providers
+		// are registered. The initial restore above runs before extensions load,
+		// so a role model supplied by an extension would have fallen back to the
+		// session's saved default; reclaim it here so resume honors the last
+		// active role.
+		if (!hasExplicitModel && restoredSessionModelIndex > 0 && sessionModelStrings.length > 0) {
+			for (let i = 0; i < restoredSessionModelIndex; i++) {
+				const sessionModelStr = sessionModelStrings[i];
+				const parsedModel = parseModelString(sessionModelStr);
+				if (!parsedModel) continue;
+				const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
+				if (restoredModel && (await hasModelApiKey(restoredModel))) {
+					model = restoredModel;
+					modelFallbackMessage = undefined;
+					restoredSessionModelIndex = i;
+					effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
+						autoThinking
+							? resolveProvisionalAutoLevel(restoredModel)
+							: resolveThinkingLevelForModel(restoredModel, effectiveThinkingLevel),
+					);
+					preconnectModelHost(restoredModel.baseUrl);
+					break;
+				}
+			}
+		}
 		// Resolve deferred --model pattern now that extension models are registered.
 		if (!model && options.modelPattern) {
 			const availableModels = modelRegistry.getAll();
