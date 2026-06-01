@@ -254,16 +254,20 @@ export interface SessionContext {
 	modeData?: Record<string, unknown>;
 }
 
-/** Selects the model string that should become active when restoring a session. */
-export function getRestorableSessionModel(
+/** Lists session model strings to try when restoring, in fallback order. */
+export function getRestorableSessionModels(
 	models: Readonly<Record<string, string>>,
 	lastModelChangeRole: string | undefined,
-): string | undefined {
-	if (lastModelChangeRole) {
-		const roleModel = models[lastModelChangeRole];
-		if (roleModel) return roleModel;
+): string[] {
+	const defaultModel = models.default;
+	if (!lastModelChangeRole || lastModelChangeRole === "default") {
+		return defaultModel ? [defaultModel] : [];
 	}
-	return models.default;
+
+	const roleModel = models[lastModelChangeRole];
+	if (!roleModel) return defaultModel ? [defaultModel] : [];
+	if (!defaultModel || roleModel === defaultModel) return [roleModel];
+	return [roleModel, defaultModel];
 }
 
 export interface SessionInfo {

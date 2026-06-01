@@ -102,7 +102,7 @@ import { AgentSession } from "./session/agent-session";
 import { resolveAuthBrokerConfig } from "./session/auth-broker-config";
 import { AuthBrokerClient, AuthStorage, RemoteAuthCredentialStore } from "./session/auth-storage";
 import { type CustomMessage, convertToLlm } from "./session/messages";
-import { getRestorableSessionModel, SessionManager } from "./session/session-manager";
+import { getRestorableSessionModels, SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
@@ -1010,18 +1010,29 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let modelFallbackMessage: string | undefined;
 	// If session has data, try to restore model from it.
 	// Skip restore when an explicit model was requested.
-	const sessionModelStr = getRestorableSessionModel(existingSession.models, sessionManager.getLastModelChangeRole());
-	if (!hasExplicitModel && !model && hasExistingSession && sessionModelStr) {
+	const sessionModelStrings = getRestorableSessionModels(
+		existingSession.models,
+		sessionManager.getLastModelChangeRole(),
+	);
+	if (!hasExplicitModel && !model && hasExistingSession && sessionModelStrings.length > 0) {
 		await logger.time("restoreSessionModel", async () => {
-			const parsedModel = parseModelString(sessionModelStr);
-			if (parsedModel) {
+			let failedSessionModel: string | undefined;
+			for (const sessionModelStr of sessionModelStrings) {
+				const parsedModel = parseModelString(sessionModelStr);
+				if (!parsedModel) {
+					failedSessionModel ??= sessionModelStr;
+					continue;
+				}
+
 				const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
 				if (restoredModel && (await hasModelApiKey(restoredModel))) {
 					model = restoredModel;
+					break;
 				}
+				failedSessionModel ??= sessionModelStr;
 			}
-			if (!model) {
-				modelFallbackMessage = `Could not restore model ${sessionModelStr}`;
+			if (failedSessionModel) {
+				modelFallbackMessage = `Could not restore model ${failedSessionModel}`;
 			}
 		});
 	}

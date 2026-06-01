@@ -227,7 +227,7 @@ import type {
 	SessionContext,
 	SessionManager,
 } from "./session-manager";
-import { getLatestCompactionEntry, getRestorableSessionModel } from "./session-manager";
+import { getLatestCompactionEntry, getRestorableSessionModels } from "./session-manager";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { YieldQueue } from "./yield-queue";
@@ -8723,31 +8723,34 @@ export class AgentSession {
 			}
 
 			// Restore model if saved
-			const targetModelStr = getRestorableSessionModel(
+			const targetModelStrings = getRestorableSessionModels(
 				sessionContext.models,
 				this.sessionManager.getLastModelChangeRole(),
 			);
-			if (targetModelStr) {
-				const slashIdx = targetModelStr.indexOf("/");
-				if (slashIdx > 0) {
+			if (targetModelStrings.length > 0) {
+				const availableModels = this.#modelRegistry.getAvailable();
+				let match: Model | undefined;
+				for (const targetModelStr of targetModelStrings) {
+					const slashIdx = targetModelStr.indexOf("/");
+					if (slashIdx <= 0) continue;
 					const provider = targetModelStr.slice(0, slashIdx);
 					const modelId = targetModelStr.slice(slashIdx + 1);
-					const availableModels = this.#modelRegistry.getAvailable();
-					const match = availableModels.find(m => m.provider === provider && m.id === modelId);
-					if (match) {
-						const currentModel = this.model;
-						const shouldResetProviderState =
-							switchingToDifferentSession ||
-							(currentModel !== undefined &&
-								(currentModel.provider !== match.provider ||
-									currentModel.id !== match.id ||
-									currentModel.api !== match.api));
-						if (shouldResetProviderState) {
-							this.#setModelWithProviderSessionReset(match);
-						} else {
-							this.agent.setModel(match);
-							this.#syncToolCallBatchCap(match);
-						}
+					match = availableModels.find(m => m.provider === provider && m.id === modelId);
+					if (match) break;
+				}
+				if (match) {
+					const currentModel = this.model;
+					const shouldResetProviderState =
+						switchingToDifferentSession ||
+						(currentModel !== undefined &&
+							(currentModel.provider !== match.provider ||
+								currentModel.id !== match.id ||
+								currentModel.api !== match.api));
+					if (shouldResetProviderState) {
+						this.#setModelWithProviderSessionReset(match);
+					} else {
+						this.agent.setModel(match);
+						this.#syncToolCallBatchCap(match);
 					}
 				}
 			}

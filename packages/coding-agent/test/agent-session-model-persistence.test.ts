@@ -4,7 +4,7 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type Api, Effort, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import { createAgentSession, type CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -119,6 +119,37 @@ describe("AgentSession model persistence", () => {
 		return { modelRegistry, settings: sessionSettings, session };
 	}
 
+	async function createStartupResumeSession(
+		targetSessionFile: string,
+		settings: Settings = Settings.isolated(),
+	): Promise<CreateAgentSessionResult> {
+		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${authStorages.length}.db`));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(
+			authStorage,
+			path.join(tempDir.path(), `models-${authStorages.length}.yml`),
+		);
+		const sessionManager = await SessionManager.open(targetSessionFile, path.join(tempDir.path(), "startup"));
+		const result = await createAgentSession({
+			cwd: tempDir.path(),
+			agentDir: tempDir.path(),
+			authStorage,
+			modelRegistry,
+			sessionManager,
+			settings,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+		session = result.session;
+		return result;
+	}
 	it("switches the active model without persisting by default", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const nextModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
@@ -246,32 +277,37 @@ describe("AgentSession model persistence", () => {
 		const smolRoleValue = modelValue(smolModel);
 		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, smolRoleValue);
 
-		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${authStorages.length}.db`));
-		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(
-			authStorage,
-			path.join(tempDir.path(), `models-${authStorages.length}.yml`),
-		);
-		const sessionManager = await SessionManager.open(targetSessionFile, path.join(tempDir.path(), "startup"));
-		const result = await createAgentSession({
-			cwd: tempDir.path(),
-			agentDir: tempDir.path(),
-			authStorage,
-			modelRegistry,
-			sessionManager,
-			settings: Settings.isolated(),
-			disableExtensionDiscovery: true,
-			skills: [],
-			contextFiles: [],
-			promptTemplates: [],
-			slashCommands: [],
-			enableMCP: false,
-			enableLsp: false,
-			skipPythonPreflight: true,
-		});
-		session = result.session;
+		const result = await createStartupResumeSession(targetSessionFile);
 
 		expect(result.session.model?.id).toBe(smolModel.id);
+	});
+
+	it("falls back to the saved default model when switch-session role restore is unavailable", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const previousModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const defaultRoleValue = modelValue(defaultModel);
+		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, "anthropic/not-loaded-anymore");
+
+		const created = await createSession({
+			initialModel: previousModel,
+			modelRoles: { default: defaultRoleValue },
+			persist: true,
+		});
+
+		await expect(created.session.switchSession(targetSessionFile)).resolves.toBe(true);
+		expect(created.session.model?.id).toBe(defaultModel.id);
+	});
+
+	it("falls back to the saved default model when startup role restore is unavailable", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const settingsFallbackModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const defaultRoleValue = modelValue(defaultModel);
+		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, "anthropic/not-loaded-anymore");
+		const settings = Settings.isolated();
+		settings.setModelRole("default", modelValue(settingsFallbackModel));
+
+		const result = await createStartupResumeSession(targetSessionFile, settings);
+
+		expect(result.session.model?.id).toBe(defaultModel.id);
 	});
 });
