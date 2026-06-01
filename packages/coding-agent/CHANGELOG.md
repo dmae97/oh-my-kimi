@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `ask` option descriptions so agents can keep short labels and render explanatory text as separate muted rows in the selector.
 
 ### Fixed
 
