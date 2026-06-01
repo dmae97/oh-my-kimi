@@ -4,10 +4,10 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type Api, Effort, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("AgentSession model persistence", () => {
@@ -46,7 +46,7 @@ describe("AgentSession model persistence", () => {
 		const timestamp = "2026-06-01T00:00:00.000Z";
 		await Bun.write(
 			targetSessionFile,
-			[
+			`${[
 				{ type: "session", version: 3, id: "target-session", timestamp, cwd: tempDir.path() },
 				{
 					type: "model_change",
@@ -66,7 +66,7 @@ describe("AgentSession model persistence", () => {
 				},
 			]
 				.map(entry => JSON.stringify(entry))
-				.join("\n") + "\n",
+				.join("\n")}\n`,
 		);
 		return targetSessionFile;
 	}
