@@ -5,6 +5,7 @@ import { Settings } from "../../config/settings";
 import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
+import { EVAL_HEARTBEAT_OP } from "../heartbeat";
 import type { JsStatusEvent } from "../js/shared/types";
 import {
 	checkPythonKernelAvailability,
@@ -496,8 +497,13 @@ async function executeWithKernel(
 	// Collect every display output and, for status events, stream them live so
 	// long-running bridge helpers (e.g. `agent()`) surface progress mid-cell.
 	const collectDisplay = (output: KernelDisplayOutput) => {
+		if (output.type === "status") {
+			// Heartbeats are pure idle-watchdog keepalives: forward them so the
+			// eval tool re-arms its timer, but never store or render them.
+			options?.onStatus?.(output.event);
+			if (output.event.op === EVAL_HEARTBEAT_OP) return;
+		}
 		displayOutputs.push(output);
-		if (output.type === "status") options?.onStatus?.(output.event);
 	};
 	const emitStatus = options?.emitStatus ?? ((event: JsStatusEvent) => collectDisplay({ type: "status", event }));
 	const runId = `py-${crypto.randomUUID()}`;

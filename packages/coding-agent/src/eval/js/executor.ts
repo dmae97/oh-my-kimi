@@ -1,6 +1,7 @@
 import { DEFAULT_MAX_BYTES, OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
+import { EVAL_HEARTBEAT_OP } from "../heartbeat";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
 import type { JsStatusEvent } from "./shared/types";
 
@@ -105,8 +106,13 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 				signal,
 				onText: chunk => outputSink.push(chunk),
 				onDisplay: output => {
+					if (output.type === "status") {
+						// Heartbeats are pure idle-watchdog keepalives: forward them so
+						// the eval tool re-arms its timer, but never store or render them.
+						options.onStatus?.(output.event);
+						if (output.event.op === EVAL_HEARTBEAT_OP) return;
+					}
 					displayOutputs.push(output);
-					if (output.type === "status") options.onStatus?.(output.event);
 				},
 			},
 		});

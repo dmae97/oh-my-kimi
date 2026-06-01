@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the `eval` tool aborting in-flight `agent()`/`parallel()` subagents and `llm()` requests by mistaking them for a stalled cell. The per-cell `timeout` is an *inactivity* budget that only re-arms on status events, but a host-side bridge call can legitimately run long stretches with no intermediate status (a subagent's time-to-first-token on a reasoning model, a long quiet nested tool, or an entire oneshot `llm()` request). Those calls now pump a lightweight heartbeat while they await, re-arming the idle watchdog through the existing status channel; the heartbeat is a pure keepalive and is never persisted or rendered, so a genuinely stalled cell is still interrupted once the call settles.
+
 ## [15.7.5] - 2026-06-01
 ### Fixed
 
