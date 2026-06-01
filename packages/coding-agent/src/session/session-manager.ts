@@ -254,6 +254,18 @@ export interface SessionContext {
 	modeData?: Record<string, unknown>;
 }
 
+/** Selects the model string that should become active when restoring a session. */
+export function getRestorableSessionModel(
+	models: Readonly<Record<string, string>>,
+	lastModelChangeRole: string | undefined,
+): string | undefined {
+	if (lastModelChangeRole) {
+		const roleModel = models[lastModelChangeRole];
+		if (roleModel) return roleModel;
+	}
+	return models.default;
+}
+
 export interface SessionInfo {
 	path: string;
 	id: string;

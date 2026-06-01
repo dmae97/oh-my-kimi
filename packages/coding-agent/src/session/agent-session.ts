@@ -227,7 +227,7 @@ import type {
 	SessionContext,
 	SessionManager,
 } from "./session-manager";
-import { getLatestCompactionEntry } from "./session-manager";
+import { getLatestCompactionEntry, getRestorableSessionModel } from "./session-manager";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { YieldQueue } from "./yield-queue";
@@ -8723,12 +8723,15 @@ export class AgentSession {
 			}
 
 			// Restore model if saved
-			const defaultModelStr = sessionContext.models.default;
-			if (defaultModelStr) {
-				const slashIdx = defaultModelStr.indexOf("/");
+			const targetModelStr = getRestorableSessionModel(
+				sessionContext.models,
+				this.sessionManager.getLastModelChangeRole(),
+			);
+			if (targetModelStr) {
+				const slashIdx = targetModelStr.indexOf("/");
 				if (slashIdx > 0) {
-					const provider = defaultModelStr.slice(0, slashIdx);
-					const modelId = defaultModelStr.slice(slashIdx + 1);
+					const provider = targetModelStr.slice(0, slashIdx);
+					const modelId = targetModelStr.slice(slashIdx + 1);
 					const availableModels = this.#modelRegistry.getAvailable();
 					const match = availableModels.find(m => m.provider === provider && m.id === modelId);
 					if (match) {

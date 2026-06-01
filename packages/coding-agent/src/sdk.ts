@@ -102,7 +102,7 @@ import { AgentSession } from "./session/agent-session";
 import { resolveAuthBrokerConfig } from "./session/auth-broker-config";
 import { AuthBrokerClient, AuthStorage, RemoteAuthCredentialStore } from "./session/auth-storage";
 import { type CustomMessage, convertToLlm } from "./session/messages";
-import { SessionManager } from "./session/session-manager";
+import { getRestorableSessionModel, SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
@@ -1010,10 +1010,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let modelFallbackMessage: string | undefined;
 	// If session has data, try to restore model from it.
 	// Skip restore when an explicit model was requested.
-	const defaultModelStr = existingSession.models.default;
-	if (!hasExplicitModel && !model && hasExistingSession && defaultModelStr) {
+	const sessionModelStr = getRestorableSessionModel(existingSession.models, sessionManager.getLastModelChangeRole());
+	if (!hasExplicitModel && !model && hasExistingSession && sessionModelStr) {
 		await logger.time("restoreSessionModel", async () => {
-			const parsedModel = parseModelString(defaultModelStr);
+			const parsedModel = parseModelString(sessionModelStr);
 			if (parsedModel) {
 				const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
 				if (restoredModel && (await hasModelApiKey(restoredModel))) {
@@ -1021,7 +1021,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 			}
 			if (!model) {
-				modelFallbackMessage = `Could not restore model ${defaultModelStr}`;
+				modelFallbackMessage = `Could not restore model ${sessionModelStr}`;
 			}
 		});
 	}
