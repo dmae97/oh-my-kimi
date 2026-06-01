@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Anthropic task budget support, forwarding `taskBudget` as `output_config.task_budget` with the required `task-budgets-2026-03-13` beta header and accepting Anthropic gateway requests that send `output_config.task_budget`.
+
 ## [15.7.4] - 2026-05-31
 
 ### Fixed

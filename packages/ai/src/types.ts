@@ -153,6 +153,12 @@ import type { Effort } from "./model-thinking";
 /** Token budgets for each thinking level (token-based providers only) */
 export type ThinkingBudgets = { [key in Effort]?: number };
 
+export interface TokenTaskBudget {
+	type: "tokens";
+	total: number;
+	remaining?: number;
+}
+
 export type MessageAttribution = "user" | "agent";
 
 export type ToolChoice =
@@ -319,6 +325,11 @@ export interface StreamOptions {
 	 * For example, Anthropic uses `user_id` for abuse tracking and rate limiting.
 	 */
 	metadata?: Record<string, unknown>;
+	/**
+	 * Advisory token budget for a full agentic loop. Anthropic encodes this as
+	 * `output_config.task_budget` with the `task-budgets-2026-03-13` beta header.
+	 */
+	taskBudget?: TokenTaskBudget;
 	/**
 	 * Optional session identifier for providers that support session-based
 	 * routing, request affinity, or transport reuse. Providers may also use this
