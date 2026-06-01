@@ -8,7 +8,7 @@ import type { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
 import type { ToolSession } from "../../tools";
 import { ToolError } from "../../tools/tool-errors";
-import { setBridgeHeartbeatIntervalMs } from "../heartbeat";
+import { EVAL_HEARTBEAT_OP, setBridgeHeartbeatIntervalMs } from "../heartbeat";
 import { IdleTimeout } from "../idle-timeout";
 import { disposeAllVmContexts } from "../js/context-manager";
 import { executeJs } from "../js/executor";
@@ -230,7 +230,14 @@ describe("runEvalLlm", () => {
 		using idle = new IdleTimeout(60);
 		const result = await runEvalLlm(
 			{ prompt: "q", model: "smol" },
-			{ session: makeSession(), signal: idle.signal, emitStatus: () => idle.bump() },
+			{
+				session: makeSession(),
+				signal: idle.signal,
+				// Mirror the eval tool: only a bridge heartbeat re-arms the watchdog.
+				emitStatus: event => {
+					if (event.op === EVAL_HEARTBEAT_OP) idle.bump();
+				},
+			},
 		);
 
 		expect(idle.signal.aborted).toBe(false);

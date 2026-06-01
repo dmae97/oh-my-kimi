@@ -31,6 +31,24 @@ describe("withBridgeHeartbeat", () => {
 		expect(events.length).toBe(settledCount);
 	});
 
+	it("emits a heartbeat immediately so a bridge call extends the budget at once", async () => {
+		// Interval far longer than the operation: the only beat that can fire is
+		// the immediate one at call start. It must still reach the sink.
+		setBridgeHeartbeatIntervalMs(10_000);
+		const events: JsStatusEvent[] = [];
+
+		await withBridgeHeartbeat(
+			event => events.push(event),
+			async () => {
+				await Bun.sleep(30);
+				return "done";
+			},
+		);
+
+		expect(events.length).toBe(1);
+		expect(events[0]?.op).toBe(EVAL_HEARTBEAT_OP);
+	});
+
 	it("runs the operation without emitting when no status sink is wired", async () => {
 		setBridgeHeartbeatIntervalMs(5);
 		let ran = 0;

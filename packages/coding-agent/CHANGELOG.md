@@ -8,7 +8,7 @@
  
 ### Fixed
 
-- Fixed the `eval` tool aborting in-flight `agent()`/`parallel()` subagents and `llm()` requests by mistaking them for a stalled cell. The per-cell `timeout` is an *inactivity* budget that only re-arms on status events, but a host-side bridge call can legitimately run long stretches with no intermediate status (a subagent's time-to-first-token on a reasoning model, a long quiet nested tool, or an entire oneshot `llm()` request). Those calls now pump a lightweight heartbeat while they await, re-arming the idle watchdog through the existing status channel; the heartbeat is a pure keepalive and is never persisted or rendered, so a genuinely stalled cell is still interrupted once the call settles.
+- Fixed the `eval` tool's per-cell `timeout` killing cells that were not stalled. The timeout is now a plain wall-clock budget on the cell's **own** work that is **paused only while a host-side `agent()`/`parallel()`/`llm()` bridge call is in flight** — those calls pump a heartbeat that re-arms the watchdog, so a long fanout or a slow (e.g. reasoning-tier) completion runs to completion instead of being aborted mid-flight (a subagent's time-to-first-token, a long quiet nested tool, or an entire oneshot `llm()` request no longer trip it). Nothing else re-arms the budget: ordinary compute, `print`/stdout, `log()`/`phase()`, and non-agent tool calls all count against it, so a cell that is not delegating to an agent/llm is bounded by the regular wall-clock timeout (and the timeout message no longer says "of inactivity"). The heartbeat is a pure keepalive — never persisted or rendered.
 
 ## [15.7.5] - 2026-06-01
 ### Fixed

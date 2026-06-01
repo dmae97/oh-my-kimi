@@ -1,22 +1,25 @@
 /**
  * Keepalive for in-flight host-side eval bridge calls.
  *
- * The eval idle watchdog ({@link ../tools/eval IdleTimeout}) treats a cell's
- * `timeout` as an *inactivity* budget and only re-arms when a status event
- * reaches it. Host-side bridge helpers — `agent()`/`parallel()` (via
- * `runSubprocess`) and `llm()` (a single completion) — can legitimately run for
- * long stretches with **no** intermediate status: a subagent's time-to-first
- * token on a reasoning model, a long quiet nested tool, or the entire body of a
- * oneshot `llm()` call. Without a keepalive the watchdog mistakes that work for
- * a stall and aborts the cell mid-flight, killing the subagent.
+ * The eval watchdog ({@link ../tools/eval IdleTimeout}) caps a cell's `timeout`
+ * as a wall-clock budget on the cell's *own* work, but pauses that budget while
+ * a host-side `agent()`/`parallel()` (via `runSubprocess`) or `llm()` (a single
+ * completion) call is in flight. Those calls are the only thing that re-arms the
+ * watchdog — and they can run for long stretches with **no** status of their own
+ * (a subagent's time-to-first-token on a reasoning model, a long quiet nested
+ * tool, or the entire body of a oneshot `llm()` call). Without a keepalive the
+ * watchdog would mistake that delegated work for the cell stalling and abort it
+ * mid-flight, killing the subagent.
  *
- * {@link withBridgeHeartbeat} fixes that by pumping a synthetic
- * {@link EVAL_HEARTBEAT_OP} status event on a fixed cadence while the wrapped
- * operation is pending. The event rides the same `emitStatus → onStatus` channel
- * both runtimes already forward, so it re-arms the watchdog without any new
- * plumbing. Consumers MUST treat the heartbeat as a pure keepalive: bump the
+ * {@link withBridgeHeartbeat} bridges that gap by emitting a synthetic
+ * {@link EVAL_HEARTBEAT_OP} status event immediately when the call begins and
+ * then on a fixed cadence until it settles. The event rides the same
+ * `emitStatus → onStatus` channel both runtimes already forward, so it re-arms
+ * the watchdog without any new plumbing. The heartbeat is the *sole* signal that
+ * extends the budget: consumers MUST treat it as a pure keepalive — bump the
  * watchdog and drop it (never persist or render it) — see the executor display
- * sinks and the eval tool's `onStatus` handler.
+ * sinks and the eval tool's `onStatus` handler. Every other status event
+ * (compute helpers, `log()`/`phase()`, tool results) counts against the budget.
  */
 import type { JsStatusEvent } from "./js/shared/types";
 
@@ -47,14 +50,19 @@ export function setBridgeHeartbeatIntervalMs(ms?: number): void {
 
 /**
  * Run {@link operation}, pumping {@link EVAL_HEARTBEAT_OP} status events through
- * {@link emitStatus} on a fixed cadence until it settles. A no-op wrapper when
- * no `emitStatus` sink is wired (the heartbeat would reach nobody).
+ * {@link emitStatus} — one immediately, then on a fixed cadence — until it
+ * settles. The immediate beat pauses the watchdog the instant the call begins,
+ * so a bridge call that starts close to the budget edge (after the cell already
+ * spent most of it computing) is not aborted before the first interval tick. A
+ * no-op wrapper when no `emitStatus` sink is wired (the heartbeat would reach
+ * nobody).
  */
 export async function withBridgeHeartbeat<T>(
 	emitStatus: ((event: JsStatusEvent) => void) | undefined,
 	operation: () => Promise<T>,
 ): Promise<T> {
 	if (!emitStatus) return operation();
+	emitStatus({ op: EVAL_HEARTBEAT_OP });
 	const timer = setInterval(() => emitStatus({ op: EVAL_HEARTBEAT_OP }), heartbeatIntervalMs);
 	// Never keep the event loop alive for the heartbeat alone.
 	timer.unref?.();

@@ -348,15 +348,16 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				for (let i = 0; i < cells.length; i++) {
 					const cell = cells[i];
 					const backend = cell.resolved.backend;
-					// The per-cell `timeout` is an *inactivity* budget, not a hard
-					// wall-clock cap: it bounds the gap between progress signals
-					// (status events — agent() updates, log()/phase(), tool-bridge
-					// activity), so a long fanout that keeps reporting progress runs to
-					// completion while a genuinely stalled cell (no progress for the
-					// whole window) is still interrupted. Raw stdout deliberately does
-					// NOT re-arm it, so pure-compute runaway loops stay bounded. The
-					// watchdog drives `combinedSignal`; we pass no wall-clock deadline
-					// downstream so the backends never arm a competing fixed timer.
+					// The per-cell `timeout` is a wall-clock budget on the cell's *own*
+					// work, but it is paused while a host-side `agent()`/`llm()` bridge
+					// call is in flight: those calls pump a heartbeat (see
+					// `withBridgeHeartbeat`) that re-arms the watchdog, so a long fanout
+					// or a slow completion runs to completion. Nothing else re-arms it —
+					// compute, stdout, `log()`/`phase()`, and ordinary tool calls all
+					// count against the budget — so a cell that is not delegating to an
+					// agent/llm is bounded by a plain wall-clock timeout. The watchdog
+					// drives `combinedSignal`; we pass no wall-clock deadline downstream
+					// so the backends never arm a competing fixed timer.
 					const idleTimeoutMs = timeoutSecondsFromMs(cell.timeoutMs) * 1000;
 					const idle = new IdleTimeout(idleTimeoutMs);
 					const combinedSignal = signal
@@ -389,12 +390,16 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 								outputSink!.push(chunk);
 							},
 							onStatus: event => {
-								// Every status event re-arms the inactivity watchdog. A
-								// heartbeat is a pure keepalive emitted while a host-side
-								// bridge call (agent()/llm()) runs: it bumps the timer but
-								// carries no payload, so don't persist or render it.
-								idle.bump();
-								if (event.op === EVAL_HEARTBEAT_OP) return;
+								// Only a bridge heartbeat re-arms the watchdog: it is the
+								// keepalive `agent()`/`llm()` pump while a host-side call is
+								// in flight, so those calls effectively pause the budget. It
+								// carries no payload — bump and drop it. Every other event
+								// (compute helpers, log()/phase(), tool results) renders but
+								// counts against the plain wall-clock budget.
+								if (event.op === EVAL_HEARTBEAT_OP) {
+									idle.bump();
+									return;
+								}
 								cellResult.statusEvents ??= [];
 								upsertStatusEvent(cellResult.statusEvents, event);
 								pushUpdate();
