@@ -4,7 +4,6 @@ import type { InteractiveModeContext } from "../src/modes/types";
 
 type FakeEditor = {
 	onEscape?: () => void;
-	shouldBypassAutocompleteOnEscape?: () => boolean;
 	onClear?: () => void;
 	onExit?: () => void;
 	onSuspend?: () => void;
