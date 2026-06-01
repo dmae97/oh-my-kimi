@@ -919,7 +919,15 @@ export class SelectorController {
 
 	async #handleOAuthLogout(providerId: string): Promise<void> {
 		try {
-			await this.ctx.session.modelRegistry.authStorage.logout(providerId);
+			const authStorage = this.ctx.session.modelRegistry.authStorage;
+			if (!authStorage.has(providerId)) {
+				const source = authStorage.describeCredentialSource(providerId, this.ctx.session.sessionId);
+				const suffix = source ? ` Current auth comes from ${source}; remove that source to log out.` : "";
+				this.ctx.showError(`Logout skipped: no stored credentials for ${providerId}.${suffix}`);
+				return;
+			}
+
+			await authStorage.logout(providerId);
 			await this.ctx.session.modelRegistry.refresh();
 			this.ctx.chatContainer.addChild(new Spacer(1));
 			this.ctx.chatContainer.addChild(
@@ -928,6 +936,12 @@ export class SelectorController {
 			this.ctx.chatContainer.addChild(
 				new Text(theme.fg("dim", `Credentials removed from ${getAgentDbPath()}`), 1, 0),
 			);
+			const remainingSource = authStorage.describeCredentialSource(providerId, this.ctx.session.sessionId);
+			if (remainingSource) {
+				this.ctx.chatContainer.addChild(
+					new Text(theme.fg("warning", `${providerId} is still authenticated via ${remainingSource}`), 1, 0),
+				);
+			}
 			this.ctx.ui.requestRender();
 		} catch (error: unknown) {
 			this.ctx.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -948,10 +962,10 @@ export class SelectorController {
 			await this.#refreshOAuthProviderAuthState();
 			const oauthProviders = getOAuthProviders();
 			const loggedInProviders = oauthProviders.filter(provider =>
-				this.ctx.session.modelRegistry.authStorage.hasAuth(provider.id),
+				this.ctx.session.modelRegistry.authStorage.has(provider.id),
 			);
 			if (loggedInProviders.length === 0) {
-				this.ctx.showStatus("No OAuth providers logged in. Use /login first.");
+				this.ctx.showStatus("No stored provider credentials to log out. Remove env or config auth at its source.");
 				return;
 			}
 		}
