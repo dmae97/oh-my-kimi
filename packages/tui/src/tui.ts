@@ -664,16 +664,23 @@ export class TUI extends Container {
 			clearTimeout(this.#renderTimer);
 			this.#renderTimer = undefined;
 		}
-		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
+		// Place the parent shell on the first line after the rendered content. When
+		// that line is still inside the viewport, moving there and writing `\r` is
+		// enough; emitting `\r\n` would create an extra blank row. If the content
+		// already reaches the viewport bottom, scroll exactly once so the prompt
+		// lands directly below the last visible TUI row.
 		if (this.#previousLines.length > 0) {
-			const targetRow = this.#previousLines.length; // Line after the last content
-			const lineDiff = targetRow - this.#hardwareCursorRow;
+			const targetRow = this.#previousLines.length;
+			const viewportBottom = this.#viewportTopRow + this.terminal.rows - 1;
+			const clampedCursorRow = Math.max(this.#viewportTopRow, Math.min(this.#hardwareCursorRow, viewportBottom));
+			const moveTargetRow = Math.min(targetRow, viewportBottom);
+			const lineDiff = moveTargetRow - clampedCursorRow;
 			if (lineDiff > 0) {
 				this.terminal.write(`\x1b[${lineDiff}B`);
 			} else if (lineDiff < 0) {
 				this.terminal.write(`\x1b[${-lineDiff}A`);
 			}
-			this.terminal.write("\r\n");
+			this.terminal.write(targetRow <= viewportBottom ? "\r" : "\r\n");
 		}
 
 		this.terminal.showCursor();

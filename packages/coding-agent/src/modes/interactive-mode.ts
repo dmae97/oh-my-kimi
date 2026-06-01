@@ -2230,14 +2230,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Emit shutdown event to hooks
 		await this.session.dispose();
 
-		if (this.isInitialized) {
-			this.ui.requestRender(true);
-		}
-
-		// Wait for any pending renders to complete
-		// requestRender() uses process.nextTick(), so we wait one tick
-		await new Promise(resolve => process.nextTick(resolve));
-
+		// Do not force a final render during teardown: disposed session/UI state can
+		// collapse to an empty frame, clearing the viewport and leaving the parent
+		// shell prompt at row 0. Stop from the last committed frame so the terminal
+		// hands Bash the cursor immediately after visible OMP content.
 		// Drain any in-flight Kitty key release events before stopping.
 		// This prevents escape sequences from leaking to the parent shell over slow SSH.
 		await this.ui.terminal.drainInput(1000);

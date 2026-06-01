@@ -1908,6 +1908,27 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+
+		it("leaves the parent shell prompt directly after short content on stop", async () => {
+			const term = new VirtualTerminal(20, 5);
+			const tui = new TUI(term);
+			let stopped = false;
+			tui.addChild(new MutableLinesComponent(["omp0", "omp1", "omp2"]));
+
+			try {
+				tui.start();
+				await settle(term);
+				tui.stop();
+				stopped = true;
+				await term.flush();
+				term.write("bash$ ");
+				await term.flush();
+
+				expect(visible(term)).toEqual(["omp0", "omp1", "omp2", "bash$", ""]);
+			} finally {
+				if (!stopped) tui.stop();
+			}
+		});
 	});
 
 	describe("overlay compositing", () => {
