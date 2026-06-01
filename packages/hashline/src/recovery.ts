@@ -70,6 +70,9 @@ function collectAnchorLines(edits: readonly Edit[]): number[] {
 
 function getEditAnchors(edit: Edit): Anchor[] {
 	if (edit.kind === "delete") return [edit.anchor];
+	// Recovery only ever receives already-resolved edits (no `block`); this arm
+	// exists for type-exhaustiveness over the full `Edit` union.
+	if (edit.kind === "block") return [edit.anchor];
 	return edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor" ? [edit.cursor.anchor] : [];
 }
 

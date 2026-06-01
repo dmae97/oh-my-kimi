@@ -43,14 +43,14 @@ Removed in the unified-flow refactor:
 
 ## Dispatcher mapping
 
-| Provider transport(s)                                                | Dispatcher                                   |
-| -------------------------------------------------------------------- | -------------------------------------------- |
-| `openai-completions`, `openai-responses`, `openai-codex-responses`   | `adaptSchemaForStrict` (sanitize + enforce)  |
-| `openai-responses` family (`oneOf` → `anyOf` only)                   | `normalizeSchemaForOpenAIResponses`          |
-| `google-generative-ai`, `google-vertex`, Gemini CLI                  | `normalizeSchemaForGoogle`                   |
-| Cloud Code Assist Claude (Antigravity + GCA, `claude-*` model ids)   | `normalizeSchemaForCCA`                      |
-| MCP `inputSchema` ingestion                                          | `normalizeSchemaForMCP`                      |
-| `anthropic-messages` (native, not CCA)                               | per-provider whitelist in `anthropic.ts`     |
+| Provider transport(s)                                              | Dispatcher                                  |
+| ------------------------------------------------------------------ | ------------------------------------------- |
+| `openai-completions`, `openai-responses`, `openai-codex-responses` | `adaptSchemaForStrict` (sanitize + enforce) |
+| `openai-responses` family (`oneOf` → `anyOf` only)                 | `normalizeSchemaForOpenAIResponses`         |
+| `google-generative-ai`, `google-vertex`, Gemini CLI                | `normalizeSchemaForGoogle`                  |
+| Cloud Code Assist Claude (Antigravity + GCA, `claude-*` model ids) | `normalizeSchemaForCCA`                     |
+| MCP `inputSchema` ingestion                                        | `normalizeSchemaForMCP`                     |
+| `anthropic-messages` (native, not CCA)                             | per-provider whitelist in `anthropic.ts`    |
 
 Gemini CLI / Antigravity CCA MUST run the full `normalizeSchemaForCCA`
 pipeline (not just the first keyword-stripping pass) to keep parity with the
@@ -58,25 +58,25 @@ shared Google Claude path.
 
 ## Walk semantics
 
-`normalizeSchema` first upgrades the input to JSON Schema 2020-12, then
-walks the tree with the option set pinned by the dispatcher. Each node:
+`normalizeSchema` first detoxifies serialized Zod-instance-shaped inputs, upgrades them to
+JSON Schema 2020-12, dereferences the tree, then walks it with the option set
+pinned by the dispatcher. Each node:
 
-1. Inlines `$ref` (see "Edge cases" below).
-2. Renames `snake_case` combinator/property keys to camelCase
+1. Renames `snake_case` combinator/property keys to camelCase
    (`any_of` → `anyOf`, etc.; collisions follow python-genai
    `pop(from)`/`set(to)` semantics — snake_case wins).
-3. Applies the `handle_null_fields` collapse for nullable unions before
+2. Applies the `handle_null_fields` collapse for nullable unions before
    recursing into children.
-4. Strips keys the target provider does not support, optionally lifting
+3. Strips keys the target provider does not support, optionally lifting
    human-meaningful keys (`pattern`, `format`, min/max, `default`,
    `examples`, ...) into the sibling `description` via the spill formatter
    (`spill.ts`). Structural/meta keys (`$ref`, `$defs`,
    `additionalProperties`) are not spilled.
-5. Normalizes type unions (`type: ["T", "null"]` → `type: "T"` + nullable
+4. Normalizes type unions (`type: ["T", "null"]` → `type: "T"` + nullable
    marker on Google, plain `type: "T"` on CCA).
-6. Collapses object-only / same-type combiners, optionally lossy-collapses
+5. Collapses object-only / same-type combiners, optionally lossy-collapses
    mixed-type combiners (CCA only), and runs the residual-combiner fixpoint.
-7. Validates against AJV 2020 when `validateAndFallback` is set (CCA path)
+6. Validates against AJV 2020 when `validateAndFallback` is set (CCA path)
    and emits the per-tool fallback `{ "type": "object", "properties": {} }`
    on residual incompatibility — `type` array, `type: "null"`, `nullable`
    key, or any remaining `anyOf`/`oneOf`/`allOf`.
@@ -99,11 +99,10 @@ which composes:
    (`anyOf: [<original>, { "type": "null" }]`). Tuple `prefixItems` are
    strictified recursively.
 
-The two passes share node-level caches and the same epoch-based cycle
-guard, so a single walk on the wire path normalizes refs, allOf, and
-nullable wrapping consistently. `tryEnforceStrictSchema` is fail-open:
-if anything throws, it returns `{ strict: false, schema: original }` so
-callers MUST emit `strict: true` only when enforcement actually succeeded.
+The two passes use cache/cycle guards, so refs, `allOf`, and nullable wrapping
+stay deterministic without recursing forever. `tryEnforceStrictSchema` is
+fail-open: if anything throws, it returns `{ strict: false, schema: upgraded }`
+so callers MUST emit `strict: true` only when enforcement actually succeeded.
 
 ### Edge cases the strict-mode normalizer handles
 

@@ -1,4 +1,6 @@
-[PROJECT]
+PROJECT
+===================================
+
 <workstation>
 {{#list environment prefix="- " join="\n"}}{{label}}: {{value}}{{/list}}
 </workstation>
@@ -47,4 +49,3 @@ Today is {{date}}, and the current working directory is '{{cwd}}'.
 {{#if appendPrompt}}
 {{appendPrompt}}
 {{/if}}
-[/PROJECT]

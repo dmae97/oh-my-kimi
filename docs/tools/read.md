@@ -30,9 +30,11 @@ For normal file-like reads, `splitPathAndSel()` in `packages/coding-agent/src/to
 | Suffix | Meaning |
 | --- | --- |
 | `:raw` | Raw/verbatim mode. Disables structural summaries and line prefixes. |
-| `:N` / `:LN` | Start at 1-indexed line `N`, open-ended. |
+| `:conflicts` | Render unresolved Git merge-conflict regions for a local file. |
+| `:N` / `:LN` / `:N-` | Start at 1-indexed line `N`, open-ended. |
 | `:A-B` / `:LA-LB` | Inclusive 1-indexed line range. |
 | `:A+C` / `:LA+LC` | `C` lines starting at `A`; tool converts this to end line `A + C - 1`. |
+| `:R1,R2,...` | Multiple ranges, sorted and merged before reading (for example `:5-16,960-973`). |
 | `:range:raw` or `:raw:range` | Same line selection, but raw output. |
 
 Validation in `parseLineRangeChunk()`:
@@ -42,7 +44,7 @@ Validation in `parseLineRangeChunk()`:
 
 Selector parsing intentionally falls through for unrecognized trailing `:...`; archive and SQLite paths consume their own colon syntax.
 
-URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts` and support only `:raw`, `:N`, `:A-B`, and `:A+C` — no optional `L` prefix there.
+URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts`, but use the same line-range parser for `:raw`, `:N`, `:A-B`, `:A+C`, `:5-10,20-30`, and `:range:raw` / `:raw:range`. Because URL ports also use `:`, add a trailing slash before a selector on a host/port URL, e.g. `https://example.com/:80`.
 
 ## Outputs
 - Single-shot `AgentToolResult` built through `toolResult()` in `packages/coding-agent/src/tools/tool-result.ts`.
@@ -95,7 +97,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 ### Local text files
 - No selector: if summarization is enabled and the file is small enough, `#trySummarize()` calls `summarizeCode()`.
   - Guards: file size `<= 2 MiB` (`MAX_SUMMARY_BYTES`), line count `<= 20_000` (`MAX_SUMMARY_LINES`).
-  - Summary output keeps selected declarations and replaces elided spans with `...`. When at least one span is elided, the text content ends with a footer like `[NN lines across MM elided regions; read <path>:raw or a line range like <path>:1-9999 for verbatim content]` so the agent has a concrete recovery selector instead of a bare marker.
+  - Summary output keeps selected declarations and replaces elided spans with `...` or merged brace-pair lines containing `..`. When at least one span is elided, the text content ends with a footer like `[NN lines elided; re-read needed ranges, e.g. <path>:5-16,40-80]` using concrete ranges from the actual elisions.
   - When an elided block sits between matching brace lines, `#renderSummary()` may merge them into one anchored line rather than emitting separate opener/closer lines.
 - Explicit selector or summarization miss: streamed text read.
   - Default open-ended limit is `min(session setting read.defaultLimit, DEFAULT_MAX_LINES)`.
@@ -104,8 +106,8 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
     - hashline numbered output when edit mode is hashline, read is not raw, source is mutable, edit tool exists, and `readHashLines !== false`
     - otherwise optional line numbers when `readLineNumbers === true`
     - raw mode suppresses both
-- Prefix format in hashline mode is a `¶PATH#TAG` header followed by `LINE:TEXT`, e.g. `¶src/foo.ts#0a` and `41:def alpha():`, from the session snapshot store plus `formatNumberedLine()` / `formatHashlineHeader()`.
-- The `edit`/hashline path consumes that header plus bare line numbers later; the two-hex tag is opaque and only meaningful in the session snapshot store that minted it. Immutable sources and `:raw` intentionally suppress hashline headers.
+- Prefix format in hashline mode is a `¶PATH#TAG` header followed by `LINE:TEXT`, e.g. `¶src/foo.ts#0A1B` and `41:def alpha():`, from the session snapshot store plus `formatNumberedLine()` / `formatHashlineHeader()`.
+- The `edit`/hashline path consumes that header plus bare line numbers later; the four-hex tag is opaque and only meaningful in the session snapshot store that minted it. Immutable sources and `:raw` intentionally suppress hashline headers.
 
 ### Directory listings
 - `#readDirectory()` calls `buildDirectoryTree()` with:
@@ -207,7 +209,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 - `parseReadUrlTarget()` accepts `http://`, `https://`, or `www.` targets.
 - Plain URL reads call `executeReadUrl()` in `packages/coding-agent/src/tools/fetch.ts`.
 - `:raw` means raw HTML/body fallback path; plain URL reads prefer rendered/reader-friendly output.
-- `:N`, `:A-B`, `:A+C` do not refetch. They page over cached output from the prior or current URL render.
+- `:N`, `:A-B`, `:A+C`, and comma-separated multi-ranges do not refetch when cached output is usable. They page over cached output from the prior or current URL render.
 - URL render pipeline in `renderUrl()`:
   1. normalize scheme (`https://` added for bare `www.`)
   2. try special handlers for known sites unless raw
@@ -290,7 +292,6 @@ Notes: ...
 - URL fetch failure does not throw when HTTP fetch succeeds but `response.ok === false`; it returns a failed URL read with `method: "failed"` and explanatory notes.
 
 ## Notes
-- `readSchema` examples include `https://example.com:L1-L40`, but URL selector parsing in `packages/coding-agent/src/tools/fetch.ts` does not accept `L` prefixes.
 - Hashline anchors are suppressed for raw reads and immutable internal resources because there is no editable backing target for later `edit` consumption.
 - `splitPathAndSel()` intentionally treats unknown trailing `:...` as part of the path so `archive.zip:inner/file` and `db.sqlite:table:key` still work.
 - `resolveReadPath()` contains macOS-specific filename fallbacks for screenshot timestamps, NFD Unicode normalization, and curly apostrophes.

@@ -663,6 +663,16 @@ export class Settings {
 			raw["edit.mode"] = "hashline";
 		}
 
+		// compaction.strategy: removed local-model shake-summary mode; plain shake
+		// keeps the same mechanical artifact-backed reduction without background CPU.
+		const compactionObj = raw.compaction as Record<string, unknown> | undefined;
+		if (compactionObj?.strategy === "shake-summary") {
+			compactionObj.strategy = "shake";
+		}
+		if (raw["compaction.strategy"] === "shake-summary") {
+			raw["compaction.strategy"] = "shake";
+		}
+
 		// statusLine: rename "plan_mode" segment to "mode"
 		const statusLineObj = raw.statusLine as Record<string, unknown> | undefined;
 		if (statusLineObj) {
@@ -690,6 +700,18 @@ export class Settings {
 			const memoryRoot = (memoryBackendObj ?? {}) as Record<string, unknown>;
 			memoryRoot.backend = next;
 			raw.memory = memoryRoot;
+		}
+
+		// Rename the legacy local `mnemosyne` memory backend to `mnemopi`.
+		// - `memory.backend: "mnemosyne"` now selects the renamed backend.
+		// - the top-level `mnemosyne` settings object becomes `mnemopi`.
+		// Idempotent: skips the object move once `mnemopi` is materialised.
+		if (memoryBackendObj && memoryBackendObj.backend === "mnemosyne") {
+			memoryBackendObj.backend = "mnemopi";
+		}
+		if ("mnemosyne" in raw && !("mnemopi" in raw)) {
+			raw.mnemopi = raw.mnemosyne;
+			delete raw.mnemosyne;
 		}
 
 		// hindsight: dynamicBankId/agentName -> scoping enum + bankId

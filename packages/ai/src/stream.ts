@@ -650,7 +650,7 @@ export function mapAnthropicToolChoice(choice?: ToolChoice): AnthropicOptions["t
 	return undefined;
 }
 
-function mapGoogleToolChoice(
+export function mapGoogleToolChoice(
 	choice?: ToolChoice,
 ): GoogleOptions["toolChoice"] | GoogleGeminiCliOptions["toolChoice"] | GoogleVertexOptions["toolChoice"] {
 	if (!choice) return undefined;
@@ -659,7 +659,16 @@ function mapGoogleToolChoice(
 		if (choice === "auto" || choice === "none" || choice === "any") return choice;
 		return undefined;
 	}
-	return "any";
+	// Named-tool routing on Google: emit an `ANY`-mode allow-list of one entry,
+	// mirroring the Anthropic mapper that returns `{type: "tool", name}`.
+	if (choice.type === "tool") {
+		return choice.name ? { mode: "ANY", allowedFunctionNames: [choice.name] } : undefined;
+	}
+	if (choice.type === "function") {
+		const name = "function" in choice ? choice.function?.name : choice.name;
+		return name ? { mode: "ANY", allowedFunctionNames: [name] } : undefined;
+	}
+	return undefined;
 }
 
 function mapOpenAiToolChoice(choice?: ToolChoice): OpenAICompletionsOptions["toolChoice"] {
@@ -718,6 +727,7 @@ function mapOptionsForApi<TApi extends Api>(
 		initiatorOverride: options?.initiatorOverride,
 		maxRetryDelayMs: options?.maxRetryDelayMs,
 		metadata: options?.metadata,
+		taskBudget: options?.taskBudget,
 		sessionId: options?.sessionId,
 		promptCacheKey: options?.promptCacheKey,
 		streamFirstEventTimeoutMs: options?.streamFirstEventTimeoutMs,

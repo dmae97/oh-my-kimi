@@ -29,6 +29,7 @@ import {
 import type { InteractiveModeContext } from "../../modes/types";
 import { type SessionInfo, SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
+import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import {
 	isImageProviderPreference,
 	isSearchProviderPreference,
@@ -252,7 +253,7 @@ export class SelectorController {
 				break;
 			case "thinkingLevel":
 			case "defaultThinkingLevel":
-				this.ctx.session.setThinkingLevel(value as ThinkingLevel, true);
+				this.ctx.session.setThinkingLevel(value as ConfiguredThinkingLevel, true);
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorBorderColor();
 				break;
@@ -403,10 +404,18 @@ export class SelectorController {
 				this.ctx.session.modelRegistry,
 				this.ctx.session.scopedModels,
 				async (model, role, thinkingLevel, selector) => {
+					// `auto` is session-global: never baked into a per-role model value
+					// (it can't round-trip through `model:<level>`). Apply it to the session
+					// separately and persist via `defaultThinkingLevel`.
+					const isAuto = thinkingLevel === AUTO_THINKING;
+					const concreteThinking = isAuto ? undefined : thinkingLevel;
 					try {
 						if (role === null) {
-							// Temporary: update agent state but don't persist to settings
+							// Temporary: update agent state but don't persist the model to settings
 							await this.ctx.session.setModelTemporary(model);
+							if (isAuto) {
+								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
+							}
 							this.ctx.statusLine.invalidate();
 							this.ctx.updateEditorBorderColor();
 							this.ctx.showStatus(`Temporary model: ${selector ?? model.id}`);
@@ -416,10 +425,13 @@ export class SelectorController {
 							// Default: update agent state and persist
 							await this.ctx.session.setModel(model, role, {
 								selector,
-								thinkingLevel,
+								thinkingLevel: concreteThinking,
+								persist: true,
 							});
-							if (thinkingLevel && thinkingLevel !== ThinkingLevel.Inherit) {
-								this.ctx.session.setThinkingLevel(thinkingLevel);
+							if (isAuto) {
+								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
+							} else if (concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
+								this.ctx.session.setThinkingLevel(concreteThinking);
 							}
 							this.ctx.statusLine.invalidate();
 							this.ctx.updateEditorBorderColor();
@@ -429,8 +441,11 @@ export class SelectorController {
 							// Other roles (smol, slow): just update settings, not current model
 							this.ctx.settings.setModelRole(
 								role,
-								formatModelSelectorValue(selector ?? `${model.provider}/${model.id}`, thinkingLevel),
+								formatModelSelectorValue(selector ?? `${model.provider}/${model.id}`, concreteThinking),
 							);
+							if (isAuto) {
+								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
+							}
 							const roleInfo = getRoleInfo(role, settings);
 							const roleLabel = roleInfo?.name ?? role;
 							this.ctx.showStatus(`${roleLabel} model: ${selector ?? model.id}`);

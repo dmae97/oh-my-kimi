@@ -47,6 +47,7 @@ The factory can:
 - register slash commands via `pi.registerCommand(...)`
 - register custom message renderers via `pi.registerMessageRenderer(...)`
 - run shell commands via `pi.exec(...)`
+- author schemas/helpers with injected `pi.zod`, `pi.typebox`, and package exports via `pi.pi`
 
 ## Discovery and loading
 
@@ -218,7 +219,7 @@ Command/renderer conflicts:
 - `setEditorText`, `getEditorText`
 - `theme` getter
 
-`ctx.hasUI` indicates whether interactive UI is available.
+`ctx` includes `hasUI`, `cwd`, `sessionManager`, `modelRegistry`, current `model`, `isIdle()`, `abort()`, and `hasQueuedMessages()`.
 
 When running with no UI, the default no-op context behavior is:
 

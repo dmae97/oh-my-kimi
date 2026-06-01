@@ -1,13 +1,22 @@
 import { DEFAULT_MAX_BYTES, OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
+import { EVAL_HEARTBEAT_OP } from "../heartbeat";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
+import type { JsStatusEvent } from "./shared/types";
 
 export interface JsExecutorOptions {
 	cwd?: string;
 	timeoutMs?: number;
 	deadlineMs?: number;
+	/**
+	 * Inactivity budget (ms). Used for worker cold-start headroom and
+	 * timeout-annotation text when the caller drives cancellation via an
+	 * idle-aware `signal` instead of `deadlineMs`/`timeoutMs`. Never arms a timer.
+	 */
+	idleTimeoutMs?: number;
 	onChunk?: (chunk: string) => Promise<void> | void;
+	onStatus?: (event: JsStatusEvent) => void;
 	signal?: AbortSignal;
 	sessionId: string;
 	reset?: boolean;
@@ -44,6 +53,19 @@ function isAbortError(error: unknown): boolean {
 	);
 }
 
+function isTimeoutReason(reason: unknown): boolean {
+	return (
+		(reason instanceof DOMException && reason.name === "TimeoutError") ||
+		(reason instanceof Error && reason.name === "TimeoutError")
+	);
+}
+
+function formatJsTimeoutAnnotation(timeoutMs: number | undefined): string {
+	if (timeoutMs === undefined) return "Command timed out";
+	const secs = Math.max(1, Math.round(timeoutMs / 1000));
+	return `Command timed out after ${secs} seconds`;
+}
+
 export async function executeJs(code: string, options: JsExecutorOptions): Promise<JsResult> {
 	const displayOutputs: JsDisplayOutput[] = [];
 	const outputSink = new OutputSink({
@@ -54,15 +76,19 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 		maxColumns: resolveOutputMaxColumns(options.session.settings),
 		onChunk: chunk => options.onChunk?.(chunk),
 	});
-	const timeoutMs = getExecutionTimeoutMs(options);
+	const legacyTimeoutMs = getExecutionTimeoutMs(options);
 	const timeoutSignal =
-		typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-			? AbortSignal.timeout(timeoutMs)
+		typeof legacyTimeoutMs === "number" && Number.isFinite(legacyTimeoutMs) && legacyTimeoutMs > 0
+			? AbortSignal.timeout(legacyTimeoutMs)
 			: undefined;
 	const signal =
 		options.signal && timeoutSignal
 			? AbortSignal.any([options.signal, timeoutSignal])
 			: (options.signal ?? timeoutSignal);
+	// The eval tool drives cancellation via an idle-aware `signal` and passes only
+	// an inactivity budget; use it solely as worker cold-start headroom and never
+	// derive a competing fixed timer from it.
+	const acquireBudgetMs = legacyTimeoutMs ?? options.idleTimeoutMs;
 
 	try {
 		await executeInVmContext({
@@ -73,11 +99,17 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 			reset: options.reset,
 			code,
 			filename: `js-cell-${crypto.randomUUID()}.js`,
-			timeoutMs,
+			timeoutMs: acquireBudgetMs,
 			runState: {
 				signal,
 				onText: chunk => outputSink.push(chunk),
 				onDisplay: output => {
+					if (output.type === "status") {
+						// Heartbeats are pure idle-watchdog keepalives: forward them so
+						// the eval tool re-arms its timer, but never store or render them.
+						options.onStatus?.(output.event);
+						if (output.event.op === EVAL_HEARTBEAT_OP) return;
+					}
 					displayOutputs.push(output);
 				},
 			},
@@ -97,9 +129,9 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 		};
 	} catch (error) {
 		if (signal?.aborted || isAbortError(error)) {
-			const timeoutReason = timeoutSignal?.aborted ? "Command timed out" : "";
-			if (timeoutReason) {
-				outputSink.push(timeoutReason);
+			const timedOut = Boolean(timeoutSignal?.aborted) || isTimeoutReason(options.signal?.reason);
+			if (timedOut) {
+				outputSink.push(formatJsTimeoutAnnotation(legacyTimeoutMs ?? options.idleTimeoutMs));
 			}
 			const summary = await outputSink.dump();
 			return {

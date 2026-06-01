@@ -1,5 +1,11 @@
 import path from "node:path";
 
+const URL_LIKE_PATH_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+function isUrlLikePath(filePath: string): boolean {
+	return URL_LIKE_PATH_RE.test(filePath);
+}
+
 /**
  * One file's contribution to a grouped file output. The header itself is generated
  * by `formatGroupedFiles` (single `#` for root files, `##` for files inside a dir);
@@ -43,7 +49,7 @@ export function formatGroupedFiles(
 ): GroupedFilesOutput {
 	const filesByDirectory = new Map<string, string[]>();
 	for (const filePath of files) {
-		const directory = path.dirname(filePath).replace(/\\/g, "/");
+		const directory = isUrlLikePath(filePath) ? "." : path.dirname(filePath).replace(/\\/g, "/");
 		if (!filesByDirectory.has(directory)) {
 			filesByDirectory.set(directory, []);
 		}
@@ -66,7 +72,8 @@ export function formatGroupedFiles(
 				const section = renderFile(filePath);
 				if (section.skip) continue;
 				pushSeparatorIfNeeded();
-				const header = `# ${path.basename(filePath)}${section.headerSuffix ?? ""}`;
+				const headerName = isUrlLikePath(filePath) ? filePath : path.basename(filePath);
+				const header = `# ${headerName}${section.headerSuffix ?? ""}`;
 				model.push(header, ...section.modelLines);
 				display.push(header, ...(section.displayLines ?? section.modelLines));
 			}

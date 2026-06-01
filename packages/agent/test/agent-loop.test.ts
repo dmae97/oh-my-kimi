@@ -334,7 +334,7 @@ describe("agentLoop with AgentMessage", () => {
 					}
 					const partial = makeMessage(index);
 					const toolCall = partial.content[index - 1];
-					if (!toolCall || toolCall.type !== "toolCall") throw new Error("Expected tool call");
+					if (toolCall?.type !== "toolCall") throw new Error("Expected tool call");
 					stream.push({ type: "toolcall_start", contentIndex: index - 1, partial });
 					stream.push({
 						type: "toolcall_delta",
@@ -371,7 +371,7 @@ describe("agentLoop with AgentMessage", () => {
 				event.type === "turn_end" && event.toolResults.length === 8,
 		);
 		expect(batchedTurn).toBeDefined();
-		if (!batchedTurn || batchedTurn.message.role !== "assistant") return;
+		if (batchedTurn?.message.role !== "assistant") return;
 		expect(batchedTurn.message.stopReason).toBe("toolUse");
 		expect(batchedTurn.message.content.filter(block => block.type === "toolCall")).toHaveLength(8);
 		expect(batchedTurn.toolResults.map(result => result.toolCallId).sort()).toEqual([
@@ -571,7 +571,7 @@ describe("agentLoop with AgentMessage", () => {
 				e.type === "message_end" && e.message.role === "toolResult",
 		);
 		expect(toolResultEvent).toBeDefined();
-		if (!toolResultEvent || toolResultEvent.message.role !== "toolResult") return;
+		if (toolResultEvent?.message.role !== "toolResult") return;
 		expect(toolResultEvent.message.isError).toBe(true);
 		expect(toolResultEvent.message.toolCallId).toBe("tool-1");
 		expect(toolResultEvent.message.content[0]?.type).toBe("text");

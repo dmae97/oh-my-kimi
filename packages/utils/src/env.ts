@@ -161,7 +161,17 @@ export function isCompiledBinary(): boolean {
 	return url.includes("$bunfs") || url.includes("~BUN") || url.includes("%7EBUN");
 }
 
-const TRUTHY: Dict<boolean> = { "1": true, Y: true, TRUE: true, YES: true, ON: true };
+const TRUTHY: Dict<boolean> = {
+	"1": true,
+	Y: true,
+	y: true,
+	TRUE: true,
+	true: true,
+	YES: true,
+	yes: true,
+	ON: true,
+	on: true,
+};
 export function $flag(name: string, def: boolean = false): boolean {
 	const value = $env[name];
 	if (!value) return def;

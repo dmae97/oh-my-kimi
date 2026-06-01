@@ -154,6 +154,26 @@ describe("tool path arrays", () => {
 		expect(details?.scopePath).toBe("apps/, packages/, phases/");
 	});
 
+	it("records hashline snapshots for matched files", async () => {
+		const session = createTestSession(tempDir);
+		const tools = await createTools(session);
+		const tool = tools.find(entry => entry.name === "search");
+		expect(tool).toBeDefined();
+		if (!tool) throw new Error("Missing search tool");
+
+		const result = await tool.execute("search-records-snapshot", {
+			pattern: "shared-needle",
+			paths: ["apps/"],
+		});
+		const text = getText(result);
+		const tag = /^# apps\/\n## grep\.txt#([0-9A-F]{4})/m.exec(text)?.[1];
+		expect(tag).toBeDefined();
+		if (!tag) throw new Error("Missing search snapshot tag");
+
+		const snapshot = session.fileSnapshotStore?.byHash(path.join(tempDir, "apps", "grep.txt"), tag);
+		expect(snapshot?.text).toBe("shared-needle apps\n");
+	});
+
 	it("search accepts a single string path through tool validation", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "search");

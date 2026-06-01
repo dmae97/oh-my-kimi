@@ -3,7 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { InternalUrlRouter, LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import {
+	type InternalResource,
+	type InternalUrl,
+	InternalUrlRouter,
+	LocalProtocolHandler,
+	type ProtocolHandler,
+} from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
 import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
@@ -14,6 +20,44 @@ function getResultText(result: { content: Array<{ type: string; text?: string }>
 		.filter(c => c.type === "text")
 		.map(c => c.text ?? "")
 		.join("\n");
+}
+
+function virtualDocName(url: InternalUrl): string {
+	const host = url.rawHost || url.hostname;
+	const pathname = url.rawPathname ?? url.pathname;
+	return host ? (pathname && pathname !== "/" ? host + pathname : host) : "";
+}
+
+function registerVirtualDocs(docs: ReadonlyMap<string, string>): void {
+	const handler: ProtocolHandler = {
+		scheme: "virtual",
+		immutable: true,
+		async resolve(url: InternalUrl): Promise<InternalResource> {
+			const name = virtualDocName(url);
+			if (!name) {
+				const content = Array.from(docs.keys())
+					.map(key => `- virtual://${key}`)
+					.join("\n");
+				return {
+					url: url.href,
+					content,
+					contentType: "text/plain",
+					size: Buffer.byteLength(content, "utf-8"),
+				};
+			}
+			const content = docs.get(name);
+			if (content === undefined) {
+				throw new Error(`Virtual doc not found: ${name}`);
+			}
+			return {
+				url: url.href,
+				content,
+				contentType: "text/plain",
+				size: Buffer.byteLength(content, "utf-8"),
+			};
+		},
+	};
+	InternalUrlRouter.instance().register(handler);
 }
 
 describe("SearchTool internal URL resolution", () => {
@@ -91,6 +135,52 @@ describe("SearchTool internal URL resolution", () => {
 		expect(text).toContain("disk full");
 		expect(text).not.toContain("timeout");
 		expect(text).not.toContain("INFO");
+	});
+
+	it("searches virtual internal URL content without a backing file", async () => {
+		registerVirtualDocs(new Map([["doc.md", "alpha line\nneedle in virtual content\ngamma line\n"]]));
+
+		const session = createSession();
+		const tool = new SearchTool(session);
+
+		const result = await tool.execute("test-call", {
+			pattern: "needle",
+			paths: ["virtual://doc.md"],
+		});
+
+		const text = getResultText(result);
+		expect(text).toContain("needle in virtual content");
+		expect(result.details?.files).toEqual(["virtual://doc.md"]);
+	});
+
+	it("applies line ranges when searching virtual internal URL content", async () => {
+		registerVirtualDocs(new Map([["doc.md", "needle outside range\nmiddle line\nneedle inside range\n"]]));
+
+		const session = createSession();
+		const tool = new SearchTool(session);
+
+		const result = await tool.execute("test-call", {
+			pattern: "needle",
+			paths: ["virtual://doc.md:3-3"],
+		});
+
+		const text = getResultText(result);
+		expect(text).toContain("needle inside range");
+		expect(text).not.toContain("needle outside range");
+	});
+
+	it("expands omp:// root to grep embedded documentation files", async () => {
+		const session = createSession();
+		const tool = new SearchTool(session);
+
+		const result = await tool.execute("test-call", {
+			pattern: "Search file contents with a regex across files",
+			paths: ["omp://"],
+		});
+
+		const text = getResultText(result);
+		expect(text).toContain("# omp://tools/search.md");
+		expect(text).toContain("Search file contents with a regex across files");
 	});
 
 	it("throws when internal URL has no sourcePath", async () => {

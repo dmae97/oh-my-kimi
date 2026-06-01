@@ -35,10 +35,12 @@ import {
 import { APP_NAME, adjustHsv, getProjectDir, hsvToRgb, isEnoent, logger, postmortem, prompt } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { KeybindingsManager } from "../config/keybindings";
+import { MODEL_ROLES, type ModelRole } from "../config/model-registry";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUISelectItem,
 	ExtensionWidgetContent,
 	ExtensionWidgetOptions,
 } from "../extensibility/extensions";
@@ -57,10 +59,11 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
 };
-import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import type { AgentSession, AgentSessionEvent, ResolvedRoleModel } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
+import type { ShakeMode } from "../session/shake-types";
 import { formatDuration } from "../slash-commands/helpers/format";
 import { STTController, type SttState } from "../stt";
 import type { LspStartupServerInfo } from "../tools";
@@ -80,7 +83,7 @@ import { DynamicBorder } from "./components/dynamic-border";
 import type { EvalExecutionComponent } from "./components/eval-execution";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
-import type { HookSelectorComponent } from "./components/hook-selector";
+import type { HookSelectorComponent, HookSelectorSlider } from "./components/hook-selector";
 import { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent, type LspServerInfo as WelcomeLspServerInfo } from "./components/welcome";
@@ -90,6 +93,7 @@ import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
+import { OmfgController } from "./controllers/omfg-controller";
 import { SelectorController } from "./controllers/selector-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
@@ -115,7 +119,14 @@ import {
 	onThemeChange,
 	theme,
 } from "./theme/theme";
-import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoItem, TodoPhase } from "./types";
+import type {
+	CompactionQueuedMessage,
+	InteractiveModeContext,
+	InteractiveModeInitOptions,
+	SubmittedUserInput,
+	TodoItem,
+	TodoPhase,
+} from "./types";
 import { UiHelpers } from "./utils/ui-helpers";
 
 const HINT_SHIMMER_PALETTE: ShimmerPalette = {
@@ -228,6 +239,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	statusContainer: Container;
 	todoContainer: Container;
 	btwContainer: Container;
+	omfgContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	hookWidgetContainerAbove: Container;
@@ -307,6 +319,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 
 	readonly #btwController: BtwController;
+	readonly #omfgController: OmfgController;
 	readonly #commandController: CommandController;
 	readonly #todoCommandController: TodoCommandController;
 	readonly #eventController: EventController;
@@ -324,8 +337,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
 	#welcomeComponent?: WelcomeComponent;
-	#todoClosingTimeout?: NodeJS.Timeout;
-	#todoClosingState: "idle" | "playing" | "done" = "idle";
 
 	constructor(
 		session: AgentSession,
@@ -362,6 +373,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.statusContainer = new Container();
 		this.todoContainer = new Container();
 		this.btwContainer = new Container();
+		this.omfgContainer = new Container();
 		this.editor = new CustomEditor(getEditorTheme());
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setAutocompleteMaxVisible(settings.get("autocompleteMaxVisible"));
@@ -369,7 +381,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender(true);
 		};
 		this.editor.onAutocompleteUpdate = () => {
-			this.ui.requestRender();
+			this.ui.requestRender(false, { allowUnknownViewportMutation: true });
 		};
 		this.#syncEditorMaxHeight();
 		this.#resizeHandler = () => {
@@ -423,6 +435,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.#uiHelpers = new UiHelpers(this);
 		this.#btwController = new BtwController(this);
+		this.#omfgController = new OmfgController(this);
 		this.#extensionUiController = new ExtensionUiController(this);
 		this.#eventController = new EventController(this);
 		this.#commandController = new CommandController(this);
@@ -432,7 +445,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#observerRegistry = new SessionObserverRegistry();
 	}
 
-	async init(): Promise<void> {
+	playWelcomeIntro(): void {
+		this.#welcomeComponent?.playIntro(() => this.ui.requestRender());
+	}
+	async init(options: InteractiveModeInitOptions = {}): Promise<void> {
 		if (this.isInitialized) return;
 
 		this.keybindings = logger.time("InteractiveMode.init:keybindings", () => KeybindingsManager.create());
@@ -490,7 +506,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.addChild(new Spacer(1));
 			this.ui.addChild(this.#welcomeComponent);
 			this.ui.addChild(new Spacer(1));
-			this.#welcomeComponent.playIntro(() => this.ui.requestRender());
+			if (!options.suppressWelcomeIntro) {
+				this.playWelcomeIntro();
+			}
 
 			// Add changelog if provided
 			if (this.#changelogMarkdown) {
@@ -515,6 +533,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.addChild(this.statusContainer);
 		this.ui.addChild(this.todoContainer);
 		this.ui.addChild(this.btwContainer);
+		this.ui.addChild(this.omfgContainer);
 		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
 		this.ui.addChild(this.hookWidgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
@@ -1035,28 +1054,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#renderTodoList(): void {
 		this.todoContainer.clear();
 		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
-		if (phases.length === 0) {
-			this.#stopTodoClosingAnimation();
-			this.#todoClosingState = "idle";
-			return;
-		}
-
-		// When every visible task is completed or abandoned, fold the panel
-		// away with a brief celebratory animation (see
-		// #startTodoClosingAnimation). State machine guards against replaying
-		// on every re-render once the animation has finished.
-		const allClosed = phases.every(phase =>
-			phase.tasks.every(t => t.status === "completed" || t.status === "abandoned"),
-		);
-		if (allClosed) {
-			if (this.#todoClosingState === "done") return;
-			if (this.#todoClosingState === "idle") this.#startTodoClosingAnimation(phases);
-			return;
-		}
-		// Any open task here means the close animation is no longer applicable.
-		this.#stopTodoClosingAnimation();
-		this.#todoClosingState = "idle";
-
+		if (phases.length === 0) return;
 		const indent = "  ";
 		const hook = theme.tree.hook;
 		const lines = ["", indent + theme.bold(theme.fg("accent", "Todos"))];
@@ -1096,87 +1094,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 
 		this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
-	}
-
-	/**
-	 * Play a short "all done" close animation: a celebratory bright frame,
-	 * a brief dim transition, then a row-by-row vertical collapse until the
-	 * panel is empty. Triggered from #renderTodoList exactly once per
-	 * open-to-all-closed transition; #todoClosingState gates re-entry.
-	 *
-	 * While playing, the animator owns the panel container; #renderTodoList
-	 * returns early. Subsequent renders with state === "done" keep the
-	 * panel hidden until a fresh open task flips state back to "idle".
-	 */
-	#startTodoClosingAnimation(phases: TodoPhase[]): void {
-		this.#stopTodoClosingAnimation();
-		this.#todoClosingState = "playing";
-
-		const indent = "  ";
-		const hook = theme.tree.hook;
-		const snapshot: string[] = ["", `${indent}Todos ${theme.status.success}`];
-		for (let i = 0; i < phases.length; i++) {
-			const phase = phases[i];
-			snapshot.push(`${indent}${hook} ${formatPhaseDisplayName(phase.name, i + 1)}`);
-			for (let j = 0; j < phase.tasks.length; j++) {
-				const task = phase.tasks[j];
-				const mark = task.status === "abandoned" ? theme.status.aborted : theme.status.success;
-				const prefix = `${indent}${j === 0 ? hook : " "} `;
-				snapshot.push(`${prefix}${mark} ${task.content}`);
-			}
-		}
-
-		// Frame schedule (tint, drop-from-bottom, hold-ms). Frame 0 holds long
-		// enough for the user to actually read the final checkmarks before the
-		// fade starts; later frames fade and progressively drop rows from the
-		// bottom for the collapse effect. Total runtime ≈ 1.4s.
-		const frames = [
-			{ tint: "success" as const, drop: 0, holdMs: 900 },
-			{ tint: "success" as const, drop: 0, holdMs: 150 },
-			{ tint: "muted" as const, drop: 1, holdMs: 90 },
-			{ tint: "muted" as const, drop: 2, holdMs: 90 },
-			{ tint: "dim" as const, drop: 3, holdMs: 80 },
-			{ tint: "dim" as const, drop: 4, holdMs: 80 },
-		];
-
-		let frameIdx = 0;
-		const tick = (): void => {
-			if (this.#todoClosingState !== "playing") return;
-			if (frameIdx >= frames.length) {
-				this.todoContainer.clear();
-				this.#stopTodoClosingAnimation();
-				this.#todoClosingState = "done";
-				this.ui.requestRender();
-				return;
-			}
-			const { tint, drop, holdMs } = frames[frameIdx];
-			const visibleCount = Math.max(0, snapshot.length - drop);
-			this.todoContainer.clear();
-			if (visibleCount > 0) {
-				const visible = snapshot.slice(0, visibleCount);
-				const painted = visible.map((line, idx) => {
-					if (idx === 1) {
-						// Header row gets a bold flourish on the opening tick.
-						const colored = theme.fg(tint, line);
-						return frameIdx === 0 ? theme.bold(colored) : colored;
-					}
-					return theme.fg(tint, line);
-				});
-				this.todoContainer.addChild(new Text(painted.join("\n"), 1, 0));
-			}
-			this.ui.requestRender();
-			frameIdx++;
-			this.#todoClosingTimeout = setTimeout(tick, holdMs);
-		};
-
-		tick();
-	}
-
-	#stopTodoClosingAnimation(): void {
-		if (this.#todoClosingTimeout) {
-			clearTimeout(this.#todoClosingTimeout);
-			this.#todoClosingTimeout = undefined;
-		}
 	}
 
 	async #loadTodoList(): Promise<void> {
@@ -1702,6 +1619,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	async #applyPlanExecutionModel(entry: ResolvedRoleModel | undefined): Promise<void> {
+		if (!entry) return;
+		try {
+			await this.session.applyRoleModel(entry);
+			this.statusLine.invalidate();
+			this.updateEditorBorderColor();
+			this.showStatus(`Continuing with ${entry.role}: ${entry.model.name || entry.model.id}`);
+		} catch (error) {
+			this.showWarning(
+				`Could not switch to the ${entry.role} model: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
 	async #approvePlan(
 		planContent: string,
 		options: {
@@ -1710,6 +1641,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			title: string;
 			preserveContext?: boolean;
 			compactBeforeExecute?: boolean;
+			executionModel?: ResolvedRoleModel;
 		},
 	): Promise<void> {
 		await renameApprovedPlanFile({
@@ -1790,6 +1722,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 			return;
 		}
+
+		await this.#applyPlanExecutionModel(options.executionModel);
 
 		// Approved plans land in a fresh (or compacted) session whose first user-visible
 		// turn is the synthetic plan-approved prompt — that path bypasses the
@@ -2106,13 +2040,42 @@ export class InteractiveMode implements InteractiveModeContext {
 			contextUsage?.percent != null
 				? `Approve and keep context (${contextUsage.percent.toFixed(1)}%)`
 				: "Approve and keep context";
+
+		// Model-tier slider: let the operator pick which configured role model
+		// (smol/default/slow/…) executes the approved plan. The slider always starts
+		// on the `default` tier so execution defaults to the default model no matter
+		// which model drove the planning conversation. Left/right move it from there;
+		// hidden when fewer than two role models resolve — a lone tier is no choice.
+		// `selectedTierIndex` tracks the live slider position.
+		const cycle = this.session.getRoleModelCycle(this.session.settings.get("cycleOrder"));
+		const defaultTierIndex = cycle ? cycle.models.findIndex(entry => entry.role === "default") : -1;
+		const startTierIndex = defaultTierIndex >= 0 ? defaultTierIndex : (cycle?.currentIndex ?? 0);
+		let selectedTierIndex = startTierIndex;
+		const slider: HookSelectorSlider | undefined =
+			cycle && cycle.models.length > 1
+				? {
+						caption: "continue with",
+						index: startTierIndex,
+						segments: cycle.models.map(entry => ({
+							label: entry.role,
+							color: MODEL_ROLES[entry.role as ModelRole]?.color,
+							detail: entry.model.name || entry.model.id,
+						})),
+						onChange: index => {
+							selectedTierIndex = index;
+						},
+					}
+				: undefined;
+		const helpText = slider ? `${this.#getPlanReviewHelpText()}  ◂/▸ model` : this.#getPlanReviewHelpText();
+
 		const choice = await this.showHookSelector(
 			"Plan mode - next step",
 			["Approve and execute", "Approve and compact context", keepContextLabel, "Refine plan"],
 			{
-				helpText: this.#getPlanReviewHelpText(),
+				helpText,
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
 			},
+			{ slider },
 		);
 
 		if (choice === "Approve and execute" || choice === "Approve and compact context" || choice === keepContextLabel) {
@@ -2123,12 +2086,24 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.showError(`Plan file not found at ${planFilePath}`);
 					return;
 				}
+				// Capture the operator's tier choice and hand it to #approvePlan, which
+				// applies it AFTER #exitPlanMode. #exitPlanMode restores
+				// #planModePreviousModelState (the model from before plan mode), so
+				// applying the slider choice any earlier would be silently reverted —
+				// the bug that made "continue with slow" keep executing on the default
+				// model. Deferred application also survives newSession()/compaction.
+				// `cycle.currentIndex` is exactly that restored model, so any chosen tier
+				// differing from it needs an explicit executionModel — this also covers
+				// leaving the slider on its `default` anchor while planning ran elsewhere.
+				const executionModel =
+					cycle && selectedTierIndex !== cycle.currentIndex ? cycle.models[selectedTierIndex] : undefined;
 				await this.#approvePlan(latestPlanContent, {
 					planFilePath,
 					finalPlanFilePath,
 					title: details.title,
 					preserveContext: choice !== "Approve and execute",
 					compactBeforeExecute: choice === "Approve and compact context",
+					executionModel,
 				});
 			} catch (error) {
 				this.showError(
@@ -2251,6 +2226,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			logger.warn("Failed to save session draft", { error: String(err) });
 		}
 		this.#btwController.dispose();
+		this.#omfgController.dispose();
 
 		// Emit shutdown event to hooks
 		await this.session.dispose();
@@ -2311,7 +2287,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender(true);
 		};
 		nextEditor.onAutocompleteUpdate = () => {
-			this.ui.requestRender();
+			this.ui.requestRender(false, { allowUnknownViewportMutation: true });
 		};
 		nextEditor.setMaxHeight(this.#computeEditorMaxHeight());
 		if (this.historyStorage) {
@@ -2572,6 +2548,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#prepareSessionSwitch(): void {
 		this.#btwController.dispose();
+		this.#omfgController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		this.#planReviewContainer = undefined;
 	}
@@ -2588,6 +2565,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleForkCommand(): Promise<void> {
 		this.#btwController.dispose();
+		this.#omfgController.dispose();
 		return this.#commandController.handleForkCommand();
 	}
 
@@ -2723,6 +2701,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleHandoffCommand(customInstructions);
 	}
 
+	handleShakeCommand(mode: ShakeMode): Promise<void> {
+		return this.#commandController.handleShakeCommand(mode);
+	}
+
 	executeCompaction(
 		customInstructionsOrOptions?: string | CompactOptions,
 		isAuto?: boolean,
@@ -2773,6 +2755,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleResumeSession(sessionPath: string): Promise<void> {
 		this.#btwController.dispose();
+		this.#omfgController.dispose();
 		this.resetObserverRegistry();
 		return this.#selectorController.handleResumeSession(sessionPath);
 	}
@@ -2826,12 +2809,24 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#btwController.handleEscape();
 	}
 
+	handleOmfgCommand(complaint: string): Promise<void> {
+		return this.#omfgController.start(complaint);
+	}
+
+	hasActiveOmfg(): boolean {
+		return this.#omfgController.hasActiveRequest();
+	}
+
+	handleOmfgEscape(): boolean {
+		return this.#omfgController.handleEscape();
+	}
+
 	cycleThinkingLevel(): void {
 		this.#inputController.cycleThinkingLevel();
 	}
 
-	cycleRoleModel(options?: { temporary?: boolean }): Promise<void> {
-		return this.#inputController.cycleRoleModel(options);
+	cycleRoleModel(direction?: "forward" | "backward"): Promise<void> {
+		return this.#inputController.cycleRoleModel(direction);
 	}
 
 	toggleToolOutputExpansion(): void {
@@ -2902,10 +2897,11 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showHookSelector(
 		title: string,
-		options: string[],
+		options: ExtensionUISelectItem[],
 		dialogOptions?: ExtensionUIDialogOptions,
+		extra?: { slider?: HookSelectorSlider },
 	): Promise<string | undefined> {
-		return this.#extensionUiController.showHookSelector(title, options, dialogOptions);
+		return this.#extensionUiController.showHookSelector(title, options, dialogOptions, extra);
 	}
 
 	hideHookSelector(): void {

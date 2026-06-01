@@ -7,12 +7,12 @@
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/ast-edit.md`
 - Key collaborators:
   - `crates/pi-natives/src/ast.rs` — native rewrite planning and file mutation
-  - `crates/pi-natives/src/language/mod.rs` — language aliases and extension inference
+  - `crates/pi-ast/src/language/mod.rs` — language aliases and extension inference used by the native wrapper.
   - `packages/coding-agent/src/tools/path-utils.ts` — path/glob parsing and multi-path resolution
   - `packages/coding-agent/src/tools/resolve.ts` — preview/apply queueing
   - `packages/coding-agent/src/tools/render-utils.ts` — parse-error dedupe and display caps
   - `packages/coding-agent/src/utils/file-display-mode.ts` — hashline vs line-number diff references
-  - `packages/coding-agent/src/hashline/hash.ts` — stable hashline diff anchors
+  - `packages/hashline/src/format.ts` — stable hashline header formatting for preview anchors
   - `packages/natives/native/index.d.ts` — JS-visible native binding contract
 
 ## Inputs
@@ -33,7 +33,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
 ## Outputs
 - Single-shot preview result from `ast_edit` itself.
 - Model-facing `content` is one text block showing proposed edits, grouped by file for directory/multi-file runs.
-  - Each change renders as two lines: `-REF|before` and `+REF|after` in hashline mode, or `-LINE:COLUMN before` / `+LINE:COLUMN after` when hashlines are off.
+  - Each change renders as two lines. Hashline mode uses `-LINE:before` / `+LINE:after` under a `¶PATH#TAG` header; plain mode uses `-LINE:COLUMN before` / `+LINE:COLUMN after`.
   - Only the first line of each `before`/`after` snippet is shown, truncated to 120 characters in the wrapper.
   - `Limit reached; narrow paths.` and formatted parse issues are appended when applicable.
 - If no rewrites match, text is `No replacements made` plus formatted parse issues when present.
@@ -62,7 +62,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
    - parses each file, skips files with syntax-error trees, collects `replace_by(...)` edits for every match, enforces replacement and file caps, and returns textual before/after slices plus source ranges.
 7. The TS wrapper deduplicates parse errors, groups changes by file, and renders preview diff lines.
 8. If preview found replacements and `applied` is false, `queueResolveHandler(...)` registers a forced `resolve` action and injects a `resolve-reminder` steering message.
-9. On `resolve(action: "apply")`, the queued callback reruns the same rewrite set with `dryRun: false`, recomputes counts, and rejects the apply as an error if the live result no longer matches the preview (`stalePreview`).
+9. On `resolve(action: "apply")`, the queued callback reruns the same rewrite set with `dryRun: false`, recomputes counts, and returns an error result if the live result no longer matches the preview (`stalePreview`). The current implementation compares replacement totals and per-file counts after the rerun; if the new run has already written different counts, the result is marked error.
 10. On a non-stale apply, the callback returns `Applied N replacements in M files.`; on discard, `resolve` returns a discard message without mutating files.
 
 ## Modes / Variants
@@ -110,7 +110,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
 - With `failOnParseError: false` (the wrapper always uses this), pattern compile failures and file parse failures become `parseErrors` instead of aborting the whole run.
 - If every rewrite pattern fails to compile, native `ast_edit` returns a successful zero-replacement result with `parseErrors` populated.
 - Files containing tree-sitter error nodes are skipped for rewriting; they do not get partial edits.
-- Apply can fail after a successful preview if the preview becomes stale. The resolve callback compares replacement totals and per-file counts and returns an error result rather than applying a mismatched preview silently.
+- Apply can fail after a successful preview if the preview becomes stale. The resolve callback compares replacement totals and per-file counts and returns an error result rather than silently reporting success for a mismatched preview.
 
 ## Notes
 - `ast_edit` does not expose the native `lang`, `strictness`, `selector`, `maxReplacements`, `failOnParseError`, or `timeoutMs` fields to the model. The runtime fixes the call shape to a preview-first, smart-strictness, best-effort parse mode.
@@ -118,4 +118,4 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
 - Idempotency is not enforced syntactically. A rewrite like `foo($A) -> foo($A)` previews zero changes because output equals input; a rewrite that keeps matching its own output may still produce replacements on repeated calls.
 - Rewrites are accumulated per file, then applied from the end of the file backward after an overlap check. Independent matches can coexist; overlapping matches abort the run.
 - Native rewrite rule order is by pattern-string sort, not by the original `ops` array order, because `normalize_rewrite_map(...)` sorts the `(pattern, rewrite)` pairs.
-- Preview/apply parity is validated only by totals and per-file counts, not by a byte-for-byte diff of every replacement payload.
+- Preview/apply parity is validated by totals and per-file counts after the apply rerun, not by a byte-for-byte diff of every replacement payload.

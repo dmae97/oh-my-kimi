@@ -1,5 +1,25 @@
-import { describe, expect, it } from "bun:test";
-import { validateFindPathInputs } from "../../src/tools/find";
+import { beforeAll, describe, expect, it } from "bun:test";
+import type { Component } from "@oh-my-pi/pi-tui";
+import type { RenderResultOptions } from "../../src/extensibility/custom-tools/types";
+import { getThemeByName, initTheme, type Theme } from "../../src/modes/theme/theme";
+import { findToolRenderer, validateFindPathInputs } from "../../src/tools/find";
+
+let uiTheme: Theme;
+
+beforeAll(async () => {
+	await initTheme(false, undefined, undefined, "dark", "light");
+	const theme = await getThemeByName("dark");
+	if (!theme) throw new Error("Missing dark theme");
+	uiTheme = theme;
+});
+const renderOptions: RenderResultOptions = {
+	expanded: false,
+	isPartial: true,
+};
+
+function renderText(component: Component): string {
+	return Bun.stripANSI(component.render(160).join("\n"));
+}
 
 describe("validateFindPathInputs", () => {
 	it("accepts a normal array of glob entries", () => {
@@ -38,5 +58,36 @@ describe("validateFindPathInputs", () => {
 		// behavior of the new escape-skip, which intentionally does NOT model glob
 		// brace semantics — it only mirrors search.ts's containsTopLevelComma.
 		expect(() => validateFindPathInputs(["\\{a,b}"])).toThrow(/paths is an array/);
+	});
+});
+
+describe("findToolRenderer", () => {
+	it("accepts a single string paths value before validation", async () => {
+		const args = { paths: "src/**/*.ts" };
+		const renderings = [
+			findToolRenderer.renderCall(args, renderOptions, uiTheme),
+			findToolRenderer.renderResult(
+				{ content: [{ type: "text", text: "src/index.ts\n" }] },
+				renderOptions,
+				uiTheme,
+				args,
+			),
+			findToolRenderer.renderResult(
+				{ content: [{ type: "text", text: "" }], details: { fileCount: 0, files: [] } },
+				renderOptions,
+				uiTheme,
+				args,
+			),
+			findToolRenderer.renderResult(
+				{ content: [{ type: "text", text: "src/index.ts" }], details: { fileCount: 1, files: ["src/index.ts"] } },
+				renderOptions,
+				uiTheme,
+				args,
+			),
+		];
+
+		for (const component of renderings) {
+			expect(renderText(component)).toContain("src/**/*.ts");
+		}
 	});
 });

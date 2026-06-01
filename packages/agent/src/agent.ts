@@ -327,6 +327,9 @@ export class Agent {
 
 	constructor(opts: AgentOptions = {}) {
 		this.#state = { ...this.#state, ...opts.initialState };
+		if (opts.initialState?.messages) this.#state.messages = opts.initialState.messages.slice();
+		if (opts.initialState?.pendingToolCalls)
+			this.#state.pendingToolCalls = new Set(opts.initialState.pendingToolCalls);
 		this.#convertToLlm = opts.convertToLlm || defaultConvertToLlm;
 		this.#transformContext = opts.transformContext;
 		this.#steeringMode = opts.steeringMode || "one-at-a-time";
@@ -608,18 +611,12 @@ export class Agent {
 				this.#state.streamMessage = null;
 				this.appendMessage(event.message);
 				break;
-			case "tool_execution_start": {
-				const pending = new Set(this.#state.pendingToolCalls);
-				pending.add(event.toolCallId);
-				this.#state.pendingToolCalls = pending;
+			case "tool_execution_start":
+				this.#state.pendingToolCalls.add(event.toolCallId);
 				break;
-			}
-			case "tool_execution_end": {
-				const pending = new Set(this.#state.pendingToolCalls);
-				pending.delete(event.toolCallId);
-				this.#state.pendingToolCalls = pending;
+			case "tool_execution_end":
+				this.#state.pendingToolCalls.delete(event.toolCallId);
 				break;
-			}
 		}
 
 		this.#emit(event);
@@ -667,22 +664,20 @@ export class Agent {
 	}
 
 	replaceMessages(ms: AgentMessage[]) {
+		// New array assignment is intentional: caller-owned `ms` may be mutated
+		// after handoff; snapshot it so external mutations cannot leak in.
 		this.#state.messages = ms.slice();
 	}
 
 	appendMessage(m: AgentMessage) {
-		this.#state.messages = [...this.#state.messages, m];
+		this.#state.messages.push(m);
 	}
 
 	popMessage(): AgentMessage | undefined {
-		const messages = this.#state.messages.slice(0, -1);
-		const removed = this.#state.messages.at(-1);
-		this.#state.messages = messages;
-
+		const removed = this.#state.messages.pop();
 		if (removed && this.#state.streamMessage === removed) {
 			this.#state.streamMessage = null;
 		}
-
 		return removed;
 	}
 
@@ -764,7 +759,7 @@ export class Agent {
 	}
 
 	clearMessages() {
-		this.#state.messages = [];
+		this.#state.messages.length = 0;
 	}
 
 	abort() {
@@ -776,10 +771,10 @@ export class Agent {
 	}
 
 	reset() {
-		this.#state.messages = [];
+		this.#state.messages.length = 0;
 		this.#state.isStreaming = false;
 		this.#state.streamMessage = null;
-		this.#state.pendingToolCalls = new Set<string>();
+		this.#state.pendingToolCalls.clear();
 		this.#state.error = undefined;
 		this.#steeringQueue = [];
 		this.#followUpQueue = [];
@@ -1011,19 +1006,13 @@ export class Agent {
 						this.appendMessage(event.message);
 						break;
 
-					case "tool_execution_start": {
-						const s = new Set(this.#state.pendingToolCalls);
-						s.add(event.toolCallId);
-						this.#state.pendingToolCalls = s;
+					case "tool_execution_start":
+						this.#state.pendingToolCalls.add(event.toolCallId);
 						break;
-					}
 
-					case "tool_execution_end": {
-						const s = new Set(this.#state.pendingToolCalls);
-						s.delete(event.toolCallId);
-						this.#state.pendingToolCalls = s;
+					case "tool_execution_end":
+						this.#state.pendingToolCalls.delete(event.toolCallId);
 						break;
-					}
 
 					case "turn_end":
 						if (event.message.role === "assistant" && (event.message as any).errorMessage) {
@@ -1083,7 +1072,7 @@ export class Agent {
 		} finally {
 			this.#state.isStreaming = false;
 			this.#state.streamMessage = null;
-			this.#state.pendingToolCalls = new Set<string>();
+			this.#state.pendingToolCalls.clear();
 			this.#abortController = undefined;
 			this.#resolveRunningPrompt?.();
 			this.#runningPrompt = undefined;
@@ -1108,7 +1097,7 @@ export class Agent {
 
 	/** Calculate total text length from an assistant message's content blocks */
 	#getAssistantTextLength(message: AgentMessage | null): number {
-		if (!message || message.role !== "assistant" || !Array.isArray(message.content)) {
+		if (message?.role !== "assistant" || !Array.isArray(message.content)) {
 			return 0;
 		}
 		let length = 0;

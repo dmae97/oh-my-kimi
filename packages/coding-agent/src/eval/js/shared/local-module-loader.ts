@@ -9,6 +9,8 @@ interface LocalModuleEntry {
 	version: number;
 	identifier: string;
 	module: vm.SourceTextModule;
+	/** Memoized link+evaluate of this module as a graph root; set lazily by `#loadLocalModule`. */
+	loaded?: Promise<void>;
 }
 
 export type LocalImportResolution = { mode: "local"; value: unknown } | { mode: "external"; target: string };
@@ -26,6 +28,7 @@ export class LocalModuleLoader {
 	#moduleBuilds = new Map<string, Promise<LocalModuleEntry>>();
 	#externalModules = new Map<string, Promise<vm.Module>>();
 	#requireCache = new Map<string, NodeJS.Require>();
+	#modulePaths = new WeakMap<vm.Module, string>();
 
 	constructor(sessionId: string) {
 		this.#context = vm.createContext(globalThis);
@@ -68,8 +71,8 @@ export class LocalModuleLoader {
 	async #resolveFromBase(baseDir: string, source: string): Promise<LocalImportResolution> {
 		const resolved = resolveImportSpecifier(baseDir, source);
 		if (isLocalPathSpecifier(source) && isManagedLocalModulePath(resolved)) {
-			const entry = await this.#ensureLocalModule(resolved);
-			return { mode: "local", value: entry.module.namespace };
+			const module = await this.#loadLocalModule(resolved);
+			return { mode: "local", value: module.namespace };
 		}
 		return { mode: "external", target: normalizeImportTarget(resolved) };
 	}
@@ -86,9 +89,17 @@ export class LocalModuleLoader {
 		return await buildPromise;
 	}
 
+	// Construct (parse + register) a local module WITHOUT linking or evaluating it.
+	// Linking and evaluation are driven once from the graph root in `#linkAndEvaluate`;
+	// doing them per-module inside the recursive linker re-enters Bun's node:vm linker
+	// mid-instantiation, which segfaults JSC (getImportedModule on a null record) whenever
+	// the local graph contains an import cycle.
 	async #buildLocalModule(modulePath: string): Promise<LocalModuleEntry> {
 		const rawSource = fs.readFileSync(modulePath, "utf8");
-		const stripped = stripTypeScriptSyntax(rawSource);
+		const stripped = stripTypeScriptSyntax(rawSource, {
+			force: isTypeScriptModulePath(modulePath),
+			loader: stripLoaderForPath(modulePath),
+		});
 		const moduleDir = path.dirname(modulePath);
 		const localDeps = new Set<string>();
 		for (const specifier of collectModuleSourceSpecifiers(stripped)) {
@@ -113,28 +124,85 @@ export class LocalModuleLoader {
 				(meta as { url?: string; path?: string; dir?: string }).dir = moduleDir;
 			},
 			importModuleDynamically: async specifier => {
-				return await this.#resolveLinkedModule(modulePath, String(specifier));
+				return await this.#resolveDynamicImport(modulePath, String(specifier));
 			},
 		});
+		this.#modulePaths.set(module, modulePath);
 		const entry: LocalModuleEntry = { version, identifier, module };
 		this.#moduleEntries.set(modulePath, entry);
+		return entry;
+	}
+
+	// Construct (if needed) then link+evaluate a local module as a graph root, returning
+	// the evaluated module. Link and evaluate run exactly once over the whole reachable
+	// graph; the static linker only constructs dependencies, letting node:vm instantiate
+	// cyclic graphs in a single pass.
+	async #loadLocalModule(modulePath: string): Promise<vm.SourceTextModule> {
+		const entry = await this.#ensureLocalModule(modulePath);
+		entry.loaded ??= this.#linkAndEvaluate(entry, modulePath);
+		await entry.loaded;
+		return entry.module;
+	}
+
+	async #linkAndEvaluate(entry: LocalModuleEntry, modulePath: string): Promise<void> {
+		const { module } = entry;
 		try {
-			await module.link(async specifier => await this.#resolveLinkedModule(modulePath, specifier));
-			await module.evaluate();
-			return entry;
+			if (module.status === "unlinked") await module.link(this.#linkResolve);
+			if (module.status === "linked") await module.evaluate();
 		} catch (error) {
-			this.#moduleEntries.delete(modulePath);
+			this.#invalidateFailedLoad(modulePath);
 			throw error;
+		}
+		if (module.status === "errored") {
+			this.#invalidateFailedLoad(modulePath);
+			throw module.error;
 		}
 	}
 
-	async #resolveLinkedModule(referrerPath: string, specifier: string): Promise<vm.Module> {
-		const baseDir = path.dirname(referrerPath);
-		const resolved = resolveImportSpecifier(baseDir, specifier);
+	// Shared static-link resolver for `module.link()`. node:vm passes the referencing
+	// module and reuses this one resolver for the entire graph, so the referrer path is
+	// recovered from `#modulePaths`. Local dependencies are constructed but NOT linked or
+	// evaluated here (the root drives that); externals are loaded eagerly — they carry no
+	// imports and cannot participate in a cycle.
+	#linkResolve = async (specifier: string, referencingModule: vm.Module): Promise<vm.Module> => {
+		const referrerPath = this.#modulePaths.get(referencingModule);
+		if (referrerPath === undefined) {
+			throw new Error(`local module loader: unknown referrer while linking "${specifier}"`);
+		}
+		const resolved = resolveImportSpecifier(path.dirname(referrerPath), specifier);
 		if (isLocalPathSpecifier(specifier) && isManagedLocalModulePath(resolved)) {
 			return (await this.#ensureLocalModule(resolved)).module;
 		}
 		return await this.#ensureExternalModule(normalizeImportTarget(resolved));
+	};
+
+	// Resolver for runtime `import()` inside evaluated module code: the result must be a
+	// fully linked+evaluated module, so local targets are loaded as graph roots.
+	async #resolveDynamicImport(referrerPath: string, specifier: string): Promise<vm.Module> {
+		const resolved = resolveImportSpecifier(path.dirname(referrerPath), specifier);
+		if (isLocalPathSpecifier(specifier) && isManagedLocalModulePath(resolved)) {
+			return await this.#loadLocalModule(resolved);
+		}
+		return await this.#ensureExternalModule(normalizeImportTarget(resolved));
+	}
+
+	// A failed link/evaluate can leave a partial graph cached. Drop every reachable module
+	// that is not fully evaluated so the next attempt reconstructs it; fully evaluated
+	// modules keep valid namespaces and stay cached.
+	#invalidateFailedLoad(rootPath: string): void {
+		const stack = [rootPath];
+		const seen = new Set<string>();
+		while (stack.length > 0) {
+			const current = stack.pop();
+			if (current === undefined || seen.has(current)) continue;
+			seen.add(current);
+			const entry = this.#moduleEntries.get(current);
+			if (entry && entry.module.status === "evaluated") continue;
+			this.#moduleEntries.delete(current);
+			this.#moduleBuilds.delete(current);
+			const deps = this.#moduleDeps.get(current);
+			if (deps) for (const dep of deps) stack.push(dep);
+		}
 	}
 
 	async #ensureExternalModule(target: string): Promise<vm.Module> {
@@ -249,6 +317,15 @@ function isLocalPathSpecifier(source: string): boolean {
 		source.startsWith("~/") ||
 		/^[a-zA-Z]:[\\/]/.test(source)
 	);
+}
+
+function isTypeScriptModulePath(modulePath: string): boolean {
+	const ext = path.extname(modulePath);
+	return ext === ".ts" || ext === ".tsx" || ext === ".mts";
+}
+
+function stripLoaderForPath(modulePath: string): "ts" | "tsx" {
+	return path.extname(modulePath) === ".tsx" ? "tsx" : "ts";
 }
 
 function isManagedLocalModulePath(target: string): boolean {

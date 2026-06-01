@@ -2,6 +2,7 @@ import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { Container, Image, ImageProtocol, Markdown, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
+import type { AssistantThinkingRenderer } from "../../extensibility/extensions/types";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { isSilentAbort } from "../../session/messages";
 import { resolveImageOptions } from "../../tools/render-utils";
@@ -21,6 +22,7 @@ export class AssistantMessageComponent extends Container {
 		message?: AssistantMessage,
 		private hideThinkingBlock = false,
 		private readonly onImageUpdate?: () => void,
+		private readonly thinkingRenderers: readonly AssistantThinkingRenderer[] = [],
 	) {
 		super();
 
@@ -131,6 +133,27 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	#appendThinkingExtensions(contentIndex: number, thinkingIndex: number, text: string): void {
+		for (const renderer of this.thinkingRenderers) {
+			try {
+				const component = renderer(
+					{
+						contentIndex,
+						thinkingIndex,
+						text,
+						requestRender: () => this.onImageUpdate?.(),
+					},
+					theme,
+				);
+				if (component) {
+					this.#contentContainer.addChild(component);
+				}
+			} catch {
+				// Ignore extension renderer failures and keep the original thinking block visible.
+			}
+		}
+	}
+
 	updateContent(message: AssistantMessage): void {
 		this.#lastMessage = message;
 
@@ -146,6 +169,7 @@ export class AssistantMessageComponent extends Container {
 		}
 
 		// Render content in order
+		let thinkingIndex = 0;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text" && content.text.trim()) {
@@ -166,13 +190,16 @@ export class AssistantMessageComponent extends Container {
 						this.#contentContainer.addChild(new Spacer(1));
 					}
 				} else {
+					const thinkingText = content.thinking.trim();
 					// Thinking traces in thinkingText color, italic
 					this.#contentContainer.addChild(
-						new Markdown(content.thinking.trim(), 1, 0, getMarkdownTheme(), {
+						new Markdown(thinkingText, 1, 0, getMarkdownTheme(), {
 							color: (text: string) => theme.fg("thinkingText", text),
 							italic: true,
 						}),
 					);
+					this.#appendThinkingExtensions(i, thinkingIndex, thinkingText);
+					thinkingIndex += 1;
 					if (hasVisibleContentAfter) {
 						this.#contentContainer.addChild(new Spacer(1));
 					}

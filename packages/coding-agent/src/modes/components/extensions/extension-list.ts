@@ -15,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { isProviderEnabled } from "../../../discovery";
 import { theme } from "../../../modes/theme/theme";
+import { matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
 import { applyFilter } from "./state-manager";
 import type { Extension, ExtensionKind, ExtensionState } from "./types";
 
@@ -400,12 +401,12 @@ export class ExtensionList implements Component {
 
 	handleInput(data: string): void {
 		// Navigation
-		if (matchesKey(data, "up") || data === "k") {
+		if (matchesSelectUp(data) || data === "k") {
 			this.#moveSelectionUp();
 			return;
 		}
 
-		if (matchesKey(data, "down") || data === "j") {
+		if (matchesSelectDown(data) || data === "j") {
 			this.#moveSelectionDown();
 			return;
 		}

@@ -167,7 +167,7 @@ describe("auth-gateway openai-chat: parseRequest", () => {
 			],
 		});
 		const tool = parsed.context.messages.find(m => m.role === "toolResult");
-		if (!tool || tool.role !== "toolResult") throw new Error("expected toolResult");
+		if (tool?.role !== "toolResult") throw new Error("expected toolResult");
 		expect(tool.toolName).toBe("submit_move");
 	});
 
@@ -184,7 +184,7 @@ describe("auth-gateway openai-chat: parseRequest", () => {
 			],
 		});
 		const tool = parsed.context.messages.find(m => m.role === "toolResult");
-		if (!tool || tool.role !== "toolResult") throw new Error("expected toolResult");
+		if (tool?.role !== "toolResult") throw new Error("expected toolResult");
 		expect(tool.toolName).toBe("submit_move");
 	});
 
@@ -198,7 +198,7 @@ describe("auth-gateway openai-chat: parseRequest", () => {
 			],
 		});
 		const tool = parsed.context.messages.find(m => m.role === "toolResult");
-		if (!tool || tool.role !== "toolResult") throw new Error("expected toolResult");
+		if (tool?.role !== "toolResult") throw new Error("expected toolResult");
 		expect(tool.toolName).toBe("");
 	});
 });

@@ -46,11 +46,11 @@ import {
 	rewriteCopilotError,
 } from "../utils/http-inspector";
 import {
+	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
-import { parseStreamingJson } from "../utils/json-parse";
+import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 import { notifyProviderResponse } from "../utils/provider-response";
@@ -421,10 +421,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const idleTimeoutMs =
-				options?.streamIdleTimeoutMs ??
-				getOpenAIStreamIdleTimeoutMs(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model));
-			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+			const idleTimeoutFallbackMs = getOpenAICompletionsStreamIdleTimeoutFallbackMs(model);
+			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs(idleTimeoutFallbackMs);
+			const firstEventTimeoutMs =
+				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			const {
@@ -539,7 +539,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			// so users don't see raw `<｜...｜>` tokens.
 			const stripDeepseekChatTemplateTokens =
 				/deepseek/i.test(model.id) && (model.provider === "nvidia" || model.provider === "deepseek");
-			type ToolCallStreamBlock = ToolCall & { partialArgs?: string; streamIndex?: number };
+			type ToolCallStreamBlock = ToolCall & { partialArgs?: string; streamIndex?: number; lastParseLen?: number };
 			type OpenAIStreamBlock = TextContent | ThinkingContent | ToolCallStreamBlock;
 			const pendingToolCallBlocks: ToolCallStreamBlock[] = [];
 			const toolCallBlockByIndex = new Map<number, ToolCallStreamBlock>();
@@ -554,6 +554,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				if (contentIndex < 0) return;
 				block.arguments = parseStreamingJson(block.partialArgs);
 				delete block.partialArgs;
+				delete block.lastParseLen;
 				if (block.streamIndex !== undefined) {
 					toolCallBlockByIndex.delete(block.streamIndex);
 					delete block.streamIndex;
@@ -586,7 +587,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				eventStream: AssistantMessageEventStream,
 				text: string,
 			): void => {
-				if (!currentBlock || currentBlock.type !== "text") {
+				if (currentBlock?.type !== "text") {
 					finishCurrentBlock(currentBlock);
 					currentBlock = { type: "text", text: "" };
 					message.content.push(currentBlock);
@@ -607,8 +608,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				signature?: string,
 			): void => {
 				if (
-					!currentBlock ||
-					currentBlock.type !== "thinking" ||
+					currentBlock?.type !== "thinking" ||
 					(signature !== undefined && currentBlock.thinkingSignature !== signature)
 				) {
 					finishCurrentBlock(currentBlock);
@@ -815,7 +815,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 							}
 
 							if (!block) {
-								if (!currentBlock || currentBlock.type !== "toolCall") {
+								if (currentBlock?.type !== "toolCall") {
 									finishCurrentBlock(currentBlock);
 								}
 								block = {
@@ -849,7 +849,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 							if (toolCall.function?.arguments) {
 								delta = toolCall.function.arguments;
 								block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
-								block.arguments = parseStreamingJson(block.partialArgs);
+								const throttled = parseStreamingJsonThrottled(block.partialArgs, block.lastParseLen ?? 0);
+								if (throttled) {
+									block.arguments = throttled.value;
+									block.lastParseLen = throttled.parsedLen;
+								}
 							}
 							stream.push({
 								type: "toolcall_delta",
@@ -1578,10 +1582,9 @@ export function convertMessages(
 				});
 			}
 		} else if (msg.role === "assistant") {
-			// Some providers (e.g. Mistral) don't accept null content, use empty string instead
 			const assistantMsg: ChatCompletionAssistantMessageParam = {
 				role: "assistant",
-				content: compat.requiresAssistantAfterToolResult ? "" : null,
+				content: null,
 			};
 
 			const textBlocks = msg.content.filter(b => b.type === "text") as TextContent[];
@@ -1753,8 +1756,10 @@ export function convertMessages(
 					(assistantMsg as any).reasoning_details = reasoningDetails;
 				}
 			}
-			// DeepSeek requires non-null content when reasoning_content is present
-			if (assistantMsg.content === null && hasReasoningField) {
+			// Some OpenAI-compatible backends concatenate assistant content as a
+			// string even for tool-call replay. OpenAI accepts an empty string here;
+			// null trips strict/proxy implementations before the tool result is read.
+			if (assistantMsg.content === null && (hasReasoningField || assistantMsg.tool_calls)) {
 				assistantMsg.content = "";
 			}
 			// Skip assistant messages that have no content, no tool calls, and no reasoning payload.

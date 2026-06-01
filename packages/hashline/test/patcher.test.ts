@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	computeFileHash,
+	HEADTAIL_DRIFT_WARNING,
 	InMemoryFilesystem,
 	InMemorySnapshotStore,
 	MismatchError,
@@ -99,5 +100,68 @@ describe("Patcher snapshot tag integrity", () => {
 			expect(message).toMatch(/current file hashes to #[0-9A-F]{4}/);
 		}
 		expect(fs.get(PATH)).toBe("current\n");
+	});
+});
+
+describe("Patcher mandatory snapshot tag policy", () => {
+	it("rejects a hashless head/tail insert — the tag is required on every section", async () => {
+		const fs = new InMemoryFilesystem([[PATH, "a\nb\n"]]);
+		const snapshots = new InMemorySnapshotStore();
+		const patcher = new Patcher({ fs, snapshots });
+
+		await expect(patcher.apply(Patch.parse(`¶${PATH}\ninsert tail:\n+c`))).rejects.toThrow(
+			/Missing hashline snapshot tag.*use the write tool/s,
+		);
+		expect(fs.get(PATH)).toBe("a\nb\n");
+	});
+
+	it("still hard-rejects an anchored edit that omits the snapshot tag", async () => {
+		const fs = new InMemoryFilesystem([[PATH, "a\nb\n"]]);
+		const snapshots = new InMemorySnapshotStore();
+		const patcher = new Patcher({ fs, snapshots });
+
+		await expect(patcher.apply(Patch.parse(`¶${PATH}\nreplace 1..1:\n+X`))).rejects.toThrow(
+			/Missing hashline snapshot tag/,
+		);
+	});
+
+	it("rejects a tagged edit whose target file does not exist (create with write instead)", async () => {
+		const fs = new InMemoryFilesystem();
+		const snapshots = new InMemorySnapshotStore();
+		const patcher = new Patcher({ fs, snapshots });
+
+		await expect(patcher.apply(Patch.parse(`¶ghost.ts#1A2B\ninsert tail:\n+c`))).rejects.toThrow(
+			/File not found.*use the write tool/is,
+		);
+	});
+
+	it("applies a head/tail insert with a stale tag and warns instead of hard-failing", async () => {
+		const content = "a\nb\n";
+		const fs = new InMemoryFilesystem([[PATH, content]]);
+		const snapshots = new InMemorySnapshotStore();
+		const live = computeFileHash(content);
+		const stale = live === "0000" ? "FFFF" : "0000";
+		const patcher = new Patcher({ fs, snapshots });
+
+		const result = await patcher.apply(Patch.parse(`¶${PATH}#${stale}\ninsert tail:\n+c`));
+
+		const section = result.sections[0];
+		expect(section?.op).toBe("update");
+		expect(fs.get(PATH)).toBe("a\nb\nc\n");
+		expect(section?.warnings).toContain(HEADTAIL_DRIFT_WARNING);
+	});
+
+	it("does not warn when a head/tail insert carries the live tag", async () => {
+		const content = "a\nb\n";
+		const fs = new InMemoryFilesystem([[PATH, content]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(PATH, content);
+		const patcher = new Patcher({ fs, snapshots });
+
+		const result = await patcher.apply(Patch.parse(`¶${PATH}#${tag}\ninsert tail:\n+c`));
+
+		const section = result.sections[0];
+		expect(section?.op).toBe("update");
+		expect(section?.warnings ?? []).not.toContain(HEADTAIL_DRIFT_WARNING);
 	});
 });

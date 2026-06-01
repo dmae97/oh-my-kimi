@@ -21,6 +21,7 @@ import {
 	type Component,
 	Container,
 	extractPrintableText,
+	fuzzyMatch,
 	Input,
 	matchesKey,
 	padding,
@@ -49,7 +50,7 @@ import { discoverAgents } from "../../task/discovery";
 import type { AgentDefinition, AgentSource } from "../../task/types";
 import { shortenPath } from "../../tools/render-utils";
 import { theme } from "../theme/theme";
-import { matchesAppInterrupt } from "../utils/keybinding-matchers";
+import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
 
 type SourceTabId = "all" | AgentSource;
@@ -110,18 +111,17 @@ function formatResolution(resolution: ModelResolution): string {
 }
 
 function matchAgent(agent: DashboardAgent, query: string): boolean {
-	const q = query.toLowerCase();
-	if (agent.name.toLowerCase().includes(q)) return true;
-	if (agent.description.toLowerCase().includes(q)) return true;
-	if (SOURCE_LABEL[agent.source].toLowerCase().includes(q)) return true;
-	if (agent.overrideModel?.toLowerCase().includes(q)) return true;
-	return false;
+	const text = `${agent.name} ${agent.description} ${SOURCE_LABEL[agent.source]} ${agent.overrideModel ?? ""}`;
+	return query
+		.trim()
+		.split(/\s+/)
+		.every(token => fuzzyMatch(token, text).matches);
 }
 
 function extractAssistantText(messages: AgentMessage[]): string | null {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];
-		if (!message || message.role !== "assistant") continue;
+		if (message?.role !== "assistant") continue;
 		const blocks = message.content;
 		if (!Array.isArray(blocks)) continue;
 		const text = blocks
@@ -1073,11 +1073,11 @@ export class AgentDashboard extends Container {
 			return;
 		}
 
-		if (matchesKey(data, "up") || data === "k") {
+		if (matchesSelectUp(data) || data === "k") {
 			this.#moveSelection(-1);
 			return;
 		}
-		if (matchesKey(data, "down") || data === "j") {
+		if (matchesSelectDown(data) || data === "j") {
 			this.#moveSelection(1);
 			return;
 		}

@@ -4,7 +4,7 @@ import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { getMemoryRoot } from "../memories";
 import { AgentRegistry } from "../registry/agent-registry";
 import { validateRelativePath } from "./skill-protocol";
-import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
+import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 const DEFAULT_MEMORY_FILE = "memory_summary.md";
 const MEMORY_NAMESPACE = "root";
@@ -160,5 +160,10 @@ export class MemoryProtocolHandler implements ProtocolHandler {
 		}
 
 		throw new Error(`Memory file not found: ${url.href}`);
+	}
+
+	async complete(): Promise<UrlCompletion[]> {
+		if (memoryRootsFromRegistry().length === 0) return [];
+		return [{ value: MEMORY_NAMESPACE, description: "Project memory summary" }];
 	}
 }

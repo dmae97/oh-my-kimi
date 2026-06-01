@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bu
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import type { ModelRegistry, ProviderDiscoveryState } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { ModelRegistry as ModelRegistryImpl } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -12,10 +13,7 @@ import type { TUI } from "@oh-my-pi/pi-tui";
 import { hookFetch, Snowflake } from "@oh-my-pi/pi-utils";
 
 function normalizeRenderedText(text: string): string {
-	return text
-		.replace(/\x1b\[[0-9;]*m/g, "")
-		.replace(/\s+/g, " ")
-		.trim();
+	return stripVTControlCharacters(text).replace(/\s+/g, " ").trim();
 }
 
 let testTheme = await getThemeByName("dark");
@@ -136,7 +134,7 @@ describe("issue #970 custom provider discovery", () => {
 		expect(deepseek?.provider).toBe("vllm");
 		expect(deepseek?.name).toBe("deepseek-r1");
 		expect(deepseek?.contextWindow).toBe(128000);
-		expect(deepseek?.maxTokens).toBe(8192);
+		expect(deepseek?.maxTokens).toBe(32_768);
 	});
 
 	test("shows a provider-tab hint when discovery succeeds but returns zero models", async () => {

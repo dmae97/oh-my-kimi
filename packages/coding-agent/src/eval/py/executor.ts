@@ -5,6 +5,7 @@ import { Settings } from "../../config/settings";
 import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
+import { EVAL_HEARTBEAT_OP } from "../heartbeat";
 import type { JsStatusEvent } from "../js/shared/types";
 import {
 	checkPythonKernelAvailability,
@@ -25,6 +26,12 @@ export interface PythonExecutorOptions {
 	timeoutMs?: number;
 	/** Absolute wall-clock deadline in milliseconds since epoch */
 	deadlineMs?: number;
+	/**
+	 * Inactivity budget (ms). Used only for timeout-annotation text when the
+	 * caller drives cancellation via an idle-aware `signal` instead of a
+	 * wall-clock `deadlineMs`/`timeoutMs`. Does not arm a timer.
+	 */
+	idleTimeoutMs?: number;
 	/** Callback for streaming output chunks (already sanitized) */
 	onChunk?: (chunk: string) => Promise<void> | void;
 	/** AbortSignal for cancellation */
@@ -57,6 +64,13 @@ export interface PythonExecutorOptions {
 	toolSession?: ToolSession;
 	/** Callback for status events emitted by tool bridge invocations. */
 	emitStatus?: (event: JsStatusEvent) => void;
+	/**
+	 * Live status events streamed as they are emitted (both host-side bridge
+	 * helpers like `agent()` and kernel-side `display`/`log`/`phase`). Mirrors
+	 * what lands in `displayOutputs` so callers can render progress before the
+	 * cell finishes.
+	 */
+	onStatus?: (event: JsStatusEvent) => void;
 	/** @internal Bridge session id, set by `executePython` before delegating. */
 	bridgeSessionId?: string;
 	/** @internal Bridge endpoint info, set by `executePython` before delegating. */
@@ -474,11 +488,18 @@ async function executeWithKernel(
 	const deadlineMs = getExecutionDeadlineMs(options);
 	let executionTimeoutMs: number | undefined;
 
-	const emitStatus =
-		options?.emitStatus ??
-		((event: JsStatusEvent) => {
-			displayOutputs.push({ type: "status", event });
-		});
+	// Collect every display output and, for status events, stream them live so
+	// long-running bridge helpers (e.g. `agent()`) surface progress mid-cell.
+	const collectDisplay = (output: KernelDisplayOutput) => {
+		if (output.type === "status") {
+			// Heartbeats are pure idle-watchdog keepalives: forward them so the
+			// eval tool re-arms its timer, but never store or render them.
+			options?.onStatus?.(output.event);
+			if (output.event.op === EVAL_HEARTBEAT_OP) return;
+		}
+		displayOutputs.push(output);
+	};
+	const emitStatus = options?.emitStatus ?? ((event: JsStatusEvent) => collectDisplay({ type: "status", event }));
 	const runId = `py-${crypto.randomUUID()}`;
 	const unregisterBridge =
 		options?.toolSession && options?.bridgeSessionId
@@ -498,12 +519,12 @@ async function executeWithKernel(
 			signal: options?.signal,
 			timeoutMs: executionTimeoutMs,
 			onChunk: text => sink.push(text),
-			onDisplay: output => void displayOutputs.push(output),
+			onDisplay: output => collectDisplay(output),
 		});
 
 		if (result.cancelled) {
 			const annotation = result.timedOut
-				? formatKernelTimeoutAnnotation(executionTimeoutMs, result.kernelKilled ?? false)
+				? formatKernelTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs, result.kernelKilled ?? false)
 				: undefined;
 			return {
 				exitCode: undefined,
@@ -540,7 +561,9 @@ async function executeWithKernel(
 				cancelled: true,
 				displayOutputs,
 				stdinRequested: false,
-				...(await sink.dump(timedOut ? formatTimeoutAnnotation(executionTimeoutMs) : undefined)),
+				...(await sink.dump(
+					timedOut ? formatTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs) : undefined,
+				)),
 			};
 		}
 		const error = err instanceof Error ? err : new Error(String(err));

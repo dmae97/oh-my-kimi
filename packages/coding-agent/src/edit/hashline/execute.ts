@@ -25,6 +25,7 @@ import { outputMeta } from "../../tools/output-meta";
 import { generateDiffString } from "../diff";
 import { getFileSnapshotStore } from "../file-snapshot-store";
 import type { EditToolDetails, EditToolPerFileResult, LspBatchRequest } from "../renderer";
+import { nativeBlockResolver } from "./block-resolver";
 import { HashlineFilesystem } from "./filesystem";
 import { type HashlineParams, hashlineEditParamsSchema } from "./params";
 
@@ -133,7 +134,7 @@ export async function executeHashlineSingle(
 		batchRequest: options.batchRequest,
 	});
 	const snapshots = getFileSnapshotStore(options.session);
-	const patcher = new Patcher({ fs, snapshots });
+	const patcher = new Patcher({ fs, snapshots, blockResolver: nativeBlockResolver });
 
 	// Single-section fast path: prepare, commit, render.
 	if (patch.sections.length === 1) {

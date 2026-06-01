@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { AgentBusyError, type AgentTelemetryConfig, type Tracer } from "@oh-my-pi/pi-agent-core";
 import { type AssistantMessage, Effort } from "@oh-my-pi/pi-ai";
+import { logger } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
 import type { ExtensionActions, LoadExtensionsResult } from "../../src/extensibility/extensions/types";
 import type { CreateAgentSessionResult } from "../../src/sdk";
@@ -226,10 +227,10 @@ describe("runSubprocess yield reminders", () => {
 		expect(systemPrompt).toHaveLength(4);
 		expect(systemPrompt?.[0]).toBe("system");
 		expect(systemPrompt?.[1]).toBe("project");
-		expect(systemPrompt?.[2]).toContain("[CONTEXT]\nShared task background\n[/CONTEXT]");
-		expect(systemPrompt?.[2]).toContain("[ROLE]\ntest\n[/ROLE]");
+		expect(systemPrompt?.[2]).toMatch(/CONTEXT\n=+\n\nShared task background/);
+		expect(systemPrompt?.[2]).toMatch(/ROLE\n=+\n\ntest/);
 		expect(systemPrompt?.[3]).toBe("now");
-		expect(userPrompt).not.toContain("[CONTEXT]");
+		expect(userPrompt).not.toMatch(/CONTEXT\n=+/);
 		expect(userPrompt).not.toContain("Shared task background");
 	});
 
@@ -520,6 +521,42 @@ describe("runSubprocess yield reminders", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toMatch(/options\.authStorage.*modelRegistry\.authStorage/);
 		expect(createAgentSessionSpy).not.toHaveBeenCalled();
+	});
+
+	it("logs reminder-loop aborts at debug, not error (issue #1623)", async () => {
+		// Repro: user ^C or compaction aborts pending operations while the
+		// yield-reminder loop is awaiting session.prompt. awaitAbortable rejects
+		// with ToolAbortError, which previously surfaced as logger.error and
+		// polluted operator dashboards.
+		const abortController = new AbortController();
+		const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+		const session = createMockSession(({ promptIndex, emit, state }) => {
+			if (promptIndex === 1) {
+				// Initial prompt: stop without yielding so the reminder loop kicks in.
+				const assistant = createAssistantStopMessage("no yield yet");
+				state.messages.push(assistant);
+				emit({ type: "message_end", message: assistant });
+				return;
+			}
+			// Reminder prompt: abort the run while it is in flight. The follow-up
+			// awaitAbortable(session.waitForIdle()) then throws ToolAbortError into
+			// the catch we are guarding.
+			abortController.abort();
+		});
+
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-abort-during-reminder",
+			signal: abortController.signal,
+		});
+
+		expect(result.aborted).toBe(true);
+		expect(errorSpy).not.toHaveBeenCalledWith("Subagent prompt failed", expect.anything());
+		expect(debugSpy).toHaveBeenCalledWith("Subagent prompt aborted", expect.anything());
 	});
 });
 

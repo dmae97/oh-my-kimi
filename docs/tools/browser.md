@@ -46,7 +46,7 @@
 | --- | --- | --- | --- |
 | `url` | `string` | No | Navigate after the tab is ready. Existing reusable tabs also navigate when `url` is supplied. |
 | `viewport` | `{ width: number; height: number; scale?: number }` | No | Requested viewport. For headless launch this becomes the initial viewport; for a page it is applied with `page.setViewport()`. `scale` maps to Puppeteer `deviceScaleFactor`. |
-| `wait_until` | `"load" \| "domcontentloaded" \| "networkidle0" \| "networkidle2"` | No | Navigation wait condition. Defaults to `"networkidle2"` where omitted. |
+| `wait_until` | `"load" \| "domcontentloaded" \| "networkidle0" \| "networkidle2"` | No | Navigation wait condition. Defaults to `"load"` where omitted, including `open` navigation and later `tab.goto(...)`. |
 | `dialogs` | `"accept" \| "dismiss"` | No | Installs a page `dialog` handler that auto-accepts or auto-dismisses dialogs. Omitted means no handler. |
 | `app` | `{ path?: string; cdp_url?: string; args?: string[]; target?: string }` | No | Selects browser kind. No `app` uses the session `browser.headless` setting. `app.path` is resolved against the session cwd and used as the executable path for spawn/attach reuse. `app.cdp_url` connects to an existing CDP endpoint. `args` are appended only when spawning `app.path`. `target` is only used for attached/spawned-app page selection. |
 
@@ -95,9 +95,9 @@ The tool returns one result per call; no streaming partial output is emitted fro
 5. `open` acquires a tab through `acquireTab()` (`packages/coding-agent/src/tools/browser/tab-supervisor.ts`):
    - same-name + same-browser + alive tab is reused unless `dialogs` changed;
    - same-name but different browser handle, dead state, or changed dialog policy forces release and recreation;
-   - reusing with a new `url` navigates by issuing `await tab.goto(...)` through the worker.
+   - reusing with a new `url` navigates by issuing `await tab.goto(...)` through the worker, defaulting to `waitUntil: "load"` when `wait_until` is omitted.
 6. New tabs build a `WorkerInitPayload` in `buildInitPayload()`:
-   - headless mode sends `url`, `waitUntil`, `viewport`, `dialogs`, and timeout;
+   - headless mode sends `url`, `waitUntil`, `viewport`, `dialogs`, and timeout; the worker defaults missing `waitUntil` to `"load"`.
    - attach mode resolves a page with `pickElectronTarget()`, gets its target id, and sends `targetId` plus `dialogs`.
 7. `acquireTab()` spawns a dedicated Bun `Worker` from `tab-worker-entry.ts`; if that fails it falls back to inline execution in the main thread (`spawnInlineWorker()`), preserving behavior but losing protection against synchronous infinite loops.
 8. `WorkerCore.#init()` (`packages/coding-agent/src/tools/browser/tab-worker.ts`) connects back to the browser websocket endpoint. Headless mode opens a new page, applies stealth patches, applies viewport, installs dialog handling if requested, and optionally navigates. Attach mode resolves the requested target page and optionally installs dialog handling.
@@ -190,7 +190,7 @@ The tool returns one result per call; no streaming partial output is emitted fro
   - A timed-out `run` aborts the worker execution path and can tear down the tab.
 
 ## Limits & Caps
-- Tool timeout clamp: default `30` s, min `1` s, max `30` s (`TOOL_TIMEOUTS.browser` in `packages/coding-agent/src/tools/tool-timeouts.ts`).
+- Tool timeout clamp: default `30` s, min `1` s, max `300` s (`TOOL_TIMEOUTS.browser` in `packages/coding-agent/src/tools/tool-timeouts.ts`).
 - Supervisor grace period around init/run/close: `750` ms (`GRACE_MS` in `packages/coding-agent/src/tools/browser/tab-supervisor.ts`).
 - Puppeteer protocol timeout for launch/connect operations: `60_000` ms (`BROWSER_PROTOCOL_TIMEOUT_MS` in `packages/coding-agent/src/tools/browser/launch.ts`).
 - Connected-browser CDP readiness wait: `5_000` ms before `puppeteer.connect()` (`packages/coding-agent/src/tools/browser/registry.ts`).
@@ -211,7 +211,7 @@ The tool returns one result per call; no streaming partial output is emitted fro
   - `No page targets available on the attached browser`
   - `No page target matched "...". Available pages:\n...`
   - `Target ... is no longer available on the attached browser`
-- Spawned-app path validation requires an absolute executable path, not an app bundle path.
+- Spawned-app path validation requires an absolute executable path after cwd resolution, not an app bundle directory path.
 - Spawn/attach failures are wrapped into `ToolError`s such as `Timed out waiting for CDP endpoint ...`, `Failed to attach to ...`, or `Connected to ... but puppeteer.connect failed: ...`.
 - `tab` helper errors are user-visible `ToolError`s, including unsupported selector prefix, stale/unknown element id, invalid drag target, missing upload files, non-`<select>` for `tab.select()`, non-file-input for `tab.uploadFile()`, and screenshot selector misses.
 - On run timeout, the worker reports `Browser code execution timed out after <ms>ms`; the supervisor may escalate to `Browser code execution hung past grace; tab killed` if the worker does not respond after the grace window.

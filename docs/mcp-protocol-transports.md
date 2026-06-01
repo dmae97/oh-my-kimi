@@ -185,7 +185,7 @@ For `notify()`:
 - timeout uses an internal `AbortController` (`config.timeout ?? 30000`)
 - there is no external abort option on the transport interface
 
-For HTTP OAuth configs managed by `MCPManager`, `request()` retries once on `HTTP 401`/`403` if token refresh returns replacement headers.
+For HTTP OAuth configs managed by `MCPManager`, outbound requests and best-effort server-request responses retry once on `HTTP 401`/`403` if token refresh returns replacement headers.
 
 ## HTTP error propagation
 
@@ -212,14 +212,15 @@ Two SSE paths exist:
 2. **Background SSE listener** (`startSSEListener()`)
    - optional GET listener for server-initiated notifications and server-to-client requests
    - `connectToServer()` starts it for HTTP/SSE transports after `initialize` and before `notifications/initialized`
-   - if GET returns `405`, another non-OK status, or no body, listener silently disables itself
+   - listener startup waits up to one second, or less for very small request timeouts; `timeout: 0` / `OMP_MCP_TIMEOUT_MS=0` disables that startup deadline
+   - if GET returns `405`, another non-OK status, no body, or times out, listener silently disables itself
 
 ## Malformed payload and disconnect handling
 
 SSE JSON parsing errors bubble out of `readSseJson` and reject request/listener.
 
 - Request SSE parse errors reject the active request.
-- Background listener errors trigger `onError` (except AbortError).
+- Background listener errors trigger `onError` (except AbortError), and an established listener ending while still connected triggers `onClose` so the manager can reconnect.
 - Transport does not restart the listener itself; managed connections may reconnect through manager `onClose` handling.
 
 ## `json-rpc.ts` utility vs transport abstraction

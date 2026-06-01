@@ -1476,17 +1476,6 @@
         return html;
       }
 
-      function renderRecipe(name, args, result, ctx) {
-        const op = str(args.op) || '?';
-        let html = toolHead('recipe', '<span class="tool-arg-val">' + escapeHtml(op) + '</span>');
-        if (result) {
-          html += ctx.renderResultImages();
-          const output = ctx.getResultText();
-          if (output) html += formatExpandableOutput(output, 10);
-        }
-        return html;
-      }
-
       function renderIrc(name, args, result, ctx) {
         const op = str(args.op) || '?';
         const badges = [op];
@@ -1551,7 +1540,6 @@
         poll: renderJob,
         cancel_job: renderJob,
         job: renderJob,
-        recipe: renderRecipe,
         irc: renderIrc,
       };
 

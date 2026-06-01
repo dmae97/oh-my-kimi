@@ -362,8 +362,8 @@ async function cmdRelease(version: string): Promise<void> {
 	} else {
 		console.log("\nTo retry after fixing (repeat until CI passes):");
 		console.log("  git commit -m \"fix: <brief description>\"");
-		console.log("  git push origin main");
-		console.log(`  git tag -f v${version} && git push origin v${version} --force`);
+		console.log(`  git tag -f v${version}`);
+		console.log(`  git push --atomic origin main +refs/tags/v${version}`);
 		console.log("  bun scripts/release.ts watch");
 		process.exit(1);
 	}

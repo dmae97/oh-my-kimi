@@ -21,22 +21,22 @@ No configuration is required for common setups. The built-in server list covers 
 
 OMP merges LSP config from multiple files, lowest to highest priority:
 
-| Priority | Location |
-|----------|----------|
-| 5 (lowest) | `~/lsp.json`, `~/.lsp.json`, `~/lsp.yaml`, `~/.lsp.yaml` |
-| 4 | Plugin LSP configs (marketplace / `--plugin-dir` roots) |
-| 3 | `~/.omp/agent/lsp.json`, `~/.omp/agent/lsp.yaml`, `~/.claude/lsp.*` |
-| 2 | `<project>/.omp/lsp.json`, `<project>/.omp/lsp.yaml`, `<project>/.claude/lsp.*` |
-| 1 (highest) | `<project>/lsp.json`, `<project>/.lsp.json`, `<project>/lsp.yaml` |
+| Priority    | Location                                                                                                                    |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------- |
+| 5 (lowest)  | `~/lsp.json`, `~/.lsp.json`, `~/lsp.yaml`, `~/.lsp.yaml`, `~/lsp.yml`, `~/.lsp.yml`                                         |
+| 4           | Plugin LSP configs (marketplace / `--plugin-dir` roots)                                                                     |
+| 3           | User config dirs: `~/.omp/agent/lsp.*`, `~/.claude/lsp.*`, `~/.codex/lsp.*`, `~/.gemini/lsp.*`                              |
+| 2           | Project config dirs: `<project>/.omp/lsp.*`, `<project>/.claude/lsp.*`, `<project>/.codex/lsp.*`, `<project>/.gemini/lsp.*` |
+| 1 (highest) | Project root: `<project>/lsp.*` and `<project>/.lsp.*`                                                                      |
 
-Each location accepts both `.json` and `.yaml` / `.yml` variants, as well as hidden-file versions (`.lsp.json`, `.lsp.yaml`). Files are merged in order: higher-priority files override lower-priority fields for the same server. Servers not mentioned in any override file remain at their built-in defaults.
+Each location accepts `.json`, `.yaml`, and `.yml` variants, including hidden-file versions (`.lsp.json`, `.lsp.yaml`, `.lsp.yml`). Files are merged in order: higher-priority files override lower-priority fields for the same server. Servers not mentioned in any override file remain at their built-in defaults.
 
 **Recommended locations:**
 
 - User-wide preferences → `~/.omp/agent/lsp.json`
 - Project-specific overrides → `<project>/.omp/lsp.json`
 
-> **Note:** The presence of any LSP config file disables auto-detection. When at least one file is found, OMP skips the binary-scan phase and loads all servers that have matching `rootMarkers`, an available binary, and are not explicitly `disabled`.
+> **Note:** Auto-detection is skipped only when at least one config file contributes server overrides. A config file that only sets `idleTimeoutMs` still lets OMP auto-detect built-in servers. When server overrides exist, OMP merges them with defaults and then loads servers that have matching `rootMarkers`, an available binary, and are not explicitly `disabled`.
 
 ## File shape
 
@@ -67,18 +67,18 @@ Top-level keys:
 
 ## ServerConfig fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `command` | `string` | yes | Binary name (resolved via PATH/local bins) or absolute path |
-| `args` | `string[]` | no | Arguments passed to the binary |
-| `fileTypes` | `string[]` | yes | File extensions this server handles, e.g. `[".ts", ".tsx"]` |
-| `rootMarkers` | `string[]` | yes | Files/dirs that indicate a project root; glob patterns (e.g. `*.cabal`) are supported |
-| `initOptions` | `object` | no | Sent as `initializationOptions` during LSP handshake |
-| `settings` | `object` | no | Workspace settings pushed via `workspace/didChangeConfiguration` |
-| `disabled` | `boolean` | no | Set to `true` to disable this server entirely |
-| `warmupTimeoutMs` | `number` | no | Startup timeout in ms for this server (overrides the global default) |
-| `isLinter` | `boolean` | no | Mark server as linter/formatter only; excluded from type-intelligence operations (hover, go-to-definition, etc.) |
-| `capabilities` | `object` | no | Opt-in server-specific features; see [Capabilities](#capabilities) |
+| Field             | Type       | Required | Description                                                                                                      |
+| ----------------- | ---------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
+| `command`         | `string`   | yes      | Binary name (resolved via PATH/local bins) or absolute path                                                      |
+| `args`            | `string[]` | no       | Arguments passed to the binary                                                                                   |
+| `fileTypes`       | `string[]` | yes      | File extensions this server handles, e.g. `[".ts", ".tsx"]`                                                      |
+| `rootMarkers`     | `string[]` | yes      | Files/dirs that indicate a project root; glob patterns (e.g. `*.cabal`) are supported                            |
+| `initOptions`     | `object`   | no       | Sent as `initializationOptions` during LSP handshake                                                             |
+| `settings`        | `object`   | no       | Workspace settings pushed via `workspace/didChangeConfiguration`                                                 |
+| `disabled`        | `boolean`  | no       | Set to `true` to disable this server entirely                                                                    |
+| `warmupTimeoutMs` | `number`   | no       | Startup timeout in ms for this server (overrides the global default)                                             |
+| `isLinter`        | `boolean`  | no       | Mark server as linter/formatter only; excluded from type-intelligence operations (hover, go-to-definition, etc.) |
+| `capabilities`    | `object`   | no       | Opt-in server-specific features; see [Capabilities](#capabilities)                                               |
 
 `resolvedCommand` is populated automatically at runtime — do not set it manually.
 
@@ -184,57 +184,57 @@ The user-level config in `~/.omp/agent/lsp.json` is unaffected; pylsp is only su
 
 The following servers ship in `defaults.json` and are eligible for auto-detection:
 
-| Server key | Language(s) | Binary |
-|---|---|---|
-| `rust-analyzer` | Rust | `rust-analyzer` |
-| `clangd` | C, C++, ObjC | `clangd` |
-| `zls` | Zig | `zls` |
-| `gopls` | Go | `gopls` |
-| `typescript-language-server` | TypeScript, JavaScript | `typescript-language-server` |
-| `denols` | TypeScript, JavaScript (Deno) | `deno` |
-| `biome` | TS/JS/JSON (linter) | `biome` |
-| `eslint` | TS/JS/Vue/Svelte (linter) | `vscode-eslint-language-server` |
-| `vscode-html-language-server` | HTML | `vscode-html-language-server` |
-| `vscode-css-language-server` | CSS, SCSS, Less | `vscode-css-language-server` |
-| `vscode-json-language-server` | JSON | `vscode-json-language-server` |
-| `tailwindcss` | HTML, CSS, TS/JS | `tailwindcss-language-server` |
-| `svelte` | Svelte | `svelteserver` |
-| `vue-language-server` | Vue | `vue-language-server` |
-| `astro` | Astro | `astro-ls` |
-| `pyright` | Python | `pyright-langserver` |
-| `basedpyright` | Python | `basedpyright-langserver` |
-| `pylsp` | Python | `pylsp` |
-| `ruff` | Python (linter) | `ruff` |
-| `jdtls` | Java | `jdtls` |
-| `kotlin-lsp` | Kotlin | `kotlin-lsp` |
-| `metals` | Scala | `metals` |
-| `hls` | Haskell | `haskell-language-server-wrapper` |
-| `ocamllsp` | OCaml | `ocamllsp` |
-| `elixirls` | Elixir | `elixir-ls` |
-| `erlangls` | Erlang | `erlang_ls` |
-| `gleam` | Gleam | `gleam` |
-| `solargraph` | Ruby | `solargraph` |
-| `ruby-lsp` | Ruby | `ruby-lsp` |
-| `rubocop` | Ruby (linter) | `rubocop` |
-| `bashls` | Bash, Zsh | `bash-language-server` |
-| `lua-language-server` | Lua | `lua-language-server` |
-| `intelephense` | PHP | `intelephense` |
-| `phpactor` | PHP | `phpactor` |
-| `omnisharp` | C# | `omnisharp` |
-| `yamlls` | YAML | `yaml-language-server` |
-| `terraformls` | Terraform | `terraform-ls` |
-| `dockerls` | Dockerfile | `docker-langserver` |
-| `helm-ls` | Helm | `helm_ls` |
-| `nixd` | Nix | `nixd` |
-| `nil` | Nix | `nil` |
-| `ols` | Odin | `ols` |
-| `dartls` | Dart | `dart` |
-| `marksman` | Markdown | `marksman` |
-| `texlab` | LaTeX | `texlab` |
-| `graphql` | GraphQL | `graphql-lsp` |
-| `prismals` | Prisma | `prisma-language-server` |
-| `vimls` | Vim script | `vim-language-server` |
-| `emmet-language-server` | HTML, CSS, JSX | `emmet-language-server` |
-| `sourcekit-lsp` | Swift | `sourcekit-lsp` |
-| `swiftlint` | Swift (linter) | `swiftlint` |
-| `tlaplus` | TLA+ | `tlapm_lsp` |
+| Server key                    | Language(s)                   | Binary                            |
+| ----------------------------- | ----------------------------- | --------------------------------- |
+| `rust-analyzer`               | Rust                          | `rust-analyzer`                   |
+| `clangd`                      | C, C++, ObjC                  | `clangd`                          |
+| `zls`                         | Zig                           | `zls`                             |
+| `gopls`                       | Go                            | `gopls`                           |
+| `typescript-language-server`  | TypeScript, JavaScript        | `typescript-language-server`      |
+| `denols`                      | TypeScript, JavaScript (Deno) | `deno`                            |
+| `biome`                       | TS/JS/JSON (linter)           | `biome`                           |
+| `eslint`                      | TS/JS/Vue/Svelte (linter)     | `vscode-eslint-language-server`   |
+| `vscode-html-language-server` | HTML                          | `vscode-html-language-server`     |
+| `vscode-css-language-server`  | CSS, SCSS, Less               | `vscode-css-language-server`      |
+| `vscode-json-language-server` | JSON                          | `vscode-json-language-server`     |
+| `tailwindcss`                 | HTML, CSS, TS/JS              | `tailwindcss-language-server`     |
+| `svelte`                      | Svelte                        | `svelteserver`                    |
+| `vue-language-server`         | Vue                           | `vue-language-server`             |
+| `astro`                       | Astro                         | `astro-ls`                        |
+| `pyright`                     | Python                        | `pyright-langserver`              |
+| `basedpyright`                | Python                        | `basedpyright-langserver`         |
+| `pylsp`                       | Python                        | `pylsp`                           |
+| `ruff`                        | Python (linter)               | `ruff`                            |
+| `jdtls`                       | Java                          | `jdtls`                           |
+| `kotlin-lsp`                  | Kotlin                        | `kotlin-lsp`                      |
+| `metals`                      | Scala                         | `metals`                          |
+| `hls`                         | Haskell                       | `haskell-language-server-wrapper` |
+| `ocamllsp`                    | OCaml                         | `ocamllsp`                        |
+| `elixirls`                    | Elixir                        | `elixir-ls`                       |
+| `erlangls`                    | Erlang                        | `erlang_ls`                       |
+| `gleam`                       | Gleam                         | `gleam`                           |
+| `solargraph`                  | Ruby                          | `solargraph`                      |
+| `ruby-lsp`                    | Ruby                          | `ruby-lsp`                        |
+| `rubocop`                     | Ruby (linter)                 | `rubocop`                         |
+| `bashls`                      | Bash, Zsh                     | `bash-language-server`            |
+| `lua-language-server`         | Lua                           | `lua-language-server`             |
+| `intelephense`                | PHP                           | `intelephense`                    |
+| `phpactor`                    | PHP                           | `phpactor`                        |
+| `omnisharp`                   | C#                            | `omnisharp`                       |
+| `yamlls`                      | YAML                          | `yaml-language-server`            |
+| `terraformls`                 | Terraform                     | `terraform-ls`                    |
+| `dockerls`                    | Dockerfile                    | `docker-langserver`               |
+| `helm-ls`                     | Helm                          | `helm_ls`                         |
+| `nixd`                        | Nix                           | `nixd`                            |
+| `nil`                         | Nix                           | `nil`                             |
+| `ols`                         | Odin                          | `ols`                             |
+| `dartls`                      | Dart                          | `dart`                            |
+| `marksman`                    | Markdown                      | `marksman`                        |
+| `texlab`                      | LaTeX                         | `texlab`                          |
+| `graphql`                     | GraphQL                       | `graphql-lsp`                     |
+| `prismals`                    | Prisma                        | `prisma-language-server`          |
+| `vimls`                       | Vim script                    | `vim-language-server`             |
+| `emmet-language-server`       | HTML, CSS, JSX                | `emmet-language-server`           |
+| `sourcekit-lsp`               | Swift                         | `sourcekit-lsp`                   |
+| `swiftlint`                   | Swift (linter)                | `swiftlint`                       |
+| `tlaplus`                     | TLA+                          | `tlapm_lsp`                       |
