@@ -1,12 +1,7 @@
 /**
  * Regression: declining the cross-project fork prompt during `--resume <id>`
- * must exit cleanly instead of throwing an uncaught exception. See #1668.
- *
- * The contract: when `promptForkSession` returns false (which it does in
- * non-TTY environments such as the test runner), `createSessionManager`
- * returns `undefined` rather than throwing. `runRootCommand` separately
- * distinguishes that cancellation from the "default new session" undefined
- * return by inspecting `parsed.resume`.
+ * must exit cleanly, while non-interactive resume still fails instead of
+ * silently succeeding. See #1668.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Args } from "@oh-my-pi/pi-coding-agent/cli/args";
@@ -47,9 +42,24 @@ describe("createSessionManager — cross-project --resume cancellation (#1668)",
 		vi.restoreAllMocks();
 	});
 
-	it("returns undefined when the user declines the fork prompt instead of throwing", async () => {
-		// promptForkSession returns false for non-TTY stdin (the test runner), so
-		// the decline path is exercised without further mocking.
+	it("returns undefined when an interactive user declines the fork prompt instead of throwing", async () => {
+		const sessionCwd = "/some/other/project";
+		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(sessionCwd));
+
+		const args = buildArgs("019e84ed");
+		const stubSettings = { get: () => undefined } as unknown as Settings;
+
+		const result = await createSessionManager(
+			args,
+			"/current/project",
+			stubSettings,
+			async () => "declined" as const,
+		);
+
+		expect(result).toBeUndefined();
+	});
+
+	it("throws when the cross-project fork prompt is unavailable in non-interactive mode", async () => {
 		expect(process.stdin.isTTY).toBeFalsy();
 
 		const sessionCwd = "/some/other/project";
@@ -58,8 +68,8 @@ describe("createSessionManager — cross-project --resume cancellation (#1668)",
 		const args = buildArgs("019e84ed");
 		const stubSettings = { get: () => undefined } as unknown as Settings;
 
-		const result = await createSessionManager(args, "/current/project", stubSettings);
-
-		expect(result).toBeUndefined();
+		await expect(createSessionManager(args, "/current/project", stubSettings)).rejects.toThrow(
+			'Session "019e84ed" is in another project (/some/other/project); run interactively to fork it into the current project.',
+		);
 	});
 });

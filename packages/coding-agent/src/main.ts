@@ -312,15 +312,19 @@ async function runInteractiveMode(
 	}
 }
 
-async function promptForkSession(session: SessionInfo): Promise<boolean> {
+type ForkSessionPromptResult = "accepted" | "declined" | "unavailable";
+
+type ForkSessionPrompt = (session: SessionInfo) => Promise<ForkSessionPromptResult>;
+
+async function promptForkSession(session: SessionInfo): Promise<ForkSessionPromptResult> {
 	if (!process.stdin.isTTY) {
-		return false;
+		return "unavailable";
 	}
 	const message = `Session found in different project: ${session.cwd}. Fork into current directory? [y/N] `;
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
 		const answer = (await rl.question(message)).trim().toLowerCase();
-		return answer === "y" || answer === "yes";
+		return answer === "y" || answer === "yes" ? "accepted" : "declined";
 	} finally {
 		rl.close();
 	}
@@ -366,10 +370,12 @@ async function flushChangelogVersion(): Promise<void> {
 	}
 }
 
+/** Resolves CLI session flags into an existing, forked, in-memory, or cancelled session manager. */
 export async function createSessionManager(
 	parsed: Args,
 	cwd: string,
 	activeSettings: Settings = settings,
+	askToForkSession: ForkSessionPrompt = promptForkSession,
 ): Promise<SessionManager | undefined> {
 	if (parsed.fork) {
 		if (parsed.noSession) {
@@ -402,8 +408,13 @@ export async function createSessionManager(
 			const normalizedCwd = normalizePathForComparison(cwd);
 			const normalizedMatchCwd = normalizePathForComparison(match.session.cwd || cwd);
 			if (normalizedCwd !== normalizedMatchCwd) {
-				const shouldFork = await promptForkSession(match.session);
-				if (!shouldFork) {
+				const forkPromptResult = await askToForkSession(match.session);
+				if (forkPromptResult === "unavailable") {
+					throw new Error(
+						`Session "${sessionArg}" is in another project (${match.session.cwd}); run interactively to fork it into the current project.`,
+					);
+				}
+				if (forkPromptResult === "declined") {
 					// User declined the cross-project fork prompt. Caller distinguishes
 					// this cancellation from the "default new session" undefined return
 					// by checking `typeof parsed.resume === "string"`.
@@ -850,8 +861,8 @@ export async function runRootCommand(
 	);
 
 	// User declined the cross-project fork prompt — exit cleanly with a friendly
-	// message rather than letting the deprecated throw bubble up as an uncaught
-	// exception (see issue #1668).
+	// message rather than letting the decline bubble up as an uncaught exception
+	// (see issue #1668).
 	if (typeof parsedArgs.resume === "string" && !sessionManager) {
 		process.stdout.write(`${chalk.dim("Resume cancelled: session is in another project.")}\n`);
 		return;

@@ -5,7 +5,7 @@
 ### Fixed
 
 - Fixed a module-load crash (`ReferenceError: Cannot access 'evalToolRenderer' before initialization`) triggered whenever `tools/eval` was imported before `tools/renderers`. The eval JS backend statically pulls the agent/task/sdk/extension chain, which re-enters the root barrel → `modes/components` → `tool-execution` → `renderers` while `eval.ts` was still initializing, so `renderers.ts` read `evalToolRenderer` in its TDZ. The eval TUI renderer is now split into a dependency-light `tools/eval-render.ts` that `renderers.ts` imports directly (decoupling pure rendering from the eval runtime); `eval.ts` re-exports `evalToolRenderer`/`EVAL_DEFAULT_PREVIEW_LINES` for compatibility.
-- Fixed `omp --resume <id>` crashing with an uncaught exception when the user declined the cross-project fork prompt. `createSessionManager` now returns `undefined` for the cancellation, and `runRootCommand` prints a dimmed `Resume cancelled` message and exits cleanly ([#1668](https://github.com/can1357/oh-my-pi/issues/1668)).
+- Fixed `omp --resume <id>` crashing with an uncaught exception when an interactive user declined the cross-project fork prompt. `createSessionManager` now returns `undefined` for that cancellation, while non-interactive invocations still fail with a diagnostic when they cannot answer the fork prompt ([#1668](https://github.com/can1357/oh-my-pi/issues/1668)).
 
 ## [15.7.6] - 2026-06-01
 ### Added
