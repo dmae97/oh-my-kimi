@@ -132,6 +132,36 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(blocks?.[2].cache_control).toEqual({ type: "ephemeral" });
 	});
 
+	it("billing-header fingerprint uses first user message, not leading developer message", async () => {
+		const userText = "Hello from user with enough chars padding here";
+
+		// Conversation with only a user message.
+		const payloadUserOnly = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: ["Be helpful."],
+			messages: [{ role: "user", content: userText, timestamp: Date.now() }],
+		})) as { system?: Array<{ type: string; text?: string }> };
+
+		// Conversation prefixed with a developer message before the same user message.
+		const payloadWithDev = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: ["Be helpful."],
+			messages: [
+				{ role: "developer", content: "developer instruction text", timestamp: Date.now() },
+				{ role: "user", content: userText, timestamp: Date.now() },
+			],
+		})) as { system?: Array<{ type: string; text?: string }> };
+
+		const billingUserOnly = payloadUserOnly.system?.[0].text ?? "";
+		const billingWithDev = payloadWithDev.system?.[0].text ?? "";
+
+		// Both payloads must carry a billing header.
+		expect(billingUserOnly).toStartWith("x-anthropic-billing-header:");
+		expect(billingWithDev).toStartWith("x-anthropic-billing-header:");
+
+		// The cc_version suffix (fingerprint) must be identical — developer message must not affect it.
+		const extractSuffix = (header: string) => header.match(/cc_version=[^.]+\.([a-f0-9]{3})/)?.[1];
+		expect(extractSuffix(billingWithDev)).toBe(extractSuffix(billingUserOnly));
+	});
+
 	it("places the automatic Anthropic cache breakpoint on the last ordered system prompt", async () => {
 		const payload = (await captureAnthropicPayload(
 			ANTHROPIC_MODEL,

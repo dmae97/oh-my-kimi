@@ -2253,7 +2253,7 @@ function buildParams(
 	// etc.) don't pollute the seed — mirrors CC's computeFingerprintFromMessages.
 	let firstUserMessageText = "";
 	if (shouldInjectClaudeCodeInstruction) {
-		const first = context.messages.find(m => m.role === "user" || m.role === "developer");
+		const first = context.messages.find(m => m.role === "user");
 		if (first) {
 			const { content } = first;
 			if (typeof content === "string") {
