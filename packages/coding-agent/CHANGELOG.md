@@ -22,6 +22,10 @@
 
 - Fixed `omp` segfaulting on exit on Windows after the tiny title/memory model loaded `onnxruntime-node` (issue [#1606](https://github.com/can1357/oh-my-pi/issues/1606)). The tiny model now runs in a Bun subprocess instead of a Worker thread, so the NAPI finalizer that crashes during shutdown never executes in the agent's address space; the subprocess is `SIGKILL`'d on dispose to skip every native destructor on every platform.
 
+### Fixed
+
+- Fixed unbounded MCP reconnect loop that could fork-bomb the host when a stdio MCP server completes the `initialize`/`tools/list` handshake and then exits. `MCPManager` now enforces a per-server crash circuit breaker (5 reconnects per 30 s window) on the automatic `transport.onClose` path; manual `/mcp reconnect` resets the window so users can recover after fixing the misconfiguration ([#1592](https://github.com/can1357/oh-my-pi/issues/1592)).
+
 ## [15.7.4] - 2026-05-31
 
 ### Removed
