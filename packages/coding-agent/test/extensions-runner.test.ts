@@ -305,6 +305,26 @@ describe("ExtensionRunner", () => {
 			const missing = runner.getMessageRenderer("not-exists");
 			expect(missing).toBeUndefined();
 		});
+
+		it("collects assistant thinking renderers", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.registerAssistantThinkingRenderer((context, theme) => null);
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "thinking-renderer.ts"), extCode);
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+
+			expect(runner.getAssistantThinkingRenderers().length).toBe(1);
+		});
 	});
 
 	describe("flags", () => {
@@ -621,7 +641,7 @@ describe("ExtensionRunner", () => {
 				`
 					export default function(pi) {
 						pi.on("session_start", async () => {
-							await new Promise(() => {});
+							await Promise.withResolvers().promise;
 						});
 					}
 				`,

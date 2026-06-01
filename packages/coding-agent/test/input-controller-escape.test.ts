@@ -7,7 +7,6 @@ type StartPendingSubmissionSpy = Mock<InteractiveModeContext["startPendingSubmis
 type FakeEditor = {
 	onEscape?: () => void;
 	onSubmit?: (text: string) => Promise<void>;
-	shouldBypassAutocompleteOnEscape?: () => boolean;
 	onClear?: () => void;
 	onExit?: () => void;
 	onSuspend?: () => void;
@@ -200,7 +199,6 @@ describe("InputController escape behavior", () => {
 
 		expect(spies.startPendingSubmission).toHaveBeenCalledWith({ text: "hello", images: undefined });
 		expect(spies.onInputCallback).toHaveBeenCalledWith(submission);
-		expect(editor.shouldBypassAutocompleteOnEscape?.()).toBe(true);
 
 		editor.onEscape?.();
 		expect(spies.cancelPendingSubmission).toHaveBeenCalledTimes(1);
@@ -269,7 +267,6 @@ describe("InputController escape behavior", () => {
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
-		expect(editor.shouldBypassAutocompleteOnEscape?.()).toBe(true);
 		editor.onEscape?.();
 
 		expect(spies.handleBtwEscape).toHaveBeenCalledTimes(1);
@@ -283,7 +280,6 @@ describe("InputController escape behavior", () => {
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
-		expect(editor.shouldBypassAutocompleteOnEscape?.()).toBe(true);
 		editor.onEscape?.();
 
 		expect(spies.handleBtwEscape).toHaveBeenCalledTimes(1);
@@ -299,7 +295,6 @@ describe("InputController escape behavior", () => {
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
-		expect(editor.shouldBypassAutocompleteOnEscape?.()).toBe(true);
 		editor.onEscape?.();
 
 		expect(spies.handleBtwEscape).toHaveBeenCalledTimes(1);

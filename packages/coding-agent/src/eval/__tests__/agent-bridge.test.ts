@@ -10,6 +10,8 @@ import { AgentOutputManager } from "../../task/output-manager";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../task/types";
 import type { ToolSession } from "../../tools";
 import { EVAL_AGENT_MAX_DEPTH, runEvalAgent } from "../agent-bridge";
+import { EVAL_HEARTBEAT_OP, setBridgeHeartbeatIntervalMs } from "../heartbeat";
+import { IdleTimeout } from "../idle-timeout";
 import { disposeAllVmContexts } from "../js/context-manager";
 import { executeJs } from "../js/executor";
 import { disposeAllKernelSessions, executePython } from "../py/executor";
@@ -232,6 +234,7 @@ describe("runEvalAgent", () => {
 describe("agent() through eval runtimes", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+		setBridgeHeartbeatIntervalMs();
 	});
 
 	afterAll(async () => {
@@ -429,5 +432,92 @@ describe("agent() through eval runtimes", () => {
 			(output): output is Extract<typeof output, { type: "status" }> => output.type === "status",
 		);
 		expect(displayAgentEvents.length).toBe(2);
+	});
+
+	it("keeps the idle watchdog armed while a quiet agent() runs past the budget", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-heartbeat-");
+		const { session } = makeEvalSession(tempDir, "js-agent-heartbeat");
+		mockAgents();
+		// Heartbeat cadence well under the idle budget so a working-but-silent
+		// subagent re-arms the watchdog several times before it could expire.
+		setBridgeHeartbeatIntervalMs(15);
+
+		// runSubprocess runs far past the budget and emits NO progress of its own
+		// — the only thing standing between the subagent and a spurious idle abort
+		// is the heartbeat keepalive the bridge pumps while it awaits.
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			await Bun.sleep(200);
+			return singleResult(options, { output: "done" });
+		});
+
+		// Mirror the eval tool's wiring: an IdleTimeout drives cancellation and
+		// ONLY a bridge heartbeat re-arms it.
+		using idle = new IdleTimeout(60);
+		const result = await runEvalAgent(
+			{ prompt: "investigate" },
+			{
+				session,
+				signal: idle.signal,
+				emitStatus: event => {
+					if (event.op === EVAL_HEARTBEAT_OP) idle.bump();
+				},
+			},
+		);
+
+		expect(idle.signal.aborted).toBe(false);
+		expect(result.text).toBe("done");
+	});
+
+	it("does not let agent() progress snapshots re-arm the watchdog without a heartbeat", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-progress-no-rearm-");
+		const { session } = makeEvalSession(tempDir, "js-agent-progress-no-rearm");
+		mockAgents();
+		// Heartbeat slower than the budget: only the immediate beat at call start
+		// fires, so after the budget elapses nothing re-arms the watchdog.
+		setBridgeHeartbeatIntervalMs(10_000);
+
+		// Stream frequent progress snapshots (op:"agent") for well past the budget.
+		// Progress is rendered but MUST NOT count as activity — only heartbeats do.
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			for (let i = 0; i < 40; i++) {
+				options.onProgress?.({
+					index: options.index,
+					id: options.id,
+					agent: options.agent.name,
+					agentSource: options.agent.source,
+					status: "running",
+					task: options.task,
+					assignment: options.assignment,
+					description: options.description,
+					recentTools: [],
+					recentOutput: [],
+					toolCount: i,
+					tokens: 0,
+					cost: 0,
+					durationMs: i * 10,
+				});
+				await Bun.sleep(10);
+			}
+			return singleResult(options, { output: "done" });
+		});
+
+		const ops: string[] = [];
+		using idle = new IdleTimeout(80);
+		await runEvalAgent(
+			{ prompt: "investigate" },
+			{
+				session,
+				signal: idle.signal,
+				emitStatus: event => {
+					ops.push(event.op);
+					if (event.op === EVAL_HEARTBEAT_OP) idle.bump();
+				},
+			},
+		);
+
+		// Progress streamed, but the watchdog still fired: agent snapshots never
+		// re-armed it, and the lone start heartbeat lapsed before the call ended.
+		expect(ops).toContain("agent");
+		expect(idle.signal.aborted).toBe(true);
 	});
 });

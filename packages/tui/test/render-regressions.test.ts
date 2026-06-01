@@ -1849,6 +1849,176 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("paints a viewport-saturating pure-append on native Windows Terminal (no \\x1b[3J)", async () => {
+			// Regression: under `WT_SESSION` on native Windows the kernel32 probe is
+			// suppressed and `isNativeViewportAtBottom()` returns `undefined`. The
+			// `15.7.5` #1635 fix routed pure-append-over-saturated-viewport frames to
+			// `deferredMutation` here, which is a literal no-op. That froze the editor
+			// on the very keystroke that grows `lines.length` past the viewport (the
+			// wrap keystroke) until the next prompt-submit checkpoint flushed.
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			try {
+				await withEnvPatch(
+					{ WT_SESSION: "wt-test", TMUX: undefined, STY: undefined, ZELLIJ: undefined },
+					async () => {
+						const term = new UnknownViewportTerminal(32, 5);
+						const tui = new TUI(term);
+						// Five-row transcript + one editor row saturates the viewport (height = 5).
+						// The user is at the tail — no scroll — but the probe still answers `undefined`.
+						const transcript = new MutableLinesComponent(rows("seed-", 5));
+						const editor = new MutableLinesComponent(["prompt> a"]);
+						tui.addChild(transcript);
+						tui.addChild(editor);
+
+						try {
+							tui.start();
+							await settle(term);
+
+							const writes: string[] = [];
+							const realWrite = term.write.bind(term);
+							(term as unknown as { write: (s: string) => void }).write = (data: string) => {
+								writes.push(data);
+								realWrite(data);
+							};
+
+							// The wrap keystroke: editor grows from one to two visual rows. This is a
+							// pure append (`firstChanged === previousLines.length`, content grew) over
+							// a viewport already at capacity — exactly the branch that used to defer.
+							editor.setLines(["prompt> a", "wrap-row"]);
+							tui.requestRender();
+							await settle(term);
+
+							// The #1635 anti-yank guarantee must survive: no destructive scrollback erase.
+							expect(writes.join("")).not.toContain("\x1b[3J");
+							// The wrap row paints in the same frame — viewportRepaint is non-destructive
+							// but writes the visible window, so the editor's new visual row is on screen.
+							expect(visible(term).map(line => line.trim())).toContain("wrap-row");
+							// And the deferred-cleanup checkpoint is queued for the next prompt submit.
+							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+						} finally {
+							tui.stop();
+						}
+					},
+				);
+			} finally {
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			}
+		});
+
+		it("paints a slash-command-shaped structural mutation on native Windows Terminal (no \\x1b[3J)", async () => {
+			// Sibling regression: `/plan`, `/resume`, model switches, role-badge flips,
+			// status-line toggles — any structural offscreen mutation — also routed to
+			// `deferredMutation` under WT, so the toggle never painted until the next
+			// checkpoint. After the fix the planner falls back to `viewportRepaint`
+			// instead, painting the visible window without emitting `\x1b[3J`.
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			try {
+				await withEnvPatch(
+					{ WT_SESSION: "wt-test", TMUX: undefined, STY: undefined, ZELLIJ: undefined },
+					async () => {
+						const term = new UnknownViewportTerminal(32, 5);
+						const tui = new TUI(term);
+						// Transcript + status + prompt; total six rows over a five-row viewport.
+						const transcript = new MutableLinesComponent(rows("seed-", 4));
+						const status = new MutableLinesComponent(["STATUS-OLD"]);
+						const prompt = new MutableLinesComponent(["prompt>"]);
+						tui.addChild(transcript);
+						tui.addChild(status);
+						tui.addChild(prompt);
+
+						try {
+							tui.start();
+							await settle(term);
+
+							const writes: string[] = [];
+							const realWrite = term.write.bind(term);
+							(term as unknown as { write: (s: string) => void }).write = (data: string) => {
+								writes.push(data);
+								realWrite(data);
+							};
+
+							// Slash-command toggle: an existing offscreen row flips its content and a
+							// new chrome row is inserted. firstChanged lands above the viewport top,
+							// length grew by one — a structural mutation, not a pure append.
+							status.setLines(["STATUS-NEW", "EXTRA"]);
+							tui.requestRender();
+							await settle(term);
+
+							expect(writes.join("")).not.toContain("\x1b[3J");
+							const view = visible(term).map(line => line.trim());
+							expect(view).toContain("STATUS-NEW");
+							expect(view).toContain("EXTRA");
+							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+						} finally {
+							tui.stop();
+						}
+					},
+				);
+			} finally {
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			}
+		});
+
+		it("still defers when the native viewport probe confirms a scrolled-up reader", async () => {
+			// Counterpart to the two paints above: when the probe is *reliable* and reports
+			// `false`, the reader is parked in scrollback and a live-frame write is wasted.
+			// `deferredMutation` (a no-op) must stay in place so the next checkpoint can
+			// reconcile cleanly, and no bytes hit the terminal during the deferred frame.
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			try {
+				await withEnvPatch(
+					{ WT_SESSION: undefined, TMUX: undefined, STY: undefined, ZELLIJ: undefined },
+					async () => {
+						const term = new VirtualTerminal(32, 5);
+						const tui = new TUI(term);
+						const transcript = new MutableLinesComponent(rows("seed-", 5));
+						const status = new MutableLinesComponent(["STATUS-OLD"]);
+						const prompt = new MutableLinesComponent(["prompt>"]);
+						tui.addChild(transcript);
+						tui.addChild(status);
+						tui.addChild(prompt);
+
+						try {
+							tui.start();
+							await settle(term);
+
+							// Pin the probe to a confirmed-scrolled answer (host reports `false`).
+							(term as unknown as { isNativeViewportAtBottom: () => boolean }).isNativeViewportAtBottom = () =>
+								false;
+
+							const writes: string[] = [];
+							const realWrite = term.write.bind(term);
+							(term as unknown as { write: (s: string) => void }).write = (data: string) => {
+								writes.push(data);
+								realWrite(data);
+							};
+
+							// Same structural mutation as the slash-command test — but with the probe
+							// telling us the user can't see the live frame, the planner stays a no-op.
+							status.setLines(["STATUS-NEW", "EXTRA"]);
+							tui.requestRender();
+							await settle(term);
+
+							// Zero bytes written — the deferral is intentional and protects the reader.
+							expect(writes.join("")).toBe("");
+							// Scrollback was marked dirty by the deferral; once the reader returns to
+							// the tail (probe reports `true`) the next checkpoint reconciles cleanly.
+							(term as unknown as { isNativeViewportAtBottom: () => boolean }).isNativeViewportAtBottom = () =>
+								true;
+							expect(tui.refreshNativeScrollbackIfDirty()).toBe(true);
+						} finally {
+							tui.stop();
+						}
+					},
+				);
+			} finally {
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			}
+		});
+
 		it("refreshes deferred native scrollback when the native viewport reaches bottom", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);

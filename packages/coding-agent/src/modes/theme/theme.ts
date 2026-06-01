@@ -812,6 +812,25 @@ const SPINNER_FRAMES: Record<SymbolPreset, Record<SpinnerType, string[]>> = {
 	},
 };
 
+/**
+ * Shape accepted by `themeJson.symbols.spinnerFrames`. A flat array applies to
+ * both spinner types; an object lets a theme override `status` and/or
+ * `activity` independently. Anything not specified falls back to the symbol
+ * preset's default frames.
+ */
+type SpinnerFramesOverride = string[] | { status?: string[]; activity?: string[] };
+
+function normalizeSpinnerFramesOverride(
+	value: SpinnerFramesOverride | undefined,
+): Partial<Record<SpinnerType, string[]>> {
+	if (value === undefined) return {};
+	if (Array.isArray(value)) return { status: value, activity: value };
+	const result: Partial<Record<SpinnerType, string[]>> = {};
+	if (value.status) result.status = value.status;
+	if (value.activity) result.activity = value.activity;
+	return result;
+}
+
 // ============================================================================
 // Types & Schema
 // ============================================================================
@@ -898,6 +917,19 @@ const themeColorsSchema = z.object(
 	},
 );
 
+const spinnerFramesArraySchema = z.array(z.string().min(1)).min(1);
+const spinnerFramesSchema = z.union([
+	spinnerFramesArraySchema,
+	z
+		.object({
+			status: spinnerFramesArraySchema.optional(),
+			activity: spinnerFramesArraySchema.optional(),
+		})
+		.refine(value => value.status !== undefined || value.activity !== undefined, {
+			message: "spinnerFrames object must define `status` and/or `activity`",
+		}),
+]);
+
 const symbolPresetSchema = z.enum(["unicode", "nerd", "ascii"]);
 
 const themeJsonSchema = z.object({
@@ -916,6 +948,7 @@ const themeJsonSchema = z.object({
 		.object({
 			preset: symbolPresetSchema.optional(),
 			overrides: z.record(z.string(), z.string()).optional(),
+			spinnerFrames: spinnerFramesSchema.optional(),
 		})
 		.optional(),
 });
@@ -1243,6 +1276,7 @@ export class Theme {
 	#fgColors: Record<ThemeColor, string>;
 	#bgColors: Record<ThemeBg, string>;
 	#symbols: SymbolMap;
+	#spinnerFramesOverrides: Partial<Record<SpinnerType, string[]>>;
 
 	constructor(
 		fgColors: Record<ThemeColor, string | number>,
@@ -1250,6 +1284,7 @@ export class Theme {
 		private readonly mode: ColorMode,
 		private readonly symbolPreset: SymbolPreset,
 		symbolOverrides: Partial<Record<SymbolKey, string>>,
+		spinnerFramesOverrides: Partial<Record<SpinnerType, string[]>> = {},
 	) {
 		this.#fgColors = {} as Record<ThemeColor, string>;
 		for (const [key, value] of Object.entries(fgColors) as [ThemeColor, string | number][]) {
@@ -1269,6 +1304,7 @@ export class Theme {
 				logger.debug("Invalid symbol key in override", { key, availableKeys: Object.keys(this.#symbols) });
 			}
 		}
+		this.#spinnerFramesOverrides = spinnerFramesOverrides;
 	}
 
 	fg(color: ThemeColor, text: string): string {
@@ -1563,7 +1599,7 @@ export class Theme {
 	 * Get spinner frames by type.
 	 */
 	getSpinnerFrames(type: SpinnerType = "status"): string[] {
-		return SPINNER_FRAMES[this.symbolPreset][type];
+		return this.#spinnerFramesOverrides[type] ?? SPINNER_FRAMES[this.symbolPreset][type];
 	}
 
 	/**
@@ -1735,7 +1771,8 @@ function createTheme(themeJson: ThemeJson, options: CreateThemeOptions = {}): Th
 	// Extract symbol configuration - settings override takes precedence over theme
 	const symbolPreset: SymbolPreset = symbolPresetOverride ?? themeJson.symbols?.preset ?? "unicode";
 	const symbolOverrides = themeJson.symbols?.overrides ?? {};
-	return new Theme(fgColors, bgColors, colorMode, symbolPreset, symbolOverrides);
+	const spinnerFramesOverrides = normalizeSpinnerFramesOverride(themeJson.symbols?.spinnerFrames);
+	return new Theme(fgColors, bgColors, colorMode, symbolPreset, symbolOverrides, spinnerFramesOverrides);
 }
 
 async function loadTheme(name: string, options: CreateThemeOptions = {}): Promise<Theme> {

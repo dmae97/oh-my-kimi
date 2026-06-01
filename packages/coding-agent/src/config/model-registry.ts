@@ -27,6 +27,32 @@ import {
 // any provider module at startup. Must match `DEFAULT_LOCAL_TOKEN` in oauth/lm-studio.ts.
 const DEFAULT_LOCAL_TOKEN = "lm-studio-local";
 
+// Default cap on `max_tokens` for auto-discovered models that do not advertise
+// their own output limit (OpenAI-models-list, Ollama, llama.cpp, new-api/
+// one-api proxies). 32K matches the upper end of what mainstream
+// OpenAI-compatible providers (DeepSeek, MiMo, OpenRouter, etc.) actually
+// accept and keeps `min(contextWindow, …)` honoring smaller local windows.
+// Conservative caps below this caused providers to drop the connection
+// mid-stream when models hit the cap on legitimate large tool calls (see
+// issue #1528: `write` payloads >~5KB on deepseek-v4-pro surfaced as
+// "socket connection was closed unexpectedly").
+const DISCOVERY_DEFAULT_MAX_TOKENS = 32_768;
+
+// Anthropic-safe variant of the discovery cap. The Anthropic stream converter
+// in `packages/ai/src/providers/anthropic.ts` derives the request limit as
+// `(model.maxTokens / 3) | 0`, so the 32K default would surface as 10,922
+// requested output tokens — above the 8,192 hard cap on classic Claude 3.x
+// Sonnet/Haiku/Opus endpoints. Discovered models routed through
+// `anthropic-messages` (proxy `supported_endpoint_types: ["anthropic"]` or a
+// custom provider with `api: anthropic-messages` + openai-models-list
+// discovery) fall back to this conservative value.
+const DISCOVERY_DEFAULT_MAX_TOKENS_ANTHROPIC = 8_192;
+
+/** Routes discovered-model `maxTokens` defaults around Anthropic's 3× output divisor. */
+function discoveryDefaultMaxTokens(api: Api | undefined): number {
+	return api === "anthropic-messages" ? DISCOVERY_DEFAULT_MAX_TOKENS_ANTHROPIC : DISCOVERY_DEFAULT_MAX_TOKENS;
+}
+
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
@@ -1690,7 +1716,7 @@ export class ModelRegistry {
 				input: metadata?.input ?? ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: metadata?.contextWindow ?? 128000,
-				maxTokens: Math.min(metadata?.contextWindow ?? Number.POSITIVE_INFINITY, 8192),
+				maxTokens: Math.min(metadata?.contextWindow ?? Number.POSITIVE_INFINITY, DISCOVERY_DEFAULT_MAX_TOKENS),
 				headers: providerConfig.headers,
 			});
 		});
@@ -1760,7 +1786,10 @@ export class ModelRegistry {
 					input: serverMetadata?.input ?? ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 					contextWindow: serverMetadata?.contextWindow ?? 128000,
-					maxTokens: Math.min(serverMetadata?.contextWindow ?? Number.POSITIVE_INFINITY, 8192),
+					maxTokens: Math.min(
+						serverMetadata?.contextWindow ?? Number.POSITIVE_INFINITY,
+						DISCOVERY_DEFAULT_MAX_TOKENS,
+					),
 					headers,
 					compat: {
 						supportsStore: false,
@@ -1807,7 +1836,7 @@ export class ModelRegistry {
 					input: ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 					contextWindow: 128000,
-					maxTokens: 8192,
+					maxTokens: discoveryDefaultMaxTokens(providerConfig.api),
 					headers,
 					compat: {
 						supportsStore: false,
@@ -1890,7 +1919,7 @@ export class ModelRegistry {
 					// we successfully recover the upstream model identity.
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 					contextWindow: reference?.contextWindow ?? 128000,
-					maxTokens: reference?.maxTokens ?? 8192,
+					maxTokens: reference?.maxTokens ?? discoveryDefaultMaxTokens(api),
 					headers,
 					// OpenAI-compat fields are no-ops on anthropic models; the
 					// Anthropic SDK ignores them. Provider-level disableStrictTools

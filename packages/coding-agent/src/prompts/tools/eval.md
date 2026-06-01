@@ -8,7 +8,7 @@ Cell fields:
 - `language` — {{#if py}}`"py"` for the IPython kernel{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`"js"` for the persistent JavaScript VM{{/if}}.
 - `code` — cell body, verbatim. Newlines, quotes, and indentation are JSON-encoded; no fences, no headers.
 - `title` (optional) — short label shown in the transcript (e.g. `"imports"`, `"load config"`).
-- `timeout` (optional) — per-cell **inactivity** budget in seconds (1-600). Default 30. The cell is interrupted only after this long with no progress, and every status event (`agent()` updates, `log()`/`phase()`, tool activity) resets the clock — so a long `agent()`/`parallel()` fanout that keeps reporting progress is not killed. Raw `print`/stdout does not reset it; raise `timeout` for a cell that runs long without emitting status.
+- `timeout` (optional) — per-cell wall-clock budget in seconds (1-600). Default 30. It bounds the cell's **own** work, but is paused while an `agent()`/`parallel()`/`llm()` call is in flight — so a long fanout or a slow completion runs to completion, while the cell itself is still bounded. Compute, `print`/stdout, `log()`/`phase()`, and ordinary tool calls all count against the budget; raise `timeout` for a cell that does heavy local work or long non-agent tool calls.
 - `reset` (optional) — wipe this cell's language kernel before running.{{#ifAll py js}} Reset is per-language: a `py` cell's reset does not touch the JavaScript VM and vice versa.{{/ifAll}}
 
 **Work incrementally:**

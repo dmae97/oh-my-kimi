@@ -1,6 +1,7 @@
 import { DEFAULT_MAX_BYTES, OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
+import { EVAL_HEARTBEAT_OP } from "../heartbeat";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
 import type { JsStatusEvent } from "./shared/types";
 
@@ -59,11 +60,10 @@ function isTimeoutReason(reason: unknown): boolean {
 	);
 }
 
-function formatJsTimeoutAnnotation(timeoutMs: number | undefined, idle: boolean): string {
-	const suffix = idle ? " of inactivity" : "";
+function formatJsTimeoutAnnotation(timeoutMs: number | undefined): string {
 	if (timeoutMs === undefined) return "Command timed out";
 	const secs = Math.max(1, Math.round(timeoutMs / 1000));
-	return `Command timed out after ${secs} seconds${suffix}`;
+	return `Command timed out after ${secs} seconds`;
 }
 
 export async function executeJs(code: string, options: JsExecutorOptions): Promise<JsResult> {
@@ -85,10 +85,9 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 		options.signal && timeoutSignal
 			? AbortSignal.any([options.signal, timeoutSignal])
 			: (options.signal ?? timeoutSignal);
-	// Idle mode: the eval tool drives cancellation via an idle-aware `signal` and
-	// passes only an inactivity budget. Use it for worker cold-start headroom and
-	// timeout-annotation text; never derive a competing fixed timer from it.
-	const idleMode = legacyTimeoutMs === undefined && options.idleTimeoutMs !== undefined;
+	// The eval tool drives cancellation via an idle-aware `signal` and passes only
+	// an inactivity budget; use it solely as worker cold-start headroom and never
+	// derive a competing fixed timer from it.
 	const acquireBudgetMs = legacyTimeoutMs ?? options.idleTimeoutMs;
 
 	try {
@@ -105,8 +104,13 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 				signal,
 				onText: chunk => outputSink.push(chunk),
 				onDisplay: output => {
+					if (output.type === "status") {
+						// Heartbeats are pure idle-watchdog keepalives: forward them so
+						// the eval tool re-arms its timer, but never store or render them.
+						options.onStatus?.(output.event);
+						if (output.event.op === EVAL_HEARTBEAT_OP) return;
+					}
 					displayOutputs.push(output);
-					if (output.type === "status") options.onStatus?.(output.event);
 				},
 			},
 		});
@@ -127,7 +131,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 		if (signal?.aborted || isAbortError(error)) {
 			const timedOut = Boolean(timeoutSignal?.aborted) || isTimeoutReason(options.signal?.reason);
 			if (timedOut) {
-				outputSink.push(formatJsTimeoutAnnotation(legacyTimeoutMs ?? options.idleTimeoutMs, idleMode));
+				outputSink.push(formatJsTimeoutAnnotation(legacyTimeoutMs ?? options.idleTimeoutMs));
 			}
 			const summary = await outputSink.dump();
 			return {

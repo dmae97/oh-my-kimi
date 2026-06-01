@@ -10,6 +10,7 @@ import {
 	type WritethroughDeferredHandle,
 	writethroughNoop,
 } from "../lsp";
+import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 import applyPatchDescription from "../prompts/tools/apply-patch.md" with { type: "text" };
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
@@ -102,7 +103,16 @@ function createEditWritethrough(session: ToolSession): WritethroughCallback {
 	const enableLsp = session.enableLsp ?? true;
 	const enableDiagnostics = enableLsp && session.settings.get("lsp.diagnosticsOnEdit");
 	const enableFormat = enableLsp && session.settings.get("lsp.formatOnWrite");
-	return enableLsp ? createLspWritethrough(session.cwd, { enableFormat, enableDiagnostics }) : writethroughNoop;
+	const dedup = enableDiagnostics && session.settings.get("lsp.diagnosticsDeduplicate");
+	return enableLsp
+		? createLspWritethrough(session.cwd, {
+				enableFormat,
+				enableDiagnostics,
+				transformDiagnostics: dedup
+					? (path, result) => getDiagnosticsLedger(session).reduce(path, result)
+					: undefined,
+			})
+		: writethroughNoop;
 }
 
 /** Run apply_patch file operations and aggregate their multi-file result. */
@@ -294,6 +304,7 @@ export class EditTool implements AgentTool<TInput> {
 	readonly #fuzzyThreshold: number;
 	readonly #writethrough: WritethroughCallback;
 	readonly #editMode?: EditMode;
+	readonly #dedupDiagnostics: boolean;
 	readonly #pendingDeferredFetches = new Map<string, AbortController>();
 
 	constructor(private readonly session: ToolSession) {
@@ -306,6 +317,10 @@ export class EditTool implements AgentTool<TInput> {
 		this.#editMode = resolveConfiguredEditMode(envEditVariant);
 		this.#allowFuzzy = resolveAllowFuzzy(session, editFuzzy);
 		this.#fuzzyThreshold = resolveFuzzyThreshold(session, editFuzzyThreshold);
+		this.#dedupDiagnostics =
+			(session.enableLsp ?? true) &&
+			session.settings.get("lsp.diagnosticsOnEdit") &&
+			session.settings.get("lsp.diagnosticsDeduplicate");
 		this.#writethrough = createEditWritethrough(session);
 	}
 
@@ -495,8 +510,13 @@ export class EditTool implements AgentTool<TInput> {
 	}
 
 	#injectLateDiagnostics(path: string, diagnostics: FileDiagnosticsResult): void {
-		const summary = diagnostics.summary ?? "";
-		const lines = diagnostics.messages ?? [];
+		const effective = this.#dedupDiagnostics
+			? getDiagnosticsLedger(this.session).reduce(path, diagnostics)
+			: diagnostics;
+		if (this.#dedupDiagnostics && effective.messages.length === 0) return;
+
+		const summary = effective.summary ?? "";
+		const lines = effective.messages ?? [];
 		const body = [`Late LSP diagnostics for ${path} (arrived after the edit tool returned):`, summary, ...lines]
 			.filter(Boolean)
 			.join("\n");

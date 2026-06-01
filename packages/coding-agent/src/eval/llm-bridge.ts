@@ -18,6 +18,7 @@ import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit
 import { expandRoleAlias, formatModelString, resolveModelFromString } from "../config/model-resolver";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
+import { withBridgeHeartbeat } from "./heartbeat";
 import type { JsStatusEvent } from "./js/shared/types";
 
 /** Synthetic bridge name reserved for the `llm()` helper across both runtimes. */
@@ -131,20 +132,25 @@ export async function runEvalLlm(args: unknown, options: EvalLlmBridgeOptions): 
 
 	const telemetry = resolveTelemetry(options.session.getTelemetry?.(), options.session.getSessionId?.() ?? undefined);
 
-	const response = await instrumentedCompleteSimple(
-		model,
-		{
-			systemPrompt: system ? [system] : undefined,
-			messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
-			tools,
-		},
-		{
-			apiKey,
-			signal: options.signal,
-			reasoning: reasoningForTier(tier, model),
-			toolChoice: schema ? { type: "tool", name: STRUCTURED_TOOL_NAME } : undefined,
-		},
-		{ telemetry, oneshotKind: "eval_llm" },
+	// A oneshot completion emits no status until it returns, so pump a heartbeat
+	// while it runs to keep the eval idle watchdog armed across a slow (e.g.
+	// reasoning-tier) request that would otherwise look like a stalled cell.
+	const response = await withBridgeHeartbeat(options.emitStatus, () =>
+		instrumentedCompleteSimple(
+			model,
+			{
+				systemPrompt: system ? [system] : undefined,
+				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+				tools,
+			},
+			{
+				apiKey,
+				signal: options.signal,
+				reasoning: reasoningForTier(tier, model),
+				toolChoice: schema ? { type: "tool", name: STRUCTURED_TOOL_NAME } : undefined,
+			},
+			{ telemetry, oneshotKind: "eval_llm" },
+		),
 	);
 
 	if (response.stopReason === "error") {

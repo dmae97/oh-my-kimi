@@ -1771,7 +1771,7 @@ describe("ModelRegistry", () => {
 
 			const gemma = registry.find("ollama", "gemma3:4b");
 			expect(gemma?.contextWindow).toBe(131072);
-			expect(gemma?.maxTokens).toBe(8192);
+			expect(gemma?.maxTokens).toBe(32_768);
 			expect(gemma?.input).toEqual(["text"]);
 			expect(gemma?.reasoning).toBe(false);
 		});
@@ -1988,7 +1988,7 @@ describe("ModelRegistry", () => {
 			await registry.refresh();
 			const llama = registry.find("llama.cpp", "qwen35-35b-a3b");
 			expect(llama?.contextWindow).toBe(262144);
-			expect(llama?.maxTokens).toBe(8192);
+			expect(llama?.maxTokens).toBe(32_768);
 			expect(llama?.input).toEqual(["text", "image"]);
 		});
 	});

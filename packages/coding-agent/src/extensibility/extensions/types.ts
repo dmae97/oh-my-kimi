@@ -25,6 +25,8 @@ import type {
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import type * as piCodingAgent from "@oh-my-pi/pi-coding-agent";
 import type { AutocompleteItem, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
+import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
+import type * as Zod from "zod/v4";
 import type { KeybindingsManager } from "../../config/keybindings";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
@@ -81,6 +83,7 @@ import type {
 	TurnStartEvent,
 } from "../shared-events";
 import type { SlashCommandInfo } from "../slash-commands";
+import type * as TypeBox from "../typebox";
 
 export type { AppKeybinding, KeybindingsManager } from "../../config/keybindings";
 export type { ExecOptions, ExecResult } from "../../exec/exec";
@@ -89,6 +92,17 @@ export type { AgentToolResult, AgentToolUpdateCallback };
 // ============================================================================
 // UI Context
 // ============================================================================
+
+export interface ExtensionUISelectOption {
+	label: string;
+	description?: string;
+}
+
+export type ExtensionUISelectItem = string | ExtensionUISelectOption;
+
+export function getExtensionUISelectOptionLabel(option: ExtensionUISelectItem): string {
+	return typeof option === "string" ? option : option.label;
+}
 
 /**
  * UI dialog options for extensions.
@@ -135,8 +149,12 @@ export type ExtensionWidgetContent = string[] | ExtensionUiComponentFactory | un
 // and may be invoked from event handlers that have already taken the agent
 // loop's lock — hooks intentionally cannot.
 export interface ExtensionUIContext {
-	/** Show a selector and return the user's choice. */
-	select(title: string, options: string[], dialogOptions?: ExtensionUIDialogOptions): Promise<string | undefined>;
+	/** Show a selector and return the selected label, even when an option also includes a description. */
+	select(
+		title: string,
+		options: ExtensionUISelectItem[],
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<string | undefined>;
 
 	/** Show a confirmation dialog. */
 	confirm(title: string, message: string, dialogOptions?: ExtensionUIDialogOptions): Promise<boolean>;
@@ -799,6 +817,18 @@ export type MessageRenderer<T = unknown> = (
 	theme: Theme,
 ) => Component | undefined;
 
+export interface AssistantThinkingRenderContext {
+	contentIndex: number;
+	thinkingIndex: number;
+	text: string;
+	requestRender(): void;
+}
+
+export type AssistantThinkingRenderer = (
+	context: AssistantThinkingRenderContext,
+	theme: Theme,
+) => Component | undefined;
+
 // ============================================================================
 // Command Registration
 // ============================================================================
@@ -830,13 +860,13 @@ export interface ExtensionAPI {
 	// =========================================================================
 
 	/** File logger for error/warning/debug messages */
-	logger: typeof import("@oh-my-pi/pi-utils").logger;
+	logger: typeof PiLogger;
 
 	/** Injected zod-backed typebox shim for legacy `Type.Object(...)` parameter authoring. */
-	typebox: typeof import("../typebox");
+	typebox: typeof TypeBox;
 
 	/** Injected zod module for Zod-authored extension tools (canonical going forward). */
-	zod: typeof import("zod/v4");
+	zod: typeof Zod;
 
 	/** Injected pi-coding-agent exports for accessing SDK utilities */
 	pi: typeof piCodingAgent;
@@ -949,6 +979,9 @@ export interface ExtensionAPI {
 
 	/** Register a custom renderer for CustomMessageEntry. */
 	registerMessageRenderer<T = unknown>(customType: string, renderer: MessageRenderer<T>): void;
+
+	/** Register a renderer for assistant thinking blocks. Rendered after the original thinking text. */
+	registerAssistantThinkingRenderer(renderer: AssistantThinkingRenderer): void;
 
 	// =========================================================================
 	// Actions
@@ -1232,6 +1265,7 @@ export interface Extension {
 	label?: string;
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool<any, any>>;
+	assistantThinkingRenderers: AssistantThinkingRenderer[];
 	messageRenderers: Map<string, MessageRenderer>;
 	commands: Map<string, RegisteredCommand>;
 	flags: Map<string, ExtensionFlag>;

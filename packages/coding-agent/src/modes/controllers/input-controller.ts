@@ -86,21 +86,6 @@ export class InputController {
 
 	setupKeyHandlers(): void {
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
-		this.ctx.editor.shouldBypassAutocompleteOnEscape = () =>
-			Boolean(
-				this.ctx.loadingAnimation ||
-					this.ctx.hasActiveBtw() ||
-					this.ctx.hasActiveOmfg() ||
-					this.ctx.session.isStreaming ||
-					this.ctx.session.isCompacting ||
-					this.ctx.session.isGeneratingHandoff ||
-					this.ctx.session.isBashRunning ||
-					this.ctx.session.isEvalRunning ||
-					this.ctx.autoCompactionLoader ||
-					this.ctx.retryLoader ||
-					this.ctx.autoCompactionEscapeHandler ||
-					this.ctx.retryEscapeHandler,
-			);
 		this.ctx.editor.onEscape = () => {
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();

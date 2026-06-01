@@ -173,10 +173,12 @@ describe("executeBash", () => {
 
 		const originalRun = piNatives.Shell.prototype.run;
 		let runCalls = 0;
+		const dispatched = Promise.withResolvers<void>();
 		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(function (this: Shell, options, onChunk) {
 			runCalls++;
 			if (runCalls === 1) {
 				onChunk?.(null, "started\n");
+				dispatched.resolve();
 				return new Promise(() => {});
 			}
 			return originalRun.call(this, options, onChunk);
@@ -190,7 +192,7 @@ describe("executeBash", () => {
 			signal: controller.signal,
 			sessionKey: "hung-native-abort",
 		});
-		await Bun.sleep(50);
+		await dispatched.promise;
 		controller.abort();
 
 		const raced = await Promise.race([
@@ -220,8 +222,10 @@ describe("executeBash", () => {
 		}
 
 		const nativeResult = Promise.withResolvers<{ exitCode: undefined; cancelled: true; timedOut: false }>();
+		const dispatched = Promise.withResolvers<void>();
 		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
 			onChunk?.(null, "started\n");
+			dispatched.resolve();
 			return nativeResult.promise;
 		});
 		vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
@@ -233,7 +237,7 @@ describe("executeBash", () => {
 			signal: controller.signal,
 			sessionKey: "settled-native-abort",
 		});
-		await Bun.sleep(50);
+		await dispatched.promise;
 		controller.abort();
 		await promise;
 
@@ -312,13 +316,22 @@ describe("executeBash", () => {
 		expect(beforeAbort.output.trim()).toBe("alive");
 
 		const controller = new AbortController();
-		const abortPromise = executeBash("sleep 10", {
+		// Abort only once the command is actually running in the persistent
+		// session. Aborting on a fixed timer races executeBash's async setup
+		// (settings + snapshot load); under load the abort can land in the
+		// early-abort short-circuit before the shell ever runs, leaving the
+		// session unreset — the source of the flaky "alive" result here.
+		const startMarker = path.join(tempDir, "reset-on-abort.started");
+		const abortPromise = executeBash(`touch ${startMarker}; sleep 10`, {
 			cwd: tempDir,
 			timeout: 5000,
 			signal: controller.signal,
 			sessionKey,
 		});
-		await Bun.sleep(50);
+		const startDeadline = Date.now() + 4000;
+		while (!fs.existsSync(startMarker) && Date.now() < startDeadline) {
+			await Bun.sleep(2);
+		}
 		controller.abort();
 		const aborted = await abortPromise;
 		expect(aborted.cancelled).toBe(true);

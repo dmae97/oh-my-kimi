@@ -1,7 +1,7 @@
 import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentTelemetryConfig, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ToolChoice } from "@oh-my-pi/pi-ai";
-import { $env, $flag, logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
@@ -34,6 +34,7 @@ import { BrowserTool } from "./browser";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { DebugTool } from "./debug";
 import { EvalTool } from "./eval";
+import { resolveEvalBackends } from "./eval-backends";
 import { FindTool } from "./find";
 import { GithubTool } from "./gh";
 import { InspectImageTool } from "./inspect-image";
@@ -74,6 +75,7 @@ export * from "./browser";
 export * from "./checkpoint";
 export * from "./debug";
 export * from "./eval";
+export * from "./eval-backends";
 export * from "./find";
 export * from "./gh";
 export * from "./image-gen";
@@ -257,6 +259,10 @@ export interface ToolSession {
 	 *  by `getConflictHistory`. */
 	conflictHistory?: import("./conflict-detect").ConflictHistory;
 
+	/** Per-session ledger of post-edit LSP diagnostics already surfaced to the
+	 *  model for each file. Lazily initialized by `getDiagnosticsLedger`. */
+	diagnosticsLedger?: import("../lsp/diagnostics-ledger").DiagnosticsLedger;
+
 	/** Queue a hidden message to be injected at the next agent turn. */
 	queueDeferredMessage?(message: CustomMessage): void;
 	/** Get the active OpenTelemetry config so subagent dispatch can forward
@@ -330,42 +336,6 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 };
 
 export type ToolName = keyof typeof BUILTIN_TOOLS;
-
-export interface EvalBackendsAllowance {
-	python: boolean;
-	js: boolean;
-}
-
-/**
- * Parse PI_PY / PI_JS environment variables. Each is a boolean flag; unset
- * means "not specified, defer to settings". Returns null when neither is set
- * so the caller can fall through to `readEvalBackendsAllowance` per key.
- */
-function getEvalBackendsFromEnv(): EvalBackendsAllowance | null {
-	const pyEnv = $env.PI_PY;
-	const jsEnv = $env.PI_JS;
-	if (pyEnv === undefined && jsEnv === undefined) return null;
-	return {
-		python: pyEnv === undefined ? true : $flag("PI_PY"),
-		js: jsEnv === undefined ? true : $flag("PI_JS"),
-	};
-}
-
-/** Read per-backend allowance from settings (defaults true). */
-export function readEvalBackendsAllowance(session: ToolSession): EvalBackendsAllowance {
-	return {
-		python: session.settings.get("eval.py") ?? true,
-		js: session.settings.get("eval.js") ?? true,
-	};
-}
-
-/**
- * Materialize the active eval backend allowance: PI_PY / PI_JS env flags
- * override the per-key settings; otherwise settings (defaults true) win.
- */
-export function resolveEvalBackends(session: ToolSession): EvalBackendsAllowance {
-	return getEvalBackendsFromEnv() ?? readEvalBackendsAllowance(session);
-}
 
 /**
  * Create tools from BUILTIN_TOOLS registry.

@@ -10,6 +10,7 @@ import { type Theme, theme } from "../../modes/theme/theme";
 import type { SessionManager } from "../../session/session-manager";
 import type {
 	AfterProviderResponseEvent,
+	AssistantThinkingRenderer,
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
 	BeforeProviderRequestEvent,
@@ -343,22 +344,22 @@ export class ExtensionRunner {
 		this.runtime.flagValues.set(name, value);
 	}
 
-	static readonly #RESERVED_SHORTCUTS = new Set([
-		"ctrl+c",
-		"ctrl+d",
-		"ctrl+z",
-		"ctrl+k",
-		"ctrl+p",
-		"ctrl+l",
-		"ctrl+o",
-		"ctrl+t",
-		"ctrl+g",
-		"shift+tab",
-		"shift+ctrl+p",
-		"alt+enter",
-		"escape",
-		"enter",
-	]);
+	static readonly #RESERVED_SHORTCUTS: Record<string, true> = {
+		"ctrl+c": true,
+		"ctrl+d": true,
+		"ctrl+z": true,
+		"ctrl+k": true,
+		"ctrl+p": true,
+		"ctrl+l": true,
+		"ctrl+o": true,
+		"ctrl+t": true,
+		"ctrl+g": true,
+		"shift+tab": true,
+		"shift+ctrl+p": true,
+		"alt+enter": true,
+		escape: true,
+		enter: true,
+	};
 
 	getShortcuts(): Map<KeyId, ExtensionShortcut> {
 		const allShortcuts = new Map<KeyId, ExtensionShortcut>();
@@ -366,7 +367,7 @@ export class ExtensionRunner {
 			for (const [key, shortcut] of ext.shortcuts) {
 				const normalizedKey = key.toLowerCase() as KeyId;
 
-				if (ExtensionRunner.#RESERVED_SHORTCUTS.has(normalizedKey)) {
+				if (ExtensionRunner.#RESERVED_SHORTCUTS[normalizedKey]) {
 					logger.warn("Extension shortcut conflicts with built-in shortcut", {
 						key,
 						extensionPath: shortcut.extensionPath,
@@ -417,6 +418,10 @@ export class ExtensionRunner {
 			}
 		}
 		return undefined;
+	}
+
+	getAssistantThinkingRenderers(): AssistantThinkingRenderer[] {
+		return this.extensions.flatMap(ext => ext.assistantThinkingRenderers);
 	}
 
 	getRegisteredCommands(reserved?: Set<string>): RegisteredCommand[] {

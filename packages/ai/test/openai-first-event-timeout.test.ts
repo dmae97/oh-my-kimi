@@ -285,9 +285,15 @@ async function expectDelayedRequestSetupSucceeds(
 	run: (streamFirstEventTimeoutMs: number) => Promise<{ stopReason: string; content: unknown[] }>,
 	responseFactory: () => Response,
 ): Promise<void> {
+	// The watchdog must cover request setup (connection + first byte). We simulate
+	// a realistic ~30ms setup latency, but keep the budget far larger so the
+	// scheduler jitter of a loaded CI box (where this stream races dozens of other
+	// parallel test processes) can never trip the watchdog on a request that is
+	// supposed to succeed. The complementary firing tests pin the budget < latency
+	// case with their own short timeouts, so the contrast is preserved.
 	global.fetch = createDelayedFetch(30, responseFactory);
 
-	const result = await run(50);
+	const result = await run(5_000);
 
 	expect(result.stopReason).toBe("stop");
 	expect(getFirstTextContent(result)).toMatchObject({ type: "text", text: "Hello delayed" });
