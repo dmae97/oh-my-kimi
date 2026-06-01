@@ -56,6 +56,37 @@ describe("agentLoop with AgentMessage", () => {
 		expect(eventTypes).toContain("agent_end");
 	});
 
+	it("retries when harmony leakage reaches the committed assistant message (openai-codex)", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		// First response leaks a harmony payload as visible assistant text; the
+		// retry is clean. Mitigation only engages for openai-codex.
+		const leak = "Some prose. analysis to=functions.edit code 大发官网";
+		const mock = createMockModel({
+			provider: "openai-codex",
+			responses: [{ content: [leak] }, { content: ["clean retry response"] }],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		// The leaked attempt was retried, not committed.
+		expect(mock.calls).toHaveLength(2);
+		expect(messages).toHaveLength(2);
+		const final = messages[1];
+		if (final.role !== "assistant") throw new Error("expected assistant message");
+		expect(final.content).toEqual([{ type: "text", text: "clean retry response" }]);
+		expect(JSON.stringify(messages)).not.toContain("to=functions.");
+	});
+
 	it("emits an aborted assistant message when cancellation happens before provider events", async () => {
 		const context: AgentContext = {
 			systemPrompt: ["You are helpful."],
