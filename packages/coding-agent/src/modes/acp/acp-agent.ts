@@ -1985,7 +1985,7 @@ export class AcpAgent implements Agent {
 		}
 		if (servers.length === 0) {
 			record.mcpManager = undefined;
-			await record.session.refreshMCPTools([]);
+			await record.session.refreshMCPTools([], { activateAll: true });
 			return;
 		}
 
@@ -2012,7 +2012,7 @@ export class AcpAgent implements Agent {
 		}
 
 		record.mcpManager = manager;
-		await record.session.refreshMCPTools(result.tools);
+		await record.session.refreshMCPTools(result.tools, { activateAll: true });
 	}
 
 	#toMcpConfig(server: McpServer): MCPServerConfig {
