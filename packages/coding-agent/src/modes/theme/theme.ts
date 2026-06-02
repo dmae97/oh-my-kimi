@@ -13,7 +13,7 @@ import type { EditorTheme, MarkdownTheme, SelectListTheme, SymbolTheme } from "@
 import { adjustHsv, getCustomThemesDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import * as z from "zod/v4";
-import { colorLuminance } from "../../utils/color";
+import { colorLuma, relativeLuminance } from "../../utils/color";
 // Embed theme JSON files at build time
 import darkThemeJson from "./dark.json" with { type: "json" };
 import { defaultThemes } from "./defaults";
@@ -1279,12 +1279,15 @@ export class Theme {
 	#symbols: SymbolMap;
 	#spinnerFramesOverrides: Partial<Record<SpinnerType, string[]>>;
 	/**
-	 * Relative luminance (0..1) of the status-line background — the surface session
-	 * accents render on — or undefined when it can't be resolved. Accents are sized
-	 * against this rather than the chat bubble (`userMessageBg`), which some themes
-	 * (e.g. `porcelain`) style dark on an otherwise-light theme.
+	 * Perceptual luma (0..1) of the status-line background — used to classify the
+	 * theme light/dark. Undefined when it can't be resolved. Classified against the
+	 * status line (the surface session accents render on) rather than the chat bubble
+	 * (`userMessageBg`), which some themes (e.g. `porcelain`) style dark on an
+	 * otherwise-light theme.
 	 */
 	readonly statusLineLuminance: number | undefined;
+	/** WCAG relative luminance of the status-line background — basis for accent contrast. */
+	readonly #statusLineContrastLuminance: number | undefined;
 
 	constructor(
 		fgColors: Record<ThemeColor, string | number>,
@@ -1294,7 +1297,8 @@ export class Theme {
 		symbolOverrides: Partial<Record<SymbolKey, string>>,
 		spinnerFramesOverrides: Partial<Record<SpinnerType, string[]>> = {},
 	) {
-		this.statusLineLuminance = colorLuminance(bgColors.statusLineBg);
+		this.statusLineLuminance = colorLuma(bgColors.statusLineBg);
+		this.#statusLineContrastLuminance = relativeLuminance(bgColors.statusLineBg);
 		this.#fgColors = {} as Record<ThemeColor, string>;
 		for (const [key, value] of Object.entries(fgColors) as [ThemeColor, string | number][]) {
 			this.#fgColors[key] = fgAnsi(value, mode);
@@ -1326,7 +1330,7 @@ export class Theme {
 	 * dark themes so accents stay vivid. Pass straight to `getSessionAccentHex`.
 	 */
 	get accentSurfaceLuminance(): number | undefined {
-		return this.isLight ? this.statusLineLuminance : undefined;
+		return this.isLight ? this.#statusLineContrastLuminance : undefined;
 	}
 
 	fg(color: ThemeColor, text: string): string {
@@ -2334,7 +2338,7 @@ export function isLightTheme(themeName?: string): boolean {
 	}
 	try {
 		const resolved = resolveVarRefs(themeJson.colors.userMessageBg, themeJson.vars ?? {});
-		const luminance = colorLuminance(resolved);
+		const luminance = colorLuma(resolved);
 		return luminance !== undefined && luminance > 0.5;
 	} catch {
 		return false;

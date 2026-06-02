@@ -1,4 +1,4 @@
-import { hexLuminance } from "./color";
+import { relativeLuminance } from "./color";
 
 /**
  * Derive a stable hue (0-359) from a string using djb2 hash.
@@ -57,14 +57,14 @@ export function getSessionAccentHex(name: string, surfaceLuminance?: number): st
 
 	const cap = accentLuminanceCap(surfaceLuminance);
 	const top = hslToHex(hue, ACCENT_SATURATION, ACCENT_DARK_LIGHTNESS);
-	if ((hexLuminance(top) ?? 0) <= cap) return top;
+	if ((relativeLuminance(top) ?? 0) <= cap) return top;
 
 	// Bisect lightness: `lo` always yields luminance <= cap, `hi` always above it.
 	let lo = 0;
 	let hi = ACCENT_DARK_LIGHTNESS;
 	for (let i = 0; i < 20; i++) {
 		const mid = (lo + hi) / 2;
-		if ((hexLuminance(hslToHex(hue, ACCENT_SATURATION, mid)) ?? 0) > cap) {
+		if ((relativeLuminance(hslToHex(hue, ACCENT_SATURATION, mid)) ?? 0) > cap) {
 			hi = mid;
 		} else {
 			lo = mid;

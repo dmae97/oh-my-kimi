@@ -1,56 +1,41 @@
 import { describe, expect, it } from "bun:test";
-import { colorLuminance, hexLuminance, paletteLuminance } from "../src/utils/color";
+import { colorLuma, relativeLuminance } from "../src/utils/color";
 
-describe("hexLuminance", () => {
-	it("parses #rrggbb at the extremes", () => {
-		expect(hexLuminance("#000000")).toBeCloseTo(0, 5);
-		expect(hexLuminance("#ffffff")).toBeCloseTo(1, 5);
+describe("relativeLuminance (WCAG, linearized sRGB)", () => {
+	it("hits the extremes", () => {
+		expect(relativeLuminance("#000000")).toBeCloseTo(0, 5);
+		expect(relativeLuminance("#ffffff")).toBeCloseTo(1, 5);
 	});
 
-	it("parses #rgb shorthand identically to its expanded form", () => {
-		expect(hexLuminance("#fff")).toBe(hexLuminance("#ffffff"));
-		expect(hexLuminance("#000")).toBe(hexLuminance("#000000"));
-		expect(hexLuminance("#abc")).toBe(hexLuminance("#aabbcc"));
+	it("linearizes — mid-gray is WCAG-dark (~0.21), not 0.5", () => {
+		// #808080 is perceptually mid (luma ~0.5) but WCAG-dark once linearized.
+		expect(relativeLuminance("#808080") ?? 1).toBeLessThan(0.25);
+		expect(colorLuma("#808080") ?? 0).toBeGreaterThan(0.45);
+	});
+
+	it("accepts #rgb shorthand and palette indices", () => {
+		expect(relativeLuminance("#fff")).toBe(relativeLuminance("#ffffff"));
+		expect(relativeLuminance(15)).toBeGreaterThan(0.9); // white
+		expect(relativeLuminance(0)).toBeCloseTo(0, 5); // black
+	});
+
+	it("returns undefined for malformed / var-ref input", () => {
+		expect(relativeLuminance("primary")).toBeUndefined();
+		expect(relativeLuminance("#ff")).toBeUndefined();
+		expect(relativeLuminance(256)).toBeUndefined();
+	});
+});
+
+describe("colorLuma (perceptual classification)", () => {
+	it("parses hex, shorthand, and palette indices", () => {
+		expect(colorLuma("#000000")).toBeCloseTo(0, 5);
+		expect(colorLuma("#ffffff")).toBeCloseTo(1, 5);
+		expect(colorLuma("#fff")).toBe(colorLuma("#ffffff"));
+		expect(colorLuma(15)).toBeGreaterThan(0.9);
 	});
 
 	it("returns undefined for malformed input", () => {
-		expect(hexLuminance("fff")).toBeUndefined();
-		expect(hexLuminance("#ff")).toBeUndefined();
-		expect(hexLuminance("#gggggg")).toBeUndefined();
-		expect(hexLuminance("")).toBeUndefined();
-	});
-});
-
-describe("paletteLuminance", () => {
-	it("classifies the 16 base ANSI colors", () => {
-		expect(paletteLuminance(0)).toBeCloseTo(0, 5); // black
-		expect(paletteLuminance(15)).toBeGreaterThan(0.9); // bright white
-		expect(paletteLuminance(15)).toBeGreaterThan(0.5);
-		expect((paletteLuminance(0) ?? 1) > 0.5).toBe(false);
-	});
-
-	it("classifies the 6x6x6 color cube", () => {
-		expect(paletteLuminance(16)).toBeCloseTo(0, 5); // cube black
-		expect(paletteLuminance(231)).toBeCloseTo(1, 5); // cube white
-	});
-
-	it("classifies the grayscale ramp", () => {
-		expect(paletteLuminance(232)).toBeLessThan(0.1); // near-black
-		expect(paletteLuminance(255)).toBeGreaterThan(0.9); // near-white
-	});
-
-	it("returns undefined out of range / non-integer", () => {
-		expect(paletteLuminance(-1)).toBeUndefined();
-		expect(paletteLuminance(256)).toBeUndefined();
-		expect(paletteLuminance(1.5)).toBeUndefined();
-	});
-});
-
-describe("colorLuminance", () => {
-	it("dispatches on hex strings and palette indices", () => {
-		expect(colorLuminance("#ffffff")).toBe(hexLuminance("#ffffff"));
-		expect(colorLuminance(15)).toBe(paletteLuminance(15));
-		expect(colorLuminance(undefined)).toBeUndefined();
-		expect(colorLuminance("primary")).toBeUndefined(); // var ref, not a color
+		expect(colorLuma("nope")).toBeUndefined();
+		expect(colorLuma(-1)).toBeUndefined();
 	});
 });
