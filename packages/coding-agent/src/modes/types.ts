@@ -25,7 +25,7 @@ import type { CustomEditor } from "./components/custom-editor";
 import type { EvalExecutionComponent } from "./components/eval-execution";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
-import type { HookSelectorComponent } from "./components/hook-selector";
+import type { HookSelectorComponent, HookSelectorOptions } from "./components/hook-selector";
 import type { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import type { LoopLimitRuntime } from "./loop-limit";
@@ -63,6 +63,8 @@ export type TodoPhase = {
 export interface InteractiveModeInitOptions {
 	suppressWelcomeIntro?: boolean;
 }
+
+export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions & Pick<HookSelectorOptions, "disabledIndices">;
 
 export interface InteractiveModeContext {
 	// UI access
@@ -242,6 +244,7 @@ export interface InteractiveModeContext {
 	): Promise<CompactionOutcome>;
 	openInBrowser(urlOrPath: string): void;
 	refreshSlashCommandState(cwd?: string): Promise<void>;
+	applyCwdChange(newCwd: string): Promise<void>;
 
 	// Selector handling
 	showSettingsSelector(): void;
@@ -299,7 +302,7 @@ export interface InteractiveModeContext {
 	showHookSelector(
 		title: string,
 		options: ExtensionUISelectItem[],
-		dialogOptions?: ExtensionUIDialogOptions,
+		dialogOptions?: InteractiveSelectorDialogOptions,
 	): Promise<string | undefined>;
 	hideHookSelector(): void;
 	showHookInput(title: string, placeholder?: string): Promise<string | undefined>;

@@ -7,6 +7,8 @@
  * Used by `anthropic-messages.ts:parseRequest` to validate the inbound JSON
  * before walking it into pi-ai's canonical `Context`.
  */
+
+import * as z from "zod/v4";
 import type {
 	ContentBlockParam,
 	ImageBlockParam,
@@ -15,8 +17,7 @@ import type {
 	TextBlockParam,
 	Tool,
 	ToolChoice,
-} from "@anthropic-ai/sdk/resources/messages";
-import * as z from "zod/v4";
+} from "./anthropic-wire";
 
 // `cache_control` is accepted and translated to pi-ai's per-request
 // `cacheRetention` (any `ttl: "1h"` marker upgrades the request to "long";

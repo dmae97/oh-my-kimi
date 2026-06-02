@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -91,6 +91,15 @@ const mockPositiveSleepsImmediate = () => {
 		}
 		return realSleep(duration ?? 0);
 	});
+};
+
+const expectSleepNear = (sleepSpy: Mock<typeof Bun.sleep>, targetMs: number) => {
+	const minMs = targetMs - 100;
+	expect(
+		sleepSpy.mock.calls.some(
+			([duration]) => typeof duration === "number" && duration >= minMs && duration <= targetMs,
+		),
+	).toBe(true);
 };
 const createSession = async (
 	tempDir: string,
@@ -415,7 +424,7 @@ describe("AgentSession python cleanup", () => {
 
 		const [toolResult] = await Promise.all([toolExecution, disposeSession]);
 
-		expect(sleepSpy).toHaveBeenCalledWith(3000);
+		expectSleepNear(sleepSpy, 3000);
 
 		expect(disposed).toBe(true);
 		expect(toolExecutionSettled).toBe(true);
@@ -460,7 +469,7 @@ describe("AgentSession python cleanup", () => {
 			firstDisposed = true;
 		});
 		await disposeFirst;
-		expect(sleepSpy).toHaveBeenCalledWith(3000);
+		expectSleepNear(sleepSpy, 3000);
 
 		expect(firstDisposed).toBe(true);
 		expect(firstExecutionSettled).toBe(false);
@@ -708,7 +717,7 @@ describe("AgentSession python cleanup", () => {
 		const sleepSpy = mockPositiveSleepsImmediate();
 
 		await session.dispose();
-		expect(sleepSpy).toHaveBeenCalledWith(3000);
+		expectSleepNear(sleepSpy, 3000);
 		const [firstResult, secondResult] = await Promise.all([firstExecution, secondExecution]);
 
 		expect(firstResult.cancelled).toBe(true);

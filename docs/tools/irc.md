@@ -28,7 +28,7 @@
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `op` | `"send"` | Yes | Sends one message to one peer or to `"all"`. |
-| `to` | `string` | Yes | Peer id such as `0-Main`, or `"all"` for broadcast. Whitespace is trimmed. |
+| `to` | `string` | Yes | Peer id such as `Main`, or `"all"` for broadcast. Whitespace is trimmed. |
 | `message` | `string` | Yes | Message body. Whitespace is trimmed; empty-after-trim is rejected. |
 | `awaitReply` | `boolean` | No | Wait for prose replies. Defaults to `true` for direct messages and `false` for `to: "all"`. |
 
@@ -44,7 +44,7 @@
 
 ## Flow
 1. `IrcTool.createIf` only constructs the tool when `irc.enabled` is on and the session has both an `AgentRegistry` and `getAgentId` (`packages/coding-agent/src/tools/irc.ts`).
-2. Tool discovery adds another gate in `packages/coding-agent/src/tools/index.ts`: if the caller is `0-Main` and `async.enabled` is off, `irc` is hidden because the main agent cannot talk to concurrent peers in sync mode.
+2. Tool discovery adds another gate in `packages/coding-agent/src/tools/index.ts`: if the caller is `Main` and `async.enabled` is off, `irc` is hidden because the main agent cannot talk to concurrent peers in sync mode.
 3. `execute` resolves the process-global registry and sender id. Missing either returns a text error result instead of throwing.
 4. `op: "list"` calls `registry.listVisibleTo(senderId)`, which exposes every other agent in flat namespace whose status is `running` or `idle` (`packages/coding-agent/src/registry/agent-registry.ts`).
 5. `list` formats human-readable lines and returns `channels` as `['all', ...peerIds]`. These are logical targets only; there is no channel join state.

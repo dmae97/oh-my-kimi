@@ -32,12 +32,26 @@ import {
 	TUI,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { APP_NAME, adjustHsv, getProjectDir, hsvToRgb, isEnoent, logger, postmortem, prompt } from "@oh-my-pi/pi-utils";
+import {
+	APP_NAME,
+	adjustHsv,
+	formatNumber,
+	getProjectDir,
+	hsvToRgb,
+	isEnoent,
+	logger,
+	postmortem,
+	prompt,
+	setProjectDir,
+} from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
+import { reset as resetCapabilities } from "../capability";
 import { KeybindingsManager } from "../config/keybindings";
 import { MODEL_ROLES, type ModelRole } from "../config/model-registry";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
+import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
+	ContextUsage,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionUISelectItem,
@@ -123,6 +137,7 @@ import type {
 	CompactionQueuedMessage,
 	InteractiveModeContext,
 	InteractiveModeInitOptions,
+	InteractiveSelectorDialogOptions,
 	SubmittedUserInput,
 	TodoItem,
 	TodoPhase,
@@ -198,6 +213,8 @@ function formatHudNoteMarker(count: number): string {
 type GoalSubcommand = "set" | "show" | "pause" | "resume" | "drop" | "budget";
 
 const GOAL_SUBCOMMANDS = new Set<GoalSubcommand>(["set", "show", "pause", "resume", "drop", "budget"]);
+const PLAN_KEEP_CONTEXT_OPTION_INDEX = 2;
+const PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT = 95;
 
 function parseGoalSubcommand(args: string): { sub: GoalSubcommand | undefined; rest: string } {
 	const trimmed = args.trim();
@@ -209,6 +226,10 @@ function parseGoalSubcommand(args: string): { sub: GoalSubcommand | undefined; r
 		return { sub: first as GoalSubcommand, rest: match[2]?.trim() ?? "" };
 	}
 	return { sub: undefined, rest: trimmed };
+}
+
+function formatContextTokenCount(value: number): string {
+	return formatNumber(Math.max(0, Math.round(value))).toLowerCase();
 }
 
 /** Options for creating an InteractiveMode instance (for future API use) */
@@ -260,6 +281,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	loopPrompt: string | undefined = undefined;
 	loopLimit: LoopLimitRuntime | undefined = undefined;
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
+	#todoAutoClearTimer: NodeJS.Timeout | undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
@@ -392,6 +414,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		try {
 			this.historyStorage = HistoryStorage.open();
 			this.editor.setHistoryStorage(this.historyStorage);
+			this.historyStorage.setSessionResolver(() => this.sessionManager.getSessionId());
 		} catch (error) {
 			logger.warn("History storage unavailable", { error: String(error) });
 		}
@@ -555,6 +578,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			// subagent is doing the work for a still-pending todo) updates as
 			// subagents start, finish, or fail.
 			this.#reconcileTodosWithSubagents();
+			this.#syncTodoAutoClearTimer();
 			this.#renderTodoList();
 			this.ui.requestRender();
 		});
@@ -639,6 +663,31 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 		this.editor.setAutocompleteProvider(autocompleteProvider);
 		this.session.setSlashCommands(fileCommands);
+	}
+
+	/**
+	 * Re-point the process and every cwd-derived cache at `newCwd` after the
+	 * active session's working directory changed (`/move` relocation or resuming
+	 * a session from another project). The SessionManager's cwd MUST already
+	 * reflect `newCwd` before this is called.
+	 */
+	async applyCwdChange(newCwd: string): Promise<void> {
+		setProjectDir(newCwd);
+		// Re-scope project settings (`.claude/settings.yml` etc.) to the new
+		// directory in place so the active session and every settings reader pick
+		// up the destination project's configuration.
+		if (isSettingsInitialized()) {
+			await settings.reloadForCwd(newCwd);
+		}
+		// Re-warm plugin roots, capabilities, slash commands, and the ssh tool so
+		// the next prompt sees everything scoped to the new project directory.
+		clearClaudePluginRootsCache();
+		resetCapabilities();
+		await this.refreshSlashCommandState(newCwd);
+		await this.session.refreshSshTool({ activateIfAvailable: true });
+		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
+		this.statusLine.invalidate();
+		this.updateEditorTopBorder();
 	}
 
 	async getUserInput(): Promise<SubmittedUserInput> {
@@ -1043,6 +1092,47 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setTodoPhases(next);
 	}
 
+	#cancelTodoAutoClearTimer(): void {
+		if (!this.#todoAutoClearTimer) return;
+		clearTimeout(this.#todoAutoClearTimer);
+		this.#todoAutoClearTimer = undefined;
+	}
+
+	#isClosedTodo(task: TodoItem): boolean {
+		return task.status === "completed" || task.status === "abandoned";
+	}
+
+	#hasClosedTodos(phases: TodoPhase[]): boolean {
+		return phases.some(phase => phase.tasks.some(task => this.#isClosedTodo(task)));
+	}
+
+	#removeClosedTodos(phases: TodoPhase[]): TodoPhase[] {
+		const next: TodoPhase[] = [];
+		for (const phase of phases) {
+			const tasks = phase.tasks.filter(task => !this.#isClosedTodo(task));
+			if (tasks.length > 0) next.push({ name: phase.name, tasks });
+		}
+		return next;
+	}
+
+	#syncTodoAutoClearTimer(): void {
+		this.#cancelTodoAutoClearTimer();
+		const delaySeconds = this.settings.get("tasks.todoClearDelay");
+		if (!Number.isFinite(delaySeconds) || delaySeconds < 0 || !this.#hasClosedTodos(this.todoPhases)) return;
+		if (delaySeconds === 0) {
+			this.todoPhases = this.#removeClosedTodos(this.todoPhases);
+			return;
+		}
+
+		this.#todoAutoClearTimer = setTimeout(() => {
+			this.#todoAutoClearTimer = undefined;
+			this.todoPhases = this.#removeClosedTodos(this.todoPhases);
+			this.#renderTodoList();
+			this.ui.requestRender();
+		}, delaySeconds * 1000);
+		this.#todoAutoClearTimer.unref?.();
+	}
+
 	#getActivePhase(phases: TodoPhase[]): TodoPhase | undefined {
 		const nonEmpty = phases.filter(phase => phase.tasks.length > 0);
 		const active = nonEmpty.find(phase =>
@@ -1098,6 +1188,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #loadTodoList(): Promise<void> {
 		this.todoPhases = this.session.getTodoPhases();
+		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 	}
 
@@ -1569,6 +1660,28 @@ export class InteractiveMode implements InteractiveModeContext {
 		return `up/down navigate  enter select  ${externalEditorKey.toLowerCase()} open in editor  esc cancel`;
 	}
 
+	#getPlanApprovalContextUsage(): ContextUsage | undefined {
+		const executionModel = this.#planModePreviousModelState?.model ?? this.session.model;
+		const contextWindow = executionModel?.contextWindow;
+		if (typeof contextWindow === "number") {
+			return this.session.getContextUsage({ contextWindow });
+		}
+		return this.session.getContextUsage();
+	}
+
+	#formatKeepContextLabel(contextUsage: ContextUsage | undefined): string {
+		if (contextUsage?.tokens == null) {
+			return "Approve and keep context";
+		}
+		const tokens = formatContextTokenCount(contextUsage.tokens);
+		const contextWindow = formatContextTokenCount(contextUsage.contextWindow);
+		return `Approve and keep context (~${tokens} / ${contextWindow})`;
+	}
+
+	#isKeepContextDisabled(contextUsage: ContextUsage | undefined): boolean {
+		return contextUsage?.percent != null && contextUsage.percent > PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT;
+	}
+
 	async #openPlanInExternalEditor(planFilePath: string): Promise<void> {
 		const editorCmd = getEditorCommand();
 		if (!editorCmd) {
@@ -2035,11 +2148,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		this.#renderPlanPreview(planContent, { append: true });
-		const contextUsage = this.session.getContextUsage();
-		const keepContextLabel =
-			contextUsage?.percent != null
-				? `Approve and keep context (${contextUsage.percent.toFixed(1)}%)`
-				: "Approve and keep context";
+		const contextUsage = this.#getPlanApprovalContextUsage();
+		const keepContextLabel = this.#formatKeepContextLabel(contextUsage);
+		const keepContextDisabled = this.#isKeepContextDisabled(contextUsage);
 
 		// Model-tier slider: let the operator pick which configured role model
 		// (smol/default/slow/…) executes the approved plan. The slider always starts
@@ -2074,6 +2185,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			{
 				helpText,
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
+				disabledIndices: keepContextDisabled ? [PLAN_KEEP_CONTEXT_OPTION_INDEX] : undefined,
 			},
 			{ slider },
 		);
@@ -2176,6 +2288,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.loadingAnimation = undefined;
 		}
 		this.#cleanupMicAnimation();
+		this.#cancelTodoAutoClearTimer();
 		this.#cancelGoalContinuation();
 		if (this.#sttController) {
 			this.#sttController.dispose();
@@ -2231,14 +2344,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Emit shutdown event to hooks
 		await this.session.dispose();
 
-		if (this.isInitialized) {
-			this.ui.requestRender(true);
-		}
-
-		// Wait for any pending renders to complete
-		// requestRender() uses process.nextTick(), so we wait one tick
-		await new Promise(resolve => process.nextTick(resolve));
-
+		// Do not force a final render during teardown: disposed session/UI state can
+		// collapse to an empty frame, clearing the viewport and leaving the parent
+		// shell prompt at row 0. Stop from the last committed frame so the terminal
+		// hands Bash the cursor immediately after visible OMP content.
 		// Drain any in-flight Kitty key release events before stopping.
 		// This prevents escape sequences from leaking to the parent shell over slow SSH.
 		await this.ui.terminal.drainInput(1000);
@@ -2858,6 +2967,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				},
 			];
 		}
+		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 		this.ui.requestRender();
 	}
@@ -2898,7 +3008,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	showHookSelector(
 		title: string,
 		options: ExtensionUISelectItem[],
-		dialogOptions?: ExtensionUIDialogOptions,
+		dialogOptions?: InteractiveSelectorDialogOptions,
 		extra?: { slider?: HookSelectorSlider },
 	): Promise<string | undefined> {
 		return this.#extensionUiController.showHookSelector(title, options, dialogOptions, extra);

@@ -1,8 +1,12 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../../src/extensibility/custom-tools/types";
 import { getThemeByName, initTheme, type Theme } from "../../src/modes/theme/theme";
-import { findToolRenderer, validateFindPathInputs } from "../../src/tools/find";
+import { findToolRenderer } from "../../src/tools/find";
+import { expandDelimitedPathEntries, parseFindPattern, splitDelimitedPathEntry } from "../../src/tools/path-utils";
 
 let uiTheme: Theme;
 
@@ -21,43 +25,79 @@ function renderText(component: Component): string {
 	return Bun.stripANSI(component.render(160).join("\n"));
 }
 
-describe("validateFindPathInputs", () => {
-	it("accepts a normal array of glob entries", () => {
-		expect(() => validateFindPathInputs(["src/**/*.ts", "test/**/*.ts"])).not.toThrow();
+describe("delimited path expansion", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "delimited-paths-"));
+		await fs.mkdir(path.join(tempDir, "apps"), { recursive: true });
+		await fs.mkdir(path.join(tempDir, "packages"), { recursive: true });
+		await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
+		await fs.mkdir(path.join(tempDir, "folder with spaces"), { recursive: true });
+		await Bun.write(path.join(tempDir, "apps", "a.txt"), "apps\n");
+		await Bun.write(path.join(tempDir, "packages", "b.txt"), "packages\n");
+		await Bun.write(path.join(tempDir, "folder with spaces", "file.txt"), "spaces\n");
 	});
 
-	it('rejects comma-joined entries (the `["a,b"]` shape)', () => {
-		expect(() => validateFindPathInputs(["a.py,b.py"])).toThrow(/paths is an array/);
+	afterEach(async () => {
+		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 
-	it("allows commas inside brace expansion", () => {
-		expect(() => validateFindPathInputs(["src/{a,b}/*.ts"])).not.toThrow();
-		expect(() => validateFindPathInputs(["{foo,bar,baz}.md"])).not.toThrow();
+	it("splits comma, semicolon, and space delimited entries when parts resolve", async () => {
+		expect(await splitDelimitedPathEntry("apps/a.txt, packages/b.txt", tempDir)).toEqual([
+			"apps/a.txt",
+			"packages/b.txt",
+		]);
+		expect(await splitDelimitedPathEntry("apps/a.txt;packages/b.txt", tempDir)).toEqual([
+			"apps/a.txt",
+			"packages/b.txt",
+		]);
+		expect(await splitDelimitedPathEntry("apps/a.txt packages/b.txt", tempDir)).toEqual([
+			"apps/a.txt",
+			"packages/b.txt",
+		]);
 	});
 
-	it("allows backslash-escaped commas at top level (matches search.ts:containsTopLevelComma)", () => {
-		// Backslash-escapes a literal comma in a filename — must not trip the
-		// array-vs-string heuristic.
-		expect(() => validateFindPathInputs(["weird\\,name.txt"])).not.toThrow();
-		expect(() => validateFindPathInputs(["a\\,b\\,c"])).not.toThrow();
+	it("keeps an existing path with spaces intact", async () => {
+		expect(await splitDelimitedPathEntry("folder with spaces/file.txt", tempDir)).toBeNull();
+		expect(await expandDelimitedPathEntries(["folder with spaces/file.txt"], tempDir)).toEqual([
+			"folder with spaces/file.txt",
+		]);
 	});
 
-	it("still rejects unescaped top-level commas mixed with escaped ones", () => {
-		// `a\,b,c` — the second comma is unescaped, so the heuristic should fire.
-		expect(() => validateFindPathInputs(["a\\,b,c"])).toThrow(/paths is an array/);
+	it("does not split commas inside brace globs", async () => {
+		expect(await splitDelimitedPathEntry("src/{a,b}.txt", tempDir)).toBeNull();
+		expect(await splitDelimitedPathEntry("src/{a,b}.txt, packages/b.txt", tempDir)).toEqual([
+			"src/{a,b}.txt",
+			"packages/b.txt",
+		]);
 	});
 
-	it("allows a trailing backslash without crashing", () => {
-		// `foo\\` is a backslash at end-of-string; the i+1<length guard must hold.
-		expect(() => validateFindPathInputs(["foo\\"])).not.toThrow();
+	it("does not split backslash-escaped delimiters", async () => {
+		expect(await splitDelimitedPathEntry("apps/a.txt\\,packages/b.txt", tempDir)).toBeNull();
+		expect(await splitDelimitedPathEntry("apps/a.txt\\;packages/b.txt", tempDir)).toBeNull();
+		expect(await splitDelimitedPathEntry("folder\\ with\\ spaces/file.txt packages/b.txt", tempDir)).toBeNull();
 	});
 
-	it("treats `\\{a,b}` as an escaped brace, so the inner comma is still top-level", () => {
-		// Skip-next semantics: the backslash consumes the `{`, so braceDepth stays 0
-		// and the unescaped `,` between `a` and `b` rejects. This pins the literal
-		// behavior of the new escape-skip, which intentionally does NOT model glob
-		// brace semantics — it only mirrors search.ts's containsTopLevelComma.
-		expect(() => validateFindPathInputs(["\\{a,b}"])).toThrow(/paths is an array/);
+	it("uses strong delimiters leniently and whitespace delimiters conservatively", async () => {
+		expect(await splitDelimitedPathEntry("missing.txt, packages/b.txt", tempDir)).toEqual([
+			"missing.txt",
+			"packages/b.txt",
+		]);
+		expect(await splitDelimitedPathEntry("missing.txt;packages/b.txt", tempDir)).toEqual([
+			"missing.txt",
+			"packages/b.txt",
+		]);
+		expect(await splitDelimitedPathEntry("missing.txt packages/b.txt", tempDir)).toBeNull();
+	});
+
+	it("cleans trailing strong delimiters and expands glob entries", async () => {
+		expect(await expandDelimitedPathEntries(["apps/a.txt,"], tempDir)).toEqual(["apps/a.txt"]);
+		expect(
+			await expandDelimitedPathEntries(["apps/**/*.txt, packages/**/*.txt"], tempDir, {
+				splitter: parseFindPattern,
+			}),
+		).toEqual(["apps/**/*.txt", "packages/**/*.txt"]);
 	});
 });
 

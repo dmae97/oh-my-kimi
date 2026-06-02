@@ -4,6 +4,7 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type Api, Effort, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { type CreateAgentSessionResult, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -40,10 +41,44 @@ describe("AgentSession model persistence", () => {
 		return `${model.provider}/${model.id}`;
 	}
 
+	async function writeRoleModelSession(
+		defaultRoleValue: string,
+		smolRoleValue: string,
+		lastRole = "smol",
+	): Promise<string> {
+		const targetSessionFile = path.join(tempDir.path(), `target-${Bun.nanoseconds()}.jsonl`);
+		const timestamp = "2026-06-01T00:00:00.000Z";
+		await Bun.write(
+			targetSessionFile,
+			`${[
+				{ type: "session", version: 3, id: "target-session", timestamp, cwd: tempDir.path() },
+				{
+					type: "model_change",
+					id: "default-model",
+					parentId: null,
+					timestamp,
+					model: defaultRoleValue,
+					role: "default",
+				},
+				{
+					type: "model_change",
+					id: "smol-model",
+					parentId: "default-model",
+					timestamp,
+					model: smolRoleValue,
+					role: lastRole,
+				},
+			]
+				.map(entry => JSON.stringify(entry))
+				.join("\n")}\n`,
+		);
+		return targetSessionFile;
+	}
 	async function createSession(options?: {
 		initialModel?: Model<Api>;
 		selectInitialModel?: (availableModels: Model<Api>[]) => Model<Api>;
 		modelRoles?: Record<string, string>;
+		persist?: boolean;
 	}): Promise<{ modelRegistry: ModelRegistry; settings: Settings; session: AgentSession }> {
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${authStorages.length}.db`));
 		authStorages.push(authStorage);
@@ -78,7 +113,9 @@ describe("AgentSession model persistence", () => {
 		}
 		session = new AgentSession({
 			agent,
-			sessionManager: SessionManager.inMemory(),
+			sessionManager: options?.persist
+				? SessionManager.create(tempDir.path(), path.join(tempDir.path(), `active-${authStorages.length}`))
+				: SessionManager.inMemory(),
 			settings: sessionSettings,
 			modelRegistry,
 		});
@@ -86,6 +123,37 @@ describe("AgentSession model persistence", () => {
 		return { modelRegistry, settings: sessionSettings, session };
 	}
 
+	async function createStartupResumeSession(
+		targetSessionFile: string,
+		settings: Settings = Settings.isolated(),
+	): Promise<CreateAgentSessionResult> {
+		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${authStorages.length}.db`));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(
+			authStorage,
+			path.join(tempDir.path(), `models-${authStorages.length}.yml`),
+		);
+		const sessionManager = await SessionManager.open(targetSessionFile, path.join(tempDir.path(), "startup"));
+		const result = await createAgentSession({
+			cwd: tempDir.path(),
+			agentDir: tempDir.path(),
+			authStorage,
+			modelRegistry,
+			sessionManager,
+			settings,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+		session = result.session;
+		return result;
+	}
 	it("switches the active model without persisting by default", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const nextModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
@@ -186,5 +254,93 @@ describe("AgentSession model persistence", () => {
 		if (!activeModel) throw new Error("Expected active model after cycleModel");
 		expect(modelValue(activeModel)).toBe(modelValue(result.model));
 		expect(created.settings.getModelRole("default")).toBe(defaultRoleValue);
+	});
+
+	it("restores the last active role model when switching sessions", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const smolModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const defaultRoleValue = modelValue(defaultModel);
+		const smolRoleValue = modelValue(smolModel);
+
+		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, smolRoleValue);
+
+		const created = await createSession({
+			initialModel: defaultModel,
+			modelRoles: { default: defaultRoleValue, smol: smolRoleValue },
+			persist: true,
+		});
+
+		await expect(created.session.switchSession(targetSessionFile)).resolves.toBe(true);
+		expect(created.session.model?.id).toBe(smolModel.id);
+	});
+
+	it("restores the last active role model during startup resume", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const smolModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const defaultRoleValue = modelValue(defaultModel);
+		const smolRoleValue = modelValue(smolModel);
+		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, smolRoleValue);
+
+		const result = await createStartupResumeSession(targetSessionFile);
+
+		expect(result.session.model?.id).toBe(smolModel.id);
+	});
+
+	it("falls back to the saved default model when switch-session role restore is unavailable", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const previousModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const defaultRoleValue = modelValue(defaultModel);
+		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, "anthropic/not-loaded-anymore");
+
+		const created = await createSession({
+			initialModel: previousModel,
+			modelRoles: { default: defaultRoleValue },
+			persist: true,
+		});
+
+		await expect(created.session.switchSession(targetSessionFile)).resolves.toBe(true);
+		expect(created.session.model?.id).toBe(defaultModel.id);
+	});
+
+	it("restores the saved default model when switch-session last role is temporary", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const temporaryModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const defaultRoleValue = modelValue(defaultModel);
+		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, modelValue(temporaryModel), "temporary");
+
+		const created = await createSession({
+			initialModel: temporaryModel,
+			modelRoles: { default: defaultRoleValue },
+			persist: true,
+		});
+
+		await expect(created.session.switchSession(targetSessionFile)).resolves.toBe(true);
+		expect(created.session.model?.id).toBe(defaultModel.id);
+	});
+
+	it("falls back to the saved default model when startup role restore is unavailable", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const settingsFallbackModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const defaultRoleValue = modelValue(defaultModel);
+		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, "anthropic/not-loaded-anymore");
+		const settings = Settings.isolated();
+		settings.setModelRole("default", modelValue(settingsFallbackModel));
+
+		const result = await createStartupResumeSession(targetSessionFile, settings);
+
+		expect(result.session.model?.id).toBe(defaultModel.id);
+	});
+
+	it("restores the saved default model when startup last role is temporary", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const temporaryModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const defaultRoleValue = modelValue(defaultModel);
+		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, modelValue(temporaryModel), "temporary");
+		const settings = Settings.isolated();
+		settings.setModelRole("default", modelValue(temporaryModel));
+
+		const result = await createStartupResumeSession(targetSessionFile, settings);
+
+		expect(result.session.model?.id).toBe(defaultModel.id);
 	});
 });

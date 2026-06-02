@@ -98,7 +98,7 @@ describe("selector navigation keybindings", () => {
 		const selected: string[] = [];
 		const selector = new SessionSelectorComponent(
 			[createSession("session-a", "Alpha"), createSession("session-b", "Beta")],
-			path => selected.push(path),
+			session => selected.push(session.path),
 			() => {},
 			() => {},
 		);

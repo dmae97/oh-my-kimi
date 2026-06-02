@@ -84,7 +84,9 @@ function rows(prefix: string, count: number): string[] {
 }
 
 async function settle(term: VirtualTerminal): Promise<void> {
-	await new Promise<void>(resolve => process.nextTick(resolve));
+	const nextTick = Promise.withResolvers<void>();
+	process.nextTick(nextTick.resolve);
+	await nextTick.promise;
 	await Bun.sleep(1);
 	await term.flush();
 }
@@ -102,9 +104,9 @@ function countMatches(lines: string[], pattern: RegExp): number {
 }
 
 async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
-	const saved = new Map<string, string | undefined>();
-	for (const key of Object.keys(patch)) {
-		saved.set(key, Bun.env[key]);
+	const saved: Record<string, string | undefined> = {};
+	for (const key in patch) {
+		saved[key] = Bun.env[key];
 		const value = patch[key];
 		if (value === undefined) {
 			delete Bun.env[key];
@@ -115,7 +117,8 @@ async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: (
 	try {
 		return await run();
 	} finally {
-		for (const [key, value] of saved) {
+		for (const key in saved) {
+			const value = saved[key];
 			if (value === undefined) {
 				delete Bun.env[key];
 			} else {
@@ -1815,35 +1818,47 @@ describe("TUI terminal-state regressions", () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
 			try {
-				await withEnvPatch({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
-					const term = new UnknownViewportTerminal(40, 5, 200);
-					const tui = new TUI(term);
-					const component = new MutableLinesComponent(rows("row-", 16));
-					tui.addChild(component);
+				await withEnvPatch(
+					{
+						TMUX: undefined,
+						STY: undefined,
+						ZELLIJ: undefined,
+						WEZTERM_PANE: undefined,
+						KITTY_WINDOW_ID: undefined,
+						GHOSTTY_RESOURCES_DIR: undefined,
+						ALACRITTY_WINDOW_ID: undefined,
+						TERM_PROGRAM: undefined,
+					},
+					async () => {
+						const term = new UnknownViewportTerminal(40, 5, 200);
+						const tui = new TUI(term);
+						const component = new MutableLinesComponent(rows("row-", 16));
+						tui.addChild(component);
 
-					try {
-						tui.start();
-						await settle(term);
-						// Default (no active tool) would defer the offscreen edit; confirm the flag flips behavior.
-						tui.setEagerNativeScrollbackRebuild(true);
+						try {
+							tui.start();
+							await settle(term);
+							// Default (no active tool) would defer the offscreen edit; confirm the flag flips behavior.
+							tui.setEagerNativeScrollbackRebuild(true);
 
-						// A streaming tool result re-laying out: an offscreen header changes and the
-						// block grows past the fold in the same frame.
-						component.setLines(["HEADER-EDITED", ...rows("row-", 16).slice(1), ...rows("tail-", 4)]);
-						tui.requestRender();
-						await settle(term);
+							// A streaming tool result re-laying out: an offscreen header changes and the
+							// block grows past the fold in the same frame.
+							component.setLines(["HEADER-EDITED", ...rows("row-", 16).slice(1), ...rows("tail-", 4)]);
+							tui.requestRender();
+							await settle(term);
 
-						const buffer = term.getScrollBuffer().map(line => line.trimEnd());
-						// History was rebuilt at the new content: offscreen edit reflected, no stale copy.
-						expect(buffer).toContain("HEADER-EDITED");
-						expect(buffer).not.toContain("row-0");
-						// The grown tail is reachable exactly once — no duplicated rows above the viewport.
-						expect(buffer.filter(line => line === "tail-3")).toHaveLength(1);
-						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
-					} finally {
-						tui.stop();
-					}
-				});
+							const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+							// History was rebuilt at the new content: offscreen edit reflected, no stale copy.
+							expect(buffer).toContain("HEADER-EDITED");
+							expect(buffer).not.toContain("row-0");
+							// The grown tail is reachable exactly once — no duplicated rows above the viewport.
+							expect(buffer.filter(line => line === "tail-3")).toHaveLength(1);
+							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
+						} finally {
+							tui.stop();
+						}
+					},
+				);
 			} finally {
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 			}
@@ -2226,6 +2241,27 @@ describe("TUI terminal-state regressions", () => {
 				expect(term.getCursor().row).toBe(cursorAnchorRow);
 			} finally {
 				tui.stop();
+			}
+		});
+
+		it("leaves the parent shell prompt directly after short content on stop", async () => {
+			const term = new VirtualTerminal(20, 5);
+			const tui = new TUI(term);
+			let stopped = false;
+			tui.addChild(new MutableLinesComponent(["omp0", "omp1", "omp2"]));
+
+			try {
+				tui.start();
+				await settle(term);
+				tui.stop();
+				stopped = true;
+				await term.flush();
+				term.write("bash$ ");
+				await term.flush();
+
+				expect(visible(term)).toEqual(["omp0", "omp1", "omp2", "bash$", ""]);
+			} finally {
+				if (!stopped) tui.stop();
 			}
 		});
 	});

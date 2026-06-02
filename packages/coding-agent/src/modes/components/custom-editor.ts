@@ -19,6 +19,7 @@ type ConfigurableEditorAction = Extract<
 	| "app.history.search"
 	| "app.message.dequeue"
 	| "app.clipboard.pasteImage"
+	| "app.clipboard.pasteTextRaw"
 	| "app.clipboard.copyPrompt"
 >;
 
@@ -38,6 +39,7 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.history.search": ["ctrl+r"],
 	"app.message.dequeue": ["alt+up"],
 	"app.clipboard.pasteImage": ["ctrl+v"],
+	"app.clipboard.pasteTextRaw": ["ctrl+shift+v", "alt+shift+v"],
 	"app.clipboard.copyPrompt": ["alt+shift+c"],
 };
 
@@ -65,6 +67,8 @@ export class CustomEditor extends Editor {
 	onCopyPrompt?: () => void;
 	/** Called when the configured image-paste shortcut is pressed. */
 	onPasteImage?: () => Promise<boolean>;
+	/** Called when the configured raw text-paste shortcut is pressed. */
+	onPasteTextRaw?: () => void;
 	/** Called when the configured dequeue shortcut is pressed. */
 	onDequeue?: () => void;
 	/** Called when Caps Lock is pressed. */
@@ -121,6 +125,12 @@ export class CustomEditor extends Editor {
 		// Intercept configured image paste (async - fires and handles result)
 		if (this.#matchesAction(data, "app.clipboard.pasteImage") && this.onPasteImage) {
 			void this.onPasteImage();
+			return;
+		}
+
+		// Intercept configured raw text paste (fires and handles result)
+		if (this.#matchesAction(data, "app.clipboard.pasteTextRaw") && this.onPasteTextRaw) {
+			this.onPasteTextRaw();
 			return;
 		}
 

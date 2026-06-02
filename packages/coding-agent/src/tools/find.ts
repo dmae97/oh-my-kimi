@@ -16,6 +16,7 @@ import type { ToolSession } from ".";
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
+	expandDelimitedPathEntries,
 	formatPathRelativeToCwd,
 	hasGlobPathChars,
 	normalizePathLikeInput,
@@ -51,33 +52,6 @@ const MAX_LIMIT = 200;
 const DEFAULT_GLOB_TIMEOUT_MS = 5000;
 const MIN_GLOB_TIMEOUT_MS = 500;
 const MAX_GLOB_TIMEOUT_MS = 60_000;
-
-/**
- * Reject comma-separated path lists packed into a single array element
- * (`["a.py,b.py"]`). The schema is array-of-string; agents that pass a
- * single comma-joined element get silent no-matches otherwise.
- *
- * Commas inside brace expansion (`{a,b}`) are legitimate glob syntax and
- * must pass through.
- */
-export function validateFindPathInputs(paths: readonly string[]): void {
-	for (const entry of paths) {
-		let braceDepth = 0;
-		for (let i = 0; i < entry.length; i++) {
-			const ch = entry.charCodeAt(i);
-			if (ch === 0x5c /* \ */ && i + 1 < entry.length) {
-				i++;
-				continue;
-			}
-			if (ch === 0x7b /* { */) braceDepth++;
-			else if (ch === 0x7d /* } */) {
-				if (braceDepth > 0) braceDepth--;
-			} else if (ch === 0x2c /* , */ && braceDepth === 0) {
-				throw new ToolError(`paths is an array — pass ["a", "b"] not ["a,b"] (got ${JSON.stringify(entry)})`);
-			}
-		}
-	}
-}
 
 /**
  * Group find matches by their directory so the model doesn't pay repeated
@@ -180,8 +154,10 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 
 		return untilAborted(signal, async () => {
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
-			validateFindPathInputs(paths);
-			const rawPatterns = paths.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
+			const rawPatternInputs = this.#customOps
+				? paths
+				: await expandDelimitedPathEntries(paths, this.session.cwd, { splitter: parseFindPattern });
+			const rawPatterns = rawPatternInputs.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
 			const internalRouter = InternalUrlRouter.instance();
 			const normalizedPatterns: string[] = [];
 			for (const rawPattern of rawPatterns) {

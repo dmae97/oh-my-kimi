@@ -365,6 +365,29 @@ export class Settings {
 		return cloned;
 	}
 
+	/**
+	 * Re-scope this instance to a new working directory *in place*: reload the
+	 * project layer (`.claude/settings.yml` etc.) from `cwd`, re-resolve
+	 * path-scoped settings against it, and re-fire side-effect hooks (theme,
+	 * symbols, tab width, …). Global settings and runtime overrides are preserved.
+	 *
+	 * Unlike {@link cloneForCwd}, this mutates the live instance, so every holder
+	 * (the `settings` proxy, the active session, controllers) observes the new
+	 * project scope without swapping references — used when the process changes
+	 * directory mid-run (`/move`, cross-project resume). No-op when `cwd` is
+	 * already the current scope.
+	 */
+	async reloadForCwd(cwd: string): Promise<void> {
+		const normalized = path.normalize(cwd);
+		if (normalized === this.#cwd) return;
+		this.#cwd = normalized;
+		if (this.#persist) {
+			this.#project = await this.#loadProjectSettings();
+		}
+		this.#rebuildMerged();
+		this.#fireAllHooks();
+	}
+
 	// ─────────────────────────────────────────────────────────────────────────
 	// Accessors
 	// ─────────────────────────────────────────────────────────────────────────

@@ -62,6 +62,7 @@ import type {
 	Message,
 	MessageAttribution,
 	Model,
+	ProviderResponseMetadata,
 	ProviderSessionState,
 	ServiceTier,
 	SimpleStreamOptions,
@@ -87,6 +88,7 @@ import { countTokens, MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
 	extractRetryHint,
 	getAgentDbPath,
+	getInstallId,
 	isEnoent,
 	isUnexpectedSocketCloseMessage,
 	logger,
@@ -227,7 +229,7 @@ import type {
 	SessionContext,
 	SessionManager,
 } from "./session-manager";
-import { getLatestCompactionEntry } from "./session-manager";
+import { getLatestCompactionEntry, getRestorableSessionModels } from "./session-manager";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { YieldQueue } from "./yield-queue";
@@ -358,7 +360,7 @@ export interface AgentSessionConfig {
 	 * **MUST NOT** dispose it on their own teardown.
 	 */
 	ownedAsyncJobManager?: AsyncJobManager;
-	/** Agent identity (registry id like "0-Main" or "3-Alice") used for IRC routing. */
+	/** Agent identity (registry id like "Main" or "Alice") used for IRC routing. */
 	agentId?: string;
 	/** Shared agent registry (for forwarding IRC observations to the main session UI). */
 	agentRegistry?: AgentRegistry;
@@ -581,15 +583,14 @@ function buildSessionMetadata(
 		const accountUuid = authStorage?.getOAuthAccountId("anthropic", sessionId);
 		if (typeof accountUuid === "string" && accountUuid.length > 0) {
 			userId.account_uuid = accountUuid;
-			// Derive device_id from account_uuid so the payload matches the real CC
-			// getAPIMetadata shape without hardware fingerprinting. A SHA-256 of a
-			// namespaced account UUID produces a stable 64-hex value that is
-			// indistinguishable from a randomly generated device ID on the wire, is
-			// deterministic per account (survives reinstalls), and is auditable: it
-			// is derived solely from the OAuth UUID the user already consented to
-			// share with Anthropic. Omitted when no OAuth credential is available
-			// (API-key callers) to avoid sending a hash of an empty string.
-			userId.device_id = crypto.createHash("sha256").update(`omp-device-id-v1:${accountUuid}`).digest("hex");
+			// Claude Code's `device_id` is a stable 64-hex install identifier. Use
+			// omp's persistent install id as the root instead of deriving it from
+			// `account_uuid`: logging into a different Claude account on the same
+			// install should not make the device look new.
+			userId.device_id = crypto
+				.createHash("sha256")
+				.update(`omp-claude-device-id-v1:${getInstallId()}`)
+				.digest("hex");
 		}
 	}
 	return { user_id: JSON.stringify(userId) };
@@ -1104,10 +1105,12 @@ export class AgentSession {
 		this.#onResponse = configuredOnResponse
 			? async (response, model) => {
 					this.rawSseDebugBuffer.recordResponse(response, model);
+					this.#ingestProviderUsageHeaders(response, model);
 					await configuredOnResponse(response, model);
 				}
 			: (response, model) => {
 					this.rawSseDebugBuffer.recordResponse(response, model);
+					this.#ingestProviderUsageHeaders(response, model);
 				};
 		const configuredOnSseEvent = config.onSseEvent;
 		this.#onSseEvent = configuredOnSseEvent
@@ -2827,13 +2830,14 @@ export class AgentSession {
 
 	/**
 	 * Set agent.sessionId from the session manager and install a dynamic
-	 * metadata resolver so every API request carries `metadata.user_id` shaped
-	 * like real Claude Code's `getAPIMetadata` output: `{ session_id,
-	 * account_uuid }` (the latter only when an Anthropic OAuth credential with
-	 * a known account UUID is loaded). Resolving live keeps the value in sync
-	 * with auth-state changes (login/logout, token refresh that surfaces a new
-	 * account uuid) without needing to re-call `#syncAgentSessionId()` on every
-	 * such event.
+	 * metadata resolver so every Anthropic API request carries
+	 * `metadata.user_id` shaped like real Claude Code's `getAPIMetadata` output:
+	 * `{ session_id, account_uuid, device_id }`. `account_uuid` is included only
+	 * when an Anthropic OAuth credential with a known account UUID is loaded;
+	 * `device_id` is derived from the persistent omp install id. Resolving live
+	 * keeps the value in sync with auth-state changes (login/logout, token
+	 * refresh that surfaces a new account uuid) without needing to re-call
+	 * `#syncAgentSessionId()` on every such event.
 	 */
 	#syncAgentSessionId(sessionId?: string): void {
 		const sid = this.#providerSessionId ?? sessionId ?? this.sessionManager.getSessionId();
@@ -8723,28 +8727,34 @@ export class AgentSession {
 			}
 
 			// Restore model if saved
-			const defaultModelStr = sessionContext.models.default;
-			if (defaultModelStr) {
-				const slashIdx = defaultModelStr.indexOf("/");
-				if (slashIdx > 0) {
-					const provider = defaultModelStr.slice(0, slashIdx);
-					const modelId = defaultModelStr.slice(slashIdx + 1);
-					const availableModels = this.#modelRegistry.getAvailable();
-					const match = availableModels.find(m => m.provider === provider && m.id === modelId);
-					if (match) {
-						const currentModel = this.model;
-						const shouldResetProviderState =
-							switchingToDifferentSession ||
-							(currentModel !== undefined &&
-								(currentModel.provider !== match.provider ||
-									currentModel.id !== match.id ||
-									currentModel.api !== match.api));
-						if (shouldResetProviderState) {
-							this.#setModelWithProviderSessionReset(match);
-						} else {
-							this.agent.setModel(match);
-							this.#syncToolCallBatchCap(match);
-						}
+			const targetModelStrings = getRestorableSessionModels(
+				sessionContext.models,
+				this.sessionManager.getLastModelChangeRole(),
+			);
+			if (targetModelStrings.length > 0) {
+				const availableModels = this.#modelRegistry.getAvailable();
+				let match: Model | undefined;
+				for (const targetModelStr of targetModelStrings) {
+					const slashIdx = targetModelStr.indexOf("/");
+					if (slashIdx <= 0) continue;
+					const provider = targetModelStr.slice(0, slashIdx);
+					const modelId = targetModelStr.slice(slashIdx + 1);
+					match = availableModels.find(m => m.provider === provider && m.id === modelId);
+					if (match) break;
+				}
+				if (match) {
+					const currentModel = this.model;
+					const shouldResetProviderState =
+						switchingToDifferentSession ||
+						(currentModel !== undefined &&
+							(currentModel.provider !== match.provider ||
+								currentModel.id !== match.id ||
+								currentModel.api !== match.api));
+					if (shouldResetProviderState) {
+						this.#setModelWithProviderSessionReset(match);
+					} else {
+						this.agent.setModel(match);
+						this.#syncToolCallBatchCap(match);
 					}
 				}
 			}
@@ -9202,12 +9212,10 @@ export class AgentSession {
 	 * Uses the last assistant message's usage data when available,
 	 * otherwise estimates tokens for all messages.
 	 */
-	getContextUsage(): ContextUsage | undefined {
+	getContextUsage(options?: { contextWindow?: number }): ContextUsage | undefined {
 		const model = this.model;
-		if (!model) return undefined;
-
-		const contextWindow = model.contextWindow ?? 0;
-		if (contextWindow <= 0) return undefined;
+		const contextWindow = options?.contextWindow ?? model?.contextWindow ?? 0;
+		if (!Number.isFinite(contextWindow) || contextWindow <= 0) return undefined;
 
 		// After compaction, the last assistant usage reflects pre-compaction context size.
 		// We can only trust usage from an assistant that responded after the latest compaction.
@@ -9248,6 +9256,14 @@ export class AgentSession {
 		};
 	}
 
+	#ingestProviderUsageHeaders(response: ProviderResponseMetadata, model?: Model): void {
+		if (model?.provider !== "anthropic") return;
+		this.#modelRegistry.authStorage.ingestUsageHeaders("anthropic", response.headers, {
+			sessionId: this.agent.sessionId,
+			baseUrl: this.#modelRegistry.getProviderBaseUrl?.("anthropic"),
+		});
+	}
+
 	async fetchUsageReports(signal?: AbortSignal): Promise<UsageReport[] | null> {
 		const authStorage = this.#modelRegistry.authStorage;
 		if (!authStorage.fetchUsageReports) return null;
@@ -9265,7 +9281,7 @@ export class AgentSession {
 	} {
 		const messages = this.messages;
 
-		// Find last assistant message with usage
+		// Find last assistant message with valid usage.
 		let lastUsageIndex: number | null = null;
 		let lastUsage: Usage | undefined;
 		for (let i = messages.length - 1; i >= 0; i--) {

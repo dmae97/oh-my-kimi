@@ -38,8 +38,10 @@ class LineList implements Component {
 }
 
 async function settle(term: VirtualTerminal): Promise<void> {
-	await new Promise<void>(r => process.nextTick(r));
-	await new Promise<void>(r => setTimeout(r, 20));
+	const nextTick = Promise.withResolvers<void>();
+	process.nextTick(nextTick.resolve);
+	await nextTick.promise;
+	await Bun.sleep(20);
 	await term.flush();
 }
 

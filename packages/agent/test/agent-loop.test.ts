@@ -56,6 +56,76 @@ describe("agentLoop with AgentMessage", () => {
 		expect(eventTypes).toContain("agent_end");
 	});
 
+	it("retries when harmony leakage reaches the committed assistant message (openai-codex)", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		// First response leaks a harmony payload as visible assistant text; the
+		// retry is clean. Mitigation only engages for openai-codex.
+		const leak = "Some prose. analysis to=functions.edit code 大发官网";
+		const mock = createMockModel({
+			provider: "openai-codex",
+			responses: [{ content: [leak] }, { content: ["clean retry response"] }],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		// The leaked attempt was retried, not committed.
+		expect(mock.calls).toHaveLength(2);
+		expect(messages).toHaveLength(2);
+		const final = messages[1];
+		if (final.role !== "assistant") throw new Error("expected assistant message");
+		expect(final.content).toEqual([{ type: "text", text: "clean retry response" }]);
+		expect(JSON.stringify(messages)).not.toContain("to=functions.");
+	});
+
+	it("does not hard-abort a codex tool call whose argument legitimately carries the marker", async () => {
+		// A legit edit of a file (e.g. these harmony fixtures) whose content carries
+		// `to=functions.*` next to a channel word + non-Latin script. tool_arg is
+		// gated on the trailing-garbage `T` co-signal, and the loop supplies no parse
+		// boundary, so the call commits + executes once instead of being detected as
+		// a leak and retried/escalated.
+		const toolSchema = z.object({ input: z.string() });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema, { input: string }> = {
+			name: "edit",
+			label: "Edit",
+			description: "Edit tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executed.push(params.input);
+				return { content: [{ type: "text", text: "ok" }], details: { input: params.input } };
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const leakyArg = "@fixtures/corpus.json\n+\tanalysis to=functions.edit code 大发官网\n";
+		const mock = createMockModel({
+			provider: "openai-codex",
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "edit", arguments: { input: leakyArg } }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+		const stream = agentLoop([createUserMessage("edit a fixture")], context, config, undefined, mock.stream);
+		for await (const _event of stream) {
+			// drain
+		}
+		// The tool ran on the original (unmodified) argument and the turn was not
+		// retried — a hard-abort would have left `executed` empty and consumed the
+		// "done" response as a clean retry instead.
+		expect(executed).toEqual([leakyArg]);
+		expect(mock.calls).toHaveLength(2);
+	});
+
 	it("emits an aborted assistant message when cancellation happens before provider events", async () => {
 		const context: AgentContext = {
 			systemPrompt: ["You are helpful."],

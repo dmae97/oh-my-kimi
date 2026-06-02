@@ -19,6 +19,7 @@ const MAX_NUM_RESULTS = 40;
 export async function searchKagi(params: {
 	query: string;
 	num_results?: number;
+	recency?: SearchParams["recency"];
 	signal?: AbortSignal;
 	authStorage: AuthStorage;
 	sessionId?: string;
@@ -30,6 +31,7 @@ export async function searchKagi(params: {
 			params.query,
 			{
 				limit: numResults,
+				recency: params.recency,
 				sessionId: params.sessionId,
 				signal: params.signal,
 			},
@@ -41,6 +43,7 @@ export async function searchKagi(params: {
 			sources: toSearchSources(result.sources, numResults),
 			relatedQuestions: result.relatedQuestions.length > 0 ? result.relatedQuestions : undefined,
 			requestId: result.requestId,
+			answer: result.answer,
 		};
 	} catch (err) {
 		if (err instanceof KagiApiError) {
@@ -67,6 +70,7 @@ export class KagiProvider extends SearchProvider {
 		return searchKagi({
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,
+			recency: params.recency,
 			signal: params.signal,
 			authStorage: params.authStorage,
 			sessionId: params.sessionId,

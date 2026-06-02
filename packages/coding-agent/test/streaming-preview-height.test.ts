@@ -108,14 +108,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		const bigLines = bigNew.split("\n");
 		const bigPartials = bigLines.map((_v, i) => bigLines.slice(0, i + 1).join("\n"));
 
-		let resolveRender: (() => void) | null = null;
-		const uiStub = {
-			requestRender() {
-				const r = resolveRender;
-				resolveRender = null;
-				r?.();
-			},
-		} as unknown as TUI;
+		const uiStub = { requestRender() {} } as unknown as TUI;
 		const tool = { mode: "replace" } as unknown as AgentTool;
 		const component = new ToolExecutionComponent(
 			"edit",
@@ -125,9 +118,13 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 			uiStub,
 			tmpDir,
 		);
-		const settle = () =>
-			Promise.race([new Promise<void>(res => (resolveRender = res)), Bun.sleep(250).then(() => undefined)]);
-		await settle();
+		// Await the actual diff recompute rather than racing the spinner's render
+		// ticks. The streaming spinner calls requestRender every ~16ms, so on a
+		// slow box a tick — not the (file-read + whole-file Myers) compute — would
+		// resolve the wait and let us sample a stale, mid-abort preview. That is the
+		// CI flake that collapsed Math.min(...steady) to 4. whenPreviewSettled()
+		// resolves only when this chunk's recompute has updated the preview.
+		await component.whenPreviewSettled();
 
 		const trailingBlankRows = (rows: string[]): number => {
 			let n = 0;
@@ -141,13 +138,18 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		const heights: number[] = [];
 		let maxTrailingBlank = 0;
 		for (const newText of bigPartials) {
-			const next = settle();
 			component.updateArgs({ path: bigFile, edits: [{ old_text: bigOld, new_text: newText }] });
-			await next;
+			await component.whenPreviewSettled();
 			const rows = component.render(RENDER_WIDTH_WIDE);
 			heights.push(rows.length);
 			maxTrailingBlank = Math.max(maxTrailingBlank, trailingBlankRows(rows));
 		}
+
+		// Finalize still renders a real diff.
+		component.setArgsComplete();
+		await component.whenPreviewSettled();
+		const finalizedHeight = component.render(RENDER_WIDTH_WIDE).length;
+		component.stopAnimation();
 
 		// The tail window saturates immediately and the box height holds dead
 		// steady for the rest of the stream — it neither stutters larger/smaller
@@ -160,11 +162,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		expect(Math.max(...steady) - Math.min(...steady)).toBe(0);
 		// And it is never padded into a half-empty rectangle (the regression).
 		expect(maxTrailingBlank).toBeLessThanOrEqual(1);
-
-		// Finalize still renders a real diff.
-		component.setArgsComplete();
-		await settle();
-		expect(component.render(RENDER_WIDTH_WIDE).length).toBeGreaterThan(1);
+		expect(finalizedHeight).toBeGreaterThan(1);
 	});
 
 	test("real TUI finalization replaces streaming edit preview throughout native scrollback", async () => {
