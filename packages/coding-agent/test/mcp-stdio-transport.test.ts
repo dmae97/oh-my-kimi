@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { StdioTransport, writeFrame } from "../src/mcp/transports/stdio";
 
 // ---------------------------------------------------------------------------
-// writeFrame — the seam that swallows synchronous FileSink failures so the
-// async `notify` / `#sendResponse` paths can never leak unhandled rejections
-// when an MCP subprocess exits between read-loop ticks. See issue #1710.
+// writeFrame — the seam that catches synchronous FileSink failures so the
+// async `notify` / `#sendResponse` paths can decide whether to swallow or
+// surface the error. See issue #1710.
 // ---------------------------------------------------------------------------
 
 describe("writeFrame", () => {
@@ -68,12 +68,19 @@ describe("writeFrame", () => {
 });
 
 // ---------------------------------------------------------------------------
-// StdioTransport.notify — guards and end-to-end behavior with a real
-// subprocess that exits between the `initialize` response and the
-// `notifications/initialized` send. The harness can't directly reproduce the
-// Windows EPIPE on Linux (Bun's FileSink absorbs it), but the contract we
-// defend is platform-independent: no unhandled rejection ever escapes
-// notify(), even when the read loop hasn't yet flipped #connected.
+// StdioTransport.notify — end-to-end behavior against a real subprocess that
+// exits between the `initialize` response and the `notifications/initialized`
+// send. Contract defended here:
+//
+//   1. notify() always settles — no unhandled rejection ever escapes when
+//      the underlying FileSink throws synchronously.
+//   2. A failed write tears the transport down (`onClose` fires) AND surfaces
+//      a rejection to the caller so `initializeConnection()` doesn't return a
+//      "connected" handle wrapping a dead transport.
+//
+// On Linux, Bun's FileSink absorbs the EPIPE so the only failure surfaced is
+// the "Transport not connected" guard on subsequent calls; on Windows the
+// write actually throws. Either way the tracker must stay empty.
 // ---------------------------------------------------------------------------
 
 function trackUnhandled(): { release: () => unknown[]; capture: () => unknown[] } {
@@ -152,24 +159,22 @@ describe("StdioTransport.notify", () => {
 		try {
 			await transport.connect();
 			await transport.request("initialize", {});
-
 			// Fire several notifies — covers both the "subprocess just exited"
-			// race and the "already torn down" guard path. None may yield an
-			// unhandled rejection.
+			// race (write may fail) and the "already torn down" guard path
+			// (subsequent calls reject with `Transport not connected`). Every
+			// rejection is handled here; the contract under test is that none
+			// of them leak as an unhandled rejection.
 			for (let i = 0; i < 5; i++) {
-				await transport.notify("notifications/initialized").catch(err => {
-					// Re-throwing "Transport not connected" is fine (handled).
-					if (!(err instanceof Error) || err.message !== "Transport not connected") {
-						throw err;
-					}
-				});
+				await transport.notify("notifications/initialized").catch(() => {});
 			}
 
-			// Let any deferred microtasks settle.
+			// Let any deferred microtasks settle so an escaped rejection has
+			// a chance to fire `unhandledRejection` before we assert.
 			await Bun.sleep(50);
 
 			expect(tracker.capture()).toEqual([]);
 			expect(closed).toBe(true);
+			expect(transport.connected).toBe(false);
 		} finally {
 			tracker.release();
 		}

@@ -314,11 +314,16 @@ export class StdioTransport implements MCPTransport {
 		// Bun's FileSink can throw EPIPE synchronously on Windows when the
 		// subprocess has exited between the last read-loop tick and this
 		// write (e.g. an MCP server that dies after returning `initialize`
-		// but before `notifications/initialized` is delivered). Treat any
-		// such failure as transport closure so the reconnect machinery
-		// engages instead of leaking an unhandled rejection — see #1710.
+		// but before `notifications/initialized` is delivered). Tear the
+		// transport down so any wired `onClose` (and reconnect machinery)
+		// engages, then surface the failure to the caller so a write that
+		// dropped on the floor is never silently treated as delivered —
+		// `initializeConnection()` runs before the manager installs its
+		// `onClose` handler, so a swallowed failure there would yield a
+		// "connected" handle wrapping a dead transport. See #1710.
 		if (!writeFrame(this.#process.stdin, `${JSON.stringify(notification)}\n`)) {
 			this.#handleClose();
+			throw new Error(`Transport closed while sending notification "${method}"`);
 		}
 	}
 
