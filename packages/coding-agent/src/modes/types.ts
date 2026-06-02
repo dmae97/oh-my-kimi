@@ -242,6 +242,7 @@ export interface InteractiveModeContext {
 	): Promise<CompactionOutcome>;
 	openInBrowser(urlOrPath: string): void;
 	refreshSlashCommandState(cwd?: string): Promise<void>;
+	applyCwdChange(newCwd: string): Promise<void>;
 
 	// Selector handling
 	showSettingsSelector(): void;

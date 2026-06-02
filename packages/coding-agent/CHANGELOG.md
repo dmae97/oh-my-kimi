@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an all-projects scope to the session picker (`pi --resume` / `/resume`). Press `Tab` to toggle between the current folder's sessions and every session across all projects; the all-projects list is loaded lazily and shows each session's directory. When the current folder has no sessions the picker now opens straight into all-projects scope instead of printing "No sessions found".
+
+### Changed
+
+- Changed resuming a session that belongs to a different project to switch the process into that project's working directory. `pi --resume` and the in-session `/resume` picker now `chdir` into the resumed session's `cwd` and refresh every cwd-derived cache (project dir, plugin roots, capabilities, slash commands, ssh tool) — the same refresh `/move` performs — so tools, discovery, and commands all scope to the resumed project. The `SessionManager` adopts the resumed session's own `cwd`/session directory on load (rolled back if the switch fails).
+
 ### Fixed
 
 - Fixed `read <db.sqlite>` freezing the TUI on large databases. Listing tables ran an unbounded `SELECT COUNT(*)` per table, and since `bun:sqlite` executes synchronously on the same JS thread that drives rendering and input, a multi-GB database's full-table scans blocked the UI for seconds. The listing now reads the planner's `sqlite_stat1` estimate for tables above a scan cap (shown as `~N rows`) and only counts exactly when a table is provably small, reading at most `cap + 1` rows (a capped table shows `N+ rows`). On an 8.4 GB stats database the listing dropped from multi-second full scans to ~2 ms.
