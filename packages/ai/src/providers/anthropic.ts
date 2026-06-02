@@ -140,7 +140,7 @@ function isClaudeCodeClientUserAgent(userAgent: string | undefined): userAgent i
 	return userAgent.toLowerCase().startsWith("claude-cli");
 }
 
-function isAnthropicApiBaseUrl(baseUrl?: string): boolean {
+export function isAnthropicApiBaseUrl(baseUrl?: string): boolean {
 	if (!baseUrl) return true;
 	try {
 		const url = new URL(baseUrl);
@@ -796,10 +796,26 @@ function parseAnthropicCustomHeaders(rawHeaders: string | undefined): Record<str
 	return Object.keys(parsed).length > 0 ? parsed : undefined;
 }
 
+/**
+ * Returns env-supplied custom headers (`ANTHROPIC_CUSTOM_HEADERS`) when they
+ * should be forwarded to the upstream endpoint.
+ *
+ * Foundry mode forwards them unconditionally. Outside Foundry, they're applied
+ * only when the configured base URL is a non-Anthropic host — i.e. an
+ * enterprise/corporate gateway that may require its own proprietary auth
+ * header. Stock `api.anthropic.com` would reject unknown headers, so they're
+ * omitted there.
+ */
+export function resolveAnthropicCustomHeadersForBaseUrl(
+	baseUrl: string | undefined,
+): Record<string, string> | undefined {
+	if (!isFoundryEnabled() && isAnthropicApiBaseUrl(baseUrl)) return undefined;
+	return parseAnthropicCustomHeaders($env.ANTHROPIC_CUSTOM_HEADERS);
+}
+
 function resolveAnthropicCustomHeaders(model: Model<"anthropic-messages">): Record<string, string> | undefined {
 	if (model.provider !== "anthropic") return undefined;
-	if (!isFoundryEnabled()) return undefined;
-	return parseAnthropicCustomHeaders($env.ANTHROPIC_CUSTOM_HEADERS);
+	return resolveAnthropicCustomHeadersForBaseUrl(model.baseUrl);
 }
 
 function looksLikeFilePath(value: string): boolean {

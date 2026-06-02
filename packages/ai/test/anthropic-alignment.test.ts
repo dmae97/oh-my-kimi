@@ -868,6 +868,56 @@ describe("Anthropic request fingerprint alignment", () => {
 		);
 	});
 
+	it("forwards ANTHROPIC_CUSTOM_HEADERS to an enterprise gateway base URL without Foundry mode", async () => {
+		const gatewayModel: Model<"anthropic-messages"> = {
+			...ANTHROPIC_MODEL,
+			baseUrl: "https://gateway.example.com",
+		};
+		await withEnv(
+			{
+				CLAUDE_CODE_USE_FOUNDRY: undefined,
+				FOUNDRY_BASE_URL: undefined,
+				ANTHROPIC_BASE_URL: undefined,
+				ANTHROPIC_CUSTOM_HEADERS: "X-Gateway-Key: secret",
+			},
+			() => {
+				const options = buildAnthropicClientOptions({
+					model: gatewayModel,
+					apiKey: "sk-ant-api-test",
+					extraBetas: [],
+					stream: true,
+					interleavedThinking: false,
+					dynamicHeaders: {},
+				});
+
+				expect(options.defaultHeaders["X-Gateway-Key"]).toBe("secret");
+			},
+		);
+	});
+
+	it("omits ANTHROPIC_CUSTOM_HEADERS when neither Foundry mode nor a custom base URL is configured", async () => {
+		await withEnv(
+			{
+				CLAUDE_CODE_USE_FOUNDRY: undefined,
+				FOUNDRY_BASE_URL: undefined,
+				ANTHROPIC_BASE_URL: undefined,
+				ANTHROPIC_CUSTOM_HEADERS: "X-Gateway-Key: secret",
+			},
+			() => {
+				const options = buildAnthropicClientOptions({
+					model: ANTHROPIC_MODEL,
+					apiKey: "sk-ant-api-test",
+					extraBetas: [],
+					stream: true,
+					interleavedThinking: false,
+					dynamicHeaders: {},
+				});
+
+				expect(options.defaultHeaders["X-Gateway-Key"]).toBeUndefined();
+			},
+		);
+	});
+
 	it("loads Foundry mTLS and CA material from file paths", async () => {
 		const tmpDir = path.join(os.tmpdir(), `pi-ai-foundry-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 		fs.mkdirSync(tmpDir, { recursive: true });
