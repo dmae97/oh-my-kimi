@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $ } from "bun";
 import { ReviewCommand } from "../../../src/extensibility/custom-commands/bundled/review";
 import type { CustomCommandAPI } from "../../../src/extensibility/custom-commands/types";
 import type { HookCommandContext } from "../../../src/extensibility/hooks/types";
@@ -39,19 +38,6 @@ describe("ReviewCommand", () => {
 	async function createTempDir(): Promise<string> {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-review-command-"));
 		return tmpDir;
-	}
-
-	async function createGitRepoWithUncommittedChange(): Promise<string> {
-		const dir = await createTempDir();
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.name Omp Test`.cwd(dir).quiet();
-		await $`git config user.email omp-test@example.com`.cwd(dir).quiet();
-		await $`git config commit.gpgsign false`.cwd(dir).quiet();
-		await Bun.write(path.join(dir, "review-target.ts"), "export const value = 1;\n");
-		await $`git add review-target.ts`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await Bun.write(path.join(dir, "review-target.ts"), "export const value = 2;\n");
-		return dir;
 	}
 
 	function createContext(options?: {
@@ -163,8 +149,16 @@ describe("ReviewCommand", () => {
 	});
 
 	it("includes reviewer task orchestration for single-agent diff reviews", async () => {
-		const dir = await createGitRepoWithUncommittedChange();
+		const dir = await createTempDir();
 		const jjRepoSpy = spyOn(jj, "isRepository").mockResolvedValue(false);
+		const gitStatusSpy = spyOn(git, "status").mockResolvedValue(" M review-target.ts\n");
+		const gitDiffSpy = spyOn(git, "diff").mockResolvedValue(`diff --git a/review-target.ts b/review-target.ts
+--- a/review-target.ts
++++ b/review-target.ts
+@@ -1 +1 @@
+-export const value = 1;
++export const value = 2;
+`);
 		try {
 			const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
 			const ctx = createContext({
@@ -180,6 +174,8 @@ describe("ReviewCommand", () => {
 			expect(promptText).not.toContain(LEGACY_TASK_INSTRUCTION);
 		} finally {
 			jjRepoSpy.mockRestore();
+			gitStatusSpy.mockRestore();
+			gitDiffSpy.mockRestore();
 		}
 	});
 
