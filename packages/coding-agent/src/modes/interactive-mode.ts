@@ -662,6 +662,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	async applyCwdChange(newCwd: string): Promise<void> {
 		setProjectDir(newCwd);
+		// Re-scope project settings (`.claude/settings.yml` etc.) to the new
+		// directory in place so the active session and every settings reader pick
+		// up the destination project's configuration.
+		if (isSettingsInitialized()) {
+			await settings.reloadForCwd(newCwd);
+		}
 		// Re-warm plugin roots, capabilities, slash commands, and the ssh tool so
 		// the next prompt sees everything scoped to the new project directory.
 		clearClaudePluginRootsCache();

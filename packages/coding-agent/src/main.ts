@@ -881,6 +881,9 @@ export async function runRootCommand(
 			clearPluginRootsAndCaches();
 			resetCapabilities();
 			cwd = getProjectDir();
+			// Re-scope project settings (.claude/settings.yml etc.) to the resumed
+			// project in place so the session is built with its configuration.
+			await settingsInstance.reloadForCwd(cwd);
 		}
 		sessionManager = await SessionManager.open(selected.path);
 	}
