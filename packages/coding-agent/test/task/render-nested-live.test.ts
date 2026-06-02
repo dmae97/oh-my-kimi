@@ -99,15 +99,15 @@ describe("task renderer: nested live rendering", () => {
 
 	it("renders completed nested task results stored in extractedToolData.task while parent is in-progress", async () => {
 		const parent = makeRunningProgress({
-			id: "1-Parent",
+			id: "Parent",
 			recentTools: [{ tool: "task", args: "", endMs: Date.now() }],
 			extractedToolData: {
 				task: [
 					{
 						projectAgentsDir: null,
 						results: [
-							makeCompletedSubResult("1-Parent.0-AlphaSub", "Alpha child"),
-							makeCompletedSubResult("1-Parent.1-BetaSub", "Beta child"),
+							makeCompletedSubResult("Parent.AlphaSub", "Alpha child"),
+							makeCompletedSubResult("Parent.BetaSub", "Beta child"),
 						],
 						totalDurationMs: 1000,
 					} satisfies TaskToolDetails,
@@ -119,12 +119,12 @@ describe("task renderer: nested live rendering", () => {
 
 		// Parent label is intact.
 		expect(text).toContain("Parent Level 1 work");
-		// Both nested completed children labels surface (formatTaskId collapses
-		// dotted ids → "1.0 Parent>AlphaSub").
+		// Both nested completed children labels surface (formatTaskId renders the
+		// dotted hierarchy as a "Parent>AlphaSub" breadcrumb).
 		expect(text).toContain("Alpha child");
 		expect(text).toContain("Beta child");
-		expect(text).toContain("1.0 Parent>AlphaSub");
-		expect(text).toContain("1.1 Parent>BetaSub");
+		expect(text).toContain("Parent>AlphaSub");
+		expect(text).toContain("Parent>BetaSub");
 	});
 
 	it("renders the in-flight nested task snapshot (progress[]) before the call ends", async () => {
@@ -133,12 +133,12 @@ describe("task renderer: nested live rendering", () => {
 			results: [],
 			totalDurationMs: 0,
 			progress: [
-				makeRunningSubProgress("2-Parent.0-GammaSub", "Gamma child running"),
-				makeRunningSubProgress("2-Parent.1-DeltaSub", "Delta child running"),
+				makeRunningSubProgress("Parent.GammaSub", "Gamma child running"),
+				makeRunningSubProgress("Parent.DeltaSub", "Delta child running"),
 			],
 		};
 		const parent = makeRunningProgress({
-			id: "2-Parent",
+			id: "Parent",
 			currentTool: "task",
 			currentToolStartMs: Date.now(),
 			inflightTaskDetails: inflight,
@@ -149,8 +149,8 @@ describe("task renderer: nested live rendering", () => {
 		expect(text).toContain("Parent Level 1 work");
 		expect(text).toContain("Gamma child running");
 		expect(text).toContain("Delta child running");
-		expect(text).toContain("2.0 Parent>GammaSub");
-		expect(text).toContain("2.1 Parent>DeltaSub");
+		expect(text).toContain("Parent>GammaSub");
+		expect(text).toContain("Parent>DeltaSub");
 	});
 
 	it("combines completed and in-flight nested snapshots in one tree", async () => {
@@ -160,7 +160,7 @@ describe("task renderer: nested live rendering", () => {
 				task: [
 					{
 						projectAgentsDir: null,
-						results: [makeCompletedSubResult("3.0-EpsilonSub", "Epsilon done")],
+						results: [makeCompletedSubResult("Parent.EpsilonSub", "Epsilon done")],
 						totalDurationMs: 1000,
 					} satisfies TaskToolDetails,
 				],
@@ -169,7 +169,7 @@ describe("task renderer: nested live rendering", () => {
 				projectAgentsDir: null,
 				results: [],
 				totalDurationMs: 0,
-				progress: [makeRunningSubProgress("3.1-ZetaSub", "Zeta running")],
+				progress: [makeRunningSubProgress("Parent.ZetaSub", "Zeta running")],
 			},
 		});
 

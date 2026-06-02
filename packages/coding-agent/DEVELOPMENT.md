@@ -323,7 +323,8 @@ This separation keeps `SessionManager` logic independent from storage backend an
 `packages/coding-agent/src/session/history-storage.ts` (`HistoryStorage`) is not conversation state restoration.
 
 - Stores prompt history in SQLite (`history.db`) with FTS5 index (`history_fts`).
-- APIs are `add(prompt, cwd?)`, `getRecent(limit)`, `search(query, limit)`.
+- APIs are `add(prompt, cwd?, sessionId?)`, `getRecent(limit)`, `search(query, limit)`, `matchingSessionIds(query, limit?)`.
+- Each row records the originating session via the `session_id` column (surfaced as `HistoryEntry.sessionId`), so prompts can be traced back to the session they were submitted from (e.g. for `--resume`). Interactive mode registers a resolver via `setSessionResolver(...)` so prompts added without an explicit id are stamped with the session active at `add()` time, tracking fork/resume switches.
 - Uses singleton `HistoryStorage.open(...)` and asynchronous insert (`setImmediate`) with duplicate-last-prompt suppression.
 
 This is command/input recall data; it does not rebuild agent message trees.

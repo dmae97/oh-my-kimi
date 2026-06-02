@@ -815,18 +815,21 @@ export class WorkerCore {
 			{ maxWidth: 1024, maxHeight: 1024, maxBytes: 150 * 1024, jpegQuality: 70 },
 		);
 		const explicitPath = opts.save ? resolveToCwd(opts.save, session.cwd) : undefined;
+		const saveFullRes = !!(explicitPath || session.browserScreenshotDir);
+		const savedBuffer = saveFullRes ? buffer : resized.buffer;
+		const savedMimeType = saveFullRes ? "image/png" : resized.mimeType;
+		// Auto-generated names must match the bytes we actually write: full-res is always
+		// PNG, but the resized buffer is whichever of PNG/JPEG/WebP encoded smallest.
+		const ext = savedMimeType === "image/webp" ? "webp" : savedMimeType === "image/jpeg" ? "jpg" : "png";
 		const dest =
 			explicitPath ??
 			(session.browserScreenshotDir
 				? path.join(
 						session.browserScreenshotDir,
-						`screenshot-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, -1)}.png`,
+						`screenshot-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, -1)}.${ext}`,
 					)
-				: path.join(os.tmpdir(), `omp-sshots-${Snowflake.next()}.png`));
+				: path.join(os.tmpdir(), `omp-sshots-${Snowflake.next()}.${ext}`));
 		await fs.promises.mkdir(path.dirname(dest), { recursive: true });
-		const saveFullRes = !!(explicitPath || session.browserScreenshotDir);
-		const savedBuffer = saveFullRes ? buffer : resized.buffer;
-		const savedMimeType = saveFullRes ? "image/png" : resized.mimeType;
 		await Bun.write(dest, savedBuffer);
 		const info: ScreenshotResult = {
 			dest,

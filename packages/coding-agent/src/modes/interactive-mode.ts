@@ -32,11 +32,23 @@ import {
 	TUI,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { APP_NAME, adjustHsv, getProjectDir, hsvToRgb, isEnoent, logger, postmortem, prompt } from "@oh-my-pi/pi-utils";
+import {
+	APP_NAME,
+	adjustHsv,
+	getProjectDir,
+	hsvToRgb,
+	isEnoent,
+	logger,
+	postmortem,
+	prompt,
+	setProjectDir,
+} from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
+import { reset as resetCapabilities } from "../capability";
 import { KeybindingsManager } from "../config/keybindings";
 import { MODEL_ROLES, type ModelRole } from "../config/model-registry";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
+import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -392,6 +404,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		try {
 			this.historyStorage = HistoryStorage.open();
 			this.editor.setHistoryStorage(this.historyStorage);
+			this.historyStorage.setSessionResolver(() => this.sessionManager.getSessionId());
 		} catch (error) {
 			logger.warn("History storage unavailable", { error: String(error) });
 		}
@@ -639,6 +652,31 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 		this.editor.setAutocompleteProvider(autocompleteProvider);
 		this.session.setSlashCommands(fileCommands);
+	}
+
+	/**
+	 * Re-point the process and every cwd-derived cache at `newCwd` after the
+	 * active session's working directory changed (`/move` relocation or resuming
+	 * a session from another project). The SessionManager's cwd MUST already
+	 * reflect `newCwd` before this is called.
+	 */
+	async applyCwdChange(newCwd: string): Promise<void> {
+		setProjectDir(newCwd);
+		// Re-scope project settings (`.claude/settings.yml` etc.) to the new
+		// directory in place so the active session and every settings reader pick
+		// up the destination project's configuration.
+		if (isSettingsInitialized()) {
+			await settings.reloadForCwd(newCwd);
+		}
+		// Re-warm plugin roots, capabilities, slash commands, and the ssh tool so
+		// the next prompt sees everything scoped to the new project directory.
+		clearClaudePluginRootsCache();
+		resetCapabilities();
+		await this.refreshSlashCommandState(newCwd);
+		await this.session.refreshSshTool({ activateIfAvailable: true });
+		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
+		this.statusLine.invalidate();
+		this.updateEditorTopBorder();
 	}
 
 	async getUserInput(): Promise<SubmittedUserInput> {

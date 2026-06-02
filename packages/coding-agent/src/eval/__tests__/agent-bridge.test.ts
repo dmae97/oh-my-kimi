@@ -106,6 +106,7 @@ function singleResult(options: ExecutorOptions, overrides: Partial<SingleResult>
 function makeEvalSession(
 	tempDir: TempDir,
 	prefix: string,
+	settings?: Settings,
 ): { session: ToolSession; sessionFile: string; sessionId: string } {
 	const sessionFile = path.join(tempDir.path(), "session.jsonl");
 	const artifactsDir = sessionFile.slice(0, -6);
@@ -113,6 +114,7 @@ function makeEvalSession(
 		cwd: tempDir.path(),
 		sessionFile,
 		artifactsDir,
+		settings,
 		outputManager: new AgentOutputManager(() => artifactsDir),
 	});
 	return { session, sessionFile, sessionId: `${prefix}:${crypto.randomUUID()}` };
@@ -261,9 +263,15 @@ describe("agent() through eval runtimes", () => {
 		expect(JSON.parse(result.output.trim())).toEqual(["hello from agent", { ok: true, n: 3 }]);
 	});
 
-	it("runs JavaScript parallel() with bounded concurrency while preserving order", async () => {
+	it("bounds JavaScript parallel() by the task.maxConcurrency setting while preserving order", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-agent-js-parallel-");
-		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "js-agent-parallel");
+		const settings = Settings.isolated({
+			"async.enabled": false,
+			"task.isolation.mode": "none",
+			"task.enableLsp": true,
+			"task.maxConcurrency": 2,
+		});
+		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "js-agent-parallel", settings);
 		mockAgents();
 		let inFlight = 0;
 		let maxInFlight = 0;
@@ -279,7 +287,7 @@ describe("agent() through eval runtimes", () => {
 		});
 
 		const result = await executeJs(
-			'const values = await parallel(["a", "b", "c", "d"].map(name => () => agent(name)), { concurrency: 2 }); return JSON.stringify(values);',
+			'const values = await parallel(["a", "b", "c", "d"].map(name => () => agent(name))); return JSON.stringify(values);',
 			{ cwd: tempDir.path(), sessionId, session, sessionFile },
 		);
 
@@ -300,7 +308,7 @@ describe("agent() through eval runtimes", () => {
 			return singleResult(options, { output: options.assignment ?? "" });
 		});
 
-		const result = await executeJs('await parallel([() => agent("ok"), () => agent("bad")], { concurrency: 2 });', {
+		const result = await executeJs('await parallel([() => agent("ok"), () => agent("bad")]);', {
 			cwd: tempDir.path(),
 			sessionId,
 			session,
@@ -341,6 +349,52 @@ describe("agent() through eval runtimes", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe("hello from python");
+	});
+
+	it("bounds Python parallel() by the task.maxConcurrency setting while preserving order", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-py-parallel-");
+		const settings = Settings.isolated({
+			"async.enabled": false,
+			"task.isolation.mode": "none",
+			"task.enableLsp": true,
+			"task.maxConcurrency": 2,
+		});
+		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "py-agent-parallel", settings);
+		mockAgents();
+		let inFlight = 0;
+		let maxInFlight = 0;
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			inFlight++;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			try {
+				await Bun.sleep(options.assignment === "a" ? 30 : 10);
+				return singleResult(options, { output: options.assignment ?? "" });
+			} finally {
+				inFlight--;
+			}
+		});
+
+		const probe = await executePython('print("probe")', {
+			cwd: tempDir.path(),
+			sessionId: `${sessionId}:probe`,
+			sessionFile,
+			kernelMode: "per-call",
+		});
+		if (probe.exitCode === undefined && probe.cancelled) {
+			expect(probe.output).toBe("");
+			return;
+		}
+		expect(probe.exitCode).toBe(0);
+
+		const result = await executePython(
+			'import json\nprint(json.dumps(parallel([lambda n=n: agent(n) for n in ["a", "b", "c", "d"]])))',
+			{ cwd: tempDir.path(), sessionId, sessionFile, kernelMode: "per-call", toolSession: session },
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.output.trim())).toEqual(["a", "b", "c", "d"]);
+		expect(maxInFlight).toBeGreaterThan(1);
+		expect(maxInFlight).toBeLessThanOrEqual(2);
 	});
 
 	it("streams enriched agent progress through onStatus before the cell finishes", async () => {

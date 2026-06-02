@@ -32,7 +32,7 @@ function createSelector(onDelete: (session: SessionInfo) => Promise<boolean>): S
 		() => {},
 		() => {},
 		() => {},
-		onDelete,
+		{ onDelete },
 	);
 }
 

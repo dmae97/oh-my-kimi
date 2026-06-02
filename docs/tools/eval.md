@@ -132,15 +132,15 @@ Implemented in `packages/coding-agent/src/eval/js/worker-core.ts`, `packages/cod
   - `read`, `write`, `append`, `sort`, `uniq`, `counter`, `diff`, `tree`, `env`, `output`
   - `tool.<name>(args)` proxy for arbitrary session tool calls
   - `llm(prompt, opts?)` for oneshot, stateless LLM calls (see _Oneshot LLM helper_ below)
-  - `agent(prompt, opts?)` for a single subagent call, plus JS-only `parallel()` / `pipeline()` bounded-pool helpers (see _Subagent helper_ below)
+  - `agent(prompt, opts?)` for a single subagent call, plus `parallel()` / `pipeline()` bounded-pool helpers (see _Subagent helper_ below)
 - JS helpers that touch the host/runtime boundary are async and `await`able; pure text helpers (`sort`, `uniq`, `counter`) return synchronously but may still be safely awaited.
 - JS helper signatures use a trailing options object rather than Python keyword arguments:
   - `await read(path, { offset?, limit? })`
   - `await tree(path = ".", { maxDepth?, hidden? })`
   - `sort(text, { reverse?, unique? })`, `uniq(text, { count? })`, `counter(items, { limit?, reverse? })`
   - `await agent(prompt, { agentType?, model?, context?, label?, schema? })`
-  - `await parallel([() => agent("a"), () => agent("b")], { concurrency? })`
-  - `await pipeline(items, stage1, stage2, { concurrency? })`
+  - `await parallel([() => agent("a"), () => agent("b")])`
+  - `await pipeline(items, stage1, stage2)`
 - `display(value)` behavior:
   - plain objects/arrays become JSON outputs
   - `{ type: "image", data, mimeType }` becomes an image output
@@ -199,7 +199,7 @@ Both runtimes expose `agent()` — a single subagent invocation routed through `
 - `context` supplies shared background; `label` controls the `agent://<id>` output label prefix.
 - `schema` passes a JSON Schema to the subagent structured-output path. When present, the helper parses the final JSON text and returns an object.
 - Spawn restrictions use `session.getSessionSpawns()` exactly like the `task` tool. Eval-driven subagent recursion is capped at depth 3.
-- JS also exposes `parallel(thunks, { concurrency })` and `pipeline(items, ...stages, { concurrency })`; both use a bounded async pool with default concurrency 4, max 16, preserve item order, and propagate rejections.
+- JS and Python both expose `parallel(thunks)` and `pipeline(items, ...stages)`; both use a bounded async/threaded pool whose width tracks the `task.maxConcurrency` setting (the same ceiling the `task` tool uses; `0` = run every item at once), preserve item order, and propagate rejections. The width is fetched live from the host via the `__concurrency__` bridge, so the helpers no longer take a `concurrency` argument.
 - Errors surface as exceptions: unknown or disabled agent, disallowed spawn, recursion cap, subagent failure, or invalid structured output all fail the eval cell.
 
 ### Multi-language call behavior
@@ -245,7 +245,7 @@ A single tool call can mix Python and JS cells. Persistence is per language runt
 - Output truncation window: 50KB default (`DEFAULT_MAX_BYTES` in `packages/coding-agent/src/session/streaming-output.ts`)
 - Output line cap inside truncation helpers: 3000 lines (`DEFAULT_MAX_LINES` in `packages/coding-agent/src/session/streaming-output.ts`)
 - Streaming tail buffer for live updates: `DEFAULT_MAX_BYTES * 2` = 100KB (`packages/coding-agent/src/tools/eval.ts`)
-- JS `parallel()` / `pipeline()` helper concurrency default: 4; maximum: 16
+- JS/Python `parallel()` / `pipeline()` helper pool width: the `task.maxConcurrency` setting (default 32; `0` = unbounded), resolved live via the `__concurrency__` bridge (`packages/coding-agent/src/eval/concurrency-bridge.ts`)
 - Eval-driven `agent()` recursion cap: task depth 3 (`EVAL_AGENT_MAX_DEPTH`)
 - Python retained kernel idle timeout: 5 minutes (`IDLE_TIMEOUT_MS` in `packages/coding-agent/src/eval/py/executor.ts`)
 - Python retained kernel cap: 4 sessions (`MAX_KERNEL_SESSIONS` in `packages/coding-agent/src/eval/py/executor.ts`)

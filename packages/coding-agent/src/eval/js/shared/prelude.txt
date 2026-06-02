@@ -55,15 +55,24 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 		return hasOwn(o, "schema") ? JSON.parse(text) : text;
 	};
 
-	const normalizeConcurrency = value => {
-		const number = Number(value ?? 4);
-		if (!Number.isFinite(number)) return 4;
-		return Math.max(1, Math.min(16, Math.trunc(number)));
+	// Pool ceiling mirrors the task tool's `task.maxConcurrency` setting so an
+	// eval fan-out runs as wide as a `task` batch would. 0 (and any non-finite
+	// reply) means unbounded — run every item at once.
+	const __concurrencyLimit = async () => {
+		try {
+			const r = await globalThis.__omp_call_tool__("__concurrency__", {});
+			const n = Math.trunc(Number(r && typeof r === "object" ? r.limit : r));
+			return Number.isFinite(n) && n > 0 ? n : 0;
+		} catch {
+			return 0;
+		}
 	};
 
-	const __pool = async (items, limit, fn) => {
+	const __pool = async (items, fn) => {
 		const list = Array.from(items ?? []);
-		const concurrency = Math.min(normalizeConcurrency(limit), list.length);
+		if (list.length === 0) return [];
+		const limit = await __concurrencyLimit();
+		const concurrency = limit > 0 ? Math.min(limit, list.length) : list.length;
 		const results = new Array(list.length);
 		let next = 0;
 		const worker = async () => {
@@ -77,23 +86,17 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 		return results;
 	};
 
-	const parallel = async (thunks, opts = {}) =>
-		__pool(thunks, toOptions(opts).concurrency, (thunk, index) => {
+	const parallel = async thunks =>
+		__pool(thunks, (thunk, index) => {
 			if (typeof thunk !== "function") throw new TypeError("parallel() expects an iterable of functions");
 			return thunk(index);
 		});
 
-	const pipeline = async (items, ...stagesAndOptions) => {
-		let opts = {};
-		const last = stagesAndOptions.at(-1);
-		if (last && typeof last === "object" && !Array.isArray(last)) {
-			opts = last;
-			stagesAndOptions = stagesAndOptions.slice(0, -1);
-		}
+	const pipeline = async (items, ...stages) => {
 		let current = Array.from(items ?? []);
-		for (const stage of stagesAndOptions) {
+		for (const stage of stages) {
 			if (typeof stage !== "function") throw new TypeError("pipeline() stages must be functions");
-			current = await __pool(current, toOptions(opts).concurrency, stage);
+			current = await __pool(current, stage);
 		}
 		return current;
 	};
