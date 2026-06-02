@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as url from "node:url";
 import {
 	__resetProfileSnapshotForTests,
 	getActiveProfile,
@@ -18,6 +19,22 @@ import {
 	setProfile,
 } from "../src/dirs";
 import { Snowflake } from "../src/snowflake";
+
+async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let text = "";
+	try {
+		while (true) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			text += decoder.decode(value, { stream: true });
+		}
+		return text + decoder.decode();
+	} finally {
+		reader.releaseLock();
+	}
+}
 
 describe("profile directories", () => {
 	let tempRoot = "";
@@ -258,5 +275,49 @@ describe("profile env + name validation", () => {
 		expect(() => normalizeProfileName("Work")).toThrow("Invalid OMP profile");
 		expect(normalizeProfileName("work")).toBe("work");
 		expect(normalizeProfileName("work-2.0_a")).toBe("work-2.0_a");
+	});
+});
+
+describe("dirs module import behavior", () => {
+	it("does not scrub inherited macOS malloc logging env variables on import", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-utils-dirs-import-"));
+		try {
+			const probePath = path.join(root, "probe.ts");
+			const dirsUrl = url.pathToFileURL(path.join(import.meta.dir, "..", "src", "dirs.ts")).href;
+			await Bun.write(
+				probePath,
+				[
+					`import ${JSON.stringify(dirsUrl)};`,
+					"process.stdout.write(JSON.stringify({",
+					"	malloc: process.env.MallocStackLogging,",
+					"	compact: process.env.MallocStackLoggingNoCompact,",
+					"}));",
+				].join("\n"),
+			);
+
+			const childEnv: Record<string, string | undefined> = {
+				...process.env,
+				MallocStackLogging: "0",
+				MallocStackLoggingNoCompact: "0",
+			};
+			const proc = Bun.spawn([process.execPath, probePath], {
+				stdout: "pipe",
+				stderr: "pipe",
+				env: childEnv,
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				readStream(proc.stdout as ReadableStream<Uint8Array>),
+				readStream(proc.stderr as ReadableStream<Uint8Array>),
+				proc.exited,
+			]);
+
+			expect(exitCode, stderr).toBe(0);
+			expect(JSON.parse(stdout)).toEqual({
+				malloc: "0",
+				compact: "0",
+			});
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
 	});
 });
