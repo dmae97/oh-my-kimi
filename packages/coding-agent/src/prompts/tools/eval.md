@@ -1,7 +1,7 @@
 Run code in a persistent kernel using a list of cells.
 
 <instruction>
-Each call submits one or more cells. Cells run in array order. State persists within each language across cells, tool calls, and subagents spawned with `task`; variables a parent or subagent declares are visible to the other on the same shared executor.
+Each call submits one or more cells. Cells run in array order. State persists within each language across cells, tool calls, and subagents spawned with `task`; variables a parent or subagent declares are visible to the other on the same shared executor. Lean on this: stage helpers, loaded datasets, or live clients once, then fan out `task` subagents that call them directly — no re-importing, re-fetching, or serializing across the boundary.
 
 Cell fields:
 
