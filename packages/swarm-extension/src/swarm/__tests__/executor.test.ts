@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -21,8 +21,15 @@ const mockResult = {
 	tokens: 0,
 } as SingleResult;
 
-afterEach(() => {
+let workspace: string;
+
+beforeEach(async () => {
+	workspace = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-test-"));
+});
+
+afterEach(async () => {
 	vi.restoreAllMocks();
+	await fs.rm(workspace, { recursive: true, force: true });
 });
 
 describe("executeSwarmAgent", () => {
@@ -33,7 +40,6 @@ describe("executeSwarmAgent", () => {
 			authStorage: { discover: vi.fn() },
 		} as unknown as ModelRegistry;
 
-		const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-test-"));
 		const stateTracker = new StateTracker(workspace, "test-swarm");
 		await stateTracker.init(["test-agent"], 1, "parallel");
 
@@ -55,7 +61,8 @@ describe("executeSwarmAgent", () => {
 
 		expect(runSubprocessSpy).toHaveBeenCalledTimes(1);
 		const passedOptions = runSubprocessSpy.mock.calls[0][0];
-		expect(passedOptions.authStorage).toBeUndefined();
-		expect(passedOptions.modelRegistry).toBe(mockModelRegistry);
+		const { authStorage, modelRegistry } = passedOptions;
+		expect(authStorage).toBeUndefined();
+		expect(modelRegistry).toBe(mockModelRegistry);
 	});
 });
