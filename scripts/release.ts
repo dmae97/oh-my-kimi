@@ -10,6 +10,7 @@
  */
 
 import { $, Glob } from "bun";
+import { runChangelogFixer } from "./fix-changelogs";
 
 const changelogGlob = new Glob("packages/*/CHANGELOG.md");
 const packageJsonGlob = new Glob("packages/*/package.json");
@@ -305,6 +306,14 @@ async function cmdRelease(version: string): Promise<void> {
 
 	// 5. Update changelogs
 	console.log("Updating CHANGELOGs...");
+	const fixResult = await runChangelogFixer({ since: latestTag });
+	for (const fixed of fixResult.changedFiles) {
+		console.log(
+			`  Fixed ${fixed.path}: ${fixed.promotedItems} promoted, ` +
+				`${fixed.mergedDuplicateHeadings} duplicate heading(s) merged, ` +
+				`${fixed.removedEmptyHeadings} empty heading(s) removed`,
+		);
+	}
 	await updateChangelogsForRelease(version);
 	console.log();
 
