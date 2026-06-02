@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { KeybindingsManager } from "../src/config/keybindings";
+import { getDefaultPasteImageKeys, KeybindingsManager } from "../src/config/keybindings";
 
 describe("KeybindingsManager.getDisplayString", () => {
 	it("formats a single binding as a human-readable key hint", () => {
@@ -24,5 +24,16 @@ describe("KeybindingsManager.getDisplayString", () => {
 		});
 
 		expect(keybindings.getDisplayString("app.clipboard.copyPrompt")).toBe("");
+	});
+});
+
+describe("getDefaultPasteImageKeys", () => {
+	it("keeps Ctrl+V registered for image paste on Windows alongside the terminal-safe fallback", () => {
+		expect(getDefaultPasteImageKeys("win32")).toEqual(["ctrl+v", "alt+v"]);
+	});
+
+	it("uses Ctrl+V as the image-paste shortcut on non-Windows platforms", () => {
+		expect(getDefaultPasteImageKeys("linux")).toEqual(["ctrl+v"]);
+		expect(getDefaultPasteImageKeys("darwin")).toEqual(["ctrl+v"]);
 	});
 });

@@ -2,10 +2,30 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/review`'s uncommitted-change mode in Jujutsu repositories to read `jj diff --git` from the current workspace, so non-default JJ workspaces include their working-copy changes instead of falling back to the colocated Git checkout.
+- Fixed empty assistant stop retry continuations preserving auto-retry state until a non-empty assistant turn completes or recovery reaches its retry cap.
+
+### Changed
+
+- Changed the `search_tool_bm25` tool description to name the hidden discoverable built-in tools (e.g. `write`, `find`, `search`, `lsp`, `task`) when `tools.discoveryMode: "all"` is active, so a model can form a targeted discovery query by name instead of guessing or falling back to shell. `mcp-only` mode is unchanged (no built-ins are advertised) and the `Total discoverable tools available: N` count still includes them.
+
+## [15.8.1] - 2026-06-02
+
+### Fixed
+
+- Fixed an unhandled `EPIPE` rejection when an MCP stdio server exits between returning the `initialize` response and the client's `notifications/initialized` send. `StdioTransport.notify()` and `#sendResponse()` now route stdin writes through a shared helper that catches synchronous sink failures: `notify()` tears the transport down (firing `onClose`) and surfaces a `Transport closed while sending notification` rejection so `connectToServer()` treats the handshake as a failed connection instead of returning a "connected" handle wrapping a dead transport; `#sendResponse()` stays silent because a dead subprocess has no use for the response. `StdioTransport.close()` is now the authoritative resource teardown — it no longer early-returns when `#handleClose()` has already flipped `#connected`, so the subprocess and read loop are always cleaned up (including in the `connectToServer()` failure path) ([#1710](https://github.com/can1357/oh-my-pi/issues/1710)).
+- Fixed startup model resolution ignoring cached discovery rows for special built-in providers (`google-antigravity`, `google-gemini-cli`, `openai-codex`) until the background refresh completed ([#1721](https://github.com/can1357/oh-my-pi/issues/1721)).
+- Fixed Windows clipboard-image paste keeping `Ctrl+V` unregistered by default. The TUI now registers `Ctrl+V` plus the Windows Terminal-safe `Alt+V` fallback, and the keybinding docs call out when to use the fallback ([#1708](https://github.com/can1357/oh-my-pi/issues/1708)).
+
+## [15.8.0] - 2026-06-02
+
 ### Added
 
 - Added an all-projects scope to the session picker (`pi --resume` / `/resume`). Press `Tab` to toggle between the current folder's sessions and every session across all projects; the all-projects list is loaded lazily and shows each session's directory. When the current folder has no sessions the picker now opens straight into all-projects scope instead of printing "No sessions found".
 - Migrated the Kagi web search provider to Kagi's V1 Search API (`POST /api/v1/search`), replacing the sunset V0 endpoint while keeping the `kagi` provider id, `KAGI_API_KEY` credential, and `/login kagi` flow unchanged ([#1272](https://github.com/can1357/oh-my-pi/pull/1272) by [@thismat](https://github.com/thismat))
+- Added Anthropic `anthropic-ratelimit-unified-*` response-header warming for `/usage` and the status-line usage segment, throttled to reduce direct OAuth `/usage` probes during active use.
 
 ### Changed
 
@@ -18,7 +38,7 @@
 
 ### Fixed
 
-- Fixed `/review`'s uncommitted-change mode in Jujutsu repositories to read `jj diff --git` from the current workspace, so non-default JJ workspaces include their working-copy changes instead of falling back to the colocated Git checkout.
+- Fixed `read`, `search`, `find`, `ast_grep`, and `ast_edit` recovering when a model flattens multiple existing paths into one comma-, semicolon-, or space-delimited string while preserving real paths that contain delimiters.
 - Fixed Exa web search reporting available without Exa credentials, which could route searches into the unauthenticated public MCP fallback and stall before trying the next provider. Availability and `searchExa()` now resolve through the standard `AuthStorage` cascade (`EXA_API_KEY` env or stored credential) ([#1695](https://github.com/can1357/oh-my-pi/issues/1695)).
 - Fixed Anthropic web search ignoring `ANTHROPIC_SEARCH_BASE_URL` when credentials came from stored Anthropic auth or generic Anthropic env fallback rather than `ANTHROPIC_SEARCH_API_KEY` ([#1694](https://github.com/can1357/oh-my-pi/issues/1694)).
 - Fixed `web_search` returning 401 from corporate Anthropic API gateways. `ANTHROPIC_CUSTOM_HEADERS` is now forwarded to web-search requests whenever `ANTHROPIC_BASE_URL` points to a non-Anthropic host, not only in Foundry mode ([#1693](https://github.com/can1357/oh-my-pi/issues/1693)).

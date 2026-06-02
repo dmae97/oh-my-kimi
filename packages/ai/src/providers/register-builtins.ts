@@ -2,8 +2,8 @@
  * Lazy provider module loading.
  *
  * Each provider module is loaded only when its stream function is first called.
- * This avoids eagerly importing heavy SDK dependencies (e.g., @anthropic-ai/sdk,
- * openai) at startup. The loaded module promise is cached so subsequent calls
+ * This avoids eagerly importing heavy SDK dependencies (e.g., openai) at
+ * startup. The loaded module promise is cached so subsequent calls
  * reuse the same import.
  *
  * NOTE: stream.ts currently imports providers directly, so this file is not yet

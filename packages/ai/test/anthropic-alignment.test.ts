@@ -154,7 +154,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(headers["X-Claude-Code-Session-Id"]).toBe(sessionId);
 		expect(headers["x-client-request-id"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 		expect(headers["Anthropic-Beta"]).toBe(
-			"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11",
+			"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11",
 		);
 	});
 
@@ -169,6 +169,35 @@ describe("Anthropic request fingerprint alignment", () => {
 		});
 
 		expect(options.defaultHeaders["Anthropic-Beta"]).toBe(
+			"oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,structured-outputs-2025-12-15",
+		);
+	});
+
+	it("sends redact-thinking beta only when thinking display is omitted", () => {
+		const baseArgs = {
+			model: ANTHROPIC_MODEL,
+			apiKey: "sk-ant-oat-test",
+			stream: true,
+			interleavedThinking: true,
+			hasTools: true,
+			thinkingEnabled: true,
+		} as const;
+
+		const visible = buildAnthropicClientOptions(baseArgs);
+		expect(visible.defaultHeaders["Anthropic-Beta"]).not.toContain("redact-thinking-2026-02-12");
+
+		const hidden = buildAnthropicClientOptions({ ...baseArgs, thinkingDisplay: "omitted" });
+		expect(hidden.defaultHeaders["Anthropic-Beta"]).toBe(
+			"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11",
+		);
+
+		const hiddenUtility = buildAnthropicClientOptions({
+			...baseArgs,
+			hasTools: false,
+			thinkingEnabled: false,
+			thinkingDisplay: "omitted",
+		});
+		expect(hiddenUtility.defaultHeaders["Anthropic-Beta"]).toBe(
 			"oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,structured-outputs-2025-12-15",
 		);
 	});
@@ -746,7 +775,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(block).not.toHaveProperty("minItems");
 	});
 
-	it("keeps OAuth tool names behind the proxy prefix without strict or eager streaming flags", async () => {
+	it("keeps OAuth tool names behind the proxy prefix with eager streaming and strict flags", async () => {
 		const tools: Tool[] = [
 			{
 				name: "bash",
@@ -769,8 +798,8 @@ describe("Anthropic request fingerprint alignment", () => {
 		};
 
 		expect(payload.tools?.[0]?.name).toBe("proxy_bash");
-		expect(payload.tools?.[0]?.strict).toBeUndefined();
-		expect(payload.tools?.[0]?.eager_input_streaming).toBeUndefined();
+		expect(payload.tools?.[0]?.strict).toBe(true);
+		expect(payload.tools?.[0]?.eager_input_streaming).toBe(true);
 		expect(payload.tools?.[0]?.cache_control).toBeUndefined();
 	});
 
@@ -1293,7 +1322,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.thinking).toBeUndefined();
 	});
 
-	it("drops sampling params and mirrors Claude Code adaptive thinking for OAuth Opus 4.7+", async () => {
+	it("drops sampling params and keeps summarized adaptive thinking for OAuth Opus 4.7+", async () => {
 		const payload = (await captureAnthropicPayload(
 			{
 				...ANTHROPIC_MODEL,
@@ -1328,11 +1357,37 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.temperature).toBeUndefined();
 		expect(payload.top_p).toBeUndefined();
 		expect(payload.top_k).toBeUndefined();
-		expect(payload.thinking).toEqual({ type: "adaptive" });
+		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
 		expect(payload.context_management).toEqual({
 			edits: [{ type: "clear_thinking_20251015", keep: "all" }],
 		});
-		expect(payload.output_config).toEqual({ effort: "high" });
+		expect(payload.output_config).toEqual({ effort: "xhigh" });
+
+		const maxPayload = (await captureAnthropicPayload(
+			{
+				...ANTHROPIC_MODEL,
+				id: "claude-opus-4-7",
+				name: "Claude Opus 4.7",
+				thinking: {
+					mode: "anthropic-adaptive",
+					minLevel: Effort.Minimal,
+					maxLevel: Effort.XHigh,
+				},
+			},
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				thinkingEnabled: true,
+				reasoning: Effort.XHigh,
+			},
+		)) as {
+			thinking?: { type?: string; display?: string };
+			output_config?: { effort?: string };
+		};
+		expect(maxPayload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(maxPayload.output_config).toEqual({ effort: "max" });
 	});
 
 	it("keeps summarized adaptive thinking by default for API-key Opus 4.7+ requests", async () => {
@@ -1396,7 +1451,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		};
 
 		expect(payload.output_config).toEqual({
-			effort: "high",
+			effort: "xhigh",
 			task_budget: { type: "tokens", total: 64_000, remaining: 48_000 },
 		});
 	});

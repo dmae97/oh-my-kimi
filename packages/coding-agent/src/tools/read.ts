@@ -69,6 +69,7 @@ import {
 	type LineRange,
 	parseLineRanges,
 	resolveReadPath,
+	splitDelimitedPathEntry,
 	splitInternalUrlSel,
 	splitPathAndSel,
 } from "./path-utils";
@@ -691,6 +692,50 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			IS_LINE_NUMBER_MODE: !displayMode.hashLines && displayMode.lineNumbers,
 			INSPECT_IMAGE_ENABLED: this.#inspectImageEnabled,
 		});
+	}
+
+	async #tryReadDelimitedPaths(
+		readPath: string,
+		signal?: AbortSignal,
+	): Promise<AgentToolResult<ReadToolDetails> | null> {
+		const parts = await splitDelimitedPathEntry(readPath, this.session.cwd);
+		if (!parts) return null;
+
+		const notice = `Note: interpreted as ${parts.length} paths: ${parts.join(", ")}`;
+		const notes = [notice];
+		const content: Array<TextContent | ImageContent> = [];
+		let pendingText = notice;
+		const flushText = () => {
+			if (pendingText.length === 0) return;
+			content.push({ type: "text", text: pendingText });
+			pendingText = "";
+		};
+		const appendText = (text: string) => {
+			pendingText = pendingText.length > 0 ? `${pendingText}\n\n${text}` : text;
+		};
+
+		for (const part of parts) {
+			try {
+				const result = await this.execute("read-delimited-part", { path: part }, signal);
+				for (const block of result.content) {
+					if (block.type === "text") {
+						appendText(block.text);
+						continue;
+					}
+					flushText();
+					content.push(block);
+				}
+			} catch (error) {
+				if (error instanceof ToolAbortError || signal?.aborted) throw error;
+				const message = error instanceof Error ? error.message : String(error);
+				const errorNote = `Could not read ${part}: ${message}`;
+				notes.push(errorNote);
+				appendText(`[${errorNote}]`);
+			}
+		}
+		flushText();
+
+		return toolResult<ReadToolDetails>({ notes }).content(content).done();
 	}
 
 	async #resolveArchiveReadPath(readPath: string, signal?: AbortSignal): Promise<ResolvedArchiveReadPath | null> {
@@ -1596,6 +1641,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				}
 
 				if (!suffixResolution) {
+					const delimitedResult = await this.#tryReadDelimitedPaths(readPath, signal);
+					if (delimitedResult) return delimitedResult;
 					throw new ToolError(`Path '${localReadPath}' not found`);
 				}
 			} else {
