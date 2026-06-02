@@ -6,6 +6,7 @@ import {
 	buildBunInstallArgs,
 	pruneBunInstallCache,
 	replaceBinaryForUpdate,
+	resolveBunGlobalNodeModulesDirFromLocations,
 	resolveUpdateMethodForTest,
 } from "../src/cli/update-cli";
 
@@ -57,6 +58,15 @@ describe("update-cli bun install command", () => {
 			"--registry=https://registry.npmjs.org/",
 			"@oh-my-pi/pi-coding-agent@15.7.6",
 		]);
+	});
+
+	it("derives global node_modules from supported bun global locations", () => {
+		expect(resolveBunGlobalNodeModulesDirFromLocations(path.join("home", ".bun", "bin"), undefined)).toBe(
+			path.join("home", ".bun", "install", "global", "node_modules"),
+		);
+		expect(
+			resolveBunGlobalNodeModulesDirFromLocations(undefined, path.join("home", ".bun", "install", "cache")),
+		).toBe(path.join("home", ".bun", "install", "global", "node_modules"));
 	});
 });
 

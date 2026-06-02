@@ -372,19 +372,26 @@ async function resolveBunInstallCacheDir(): Promise<string | undefined> {
 	}
 }
 
-async function resolveBunGlobalNodeModulesDir(): Promise<string | undefined> {
+export function resolveBunGlobalNodeModulesDirFromLocations(
+	globalBinDir: string | undefined,
+	cacheDir: string | undefined,
+): string | undefined {
+	if (globalBinDir && globalBinDir.length > 0) {
+		return path.join(path.dirname(globalBinDir), "install", "global", "node_modules");
+	}
+	if (cacheDir && cacheDir.length > 0) {
+		return path.join(path.dirname(cacheDir), "global", "node_modules");
+	}
+	return undefined;
+}
+
+async function resolveBunGlobalNodeModulesDir(cacheDir: string): Promise<string | undefined> {
 	try {
-		const result = await $`bun pm ls -g`.quiet().nothrow();
-		if (result.exitCode !== 0) return undefined;
-		const output = result.text();
-		const firstLineEnd = output.indexOf("\n");
-		const firstLine = (firstLineEnd === -1 ? output : output.slice(0, firstLineEnd)).trim();
-		const marker = " node_modules ";
-		const markerIndex = firstLine.lastIndexOf(marker);
-		if (markerIndex === -1) return undefined;
-		return path.join(firstLine.slice(0, markerIndex), "node_modules");
+		const result = await $`bun pm bin -g`.quiet().nothrow();
+		const globalBinDir = result.exitCode === 0 ? result.text().trim() : undefined;
+		return resolveBunGlobalNodeModulesDirFromLocations(globalBinDir, cacheDir);
 	} catch {
-		return undefined;
+		return resolveBunGlobalNodeModulesDirFromLocations(undefined, cacheDir);
 	}
 }
 
@@ -406,7 +413,7 @@ async function collectInstalledPackageNames(nodeModulesDir: string): Promise<Set
 async function pruneBunCacheAfterGlobalInstall(): Promise<BunInstallCachePruneResult | undefined> {
 	const cacheDir = await resolveBunInstallCacheDir();
 	if (!cacheDir) return undefined;
-	const globalNodeModulesDir = await resolveBunGlobalNodeModulesDir();
+	const globalNodeModulesDir = await resolveBunGlobalNodeModulesDir(cacheDir);
 	const packageNames = globalNodeModulesDir
 		? await collectInstalledPackageNames(globalNodeModulesDir)
 		: new Set<string>();
