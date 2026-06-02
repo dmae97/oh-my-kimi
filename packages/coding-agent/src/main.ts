@@ -841,6 +841,11 @@ export async function runRootCommand(
 		});
 	}
 
+	// Apply --hide-thinking CLI flag (ephemeral, not persisted)
+	if (parsedArgs.hideThinking) {
+		settingsInstance.override("hideThinkingBlock", true);
+	}
+
 	await logger.time(
 		"initTheme:final",
 		initTheme,
