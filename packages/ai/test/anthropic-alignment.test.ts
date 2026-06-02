@@ -20,7 +20,6 @@ import {
 } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Model, TJsonSchema, TokenTaskBudget, Tool } from "@oh-my-pi/pi-ai/types";
-import { xxhash64 } from "@oh-my-pi/pi-ai/utils/xxhash64";
 import * as z from "zod/v4";
 import { withEnv } from "./helpers";
 
@@ -1339,7 +1338,23 @@ describe("cch attestation", () => {
 		// Self-consistency: hashing the body with the placeholder restored must reproduce the embedded cch.
 		const CCH_SEED = 0x4d659218e32a3268n;
 		const withPlaceholder = capturedBody.replace(/cch=[0-9a-f]{5}/, "cch=00000");
-		const h = xxhash64(new TextEncoder().encode(withPlaceholder), CCH_SEED);
+		const h = Bun.hash.xxHash64(new TextEncoder().encode(withPlaceholder), CCH_SEED);
 		expect(m![1]).toBe((h & 0xfffffn).toString(16).padStart(5, "0"));
+	});
+
+	it("derives cch from low-20-bits of XXHash64(body, seed) — external reference values", () => {
+		// Each body contains "cch=00000" as the Bun HTTP layer sees it before patching.
+		// Expected low-20-bit hashes precomputed with the Python xxhash reference.
+		const CCH_SEED = 0x4d659218e32a3268n;
+		const enc = new TextEncoder();
+		const cases: [string, string][] = [
+			["cch=00000", "a47f7"],
+			['{"messages":[],"cch=00000","x":1}', "3073d"],
+			["x-anthropic-billing-header: cc_version=2.1.158; cc_entrypoint=cli; cch=00000;", "f2b0b"],
+		];
+		for (const [body, expected] of cases) {
+			const h = Bun.hash.xxHash64(enc.encode(body), CCH_SEED);
+			expect((h & 0xfffffn).toString(16).padStart(5, "0")).toBe(expected);
+		}
 	});
 });

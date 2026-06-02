@@ -74,7 +74,6 @@ import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { spillToDescription } from "../utils/schema/spill";
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
-import { xxhash64 } from "../utils/xxhash64";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -495,7 +494,7 @@ function patchCch(body: Uint8Array): Uint8Array {
 	if (idx === -1) return body; // placeholder not within the billing header value
 
 	// Hash the body with the placeholder in place (matches CC's in-place behaviour).
-	const h = xxhash64(body, CCH_SEED);
+	const h = Bun.hash.xxHash64(body, CCH_SEED);
 	const cch = (h & 0xfffffn).toString(16).padStart(5, "0");
 
 	for (let i = 0; i < 5; i++) body[idx + 4 + i] = cch.charCodeAt(i);

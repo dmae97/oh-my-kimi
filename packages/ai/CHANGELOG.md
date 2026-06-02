@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `claudeCodeVersion` bumped to `2.1.148` to match current Claude Code release.
+- `X-Stainless-Package-Version` updated to `0.94.0` (matches the bundled `@anthropic-ai/sdk` version); `X-Stainless-Runtime-Version` pinned to `v24.3.0` (Bun version bundled with CC 2.1.148); `X-Stainless-Os` header key corrected to `X-Stainless-OS`.
+- `createClaudeBillingHeader` now emits a deterministic billing header (`cc_version=<claudeCodeVersion>.<suffix>; cc_entrypoint=cli; cch=00000;`), where `<suffix>` is the first 3 hex chars of `SHA-256(salt + msg[4] + msg[7] + msg[20] + version)` instead of random bytes. The fingerprint seed is taken from the first **user** message (skipping synthetic/developer injections), mirroring Claude Code's `computeFingerprintFromMessages`.
+- `cch` attestation implemented: `cch=00000` is a placeholder that, for OAuth requests, `wrapFetchForCch` rewrites on the wire to `XXHash64(body, 0x4D659218E32A3268) & 0xFFFFF` formatted as 5 lowercase hex chars, computed in-place via `Bun.hash.xxHash64`. The rewrite is anchored to the `system[0]` billing-header prefix so user content is never mutated, and is installed only when a billing-header prefix is present (OAuth turns).
+- `anthropic-beta` header set for OAuth model discovery and Claude usage-API requests expanded to add `context-1m-2025-08-07`, `redact-thinking-2026-02-12`, `mid-conversation-system-2026-04-07`, `advanced-tool-use-2025-11-20`, `effort-2025-11-24`, and `extended-cache-ttl-2025-04-11`. The usage-API `user-agent` is bumped to `claude-cli/2.1.158 (external, cli)`.
+- Reasoning models now append `effort-2025-11-24` to the per-request `Anthropic-Beta` header (matches Claude Code).
+- `buildAnthropicSystemBlocks` (CC-instruction mode) now emits the same 3-block layout as Claude Code: billing header (never cached), system instruction (cached), all user content merged into one block with `\n\n` (cached). Previously emitted one block per item with cache only on the last, which fingerprinted the caller by block count.
+- `applyPromptCaching` now matches Claude Code's breakpoint layout: 2 system (instruction + merged content) + 2 message, with no tool breakpoint. The tool breakpoint was redundant — tools follow system in the token sequence, so when system changes the tool cache prefix also changes. The instruction block (system[1]) is stable across every request and now gets its own guaranteed-hit breakpoint.
+- `applyPromptCaching` now caches the last two messages regardless of role instead of the last two *user* messages. The penultimate assistant message (tool calls + response from the previous turn) is larger and more recently created than the penultimate user message, making it the higher-value cache target.
+- OAuth scope set expanded: added `user:sessions:claude_code`, `user:mcp_servers`, `user:file_upload`. `AUTHORIZE_URL` stays at `claude.ai/oauth/authorize` and `TOKEN_URL` stays at `api.anthropic.com/v1/oauth/token` — the `platform.claude.com` equivalents are CC's console-credential flow and do not grant `user:inference`, which OMP requires for direct OAuth-token inference.
+- Token refresh POST now sends `anthropic-beta: oauth-2025-04-20` and `User-Agent: anthropic-sdk-typescript/0.94.0 userOAuthProvider` (CC sends these on refresh but not on the initial code exchange).
+
 ## [15.7.5] - 2026-06-01
 
 ### Added
@@ -280,17 +294,6 @@
 ### Added
 
 - Added DeepSeek to the built-in API-key login provider catalog so `omp login deepseek` stores a reusable `DEEPSEEK_API_KEY` credential for the bundled DeepSeek models.
-### Changed
-
-- `claudeCodeVersion` bumped to `2.1.148` to match current Claude Code release.
-- `X-Stainless-Package-Version` updated to `0.94.0` (matches the bundled `@anthropic-ai/sdk` version); `X-Stainless-Runtime-Version` pinned to `v24.3.0` (Bun version bundled with CC 2.1.148); `X-Stainless-Os` header key corrected to `X-Stainless-OS`.
-- `createClaudeBillingHeader` now uses `cch=00000` (fixed placeholder for first-party Anthropic endpoints) instead of a computed SHA-256 hash, and a deterministic 3-char version suffix derived from the payload seed + a fixed salt and version string, instead of random bytes.
-- `user-agent` in Claude usage-API requests updated to `claude-cli/2.1.148 (external, cli)`.
-- `buildAnthropicSystemBlocks` (CC-instruction mode) now emits the same 3-block layout as Claude Code: billing header (never cached), system instruction (cached), all user content merged into one block with `\n\n` (cached). Previously emitted one block per item with cache only on the last, which fingerprinted the caller by block count.
-- `applyPromptCaching` now matches Claude Code's breakpoint layout: 2 system (instruction + merged content) + 2 message, with no tool breakpoint. The tool breakpoint was redundant — tools follow system in the token sequence, so when system changes the tool cache prefix also changes. The instruction block (system[1]) is stable across every request and now gets its own guaranteed-hit breakpoint.
-- `applyPromptCaching` now caches the last two messages regardless of role instead of the last two *user* messages. The penultimate assistant message (tool calls + response from the previous turn) is larger and more recently created than the penultimate user message, making it the higher-value cache target.
-- OAuth scope set expanded: added `user:sessions:claude_code`, `user:mcp_servers`, `user:file_upload`. `AUTHORIZE_URL` stays at `claude.ai/oauth/authorize` and `TOKEN_URL` stays at `api.anthropic.com/v1/oauth/token` — the `platform.claude.com` equivalents are CC's console-credential flow and do not grant `user:inference`, which OMP requires for direct OAuth-token inference.
-- Token refresh POST now sends `anthropic-beta: oauth-2025-04-20` and `User-Agent: anthropic-sdk-typescript/0.94.0 userOAuthProvider` (CC sends these on refresh but not on the initial code exchange).
 
 ### Fixed
 
