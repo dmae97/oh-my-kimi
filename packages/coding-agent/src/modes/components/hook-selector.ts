@@ -7,6 +7,7 @@ import {
 	extractPrintableText,
 	fuzzyFilter,
 	Markdown,
+	type MarkdownTheme,
 	matchesKey,
 	padding,
 	renderInlineMarkdown,
@@ -14,8 +15,8 @@ import {
 	Spacer,
 	Text,
 	type TUI,
-	truncateToWidth,
 	visibleWidth,
+	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import { getMarkdownTheme, type ThemeColor, theme } from "../../modes/theme/theme";
 import {
@@ -69,6 +70,34 @@ export interface HookSelectorOptions {
 	slider?: HookSelectorSlider;
 }
 
+export interface HookSelectorOption {
+	label: string;
+	description?: string;
+}
+
+export type HookSelectorOptionInput = string | HookSelectorOption;
+
+function normalizeHookSelectorOption(option: HookSelectorOptionInput): HookSelectorOption {
+	if (typeof option === "string") return { label: option };
+	if (option.description?.trim()) {
+		return { label: option.label, description: option.description.trim() };
+	}
+	return { label: option.label };
+}
+
+function splitLeadingSpacesForWrap(line: string, width: number): { indent: string; body: string } {
+	let indentLength = 0;
+	while (indentLength < line.length && line.charCodeAt(indentLength) === 32) {
+		indentLength += 1;
+	}
+	const maxIndentLength = Math.max(0, width - 1);
+	const clampedIndentLength = Math.min(indentLength, maxIndentLength);
+	return {
+		indent: line.slice(0, clampedIndentLength),
+		body: line.slice(indentLength),
+	};
+}
+
 class OutlinedList extends Container {
 	#lines: string[] = [];
 
@@ -81,19 +110,26 @@ class OutlinedList extends Container {
 		const borderColor = (text: string) => theme.fg("border", text);
 		const horizontal = borderColor(theme.boxSharp.horizontal.repeat(Math.max(1, width)));
 		const innerWidth = Math.max(1, width - 2);
-		const content = this.#lines.map(line => {
+		const content: string[] = [];
+		for (const line of this.#lines) {
 			const normalized = replaceTabs(line);
-			const fitted = truncateToWidth(normalized, innerWidth);
-			const pad = Math.max(0, innerWidth - visibleWidth(fitted));
-			return `${borderColor(theme.boxSharp.vertical)}${fitted}${padding(pad)}${borderColor(theme.boxSharp.vertical)}`;
-		});
+			const { indent, body } = splitLeadingSpacesForWrap(normalized, innerWidth);
+			const wrapped = wrapTextWithAnsi(body, Math.max(1, innerWidth - visibleWidth(indent)));
+			for (const wrappedBody of wrapped.length > 0 ? wrapped : [""]) {
+				const wrappedLine = `${indent}${wrappedBody}`;
+				const pad = Math.max(0, innerWidth - visibleWidth(wrappedLine));
+				content.push(
+					`${borderColor(theme.boxSharp.vertical)}${wrappedLine}${padding(pad)}${borderColor(theme.boxSharp.vertical)}`,
+				);
+			}
+		}
 		return [horizontal, ...content, horizontal];
 	}
 }
 
 export class HookSelectorComponent extends Container {
-	#options: string[];
-	#filteredOptions: string[];
+	#options: HookSelectorOption[];
+	#filteredOptions: HookSelectorOption[];
 	#searchQuery = "";
 	#selectedIndex: number;
 	#maxVisible: number;
@@ -110,17 +146,18 @@ export class HookSelectorComponent extends Container {
 	#slider: HookSelectorSlider | undefined;
 	#sliderIndex: number = 0;
 	#sliderComponent: Text | undefined;
+	#lastRenderWidth: number | undefined;
 	constructor(
 		title: string,
-		options: string[],
+		options: HookSelectorOptionInput[],
 		onSelect: (option: string) => void,
 		onCancel: () => void,
 		opts?: HookSelectorOptions,
 	) {
 		super();
 
-		this.#options = options;
-		this.#filteredOptions = options;
+		this.#options = options.map(normalizeHookSelectorOption);
+		this.#filteredOptions = this.#options;
 		this.#selectedIndex = Math.min(opts?.initialIndex ?? 0, this.#filteredOptions.length - 1);
 		this.#maxVisible = Math.max(3, opts?.maxVisible ?? 12);
 		this.#onSelectCallback = onSelect;
@@ -156,7 +193,7 @@ export class HookSelectorComponent extends Container {
 					opts?.onTimeout?.();
 					const selected = this.#filteredOptions[this.#selectedIndex];
 					if (selected) {
-						this.#onSelectCallback(selected);
+						this.#onSelectCallback(selected.label);
 					} else {
 						this.#onCancelCallback();
 					}
@@ -180,32 +217,111 @@ export class HookSelectorComponent extends Container {
 		this.#updateList();
 	}
 
-	#updateList(): void {
+	#renderOptionLines(option: HookSelectorOption, isSelected: boolean, mdTheme: MarkdownTheme): string[] {
+		const label = isSelected
+			? renderInlineMarkdown(option.label, mdTheme, t => theme.fg("accent", t))
+			: renderInlineMarkdown(option.label, mdTheme, t => theme.fg("text", t));
+		const prefix = isSelected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
+		const lines = [prefix + label];
+		if (option.description) {
+			const description = renderInlineMarkdown(option.description, mdTheme, t => theme.fg("muted", t));
+			lines.push(`    ${description}`);
+		}
+		return lines;
+	}
+
+	#renderedLineRowCount(line: string, renderWidth: number): number {
+		const normalized = replaceTabs(line);
+		if (this.#outlinedList) {
+			const innerWidth = Math.max(1, renderWidth - 2);
+			const { indent, body } = splitLeadingSpacesForWrap(normalized, innerWidth);
+			const wrapped = wrapTextWithAnsi(body, Math.max(1, innerWidth - visibleWidth(indent)));
+			return Math.max(1, wrapped.length);
+		}
+		const wrapped = wrapTextWithAnsi(normalized, Math.max(1, renderWidth - 2));
+		return Math.max(1, wrapped.length);
+	}
+
+	#optionRowCount(
+		option: HookSelectorOption,
+		renderWidth: number | undefined,
+		isSelected: boolean,
+		mdTheme: MarkdownTheme,
+	): number {
+		if (renderWidth === undefined) return option.description ? 2 : 1;
+		let rows = 0;
+		for (const line of this.#renderOptionLines(option, isSelected, mdTheme)) {
+			rows += this.#renderedLineRowCount(line, renderWidth);
+		}
+		return rows;
+	}
+
+	#totalOptionRows(options: HookSelectorOption[], renderWidth?: number, mdTheme?: MarkdownTheme): number {
+		const themeForRows = mdTheme ?? getMarkdownTheme();
+		let rows = 0;
+		for (const option of options) {
+			rows += this.#optionRowCount(option, renderWidth, false, themeForRows);
+		}
+		return rows;
+	}
+
+	#getVisibleOptionRange(
+		total: number,
+		renderWidth?: number,
+		mdTheme: MarkdownTheme = getMarkdownTheme(),
+	): { startIndex: number; endIndex: number } {
+		if (total === 0) return { startIndex: 0, endIndex: 0 };
+
+		const rowBudget = Math.max(1, this.#maxVisible);
+		const selectedIndex = Math.max(0, Math.min(this.#selectedIndex, total - 1));
+		let startIndex = selectedIndex;
+		let endIndex = selectedIndex + 1;
+		let rows = this.#optionRowCount(this.#filteredOptions[selectedIndex]!, renderWidth, true, mdTheme);
+		let beforeRows = 0;
+		const targetBeforeRows = Math.max(0, Math.floor((rowBudget - rows) / 2));
+
+		while (startIndex > 0) {
+			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!, renderWidth, false, mdTheme);
+			if (beforeRows + cost > targetBeforeRows || rows + cost > rowBudget) break;
+			startIndex--;
+			beforeRows += cost;
+			rows += cost;
+		}
+
+		while (endIndex < total) {
+			const cost = this.#optionRowCount(this.#filteredOptions[endIndex]!, renderWidth, false, mdTheme);
+			if (rows + cost > rowBudget) break;
+			endIndex++;
+			rows += cost;
+		}
+
+		while (startIndex > 0) {
+			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!, renderWidth, false, mdTheme);
+			if (rows + cost > rowBudget) break;
+			startIndex--;
+			rows += cost;
+		}
+
+		return { startIndex, endIndex };
+	}
+
+	#updateList(renderWidth = this.#lastRenderWidth): void {
 		const lines: string[] = [];
 		const total = this.#filteredOptions.length;
-		const startIndex = Math.max(
-			0,
-			Math.min(this.#selectedIndex - Math.floor(this.#maxVisible / 2), total - this.#maxVisible),
-		);
-		const endIndex = Math.min(startIndex + this.#maxVisible, total);
-
 		const mdTheme = getMarkdownTheme();
+		const { startIndex, endIndex } = this.#getVisibleOptionRange(total, renderWidth, mdTheme);
+
 		for (let i = startIndex; i < endIndex; i++) {
 			const option = this.#filteredOptions[i];
 			if (option === undefined) continue;
-			const isSelected = i === this.#selectedIndex;
-			const label = isSelected
-				? renderInlineMarkdown(option, mdTheme, t => theme.fg("accent", t))
-				: renderInlineMarkdown(option, mdTheme, t => theme.fg("text", t));
-			const prefix = isSelected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
-			lines.push(prefix + label);
+			lines.push(...this.#renderOptionLines(option, i === this.#selectedIndex, mdTheme));
 		}
 
 		if (total === 0) {
 			lines.push(theme.fg("dim", "  No matching options"));
 		}
 
-		if (startIndex > 0 || endIndex < total || this.#shouldRenderSearchStatus()) {
+		if (startIndex > 0 || endIndex < total || this.#shouldRenderSearchStatus(renderWidth, mdTheme)) {
 			lines.push(this.#renderStatusLine(total));
 		}
 		if (this.#outlinedList) {
@@ -253,12 +369,12 @@ export class HookSelectorComponent extends Container {
 		slider.onChange?.(next);
 	}
 
-	#isSearchEnabled(): boolean {
-		return this.#options.length > this.#maxVisible;
+	#isSearchEnabled(renderWidth = this.#lastRenderWidth, mdTheme?: MarkdownTheme): boolean {
+		return this.#totalOptionRows(this.#options, renderWidth, mdTheme) > this.#maxVisible;
 	}
 
-	#shouldRenderSearchStatus(): boolean {
-		return this.#isSearchEnabled() || this.#searchQuery.length > 0;
+	#shouldRenderSearchStatus(renderWidth = this.#lastRenderWidth, mdTheme?: MarkdownTheme): boolean {
+		return this.#isSearchEnabled(renderWidth, mdTheme) || this.#searchQuery.length > 0;
 	}
 
 	#renderStatusLine(total: number): string {
@@ -273,7 +389,9 @@ export class HookSelectorComponent extends Container {
 
 	#setSearchQuery(query: string): void {
 		this.#searchQuery = query;
-		this.#filteredOptions = query.trim() ? fuzzyFilter(this.#options, query, option => option) : this.#options;
+		this.#filteredOptions = query.trim()
+			? fuzzyFilter(this.#options, query, option => `${option.label} ${option.description ?? ""}`)
+			: this.#options;
 		this.#selectedIndex = 0;
 		this.#updateList();
 	}
@@ -322,7 +440,7 @@ export class HookSelectorComponent extends Container {
 			}
 		} else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			const selected = this.#filteredOptions[this.#selectedIndex];
-			if (selected) this.#onSelectCallback(selected);
+			if (selected) this.#onSelectCallback(selected.label);
 		} else if (matchesKey(keyData, "left") || (this.#slider && !this.#isSearchEnabled() && keyData === "h")) {
 			if (this.#slider) this.#moveSlider(-1);
 			else this.#onLeftCallback?.();
@@ -332,6 +450,15 @@ export class HookSelectorComponent extends Container {
 		} else if (this.#onExternalEditorCallback && matchesAppExternalEditor(keyData)) {
 			this.#onExternalEditorCallback();
 		}
+	}
+
+	override render(width: number): string[] {
+		const renderWidth = Math.max(1, width);
+		if (this.#lastRenderWidth !== renderWidth) {
+			this.#lastRenderWidth = renderWidth;
+			this.#updateList(renderWidth);
+		}
+		return super.render(renderWidth);
 	}
 
 	dispose(): void {

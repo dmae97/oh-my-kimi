@@ -49,7 +49,6 @@ export class CustomEditor extends Editor {
 	 *  them, skipping any occurrence inside code spans, fenced blocks, or XML sections. */
 	decorateText = (text: string): string => highlightMagicKeywords(text);
 	onEscape?: () => void;
-	shouldBypassAutocompleteOnEscape?: () => boolean;
 	onClear?: () => void;
 	onExit?: () => void;
 	onCycleThinkingLevel?: () => void;
@@ -186,12 +185,15 @@ export class CustomEditor extends Editor {
 		}
 
 		// Intercept configured interrupt shortcut.
-		// Default behavior keeps autocomplete dismissal, but parent can prioritize global interrupt handling.
-		if (this.#matchesAction(data, "app.interrupt") && this.onEscape) {
-			if (!this.isShowingAutocomplete() || this.shouldBypassAutocompleteOnEscape?.()) {
-				this.onEscape();
-				return;
-			}
+		// When the autocomplete popup is visible, ESC's first job is to dismiss
+		// the popup — let super.handleInput() route it to #cancelAutocomplete().
+		// The user can press ESC again afterward to fire the global interrupt
+		// handler. This matches the standard TUI/IDE pattern and prevents a
+		// single ESC from both closing an @ completion and aborting an active
+		// agent run (#1655).
+		if (this.#matchesAction(data, "app.interrupt") && this.onEscape && !this.isShowingAutocomplete()) {
+			this.onEscape();
+			return;
 		}
 
 		// Intercept configured clear shortcut

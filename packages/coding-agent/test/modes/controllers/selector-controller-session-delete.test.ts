@@ -148,6 +148,7 @@ beforeAll(() => {
 describe("SelectorController session deletion", () => {
 	beforeEach(() => {
 		vi.spyOn(SessionManager, "list").mockResolvedValue([]);
+		vi.spyOn(SessionManager, "listAll").mockResolvedValue([]);
 	});
 
 	afterEach(() => {

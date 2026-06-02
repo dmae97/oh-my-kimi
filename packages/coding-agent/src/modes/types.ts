@@ -7,6 +7,7 @@ import type { Settings } from "../config/settings";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUISelectItem,
 	ExtensionWidgetContent,
 	ExtensionWidgetOptions,
 } from "../extensibility/extensions";
@@ -241,6 +242,7 @@ export interface InteractiveModeContext {
 	): Promise<CompactionOutcome>;
 	openInBrowser(urlOrPath: string): void;
 	refreshSlashCommandState(cwd?: string): Promise<void>;
+	applyCwdChange(newCwd: string): Promise<void>;
 
 	// Selector handling
 	showSettingsSelector(): void;
@@ -297,7 +299,7 @@ export interface InteractiveModeContext {
 	setHookStatus(key: string, text: string | undefined): void;
 	showHookSelector(
 		title: string,
-		options: string[],
+		options: ExtensionUISelectItem[],
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<string | undefined>;
 	hideHookSelector(): void;

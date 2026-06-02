@@ -141,6 +141,14 @@ export interface ToolExecutionHandle {
 	setExpanded(expanded: boolean): void;
 }
 
+/** Drive pending-tool redraws at ~60fps so the animated border sweep is smooth.
+ * The TUI already throttles at its 16ms `MIN_RENDER_INTERVAL_MS`, so this is the
+ * natural upper bound and static frames diff to a no-op redraw at ~zero cost. */
+const SPINNER_RENDER_INTERVAL_MS = 16;
+/** Advance the spinner glyph at its classic ~12.5fps step, decoupled from the
+ * 60fps render cadence (mirrors `Loader`). */
+const SPINNER_GLYPH_ADVANCE_MS = 80;
+
 /**
  * Component that renders a tool call with its result (updateable)
  */
@@ -172,11 +180,14 @@ export class ToolExecutionComponent extends Container {
 	#editDiffPreview?: PerFileDiffPreview[];
 	#editDiffAbort?: AbortController;
 	#editDiffLastArgsKey?: string;
+	// Latest in-flight streaming diff recompute, captured so it can be awaited.
+	#editDiffInFlight?: Promise<void>;
 	// Cached converted images for Kitty protocol (which requires PNG), keyed by index
 	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	// Spinner animation for partial task results
 	#spinnerFrame?: number;
 	#spinnerInterval?: NodeJS.Timeout;
+	#lastSpinnerAdvanceAt = 0;
 	// Todo write completion strikethrough reveal animation
 	#todoStrikeInterval?: NodeJS.Timeout;
 	// Track if args are still being streamed (for edit/write spinner)
@@ -230,7 +241,7 @@ export class ToolExecutionComponent extends Container {
 		this.#editMode = resolveEditModeForTool(toolName, tool);
 
 		this.#updateDisplay();
-		void this.#runPreviewDiff();
+		this.#editDiffInFlight = this.#runPreviewDiff();
 	}
 
 	updateArgs(args: any, _toolCallId?: string): void {
@@ -241,7 +252,7 @@ export class ToolExecutionComponent extends Container {
 		if (args === this.#args) return;
 		this.#args = args;
 		this.#updateSpinnerAnimation();
-		void this.#runPreviewDiff();
+		this.#editDiffInFlight = this.#runPreviewDiff();
 		this.#updateDisplay();
 	}
 
@@ -252,7 +263,18 @@ export class ToolExecutionComponent extends Container {
 	setArgsComplete(_toolCallId?: string): void {
 		this.#argsComplete = true;
 		this.#updateSpinnerAnimation();
-		void this.#runPreviewDiff();
+		this.#editDiffInFlight = this.#runPreviewDiff();
+	}
+
+	/**
+	 * Await the streaming diff recompute kicked off by the most recent
+	 * `updateArgs`/`setArgsComplete`. The recompute reads the file and re-runs the
+	 * whole-file Myers diff off the render path, signalling completion only via a
+	 * throttled `requestRender`. Tests await this to sample a *settled* preview
+	 * deterministically instead of racing the spinner's render ticks.
+	 */
+	async whenPreviewSettled(): Promise<void> {
+		await this.#editDiffInFlight;
 	}
 
 	async #runPreviewDiff(): Promise<void> {
@@ -404,13 +426,20 @@ export class ToolExecutionComponent extends Container {
 			this.#isPartial && shimmerEnabled() && (this.#toolName === "bash" || this.#toolName === "eval");
 		const needsSpinner = isStreamingArgs || isPartialTask || isPendingExecBlock;
 		if (needsSpinner && !this.#spinnerInterval) {
+			this.#lastSpinnerAdvanceAt = performance.now();
 			this.#spinnerInterval = setInterval(() => {
+				const now = performance.now();
 				const frameCount = theme.spinnerFrames.length;
-				if (frameCount === 0) return;
-				this.#spinnerFrame = ((this.#spinnerFrame ?? -1) + 1) % frameCount;
-				this.#renderState.spinnerFrame = this.#spinnerFrame;
+				// Redraw at ~60fps for a smooth border sweep, but only step the spinner
+				// glyph at its classic ~12.5fps cadence. The TUI throttles renders at
+				// 16ms and the differ drops no-op redraws, so the extra ticks are free.
+				if (frameCount > 0 && now - this.#lastSpinnerAdvanceAt >= SPINNER_GLYPH_ADVANCE_MS) {
+					this.#spinnerFrame = ((this.#spinnerFrame ?? -1) + 1) % frameCount;
+					this.#renderState.spinnerFrame = this.#spinnerFrame;
+					this.#lastSpinnerAdvanceAt = now;
+				}
 				this.#ui.requestRender();
-			}, 80);
+			}, SPINNER_RENDER_INTERVAL_MS);
 		} else if (!needsSpinner && this.#spinnerInterval) {
 			clearInterval(this.#spinnerInterval);
 			this.#spinnerInterval = undefined;

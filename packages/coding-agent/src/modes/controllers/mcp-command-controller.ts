@@ -1425,7 +1425,7 @@ export class MCPCommandController {
 		this.#showMessage(["", theme.fg("muted", `Reconnecting to "${name}"...`), ""].join("\n"));
 
 		try {
-			const connection = await this.ctx.mcpManager.reconnectServer(name);
+			const connection = await this.ctx.mcpManager.reconnectServer(name, { manual: true });
 			if (connection) {
 				// refreshMCPTools re-registers tools and preserves the user's prior
 				// MCP tool selection. No need to call activateDiscoveredMCPTools —

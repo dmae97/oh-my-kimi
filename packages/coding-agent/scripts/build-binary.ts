@@ -56,7 +56,6 @@ async function main(): Promise<void> {
 					"../stats/src/sync-worker.ts",
 					"./src/tools/browser/tab-worker-entry.ts",
 					"./src/eval/js/worker-entry.ts",
-					"./src/tiny/worker.ts",
 					// Legacy pi-* extension compat entrypoints served by
 					// `legacy-pi-compat.ts`. These are reached via computed bunfs paths
 					// (which `--compile`'s static analyzer cannot trace), so each must be

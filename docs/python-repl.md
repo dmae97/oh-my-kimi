@@ -166,9 +166,9 @@ Python prelude helpers include `agent(prompt, *, agent_type="task", model=None, 
 
 ### Cell timeout
 
-Each eval cell `timeout` is in seconds, defaults to 30, and is clamped to `1..600`. It is an **inactivity (idle) budget, not a hard wall-clock cap**: the watchdog (`IdleTimeout`, `src/eval/idle-timeout.ts`) only fires once the cell goes the full window with **no progress signal**. Every status event re-arms it — `agent()` progress snapshots, `log()`/`phase()`, and tool-bridge activity all count — so a long-running fanout that keeps reporting progress runs to completion instead of being killed mid-stream.
+Each eval cell `timeout` is in seconds, defaults to 30, and is clamped to `1..600`. It is a **wall-clock budget on the cell's own work** that the watchdog (`IdleTimeout`, `src/eval/idle-timeout.ts`) enforces, **but it is paused while a host-side `agent()`/`parallel()`/`llm()` bridge call is in flight**: those calls pump a heartbeat (`withBridgeHeartbeat`, `src/eval/heartbeat.ts`) that re-arms the watchdog, so a long fanout or a slow completion runs to completion instead of being killed mid-stream.
 
-Raw `stdout`/`stderr` does **not** re-arm the watchdog, so a pure-compute runaway loop with no progress reporting is still bounded by `timeout`. The tool combines the caller abort signal, the session abort signal, and the idle watchdog's signal with `AbortSignal.any(...)`; no wall-clock deadline is passed to the backend, so neither runtime arms a competing fixed timer.
+The heartbeat is the **sole** signal that extends the budget. Everything else the cell does — compute, `stdout`/`stderr`, `log()`/`phase()`, and ordinary (non-agent) tool calls — counts against `timeout`, so a cell that is not delegating to an agent/llm is bounded by a plain wall-clock timeout. The tool combines the caller abort signal, the session abort signal, and the watchdog's signal with `AbortSignal.any(...)`; no wall-clock deadline is passed to the backend, so neither runtime arms a competing fixed timer.
 
 ### Kernel execution cancellation
 
@@ -176,7 +176,7 @@ On abort/timeout:
 
 - The host sends `kill("SIGINT")` to the runner subprocess.
 - The runner's exec-time signal handler raises `KeyboardInterrupt` inside the user code.
-- Result includes `cancelled=true`; the timeout path annotates output as `Command timed out after <n> seconds of inactivity`.
+- Result includes `cancelled=true`; the timeout path annotates output as `Command timed out after <n> seconds`.
 - Between requests the runner installs `SIG_IGN` for SIGINT so a stray cancel does not tear down the kernel.
 
 If a second cancel is required (runner stuck in C code), the host escalates to `SIGTERM` and the session restarts on the next call.

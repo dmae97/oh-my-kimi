@@ -5,7 +5,8 @@ import type * as fs1 from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, Model, TextContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent, Model, TextContent, TSchema } from "@oh-my-pi/pi-ai";
+import * as PiCodingAgent from "@oh-my-pi/pi-coding-agent";
 import type { KeyId } from "@oh-my-pi/pi-tui";
 import { hasFsCode, isEacces, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import * as Zod from "zod/v4";
@@ -22,6 +23,7 @@ import * as TypeBox from "../typebox";
 
 import { resolvePath } from "../utils";
 import type {
+	AssistantThinkingRenderer,
 	Extension,
 	ExtensionAPI,
 	ExtensionContext,
@@ -29,6 +31,7 @@ import type {
 	ExtensionRuntime as IExtensionRuntime,
 	LoadExtensionsResult,
 	MessageRenderer,
+	ProviderConfig,
 	RegisteredCommand,
 	ToolDefinition,
 } from "./types";
@@ -55,8 +58,7 @@ export class ExtensionRuntimeNotInitializedError extends Error {
  */
 export class ExtensionRuntime implements IExtensionRuntime {
 	flagValues = new Map<string, boolean | string>();
-	pendingProviderRegistrations: Array<{ name: string; config: import("./types").ProviderConfig; sourceId: string }> =
-		[];
+	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; sourceId: string }> = [];
 
 	sendMessage(): void {
 		throw new ExtensionRuntimeNotInitializedError();
@@ -123,12 +125,12 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 	readonly flagValues = new Map<string, boolean | string>();
 	readonly pendingProviderRegistrations: Array<{
 		name: string;
-		config: import("./types").ProviderConfig;
+		config: ProviderConfig;
 		sourceId: string;
 	}> = [];
 
 	constructor(
-		public readonly pi: typeof import("@oh-my-pi/pi-coding-agent"),
+		public readonly pi: typeof PiCodingAgent,
 		private readonly extension: Extension,
 		private readonly runtime: IExtensionRuntime,
 		private readonly cwd: string,
@@ -141,10 +143,7 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		this.extension.handlers.set(event, list);
 	}
 
-	registerTool<
-		TParams extends import("@oh-my-pi/pi-ai").TSchema = import("@oh-my-pi/pi-ai").TSchema,
-		TDetails = unknown,
-	>(tool: ToolDefinition<TParams, TDetails>): void {
+	registerTool<TParams extends TSchema = TSchema, TDetails = unknown>(tool: ToolDefinition<TParams, TDetails>): void {
 		this.extension.tools.set(tool.name, {
 			definition: tool,
 			extensionPath: this.extension.path,
@@ -188,6 +187,10 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 
 	registerMessageRenderer<T>(customType: string, renderer: MessageRenderer<T>): void {
 		this.extension.messageRenderers.set(customType, renderer as MessageRenderer);
+	}
+
+	registerAssistantThinkingRenderer(renderer: AssistantThinkingRenderer): void {
+		this.extension.assistantThinkingRenderers.push(renderer);
 	}
 
 	getFlag(name: string): boolean | string | undefined {
@@ -253,7 +256,7 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		return this.runtime.setSessionName(name);
 	}
 
-	registerProvider(name: string, config: import("./types").ProviderConfig): void {
+	registerProvider(name: string, config: ProviderConfig): void {
 		this.runtime.pendingProviderRegistrations.push({ name, config, sourceId: this.extension.path });
 	}
 }
@@ -267,6 +270,7 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 		resolvedPath,
 		handlers: new Map(),
 		tools: new Map(),
+		assistantThinkingRenderers: [],
 		messageRenderers: new Map(),
 		commands: new Map(),
 		flags: new Map(),
@@ -293,13 +297,7 @@ async function loadExtension(
 		}
 
 		const extension = createExtension(extensionPath, resolvedPath);
-		const api = new ConcreteExtensionAPI(
-			await import("@oh-my-pi/pi-coding-agent"),
-			extension,
-			runtime,
-			cwd,
-			eventBus,
-		);
+		const api = new ConcreteExtensionAPI(PiCodingAgent, extension, runtime, cwd, eventBus);
 		await factory(api);
 
 		return { extension, error: null };
@@ -320,7 +318,7 @@ export async function loadExtensionFromFactory(
 	name = "<inline>",
 ): Promise<Extension> {
 	const extension = createExtension(name, name);
-	const api = new ConcreteExtensionAPI(await import("@oh-my-pi/pi-coding-agent"), extension, runtime, cwd, eventBus);
+	const api = new ConcreteExtensionAPI(PiCodingAgent, extension, runtime, cwd, eventBus);
 	await factory(api);
 	return extension;
 }

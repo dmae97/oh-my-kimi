@@ -47,7 +47,11 @@ import { logger, VERSION } from "@oh-my-pi/pi-utils";
 import { disableProvider, enableProvider, reset as resetCapabilities } from "../../capability";
 import { Settings } from "../../config/settings";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
-import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../../extensibility/extensions";
+import {
+	type ExtensionUIContext,
+	type ExtensionUIDialogOptions,
+	getExtensionUISelectOptionLabel,
+} from "../../extensibility/extensions";
 import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
 import { buildSkillPromptMessage, getSkillSlashCommandName } from "../../extensibility/skills";
@@ -302,7 +306,7 @@ export function createAcpExtensionUiContext(
 				getSessionId(),
 				"select",
 				title,
-				{ type: "string", enum: options },
+				{ type: "string", enum: options.map(getExtensionUISelectOptionLabel) },
 				dialogOptions,
 			);
 			return typeof value === "string" ? value : undefined;
@@ -1981,7 +1985,7 @@ export class AcpAgent implements Agent {
 		}
 		if (servers.length === 0) {
 			record.mcpManager = undefined;
-			await record.session.refreshMCPTools([]);
+			await record.session.refreshMCPTools([], { activateAll: true });
 			return;
 		}
 
@@ -2008,7 +2012,7 @@ export class AcpAgent implements Agent {
 		}
 
 		record.mcpManager = manager;
-		await record.session.refreshMCPTools(result.tools);
+		await record.session.refreshMCPTools(result.tools, { activateAll: true });
 	}
 
 	#toMcpConfig(server: McpServer): MCPServerConfig {

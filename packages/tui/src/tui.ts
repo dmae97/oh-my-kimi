@@ -1342,8 +1342,42 @@ export class TUI extends Container {
 			) {
 				return { kind: "historyRebuild" };
 			}
+			// POSIX terminals — and Windows Terminal/ConPTY — that cannot report the
+			// viewport position fall through here (`canRebuildNativeScrollbackLive` is
+			// false). A destructive rebuild emits `\x1b[3J`, which on modern terminals
+			// resets the viewport to the top of scrollback and yanks a scrolled-up
+			// reader (issue #1635), so it is unsafe while the probe is unavailable.
+			//
+			// When the shrunk transcript now fits entirely in the viewport there is no
+			// new native history to preserve during the live frame: repaint the screen
+			// in place (no `\x1b[3J`) and defer stale-scrollback cleanup to the next
+			// checkpoint rebuild (e.g. prompt submit -> `refreshNativeScrollbackIfDirty`).
+			if (nativeViewportAtBottom === undefined && newLines.length <= height) {
+				this.#markNativeScrollbackDirty();
+				return { kind: "viewportRepaint" };
+			}
+			// The shrunk transcript still overflows the viewport. A plain viewport
+			// repaint would re-emit the rows between the new and old viewport tops on top
+			// of the copies the terminal already kept in native scrollback; `deferredShrink`
+			// pads to the previous row count so no committed row is re-emitted, and the
+			// next checkpoint rebuild cleans up.
+			//
+			// That deferral only carries real content when `newLines.length` reaches the
+			// padded viewport top (`previousLines.length - height`) — otherwise every row
+			// the padded repaint draws is past the end of `newLines` and renders blank,
+			// hiding the prompt until the next checkpoint. This can happen even when
+			// `scrollbackHighWater` is far below `previousLines.length - height`, because
+			// prior unknown-POSIX viewport repaints commit longer logical frames without
+			// moving the native scrollback boundary. For a shrink that large a blank,
+			// uninteractable viewport is the greater evil, so yank with `historyRebuild`.
+			// Real win32 unknown probes defer as scrolled above and never reach this; the
+			// yank only lands on non-win32 hosts whose probe is genuinely unavailable.
+			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
+			if (newLines.length <= paddedViewportTop) {
+				return { kind: "historyRebuild" };
+			}
 			this.#markNativeScrollbackDirty();
-			return { kind: "viewportRepaint" };
+			return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 		}
 
 		const suppressSuffixScroll = this.#suppressNextSuffixScroll;
@@ -1412,14 +1446,32 @@ export class TUI extends Container {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				this.#markNativeScrollbackDirty();
-				return { kind: "deferredMutation" };
+				// Confirmed scrolled (probe returned `false`): the reader is parked in
+				// scrollback and writing the live frame is wasted bytes — defer until
+				// the next checkpoint reconciles. Unknown viewport (e.g. native Windows
+				// Terminal where the probe cannot see WT host scrollback) is a
+				// different case: a no-op there freezes the editor on the keystroke
+				// that grows `lines.length` past the viewport (the wrap keystroke).
+				// Fall through to a non-destructive viewport repaint instead so the
+				// live UI keeps updating without yanking a possibly-scrolled reader.
+				if (this.#nativeViewportIsKnownScrolled(nativeViewportAtBottom)) {
+					return { kind: "deferredMutation" };
+				}
+				return { kind: "viewportRepaint" };
 			}
 		}
 		if (!pureAppend && structuralMutation && !isMultiplexerSession()) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				this.#markNativeScrollbackDirty();
-				return { kind: "deferredMutation" };
+				// See the matching comment on the pure-append branch above: confirmed
+				// scrolled stays a no-op; unknown viewport repaints the visible window
+				// so slash-command transitions and offscreen chrome edits paint on the
+				// same frame instead of stalling until the next prompt submit.
+				if (this.#nativeViewportIsKnownScrolled(nativeViewportAtBottom)) {
+					return { kind: "deferredMutation" };
+				}
+				return { kind: "viewportRepaint" };
 			}
 			// The append-tail path can only scroll a clean pure-tail append over an
 			// offscreen edit into history: the rows it pushes must equal the net
@@ -1592,6 +1644,10 @@ export class TUI extends Container {
 			nativeViewportAtBottom === false ||
 			(nativeViewportAtBottom === undefined && process.platform === "win32" && !allowUnknownViewportMutation)
 		);
+	}
+
+	#nativeViewportIsKnownScrolled(nativeViewportAtBottom: boolean | undefined): boolean {
+		return nativeViewportAtBottom === false;
 	}
 
 	#nativeViewportIsAtBottom(nativeViewportAtBottom: boolean | undefined): boolean {

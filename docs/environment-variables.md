@@ -190,15 +190,16 @@ OAuth host chain: `KIMI_CODE_OAUTH_HOST` → `KIMI_OAUTH_HOST` → `https://auth
 
 ### OpenAI Codex responses (feature/debug controls)
 
-| Variable                             | Behavior                                             |
-| ------------------------------------ | ---------------------------------------------------- |
-| `PI_CODEX_DEBUG`                     | `1`/`true` enables Codex provider debug logging      |
-| `PI_CODEX_WEBSOCKET`                 | `1`/`true` enables websocket transport preference    |
-| `PI_CODEX_WEBSOCKET_V2`              | `1`/`true` enables websocket v2 path                 |
-| `PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS` | Positive integer override (default 300000)           |
-| `PI_CODEX_WEBSOCKET_RETRY_BUDGET`    | Non-negative integer override (default 5)            |
-| `PI_CODEX_WEBSOCKET_RETRY_DELAY_MS`  | Positive integer base backoff override (default 500) |
-| `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS`   | Positive integer OpenAI stream idle timeout override |
+| Variable                                   | Behavior                                             |
+| ------------------------------------------ | ---------------------------------------------------- |
+| `PI_CODEX_DEBUG`                           | `1`/`true` enables Codex provider debug logging      |
+| `PI_CODEX_WEBSOCKET`                       | `1`/`true` enables websocket transport preference    |
+| `PI_CODEX_WEBSOCKET_V2`                    | `1`/`true` enables websocket v2 path                 |
+| `PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS`       | Positive integer override (default 300000)           |
+| `PI_CODEX_WEBSOCKET_RETRY_BUDGET`          | Non-negative integer override (default 5)            |
+| `PI_CODEX_WEBSOCKET_RETRY_DELAY_MS`        | Positive integer base backoff override (default 500) |
+| `PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS`  | Positive integer OpenAI first-event timeout override |
+| `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS`         | Positive integer OpenAI stream idle timeout override |
 
 ### Cursor provider debug
 

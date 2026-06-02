@@ -17,7 +17,7 @@ import { astGrepToolRenderer } from "./ast-grep";
 import { bashToolRenderer } from "./bash";
 import { browserToolRenderer } from "./browser/render";
 import { debugToolRenderer } from "./debug";
-import { evalToolRenderer } from "./eval";
+import { evalToolRenderer } from "./eval-render";
 import { findToolRenderer } from "./find";
 import { githubToolRenderer } from "./gh-renderer";
 import { inspectImageToolRenderer } from "./inspect-image-renderer";

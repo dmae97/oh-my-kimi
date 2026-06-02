@@ -2,9 +2,71 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an all-projects scope to the session picker (`pi --resume` / `/resume`). Press `Tab` to toggle between the current folder's sessions and every session across all projects; the all-projects list is loaded lazily and shows each session's directory. When the current folder has no sessions the picker now opens straight into all-projects scope instead of printing "No sessions found".
+
+### Changed
+
+- Changed the eval `parallel()` / `pipeline()` helpers to drop their `concurrency` argument and run as wide as a `task` tool batch. The worker-pool ceiling now tracks the `task.maxConcurrency` setting (default 32; `0` = run every item at once) resolved live from the host via a new `__concurrency__` bridge, instead of the old per-call `concurrency` option that defaulted to 4 and capped at 16. This stops eval fan-outs from under-using the parallelism the session is configured for.
+- Changed subagent / `agent://` output ids from a numeric prefix scheme (`0-Anna`, `1-Bob`, nested `0-Anna.1-Bob`) to a name-first scheme: the requested name is used verbatim and a `-2`/`-3`/… suffix is added only when the same name recurs within a session (`Anna`, `Anna-2`, `Anna-3`). Nested ids stay grouped under the parent (`Anna.Bob`) and the live task widget renders them as `Anna>Bob`. The main agent's IRC id is now `Main` (was `0-Main`). `AgentOutputManager` still scans existing `.md` outputs on resume so it never reuses a name that would clobber a prior output.
+- Changed resuming a session that belongs to a different project to switch the process into that project's working directory. `pi --resume` and the in-session `/resume` picker now `chdir` into the resumed session's `cwd` and re-scope every cwd-derived input — project dir, **project settings** (`.claude/settings.yml`, `.omp/settings.json`, path-scoped `enabledModels`/`disabledProviders`), plugin roots, capabilities, slash commands, and the ssh tool — so tools, discovery, configuration, and commands all follow the resumed project. The `SessionManager` adopts the resumed session's own `cwd`/session directory on load (rolled back if the switch fails).
+
 ### Fixed
 
+- Fixed `/move` (and cross-project resume) not re-scoping the live project settings to the destination directory. Changing a session's working directory now reloads the project settings layer in place (via `Settings.reloadForCwd`) so project-scoped configuration and path-scoped `enabledModels`/`disabledProviders` follow the move instead of remaining pinned to the launch directory.
+- Fixed `read <db.sqlite>` freezing the TUI on large databases. Listing tables ran an unbounded `SELECT COUNT(*)` per table, and since `bun:sqlite` executes synchronously on the same JS thread that drives rendering and input, a multi-GB database's full-table scans blocked the UI for seconds. The listing now reads the planner's `sqlite_stat1` estimate for tables above a scan cap (shown as `~N rows`) and only counts exactly when a table is provably small, reading at most `cap + 1` rows (a capped table shows `N+ rows`). On an 8.4 GB stats database the listing dropped from multi-second full scans to ~2 ms.
+- Fixed a module-load crash (`ReferenceError: Cannot access 'evalToolRenderer' before initialization`) triggered whenever `tools/eval` was imported before `tools/renderers`. The eval JS backend statically pulls the agent/task/sdk/extension chain, which re-enters the root barrel → `modes/components` → `tool-execution` → `renderers` while `eval.ts` was still initializing, so `renderers.ts` read `evalToolRenderer` in its TDZ. The eval TUI renderer is now split into a dependency-light `tools/eval-render.ts` that `renderers.ts` imports directly (decoupling pure rendering from the eval runtime); `eval.ts` re-exports `evalToolRenderer`/`EVAL_DEFAULT_PREVIEW_LINES` for compatibility.
+- Fixed `/logout` offering providers that were only authenticated by env/config fallbacks, which made OpenCode Go/Zen appear to remain logged in after their stored credentials were removed ([#1658](https://github.com/can1357/oh-my-pi/issues/1658)).
+- Fixed `omp --resume <id>` crashing with an uncaught exception when an interactive user declined the cross-project fork prompt. `createSessionManager` now returns `undefined` for that cancellation, while non-interactive invocations still fail with a diagnostic when they cannot answer the fork prompt ([#1668](https://github.com/can1357/oh-my-pi/issues/1668)).
+- Fixed `history.db` never recording the originating session id: the `session_id` column documented for 15.6.0 was missing from the shipped storage layer, so the column was never created/populated on the write path and every prompt row had `session_id` `NULL`. Restored the `session_id` column, schema migration (`ALTER TABLE history ADD COLUMN session_id` for pre-existing databases), and `HistoryEntry.sessionId`; wired interactive mode to register `setSessionResolver(...)` so prompts are stamped with the session active at submission time (tracking fork/resume switches); and re-enabled prompt-history ranking in the `--resume` and in-session session pickers via `HistoryStorage.matchingSessionIds()`.
 - Fixed `/quit` shutdown leaving the parent shell prompt at the top of the viewport after the final TUI teardown render on Linux terminals ([#1620](https://github.com/can1357/oh-my-pi/issues/1620)).
+
+## [15.7.6] - 2026-06-01
+### Added
+
+- Added `ask` option descriptions so agents can keep short labels and render explanatory text as separate muted rows in the selector.
+- Added an extension API for rendering supplemental UI below visible assistant thinking blocks.
+- Added default-on `lsp.diagnosticsDeduplicate` support so post-edit LSP diagnostics already shown for a file are suppressed within the session and only new or changed diagnostics are surfaced.
+ 
+### Fixed
+
+- Fixed a single ESC press both dismissing the @/slash autocomplete popup and aborting the running agent operation. ESC now drains the popup first; only when no popup is visible does it route to the global interrupt handler (matching the standard TUI/IDE pattern). The `shouldBypassAutocompleteOnEscape` editor hook is removed — it had become the trigger for this bug ([#1655](https://github.com/can1357/oh-my-pi/issues/1655)).
+- Fixed Claude Code slash command discovery to load subdirectory commands recursively while preserving basename commands (e.g. `/apply`) and adding namespace aliases (e.g. `/opsx:apply`) for tools that install colon-namespaced workflows ([#1523](https://github.com/can1357/oh-my-pi/issues/1523)).
+- Fixed the `eval` tool's per-cell `timeout` killing cells that were not stalled. The timeout is now a plain wall-clock budget on the cell's **own** work that is **paused only while a host-side `agent()`/`parallel()`/`llm()` bridge call is in flight** — those calls pump a heartbeat that re-arms the watchdog, so a long fanout or a slow (e.g. reasoning-tier) completion runs to completion instead of being aborted mid-flight (a subagent's time-to-first-token, a long quiet nested tool, or an entire oneshot `llm()` request no longer trip it). Nothing else re-arms the budget: ordinary compute, `print`/stdout, `log()`/`phase()`, and non-agent tool calls all count against it, so a cell that is not delegating to an agent/llm is bounded by the regular wall-clock timeout (and the timeout message no longer says "of inactivity"). The heartbeat is a pure keepalive — never persisted or rendered.
+
+## [15.7.5] - 2026-06-01
+### Fixed
+
+- Fixed streaming assistant responses leaving duplicated tail rows in WSL/Windows Terminal scrollback by enabling eager native-scrollback rebuilds while assistant text is actively streaming ([#1615](https://github.com/can1357/oh-my-pi/issues/1615)).
+
+### Fixed
+
+- Fixed the `task` tool mangling subagent prompts when a model double-JSON-encodes a string argument: `context` and each task's `assignment`/`description` are now repaired when they arrive uniformly double-escaped (literal `\n`, `\"`, `\uXXXX`), so the subagent receives the intended prose and the call preview renders real newlines. The repair is guarded by a JSON-string round-trip and a double-encode signature, so legitimate backslashes/quotes (Windows paths, regexes, embedded quotes) are left untouched, and it is scoped to these natural-language fields only (never code-bearing tools).
+
+### Fixed
+
+- Fixed `pr://` PR views omitting formal review submissions and approvals when comments are enabled ([#1600](https://github.com/can1357/oh-my-pi/issues/1600)).
+
+### Fixed
+
+- Fixed subagent yield-reminder loop logging benign user/compaction aborts as `ERROR`. The catch around `session.prompt`/`waitForIdle` in `task/executor.ts` now demotes `ToolAbortError` and signal-aborted exits to `debug` and keeps `ERROR` for genuine prompt failures only ([#1623](https://github.com/can1357/oh-my-pi/issues/1623)).
+
+### Fixed
+
+- Fixed `read local://<file>` resolving to the wrong session's artifacts directory in multi-session ACP hosts (e.g. cmux). `LocalProtocolHandler.resolve` now honors `context.localProtocolOptions` supplied by the calling tool before falling back to the process-wide override or the first `main`-kind session in the global `AgentRegistry`; `read`, `find`, `search`, `ast_grep`, and `ast_edit` thread their session's options through so a `local://PLAN.md` lookup hits the calling session's `local` root instead of a sibling session's ([#1608](https://github.com/can1357/oh-my-pi/issues/1608)).
+
+### Fixed
+
+- Fixed `omp` segfaulting on exit on Windows after the tiny title/memory model loaded `onnxruntime-node` (issue [#1606](https://github.com/can1357/oh-my-pi/issues/1606)). The tiny model now runs in a Bun subprocess instead of a Worker thread, so the NAPI finalizer that crashes during shutdown never executes in the agent's address space; the subprocess is `SIGKILL`'d on dispose to skip every native destructor on every platform.
+
+### Fixed
+
+- Fixed unbounded MCP reconnect loop that could fork-bomb the host when a stdio MCP server completes the `initialize`/`tools/list` handshake and then exits. `MCPManager` now enforces a per-server crash circuit breaker (5 reconnects per 30 s window) on the automatic `transport.onClose` path; manual `/mcp reconnect` resets the window so users can recover after fixing the misconfiguration ([#1592](https://github.com/can1357/oh-my-pi/issues/1592)).
+
+### Fixed
+
+- Fixed auto context maintenance to include the pending prompt in the pre-send token estimate, so large user turns compact history before the provider rejects an over-limit request ([#1618](https://github.com/can1357/oh-my-pi/issues/1618)).
 
 ## [15.7.4] - 2026-05-31
 
@@ -52,6 +114,10 @@
 - Fixed Ctrl+O tool-result expansion on POSIX terminals so offscreen tool blocks rebuild native scrollback instead of leaving stale collapsed rows above the viewport.
 
 ### Removed
+
+### Fixed
+
+- Fixed auto-discovered OpenAI-compatible / Ollama / llama.cpp / new-api proxy models defaulting to `maxTokens: 8192`, which made providers drop the streaming connection mid-response on large `write`/`edit` tool calls and surfaced as Bun's opaque `socket connection was closed unexpectedly`. The discovery cap is now `32_768` (`DISCOVERY_DEFAULT_MAX_TOKENS` in `packages/coding-agent/src/config/model-registry.ts`) and `min(contextWindow, …)` still honors smaller advertised context windows ([#1528](https://github.com/can1357/oh-my-pi/issues/1528)).
 
 - Removed the `/drop-images` slash command; use `/shake images`, which strips every image from the session through the same `dropImages()` path.
 
@@ -125,6 +191,10 @@
 ### Removed
 
 - Removed the `recipe` tool and its `recipe.enabled` setting. Task-runner targets (just/package.json/Cargo/make/Taskfile) are invoked directly through `bash`.
+
+### Added
+
+- Added a `symbols.spinnerFrames` field to custom theme JSON so themes can override the loader/tool-execution spinner. Accepts either a flat `string[]` (used for both spinner types) or `{ "status"?: string[], "activity"?: string[] }` to override each independently; anything not specified falls back to the symbol preset. Documented in `docs/theme.md` and validated by `theme-schema.json`. ([#1553](https://github.com/can1357/oh-my-pi/issues/1553))
 
 ## [15.6.0] - 2026-05-30
 ### Added
