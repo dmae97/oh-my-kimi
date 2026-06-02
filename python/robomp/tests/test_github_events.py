@@ -5,6 +5,7 @@ import hmac
 
 from robomp.github_events import (
     extract_mention,
+    is_implementation_authorizer,
     is_maintainer,
     rate_limit_cap,
     route,
@@ -545,6 +546,17 @@ def test_is_maintainer_rejects_contributor_and_none() -> None:
     assert is_maintainer(None, "OWNER", maintainers=frozenset())  # association still wins
 
 
+def test_is_implementation_authorizer_accepts_allowlist_and_owner() -> None:
+    assert is_implementation_authorizer("can1357", None, maintainers=frozenset({"can1357"}))
+    assert is_implementation_authorizer("Can1357", "NONE", maintainers=frozenset({"can1357"}))
+    assert is_implementation_authorizer("stranger", "OWNER", maintainers=frozenset())
+
+
+def test_is_implementation_authorizer_rejects_non_owner_associations() -> None:
+    for assoc in ("MEMBER", "COLLABORATOR", "NONE", "CONTRIBUTOR", None):
+        assert not is_implementation_authorizer("stranger", assoc, maintainers=frozenset()), assoc
+
+
 def test_route_directive_set_on_issue_comment_when_owner_mentions_bot() -> None:
     decision = route(
         "issue_comment",
@@ -565,6 +577,7 @@ def test_route_directive_set_on_issue_comment_when_owner_mentions_bot() -> None:
     assert decision.directive is True
     assert decision.directive_body == "please refactor X"
     assert decision.directive_author == "can1357"
+    assert decision.directive_authorizes_impl is True
 
 
 def test_route_directive_set_when_login_in_maintainers_list() -> None:
@@ -587,6 +600,28 @@ def test_route_directive_set_when_login_in_maintainers_list() -> None:
     assert decision.directive is True
     assert decision.directive_body == "do it"
     assert decision.directive_author == "can1357"
+    assert decision.directive_authorizes_impl is True
+
+
+def test_route_directive_from_collaborator_does_not_authorize_impl() -> None:
+    decision = route(
+        "issue_comment",
+        {
+            "action": "created",
+            "comment": {
+                "user": {"login": "oldschoola"},
+                "author_association": "COLLABORATOR",
+                "body": "@robomp-bot go ahead with the plan",
+            },
+            "issue": {"number": 9},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+    )
+    assert decision.directive is True
+    assert decision.directive_body == "go ahead with the plan"
+    assert decision.directive_authorizes_impl is False
 
 
 def test_route_directive_unset_for_random_user_even_with_mention() -> None:
@@ -719,6 +754,7 @@ def test_route_reviewer_bot_review_comment_is_directive() -> None:
     assert decision.directive is True
     assert decision.directive_body == "This branch leaks memory."
     assert decision.directive_author == "chatgpt-codex-connector"
+    assert decision.directive_authorizes_impl is False
 
 
 def test_route_random_bot_still_skipped_when_not_in_reviewer_list() -> None:

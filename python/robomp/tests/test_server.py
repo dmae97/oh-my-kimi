@@ -1500,7 +1500,7 @@ def test_webhook_directive_on_unknown_issue_is_queued_with_metadata(env) -> None
     assert row is not None
     assert row.state == "queued"
     directive = row.payload.get("_robomp_directive")
-    assert directive == {"body": "please refactor X", "author": "can1357", "pragmas": []}
+    assert directive == {"body": "please refactor X", "author": "can1357", "pragmas": [], "authorizes_impl": True}
 
 
 def test_webhook_maintainer_bypasses_rate_limit(

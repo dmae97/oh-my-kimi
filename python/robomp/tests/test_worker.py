@@ -158,6 +158,40 @@ def _patch_worker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_task_sets_impl_authorized_from_directive(
+    tmp_path: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs, _bindings = _make_inputs(tmp_path, settings, session_has_jsonl=False)
+    captured: dict[str, bool] = {}
+
+    monkeypatch.setattr(worker, "_build_prompt", lambda *args, **kwargs: "prompt")
+
+    def fake_run_rpc_blocking(
+        _inputs: worker.TaskInputs,
+        *,
+        task_kind: str,
+        prompt: str,
+        loop: asyncio.AbstractEventLoop,
+        bindings: worker.ToolBindings,
+        directive: worker.DirectiveInfo | None = None,
+    ) -> str:
+        del task_kind, prompt, loop, directive
+        captured["impl_authorized"] = bindings.impl_authorized
+        return "ok"
+
+    monkeypatch.setattr(worker, "_run_rpc_blocking", fake_run_rpc_blocking)
+
+    result = await worker.run_task(
+        task_kind="triage_issue",
+        inputs=inputs,
+        directive=worker.DirectiveInfo(body="go ahead", author="can1357", authorizes_impl=True),
+    )
+
+    assert result == "ok"
+    assert captured == {"impl_authorized": True}
+
+
+@pytest.mark.asyncio
 async def test_run_rpc_passes_continue_when_session_jsonl_present(tmp_path: Path, settings: Settings) -> None:
     inputs, bindings = _make_inputs(tmp_path, settings, session_has_jsonl=True)
     loop = asyncio.new_event_loop()

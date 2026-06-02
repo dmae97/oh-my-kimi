@@ -113,6 +113,9 @@ class ToolBindings:
     # True only for incoming-PR review tasks. Review tools require it; mutating
     # branch/PR publication tools reject when it is set.
     review_mode: bool = False
+    # Current task is driven by an allowlist/OWNER maintainer directive that
+    # authorizes implementation. Gates first-PR creation on non-bug/doc issues.
+    impl_authorized: bool = False
     slot_uid: int | None = None
     # Set by the worker before launching omp. Carries the abort-task signal
     # back out to the worker; `None` for unit tests that exercise tools
@@ -623,6 +626,7 @@ def _build_push_branch(bindings: ToolBindings) -> HostTool[Any, Any]:
             msg = "refusing to push: PR review worktrees are read-only."
             _audit(bindings, "gh_push_branch", args, error=msg)
             _raise_command(msg)
+        _enforce_impl_authorization(bindings, "gh_push_branch", args, action="push branch")
         branch = str(args.get("branch") or bindings.workspace.branch)
         skip = bool(args.get("skip_checks", False))
         # Same gate as gh_open_pr — formatter + check before bytes leave the
@@ -664,6 +668,7 @@ def _build_open_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
             msg = "refusing to open PR: PR review tasks are read-only."
             _audit(bindings, "gh_open_pr", args, error=msg)
             _raise_command(msg)
+        _enforce_impl_authorization(bindings, "gh_open_pr", args, action="open PR")
         title = args.get("title")
         body = args.get("body")
         if not isinstance(title, str) or not title.strip():
@@ -982,12 +987,42 @@ def _build_fetch_thread(bindings: ToolBindings) -> HostTool[Any, Any]:
 
 
 _PRIMARY_TYPES = ("bug", "enhancement", "question", "proposal", "documentation", "invalid", "duplicate")
+_AUTO_PR_CLASSIFICATIONS = frozenset({"bug", "documentation"})
 _PRIORITIES = ("prio:p0", "prio:p1", "prio:p2", "prio:p3")
 _FUNCTIONAL = ("agent", "tool", "tui", "cli", "prompting", "sdk", "auth", "setup", "ux", "providers")
 _PLATFORMS = ("platform:linux", "platform:macos", "platform:windows", "platform:wsl")
 _PR_RANKS = ("review:p0", "review:p1", "review:p2", "review:p3")
 _PR_TYPES = ("feat", "fix", "docs", "refactor", "perf", "test", "chore", "ci", "build")
 _CLOSING_ISSUE_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.IGNORECASE)
+
+
+def _enforce_impl_authorization(
+    bindings: ToolBindings,
+    tool_name: str,
+    args: Mapping[str, Any],
+    *,
+    action: str,
+) -> None:
+    """Refuse first publish on issue classes that require maintainer authorization."""
+    if bindings.impl_authorized:
+        return
+    row = bindings.db.get_issue(bindings.issue_key)
+    if row is not None:
+        if row.pr_number is not None:
+            return
+        classification = row.classification
+        if classification in _AUTO_PR_CLASSIFICATIONS:
+            return
+    else:
+        classification = None
+    classification_phrase = f"classified `{classification}`" if classification else "not classified"
+    msg = (
+        f"refusing to {action}: issue #{bindings.issue.number} is {classification_phrase}; "
+        "a repo OWNER or allowlisted maintainer must @-mention you with an explicit go-ahead "
+        "before any branch/PR. Post your analysis with `gh_post_comment` and stop."
+    )
+    _audit(bindings, tool_name, args, error=msg)
+    _raise_command(msg)
 
 
 def _require_review_mode(bindings: ToolBindings, name: str, args: Mapping[str, Any]) -> None:

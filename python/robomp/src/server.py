@@ -379,6 +379,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "body": decision.directive_body,
                 "author": decision.directive_author,
                 "pragmas": [list(item) for item in decision.directive_pragmas],
+                "authorizes_impl": decision.directive_authorizes_impl,
             }
 
         if not decision.should_queue:

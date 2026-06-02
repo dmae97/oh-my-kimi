@@ -54,7 +54,12 @@ def _directive_from_payload(payload: Mapping[str, Any]) -> DirectiveInfo | None:
                 k, v = entry
                 if isinstance(k, str) and isinstance(v, str):
                     pragmas.append((k, v))
-    return DirectiveInfo(body=body, author=author, pragmas=tuple(pragmas))
+    return DirectiveInfo(
+        body=body,
+        author=author,
+        pragmas=tuple(pragmas),
+        authorizes_impl=bool(raw.get("authorizes_impl")),
+    )
 
 
 async def _fetch_thread(

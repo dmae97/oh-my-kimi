@@ -31,6 +31,7 @@ class RouteDecision:
     directive_body: str | None = None
     directive_author: str | None = None
     directive_pragmas: tuple[tuple[str, str], ...] = ()
+    directive_authorizes_impl: bool = False
 
     @property
     def should_queue(self) -> bool:
@@ -125,6 +126,20 @@ def is_maintainer(
     return False
 
 
+def is_implementation_authorizer(
+    login: str | None,
+    association: str | None,
+    *,
+    maintainers: frozenset[str],
+) -> bool:
+    """Return whether this author may authorize implementation work."""
+    if isinstance(login, str) and login and login.lower() in maintainers:
+        return True
+    if isinstance(association, str) and association.upper() == "OWNER":
+        return True
+    return False
+
+
 def route(
     event_type: str,
     payload: Mapping[str, Any],
@@ -184,6 +199,7 @@ def route(
                 "directive_body": cleaned,
                 "directive_author": rb_login,
                 "directive_pragmas": pragmas,
+                "directive_authorizes_impl": False,
             }
         if not is_maintainer(login, assoc, maintainers=maintainers):
             return {}
@@ -191,11 +207,13 @@ def route(
         if stripped is None:
             return {}
         cleaned, pragmas = parse_pragmas(stripped)
+        authorizes_impl = is_implementation_authorizer(login, assoc, maintainers=maintainers)
         return {
             "directive": True,
             "directive_body": cleaned,
             "directive_author": login,
             "directive_pragmas": pragmas,
+            "directive_authorizes_impl": authorizes_impl,
         }
 
     if event_type == "issues":
@@ -352,6 +370,7 @@ __all__ = [
     "TRUSTED_ASSOCIATIONS",
     "extract_mention",
     "is_maintainer",
+    "is_implementation_authorizer",
     "rate_limit_cap",
     "route",
     "verify_signature",

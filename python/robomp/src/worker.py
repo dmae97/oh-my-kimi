@@ -86,6 +86,7 @@ class DirectiveInfo:
     author: str
     thread: tuple[ThreadMessage, ...] = ()
     pragmas: tuple[tuple[str, str], ...] = ()
+    authorizes_impl: bool = False
 
 
 def _resolve_pragma_overrides(
@@ -685,6 +686,7 @@ async def run_task(
         inbound_thread_number=pr_number,
         inbound_is_pr=pr_number is not None,
         review_mode=review_mode,
+        impl_authorized=bool(directive is not None and directive.authorizes_impl),
         slot_uid=inputs.slot_uid,
         abort=AbortController(),
     )
