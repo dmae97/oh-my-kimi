@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a bundled TypeScript rule that warns against leaving `@deprecated` compatibility shims behind instead of finishing a refactor.
+
 ### Fixed
 
 - Fixed `/review`'s uncommitted-change mode in Jujutsu repositories to read `jj diff --git` from the current workspace, so non-default JJ workspaces include their working-copy changes instead of falling back to the colocated Git checkout.

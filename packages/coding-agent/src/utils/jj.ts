@@ -59,7 +59,6 @@ export class JjCommandError extends Error {
 	}
 }
 
-
 // ════════════════════════════════════════════════════════════════════════════
 // Internal: Core execution
 // ════════════════════════════════════════════════════════════════════════════
@@ -192,10 +191,7 @@ export const diff = Object.assign(
 	},
 	{
 		/** List changed file paths. */
-		async changedFiles(
-			cwd: string,
-			options: Pick<DiffOptions, "files" | "signal"> = {},
-		): Promise<string[]> {
+		async changedFiles(cwd: string, options: Pick<DiffOptions, "files" | "signal"> = {}): Promise<string[]> {
 			return splitLines(await diff(cwd, { ...options, nameOnly: true }));
 		},
 	},
@@ -227,4 +223,3 @@ export const repo = {
 		return (await repo.root(cwd)) !== null;
 	},
 };
-
