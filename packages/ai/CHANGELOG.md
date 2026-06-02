@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- Fixed tool argument validation to wrap a plain string in a singleton array when the schema requires an array, allowing tool-level path/list normalization to recover from bare string arguments.
 - Restored `eager_input_streaming` and strict flags on OAuth Anthropic tool definitions when model compatibility allows eager streaming.
 - Fixed OAuth stream calls with injected custom clients missing a `beta` client by falling back to `client.messages.create` instead of requiring `client.beta.messages.create`
 - Fixed direct use of internal API client typing so retry/timeouts and malformed-error classification remain compatible while not requiring the external SDK
