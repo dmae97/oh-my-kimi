@@ -31,6 +31,7 @@ import { AstEditTool } from "./ast-edit";
 import { AstGrepTool } from "./ast-grep";
 import { BashTool } from "./bash";
 import { BrowserTool } from "./browser";
+import type { BuiltinToolName } from "./builtin-names";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { DebugTool } from "./debug";
 import { EvalTool } from "./eval";
@@ -295,7 +296,7 @@ export function computeEssentialBuiltinNames(settings: Settings): string[] {
  * Public callable factory map. External callers may invoke `BUILTIN_TOOLS.read(session)` or
  * `BUILTIN_TOOLS[name](session)` to construct a tool directly.
  */
-export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
+export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	read: s => new ReadTool(s),
 	bash: s => new BashTool(s),
 	edit: s => new EditTool(s),
@@ -335,7 +336,7 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	goal: s => new GoalTool(s),
 };
 
-export type ToolName = keyof typeof BUILTIN_TOOLS;
+export type ToolName = BuiltinToolName;
 
 /**
  * Create tools from BUILTIN_TOOLS registry.

@@ -5,7 +5,7 @@ import { type Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { APP_NAME, CONFIG_DIR_NAME, logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { parseEffort } from "../thinking";
-import { BUILTIN_TOOLS } from "../tools";
+import { BUILTIN_TOOL_NAMES } from "../tools/builtin-names";
 import {
 	OPTIONAL_FLAGS,
 	OPTIONAL_VALUE_FLAGS,
@@ -72,8 +72,8 @@ export interface Args {
 const PARSE_DEPS: ParseDeps = {
 	logger,
 	parseEffort,
-	BUILTIN_TOOLS,
-	THINKING_EFFORTS,
+	builtinToolNames: BUILTIN_TOOL_NAMES,
+	thinkingEfforts: THINKING_EFFORTS,
 };
 
 export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {

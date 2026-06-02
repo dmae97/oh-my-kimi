@@ -47,8 +47,8 @@ import type { Args } from "./args";
 export interface ParseDeps {
 	logger: { warn: (message: string, meta?: Record<string, unknown>) => void };
 	parseEffort: (value: string | null | undefined) => Effort | undefined;
-	BUILTIN_TOOLS: Record<string, unknown>;
-	THINKING_EFFORTS: readonly string[];
+	builtinToolNames: readonly string[];
+	thinkingEfforts: readonly string[];
 }
 
 export type StringSetter = (result: Args, value: string, deps: ParseDeps) => void;
@@ -146,12 +146,12 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 			.filter(Boolean);
 		const valid: string[] = [];
 		for (const name of names) {
-			if (name in deps.BUILTIN_TOOLS) {
+			if (deps.builtinToolNames.includes(name)) {
 				valid.push(name);
 			} else {
 				deps.logger.warn("Unknown tool passed to --tools", {
 					tool: name,
-					validTools: Object.keys(deps.BUILTIN_TOOLS),
+					validTools: deps.builtinToolNames,
 				});
 			}
 		}
@@ -164,7 +164,7 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 		} else {
 			deps.logger.warn("Invalid thinking level passed to --thinking", {
 				level: value,
-				validThinkingLevels: deps.THINKING_EFFORTS,
+				validThinkingLevels: deps.thinkingEfforts,
 			});
 		}
 	},
