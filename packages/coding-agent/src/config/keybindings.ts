@@ -59,6 +59,13 @@ declare module "@oh-my-pi/pi-tui" {
 }
 
 /**
+ * Resolve default image-paste shortcuts for the current terminal platform.
+ */
+export function getDefaultPasteImageKeys(platform: NodeJS.Platform = process.platform): KeyId[] {
+	return platform === "win32" ? ["ctrl+v", "alt+v"] : ["ctrl+v"];
+}
+
+/**
  * All keybindings definitions: TUI + app-specific.
  */
 export const KEYBINDINGS = {
@@ -120,7 +127,7 @@ export const KEYBINDINGS = {
 		description: "Dequeue message",
 	},
 	"app.clipboard.pasteImage": {
-		defaultKeys: process.platform === "win32" ? "alt+v" : "ctrl+v",
+		defaultKeys: getDefaultPasteImageKeys(),
 		description: "Paste image from clipboard",
 	},
 	"app.clipboard.pasteTextRaw": {
