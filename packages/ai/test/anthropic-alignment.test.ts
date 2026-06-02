@@ -1361,7 +1361,33 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.context_management).toEqual({
 			edits: [{ type: "clear_thinking_20251015", keep: "all" }],
 		});
-		expect(payload.output_config).toEqual({ effort: "high" });
+		expect(payload.output_config).toEqual({ effort: "xhigh" });
+
+		const maxPayload = (await captureAnthropicPayload(
+			{
+				...ANTHROPIC_MODEL,
+				id: "claude-opus-4-7",
+				name: "Claude Opus 4.7",
+				thinking: {
+					mode: "anthropic-adaptive",
+					minLevel: Effort.Minimal,
+					maxLevel: Effort.XHigh,
+				},
+			},
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				thinkingEnabled: true,
+				reasoning: Effort.XHigh,
+			},
+		)) as {
+			thinking?: { type?: string; display?: string };
+			output_config?: { effort?: string };
+		};
+		expect(maxPayload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(maxPayload.output_config).toEqual({ effort: "max" });
 	});
 
 	it("keeps summarized adaptive thinking by default for API-key Opus 4.7+ requests", async () => {
@@ -1425,7 +1451,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		};
 
 		expect(payload.output_config).toEqual({
-			effort: "high",
+			effort: "xhigh",
 			task_budget: { type: "tokens", total: 64_000, remaining: 48_000 },
 		});
 	});

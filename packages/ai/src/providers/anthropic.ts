@@ -14,7 +14,6 @@ import {
 } from "@oh-my-pi/pi-utils";
 import {
 	disablesParallelToolUse,
-	Effort,
 	hasOpus47ApiRestrictions,
 	mapEffortToAnthropicAdaptiveEffort,
 	supportsMidConversationSystemMessages,
@@ -2200,37 +2199,15 @@ function enforceCacheControlLimit(params: MessageCreateParamsStreaming, maxBreak
 		stripAllCacheControl(toolBlocks, excessCounter);
 	}
 }
-function mapEffortToClaudeCodeAdaptiveEffort(
-	model: Model<"anthropic-messages">,
-	effort: Effort,
-): "low" | "medium" | "high" | "xhigh" {
-	// Validate against the model's supported effort range before applying Claude
-	// Code's unshifted wire mapping.
-	mapEffortToAnthropicAdaptiveEffort(model, effort);
-	switch (effort) {
-		case Effort.Minimal:
-		case Effort.Low:
-			return "low";
-		case Effort.Medium:
-			return "medium";
-		case Effort.High:
-			return "high";
-		case Effort.XHigh:
-			return "xhigh";
-	}
-}
 
 function resolveAnthropicAdaptiveEffort(
 	model: Model<"anthropic-messages">,
 	options: AnthropicOptions,
-	isOAuthToken: boolean,
 ): AnthropicEffort | undefined {
 	if (options.effort) return options.effort;
 	const requestedEffort = options.reasoning;
 	if (!requestedEffort) return undefined;
-	return isOAuthToken
-		? mapEffortToClaudeCodeAdaptiveEffort(model, requestedEffort)
-		: mapEffortToAnthropicAdaptiveEffort(model, requestedEffort);
+	return mapEffortToAnthropicAdaptiveEffort(model, requestedEffort);
 }
 
 function startsWithAfterAsciiWhitespace(value: string, prefix: string): boolean {
@@ -2330,7 +2307,7 @@ function buildParams(
 	if (model.reasoning) {
 		if (options?.thinkingEnabled) {
 			const mode = model.thinking?.mode;
-			const effort = resolveAnthropicAdaptiveEffort(model, options, isOAuthToken);
+			const effort = resolveAnthropicAdaptiveEffort(model, options);
 
 			const compat = getAnthropicCompat(model);
 			if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
