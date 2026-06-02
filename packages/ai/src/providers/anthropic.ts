@@ -1933,9 +1933,26 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		};
 	}
 
-	// OpenCode's Anthropic-compatible gateway accepts bearer auth only; leaving
-	// apiKey set lets the SDK add X-Api-Key, which upstream Alibaba rejects.
-	if (model.provider === "opencode-go" || model.provider === "opencode-zen") {
+	// OpenCode Go's Anthropic-compatible gateway validates API-key auth through
+	// `X-Api-Key`; bearer-only requests reach the endpoint but return
+	// `Missing API key` before token validation.
+	if (model.provider === "opencode-go") {
+		delete defaultHeaders.Authorization;
+		return {
+			isOAuthToken: false,
+			apiKey,
+			authToken: null,
+			baseURL: baseUrl,
+			maxRetries: 5,
+			defaultHeaders,
+			...(debugFetch ? { fetch: debugFetch } : {}),
+			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
+		};
+	}
+
+	// OpenCode Zen's Anthropic-compatible gateway accepts bearer auth only;
+	// leaving apiKey set lets the client add X-Api-Key, which upstream Alibaba rejects.
+	if (model.provider === "opencode-zen") {
 		return {
 			isOAuthToken: false,
 			apiKey: null,
