@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as url from "node:url";
 import { loadLegacyPiModule } from "../../src/extensibility/plugins/legacy-pi-compat";
 
 // Issue #1674: legacy Pi extensions load browser-UI assets (HTML/CSS) at module
@@ -102,7 +103,7 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.hasZod).toBe(true);
 	});
 
-	it("anchors the rewrite scope at the package root for dist/ entries importing ../src", async () => {
+	it("rewrites legacy imports in ../src modules reached through relative imports", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "dist-ext", version: "1.0.0" }),
 			"src/helper.ts": [
@@ -117,8 +118,31 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 
 		const mod = (await loadLegacyPiModule(path.join(dir, "dist", "extension.ts"))) as { ok: boolean };
 
-		// `../src/helper.ts` lives outside the entry's own dir but inside the
-		// package root, so its legacy import is still rewritten.
+		// `../src/helper.ts` lives outside the entry's own dir but is part of the
+		// entry's relative-import graph, so its legacy import is still rewritten.
 		expect(mod.ok).toBe(true);
+	});
+
+	it("does not rewrite sibling files outside the loaded extension's import graph", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "scoped-ext", version: "1.0.0" }),
+			"index.ts": ['export { local } from "./local.ts";', "export default function (pi) { void pi; }"].join("\n"),
+			"local.ts": 'export const local = "local-ok";',
+			// Not imported by index.ts, so it must stay outside the rewrite scope.
+			// `@earendil-works/*` only resolves via the rewrite, so an un-rewritten
+			// import fails — proving the hook did not over-reach to this sibling.
+			"unrelated.ts": [
+				'import { z } from "@earendil-works/pi-ai";',
+				'export const hasZod = typeof z?.object === "function";',
+			].join("\n"),
+		});
+
+		const entryMod = (await loadLegacyPiModule(path.join(dir, "index.ts"))) as { local: string };
+		expect(entryMod.local).toBe("local-ok");
+
+		// Loading the un-imported sibling directly must NOT benefit from the
+		// extension's rewrite hook; its fork-scope import stays unresolved.
+		const siblingUrl = `${url.pathToFileURL(await fs.realpath(path.join(dir, "unrelated.ts"))).href}?nonce=${Date.now()}`;
+		await expect(import(siblingUrl)).rejects.toThrow(/@earendil-works\/pi-ai/);
 	});
 });

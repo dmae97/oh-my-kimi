@@ -244,60 +244,15 @@ function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Extension roots that already have a load-time rewrite hook installed. Each
-// `Bun.plugin()` registration is process-global and permanent, so we register
-// at most one hook per root.
-const hookedExtensionRoots = new Set<string>();
+// Match relative import specifiers (static `from "./…"` and dynamic
+// `import("./…")`). Used to walk an extension's own module graph; bare and
+// absolute specifiers are deliberately excluded.
+const RELATIVE_IMPORT_SPECIFIER_REGEX = /(?:from\s+|import\s*\(\s*)["'](\.\.?\/[^"']+)["']/g;
 
-/**
- * Install a `Bun.plugin()` `onLoad` hook scoped to a single extension root so
- * the extension's own `.js`/`.ts` source is rewritten at load time while its
- * bundled `node_modules` keep Bun's native CJS/ESM resolution.
- *
- * The filter matches `<root>/…/*.{c,m}{j,t}s{,x}` but never a path containing a
- * `node_modules/` segment. A runtime `onLoad` cannot fall through (Bun requires
- * a result object), so the path-scoped filter — not a runtime bail — is what
- * keeps host and dependency modules out of the rewrite path.
- */
-function ensureExtensionRootHook(root: string): void {
-	if (hookedExtensionRoots.has(root)) {
-		return;
-	}
-	hookedExtensionRoots.add(root);
-
-	const filter = new RegExp(`^${escapeRegExp(root + path.sep)}(?:(?!node_modules[\\\\/]).)*\\.[cm]?[jt]sx?$`);
-	Bun.plugin({
-		name: `omp:legacy-pi-ext:${Bun.hash(root).toString(36)}`,
-		setup(build) {
-			build.onLoad({ filter, namespace: "file" }, async args => {
-				const raw = await Bun.file(args.path).text();
-				return { contents: rewriteLegacyExtensionSource(raw), loader: getLoader(args.path) };
-			});
-		},
-	});
-}
-
-/**
- * Resolve the directory whose `.js`/`.ts` files should be treated as extension
- * source: the nearest ancestor of the entry that contains a `package.json`,
- * falling back to the entry's own directory. Anchoring on the package root keeps
- * `dist/` entries, sibling `../src` modules, and package-root assets inside one
- * rewrite scope.
- */
-async function findExtensionRoot(entryPath: string): Promise<string> {
-	const entryDir = path.dirname(entryPath);
-	let dir = entryDir;
-	for (;;) {
-		if (await Bun.file(path.join(dir, "package.json")).exists()) {
-			return dir;
-		}
-		const parent = path.dirname(dir);
-		if (parent === dir) {
-			return entryDir;
-		}
-		dir = parent;
-	}
-}
+// Extension entry realpaths that already have a load-time rewrite hook
+// installed. Each `Bun.plugin()` registration is process-global and permanent,
+// so we register at most one hook per entry.
+const hookedExtensionEntries = new Set<string>();
 
 /** Resolve symlinks in a path, falling back to the input if realpath fails. */
 async function realpathOrSelf(p: string): Promise<string> {
@@ -309,24 +264,92 @@ async function realpathOrSelf(p: string): Promise<string> {
 }
 
 /**
+ * Walk the extension's relative-import graph starting at `entryRealPath`,
+ * returning the realpath of every reachable source module. Only relative
+ * specifiers (`./`, `../`) are followed — bare and absolute imports are left to
+ * Bun's native resolver — so the set is exactly the extension's own source,
+ * wherever it physically lives (a `../src` sibling, a symlinked sub-tree, …).
+ * This mirrors the module set the old temp-dir mirror tracked, minus the copy.
+ */
+async function collectExtensionModules(entryRealPath: string): Promise<Set<string>> {
+	const modules = new Set<string>();
+	const queue = [entryRealPath];
+	while (queue.length > 0) {
+		const file = queue.pop();
+		if (!file || modules.has(file)) {
+			continue;
+		}
+		let source: string;
+		try {
+			source = await Bun.file(file).text();
+		} catch {
+			continue;
+		}
+		modules.add(file);
+		const dir = path.dirname(file);
+		for (const match of source.matchAll(RELATIVE_IMPORT_SPECIFIER_REGEX)) {
+			try {
+				const resolved = await realpathOrSelf(Bun.resolveSync(match[1], dir));
+				if (!modules.has(resolved)) {
+					queue.push(resolved);
+				}
+			} catch {
+				// Unresolvable relative import (e.g. a type-only path); skip it.
+			}
+		}
+	}
+	return modules;
+}
+
+/**
+ * Install a `Bun.plugin()` `onLoad` hook scoped to exactly the modules in an
+ * extension's relative-import graph, so their legacy `@(scope)/pi-*` and bare
+ * `@sinclair/typebox` imports are rewritten at load time. A runtime `onLoad`
+ * cannot fall through (Bun requires a result object), so the filter is an
+ * exact-path alternation of the graph's realpaths — it never matches the host,
+ * other extensions, `node_modules` deps, or unrelated project source.
+ */
+async function ensureExtensionGraphHook(entryRealPath: string): Promise<void> {
+	if (hookedExtensionEntries.has(entryRealPath)) {
+		return;
+	}
+	hookedExtensionEntries.add(entryRealPath);
+
+	const modules = await collectExtensionModules(entryRealPath);
+	const alternation = [...modules].map(escapeRegExp).join("|");
+	const filter = new RegExp(`^(?:${alternation})$`);
+	Bun.plugin({
+		name: `omp:legacy-pi-ext:${Bun.hash(entryRealPath).toString(36)}`,
+		setup(build) {
+			build.onLoad({ filter, namespace: "file" }, async args => {
+				// Re-read on every load so a `?mtime` reload picks up edited source.
+				const raw = await Bun.file(args.path).text();
+				return { contents: rewriteLegacyExtensionSource(raw), loader: getLoader(args.path) };
+			});
+		},
+	});
+}
+
+/**
  * Load a legacy Pi extension module from its real on-disk location.
  *
  * The extension runs in place, so its `import.meta.url` is the real source file
  * and `__dirname`-relative `readFileSync` asset loads (HTML/CSS bundled next to
  * the entry) resolve exactly as they do under the original Pi runtime — no
- * temp-directory mirroring and no asset copying. A per-root `onLoad` hook
- * rewrites only the legacy `@(scope)/pi-*` and `@sinclair/typebox` imports;
- * everything else resolves natively.
+ * temp-directory mirroring and no asset copying. An `onLoad` hook scoped to the
+ * entry's relative-import graph rewrites only the legacy `@(scope)/pi-*` and
+ * `@sinclair/typebox` imports in the extension's own source; everything else
+ * resolves natively.
  */
 export async function loadLegacyPiModule(resolvedPath: string): Promise<unknown> {
 	// Bun reports the realpath of a loaded module to `onLoad` and exposes it as
 	// `import.meta.url`. Resolve symlinks here too (macOS `/var`→`/private/var`,
-	// `bun link`/pnpm installs) so the per-root rewrite filter matches the path
-	// Bun actually hands the hook.
-	const absolutePath = await realpathOrSelf(path.resolve(resolvedPath));
-	ensureExtensionRootHook(await findExtensionRoot(absolutePath));
+	// `bun link`/pnpm installs) so the rewrite filter matches the path Bun
+	// actually hands the hook.
+	const entryRealPath = await realpathOrSelf(path.resolve(resolvedPath));
+	await ensureExtensionGraphHook(entryRealPath);
 	// `?mtime` busts Bun's module cache so repeat loads pick up edited source.
-	return import(`${toImportSpecifier(absolutePath)}?mtime=${Date.now()}`);
+	return import(`${toImportSpecifier(entryRealPath)}?mtime=${Date.now()}`);
 }
 
 function getLoader(path: string): "js" | "jsx" | "ts" | "tsx" {
