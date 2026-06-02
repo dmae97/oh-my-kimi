@@ -826,7 +826,7 @@ export class TUI extends Container {
 				return;
 			}
 			this.#focusedComponent.handleInput(data);
-			this.requestRender();
+			this.requestRender(false, { allowUnknownViewportMutation: true });
 		}
 	}
 

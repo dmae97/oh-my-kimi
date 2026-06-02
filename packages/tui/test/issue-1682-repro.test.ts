@@ -36,6 +36,21 @@ class LineList implements Component {
 	}
 }
 
+class PromptInput implements Component {
+	focused = false;
+	#text = "";
+
+	handleInput(data: string): void {
+		this.#text += data;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		return [`prompt> ${this.#text}`.slice(0, width)];
+	}
+}
+
 async function settle(term: VirtualTerminal): Promise<void> {
 	const nextTick = Promise.withResolvers<void>();
 	process.nextTick(nextTick.resolve);
@@ -169,6 +184,44 @@ describe("issue #1682: TUI eager scrollback rebuild", () => {
 					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
 					await settle(term);
 					expect(eraseScrollbackCount(writes)).toBe(1);
+				} finally {
+					tui.stop();
+				}
+			});
+		});
+	});
+
+	it("treats focused keyboard input as a user-input opt-in after an ED3-risk shrink defers", async () => {
+		await withEnvPatch(CLEAR_MULTIPLEXER_ENV, async () => {
+			await withTerminalRisk(true, async () => {
+				const term = new VirtualTerminal(40, 10);
+				overrideProbe(term, undefined);
+				const tui = new TUI(term);
+				const transcript = new LineList(Array.from({ length: 80 }, (_value, index) => `init-${index}`));
+				const prompt = new PromptInput();
+				tui.addChild(transcript);
+				tui.addChild(prompt);
+				tui.setFocus(prompt);
+
+				try {
+					tui.start();
+					await settle(term);
+					const writes = capture(term);
+					tui.setEagerNativeScrollbackRebuild(true);
+
+					transcript.setLines(Array.from({ length: 20 }, (_value, index) => `shrunk-${index}`));
+					tui.requestRender();
+					await settle(term);
+
+					expect(eraseScrollbackCount(writes)).toBe(0);
+					expect(term.getViewport().map(line => line.trim())).not.toContain("prompt> x");
+
+					term.sendInput("x");
+					await settle(term);
+
+					expect(term.getViewport().map(line => line.trim())).toContain("prompt> x");
+					expect(eraseScrollbackCount(writes)).toBe(1);
+					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 				} finally {
 					tui.stop();
 				}
