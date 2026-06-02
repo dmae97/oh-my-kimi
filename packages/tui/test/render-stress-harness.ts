@@ -584,6 +584,7 @@ class StressModel {
 	#initialText(index: number): string {
 		if (this.#uniqueContent) return index % 13 === 0 ? "" : `${this.#labelPrefix}init${index.toString(36)}`;
 		if (index % 13 === 0) return "";
+		if (index % 31 === 0) return emojiPresentationText(`ep${index.toString(36)}`);
 		if (index % 29 === 0) return arabicCombiningText(`ar${index.toString(36)}`);
 		if (index % 23 === 0) return longText(`L${index.toString(36)}`, 4);
 		if (index % 19 === 0) return linkedText(`link${index.toString(36)}`);
@@ -2367,6 +2368,23 @@ function arabicCombiningText(label: string): string {
 	return `${label}-بَسِمَ-قُرْآن`;
 }
 
+function emojiPresentationText(label: string): string {
+	// Text-default symbols promoted to emoji presentation by VS16 (U+FE0F) plus a
+	// keycap sequence. The renderer's native width engine (unicode-width, matching
+	// ghostty/WezTerm/kitty) measures each as 2 cells, while the xterm.js test
+	// model (Unicode 6 tables) renders them as 1 cell (VS16 = combining, width 0).
+	// This deliberately models the legacy-terminal disagreement direction: the
+	// renderer OVER-measures, so its truncation is conservative and written lines
+	// can never overflow the model terminal. The opposite direction (renderer
+	// under-measures, e.g. ZWJ families on kitty/alacritty) clips intra-line and
+	// is locked by deterministic regression tests instead — randomized text-fidelity
+	// oracles would mis-report that unavoidable clipping as a renderer bug.
+	// Width facts: xterm.js UnicodeV6.ts (VS16 in BMP_COMBINING), unicode-width
+	// tests ("\u{26A0}\u{FE0F}" == 2), kitty text-sizing-protocol.rst (VS16
+	// promotes the previous cell to width 2).
+	return `${label} \u26A0\uFE0F\u2139\uFE0F 1\uFE0F\u20E3`;
+}
+
 function styledText(label: string, color: number): string {
 	return `${ESC}[${color}m${label}${ESC}[0m`;
 }
@@ -2389,7 +2407,8 @@ function randomDecoratedText(rng: Rng, label: string): string {
 	if (roll < 0.36) return styledText(`${label}界`, 31 + rng.int(0, 6));
 	if (roll < 0.54) return linkedText(label);
 	if (roll < 0.72) return longText(label, rng.int(2, 6));
-	if (roll < 0.86) return arabicCombiningText(label);
+	if (roll < 0.81) return arabicCombiningText(label);
+	if (roll < 0.9) return emojiPresentationText(label);
 	return label;
 }
 
