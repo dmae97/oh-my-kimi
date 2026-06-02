@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `parseClaudeRateLimitHeaders` and `AuthStorage.ingestUsageHeaders` so Anthropic rate-limit response headers can warm the per-credential usage cache with throttling while preserving per-tier data from the last full usage report.
+
 ### Changed
 
 - Changed generated OAuth metadata `user_id` to use a deterministic `device_id` derived from the install ID instead of a random value
