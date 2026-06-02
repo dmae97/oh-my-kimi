@@ -18,6 +18,28 @@ import * as typebox from "../typebox";
 import { createNoOpUIContext, resolvePath } from "../utils";
 import type { CustomToolAPI, CustomToolFactory, LoadedCustomTool, ToolLoadError } from "./types";
 
+class CustomToolProcessExitError extends Error {
+	constructor(code: string | number | null | undefined) {
+		const suffix = code == null ? "" : ` with code ${code}`;
+		super(`Custom tool attempted to exit the process during load${suffix}`);
+		this.name = "CustomToolProcessExitError";
+	}
+}
+
+async function withProcessExitGuard<T>(operation: () => T | Promise<T>): Promise<T> {
+	const originalExit = process.exit;
+	const interceptedExit: typeof process.exit = code => {
+		throw new CustomToolProcessExitError(code);
+	};
+
+	process.exit = interceptedExit;
+	try {
+		return await operation();
+	} finally {
+		process.exit = originalExit;
+	}
+}
+
 /**
  * Load a single tool module using native Bun import.
  */
@@ -42,14 +64,14 @@ async function loadTool(
 	}
 
 	try {
-		const module = await import(resolvedPath);
+		const module = await withProcessExitGuard(() => import(resolvedPath));
 		const factory = (module.default ?? module) as CustomToolFactory;
 
 		if (typeof factory !== "function") {
 			return { tools: null, error: { path: toolPath, error: "Tool must export a default function", source } };
 		}
 
-		const toolResult = await factory(sharedApi);
+		const toolResult = await withProcessExitGuard(() => factory(sharedApi));
 		const toolsArray = Array.isArray(toolResult) ? toolResult : [toolResult];
 
 		const loadedTools: LoadedCustomTool[] = toolsArray.map(tool => ({
