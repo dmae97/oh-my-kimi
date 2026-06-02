@@ -503,27 +503,35 @@ if "__omp_prelude_loaded__" not in globals():
         text = res.get("text") if isinstance(res, dict) else res
         return json.loads(text) if schema is not None else text
 
-    def _normalize_concurrency(value):
-        """Clamp a concurrency hint to [1, 16], defaulting to 4 on bad input."""
-        try:
-            n = int(value)
-        except (TypeError, ValueError):
-            n = 4
-        return max(1, min(16, n))
+    def _concurrency_limit():
+        """Worker-pool ceiling from the host ``task.maxConcurrency`` setting.
 
-    def _pool_map(items, fn, concurrency):
+        An eval fan-out runs as wide as a ``task`` batch would. Returns ``0`` for
+        unbounded (run every item at once); falls back to ``0`` if the host
+        bridge is unreachable.
+        """
+        try:
+            snap = _bridge_call("__concurrency__", {}) or {}
+            n = int(snap.get("limit") or 0)
+        except Exception:
+            return 0
+        return n if n > 0 else 0
+
+    def _pool_map(items, fn):
         """Run ``fn`` over ``items`` through a bounded thread pool.
 
         Preserves input order, barriers until every task settles, and raises the
         lowest-index exception if any task failed. Each task runs inside a copy
         of the submitting thread's context so the ``_CURRENT_RID`` ContextVar
-        propagates and bridge calls (agent(), tool.*, etc.) keep working.
+        propagates and bridge calls (agent(), tool.*, etc.) keep working. The
+        pool width tracks ``task.maxConcurrency`` (0 = run every item at once).
         """
         import concurrent.futures, contextvars
         items = list(items)
         if not items:
             return []
-        workers = min(_normalize_concurrency(concurrency), len(items))
+        limit = _concurrency_limit()
+        workers = min(limit, len(items)) if limit > 0 else len(items)
         results = [None] * len(items)
         errors = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
@@ -541,30 +549,30 @@ if "__omp_prelude_loaded__" not in globals():
             raise errors[min(errors)]
         return results
 
-    def parallel(thunks, *, concurrency=4):
+    def parallel(thunks):
         """Run zero-arg callables through a bounded pool, preserving input order.
 
         Barriers until all finish; re-raises the lowest-index exception if any
-        thunk raised.
+        thunk raised. Pool width tracks the task tool's ``task.maxConcurrency``.
         """
         thunks = list(thunks)
         for t in thunks:
             if not callable(t):
                 raise TypeError("parallel() expects an iterable of zero-arg callables")
-        return _pool_map(thunks, lambda t: t(), concurrency)
+        return _pool_map(thunks, lambda t: t())
 
-    def pipeline(items, *stages, concurrency=4):
+    def pipeline(items, *stages):
         """Map items left-to-right through one-arg stage callables.
 
         Every item clears stage N before any item enters stage N+1 (barrier per
         stage). Stage 1 receives the original item; later stages receive the
-        previous stage's result.
+        previous stage's result. Pool width tracks ``task.maxConcurrency``.
         """
         current = list(items)
         for stage in stages:
             if not callable(stage):
                 raise TypeError("pipeline() stages must be callables")
-            current = _pool_map(current, stage, concurrency)
+            current = _pool_map(current, stage)
         return current
 
     def log(message):

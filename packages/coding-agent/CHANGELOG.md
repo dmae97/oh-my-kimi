@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Changed the eval `parallel()` / `pipeline()` helpers to drop their `concurrency` argument and run as wide as a `task` tool batch. The worker-pool ceiling now tracks the `task.maxConcurrency` setting (default 32; `0` = run every item at once) resolved live from the host via a new `__concurrency__` bridge, instead of the old per-call `concurrency` option that defaulted to 4 and capped at 16. This stops eval fan-outs from under-using the parallelism the session is configured for.
 - Changed resuming a session that belongs to a different project to switch the process into that project's working directory. `pi --resume` and the in-session `/resume` picker now `chdir` into the resumed session's `cwd` and re-scope every cwd-derived input — project dir, **project settings** (`.claude/settings.yml`, `.omp/settings.json`, path-scoped `enabledModels`/`disabledProviders`), plugin roots, capabilities, slash commands, and the ssh tool — so tools, discovery, configuration, and commands all follow the resumed project. The `SessionManager` adopts the resumed session's own `cwd`/session directory on load (rolled back if the switch fails).
 
 ### Fixed

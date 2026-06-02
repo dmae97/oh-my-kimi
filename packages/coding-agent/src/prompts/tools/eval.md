@@ -48,10 +48,10 @@ llm(prompt, model?="default", system?=None, schema?=None) → str | dict
     Oneshot, stateless LLM call (no history, no tools). `model` picks a tier: "smol" (fast), "default" (this session's model), "slow" (most capable). Pass `system` for a system prompt. Pass a JSON-Schema `schema` to force structured output and get the parsed object back; otherwise returns the completion text.
 agent(prompt, agent_type?="task", model?=None, context?=None, label?=None, schema?=None) → str | dict
     Run a subagent and return its final output. Defaults to the bundled "task" agent; pass `agent_type`/`agentType` for another discovered agent. Pass a JSON-Schema `schema` to force structured output and get the parsed object back.
-parallel(thunks, concurrency?=4) → list
-    Run thunks (callables) through a bounded pool (default 4, max 16), preserving input order. Barrier: returns once all finish; a thunk that throws propagates.
-pipeline(items, ...stages, concurrency?=4) → list
-    Map each item through stages left-to-right; a barrier runs between stages (every item clears stage N before stage N+1). Each stage is a one-arg callable: stage 1 gets the original item, later stages get the previous result.
+parallel(thunks) → list
+    Run thunks (callables) through a bounded pool, preserving input order. The pool is as wide as a `task` tool batch (tracks the `task.maxConcurrency` setting), so fan out as wide as the work divides — don't pre-shrink it. Barrier: returns once all finish; a thunk that throws propagates.
+pipeline(items, ...stages) → list
+    Map each item through stages left-to-right; a barrier runs between stages (every item clears stage N before stage N+1). Each stage is a one-arg callable: stage 1 gets the original item, later stages get the previous result. Same pool width as parallel().
 log(message) → None
     Emit a progress line above the status tree.
 phase(title) → None
