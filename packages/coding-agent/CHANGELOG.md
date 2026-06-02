@@ -1,9 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-### Changed
-
-- Changed Anthropic API request metadata `user_id.device_id` to be derived from the persistent install ID so it remains stable across Anthropic account changes on the same install
 
 ### Added
 
@@ -12,10 +9,12 @@
 
 ### Changed
 
+- Changed Anthropic API request metadata `user_id.device_id` to be derived from the persistent install ID so it remains stable across Anthropic account changes on the same install
 - Changed the eval `parallel()` / `pipeline()` helpers to drop their `concurrency` argument and run as wide as a `task` tool batch. The worker-pool ceiling now tracks the `task.maxConcurrency` setting (default 32; `0` = run every item at once) resolved live from the host via a new `__concurrency__` bridge, instead of the old per-call `concurrency` option that defaulted to 4 and capped at 16. This stops eval fan-outs from under-using the parallelism the session is configured for.
 - Changed subagent / `agent://` output ids from a numeric prefix scheme (`0-Anna`, `1-Bob`, nested `0-Anna.1-Bob`) to a name-first scheme: the requested name is used verbatim and a `-2`/`-3`/… suffix is added only when the same name recurs within a session (`Anna`, `Anna-2`, `Anna-3`). Nested ids stay grouped under the parent (`Anna.Bob`) and the live task widget renders them as `Anna>Bob`. The main agent's IRC id is now `Main` (was `0-Main`). `AgentOutputManager` still scans existing `.md` outputs on resume so it never reuses a name that would clobber a prior output.
 - Changed resuming a session that belongs to a different project to switch the process into that project's working directory. `pi --resume` and the in-session `/resume` picker now `chdir` into the resumed session's `cwd` and re-scope every cwd-derived input — project dir, **project settings** (`.claude/settings.yml`, `.omp/settings.json`, path-scoped `enabledModels`/`disabledProviders`), plugin roots, capabilities, slash commands, and the ssh tool — so tools, discovery, configuration, and commands all follow the resumed project. The `SessionManager` adopts the resumed session's own `cwd`/session directory on load (rolled back if the switch fails).
 - Documented `ANTHROPIC_SEARCH_API_KEY` and `ANTHROPIC_SEARCH_BASE_URL` more thoroughly in `docs/environment-variables.md`, surfaced them in `docs/tools/web_search.md`'s Anthropic provider section, and added `ANTHROPIC_SEARCH_BASE_URL` to `omp --help`'s env-var summary so the search-only overrides are discoverable alongside `ANTHROPIC_SEARCH_API_KEY` ([#1694](https://github.com/can1357/oh-my-pi/issues/1694)).
+- Migrated the Kagi web search provider to Kagi's V1 Search API (`POST /api/v1/search`), replacing the sunset V0 endpoint while keeping the `kagi` provider id, `KAGI_API_KEY` credential, and `/login kagi` flow unchanged ([#1272](https://github.com/can1357/oh-my-pi/pull/1272) by [@thismat](https://github.com/thismat))
 
 ### Fixed
 
@@ -33,14 +32,16 @@
 - Fixed `omp update` failing with `No version matching "X" found for specifier "@oh-my-pi/pi-coding-agent" (but package exists)` when bun saw an older catalog than the update check did. The version is resolved by querying `https://registry.npmjs.org/` directly, but `bun install -g` would then consult its on-disk manifest snapshot or a configured npm mirror (corporate proxy, Taobao, …) that hadn't replicated the release. The bun install step now runs with `--no-cache --registry=https://registry.npmjs.org/` so it hits exactly the registry the version check used ([#1686](https://github.com/can1357/oh-my-pi/issues/1686)).
 - Fixed ACP mode resetting configured async/background job settings to disabled RPC defaults, so explicit ACP background-job opt-ins are preserved during startup ([#1324](https://github.com/can1357/oh-my-pi/issues/1324)).
 - Fixed legacy Pi extensions loading their `__dirname`-relative assets as empty — e.g. `@plannotator/pi-extension` reading `plannotator.html`/`review-editor.html` via `readFileSync(join(__dirname, …))`, which left `planHtmlContent` empty and dropped the plugin into its "no UI support" auto-approve path. The compat layer previously mirrored every extension module into a flat temp directory, so `import.meta.url` (and thus `__dirname`) pointed at the mirror root and sibling asset reads `ENOENT`ed. Extensions now load in place from their real on-disk location — `import.meta.url` is the real source file, so asset reads resolve exactly as under the original Pi runtime. A `Bun.plugin()` `onLoad` hook scoped to the entry's relative-import graph (the exact set of source modules, never the host, other extensions, `node_modules` deps, or unrelated project files) rewrites only the legacy `@(scope)/pi-*` and `@sinclair/typebox` imports; relative siblings, the extension's own `node_modules` deps, and bundled assets all resolve natively, with no temp-directory mirroring and no asset copying ([#1674](https://github.com/can1357/oh-my-pi/issues/1674)).
+- Fixed plan approval keep-context usage to use the execution model context window, avoid zero-usage aborted turns, and disable keeping context when preserved context exceeds 95%.
 
 ## [15.7.6] - 2026-06-01
+
 ### Added
 
 - Added `ask` option descriptions so agents can keep short labels and render explanatory text as separate muted rows in the selector.
 - Added an extension API for rendering supplemental UI below visible assistant thinking blocks.
 - Added default-on `lsp.diagnosticsDeduplicate` support so post-edit LSP diagnostics already shown for a file are suppressed within the session and only new or changed diagnostics are surfaced.
- 
+
 ### Fixed
 
 - Fixed a single ESC press both dismissing the @/slash autocomplete popup and aborting the running agent operation. ESC now drains the popup first; only when no popup is visible does it route to the global interrupt handler (matching the standard TUI/IDE pattern). The `shouldBypassAutocompleteOnEscape` editor hook is removed — it had become the trigger for this bug ([#1655](https://github.com/can1357/oh-my-pi/issues/1655)).
@@ -59,10 +60,6 @@
 - Fixed `omp` segfaulting on exit on Windows after the tiny title/memory model loaded `onnxruntime-node` (issue [#1606](https://github.com/can1357/oh-my-pi/issues/1606)). The tiny model now runs in a Bun subprocess instead of a Worker thread, so the NAPI finalizer that crashes during shutdown never executes in the agent's address space; the subprocess is `SIGKILL`'d on dispose to skip every native destructor on every platform.
 - Fixed unbounded MCP reconnect loop that could fork-bomb the host when a stdio MCP server completes the `initialize`/`tools/list` handshake and then exits. `MCPManager` now enforces a per-server crash circuit breaker (5 reconnects per 30 s window) on the automatic `transport.onClose` path; manual `/mcp reconnect` resets the window so users can recover after fixing the misconfiguration ([#1592](https://github.com/can1357/oh-my-pi/issues/1592)).
 - Fixed auto context maintenance to include the pending prompt in the pre-send token estimate, so large user turns compact history before the provider rejects an over-limit request ([#1618](https://github.com/can1357/oh-my-pi/issues/1618)).
-
-### Fixed
-
-- Fixed plan approval keep-context usage to use the execution model context window, avoid zero-usage aborted turns, and disable keeping context when preserved context exceeds 95%.
 
 ## [15.7.4] - 2026-05-31
 
@@ -125,6 +122,7 @@
 - Fixed duplicated/stale scrollback above a streaming tool result on POSIX terminals (macOS/Linux). A tool whose output grows and re-lays-out (e.g. an edit diff gaining hunks) re-renders rows that already scrolled into native scrollback; the unknown-viewport anti-yank deferral left the old copy in place while the new one rendered below, showing the block twice. The event controller now enables the TUI's eager native-scrollback rebuild while a foreground tool is executing (`setEagerNativeScrollbackRebuild`), so those offscreen re-renders rebuild history cleanly — a snap to the tail is acceptable mid-tool. Background-running tools and plain assistant-text streaming keep the no-yank deferral; the mode resets at each turn start.
 
 ## [15.7.2] - 2026-05-31
+
 ### Added
 
 - Added `providers.autoThinkingModel` setting so users can choose the `auto` thinking classifier backend (online smol or local tiny-memory model)
@@ -230,6 +228,7 @@
 - Removed the sticky Todos panel all-done drop/collapse animation; completed todo state now stays visible until the next explicit todo update changes it.
 
 ## [15.5.15] - 2026-05-30
+
 ### Changed
 
 - Enabled the agent loop's tool-call batch cap for Anthropic Claude sessions, cutting oversized streamed tool-use bursts into runnable batches before continuing the conversation.
@@ -243,6 +242,7 @@
 - Fixed Anthropic Claude tool-call batching to clear and reapply the Claude-specific batch cap whenever the session model changes
 
 ## [15.5.14] - 2026-05-29
+
 ### Added
 
 - Added progress status output for `llm()` calls in `eval`, including the resolved model, tier, and returned character count
@@ -261,6 +261,7 @@
 - Reverted the sticky `Todos` panel task glyphs to the pre-15.5.12 checkbox icons: completed tasks render `theme.checkbox.checked` (not `theme.status.success`) and in-progress tasks render `theme.checkbox.unchecked` (not the running glyph). Removed the animated spinner entirely — in-progress tasks and pending tasks with a matching in-flight subagent still highlight via the `accent` colour, but the panel now paints once per state change instead of on an 80 ms timer. Subagent auto-checkmarking, the advancing window (`selectStickyTodoWindow`), `todoMatchesAnyDescription` highlighting, and the all-done close animation are unchanged.
 
 ## [15.5.13] - 2026-05-29
+
 ### Breaking Changes
 
 - Changed hashline edit syntax to verb-based v4: body-bearing ops are `replace N..M:`, `insert before N:`, `insert after N:`, `insert head:`, and `insert tail:`, while bodyless `delete N..M` handles deletion. Removed `>A..B` repeat rows and the old `prepend:` / `append:` virtual insert headers; `-` rows remain rejected with a teaching error.
@@ -369,7 +370,9 @@
 - Secured `vault://` reads and writes by validating URL paths and blocking traversal, absolute paths, and symlink escapes outside the selected vault root
 
 ## [15.5.7] - 2026-05-27
+
 ### Added
+
 - `providers.openrouterVariant` setting (Settings → Providers → "OpenRouter Routing") to default OpenRouter requests to a routing-variant suffix (`:nitro`, `:floor`, `:online`, `:exacto`). Selectors that already name a variant (e.g. `openrouter/anthropic/claude-haiku:nitro`) keep precedence.
 
 - `generate_image` supports xAI Grok Imagine via `providers.image=xai`. Supports `grok-imagine-image` (default) and `grok-imagine-image-quality` at aspect ratios `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`. Uses the xAI Grok OAuth credential when available, otherwise `XAI_API_KEY`.
@@ -381,6 +384,7 @@
 - Fixed `read` URL reader mode aborting after a stalled Jina request instead of falling back to trafilatura/lynx/native: Jina (and Parallel extract) now have their own per-attempt sub-budget capped at 10s, the catch handler honours only real user cancellation, and the in-process native renderer is always attempted on already-loaded HTML ([#1449](https://github.com/can1357/oh-my-pi/issues/1449))
 
 ## [15.5.6] - 2026-05-27
+
 ### Added
 
 - Support for multi-range line selectors on URLs (e.g., `:5-10,20-30`) to fetch and display multiple non-contiguous sections
@@ -440,6 +444,7 @@
 - Fixed hashline session-chain replay silently overwriting in-session edits when the model re-targeted a previously rewritten line with a stale file hash; replay now refuses unless every edit's anchor line content matches between the snapshot and the current file ([#1422](https://github.com/can1357/oh-my-pi/pull/1422))
 
 ## [15.5.3] - 2026-05-27
+
 ### Breaking Changes
 
 - Disallowed inline payload on hashline `↑`, `↓`, and `:` operations (including BOF/EOF inserts), requiring payload text to be supplied on standalone `+` continuation rows
@@ -453,6 +458,7 @@
 - Fixed runtime model registry refresh and cache loading so providers with authoritative dynamic catalogs, including Synthetic, do not re-add deprecated bundled model IDs after discovery ([#1417](https://github.com/can1357/oh-my-pi/issues/1417)).
 
 ## [15.5.2] - 2026-05-26
+
 ### Breaking Changes
 
 - Changed the hashline patch format so payload continuation lines now require a leading `+`, rejecting unprefixed multiline payload rows that were previously accepted as fallback payload text
@@ -517,10 +523,12 @@
 ## [15.4.1] - 2026-05-26
 
 ### Breaking Changes
+
 - The `vim` edit mode option is no longer available; configurations using `edit.mode: vim` will be automatically mapped to `hashline` mode
 - Hashline payload semantics are now strictly inline-first: the first payload line is whatever follows the sigil on the op line itself, and subsequent lines append after it. A newline immediately after `↑`/`↓`/`:` is no longer a free separator — it produces a blank first payload line. Use `LINE↓content` for a one-line insert, `LINE↓firstline\nsecondline` for two lines; bare `LINE↓` / `LINE↑` / `LINE:` (no inline payload) still insert/replace with one blank line as before.
 
 ### Added
+
 - Added `irc.timeoutMs` setting to configure IRC message timeout duration with a default of 120 seconds
 - Added timeout enforcement for IRC send operations to prevent indefinite hangs when recipients are unresponsive
 - Added evaluator state inheritance for `task`-spawned subagents so JavaScript and Python variables are visible between a parent agent and its child sessions
@@ -568,6 +576,7 @@
 - Updated `MCPOAuthFlow.#resolveRegistrationEndpoint` to try origin-root well-known first, then fall back to path-prefixed well-known ([1407](https://github.com/can1357/oh-my-pi/pull/1407) by [@faizhasim](https://github.com/faizhasim))
 
 ### Removed
+
 - Removed the `installH2Fetch()` activation from CLI startup; HTTPS fetches now use Bun's default transport
 - Removed the `vim` edit mode along with the `VimTool` module, prompt, and supporting buffer/engine/renderer stack
 - Removed per-line hash anchors (2-letter bigram hashes) from hashline format
@@ -587,6 +596,7 @@
 - Fixed JavaScript `eval` imports to preserve module-level singletons across re-imports of unchanged local files and reload them only after edits
 - Fixed concurrent Python evaluator tool calls to use per-run identifiers so tool responses and output are routed to the correct execution
 - Fixed the `search` tool argument validation to accept a single string `paths` value as a one-path search.
+
 ## [15.4.0] - 2026-05-26
 
 ### Breaking Changes
@@ -616,7 +626,6 @@
 - Updated hashline anchor parsing so copied `|TEXT` decorations remain cosmetic and payload must be provided on or after the operator
 - Unified subagent output-schema validation into a single shared module (`tools/output-schema-validator.ts`) used by both the in-process `yield` tool (validates before the subagent yields) and the executor's post-mortem `finalizeSubprocessOutput` path (validates after subprocess exit). Previously each side ran its own `normalizeSchema` → `jtdToJsonSchema` → `validateJsonSchemaValue` chain in parallel, which was semantically equivalent but invited drift: a future tweak on one side could silently disagree with the other and cause yields that pass in-tool to fail post-mortem (or vice versa). The unification preserves both call sites' existing behavior (yield throws an actionable per-issue error for the model; executor produces a `schema_violation` outcome with the first issue and missing-required fields) by exposing two output formatters (`formatAllValidationIssues` for retries, `formatValidationIssueHeadline` for headlines).
 - Changed web search provider credential lookup to use the shared `AuthStorage` pipeline (`getApiKey`/`getOAuthAccess`) for API-key and OAuth auth instead of direct `AgentStorage` access
-- Migrated the Kagi web search provider to Kagi's V1 Search API (`POST /api/v1/search`), replacing the sunset V0 endpoint while keeping the `kagi` provider id, `KAGI_API_KEY` credential, and `/login kagi` flow unchanged ([#1272](https://github.com/can1357/oh-my-pi/pull/1272) by [@thismat](https://github.com/thismat))
 - Changed the `codex` web search provider display label from `Codex` to `OpenAI`
 - Updated `anthropic` and `openai`/`gemini` web search option descriptions to reflect their native `web_search`/OAuth requirements
 
@@ -652,6 +661,7 @@
 - Added `tools.approvalMode` global setting (Interaction tab in `/settings`) with values `auto` | `prompt` | `custom`. Defaults to `auto` so the agent runs every tool call without interruption — matching the `--auto-approve` / `--yolo` CLI flag. `prompt` uses built-in per-tool defaults only (read/find/search auto-allow; bash/edit/write/eval/ssh require confirmation; `tools.approval.<tool>` config is ignored). `custom` makes the `tools.approval.<tool>` config the source of truth — your settings win over built-in defaults, which fall back only for tools you haven't configured. CLI `--auto-approve` always wins. Critical safety patterns (e.g. `rm -rf /`, `curl … | bash`, fork bombs) keep prompting even when the tool is user-allowed.
 
 ## [15.3.2] - 2026-05-25
+
 ### Added
 
 - Added inline `|TEXT` payload support to `»` and `«` hashline insert operations, allowing single-line inserts on the op line and still supporting additional payload lines
@@ -679,8 +689,11 @@
 - Fixed append-only context mode not being recomputed after model switches — the mode was frozen at session construction time using the initial model's provider, so `provider.appendOnlyContext=auto` left append-only enabled after switching away from DeepSeek (or disabled after switching to DeepSeek) for the rest of the session
 
 ### Fixed
+
 - Fixed clipboard image paste (Ctrl+V) silently failing on WSL2 by routing image reads through a `powershell.exe` bridge when WSL interop is detected, since `arboard` returns `ContentNotAvailable` under WSLg ([#1280](https://github.com/can1357/oh-my-pi/issues/1280))
+
 ## [15.2.4] - 2026-05-22
+
 ### Breaking Changes
 
 - Replaced the legacy `@@` header and `+`/`<`/`=`/`-` hashline syntax with the new `§PATH` header and `«`/`»`/`≔` operation format, so existing hashline scripts and prompts using old symbols must be updated
@@ -702,6 +715,7 @@
 - Fixed hashline payload handling in parser and streaming preview to preserve blank lines as actual payload text until the next op, file header, or envelope marker
 
 ## [15.2.3] - 2026-05-22
+
 ### Breaking Changes
 
 - Changed PR and task-isolation worktree directory layout to hash-based `~/.omp/wt/<identifier>-<path-hash>` style paths, replacing the previous nested encoded-repo layout
@@ -865,6 +879,7 @@
 - Fixed `.env` loading so malformed variable names and NUL-containing values are ignored before they can poison `Bun.env` and break bash/external process execution with `nul byte found in provided data`.
 
 ## [15.1.2] - 2026-05-15
+
 ### Fixed
 
 - Fixed SSH host additions/removals made inside a running session not refreshing the live `ssh` tool. `/ssh add` and `/ssh remove` now update the model-visible host list immediately, while `/reload-plugins` and `/move` refresh SSH discovery for external or project-scope config changes without restart.
@@ -877,6 +892,7 @@
 - Updated MCP and theme schema metadata to reference JSON Schema draft-2020-12
 
 ## [15.1.0] - 2026-05-15
+
 ### Breaking Changes
 
 - Changed the extension and hook runtime API by moving schema typing from direct TypeBox imports to `TSchema` from `@oh-my-pi/pi-ai`, requiring callers who use TypeScript imports of `Type` to migrate via provided injected modules
@@ -965,6 +981,7 @@
 - Fixed `$env:VAR` PowerShell variables being mangled on Windows when commands invoked PowerShell as a subprocess (e.g. `powershell -Command "Write-Host $env:SystemRoot"`). Brush-core applied POSIX parameter expansion to `$env` before spawning the child, leaving a dangling `:NAME`. The fix lives in `pi-shell` at env-var application time: every brush session now defines `env=$env` as an internal shell variable so `$env:NAME` expands to the literal `$env:NAME` token that PowerShell expects. The fallback is not exported, only influences brush's own expansion, and is shadowed by any user assignment to `env` (e.g. `env=prod; echo "$env:8080"` still prints `prod:8080`), so the POSIX bash contract is preserved. ([#1079](https://github.com/can1357/oh-my-pi/issues/1079))
 
 ## [15.0.1] - 2026-05-14
+
 ### Breaking Changes
 
 - Removed the dedicated `exit_plan_mode` tool and its prompt, requiring plan-mode completion to use the existing `resolve` tool path instead
@@ -1007,6 +1024,7 @@
 - Fixed MCP OAuth refresh failing with `HTTP 401 invalid_client` for servers that require Dynamic Client Registration (RFC 7591) and have no `oauth.clientId` configured (e.g. `mcp.linear.app`). `MCPOAuthFlow` registered a fresh public PKCE client on each authorize and discarded the issued `client_id` once the flow object went out of scope; refresh then called the provider's `/token` endpoint without a `client_id`. The flow now exposes `resolvedClientId` / `registeredClientSecret` getters, `MCPCommandController#handleOAuthFlow` returns them alongside `credentialId`, and both the initial-connect and `/mcp reauth` paths persist them into `auth.{clientId,clientSecret}` (used at refresh) and `oauth.{clientId,clientSecret}` (used by subsequent `/mcp reauth` to skip re-registration). The `MCPAddWizard` `onOAuth` callback type is now `Promise<MCPAddWizardOAuthResult>` and `#launchOAuthFlow` folds the registered credentials into wizard state. Servers with a statically-configured `oauth.clientId` (Notion, Slack, Datadog) are unaffected — `#tryRegisterClient` short-circuits and the write-back is a no-op. ([#1061](https://github.com/can1357/oh-my-pi/pull/1061) by [@ldx](https://github.com/ldx)).
 
 ## [15.0.0] - 2026-05-13
+
 ### Breaking Changes
 
 - Removed `op: issue_view` and `op: pr_view` from the `github` tool. Read single issues/PRs via the `read` tool against `issue://<N>` / `pr://<N>` (or the long form `issue://<owner>/<repo>/<N>` / `pr://<owner>/<repo>/<N>`); append `?comments=0` to drop the comments section. The `issue` and `comments` parameters were removed from the tool schema since no remaining op consumes them. Mutating ops (`pr_create`, `pr_checkout`, `pr_push`), `repo_view`, `search_*`, and `run_watch` are unchanged.
@@ -1040,6 +1058,7 @@
 - Aligned prompt instruction language by defining `NEVER` and `AVOID` as strict aliases for `MUST NOT` and `SHOULD NOT` in the system prompt, and standardized agent, tool, and system prompt templates to use those terms consistently
 - Changed `--mode acp` to apply the same stdout-quiet overrides as `--mode rpc` so no banner or status text leaks into the JSON-RPC channel
 - Changed ACP startup to no longer require a configured model so registry validators and clients can complete `initialize` and `authenticate` before any model is selected
+
 ### Fixed
 
 - Deferred flushing of buffered `credential_disabled` events during extension runner initialization to a microtask so handler failures are now routed through `onError()` registrations made immediately after `initialize()`, preserving extension error reporting
@@ -1219,6 +1238,7 @@
 - Fixed `Timed out initializing browser tab worker` on prebuilt binaries by rewriting `spawnTabWorker` to import the worker entry with `with { type: "file" }` so Bun's `--compile` bundler statically discovers and embeds `tab-worker-entry.ts` in the single-file binary ([#1011](https://github.com/can1357/oh-my-pi/issues/1011))
 
 ## [14.9.3] - 2026-05-10
+
 ### Breaking Changes
 
 - Changed the `eval` tool input format to canonical `*** Begin <LANG>` ... `*** End <LANG>` cells with `*** Title`, `*** Timeout`, and `*** Reset` directives, so legacy `===== ... =====` eval inputs are no longer accepted for execution
@@ -1264,6 +1284,7 @@
 - Fixed IRC background exchange poll loop leaking after session disposal: `#scheduleBackgroundExchangeFlush` now stops immediately when `dispose()` is called, preventing stale `setTimeout` callbacks from firing against a torn-down agent
 
 ## [14.9.2] - 2026-05-10
+
 ### Added
 
 - Added `agentsMdFiles` to `WorkspaceTree` so AGENTS.md discovery results are returned with the workspace scan output
@@ -1312,6 +1333,7 @@
 - Removed hashline auto-rebase. Anchor mismatches now reject immediately so the model re-reads instead of silently relocating an edit to a hash-collision within ±5 lines, which could otherwise apply the change to the wrong region. Stale-anchor recovery via the cached read snapshot is unaffected.
 
 ## [14.8.0] - 2026-05-09
+
 ### Added
 
 - Added hashline stale-anchor recovery by replaying edits against a session-scoped `read`/`search` snapshot and 3-way-merging them onto the current file when anchors no longer match
@@ -1331,6 +1353,7 @@
 - Fixed indefinite startup hang on large repos introduced in 14.7.6 ([#975](https://github.com/can1357/oh-my-pi/issues/975)) on two fronts: (1) `createAgentSession` was awaiting `buildAgentsMdSearch` and `buildWorkspaceTree` directly in its blocking `Promise.all`, bypassing the existing 5s preparation deadline that previously protected startup — both scans are now raced against a 5s deadline and fall back to the system-prompt fallback path on timeout; (2) `buildWorkspaceTree` now derives its listing from `git ls-files --cached --others --exclude-standard` when the workspace is a git worktree, which is O(index size) and avoids the per-call full-tree gitignore-aware native scan that the previous implementation triggered. Repos without git, or where the call fails / times out, transparently fall back to the previous native-glob path.
 
 ## [14.7.6] - 2026-05-07
+
 ### Changed
 
 - Changed the "Hide Thinking Blocks" setting (Ctrl+T) to also instruct the provider to omit thinking/reasoning summaries from responses, instead of just hiding them client-side. Anthropic sees `thinking.display = "omitted"` (where supported); OpenAI Responses / Azure / Codex requests drop `reasoning.summary` entirely.
@@ -1343,6 +1366,7 @@
 - Fixed subagents re-running expensive workspace scans (`buildAgentsMdSearch`, `buildWorkspaceTree`) on every spawn: parents now forward their already-resolved `AGENTS.md` search and workspace tree to subagents through `createAgentSession`, matching how `contextFiles`, `skills`, and `promptTemplates` are already inherited. On large monorepos this removes seconds of redundant work per `task` invocation and prevents the per-subagent system-prompt timeout warnings.
 
 ## [14.7.5] - 2026-05-07
+
 ### Added
 
 - Added optional `/loop` limits: `/loop 10` stops after 10 auto-iterations, while duration forms such as `/loop 10m` and `/loop 10min` stop after the time limit.
@@ -1378,6 +1402,7 @@
 - Fixed hashline edit streaming preview collapsing to a header-only "opaque box" when a second `@PATH` section header arrived mid-stream — earlier completed sections now stay rendered while the trailing section is still being typed.
 
 ## [14.7.2] - 2026-05-06
+
 ### Breaking Changes
 
 - Removed the exported `BUILTIN_TOOL_METADATA` API, including `BuiltinEntry`-style metadata exports and discoverable-built-in helper exports, which will break consumers relying on those symbols
@@ -1405,6 +1430,7 @@
 - Changed hashline replacement and pure-insert auto-absorb to also drop a single duplicated structural-closing line (`}`, `);`, `]`, etc.) on either boundary when keeping it would unbalance brackets. The pure-insert variant fires regardless of `edit.hashlineAutoDropPureInsertDuplicates`, while the existing 2+ line generic absorb stays gated on that setting.
 
 ## [14.7.0] - 2026-05-04
+
 ### Breaking Changes
 
 - Changed session system-prompt APIs to use ordered string block arrays by requiring `buildSystemPrompt`, `CreateAgentSessionOptions.systemPrompt`, `Session.rebuildSystemPrompt`, and extension `before_agent_start`/`getSystemPrompt` hooks to accept and return `systemPrompt: string[]` instead of a plain system-prompt string or separate `projectPrompt` field
@@ -1449,6 +1475,7 @@
 - Added Ctrl+D draft persistence: pressing Ctrl+D with text in the editor now exits the app and saves the unsent text as a per-session draft. Resuming the same session (e.g. via `--resume`) restores the draft into the editor (one-shot, removed after restore).
 
 ## [14.6.4] - 2026-05-03
+
 ### Added
 
 - Added `hindsight.mentalModelsEnabled`, `hindsight.mentalModelAutoSeed`, `hindsight.mentalModelRefreshIntervalMs`, and `hindsight.mentalModelMaxRenderChars` settings to control curated Hindsight mental-model activation, seeding, refresh cadence, and prompt render budget
