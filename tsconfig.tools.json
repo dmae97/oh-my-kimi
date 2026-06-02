@@ -3,8 +3,9 @@
 	"compilerOptions": {
 		"composite": true,
 		"noEmit": true,
-		"emitDeclarationOnly": false
+		"emitDeclarationOnly": false,
+		"allowImportingTsExtensions": true
 	},
-	"include": ["scripts"],
+	"include": ["scripts", "packages/natives/scripts/gen-npm-packages.ts"],
 	"exclude": ["node_modules"]
 }

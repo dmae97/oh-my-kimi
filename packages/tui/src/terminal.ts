@@ -18,6 +18,7 @@ let activeTerminal: ProcessTerminal | null = null;
 let terminalEverStarted = false;
 
 const STD_INPUT_HANDLE = -10;
+const STD_OUTPUT_HANDLE = -11;
 const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
 /**
  * Emergency terminal restore - call this from signal/crash handlers
@@ -93,18 +94,77 @@ export interface Terminal {
 	setProgress(active: boolean): void;
 
 	/**
+	 * Returns whether the native terminal viewport is at the scrollback tail when
+	 * the host exposes that state. `undefined` means the terminal cannot report it.
+	 */
+	isNativeViewportAtBottom?(): boolean | undefined;
+
+	/**
 	 * Register a callback for terminal appearance (dark/light) changes.
 	 * Detection uses OSC 11 background color query with Mode 2031 as a change trigger.
 	 * Fires when the detected appearance changes, including the initial detection.
 	 */
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
-
 	/** The last detected terminal appearance, or undefined if not yet known. */
 	get appearance(): TerminalAppearance | undefined;
 }
 
 function isWindowsSubsystemForLinux(): boolean {
 	return process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
+}
+
+/**
+ * Whether the native console viewport-position probe should be consulted.
+ *
+ * Returns `true` only on native Windows that is *not* fronted by Windows
+ * Terminal. The kernel32 `GetConsoleScreenBufferInfo` API answers about the
+ * ConPTY pseudo-console — which is always pinned to its tail — and not about
+ * the user-visible scrollback in modern hosts. Treat any such host as
+ * unreportable so the renderer falls back to the deferred-rebuild path.
+ *
+ * Pure helper for unit testing; the runtime call site reads `$env` /
+ * `process.platform`. See #1635.
+ */
+export function shouldTrustNativeViewportProbe(
+	env: { WT_SESSION?: string | undefined } = $env,
+	platform: NodeJS.Platform = process.platform,
+): boolean {
+	if (platform !== "win32") return false;
+	if (env.WT_SESSION) return false;
+	return true;
+}
+
+/**
+ * Whether eager live-frame native scrollback rebuilds are unsafe for the
+ * current POSIX terminal when its viewport position is unobservable.
+ *
+ * A TUI history rebuild emits xterm ED3 (`CSI 3 J`, erase saved lines). On the
+ * terminals below, ED3 can disturb a reader parked in native scrollback during
+ * streaming: kitty/ghostty/alacritty clamp the scroll offset back to the active
+ * tail when saved lines are erased, and WezTerm is the reported POSIX host for
+ * #1682. Defer only the eager streaming opt-in on these hosts; direct
+ * user-input renders and explicit checkpoint rebuilds still pass their own
+ * `allowUnknownViewportMutation` / `allowUnknownViewport` flags.
+ *
+ * Pure helper for unit testing; the runtime call site reads `$env` /
+ * `process.platform`. See #1682.
+ */
+export function terminalHasEagerEraseScrollbackRisk(
+	env: {
+		WEZTERM_PANE?: string | undefined;
+		KITTY_WINDOW_ID?: string | undefined;
+		GHOSTTY_RESOURCES_DIR?: string | undefined;
+		ALACRITTY_WINDOW_ID?: string | undefined;
+		TERM_PROGRAM?: string | undefined;
+	} = $env,
+	platform: NodeJS.Platform = process.platform,
+): boolean {
+	if (platform === "win32") return false;
+	if (env.WEZTERM_PANE || env.KITTY_WINDOW_ID || env.GHOSTTY_RESOURCES_DIR || env.ALACRITTY_WINDOW_ID) {
+		return true;
+	}
+	const termProgram = env.TERM_PROGRAM?.toLowerCase();
+	return termProgram === "ghostty";
 }
 
 /**
@@ -128,7 +188,7 @@ export class ProcessTerminal implements Terminal {
 	#osc11QueryQueued = false;
 	#osc11ResponseBuffer = "";
 	#privateCsiResponseBuffer = "";
-	#pendingDa1Sentinels = 0;
+	#da1SentinelOwners: ("keyboard" | "osc11")[] = [];
 	#osc11PollTimer?: Timer;
 	#mode2031DebounceTimer?: Timer;
 	#progressTimer?: ReturnType<typeof setInterval>;
@@ -202,6 +262,42 @@ export class ProcessTerminal implements Terminal {
 		// but avoid background polling there.
 		if (!isWindowsSubsystemForLinux()) {
 			this.#startOsc11Poll();
+		}
+	}
+
+	/**
+	 * Returns true when Windows' active console viewport is at the scrollback tail.
+	 * POSIX terminals do not expose native scrollback position through a standard API.
+	 *
+	 * On native Windows running under Windows Terminal (the default modern
+	 * host), the `kernel32` probe answers about the ConPTY pseudo-console — not
+	 * the user-visible WT viewport — so it would always read "at bottom" while
+	 * the user is scrolled up. Return `undefined` there so the renderer falls
+	 * back to the POSIX-style deferred-rebuild path: streaming mutations stay
+	 * non-destructive (no `\x1b[3J`), and the rebuild fires at the next prompt
+	 * checkpoint via {@link TUI.refreshNativeScrollbackIfDirty} where the user
+	 * is already pinned to the bottom by the editor keystroke. See #1635.
+	 */
+	isNativeViewportAtBottom(): boolean | undefined {
+		if (!shouldTrustNativeViewportProbe()) return undefined;
+		try {
+			const kernel32 = dlopen("kernel32.dll", {
+				GetStdHandle: { args: [FFIType.i32], returns: FFIType.ptr },
+				GetConsoleScreenBufferInfo: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.bool },
+			});
+			try {
+				const handle = kernel32.symbols.GetStdHandle(STD_OUTPUT_HANDLE);
+				const info = new Uint8Array(22);
+				const infoPtr = ptr(info);
+				if (!infoPtr || !kernel32.symbols.GetConsoleScreenBufferInfo(handle, infoPtr)) return undefined;
+				const viewBottom = new DataView(info.buffer, info.byteOffset, info.byteLength).getInt16(16, true);
+				const bufferHeight = new DataView(info.buffer, info.byteOffset, info.byteLength).getInt16(2, true);
+				return viewBottom >= bufferHeight - 1;
+			} finally {
+				kernel32.close();
+			}
+		} catch {
+			return undefined;
 		}
 	}
 
@@ -293,7 +389,7 @@ export class ProcessTerminal implements Terminal {
 			// events that would otherwise leak into the prompt as keystrokes. See #1238.
 			if (
 				this.#privateCsiResponseBuffer ||
-				(privateCsiPartialPattern.test(sequence) && this.#pendingDa1Sentinels > 0)
+				(privateCsiPartialPattern.test(sequence) && this.#da1SentinelOwners.length > 0)
 			) {
 				if (this.#privateCsiResponseBuffer && sequence.startsWith("\x1b")) {
 					// New escape arrived mid-reassembly — abandon partial and re-process the new sequence.
@@ -324,41 +420,60 @@ export class ProcessTerminal implements Terminal {
 				}
 			}
 
-			// Check for Kitty protocol response (only if not already enabled)
-			if (!this.#kittyProtocolActive) {
-				const match = sequence.match(kittyResponsePattern);
-				if (match) {
-					if (this.#modifyOtherKeysTimeout) {
-						clearTimeout(this.#modifyOtherKeysTimeout);
-						this.#modifyOtherKeysTimeout = undefined;
-					}
-					this.#kittyProtocolActive = true;
-					setKittyProtocolActive(true);
-
-					// Enable Kitty keyboard protocol (push flags)
-					// Flag 1 = disambiguate escape codes
-					// Flag 2 = report event types (press/repeat/release)
-					// Flag 4 = report alternate keys
-					this.#safeWrite("\x1b[>7u");
-					return; // Don't forward protocol response to TUI
-				}
-			}
-
 			// DA1 response: swallow our sentinel reply regardless of whether OSC 11
 			// already succeeded. Other terminal probes should never see these replies.
-			if (da1ResponsePattern.test(sequence) && this.#pendingDa1Sentinels > 0) {
-				this.#pendingDa1Sentinels--;
-				if (this.#osc11Pending) {
-					// DA1 arrived before OSC 11 response: terminal does not support
-					// OSC 11. Clear the pending state without starting a queued query
-					// (queued query is started below, after sentinel is consumed).
-					this.#osc11Pending = false;
-					this.#osc11ResponseBuffer = "";
+			if (da1ResponsePattern.test(sequence) && this.#da1SentinelOwners.length > 0) {
+				const owner = this.#da1SentinelOwners.shift()!;
+				if (owner === "osc11") {
+					if (this.#osc11Pending) {
+						// DA1 arrived before the OSC 11 reply: terminal does not support OSC 11.
+						this.#osc11Pending = false;
+						this.#osc11ResponseBuffer = "";
+					}
+					// Start a queued OSC 11 query once the prior cycle is fully drained.
+					if (
+						this.#osc11QueryQueued &&
+						!this.#osc11Pending &&
+						!this.#da1SentinelOwners.includes("osc11") &&
+						!this.#dead
+					) {
+						this.#osc11QueryQueued = false;
+						this.#startOsc11Query();
+					}
+				} else {
+					// Keyboard probe sentinel: kitty reply never arrived → fall back to modifyOtherKeys.
+					if (!this.#kittyProtocolActive && !this.#modifyOtherKeysActive && this.#modifyOtherKeysTimeout) {
+						clearTimeout(this.#modifyOtherKeysTimeout);
+						this.#modifyOtherKeysTimeout = undefined;
+						this.#safeWrite("\x1b[>4;2m");
+						this.#modifyOtherKeysActive = true;
+					}
 				}
-				// Now that this DA1 cycle is complete, start any queued query.
-				if (this.#osc11QueryQueued && !this.#dead) {
-					this.#osc11QueryQueued = false;
-					this.#startOsc11Query();
+				return;
+			}
+
+			const match = sequence.match(kittyResponsePattern);
+			if (match && !this.#modifyOtherKeysActive) {
+				if (this.#modifyOtherKeysTimeout) {
+					clearTimeout(this.#modifyOtherKeysTimeout);
+					this.#modifyOtherKeysTimeout = undefined;
+				}
+				// Any reply to `\x1b[?u` means the terminal speaks the kitty keyboard
+				// protocol. The reported flag value is the *current* stack-top — fresh
+				// terminals report 0 — so support is implied by the reply itself, not by
+				// the flag value. Pick the level we want; `\x1b[>Nu` pushes one frame
+				// that shutdown's single `\x1b[<u` pop balances.
+				const reportedFlags = parseInt(match[1]!, 10);
+				this.#kittyProtocolActive = true;
+				setKittyProtocolActive(true);
+				if (reportedFlags >= 3) {
+					// Already enriched (Ghostty/foot may keep flags from a parent app).
+					// Push level-2 to lock in event reporting.
+					this.#safeWrite("\x1b[>7u");
+				} else {
+					// Level 1 (disambiguate escape codes) — enough for Shift+Enter
+					// without the modifyOtherKeys fallback that caused regression #3259.
+					this.#safeWrite("\x1b[>1u");
 				}
 				return;
 			}
@@ -425,7 +540,7 @@ export class ProcessTerminal implements Terminal {
 		// consumed yet. Starting a new query while a DA1 is outstanding would
 		// increment the sentinel counter, and the old DA1 arrival would then
 		// prematurely clear the new query's pending state.
-		if (this.#osc11Pending || this.#pendingDa1Sentinels > 0) {
+		if (this.#osc11Pending || this.#da1SentinelOwners.includes("osc11")) {
 			this.#osc11QueryQueued = true;
 			return;
 		}
@@ -435,7 +550,7 @@ export class ProcessTerminal implements Terminal {
 	#startOsc11Query(): void {
 		this.#osc11Pending = true;
 		this.#osc11ResponseBuffer = "";
-		this.#pendingDa1Sentinels++;
+		this.#da1SentinelOwners.push("osc11");
 		this.#safeWrite("\x1b]11;?\x07"); // OSC 11 query (BEL terminated)
 		this.#safeWrite("\x1b[c"); // DA1 sentinel
 	}
@@ -498,7 +613,11 @@ export class ProcessTerminal implements Terminal {
 	#queryAndEnableKittyProtocol(): void {
 		this.#setupStdinBuffer();
 		process.stdin.on("data", this.#stdinDataHandler!);
-		this.#safeWrite("\x1b[?u");
+		// Progressive enhancement query: CSI ?u asks the terminal for its current
+		// kitty keyboard flags (no side effect on the stack); the DA1 sentinel
+		// guarantees a reply even from terminals that ignore CSI ?u.
+		this.#da1SentinelOwners.push("keyboard");
+		this.#safeWrite("\x1b[?u\x1b[c");
 		this.#modifyOtherKeysTimeout = setTimeout(() => {
 			this.#modifyOtherKeysTimeout = undefined;
 			if (this.#kittyProtocolActive || this.#modifyOtherKeysActive) {
@@ -576,7 +695,7 @@ export class ProcessTerminal implements Terminal {
 		this.#osc11QueryQueued = false;
 		this.#osc11ResponseBuffer = "";
 		this.#privateCsiResponseBuffer = "";
-		this.#pendingDa1Sentinels = 0;
+		this.#da1SentinelOwners.length = 0;
 
 		// Disable Kitty keyboard protocol if not already done by drainInput()
 		if (this.#kittyProtocolActive) {

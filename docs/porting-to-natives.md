@@ -18,12 +18,12 @@ Avoid ports that depend on JS-only state or dynamic imports. N-API exports shoul
 
 `@oh-my-pi/pi-natives` no longer has a `packages/natives/src/<module>` TypeScript wrapper layer. The package root points at generated native artifacts:
 
-- runtime entry: `packages/natives/native/index.js`
+- runtime entry/export wrapper: `packages/natives/native/index.js`
 - types entry: `packages/natives/native/index.d.ts`
 - loader helpers: `packages/natives/native/loader-state.js`
 - embedded manifest: `packages/natives/native/embedded-addon.js`
 
-Consumers import directly from `@oh-my-pi/pi-natives`. The generated declarations are produced during `bun --cwd=packages/natives run build`.
+Consumers import directly from `@oh-my-pi/pi-natives`. The generated declarations and explicit ESM exports are produced during `bun --cwd=packages/natives run build`.
 
 ## Anatomy of a native export
 
@@ -38,9 +38,9 @@ Consumers import directly from `@oh-my-pi/pi-natives`. The generated declaration
 
 **Package/build side:**
 
-- `packages/natives/scripts/build-native.ts` runs napi-rs, installs the `.node` artifact, copies generated `index.js`/`index.d.ts`, and appends enum runtime exports.
-- `packages/natives/native/index.js` is the loader that chooses a candidate `.node` file and returns the loaded addon.
-- `packages/natives/package.json` exposes only the package root (`@oh-my-pi/pi-natives`).
+- `packages/natives/scripts/build-native.ts` runs napi-rs, installs the `.node` artifact, copies generated `index.d.ts`, and regenerates explicit ESM class/function exports plus enum runtime exports in the checked-in `native/index.js`.
+- `packages/natives/native/index.js` is the ESM entrypoint that calls the loader, exposes named exports, and rejects install/compiled `.node` files that do not expose the package-version sentinel.
+- `packages/natives/package.json` exposes only the package root (`@oh-my-pi/pi-natives`) as the import surface. At publish time the binaries are split out: the core ships the loader only (no `.node`), and each platform's `.node` is published as an optional-dependency leaf package `@oh-my-pi/pi-natives-<tag>` (`scripts/ci-release-publish.ts` + `packages/natives/scripts/gen-npm-packages.ts`). This is transparent to importers — you still `import` from `@oh-my-pi/pi-natives`.
 
 **Consumer side:**
 
@@ -62,7 +62,7 @@ Consumers import directly from `@oh-my-pi/pi-natives`. The generated declaration
 
 - Run `bun --cwd=packages/natives run build`.
 - Confirm the generated `packages/natives/native/index.d.ts` includes the new export with the intended JS name/signature.
-- Confirm `packages/natives/native/index.js` still has generated enum exports appended when enum changes are involved.
+- Confirm `packages/natives/native/index.js` has generated explicit ESM exports for the new class/function and enum objects when enum changes are involved.
 
 3. **Update consumers**
 
@@ -94,7 +94,7 @@ The loader probes platform-tagged artifacts in deterministic order. For x64, sel
 
 Non-x64 uses `pi_natives.<tag>.node`.
 
-Compiled binaries also probe `<getNativesDir()>/<version>/...` and a legacy user-data directory before package/executable locations. If any earlier candidate is stale, a new export may appear missing.
+Compiled binaries also probe `<getNativesDir()>/<version>/...` and a legacy user-data directory before package/executable locations. Windows `node_modules` installs stage leaf/core addons into the same versioned directory before probing. If any earlier candidate is stale, a new export may appear missing unless the version sentinel rejects it first.
 
 **Fix:** remove stale candidate/cache files and rebuild.
 
@@ -105,16 +105,16 @@ rm packages/natives/native/pi_natives.<platform>-<arch>-baseline.node
 bun --cwd=packages/natives run build
 ```
 
-For compiled binaries, delete the versioned addon cache shown in the loader error (normally under `~/.omp/natives/<version>` unless `$XDG_DATA_HOME/omp` is used).
+For compiled binaries or Windows staging, delete the versioned addon cache shown in the loader error (normally under `~/.omp/natives/<version>` unless `$XDG_DATA_HOME/omp` is used).
 
 ### 2) Generated types do not match loaded binary
 
-This can happen when `native/index.d.ts` was regenerated but the `.node` file being loaded is stale or from a different platform/variant.
+This can happen when `native/index.d.ts` was regenerated but the `.node` file being loaded is stale, same-version incomplete, or from a different platform/variant. Different-version install/compiled binaries should be rejected by the version sentinel during loading.
 
-Verify the loaded export set from the actual candidate path:
+Verify the loaded export set from the actual candidate path reported by the loader:
 
 ```bash
-bun -e 'const tag = `${process.platform}-${process.arch}`; const mod = require(`./packages/natives/native/pi_natives.${tag}.node`); console.log(Object.keys(mod).sort())'
+bun -e 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url); const mod = require(process.argv[2]); console.log(Object.keys(mod).sort())' -- /path/from/loader/error/pi_natives.<tag>[-variant].node
 ```
 
 Fix the build/candidate mismatch. Do not paper over it with optional consumer checks if the export is required.
@@ -123,9 +123,9 @@ Fix the build/candidate mismatch. Do not paper over it with optional consumer ch
 
 Keep N-API signatures simple and owned. Avoid borrowed references like `&str` in public exports. If you need structured data, use `#[napi(object)]` structs. If you need callbacks, use napi-rs `ThreadsafeFunction` and keep callback error/value behavior explicit.
 
-### 4) Enum runtime exports
+### 4) Enum runtime exports and ESM named exports
 
-napi-rs declarations alone are not enough for JS callers that use enum objects at runtime. `scripts/gen-enums.ts` appends enum objects to `native/index.js`. If you add or change a native enum, verify both `native/index.d.ts` and the generated enum export block in `native/index.js`.
+napi-rs declarations alone are not enough for JS callers that import named symbols or use enum objects at runtime. `scripts/gen-enums.ts` reads `native/index.d.ts`, writes explicit `export const ... = nativeBindings...` entries for public classes/functions, and emits enum objects in `native/index.js`. If you add or change a native export, verify both `native/index.d.ts` and the generated export block in `native/index.js`.
 
 ### 5) Benchmarking mistakes
 
@@ -161,8 +161,8 @@ bench("feature/native", () => {
 ## Verification checklist
 
 - Generated `native/index.d.ts` includes the new export and intended TS signature.
-- The loaded `.node` file's `Object.keys(require(candidate))` includes the new export.
-- Runtime enum objects are present when the change adds/changes enums.
+- `native/index.js` includes the generated named export; enum objects are present when the change adds/changes enums.
+- The loaded `.node` file's `Object.keys(require(candidate))` includes the new export and the package-version sentinel.
 - Bench numbers are recorded in the PR/notes.
 - Call sites are updated only if native is faster/equal and behavior-compatible.
 - Obsolete JS code is removed when the native implementation becomes canonical.

@@ -108,14 +108,28 @@ function toErrorMessage(value: unknown): string {
 interface DapStartRequestFailure {
 	rejected: boolean;
 	error?: unknown;
+	/**
+	 * Resolves (never rejects) when the underlying launch/attach request
+	 * settles either way. Set by {@link trackDapStartRequest} on each call,
+	 * so a single failure object must not be reused across launch attempts.
+	 * Consumed by {@link throwPreferredDapStartError} to bound how long to
+	 * wait for a delayed adapter-side rejection before falling back to the
+	 * cascade error from configurationDone.
+	 */
+	settled?: Promise<void>;
 }
 
 function trackDapStartRequest<T>(promise: Promise<T>, failure: DapStartRequestFailure): Promise<T> {
-	return promise.catch(error => {
+	const tracked = promise.catch(error => {
 		failure.rejected = true;
 		failure.error = error;
 		throw error;
 	});
+	failure.settled = tracked.then(
+		() => {},
+		() => {},
+	);
+	return tracked;
 }
 
 function combineDapStartErrors(command: "launch" | "attach", startError: unknown, configurationError: unknown): Error {
@@ -134,12 +148,27 @@ async function throwPreferredDapStartError(
 	startFailure: DapStartRequestFailure,
 	configurationError: unknown,
 ): Promise<never> {
-	await Promise.resolve();
+	await Promise.race([startFailure.settled ?? Promise.resolve(), timers.setTimeout(50)]);
 	if (startFailure.rejected) {
 		throw combineDapStartErrors(command, startFailure.error, configurationError);
 	}
 	throw configurationError;
 }
+
+const DEBUGPY_MISSING_MODULE_RE = /No module named ['"]?debugpy['"]?/;
+
+/**
+ * Map a generic adapter-side failure into the targeted `pip install debugpy`
+ * hint when the adapter is debugpy and stderr/the wrapping error mentions
+ * the missing module. Returns null when the heuristic does not apply, so the
+ * caller can rethrow the original error untouched.
+ */
+function mapDebugpyMissingModule(adapterName: string, error: unknown): Error | null {
+	if (adapterName !== "debugpy") return null;
+	if (!DEBUGPY_MISSING_MODULE_RE.test(toErrorMessage(error))) return null;
+	return new Error("adapter 'debugpy' is not available: install with 'pip install debugpy'");
+}
+
 function normalizePath(filePath: string): string {
 	return path.resolve(filePath);
 }
@@ -274,6 +303,8 @@ export class DapSessionManager {
 			return buildSummary(session);
 		} catch (error) {
 			await this.#disposeSession(session);
+			const mapped = mapDebugpyMissingModule(options.adapter.name, error);
+			if (mapped) throw mapped;
 			throw error;
 		}
 	}
@@ -330,6 +361,8 @@ export class DapSessionManager {
 			return buildSummary(session);
 		} catch (error) {
 			await this.#disposeSession(session);
+			const mapped = mapDebugpyMissingModule(options.adapter.name, error);
+			if (mapped) throw mapped;
 			throw error;
 		}
 	}

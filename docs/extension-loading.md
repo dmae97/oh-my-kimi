@@ -28,17 +28,18 @@ Extension loading builds a list of module entry files, imports each module with 
 
 `discoverAndLoadExtensions()` first asks discovery providers for `extension-module` capability items, then keeps only provider `native` items.
 
-Effective native locations:
+Native `extension-module` discovery comes from:
 
-- Project: `<cwd>/.omp/extensions`
-- User: `~/.omp/agent/extensions`
+- Project directory: `<cwd>/.omp/extensions`
+- User directory: `~/.omp/agent/extensions`
+- Native legacy/settings JSON entries: `<cwd>/.omp/settings.json#extensions` and `~/.omp/agent/settings.json#extensions`
 
-Path roots come from the native provider (`SOURCE_PATHS.native`).
+Path roots come from the native provider (`SOURCE_PATHS.native`). Project lookup is cwd-only for these native roots; it does not walk ancestors.
 
 Notes:
 
 - Native auto-discovery is currently `.omp` based.
-- Legacy `.pi` is still accepted in `package.json` manifest keys (`pi.extensions`), but not as a native root here.
+- Legacy `.pi` is still accepted in package manifests (`pi.extensions`) and project override lookup, but `.pi/extensions` is not a native root here.
 
 ### 2) Installed plugin extension entries
 
@@ -53,14 +54,16 @@ After plugin extension entries, configured paths are appended and resolved.
 Configured path sources in the main session startup path (`sdk.ts`):
 
 1. CLI-provided paths (`--extension/-e`, and `--hook` is also treated as an extension path)
-2. Settings `extensions` array (merged global + project settings)
+2. Merged settings `extensions` array
 
-Global settings file:
+Settings files:
 
-- `~/.omp/agent/config.yml` (or custom agent dir via `PI_CODING_AGENT_DIR`)
+- User: `~/.omp/agent/config.yml` (or custom agent dir via `PI_CODING_AGENT_DIR`)
+- Project/native settings capability: `<cwd>/.omp/config.yml` and `<cwd>/.omp/settings.json`
 
-Project settings file:
+Native extension-module discovery also reads legacy JSON extension lists from:
 
+- `~/.omp/agent/settings.json`
 - `<cwd>/.omp/settings.json`
 
 Examples:

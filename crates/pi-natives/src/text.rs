@@ -14,7 +14,7 @@ use napi::{JsString, bindgen_prelude::*};
 use napi_derive::napi;
 use smallvec::{SmallVec, smallvec};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const MIN_TAB_WIDTH: u32 = 1;
 const MAX_TAB_WIDTH: u32 = 16;
@@ -380,13 +380,11 @@ const fn ascii_cell_width_u16(u: u16, tab_width: usize) -> usize {
 
 #[inline]
 fn char_width_corrected(c: char) -> Option<usize> {
-	// Hangul Compatibility Jamo U+3131..=U+318E render as a single cell in
-	// the terminals we ship to (Ghostty, Terminal.app, iTerm2) even though
-	// UAX#11 classifies them as Wide. Mirrors the TS-side correction in
-	// packages/tui/src/utils.ts (visibleWidth). U+318F is reserved and
-	// intentionally excluded.
+	// Hangul Compatibility Jamo U+3131..=U+318E render as 1 cell on macOS
+	// terminals (Ghostty, Terminal.app, iTerm2), but follow UAX#11 at 2
+	// cells on WezTerm and most Linux terminals. Only force 1 on macOS.
 	let cp = c as u32;
-	if (0x3131..=0x318e).contains(&cp) {
+	if cfg!(target_os = "macos") && (0x3131..=0x318e).contains(&cp) {
 		return Some(1);
 	}
 	UnicodeWidthChar::width(c)
@@ -404,12 +402,13 @@ fn grapheme_width_str(g: &str, tab_width: usize) -> usize {
 	if it.next().is_none() {
 		return char_width_corrected(c0).unwrap_or(0);
 	}
-	// Multi-char grapheme: sum per-char corrected widths so the jamo
-	// override applies even inside combining clusters. Matches what
-	// UnicodeWidthStr would compute, minus the UAX#11 jamo bias.
-	g.chars()
-		.map(|c| char_width_corrected(c).unwrap_or(0))
-		.sum()
+	if cfg!(target_os = "macos") {
+		g.chars()
+			.map(|c| char_width_corrected(c).unwrap_or(0))
+			.sum()
+	} else {
+		UnicodeWidthStr::width(g)
+	}
 }
 
 thread_local! {

@@ -18,30 +18,57 @@ const priorityList = [
 // =============================================================================
 
 /**
- * Get the base directory for resolving optional package assets (docs, examples).
- * Walk up from import.meta.dir until we find package.json, or fall back to cwd.
+ * Walk up from `startDir` looking for a `package.json`. Returns the directory
+ * containing the marker, or `undefined` when the walk hits the filesystem root
+ * without finding one.
+ *
+ * Exported for unit-testing the resolution contract from arbitrary start
+ * directories (notably the `bun --compile` case where `import.meta.dir`
+ * resolves to `/$bunfs/root` and no owning package is locatable — issue
+ * #1423). Production callers should use {@link getPackageDir} instead.
  */
-export function getPackageDir(): string {
-	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
-	const envDir = process.env.PI_PACKAGE_DIR;
-	if (envDir) {
-		return expandTilde(envDir);
-	}
-
-	let dir = import.meta.dir;
+export function walkUpForPackageDir(startDir: string): string | undefined {
+	let dir = startDir;
 	while (dir !== path.dirname(dir)) {
 		if (fs.existsSync(path.join(dir, "package.json"))) {
 			return dir;
 		}
 		dir = path.dirname(dir);
 	}
-	// Fallback to project dir (docs/examples won't be found, but that's fine)
-	return getProjectDir();
+	return undefined;
 }
 
-/** Get path to CHANGELOG.md (optional, may not exist in binary) */
-export function getChangelogPath(): string {
-	return path.resolve(path.join(getPackageDir(), "CHANGELOG.md"));
+/**
+ * Get the base directory for resolving optional package assets (docs, examples, CHANGELOG.md).
+ *
+ * Honors the `PI_PACKAGE_DIR` override (useful for Nix/Guix store paths);
+ * otherwise walks up from `import.meta.dir` looking for a `package.json`.
+ * Returns `undefined` when no owning package is locatable — notably inside
+ * `bun --compile` binaries where `import.meta.dir` resolves to `/$bunfs/root`
+ * and the walk hits the filesystem root with nothing found.
+ *
+ * Callers MUST treat `undefined` as "no package assets available" and skip the
+ * lookup. NEVER fall back to the user's `cwd` here: that conflates the host
+ * project with omp's own assets and was the source of issue #1423 (the host
+ * project's `CHANGELOG.md` rendered as omp's startup changelog).
+ */
+export function getPackageDir(): string | undefined {
+	const envDir = process.env.PI_PACKAGE_DIR;
+	if (envDir) {
+		return expandTilde(envDir);
+	}
+	return walkUpForPackageDir(import.meta.dir);
+}
+
+/**
+ * Path to omp's own `CHANGELOG.md`, or `undefined` when the package directory
+ * cannot be resolved (e.g. inside `bun --compile` binaries that don't bundle
+ * package assets). Callers MUST skip changelog parsing when this is undefined;
+ * see issue #1423.
+ */
+export function getChangelogPath(): string | undefined {
+	const packageDir = getPackageDir();
+	return packageDir ? path.resolve(packageDir, "CHANGELOG.md") : undefined;
 }
 
 // =============================================================================

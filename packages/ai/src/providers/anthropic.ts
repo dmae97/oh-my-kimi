@@ -2,7 +2,10 @@ import * as nodeCrypto from "node:crypto";
 import * as fs from "node:fs";
 import { scheduler } from "node:timers/promises";
 import * as tls from "node:tls";
-import Anthropic, { type ClientOptions as AnthropicSdkClientOptions } from "@anthropic-ai/sdk";
+import Anthropic, {
+	APIConnectionTimeoutError as AnthropicConnectionTimeoutError,
+	type ClientOptions as AnthropicSdkClientOptions,
+} from "@anthropic-ai/sdk";
 import type {
 	ContentBlockParam,
 	MessageCreateParamsStreaming,
@@ -18,7 +21,12 @@ import {
 	logger,
 	readSseEvents,
 } from "@oh-my-pi/pi-utils";
-import { hasOpus47ApiRestrictions, mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
+import {
+	disablesParallelToolUse,
+	hasOpus47ApiRestrictions,
+	mapEffortToAnthropicAdaptiveEffort,
+	supportsMidConversationSystemMessages,
+} from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
 import type {
@@ -39,6 +47,7 @@ import type {
 	StreamOptions,
 	TextContent,
 	ThinkingContent,
+	TokenTaskBudget,
 	Tool,
 	ToolCall,
 	ToolResultMessage,
@@ -57,12 +66,13 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
-import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
+import { parseJsonWithRepair, parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { isCopilotTransientModelError } from "../utils/retry";
 import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { spillToDescription } from "../utils/schema/spill";
+import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
 import {
 	buildCopilotDynamicHeaders,
@@ -114,6 +124,7 @@ const claudeCodeBetaDefaults = [
 const fineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14";
 const interleavedThinkingBeta = "interleaved-thinking-2025-05-14";
 const fastModeBeta = "fast-mode-2026-02-01";
+const taskBudgetBeta = "task-budgets-2026-03-13";
 
 function getHeaderCaseInsensitive(headers: Record<string, string> | undefined, headerName: string): string | undefined {
 	if (!headers) return undefined;
@@ -207,6 +218,16 @@ type AnthropicSamplingParams = MessageCreateParamsStreaming & {
 	top_p?: number;
 	top_k?: number;
 };
+
+type AnthropicOutputConfig = NonNullable<MessageCreateParamsStreaming["output_config"]> & {
+	task_budget?: TokenTaskBudget | null;
+};
+
+function getAnthropicOutputConfig(params: MessageCreateParamsStreaming): AnthropicOutputConfig {
+	const outputConfig = (params.output_config ?? {}) as AnthropicOutputConfig;
+	params.output_config = outputConfig as typeof params.output_config;
+	return outputConfig;
+}
 
 const ANTHROPIC_STOP_SEQUENCES_MAX = 4;
 let warnedStopSequencesTrim = false;
@@ -486,6 +507,108 @@ export const stripClaudeToolPrefix = (name: string, prefixOverride: string = cla
 	if (!name.toLowerCase().startsWith(prefix)) return name;
 	return name.slice(prefixOverride.length);
 };
+
+const ANTHROPIC_MANY_IMAGE_THRESHOLD = 20;
+const ANTHROPIC_MANY_IMAGE_MAX_DIMENSION = 2000;
+
+function countAnthropicImageBlocks(messages: Message[]): number {
+	let count = 0;
+	for (const message of messages) {
+		if (message.role !== "user" && message.role !== "developer" && message.role !== "toolResult") continue;
+		if (!Array.isArray(message.content)) continue;
+		for (const block of message.content) {
+			if (block.type === "image") count++;
+		}
+	}
+	return count;
+}
+
+async function resizeAnthropicManyImageBlock(block: ImageContent): Promise<ImageContent> {
+	try {
+		const inputBuffer = Buffer.from(block.data, "base64");
+		const { width, height } = await new Bun.Image(inputBuffer).metadata();
+		if (!width || !height) return block;
+		if (width <= ANTHROPIC_MANY_IMAGE_MAX_DIMENSION && height <= ANTHROPIC_MANY_IMAGE_MAX_DIMENSION) return block;
+
+		const scale = Math.min(ANTHROPIC_MANY_IMAGE_MAX_DIMENSION / width, ANTHROPIC_MANY_IMAGE_MAX_DIMENSION / height);
+		const targetWidth = Math.max(1, Math.min(ANTHROPIC_MANY_IMAGE_MAX_DIMENSION, Math.round(width * scale)));
+		const targetHeight = Math.max(1, Math.min(ANTHROPIC_MANY_IMAGE_MAX_DIMENSION, Math.round(height * scale)));
+
+		const [png, jpeg] = await Promise.all([
+			new Bun.Image(inputBuffer).resize(targetWidth, targetHeight).png().bytes(),
+			new Bun.Image(inputBuffer).resize(targetWidth, targetHeight).jpeg({ quality: 85 }).bytes(),
+		]);
+		const best =
+			png.length <= jpeg.length ? { buffer: png, mimeType: "image/png" } : { buffer: jpeg, mimeType: "image/jpeg" };
+
+		return {
+			type: "image",
+			data: Buffer.from(best.buffer).toString("base64"),
+			mimeType: best.mimeType,
+		};
+	} catch (error) {
+		logger.warn("anthropic: failed to resize oversized image for many-image request", {
+			mimeType: block.mimeType,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return block;
+	}
+}
+
+async function resizeAnthropicManyImageContent(
+	content: (TextContent | ImageContent)[],
+	state: { resized: number },
+): Promise<(TextContent | ImageContent)[]> {
+	let changed = false;
+	const next = await Promise.all(
+		content.map(async block => {
+			if (block.type !== "image") return block;
+			const resized = await resizeAnthropicManyImageBlock(block);
+			if (resized !== block) {
+				changed = true;
+				state.resized++;
+			}
+			return resized;
+		}),
+	);
+	return changed ? next : content;
+}
+
+async function resizeAnthropicManyImageMessage(message: Message, state: { resized: number }): Promise<Message> {
+	if (message.role === "user" || message.role === "developer") {
+		if (!Array.isArray(message.content)) return message;
+		const content = await resizeAnthropicManyImageContent(message.content, state);
+		return content === message.content ? message : { ...message, content };
+	}
+	if (message.role === "toolResult") {
+		const content = await resizeAnthropicManyImageContent(message.content, state);
+		return content === message.content ? message : { ...message, content };
+	}
+	return message;
+}
+
+async function prepareAnthropicManyImageContext(context: Context, supportsImages: boolean): Promise<Context> {
+	if (!supportsImages) return context;
+	const imageCount = countAnthropicImageBlocks(context.messages);
+	if (imageCount <= ANTHROPIC_MANY_IMAGE_THRESHOLD) return context;
+
+	let changed = false;
+	const state = { resized: 0 };
+	const messages = await Promise.all(
+		context.messages.map(async message => {
+			const next = await resizeAnthropicManyImageMessage(message, state);
+			if (next !== message) changed = true;
+			return next;
+		}),
+	);
+	if (!changed) return context;
+	logger.debug("anthropic: resized oversized images for many-image request", {
+		imageCount,
+		resized: state.resized,
+		maxDimension: ANTHROPIC_MANY_IMAGE_MAX_DIMENSION,
+	});
+	return { ...context, messages };
+}
 
 /**
  * Convert content blocks to Anthropic API format
@@ -866,6 +989,12 @@ function getAnthropicCompat(
 		disableAdaptiveThinking: model.compat?.disableAdaptiveThinking ?? false,
 		supportsEagerToolInputStreaming: model.compat?.supportsEagerToolInputStreaming ?? true,
 		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
+		supportsMidConversationSystem:
+			model.compat?.supportsMidConversationSystem ??
+			// First-party Claude API only. Bedrock/Vertex/Foundry and other
+			// Anthropic-compatible proxies reject the role; gate auto-detection on
+			// the canonical api.anthropic.com host plus an Opus 4.8+ model id.
+			(isAnthropicApiBaseUrl(model.baseUrl) && supportsMidConversationSystemMessages(model.id)),
 	};
 }
 
@@ -1033,6 +1162,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				if (wantsAnthropicPriority && !extraBetas.includes(fastModeBeta)) {
 					extraBetas.push(fastModeBeta);
 				}
+				if (options?.taskBudget && !extraBetas.includes(taskBudgetBeta)) {
+					extraBetas.push(taskBudgetBeta);
+				}
 
 				const created = createClient(model, {
 					model,
@@ -1058,8 +1190,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
 			let strictFallbackErrorMessage: string | undefined;
 			let dropFastMode = providerSessionState?.fastModeDisabled ?? false;
+			const preparedContext = await prepareAnthropicManyImageContext(context, model.input.includes("image"));
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
-				let nextParams = buildParams(model, baseUrl, context, isOAuthToken, options, disableStrictTools);
+				let nextParams = buildParams(model, baseUrl, preparedContext, isOAuthToken, options, disableStrictTools);
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
 				}
@@ -1086,36 +1219,56 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				| ThinkingContent
 				| RedactedThinkingContent
 				| TextContent
-				| (ToolCall & { partialJson: string })
+				| (ToolCall & { partialJson: string; lastParseLen?: number })
 			) & { index: number };
-			const blocks = output.content as Block[];
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getStreamIdleTimeoutMs();
 			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+			const requestTimeoutMs =
+				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
+			const blocks = output.content as Block[];
 			stream.push({ type: "start", partial: output });
 			// Retry loop for transient errors from the stream.
 			// Provider-level transport/rate-limit failures: only before any streamed content starts.
 			// Malformed envelopes/JSON: only before replay-unsafe text/tool events are visible on this stream.
 			let providerRetryAttempt = 0;
+			const firstEventTimeoutAbortError = new Error("Anthropic stream timed out while waiting for the first event");
+			const idleTimeoutAbortError = new Error("Anthropic stream stalled while waiting for the next event");
 			while (true) {
 				activeAbortTracker = createAbortSourceTracker(options?.signal);
-				const firstEventTimeoutAbortError = new Error(
-					"Anthropic stream timed out while waiting for the first event",
-				);
-				const idleTimeoutAbortError = new Error("Anthropic stream stalled while waiting for the next event");
 				const { requestSignal } = activeAbortTracker;
-				const anthropicRequest = client.messages.create({ ...params, stream: true }, { signal: requestSignal });
+				const requestOptions = createSdkStreamRequestOptions(requestSignal, requestTimeoutMs);
+				const anthropicRequest = client.messages.create({ ...params, stream: true }, requestOptions);
 				let streamedReplayUnsafeContent = false;
 
 				try {
-					const {
-						events: anthropicStream,
-						response,
-						requestId,
-					} = await getAnthropicStreamResponse(
-						anthropicRequest,
-						requestSignal,
-						options?.client ? event => options?.onSseEvent?.(event, model) : undefined,
-					);
+					let requestTimeout: NodeJS.Timeout | undefined;
+					if (requestTimeoutMs !== undefined) {
+						requestTimeout = setTimeout(
+							() => activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
+							requestTimeoutMs,
+						);
+					}
+					let anthropicStream: AsyncIterable<RawMessageStreamEvent>;
+					let response: Response;
+					let requestId: string | null;
+					try {
+						({
+							events: anthropicStream,
+							response,
+							requestId,
+						} = await getAnthropicStreamResponse(
+							anthropicRequest,
+							requestSignal,
+							options?.client ? event => options?.onSseEvent?.(event, model) : undefined,
+						));
+					} catch (error) {
+						if (error instanceof AnthropicConnectionTimeoutError && !activeAbortTracker.wasCallerAbort()) {
+							throw firstEventTimeoutAbortError;
+						}
+						throw error;
+					} finally {
+						if (requestTimeout !== undefined) clearTimeout(requestTimeout);
+					}
 					await notifyProviderResponse(options, response, model, requestId);
 					let sawEvent = false;
 					let sawMessageStart = false;
@@ -1240,7 +1393,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								const block = blocks[index];
 								if (block && block.type === "toolCall") {
 									block.partialJson += event.delta.partial_json;
-									block.arguments = parseStreamingJson(block.partialJson);
+									const throttled = parseStreamingJsonThrottled(block.partialJson, block.lastParseLen ?? 0);
+									if (throttled) {
+										block.arguments = throttled.value;
+										block.lastParseLen = throttled.parsedLen;
+									}
 									stream.push({
 										type: "toolcall_delta",
 										contentIndex: index,
@@ -1278,6 +1435,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								} else if (block.type === "toolCall") {
 									block.arguments = parseStreamingJson(block.partialJson);
 									delete (block as { partialJson?: string }).partialJson;
+									delete (block as { lastParseLen?: number }).lastParseLen;
 									stream.push({
 										type: "toolcall_end",
 										contentIndex: index,
@@ -1287,8 +1445,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								}
 							}
 						} else if (event.type === "message_delta") {
-							if (event.delta.stop_reason) {
-								output.stopReason = mapStopReason(event.delta.stop_reason);
+							const rawStopReason = event.delta.stop_reason as string | null | undefined;
+							if (rawStopReason) {
+								output.stopReason = mapStopReason(rawStopReason);
 								sawTerminalEnvelope = true;
 							}
 							const stopDetails = event.delta.stop_details;
@@ -1297,6 +1456,16 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								const category = stopDetails.category;
 								const label = category ? `Refusal (${category})` : "Refusal";
 								output.errorMessage = explanation ? `${label}: ${explanation}` : label;
+							} else if (output.stopReason === "error" && !output.errorMessage) {
+								// Anthropic flagged an error-class stop (refusal / sensitive) without
+								// populating stop_details. Surface the raw reason instead of falling
+								// through to the generic "unknown error" string when we throw below.
+								output.errorMessage =
+									rawStopReason === "refusal"
+										? "Refusal (no details provided)"
+										: rawStopReason === "sensitive"
+											? "Content flagged by safety filters"
+											: `Anthropic stream ended with stop_reason: ${rawStopReason ?? "unknown"}`;
 							}
 							if (event.usage.input_tokens != null) {
 								output.usage.input = event.usage.input_tokens;
@@ -1387,9 +1556,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					}
 					const isTransientEnvelopeFailure =
 						isTransientStreamParseError(streamFailure) || isTransientStreamEnvelopeError(streamFailure);
+					const isLocalIdleTimeout =
+						streamFailure === idleTimeoutAbortError ||
+						(streamFailure instanceof Error && streamFailure.message === idleTimeoutAbortError.message);
 					const canRetryTransientEnvelopeFailure = isTransientEnvelopeFailure && !streamedReplayUnsafeContent;
 					const canRetryProviderFailure =
-						firstTokenTime === undefined && isProviderRetryableError(streamFailure, model.provider);
+						!isLocalIdleTimeout &&
+						firstTokenTime === undefined &&
+						!streamedReplayUnsafeContent &&
+						isProviderRetryableError(streamFailure, model.provider);
 					if (
 						activeAbortTracker.wasCallerAbort() ||
 						providerRetryAttempt >= PROVIDER_MAX_RETRIES ||
@@ -1425,6 +1600,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			for (const block of output.content) {
 				delete (block as { index?: number }).index;
 				delete (block as { partialJson?: string }).partialJson;
+				delete (block as { lastParseLen?: number }).lastParseLen;
 			}
 			const firstEventTimeoutError = activeAbortTracker.getLocalAbortReason();
 			output.stopReason = activeAbortTracker.wasCallerAbort() ? "aborted" : "error";
@@ -1592,6 +1768,23 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		};
 	}
 
+	// OpenCode's Anthropic-compatible gateway accepts bearer auth only; leaving
+	// apiKey set lets the SDK add X-Api-Key, which upstream Alibaba rejects.
+	if (model.provider === "opencode-go" || model.provider === "opencode-zen") {
+		return {
+			isOAuthToken: false,
+			apiKey: null,
+			authToken: null,
+			baseURL: baseUrl,
+			maxRetries: 5,
+			dangerouslyAllowBrowser: true,
+			defaultHeaders,
+			logLevel: ANTHROPIC_SDK_LOG_LEVEL,
+			...(debugFetch ? { fetch: debugFetch } : {}),
+			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
+		};
+	}
+
 	return {
 		isOAuthToken: oauthToken,
 		apiKey: oauthToken ? null : apiKey,
@@ -1618,15 +1811,21 @@ function createClient(
 function disableThinkingIfToolChoiceForced(params: MessageCreateParamsStreaming): void {
 	const toolChoice = params.tool_choice;
 	if (!toolChoice) return;
-	if (toolChoice.type === "any" || toolChoice.type === "tool") {
-		delete params.thinking;
+	if (toolChoice.type !== "any" && toolChoice.type !== "tool") return;
+
+	delete params.thinking;
+	const outputConfig = params.output_config as AnthropicOutputConfig | undefined;
+	if (!outputConfig) return;
+
+	delete outputConfig.effort;
+	if (Object.keys(outputConfig).length === 0) {
 		delete params.output_config;
 	}
 }
 
 function ensureMaxTokensForThinking(params: MessageCreateParamsStreaming, model: Model<"anthropic-messages">): void {
 	const thinking = params.thinking;
-	if (!thinking || thinking.type !== "enabled") return;
+	if (thinking?.type !== "enabled") return;
 
 	const budgetTokens = thinking.budget_tokens ?? 0;
 	if (budgetTokens <= 0) return;
@@ -1880,7 +2079,9 @@ function buildParams(
 	const { cacheControl } = getCacheControl(model, baseUrl, options?.cacheRetention);
 	const params: AnthropicSamplingParams = {
 		model: model.id,
-		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
+		// `system`-role params (Opus 4.8 mid-conversation system messages) are not
+		// yet in the SDK's `MessageParam` union; cast until it widens.
+		messages: convertAnthropicMessages(context.messages, model, isOAuthToken) as MessageParam[],
 		max_tokens: options?.maxTokens || (model.maxTokens / 3) | 0,
 		stream: true,
 	};
@@ -1944,7 +2145,7 @@ function buildParams(
 				if (effort) {
 					// SDK's OutputConfig.effort type is not yet widened to include the new "xhigh"
 					// level introduced with Claude Opus 4.7. Cast until the SDK catches up.
-					params.output_config = { effort } as typeof params.output_config;
+					getAnthropicOutputConfig(params).effort = effort;
 				}
 			} else {
 				params.thinking = {
@@ -1953,7 +2154,7 @@ function buildParams(
 					display: options.thinkingDisplay ?? "summarized",
 				} as typeof params.thinking;
 				if (mode === "anthropic-budget-effort" && effort) {
-					params.output_config = { effort } as typeof params.output_config;
+					getAnthropicOutputConfig(params).effort = effort;
 				}
 			}
 		} else if (options?.thinkingEnabled === false) {
@@ -1961,6 +2162,9 @@ function buildParams(
 		}
 	}
 
+	if (options?.taskBudget) {
+		getAnthropicOutputConfig(params).task_budget = options.taskBudget;
+	}
 	const metadataUserId = resolveAnthropicMetadataUserId(options?.metadata?.user_id, isOAuthToken);
 	if (metadataUserId) {
 		params.metadata = { user_id: metadataUserId };
@@ -1980,6 +2184,21 @@ function buildParams(
 			};
 		} else {
 			params.tool_choice = options.toolChoice;
+		}
+	}
+
+	// Claude Opus 4.8 must emit at most one tool call per turn. Force
+	// `disable_parallel_tool_use` onto the outgoing tool_choice (synthesizing an
+	// `auto` choice when none is set). Gated on tools being present: Anthropic
+	// rejects `tool_choice` without `tools`, and parallelism is moot otherwise.
+	// `none` rejects the field, so leave it untouched. A fresh object is built
+	// rather than mutated so the caller's `options.toolChoice` is never aliased.
+	if (disablesParallelToolUse(model.id) && params.tools && params.tools.length > 0) {
+		const current = params.tool_choice;
+		if (!current) {
+			params.tool_choice = { type: "auto", disable_parallel_tool_use: true };
+		} else if (current.type !== "none") {
+			params.tool_choice = { ...current, disable_parallel_tool_use: true };
 		}
 	}
 
@@ -2059,12 +2278,24 @@ function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResul
 	return block;
 }
 
+/**
+ * Anthropic message param extended with the mid-conversation `system` role
+ * (Opus 4.8+). The SDK's `MessageParam` predates the feature and only allows
+ * `user`/`assistant`, so the system variant is modeled locally and cast back
+ * to `MessageParam[]` at the call site.
+ */
+export type AnthropicMessageParam = MessageParam | { role: "system"; content: MessageParam["content"] };
+
 export function convertAnthropicMessages(
 	messages: Message[],
 	model: Model<"anthropic-messages">,
 	isOAuthToken: boolean,
-): MessageParam[] {
-	const params: MessageParam[] = [];
+): AnthropicMessageParam[] {
+	const params: AnthropicMessageParam[] = [];
+	// Indices of params emitted from `developer` messages. After the main pass,
+	// the ones whose placement satisfies Anthropic's mid-conversation rules are
+	// upgraded from the `user` role to the authoritative `system` role.
+	const developerParamIndices: number[] = [];
 
 	const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
 
@@ -2074,29 +2305,22 @@ export function convertAnthropicMessages(
 		if (msg.role === "user" || msg.role === "developer") {
 			if (!msg.content) continue;
 
+			let content: string | ContentBlockParam[];
 			if (typeof msg.content === "string") {
-				if (msg.content.trim().length > 0) {
-					params.push({
-						role: "user",
-						content: msg.content.toWellFormed(),
-					});
-				}
+				if (msg.content.trim().length === 0) continue;
+				content = msg.content.toWellFormed();
 			} else {
 				const contentBlocks = convertContentBlocks(msg.content, model.input.includes("image"));
 				if (typeof contentBlocks === "string") {
 					if (contentBlocks.trim().length === 0) continue;
-					params.push({
-						role: "user",
-						content: contentBlocks,
-					});
-					continue;
+					content = contentBlocks;
+				} else {
+					if (contentBlocks.length === 0) continue;
+					content = contentBlocks;
 				}
-				if (contentBlocks.length === 0) continue;
-				params.push({
-					role: "user",
-					content: contentBlocks,
-				});
 			}
+			if (msg.role === "developer") developerParamIndices.push(params.length);
+			params.push({ role: "user", content });
 		} else if (msg.role === "assistant") {
 			const blocks: ContentBlockParam[] = [];
 			const hasSignedThinking = msg.content.some(
@@ -2195,6 +2419,23 @@ export function convertAnthropicMessages(
 		}
 	}
 
+	// Upgrade developer-origin params to mid-conversation `system` messages where
+	// Anthropic's placement rules allow it (Opus 4.8+ on the first-party API).
+	// Rules: a system message must immediately follow a `user` turn and must be
+	// the last entry or be followed by an `assistant` turn — never first, and
+	// never consecutive. Requiring the next param to be `assistant` (or absent)
+	// covers both the "followed by assistant / last" and "no consecutive system"
+	// constraints. Anything that does not qualify stays a `user` message.
+	if (developerParamIndices.length > 0 && getAnthropicCompat(model).supportsMidConversationSystem) {
+		for (const idx of developerParamIndices) {
+			const followsUser = idx > 0 && params[idx - 1]?.role === "user";
+			const next = params[idx + 1];
+			const lastOrBeforeAssistant = idx === params.length - 1 || next?.role === "assistant";
+			if (followsUser && lastOrBeforeAssistant) {
+				params[idx] = { role: "system", content: params[idx].content };
+			}
+		}
+	}
 	if (params.length > 0 && params[params.length - 1]?.role === "assistant") {
 		params.push({ role: "user", content: "Continue." });
 	}

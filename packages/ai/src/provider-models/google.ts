@@ -1,4 +1,5 @@
 import type { ModelManagerOptions } from "../model-manager";
+import type { FetchImpl } from "../types";
 import { fetchAntigravityDiscoveryModels } from "../utils/discovery/antigravity";
 import { fetchGeminiModels } from "../utils/discovery/gemini";
 
@@ -8,6 +9,10 @@ export interface GoogleModelManagerConfig {
 
 export interface GoogleVertexModelManagerConfig {
 	apiKey?: string;
+	project?: string;
+	location?: string;
+	signal?: AbortSignal;
+	fetch?: FetchImpl;
 }
 
 export interface GoogleAntigravityModelManagerConfig {
@@ -32,15 +37,8 @@ export function googleModelManagerOptions(
 	};
 }
 
-export function googleVertexModelManagerOptions(
-	_config?: GoogleVertexModelManagerConfig,
-): ModelManagerOptions<"google-vertex"> {
-	// Vertex AI uses Application Default Credentials (ADC) for authentication,
-	// which is handled at stream time rather than during model discovery.
-	// Dynamic model discovery is not yet implemented for this provider.
-	return {
-		providerId: "google-vertex",
-	};
+export function googleVertexModelManagerOptions(_config?: GoogleVertexModelManagerConfig): ModelManagerOptions {
+	return { providerId: "google-vertex" };
 }
 
 export function googleAntigravityModelManagerOptions(

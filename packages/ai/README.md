@@ -62,6 +62,8 @@ Unified LLM API with automatic model discovery, provider configuration, token an
 - **Hugging Face Inference**
 - **xAI**
 - **Venice** (requires `VENICE_API_KEY`)
+- **Wafer Pass** (requires `WAFER_PASS_API_KEY`; flat-rate subscription, includes GLM-5.1 and Qwen3.5-397B-A17B)
+- **Wafer Serverless** (requires `WAFER_SERVERLESS_API_KEY`; pay-as-you-go)
 - **OpenRouter**
 - **Kilo Gateway** (supports OAuth `/login kilo` or `KILO_API_KEY`)
 - **LiteLLM** (requires `LITELLM_API_KEY`)
@@ -1057,13 +1059,14 @@ Official docs: [Application Default Credentials](https://cloud.google.com/docs/a
 
 ### CLI Login
 
-The quickest way to authenticate:
+Authenticate via the [`omp`](https://omp.sh) coding-agent CLI, which drives this library's OAuth/API-key flows in-process and persists into `agent.db`:
 
 ```bash
-bunx @oh-my-pi/pi-ai login              # interactive provider selection
-bunx @oh-my-pi/pi-ai login anthropic    # login to specific provider
-bunx @oh-my-pi/pi-ai login vllm         # store vLLM API key (or placeholder for local no-auth)
-bunx @oh-my-pi/pi-ai list               # list available providers
+omp auth-broker login              # interactive provider selection
+omp auth-broker login anthropic    # login to a specific provider
+omp auth-broker login vllm         # store vLLM API key (or placeholder for local no-auth)
+omp auth-broker list               # list supported providers
+omp auth-broker logout             # interactive — pick a stored credential to remove
 ```
 
 Credentials are saved to `agent.db` in the agent directory. `/login qianfan` opens the Qianfan console and stores the pasted API key.

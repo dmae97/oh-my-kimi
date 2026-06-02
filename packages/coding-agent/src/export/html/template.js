@@ -1227,17 +1227,6 @@
         return html;
       }
 
-      function renderCalc(name, args, result, ctx) {
-        let html = toolHead('calc');
-        const exprs = args.expressions || (args.expression ? [args.expression] : []);
-        for (const e of exprs) html += codeBlock(String(e), 'plaintext');
-        if (result) {
-          const output = ctx.getResultText();
-          if (output) html += formatExpandableOutput(output, 6);
-        }
-        return html;
-      }
-
       function renderJob(name, args, result, ctx) {
         const badges = [];
         const pollIds = Array.isArray(args.poll) ? args.poll : Array.isArray(args.jobs) ? args.jobs : Array.isArray(args.jobIds) ? args.jobIds : [];
@@ -1487,17 +1476,6 @@
         return html;
       }
 
-      function renderRecipe(name, args, result, ctx) {
-        const op = str(args.op) || '?';
-        let html = toolHead('recipe', '<span class="tool-arg-val">' + escapeHtml(op) + '</span>');
-        if (result) {
-          html += ctx.renderResultImages();
-          const output = ctx.getResultText();
-          if (output) html += formatExpandableOutput(output, 10);
-        }
-        return html;
-      }
-
       function renderIrc(name, args, result, ctx) {
         const op = str(args.op) || '?';
         const badges = [op];
@@ -1558,13 +1536,10 @@
         yield: renderYield,
         report_finding: renderReportFinding,
         report_tool_issue: renderReportToolIssue,
-        calc: renderCalc,
-        calculator: renderCalc,
         await: renderJob,
         poll: renderJob,
         cancel_job: renderJob,
         job: renderJob,
-        recipe: renderRecipe,
         irc: renderIrc,
       };
 

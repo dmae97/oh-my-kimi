@@ -89,6 +89,16 @@ describe("openai-responses cache affinity", () => {
 		expect(captured.clientRequestId).toBe("session-123");
 		expect(captured.body?.prompt_cache_key).toBe("session-123");
 	});
+	it("keeps prompt cache key separate from OpenAI routing headers when both are provided", async () => {
+		const captured = await captureOpenAIResponseHeaders({
+			sessionId: "side-channel-456",
+			promptCacheKey: "session-123",
+		});
+
+		expect(captured.sessionId).toBe("side-channel-456");
+		expect(captured.clientRequestId).toBe("side-channel-456");
+		expect(captured.body?.prompt_cache_key).toBe("session-123");
+	});
 
 	it("lets explicit headers override the default OpenAI session routing headers", async () => {
 		const captured = await captureOpenAIResponseHeaders({
@@ -102,6 +112,19 @@ describe("openai-responses cache affinity", () => {
 		expect(captured.sessionId).toBe("override-session");
 		expect(captured.clientRequestId).toBe("override-request");
 		expect(captured.body?.prompt_cache_key).toBe("session-123");
+	});
+
+	it("merges adapter extra body fields into the Responses request payload", async () => {
+		const captured = await captureOpenAIResponseHeaders({
+			sessionId: "session-123",
+			extraBody: {
+				prompt_cache_key: "adapter-cache-key",
+				x_provider_hint: "xai",
+			},
+		});
+
+		expect(captured.body?.prompt_cache_key).toBe("adapter-cache-key");
+		expect(captured.body?.x_provider_hint).toBe("xai");
 	});
 
 	it("omits OpenAI session routing headers when cache retention is disabled", async () => {

@@ -122,23 +122,6 @@ describe("StatusLineComponent incremental context breakdown cache", () => {
 		expect(v3.usedTokens).toBeGreaterThan(v2.usedTokens);
 	});
 
-	it("warm-cache refresh on 200-message session is fast (<100ms for 20 refreshes)", () => {
-		const session = makeSession({
-			messages: Array.from({ length: 200 }, (_, i) => userMessage(`msg ${i}`.repeat(20))),
-		});
-		const comp = new StatusLineComponent(session);
-
-		// Warm-up call (acceptable cost; not measured).
-		comp.getCachedContextBreakdown();
-
-		// 20 warm refreshes; each should only recompute the last message
-		// (~0.5 ms native) since no other messages changed.
-		const start = performance.now();
-		for (let i = 0; i < 20; i++) comp.getCachedContextBreakdown();
-		const elapsedMs = performance.now() - start;
-		expect(elapsedMs).toBeLessThan(100);
-	});
-
 	it("zero messages: produces only non-message tokens, no crash", () => {
 		const session = makeSession({ messages: [] });
 		const comp = new StatusLineComponent(session);

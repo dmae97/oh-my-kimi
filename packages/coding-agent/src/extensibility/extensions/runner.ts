@@ -10,6 +10,7 @@ import { type Theme, theme } from "../../modes/theme/theme";
 import type { SessionManager } from "../../session/session-manager";
 import type {
 	AfterProviderResponseEvent,
+	AssistantThinkingRenderer,
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
 	BeforeProviderRequestEvent,
@@ -315,14 +316,24 @@ export class ExtensionRunner {
 		return tools;
 	}
 
-	getFlags(): Map<string, ExtensionFlag> {
+	/**
+	 * Aggregate the registered CLI flags across a set of extensions (last write
+	 * wins on name collision). Static so callers that need the flag set before a
+	 * runner exists — e.g. the CLI resolving `@file`/flag args before session
+	 * creation — share this exact logic instead of duplicating it.
+	 */
+	static aggregateFlags(extensions: readonly Extension[]): Map<string, ExtensionFlag> {
 		const allFlags = new Map<string, ExtensionFlag>();
-		for (const ext of this.extensions) {
+		for (const ext of extensions) {
 			for (const [name, flag] of ext.flags) {
 				allFlags.set(name, flag);
 			}
 		}
 		return allFlags;
+	}
+
+	getFlags(): Map<string, ExtensionFlag> {
+		return ExtensionRunner.aggregateFlags(this.extensions);
 	}
 
 	getFlagValues(): Map<string, boolean | string> {
@@ -333,22 +344,22 @@ export class ExtensionRunner {
 		this.runtime.flagValues.set(name, value);
 	}
 
-	static readonly #RESERVED_SHORTCUTS = new Set([
-		"ctrl+c",
-		"ctrl+d",
-		"ctrl+z",
-		"ctrl+k",
-		"ctrl+p",
-		"ctrl+l",
-		"ctrl+o",
-		"ctrl+t",
-		"ctrl+g",
-		"shift+tab",
-		"shift+ctrl+p",
-		"alt+enter",
-		"escape",
-		"enter",
-	]);
+	static readonly #RESERVED_SHORTCUTS: Record<string, true> = {
+		"ctrl+c": true,
+		"ctrl+d": true,
+		"ctrl+z": true,
+		"ctrl+k": true,
+		"ctrl+p": true,
+		"ctrl+l": true,
+		"ctrl+o": true,
+		"ctrl+t": true,
+		"ctrl+g": true,
+		"shift+tab": true,
+		"shift+ctrl+p": true,
+		"alt+enter": true,
+		escape: true,
+		enter: true,
+	};
 
 	getShortcuts(): Map<KeyId, ExtensionShortcut> {
 		const allShortcuts = new Map<KeyId, ExtensionShortcut>();
@@ -356,7 +367,7 @@ export class ExtensionRunner {
 			for (const [key, shortcut] of ext.shortcuts) {
 				const normalizedKey = key.toLowerCase() as KeyId;
 
-				if (ExtensionRunner.#RESERVED_SHORTCUTS.has(normalizedKey)) {
+				if (ExtensionRunner.#RESERVED_SHORTCUTS[normalizedKey]) {
 					logger.warn("Extension shortcut conflicts with built-in shortcut", {
 						key,
 						extensionPath: shortcut.extensionPath,
@@ -407,6 +418,10 @@ export class ExtensionRunner {
 			}
 		}
 		return undefined;
+	}
+
+	getAssistantThinkingRenderers(): AssistantThinkingRenderer[] {
+		return this.extensions.flatMap(ext => ext.assistantThinkingRenderers);
 	}
 
 	getRegisteredCommands(reserved?: Set<string>): RegisteredCommand[] {
@@ -462,7 +477,6 @@ export class ExtensionRunner {
 			hasPendingMessages: () => this.#hasPendingMessagesFn(),
 			shutdown: () => this.#shutdownHandler(),
 			getSystemPrompt: () => this.#getSystemPromptFn(),
-			hasQueuedMessages: () => this.#hasPendingMessagesFn(), // deprecated alias
 		};
 	}
 

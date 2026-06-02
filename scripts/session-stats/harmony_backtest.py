@@ -53,12 +53,28 @@ SCRIPT_RUN_RE = re.compile(
     "]{2,}"
 )
 
-HEADER_RE = re.compile(r"^(?:§+(?P<hl>.*)|\*\*\* Update File:\s+(?P<upd>\S.*))\s*$")
+# Header detector — matches any of:
+#   ¶PATH or ¶PATH#hash  (current hashline format)
+#   §PATH                (legacy hashline format, pre-2026-05)
+#   *** Update File: PATH (Codex apply_patch envelope)
+HEADER_RE = re.compile(
+    r"^(?:§+(?P<hl_legacy>.*)|¶+\s*(?P<hl_new>[^\s#¶]+)(?:#[0-9a-f]{4})?|\*\*\* Update File:\s+(?P<upd>\S.*))\s*$"
+)
 BEGIN_PATCH_RE = re.compile(r"^\*\*\* Begin Patch\s*$")
 END_PATCH_RE = re.compile(r"^\*\*\* End Patch\s*$")
-INSERT_RE = re.compile(r"^(?P<op>[«»])\s*(?P<anchor>BOF|EOF|[1-9][0-9]*[A-Za-z]{2})\s*$")
-RANGE_RE = re.compile(r"(?P<a>[1-9][0-9]*[A-Za-z]{2})(?:\.\.(?P<b>[1-9][0-9]*[A-Za-z]{2}))?")
-REPLACE_RE = re.compile(r"^≔\s*(?P<range>[1-9][0-9]*[A-Za-z]{2}(?:\.\.[1-9][0-9]*[A-Za-z]{2})?)\s*$")
+
+# Legacy hashline ops (kept for historical session corpus).
+LEGACY_INSERT_RE = re.compile(r"^(?P<op>[«»])\s*(?P<anchor>BOF|EOF|[1-9][0-9]*[A-Za-z]{2})\s*$")
+LEGACY_RANGE_RE = re.compile(r"(?P<a>[1-9][0-9]*[A-Za-z]{2})(?:\.\.(?P<b>[1-9][0-9]*[A-Za-z]{2}))?")
+LEGACY_REPLACE_RE = re.compile(r"^≔\s*(?P<range>[1-9][0-9]*[A-Za-z]{2}(?:\.\.[1-9][0-9]*[A-Za-z]{2})?)\s*$")
+
+# Current hashline ops.
+NEW_INSERT_RE = re.compile(
+    r"^\s*(?:[>+\-*]+\s*)?(?P<anchor>[1-9][0-9]*|BOF|EOF)(?P<sigil>[↑↓])(?P<inline>.*)$"
+)
+NEW_RANGE_RE = re.compile(
+    r"^\s*(?:[>+\-*]+\s*)?(?P<a>[1-9][0-9]*)(?:-(?P<b>[1-9][0-9]*))?(?P<sigil>[:!])(?P<inline>.*)$"
+)
 
 JSON_DECODER = json.JSONDecoder()
 
@@ -410,8 +426,8 @@ def anchor_line_no(anchor: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def range_deleted_lines(raw_range: str) -> int:
-    m = RANGE_RE.fullmatch(raw_range)
+def legacy_range_deleted_lines(raw_range: str) -> int:
+    m = LEGACY_RANGE_RE.fullmatch(raw_range)
     if not m:
         return 1
     a = anchor_line_no(m.group("a")) or 0
@@ -419,15 +435,40 @@ def range_deleted_lines(raw_range: str) -> int:
     return max(1, b - a + 1)
 
 
+def new_range_deleted_lines(a_raw: str, b_raw: str | None) -> int:
+    try:
+        a = int(a_raw)
+        b = int(b_raw) if b_raw else a
+    except ValueError:
+        return 1
+    return max(1, b - a + 1)
+
+
 def parse_edit_boundary(text: str, *, legacy_loose_tail: bool = False) -> EditBoundary:
+    """Find the longest tool-input prefix that parses as a complete sequence of
+    edit sections.
+
+    Supports both the current hashline format (``¶PATH#hash`` / ``↑↓:!``) and
+    the legacy format (``§PATH`` / ``«»≔``) since the analyzed corpus spans the
+    format transition. Codex ``*** Update File:`` envelopes are also recognized.
+    """
     sections: list[EditSection] = []
     cur: EditSection | None = None
+    # Per-section format: "new", "legacy_hl", or "codex". Determines which op
+    # regexes apply and whether `needs_payload` semantics are in effect.
+    cur_format: str | None = None
     parsed_end = 0
     line_no = 0
+    # Legacy hashline (`«»`) inserts demand at least one payload line before the
+    # boundary advances. New-format inserts are self-completing on their own
+    # line, so these flags only matter when ``cur_format == "legacy_hl"``.
     needs_payload = False
     payload_allowed = False
     saw_required_payload = False
     seen_content = False
+
+    legacy_payload_blockers = {"«", "»", "≔", "§"}
+    new_payload_blockers = ("¶",)
 
     for line, _start, end in line_spans(text):
         line_no += 1
@@ -456,7 +497,15 @@ def parse_edit_boundary(text: str, *, legacy_loose_tail: bool = False) -> EditBo
         if header:
             if needs_payload and not saw_required_payload:
                 break
-            target = (header.group("hl") or header.group("upd") or "").strip()
+            if header.group("hl_new") is not None:
+                target = header.group("hl_new").strip()
+                cur_format = "new"
+            elif header.group("hl_legacy") is not None:
+                target = header.group("hl_legacy").strip()
+                cur_format = "legacy_hl"
+            else:
+                target = (header.group("upd") or "").strip()
+                cur_format = "codex"
             cur = EditSection(target_file=target)
             sections.append(cur)
             parsed_end = end
@@ -468,7 +517,49 @@ def parse_edit_boundary(text: str, *, legacy_loose_tail: bool = False) -> EditBo
         if cur is None:
             break
 
-        if payload_allowed and line[:1] not in {"«", "»", "≔", "§"}:
+        if cur_format == "new":
+            # New format: payload lines are anything that does not start a new
+            # op or header. `↑`/`↓`/`:` ops may be followed by additional
+            # payload lines; `!` ops are self-contained.
+            if payload_allowed and not line.startswith(new_payload_blockers):
+                # Re-check whether the line itself is an op — an op line ends
+                # the current payload run and starts a new op.
+                if not NEW_INSERT_RE.match(line) and not NEW_RANGE_RE.match(line):
+                    cur.payload_lines += 1
+                    parsed_end = end
+                    continue
+
+            if not stripped:
+                parsed_end = end
+                payload_allowed = False
+                continue
+
+            ins = NEW_INSERT_RE.match(line)
+            if ins:
+                cur.op_count += 1
+                if ins.group("inline"):
+                    cur.payload_lines += 1
+                parsed_end = end
+                payload_allowed = True
+                continue
+
+            rng = NEW_RANGE_RE.match(line)
+            if rng:
+                sigil = rng.group("sigil")
+                cur.op_count += 1
+                cur.deleted_lines += new_range_deleted_lines(rng.group("a"), rng.group("b"))
+                if sigil == ":" and rng.group("inline"):
+                    cur.payload_lines += 1
+                parsed_end = end
+                # `!` deletes do not accept payload; `:` replaces may carry
+                # subsequent payload lines.
+                payload_allowed = sigil == ":"
+                continue
+
+            break
+
+        # Legacy hashline state machine (preserved verbatim for §«»≔ corpus).
+        if payload_allowed and line[:1] not in legacy_payload_blockers:
             cur.payload_lines += 1
             parsed_end = end
             saw_required_payload = True
@@ -487,7 +578,7 @@ def parse_edit_boundary(text: str, *, legacy_loose_tail: bool = False) -> EditBo
         if needs_payload and not saw_required_payload:
             break
 
-        ins = INSERT_RE.match(line)
+        ins = LEGACY_INSERT_RE.match(line)
         if ins:
             cur.op_count += 1
             needs_payload = True
@@ -496,11 +587,10 @@ def parse_edit_boundary(text: str, *, legacy_loose_tail: bool = False) -> EditBo
             # Not complete until at least one payload line appears.
             continue
 
-
-        repl = REPLACE_RE.match(line)
+        repl = LEGACY_REPLACE_RE.match(line)
         if repl:
             cur.op_count += 1
-            cur.deleted_lines += range_deleted_lines(repl.group("range"))
+            cur.deleted_lines += legacy_range_deleted_lines(repl.group("range"))
             parsed_end = end
             needs_payload = False
             payload_allowed = True

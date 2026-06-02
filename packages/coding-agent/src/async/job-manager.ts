@@ -17,8 +17,8 @@ export interface AsyncJob {
 	resultText?: string;
 	errorText?: string;
 	/**
-	 * Registry id of the agent that registered the job (e.g. "0-Main",
-	 * "3-AuthLoader"). Used by scoped cancel/list APIs so a subagent's teardown
+	 * Registry id of the agent that registered the job (e.g. "Main",
+	 * "AuthLoader"). Used by scoped cancel/list APIs so a subagent's teardown
 	 * does not cancel its parent's jobs. Undefined for callers that don't
 	 * supply an id (e.g. legacy tests, SDK consumers without an agent context).
 	 */
@@ -58,7 +58,7 @@ export interface AsyncJobRegisterOptions {
 /**
  * Filter applied to job query/cancel APIs. With `ownerId`, results are
  * restricted to jobs registered by that agent (registry id from
- * `AgentRegistry`, e.g. "0-Main", "3-AuthLoader").
+ * `AgentRegistry`, e.g. "Main", "AuthLoader").
  */
 export interface AsyncJobFilter {
 	ownerId?: string;

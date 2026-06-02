@@ -253,5 +253,29 @@ describe("Settings", () => {
 
 			expect(settings.get("hindsight.bankId")).toBe("ada-cli");
 		});
+
+		it("migrates the legacy mnemosyne memory backend to mnemopi", async () => {
+			await writeSettings({
+				memory: { backend: "mnemosyne" },
+				mnemosyne: { dbPath: "/tmp/old.db", scoping: "global" },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("memory.backend")).toBe("mnemopi");
+			expect(settings.get("mnemopi.dbPath")).toBe("/tmp/old.db");
+			expect(settings.get("mnemopi.scoping")).toBe("global");
+		});
+
+		it("does not clobber an explicit mnemopi block when the legacy mnemosyne block is also present", async () => {
+			await writeSettings({
+				mnemosyne: { dbPath: "/tmp/old.db" },
+				mnemopi: { dbPath: "/tmp/new.db" },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("mnemopi.dbPath")).toBe("/tmp/new.db");
+		});
 	});
 });

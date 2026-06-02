@@ -25,6 +25,7 @@ import ircDescription from "../prompts/tools/irc.md" with { type: "text" };
 import type { AgentRef, AgentRegistry } from "../registry/agent-registry";
 import type { ToolSession } from ".";
 
+const DEFAULT_IRC_TIMEOUT_MS = 120_000;
 const ircSchema = z.object({
 	op: z.enum(["send", "list"]).describe("irc operation"),
 	to: z.string().optional().describe('recipient agent id or "all"'),
@@ -53,6 +54,7 @@ export interface IrcDetails {
 
 export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 	readonly name = "irc";
+	readonly approval = "read" as const;
 	readonly label = "IRC";
 	readonly summary = "Send and receive messages between agents over IRC-like channels";
 	readonly description: string;
@@ -159,6 +161,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 
 		const awaitReply = params.awaitReply ?? !isBroadcast;
 
+		const timeoutMs = normalizeIrcTimeoutMs(this.session.settings.get("irc.timeoutMs"));
 		const delivered: string[] = [];
 		const replies: IrcReply[] = [];
 		const failed: Array<{ id: string; error: string }> = [];
@@ -174,12 +177,18 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 				return;
 			}
 			try {
-				const result = await targetSession.respondAsBackground({
-					from: senderId,
-					message,
-					awaitReply,
+				const result = await runIrcDispatchWithTimeout(
+					timeoutMs,
 					signal,
-				});
+					timeoutSignal =>
+						targetSession.respondAsBackground({
+							from: senderId,
+							message,
+							awaitReply,
+							signal: timeoutSignal,
+						}),
+					target.id,
+				);
 				delivered.push(target.id);
 				if (awaitReply && result.replyText) {
 					replies.push({ from: target.id, text: result.replyText });
@@ -236,4 +245,50 @@ function errorResult(text: string, details: IrcDetails): AgentToolResult<IrcDeta
 		content: [{ type: "text", text }],
 		details,
 	};
+}
+
+function normalizeIrcTimeoutMs(value: number): number {
+	if (!Number.isFinite(value) || value === 0) return value === 0 ? 0 : DEFAULT_IRC_TIMEOUT_MS;
+	return Math.max(1, Math.trunc(value));
+}
+
+async function runIrcDispatchWithTimeout<T>(
+	timeoutMs: number,
+	parentSignal: AbortSignal | undefined,
+	run: (signal?: AbortSignal) => Promise<T>,
+	targetId: string,
+): Promise<T> {
+	if (timeoutMs <= 0) {
+		return await run(parentSignal);
+	}
+
+	const controller = new AbortController();
+	const timeoutError = new Error(`IRC timed out waiting for ${targetId} after ${timeoutMs} ms`);
+	let timeout: NodeJS.Timeout | undefined;
+	let parentAbortListener: (() => void) | undefined;
+
+	const timeoutDeferred = Promise.withResolvers<never>();
+	if (parentSignal) {
+		if (parentSignal.aborted) {
+			throw parentSignal.reason instanceof Error ? parentSignal.reason : new Error("IRC aborted");
+		}
+		parentAbortListener = () => {
+			controller.abort(parentSignal.reason);
+			timeoutDeferred.reject(parentSignal.reason instanceof Error ? parentSignal.reason : new Error("IRC aborted"));
+		};
+		parentSignal.addEventListener("abort", parentAbortListener, { once: true });
+	}
+
+	timeout = setTimeout(() => {
+		controller.abort(timeoutError);
+		timeoutDeferred.reject(timeoutError);
+	}, timeoutMs);
+	timeout.unref?.();
+
+	try {
+		return await Promise.race([run(controller.signal), timeoutDeferred.promise]);
+	} finally {
+		if (timeout) clearTimeout(timeout);
+		if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
+	}
 }

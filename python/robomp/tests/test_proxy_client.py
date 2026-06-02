@@ -22,6 +22,7 @@ from robomp.github_client import (
     GitHubError,
     IssueInfo,
     IssueSummary,
+    PullRequestFileInfo,
     PullRequestInfo,
     PullRequestReviewInfo,
     ReactionInfo,
@@ -276,7 +277,7 @@ def round_trip_app(proxy_settings: Settings):
                     }
                 ],
             )
-        if path == "/repos/octo/widget/pulls/2/reviews":
+        if path == "/repos/octo/widget/pulls/2/reviews" and req.method == "GET":
             return httpx.Response(
                 200,
                 json=[
@@ -288,6 +289,25 @@ def round_trip_app(proxy_settings: Settings):
                         "submitted_at": "2026-01-01T00:00:00Z",
                     }
                 ],
+            )
+        if path == "/repos/octo/widget/pulls/2/files":
+            return httpx.Response(
+                200,
+                json=[{"filename": "src/app.py", "status": "modified", "additions": 2, "deletions": 1}],
+            )
+        if path == "/repos/octo/widget/pulls/2/reviews" and req.method == "POST":
+            body = json.loads(req.content)
+            assert body["event"] == "COMMENT"
+            assert body["comments"] == [{"path": "src/app.py", "line": 12, "side": "RIGHT", "body": "finding"}]
+            return httpx.Response(
+                200,
+                json={
+                    "id": 55,
+                    "user": {"login": "robomp-bot"},
+                    "body": body["body"],
+                    "state": "COMMENTED",
+                    "submitted_at": "2026-01-01T00:00:00Z",
+                },
             )
         if path == "/user":
             return httpx.Response(200, json={"login": "robomp-bot"})
@@ -352,6 +372,19 @@ async def test_round_trip_all_endpoints(round_trip_app) -> None:
 
     prs = await client.list_pr_reviews("octo/widget", 2)
     assert len(prs) == 1 and isinstance(prs[0], PullRequestReviewInfo)
+
+    files = await client.list_pr_files("octo/widget", 2)
+    assert len(files) == 1 and isinstance(files[0], PullRequestFileInfo)
+    assert files[0].path == "src/app.py"
+
+    submitted = await client.submit_pr_review(
+        repo="octo/widget",
+        pr_number=2,
+        body="summary",
+        event="COMMENT",
+        comments=[{"path": "src/app.py", "line": 12, "side": "RIGHT", "body": "finding"}],
+    )
+    assert submitted.id == 55
 
     assert await client.get_authenticated_login() == "robomp-bot"
 

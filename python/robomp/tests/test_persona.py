@@ -37,6 +37,16 @@ class _Workspace:
 
 
 @dataclass(slots=True, frozen=True)
+class _Pr:
+    number: int = 99
+    author: str = "alice"
+    head_ref: str = "fix-crash"
+    base_ref: str = "main"
+    head_repo: str = "alice/widget"
+    html_url: str = "https://github.com/octo/widget/pull/99"
+
+
+@dataclass(slots=True, frozen=True)
 class _Comment:
     id: int = 1
     author: str = "can1357"
@@ -151,3 +161,23 @@ def test_resume_triage_renders_branch_and_issue() -> None:
     assert "broken thing" in out
     # The prompt instructs the agent to reconcile drift via fetch_issue_thread.
     assert "fetch_issue_thread" in out
+
+
+def test_kickoff_pr_review_formats_head_repo_and_origin_base() -> None:
+    out = persona.kickoff_pr_review(
+        repo=_Repo(),
+        pr=_Pr(),
+        workspace=_Workspace(),
+    )
+    assert "`fix-crash` from `alice/widget`" in out
+    assert "git diff origin/main...HEAD" in out
+
+
+def test_review_completion_reminder_mentions_submit_only() -> None:
+    out = persona.review_completion_reminder(
+        repo=_Repo(),
+        issue=_Issue(number=99, title="Fix parser"),
+        workspace=_Workspace(branch="review/pr-99"),
+    )
+    assert "submit_pr_review" in out
+    assert "gh_open_pr" not in out

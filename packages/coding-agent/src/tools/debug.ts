@@ -5,6 +5,7 @@ import type {
 	AgentToolResult,
 	AgentToolUpdateCallback,
 	RenderResultOptions,
+	ToolApprovalDecision,
 } from "@oh-my-pi/pi-agent-core";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
@@ -37,6 +38,7 @@ import debugDescription from "../prompts/tools/debug.md" with { type: "text" };
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import type { ToolSession } from ".";
+import { truncateForPrompt } from "./approval";
 import type { OutputMeta } from "./output-meta";
 import { formatPathRelativeToCwd, resolveToCwd } from "./path-utils";
 import {
@@ -51,6 +53,23 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
 
+/**
+ * DAP debug actions that only read program state (no mutation, no execution).
+ * Execution-side actions (`launch`, `attach`, `continue`, `step_*`, `pause`,
+ * `evaluate`, breakpoint mutations, memory writes) are exec-tier.
+ */
+export const DEBUG_READONLY_ACTIONS: ReadonlySet<string> = new Set([
+	"output",
+	"threads",
+	"stack_trace",
+	"scopes",
+	"variables",
+	"disassemble",
+	"read_memory",
+	"loaded_sources",
+	"modules",
+	"sessions",
+]);
 const debugSchema = z.object({
 	action: z.enum([
 		"launch",
@@ -609,6 +628,19 @@ export const debugToolRenderer = {
 
 export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails> {
 	readonly name = "debug";
+	readonly approval = (args: unknown): ToolApprovalDecision => {
+		const rawAction = (args as Partial<DebugParams>).action;
+		const action = typeof rawAction === "string" ? rawAction.toLowerCase() : "";
+		return DEBUG_READONLY_ACTIONS.has(action) ? "read" : "exec";
+	};
+	readonly formatApprovalDetails = (args: unknown): string[] => {
+		const params = args as Partial<DebugParams>;
+		const lines = [`Action: ${typeof params.action === "string" ? params.action : "(missing)"}`];
+		if (typeof params.program === "string" && params.program.length > 0) {
+			lines.push(`Program: ${truncateForPrompt(params.program)}`);
+		}
+		return lines;
+	};
 	readonly label = "Debug";
 	readonly summary = "Debug a running process with DAP (debugger adapter protocol)";
 	readonly description: string;
@@ -647,6 +679,9 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails
 				await validateLaunchProgram(program, commandCwd);
 				const adapter = selectLaunchAdapter(program, commandCwd, params.adapter);
 				if (!adapter) {
+					if (params.adapter === "debugpy") {
+						throw new ToolError("adapter 'debugpy' is not available: python not found in PATH");
+					}
 					throw new ToolError(
 						`No debugger adapter available. Installed adapters: ${getConfiguredAdapters(commandCwd)}`,
 					);
@@ -667,6 +702,9 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails
 				const commandCwd = params.cwd ? resolveToCwd(params.cwd, this.session.cwd) : this.session.cwd;
 				const adapter = selectAttachAdapter(commandCwd, params.adapter, params.port);
 				if (!adapter) {
+					if (params.adapter === "debugpy") {
+						throw new ToolError("adapter 'debugpy' is not available: python not found in PATH");
+					}
 					throw new ToolError(
 						`No debugger adapter available. Installed adapters: ${getConfiguredAdapters(commandCwd)}`,
 					);

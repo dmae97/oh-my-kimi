@@ -1,14 +1,8 @@
+import { MismatchError as HashlineMismatchError } from "@oh-my-pi/hashline";
+import hashlineGrammar from "@oh-my-pi/hashline/grammar.lark" with { type: "text" };
+import hashlineDescription from "@oh-my-pi/hashline/prompt.md" with { type: "text" };
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
-import type * as z from "zod/v4";
-import {
-	executeHashlineSingle,
-	HashlineMismatchError,
-	type HashlineParams,
-	hashlineEditParamsSchema,
-} from "../hashline";
-import hashlineGrammarTemplate from "../hashline/grammar.lark" with { type: "text" };
-import { resolveHashlineGrammarPlaceholders } from "../hashline/hash";
 import {
 	createLspWritethrough,
 	type FileDiagnosticsResult,
@@ -16,29 +10,27 @@ import {
 	type WritethroughDeferredHandle,
 	writethroughNoop,
 } from "../lsp";
+import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 import applyPatchDescription from "../prompts/tools/apply-patch.md" with { type: "text" };
-import hashlineDescription from "../prompts/tools/hashline.md" with { type: "text" };
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
 import type { ToolSession } from "../tools";
-import { VimTool, vimSchema } from "../tools/vim";
+import { truncateForPrompt } from "../tools/approval";
+import { isInternalUrlPath } from "../tools/path-utils";
 import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit-mode";
-import type { VimToolDetails } from "../vim/types";
+import { executeHashlineSingle, type HashlineParams, hashlineEditParamsSchema } from "./hashline";
 import { type ApplyPatchParams, applyPatchSchema, expandApplyPatchToEntries } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
 import { executePatchSingle, type PatchEditEntry, type PatchParams, patchEditSchema } from "./modes/patch";
 import { executeReplaceSingle, type ReplaceEditEntry, type ReplaceParams, replaceEditSchema } from "./modes/replace";
 import { type EditToolDetails, type EditToolPerFileResult, getLspBatchRequest, type LspBatchRequest } from "./renderer";
 
+export * from "@oh-my-pi/hashline";
 export { DEFAULT_EDIT_MODE, type EditMode, normalizeEditMode } from "../utils/edit-mode";
 export * from "./apply-patch";
 export * from "./diff";
-export * from "./file-read-cache";
-
-// Resolve the `$HFMT$`, `$HOP_*$`, `$HOP_CHARS$`, and `$HFILE$` placeholders in the hashline Lark grammar.
-const hashlineGrammar = resolveHashlineGrammarPlaceholders(hashlineGrammarTemplate);
-
-export * from "../hashline";
+export * from "./file-snapshot-store";
+export * from "./hashline";
 export * from "./modes/apply-patch";
 export * from "./modes/patch";
 export * from "./modes/replace";
@@ -50,12 +42,9 @@ type TInput =
 	| typeof replaceEditSchema
 	| typeof patchEditSchema
 	| typeof hashlineEditParamsSchema
-	| typeof vimSchema
 	| typeof applyPatchSchema;
 
-type VimParams = z.infer<typeof vimSchema>;
-type EditParams = ReplaceParams | PatchParams | HashlineParams | VimParams | ApplyPatchParams;
-type EditToolResultDetails = EditToolDetails | VimToolDetails;
+type EditParams = ReplaceParams | PatchParams | HashlineParams | ApplyPatchParams;
 
 type EditModeDefinition = {
 	description: (session: ToolSession) => string;
@@ -65,8 +54,8 @@ type EditModeDefinition = {
 		params: EditParams,
 		signal: AbortSignal | undefined,
 		batchRequest: LspBatchRequest | undefined,
-		onUpdate?: (partialResult: AgentToolResult<EditToolResultDetails, TInput>) => void,
-	) => Promise<AgentToolResult<EditToolResultDetails, TInput>>;
+		onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
+	) => Promise<AgentToolResult<EditToolDetails, TInput>>;
 };
 
 function resolveConfiguredEditMode(rawEditMode: string): EditMode | undefined {
@@ -114,7 +103,16 @@ function createEditWritethrough(session: ToolSession): WritethroughCallback {
 	const enableLsp = session.enableLsp ?? true;
 	const enableDiagnostics = enableLsp && session.settings.get("lsp.diagnosticsOnEdit");
 	const enableFormat = enableLsp && session.settings.get("lsp.formatOnWrite");
-	return enableLsp ? createLspWritethrough(session.cwd, { enableFormat, enableDiagnostics }) : writethroughNoop;
+	const dedup = enableDiagnostics && session.settings.get("lsp.diagnosticsDeduplicate");
+	return enableLsp
+		? createLspWritethrough(session.cwd, {
+				enableFormat,
+				enableDiagnostics,
+				transformDiagnostics: dedup
+					? (path, result) => getDiagnosticsLedger(session).reduce(path, result)
+					: undefined,
+			})
+		: writethroughNoop;
 }
 
 /** Run apply_patch file operations and aggregate their multi-file result. */
@@ -272,7 +270,29 @@ async function executeSinglePathEntries(
 	};
 }
 
+function extractApprovalPath(args: unknown): string {
+	const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+	const input = typeof record.input === "string" ? record.input : undefined;
+	if (input) {
+		const hashlineMatch = /^(?:¶|§|@)([^\s#]+)/m.exec(input);
+		if (hashlineMatch?.[1]) return hashlineMatch[1];
+
+		const applyPatchMatch = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/m.exec(input);
+		if (applyPatchMatch?.[1]) return applyPatchMatch[1].trim();
+	}
+
+	const targetPath = record.path;
+	return typeof targetPath === "string" && targetPath.length > 0 ? targetPath : "(unknown)";
+}
+
 export class EditTool implements AgentTool<TInput> {
+	readonly approval = (args: unknown) => {
+		const targetPath = extractApprovalPath(args);
+		return targetPath !== "(unknown)" && isInternalUrlPath(targetPath) ? "read" : "write";
+	};
+	readonly formatApprovalDetails = (args: unknown): string[] => [
+		`File: ${truncateForPrompt(extractApprovalPath(args))}`,
+	];
 	readonly name = "edit";
 	readonly label = "Edit";
 	readonly loadMode = "essential";
@@ -284,7 +304,7 @@ export class EditTool implements AgentTool<TInput> {
 	readonly #fuzzyThreshold: number;
 	readonly #writethrough: WritethroughCallback;
 	readonly #editMode?: EditMode;
-	readonly #vimTool: VimTool;
+	readonly #dedupDiagnostics: boolean;
 	readonly #pendingDeferredFetches = new Map<string, AbortController>();
 
 	constructor(private readonly session: ToolSession) {
@@ -297,8 +317,11 @@ export class EditTool implements AgentTool<TInput> {
 		this.#editMode = resolveConfiguredEditMode(envEditVariant);
 		this.#allowFuzzy = resolveAllowFuzzy(session, editFuzzy);
 		this.#fuzzyThreshold = resolveFuzzyThreshold(session, editFuzzyThreshold);
+		this.#dedupDiagnostics =
+			(session.enableLsp ?? true) &&
+			session.settings.get("lsp.diagnosticsOnEdit") &&
+			session.settings.get("lsp.diagnosticsDeduplicate");
 		this.#writethrough = createEditWritethrough(session);
-		this.#vimTool = new VimTool(session);
 	}
 
 	get mode(): EditMode {
@@ -341,9 +364,9 @@ export class EditTool implements AgentTool<TInput> {
 		_toolCallId: string,
 		params: EditParams,
 		signal?: AbortSignal,
-		onUpdate?: AgentToolUpdateCallback<EditToolResultDetails, TInput>,
+		onUpdate?: AgentToolUpdateCallback<EditToolDetails, TInput>,
 		context?: AgentToolContext,
-	): Promise<AgentToolResult<EditToolResultDetails, TInput>> {
+	): Promise<AgentToolResult<EditToolDetails, TInput>> {
 		const modeDefinition = this.#getModeDefinition();
 		return modeDefinition.execute(this, params, signal, getLspBatchRequest(context?.toolCall), onUpdate);
 	}
@@ -420,11 +443,10 @@ export class EditTool implements AgentTool<TInput> {
 					batchRequest: LspBatchRequest | undefined,
 					_onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
-					const { input, path } = params as HashlineParams & { path?: string };
+					const { input } = params as HashlineParams;
 					return executeHashlineSingle({
 						session: tool.session,
 						input,
-						path,
 						signal,
 						batchRequest,
 						writethrough: tool.#writethrough,
@@ -460,29 +482,6 @@ export class EditTool implements AgentTool<TInput> {
 					return executeSinglePathEntries(path, runs, batchRequest, onUpdate);
 				},
 			},
-			vim: {
-				description: () => this.#vimTool.description,
-				parameters: vimSchema,
-				execute: async (
-					tool: EditTool,
-					params: EditParams,
-					signal: AbortSignal | undefined,
-					_batchRequest: LspBatchRequest | undefined,
-					onUpdate?: (partialResult: AgentToolResult<EditToolResultDetails, TInput>) => void,
-				) => {
-					const handleUpdate = onUpdate
-						? (partialResult: AgentToolResult<VimToolDetails>) => {
-								onUpdate(partialResult as AgentToolResult<EditToolResultDetails, TInput>);
-							}
-						: undefined;
-					return (await tool.#vimTool.execute(
-						"edit",
-						params as VimParams,
-						signal,
-						handleUpdate,
-					)) as AgentToolResult<EditToolResultDetails, TInput>;
-				},
-			},
 		}[this.mode];
 	}
 
@@ -511,8 +510,13 @@ export class EditTool implements AgentTool<TInput> {
 	}
 
 	#injectLateDiagnostics(path: string, diagnostics: FileDiagnosticsResult): void {
-		const summary = diagnostics.summary ?? "";
-		const lines = diagnostics.messages ?? [];
+		const effective = this.#dedupDiagnostics
+			? getDiagnosticsLedger(this.session).reduce(path, diagnostics)
+			: diagnostics;
+		if (this.#dedupDiagnostics && effective.messages.length === 0) return;
+
+		const summary = effective.summary ?? "";
+		const lines = effective.messages ?? [];
 		const body = [`Late LSP diagnostics for ${path} (arrived after the edit tool returned):`, summary, ...lines]
 			.filter(Boolean)
 			.join("\n");

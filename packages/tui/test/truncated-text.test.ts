@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { TruncatedText } from "@oh-my-pi/pi-tui/components/truncated-text";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { Chalk } from "chalk";
@@ -49,7 +50,7 @@ describe("TruncatedText component", () => {
 		expect(visibleWidth(lines[0])).toBe(30);
 
 		// Should contain ellipsis
-		const stripped = lines[0].replace(/\x1b\[[0-9;]*m/g, "");
+		const stripped = stripVTControlCharacters(lines[0]);
 		expect(stripped.includes("…")).toBeTruthy();
 	});
 
@@ -92,7 +93,7 @@ describe("TruncatedText component", () => {
 		expect(visibleWidth(lines[0])).toBe(13);
 
 		// Should NOT contain ellipsis
-		const stripped = lines[0].replace(/\x1b\[[0-9;]*m/g, "");
+		const stripped = stripVTControlCharacters(lines[0]);
 		expect(!stripped.includes("…")).toBeTruthy();
 	});
 
@@ -115,7 +116,7 @@ describe("TruncatedText component", () => {
 		expect(visibleWidth(lines[0])).toBe(12);
 
 		// Should only contain "First line"
-		const stripped = lines[0].replace(/\x1b\[[0-9;]*m/g, "").trim();
+		const stripped = stripVTControlCharacters(lines[0]).trim();
 		expect(stripped.includes("First line")).toBeTruthy();
 		expect(!stripped.includes("Second line")).toBeTruthy();
 		expect(!stripped.includes("Third line")).toBeTruthy();
@@ -131,7 +132,7 @@ describe("TruncatedText component", () => {
 		expect(visibleWidth(lines[0])).toBe(25);
 
 		// Should contain ellipsis and not second line
-		const stripped = lines[0].replace(/\x1b\[[0-9;]*m/g, "");
+		const stripped = stripVTControlCharacters(lines[0]);
 		expect(stripped.includes("…")).toBeTruthy();
 		expect(!stripped.includes("Second line")).toBeTruthy();
 	});

@@ -12,7 +12,7 @@ import {
 	type CreateAgentSessionResult,
 	createAgentSession,
 	discoverAuthStorage,
-	type ModelRegistry,
+	ModelRegistry,
 	SessionManager,
 	Settings,
 } from "@oh-my-pi/pi-coding-agent";
@@ -49,24 +49,28 @@ export interface DiscoverSharedInfraOptions {
 
 /** Discover shared infrastructure once for the entire benchmark run. */
 export async function discoverSharedInfra(options: DiscoverSharedInfraOptions = {}): Promise<SharedInfra> {
-	const { ModelRegistry: MR } = await import("@oh-my-pi/pi-coding-agent");
 	const authStorage = await discoverAuthStorage();
-	const modelRegistry = new MR(authStorage);
+	try {
+		const modelRegistry = new ModelRegistry(authStorage);
 
-	// Initialize global Settings singleton (required by code paths that use the global `settings` proxy)
-	const overrides: Record<string, unknown> = {};
-	if (options.editVariant && options.editVariant !== "auto") {
-		overrides["edit.mode"] = options.editVariant;
-	}
-	if (options.editFuzzy !== undefined && options.editFuzzy !== "auto") {
-		overrides["edit.fuzzyMatch"] = options.editFuzzy;
-	}
-	if (options.editFuzzyThreshold !== undefined && options.editFuzzyThreshold !== "auto") {
-		overrides["edit.fuzzyThreshold"] = options.editFuzzyThreshold;
-	}
-	await Settings.init({ cwd: options.cwd, overrides });
+		// Initialize global Settings singleton (required by code paths that use the global `settings` proxy)
+		const overrides: Record<string, unknown> = {};
+		if (options.editVariant && options.editVariant !== "auto") {
+			overrides["edit.mode"] = options.editVariant;
+		}
+		if (options.editFuzzy !== undefined && options.editFuzzy !== "auto") {
+			overrides["edit.fuzzyMatch"] = options.editFuzzy;
+		}
+		if (options.editFuzzyThreshold !== undefined && options.editFuzzyThreshold !== "auto") {
+			overrides["edit.fuzzyThreshold"] = options.editFuzzyThreshold;
+		}
+		await Settings.init({ cwd: options.cwd, overrides });
 
-	return { authStorage, modelRegistry };
+		return { authStorage, modelRegistry };
+	} catch (error) {
+		authStorage.close();
+		throw error;
+	}
 }
 
 /**

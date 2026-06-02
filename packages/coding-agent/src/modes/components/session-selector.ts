@@ -13,10 +13,53 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { formatBytes } from "@oh-my-pi/pi-utils";
 import { theme } from "../../modes/theme/theme";
-import { matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
+import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
 import type { SessionInfo } from "../../session/session-manager";
+import { shortenPath } from "../../tools/render-utils";
 import { DynamicBorder } from "./dynamic-border";
 import { HookSelectorComponent } from "./hook-selector";
+
+/** Returns the IDs of sessions whose recorded prompts match a query, best first. */
+export type SessionHistoryMatcher = (query: string) => string[];
+
+/**
+ * Combine fuzzy session matches with prompt-history matches for ranking, using
+ * both signals rather than replacing one with the other.
+ *
+ * - `fuzzy` is the ordered fuzzy-filter result over session metadata (best first).
+ * - `historyIds` are session IDs whose recorded prompts matched the query,
+ *   ordered by history relevance (best first); duplicates are tolerated.
+ *
+ * Ranking: sessions matched by **both** signals lead (keeping fuzzy order), then
+ * fuzzy-only matches, then history-only matches (by history order). A fuzzy match
+ * is never dropped, and history matches not present in `allSessions` (e.g. deleted
+ * or out-of-scope sessions) are ignored since they cannot be resumed from here.
+ */
+export function mergeSessionRanking(
+	allSessions: SessionInfo[],
+	fuzzy: SessionInfo[],
+	historyIds: string[],
+): SessionInfo[] {
+	const historyRank = new Map<string, number>();
+	historyIds.forEach((id, index) => {
+		if (!historyRank.has(id)) historyRank.set(id, index);
+	});
+	if (historyRank.size === 0) return fuzzy;
+
+	const both: SessionInfo[] = [];
+	const fuzzyOnly: SessionInfo[] = [];
+	const fuzzyPaths = new Set<string>();
+	for (const session of fuzzy) {
+		fuzzyPaths.add(session.path);
+		(historyRank.has(session.id) ? both : fuzzyOnly).push(session);
+	}
+
+	const historyOnly = allSessions
+		.filter(session => historyRank.has(session.id) && !fuzzyPaths.has(session.path))
+		.sort((a, b) => (historyRank.get(a.id) ?? 0) - (historyRank.get(b.id) ?? 0));
+
+	return [...both, ...fuzzyOnly, ...historyOnly];
+}
 
 /**
  * Custom session list component with multi-line items and search
@@ -25,33 +68,44 @@ class SessionList implements Component {
 	#filteredSessions: SessionInfo[] = [];
 	#selectedIndex: number = 0;
 	readonly #searchInput: Input;
-	onSelect?: (sessionPath: string) => void;
+	onSelect?: (session: SessionInfo) => void;
 	onCancel?: () => void;
 	onExit: () => void = () => {};
+	onToggleScope?: () => void;
 	#maxVisible: number = 5; // Max sessions visible (each session is 3 lines: msg + metadata + blank)
 
 	onDeleteRequest?: (session: SessionInfo) => void;
 
-	constructor(
-		private readonly allSessions: SessionInfo[],
-		private readonly showCwd = false,
-	) {
-		this.#filteredSessions = allSessions;
+	#allSessions: SessionInfo[];
+	#showCwd: boolean;
+	readonly #historyMatcher?: SessionHistoryMatcher;
+
+	constructor(sessions: SessionInfo[], showCwd = false, historyMatcher?: SessionHistoryMatcher) {
+		this.#allSessions = sessions;
+		this.#showCwd = showCwd;
+		this.#historyMatcher = historyMatcher;
+		this.#filteredSessions = sessions;
 		this.#searchInput = new Input();
 
 		// Handle Enter in search input - select current item
 		this.#searchInput.onSubmit = () => {
-			if (this.#filteredSessions[this.#selectedIndex]) {
-				const selected = this.#filteredSessions[this.#selectedIndex];
-				if (this.onSelect) {
-					this.onSelect(selected.path);
-				}
+			const selected = this.#filteredSessions[this.#selectedIndex];
+			if (selected) {
+				this.onSelect?.(selected);
 			}
 		};
 	}
 
+	/** Replace the visible dataset, e.g. when toggling folder/all-projects scope. */
+	setSessions(sessions: SessionInfo[], showCwd: boolean): void {
+		this.#allSessions = sessions;
+		this.#showCwd = showCwd;
+		this.#selectedIndex = 0;
+		this.#filterSessions(this.#searchInput.getValue());
+	}
+
 	#filterSessions(query: string): void {
-		this.#filteredSessions = fuzzyFilter(this.allSessions, query, session => {
+		const fuzzy = fuzzyFilter(this.#allSessions, query, session => {
 			const parts = [
 				session.id,
 				session.title ?? "",
@@ -62,13 +116,28 @@ class SessionList implements Component {
 			];
 			return parts.filter(Boolean).join(" ");
 		});
+		this.#filteredSessions = this.#mergeHistoryMatches(query, fuzzy);
 		this.#selectedIndex = Math.min(this.#selectedIndex, Math.max(0, this.#filteredSessions.length - 1));
 	}
 
+	/**
+	 * Augment fuzzy results with prompt-history matches without replacing them.
+	 * The session-list corpus only sees the first 4KB of each session, so a prompt
+	 * typed deep into a long session is invisible to fuzzy search; `historyMatcher`
+	 * recovers those via `history.db`.
+	 */
+	#mergeHistoryMatches(query: string, fuzzy: SessionInfo[]): SessionInfo[] {
+		const trimmed = query.trim();
+		if (!trimmed || !this.#historyMatcher) return fuzzy;
+		const historyIds = this.#historyMatcher(trimmed);
+		if (historyIds.length === 0) return fuzzy;
+		return mergeSessionRanking(this.#allSessions, fuzzy, historyIds);
+	}
+
 	removeSession(sessionPath: string): void {
-		const index = this.allSessions.findIndex(s => s.path === sessionPath);
+		const index = this.#allSessions.findIndex(s => s.path === sessionPath);
 		if (index === -1) return;
-		this.allSessions.splice(index, 1);
+		this.#allSessions.splice(index, 1);
 		// Re-filter to update filteredSessions
 		this.#filterSessions(this.#searchInput.getValue());
 		// Adjust selectedIndex if we deleted the last item or beyond
@@ -89,7 +158,7 @@ class SessionList implements Component {
 		lines.push(""); // Blank line after search
 
 		if (this.#filteredSessions.length === 0) {
-			if (this.showCwd) {
+			if (this.#showCwd) {
 				// "All" scope - no sessions anywhere that match filter
 				lines.push(truncateToWidth(theme.fg("muted", "  No sessions found"), width));
 			} else {
@@ -158,9 +227,12 @@ class SessionList implements Component {
 				lines.push(messageLine);
 			}
 
-			// Metadata line: date + file size
+			// Metadata line: date + file size (+ project dir in all-projects scope)
 			const modified = formatDate(session.modified);
-			const metadata = `  ${modified} ${theme.sep.dot} ${formatBytes(session.size)}`;
+			let metadata = `  ${modified} ${theme.sep.dot} ${formatBytes(session.size)}`;
+			if (this.#showCwd && session.cwd) {
+				metadata += ` ${theme.sep.dot} ${shortenPath(session.cwd)}`;
+			}
 			const metadataLine = theme.fg("dim", truncateToWidth(metadata, width));
 
 			lines.push(metadataLine);
@@ -176,7 +248,12 @@ class SessionList implements Component {
 
 		// Add keybinding hint
 		lines.push("");
-		lines.push(theme.fg("muted", "  [Del to delete, Enter to select, Esc to cancel]"));
+		lines.push(
+			theme.fg(
+				"muted",
+				`  [Del delete · Enter select · Tab ${this.#showCwd ? "current folder" : "all projects"} · Esc cancel]`,
+			),
+		);
 
 		return lines;
 	}
@@ -192,12 +269,12 @@ class SessionList implements Component {
 		}
 
 		// Up arrow
-		if (matchesKey(keyData, "up")) {
+		if (matchesSelectUp(keyData)) {
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
 			return;
 		}
 		// Down arrow
-		if (matchesKey(keyData, "down")) {
+		if (matchesSelectDown(keyData)) {
 			this.#selectedIndex = Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + 1);
 			return;
 		}
@@ -215,7 +292,7 @@ class SessionList implements Component {
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			const selected = this.#filteredSessions[this.#selectedIndex];
 			if (selected && this.onSelect) {
-				this.onSelect(selected.path);
+				this.onSelect(selected);
 			}
 			return;
 		}
@@ -231,10 +308,26 @@ class SessionList implements Component {
 			this.onExit();
 			return;
 		}
+		// Tab - toggle folder / all-projects scope
+		if (matchesKey(keyData, "tab")) {
+			this.onToggleScope?.();
+			return;
+		}
 		// Pass everything else to search input
 		this.#searchInput.handleInput(keyData);
 		this.#filterSessions(this.#searchInput.getValue());
 	}
+}
+
+export interface SessionSelectorOptions {
+	onDelete?: (session: SessionInfo) => Promise<boolean>;
+	historyMatcher?: SessionHistoryMatcher;
+	/** Loads sessions across all projects for the all-projects scope toggle (Tab). */
+	loadAllSessions?: () => Promise<SessionInfo[]>;
+	/** Preloaded all-projects list; cached so the first Tab toggle is instant. */
+	allSessions?: SessionInfo[];
+	/** Open directly in all-projects scope (e.g. the current folder has no sessions). */
+	startInAllScope?: boolean;
 }
 
 /**
@@ -244,40 +337,102 @@ export class SessionSelectorComponent extends Container {
 	#sessionList: SessionList;
 	#confirmationDialog: HookSelectorComponent | null = null;
 	#messageContainer: Container;
+	#headerText: Text;
 	#onDelete?: (session: SessionInfo) => Promise<boolean>;
 	#onRequestRender?: () => void;
+	readonly #loadAllSessions?: () => Promise<SessionInfo[]>;
+	#folderSessions: SessionInfo[];
+	#globalSessions: SessionInfo[] | null = null;
+	#scope: "folder" | "all" = "folder";
+	#toggling = false;
 
 	constructor(
 		sessions: SessionInfo[],
-		onSelect: (sessionPath: string) => void,
+		onSelect: (session: SessionInfo) => void,
 		onCancel: () => void,
 		onExit: () => void,
-		onDelete?: (session: SessionInfo) => Promise<boolean>,
+		options: SessionSelectorOptions = {},
 	) {
 		super();
 
 		this.#messageContainer = new Container();
-		this.#onDelete = onDelete;
+		this.#onDelete = options.onDelete;
+		this.#loadAllSessions = options.loadAllSessions;
+		this.#folderSessions = sessions;
+		this.#globalSessions = options.allSessions ?? null;
+		// Open in all-projects scope when asked and we already have that list
+		// (e.g. the current folder has no sessions to show).
+		const startAll = options.startInAllScope === true && this.#globalSessions !== null;
+		this.#scope = startAll ? "all" : "folder";
+		const initialSessions = startAll ? this.#globalSessions! : sessions;
 		// Add header
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.bold("Resume Session"), 1, 0));
+		this.#headerText = new Text(this.#headerLabel(), 1, 0);
+		this.addChild(this.#headerText);
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 		this.addChild(this.#messageContainer);
 		// Create session list
-		this.#sessionList = new SessionList(sessions);
+		this.#sessionList = new SessionList(initialSessions, startAll, options.historyMatcher);
 		this.#sessionList.onSelect = onSelect;
 		this.#sessionList.onCancel = onCancel;
 		this.#sessionList.onExit = onExit;
 		this.#sessionList.onDeleteRequest = (session: SessionInfo) => {
 			this.#showDeleteConfirmation(session);
 		};
+		if (this.#loadAllSessions || this.#globalSessions) {
+			this.#sessionList.onToggleScope = () => {
+				void this.#toggleScope();
+			};
+		}
 		this.addChild(this.#sessionList);
 
 		// Add bottom border
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
+	}
+
+	#headerLabel(): string {
+		const scopeLabel = this.#scope === "all" ? "all projects" : "current folder";
+		return `${theme.bold("Resume Session")} ${theme.fg("muted", `(${scopeLabel})`)}`;
+	}
+
+	/**
+	 * Toggle between current-folder and all-projects scope. The global list is
+	 * loaded lazily on first switch and cached, so the common folder-scope path
+	 * never pays for the cross-project scan.
+	 */
+	async #toggleScope(): Promise<void> {
+		if (this.#toggling || this.#confirmationDialog) return;
+		if (this.#scope === "folder") {
+			let global = this.#globalSessions;
+			if (!global) {
+				if (!this.#loadAllSessions) return;
+				this.#toggling = true;
+				this.#messageContainer.clear();
+				this.#messageContainer.addChild(new Text(theme.fg("muted", "  Loading all projects…"), 1, 0));
+				this.#onRequestRender?.();
+				try {
+					global = await this.#loadAllSessions();
+				} catch (err) {
+					this.#showError(err instanceof Error ? err.message : String(err));
+					this.#toggling = false;
+					this.#onRequestRender?.();
+					return;
+				}
+				this.#globalSessions = global;
+				this.#messageContainer.clear();
+				this.#toggling = false;
+			}
+			this.#scope = "all";
+			this.#sessionList.setSessions(global, true);
+		} else {
+			this.#scope = "folder";
+			this.#sessionList.setSessions(this.#folderSessions, false);
+		}
+		this.#headerText.setText(this.#headerLabel());
+		this.#onRequestRender?.();
 	}
 
 	setOnRequestRender(callback: () => void): void {

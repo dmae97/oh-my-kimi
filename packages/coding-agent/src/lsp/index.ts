@@ -1,11 +1,18 @@
 import * as fs from "node:fs";
 import path from "node:path";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	ToolApprovalDecision,
+} from "@oh-my-pi/pi-agent-core";
 import { logger, once, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import type { BunFile } from "bun";
 import { type Theme, theme } from "../modes/theme/theme";
 import lspDescription from "../prompts/tools/lsp.md" with { type: "text" };
 import type { ToolSession } from "../tools";
+import { truncateForPrompt } from "../tools/approval";
 import { formatPathRelativeToCwd, resolveToCwd } from "../tools/path-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "../tools/tool-errors";
 import { clampTimeout } from "../tools/tool-timeouts";
@@ -72,12 +79,30 @@ import {
 	resolveDiagnosticTargets,
 	resolveSymbolColumn,
 	sortDiagnostics,
+	summarizeDiagnosticMessages,
 	symbolKindToIcon,
 	uriToFile,
 } from "./utils";
 
 export type { LspServerStatus } from "./client";
 export type { LspToolDetails } from "./types";
+
+/**
+ * LSP actions that do not mutate the workspace or language-server state.
+ * Anything not in this set (rename, code_actions with apply, rename_file,
+ * reload, raw request, etc.) is classified as write-tier.
+ */
+export const LSP_READONLY_ACTIONS: ReadonlySet<string> = new Set([
+	"diagnostics",
+	"definition",
+	"type_definition",
+	"implementation",
+	"references",
+	"hover",
+	"symbols",
+	"status",
+	"capabilities",
+]);
 
 export interface LspStartupServerInfo {
 	name: string;
@@ -792,12 +817,15 @@ export interface WritethroughOptions {
 	onDeferredDiagnostics?: (diagnostics: FileDiagnosticsResult) => void;
 	/** Signal to cancel a pending deferred diagnostics fetch. */
 	deferredSignal?: AbortSignal;
+	/** Transform diagnostics before surfacing them after a successful fetch. */
+	transformDiagnostics?: (absPath: string, result: FileDiagnosticsResult) => FileDiagnosticsResult;
 }
 
 /** Internal resolved form of {@link WritethroughOptions} that the writethrough machinery operates on. */
 type ResolvedWritethroughOptions = {
 	enableFormat: boolean;
 	enableDiagnostics: boolean;
+	transformDiagnostics?: (absPath: string, result: FileDiagnosticsResult) => FileDiagnosticsResult;
 };
 
 /** Per-file deferred LSP diagnostics wiring for {@link WritethroughCallback}. */
@@ -857,6 +885,7 @@ function getOrCreateWritethroughBatch(id: string, options: ResolvedWritethroughO
 	if (existing) {
 		existing.options.enableFormat ||= options.enableFormat;
 		existing.options.enableDiagnostics ||= options.enableDiagnostics;
+		existing.options.transformDiagnostics ??= options.transformDiagnostics;
 		return existing;
 	}
 	const batch: LspWritethroughBatchState = {
@@ -878,27 +907,6 @@ export async function flushLspWritethroughBatch(
 	}
 	writethroughBatches.delete(id);
 	return flushWritethroughBatch(Array.from(state.entries.values()), cwd, state.options, signal);
-}
-
-function summarizeDiagnosticMessages(messages: string[]): { summary: string; errored: boolean } {
-	const counts = { error: 0, warning: 0, info: 0, hint: 0 };
-	for (const message of messages) {
-		const match = message.match(/\[(error|warning|info|hint)\]/i);
-		if (!match) continue;
-		const key = match[1].toLowerCase() as keyof typeof counts;
-		counts[key] += 1;
-	}
-
-	const parts: string[] = [];
-	if (counts.error > 0) parts.push(`${counts.error} error(s)`);
-	if (counts.warning > 0) parts.push(`${counts.warning} warning(s)`);
-	if (counts.info > 0) parts.push(`${counts.info} info(s)`);
-	if (counts.hint > 0) parts.push(`${counts.hint} hint(s)`);
-
-	return {
-		summary: parts.length > 0 ? parts.join(", ") : "no issues",
-		errored: counts.error > 0,
-	};
 }
 
 function mergeDiagnostics(
@@ -1059,12 +1067,14 @@ async function runLspWritethrough(
 
 			// 6. Get diagnostics from all servers (wait for fresh results)
 			if (enableDiagnostics) {
-				diagnostics = await getDiagnosticsForFile(dst, cwd, servers, {
+				const fetched = await getDiagnosticsForFile(dst, cwd, servers, {
 					signal: operationSignal,
 					minVersions,
 					expectedDocumentVersions,
 					allowUnversionedLspDiagnostics: false,
 				});
+				diagnostics =
+					fetched && options.transformDiagnostics ? options.transformDiagnostics(dst, fetched) : fetched;
 			}
 		});
 	} catch {
@@ -1131,6 +1141,7 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 	const resolvedOptions: ResolvedWritethroughOptions = {
 		enableFormat: options?.enableFormat ?? false,
 		enableDiagnostics: options?.enableDiagnostics ?? false,
+		transformDiagnostics: options?.transformDiagnostics,
 	};
 	if (!resolvedOptions.enableFormat && !resolvedOptions.enableDiagnostics) {
 		return writethroughNoop;
@@ -1174,6 +1185,19 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
  */
 export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Theme> {
 	readonly name = "lsp";
+	readonly approval = (args: unknown): ToolApprovalDecision => {
+		const rawAction = (args as Partial<LspParams>).action;
+		const action = typeof rawAction === "string" ? rawAction.toLowerCase() : "";
+		return LSP_READONLY_ACTIONS.has(action) ? "read" : "write";
+	};
+	readonly formatApprovalDetails = (args: unknown): string[] => {
+		const params = args as Partial<LspParams>;
+		const lines = [`Action: ${typeof params.action === "string" ? params.action : "(missing)"}`];
+		if (typeof params.file === "string" && params.file.length > 0) {
+			lines.push(`File: ${truncateForPrompt(params.file)}`);
+		}
+		return lines;
+	};
 	readonly label = "LSP";
 	readonly loadMode = "discoverable";
 	readonly summary = "Query LSP (language server) for diagnostics, hover info, and references";

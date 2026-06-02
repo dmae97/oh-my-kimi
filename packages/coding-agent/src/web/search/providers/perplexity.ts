@@ -193,13 +193,15 @@ async function findOAuthToken(
 	authStorage: AuthStorage,
 	sessionId: string | undefined,
 	signal: AbortSignal | undefined,
-	envApiKey: string | null,
 ): Promise<string | null> {
 	try {
-		const token = await authStorage.getApiKey("perplexity", sessionId, { signal });
-		// `getApiKey` falls back to PERPLEXITY_API_KEY; do not route that env key
-		// through the OAuth/web endpoint.
-		if (!token || (envApiKey && token === envApiKey)) return null;
+		// `getOAuthAccess` returns the raw OAuth bearer only — runtime/config
+		// api_key overrides and stored api_key credentials are intentionally
+		// suppressed so we don't POST an `api.perplexity.ai` key to the
+		// `www.perplexity.ai` session/SSE endpoint.
+		const access = await authStorage.getOAuthAccess("perplexity", sessionId, { signal });
+		const token = access?.accessToken;
+		if (!token) return null;
 		// Trust the JWT's own `exp` claim if it has one; otherwise treat as
 		// non-expiring. Perplexity session JWTs commonly omit `exp`.
 		const jwtExpiry = jwtExpiryMs(token);
@@ -224,7 +226,7 @@ async function findPerplexityAuth(
 	const apiKey = findApiKey();
 
 	// 2. OAuth/session bearer from AuthStorage.
-	const oauthToken = await findOAuthToken(authStorage, sessionId, signal, apiKey);
+	const oauthToken = await findOAuthToken(authStorage, sessionId, signal);
 	if (oauthToken) {
 		return { type: "oauth", token: oauthToken };
 	}

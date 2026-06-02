@@ -57,6 +57,12 @@ function cursorColAfterTyping(text: string, width = 80): number {
 
 const PROMPT_WIDTH = 2; // "> "
 
+// The jamo-cursor regression (PR #1410 / origin issue) only applies on
+// macOS, where terminals render Hangul Compatibility Jamo as 1 cell while
+// UAX#11 (and `Bun.stringWidth`) report 2. Off-darwin both the terminal and
+// the width helper agree on 2, so the doubling regression cannot occur.
+const IS_DARWIN = process.platform === "darwin";
+
 describe("Input cursor column does not grow at 2× per jamo", () => {
 	it("ASCII baseline: cursor lands exactly after the typed text", () => {
 		expect(cursorColAfterTyping("hello")).toBe(PROMPT_WIDTH + 5);
@@ -66,23 +72,23 @@ describe("Input cursor column does not grow at 2× per jamo", () => {
 		expect(cursorColAfterTyping("안녕")).toBe(PROMPT_WIDTH + 4);
 	});
 
-	it("single jamo: cursor column is at most `PROMPT_WIDTH + 1`", () => {
+	it.skipIf(!IS_DARWIN)("single jamo: cursor column is at most `PROMPT_WIDTH + 1`", () => {
 		// Before fix: PROMPT_WIDTH + 2 = 4. After fix: ≤ 3.
 		expect(cursorColAfterTyping("ㅁ")).toBeLessThanOrEqual(PROMPT_WIDTH + 1);
 	});
 
-	it("8 consecutive jamo: cursor column is at most `PROMPT_WIDTH + 8`", () => {
+	it.skipIf(!IS_DARWIN)("8 consecutive jamo: cursor column is at most `PROMPT_WIDTH + 8`", () => {
 		// Before fix: PROMPT_WIDTH + 16 = 18. After fix: ≤ 10.
 		expect(cursorColAfterTyping("ㅁㄴㅁㄴㅇㅂㄴㅂ")).toBeLessThanOrEqual(PROMPT_WIDTH + 8);
 	});
 
-	it("20 consecutive jamo: cursor column is at most `PROMPT_WIDTH + 20`", () => {
+	it.skipIf(!IS_DARWIN)("20 consecutive jamo: cursor column is at most `PROMPT_WIDTH + 20`", () => {
 		// Before fix: PROMPT_WIDTH + 40 = 42 (catastrophic gap). After fix: ≤ 22.
 		const jamo = "ㅁㄴㄷㅂㅈㅎㅋㅌㄱㄹ".repeat(2);
 		expect(cursorColAfterTyping(jamo)).toBeLessThanOrEqual(PROMPT_WIDTH + 20);
 	});
 
-	it("cursor column grows by ≤1 per typed jamo (not 2)", () => {
+	it.skipIf(!IS_DARWIN)("cursor column grows by ≤1 per typed jamo (not 2)", () => {
 		// The regression: each typed jamo would advance cursor by 2 columns
 		// instead of 1, doubling the offset every keystroke. Assert the
 		// per-step delta never exceeds 1.

@@ -210,6 +210,8 @@ export interface AgentProgress {
 	cost: number;
 	durationMs: number;
 	modelOverride?: string | string[];
+	/** Resolved model display string in the form `<provider>/<id>`, optionally suffixed with `:<thinkingLevel>` when the level was set explicitly. Undefined when the model could not be resolved. */
+	resolvedModel?: string;
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
 	extractedToolData?: Record<string, unknown[]>;
 	/**
@@ -268,6 +270,8 @@ export interface SingleResult {
 	/** Model's context window in tokens, when known. */
 	contextWindow?: number;
 	modelOverride?: string | string[];
+	/** Resolved model display string in the form `<provider>/<id>`, optionally suffixed with `:<thinkingLevel>` when the level was set explicitly. Omitted from tool-result JSON when undefined to keep wire payloads small. */
+	resolvedModel?: string;
 	error?: string;
 	aborted?: boolean;
 	abortReason?: string;

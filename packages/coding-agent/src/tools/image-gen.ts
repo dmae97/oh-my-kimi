@@ -22,12 +22,14 @@ import * as z from "zod/v4";
 import packageJson from "../../package.json" with { type: "json" };
 import { isAuthenticated, type ModelRegistry } from "../config/model-registry";
 import type { CustomTool } from "../extensibility/custom-tools/types";
+import { ohMyPiXAIUserAgent, resolveXAIHttpCredentials } from "../lib/xai-http";
 import imageGenDescription from "../prompts/tools/image-gen.md" with { type: "text" };
 import { resolveReadPath } from "./path-utils";
 
 const DEFAULT_MODEL = "gemini-3-pro-image-preview";
 const DEFAULT_OPENROUTER_MODEL = "google/gemini-3-pro-image-preview";
 const DEFAULT_ANTIGRAVITY_MODEL = "gemini-3-pro-image";
+const DEFAULT_XAI_IMAGE_MODEL = "grok-imagine-image";
 const IMAGE_TIMEOUT = 3 * 60 * 1000; // 3 minutes
 const MAX_IMAGE_SIZE = 35 * 1024 * 1024;
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -38,7 +40,9 @@ const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 const IMAGE_SYSTEM_INSTRUCTION =
 	"You are an AI image generator. Generate images based on user descriptions. Focus on creating high-quality, visually appealing images that match the user's request.";
 
-type ImageProvider = "antigravity" | "gemini" | "openai" | "openai-codex" | "openrouter";
+export type ImageProvider = "antigravity" | "gemini" | "openai" | "openai-codex" | "openrouter" | "xai";
+export type ImageProviderPreference = Exclude<ImageProvider, "openai-codex"> | "auto";
+
 interface ImageApiKey {
 	provider: ImageProvider;
 	apiKey: string;
@@ -46,8 +50,13 @@ interface ImageApiKey {
 	model?: Model;
 }
 
+const COMMON_IMAGE_ASPECT_RATIOS = ["1:1", "3:4", "4:3", "9:16", "16:9"] as const;
+const XAI_IMAGE_ASPECT_RATIOS = [...COMMON_IMAGE_ASPECT_RATIOS, "3:2", "2:3"] as const;
+const COMMON_IMAGE_ASPECT_RATIO_SET = new Set<string>(COMMON_IMAGE_ASPECT_RATIOS);
+const IMAGE_PROVIDER_PREFERENCES = new Set<string>(["auto", "antigravity", "gemini", "openai", "openrouter", "xai"]);
+
 const responseModalitySchema = z.enum(["IMAGE", "TEXT"] as const);
-const aspectRatioSchema = z.enum(["1:1", "3:4", "4:3", "9:16", "16:9"] as const).describe("aspect ratio");
+const aspectRatioSchema = z.enum(XAI_IMAGE_ASPECT_RATIOS).describe("aspect ratio");
 const imageSizeSchema = z.enum(["1024x1024", "1536x1024", "1024x1536"] as const).describe("image size");
 
 const inputImageSchema = z
@@ -274,6 +283,36 @@ interface AntigravityRequest {
 	requestId?: string;
 }
 
+interface XAIImageReference {
+	// OpenAI-compat discriminator. Every code example at
+	// docs.x.ai/developers/rest-api-reference/inference/images sends this
+	// alongside `url`; the schema text doesn't strictly require it, but
+	// matching the documented wire format avoids relying on schema-vs-example.
+	readonly type: "image_url";
+	readonly url: string;
+}
+
+interface XAIImageRequestBase {
+	readonly model: string;
+	readonly prompt: string;
+	readonly aspect_ratio: string;
+	readonly resolution: "1k" | "2k";
+	readonly n: number;
+	readonly response_format: "b64_json" | "url";
+}
+
+// xAI image request body. Three shapes:
+//   1. text-only generation                  → POST /v1/images/generations
+//   2. single-source edit (image field)      → POST /v1/images/edits
+//   3. multi-reference edit (images field)   → POST /v1/images/edits
+// `image` and `images` are mutually exclusive per docs.x.ai; the discriminated
+// union enforces that statically. The runtime cap (XAI_MAX_EDIT_IMAGES) bounds
+// the array length, which TypeScript cannot encode without lossy tuple unions.
+type XAIImageRequestBody =
+	| (XAIImageRequestBase & { readonly image?: never; readonly images?: never })
+	| (XAIImageRequestBase & { readonly image: XAIImageReference; readonly images?: never })
+	| (XAIImageRequestBase & { readonly images: readonly XAIImageReference[]; readonly image?: never });
+
 interface AntigravityResponseChunk {
 	response?: {
 		candidates?: Array<{
@@ -391,11 +430,23 @@ function extractOpenRouterImageUrls(message: OpenRouterMessage | undefined): str
 }
 
 /** Preferred provider set via settings (default: auto) */
-let preferredImageProvider: ImageProvider | "auto" = "auto";
+let preferredImageProvider: ImageProviderPreference = "auto";
+
+export function isImageProviderPreference(value: unknown): value is ImageProviderPreference {
+	return typeof value === "string" && IMAGE_PROVIDER_PREFERENCES.has(value);
+}
 
 /** Set the preferred image provider from settings */
-export function setPreferredImageProvider(provider: ImageProvider | "auto"): void {
+export function setPreferredImageProvider(provider: ImageProviderPreference): void {
 	preferredImageProvider = provider;
+}
+function assertImageAspectRatioSupported(provider: ImageProvider, aspectRatio: ImageGenParams["aspect_ratio"]): void {
+	if (!aspectRatio || provider === "xai" || COMMON_IMAGE_ASPECT_RATIO_SET.has(aspectRatio)) {
+		return;
+	}
+	throw new Error(
+		`Aspect ratio ${aspectRatio} is only supported by xAI image generation. Set providers.image to xai or use one of ${COMMON_IMAGE_ASPECT_RATIOS.join(", ")}.`,
+	);
 }
 
 interface ParsedAntigravityCredentials {
@@ -427,6 +478,17 @@ async function findAntigravityCredentials(modelRegistry: ModelRegistry): Promise
 		apiKey: parsed.accessToken,
 		projectId: parsed.projectId,
 	};
+}
+
+async function findXAIImageCredentials(modelRegistry?: ModelRegistry): Promise<ImageApiKey | null> {
+	if (modelRegistry) {
+		const creds = await resolveXAIHttpCredentials(modelRegistry);
+		if (creds) return { provider: "xai", apiKey: creds.apiKey };
+		return null;
+	}
+	const apiKey = $env.XAI_API_KEY;
+	if (apiKey) return { provider: "xai", apiKey };
+	return null;
 }
 
 async function findOpenAIHostedImageCredentials(
@@ -468,9 +530,13 @@ async function findImageApiKey(
 		const openRouterKey = getEnvApiKey("openrouter");
 		if (openRouterKey) return { provider: "openrouter", apiKey: openRouterKey };
 		// Fall through to auto-detect if preferred provider key not found.
+	} else if (preferredImageProvider === "xai") {
+		const xai = await findXAIImageCredentials(modelRegistry);
+		if (xai) return xai;
+		// Fall through to auto-detect if preferred provider key not found.
 	}
 
-	// Auto-detect: GPT hosted image generation, then Antigravity, OpenRouter, Gemini.
+	// Auto-detect: GPT hosted image generation, then Antigravity, xAI, OpenRouter, Gemini.
 	const openAI = await findOpenAIHostedImageCredentials(modelRegistry, activeModel, sessionId);
 	if (openAI) return openAI;
 
@@ -478,6 +544,9 @@ async function findImageApiKey(
 		const antigravity = await findAntigravityCredentials(modelRegistry);
 		if (antigravity) return antigravity;
 	}
+
+	const xai = await findXAIImageCredentials(modelRegistry);
+	if (xai) return xai;
 
 	const openRouterKey = getEnvApiKey("openrouter");
 	if (openRouterKey) return { provider: "openrouter", apiKey: openRouterKey };
@@ -857,6 +926,31 @@ function buildAntigravityRequest(
 	};
 }
 
+// xAI image-edit cap per docs.x.ai (POST /v1/images/edits supports up to 3
+// source images for multi-reference editing).
+const XAI_MAX_EDIT_IMAGES = 3;
+
+// Map the OpenAI-style pixel-size enum (image_size) to xAI's discrete tier.
+// "1024x1024" → "1k"; anything wider (1536x... or ...x1536) → "2k". Absent
+// image_size defaults to "1k", matching hermes-agent's DEFAULT_RESOLUTION
+// (plugins/image_gen/xai/__init__.py:71).
+function resolveXAIResolution(imageSize: string | undefined): "1k" | "2k" {
+	if (!imageSize || imageSize === "1024x1024") return "1k";
+	return "2k";
+}
+
+// Build the discriminated edit body. Caller must ensure images.length is in
+// [1, XAI_MAX_EDIT_IMAGES]; the bound check fires earlier in execute().
+function buildXAIEditPayload(base: XAIImageRequestBase, images: readonly InlineImageData[]): XAIImageRequestBody {
+	const refs: readonly XAIImageReference[] = images.map(img => ({
+		type: "image_url",
+		url: toDataUrl(img),
+	}));
+	const [first, ...rest] = refs;
+	if (first === undefined) return base; // unreachable: caller checked images.length > 0
+	return rest.length === 0 ? { ...base, image: first } : { ...base, images: refs };
+}
+
 interface AntigravitySseResult {
 	images: InlineImageData[];
 	text: string[];
@@ -901,6 +995,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 	name: "generate_image",
 	label: "GenerateImage",
 	strict: false,
+	approval: "write",
 	description: prompt.render(imageGenDescription),
 	parameters: imageGenSchema,
 	async execute(_toolCallId, params, _onUpdate, ctx, signal) {
@@ -909,7 +1004,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 			const apiKey = await findImageApiKey(ctx.modelRegistry, ctx.model, sessionId);
 			if (!apiKey) {
 				throw new Error(
-					"No image API credentials found. Use a GPT Responses/Codex model with OpenAI credentials, login with google-antigravity, or set OPENROUTER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY.",
+					"No image API credentials found. Use a GPT Responses/Codex model with OpenAI credentials, login with google-antigravity or xAI Grok OAuth, or set XAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY.",
 				);
 			}
 
@@ -921,8 +1016,11 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 						? DEFAULT_ANTIGRAVITY_MODEL
 						: provider === "openrouter"
 							? DEFAULT_OPENROUTER_MODEL
-							: DEFAULT_MODEL;
+							: provider === "xai"
+								? DEFAULT_XAI_IMAGE_MODEL
+								: DEFAULT_MODEL;
 			const resolvedModel = provider === "openrouter" ? resolveOpenRouterModel(model) : model;
+			assertImageAspectRatioSupported(provider, params.aspect_ratio);
 			const cwd = ctx.sessionManager.getCwd();
 
 			const resolvedImages: InlineImageData[] = [];
@@ -1054,6 +1152,107 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 						images: parsed.images,
 						responseText,
 						usage: parsed.usage,
+					},
+				};
+			}
+
+			if (provider === "xai") {
+				if (!ctx.modelRegistry) {
+					throw new Error("Missing modelRegistry for xAI image generation");
+				}
+				const xaiCreds = await resolveXAIHttpCredentials(ctx.modelRegistry, resolvedModel);
+				if (!xaiCreds) {
+					throw new Error(
+						"No xAI credentials. Run /login → xAI Grok OAuth (SuperGrok Subscription) or set XAI_API_KEY.",
+					);
+				}
+
+				const prompt = assemblePrompt(params);
+				const aspectRatio = params.aspect_ratio ?? "1:1";
+				const xaiResolution = resolveXAIResolution(params.image_size);
+
+				const isEdit = resolvedImages.length > 0;
+				if (isEdit && resolvedImages.length > XAI_MAX_EDIT_IMAGES) {
+					throw new Error(
+						`xAI image edits accept up to ${XAI_MAX_EDIT_IMAGES} reference images; got ${resolvedImages.length}.`,
+					);
+				}
+
+				const xaiBaseBody: XAIImageRequestBase = {
+					model: resolvedModel,
+					prompt,
+					aspect_ratio: aspectRatio,
+					resolution: xaiResolution,
+					n: 1,
+					response_format: "b64_json",
+				};
+				const xaiBody: XAIImageRequestBody = isEdit
+					? buildXAIEditPayload(xaiBaseBody, resolvedImages)
+					: xaiBaseBody;
+				const xaiEndpoint = isEdit ? "/images/edits" : "/images/generations";
+
+				const xaiResponse = await fetch(`${xaiCreds.baseURL}${xaiEndpoint}`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${xaiCreds.apiKey}`,
+						"Content-Type": "application/json",
+						"User-Agent": ohMyPiXAIUserAgent(),
+					},
+					body: JSON.stringify(xaiBody),
+					signal: requestSignal,
+				});
+
+				const xaiRawText = await xaiResponse.text();
+				if (!xaiResponse.ok) {
+					let message = xaiRawText;
+					try {
+						const parsedErr = JSON.parse(xaiRawText) as { error?: { message?: string } };
+						message = parsedErr.error?.message ?? message;
+					} catch {
+						// Keep raw text.
+					}
+					throw new Error(`xAI image request failed (${xaiResponse.status}): ${message}`);
+				}
+
+				const xaiData = JSON.parse(xaiRawText) as {
+					data?: Array<{ b64_json?: string; url?: string }>;
+				};
+				const xaiInlineImages: InlineImageData[] = [];
+				for (const entry of xaiData.data ?? []) {
+					if (entry.b64_json) {
+						const bytes = Buffer.from(entry.b64_json, "base64");
+						const mimeType = parseImageMetadata(bytes)?.mimeType ?? "image/png";
+						xaiInlineImages.push({ data: entry.b64_json, mimeType });
+					} else if (entry.url) {
+						xaiInlineImages.push(await loadImageFromUrl(entry.url, requestSignal));
+					}
+				}
+
+				if (xaiInlineImages.length === 0) {
+					return {
+						content: [{ type: "text", text: "No image data returned." }],
+						details: {
+							provider,
+							model: resolvedModel,
+							imageCount: 0,
+							imagePaths: [],
+							images: [],
+						},
+					};
+				}
+
+				const xaiImagePaths = await saveImagesToTemp(xaiInlineImages);
+
+				return {
+					content: [
+						{ type: "text", text: buildResponseSummary(provider, resolvedModel, xaiImagePaths, undefined) },
+					],
+					details: {
+						provider,
+						model: resolvedModel,
+						imageCount: xaiInlineImages.length,
+						imagePaths: xaiImagePaths,
+						images: xaiInlineImages,
 					},
 				};
 			}

@@ -1,6 +1,6 @@
 # Plugin manager and installer plumbing
 
-This document describes how `omp plugin` operations mutate plugin state on disk and how installed plugins become runtime capabilities (tools and extensions today, hooks/commands path resolution available).
+This document describes how `omp plugin` npm/link operations mutate plugin state on disk and how installed npm/link plugins become runtime capabilities (tools and extensions today, hooks/commands path resolution available). Marketplace installs use separate marketplace registries and cache plumbing; see `docs/marketplace.md`.
 
 ## Scope and architecture
 
@@ -9,14 +9,14 @@ There are two plugin-management implementations in the codebase:
 1. **Active path used by CLI commands**: `PluginManager` (`src/extensibility/plugins/manager.ts`)
 2. **Legacy helper module**: installer functions (`src/extensibility/plugins/installer.ts`)
 
-`omp plugin ...` command execution goes through `PluginManager`.
+`omp plugin` npm/link actions go through `PluginManager`; marketplace actions go through `MarketplaceManager`.
 
 `installer.ts` still documents important safety checks and filesystem behavior, but it is not the path used by `src/commands/plugin.ts` + `src/cli/plugin-cli.ts`.
 
 ## Lifecycle: from CLI invocation to runtime availability
 
 ```text
-omp plugin <action> ...
+omp plugin <npm/link action> ...
   -> src/commands/plugin.ts
   -> runPluginCommand(...) in src/cli/plugin-cli.ts
   -> PluginManager method (install/list/uninstall/link/...)
@@ -24,22 +24,28 @@ omp plugin <action> ...
   -> runtime discovery: discoverAndLoadCustomTools(...) and discoverAndLoadExtensions(...)
   -> getAllPluginToolPaths(cwd) / getAllPluginExtensionPaths(cwd)
   -> custom tool loader imports tool modules; extension loader imports extension modules
+
+omp plugin install name@marketplace / omp install name@marketplace
+  -> MarketplaceManager
+  -> mutate ~/.omp/marketplaces.json, ~/.omp/plugins/installed_plugins.json, cache dirs
+  -> installed marketplace plugin cache is surfaced as plugin roots/capabilities
 ```
 
 ### Command entrypoints
 
 - `src/commands/plugin.ts` defines command/flags and forwards to `runPluginCommand`.
-- `src/cli/plugin-cli.ts` maps subcommands to `PluginManager` methods:
+- `src/cli/plugin-cli.ts` maps npm/link subcommands to `PluginManager` methods:
   - `install`, `uninstall`, `list`, `link`, `doctor`, `features`, `config`, `enable`, `disable`
-- No explicit `update` action exists; update is done by re-running `install` with a new package/version spec.
+- `discover`, `upgrade`, and `marketplace ...` subcommands use `MarketplaceManager`.
+- No explicit npm-plugin `update` action exists; update is done by re-running `install` with a new package/version spec.
 
 ## On-disk model
 
 Global plugin state lives under `~/.omp/plugins`:
 
-- `package.json` — dependency manifest used by `bun install`/`bun uninstall`
-- `node_modules/` — installed plugin packages or symlinks
-- `omp-plugins.lock.json` — runtime state:
+- `package.json` — dependency manifest used by `bun install`/`bun uninstall` for npm-installed plugins
+- `node_modules/` — installed npm plugin packages or symlinks
+- `omp-plugins.lock.json` — runtime state for npm/link plugins:
   - enabled/disabled per plugin
   - selected feature set per plugin
   - persisted plugin settings
@@ -49,6 +55,13 @@ Project-local overrides live at:
 - `<cwd>/.omp/plugin-overrides.json`
 
 Overrides are read-only from manager/loader perspective (no write path here) and can disable plugins or override features/settings for this project.
+
+Marketplace registries live separately:
+
+- `~/.omp/marketplaces.json` — configured marketplace catalogs
+- `~/.omp/plugins/installed_plugins.json` — user-scoped marketplace installs
+- `<cwd>/.omp/plugins/installed_plugins.json` — project-scoped marketplace installs when available
+- `~/.omp/plugins/cache/{marketplaces,plugins}/` — cached catalogs and plugin directories
 
 ## Plugin spec parsing and metadata interpretation
 
@@ -171,10 +184,11 @@ For each enabled plugin:
 
 Each resolver includes base entries plus feature entries:
 
+- base entries are always included
 - explicit feature list -> only selected features
 - `enabledFeatures === null` -> enable features marked `default: true`
 
-Missing files are silently skipped (`existsSync` guard).
+Manifest entries may point to a file or to a directory containing `index.ts`, `index.js`, `index.mjs`, or `index.cjs`. Missing files are silently skipped (`existsSync` guard).
 
 ## Current runtime wiring differences
 

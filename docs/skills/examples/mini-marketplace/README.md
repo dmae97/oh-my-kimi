@@ -21,6 +21,7 @@ omp plugin install my-plugin@example-marketplace
 - Minimum required `marketplace.json` fields: `name`, `owner.name`, `plugins`
 - Relative path plugin source using `./` prefix (`"source": "./my-plugin"`)
 - Plugin bundled inside the same directory tree as the marketplace catalog
+- Extra catalog metadata: the example includes a top-level `description`; current marketplace parsing preserves extra top-level fields, while runtime behavior uses required fields and plugin entries.
 
 ## Structure
 

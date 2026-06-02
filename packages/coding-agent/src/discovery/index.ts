@@ -22,6 +22,7 @@ import "../capability/tool";
 // Import providers (each registers itself on import)
 import "./agents-md";
 import "./builtin";
+import "./builtin-defaults";
 import "./claude";
 import "./claude-plugins";
 import "./cline";
@@ -32,6 +33,7 @@ import "./gemini";
 import "./opencode";
 import "./github";
 import "./mcp-json";
+import "./omp-plugins";
 import "./ssh";
 import "./vscode";
 import "./windsurf";

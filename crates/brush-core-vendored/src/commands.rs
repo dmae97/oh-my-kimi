@@ -617,37 +617,46 @@ pub(crate) fn execute_external_command(
 
 
 	// Set up process group/session state.
+	//
+	// A child we are about to `setsid()` (`DetachSession`) must NOT also be
+	// handed a `process_group(...)`. For a would-be new-group leader it would
+	// duplicate the group `setsid` already creates; for a pipeline stage joining
+	// an established group it is a cross-session `setpgid` that fails with EPERM
+	// now that the leader (and every prior stage) has moved into its own session.
+	// In both cases `setsid` alone gives the child its own session and process
+	// group. See `child_session_action` for the decision rationale.
 	let command_leads_session = new_pg
 		&& matches!(session_action, ChildSessionAction::TakeForeground)
 		&& context.shell.options().external_cmd_leads_session;
 
-	if new_pg {
-		match session_action {
-			ChildSessionAction::DetachSession => {
-				// `detach_session()` calls `setsid()`, which creates a fresh session
-				// and process group; requesting `process_group(0)` as well would
-				// conflict with that setup.
-			}
-			ChildSessionAction::TakeForeground if command_leads_session => {
-				// Don't set process_group(0) - setsid() in pre_exec will handle it.
-				cmd.lead_session();
-			}
-			ChildSessionAction::TakeForeground | ChildSessionAction::None => {
-				// Normal case: create new process group in current session.
+	match session_action {
+		ChildSessionAction::DetachSession => {
+			// setsid() creates the fresh session + process group; no process_group().
+			cmd.detach_session();
+		}
+		ChildSessionAction::TakeForeground if command_leads_session => {
+			// Don't set process_group(0) - setsid() in pre_exec will handle it.
+			cmd.lead_session();
+		}
+		ChildSessionAction::TakeForeground => {
+			// Foreground a child that is not leading its own session: create/join
+			// the process group in the current session, then grab the terminal.
+			if new_pg {
 				cmd.process_group(0);
+			} else if let Some(pgid) = process_group_id {
+				cmd.process_group(pgid);
+			}
+			cmd.take_foreground();
+		}
+		ChildSessionAction::None => {
+			// Normal case: create a new process group in the current session, or
+			// join an established one (later pipeline stages).
+			if new_pg {
+				cmd.process_group(0);
+			} else if let Some(pgid) = process_group_id {
+				cmd.process_group(pgid);
 			}
 		}
-	} else if let Some(pgid) = process_group_id {
-		// We need to join an established process group.
-		cmd.process_group(pgid);
-	}
-
-	// See `child_session_action` for the decision rationale and call-out about
-	// pipeline groups.
-	match session_action {
-		ChildSessionAction::DetachSession => cmd.detach_session(),
-		ChildSessionAction::TakeForeground if !command_leads_session => cmd.take_foreground(),
-		ChildSessionAction::TakeForeground | ChildSessionAction::None => {}
 	}
 
 	// When tracing is enabled, report.
@@ -964,28 +973,33 @@ pub enum ChildSessionAction {
 /// child inherited the host's controlling tty, and any `/dev/tty` open or
 /// `tcsetpgrp` call from the child could SIGTTIN/SIGTTOU and stop the host.
 ///
-/// `detach_session()` is unsafe for any member of a multi-command pipeline:
-/// for the first stage it puts the process-group leader in a different session,
-/// causing later stages' `setpgid()` to fail with EPERM; for later stages it
-/// either fails with EPERM or moves the child into a fresh session, breaking the
-/// pipeline's shared process group and job-control signal propagation. Pipeline
-/// stages therefore keep their pre-fix behavior (no detach).
+/// A child whose stdin is **not** a terminal therefore always detaches, even
+/// when it is a stage of a multi-command pipeline. An interactive program in a
+/// pipeline (`zsh -i ... | awk`) would otherwise open `/dev/tty`, `tcsetpgrp`
+/// itself to the foreground, and leave the host stopped on its next tty read.
+/// `setsid()` puts each stage in its own session with no controlling tty, so it
+/// cannot reach `/dev/tty` at all. The historical EPERM hazard — a later stage
+/// `setpgid()`-joining a leader that already moved to a new session — is avoided
+/// in `execute_external_command`, which skips `process_group(...)` entirely for
+/// detached children; pipeline stages no longer share one process group, which
+/// the embedded host does not rely on (it cancels via the descendant tree, and
+/// pipes are session-independent).
+///
+/// `in_pipeline_group` is no longer consulted: a pipeline stage that legitimately
+/// needs the shared tty group has terminal stdin and is handled by the
+/// `child_stdin_is_terminal` arm before pipeline membership would ever matter.
 ///
 /// Foregrounding remains gated on `new_pg && child_stdin_is_terminal`.
 pub fn child_session_action(
 	new_pg: bool,
 	child_stdin_is_terminal: bool,
-	in_pipeline_group: bool,
+	_in_pipeline_group: bool,
 ) -> ChildSessionAction {
 	if new_pg && child_stdin_is_terminal {
 		return ChildSessionAction::TakeForeground;
 	}
 
 	if child_stdin_is_terminal {
-		return ChildSessionAction::None;
-	}
-
-	if in_pipeline_group {
 		return ChildSessionAction::None;
 	}
 

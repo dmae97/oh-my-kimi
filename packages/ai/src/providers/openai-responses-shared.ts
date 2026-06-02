@@ -30,8 +30,33 @@ import {
 } from "../types";
 import { normalizeResponsesToolCallId } from "../utils";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
-import { parseStreamingJson } from "../utils/json-parse";
+import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER, partitionVisionContent } from "./vision-guard";
+export const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES: ReadonlySet<string> = new Set([
+	"response.created",
+	"response.output_item.added",
+	"response.reasoning_summary_part.added",
+	"response.reasoning_summary_text.delta",
+	"response.reasoning_summary_part.done",
+	"response.reasoning_text.delta",
+	"response.content_part.added",
+	"response.output_text.delta",
+	"response.refusal.delta",
+	"response.function_call_arguments.delta",
+	"response.function_call_arguments.done",
+	"response.custom_tool_call_input.delta",
+	"response.custom_tool_call_input.done",
+	"response.output_item.done",
+	"response.completed",
+	"response.failed",
+	"error",
+]);
+
+export function isOpenAIResponsesProgressEvent(event: unknown): boolean {
+	if (!event || typeof event !== "object") return false;
+	const type = (event as { type?: unknown }).type;
+	return typeof type === "string" && OPENAI_RESPONSES_PROGRESS_EVENT_TYPES.has(type);
+}
 
 export function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
 	const payload: TextSignatureV1 = { v: 1, id };
@@ -376,7 +401,11 @@ export async function processResponsesStream<TApi extends Api>(
 		| ResponseFunctionToolCall
 		| ResponseCustomToolCall
 		| null = null;
-	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
+	let currentBlock:
+		| ThinkingContent
+		| TextContent
+		| (ToolCall & { partialJson: string; lastParseLen?: number })
+		| null = null;
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
 	let sawFirstToken = false;
@@ -515,7 +544,11 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.function_call_arguments.delta") {
 			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
 				currentBlock.partialJson += event.delta;
-				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+				const throttled = parseStreamingJsonThrottled(currentBlock.partialJson, currentBlock.lastParseLen ?? 0);
+				if (throttled) {
+					currentBlock.arguments = throttled.value;
+					currentBlock.lastParseLen = throttled.parsedLen;
+				}
 				stream.push({
 					type: "toolcall_delta",
 					contentIndex: blockIndex(),
@@ -527,6 +560,8 @@ export async function processResponsesStream<TApi extends Api>(
 			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
 				currentBlock.partialJson = event.arguments;
 				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+				delete (currentBlock as { partialJson?: string }).partialJson;
+				delete (currentBlock as { lastParseLen?: number }).lastParseLen;
 			}
 		} else if (event.type === "response.custom_tool_call_input.delta") {
 			if (currentItem?.type === "custom_tool_call" && currentBlock?.type === "toolCall") {
@@ -592,6 +627,15 @@ export async function processResponsesStream<TApi extends Api>(
 					name: item.name,
 					arguments: args,
 				};
+				if (currentBlock?.type === "toolCall") {
+					// Persist the authoritative final args on the stored block. The
+					// throttled delta parser may have skipped the last partial parse,
+					// leaving currentBlock.arguments stale (often `{}`); the emitted
+					// toolCall and the persisted block must agree.
+					currentBlock.arguments = args;
+					delete (currentBlock as { partialJson?: string }).partialJson;
+					delete (currentBlock as { lastParseLen?: number }).lastParseLen;
+				}
 				currentBlock = null;
 				stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
 			} else if (item.type === "custom_tool_call") {
@@ -738,6 +782,15 @@ type ReasoningOptions = {
  * Apply reasoning-related Responses parameters: enable encrypted reasoning content for replay,
  * set effort/summary when requested, and otherwise inject the GPT-5 "Juice: 0" no-reasoning hack.
  * Mutates `params` and may push a developer message into `messages`.
+ *
+ * @param omitReasoningEffort - When `true`, suppresses `params.reasoning.effort` from the wire
+ *   body. Set by `xai-responses.ts` via {@link OpenAIResponsesOptions.omitReasoningEffort} for
+ *   xAI Grok models that return HTTP 400 on any `reasoning.effort` value (e.g. grok-build,
+ *   grok-4.20-0309-reasoning). When `true` and `options.reasoning` is set but
+ *   `options.reasoningSummary` is absent, `params.reasoning` is intentionally omitted from the
+ *   wire body entirely — these models reason natively at their own internal default effort level
+ *   without needing explicit activation. Callers that pass `options.reasoning` for such models
+ *   should expect this documented downgrade: the model will reason, but at its default effort.
  */
 export function applyResponsesReasoningParams<P extends OpenAI.Responses.ResponseCreateParamsStreaming>(
 	params: P,
@@ -745,23 +798,43 @@ export function applyResponsesReasoningParams<P extends OpenAI.Responses.Respons
 	options: ReasoningOptions | undefined,
 	messages: ResponseInput,
 	mapEffort?: (effort: string) => string,
+	includeEncryptedReasoning: boolean = true,
+	omitReasoningEffort: boolean = false,
 ): void {
 	if (!model.reasoning) return;
 	// Always request encrypted reasoning content so reasoning items can be replayed in
 	// multi-turn conversations when store is false (items aren't persisted server-side, so
 	// we must include the full content). See: https://github.com/can1357/oh-my-pi/issues/41
-	params.include = ["reasoning.encrypted_content"];
+	if (includeEncryptedReasoning) {
+		params.include = ["reasoning.encrypted_content"];
+	}
 
 	if (options?.reasoning || options?.reasoningSummary !== undefined) {
-		const requested = options?.reasoning || "medium";
-		type ReasoningParam = NonNullable<OpenAI.Responses.ResponseCreateParamsStreaming["reasoning"]>;
-		const reasoningParams: ReasoningParam = {
-			effort: (mapEffort ? mapEffort(requested) : requested) as ReasoningParam["effort"],
-		};
-		if (options?.reasoningSummary !== null) {
-			reasoningParams.summary = options?.reasoningSummary || "auto";
+		// Suppress the effort dial entirely when the upstream provider rejects
+		// `reasoning.effort` for this model (xAI Grok models outside the
+		// effort-capable allowlist 400 with "Model X does not support parameter
+		// reasoningEffort"). Default is false to preserve existing behavior for
+		// every non-xAI caller.
+		if (omitReasoningEffort) {
+			// Still honor reasoningSummary when explicitly requested; xAI
+			// accepts the summary field on every reasoning-capable model.
+			// When only options.reasoning (effort level) is set, params.reasoning
+			// is intentionally omitted — see @param omitReasoningEffort above.
+			if (options?.reasoningSummary !== undefined && options?.reasoningSummary !== null) {
+				type ReasoningParam = NonNullable<OpenAI.Responses.ResponseCreateParamsStreaming["reasoning"]>;
+				params.reasoning = { summary: options.reasoningSummary || "auto" } as P["reasoning"] & ReasoningParam;
+			}
+		} else {
+			const requested = options?.reasoning || "medium";
+			type ReasoningParam = NonNullable<OpenAI.Responses.ResponseCreateParamsStreaming["reasoning"]>;
+			const reasoningParams: ReasoningParam = {
+				effort: (mapEffort ? mapEffort(requested) : requested) as ReasoningParam["effort"],
+			};
+			if (options?.reasoningSummary !== null) {
+				reasoningParams.summary = options?.reasoningSummary || "auto";
+			}
+			params.reasoning = reasoningParams as P["reasoning"];
 		}
-		params.reasoning = reasoningParams as P["reasoning"];
 	} else if (model.name.toLowerCase().startsWith("gpt-5")) {
 		// Jesus Christ, see https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7
 		messages.push({

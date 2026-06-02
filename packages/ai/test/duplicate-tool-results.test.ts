@@ -375,6 +375,41 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
 		timestamp: Date.now(),
 	});
 
+	const expectAnthropicToolResultAdjacency = (messages: Message[]): void => {
+		const seenToolUseIds = new Set<string>();
+
+		for (let i = 0; i < messages.length; i++) {
+			const message = messages[i];
+
+			if (message.role === "assistant") {
+				const toolCalls = message.content.filter((block): block is ToolCall => block.type === "toolCall");
+				for (const toolCall of toolCalls) seenToolUseIds.add(toolCall.id);
+				if (toolCalls.length === 0) continue;
+
+				const nextResultIds = new Set<string>();
+				for (let j = i + 1; j < messages.length; j++) {
+					const next = messages[j];
+					if (next.role !== "toolResult") break;
+					nextResultIds.add(next.toolCallId);
+				}
+
+				for (const toolCall of toolCalls) {
+					expect(
+						nextResultIds.has(toolCall.id),
+						`tool_use ${toolCall.id} @${i} must be followed by its tool_result`,
+					).toBe(true);
+				}
+			}
+
+			if (message.role === "toolResult") {
+				expect(
+					seenToolUseIds.has(message.toolCallId),
+					`tool_result ${message.toolCallId} has no preceding tool_use`,
+				).toBe(true);
+			}
+		}
+	};
+
 	it("drops orphan tool_result with no matching tool_use and preserves content as a user-level note", () => {
 		// Exact shape from the captured 400 log
 		// (1779104960753-3apjo744j173x.json — request id req_011Cb9yxvT1b8wEiWQ5u1Zn5):
@@ -502,6 +537,76 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
 				).toBe(true);
 			}
 		}
+	});
+
+	it("pulls delayed real tool results forward before the next assistant turn", () => {
+		const delayedBrewId = "toolu_01EdearErxJ4vwp5NLsTGk8S";
+		const readId1 = "toolu_01P4H6odgyDs66SEJ8FX4RV3";
+		const readId2 = "toolu_015RcKAXBvXetVgiED5v1nPT";
+		const searchId = "toolu_013K5Vc64av3yzAN3hLwL6DL";
+		const delayedCargoId = "toolu_0112GoRndsiyYQir3n28bwhx";
+		const laterReadId1 = "toolu_019RZ8rULdJw4EosohokXxdK";
+		const laterReadId2 = "toolu_01WWuonPRhfdczM85q2CHU1e";
+
+		const readAssistant: AssistantMessage = {
+			...makeAssistantWithToolCall(readId1, "proxy_read"),
+			content: [
+				{ type: "toolCall", id: readId1, name: "proxy_read", arguments: { path: "a.cpp" } },
+				{ type: "toolCall", id: readId2, name: "proxy_read", arguments: { path: "b.cpp" } },
+			],
+		};
+		const laterReadAssistant: AssistantMessage = {
+			...makeAssistantWithToolCall(laterReadId1, "proxy_read"),
+			content: [
+				{ type: "toolCall", id: laterReadId1, name: "proxy_read", arguments: { path: "c.cpp" } },
+				{ type: "toolCall", id: laterReadId2, name: "proxy_read", arguments: { path: "d.cpp" } },
+			],
+		};
+
+		const messages: Message[] = [
+			{ role: "user", content: "<handoff-context>compacted history</handoff-context>", timestamp: 1 },
+			{ role: "user", content: "Resume work on the user's most recent intent.", timestamp: 2 },
+			makeAssistantWithToolCall(delayedBrewId, "proxy_bash", { command: "brew install minidump-stackwalk" }),
+			readAssistant,
+			makeToolResult(readId1, "read a.cpp", "proxy_read"),
+			makeToolResult(readId2, "read b.cpp", "proxy_read"),
+			makeAssistantWithToolCall(searchId, "proxy_search", { pattern: "SoftTissueRemoval" }),
+			makeToolResult(searchId, "search results", "proxy_search"),
+			makeToolResult(delayedBrewId, "brew failed", "proxy_bash"),
+			makeAssistantWithToolCall(delayedCargoId, "proxy_bash", { command: "cargo install minidump-stackwalk" }),
+			laterReadAssistant,
+			makeToolResult(laterReadId1, "read c.cpp", "proxy_read"),
+			makeToolResult(laterReadId2, "read d.cpp", "proxy_read"),
+			makeToolResult(delayedCargoId, "cargo output", "proxy_bash"),
+		];
+
+		const transformed = transformMessages(messages, model);
+
+		expectAnthropicToolResultAdjacency(transformed);
+		expect(
+			transformed.filter(m => m.role === "toolResult" && (m as ToolResultMessage).toolCallId === delayedBrewId)
+				.length,
+		).toBe(1);
+		expect(
+			transformed.filter(m => m.role === "toolResult" && (m as ToolResultMessage).toolCallId === delayedCargoId)
+				.length,
+		).toBe(1);
+
+		const brewAssistantIndex = transformed.findIndex(
+			m =>
+				m.role === "assistant" && m.content.some(block => block.type === "toolCall" && block.id === delayedBrewId),
+		);
+		const brewResult = transformed[brewAssistantIndex + 1];
+		expect(brewResult?.role).toBe("toolResult");
+		if (brewResult?.role === "toolResult") expect(brewResult.toolCallId).toBe(delayedBrewId);
+
+		const cargoAssistantIndex = transformed.findIndex(
+			m =>
+				m.role === "assistant" && m.content.some(block => block.type === "toolCall" && block.id === delayedCargoId),
+		);
+		const cargoResult = transformed[cargoAssistantIndex + 1];
+		expect(cargoResult?.role).toBe("toolResult");
+		if (cargoResult?.role === "toolResult") expect(cargoResult.toolCallId).toBe(delayedCargoId);
 	});
 
 	it("drops orphan tool_result with empty content without emitting an empty developer note", () => {

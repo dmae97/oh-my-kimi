@@ -1,9 +1,10 @@
 import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
-import { AzureOpenAI } from "openai";
+import { AzureOpenAI, APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
 import type {
 	Tool as OpenAITool,
 	ResponseCreateParamsStreaming,
 	ResponseInput,
+	ResponseStreamEvent,
 } from "openai/resources/responses/responses";
 import { getEnvApiKey } from "../stream";
 import type {
@@ -21,9 +22,8 @@ import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
-	createWatchdog,
+	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
@@ -37,6 +37,7 @@ import {
 	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
 	createInitialResponsesAssistantMessage,
+	isOpenAIResponsesProgressEvent,
 	normalizeResponsesToolCallIdForTransform,
 	processResponsesStream,
 } from "./openai-responses-shared";
@@ -119,8 +120,12 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			const client = createClient(model, apiKey, options);
 			const { baseUrl } = resolveAzureConfig(model, options);
 			const params = buildParams(model, context, options, deploymentName, baseUrl);
-			const idleTimeoutMs = getOpenAIStreamIdleTimeoutMs();
 			options?.onPayload?.(params);
+			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
+			const firstEventTimeoutMs =
+				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
+			const requestTimeoutMs =
+				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			rawRequestDump = {
 				provider: model.provider,
 				api: output.api,
@@ -129,19 +134,37 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				url: `${baseUrl}/responses`,
 				body: params,
 			};
-			const openaiStream = await client.responses.create(params, { signal: requestSignal });
-			const firstEventWatchdog = createWatchdog(
-				options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs),
-				() => abortTracker.abortLocally(firstEventTimeoutAbortError),
-			);
+			let requestTimeout: NodeJS.Timeout | undefined;
+			if (requestTimeoutMs !== undefined) {
+				requestTimeout = setTimeout(() => abortTracker.abortLocally(firstEventTimeoutAbortError), requestTimeoutMs);
+			}
+			let openaiStream: AsyncIterable<ResponseStreamEvent>;
+			try {
+				const requestOptions =
+					requestTimeoutMs === undefined
+						? { signal: requestSignal }
+						: { signal: requestSignal, timeout: requestTimeoutMs };
+				openaiStream = await client.responses.create(params, requestOptions);
+			} catch (error) {
+				if (error instanceof OpenAIConnectionTimeoutError && !abortTracker.wasCallerAbort()) {
+					throw firstEventTimeoutAbortError;
+				}
+				throw error;
+			} finally {
+				if (requestTimeout !== undefined) clearTimeout(requestTimeout);
+			}
 			stream.push({ type: "start", partial: output });
 
 			await processResponsesStream(
 				iterateWithIdleTimeout(openaiStream, {
-					watchdog: firstEventWatchdog,
 					idleTimeoutMs,
+					firstItemTimeoutMs: firstEventTimeoutMs,
+					firstItemErrorMessage: AZURE_OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE,
 					errorMessage: "Azure OpenAI responses stream stalled while waiting for the next event",
 					onIdle: () => requestAbortController.abort(),
+					onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
+					abortSignal: options?.signal,
+					isProgressItem: isOpenAIResponsesProgressEvent,
 				}),
 				output,
 				stream,
@@ -157,6 +180,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			if (firstEventTimeoutError) {
 				throw firstEventTimeoutError;
 			}
+
 			if (abortTracker.wasCallerAbort()) {
 				throw new Error("Request was aborted");
 			}
@@ -269,7 +293,7 @@ function buildParams(
 		model: deploymentName,
 		input: messages,
 		stream: true,
-		prompt_cache_key: normalizeOpenAIResponsesPromptCacheKey(options?.sessionId),
+		prompt_cache_key: normalizeOpenAIResponsesPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
 	};
 
 	applyCommonResponsesSamplingParams(params, options, model.provider);

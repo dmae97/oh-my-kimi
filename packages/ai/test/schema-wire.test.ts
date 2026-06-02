@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { normalizeAnthropicToolSchema } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { Tool } from "@oh-my-pi/pi-ai/types";
 import {
+	decontaminateZodInstance,
 	isZodSchema,
 	normalizeEmptySchemas,
 	normalizeSchemaForCCA,
@@ -189,5 +190,26 @@ describe("provider normalizers on normalized open-record schemas", () => {
 		const out = normalizeSchemaForCCA(wire) as Record<string, unknown>;
 		const extra = (out.properties as Record<string, unknown>).extra as Record<string, unknown>;
 		expect(extra).not.toHaveProperty("additionalProperties");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// decontaminateZodInstance — nullable wrapping of non-scalar inner schemas
+// ---------------------------------------------------------------------------
+
+describe("decontaminateZodInstance — nullable union", () => {
+	it("z.union([z.string(), z.number()]).nullable() produces a null-tolerant schema", () => {
+		// Round-trip strips Zod methods; decontaminateZodInstance must then inject null.
+		const roundTripped = JSON.parse(JSON.stringify(z.union([z.string(), z.number()]).nullable()));
+		const out = decontaminateZodInstance(roundTripped) as Record<string, unknown>;
+		// The union inner schema surfaces as an anyOf shape (no scalar `type`), so
+		// nullable wrapping must produce { anyOf: [..., { type: "null" }] }.
+		const toleratesNull =
+			(Array.isArray(out.type) && (out.type as string[]).includes("null")) ||
+			(Array.isArray(out.anyOf) &&
+				(out.anyOf as unknown[]).some(
+					b => typeof b === "object" && b !== null && (b as Record<string, unknown>).type === "null",
+				));
+		expect(toleratesNull).toBe(true);
 	});
 });

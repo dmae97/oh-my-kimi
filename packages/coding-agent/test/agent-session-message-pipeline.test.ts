@@ -1,9 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { Message, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
+import {
+	clearCustomApis,
+	type Message,
+	type Model,
+	registerCustomApi,
+	type SimpleStreamOptions,
+} from "@oh-my-pi/pi-ai";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import {
+	AgentSession,
+	type AgentSessionEvent,
+	ANTHROPIC_TOOL_CALL_BATCH_CAP,
+	resolveToolCallBatchCapForModel,
+} from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 function createAgent(): Agent {
 	return new Agent({
@@ -20,9 +33,47 @@ describe("AgentSession message pipeline", () => {
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
+		clearCustomApis();
 		for (const session of sessions.splice(0)) {
 			await session.dispose();
 		}
+	});
+
+	it("enables the tool-call batch cap only for Anthropic Claude Opus 4.8 models", () => {
+		const baseModel: Model = {
+			id: "gpt-5",
+			name: "GPT-5",
+			api: "openai-responses",
+			provider: "openai",
+			baseUrl: "",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 8_192,
+		};
+		const anthropicOpus48: Model = {
+			...baseModel,
+			id: "claude-opus-4-8",
+			name: "Claude Opus 4.8",
+			api: "anthropic",
+			provider: "anthropic",
+		};
+
+		expect(resolveToolCallBatchCapForModel(anthropicOpus48)).toBe(ANTHROPIC_TOOL_CALL_BATCH_CAP);
+		expect(resolveToolCallBatchCapForModel({ ...anthropicOpus48, id: "claude-opus-4.8" })).toBe(
+			ANTHROPIC_TOOL_CALL_BATCH_CAP,
+		);
+		expect(resolveToolCallBatchCapForModel({ ...anthropicOpus48, id: "claude-opus-4-8-20260530" })).toBe(
+			ANTHROPIC_TOOL_CALL_BATCH_CAP,
+		);
+		expect(resolveToolCallBatchCapForModel({ ...anthropicOpus48, provider: "openrouter" })).toBeUndefined();
+		expect(resolveToolCallBatchCapForModel({ ...anthropicOpus48, id: "claude-sonnet-4-8" })).toBeUndefined();
+		expect(resolveToolCallBatchCapForModel({ ...anthropicOpus48, id: "claude-opus-4-7" })).toBeUndefined();
+		expect(resolveToolCallBatchCapForModel({ ...anthropicOpus48, id: "claude-opus-4-9" })).toBeUndefined();
+		expect(resolveToolCallBatchCapForModel({ ...anthropicOpus48, id: "claude-opus-4-80" })).toBeUndefined();
+		expect(resolveToolCallBatchCapForModel(baseModel)).toBeUndefined();
+		expect(resolveToolCallBatchCapForModel({ ...baseModel, provider: "openai-codex" })).toBeUndefined();
 	});
 
 	it("applies transformContext before convertToLlm", async () => {
@@ -89,6 +140,110 @@ describe("AgentSession message pipeline", () => {
 		expect(sessionOnPayload).toHaveBeenCalledWith({ original: true }, undefined);
 		expect(requestOnPayload).toHaveBeenCalledWith({ original: true, session: true }, undefined);
 		expect(result).toEqual({ original: true, session: true });
+	});
+	it("keeps ephemeral side-channel cache key separate from provider routing", async () => {
+		const api = "test-ephemeral-side-channel";
+		let capturedOptions: SimpleStreamOptions | undefined;
+		registerCustomApi(api, (_model, _context, options) => {
+			capturedOptions = options;
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("Answer");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Answer", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+
+		const model = {
+			id: "side-model",
+			name: "Side Model",
+			api,
+			provider: "test-provider",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} satisfies Model;
+		const session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["system prompt"],
+					messages: [],
+					tools: [],
+				},
+			}),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: {
+				getApiKey: vi.fn(async () => "key"),
+			} as never,
+		});
+		sessions.push(session);
+		const cacheSessionId = session.sessionId;
+
+		const result = await session.runEphemeralTurn({ promptText: "Question?" });
+
+		expect(result.replyText).toBe("Answer");
+		expect(capturedOptions?.promptCacheKey).toBe(cacheSessionId);
+		expect(capturedOptions?.sessionId).toStartWith(`${cacheSessionId}:side:`);
+		expect(capturedOptions?.sessionId).not.toBe(cacheSessionId);
+		expect(capturedOptions?.preferWebsockets).toBe(false);
+	});
+
+	it("applies configured OpenRouter routing variant to ephemeral side-channel options", async () => {
+		const api = "test-ephemeral-openrouter-variant";
+		let capturedOptions: SimpleStreamOptions | undefined;
+		registerCustomApi(api, (_model, _context, options) => {
+			capturedOptions = options;
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("Answer");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Answer", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+
+		const model = {
+			id: "anthropic/claude-sonnet-4",
+			name: "OpenRouter Model",
+			api,
+			provider: "openrouter",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} satisfies Model;
+		const session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["system prompt"],
+					messages: [],
+					tools: [],
+				},
+			}),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"providers.openrouterVariant": "nitro",
+			}),
+			modelRegistry: {
+				getApiKey: vi.fn(async () => "key"),
+			} as never,
+		});
+		sessions.push(session);
+
+		const result = await session.runEphemeralTurn({ promptText: "Question?" });
+
+		expect(result.replyText).toBe("Answer");
+		expect(capturedOptions?.openrouterVariant).toBe("nitro");
 	});
 
 	it("records raw SSE diagnostics into the session buffer before request hooks", async () => {

@@ -138,4 +138,77 @@ describe("issue #986 compaction auth fallback", () => {
 		);
 		expect((error as Error).message).not.toMatch(/auth_unavailable/i);
 	});
+
+	it("falls back when the current provider returns a real HTTP 401 from the compaction call", async () => {
+		// Companion to the auth_unavailable test above: that case exercises the
+		// pi-native gateway synthetic ("no credential configured"), this one
+		// exercises a configured-but-rejected credential (rotated/revoked
+		// Anthropic key, expired OAuth token, wrong workspace). Before the
+		// status-aware detector landed, only the synthetic was caught — a real
+		// 401 from the provider bypassed the fallback and dumped the raw HTTP
+		// body into the UI as "Compaction failed: 401 {...}".
+		const { currentModel, fallbackModel } = await createSession({ fallbackModelRole: "smol" });
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async (preparation, model) => {
+			if (model.provider === currentModel.provider && model.id === currentModel.id) {
+				throw Object.assign(
+					new Error(
+						'Turn prefix summarization failed: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"}}',
+					),
+					{ status: 401 },
+				);
+			}
+			if (model.provider !== fallbackModel.provider || model.id !== fallbackModel.id) {
+				throw new Error(`Unexpected compaction model ${model.provider}/${model.id}`);
+			}
+			return {
+				summary: "fallback summary",
+				shortSummary: "fallback short summary",
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: 42,
+				details: { provider: model.provider },
+			};
+		});
+		vi.spyOn(modelRegistry, "getApiKey").mockImplementation(async model => {
+			if (model.provider === currentModel.provider && model.id === currentModel.id) return "stale-codex-token";
+			if (model.provider === fallbackModel.provider && model.id === fallbackModel.id) return "anthropic-token";
+			return undefined;
+		});
+
+		const result = await session.compact();
+
+		expect(result.summary).toBe("fallback summary");
+		expect(compactSpy).toHaveBeenCalledTimes(2);
+		expect(compactSpy.mock.calls.map(([, model]) => `${model.provider}/${model.id}`)).toEqual([
+			`${currentModel.provider}/${currentModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+	});
+
+	it("fails fast with the configured-credentials hint when a 401 has no authenticated fallback", async () => {
+		const { currentModel } = await createSession({ configureFallbackAuth: false });
+		vi.spyOn(compactionModule, "compact").mockImplementation(async (_preparation, model) => {
+			if (model.provider === currentModel.provider && model.id === currentModel.id) {
+				throw Object.assign(
+					new Error(
+						'Summarization failed: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"}}',
+					),
+					{ status: 401 },
+				);
+			}
+			throw new Error(`Unexpected compaction model ${model.provider}/${model.id}`);
+		});
+		vi.spyOn(modelRegistry, "getApiKey").mockImplementation(async model => {
+			if (model.provider === currentModel.provider && model.id === currentModel.id) return "stale-codex-token";
+			return undefined;
+		});
+
+		const error = await session.compact().catch(err => err);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain(
+			`Compaction requires usable credentials for ${currentModel.provider}/${currentModel.id}`,
+		);
+		// The raw provider envelope must not leak into the actionable error.
+		expect((error as Error).message).not.toContain("authentication_error");
+		expect((error as Error).message).not.toMatch(/\b401\b/);
+	});
 });

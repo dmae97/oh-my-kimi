@@ -12,7 +12,7 @@ inputs:
       description: Target arch (x64, arm64)
       required: true
    variant:
-      description: Optional build variant (baseline, modern)
+      description: Optional build variant (baseline, modern); required for native x64 builds.
       required: false
       default: ""
    target:
@@ -46,12 +46,69 @@ runs:
            toolchain_bin="$(dirname "$(rustup which cargo)")"
            echo "$toolchain_bin" >> "$GITHUB_PATH"
            echo "Prepended $toolchain_bin to PATH"
+      # `Swatinem/rust-cache` keys target/ off its restore-time environment, so
+      # set RUSTFLAGS before restoring it. If x64 target-cpu is only selected
+      # inside ci-build-native.ts/build-native.ts, cargo invalidates the restored
+      # target/ but rust-cache sees an exact key and refuses to save the rebuilt
+      # artifacts, causing macOS x64 baseline to rebuild forever.
+      #
+      # Include the native source hash in the shared key as well: rust-cache's
+      # lockfile scan misses the workspace root Cargo.toml version that Cargo
+      # fingerprints for workspace crates. Without it, release version bumps can
+      # get an exact hit for artifacts Cargo must rebuild.
+      #
+      # sccache is still layered on top of rust-cache: target/ wins when warm,
+      # sccache fills the gaps when target/ is cold.
+      - name: Configure native Rust flags
+        if: inputs.target == ''
+        shell: bash
+        env:
+           TARGET_ARCH: ${{ inputs.arch }}
+           TARGET_VARIANT: ${{ inputs.variant }}
+        run: |
+           case "$TARGET_ARCH:$TARGET_VARIANT" in
+             x64:modern)
+               rustflags="-C target-cpu=x86-64-v3"
+               ;;
+             x64:baseline)
+               rustflags="-C target-cpu=x86-64-v2"
+               ;;
+             x64:*)
+               echo "::error::x64 native builds require variant=modern or variant=baseline"
+               exit 1
+               ;;
+             *)
+               if [ -n "${RUSTFLAGS:-}" ]; then
+                 echo "Using caller-provided RUSTFLAGS=$RUSTFLAGS"
+                 exit 0
+               fi
+               rustflags="-C target-cpu=native"
+               ;;
+           esac
+
+           echo "RUSTFLAGS=$rustflags" >> "$GITHUB_ENV"
+           echo "Configured RUSTFLAGS=$rustflags"
       - uses: Swatinem/rust-cache@v2
         with:
-           shared-key: native-${{ inputs.platform }}-${{ inputs.arch }}-${{ inputs.variant || 'default' }}
+           shared-key: native-${{ inputs.platform }}-${{ inputs.arch }}-${{ inputs.variant || 'default' }}-h${{ inputs.hash }}
            cache-on-failure: true
            save-if: ${{ inputs.save_cache == 'true' }}
            cache-workspace-crates: true
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Enable sccache for cargo
+        # `CARGO_INCREMENTAL=0` is required: sccache silently skips caching
+        # when incremental is enabled, which would turn the wrapper into a
+        # no-op. rust-cache also sets this today, but pin it here so sccache
+        # stays effective if rust-cache is removed or changes defaults. Also
+        # overrides `profile.dev.incremental = true` for `bun run test:rs`.
+        shell: bash
+        run: |
+           {
+             echo "SCCACHE_GHA_ENABLED=true"
+             echo "RUSTC_WRAPPER=sccache"
+             echo "CARGO_INCREMENTAL=0"
+           } >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@v2
         if: inputs.target == ''
         with:
@@ -61,18 +118,51 @@ runs:
            bun-version: "1.3"
       - shell: bash
         run: bun install --frozen-lockfile
-      - name: Install cross-compilation toolchain
-        if: inputs.target == 'aarch64-unknown-linux-gnu'
+      # Cross-compile toolchain selection: non-MSVC targets (e.g.
+      # `aarch64-unknown-linux-gnu`) build with `cargo-zigbuild`; MSVC targets
+      # (e.g. `x86_64-pc-windows-msvc`) build with `cargo-xwin`. The napi CLI's
+      # `--cross-compile` flag picks the backend; we just install what it needs.
+      - name: Setup zig (non-MSVC cross-compile)
+        if: inputs.target != '' && !endsWith(inputs.target, '-msvc')
+        uses: mlugg/setup-zig@v2
+        with:
+           version: 0.16.0
+      - name: Install cargo-zigbuild (non-MSVC cross-compile)
+        if: inputs.target != '' && !endsWith(inputs.target, '-msvc')
+        uses: taiki-e/install-action@v2
+        with:
+           tool: cargo-zigbuild
+      - name: Install LLVM tooling (MSVC cross-compile)
+        if: endsWith(inputs.target, '-msvc')
         shell: bash
         run: |
            sudo apt-get update
-           sudo apt-get install -y gcc-aarch64-linux-gnu
+           sudo apt-get install -y clang lld llvm
+      - name: Install cargo-xwin (MSVC cross-compile)
+        if: endsWith(inputs.target, '-msvc')
+        uses: taiki-e/install-action@v2
+        with:
+           tool: cargo-xwin
+      - name: Cache cargo-xwin Windows SDK
+        if: endsWith(inputs.target, '-msvc')
+        uses: actions/cache@v4
+        with:
+           path: ~/.cache/cargo-xwin
+           key: cargo-xwin-${{ runner.os }}-v1
+      - name: Accept xwin license
+        if: endsWith(inputs.target, '-msvc')
+        shell: bash
+        run: echo "XWIN_ACCEPT_LICENSE=1" >> "$GITHUB_ENV"
       - name: Rust checks
         if: inputs.rust_checks == 'true'
         shell: bash
         run: bun run check:rs
       - name: Test workspace (Rust)
-        if: inputs.target == ''
+        # macOS has no `#[cfg(target_os = "macos")]` tests in the workspace,
+        # and Windows-only tests are no longer exercised in CI (`win32-x64`
+        # cross-builds on Linux). Skipping the duplicate Linux runs on macOS
+        # saves ~10 min of parallel runner time.
+        if: inputs.target == '' && inputs.platform != 'darwin'
         shell: bash
         run: bun run test:rs
       - name: Build native addon(s)
@@ -82,7 +172,6 @@ runs:
            TARGET_PLATFORM: ${{ inputs.platform }}
            TARGET_ARCH: ${{ inputs.arch }}
            TARGET_VARIANTS: ${{ inputs.variant }}
-           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: bun run ci:build:native
       - name: Upload native addon(s)
         uses: actions/upload-artifact@v4

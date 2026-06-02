@@ -113,7 +113,70 @@ export interface CredentialHealthResult {
 	reason?: string;
 	/** Probe usage report (raw payload stripped) when `ok === true`. */
 	report?: Omit<UsageReport, "raw">;
+	/**
+	 * Result of the optional end-to-end completion probe (see
+	 * {@link CheckCredentialsOptions.completionProbe}). Absent when no probe was
+	 * supplied. The completion probe exercises the provider's chat-completion
+	 * endpoint with the credential's bearer bytes, which is a stricter signal
+	 * than the usage endpoint (some providers happily 200 a `/usage` call while
+	 * the chat endpoint 401s the same bearer).
+	 */
+	completion?: CredentialCompletionResult;
 }
+
+/**
+ * Outcome of the end-to-end completion probe. `null` means the probe was
+ * skipped (no bearer bytes were available — e.g. OAuth refresh failed
+ * upstream of the probe).
+ */
+export interface CredentialCompletionResult {
+	ok: boolean | null;
+	/** Failure / unverifiable reason; absent when `ok === true`. */
+	reason?: string;
+	/** Probe model id used (carried back from the caller for display). */
+	modelId?: string;
+	/** Round-trip latency in milliseconds. */
+	latencyMs?: number;
+}
+
+/**
+ * Credential payload handed to {@link CompletionProbe}. For API-key
+ * credentials only the bytes are exposed; for OAuth, every identity field
+ * carried by the refreshed credential is included so the probe can compose
+ * provider-specific apiKey shapes (e.g. GitHub Copilot / Google Gemini CLI
+ * expect a JSON blob with `token` + `projectId`, not the raw access token).
+ *
+ * `refreshToken` may be {@link REMOTE_REFRESH_SENTINEL} when the credential
+ * lives behind a broker; the chat endpoint never reads it, so the probe can
+ * forward it verbatim into the structured shape without harm.
+ */
+export type CompletionProbeCredential =
+	| { type: "api_key"; apiKey: string }
+	| {
+			type: "oauth";
+			accessToken: string;
+			refreshToken?: string;
+			expiresAt?: number;
+			accountId?: string;
+			projectId?: string;
+			email?: string;
+			enterpriseUrl?: string;
+	  };
+
+/**
+ * Caller-supplied bearer probe. Receives the post-refresh credential for a
+ * single row and reports whether a real chat-completion round-trip succeeds.
+ * The check-credentials pipeline calls this AFTER any OAuth refresh so the
+ * bytes match what a live request would send.
+ */
+export interface CompletionProbeInput {
+	provider: Provider;
+	credentialId: number;
+	credential: CompletionProbeCredential;
+	signal: AbortSignal;
+}
+
+export type CompletionProbe = (input: CompletionProbeInput) => Promise<CredentialCompletionResult>;
 
 export interface CheckCredentialsOptions {
 	signal?: AbortSignal;
@@ -121,6 +184,21 @@ export interface CheckCredentialsOptions {
 	timeoutMs?: number;
 	/** Provider → base URL override, same shape as {@link AuthStorage.fetchUsageReports}. */
 	baseUrlResolver?: (provider: Provider) => string | undefined;
+	/**
+	 * Optional end-to-end probe. When provided, `checkCredentials` invokes it
+	 * for every credential where a usable bearer is available (API key, or
+	 * OAuth access token after refresh-on-expiry succeeded). The result lands
+	 * on {@link CredentialHealthResult.completion}.
+	 *
+	 * The probe runs INDEPENDENTLY of whether a {@link UsageProvider} is
+	 * configured: providers without a usage endpoint still benefit from the
+	 * extra signal. The probe is NOT invoked when OAuth refresh fails — the
+	 * bytes would be stale anyway and the upstream failure is already captured
+	 * on `reason`.
+	 */
+	completionProbe?: CompletionProbe;
+	/** Per-credential completion probe timeout (ms). Defaults to `timeoutMs`. */
+	completionTimeoutMs?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -413,6 +491,29 @@ const OAUTH_REFRESH_SKEW_MS = 60_000;
  * pathological detach-without-reattach loops can't grow memory unboundedly.
  */
 const MAX_PENDING_DISABLED_EVENTS = 32;
+
+/**
+ * Classify an OAuth refresh error as a definitive credential failure (the
+ * refresh token is dead — re-login required) versus a transient blip
+ * (network/5xx — retry next sweep).
+ *
+ * Anchored at module scope so all three refresh sites — in-stream
+ * {@link AuthStorage.getApiKey}, the usage probe in
+ * {@link AuthStorage.fetchUsageReports}, and the auth-broker background
+ * refresher — disable rows on the same criteria. A drifting classifier
+ * between sites would let stale last-good usage reports surface indefinitely
+ * while streaming requests correctly tear the row down.
+ */
+const OAUTH_DEFINITIVE_FAILURE_REGEX =
+	/invalid_grant|invalid_token|revoked|unauthorized|expired.*refresh|refresh.*expired/i;
+const OAUTH_TRANSIENT_FAILURE_REGEX = /timeout|network|fetch failed|ECONNREFUSED/i;
+const OAUTH_HTTP_AUTH_REGEX = /\b(401|403)\b/;
+
+export function isDefinitiveOAuthFailure(errorMsg: string): boolean {
+	if (OAUTH_DEFINITIVE_FAILURE_REGEX.test(errorMsg)) return true;
+	if (OAUTH_HTTP_AUTH_REGEX.test(errorMsg) && !OAUTH_TRANSIENT_FAILURE_REGEX.test(errorMsg)) return true;
+	return false;
+}
 
 type UsageCacheEntry<T> = {
 	value: T;
@@ -1258,6 +1359,25 @@ export class AuthStorage {
 	}
 
 	/**
+	 * True iff a dedicated, non-env credential source is configured for this
+	 * provider — i.e. anything in the cascade EXCEPT `getEnvApiKey(provider)`.
+	 *
+	 * Mirrors `hasAuth` minus the env-fallback leg. Useful for callers that
+	 * need to distinguish "the user explicitly configured this provider"
+	 * from "an env var happens to alias this provider via the cross-provider
+	 * fallback map" (see e.g. `xai-oauth → XAI_OAUTH_TOKEN || XAI_API_KEY` in
+	 * `stream.ts`). Without that distinction, an `XAI_API_KEY`-only setup
+	 * silently satisfies xai-oauth and routes around `providers.xai.baseUrl`.
+	 */
+	hasNonEnvCredential(provider: string): boolean {
+		if (this.#runtimeOverrides.has(provider)) return true;
+		if (this.#configOverrides.has(provider)) return true;
+		if (this.#getCredentialsForProvider(provider).length > 0) return true;
+		if (this.#fallbackResolver?.(provider)) return true;
+		return false;
+	}
+
+	/**
 	 * Check if OAuth credentials are configured for a provider.
 	 */
 	hasOAuth(provider: string): boolean {
@@ -1350,6 +1470,14 @@ export class AuthStorage {
 			case "anthropic": {
 				const { loginAnthropic } = await import("./utils/oauth/anthropic");
 				credentials = await loginAnthropic({
+					...ctrl,
+					onManualCodeInput: ctrl.onManualCodeInput ?? manualCodeInput,
+				});
+				break;
+			}
+			case "xai-oauth": {
+				const { loginXAIOAuth } = await import("./utils/oauth/xai-oauth");
+				credentials = await loginXAIOAuth({
 					...ctrl,
 					onManualCodeInput: ctrl.onManualCodeInput ?? manualCodeInput,
 				});
@@ -1491,9 +1619,27 @@ export class AuthStorage {
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
+			case "wafer-pass": {
+				const { loginWaferPass } = await import("./utils/oauth/wafer");
+				const apiKey = await loginWaferPass(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "wafer-serverless": {
+				const { loginWaferServerless } = await import("./utils/oauth/wafer");
+				const apiKey = await loginWaferServerless(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
 			case "zai": {
 				const { loginZai } = await import("./utils/oauth/zai");
 				const apiKey = await loginZai(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "zhipu-coding-plan": {
+				const { loginZhipuCodingPlan } = await import("./utils/oauth/zhipu");
+				const apiKey = await loginZhipuCodingPlan(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
@@ -1554,6 +1700,12 @@ export class AuthStorage {
 			case "nanogpt": {
 				const { loginNanoGPT } = await import("./utils/oauth/nanogpt");
 				const apiKey = await loginNanoGPT(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "openrouter": {
+				const { loginOpenRouter } = await import("./utils/oauth/openrouter");
+				const apiKey = await loginOpenRouter(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
@@ -1734,6 +1886,29 @@ export class AuthStorage {
 		};
 	}
 
+	/**
+	 * Translate a refreshed {@link UsageCredential} into the public
+	 * {@link CompletionProbeCredential} shape. Returns `null` when the
+	 * credential lacks any usable bearer bytes (e.g. an API-key row with an
+	 * empty key, or an OAuth row that never had an `access` token written).
+	 */
+	#buildCompletionProbeCredential(credential: UsageCredential): CompletionProbeCredential | null {
+		if (credential.type === "api_key") {
+			return credential.apiKey ? { type: "api_key", apiKey: credential.apiKey } : null;
+		}
+		if (!credential.accessToken) return null;
+		return {
+			type: "oauth",
+			accessToken: credential.accessToken,
+			refreshToken: credential.refreshToken,
+			expiresAt: credential.expiresAt,
+			accountId: credential.accountId,
+			projectId: credential.projectId,
+			email: credential.email,
+			enterpriseUrl: credential.enterpriseUrl,
+		};
+	}
+
 	#mergeRefreshedUsageCredential(credential: UsageCredential, refreshed: OAuthCredentials): UsageCredential {
 		return {
 			...credential,
@@ -1810,7 +1985,7 @@ export class AuthStorage {
 		if (
 			request.credential.type === "oauth" &&
 			request.credential.expiresAt !== undefined &&
-			Date.now() >= request.credential.expiresAt
+			Date.now() + OAUTH_REFRESH_SKEW_MS >= request.credential.expiresAt
 		) {
 			const refreshableCredential = this.#buildRefreshableOauthCredential(request.credential);
 			if (refreshableCredential) {
@@ -1832,9 +2007,50 @@ export class AuthStorage {
 						credential: refreshedCredential,
 					};
 				} catch (error) {
+					const errorMsg = String(error);
+					// Definitive failure (invalid_grant / 401 not from a network blip) means
+					// the refresh token itself is dead — probing with the original credential
+					// will 401, the catch below will return null, and #fetchUsageCached's
+					// last-good fallback will surface yesterday's report indefinitely
+					// (including its already-elapsed `resetsAt`). CAS-disable the row and
+					// clear the cache so the credential drops out of the report instead of
+					// freezing in place until the user notices and re-logs in.
+					if (isDefinitiveOAuthFailure(errorMsg)) {
+						const credentialId = this.#findStoredCredentialIdForUsageCredential(
+							request.provider,
+							request.credential,
+						);
+						if (credentialId !== undefined) {
+							const entries = this.#getStoredCredentials(request.provider);
+							const index = entries.findIndex(entry => entry.id === credentialId);
+							if (index !== -1) {
+								const disabled = this.#tryDisableCredentialAtIfMatches(
+									request.provider,
+									index,
+									refreshableCredential,
+									`oauth refresh failed during usage probe: ${errorMsg}`,
+								);
+								if (disabled) {
+									this.#usageLogger?.warn(
+										"Usage credential refresh failed definitively; credential disabled",
+										{ provider: request.provider, credentialId, error: errorMsg },
+									);
+									// Neutralize last-good for this cache key: write a null
+									// entry with an immediately-elapsed expiry so a future
+									// getStale lookup (e.g. on re-login under the same
+									// account identity) can't replay the stale report.
+									this.#usageCache.set(this.#buildUsageReportCacheKey(request), {
+										value: null,
+										expiresAt: 0,
+									});
+									return null;
+								}
+							}
+						}
+					}
 					this.#usageLogger?.debug("Usage credential refresh failed, using original credential", {
 						provider: request.provider,
-						error: String(error),
+						error: errorMsg,
 					});
 				}
 			}
@@ -2216,12 +2432,20 @@ export class AuthStorage {
 	 * soft-disabled rows are already known-bad and don't need a network probe.
 	 * Environment-variable API keys are not enumerated — the caller's intent
 	 * here is "which of my stored credentials is broken".
+	 *
+	 * Pass {@link CheckCredentialsOptions.completionProbe} to additionally
+	 * exercise each credential against the provider's chat-completion endpoint
+	 * (strict mode). The result lands on
+	 * {@link CredentialHealthResult.completion}; the usage `ok` field is
+	 * unchanged so callers can tell the two signals apart.
 	 */
 	async checkCredentials(options?: CheckCredentialsOptions): Promise<CredentialHealthResult[]> {
 		options?.signal?.throwIfAborted();
 		const stored = this.#store.listAuthCredentials();
 		const resolver = this.#usageProviderResolver;
 		const timeoutMs = options?.timeoutMs ?? this.#usageRequestTimeoutMs;
+		const completionProbe = options?.completionProbe;
+		const completionTimeoutMs = options?.completionTimeoutMs ?? timeoutMs;
 		const ctx: UsageFetchContext = { fetch: this.#usageFetch, logger: this.#usageLogger };
 
 		const results: CredentialHealthResult[] = [];
@@ -2239,13 +2463,6 @@ export class AuthStorage {
 				if (row.credential.refresh === REMOTE_REFRESH_SENTINEL) base.remoteRefresh = true;
 			}
 
-			const providerImpl = resolver?.(row.provider as Provider);
-			if (!providerImpl) {
-				base.reason = `no usage probe configured for provider ${row.provider}`;
-				results.push(base);
-				continue;
-			}
-
 			const baseUrl = options?.baseUrlResolver?.(row.provider as Provider);
 			const cred = row.credential;
 			const initialRequest: UsageRequestDescriptor =
@@ -2253,19 +2470,17 @@ export class AuthStorage {
 					? this.#buildUsageRequest(row.provider as Provider, { type: "api_key", apiKey: cred.key }, baseUrl)
 					: this.#buildUsageRequestForOauth(row.provider as Provider, cred, baseUrl);
 
-			if (providerImpl.supports && !providerImpl.supports(initialRequest)) {
-				base.reason = `usage probe does not support ${cred.type} credentials for ${row.provider}`;
-				results.push(base);
-				continue;
-			}
-
 			const timeoutSignal = AbortSignal.timeout(timeoutMs);
 			const probeSignal = options?.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
 			let params: UsageFetchParams & { signal: AbortSignal } = { ...initialRequest, signal: probeSignal };
+			let refreshError: string | undefined;
 
 			// Refresh expired OAuth before probing — without this an expired access
 			// token reports as `false` when the credential is actually healthy
-			// (broker would happily refresh it on the next real request).
+			// (broker would happily refresh it on the next real request). The
+			// refreshed bytes feed BOTH the usage probe and the optional
+			// completion probe; we do it up-front so it runs even when no
+			// `UsageProvider` is registered for this provider.
 			if (
 				cred.type === "oauth" &&
 				initialRequest.credential.type === "oauth" &&
@@ -2289,30 +2504,71 @@ export class AuthStorage {
 						);
 						params = { ...params, credential: refreshedCredential };
 					} catch (error) {
-						base.ok = false;
-						base.reason = `oauth refresh failed: ${error instanceof Error ? error.message : String(error)}`;
-						results.push(base);
-						continue;
+						refreshError = `oauth refresh failed: ${error instanceof Error ? error.message : String(error)}`;
 					}
 				}
 			}
 
-			try {
-				const report = await providerImpl.fetchUsage(params, ctx);
-				if (report === null) {
-					base.reason = "usage probe returned no data for this credential";
-				} else {
-					base.ok = true;
-					const accountId = this.#getUsageReportMetadataValue(report, "accountId");
-					const email = this.#getUsageReportMetadataValue(report, "email");
-					if (accountId) base.accountId = accountId;
-					if (email) base.email = email;
-					const { raw: _raw, ...trimmed } = report;
-					base.report = trimmed;
-				}
-			} catch (error) {
+			if (refreshError) {
 				base.ok = false;
-				base.reason = error instanceof Error ? error.message : String(error);
+				base.reason = refreshError;
+				// Refresh failed → the access token is unusable. Skip both probes;
+				// they would only re-surface the same upstream failure.
+				results.push(base);
+				continue;
+			}
+
+			const providerImpl = resolver?.(row.provider as Provider);
+			if (!providerImpl) {
+				base.reason = `no usage probe configured for provider ${row.provider}`;
+			} else if (providerImpl.supports && !providerImpl.supports(initialRequest)) {
+				base.reason = `usage probe does not support ${cred.type} credentials for ${row.provider}`;
+			} else {
+				try {
+					const report = await providerImpl.fetchUsage(params, ctx);
+					if (report === null) {
+						base.reason = "usage probe returned no data for this credential";
+					} else {
+						base.ok = true;
+						const accountId = this.#getUsageReportMetadataValue(report, "accountId");
+						const email = this.#getUsageReportMetadataValue(report, "email");
+						if (accountId) base.accountId = accountId;
+						if (email) base.email = email;
+						const { raw: _raw, ...trimmed } = report;
+						base.report = trimmed;
+					}
+				} catch (error) {
+					base.ok = false;
+					base.reason = error instanceof Error ? error.message : String(error);
+				}
+			}
+
+			if (completionProbe) {
+				const probeCred = this.#buildCompletionProbeCredential(params.credential);
+				if (!probeCred) {
+					base.completion = {
+						ok: null,
+						reason: `no bearer bytes available for ${row.credential.type} credential`,
+					};
+				} else {
+					const completionTimeoutSignal = AbortSignal.timeout(completionTimeoutMs);
+					const completionSignal = options?.signal
+						? AbortSignal.any([options.signal, completionTimeoutSignal])
+						: completionTimeoutSignal;
+					try {
+						base.completion = await completionProbe({
+							provider: row.provider as Provider,
+							credentialId: row.id,
+							credential: probeCred,
+							signal: completionSignal,
+						});
+					} catch (error) {
+						base.completion = {
+							ok: false,
+							reason: error instanceof Error ? error.message : String(error),
+						};
+					}
+				}
 			}
 
 			results.push(base);
@@ -2728,7 +2984,7 @@ export class AuthStorage {
 		if (!prepare) return true;
 		const stored = this.#getStoredCredentials(provider);
 		const selected = stored[selection.index];
-		if (!selected || selected.credential.type !== "oauth") return false;
+		if (selected?.credential.type !== "oauth") return false;
 
 		const prepared = await prepare(selected.id, { signal: options?.signal });
 		if (!prepared) return true;
@@ -2740,7 +2996,7 @@ export class AuthStorage {
 		const latestIndex = latestRows.findIndex(row => row.id === selected.id);
 		if (latestIndex === -1) return false;
 		const latest = latestRows[latestIndex];
-		if (!latest || latest.credential.type !== "oauth") return false;
+		if (latest?.credential.type !== "oauth") return false;
 		selection.index = latestIndex;
 		selection.credential = latest.credential;
 		return true;
@@ -2821,8 +3077,19 @@ export class AuthStorage {
 					: refreshedCredentials.access;
 				result = { newCredentials: refreshedCredentials, apiKey };
 			} else {
+				// Refresh first through the broker-aware single-flighted machinery
+				// so transient failures surface as network errors (5-min temp block)
+				// instead of `getOAuthApiKey`'s "expired" precondition error, which
+				// the definitive-failure regex below would otherwise classify as
+				// auth failure and soft-disable a still-valid credential.
+				const refreshedCredentials = await this.#refreshOAuthCredential(
+					provider,
+					selection.credential,
+					this.#getStoredCredentials(provider)[selection.index]?.id,
+					options?.signal,
+				);
 				const oauthCreds: Record<string, OAuthCredentials> = {
-					[provider]: selection.credential,
+					[provider]: refreshedCredentials,
 				};
 				result = await getOAuthApiKey(provider as OAuthProvider, oauthCreds);
 			}
@@ -2866,9 +3133,7 @@ export class AuthStorage {
 			const errorMsg = String(error);
 			// Only remove credentials for definitive auth failures
 			// Keep credentials for transient errors (network, 5xx) and block temporarily
-			const isDefinitiveFailure =
-				/invalid_grant|invalid_token|revoked|unauthorized|expired.*refresh|refresh.*expired/i.test(errorMsg) ||
-				(/\b(401|403)\b/.test(errorMsg) && !/timeout|network|fetch failed|ECONNREFUSED/i.test(errorMsg));
+			const isDefinitiveFailure = isDefinitiveOAuthFailure(errorMsg);
 
 			logger.warn("OAuth token refresh failed", {
 				provider,

@@ -5,6 +5,7 @@ wrapper writes typed frames back.
 
 Host -> wrapper:
   {"id": str, "code": str, "silent": bool?, "storeHistory": bool?}
+  {"id": str, "code": str, "silent": bool?, "storeHistory": bool?, "cwd": str?, "env": dict?}
   {"type": "exit"}                                # graceful shutdown
 
 Wrapper -> host:
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import contextvars
 import base64
 import builtins
 import inspect
@@ -43,7 +45,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Frame writer
@@ -93,7 +95,7 @@ class _StreamProxy(io.TextIOBase):
             data = str(data)
         if not data:
             return 0
-        rid = _STATE.current_id
+        rid = _CURRENT_RID.get()
         if rid is None:
             _RAW_STDERR.write(data)
             _RAW_STDERR.flush()
@@ -112,7 +114,6 @@ class _StreamProxy(io.TextIOBase):
 
 class _RunnerState:
     def __init__(self) -> None:
-        self.current_id: str | None = None
         self.execution_count: int = 0
         self.cancel_requested: bool = False
         # User globals — kept across requests when running in session mode.
@@ -123,7 +124,10 @@ class _RunnerState:
         }
         self.last_install_marker: int = 0
         self.loop: asyncio.AbstractEventLoop | None = None
+        self.active_executions: int = 0
 
+
+_CURRENT_RID: contextvars.ContextVar[str | None] = contextvars.ContextVar("omp_current_rid", default=None)
 
 _STATE = _RunnerState()
 
@@ -284,7 +288,7 @@ def cell_magic(name: str) -> Callable[[Callable[[str, str], Any]], Callable[[str
 
 def _emit_status(op: str, **data: Any) -> None:
     bundle = {"application/x-omp-status": {"op": op, **data}}
-    rid = _STATE.current_id
+    rid = _CURRENT_RID.get()
     if rid is None:
         return
     _emit({"type": "display", "id": rid, "bundle": bundle})
@@ -424,7 +428,7 @@ def _magic_reset(_args: str) -> None:
 def _magic_load(args: str) -> None:
     path = Path(os.path.expanduser(args.strip()))
     source = path.read_text(encoding="utf-8")
-    _emit({"type": "display", "id": _STATE.current_id, "bundle": {"text/plain": source}})
+    _emit({"type": "display", "id": _CURRENT_RID.get(), "bundle": {"text/plain": source}})
     _exec_source(source, _STATE.user_ns)
 
 
@@ -622,7 +626,7 @@ def _mime_bundle(value: Any) -> dict:
 
 
 def _emit_display(bundle: dict, *, kind: str = "display") -> None:
-    rid = _STATE.current_id
+    rid = _CURRENT_RID.get()
     if rid is None:
         return
     _emit({"type": kind, "id": rid, "bundle": bundle})
@@ -681,6 +685,7 @@ def _install_builtins(ns: dict) -> None:
     ns["__omp_magic"] = __omp_magic
     ns["__omp_magic_cell"] = __omp_magic_cell
     ns["__omp_shell"] = __omp_shell
+    ns["__omp_current_run_id__"] = lambda: _CURRENT_RID.get()
 
 
 _install_builtins(_STATE.user_ns)
@@ -694,25 +699,20 @@ _install_builtins(_STATE.user_ns)
 _TLA_FLAG = getattr(ast, "PyCF_ALLOW_TOP_LEVEL_AWAIT", 0x2000)
 
 
-def _get_event_loop() -> asyncio.AbstractEventLoop:
-    loop = _STATE.loop
-    if loop is None or loop.is_closed():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        _STATE.loop = loop
-    return loop
+def _await_sync(coro) -> Any:
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+    if running_loop is not None and running_loop.is_running():
+        raise RuntimeError("top-level await is not supported from synchronous magic execution")
+    return asyncio.run(coro)
 
 
-def _run_compiled(code, ns: dict, *, want_value: bool) -> Any:
-    """Execute a code object, awaiting it if compiled as a coroutine.
-
-    ``want_value`` is True for the trailing expression — we return ``eval``'s
-    result (or the awaited coroutine's value). For statement blocks the
-    return is always ``None``.
-    """
+def _run_compiled_sync(code, ns: dict, *, want_value: bool) -> Any:
+    """Synchronous execution path used by nested magic helpers."""
     if code.co_flags & inspect.CO_COROUTINE:
-        coro = eval(code, ns)
-        result = _get_event_loop().run_until_complete(coro)
+        result = _await_sync(eval(code, ns))
         return result if want_value else None
     if want_value:
         return eval(code, ns)
@@ -720,15 +720,27 @@ def _run_compiled(code, ns: dict, *, want_value: bool) -> Any:
     return None
 
 
-def _exec_source(source: str, ns: dict) -> None:
-    """Compile + execute ``source``; if the last node is an expression, route
-    its value through ``__omp_display`` so dataframes/figures render rich.
-    Top-level ``await`` / ``async for`` / ``async with`` is permitted; the
-    cell is driven through the runner's persistent event loop."""
-    module = ast.parse(source, mode="exec")
 
+async def _run_compiled_async(code, ns: dict, *, want_value: bool) -> Any:
+    """Execute a code object in the persistent event loop.
+
+    Coroutine code is awaited in this task so top-level ``await`` interleaves
+    with sibling requests. Plain statement/expression code runs on the main
+    runner thread so SIGINT can interrupt it reliably.
+    """
+    if code.co_flags & inspect.CO_COROUTINE:
+        result = await eval(code, ns)
+        return result if want_value else None
+    if want_value:
+        return eval(code, ns)
+    exec(code, ns)
+    return None
+
+
+def _compile_source(source: str) -> tuple[Any, Any | None, bool]:
+    module = ast.parse(source, mode="exec")
     if not module.body:
-        return
+        return None, None, False
 
     last = module.body[-1]
     if isinstance(last, ast.Expr):
@@ -737,14 +749,36 @@ def _exec_source(source: str, ns: dict) -> None:
         ast.copy_location(expr_module, last)
         body_code = compile(body_module, "<cell>", "exec", flags=_TLA_FLAG)
         expr_code = compile(expr_module, "<cell>", "eval", flags=_TLA_FLAG)
-        _run_compiled(body_code, ns, want_value=False)
-        value = _run_compiled(expr_code, ns, want_value=True)
+        return body_code, expr_code, True
+
+    return compile(module, "<cell>", "exec", flags=_TLA_FLAG), None, False
+
+
+def _exec_source(source: str, ns: dict) -> None:
+    """Synchronous source execution for legacy magic helpers."""
+    body_code, expr_code, has_expr = _compile_source(source)
+    if body_code is None:
+        return
+    _run_compiled_sync(body_code, ns, want_value=False)
+    if has_expr and expr_code is not None:
+        value = _run_compiled_sync(expr_code, ns, want_value=True)
         if value is not None:
             __omp_display(value, kind="result")
-        return
 
-    code = compile(module, "<cell>", "exec", flags=_TLA_FLAG)
-    _run_compiled(code, ns, want_value=False)
+
+async def _exec_source_async(source: str, ns: dict) -> None:
+    """Compile + execute ``source``; if the last node is an expression, route
+    its value through ``__omp_display`` so dataframes/figures render rich.
+    Top-level ``await`` / ``async for`` / ``async with`` is permitted; awaited
+    regions yield to other requests in the runner's persistent event loop."""
+    body_code, expr_code, has_expr = _compile_source(source)
+    if body_code is None:
+        return
+    await _run_compiled_async(body_code, ns, want_value=False)
+    if has_expr and expr_code is not None:
+        value = await _run_compiled_async(expr_code, ns, want_value=True)
+        if value is not None:
+            __omp_display(value, kind="result")
 
 
 # ---------------------------------------------------------------------------
@@ -766,6 +800,46 @@ def _install_exec_sigint() -> None:
     except (OSError, ValueError):
         pass
 
+
+def _begin_exec_sigint() -> None:
+    _STATE.active_executions += 1
+    _install_exec_sigint()
+
+
+def _end_exec_sigint() -> None:
+    if _STATE.active_executions > 0:
+        _STATE.active_executions -= 1
+    if _STATE.active_executions == 0:
+        _install_idle_sigint()
+
+
+_MANAGED_ENV_KEYS = (
+    "PI_SESSION_FILE",
+    "PI_ARTIFACTS_DIR",
+    "PI_TOOL_BRIDGE_URL",
+    "PI_TOOL_BRIDGE_TOKEN",
+    "PI_TOOL_BRIDGE_SESSION",
+)
+
+
+def _apply_request_runtime(req: dict) -> None:
+    cwd = req.get("cwd")
+    if isinstance(cwd, str) and cwd:
+        os.chdir(cwd)
+        try:
+            sys.path.remove(cwd)
+        except ValueError:
+            pass
+        sys.path.insert(0, cwd)
+
+    env = req.get("env")
+    if isinstance(env, dict):
+        for key in _MANAGED_ENV_KEYS:
+            value = env.get(key)
+            if isinstance(value, str):
+                os.environ[key] = value
+            elif value is None:
+                os.environ.pop(key, None)
 
 def _start_parent_watchdog() -> None:
     """Self-terminate when the host process dies.
@@ -802,61 +876,72 @@ def _start_parent_watchdog() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _handle_request(req: dict) -> None:
-    if req.get("type") == "exit":
-        sys.exit(0)
-
+async def _handle_request_async(req: dict) -> None:
     rid = str(req.get("id"))
-    code = req.get("code", "")
-    _STATE.current_id = rid
+    token = _CURRENT_RID.set(rid)
+    _STATE.user_ns["__omp_run_id__"] = rid
     _STATE.cancel_requested = False
     _STATE.execution_count += 1
+    execution_count = _STATE.execution_count
     _emit({"type": "started", "id": rid})
 
     status: str = "ok"
     cancelled = False
 
     try:
-        transformed = transform_cell(code)
-    except SyntaxError as exc:
-        _emit_error(rid, exc)
+        try:
+            _apply_request_runtime(req)
+            transformed = transform_cell(req.get("code", ""))
+        except SyntaxError as exc:
+            _emit_error(rid, exc)
+            _emit({
+                "type": "done",
+                "id": rid,
+                "status": "error",
+                "executionCount": execution_count,
+                "cancelled": False,
+            })
+            return
+        except BaseException as exc:  # noqa: BLE001 - runtime setup errors must settle the request
+            _emit_error(rid, exc)
+            _emit({
+                "type": "done",
+                "id": rid,
+                "status": "error",
+                "executionCount": execution_count,
+                "cancelled": False,
+            })
+            return
+
+        _begin_exec_sigint()
+        try:
+            await _exec_source_async(transformed, _STATE.user_ns)
+        except KeyboardInterrupt:
+            cancelled = True
+            status = "error"
+            _emit_error(rid, KeyboardInterrupt("Execution interrupted"))
+        except SystemExit as exc:
+            status = "error"
+            _emit_error(rid, exc)
+        except BaseException as exc:  # noqa: BLE001 - we want to surface every user error
+            status = "error"
+            _emit_error(rid, exc)
+        finally:
+            _end_exec_sigint()
+            try:
+                _flush_matplotlib_figures()
+            except Exception:
+                pass
+
         _emit({
             "type": "done",
             "id": rid,
-            "status": "error",
-            "executionCount": _STATE.execution_count,
-            "cancelled": False,
+            "status": status,
+            "executionCount": execution_count,
+            "cancelled": cancelled,
         })
-        _STATE.current_id = None
-        return
-
-    _install_exec_sigint()
-    try:
-        _exec_source(transformed, _STATE.user_ns)
-    except KeyboardInterrupt:
-        cancelled = True
-        status = "error"
-        _emit_error(rid, KeyboardInterrupt("Execution interrupted"))
-    except SystemExit:
-        raise
-    except BaseException as exc:  # noqa: BLE001 - we want to surface every user error
-        status = "error"
-        _emit_error(rid, exc)
     finally:
-        _install_idle_sigint()
-        try:
-            _flush_matplotlib_figures()
-        except Exception:
-            pass
-
-    _emit({
-        "type": "done",
-        "id": rid,
-        "status": status,
-        "executionCount": _STATE.execution_count,
-        "cancelled": cancelled,
-    })
-    _STATE.current_id = None
+        _CURRENT_RID.reset(token)
 
 
 def _emit_error(rid: str, exc: BaseException) -> None:
@@ -875,16 +960,7 @@ def _emit_error(rid: str, exc: BaseException) -> None:
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    sys.stdout = _StreamProxy("stdout")
-    sys.stderr = _StreamProxy("stderr")
-    _install_idle_sigint()
-    _start_parent_watchdog()
-
-    stdin = sys.__stdin__
-    if stdin is None:
-        return
-
+def _read_stdin(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, stdin) -> None:
     for raw_line in stdin:
         line = raw_line.strip()
         if not line:
@@ -900,10 +976,52 @@ def main() -> None:
                 "traceback": [],
             })
             continue
+        loop.call_soon_threadsafe(queue.put_nowait, req)
+    loop.call_soon_threadsafe(queue.put_nowait, {"type": "exit"})
+
+
+async def _main_async() -> None:
+    sys.stdout = _StreamProxy("stdout")
+    sys.stderr = _StreamProxy("stderr")
+    _install_idle_sigint()
+    _start_parent_watchdog()
+
+    stdin = sys.__stdin__
+    if stdin is None:
+        return
+
+    loop = asyncio.get_running_loop()
+    _STATE.loop = loop
+    queue: asyncio.Queue = asyncio.Queue()
+    reader = threading.Thread(target=_read_stdin, args=(loop, queue, stdin), name="omp-stdin-reader", daemon=True)
+    reader.start()
+
+    tasks: set[asyncio.Task] = set()
+    def _task_done(task: asyncio.Task) -> None:
+        tasks.discard(task)
         try:
-            _handle_request(req)
-        except SystemExit:
+            exc = task.exception()
+        except asyncio.CancelledError:
             return
+        if exc is not None:
+            _emit_error("", exc)
+    try:
+        while True:
+            req = await queue.get()
+            if req.get("type") == "exit":
+                break
+            task = asyncio.create_task(_handle_request_async(req))
+            tasks.add(task)
+            task.add_done_callback(_task_done)
+    finally:
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def main() -> None:
+    asyncio.run(_main_async())
 
 
 if __name__ == "__main__":

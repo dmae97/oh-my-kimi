@@ -1,7 +1,7 @@
 /**
  * Setup CLI command handler.
  *
- * Handles `omp setup <component>` to install dependencies for optional features.
+ * Handles `omp setup` for onboarding and `omp setup <component>` for optional dependencies.
  */
 import * as path from "node:path";
 import { $which, APP_NAME, getPythonEnvDir } from "@oh-my-pi/pi-utils";
@@ -207,9 +207,10 @@ async function handleSttSetup(flags: { json?: boolean; check?: boolean }): Promi
  * Print setup command help.
  */
 export function printSetupHelp(): void {
-	console.log(`${chalk.bold(`${APP_NAME} setup`)} - Install dependencies for optional features
+	console.log(`${chalk.bold(`${APP_NAME} setup`)} - Run onboarding or install dependencies for optional features
 
 ${chalk.bold("Usage:")}
+  ${APP_NAME} setup                     Run the onboarding wizard
   ${APP_NAME} setup <component> [options]
 
 ${chalk.bold("Components:")}
@@ -221,7 +222,8 @@ ${chalk.bold("Options:")}
   --json        Output status as JSON
 
 ${chalk.bold("Examples:")}
-  ${APP_NAME} setup python           Install Python execution dependencies
+  ${APP_NAME} setup                  Run the onboarding wizard
+  ${APP_NAME} setup python           Check Python execution dependencies
   ${APP_NAME} setup stt              Install speech-to-text dependencies
   ${APP_NAME} setup stt --check      Check if STT dependencies are available
   ${APP_NAME} setup python --check   Check if Python execution is available

@@ -27,6 +27,7 @@ import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" wit
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
+import { truncateForPrompt } from "../tools/approval";
 import { formatBytes, formatDuration } from "../tools/render-utils";
 import {
 	type AgentDefinition,
@@ -47,6 +48,7 @@ import { runSubprocess } from "./executor";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { renderResult, renderCall as renderTaskCall } from "./render";
+import { repairTaskParams } from "./repair-args";
 import { getTaskSimpleModeCapabilities, type TaskSimpleMode } from "./simple-mode";
 import {
 	applyNestedPatches,
@@ -214,6 +216,24 @@ function validateTaskModeParams(simpleMode: TaskSimpleMode, params: TaskParams):
  */
 export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetails, Theme> {
 	readonly name = "task";
+	readonly approval = "exec" as const;
+	readonly formatApprovalDetails = (args: unknown): string[] => {
+		const params = args as Partial<TaskParams>;
+		const lines: string[] = [];
+		if (typeof params.agent === "string") {
+			lines.push(`Agent: ${truncateForPrompt(params.agent)}`);
+		}
+		const tasks = Array.isArray(params.tasks) ? params.tasks : [];
+		const firstTask = tasks[0];
+		if (firstTask) {
+			lines.push(`Task: ${truncateForPrompt(firstTask.id)}`);
+			lines.push(`Assignment:\n${truncateForPrompt(firstTask.assignment)}`);
+			if (tasks.length > 1) {
+				lines.push(`+${tasks.length - 1} more task${tasks.length === 2 ? "" : "s"}`);
+			}
+		}
+		return lines;
+	};
 	readonly label = "Task";
 	readonly summary = "Spawn a subagent to complete a parallel task";
 	readonly strict = true;
@@ -228,7 +248,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}
 
 	renderCall(args: unknown, options: Parameters<typeof renderTaskCall>[1], theme: Theme) {
-		return renderTaskCall(args as TaskParams, options, theme);
+		return renderTaskCall(repairTaskParams(args as TaskParams), options, theme);
 	}
 
 	/** Dynamic description that reflects current disabled-agent settings */
@@ -273,7 +293,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 	): Promise<AgentToolResult<TaskToolDetails>> {
-		const params = rawParams as TaskParams;
+		const params = repairTaskParams(rawParams as TaskParams);
 		const simpleMode = this.#getTaskSimpleMode();
 		const validationError = validateTaskModeParams(simpleMode, params);
 		if (validationError) {
@@ -743,8 +763,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const tempArtifactsDir = artifactsDir ? null : path.join(os.tmpdir(), `omp-task-${Snowflake.next()}`);
 		const effectiveArtifactsDir = artifactsDir || tempArtifactsDir!;
 
-		// Share the parent session's local:// root with subagents so they read/write the same scratch space
-		const localProtocolOptions: LocalProtocolOptions = {
+		const localProtocolOptions: LocalProtocolOptions = this.session.localProtocolOptions ?? {
 			getArtifactsDir: this.session.getArtifactsDir ?? (() => null),
 			getSessionId: this.session.getSessionId ?? (() => null),
 		};
@@ -844,6 +863,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				file => path.basename(file.path).toLowerCase() !== "agents.md",
 			);
 			const promptTemplates = this.session.promptTemplates;
+			const parentEvalSessionId = this.session.getEvalSessionId?.() ?? undefined;
+			const mcpManager = this.session.mcpManager ?? MCPManager.instance();
 
 			// Initialize progress for all tasks
 			for (let i = 0; i < tasksWithUniqueIds.length; i++) {
@@ -901,7 +922,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
-						mcpManager: MCPManager.instance(),
+						mcpManager,
 						contextFiles,
 						skills: availableSkills,
 						autoloadSkills: resolvedAutoloadSkills,
@@ -910,7 +931,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						localProtocolOptions,
 						parentArtifactManager,
 						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
+						parentMnemopiSessionState: this.session.getMnemopiSessionState?.(),
 						parentTelemetry: this.session.getTelemetry?.(),
+						parentEvalSessionId,
 					});
 				}
 
@@ -956,7 +979,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
-						mcpManager: MCPManager.instance(),
+						mcpManager,
 						contextFiles,
 						skills: availableSkills,
 						autoloadSkills: resolvedAutoloadSkills,
@@ -965,7 +988,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						localProtocolOptions,
 						parentArtifactManager,
 						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
+						parentMnemopiSessionState: this.session.getMnemopiSessionState?.(),
 						parentTelemetry: this.session.getTelemetry?.(),
+						parentEvalSessionId,
 					});
 					if (mergeMode === "branch" && result.exitCode === 0) {
 						try {

@@ -10,29 +10,20 @@ import type {
 } from "./types";
 
 const builtInOAuthProviders: OAuthProviderInfo[] = [
-	{
-		id: "anthropic",
-		name: "Anthropic (Claude Pro/Max)",
-		available: true,
-	},
-	{
-		id: "alibaba-coding-plan",
-		name: "Alibaba Coding Plan",
-		available: true,
-	},
+	// Most popular coding subscriptions / gateways.
 	{
 		id: "openai-codex",
 		name: "ChatGPT Plus/Pro (Codex Subscription)",
 		available: true,
 	},
 	{
-		id: "openai-codex-device",
-		name: "ChatGPT Plus/Pro (Codex, headless/device)",
+		id: "anthropic",
+		name: "Anthropic (Claude Pro/Max)",
 		available: true,
 	},
 	{
-		id: "gitlab-duo",
-		name: "GitLab Duo",
+		id: "zai",
+		name: "Z.AI (GLM Coding Plan)",
 		available: true,
 	},
 	{
@@ -41,48 +32,14 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
-		id: "kilo",
-		name: "Kilo Gateway",
+		id: "openrouter",
+		name: "OpenRouter",
 		available: true,
 	},
-	{
-		id: "kagi",
-		name: "Kagi",
-		available: true,
-	},
-	{
-		id: "cerebras",
-		name: "Cerebras",
-		available: true,
-	},
-	{
-		id: "deepseek",
-		name: "DeepSeek",
-		available: true,
-	},
-	{
-		id: "fireworks",
-		name: "Fireworks",
-		available: true,
-	},
-	{
-		id: "firepass",
-		name: "Fire Pass (Fireworks Kimi K2.6 Turbo subscription)",
-		available: true,
-	},
+	// Other coding subscriptions & first-party assistants.
 	{
 		id: "github-copilot",
 		name: "GitHub Copilot",
-		available: true,
-	},
-	{
-		id: "google-gemini-cli",
-		name: "Google Cloud Code Assist (Gemini CLI)",
-		available: true,
-	},
-	{
-		id: "google-antigravity",
-		name: "Antigravity (Gemini 3, Claude, GPT-OSS)",
 		available: true,
 	},
 	{
@@ -91,63 +48,43 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
-		id: "litellm",
-		name: "LiteLLM",
+		id: "google-antigravity",
+		name: "Antigravity (Gemini 3, Claude, GPT-OSS)",
 		available: true,
 	},
 	{
-		id: "lm-studio",
-		name: "LM Studio (Local OpenAI-compatible)",
+		id: "google-gemini-cli",
+		name: "Google Cloud Code Assist (Gemini CLI)",
 		available: true,
 	},
 	{
-		id: "ollama",
-		name: "Ollama (Local OpenAI-compatible)",
+		id: "openai-codex-device",
+		name: "ChatGPT Plus/Pro (Codex, headless/device)",
 		available: true,
 	},
 	{
-		id: "ollama-cloud",
-		name: "Ollama Cloud",
+		id: "xai-oauth",
+		name: "xAI Grok OAuth (SuperGrok Subscription)",
 		available: true,
 	},
 	{
-		id: "huggingface",
-		name: "Hugging Face Inference",
+		id: "gitlab-duo",
+		name: "GitLab Duo",
 		available: true,
 	},
 	{
-		id: "synthetic",
-		name: "Synthetic",
+		id: "alibaba-coding-plan",
+		name: "Alibaba Coding Plan",
 		available: true,
 	},
 	{
-		id: "tavily",
-		name: "Tavily",
+		id: "zhipu-coding-plan",
+		name: "Zhipu Coding Plan (智谱)",
 		available: true,
 	},
 	{
-		id: "together",
-		name: "Together",
-		available: true,
-	},
-	{
-		id: "xiaomi",
-		name: "Xiaomi MiMo",
-		available: true,
-	},
-	{
-		id: "opencode-zen",
-		name: "OpenCode Zen",
-		available: true,
-	},
-	{
-		id: "opencode-go",
-		name: "OpenCode Go",
-		available: true,
-	},
-	{
-		id: "zai",
-		name: "Z.AI (GLM Coding Plan)",
+		id: "qwen-portal",
+		name: "Qwen Portal",
 		available: true,
 	},
 	{
@@ -161,23 +98,44 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "xiaomi",
+		name: "Xiaomi MiMo",
+		available: true,
+	},
+	{
+		id: "firepass",
+		name: "Fire Pass (Fireworks Kimi K2.6 Turbo subscription)",
+		available: true,
+	},
+	{
+		id: "wafer-pass",
+		name: "Wafer Pass (flat-rate subscription)",
+		available: true,
+	},
+	// Direct model-provider APIs (pay-as-you-go inference).
+	{
+		id: "deepseek",
+		name: "DeepSeek",
+		available: true,
+	},
+	{
 		id: "moonshot",
 		name: "Moonshot (Kimi API)",
 		available: true,
 	},
 	{
-		id: "nanogpt",
-		name: "NanoGPT",
+		id: "cerebras",
+		name: "Cerebras",
 		available: true,
 	},
 	{
-		id: "parallel",
-		name: "Parallel",
+		id: "fireworks",
+		name: "Fireworks",
 		available: true,
 	},
 	{
-		id: "perplexity",
-		name: "Perplexity (Pro/Max)",
+		id: "together",
+		name: "Together",
 		available: true,
 	},
 	{
@@ -186,8 +144,13 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
-		id: "qwen-portal",
-		name: "Qwen Portal",
+		id: "huggingface",
+		name: "Hugging Face Inference",
+		available: true,
+	},
+	{
+		id: "perplexity",
+		name: "Perplexity (Pro/Max)",
 		available: true,
 	},
 	{
@@ -201,13 +164,24 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
-		id: "zenmux",
-		name: "ZenMux",
+		id: "synthetic",
+		name: "Synthetic",
 		available: true,
 	},
 	{
-		id: "vllm",
-		name: "vLLM (Local OpenAI-compatible)",
+		id: "nanogpt",
+		name: "NanoGPT",
+		available: true,
+	},
+	{
+		id: "wafer-serverless",
+		name: "Wafer Serverless (pay-as-you-go)",
+		available: true,
+	},
+	// Aggregator gateways / routers.
+	{
+		id: "vercel-ai-gateway",
+		name: "Vercel AI Gateway",
 		available: true,
 	},
 	{
@@ -216,8 +190,65 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
-		id: "vercel-ai-gateway",
-		name: "Vercel AI Gateway",
+		id: "litellm",
+		name: "LiteLLM",
+		available: true,
+	},
+	{
+		id: "kilo",
+		name: "Kilo Gateway",
+		available: true,
+	},
+	{
+		id: "zenmux",
+		name: "ZenMux",
+		available: true,
+	},
+	{
+		id: "opencode-zen",
+		name: "OpenCode Zen",
+		available: true,
+	},
+	{
+		id: "opencode-go",
+		name: "OpenCode Go",
+		available: true,
+	},
+	// Search & tool providers.
+	{
+		id: "tavily",
+		name: "Tavily",
+		available: true,
+	},
+	{
+		id: "kagi",
+		name: "Kagi",
+		available: true,
+	},
+	{
+		id: "parallel",
+		name: "Parallel",
+		available: true,
+	},
+	// Local runtimes.
+	{
+		id: "ollama",
+		name: "Ollama (Local OpenAI-compatible)",
+		available: true,
+	},
+	{
+		id: "ollama-cloud",
+		name: "Ollama Cloud",
+		available: true,
+	},
+	{
+		id: "lm-studio",
+		name: "LM Studio (Local OpenAI-compatible)",
+		available: true,
+	},
+	{
+		id: "vllm",
+		name: "vLLM (Local OpenAI-compatible)",
 		available: true,
 	},
 ];
@@ -310,11 +341,17 @@ export async function refreshOAuthToken(
 			newCredentials = await refreshCursorToken(credentials.refresh);
 			break;
 		}
+		case "xai-oauth": {
+			const { refreshXAIOAuthToken } = await import("./xai-oauth");
+			newCredentials = await refreshXAIOAuthToken(credentials.refresh);
+			break;
+		}
 		case "kilo":
 		case "perplexity":
 		case "huggingface":
 		case "opencode-zen":
 		case "opencode-go":
+		case "openrouter":
 		case "cerebras":
 		case "fireworks":
 		case "firepass":
@@ -328,6 +365,7 @@ export async function refreshOAuthToken(
 		case "ollama-cloud":
 		case "xiaomi":
 		case "zai":
+		case "zhipu-coding-plan":
 		case "qianfan":
 		case "venice":
 		case "minimax-code":
@@ -337,6 +375,8 @@ export async function refreshOAuthToken(
 		case "cloudflare-ai-gateway":
 		case "vercel-ai-gateway":
 		case "qwen-portal":
+		case "wafer-pass":
+		case "wafer-serverless":
 		case "zenmux":
 		case "vllm":
 			// API keys / static bearer tokens don't expire, return as-is

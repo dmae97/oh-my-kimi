@@ -122,6 +122,7 @@ export function parseReportFindingDetails(value: unknown): ReportFindingDetails 
 export const reportFindingTool: AgentTool<typeof ReportFindingParams, ReportFindingDetails, Theme> = {
 	name: "report_finding",
 	label: "Report Finding",
+	approval: "read",
 	description: "Report a code review finding. Use this for each issue found. Call yield when done.",
 	parameters: ReportFindingParams,
 	intent: "omit",

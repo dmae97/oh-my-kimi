@@ -98,9 +98,26 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(values).toContain("@.github/");
 			expect(values.some(value => value === "@.git" || value.startsWith("@.git/"))).toBe(false);
 		});
+
+		it("returns more than 20 fuzzy matches when the project contains them", async () => {
+			// Regression: previously hard-capped at 20 by `slice(0, 20)`.
+			const total = 30;
+			for (let i = 0; i < total; i += 1) {
+				fs.writeFileSync(path.join(baseDir, `controller-${i}.ts`), "export {};\n");
+			}
+
+			const provider = new CombinedAutocompleteProvider([], baseDir);
+			const line = "@controller";
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			expect(result).not.toBeNull();
+			const values = result?.items.map(item => item.value) ?? [];
+			expect(values.length).toBeGreaterThan(20);
+			expect(values.length).toBeGreaterThanOrEqual(total);
+		});
 	});
 
-	describe("@ fuzzy search scoped paths", () => {
+	describe("@ paths outside cwd", () => {
 		let rootDir: string;
 		let baseDir: string;
 		let outsideDir: string;
@@ -117,22 +134,41 @@ describe("CombinedAutocompleteProvider", () => {
 			fs.rmSync(rootDir, { recursive: true, force: true });
 		});
 
-		it("scopes @ fuzzy search to the typed relative path prefix", async () => {
-			fs.writeFileSync(path.join(baseDir, "alpha-local.ts"), "export const local = 1;\n");
-			fs.mkdirSync(path.join(outsideDir, "nested", "deeper"), { recursive: true });
-			fs.writeFileSync(path.join(outsideDir, "nested", "alpha.ts"), "export const alpha = 1;\n");
-			fs.writeFileSync(path.join(outsideDir, "nested", "deeper", "also-alpha.ts"), "export const also = 1;\n");
-			fs.writeFileSync(path.join(outsideDir, "nested", "deeper", "zzz.ts"), "export const zzz = 1;\n");
+		it("uses immediate-directory prefix completion for @../ (no recursive fuzzy walk)", async () => {
+			// Sibling-of-cwd layout, mirroring the user-reported case: parent
+			// dir holds many unrelated projects, each with deep subtrees.
+			fs.mkdirSync(path.join(outsideDir, "workspace"), { recursive: true });
+			fs.mkdirSync(path.join(outsideDir, "workflows"), { recursive: true });
+			fs.mkdirSync(path.join(outsideDir, "other"), { recursive: true });
+			fs.mkdirSync(path.join(outsideDir, "other", "deep", "nested"), { recursive: true });
+			fs.writeFileSync(path.join(outsideDir, "other", "deep", "nested", "workspace-config.yml"), "x\n");
 
 			const provider = new CombinedAutocompleteProvider([], baseDir);
-			const line = "@../outside/a";
+			const line = "@../outside/wor";
 			const result = await provider.getSuggestions([line], 0, line.length);
 
 			const values = result?.items.map(item => item.value) ?? [];
-			expect(values).toContain("@../outside/nested/alpha.ts");
-			expect(values).toContain("@../outside/nested/deeper/also-alpha.ts");
-			expect(values).not.toContain("@../outside/nested/deeper/zzz.ts");
-			expect(values.some(value => value.includes("alpha-local.ts"))).toBe(false);
+			expect(values).toContain("@../outside/workspace/");
+			expect(values).toContain("@../outside/workflows/");
+			// Recursive matches must NOT leak in — that's the whole point of
+			// the short-circuit.
+			expect(values.some(value => value.includes("workspace-config.yml"))).toBe(false);
+			expect(values.some(value => value.includes("/deep/"))).toBe(false);
+		});
+
+		it("lists entries inside an absolute @/abs/ path without walking recursively", async () => {
+			fs.mkdirSync(path.join(outsideDir, "alpha"), { recursive: true });
+			fs.mkdirSync(path.join(outsideDir, "beta"), { recursive: true });
+			fs.writeFileSync(path.join(outsideDir, "alpha", "nested.ts"), "export {};\n");
+
+			const provider = new CombinedAutocompleteProvider([], baseDir);
+			const line = `@${outsideDir}/`;
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			const values = result?.items.map(item => item.value) ?? [];
+			expect(values).toContain(`@${outsideDir}/alpha/`);
+			expect(values).toContain(`@${outsideDir}/beta/`);
+			expect(values.some(value => value.endsWith("nested.ts"))).toBe(false);
 		});
 	});
 	describe("dot-slash path completion", () => {

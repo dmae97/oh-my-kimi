@@ -11,6 +11,7 @@ import { systemPromptCapability } from "./capability/system-prompt";
 import type { SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
 import { loadSkills, type Skill } from "./extensibility/skills";
+import { hasObsidian } from "./internal-urls/vault-protocol";
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
 import projectPromptTemplate from "./prompts/system/project-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
@@ -360,6 +361,8 @@ export interface BuildSystemPromptOptions {
 	secretsEnabled?: boolean;
 	/** Pre-loaded workspace tree (skips discovery if provided). May be a Promise to allow early kick-off. */
 	workspaceTree?: WorkspaceTree | Promise<WorkspaceTree>;
+	/** Whether the local memory://root summary is active. */
+	memoryRootEnabled?: boolean;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -392,6 +395,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		eagerTasks = false,
 		secretsEnabled = false,
 		workspaceTree: providedWorkspaceTree,
+		memoryRootEnabled = false,
 	} = options;
 	const resolvedCwd = cwd ?? getProjectDir();
 
@@ -569,6 +573,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		mcpDiscoveryServerSummaries,
 		eagerTasks,
 		secretsEnabled,
+		hasMemoryRoot: memoryRootEnabled,
+		hasObsidian: hasObsidian(),
 	};
 	const rendered = prompt.render(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
 	const systemPrompt = [rendered];

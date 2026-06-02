@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { createModelManager } from "../src/model-manager";
 import { Effort } from "../src/model-thinking";
 import { getBundledModel } from "../src/models";
 import { githubCopilotModelManagerOptions } from "../src/provider-models/openai-compat";
@@ -84,7 +88,7 @@ describe("github copilot model limits mapping", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("uses capabilities.limits max_prompt_tokens as context window when context_length is absent", async () => {
+	it("uses max_context_window_tokens as context window when Copilot reports a prompt budget", async () => {
 		const { models, fetchMock } = await discoverCopilotModels({
 			data: [
 				{
@@ -103,12 +107,12 @@ describe("github copilot model limits mapping", () => {
 
 		const model = models.find(candidate => candidate.id === "gemini-2.5-pro");
 		expect(model).toBeDefined();
-		expect(model?.contextWindow).toBe(128_000);
+		expect(model?.contextWindow).toBe(1_048_576);
 		expect(model?.maxTokens).toBe(64_000);
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("prefers explicit context_length/max_completion_tokens when max_prompt_tokens is absent", async () => {
+	it("falls back to explicit context_length and derives max tokens from max_output_tokens", async () => {
 		const { models } = await discoverCopilotModels({
 			data: [
 				{
@@ -118,7 +122,7 @@ describe("github copilot model limits mapping", () => {
 					max_completion_tokens: 120_000,
 					capabilities: {
 						limits: {
-							max_context_window_tokens: 400_000,
+							max_prompt_tokens: 128_000,
 							max_output_tokens: 128_000,
 						},
 					},
@@ -130,10 +134,10 @@ describe("github copilot model limits mapping", () => {
 		expect(model).toBeDefined();
 		expect(model?.api).toBe("openai-responses");
 		expect(model?.contextWindow).toBe(250_000);
-		expect(model?.maxTokens).toBe(120_000);
+		expect(model?.maxTokens).toBe(128_000);
 	});
 
-	it("falls back to max_non_streaming_output_tokens when max_output_tokens is absent", async () => {
+	it("falls back to max_prompt_tokens when total-window fields are absent", async () => {
 		const { models } = await discoverCopilotModels({
 			data: [
 				{
@@ -141,7 +145,6 @@ describe("github copilot model limits mapping", () => {
 					name: "Claude Opus 4.6",
 					capabilities: {
 						limits: {
-							max_context_window_tokens: 200_000,
 							max_prompt_tokens: 128_000,
 							max_non_streaming_output_tokens: 16_000,
 						},
@@ -197,9 +200,9 @@ describe("github copilot model limits mapping", () => {
 		expect(model).toBeDefined();
 		expect(model?.api).toBe("openai-responses");
 		expect(model?.reasoning).toBe(true);
-		// max_prompt_tokens is the true prompt budget; root-level context_length
-		// mirrors max_context_window_tokens (total window) and must not win.
-		expect(model?.contextWindow).toBe(272_000);
+		// max_context_window_tokens is the model window; max_prompt_tokens is only
+		// Copilot's prompt/summarization budget.
+		expect(model?.contextWindow).toBe(400_000);
 		expect(model?.maxTokens).toBe(128_000);
 		expect(model?.premiumMultiplier).toBe(0.33);
 		expect(model?.thinking).toEqual({
@@ -209,7 +212,7 @@ describe("github copilot model limits mapping", () => {
 		});
 	});
 
-	it("does not use max_context_window_tokens for contextWindow", async () => {
+	it("uses max_context_window_tokens before the bundled reference", async () => {
 		const { models } = await discoverCopilotModels({
 			data: [
 				{
@@ -227,13 +230,55 @@ describe("github copilot model limits mapping", () => {
 
 		const model = models.find(candidate => candidate.id === "gpt-5.4");
 		expect(model).toBeDefined();
-		// max_context_window_tokens is total window (prompt + output), not prompt capacity.
-		// Without max_prompt_tokens, contextWindow should fall back to bundled reference,
-		// NOT to max_context_window_tokens.
-		expect(model?.contextWindow).toBe(272_000);
+		expect(model?.contextWindow).toBe(400_000);
 		expect(model?.maxTokens).toBe(128_000);
 	});
 
+	it("keeps discovered context window through full model resolution for bundled models", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-copilot-models-"));
+		try {
+			global.fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+				const url = typeof input === "string" ? input : input.toString();
+				expect(url).toBe("https://api.githubcopilot.com/models");
+				expect(init?.method).toBe("GET");
+				expect(getHeaderValue(init?.headers, "Authorization")).toBe("Bearer copilot-test-key");
+				return new Response(
+					JSON.stringify({
+						data: [
+							{
+								id: "gpt-5.4",
+								name: "GPT-5.4",
+								capabilities: {
+									limits: {
+										max_context_window_tokens: 400_000,
+										max_prompt_tokens: 128_000,
+										max_output_tokens: 128_000,
+									},
+								},
+							},
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}) as unknown as typeof fetch;
+
+			const options = githubCopilotModelManagerOptions({ apiKey: "copilot-test-key" });
+			const manager = createModelManager({
+				...options,
+				cacheDbPath: path.join(tempDir, "models.db"),
+			});
+			const { models } = await manager.refresh("online");
+			const model = models.find(candidate => candidate.id === "gpt-5.4");
+
+			expect(getBundledModel("github-copilot", "gpt-5.4")?.contextWindow).toBe(272_000);
+			expect(model).toBeDefined();
+			expect(model?.contextWindow).toBe(400_000);
+			expect(model?.maxTokens).toBe(128_000);
+			expect(model?.reasoning).toBe(true);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
 	it("prefers Copilot-specific bundled reference over global reference", async () => {
 		// When the API returns no limits at all, the model should use the Copilot-specific
 		// bundled reference, not a global reference from another provider (e.g. OpenAI at 1050k).

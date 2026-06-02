@@ -260,18 +260,18 @@ export function getPluginsDir(home?: string): string {
 }
 
 /** Where npm installs packages (~/.omp/plugins/node_modules). */
-export function getPluginsNodeModules(): string {
-	return path.join(getPluginsDir(), "node_modules");
+export function getPluginsNodeModules(home?: string): string {
+	return path.join(getPluginsDir(home), "node_modules");
 }
 
 /** Plugin manifest (~/.omp/plugins/package.json). */
-export function getPluginsPackageJson(): string {
-	return path.join(getPluginsDir(), "package.json");
+export function getPluginsPackageJson(home?: string): string {
+	return path.join(getPluginsDir(home), "package.json");
 }
 
 /** Plugin lock file (~/.omp/plugins/omp-plugins.lock.json). */
-export function getPluginsLockfile(): string {
-	return path.join(getPluginsDir(), "omp-plugins.lock.json");
+export function getPluginsLockfile(home?: string): string {
+	return path.join(getPluginsDir(home), "omp-plugins.lock.json");
 }
 
 /** Get the remote mount directory (~/.omp/remote). */
@@ -343,6 +343,11 @@ export function getGithubCacheDbPath(): string {
 	return dirs.rootSubdir(path.join("cache", "github-cache.db"), "cache");
 }
 
+/** Get the local FastEmbed model cache directory (~/.omp/cache/fastembed). */
+export function getFastembedCacheDir(): string {
+	return dirs.rootSubdir(path.join("cache", "fastembed"), "cache");
+}
+
 /** Get the natives directory (~/.omp/natives). */
 export function getNativesDir(): string {
 	return dirs.rootSubdir("natives", "cache");
@@ -390,6 +395,11 @@ export function getHistoryDbPath(agentDir?: string): string {
 /** Get the path to models.db (model cache database). */
 export function getModelDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "models.db", "data");
+}
+
+/** Get the tiny title model cache directory (~/.omp/agent/cache/tiny-models). */
+export function getTinyModelsCacheDir(agentDir?: string): string {
+	return dirs.agentSubdir(agentDir, path.join("cache", "tiny-models"), "cache");
 }
 
 /** Get the sessions directory (~/.omp/agent/sessions). */

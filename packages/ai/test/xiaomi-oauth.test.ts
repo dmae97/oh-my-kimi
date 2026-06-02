@@ -34,4 +34,49 @@ describe("xiaomi oauth validation", () => {
 		// And the AMS signal is not aborted (would be if the timeout signal were shared).
 		expect(capturedSignals[1]?.aborted).toBe(false);
 	});
+
+	it("sends Authorization: Bearer header (not Anthropic-style x-api-key) for tp- keys", async () => {
+		// Regression: commit 92e8ac06b moved validation from /anthropic/v1/messages to
+		// /v1/chat/completions but kept the Anthropic-style `x-api-key` header. Xiaomi's
+		// OpenAI-compatible endpoint requires Bearer auth and rejects x-api-key as 401
+		// "Invalid API Key" — see issue #1580.
+		const capturedHeaders: Record<string, string>[] = [];
+		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+			capturedHeaders.push((init?.headers ?? {}) as Record<string, string>);
+			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		await loginXiaomi({
+			onPrompt: async () => "tp-test-key",
+			onAuth: () => {},
+		});
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const headers = capturedHeaders[0];
+		expect(headers.Authorization).toBe("Bearer tp-test-key");
+		expect(headers["x-api-key"]).toBeUndefined();
+	});
+
+	it("sends Authorization: Bearer for standard sk- keys as well", async () => {
+		const capturedHeaders: Record<string, string>[] = [];
+		const capturedUrls: string[] = [];
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			capturedUrls.push(typeof input === "string" ? input : input.toString());
+			capturedHeaders.push((init?.headers ?? {}) as Record<string, string>);
+			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		await loginXiaomi({
+			onPrompt: async () => "sk-test-key",
+			onAuth: () => {},
+		});
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(capturedUrls[0]).toBe("https://api.xiaomimimo.com/v1/chat/completions");
+		const headers = capturedHeaders[0];
+		expect(headers.Authorization).toBe("Bearer sk-test-key");
+		expect(headers["x-api-key"]).toBeUndefined();
+	});
 });

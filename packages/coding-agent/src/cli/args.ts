@@ -46,13 +46,20 @@ export interface Args {
 	noRules?: boolean;
 	listModels?: string | true;
 	noTitle?: boolean;
+	autoApprove?: boolean;
+	approvalMode?: "always-ask" | "write" | "yolo";
 	messages: string[];
 	fileArgs: string[];
 	/** Unknown flags (potentially extension flags) - map of flag name to value */
 	unknownFlags: Map<string, boolean | string>;
 }
 
-export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
+export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
+	// Work on a copy: the `--option=value` handling below splices the value
+	// into the array, and callers reuse the same argv (the post-extension
+	// reparse in `runRootCommand` parses it a second time). Mutating the input
+	// would corrupt that later parse, so never touch the caller's array.
+	const args = [...inputArgs];
 	const result: Args = {
 		messages: [],
 		fileArgs: [],
@@ -61,17 +68,41 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 
 	for (let i = 0; i < args.length; i++) {
 		let arg = args[i];
+		const flagIndex = i;
 
-		// Support --flag=value syntax (e.g. --tools=ask,read)
+		// Support --flag=value syntax (e.g. --tools=ask,read). The value is
+		// spliced in as the next token so value-consuming flags pick it up via
+		// `args[++i]`; a non-consuming flag (e.g. a boolean) leaves it behind and
+		// the post-loop guard drops it so it is not mistaken for a message.
+		let equalsValueIndex = -1;
 		if (arg.startsWith("--") && arg.includes("=")) {
 			const eqIdx = arg.indexOf("=");
 			const value = arg.slice(eqIdx + 1);
 			arg = arg.slice(0, eqIdx);
-			// Insert the value so the existing "args[++i]" logic picks it up
 			args.splice(i + 1, 0, value);
+			equalsValueIndex = i + 1;
 		}
 
-		if (arg === "--help" || arg === "-h") {
+		// Extension-registered flags take precedence over built-ins: a flag an
+		// extension owns (e.g. plan-mode's boolean `--plan`) is parsed with the
+		// extension's semantics rather than falling into a built-in branch. For a
+		// value-taking built-in (`--plan`, `--model`, …) that branch would consume
+		// the following token — eating the user's message and setting the wrong
+		// built-in field — so registered flags shadow same-named built-ins here.
+		const extFlag = arg.startsWith("--") ? extensionFlags?.get(arg.slice(2)) : undefined;
+		if (extFlag) {
+			const flagName = arg.slice(2);
+			if (extFlag.type === "boolean") {
+				result.unknownFlags.set(flagName, true);
+			} else if (extFlag.type === "string" && i + 1 < args.length) {
+				// Consume the value in `--flag=value` form, or when the next token is
+				// not flag-looking. A `-`-prefixed token in space form is left to be
+				// its own flag; pass a flag-looking value as `--flag=value`.
+				if (equalsValueIndex !== -1 || !args[i + 1].startsWith("-")) {
+					result.unknownFlags.set(flagName, args[++i]);
+				}
+			}
+		} else if (arg === "--help" || arg === "-h") {
 			result.help = true;
 		} else if (arg === "--version" || arg === "-v") {
 			result.version = true;
@@ -172,6 +203,18 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.noRules = true;
 		} else if (arg === "--no-title") {
 			result.noTitle = true;
+		} else if (arg === "--auto-approve" || arg === "--yolo") {
+			result.autoApprove = true;
+		} else if (arg === "--approval-mode" && i + 1 < args.length) {
+			const mode = args[++i];
+			if (mode === "always-ask" || mode === "write" || mode === "yolo") {
+				result.approvalMode = mode;
+			} else {
+				logger.warn("Invalid value passed to --approval-mode", {
+					value: mode,
+					validValues: ["always-ask", "write", "yolo"],
+				});
+			}
 		} else if (arg === "--skills" && i + 1 < args.length) {
 			// Comma-separated glob patterns for skill filtering
 			result.skills = args[++i].split(",").map(s => s.trim());
@@ -184,20 +227,14 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			}
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
-		} else if (arg.startsWith("--") && extensionFlags) {
-			// Check if it's an extension-registered flag
-			const flagName = arg.slice(2);
-			const extFlag = extensionFlags.get(flagName);
-			if (extFlag) {
-				if (extFlag.type === "boolean") {
-					result.unknownFlags.set(flagName, true);
-				} else if (extFlag.type === "string" && i + 1 < args.length) {
-					result.unknownFlags.set(flagName, args[++i]);
-				}
-			}
-			// Unknown flags without extensionFlags are silently ignored (first pass)
 		} else if (!arg.startsWith("-")) {
 			result.messages.push(arg);
+		}
+		// Drop an unconsumed `--flag=value` value (e.g. a boolean flag): when no
+		// branch advanced past the spliced token, remove it so it does not fall
+		// through to a later iteration and become a positional message.
+		if (equalsValueIndex !== -1 && i === flagIndex) {
+			args.splice(equalsValueIndex, 1);
 		}
 	}
 
@@ -233,6 +270,8 @@ export function getExtraHelpText(): string {
   OPENCODE_API_KEY           - OpenCode Zen/OpenCode Go models
   CURSOR_ACCESS_TOKEN        - Cursor AI models
   AI_GATEWAY_API_KEY         - Vercel AI Gateway
+  WAFER_PASS_API_KEY         - Wafer Pass (flat-rate subscription; GLM-5.1, Qwen3.5)
+  WAFER_SERVERLESS_API_KEY   - Wafer Serverless (pay-as-you-go)
 
   ${chalk.dim("# Cloud Providers")}
   AWS_PROFILE                - AWS Bedrock (or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY)

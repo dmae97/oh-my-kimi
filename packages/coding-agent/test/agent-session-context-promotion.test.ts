@@ -54,6 +54,28 @@ describe("AgentSession context promotion", () => {
 		};
 	}
 
+	function createIncompleteMessage(model: Model): AssistantMessage {
+		// Mirrors what the codex/responses provider produces for `response.incomplete`:
+		// stopReason "length", reasoning-only content, no actionable deliverable.
+		return {
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "length",
+			timestamp: Date.now(),
+		};
+	}
+
 	function createUserMessage(content: string) {
 		return {
 			role: "user" as const,
@@ -374,5 +396,85 @@ describe("AgentSession context promotion", () => {
 		expect(session.model?.id).toBe(sparkModel.id);
 		expect(closeSpy).not.toHaveBeenCalled();
 		expect(session.providerSessionState.size).toBe(1);
+	});
+
+	it("promotes to a larger-context model on response.incomplete (length stop)", async () => {
+		const sparkModel = modelRegistry.find("openai-codex", "gpt-5.3-codex-spark");
+		const codexModel = modelRegistry.find("openai-codex", "gpt-5.5");
+		if (!sparkModel || !codexModel) {
+			throw new Error("Expected codex spark and codex models to exist");
+		}
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"contextPromotion.enabled": true,
+		});
+
+		const agent = new Agent({
+			initialState: {
+				model: sparkModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		const incompleteMessage = createIncompleteMessage(sparkModel);
+		session.agent.emitExternalEvent({ type: "message_end", message: incompleteMessage });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [incompleteMessage] });
+
+		await waitFor(() => session.model?.id === codexModel.id);
+
+		expect(session.model?.provider).toBe(codexModel.provider);
+		expect(session.model?.id).toBe(codexModel.id);
+	});
+
+	it("does not promote on length stop when message is from a different model", async () => {
+		// Switching from a small-context model to a larger one and then receiving a
+		// stale length-stop event for the previous model must NOT trigger promotion
+		// or compaction on the new model — same guard as the overflow path.
+		const sparkModel = modelRegistry.find("openai-codex", "gpt-5.3-codex-spark");
+		const codexModel = modelRegistry.find("openai-codex", "gpt-5.5");
+		if (!sparkModel || !codexModel) {
+			throw new Error("Expected codex spark and codex models to exist");
+		}
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"contextPromotion.enabled": true,
+		});
+
+		const agent = new Agent({
+			initialState: {
+				model: codexModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		// Stale incomplete from the smaller model — current session is already on codex.
+		const staleIncomplete = createIncompleteMessage(sparkModel);
+		session.agent.emitExternalEvent({ type: "message_end", message: staleIncomplete });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [staleIncomplete] });
+
+		await Bun.sleep(30);
+
+		expect(session.model?.provider).toBe(codexModel.provider);
+		expect(session.model?.id).toBe(codexModel.id);
 	});
 });

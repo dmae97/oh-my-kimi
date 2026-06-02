@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { stripVTControlCharacters } from "node:util";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Component, padding, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
@@ -7,7 +8,7 @@ import type { AgentSession } from "../../session/agent-session";
 import { shortenPath } from "../../tools/render-utils";
 import * as git from "../../utils/git";
 import { sanitizeStatusText } from "../shared";
-import { getContextUsageLevel, getContextUsageThemeColor } from "./status-line/context-thresholds";
+import { formatContextUsage, getContextUsageLevel, getContextUsageThemeColor } from "./status-line/context-thresholds";
 
 /**
  * Footer component that shows pwd, token stats, and context usage
@@ -136,7 +137,6 @@ export class FooterComponent implements Component {
 		const contextUsage = this.session.getContextUsage();
 		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
 		const contextPercentValue = contextUsage?.percent ?? 0;
-		const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
 
 		// Replace home directory with ~
 		let pwd = shortenPath(getProjectDir());
@@ -180,10 +180,10 @@ export class FooterComponent implements Component {
 		// Colorize context percentage based on usage
 		let contextPercentStr: string;
 		const autoIndicator = this.#autoCompactEnabled ? " (auto)" : "";
-		const contextPercentDisplay =
-			contextPercent === "?"
-				? `?/${formatNumber(contextWindow)}${autoIndicator}`
-				: `${contextPercent}%/${formatNumber(contextWindow)}${autoIndicator}`;
+		const contextPercentDisplay = `${formatContextUsage(
+			contextUsage?.percent === null ? null : contextPercentValue,
+			contextWindow,
+		)}${autoIndicator}`;
 		if (contextUsage?.percent !== null && contextUsage?.percent !== undefined) {
 			const color = getContextUsageThemeColor(getContextUsageLevel(contextPercentValue, contextWindow));
 			contextPercentStr =
@@ -201,9 +201,16 @@ export class FooterComponent implements Component {
 		// Add thinking level hint when the current model advertises supported efforts
 		let rightSide = modelName;
 		if (state.model?.thinking) {
-			const thinkingLevel = state.thinkingLevel ?? ThinkingLevel.Off;
-			if (thinkingLevel !== ThinkingLevel.Off) {
-				rightSide = `${modelName} • ${thinkingLevel}`;
+			if (this.session.isAutoThinking) {
+				// Pending (no turn classified yet / classifying) shows a symbol-theme
+				// question-box marker; once resolved it shows `<level>`.
+				const resolved = this.session.autoResolvedThinkingLevel();
+				rightSide = `${modelName} • ${resolved ? resolved : `${theme.thinking.autoPending} auto`}`;
+			} else {
+				const thinkingLevel = state.thinkingLevel ?? ThinkingLevel.Off;
+				if (thinkingLevel !== ThinkingLevel.Off) {
+					rightSide = `${modelName} • ${thinkingLevel}`;
+				}
 			}
 		}
 
@@ -212,9 +219,9 @@ export class FooterComponent implements Component {
 
 		// If statsLeft is too wide, truncate it
 		if (statsLeftWidth > width) {
-			// Truncate statsLeft to fit width (no room for right side)
-			const plainStatsLeft = statsLeft.replace(/\x1b\[[0-9;]*m/g, "");
-			statsLeft = `${plainStatsLeft.substring(0, width - 1)}…`;
+			// Drop styling and truncate by terminal cells (not code points) so wide
+			// glyphs and non-SGR escapes can't overflow the line.
+			statsLeft = truncateToWidth(stripVTControlCharacters(statsLeft), width);
 			statsLeftWidth = visibleWidth(statsLeft);
 		}
 
@@ -231,12 +238,10 @@ export class FooterComponent implements Component {
 			// Need to truncate right side
 			const availableForRight = width - statsLeftWidth - minPadding;
 			if (availableForRight > 3) {
-				// Truncate to fit (strip ANSI codes for length calculation, then truncate raw string)
-				const plainRightSide = rightSide.replace(/\x1b\[[0-9;]*m/g, "");
-				const truncatedPlain = plainRightSide.substring(0, availableForRight);
-				// For simplicity, just use plain truncated version (loses color, but fits)
-				const pad = padding(width - statsLeftWidth - truncatedPlain.length);
-				statsLine = statsLeft + pad + truncatedPlain;
+				// Drop styling and truncate by terminal cells so the right side fits.
+				const truncatedRight = truncateToWidth(stripVTControlCharacters(rightSide), availableForRight);
+				const pad = padding(width - statsLeftWidth - visibleWidth(truncatedRight));
+				statsLine = statsLeft + pad + truncatedRight;
 			} else {
 				// Not enough space for right side at all
 				statsLine = statsLeft;

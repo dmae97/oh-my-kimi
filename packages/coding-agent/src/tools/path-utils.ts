@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { InternalUrlRouter } from "../internal-urls";
+import { InternalUrlRouter, type LocalProtocolOptions } from "../internal-urls";
 import { ToolError } from "./tool-errors";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
@@ -28,7 +28,15 @@ const INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
 	pr: true,
 	rule: true,
 	skill: true,
+	vault: true,
 };
+// Schemes whose resource URIs are server-defined and may legitimately end
+// with selector-shaped tails (e.g. `:raw`, `:conflicts`, `:1-50`, `/:raw`).
+// `McpProtocolHandler` resolves by exact URI match (`r.uri === uri`), so
+// peeling syntactically can make valid resources unreachable. Keep these
+// schemes opaque; selector support for them needs a resolver-aware path that
+// tries the exact URI before interpreting any suffix as a read selector.
+const OPAQUE_RESOURCE_SCHEMES: ReadonlySet<string> = new Set(["mcp"]);
 const INTERNAL_URL_SCHEME_RE = /^([a-z][a-z0-9+.-]*):\/\//i;
 const NARROW_NO_BREAK_SPACE = "\u202F";
 const TOP_LEVEL_INTERNAL_URL_PREFIXES = [
@@ -38,6 +46,7 @@ const TOP_LEVEL_INTERNAL_URL_PREFIXES = [
 	"rule://",
 	"local://",
 	"mcp://",
+	"vault://",
 ] as const;
 
 function normalizeUnicodeSpaces(str: string): string {
@@ -126,6 +135,87 @@ export function expandPath(filePath: string): string {
 	const normalized = stripFileUrl(normalizeUnicodeSpaces(normalizeAtPrefix(filePath)));
 	return expandTilde(normalized);
 }
+/**
+ * Inclusive line range describing one selector segment (e.g. `50-100`,
+ * `301-`, or `50+10`). `endLine` is `undefined` for open-ended ranges.
+ */
+export interface LineRange {
+	startLine: number;
+	endLine: number | undefined;
+}
+
+const LINE_RANGE_CHUNK_RE = /^L?(\d+)(?:([-+])L?(\d+)?)?$/i;
+
+/** Parse a single `N`, `N-M`, `N-`, or `N+K` chunk. Throws via {@link ToolError} on invalid bounds. */
+export function parseLineRangeChunk(sel: string): LineRange | null {
+	const lineMatch = LINE_RANGE_CHUNK_RE.exec(sel);
+	if (!lineMatch) return null;
+	const rawStart = Number.parseInt(lineMatch[1]!, 10);
+	if (rawStart < 1) {
+		throw new ToolError("Line selector 0 is invalid; lines are 1-indexed. Use :1.");
+	}
+	const sep = lineMatch[2];
+	const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
+	let rawEnd: number | undefined;
+	if (sep === "+") {
+		if (rhs === undefined || rhs < 1) {
+			throw new ToolError(`Invalid range ${rawStart}+${rhs ?? 0}: count must be >= 1.`);
+		}
+		rawEnd = rawStart + rhs - 1;
+	} else if (sep === "-") {
+		// `301-` is shorthand for "from 301 onward" — equivalent to bare `301`.
+		if (rhs !== undefined) {
+			if (rhs < rawStart) {
+				throw new ToolError(`Invalid range ${rawStart}-${rhs}: end must be >= start.`);
+			}
+			rawEnd = rhs;
+		}
+	}
+	return { startLine: rawStart, endLine: rawEnd };
+}
+
+/**
+ * Parse a comma-separated list of line ranges (e.g. `5-16,960-973`). Returns
+ * the ranges in ascending order with overlapping/adjacent ranges merged so
+ * downstream consumers can stream the file in a single forward pass per range.
+ */
+export function parseLineRanges(sel: string): [LineRange, ...LineRange[]] | null {
+	const chunks = sel.split(",");
+	const parsed: LineRange[] = [];
+	for (const chunk of chunks) {
+		const range = parseLineRangeChunk(chunk);
+		if (!range) return null;
+		parsed.push(range);
+	}
+	if (parsed.length === 0) return null;
+	parsed.sort((a, b) => a.startLine - b.startLine);
+
+	const merged: LineRange[] = [parsed[0]];
+	for (let i = 1; i < parsed.length; i++) {
+		const current = parsed[i];
+		const last = merged[merged.length - 1];
+		// Open-ended (endLine undefined) means "to EOF" — any later range is absorbed.
+		if (last.endLine === undefined) continue;
+		// Merge when current starts within (or immediately after) the last range.
+		if (current.startLine <= last.endLine + 1) {
+			if (current.endLine === undefined || current.endLine > last.endLine) {
+				merged[merged.length - 1] = { startLine: last.startLine, endLine: current.endLine };
+			}
+			continue;
+		}
+		merged.push(current);
+	}
+	return merged as [LineRange, ...LineRange[]];
+}
+
+/** Return `true` when `lineNumber` (1-indexed) falls in any of the supplied ranges. */
+export function isLineInRanges(lineNumber: number, ranges: readonly LineRange[]): boolean {
+	for (const range of ranges) {
+		if (lineNumber < range.startLine) continue;
+		if (range.endLine === undefined || lineNumber <= range.endLine) return true;
+	}
+	return false;
+}
 
 export function splitPathAndSel(rawPath: string): { path: string; sel?: string } {
 	const colon = rawPath.lastIndexOf(":");
@@ -173,10 +263,16 @@ export function splitPathAndSel(rawPath: string): { path: string; sel?: string }
  *
  * Falls back to the input unchanged when nothing matches.
  */
+
 export function splitInternalUrlSel(rawPath: string): { path: string; sel?: string } {
 	const schemeMatch = rawPath.match(INTERNAL_URL_SCHEME_RE);
 	if (!schemeMatch) return { path: rawPath };
-	if (!INTERNAL_SCHEMES_WITH_SELECTORS[schemeMatch[1].toLowerCase()]) return { path: rawPath };
+	const scheme = schemeMatch[1].toLowerCase();
+	// Opaque schemes (mcp://, etc.) carry server-defined resource URIs that may
+	// legitimately end in selector-shaped tails. Forward verbatim — see
+	// OPAQUE_RESOURCE_SCHEMES.
+	if (OPAQUE_RESOURCE_SCHEMES.has(scheme)) return { path: rawPath };
+	if (!INTERNAL_SCHEMES_WITH_SELECTORS[scheme]) return { path: rawPath };
 
 	const schemeEnd = schemeMatch[0].length;
 	let path = rawPath;
@@ -644,6 +740,12 @@ export interface ToolScopeOptions {
 	surfaceExactFilePaths?: boolean;
 	/** Extra hint appended to "Path not found" when stat fails and the user supplied multiple paths. */
 	multipathStatHint?: string;
+	/** Calling session's settings — forwarded to the internal-URL router so caller-aware handlers (issue://, pr://) honor it. */
+	settings?: unknown;
+	/** Caller's abort signal — forwarded to the internal-URL router. */
+	signal?: AbortSignal;
+	/** Calling session's `local://` root mapping — pins resolutions to the calling session. */
+	localProtocolOptions?: LocalProtocolOptions;
 }
 
 export interface ToolScopeResolution {
@@ -682,7 +784,12 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 		if (hasGlobPathChars(rawPath)) {
 			throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
 		}
-		const resource = await internalRouter.resolve(rawPath);
+		const resource = await internalRouter.resolve(rawPath, {
+			cwd,
+			settings: opts.settings,
+			signal: opts.signal,
+			localProtocolOptions: opts.localProtocolOptions,
+		});
 		if (!resource.sourcePath) {
 			throw new ToolError(`Cannot ${internalUrlAction} internal URL without a backing file: ${rawPath}`);
 		}

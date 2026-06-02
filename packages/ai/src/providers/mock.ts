@@ -216,10 +216,6 @@ export class MockModel implements Model<MockApi> {
 		this.toolCallCounter = 0;
 	}
 }
-
-/** @deprecated Use {@link MockModel}; the class IS the handle. */
-export type MockModelHandle = MockModel;
-
 /** Check whether `model` was produced by `createMockModel`. */
 export function isMockModel(model: Model<Api>): model is MockModel {
 	return model instanceof MockModel;

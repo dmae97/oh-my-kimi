@@ -37,6 +37,7 @@ export type OAuthProvider =
 	| "openai-codex"
 	| "openai-codex-device"
 	| "opencode-go"
+	| "openrouter"
 	| "opencode-zen"
 	| "parallel"
 	| "perplexity"
@@ -47,10 +48,14 @@ export type OAuthProvider =
 	| "together"
 	| "venice"
 	| "vercel-ai-gateway"
+	| "wafer-pass"
+	| "wafer-serverless"
 	| "vllm"
+	| "xai-oauth"
 	| "xiaomi"
 	| "zenmux"
-	| "zai";
+	| "zai"
+	| "zhipu-coding-plan";
 
 export type OAuthProviderId = OAuthProvider | (string & {});
 

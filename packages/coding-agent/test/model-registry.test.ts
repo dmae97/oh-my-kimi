@@ -221,6 +221,39 @@ describe("ModelRegistry", () => {
 			expect(variants.some(variant => variant.selector === "openrouter/z-ai/glm-4.7-20251222:nitro")).toBe(true);
 		});
 
+		test("keeps Perplexity search canonical distinct from non-search Sonar Pro ids", () => {
+			writeRawModelsJson({
+				demo: providerConfig("https://demo.example.com/v1", [
+					{ id: "perplexity/sonar-pro-search" },
+					{ id: "perplexity/sonar-pro" },
+					{ id: "sonar-pro" },
+				]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const searchModel = registry.find("demo", "perplexity/sonar-pro-search");
+			const proModel = registry.find("demo", "perplexity/sonar-pro");
+			const bareModel = registry.find("demo", "sonar-pro");
+			if (!searchModel || !proModel || !bareModel) {
+				throw new Error("Perplexity canonical equivalence fixture models were not registered");
+			}
+
+			const searchCanonicalId = registry.getCanonicalId(searchModel);
+			expect(searchCanonicalId).toBe("perplexity/sonar-pro-search");
+			expect(searchCanonicalId).not.toBe(registry.getCanonicalId(proModel));
+			expect(searchCanonicalId).not.toBe(registry.getCanonicalId(bareModel));
+			expect(
+				registry
+					.getCanonicalVariants("perplexity/sonar-pro-search")
+					.some(variant => variant.selector === "demo/perplexity/sonar-pro"),
+			).toBe(false);
+			expect(
+				registry
+					.getCanonicalVariants("perplexity/sonar-pro-search")
+					.some(variant => variant.selector === "demo/sonar-pro"),
+			).toBe(false);
+		});
+
 		test("uses bundled metadata for Ollama cloud aliases in custom local-proxy configs", () => {
 			writeRawModelsJson({
 				ollama: {
@@ -258,7 +291,7 @@ describe("ModelRegistry", () => {
 			});
 
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
-			const opusVariants = registry.getCanonicalVariants("claude-opus-4-7");
+			const opusVariants = registry.getCanonicalVariants("claude-opus-4-8");
 			const haikuVariants = registry.getCanonicalVariants("claude-haiku-4-5");
 
 			expect(opusVariants.some(variant => variant.selector === "demo/anthropic/claude-opus-latest")).toBe(true);
@@ -1738,7 +1771,7 @@ describe("ModelRegistry", () => {
 
 			const gemma = registry.find("ollama", "gemma3:4b");
 			expect(gemma?.contextWindow).toBe(131072);
-			expect(gemma?.maxTokens).toBe(8192);
+			expect(gemma?.maxTokens).toBe(32_768);
 			expect(gemma?.input).toEqual(["text"]);
 			expect(gemma?.reasoning).toBe(false);
 		});
@@ -1955,7 +1988,7 @@ describe("ModelRegistry", () => {
 			await registry.refresh();
 			const llama = registry.find("llama.cpp", "qwen35-35b-a3b");
 			expect(llama?.contextWindow).toBe(262144);
-			expect(llama?.maxTokens).toBe(8192);
+			expect(llama?.maxTokens).toBe(32_768);
 			expect(llama?.input).toEqual(["text", "image"]);
 		});
 	});
@@ -2233,5 +2266,107 @@ describe("ModelRegistry", () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 
 		expect(registry.find("ollama-cloud", "deepseek-v4-pro")?.maxTokens).toBe(384_000);
+	});
+
+	test("replaces bundled google-vertex models with authoritative Vertex project discovery", () => {
+		const cachedModel: Model<"openai-completions"> = {
+			id: "zai-org/glm-4.7-maas",
+			name: "GLM-4.7",
+			api: "openai-completions",
+			provider: "google-vertex",
+			baseUrl: "https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/endpoints/openapi",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 222_222,
+			maxTokens: 8_888,
+		};
+		writeModelCache("google-vertex", Date.now(), [cachedModel], true, "", cacheDbPath);
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const vertexModels = getModelsForProvider(registry, "google-vertex");
+
+		expect(vertexModels.map(model => model.id)).toEqual(["zai-org/glm-4.7-maas"]);
+		expect(registry.find("google-vertex", "gemini-1.5-pro")).toBeUndefined();
+	});
+
+	test("does not re-add bundled synthetic models after authoritative cache load", () => {
+		const cachedModel: Model<"openai-completions"> = {
+			id: "hf:zai-org/GLM-5.1",
+			name: "GLM 5.1",
+			api: "openai-completions",
+			provider: "synthetic",
+			baseUrl: "https://api.synthetic.new/openai/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+		};
+		writeModelCache("synthetic", Date.now(), [cachedModel], true, "authoritative:test", cacheDbPath);
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const syntheticModels = getModelsForProvider(registry, "synthetic");
+
+		expect(syntheticModels.map(model => model.id)).toEqual(["hf:zai-org/GLM-5.1"]);
+		expect(registry.find("synthetic", "hf:moonshotai/Kimi-K2.5")).toBeUndefined();
+	});
+
+	test("does not re-add bundled synthetic models after authoritative refresh", async () => {
+		authStorage.setRuntimeApiKey("synthetic", "synthetic-test-key");
+		using _hook = mockOpenAiCompatibleModels("https://api.synthetic.new/openai/v1/models", ["hf:zai-org/GLM-5.1"]);
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+
+		await registry.refresh("online");
+		const syntheticModels = getModelsForProvider(registry, "synthetic");
+
+		expect(syntheticModels.map(model => model.id)).toEqual(["hf:zai-org/GLM-5.1"]);
+		expect(registry.find("synthetic", "hf:moonshotai/Kimi-K2.5")).toBeUndefined();
+	});
+
+	test("keeps bundled google-vertex fallback when cached project catalog is non-authoritative", () => {
+		const cachedModel: Model<"openai-completions"> = {
+			id: "zai-org/glm-4.7-maas",
+			name: "GLM-4.7",
+			api: "openai-completions",
+			provider: "google-vertex",
+			baseUrl: "https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/endpoints/openapi",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 222_222,
+			maxTokens: 8_888,
+		};
+		writeModelCache("google-vertex", Date.now(), [cachedModel], false, "", cacheDbPath);
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const vertexModels = getModelsForProvider(registry, "google-vertex");
+
+		expect(vertexModels.some(model => model.id === "zai-org/glm-4.7-maas")).toBe(true);
+		expect(vertexModels.some(model => model.id.startsWith("gemini-"))).toBe(true);
+	});
+
+	test("keeps bundled google-vertex fallback when cached project catalog is stale", () => {
+		const cachedModel: Model<"openai-completions"> = {
+			id: "zai-org/glm-4.7-maas",
+			name: "GLM-4.7",
+			api: "openai-completions",
+			provider: "google-vertex",
+			baseUrl: "https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/global/endpoints/openapi",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 222_222,
+			maxTokens: 8_888,
+		};
+		// 25h old > 24h TTL → cache.fresh === false even though authoritative === true.
+		const staleTimestamp = Date.now() - 25 * 60 * 60 * 1000;
+		writeModelCache("google-vertex", staleTimestamp, [cachedModel], true, "", cacheDbPath);
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const vertexModels = getModelsForProvider(registry, "google-vertex");
+
+		expect(vertexModels.some(model => model.id === "zai-org/glm-4.7-maas")).toBe(true);
+		expect(vertexModels.some(model => model.id.startsWith("gemini-"))).toBe(true);
 	});
 });

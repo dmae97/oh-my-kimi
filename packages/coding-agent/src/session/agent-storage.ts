@@ -240,11 +240,10 @@ FROM model_usage_legacy
 	}
 
 	/**
-	 * Retrieves all settings from storage (legacy, for migration only).
-	 * Settings are now stored in config.yml. This method is only used
-	 * during migration from agent.db to config.yml.
+	 * Reads legacy settings persisted in the agent.db `settings` table.
+	 * The canonical settings store is `config.yml`; this accessor only
+	 * exists so the config loader can migrate values from older installs.
 	 * @returns Settings object, or null if no settings are stored
-	 * @deprecated Use config.yml instead. This is only for migration.
 	 */
 	getSettings(): Settings | null {
 		const rows = (this.#listSettingsStmt.all() as SettingsRow[]) ?? [];
@@ -261,16 +260,6 @@ FROM model_usage_legacy
 			}
 		}
 		return settings as Settings;
-	}
-
-	/**
-	 * @deprecated Settings are now stored in config.yml, not agent.db.
-	 * This method is kept for backward compatibility but does nothing.
-	 */
-	saveSettings(settings: Settings): void {
-		logger.warn("AgentStorage.saveSettings is deprecated - settings are now stored in config.yml", {
-			keys: Object.keys(settings),
-		});
 	}
 
 	/**

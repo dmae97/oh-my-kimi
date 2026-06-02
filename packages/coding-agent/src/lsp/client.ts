@@ -415,6 +415,10 @@ export const WARMUP_TIMEOUT_MS = 5000;
 /** Max time to wait for the server to report project loading completion via $/progress */
 const PROJECT_LOAD_TIMEOUT_MS = 15_000;
 
+/** Max time to wait for graceful LSP shutdown and process exit. */
+const SHUTDOWN_TIMEOUT_MS = 5_000;
+const EXIT_TIMEOUT_MS = 1_000;
+
 /**
  * Get or create an LSP client for the given server configuration and working directory.
  * @param config - Server configuration
@@ -768,8 +772,18 @@ export async function refreshFile(client: LspClient, filePath: string, signal?: 
 	}
 }
 
+async function waitForExit(client: LspClient, timeoutMs: number): Promise<boolean> {
+	return await Promise.race([
+		client.proc.exited.then(
+			() => true,
+			() => true,
+		),
+		Bun.sleep(timeoutMs).then(() => false),
+	]);
+}
+
 /**
- * Shutdown a specific client by key.
+ * Shutdown a specific client instance using the LSP shutdown/exit handshake.
  */
 async function shutdownClientInstance(client: LspClient): Promise<void> {
 	const err = new Error("LSP client shutdown");
@@ -778,13 +792,22 @@ async function shutdownClientInstance(client: LspClient): Promise<void> {
 	}
 	client.pendingRequests.clear();
 
-	const timeout = Bun.sleep(5_000);
-	const shutdown = sendRequest(client, "shutdown", null).catch(() => {});
-	await Promise.race([shutdown, timeout]);
+	const shutdownCompleted = await sendRequest(client, "shutdown", null, undefined, SHUTDOWN_TIMEOUT_MS).then(
+		() => true,
+		() => false,
+	);
+	if (shutdownCompleted) {
+		await sendNotification(client, "exit", undefined).catch(() => {});
+		if (await waitForExit(client, EXIT_TIMEOUT_MS)) return;
+	}
+
 	client.proc.kill();
-	await Promise.race([client.proc.exited.catch(() => {}), Bun.sleep(1_000)]);
+	await waitForExit(client, EXIT_TIMEOUT_MS);
 }
 
+/**
+ * Shutdown a specific client by key.
+ */
 export async function shutdownClient(key: string): Promise<void> {
 	const client = clients.get(key);
 	if (!client) return;

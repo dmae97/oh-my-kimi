@@ -374,6 +374,18 @@ class WorkerPool:
                     attempts=row.attempts,
                     slot_uid=slot_uid,
                 )
+        elif event == "pull_request" and action in ("opened", "reopened", "ready_for_review"):
+            await tasks.review_pr(
+                settings=self.settings,
+                db=self.db,
+                github=self.github,
+                sandbox=self.sandbox,
+                git_transport=self.git_transport,
+                payload=row.payload,
+                delivery_id=row.delivery_id,
+                attempts=row.attempts,
+                slot_uid=slot_uid,
+            )
         elif event == "pull_request_review_comment" and action == "created":
             await tasks.handle_review(
                 settings=self.settings,
@@ -395,12 +407,14 @@ class WorkerPool:
                 target_state="closed",
             )
         elif event == "pull_request" and action == "closed":
+            pr = row.payload.get("pull_request") or {}
+            target_state = "merged" if bool(pr.get("merged")) else "closed"
             await tasks.cleanup_workspace(
                 settings=self.settings,
                 db=self.db,
                 sandbox=self.sandbox,
                 payload=row.payload,
-                target_state="merged",
+                target_state=target_state,
             )
         else:
             log.info("no-op dispatch", extra={"event": event, "action": action})
