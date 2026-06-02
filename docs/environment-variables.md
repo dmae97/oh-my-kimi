@@ -252,12 +252,14 @@ Anthropic web search uses `findAnthropicAuth()` from `packages/ai/src/utils/anth
 
 Related vars:
 
-| Variable                    | Default / behavior                                   |
-| --------------------------- | ---------------------------------------------------- |
-| `ANTHROPIC_SEARCH_API_KEY`  | Highest-priority explicit search key                 |
-| `ANTHROPIC_SEARCH_BASE_URL` | Defaults to `https://api.anthropic.com` when omitted |
-| `ANTHROPIC_SEARCH_MODEL`    | Defaults to `claude-haiku-4-5`                       |
-| `ANTHROPIC_BASE_URL`        | Generic fallback base URL for tier-4 auth path       |
+| Variable                    | Default / behavior                                                                                                                                                                                |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_SEARCH_API_KEY`  | API key used exclusively for the Anthropic web search provider. Highest-priority search auth; overrides `ANTHROPIC_API_KEY` / OAuth / Foundry for search calls without affecting chat completions.|
+| `ANTHROPIC_SEARCH_BASE_URL` | Base URL used exclusively for the Anthropic web search provider. Overrides `ANTHROPIC_BASE_URL` (and `FOUNDRY_BASE_URL` in Foundry mode) for search calls. Defaults to `https://api.anthropic.com`.|
+| `ANTHROPIC_SEARCH_MODEL`    | Search model override. Defaults to `claude-haiku-4-5`.                                                                                                                                            |
+| `ANTHROPIC_BASE_URL`        | Generic fallback base URL for the tier-4 auth path (`ANTHROPIC_API_KEY` + base URL) when no search-specific base URL is set.                                                                      |
+
+Use `ANTHROPIC_SEARCH_API_KEY` + `ANTHROPIC_SEARCH_BASE_URL` to keep chat routed through an enterprise gateway (`ANTHROPIC_BASE_URL` or `CLAUDE_CODE_USE_FOUNDRY=true`) while pointing web search at a direct Anthropic endpoint, or vice versa.
 
 ### Perplexity OAuth flow behavior flag
 
