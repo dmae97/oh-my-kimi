@@ -3,14 +3,13 @@
 ## [Unreleased]
 
 ### Added
-- Added Kagi V1 web search provider support for the new API, intentionally left V0 in for now to not break any existing users.
-
 - Added `codex` and `gemini` to the web search provider settings so users can configure OpenAI and Gemini web search directly from provider selection
 - Added OpenAI (`codex`) and Gemini web search options with updated setup descriptions for `omp /login openai-codex` and Gemini OAuth login
 
 ### Changed
 
 - Changed web search provider credential lookup to use the shared `AuthStorage` pipeline (`getApiKey`/`getOAuthAccess`) for API-key and OAuth auth instead of direct `AgentStorage` access
+- Migrated the Kagi web search provider to Kagi's V1 Search API (`POST /api/v1/search`), replacing the sunset V0 endpoint while keeping the `kagi` provider id, `KAGI_API_KEY` credential, and `/login kagi` flow unchanged ([#1272](https://github.com/can1357/oh-my-pi/pull/1272) by [@thismat](https://github.com/thismat))
 - Changed the `codex` web search provider display label from `Codex` to `OpenAI`
 - Updated `anthropic` and `openai`/`gemini` web search option descriptions to reflect their native `web_search`/OAuth requirements
 
