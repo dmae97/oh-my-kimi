@@ -18,6 +18,48 @@ import type { SessionInfo } from "../../session/session-manager";
 import { DynamicBorder } from "./dynamic-border";
 import { HookSelectorComponent } from "./hook-selector";
 
+/** Returns the IDs of sessions whose recorded prompts match a query, best first. */
+export type SessionHistoryMatcher = (query: string) => string[];
+
+/**
+ * Combine fuzzy session matches with prompt-history matches for ranking, using
+ * both signals rather than replacing one with the other.
+ *
+ * - `fuzzy` is the ordered fuzzy-filter result over session metadata (best first).
+ * - `historyIds` are session IDs whose recorded prompts matched the query,
+ *   ordered by history relevance (best first); duplicates are tolerated.
+ *
+ * Ranking: sessions matched by **both** signals lead (keeping fuzzy order), then
+ * fuzzy-only matches, then history-only matches (by history order). A fuzzy match
+ * is never dropped, and history matches not present in `allSessions` (e.g. deleted
+ * or out-of-scope sessions) are ignored since they cannot be resumed from here.
+ */
+export function mergeSessionRanking(
+	allSessions: SessionInfo[],
+	fuzzy: SessionInfo[],
+	historyIds: string[],
+): SessionInfo[] {
+	const historyRank = new Map<string, number>();
+	historyIds.forEach((id, index) => {
+		if (!historyRank.has(id)) historyRank.set(id, index);
+	});
+	if (historyRank.size === 0) return fuzzy;
+
+	const both: SessionInfo[] = [];
+	const fuzzyOnly: SessionInfo[] = [];
+	const fuzzyPaths = new Set<string>();
+	for (const session of fuzzy) {
+		fuzzyPaths.add(session.path);
+		(historyRank.has(session.id) ? both : fuzzyOnly).push(session);
+	}
+
+	const historyOnly = allSessions
+		.filter(session => historyRank.has(session.id) && !fuzzyPaths.has(session.path))
+		.sort((a, b) => (historyRank.get(a.id) ?? 0) - (historyRank.get(b.id) ?? 0));
+
+	return [...both, ...fuzzyOnly, ...historyOnly];
+}
+
 /**
  * Custom session list component with multi-line items and search
  */
@@ -35,6 +77,7 @@ class SessionList implements Component {
 	constructor(
 		private readonly allSessions: SessionInfo[],
 		private readonly showCwd = false,
+		private readonly historyMatcher?: SessionHistoryMatcher,
 	) {
 		this.#filteredSessions = allSessions;
 		this.#searchInput = new Input();
@@ -51,7 +94,7 @@ class SessionList implements Component {
 	}
 
 	#filterSessions(query: string): void {
-		this.#filteredSessions = fuzzyFilter(this.allSessions, query, session => {
+		const fuzzy = fuzzyFilter(this.allSessions, query, session => {
 			const parts = [
 				session.id,
 				session.title ?? "",
@@ -62,7 +105,22 @@ class SessionList implements Component {
 			];
 			return parts.filter(Boolean).join(" ");
 		});
+		this.#filteredSessions = this.#mergeHistoryMatches(query, fuzzy);
 		this.#selectedIndex = Math.min(this.#selectedIndex, Math.max(0, this.#filteredSessions.length - 1));
+	}
+
+	/**
+	 * Augment fuzzy results with prompt-history matches without replacing them.
+	 * The session-list corpus only sees the first 4KB of each session, so a prompt
+	 * typed deep into a long session is invisible to fuzzy search; `historyMatcher`
+	 * recovers those via `history.db`.
+	 */
+	#mergeHistoryMatches(query: string, fuzzy: SessionInfo[]): SessionInfo[] {
+		const trimmed = query.trim();
+		if (!trimmed || !this.historyMatcher) return fuzzy;
+		const historyIds = this.historyMatcher(trimmed);
+		if (historyIds.length === 0) return fuzzy;
+		return mergeSessionRanking(this.allSessions, fuzzy, historyIds);
 	}
 
 	removeSession(sessionPath: string): void {
@@ -253,6 +311,7 @@ export class SessionSelectorComponent extends Container {
 		onCancel: () => void,
 		onExit: () => void,
 		onDelete?: (session: SessionInfo) => Promise<boolean>,
+		historyMatcher?: SessionHistoryMatcher,
 	) {
 		super();
 
@@ -266,7 +325,7 @@ export class SessionSelectorComponent extends Container {
 		this.addChild(new Spacer(1));
 		this.addChild(this.#messageContainer);
 		// Create session list
-		this.#sessionList = new SessionList(sessions);
+		this.#sessionList = new SessionList(sessions, false, historyMatcher);
 		this.#sessionList.onSelect = onSelect;
 		this.#sessionList.onCancel = onCancel;
 		this.#sessionList.onExit = onExit;

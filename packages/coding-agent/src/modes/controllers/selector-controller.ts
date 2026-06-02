@@ -719,6 +719,8 @@ export class SelectorController {
 			this.ctx.sessionManager.getCwd(),
 			this.ctx.sessionManager.getSessionDir(),
 		);
+		const historyStorage = this.ctx.historyStorage;
+		const historyMatcher = historyStorage ? (query: string) => historyStorage.matchingSessionIds(query) : undefined;
 		this.showSelector(done => {
 			const selector = new SessionSelectorComponent(
 				sessions,
@@ -747,6 +749,7 @@ export class SelectorController {
 						});
 					}
 				},
+				historyMatcher,
 			);
 			selector.setOnRequestRender(() => this.ctx.ui.requestRender());
 			return { component: selector, focus: selector };
