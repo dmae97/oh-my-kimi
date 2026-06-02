@@ -272,6 +272,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	loopPrompt: string | undefined = undefined;
 	loopLimit: LoopLimitRuntime | undefined = undefined;
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
+	#todoAutoClearTimer: NodeJS.Timeout | undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
@@ -568,6 +569,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			// subagent is doing the work for a still-pending todo) updates as
 			// subagents start, finish, or fail.
 			this.#reconcileTodosWithSubagents();
+			this.#syncTodoAutoClearTimer();
 			this.#renderTodoList();
 			this.ui.requestRender();
 		});
@@ -1081,6 +1083,47 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setTodoPhases(next);
 	}
 
+	#cancelTodoAutoClearTimer(): void {
+		if (!this.#todoAutoClearTimer) return;
+		clearTimeout(this.#todoAutoClearTimer);
+		this.#todoAutoClearTimer = undefined;
+	}
+
+	#isClosedTodo(task: TodoItem): boolean {
+		return task.status === "completed" || task.status === "abandoned";
+	}
+
+	#hasClosedTodos(phases: TodoPhase[]): boolean {
+		return phases.some(phase => phase.tasks.some(task => this.#isClosedTodo(task)));
+	}
+
+	#removeClosedTodos(phases: TodoPhase[]): TodoPhase[] {
+		const next: TodoPhase[] = [];
+		for (const phase of phases) {
+			const tasks = phase.tasks.filter(task => !this.#isClosedTodo(task));
+			if (tasks.length > 0) next.push({ name: phase.name, tasks });
+		}
+		return next;
+	}
+
+	#syncTodoAutoClearTimer(): void {
+		this.#cancelTodoAutoClearTimer();
+		const delaySeconds = this.settings.get("tasks.todoClearDelay");
+		if (!Number.isFinite(delaySeconds) || delaySeconds < 0 || !this.#hasClosedTodos(this.todoPhases)) return;
+		if (delaySeconds === 0) {
+			this.todoPhases = this.#removeClosedTodos(this.todoPhases);
+			return;
+		}
+
+		this.#todoAutoClearTimer = setTimeout(() => {
+			this.#todoAutoClearTimer = undefined;
+			this.todoPhases = this.#removeClosedTodos(this.todoPhases);
+			this.#renderTodoList();
+			this.ui.requestRender();
+		}, delaySeconds * 1000);
+		this.#todoAutoClearTimer.unref?.();
+	}
+
 	#getActivePhase(phases: TodoPhase[]): TodoPhase | undefined {
 		const nonEmpty = phases.filter(phase => phase.tasks.length > 0);
 		const active = nonEmpty.find(phase =>
@@ -1136,6 +1179,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #loadTodoList(): Promise<void> {
 		this.todoPhases = this.session.getTodoPhases();
+		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 	}
 
@@ -2214,6 +2258,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.loadingAnimation = undefined;
 		}
 		this.#cleanupMicAnimation();
+		this.#cancelTodoAutoClearTimer();
 		this.#cancelGoalContinuation();
 		if (this.#sttController) {
 			this.#sttController.dispose();
@@ -2892,6 +2937,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				},
 			];
 		}
+		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 		this.ui.requestRender();
 	}
