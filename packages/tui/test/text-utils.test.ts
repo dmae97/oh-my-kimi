@@ -36,6 +36,25 @@ describe("text utils", () => {
 		expect(visibleWidth("\x1b[31mhello\x1b[0m")).toBe(visibleWidth("hello"));
 	});
 
+	it("counts a VS16 emoji-presentation symbol as 2 cells", () => {
+		// A default-text-presentation symbol followed by variation-selector-16
+		// (U+FE0F) renders in emoji presentation = 2 cells. The native scanner
+		// must apply UnicodeWidthStr's VS16 promotion, not a per-char sum that
+		// drops the selector — otherwise `⚠️` measures 1 and pads one column
+		// short, shifting markdown table borders. Regression for the offset
+		// seen with the ⚠️ keyword in a rendered table row.
+		expect(visibleWidth("\u26a0\ufe0f")).toBe(2); // ⚠️
+		expect(visibleWidth("\u2139\ufe0f")).toBe(2); // ℹ️
+		expect(visibleWidth("\u2764\ufe0f")).toBe(2); // ❤️
+		// Bare symbol without VS16 keeps its text-presentation width.
+		expect(visibleWidth("\u26a0")).toBe(1);
+		// Intrinsically wide emoji are unaffected by the change.
+		expect(visibleWidth("\u2705")).toBe(2); // ✅
+		expect(visibleWidth("\u274c")).toBe(2); // ❌
+		// Padding math the table renderer relies on stays exact.
+		expect(visibleWidth("\u26a0\ufe0f now")).toBe(6);
+	});
+
 	it("truncates ANSI text with ellipsis", () => {
 		const text = "\x1b[31mhello world\x1b[0m";
 		const result = truncateToWidth(text, 6);
