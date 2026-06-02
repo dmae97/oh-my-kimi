@@ -21,10 +21,15 @@
  * maintaining parallel constants.
  *
  * An unclassified bare long option (one not in any flag table) is treated as a
- * possible extension string flag: its successor token is forwarded untouched and
- * never read as a global `--profile`/`--alias`. Known value-less launch flags
- * ({@link VALUELESS_FLAGS}) are exempt so a trailing profile still activates
- * (`omp --print --profile work`).
+ * possible extension string flag, but the bootstrap mirrors `parseArgs`'
+ * extension-flag rules ({@link ./args}): a string extension flag consumes its
+ * successor ONLY when that successor is value-like (does not start with `-`), and
+ * a boolean extension flag consumes nothing. So the successor is forwarded
+ * untouched (and never read as a global `--profile`/`--alias`) only when it is
+ * value-like; a flag-looking successor is left for normal processing, so
+ * `omp --some-ext-flag --profile work` still selects a profile. Known value-less
+ * launch flags ({@link VALUELESS_FLAGS}) are exempt so a trailing profile after
+ * them also activates (`omp --print --profile work`).
  */
 
 import { isSubcommand } from "../cli-commands";
@@ -143,17 +148,26 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 
 		// An unclassified bare long option (`--xxx` with no `=`) may be an extension
 		// string flag that consumes the next token as its value. The bootstrap runs
-		// before extensions load, so it cannot consult the extension flag table; to
-		// avoid stealing a value that belongs to such a flag (e.g. `omp --bar --alias
-		// foo` where an extension registers string flag `bar`), forward the flag AND
-		// its immediate successor untouched, never interpreting that successor as a
-		// global --profile/--alias. Known value-less launch flags are exempt so a
-		// trailing profile still activates (`omp --print --profile work`).
+		// before extensions load, so it cannot consult the extension flag table; it
+		// therefore mirrors the value-consumption rule `parseArgs` applies to
+		// extension flags (./args.ts): a string extension flag consumes its successor
+		// ONLY when that successor is value-like (does not start with `-`), and a
+		// boolean extension flag consumes nothing. So protect (forward + skip) the
+		// successor only when it is value-like — `omp --bar val --profile work` keeps
+		// `val` with `--bar` and still extracts the trailing profile — and otherwise
+		// forward just the flag, letting the loop process a flag-looking successor so
+		// a trailing global flag still applies (`omp --some-ext-bool --profile work`
+		// selects profile `work`). A `--` successor is deliberately NOT protected
+		// here: it falls through to the end-of-options arm above, keeping `--` a
+		// single, consistent meaning instead of being swallowed as a flag value.
+		// Known value-less launch flags are exempt so a trailing profile still
+		// activates (`omp --print --profile work`).
 		if (arg.startsWith("--") && !arg.includes("=") && !VALUELESS_FLAGS.has(arg)) {
 			canDispatchSubcommand = false;
 			stripped.push(arg);
-			if (index + 1 < argv.length) {
-				stripped.push(argv[index + 1]);
+			const next = argv[index + 1];
+			if (next !== undefined && !next.startsWith("-")) {
+				stripped.push(next);
 				index += 1;
 			}
 			continue;

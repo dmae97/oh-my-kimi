@@ -167,18 +167,50 @@ describe("extractProfileFlags", () => {
 		});
 	});
 
-	it("does not steal --alias/--profile that may be the value of an unknown (extension) string flag", () => {
+	it("protects a value-like successor of an unknown (extension) string flag", () => {
 		// The bootstrap runs before extensions load and cannot know that `--bar`
-		// is a string flag consuming its next token. It must not interpret that
-		// token as a global --alias/--profile, or `omp --bar --alias foo` would
-		// install a shell alias instead of passing `--alias`/`foo` to the extension.
-		expect(extractProfileFlags(["--bar", "--alias", "foo"])).toEqual({
-			argv: ["--bar", "--alias", "foo"],
+		// is a string flag consuming its next token. When the successor is
+		// value-like (does not start with `-`), `parseArgs` consumes it as the
+		// extension flag's value, so the bootstrap forwards it untouched and never
+		// mis-reads it as a global flag — even when it spells a subcommand name.
+		expect(extractProfileFlags(["--bar", "value", "--profile", "work"])).toEqual({
+			argv: ["--bar", "value"],
+			profile: "work",
+			aliasName: undefined,
+		});
+		expect(extractProfileFlags(["--bar", "config"])).toEqual({
+			argv: ["--bar", "config"],
 			profile: undefined,
 			aliasName: undefined,
 		});
-		expect(extractProfileFlags(["--bar", "--profile", "work"])).toEqual({
-			argv: ["--bar", "--profile", "work"],
+	});
+
+	it("does not hide a global --profile/--alias behind an unknown flag with a flag-looking successor (regression: PR #1435 review)", () => {
+		// `parseArgs` never hands a flag-looking successor to an extension flag:
+		// boolean extension flags consume nothing, and string extension flags only
+		// consume value-like (non-`-`) successors. So `omp --some-ext-flag --profile
+		// work` must still select profile `work`; the prior bootstrap forwarded
+		// `--profile` as a protected successor and silently fell back to default.
+		expect(extractProfileFlags(["--some-ext-flag", "--profile", "work"])).toEqual({
+			argv: ["--some-ext-flag"],
+			profile: "work",
+			aliasName: undefined,
+		});
+		expect(extractProfileFlags(["--some-ext-flag", "--alias", "omp-work"])).toEqual({
+			argv: ["--some-ext-flag"],
+			profile: undefined,
+			aliasName: "omp-work",
+		});
+	});
+
+	it("treats a `--` successor of an unknown flag as end-of-options, not a protected value", () => {
+		// `--` is ambiguous under the parser (a string extension flag consumes it,
+		// a boolean one does not), so the bootstrap keeps `--` a single consistent
+		// meaning: end-of-options. Everything after is forwarded verbatim and no
+		// profile is extracted, so a `--profile` fenced behind `--` never silently
+		// activates.
+		expect(extractProfileFlags(["--some-ext-flag", "--", "--profile", "work"])).toEqual({
+			argv: ["--some-ext-flag", "--", "--profile", "work"],
 			profile: undefined,
 			aliasName: undefined,
 		});

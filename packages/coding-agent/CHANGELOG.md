@@ -12,6 +12,7 @@
 - Fixed generated profile aliases to pass the profile as `--profile=<name>`, avoiding the separate argv value that could be misread as an initial prompt while still forcing the CLI's explicit profile bootstrap path.
 - Fixed `--alias` when run from a source checkout (`bun src/cli.ts` / `omp-test`) so the generated profile command targets that same checkout instead of a stale installed `omp` binary, while preserving the directory where the alias is invoked.
 - Fixed explicit `omp launch --profile <name>` / `omp launch --alias <name>` so `launch` behaves like the default command during profile bootstrap instead of blocking global profile extraction.
+- Fixed profile bootstrap and alias installation edge cases: `--profile` is now still honored for `launch` argv that merely contain subcommand-shaped words; a trailing global `--profile`/`--alias` after an unknown (extension) flag is still extracted unless that flag would consume it as a value-like successor (mirroring `parseArgs`); extension flags no longer parse literal text after `--`; alias installation preserves non-ENOENT shell config read failures; `/bin/sh` is rejected instead of being treated as bash; aliases cannot shadow `omp` case-insensitively; on Windows the PowerShell edition is inferred from `PSModulePath` (then `POWERSHELL_DISTRIBUTION_CHANNEL`) when `$SHELL` is unset; and the fish alias honors `$XDG_CONFIG_HOME`.
 
 ## [15.8.0] - 2026-06-02
 
@@ -224,8 +225,6 @@
 
 ### Fixed
 
-- Fixed profile bootstrap and alias installation edge cases: `--profile` is now still honored for `launch` argv that merely contain subcommand-shaped words, extension flags no longer parse literal text after `--`, alias installation preserves non-ENOENT shell config read failures, `/bin/sh` is rejected instead of being treated as bash, and aliases cannot shadow `omp` case-insensitively.
-- Fixed the Mnemosyne memory backend lifecycle so auto-retain counts the full session transcript, delegated agents inherit the parent Mnemosyne state, `/memory clear` removes scoped project-bank databases, session disposal closes Mnemosyne SQLite handles, session switches rekey/reset Mnemosyne tracking, and project bank names include an absolute-root hash with safe bank-name sanitization.
 - Fixed Mnemopi session shutdown to flush queued memory extractions before exit so the last turn’s facts are not lost
 - Fixed a native crash (`malloc: pointer being freed was not allocated` / `NAPI FATAL ERROR`) when quitting after the local transformers.js title model had run. The tiny-title worker no longer calls `pipeline.dispose()` on shutdown — disposing the onnxruntime session freed native memory that Bun's worker/NAPI teardown then freed again. The worker is torn down immediately after, so the OS reclaims the model memory regardless.
 - Fixed the tiny-title download progress bar flashing on every first message even when the local model was already downloaded. A cached model emits the same `download`/`progress` events as a real download, so the bar is now revealed only when in-flight progress events keep arriving past a short grace window — cache hits finish (or fall silent during onnxruntime init) before then and never show the bar.

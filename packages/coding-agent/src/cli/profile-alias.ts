@@ -32,6 +32,7 @@ export interface ProfileAliasInstallOptions {
 	shellPath?: string;
 	platform?: NodeJS.Platform;
 	homeDir?: string;
+	env?: NodeJS.ProcessEnv;
 	readFile?: (filePath: string) => Promise<string>;
 	command?: ProfileAliasCommand;
 	writeFile?: (filePath: string, content: string) => Promise<void>;
@@ -65,7 +66,26 @@ function validateAliasName(aliasName: string): string {
 	return normalized;
 }
 
-function normalizeShellName(shellPath: string | undefined, platform: NodeJS.Platform): ProfileAliasShell {
+// On Windows the launching shell is rarely exported through $SHELL, so when it
+// is missing we infer the PowerShell edition from the inherited environment.
+// PowerShell 7 (pwsh) always seeds PSModulePath with separator-delimited
+// ".../PowerShell/..." module directories (plus the Windows PowerShell ones for
+// back-compat), whereas Windows PowerShell 5.1 only ever lists
+// ".../WindowsPowerShell/...". The separator anchors keep "WindowsPowerShell"
+// from matching. POWERSHELL_DISTRIBUTION_CHANNEL is set only by some pwsh
+// distributions, so it stays a secondary hint rather than the primary signal.
+function detectWindowsPowerShell(env: NodeJS.ProcessEnv): ProfileAliasShell {
+	const modulePath = env.PSModulePath ?? env.PSMODULEPATH ?? env.psmodulepath ?? "";
+	if (/[\\/]PowerShell[\\/]/i.test(modulePath)) return "pwsh";
+	if (env.POWERSHELL_DISTRIBUTION_CHANNEL) return "pwsh";
+	return "powershell";
+}
+
+function normalizeShellName(
+	shellPath: string | undefined,
+	platform: NodeJS.Platform,
+	env: NodeJS.ProcessEnv,
+): ProfileAliasShell {
 	const shell = path
 		.basename(shellPath ?? "")
 		.toLowerCase()
@@ -75,7 +95,7 @@ function normalizeShellName(shellPath: string | undefined, platform: NodeJS.Plat
 	if (shell === "fish") return "fish";
 	if (shell === "pwsh") return "pwsh";
 	if (shell === "powershell") return "powershell";
-	if (platform === "win32") return process.env.POWERSHELL_DISTRIBUTION_CHANNEL ? "pwsh" : "powershell";
+	if (platform === "win32") return detectWindowsPowerShell(env);
 	throw new Error(`Unsupported shell${shell ? ` "${shell}"` : ""}. Supported shells: bash, zsh, fish, PowerShell.`);
 }
 
@@ -97,14 +117,24 @@ export function resolveProfileAliasCommandFromProcess(
 	};
 }
 
-function resolveShellConfigPath(shell: ProfileAliasShell, homeDir: string, platform: NodeJS.Platform): string {
+function resolveShellConfigPath(
+	shell: ProfileAliasShell,
+	homeDir: string,
+	platform: NodeJS.Platform,
+	env: NodeJS.ProcessEnv,
+): string {
 	switch (shell) {
 		case "zsh":
 			return path.join(homeDir, ".zshrc");
 		case "bash":
 			return platform === "darwin" ? path.join(homeDir, ".bash_profile") : path.join(homeDir, ".bashrc");
-		case "fish":
-			return path.join(homeDir, ".config", "fish", "conf.d", "omp-profiles.fish");
+		case "fish": {
+			// fish sources conf.d from $XDG_CONFIG_HOME/fish (default ~/.config/fish);
+			// a hard-coded ~/.config would be silently ignored when the user relocates
+			// their XDG config root, leaving the alias unsourced after a restart.
+			const configHome = env.XDG_CONFIG_HOME || path.join(homeDir, ".config");
+			return path.join(configHome, "fish", "conf.d", "omp-profiles.fish");
+		}
 		case "pwsh":
 			return platform === "win32"
 				? path.join(homeDir, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
@@ -188,8 +218,9 @@ export async function installProfileAlias(options: ProfileAliasInstallOptions): 
 	const aliasName = validateAliasName(options.aliasName);
 	const platform = options.platform ?? process.platform;
 	const homeDir = options.homeDir ?? os.homedir();
-	const shell = normalizeShellName(options.shellPath ?? process.env.SHELL, platform);
-	const configPath = resolveShellConfigPath(shell, homeDir, platform);
+	const env = options.env ?? process.env;
+	const shell = normalizeShellName(options.shellPath ?? env.SHELL, platform, env);
+	const configPath = resolveShellConfigPath(shell, homeDir, platform, env);
 	const { block, command } = renderAliasBlock(shell, aliasName, profile, options.command ?? DEFAULT_ALIAS_COMMAND);
 	const readFile = options.readFile ?? readProfileAliasConfigFile;
 	const writeFile =

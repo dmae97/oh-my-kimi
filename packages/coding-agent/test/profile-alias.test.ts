@@ -73,6 +73,7 @@ describe("profile alias installer", () => {
 			shellPath: "/opt/homebrew/bin/fish",
 			platform: "darwin",
 			homeDir: "/Users/me",
+			env: {},
 			readFile: async filePath => files.get(filePath) ?? "",
 			writeFile: async (filePath, content) => {
 				files.set(filePath, content);
@@ -82,6 +83,26 @@ describe("profile alias installer", () => {
 		const content = files.get("/Users/me/.config/fish/conf.d/omp-profiles.fish") ?? "";
 		expect(content).toContain("function omp-work --wraps omp");
 		expect(content).toContain("command omp --profile=work $argv");
+	});
+
+	it("installs the fish alias under XDG_CONFIG_HOME when set", async () => {
+		const files = new Map<string, string>();
+
+		const result = await installProfileAlias({
+			profile: "work",
+			aliasName: "omp-work",
+			shellPath: "/usr/bin/fish",
+			platform: "linux",
+			homeDir: "/home/me",
+			env: { XDG_CONFIG_HOME: "/home/me/.dotfiles/config" },
+			readFile: async filePath => files.get(filePath) ?? "",
+			writeFile: async (filePath, content) => {
+				files.set(filePath, content);
+			},
+		});
+
+		expect(result.configPath).toBe("/home/me/.dotfiles/config/fish/conf.d/omp-profiles.fish");
+		expect(files.get(result.configPath)).toContain("function omp-work --wraps omp");
 	});
 
 	it("writes a PowerShell function because aliases cannot carry arguments", async () => {
@@ -102,6 +123,70 @@ describe("profile alias installer", () => {
 		const content = files.get("C:\\Users\\me/Documents/PowerShell/Microsoft.PowerShell_profile.ps1") ?? "";
 		expect(content).toContain("function omp-work");
 		expect(content).toContain("& omp --profile=work @args");
+	});
+
+	it("detects pwsh from PSModulePath when SHELL is unset on Windows", async () => {
+		const files = new Map<string, string>();
+
+		const result = await installProfileAlias({
+			profile: "work",
+			aliasName: "omp-work",
+			platform: "win32",
+			homeDir: "C:\\Users\\me",
+			env: {
+				PSModulePath:
+					"C:\\Users\\me\\Documents\\PowerShell\\Modules;C:\\Program Files\\PowerShell\\7\\Modules;C:\\Users\\me\\Documents\\WindowsPowerShell\\Modules",
+			},
+			readFile: async filePath => files.get(filePath) ?? "",
+			writeFile: async (filePath, content) => {
+				files.set(filePath, content);
+			},
+		});
+
+		expect(result.shell).toBe("pwsh");
+		expect(result.configPath).toBe("C:\\Users\\me/Documents/PowerShell/Microsoft.PowerShell_profile.ps1");
+		expect(files.get(result.configPath)).toContain("& omp --profile=work @args");
+	});
+
+	it("selects Windows PowerShell when only WindowsPowerShell modules are present", async () => {
+		const files = new Map<string, string>();
+
+		const result = await installProfileAlias({
+			profile: "work",
+			aliasName: "omp-work",
+			platform: "win32",
+			homeDir: "C:\\Users\\me",
+			env: {
+				PSModulePath:
+					"C:\\Users\\me\\Documents\\WindowsPowerShell\\Modules;C:\\WINDOWS\\system32\\WindowsPowerShell\\v1.0\\Modules",
+			},
+			readFile: async filePath => files.get(filePath) ?? "",
+			writeFile: async (filePath, content) => {
+				files.set(filePath, content);
+			},
+		});
+
+		expect(result.shell).toBe("powershell");
+		expect(result.configPath).toBe("C:\\Users\\me/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1");
+	});
+
+	it("treats POWERSHELL_DISTRIBUTION_CHANNEL as a pwsh hint when no module paths disambiguate", async () => {
+		const files = new Map<string, string>();
+
+		const result = await installProfileAlias({
+			profile: "work",
+			aliasName: "omp-work",
+			platform: "win32",
+			homeDir: "C:\\Users\\me",
+			env: { POWERSHELL_DISTRIBUTION_CHANNEL: "MSI:Windows 10 Pro" },
+			readFile: async filePath => files.get(filePath) ?? "",
+			writeFile: async (filePath, content) => {
+				files.set(filePath, content);
+			},
+		});
+
+		expect(result.shell).toBe("pwsh");
+		expect(result.configPath).toBe("C:\\Users\\me/Documents/PowerShell/Microsoft.PowerShell_profile.ps1");
 	});
 
 	it("replaces a previous block for the same alias", async () => {
