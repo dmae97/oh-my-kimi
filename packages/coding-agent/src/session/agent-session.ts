@@ -62,6 +62,7 @@ import type {
 	Message,
 	MessageAttribution,
 	Model,
+	ProviderResponseMetadata,
 	ProviderSessionState,
 	ServiceTier,
 	SimpleStreamOptions,
@@ -1104,10 +1105,12 @@ export class AgentSession {
 		this.#onResponse = configuredOnResponse
 			? async (response, model) => {
 					this.rawSseDebugBuffer.recordResponse(response, model);
+					this.#ingestProviderUsageHeaders(response, model);
 					await configuredOnResponse(response, model);
 				}
 			: (response, model) => {
 					this.rawSseDebugBuffer.recordResponse(response, model);
+					this.#ingestProviderUsageHeaders(response, model);
 				};
 		const configuredOnSseEvent = config.onSseEvent;
 		this.#onSseEvent = configuredOnSseEvent
@@ -9251,6 +9254,14 @@ export class AgentSession {
 			contextWindow,
 			percent,
 		};
+	}
+
+	#ingestProviderUsageHeaders(response: ProviderResponseMetadata, model?: Model): void {
+		if (model?.provider !== "anthropic") return;
+		this.#modelRegistry.authStorage.ingestUsageHeaders("anthropic", response.headers, {
+			sessionId: this.agent.sessionId,
+			baseUrl: this.#modelRegistry.getProviderBaseUrl?.("anthropic"),
+		});
 	}
 
 	async fetchUsageReports(signal?: AbortSignal): Promise<UsageReport[] | null> {

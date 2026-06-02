@@ -2,17 +2,6 @@ import * as nodeCrypto from "node:crypto";
 import * as fs from "node:fs";
 import { scheduler } from "node:timers/promises";
 import * as tls from "node:tls";
-import Anthropic, {
-	APIConnectionTimeoutError as AnthropicConnectionTimeoutError,
-	type ClientOptions as AnthropicSdkClientOptions,
-} from "@anthropic-ai/sdk";
-import type { MessageCreateParamsStreaming as BetaMessageCreateParamsStreaming } from "@anthropic-ai/sdk/resources/beta/messages";
-import type {
-	ContentBlockParam,
-	MessageCreateParamsStreaming,
-	MessageParam,
-	RawMessageStreamEvent,
-} from "@anthropic-ai/sdk/resources/messages";
 import {
 	$env,
 	extractHttpStatusFromError,
@@ -25,7 +14,6 @@ import {
 } from "@oh-my-pi/pi-utils";
 import {
 	disablesParallelToolUse,
-	Effort,
 	hasOpus47ApiRestrictions,
 	mapEffortToAnthropicAdaptiveEffort,
 	supportsMidConversationSystemMessages,
@@ -50,7 +38,6 @@ import type {
 	StreamOptions,
 	TextContent,
 	ThinkingContent,
-	TokenTaskBudget,
 	Tool,
 	ToolCall,
 	ToolResultMessage,
@@ -77,6 +64,21 @@ import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { spillToDescription } from "../utils/schema/spill";
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
+import {
+	AnthropicConnectionTimeoutError,
+	type AnthropicFetchOptions,
+	AnthropicMessagesClient,
+	type AnthropicMessagesClientLike,
+} from "./anthropic-client";
+import type {
+	ToolInputSchema as AnthropicToolInputSchema,
+	Tool as AnthropicWireTool,
+	ContentBlockParam,
+	MessageCreateParamsStreaming,
+	MessageParam,
+	RawMessageStreamEvent,
+	TextBlockParam,
+} from "./anthropic-wire";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -123,7 +125,6 @@ export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readon
 const claudeCodeUtilityBetaDefaults = [
 	"oauth-2025-04-20",
 	"interleaved-thinking-2025-05-14",
-	"redact-thinking-2026-02-12",
 	"context-management-2025-06-27",
 	"prompt-caching-scope-2026-01-05",
 	"structured-outputs-2025-12-15",
@@ -133,7 +134,6 @@ const claudeCodeAgentBetaDefaults = [
 	"oauth-2025-04-20",
 	"context-1m-2025-08-07",
 	"interleaved-thinking-2025-05-14",
-	"redact-thinking-2026-02-12",
 	"context-management-2025-06-27",
 	"prompt-caching-scope-2026-01-05",
 	"mid-conversation-system-2026-04-07",
@@ -142,14 +142,30 @@ const claudeCodeAgentBetaDefaults = [
 const claudeCodeAgentPostEffortBetas = ["extended-cache-ttl-2025-04-11"] as const;
 const fineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14";
 const interleavedThinkingBeta = "interleaved-thinking-2025-05-14";
+// Asks the API to redact thinking blocks from responses. Only sent when the
+// caller explicitly hides thinking (`thinkingDisplay: "omitted"`); sending it
+// by default suppresses the thinking traces callers expect to stream.
+const redactThinkingBeta = "redact-thinking-2026-02-12";
 const fastModeBeta = "fast-mode-2026-02-01";
 const taskBudgetBeta = "task-budgets-2026-03-13";
 const effortBeta = "effort-2025-11-24";
 
-function buildClaudeCodeBetas(agentRequest: boolean, thinkingRequest: boolean): readonly string[] {
-	if (!agentRequest) return claudeCodeUtilityBetaDefaults;
-	if (!thinkingRequest) return [...claudeCodeAgentBetaDefaults, ...claudeCodeAgentPostEffortBetas];
-	return [...claudeCodeAgentBetaDefaults, effortBeta, ...claudeCodeAgentPostEffortBetas];
+function buildClaudeCodeBetas(
+	agentRequest: boolean,
+	thinkingRequest: boolean,
+	redactThinking: boolean,
+): readonly string[] {
+	if (!agentRequest && !redactThinking) return claudeCodeUtilityBetaDefaults;
+	const betas: string[] = [];
+	for (const beta of agentRequest ? claudeCodeAgentBetaDefaults : claudeCodeUtilityBetaDefaults) {
+		betas.push(beta);
+		// Match CC's header order: redact-thinking immediately follows interleaved-thinking.
+		if (redactThinking && beta === interleavedThinkingBeta) betas.push(redactThinkingBeta);
+	}
+	if (!agentRequest) return betas;
+	if (thinkingRequest) betas.push(effortBeta);
+	betas.push(...claudeCodeAgentPostEffortBetas);
+	return betas;
 }
 
 function getHeaderCaseInsensitive(headers: Record<string, string> | undefined, headerName: string): string | undefined {
@@ -189,7 +205,7 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 	const oauthToken = options.isOAuth ?? isAnthropicOAuthToken(options.apiKey);
 	const extraBetas = options.extraBetas ?? [];
 	const stream = options.stream ?? false;
-	const betaHeader = buildBetaHeader(options.claudeCodeBetas ?? buildClaudeCodeBetas(true, true), extraBetas);
+	const betaHeader = buildBetaHeader(options.claudeCodeBetas ?? buildClaudeCodeBetas(true, true, false), extraBetas);
 	const acceptHeader = oauthToken ? "application/json" : stream ? "text/event-stream" : "application/json";
 	const modelHeaders = Object.fromEntries(
 		Object.entries(options.modelHeaders ?? {}).filter(([key]) => !enforcedHeaderKeys.has(key.toLowerCase())),
@@ -240,20 +256,13 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 	}
 }
 
-type AnthropicCacheControl = { type: "ephemeral"; ttl?: "1h" | "5m"; scope?: "global" };
+type AnthropicCacheControl = NonNullable<TextBlockParam["cache_control"]>;
 
-type AnthropicSamplingParams = MessageCreateParamsStreaming & {
-	top_p?: number;
-	top_k?: number;
-};
-
-type AnthropicOutputConfig = NonNullable<MessageCreateParamsStreaming["output_config"]> & {
-	task_budget?: TokenTaskBudget | null;
-};
+type AnthropicOutputConfig = NonNullable<MessageCreateParamsStreaming["output_config"]>;
 
 function getAnthropicOutputConfig(params: MessageCreateParamsStreaming): AnthropicOutputConfig {
-	const outputConfig = (params.output_config ?? {}) as AnthropicOutputConfig;
-	params.output_config = outputConfig as typeof params.output_config;
+	const outputConfig = params.output_config ?? {};
+	params.output_config = outputConfig;
 	return outputConfig;
 }
 
@@ -354,28 +363,16 @@ export function isAnthropicFastModeUnsupportedError(error: unknown): boolean {
 }
 
 function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean {
-	const tools = params.tools as Array<{ strict?: unknown }> | undefined;
-	return tools?.some(tool => tool.strict === true) ?? false;
+	return params.tools?.some(tool => tool.strict === true) ?? false;
 }
 
-/**
- * `speed` and `context_management` live on Beta message params.  API-key
- * requests still use `client.messages.create`, so these aliases narrow casts to
- * one place.
- */
-type ParamsWithSpeed = MessageCreateParamsStreaming & { speed?: "fast" };
-type ParamsWithContextManagement = MessageCreateParamsStreaming & {
-	context_management?: { edits: [{ type: "clear_thinking_20251015"; keep: "all" }] };
-};
-
 function dropAnthropicFastMode(params: MessageCreateParamsStreaming): void {
-	delete (params as ParamsWithSpeed).speed;
+	delete params.speed;
 }
 
 function dropAnthropicStrictTools(params: MessageCreateParamsStreaming): void {
-	const tools = params.tools as Array<{ strict?: unknown }> | undefined;
-	if (!tools) return;
-	for (const tool of tools) {
+	if (!params.tools) return;
+	for (const tool of params.tools) {
 		delete tool.strict;
 	}
 }
@@ -849,11 +846,11 @@ export interface AnthropicOptions extends StreamOptions {
 	/** Force OAuth bearer auth mode for proxy tokens that don't match Anthropic token prefixes. */
 	isOAuth?: boolean;
 	/**
-	 * Pre-built Anthropic client instance. When provided, skips internal client
-	 * construction entirely. Use this to inject alternative SDK clients such as
-	 * `AnthropicVertex` that shares the same messaging API.
+	 * Pre-built Anthropic Messages client. When provided, skips internal client
+	 * construction entirely. Accepts any structurally compatible client,
+	 * including SDK clients such as `AnthropicVertex`.
 	 */
-	client?: Anthropic;
+	client?: AnthropicMessagesClientLike;
 }
 
 export type AnthropicClientOptionsArgs = {
@@ -867,6 +864,7 @@ export type AnthropicClientOptionsArgs = {
 	isOAuth?: boolean;
 	hasTools?: boolean;
 	thinkingEnabled?: boolean;
+	thinkingDisplay?: AnthropicThinkingDisplay;
 	onSseEvent?: AnthropicOptions["onSseEvent"];
 	fetch?: FetchImpl;
 	claudeCodeSessionId?: string;
@@ -878,11 +876,9 @@ export type AnthropicClientOptionsResult = {
 	authToken?: string | null;
 	baseURL?: string;
 	maxRetries: number;
-	dangerouslyAllowBrowser: boolean;
 	defaultHeaders: Record<string, string>;
-	logLevel: AnthropicSdkClientOptions["logLevel"];
-	fetch?: AnthropicSdkClientOptions["fetch"];
-	fetchOptions?: AnthropicSdkClientOptions["fetchOptions"];
+	fetch?: FetchImpl;
+	fetchOptions?: AnthropicFetchOptions;
 };
 
 const CLAUDE_CODE_TLS_CIPHERS = tls.DEFAULT_CIPHERS;
@@ -999,7 +995,7 @@ function resolveFoundryTlsOptions(model: Model<"anthropic-messages">): FoundryTl
 function buildClaudeCodeTlsFetchOptions(
 	model: Model<"anthropic-messages">,
 	baseUrl: string | undefined,
-): AnthropicSdkClientOptions["fetchOptions"] | undefined {
+): AnthropicFetchOptions | undefined {
 	if (model.provider !== "anthropic") return undefined;
 	if (!baseUrl) return undefined;
 
@@ -1032,10 +1028,6 @@ function mergeHeaders(...headerSources: (Record<string, string> | undefined)[]):
 	}
 	return merged;
 }
-
-// The Anthropic SDK logs malformed SSE frames directly before rethrowing them.
-// We surface the resulting provider error ourselves, so keep the SDK quiet.
-const ANTHROPIC_SDK_LOG_LEVEL = "off" as const;
 
 const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
 	"message_start",
@@ -1296,7 +1288,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 		let activeAbortTracker = createAbortSourceTracker(options?.signal);
 
 		try {
-			let client: Anthropic;
+			let client: AnthropicMessagesClientLike;
 			let isOAuthToken: boolean;
 
 			if (options?.client) {
@@ -1328,6 +1320,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					isOAuth: options?.isOAuth,
 					hasTools: !!context.tools?.length,
 					thinkingEnabled: options?.thinkingEnabled,
+					thinkingDisplay: options?.thinkingDisplay,
 					onSseEvent: options?.onSseEvent,
 					fetch: options?.fetch,
 					claudeCodeSessionId: options?.sessionId ?? extractClaudeMetadataSessionId(options?.metadata?.user_id),
@@ -1390,12 +1383,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				activeAbortTracker = createAbortSourceTracker(options?.signal);
 				const { requestSignal } = activeAbortTracker;
 				const requestOptions = createSdkStreamRequestOptions(requestSignal, requestTimeoutMs);
-				const anthropicRequest: unknown = isOAuthToken
-					? client.beta.messages.create(
-							{ ...params, stream: true } as BetaMessageCreateParamsStreaming,
-							requestOptions,
-						)
-					: client.messages.create({ ...params, stream: true }, requestOptions);
+				const anthropicRequest: unknown =
+					isOAuthToken && client.beta
+						? client.beta.messages.create({ ...params, stream: true }, requestOptions)
+						: client.messages.create({ ...params, stream: true }, requestOptions);
 				let streamedReplayUnsafeContent = false;
 
 				try {
@@ -1510,7 +1501,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 									name: isOAuthToken
 										? stripClaudeToolPrefix(event.content_block.name)
 										: event.content_block.name,
-									arguments: (event.content_block.input as Record<string, unknown>) ?? {},
+									arguments: event.content_block.input ?? {},
 									partialJson: "",
 									index: event.index,
 								};
@@ -1603,7 +1594,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								}
 							}
 						} else if (event.type === "message_delta") {
-							const rawStopReason = event.delta.stop_reason as string | null | undefined;
+							const rawStopReason = event.delta.stop_reason;
 							if (rawStopReason) {
 								output.stopReason = mapStopReason(rawStopReason);
 								sawTerminalEnvelope = true;
@@ -1861,6 +1852,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		dynamicHeaders,
 		hasTools = false,
 		thinkingEnabled = false,
+		thinkingDisplay,
 		isOAuth,
 		onSseEvent,
 		claudeCodeSessionId,
@@ -1901,9 +1893,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			authToken: copilotApiKey,
 			baseURL: baseUrl,
 			maxRetries: 5,
-			dangerouslyAllowBrowser: true,
 			defaultHeaders,
-			logLevel: ANTHROPIC_SDK_LOG_LEVEL,
 			fetch: debugFetch,
 			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 		};
@@ -1926,7 +1916,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		modelHeaders: mergeHeaders(model.headers, foundryCustomHeaders, headers, dynamicHeaders),
 		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
 		claudeCodeSessionId,
-		claudeCodeBetas: oauthToken ? buildClaudeCodeBetas(hasTools || thinkingEnabled, thinkingEnabled) : [],
+		claudeCodeBetas: oauthToken
+			? buildClaudeCodeBetas(hasTools || thinkingEnabled, thinkingEnabled, thinkingDisplay === "omitted")
+			: [],
 	});
 
 	if (model.provider === "cloudflare-ai-gateway") {
@@ -1936,9 +1928,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			authToken: null,
 			baseURL: baseUrl,
 			maxRetries: 5,
-			dangerouslyAllowBrowser: true,
 			defaultHeaders,
-			logLevel: ANTHROPIC_SDK_LOG_LEVEL,
 			fetch: debugFetch,
 		};
 	}
@@ -1952,9 +1942,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			authToken: null,
 			baseURL: baseUrl,
 			maxRetries: 5,
-			dangerouslyAllowBrowser: true,
 			defaultHeaders,
-			logLevel: ANTHROPIC_SDK_LOG_LEVEL,
 			...(debugFetch ? { fetch: debugFetch } : {}),
 			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 		};
@@ -1966,9 +1954,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		authToken: oauthToken ? apiKey : undefined,
 		baseURL: baseUrl,
 		maxRetries: 5,
-		dangerouslyAllowBrowser: true,
 		defaultHeaders,
-		logLevel: ANTHROPIC_SDK_LOG_LEVEL,
 		fetch: debugFetch,
 		...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 	};
@@ -1977,9 +1963,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 function createClient(
 	model: Model<"anthropic-messages">,
 	args: AnthropicClientOptionsArgs,
-): { client: Anthropic; isOAuthToken: boolean } {
+): { client: AnthropicMessagesClient; isOAuthToken: boolean } {
 	const { isOAuthToken: oauthToken, ...clientOptions } = buildAnthropicClientOptions({ ...args, model });
-	const client = new Anthropic(clientOptions);
+	const client = new AnthropicMessagesClient(clientOptions);
 	return { client, isOAuthToken: oauthToken };
 }
 
@@ -2101,7 +2087,7 @@ function normalizeCacheControlBlockTtl(block: CacheControlBlock, seenFiveMinute:
 function normalizeCacheControlTtlOrdering(params: MessageCreateParamsStreaming): void {
 	const seenFiveMinute = { value: false };
 	if (params.tools) {
-		for (const tool of params.tools as Array<Anthropic.Messages.Tool & CacheControlBlock>) {
+		for (const tool of params.tools as Array<AnthropicWireTool & CacheControlBlock>) {
 			normalizeCacheControlBlockTtl(tool, seenFiveMinute);
 		}
 	}
@@ -2166,7 +2152,7 @@ function stripMessageCacheControl(
 function countCacheControlBreakpoints(params: MessageCreateParamsStreaming): number {
 	let total = 0;
 	if (params.tools) {
-		for (const tool of params.tools as Array<Anthropic.Messages.Tool & CacheControlBlock>) {
+		for (const tool of params.tools as Array<AnthropicWireTool & CacheControlBlock>) {
 			if (tool.cache_control) total++;
 		}
 	}
@@ -2192,7 +2178,7 @@ function enforceCacheControlLimit(params: MessageCreateParamsStreaming, maxBreak
 		params.system && Array.isArray(params.system)
 			? (params.system as Array<AnthropicSystemBlock & CacheControlBlock>)
 			: [];
-	const toolBlocks = (params.tools ?? []) as Array<Anthropic.Messages.Tool & CacheControlBlock>;
+	const toolBlocks = (params.tools ?? []) as Array<AnthropicWireTool & CacheControlBlock>;
 	const lastSystemIndex = findLastCacheControlIndex(systemBlocks);
 	const lastToolIndex = findLastCacheControlIndex(toolBlocks);
 	if (systemBlocks.length > 0) {
@@ -2213,37 +2199,15 @@ function enforceCacheControlLimit(params: MessageCreateParamsStreaming, maxBreak
 		stripAllCacheControl(toolBlocks, excessCounter);
 	}
 }
-function mapEffortToClaudeCodeAdaptiveEffort(
-	model: Model<"anthropic-messages">,
-	effort: Effort,
-): "low" | "medium" | "high" | "xhigh" {
-	// Validate against the model's supported effort range before applying Claude
-	// Code's unshifted wire mapping.
-	mapEffortToAnthropicAdaptiveEffort(model, effort);
-	switch (effort) {
-		case Effort.Minimal:
-		case Effort.Low:
-			return "low";
-		case Effort.Medium:
-			return "medium";
-		case Effort.High:
-			return "high";
-		case Effort.XHigh:
-			return "xhigh";
-	}
-}
 
 function resolveAnthropicAdaptiveEffort(
 	model: Model<"anthropic-messages">,
 	options: AnthropicOptions,
-	isOAuthToken: boolean,
 ): AnthropicEffort | undefined {
 	if (options.effort) return options.effort;
 	const requestedEffort = options.reasoning;
 	if (!requestedEffort) return undefined;
-	return isOAuthToken
-		? mapEffortToClaudeCodeAdaptiveEffort(model, requestedEffort)
-		: mapEffortToAnthropicAdaptiveEffort(model, requestedEffort);
+	return mapEffortToAnthropicAdaptiveEffort(model, requestedEffort);
 }
 
 function startsWithAfterAsciiWhitespace(value: string, prefix: string): boolean {
@@ -2279,7 +2243,7 @@ function extractClaudeCodeFirstUserMessageText(messages: readonly Message[]): st
 
 function applyClaudeCodeContextManagement(params: MessageCreateParamsStreaming, isOAuthToken: boolean): void {
 	if (!isOAuthToken || params.thinking?.type !== "adaptive") return;
-	(params as ParamsWithContextManagement).context_management = {
+	params.context_management = {
 		edits: [{ type: "clear_thinking_20251015", keep: "all" }],
 	};
 }
@@ -2293,11 +2257,9 @@ function buildParams(
 	disableStrictTools = false,
 ): MessageCreateParamsStreaming {
 	const { cacheControl } = getCacheControl(model, baseUrl, options?.cacheRetention, isOAuthToken);
-	const params: AnthropicSamplingParams = {
+	const params: MessageCreateParamsStreaming = {
 		model: model.id,
-		// `system`-role params (Opus 4.8 mid-conversation system messages) are not
-		// yet in the SDK's `MessageParam` union; cast until it widens.
-		messages: convertAnthropicMessages(context.messages, model, isOAuthToken) as MessageParam[],
+		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
 		max_tokens: options?.maxTokens || model.maxTokens,
 		stream: true,
 	};
@@ -2345,18 +2307,19 @@ function buildParams(
 	if (model.reasoning) {
 		if (options?.thinkingEnabled) {
 			const mode = model.thinking?.mode;
-			const effort = resolveAnthropicAdaptiveEffort(model, options, isOAuthToken);
+			const effort = resolveAnthropicAdaptiveEffort(model, options);
 
 			const compat = getAnthropicCompat(model);
 			if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
 				const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
-				if (options.thinkingDisplay !== undefined || (!isOAuthToken && supportsAdaptiveThinkingDisplay(model.id))) {
+				// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
+				// response by default. Opt into summarized reasoning so thinking deltas keep
+				// streaming with human-readable content for callers that rely on it.
+				if (options.thinkingDisplay !== undefined || supportsAdaptiveThinkingDisplay(model.id)) {
 					adaptive.display = options.thinkingDisplay ?? "summarized";
 				}
-				params.thinking = adaptive as typeof params.thinking;
+				params.thinking = adaptive;
 				if (effort) {
-					// SDK's OutputConfig.effort type is not yet widened to include the new "xhigh"
-					// level introduced with Claude Opus 4.7. Cast until the SDK catches up.
 					getAnthropicOutputConfig(params).effort = effort;
 				}
 			} else {
@@ -2364,7 +2327,7 @@ function buildParams(
 					type: "enabled",
 					budget_tokens: options.thinkingBudgetTokens || 1024,
 					display: options.thinkingDisplay ?? "summarized",
-				} as typeof params.thinking;
+				};
 				if (mode === "anthropic-budget-effort" && effort) {
 					getAnthropicOutputConfig(params).effort = effort;
 				}
@@ -2383,7 +2346,7 @@ function buildParams(
 	}
 
 	if (resolveServiceTier(options?.serviceTier, model.provider) === "priority") {
-		(params as ParamsWithSpeed).speed = "fast";
+		params.speed = "fast";
 	}
 
 	if (options?.toolChoice) {
@@ -2485,12 +2448,10 @@ function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResul
 }
 
 /**
- * Anthropic message param extended with the mid-conversation `system` role
- * (Opus 4.8+). The SDK's `MessageParam` predates the feature and only allows
- * `user`/`assistant`, so the system variant is modeled locally and cast back
- * to `MessageParam[]` at the call site.
+ * A single Anthropic conversation turn, including the mid-conversation
+ * `system` role (Opus 4.8+).
  */
-export type AnthropicMessageParam = MessageParam | { role: "system"; content: MessageParam["content"] };
+export type AnthropicMessageParam = MessageParam;
 
 export function convertAnthropicMessages(
 	messages: Message[],
@@ -2872,8 +2833,6 @@ export function normalizeAnthropicToolSchema(schema: unknown): unknown {
 	return result;
 }
 
-type AnthropicToolInputSchema = Anthropic.Messages.Tool["input_schema"];
-
 type AnthropicToolSchemaPlan = {
 	inputSchema: AnthropicToolInputSchema;
 	strict: boolean;
@@ -3093,7 +3052,7 @@ function convertTools(
 	isOAuthToken: boolean,
 	disableStrictTools = false,
 	supportsEagerToolInputStreaming = true,
-): Anthropic.Messages.Tool[] {
+): AnthropicWireTool[] {
 	if (!tools) return [];
 	const schemaPlans = buildAnthropicToolSchemaPlans(tools, disableStrictTools);
 
@@ -3104,7 +3063,6 @@ function convertTools(
 			description: tool.description || "",
 			input_schema: plan.inputSchema,
 		};
-		if (isOAuthToken) return baseTool;
 		return {
 			...baseTool,
 			...(supportsEagerToolInputStreaming ? { eager_input_streaming: true } : {}),
@@ -3113,7 +3071,7 @@ function convertTools(
 	});
 }
 
-function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReason {
+function mapStopReason(reason: string): StopReason {
 	switch (reason) {
 		case "end_turn":
 			return "stop";

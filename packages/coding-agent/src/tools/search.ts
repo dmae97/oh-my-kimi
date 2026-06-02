@@ -30,6 +30,7 @@ import { formatGroupedFiles } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
+	expandDelimitedPathEntries,
 	hasGlobPathChars,
 	isLineInRanges,
 	type LineRange,
@@ -94,29 +95,6 @@ export const SINGLE_FILE_MATCHES = 200;
 const INTERNAL_TOTAL_CAP = 2000;
 
 /**
- * Detect a `,` that is not inside a `{…}` brace expansion. Used to catch
- * `paths: ["a,b"]` mistakes where the caller flattened multiple entries
- * into a single string instead of passing a JSON array of strings.
- */
-function containsTopLevelComma(entry: string): boolean {
-	let depth = 0;
-	for (let i = 0; i < entry.length; i++) {
-		const ch = entry[i];
-		if (ch === "\\" && i + 1 < entry.length) {
-			i++;
-			continue;
-		}
-		if (ch === "{") depth++;
-		else if (ch === "}") {
-			if (depth > 0) depth--;
-		} else if (ch === "," && depth === 0) {
-			return true;
-		}
-	}
-	return false;
-}
-
-/**
  * Parsed `paths` entry — a path (possibly archive-shaped) plus an optional
  * line-range selector peeled off the trailing `:N-M` (or `:N+K`, `:N,M`, …)
  * chunk via {@link splitPathAndSel}.
@@ -145,9 +123,6 @@ function parsePathSpecs(rawEntries: readonly string[]): SearchPathSpec[] {
 			}
 			clean = split.path;
 			ranges = parsed;
-		}
-		if (containsTopLevelComma(clean)) {
-			throw new ToolError('paths is an array — pass ["a", "b"] not ["a,b"]');
 		}
 		specs.push({ original: entry, clean, ranges });
 	}
@@ -663,7 +638,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			if (normalizedSkip < 0 || !Number.isFinite(normalizedSkip)) {
 				throw new ToolError("Skip must be a non-negative number");
 			}
-			const rawEntries = toPathList(rawPaths);
+			const rawEntries = await expandDelimitedPathEntries(toPathList(rawPaths), this.session.cwd);
 			const pathSpecs = parsePathSpecs(rawEntries);
 			const paths = pathSpecs.map(spec => spec.clean);
 			const {

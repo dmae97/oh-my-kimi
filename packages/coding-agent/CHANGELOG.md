@@ -2,10 +2,13 @@
 
 ## [Unreleased]
 
+## [15.8.0] - 2026-06-02
+
 ### Added
 
 - Added an all-projects scope to the session picker (`pi --resume` / `/resume`). Press `Tab` to toggle between the current folder's sessions and every session across all projects; the all-projects list is loaded lazily and shows each session's directory. When the current folder has no sessions the picker now opens straight into all-projects scope instead of printing "No sessions found".
 - Migrated the Kagi web search provider to Kagi's V1 Search API (`POST /api/v1/search`), replacing the sunset V0 endpoint while keeping the `kagi` provider id, `KAGI_API_KEY` credential, and `/login kagi` flow unchanged ([#1272](https://github.com/can1357/oh-my-pi/pull/1272) by [@thismat](https://github.com/thismat))
+- Added Anthropic `anthropic-ratelimit-unified-*` response-header warming for `/usage` and the status-line usage segment, throttled to reduce direct OAuth `/usage` probes during active use.
 
 ### Changed
 
@@ -19,6 +22,7 @@
 
 ### Fixed
 
+- Fixed `read`, `search`, `find`, `ast_grep`, and `ast_edit` recovering when a model flattens multiple existing paths into one comma-, semicolon-, or space-delimited string while preserving real paths that contain delimiters.
 - Fixed Exa web search reporting available without Exa credentials, which could route searches into the unauthenticated public MCP fallback and stall before trying the next provider. Availability and `searchExa()` now resolve through the standard `AuthStorage` cascade (`EXA_API_KEY` env or stored credential) ([#1695](https://github.com/can1357/oh-my-pi/issues/1695)).
 - Fixed Anthropic web search ignoring `ANTHROPIC_SEARCH_BASE_URL` when credentials came from stored Anthropic auth or generic Anthropic env fallback rather than `ANTHROPIC_SEARCH_API_KEY` ([#1694](https://github.com/can1357/oh-my-pi/issues/1694)).
 - Fixed `web_search` returning 401 from corporate Anthropic API gateways. `ANTHROPIC_CUSTOM_HEADERS` is now forwarded to web-search requests whenever `ANTHROPIC_BASE_URL` points to a non-Anthropic host, not only in Foundry mode ([#1693](https://github.com/can1357/oh-my-pi/issues/1693)).

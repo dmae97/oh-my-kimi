@@ -21,7 +21,7 @@
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `pattern` | `string` | Yes | Regex pattern. `search.ts` trims it and rejects empty input. The native matcher enables multiline only when the pattern text contains a literal newline or the two-character sequence `\\n`. The model prompt explicitly documents literal-brace escaping such as ``interface\\{\\}``, although the native layer also auto-escapes braces that cannot be valid repetition quantifiers. |
-| `paths` | `string \| string[]` | Yes | One file path, directory path, glob-like path, archive member, internal URL, or an array of those. Append a line-range selector such as `:50-100` or `:5-16,960-973` to a single file/archive/internal-resource input to constrain matches. Empty strings and comma-joined multi-path entries are rejected after trimming/quote stripping. Filesystem-backed internal URLs search their backing file; virtual internal resources search resolved text in memory. Internal URLs cannot contain glob characters. |
+| `paths` | `string \| string[]` | Yes | One file path, directory path, glob-like path, archive member, internal URL, or an array of those. Append a line-range selector such as `:50-100` or `:5-16,960-973` to a single file/archive/internal-resource input to constrain matches. Empty strings are rejected after trimming/quote stripping. Single entries accidentally joined with comma, semicolon, or whitespace are expanded only after existence validation; existing paths containing delimiters stay intact. Filesystem-backed internal URLs search their backing file; virtual internal resources search resolved text in memory. Internal URLs cannot contain glob characters. |
 | `i` | `boolean` | No | Case-insensitive search. Defaults to `false`. Passed to native `ignoreCase` or JS `RegExp` flags for virtual resources. |
 | `gitignore` | `boolean` | No | Respect `.gitignore` during directory scans. Defaults to `true`. Passed to native `gitignore`. |
 | `skip` | `number` | No | File-page offset for multi-file results. Defaults to `0`; `search.ts` floors finite numbers and rejects negative or non-finite values. Single-file searches ignore it because they do not paginate by file. |
@@ -48,10 +48,11 @@ The tool returns a single text block in `content[0].text` plus structured `detai
 1. `SearchTool.execute()` validates and normalizes input in `packages/coding-agent/src/tools/search.ts`:
    - trims `pattern`, rejects empty patterns;
    - normalizes `skip` to a non-negative integer;
+   - expands delimiter-flattened `paths` entries with `expandDelimitedPathEntries()`, keeping existing delimiter-containing paths intact, accepting comma/semicolon splits when at least one part resolves, and accepting whitespace splits only when every part resolves;
+   - peels any line-range selector from each resulting entry;
    - reads `search.contextBefore` and `search.contextAfter` from session settings (`1` and `3` by default);
-   - enables multiline only when `pattern` contains `\n` or an actual newline;
-   - wraps a single string `paths` value into a one-element list and peels any line-range selector from each entry.
-2. Each `paths` entry is normalized with `normalizePathLikeInput()`.
+   - enables multiline only when `pattern` contains `\n` or an actual newline.
+2. Each `paths` entry is normalized with `normalizePathLikeInput()` again during shared scope resolution; this is a no-op for entries already normalized by delimiter expansion.
 3. Archive member paths such as `bundle.zip:src/foo.ts` are materialized to temporary UTF-8 scratch files before native grep. Binary or non-UTF-8 archive members are reported as skipped/unreadable.
 4. Internal URLs are resolved before filesystem scope resolution:
    - glob metacharacters (`*`, `?`, `[`, `{`) are rejected for internal URLs;
@@ -139,7 +140,6 @@ The tool returns a single text block in `content[0].text` plus structured `detai
 - `Pattern must not be empty` when trimmed `pattern` is empty.
 - `Skip must be a non-negative number` for negative or non-finite `skip`.
 - `` `paths` must contain non-empty paths or globs `` when any normalized path is empty.
-- `paths is an array — pass ["a", "b"] not ["a,b"] ...` for comma-joined multi-path entries outside brace expansion.
 - `Glob patterns are not supported for internal URLs: ...` for internal URL + glob metacharacters.
 - Line-range selector errors include `Line-range selector requires a single file, not a glob: ...`, `Line-range selector requires a single file: ... is a directory`, and `Path not found for line-range selector: ...`.
 - `Cannot search archive member(s): ...` when all archive selectors are unreadable, binary, or non-UTF-8.

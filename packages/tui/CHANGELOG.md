@@ -5,6 +5,7 @@
 ### Added
 
 - Added `CMUX_SURFACE_ID` environment variable support to `getTerminalId()`, so cmux terminal surfaces get a stable identifier alongside kitty, tmux, macOS Terminal.app, and Windows Terminal — enabling per-surface session breadcrumbs for `omp -c` in cmux.
+## [15.8.0] - 2026-06-02
 
 ### Fixed
 
