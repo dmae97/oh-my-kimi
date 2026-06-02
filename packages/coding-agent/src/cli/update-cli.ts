@@ -321,13 +321,7 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
  * lookup the version check just performed. See #1686.
  */
 export function buildBunInstallArgs(expectedVersion: string): string[] {
-	return [
-		"install",
-		"-g",
-		"--no-cache",
-		`--registry=${NPM_REGISTRY}`,
-		`${PACKAGE}@${expectedVersion}`,
-	];
+	return ["install", "-g", "--no-cache", `--registry=${NPM_REGISTRY}`, `${PACKAGE}@${expectedVersion}`];
 }
 
 /**
