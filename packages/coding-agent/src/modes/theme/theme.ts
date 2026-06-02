@@ -13,7 +13,7 @@ import type { EditorTheme, MarkdownTheme, SelectListTheme, SymbolTheme } from "@
 import { adjustHsv, getCustomThemesDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import * as z from "zod/v4";
-import { hexLuminance } from "../../utils/color";
+import { colorLuminance } from "../../utils/color";
 // Embed theme JSON files at build time
 import darkThemeJson from "./dark.json" with { type: "json" };
 import { defaultThemes } from "./defaults";
@@ -1275,8 +1275,7 @@ const langMap: Record<string, SymbolKey> = {
 
 /** Whether a resolved background color reads as light (BT.709 luminance > 0.5). */
 function bgIsLight(value: string | number | undefined): boolean {
-	if (typeof value !== "string") return false;
-	const luminance = hexLuminance(value);
+	const luminance = colorLuminance(value);
 	return luminance !== undefined && luminance > 0.5;
 }
 
@@ -2328,8 +2327,7 @@ export function isLightTheme(themeName?: string): boolean {
 	}
 	try {
 		const resolved = resolveVarRefs(themeJson.colors.userMessageBg, themeJson.vars ?? {});
-		if (typeof resolved !== "string") return false;
-		const luminance = hexLuminance(resolved);
+		const luminance = colorLuminance(resolved);
 		return luminance !== undefined && luminance > 0.5;
 	} catch {
 		return false;
