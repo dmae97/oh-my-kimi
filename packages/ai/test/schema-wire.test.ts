@@ -203,6 +203,27 @@ describe("toolWireSchema — empty-schema normalization across both paths", () =
 			minimum: 0,
 		});
 	});
+
+	it("preserves raw JSON Schema required defaults and safe-integer bounds", () => {
+		const wire = toolWireSchema(
+			jsonTool({
+				type: "object",
+				properties: {
+					mode: { type: "string", default: "fast" },
+					limit: {
+						type: "integer",
+						minimum: Number.MIN_SAFE_INTEGER,
+						maximum: Number.MAX_SAFE_INTEGER,
+					},
+				},
+				required: ["mode", "limit"],
+			}),
+		);
+		expect(wire.required).toEqual(["mode", "limit"]);
+		const limit = (wire.properties as Record<string, unknown>).limit as Record<string, unknown>;
+		expect(limit.minimum).toBe(Number.MIN_SAFE_INTEGER);
+		expect(limit.maximum).toBe(Number.MAX_SAFE_INTEGER);
+	});
 });
 
 // ---------------------------------------------------------------------------

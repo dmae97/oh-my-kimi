@@ -68,7 +68,13 @@ const kJsonWireSchema = Symbol("pi.schema.json.wire");
  */
 function postProcess(schema: Record<string, unknown>): Record<string, unknown> {
 	delete schema.$schema;
-	walk(schema);
+	walk(schema, true);
+	normalizeEmptySchemas(schema);
+	return schema;
+}
+
+function postProcessJsonSchema(schema: Record<string, unknown>): Record<string, unknown> {
+	walk(schema, false);
 	normalizeEmptySchemas(schema);
 	return schema;
 }
@@ -176,40 +182,42 @@ function isEmptyObject(val: unknown): val is Record<string, never> {
 	return Object.keys(val).length === 0;
 }
 
-function walk(node: unknown): void {
+function walk(node: unknown, zodCleanup: boolean): void {
 	if (Array.isArray(node)) {
-		for (const child of node) walk(child);
+		for (const child of node) walk(child, zodCleanup);
 		return;
 	}
 	if (!node || typeof node !== "object") return;
 	const obj = node as Record<string, unknown>;
 	rewriteNullableScalarAnyOf(obj);
 
-	// Drop noise injected for `z.number().int()`.
-	if (hasIntegerType(obj.type)) {
-		if (obj.minimum === SAFE_INTEGER_MIN) delete obj.minimum;
-		if (obj.maximum === SAFE_INTEGER_MAX) delete obj.maximum;
-	}
+	if (zodCleanup) {
+		// Drop noise injected for `z.number().int()`.
+		if (hasIntegerType(obj.type)) {
+			if (obj.minimum === SAFE_INTEGER_MIN) delete obj.minimum;
+			if (obj.maximum === SAFE_INTEGER_MAX) delete obj.maximum;
+		}
 
-	// Make defaulted properties non-required.
-	if (Array.isArray(obj.required) && obj.properties && typeof obj.properties === "object") {
-		const properties = obj.properties as Record<string, unknown>;
-		const required = obj.required as string[];
-		const filtered = required.filter(name => {
-			const propertySchema = properties[name];
-			if (!propertySchema || typeof propertySchema !== "object") return true;
-			return !("default" in (propertySchema as Record<string, unknown>));
-		});
-		if (filtered.length !== required.length) {
-			if (filtered.length === 0) {
-				delete obj.required;
-			} else {
-				obj.required = filtered;
+		// Make defaulted properties non-required.
+		if (Array.isArray(obj.required) && obj.properties && typeof obj.properties === "object") {
+			const properties = obj.properties as Record<string, unknown>;
+			const required = obj.required as string[];
+			const filtered = required.filter(name => {
+				const propertySchema = properties[name];
+				if (!propertySchema || typeof propertySchema !== "object") return true;
+				return !("default" in (propertySchema as Record<string, unknown>));
+			});
+			if (filtered.length !== required.length) {
+				if (filtered.length === 0) {
+					delete obj.required;
+				} else {
+					obj.required = filtered;
+				}
 			}
 		}
 	}
 
-	for (const k in obj) walk(obj[k]);
+	for (const k in obj) walk(obj[k], zodCleanup);
 }
 
 /**
@@ -272,8 +280,7 @@ export function zodToWireSchema(schema: ZodType): Record<string, unknown> {
  * over the wire. Zod schemas are converted (and cached); legacy TypeBox / raw
  * JSON Schema parameters are upgraded to draft 2020-12 (and cached).
  *
- * Both branches finish with `postProcess` so every provider — OpenAI,
- * Anthropic, Google, Ollama, Bedrock, Cursor — sees the same normalized
+ * Zod schemas also receive Zod-artifact cleanup; both branches normalize
  * schema-valued positions and nullable scalar unions.
  */
 export function toolWireSchema(tool: Tool): Record<string, unknown> {
@@ -281,6 +288,6 @@ export function toolWireSchema(tool: Tool): Record<string, unknown> {
 	if (isZodSchema(params)) return zodToWireSchema(params);
 	return stamp(params as Record<string, unknown>, kJsonWireSchema, p => {
 		const upgraded = upgradeJsonSchemaTo202012(p) as Record<string, unknown>;
-		return postProcess(upgraded);
+		return postProcessJsonSchema(upgraded);
 	});
 }
