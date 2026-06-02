@@ -2268,6 +2268,56 @@ describe("ModelRegistry", () => {
 		expect(registry.find("ollama-cloud", "deepseek-v4-pro")?.maxTokens).toBe(384_000);
 	});
 
+	test("loads cached special provider discovery models on startup", () => {
+		const cachedModels: Model[] = [
+			{
+				id: "gemini-3.5-flash-low",
+				name: "Gemini 3.5 Flash Low",
+				api: "google-gemini-cli",
+				provider: "google-antigravity",
+				baseUrl: "https://cloudcode-pa.googleapis.com",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1_000_000,
+				maxTokens: 8_192,
+			},
+			{
+				id: "gemini-3.5-flash",
+				name: "Gemini 3.5 Flash",
+				api: "google-gemini-cli",
+				provider: "google-gemini-cli",
+				baseUrl: "https://cloudcode-pa.googleapis.com",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1_000_000,
+				maxTokens: 16_384,
+			},
+			{
+				id: "gpt-5.4-codex-pro",
+				name: "GPT-5.4 Codex Pro",
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				baseUrl: "https://chatgpt.com/backend-api/codex",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 400_000,
+				maxTokens: 128_000,
+			},
+		];
+		for (const cachedModel of cachedModels) {
+			writeModelCache(cachedModel.provider, Date.now(), [cachedModel], true, "", cacheDbPath);
+		}
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+
+		expect(registry.find("google-antigravity", "gemini-3.5-flash-low")?.maxTokens).toBe(8_192);
+		expect(registry.find("google-gemini-cli", "gemini-3.5-flash")?.maxTokens).toBe(16_384);
+		expect(registry.find("openai-codex", "gpt-5.4-codex-pro")?.maxTokens).toBe(128_000);
+	});
+
 	test("replaces bundled google-vertex models with authoritative Vertex project discovery", () => {
 		const cachedModel: Model<"openai-completions"> = {
 			id: "zai-org/glm-4.7-maas",
