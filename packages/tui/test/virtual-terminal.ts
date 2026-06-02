@@ -120,8 +120,10 @@ export class VirtualTerminal implements Terminal {
 
 	/** Wait for TUI's throttled render pipeline to settle (matches the 16ms frame budget). */
 	async waitForRender(): Promise<void> {
-		await new Promise<void>(resolve => process.nextTick(resolve));
-		await new Promise<void>(resolve => setTimeout(resolve, 20));
+		const nextTick = Promise.withResolvers<void>();
+		process.nextTick(nextTick.resolve);
+		await nextTick.promise;
+		await Bun.sleep(20);
 		await this.flush();
 	}
 
@@ -172,9 +174,9 @@ export class VirtualTerminal implements Terminal {
 	 */
 	async flush(): Promise<void> {
 		// Write an empty string to ensure all previous writes are flushed
-		return new Promise<void>(resolve => {
-			this.xterm.write("", () => resolve());
-		});
+		const done = Promise.withResolvers<void>();
+		this.xterm.write("", done.resolve);
+		return done.promise;
 	}
 
 	/**

@@ -207,7 +207,9 @@ class ProtocolParsingTests(unittest.TestCase):
         )
         self.assertEqual(state.system_prompt, ())
 
-    def test_parse_session_state_rejects_non_string_in_system_prompt_array(self) -> None:
+    def test_parse_session_state_rejects_non_string_in_system_prompt_array(
+        self,
+    ) -> None:
         with self.assertRaises(ValueError):
             parse_session_state(
                 {
@@ -233,7 +235,9 @@ class ProtocolParsingTests(unittest.TestCase):
 
     def test_parse_extension_ui_request_rejects_invalid_method(self) -> None:
         with self.assertRaises(ValueError):
-            parse_notification({"type": "extension_ui_request", "id": "ui-1", "method": "launch"})
+            parse_notification(
+                {"type": "extension_ui_request", "id": "ui-1", "method": "launch"}
+            )
 
     def test_parse_message_update_rejects_invalid_assistant_done_reason(self) -> None:
         with self.assertRaises(ValueError):

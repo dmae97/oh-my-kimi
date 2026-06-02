@@ -135,6 +135,46 @@ export function shouldTrustNativeViewportProbe(
 }
 
 /**
+ * Whether eager live-frame native scrollback rebuilds are unsafe for the
+ * current POSIX terminal when its viewport position is unobservable.
+ *
+ * A TUI history rebuild emits xterm ED3 (`CSI 3 J`, erase saved lines). On the
+ * terminals below, ED3 can disturb a reader parked in native scrollback during
+ * streaming: kitty/ghostty/alacritty/VTE clamp the scroll offset back to the
+ * active tail when saved lines are erased, and WezTerm is the reported POSIX
+ * host for #1682. Defer only the eager streaming opt-in on these hosts; direct
+ * user-input renders and explicit checkpoint rebuilds still pass their own
+ * `allowUnknownViewportMutation` / `allowUnknownViewport` flags.
+ *
+ * Pure helper for unit testing; the runtime call site reads `$env` /
+ * `process.platform`. See #1682 and #1719.
+ */
+export function terminalHasEagerEraseScrollbackRisk(
+	env: {
+		WEZTERM_PANE?: string | undefined;
+		KITTY_WINDOW_ID?: string | undefined;
+		GHOSTTY_RESOURCES_DIR?: string | undefined;
+		ALACRITTY_WINDOW_ID?: string | undefined;
+		VTE_VERSION?: string | undefined;
+		TERM_PROGRAM?: string | undefined;
+	} = $env,
+	platform: NodeJS.Platform = process.platform,
+): boolean {
+	if (platform === "win32") return false;
+	if (
+		env.WEZTERM_PANE ||
+		env.KITTY_WINDOW_ID ||
+		env.GHOSTTY_RESOURCES_DIR ||
+		env.ALACRITTY_WINDOW_ID ||
+		env.VTE_VERSION
+	) {
+		return true;
+	}
+	const termProgram = env.TERM_PROGRAM?.toLowerCase();
+	return termProgram === "ghostty";
+}
+
+/**
  * Real terminal using process.stdin/stdout
  */
 export class ProcessTerminal implements Terminal {

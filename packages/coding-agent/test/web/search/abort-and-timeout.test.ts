@@ -12,6 +12,7 @@
  * helper itself is exercised directly.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { hookFetch } from "@oh-my-pi/pi-utils";
 import type { AgentStorage } from "../../../src/session/agent-storage";
 import type { ToolSession } from "../../../src/tools";
@@ -60,6 +61,7 @@ describe("Anthropic provider hard-timeout wiring", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		delete process.env.ANTHROPIC_SEARCH_API_KEY;
+		delete process.env.ANTHROPIC_SEARCH_BASE_URL;
 	});
 
 	it("passes a composed signal to fetch even when the caller did not supply one", async () => {
@@ -103,6 +105,28 @@ describe("Anthropic provider hard-timeout wiring", () => {
 		// when Bun fails to honour the caller's abort.
 		expect(capturedSignal).toBeInstanceOf(AbortSignal);
 		expect(capturedSignal).not.toBe(ac.signal);
+	});
+	it("applies ANTHROPIC_SEARCH_BASE_URL to stored Anthropic credentials", async () => {
+		process.env.ANTHROPIC_SEARCH_BASE_URL = "https://search.example.test/";
+
+		let capturedUrl: string | undefined;
+		using _hook = hookFetch(async input => {
+			capturedUrl = String(input);
+			return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }], usage: {} }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		});
+
+		await searchAnthropic({
+			query: "ping",
+			systemPrompt: "",
+			authStorage: {
+				getApiKey: async () => "sk-fallback",
+			} as unknown as AuthStorage,
+		});
+
+		expect(capturedUrl).toBe("https://search.example.test/v1/messages?beta=true");
 	});
 });
 

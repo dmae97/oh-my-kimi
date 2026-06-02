@@ -24,7 +24,7 @@ Read the thread first — reviewer bots (e.g. `chatgpt-codex-connector`) often r
 
 Then branch on request type:
 
-- **Code change** → commit on `{{workspace.branch}}`. NEVER open a second PR; push to this branch. `gh_push_branch` / `gh_open_pr` run `bun run fix` + `bun check` before contacting the remote — you do NOT. After pushing, reply with ONE `gh_post_comment` summarizing the fix, one line per concrete change. Directive bundles multiple issues (e.g. several inline review comments)? Address each and group them in the reply.
+- **Code change** → commit on `{{workspace.branch}}`. NEVER open a second PR; push to this branch. `gh_push_branch` / `gh_open_pr` run `bun run fix` + `bun check` before contacting the remote — you do NOT. If these tools refuse on an enhancement/proposal because the directive author lacks implementation authority, reply with ONE `gh_post_comment` explaining that a repo OWNER or allowlisted maintainer must explicitly authorize implementation, then stop. After pushing, reply with ONE `gh_post_comment` summarizing the fix, one line per concrete change. Directive bundles multiple issues (e.g. several inline review comments)? Address each and group them in the reply.
 - **Question / clarification** → one `gh_post_comment`. No code change.
 - **Explicit stop / drop this** → one ack comment, then halt.
 - **Ambiguous** → exactly one clarifying question, then stop. NEVER guess.

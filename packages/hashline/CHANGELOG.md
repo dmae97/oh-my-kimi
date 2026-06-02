@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [15.8.0] - 2026-06-02
+
+### Fixed
+
+- Fixed hashline replacements that accidentally restated unchanged lines above and below the selected range so they no longer duplicate both boundary lines ([#1664](https://github.com/can1357/oh-my-pi/issues/1664)).
+
 ## [15.7.0] - 2026-05-31
 ### Added
 

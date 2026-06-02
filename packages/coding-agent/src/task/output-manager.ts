@@ -1,29 +1,28 @@
 /**
  * Session-scoped manager for agent output IDs.
  *
- * Ensures unique output IDs across task tool invocations within a session.
- * Prefixes each ID with a sequential number (e.g., "0-AuthProvider", "1-AuthApi").
- * If a parent prefix is provided, IDs are nested (e.g., "0-Auth.1-Subtask").
+ * Keeps every subagent output id unique within a session without polluting the
+ * common case with bookkeeping. A requested name is used verbatim the first
+ * time it appears; only a *repeated* name gets a numeric suffix to disambiguate
+ * it (e.g. "Anna", "Anna-2", "Anna-3"). When a parent prefix is configured, ids
+ * are nested under it (e.g. "Anna.Bob") so hierarchical outputs stay grouped.
  *
- * This enables reliable agent:// URL resolution and prevents artifact collisions.
+ * This enables reliable agent:// URL resolution and prevents artifact
+ * collisions across repeated or nested task invocations.
  */
 import * as fs from "node:fs/promises";
-
-function escapeRegExp(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 /**
  * Manages agent output ID allocation to ensure uniqueness.
  *
- * Each allocated ID gets a numeric prefix based on allocation order.
- * If configured with a parent prefix, the numeric prefix is appended after
- * the parent (e.g., "0-Parent.0-Child").
- * On resume, scans existing files to find the next available index.
+ * The first allocation of a given name keeps the name as-is; subsequent
+ * allocations of the same name get a `-2`, `-3`, … suffix. On resume, scans
+ * existing output files so previously written outputs are never overwritten.
  */
 export class AgentOutputManager {
-	#nextId = 0;
 	#initialized = false;
+	/** Final ids already handed out, relative to this manager's scope. */
+	readonly #taken = new Set<string>();
 	readonly #getArtifactsDir: () => string | null;
 	readonly #parentPrefix: string | undefined;
 
@@ -33,8 +32,8 @@ export class AgentOutputManager {
 	}
 
 	/**
-	 * Scan existing agent output files to find the next available ID.
-	 * This ensures we don't overwrite outputs when resuming a session.
+	 * Seed the taken-id set from output files already on disk so a resumed
+	 * session never reuses a name that would clobber a prior subagent's output.
 	 */
 	async #ensureInitialized(): Promise<void> {
 		if (this.#initialized) return;
@@ -50,31 +49,41 @@ export class AgentOutputManager {
 			return; // Directory doesn't exist yet
 		}
 
-		const pattern = this.#parentPrefix
-			? new RegExp(`^${escapeRegExp(this.#parentPrefix)}\\.(\\d+)-.*\\.md$`)
-			: /^(\d+)-.*\.md$/;
-
-		let maxId = -1;
+		const prefix = this.#parentPrefix ? `${this.#parentPrefix}.` : "";
 		for (const file of files) {
-			const match = file.match(pattern);
-			if (match) {
-				const id = Number.parseInt(match[1], 10);
-				if (id > maxId) maxId = id;
+			if (!file.endsWith(".md")) continue;
+			let rest = file.slice(0, -3); // drop ".md"
+			if (prefix) {
+				if (!rest.startsWith(prefix)) continue;
+				rest = rest.slice(prefix.length);
 			}
+			// Requested ids never contain "."; a dot marks a nested child, so this
+			// manager only owns the first segment of whatever remains.
+			const dot = rest.indexOf(".");
+			const segment = dot === -1 ? rest : rest.slice(0, dot);
+			if (segment) this.#taken.add(segment);
 		}
-		this.#nextId = maxId + 1;
+	}
+
+	/** Pick the first free name (base, then `base-2`, `base-3`, …) and reserve it. */
+	#allocateUnique(id: string): string {
+		let candidate = id;
+		for (let n = 2; this.#taken.has(candidate); n++) {
+			candidate = `${id}-${n}`;
+		}
+		this.#taken.add(candidate);
+		return this.#parentPrefix ? `${this.#parentPrefix}.${candidate}` : candidate;
 	}
 
 	/**
-	 * Allocate a unique ID with numeric prefix.
+	 * Allocate a unique ID.
 	 *
-	 * @param id Requested ID (e.g., "AuthProvider")
-	 * @returns Unique ID with prefix (e.g., "0-AuthProvider")
+	 * @param id Requested ID (e.g., "Anna")
+	 * @returns Unique ID ("Anna" first, then "Anna-2", "Anna-3", …)
 	 */
 	async allocate(id: string): Promise<string> {
 		await this.#ensureInitialized();
-		const prefix = this.#parentPrefix ? `${this.#parentPrefix}.` : "";
-		return `${prefix}${this.#nextId++}-${id}`;
+		return this.#allocateUnique(id);
 	}
 
 	/**
@@ -85,23 +94,6 @@ export class AgentOutputManager {
 	 */
 	async allocateBatch(ids: string[]): Promise<string[]> {
 		await this.#ensureInitialized();
-		const prefix = this.#parentPrefix ? `${this.#parentPrefix}.` : "";
-		return ids.map(id => `${prefix}${this.#nextId++}-${id}`);
-	}
-
-	/**
-	 * Get the next ID that would be allocated (without allocating).
-	 */
-	async peekNextIndex(): Promise<number> {
-		await this.#ensureInitialized();
-		return this.#nextId;
-	}
-
-	/**
-	 * Reset state (primarily for testing).
-	 */
-	reset(): void {
-		this.#nextId = 0;
-		this.#initialized = false;
+		return ids.map(id => this.#allocateUnique(id));
 	}
 }

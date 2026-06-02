@@ -393,6 +393,73 @@ def test_ensure_workspace_creates_worktree(tmp_path: Path, upstream_repo: Path) 
     assert ws.artifacts_dir.is_dir()
 
 
+def test_ensure_workspace_pr_head_uses_detached_pr_ref(tmp_path: Path, upstream_repo: Path) -> None:
+    contributor = tmp_path / "contributor"
+    _git(["clone", str(upstream_repo), str(contributor)], cwd=tmp_path)
+    (contributor / "README.md").write_text("hello from pr\n", encoding="utf-8")
+    _git(["-C", str(contributor), "add", "README.md"], cwd=tmp_path)
+    subprocess.run(
+        ["git", "commit", "-m", "pr change"],
+        cwd=str(contributor),
+        check=True,
+        capture_output=True,
+        text=True,
+        env=os.environ
+        | {
+            "GIT_AUTHOR_NAME": "c",
+            "GIT_AUTHOR_EMAIL": "c@t",
+            "GIT_COMMITTER_NAME": "c",
+            "GIT_COMMITTER_EMAIL": "c@t",
+        },
+    )
+    pr_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(contributor),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _git(["-C", str(contributor), "push", "origin", "HEAD:refs/pull/9/head"], cwd=tmp_path)
+
+    mgr = SandboxManager(tmp_path / "workspaces")
+    ws = mgr.ensure_workspace(
+        repo="octo/widget",
+        number=9,
+        title="incoming PR",
+        clone_url=str(upstream_repo),
+        default_branch="main",
+        pr_head=9,
+        author_name="robomp-bot",
+        author_email="robomp-bot@example.invalid",
+    )
+
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(ws.repo_dir),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    symbolic = subprocess.run(
+        ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+        cwd=str(ws.repo_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    pushurl = subprocess.run(
+        ["git", "config", "--get", "remote.origin.pushurl"],
+        cwd=str(ws.repo_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert head == pr_head
+    assert symbolic.returncode != 0
+    assert ws.branch == "review/pr-9"
+    assert pushurl.returncode != 0
+
+
 def test_chown_workspace_noops_when_not_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[list[str], bool]] = []
 

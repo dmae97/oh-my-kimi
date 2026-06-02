@@ -340,6 +340,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             bot_login=cfg.bot_login,
             maintainers=cfg.maintainer_logins,
             reviewer_bots=cfg.reviewer_bots,
+            pr_review_enabled=cfg.pr_review_enabled,
             resolve_issue_from_pr=_resolve,
         )
 
@@ -378,6 +379,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "body": decision.directive_body,
                 "author": decision.directive_author,
                 "pragmas": [list(item) for item in decision.directive_pragmas],
+                "authorizes_impl": decision.directive_authorizes_impl,
             }
 
         if not decision.should_queue:

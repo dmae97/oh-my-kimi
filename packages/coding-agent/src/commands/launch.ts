@@ -90,6 +90,9 @@ export default class Index extends Command {
 			description: `Set thinking level: ${THINKING_EFFORTS.join(", ")}`,
 			options: [...THINKING_EFFORTS],
 		}),
+		"hide-thinking": Flags.boolean({
+			description: "Hide thinking blocks in TUI output (display only, does not disable model thinking)",
+		}),
 		hook: Flags.string({
 			description: "Load a hook/extension file (can be used multiple times)",
 			multiple: true,

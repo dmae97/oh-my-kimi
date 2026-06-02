@@ -6,7 +6,13 @@ import * as path from "node:path";
 import "../../src/tools/renderers";
 import { Settings } from "../../src/config/settings";
 import { ReadTool } from "../../src/tools/read";
-import { parseSqlitePathCandidates, parseSqliteSelector, renderTable } from "../../src/tools/sqlite-reader";
+import {
+	listTables,
+	parseSqlitePathCandidates,
+	parseSqliteSelector,
+	renderTable,
+	renderTableList,
+} from "../../src/tools/sqlite-reader";
 import { WriteTool } from "../../src/tools/write";
 
 type ToolTextResult = {
@@ -416,5 +422,83 @@ describe("SQLite tool support", () => {
 				content: "{ bogus: 1 }",
 			}),
 		).rejects.toThrow(/no column named 'bogus'/i);
+	});
+});
+
+describe("SQLite table listing row counts", () => {
+	let tmpDir: string;
+	let dbPath: string;
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "sqlite-count-test-"));
+		dbPath = path.join(tmpDir, "counts.db");
+	});
+
+	afterEach(async () => {
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	function seed(rowsPerTable: { big: number; small: number }): void {
+		const db = new Database(dbPath);
+		try {
+			db.run("CREATE TABLE big (id INTEGER PRIMARY KEY, v TEXT NOT NULL)");
+			db.run("CREATE TABLE small (id INTEGER PRIMARY KEY)");
+			const bigStmt = db.prepare("INSERT INTO big (v) VALUES (?)");
+			for (let i = 0; i < rowsPerTable.big; i++) bigStmt.run("x");
+			const smallStmt = db.prepare("INSERT INTO small DEFAULT VALUES");
+			for (let i = 0; i < rowsPerTable.small; i++) smallStmt.run();
+		} finally {
+			db.close();
+		}
+	}
+
+	function analyze(): void {
+		const db = new Database(dbPath);
+		try {
+			db.run("ANALYZE");
+		} finally {
+			db.close();
+		}
+	}
+
+	it("counts small tables exactly", () => {
+		seed({ big: 10, small: 2 });
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			const rendered = renderTableList(listTables(db, { probeCap: 100 }));
+			expect(rendered).toContain("big (10 rows)");
+			expect(rendered).toContain("small (2 rows)");
+		} finally {
+			db.close();
+		}
+	});
+
+	it("reports the planner estimate for tables larger than the probe cap", () => {
+		seed({ big: 10, small: 2 });
+		analyze();
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			// probeCap=5: big (estimate 10) exceeds it and is reported as an estimate
+			// without scanning; small (estimate 2) is counted exactly.
+			const rendered = renderTableList(listTables(db, { probeCap: 5 }));
+			expect(rendered).toContain("big (~10 rows)");
+			expect(rendered).toContain("small (2 rows)");
+		} finally {
+			db.close();
+		}
+	});
+
+	it("reports a lower bound when an unanalyzed table exceeds the probe cap", () => {
+		seed({ big: 10, small: 2 });
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			// No ANALYZE, so no estimate exists; the bounded probe stops at the cap
+			// and reports a lower bound instead of scanning the whole table.
+			const rendered = renderTableList(listTables(db, { probeCap: 3 }));
+			expect(rendered).toContain("big (3+ rows)");
+			expect(rendered).toContain("small (2 rows)");
+		} finally {
+			db.close();
+		}
 	});
 });

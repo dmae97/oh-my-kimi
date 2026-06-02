@@ -34,6 +34,9 @@ from robomp.git_ops import (
     clone as git_clone,
 )
 from robomp.git_ops import (
+    fetch_pr_head as git_fetch_pr_head,
+)
+from robomp.git_ops import (
     fetch_prune as git_fetch_prune,
 )
 from robomp.git_ops import (
@@ -118,6 +121,35 @@ def _optional_str_list(value: Any, field: str) -> list[str] | None:
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise HTTPException(400, f"invalid '{field}': must be array of strings")
     return list(value)
+
+
+def _require_review_comments(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise HTTPException(400, "missing/invalid 'comments'")
+    comments: list[dict[str, Any]] = []
+    for idx, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise HTTPException(400, f"comments[{idx}] must be an object")
+        path = _require_str(item.get("path"), f"comments[{idx}].path")
+        line = _require_int(item.get("line"), f"comments[{idx}].line")
+        body = _require_str(item.get("body"), f"comments[{idx}].body")
+        side = str(item.get("side") or "RIGHT")
+        if side not in ("RIGHT", "LEFT"):
+            raise HTTPException(400, f"comments[{idx}].side must be RIGHT or LEFT")
+        comment: dict[str, Any] = {"path": path, "line": line, "side": side, "body": body}
+        start_line = item.get("start_line")
+        if start_line is not None:
+            comment["start_line"] = _require_int(start_line, f"comments[{idx}].start_line")
+        start_side = item.get("start_side")
+        if start_side is not None:
+            start_side_str = _require_str(start_side, f"comments[{idx}].start_side")
+            if start_side_str not in ("RIGHT", "LEFT"):
+                raise HTTPException(400, f"comments[{idx}].start_side must be RIGHT or LEFT")
+            comment["start_side"] = start_side_str
+        comments.append(comment)
+    return comments
 
 
 def _pool_dir(cfg: Settings, repo: str) -> Path:
@@ -346,6 +378,16 @@ def create_proxy_app(settings: Settings) -> FastAPI:
             return _gh_error_response(exc)
         return JSONResponse(_serialize(info))
 
+    @app.get("/gh/v1/pr_files")
+    async def list_pr_files(request: Request, repo: str, pr_number: int) -> JSONResponse:
+        await _authenticate(request)
+        github: GitHubClient = request.app.state.github
+        try:
+            items = await github.list_pr_files(repo, pr_number)
+        except GitHubError as exc:
+            return _gh_error_response(exc)
+        return JSONResponse({"items": [_serialize(item) for item in items]})
+
     @app.get("/gh/v1/issues")
     async def list_issues(request: Request, repo: str, state: str = "open", limit: int = 30) -> JSONResponse:
         await _authenticate(request)
@@ -467,6 +509,27 @@ def create_proxy_app(settings: Settings) -> FastAPI:
             return _gh_error_response(exc)
         return JSONResponse({"labels": list(applied)})
 
+    @app.post("/gh/v1/submit_pr_review")
+    async def submit_pr_review(request: Request) -> JSONResponse:
+        data = await _json_body(request)
+        repo = _require_str(data.get("repo"), "repo")
+        pr_number = _require_int(data.get("pr_number"), "pr_number")
+        body = _require_str(data.get("body"), "body")
+        event = str(data.get("event") or "COMMENT")
+        comments = _require_review_comments(data.get("comments"))
+        github: GitHubClient = request.app.state.github
+        try:
+            review = await github.submit_pr_review(
+                repo=repo,
+                pr_number=pr_number,
+                body=body,
+                event=event,
+                comments=comments,
+            )
+        except GitHubError as exc:
+            return _gh_error_response(exc)
+        return JSONResponse(_serialize(review))
+
     @app.post("/gh/v1/add_assignees")
     async def add_assignees(request: Request) -> JSONResponse:
         data = await _json_body(request)
@@ -566,6 +629,18 @@ def create_proxy_app(settings: Settings) -> FastAPI:
         target = _pool_dir(settings, repo)
         # fetch_ref is intentionally best-effort; never surfaces a 5xx.
         await _run_git_op(git_fetch_ref, target, ref, token=_resolve_token(settings))
+        return JSONResponse({"pool_dir": str(target)})
+
+    @app.post("/gh/v1/git/fetch_pr_head")
+    async def git_fetch_pr_head_endpoint(request: Request) -> JSONResponse:
+        data = await _json_body(request)
+        repo = _require_str(data.get("repo"), "repo")
+        pr_number = _require_int(data.get("pr_number"), "pr_number")
+        target = _pool_dir(settings, repo)
+        try:
+            await _run_git_op(git_fetch_pr_head, target, pr_number, token=_resolve_token(settings))
+        except GitCommandError as exc:
+            return _git_error_response(exc)
         return JSONResponse({"pool_dir": str(target)})
 
     @app.post("/gh/v1/git/push")

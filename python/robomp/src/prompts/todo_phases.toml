@@ -12,6 +12,26 @@ tasks = [
   "Bug: repro_record, fix, open PR. Else: one gh_post_comment, stop.",
 ]
 
+[[review_pr]]
+name = "Orient"
+tasks = [
+  "Call fetch_pr and read the changed files",
+  "Compare the PR head against its base",
+]
+
+[[review_pr]]
+name = "Classify"
+tasks = [
+  "Call classify_pr with rank, type, and areas",
+]
+
+[[review_pr]]
+name = "Review"
+tasks = [
+  "Stage inline findings with pr_review_comment",
+  "Call submit_pr_review once with the summary",
+]
+
 [[handle_comment]]
 name = "Follow up"
 tasks = [

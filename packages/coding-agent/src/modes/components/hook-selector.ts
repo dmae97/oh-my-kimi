@@ -68,6 +68,9 @@ export interface HookSelectorOptions {
 	onExternalEditor?: () => void;
 	helpText?: string;
 	slider?: HookSelectorSlider;
+	/** Indices into the original options that cannot be selected: they render
+	 *  dimmed, are skipped during navigation, and reject enter/timeout. */
+	disabledIndices?: readonly number[];
 }
 
 export interface HookSelectorOption {
@@ -127,11 +130,16 @@ class OutlinedList extends Container {
 	}
 }
 
+/** A filtered option paired with its index into the original options array, so
+ *  disabled-index lookups survive fuzzy filtering and reordering. */
+type FilteredOption = { option: HookSelectorOption; index: number };
+
 export class HookSelectorComponent extends Container {
 	#options: HookSelectorOption[];
-	#filteredOptions: HookSelectorOption[];
+	#filteredOptions: FilteredOption[];
 	#searchQuery = "";
 	#selectedIndex: number;
+	#disabledIndices: Set<number>;
 	#maxVisible: number;
 	#listContainer: Container | undefined;
 	#outlinedList: OutlinedList | undefined;
@@ -157,8 +165,13 @@ export class HookSelectorComponent extends Container {
 		super();
 
 		this.#options = options.map(normalizeHookSelectorOption);
-		this.#filteredOptions = this.#options;
-		this.#selectedIndex = Math.min(opts?.initialIndex ?? 0, this.#filteredOptions.length - 1);
+		this.#filteredOptions = this.#options.map((option, index) => ({ option, index }));
+		this.#disabledIndices = new Set(
+			(opts?.disabledIndices ?? []).filter(
+				index => Number.isInteger(index) && index >= 0 && index < this.#options.length,
+			),
+		);
+		this.#selectedIndex = this.#coerceSelectedIndex(opts?.initialIndex ?? 0);
 		this.#maxVisible = Math.max(3, opts?.maxVisible ?? 12);
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
@@ -191,9 +204,10 @@ export class HookSelectorComponent extends Container {
 				s => this.#titleComponent.setText(`${this.#baseTitle} (${s}s)`),
 				() => {
 					opts?.onTimeout?.();
+					// Auto-select current option on timeout (typically the first/recommended option)
 					const selected = this.#filteredOptions[this.#selectedIndex];
-					if (selected) {
-						this.#onSelectCallback(selected.label);
+					if (selected && !this.#isDisabled(selected.index)) {
+						this.#onSelectCallback(selected.option.label);
 					} else {
 						this.#onCancelCallback();
 					}
@@ -217,14 +231,62 @@ export class HookSelectorComponent extends Container {
 		this.#updateList();
 	}
 
-	#renderOptionLines(option: HookSelectorOption, isSelected: boolean, mdTheme: MarkdownTheme): string[] {
-		const label = isSelected
-			? renderInlineMarkdown(option.label, mdTheme, t => theme.fg("accent", t))
-			: renderInlineMarkdown(option.label, mdTheme, t => theme.fg("text", t));
-		const prefix = isSelected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
+	#isDisabled(index: number): boolean {
+		return this.#disabledIndices.has(index);
+	}
+
+	/** Clamp `index` into range, then walk forward (and finally backward) to the
+	 *  nearest enabled option so the cursor never lands on a disabled row. */
+	#coerceSelectedIndex(index: number): number {
+		if (this.#filteredOptions.length === 0) return -1;
+		const maxIndex = this.#filteredOptions.length - 1;
+		const clamped = Math.max(0, Math.min(index, maxIndex));
+		const clampedOption = this.#filteredOptions[clamped];
+		if (clampedOption && !this.#isDisabled(clampedOption.index)) return clamped;
+		for (let i = clamped + 1; i <= maxIndex; i++) {
+			const option = this.#filteredOptions[i];
+			if (option && !this.#isDisabled(option.index)) return i;
+		}
+		for (let i = clamped - 1; i >= 0; i--) {
+			const option = this.#filteredOptions[i];
+			if (option && !this.#isDisabled(option.index)) return i;
+		}
+		return clamped;
+	}
+
+	/** Move the cursor by `delta`, skipping disabled rows, stopping at the first
+	 *  enabled option reached or at the list edge. */
+	#moveSelection(delta: number): void {
+		if (this.#filteredOptions.length === 0) return;
+		const maxIndex = this.#filteredOptions.length - 1;
+		let index = this.#selectedIndex;
+		while (true) {
+			const next = Math.max(0, Math.min(index + delta, maxIndex));
+			if (next === index) return;
+			index = next;
+			const option = this.#filteredOptions[index];
+			if (option && !this.#isDisabled(option.index)) {
+				this.#selectedIndex = index;
+				this.#updateList();
+				return;
+			}
+		}
+	}
+
+	#renderOptionLines(
+		option: HookSelectorOption,
+		isSelected: boolean,
+		isDisabled: boolean,
+		mdTheme: MarkdownTheme,
+	): string[] {
+		const textColor = isDisabled ? "dim" : isSelected ? "accent" : "text";
+		const prefixColor = isDisabled ? "dim" : "accent";
+		const label = renderInlineMarkdown(option.label, mdTheme, t => theme.fg(textColor, t));
+		const prefix = isSelected ? theme.fg(prefixColor, `${theme.nav.cursor} `) : "  ";
 		const lines = [prefix + label];
 		if (option.description) {
-			const description = renderInlineMarkdown(option.description, mdTheme, t => theme.fg("muted", t));
+			const descriptionColor = isDisabled ? "dim" : "muted";
+			const description = renderInlineMarkdown(option.description, mdTheme, t => theme.fg(descriptionColor, t));
 			lines.push(`    ${description}`);
 		}
 		return lines;
@@ -250,7 +312,7 @@ export class HookSelectorComponent extends Container {
 	): number {
 		if (renderWidth === undefined) return option.description ? 2 : 1;
 		let rows = 0;
-		for (const line of this.#renderOptionLines(option, isSelected, mdTheme)) {
+		for (const line of this.#renderOptionLines(option, isSelected, false, mdTheme)) {
 			rows += this.#renderedLineRowCount(line, renderWidth);
 		}
 		return rows;
@@ -276,12 +338,12 @@ export class HookSelectorComponent extends Container {
 		const selectedIndex = Math.max(0, Math.min(this.#selectedIndex, total - 1));
 		let startIndex = selectedIndex;
 		let endIndex = selectedIndex + 1;
-		let rows = this.#optionRowCount(this.#filteredOptions[selectedIndex]!, renderWidth, true, mdTheme);
+		let rows = this.#optionRowCount(this.#filteredOptions[selectedIndex]!.option, renderWidth, true, mdTheme);
 		let beforeRows = 0;
 		const targetBeforeRows = Math.max(0, Math.floor((rowBudget - rows) / 2));
 
 		while (startIndex > 0) {
-			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!, renderWidth, false, mdTheme);
+			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!.option, renderWidth, false, mdTheme);
 			if (beforeRows + cost > targetBeforeRows || rows + cost > rowBudget) break;
 			startIndex--;
 			beforeRows += cost;
@@ -289,14 +351,14 @@ export class HookSelectorComponent extends Container {
 		}
 
 		while (endIndex < total) {
-			const cost = this.#optionRowCount(this.#filteredOptions[endIndex]!, renderWidth, false, mdTheme);
+			const cost = this.#optionRowCount(this.#filteredOptions[endIndex]!.option, renderWidth, false, mdTheme);
 			if (rows + cost > rowBudget) break;
 			endIndex++;
 			rows += cost;
 		}
 
 		while (startIndex > 0) {
-			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!, renderWidth, false, mdTheme);
+			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!.option, renderWidth, false, mdTheme);
 			if (rows + cost > rowBudget) break;
 			startIndex--;
 			rows += cost;
@@ -312,9 +374,10 @@ export class HookSelectorComponent extends Container {
 		const { startIndex, endIndex } = this.#getVisibleOptionRange(total, renderWidth, mdTheme);
 
 		for (let i = startIndex; i < endIndex; i++) {
-			const option = this.#filteredOptions[i];
-			if (option === undefined) continue;
-			lines.push(...this.#renderOptionLines(option, i === this.#selectedIndex, mdTheme));
+			const filtered = this.#filteredOptions[i];
+			if (filtered === undefined) continue;
+			const isSelected = i === this.#selectedIndex;
+			lines.push(...this.#renderOptionLines(filtered.option, isSelected, this.#isDisabled(filtered.index), mdTheme));
 		}
 
 		if (total === 0) {
@@ -389,10 +452,11 @@ export class HookSelectorComponent extends Container {
 
 	#setSearchQuery(query: string): void {
 		this.#searchQuery = query;
+		const indexedOptions = this.#options.map((option, index) => ({ option, index }));
 		this.#filteredOptions = query.trim()
-			? fuzzyFilter(this.#options, query, option => `${option.label} ${option.description ?? ""}`)
-			: this.#options;
-		this.#selectedIndex = 0;
+			? fuzzyFilter(indexedOptions, query, item => `${item.option.label} ${item.option.description ?? ""}`)
+			: indexedOptions;
+		this.#selectedIndex = this.#coerceSelectedIndex(0);
 		this.#updateList();
 	}
 
@@ -429,18 +493,12 @@ export class HookSelectorComponent extends Container {
 		}
 
 		if (matchesSelectUp(keyData) || (!this.#isSearchEnabled() && keyData === "k")) {
-			if (this.#filteredOptions.length > 0) {
-				this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
-				this.#updateList();
-			}
+			this.#moveSelection(-1);
 		} else if (matchesSelectDown(keyData) || (!this.#isSearchEnabled() && keyData === "j")) {
-			if (this.#filteredOptions.length > 0) {
-				this.#selectedIndex = Math.min(this.#filteredOptions.length - 1, this.#selectedIndex + 1);
-				this.#updateList();
-			}
+			this.#moveSelection(1);
 		} else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			const selected = this.#filteredOptions[this.#selectedIndex];
-			if (selected) this.#onSelectCallback(selected.label);
+			if (selected && !this.#isDisabled(selected.index)) this.#onSelectCallback(selected.option.label);
 		} else if (matchesKey(keyData, "left") || (this.#slider && !this.#isSearchEnabled() && keyData === "h")) {
 			if (this.#slider) this.#moveSlider(-1);
 			else this.#onLeftCallback?.();

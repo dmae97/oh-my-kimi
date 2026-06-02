@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-ai",
-	"version": "15.7.6",
+	"version": "15.8.1",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
@@ -38,7 +38,6 @@
 		"generate-models": "bun scripts/generate-models.ts"
 	},
 	"dependencies": {
-		"@anthropic-ai/sdk": "catalog:",
 		"@bufbuild/protobuf": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
 		"openai": "catalog:",

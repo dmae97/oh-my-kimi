@@ -26,6 +26,20 @@ function makeCopilotClaudeModel(): Model<"anthropic-messages"> {
 		maxTokens: 16000,
 	};
 }
+function makeOpenCodeGoQwen37Model(): Model<"anthropic-messages"> {
+	return {
+		id: "qwen3.7-max",
+		name: "Qwen3.7 Max",
+		api: "anthropic-messages",
+		provider: "opencode-go",
+		baseUrl: "https://opencode.ai/zen/go",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1_000_000,
+		maxTokens: 65_536,
+	};
+}
 
 const testContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
@@ -59,6 +73,43 @@ describe("Anthropic Copilot auth config", () => {
 
 		expect(options.apiKey).toBeNull();
 		expect(options.defaultHeaders.Authorization).toBe(`Bearer ${token}`);
+	});
+
+	it("uses X-Api-Key auth for OpenCode Go Anthropic models", () => {
+		const model = makeOpenCodeGoQwen37Model();
+		const token = "opencode_test_key";
+		const options = buildAnthropicClientOptions({
+			model,
+			apiKey: token,
+			extraBetas: [],
+			stream: true,
+			dynamicHeaders: {},
+		});
+
+		expect(options.apiKey).toBe(token);
+		expect(options.authToken).toBeNull();
+		expect(options.defaultHeaders.Authorization).toBeUndefined();
+	});
+
+	it("sends OpenCode Go Anthropic requests with X-Api-Key", async () => {
+		const requestedApiKeys: Array<string | null> = [];
+		const requestedAuthorizations: Array<string | null> = [];
+		global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			requestedApiKeys.push(getRequestHeader(input, init, "X-Api-Key"));
+			requestedAuthorizations.push(getRequestHeader(input, init, "Authorization"));
+			return new Response(JSON.stringify({ error: { type: "authentication_error", message: "Unauthorized" } }), {
+				status: 401,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as unknown as typeof fetch;
+
+		const result = await streamAnthropic(makeOpenCodeGoQwen37Model(), testContext, {
+			apiKey: "opencode_test_key",
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(requestedApiKeys[0]).toBe("opencode_test_key");
+		expect(requestedAuthorizations[0]).toBeNull();
 	});
 
 	it("unwraps structured Copilot credentials before setting Authorization", () => {

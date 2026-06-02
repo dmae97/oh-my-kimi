@@ -76,7 +76,7 @@ Non-persistent sessions without an adopted manager can store `saveArtifact(...)`
 
 ### Agent output IDs (`agent://`)
 
-`AgentOutputManager` allocates IDs for subagent outputs as `<index>-<requestedId>` (optionally nested under parent prefix, e.g. `0-Parent.1-Child`). It scans existing `.md` files on initialization to continue from the next index on resume.
+`AgentOutputManager` allocates IDs for subagent outputs from the requested name, used verbatim the first time and suffixed (`-2`, `-3`, …) only when the same name repeats (e.g. `Anna`, `Anna-2`). Nested outputs are grouped under the parent prefix (e.g. `Parent.Child`). It scans existing `.md` files on initialization so a resumed session never reuses a name that would clobber a prior output.
 
 ## Persistence dataflow
 

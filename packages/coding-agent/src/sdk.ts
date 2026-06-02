@@ -102,7 +102,7 @@ import { AgentSession } from "./session/agent-session";
 import { resolveAuthBrokerConfig } from "./session/auth-broker-config";
 import { AuthBrokerClient, AuthStorage, RemoteAuthCredentialStore } from "./session/auth-storage";
 import { type CustomMessage, convertToLlm } from "./session/messages";
-import { SessionManager } from "./session/session-manager";
+import { getRestorableSessionModels, SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
@@ -323,13 +323,13 @@ export interface CreateAgentSessionOptions {
 	parentHindsightSessionState?: HindsightSessionState;
 	/** Parent Mnemopi state to alias for subagent memory tools. */
 	parentMnemopiSessionState?: MnemopiSessionState;
-	/** Pre-allocated agent identity for IRC routing. Default: "0-Main" for top-level, parentTaskPrefix-derived for sub. */
+	/** Pre-allocated agent identity for IRC routing. Default: "Main" for top-level, parentTaskPrefix-derived for sub. */
 	agentId?: string;
 	/** Display name for the agent in IRC. Default: "main" or "sub". */
 	agentDisplayName?: string;
 	/** Optional shared agent registry for IRC routing. Default: AgentRegistry.global(). */
 	agentRegistry?: AgentRegistry;
-	/** Parent task ID prefix for nested artifact naming (e.g., "6-Extensions") */
+	/** Parent task ID prefix for nested artifact naming (e.g., "Extensions") */
 	parentTaskPrefix?: string;
 	/** Inherited eval executor session id for subagents sharing parent eval state. */
 	parentEvalSessionId?: string;
@@ -1008,20 +1008,37 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	);
 	let model = options.model;
 	let modelFallbackMessage: string | undefined;
-	// If session has data, try to restore model from it.
-	// Skip restore when an explicit model was requested.
-	const defaultModelStr = existingSession.models.default;
-	if (!hasExplicitModel && !model && hasExistingSession && defaultModelStr) {
+	// Identify session model strings to restore in fallback order. We do an
+	// initial pass here so model-dependent setup (thinking-level resolution,
+	// host preconnect) can use the restored model; extension-registered
+	// providers aren't visible yet, so we retry the preferred candidates once
+	// extensions register below.
+	const sessionModelStrings =
+		!hasExplicitModel && hasExistingSession
+			? getRestorableSessionModels(existingSession.models, sessionManager.getLastModelChangeRole())
+			: [];
+	let restoredSessionModelIndex = -1;
+	if (!hasExplicitModel && !model && sessionModelStrings.length > 0) {
 		await logger.time("restoreSessionModel", async () => {
-			const parsedModel = parseModelString(defaultModelStr);
-			if (parsedModel) {
+			let failedSessionModel: string | undefined;
+			for (let i = 0; i < sessionModelStrings.length; i++) {
+				const sessionModelStr = sessionModelStrings[i];
+				const parsedModel = parseModelString(sessionModelStr);
+				if (!parsedModel) {
+					failedSessionModel ??= sessionModelStr;
+					continue;
+				}
+
 				const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
 				if (restoredModel && (await hasModelApiKey(restoredModel))) {
 					model = restoredModel;
+					restoredSessionModelIndex = i;
+					break;
 				}
+				failedSessionModel ??= sessionModelStr;
 			}
-			if (!model) {
-				modelFallbackMessage = `Could not restore model ${defaultModelStr}`;
+			if (failedSessionModel) {
+				modelFallbackMessage = `Could not restore model ${failedSessionModel}`;
 			}
 		});
 	}
@@ -1039,26 +1056,29 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const taskDepth = options.taskDepth ?? 0;
 
-	let thinkingLevel = options.thinkingLevel;
-
-	// If session has data and includes a thinking entry, restore it
-	if (thinkingLevel === undefined && hasExistingSession && hasThinkingEntry) {
-		thinkingLevel = parseThinkingLevel(existingSession.thinkingLevel);
-	}
-
-	if (thinkingLevel === undefined && !hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel) {
-		thinkingLevel = defaultRoleSpec.thinkingLevel;
-	}
-
-	// Prefer the selected model's configured defaultLevel, otherwise fall back
-	// to the global settings default.
-	if (thinkingLevel === undefined && model?.thinking?.defaultLevel !== undefined) {
-		thinkingLevel = model.thinking.defaultLevel;
-	}
-	if (thinkingLevel === undefined) {
-		thinkingLevel = settings.get("defaultThinkingLevel");
-	}
-	const autoThinking = thinkingLevel === AUTO_THINKING;
+	// Resolves the session/agent thinking level using the same precedence we
+	// apply at startup: explicit option → persisted session entry → default
+	// role's explicit selector → selected model's defaultLevel → global
+	// settings default. Run again after extension role reclaim so the final
+	// model's own defaults aren't masked by an earlier fallback model's.
+	const pickInitialThinkingLevel = (selectedModel: Model | undefined): ConfiguredThinkingLevel | undefined => {
+		let level = options.thinkingLevel;
+		if (level === undefined && hasExistingSession && hasThinkingEntry) {
+			level = parseThinkingLevel(existingSession.thinkingLevel);
+		}
+		if (level === undefined && !hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel) {
+			level = defaultRoleSpec.thinkingLevel;
+		}
+		if (level === undefined && selectedModel?.thinking?.defaultLevel !== undefined) {
+			level = selectedModel.thinking.defaultLevel;
+		}
+		if (level === undefined) {
+			level = settings.get("defaultThinkingLevel");
+		}
+		return level;
+	};
+	let thinkingLevel = pickInitialThinkingLevel(model);
+	let autoThinking = thinkingLevel === AUTO_THINKING;
 	// Concrete level the agent/session start with. With `auto` this is the
 	// provisional level shown until the first per-turn classification resolves;
 	// `auto` itself stays a session-only concept handled by AgentSession.
@@ -1444,6 +1464,40 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			extensionsResult.runtime.pendingProviderRegistrations = [];
 		}
 
+		// Retry session-model candidates now that extension providers are
+		// registered. The initial restore runs before extensions load, so a role
+		// model supplied by an extension would have either fallen back to the
+		// saved default (`restoredSessionModelIndex > 0`) or failed entirely
+		// (`restoredSessionModelIndex === -1`, with the settings default or
+		// downstream fallback filling `model`). Reclaim it here so resume
+		// honors the last active role in either case.
+		const sessionRetryLimit = restoredSessionModelIndex >= 0 ? restoredSessionModelIndex : sessionModelStrings.length;
+		if (!hasExplicitModel && sessionRetryLimit > 0) {
+			for (let i = 0; i < sessionRetryLimit; i++) {
+				const sessionModelStr = sessionModelStrings[i];
+				const parsedModel = parseModelString(sessionModelStr);
+				if (!parsedModel) continue;
+				const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
+				if (restoredModel && (await hasModelApiKey(restoredModel))) {
+					model = restoredModel;
+					modelFallbackMessage = undefined;
+					restoredSessionModelIndex = i;
+					// Recompute thinking-level from scratch against the reclaimed
+					// model: any value derived from the earlier fallback model's
+					// `thinking.defaultLevel` must not become sticky.
+					thinkingLevel = pickInitialThinkingLevel(restoredModel);
+					autoThinking = thinkingLevel === AUTO_THINKING;
+					effectiveThinkingLevel = thinkingLevel === AUTO_THINKING ? undefined : thinkingLevel;
+					effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
+						autoThinking
+							? resolveProvisionalAutoLevel(restoredModel)
+							: resolveThinkingLevelForModel(restoredModel, effectiveThinkingLevel),
+					);
+					preconnectModelHost(restoredModel.baseUrl);
+					break;
+				}
+			}
+		}
 		// Resolve deferred --model pattern now that extension models are registered.
 		if (!model && options.modelPattern) {
 			const availableModels = modelRegistry.getAll();

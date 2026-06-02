@@ -180,6 +180,8 @@ export class ToolExecutionComponent extends Container {
 	#editDiffPreview?: PerFileDiffPreview[];
 	#editDiffAbort?: AbortController;
 	#editDiffLastArgsKey?: string;
+	// Latest in-flight streaming diff recompute, captured so it can be awaited.
+	#editDiffInFlight?: Promise<void>;
 	// Cached converted images for Kitty protocol (which requires PNG), keyed by index
 	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	// Spinner animation for partial task results
@@ -239,7 +241,7 @@ export class ToolExecutionComponent extends Container {
 		this.#editMode = resolveEditModeForTool(toolName, tool);
 
 		this.#updateDisplay();
-		void this.#runPreviewDiff();
+		this.#editDiffInFlight = this.#runPreviewDiff();
 	}
 
 	updateArgs(args: any, _toolCallId?: string): void {
@@ -250,7 +252,7 @@ export class ToolExecutionComponent extends Container {
 		if (args === this.#args) return;
 		this.#args = args;
 		this.#updateSpinnerAnimation();
-		void this.#runPreviewDiff();
+		this.#editDiffInFlight = this.#runPreviewDiff();
 		this.#updateDisplay();
 	}
 
@@ -261,7 +263,18 @@ export class ToolExecutionComponent extends Container {
 	setArgsComplete(_toolCallId?: string): void {
 		this.#argsComplete = true;
 		this.#updateSpinnerAnimation();
-		void this.#runPreviewDiff();
+		this.#editDiffInFlight = this.#runPreviewDiff();
+	}
+
+	/**
+	 * Await the streaming diff recompute kicked off by the most recent
+	 * `updateArgs`/`setArgsComplete`. The recompute reads the file and re-runs the
+	 * whole-file Myers diff off the render path, signalling completion only via a
+	 * throttled `requestRender`. Tests await this to sample a *settled* preview
+	 * deterministically instead of racing the spinner's render ticks.
+	 */
+	async whenPreviewSettled(): Promise<void> {
+		await this.#editDiffInFlight;
 	}
 
 	async #runPreviewDiff(): Promise<void> {

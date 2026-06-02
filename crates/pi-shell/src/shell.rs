@@ -663,7 +663,7 @@ async fn run_shell_command(
 		.await;
 
 	if cancel_token.is_cancelled() {
-		terminate_background_jobs(&session.shell);
+		terminate_background_jobs(&mut session.shell);
 	}
 
 	if env_scope_pushed {
@@ -833,7 +833,7 @@ async fn run_shell_command_streams(
 		.await;
 
 	if cancel_token.is_cancelled() {
-		terminate_background_jobs(&session.shell);
+		terminate_background_jobs(&mut session.shell);
 	}
 
 	if env_scope_pushed {
@@ -998,9 +998,10 @@ async fn terminate_new_descendants<S: std::hash::BuildHasher + Sync>(baseline: &
 		}
 	}
 }
-fn terminate_background_jobs(shell: &BrushShell) {
+fn terminate_background_jobs(shell: &mut BrushShell) {
 	let mut targets = process::TerminationTargets::new();
-	for job in &shell.jobs().jobs {
+	for job in &mut shell.jobs_mut().jobs {
+		job.abort_internal_tasks();
 		if let Some(pgid) = job.process_group_id() {
 			targets.add_pgid(pgid);
 		}
@@ -1009,11 +1010,9 @@ fn terminate_background_jobs(shell: &BrushShell) {
 		}
 	}
 	if targets.is_empty() {
-		// Pure descendant cleanup is handled by `process_cancel_bridge` while
-		// the cancel was still in flight. Here we only signal brush's own
-		// job-tracked targets — pgids of background-group leaders that may have
-		// already exited (so the descendant walk would no longer find them as
-		// new descendants, but their group still holds live grandchildren).
+		// Shell-internal jobs were aborted above. Pure descendant cleanup is
+		// handled by `process_cancel_bridge` while the cancel was in flight;
+		// without job-tracked pgids or pids there is nothing else to signal here.
 		return;
 	}
 
@@ -1932,6 +1931,66 @@ mod tests {
 			.await
 			.expect("cancel token should be signalled");
 		assert!(matches!(reason, AbortReason::Signal));
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn cancellation_aborts_internal_background_jobs() {
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.expect("system clock before epoch")
+			.as_nanos();
+		let dir =
+			std::env::temp_dir().join(format!("pi-shell-bg-cancel-{}-{unique}", std::process::id()));
+		std::fs::create_dir(&dir).expect("create temp dir");
+		let started = dir.join("started");
+		let release = dir.join("release");
+		let marker = dir.join("marker");
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create session");
+		session
+			.shell
+			.set_working_dir(dir.to_string_lossy().as_ref())
+			.expect("set cwd");
+
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null stdin"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null stdout"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null stderr"));
+
+		let source_info = SourceInfo::from("pi-shell:test");
+		let result = session
+			.shell
+			.run_string(
+				"{ echo started > started; while [ ! -f release ]; do sleep 0.05; done; echo done > \
+				 marker; } &",
+				&source_info,
+				&params,
+			)
+			.await
+			.expect("spawn background job");
+		assert_eq!(exit_code(&result), 0);
+
+		let mut background_started = false;
+		for _ in 0..200 {
+			if started.exists() {
+				background_started = true;
+				break;
+			}
+			time::sleep(Duration::from_millis(10)).await;
+		}
+		assert!(background_started, "background job did not reach its wait loop");
+
+		terminate_background_jobs(&mut session.shell);
+		std::fs::write(&release, b"").expect("release marker");
+		time::sleep(Duration::from_millis(250)).await;
+		let marker_exists = marker.exists();
+		std::fs::remove_dir_all(&dir).expect("cleanup temp dir");
+
+		assert!(
+			!marker_exists,
+			"internal background job survived cancellation and wrote marker after release",
+		);
 	}
 
 	#[cfg(unix)]

@@ -18,6 +18,7 @@ const STANDARD_AUTH_URL = "https://platform.xiaomimimo.com/#/console/api-keys";
 const STANDARD_API_BASE_URL = "https://api.xiaomimimo.com/v1";
 const TOKEN_PLAN_SGP_API_BASE_URL = "https://token-plan-sgp.xiaomimimo.com/v1";
 const TOKEN_PLAN_AMS_API_BASE_URL = "https://token-plan-ams.xiaomimimo.com/v1";
+const TOKEN_PLAN_CN_API_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1";
 const TOKEN_PLAN_KEY_PREFIX = "tp-";
 const STANDARD_VALIDATION_MODEL = "mimo-v2-flash";
 const TOKEN_PLAN_VALIDATION_MODEL = "mimo-v2.5";
@@ -29,12 +30,13 @@ function isTokenPlanKey(apiKey: string): boolean {
 const VALIDATION_TIMEOUT_MS = 15_000;
 
 async function validateXiaomiApiKey(apiKey: string, signal?: AbortSignal): Promise<void> {
-	// For token-plan keys try SGP first, then AMS as fallback.
+	// For token-plan keys try SGP → AMS → CN in order until one succeeds.
 	// Standard sk- keys only hit the one endpoint.
 	const endpoints = isTokenPlanKey(apiKey)
 		? [
 				{ baseUrl: TOKEN_PLAN_SGP_API_BASE_URL, model: TOKEN_PLAN_VALIDATION_MODEL },
 				{ baseUrl: TOKEN_PLAN_AMS_API_BASE_URL, model: TOKEN_PLAN_VALIDATION_MODEL },
+				{ baseUrl: TOKEN_PLAN_CN_API_BASE_URL, model: TOKEN_PLAN_VALIDATION_MODEL },
 			]
 		: [{ baseUrl: STANDARD_API_BASE_URL, model: STANDARD_VALIDATION_MODEL }];
 
