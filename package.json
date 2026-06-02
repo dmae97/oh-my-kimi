@@ -85,6 +85,7 @@
     "install:dev": "bun install && bun --cwd=packages/coding-agent link && bun --cwd=packages/ai link",
     "dev": "bun --cwd=packages/coding-agent src/cli.ts",
     "stats": "bun --cwd=packages/coding-agent src/cli.ts stats",
+    "claude:trace": "bun scripts/claude-trace.ts",
     "build": "bun run --workspaces --if-present build",
     "build:native": "bun --cwd=packages/natives run build",
     "test": "bun run --parallel test:ts test:rs",
