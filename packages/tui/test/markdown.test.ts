@@ -1187,6 +1187,15 @@ describe("Inline color swatches", () => {
 		expect(out.includes(swatchFor("fff"))).toBeTruthy();
 	});
 
+	it("does not swatch 4-digit hashline #TAG snapshot tags", () => {
+		// Hashline tags are 4 hex digits with letters (e.g. #6C5E) and would
+		// otherwise be read as #RGBA colors. Neither prose nor codespans swatch them.
+		const prose = new Markdown("Re-anchor on #6C5E before editing.", 0, 0, defaultMarkdownTheme).render(80).join("");
+		expect(prose.includes("■")).toBe(false);
+		const code = new Markdown("Tag `#6C5E` stays plain.", 0, 0, defaultMarkdownTheme).render(80).join("");
+		expect(code.includes("■")).toBe(false);
+	});
+
 	it("uses the theme's colorSwatch symbol when provided", () => {
 		const themed = { ...defaultMarkdownTheme, symbols: { ...defaultMarkdownTheme.symbols, colorSwatch: "▢" } };
 		const out = new Markdown("Accent #C5FFD6.", 0, 0, themed).render(80).join("\n");

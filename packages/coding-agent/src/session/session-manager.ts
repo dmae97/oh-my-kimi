@@ -1808,6 +1808,8 @@ export async function resolveResumableSession(
 	return { session: globalMatch, scope: "global" };
 }
 interface SessionManagerStateSnapshot {
+	cwd: string;
+	sessionDir: string;
 	sessionId: string;
 	sessionName: string | undefined;
 	titleSource: "auto" | "user" | undefined;
@@ -1880,6 +1882,8 @@ export class SessionManager {
 
 	captureState(): SessionManagerStateSnapshot {
 		return {
+			cwd: this.cwd,
+			sessionDir: this.sessionDir,
 			sessionId: this.#sessionId,
 			sessionName: this.#sessionName,
 			titleSource: this.#titleSource,
@@ -1893,6 +1897,8 @@ export class SessionManager {
 	}
 
 	restoreState(snapshot: SessionManagerStateSnapshot): void {
+		this.cwd = snapshot.cwd;
+		this.sessionDir = snapshot.sessionDir;
 		this.#sessionId = snapshot.sessionId;
 		this.#sessionName = snapshot.sessionName;
 		this.#titleSource = snapshot.titleSource;
@@ -1937,6 +1943,18 @@ export class SessionManager {
 			this.#sessionId = header?.id ?? createSessionId();
 			this.#sessionName = header?.title;
 			this.#titleSource = header?.titleSource;
+
+			// Adopt the loaded session's own working directory. Sessions are stored in
+			// a directory keyed by their cwd, so resuming a session from another
+			// project (e.g. global review in the picker) must re-point cwd/sessionDir
+			// at that project. Same-cwd resumes and in-place reloads are a no-op; old
+			// sessions with no recorded cwd keep the current cwd.
+			const headerCwd = header?.cwd ? path.resolve(header.cwd) : undefined;
+			if (headerCwd && headerCwd !== this.cwd) {
+				this.cwd = headerCwd;
+				this.sessionDir = path.resolve(this.#sessionFile, "..");
+				writeTerminalBreadcrumb(this.cwd, this.#sessionFile);
+			}
 
 			this.#needsFullRewriteOnNextPersist = migrateToCurrentVersion(this.#fileEntries);
 

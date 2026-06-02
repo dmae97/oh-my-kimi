@@ -2,10 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an all-projects scope to the session picker (`pi --resume` / `/resume`). Press `Tab` to toggle between the current folder's sessions and every session across all projects; the all-projects list is loaded lazily and shows each session's directory. When the current folder has no sessions the picker now opens straight into all-projects scope instead of printing "No sessions found".
+
+### Changed
+
+- Changed resuming a session that belongs to a different project to switch the process into that project's working directory. `pi --resume` and the in-session `/resume` picker now `chdir` into the resumed session's `cwd` and re-scope every cwd-derived input — project dir, **project settings** (`.claude/settings.yml`, `.omp/settings.json`, path-scoped `enabledModels`/`disabledProviders`), plugin roots, capabilities, slash commands, and the ssh tool — so tools, discovery, configuration, and commands all follow the resumed project. The `SessionManager` adopts the resumed session's own `cwd`/session directory on load (rolled back if the switch fails).
+
 ### Fixed
 
+- Fixed `/move` (and cross-project resume) not re-scoping the live project settings to the destination directory. Changing a session's working directory now reloads the project settings layer in place (via `Settings.reloadForCwd`) so project-scoped configuration and path-scoped `enabledModels`/`disabledProviders` follow the move instead of remaining pinned to the launch directory.
+- Fixed `read <db.sqlite>` freezing the TUI on large databases. Listing tables ran an unbounded `SELECT COUNT(*)` per table, and since `bun:sqlite` executes synchronously on the same JS thread that drives rendering and input, a multi-GB database's full-table scans blocked the UI for seconds. The listing now reads the planner's `sqlite_stat1` estimate for tables above a scan cap (shown as `~N rows`) and only counts exactly when a table is provably small, reading at most `cap + 1` rows (a capped table shows `N+ rows`). On an 8.4 GB stats database the listing dropped from multi-second full scans to ~2 ms.
 - Fixed a module-load crash (`ReferenceError: Cannot access 'evalToolRenderer' before initialization`) triggered whenever `tools/eval` was imported before `tools/renderers`. The eval JS backend statically pulls the agent/task/sdk/extension chain, which re-enters the root barrel → `modes/components` → `tool-execution` → `renderers` while `eval.ts` was still initializing, so `renderers.ts` read `evalToolRenderer` in its TDZ. The eval TUI renderer is now split into a dependency-light `tools/eval-render.ts` that `renderers.ts` imports directly (decoupling pure rendering from the eval runtime); `eval.ts` re-exports `evalToolRenderer`/`EVAL_DEFAULT_PREVIEW_LINES` for compatibility.
 - Fixed `omp --resume <id>` crashing with an uncaught exception when an interactive user declined the cross-project fork prompt. `createSessionManager` now returns `undefined` for that cancellation, while non-interactive invocations still fail with a diagnostic when they cannot answer the fork prompt ([#1668](https://github.com/can1357/oh-my-pi/issues/1668)).
+- Fixed `history.db` never recording the originating session id: the `session_id` column documented for 15.6.0 was missing from the shipped storage layer, so the column was never created/populated on the write path and every prompt row had `session_id` `NULL`. Restored the `session_id` column, schema migration (`ALTER TABLE history ADD COLUMN session_id` for pre-existing databases), and `HistoryEntry.sessionId`; wired interactive mode to register `setSessionResolver(...)` so prompts are stamped with the session active at submission time (tracking fork/resume switches); and re-enabled prompt-history ranking in the `--resume` and in-session session pickers via `HistoryStorage.matchingSessionIds()`.
 
 ## [15.7.6] - 2026-06-01
 ### Added

@@ -146,22 +146,24 @@ const DEFAULT_COLOR_SWATCH_GLYPH = "■";
 // entities like &#9731; and paths like foo#fff) and not trailed by more hex
 // (so over-long runs never produce a misleading swatch). Length/letter rules
 // are enforced in classifyHexColor since the alternation can't express "exactly
-// 3, 4, 6, or 8".
+// 3, 6, or 8".
 const HEX_COLOR_REGEX = /(?<![\w#&])#([0-9a-fA-F]{3,8})(?![0-9a-fA-F])/g;
 const HEX_COLOR_EXACT_REGEX = /^#([0-9a-fA-F]{3,8})$/;
 
 /**
  * Decide whether a run of hex digits denotes a renderable CSS color.
  *
- * Only the canonical CSS lengths (#RGB, #RGBA, #RRGGBB, #RRGGBBAA) qualify. In
- * `strict` mode (bare prose) a 3/4-digit run must contain a hex letter, so the
+ * Only the canonical CSS lengths (#RGB, #RRGGBB, #RRGGBBAA) qualify. The 4-digit
+ * #RGBA form is deliberately excluded: it collides with hashline `#TAG` snapshot
+ * tags (4 hex digits, e.g. #6C5E), which would otherwise sprout spurious swatches.
+ * In `strict` mode (bare prose) a 3-digit run must contain a hex letter, so the
  * far more common short issue/PR references (#123, #1011) don't sprout swatches.
  * Codespans opt out of strictness — the backticks already signal "this is a color".
  */
 function classifyHexColor(hex: string, strict: boolean): boolean {
 	const n = hex.length;
-	if (n !== 3 && n !== 4 && n !== 6 && n !== 8) return false;
-	if (strict && n <= 4 && !/[a-fA-F]/.test(hex)) return false;
+	if (n !== 3 && n !== 6 && n !== 8) return false;
+	if (strict && n === 3 && !/[a-fA-F]/.test(hex)) return false;
 	return true;
 }
 

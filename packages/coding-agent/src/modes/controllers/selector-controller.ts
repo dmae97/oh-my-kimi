@@ -3,7 +3,7 @@ import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
-import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, getProjectDir, normalizePathForComparison } from "@oh-my-pi/pi-utils";
 import { getRoleInfo } from "../../config/model-registry";
 import { formatModelSelectorValue } from "../../config/model-resolver";
 import { settings } from "../../config/settings";
@@ -36,6 +36,7 @@ import {
 	setPreferredImageProvider,
 	setPreferredSearchProvider,
 } from "../../tools";
+import { shortenPath } from "../../tools/render-utils";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { AgentDashboard } from "../components/agent-dashboard";
 import { AssistantMessageComponent } from "../components/assistant-message";
@@ -719,12 +720,22 @@ export class SelectorController {
 			this.ctx.sessionManager.getCwd(),
 			this.ctx.sessionManager.getSessionDir(),
 		);
+		// Current folder has no sessions: preload the global list so the picker
+		// can open straight into all-projects scope instead of dead-ending.
+		let allSessions: SessionInfo[] | undefined;
+		let startInAllScope = false;
+		if (sessions.length === 0) {
+			allSessions = await SessionManager.listAll();
+			startInAllScope = allSessions.length > 0;
+		}
+		const historyStorage = this.ctx.historyStorage;
+		const historyMatcher = historyStorage ? (query: string) => historyStorage.matchingSessionIds(query) : undefined;
 		this.showSelector(done => {
 			const selector = new SessionSelectorComponent(
 				sessions,
-				async sessionPath => {
+				async (session: SessionInfo) => {
 					done();
-					await this.handleResumeSession(sessionPath);
+					await this.handleResumeSession(session.path);
 				},
 				() => {
 					done();
@@ -733,19 +744,25 @@ export class SelectorController {
 				() => {
 					void this.ctx.shutdown();
 				},
-				async (session: SessionInfo) => {
-					if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
-						return false;
-					}
-					const storage = new FileSessionStorage();
-					try {
-						await storage.deleteSessionWithArtifacts(session.path);
-						return true;
-					} catch (err) {
-						throw new Error(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`, {
-							cause: err,
-						});
-					}
+				{
+					onDelete: async (session: SessionInfo) => {
+						if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
+							return false;
+						}
+						const storage = new FileSessionStorage();
+						try {
+							await storage.deleteSessionWithArtifacts(session.path);
+							return true;
+						} catch (err) {
+							throw new Error(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`, {
+								cause: err,
+							});
+						}
+					},
+					historyMatcher,
+					loadAllSessions: () => SessionManager.listAll(),
+					allSessions,
+					startInAllScope,
 				},
 			);
 			selector.setOnRequestRender(() => this.ctx.ui.requestRender());
@@ -801,8 +818,17 @@ export class SelectorController {
 	async handleResumeSession(sessionPath: string): Promise<void> {
 		this.#clearTransientSessionUi();
 
-		// Switch session via AgentSession (emits hook and tool session events)
+		const previousCwd = this.ctx.sessionManager.getCwd();
+		// Switch session via AgentSession (emits hook and tool session events). The
+		// SessionManager adopts the resumed session's own cwd when it differs.
 		await this.ctx.session.switchSession(sessionPath);
+		const newCwd = this.ctx.sessionManager.getCwd();
+		const movedProject = normalizePathForComparison(newCwd) !== normalizePathForComparison(previousCwd);
+		if (movedProject) {
+			// Resumed a session from another project: re-point the process and every
+			// cwd-derived cache at it before rendering.
+			await this.ctx.applyCwdChange(newCwd);
+		}
 		this.#refreshSessionTerminalTitle();
 		this.ctx.updateEditorBorderColor();
 
@@ -810,7 +836,7 @@ export class SelectorController {
 		this.ctx.chatContainer.clear();
 		this.ctx.renderInitialMessages(undefined, { clearTerminalHistory: true });
 		await this.ctx.reloadTodos();
-		this.ctx.showStatus("Resumed session");
+		this.ctx.showStatus(movedProject ? `Resumed session in ${shortenPath(newCwd)}` : "Resumed session");
 	}
 
 	async handleSessionDeleteCommand(): Promise<void> {

@@ -21,6 +21,7 @@ import {
 	VERSION,
 } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
+import { reset as resetCapabilities } from "./capability";
 import type { Args } from "./cli/args";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
@@ -790,7 +791,7 @@ export async function runRootCommand(
 		}
 	}
 
-	const cwd = getProjectDir();
+	let cwd = getProjectDir();
 	const settingsInstance = deps.settings ?? (await logger.time("settings:init", Settings.init, { cwd }));
 	if (parsedArgs.approvalMode) {
 		// Runtime override (not persisted): every settings.get("tools.approvalMode") downstream
@@ -870,17 +871,43 @@ export async function runRootCommand(
 
 	// Handle --resume (no value): show session picker
 	if (parsedArgs.resume === true && !parsedArgs.fork) {
-		const sessions = await logger.time("SessionManager.list", SessionManager.list, cwd, parsedArgs.sessionDir);
-		if (sessions.length === 0) {
-			process.stdout.write(`${chalk.dim("No sessions found")}\n`);
-			return;
+		const folderSessions = await logger.time("SessionManager.list", SessionManager.list, cwd, parsedArgs.sessionDir);
+		let preloadedAllSessions: SessionInfo[] | undefined;
+		let startInAllScope = false;
+		if (folderSessions.length === 0) {
+			// Nothing in the current folder — fall back to a global scan so the
+			// picker can still open in all-projects scope instead of dead-ending.
+			preloadedAllSessions = await logger.time("SessionManager.listAll", SessionManager.listAll);
+			if (preloadedAllSessions.length === 0) {
+				process.stdout.write(`${chalk.dim("No sessions found")}\n`);
+				return;
+			}
+			startInAllScope = true;
 		}
-		const selectedPath = await logger.time("selectSession", selectSession, sessions);
-		if (!selectedPath) {
+		const selected = await logger.time("selectSession", selectSession, folderSessions, {
+			allSessions: preloadedAllSessions,
+			startInAllScope,
+		});
+		if (!selected) {
 			process.stdout.write(`${chalk.dim("No session selected")}\n`);
 			return;
 		}
-		sessionManager = await SessionManager.open(selectedPath);
+		// Resuming a session from another project: switch the process into that
+		// project's directory and refresh cwd-derived caches before the session is
+		// built, so settings discovery, plugins, and capabilities all scope to it.
+		if (selected.cwd && normalizePathForComparison(selected.cwd) !== normalizePathForComparison(getProjectDir())) {
+			// Let the original (launch-cwd) plugin-root preload settle first so its
+			// late resolution can't clobber the re-warm we trigger below.
+			await pluginPreloadPromise.catch(() => {});
+			setProjectDir(selected.cwd);
+			clearPluginRootsAndCaches();
+			resetCapabilities();
+			cwd = getProjectDir();
+			// Re-scope project settings (.claude/settings.yml etc.) to the resumed
+			// project in place so the session is built with its configuration.
+			await settingsInstance.reloadForCwd(cwd);
+		}
+		sessionManager = await SessionManager.open(selected.path);
 	}
 
 	await pluginPreloadPromise;

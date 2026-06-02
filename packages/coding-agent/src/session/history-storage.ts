@@ -8,6 +8,8 @@ export interface HistoryEntry {
 	prompt: string;
 	created_at: number;
 	cwd?: string;
+	/** ID of the session the prompt was submitted from, if known. */
+	sessionId?: string;
 }
 
 type HistoryRow = {
@@ -15,6 +17,7 @@ type HistoryRow = {
 	prompt: string;
 	created_at: number;
 	cwd: string | null;
+	session_id: string | null;
 };
 
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
@@ -62,7 +65,8 @@ class AsyncDrain<T> {
 export class HistoryStorage {
 	#db: Database;
 	static #instance?: HistoryStorage;
-	#drain = new AsyncDrain<Pick<HistoryEntry, "prompt" | "cwd">>(100);
+	#drain = new AsyncDrain<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>(100);
+	#sessionResolver?: () => string | undefined;
 
 	// Prepared statements
 	#insertRowStmt: Statement;
@@ -91,7 +95,8 @@ CREATE TABLE IF NOT EXISTS history (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	prompt TEXT NOT NULL,
 	created_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH}),
-	cwd TEXT
+	cwd TEXT,
+	session_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_history_created_at ON history(created_at DESC);
 
@@ -106,6 +111,10 @@ CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 			this.#migrateHistorySchema();
 		}
 
+		if (!this.#historySchemaHasColumn("session_id")) {
+			this.#db.run("ALTER TABLE history ADD COLUMN session_id TEXT");
+		}
+
 		if (!hasFts) {
 			try {
 				this.#db.run("INSERT INTO history_fts(history_fts) VALUES('rebuild')");
@@ -115,14 +124,14 @@ CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 		}
 
 		this.#recentStmt = this.#db.prepare(
-			"SELECT id, prompt, created_at, cwd FROM history ORDER BY created_at DESC, id DESC LIMIT ?",
+			"SELECT id, prompt, created_at, cwd, session_id FROM history ORDER BY created_at DESC, id DESC LIMIT ?",
 		);
 		this.#searchStmt = this.#db.prepare(
-			"SELECT h.id, h.prompt, h.created_at, h.cwd FROM history_fts f JOIN history h ON h.id = f.rowid WHERE history_fts MATCH ? ORDER BY h.created_at DESC, h.id DESC LIMIT ?",
+			"SELECT h.id, h.prompt, h.created_at, h.cwd, h.session_id FROM history_fts f JOIN history h ON h.id = f.rowid WHERE history_fts MATCH ? ORDER BY h.created_at DESC, h.id DESC LIMIT ?",
 		);
 		this.#lastPromptStmt = this.#db.prepare("SELECT prompt FROM history ORDER BY id DESC LIMIT 1");
 
-		this.#insertRowStmt = this.#db.prepare("INSERT INTO history (prompt, cwd) VALUES (?, ?)");
+		this.#insertRowStmt = this.#db.prepare("INSERT INTO history (prompt, cwd, session_id) VALUES (?, ?, ?)");
 
 		const last = this.#lastPromptStmt.get() as { prompt?: string } | undefined;
 		this.#lastPromptCache = last?.prompt ?? null;
@@ -140,20 +149,30 @@ CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 		HistoryStorage.#instance = undefined;
 	}
 
-	#insertBatch(rows: Array<Pick<HistoryEntry, "prompt" | "cwd">>): void {
-		this.#db.transaction((rows: Array<Pick<HistoryEntry, "prompt" | "cwd">>) => {
+	#insertBatch(rows: Array<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>): void {
+		this.#db.transaction((rows: Array<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>) => {
 			for (const row of rows) {
-				this.#insertRowStmt.run(row.prompt, row.cwd ?? null);
+				this.#insertRowStmt.run(row.prompt, row.cwd ?? null, row.sessionId ?? null);
 			}
 		})(rows);
 	}
 
-	add(prompt: string, cwd?: string): Promise<void> {
+	/**
+	 * Register a resolver that supplies the current session ID for prompts added
+	 * without an explicit `sessionId`. Evaluated synchronously at `add()` time so
+	 * batched writes capture the session active when the prompt was submitted.
+	 */
+	setSessionResolver(resolver: () => string | undefined): void {
+		this.#sessionResolver = resolver;
+	}
+
+	add(prompt: string, cwd?: string, sessionId?: string): Promise<void> {
 		const trimmed = prompt.trim();
 		if (!trimmed) return Promise.resolve();
 		if (this.#lastPromptCache === trimmed) return Promise.resolve();
 		this.#lastPromptCache = trimmed;
-		return this.#drain.push({ prompt: trimmed, cwd: cwd ?? undefined }, rows => {
+		const session = sessionId ?? this.#sessionResolver?.();
+		return this.#drain.push({ prompt: trimmed, cwd: cwd ?? undefined, sessionId: session || undefined }, rows => {
 			this.#insertBatch(rows);
 		});
 	}
@@ -224,6 +243,24 @@ CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 		return merged;
 	}
 
+	/**
+	 * IDs of the sessions whose stored prompts match `query`, ordered by match
+	 * relevance (most relevant/recent first) and de-duplicated. Prompts with no
+	 * recorded session are skipped. Used to augment session ranking in the
+	 * resume picker with prompts that the 4KB session-list prefix never sees.
+	 */
+	matchingSessionIds(query: string, limit = 500): string[] {
+		const seen = new Set<string>();
+		const ids: string[] = [];
+		for (const entry of this.search(query, limit)) {
+			const id = entry.sessionId;
+			if (!id || seen.has(id)) continue;
+			seen.add(id);
+			ids.push(id);
+		}
+		return ids;
+	}
+
 	#ensureDir(dbPath: string): void {
 		const dir = path.dirname(dbPath);
 		fs.mkdirSync(dir, { recursive: true });
@@ -234,6 +271,11 @@ CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 			| { sql?: string | null }
 			| undefined;
 		return row?.sql?.includes("unixepoch(") ?? false;
+	}
+
+	#historySchemaHasColumn(column: string): boolean {
+		const columns = this.#db.prepare("PRAGMA table_info(history)").all() as Array<{ name: string }>;
+		return columns.some(col => col.name === column);
 	}
 
 	#migrateHistorySchema(): void {
@@ -247,7 +289,8 @@ CREATE TABLE history (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	prompt TEXT NOT NULL,
 	created_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH}),
-	cwd TEXT
+	cwd TEXT,
+	session_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_history_created_at ON history(created_at DESC);
 INSERT INTO history (id, prompt, created_at, cwd)
@@ -294,7 +337,7 @@ END;
 		if (stmt) return stmt;
 		const whereClause = Array(tokenCount).fill("prompt LIKE ? ESCAPE '\\' COLLATE NOCASE").join(" AND ");
 		stmt = this.#db.prepare(
-			`SELECT id, prompt, created_at, cwd FROM history WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
+			`SELECT id, prompt, created_at, cwd, session_id FROM history WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
 		);
 		this.#substringStmts.set(tokenCount, stmt);
 		return stmt;
@@ -306,6 +349,7 @@ END;
 			prompt: row.prompt,
 			created_at: row.created_at,
 			cwd: row.cwd ?? undefined,
+			sessionId: row.session_id ?? undefined,
 		};
 	}
 }
