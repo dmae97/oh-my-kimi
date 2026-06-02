@@ -6,6 +6,7 @@ import Anthropic, {
 	APIConnectionTimeoutError as AnthropicConnectionTimeoutError,
 	type ClientOptions as AnthropicSdkClientOptions,
 } from "@anthropic-ai/sdk";
+import type { MessageCreateParamsStreaming as BetaMessageCreateParamsStreaming } from "@anthropic-ai/sdk/resources/beta/messages";
 import type {
 	ContentBlockParam,
 	MessageCreateParamsStreaming,
@@ -23,6 +24,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import {
 	disablesParallelToolUse,
+	Effort,
 	hasOpus47ApiRestrictions,
 	mapEffortToAnthropicAdaptiveEffort,
 	supportsMidConversationSystemMessages,
@@ -90,6 +92,8 @@ export type AnthropicHeaderOptions = {
 	stream?: boolean;
 	modelHeaders?: Record<string, string>;
 	isCloudflareAiGateway?: boolean;
+	claudeCodeSessionId?: string;
+	claudeCodeBetas?: readonly string[];
 };
 
 export function normalizeAnthropicBaseUrl(baseUrl?: string): string | undefined {
@@ -102,7 +106,7 @@ export function normalizeAnthropicBaseUrl(baseUrl?: string): string | undefined 
 }
 
 // Build deduplicated beta header string
-export function buildBetaHeader(baseBetas: string[], extraBetas: string[]): string {
+export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readonly string[]): string {
 	const seen = new Set<string>();
 	const result: string[] = [];
 	for (const beta of [...baseBetas, ...extraBetas]) {
@@ -115,17 +119,37 @@ export function buildBetaHeader(baseBetas: string[], extraBetas: string[]): stri
 	return result.join(",");
 }
 
-const claudeCodeBetaDefaults = [
-	"claude-code-20250219",
+const claudeCodeUtilityBetaDefaults = [
 	"oauth-2025-04-20",
+	"interleaved-thinking-2025-05-14",
+	"redact-thinking-2026-02-12",
 	"context-management-2025-06-27",
 	"prompt-caching-scope-2026-01-05",
-];
+	"structured-outputs-2025-12-15",
+] as const;
+const claudeCodeAgentBetaDefaults = [
+	"claude-code-20250219",
+	"oauth-2025-04-20",
+	"context-1m-2025-08-07",
+	"interleaved-thinking-2025-05-14",
+	"redact-thinking-2026-02-12",
+	"context-management-2025-06-27",
+	"prompt-caching-scope-2026-01-05",
+	"mid-conversation-system-2026-04-07",
+	"advanced-tool-use-2025-11-20",
+] as const;
+const claudeCodeAgentPostEffortBetas = ["extended-cache-ttl-2025-04-11"] as const;
 const fineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14";
 const interleavedThinkingBeta = "interleaved-thinking-2025-05-14";
 const fastModeBeta = "fast-mode-2026-02-01";
 const taskBudgetBeta = "task-budgets-2026-03-13";
 const effortBeta = "effort-2025-11-24";
+
+function buildClaudeCodeBetas(agentRequest: boolean, thinkingRequest: boolean): readonly string[] {
+	if (!agentRequest) return claudeCodeUtilityBetaDefaults;
+	if (!thinkingRequest) return [...claudeCodeAgentBetaDefaults, ...claudeCodeAgentPostEffortBetas];
+	return [...claudeCodeAgentBetaDefaults, effortBeta, ...claudeCodeAgentPostEffortBetas];
+}
 
 function getHeaderCaseInsensitive(headers: Record<string, string> | undefined, headerName: string): string | undefined {
 	if (!headers) return undefined;
@@ -164,8 +188,8 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 	const oauthToken = options.isOAuth ?? isAnthropicOAuthToken(options.apiKey);
 	const extraBetas = options.extraBetas ?? [];
 	const stream = options.stream ?? false;
-	const betaHeader = buildBetaHeader(claudeCodeBetaDefaults, extraBetas);
-	const acceptHeader = stream ? "text/event-stream" : "application/json";
+	const betaHeader = buildBetaHeader(options.claudeCodeBetas ?? buildClaudeCodeBetas(true, true), extraBetas);
+	const acceptHeader = oauthToken ? "application/json" : stream ? "text/event-stream" : "application/json";
 	const modelHeaders = Object.fromEntries(
 		Object.entries(options.modelHeaders ?? {}).filter(([key]) => !enforcedHeaderKeys.has(key.toLowerCase())),
 	);
@@ -192,6 +216,8 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 			Authorization: `Bearer ${options.apiKey}`,
 			...sharedHeaders,
 			"Anthropic-Beta": betaHeader,
+			...(options.claudeCodeSessionId ? { "X-Claude-Code-Session-Id": options.claudeCodeSessionId } : {}),
+			"x-client-request-id": nodeCrypto.randomUUID(),
 			"User-Agent": userAgent,
 		};
 	} else if (!isAnthropicApiBaseUrl(options.baseUrl)) {
@@ -213,7 +239,7 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 	}
 }
 
-type AnthropicCacheControl = { type: "ephemeral"; ttl?: "1h" | "5m" };
+type AnthropicCacheControl = { type: "ephemeral"; ttl?: "1h" | "5m"; scope?: "global" };
 
 type AnthropicSamplingParams = MessageCreateParamsStreaming & {
 	top_p?: number;
@@ -332,11 +358,14 @@ function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean 
 }
 
 /**
- * `speed` lives on `BetaMessageCreateParams` (client.beta.messages) but this
- * provider posts via `client.messages.create`, whose param type doesn't
- * include it. This alias narrows the cast to one place.
+ * `speed` and `context_management` live on Beta message params.  API-key
+ * requests still use `client.messages.create`, so these aliases narrow casts to
+ * one place.
  */
 type ParamsWithSpeed = MessageCreateParamsStreaming & { speed?: "fast" };
+type ParamsWithContextManagement = MessageCreateParamsStreaming & {
+	context_management?: { edits: [{ type: "clear_thinking_20251015"; keep: "all" }] };
+};
 
 function dropAnthropicFastMode(params: MessageCreateParamsStreaming): void {
 	delete (params as ParamsWithSpeed).speed;
@@ -353,9 +382,10 @@ function dropAnthropicStrictTools(params: MessageCreateParamsStreaming): void {
 function getCacheControl(
 	model: Model<"anthropic-messages">,
 	baseUrl: string,
-	cacheRetention?: CacheRetention,
+	cacheRetention: CacheRetention | undefined,
+	isOAuthToken: boolean,
 ): { retention: CacheRetention; cacheControl?: AnthropicCacheControl } {
-	const retention = resolveCacheRetention(cacheRetention);
+	const retention = cacheRetention ?? (isOAuthToken ? "long" : resolveCacheRetention(undefined));
 	if (retention === "none") {
 		return { retention };
 	}
@@ -369,10 +399,10 @@ function getCacheControl(
 	};
 }
 
-// Stealth mode: Mimic Claude Code headers and tool prefixing.
-export const claudeCodeVersion = "2.1.148";
+// Stealth mode: mimic Claude Code's request fingerprint.
+export const claudeCodeVersion = "2.1.160";
 export const claudeToolPrefix: string = "proxy_";
-export const claudeCodeSystemInstruction = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+export const claudeCodeSystemInstruction = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 export function mapStainlessOs(platform: string): "MacOS" | "Windows" | "Linux" | "FreeBSD" | `Other::${string}` {
 	switch (platform.toLowerCase()) {
@@ -432,6 +462,8 @@ const enforcedHeaderKeys = new Set(
 		"X-App",
 		"Authorization",
 		"X-Api-Key",
+		"X-Claude-Code-Session-Id",
+		"x-client-request-id",
 		"cf-aig-authorization",
 	].map(key => key.toLowerCase()),
 );
@@ -541,6 +573,23 @@ function isClaudeJsonUserId(userId: string): boolean {
 	return typeof obj.session_id === "string" && obj.session_id.length > 0;
 }
 
+function extractClaudeMetadataSessionId(userId: unknown): string | undefined {
+	if (typeof userId !== "string") return undefined;
+	if (isClaudeCloakingUserId(userId)) {
+		return userId.slice(userId.lastIndexOf("_session_") + "_session_".length);
+	}
+	if (userId.length === 0 || userId[0] !== "{") return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(userId);
+	} catch {
+		return undefined;
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+	const sessionId = (parsed as Record<string, unknown>).session_id;
+	return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : undefined;
+}
+
 export function generateClaudeCloakingUserId(): string {
 	const userHash = nodeCrypto.randomBytes(32).toString("hex");
 	const accountId = nodeCrypto.randomUUID().toLowerCase();
@@ -548,7 +597,19 @@ export function generateClaudeCloakingUserId(): string {
 	return `user_${userHash}_account_${accountId}_session_${sessionId}`;
 }
 
-function resolveAnthropicMetadataUserId(userId: unknown, isOAuthToken: boolean): string | undefined {
+function generateClaudeJsonUserId(sessionId?: string): string {
+	return JSON.stringify({
+		device_id: nodeCrypto.randomBytes(32).toString("hex"),
+		account_uuid: nodeCrypto.randomUUID().toLowerCase(),
+		session_id: sessionId ?? nodeCrypto.randomUUID().toLowerCase(),
+	});
+}
+
+function resolveAnthropicMetadataUserId(
+	userId: unknown,
+	isOAuthToken: boolean,
+	sessionId?: string,
+): string | undefined {
 	if (typeof userId === "string") {
 		if (!isOAuthToken || isClaudeCloakingUserId(userId) || isClaudeJsonUserId(userId)) {
 			return userId;
@@ -556,7 +617,7 @@ function resolveAnthropicMetadataUserId(userId: unknown, isOAuthToken: boolean):
 	}
 
 	if (!isOAuthToken) return undefined;
-	return generateClaudeCloakingUserId();
+	return generateClaudeJsonUserId(sessionId);
 }
 const ANTHROPIC_BUILTIN_TOOL_NAMES = new Set(["web_search", "code_execution", "text_editor", "computer"]);
 export const applyClaudeToolPrefix = (name: string, prefixOverride: string = claudeToolPrefix) => {
@@ -802,8 +863,10 @@ export type AnthropicClientOptionsArgs = {
 	dynamicHeaders?: Record<string, string>;
 	isOAuth?: boolean;
 	hasTools?: boolean;
+	thinkingEnabled?: boolean;
 	onSseEvent?: AnthropicOptions["onSseEvent"];
 	fetch?: FetchImpl;
+	claudeCodeSessionId?: string;
 };
 
 export type AnthropicClientOptionsResult = {
@@ -1231,7 +1294,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				if (options?.taskBudget && !extraBetas.includes(taskBudgetBeta)) {
 					extraBetas.push(taskBudgetBeta);
 				}
-				if (model.reasoning && !extraBetas.includes(effortBeta)) {
+				if (options?.thinkingEnabled && model.reasoning && !extraBetas.includes(effortBeta)) {
 					extraBetas.push(effortBeta);
 				}
 
@@ -1245,8 +1308,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					dynamicHeaders: copilotDynamicHeaders?.headers,
 					isOAuth: options?.isOAuth,
 					hasTools: !!context.tools?.length,
+					thinkingEnabled: options?.thinkingEnabled,
 					onSseEvent: options?.onSseEvent,
 					fetch: options?.fetch,
+					claudeCodeSessionId: options?.sessionId ?? extractClaudeMetadataSessionId(options?.metadata?.user_id),
 				});
 				client = created.client;
 				isOAuthToken = created.isOAuthToken;
@@ -1277,7 +1342,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					api: output.api,
 					model: model.id,
 					method: "POST",
-					url: `${baseUrl}/v1/messages`,
+					url: `${baseUrl}/v1/messages${isOAuthToken ? "?beta=true" : ""}`,
 					body: nextParams,
 				};
 				return nextParams;
@@ -1306,7 +1371,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				activeAbortTracker = createAbortSourceTracker(options?.signal);
 				const { requestSignal } = activeAbortTracker;
 				const requestOptions = createSdkStreamRequestOptions(requestSignal, requestTimeoutMs);
-				const anthropicRequest = client.messages.create({ ...params, stream: true }, requestOptions);
+				const anthropicRequest: unknown = isOAuthToken
+					? client.beta.messages.create(
+							{ ...params, stream: true } as BetaMessageCreateParamsStreaming,
+							requestOptions,
+						)
+					: client.messages.create({ ...params, stream: true }, requestOptions);
 				let streamedReplayUnsafeContent = false;
 
 				try {
@@ -1699,6 +1769,22 @@ type SystemBlockOptions = {
 	cacheControl?: AnthropicCacheControl;
 };
 
+function withGlobalCacheScope(cacheControl: AnthropicCacheControl): AnthropicCacheControl {
+	return { ...cacheControl, scope: "global" };
+}
+
+function applyClaudeCodeSystemCache(
+	blocks: AnthropicSystemBlock[],
+	cacheControl: AnthropicCacheControl | undefined,
+): number {
+	if (!cacheControl || blocks.length <= 2) return 0;
+	blocks[2] = { ...blocks[2], cache_control: withGlobalCacheScope(cacheControl) };
+	if (blocks.length === 3) return 1;
+	const lastIndex = blocks.length - 1;
+	blocks[lastIndex] = { ...blocks[lastIndex], cache_control: cacheControl };
+	return 2;
+}
+
 export function buildAnthropicSystemBlocks(
 	systemPrompt: readonly string[] | undefined,
 	options: SystemBlockOptions = {},
@@ -1709,21 +1795,18 @@ export function buildAnthropicSystemBlocks(
 	const hasBillingHeader = sanitizedPrompts.some(prompt => prompt.includes(CLAUDE_BILLING_HEADER_PREFIX));
 
 	if (includeClaudeCodeInstruction && !hasBillingHeader) {
-		// CC system-block layout (3 blocks max):
-		//   [0] billing header      — never cached
-		//   [1] system instruction  — cached when cacheControl is set
-		//   [2] all user content    — extra instructions + system prompts joined with \n\n, cached
-		// Collapsing into one merged user block prevents block count from
-		// fingerprinting the caller.
 		const blocks: AnthropicSystemBlock[] = [
 			{ type: "text", text: createClaudeBillingHeader(firstUserMessageText ?? "") },
-			{ type: "text", text: claudeCodeSystemInstruction, ...(cacheControl && { cache_control: cacheControl }) },
+			{ type: "text", text: claudeCodeSystemInstruction },
 		];
 
-		const userContent = [...trimmedInstructions, ...sanitizedPrompts].join("\n\n");
-		if (userContent) {
-			blocks.push({ type: "text", text: userContent, ...(cacheControl && { cache_control: cacheControl }) });
+		for (const instruction of trimmedInstructions) {
+			blocks.push({ type: "text", text: instruction });
 		}
+		for (const prompt of sanitizedPrompts) {
+			blocks.push({ type: "text", text: prompt });
+		}
+		applyClaudeCodeSystemCache(blocks, cacheControl);
 
 		return blocks;
 	}
@@ -1758,8 +1841,10 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		headers,
 		dynamicHeaders,
 		hasTools = false,
+		thinkingEnabled = false,
 		isOAuth,
 		onSseEvent,
+		claudeCodeSessionId,
 	} = args;
 	const compat = getAnthropicCompat(model);
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinkingDisplay(model.id);
@@ -1821,6 +1906,8 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		stream,
 		modelHeaders: mergeHeaders(model.headers, foundryCustomHeaders, headers, dynamicHeaders),
 		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
+		claudeCodeSessionId,
+		claudeCodeBetas: oauthToken ? buildClaudeCodeBetas(hasTools || thinkingEnabled, thinkingEnabled) : [],
 	});
 
 	if (model.provider === "cloudflare-ai-gateway") {
@@ -1927,35 +2014,17 @@ function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?:
 		}
 	}
 
-	// CC layout: 2 system + 2 message breakpoints, no tool breakpoint.
-	//
-	// Tools are omitted because they come after system in the token sequence: when
-	// system changes the tool cache prefix also changes, making a dedicated tool
-	// breakpoint redundant.  The instruction block (system[1]) is stable across every
-	// request in a session, so caching it gives a guaranteed hit at negligible cost.
-	//
-	// Breakpoint order (each "covers" all content before it):
-	//   [0] system[1]  — instruction block   (always hits; never changes)
-	//   [1] system[-1] — merged user content
-	//   [2] penultimate user/assistant message
-	//   [3] last user/assistant message
 	const MAX_CACHE_BREAKPOINTS = 4;
 	let cacheBreakpointsUsed = 0;
+	let isCCLayout = false;
 
 	if (params.system && Array.isArray(params.system) && params.system.length > 0) {
-		// When the 3-block CC layout is present (billing / instruction / merged),
-		// cache the instruction (index 1) independently so it gets its own
-		// always-hit breakpoint before the potentially-changing merged block.
-		// Guard on the billing header prefix so we don't misfire on non-CC
-		// flows that happen to have ≥3 system blocks.
-		const isCCLayout =
+		isCCLayout =
 			params.system.length >= 3 &&
-			(params.system[0] as { text?: string }).text?.startsWith(CLAUDE_BILLING_HEADER_PREFIX);
+			(params.system[0] as { text?: string }).text?.startsWith(CLAUDE_BILLING_HEADER_PREFIX) === true;
 		if (isCCLayout) {
-			(params.system[1] as CacheControlBlock).cache_control = cacheControl;
-			cacheBreakpointsUsed++;
-		}
-		if (cacheBreakpointsUsed < MAX_CACHE_BREAKPOINTS) {
+			cacheBreakpointsUsed += applyClaudeCodeSystemCache(params.system as AnthropicSystemBlock[], cacheControl);
+		} else {
 			applyCacheControlToLastBlock(params.system, cacheControl);
 			cacheBreakpointsUsed++;
 		}
@@ -1963,11 +2032,7 @@ function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?:
 
 	if (cacheBreakpointsUsed >= MAX_CACHE_BREAKPOINTS) return;
 
-	// CC marks the last two messages regardless of role (user or assistant).
-	// Caching the penultimate assistant message is higher value than the
-	// penultimate user message: it contains the previous turn's tool calls and
-	// response — the largest and most recently created message in the array.
-	const start = Math.max(0, params.messages.length - 2);
+	const start = isCCLayout ? Math.max(0, params.messages.length - 1) : Math.max(0, params.messages.length - 2);
 	for (let i = start; i < params.messages.length; i++) {
 		if (cacheBreakpointsUsed >= MAX_CACHE_BREAKPOINTS) break;
 		const message = params.messages[i];
@@ -2112,6 +2177,77 @@ function enforceCacheControlLimit(params: MessageCreateParamsStreaming, maxBreak
 		stripAllCacheControl(toolBlocks, excessCounter);
 	}
 }
+function mapEffortToClaudeCodeAdaptiveEffort(
+	model: Model<"anthropic-messages">,
+	effort: Effort,
+): "low" | "medium" | "high" | "xhigh" {
+	// Validate against the model's supported effort range before applying Claude
+	// Code's unshifted wire mapping.
+	mapEffortToAnthropicAdaptiveEffort(model, effort);
+	switch (effort) {
+		case Effort.Minimal:
+		case Effort.Low:
+			return "low";
+		case Effort.Medium:
+			return "medium";
+		case Effort.High:
+			return "high";
+		case Effort.XHigh:
+			return "xhigh";
+	}
+}
+
+function resolveAnthropicAdaptiveEffort(
+	model: Model<"anthropic-messages">,
+	options: AnthropicOptions,
+	isOAuthToken: boolean,
+): AnthropicEffort | undefined {
+	if (options.effort) return options.effort;
+	const requestedEffort = options.reasoning;
+	if (!requestedEffort) return undefined;
+	return isOAuthToken
+		? mapEffortToClaudeCodeAdaptiveEffort(model, requestedEffort)
+		: mapEffortToAnthropicAdaptiveEffort(model, requestedEffort);
+}
+
+function startsWithAfterAsciiWhitespace(value: string, prefix: string): boolean {
+	let index = 0;
+	while (index < value.length) {
+		const code = value.charCodeAt(index);
+		if (code !== 9 && code !== 10 && code !== 13 && code !== 32) break;
+		index++;
+	}
+	return value.startsWith(prefix, index);
+}
+
+function isClaudeSyntheticUserText(value: string): boolean {
+	return startsWithAfterAsciiWhitespace(value, "<system-reminder>");
+}
+
+function extractClaudeCodeFirstUserMessageText(messages: readonly Message[]): string {
+	for (const message of messages) {
+		if (message.role !== "user") continue;
+		const { content } = message;
+		if (typeof content === "string") return content;
+		if (!Array.isArray(content)) return "";
+		let fallback: string | undefined;
+		for (const block of content) {
+			if (block.type !== "text") continue;
+			fallback ??= block.text;
+			if (!isClaudeSyntheticUserText(block.text)) return block.text;
+		}
+		return fallback ?? "";
+	}
+	return "";
+}
+
+function applyClaudeCodeContextManagement(params: MessageCreateParamsStreaming, isOAuthToken: boolean): void {
+	if (!isOAuthToken || params.thinking?.type !== "adaptive") return;
+	(params as ParamsWithContextManagement).context_management = {
+		edits: [{ type: "clear_thinking_20251015", keep: "all" }],
+	};
+}
+
 function buildParams(
 	model: Model<"anthropic-messages">,
 	baseUrl: string,
@@ -2120,13 +2256,13 @@ function buildParams(
 	options?: AnthropicOptions,
 	disableStrictTools = false,
 ): MessageCreateParamsStreaming {
-	const { cacheControl } = getCacheControl(model, baseUrl, options?.cacheRetention);
+	const { cacheControl } = getCacheControl(model, baseUrl, options?.cacheRetention, isOAuthToken);
 	const params: AnthropicSamplingParams = {
 		model: model.id,
 		// `system`-role params (Opus 4.8 mid-conversation system messages) are not
 		// yet in the SDK's `MessageParam` union; cast until it widens.
 		messages: convertAnthropicMessages(context.messages, model, isOAuthToken) as MessageParam[],
-		max_tokens: options?.maxTokens || (model.maxTokens / 3) | 0,
+		max_tokens: options?.maxTokens || model.maxTokens,
 		stream: true,
 	};
 	if (options?.temperature !== undefined && !options?.thinkingEnabled) {
@@ -2166,23 +2302,19 @@ function buildParams(
 			disableStrictTools || model.provider === "github-copilot",
 			getAnthropicCompat(model).supportsEagerToolInputStreaming,
 		);
+	} else if (isOAuthToken) {
+		params.tools = [];
 	}
 
 	if (model.reasoning) {
 		if (options?.thinkingEnabled) {
 			const mode = model.thinking?.mode;
-			const requestedEffort = options.reasoning;
-			const effort =
-				options.effort ??
-				(requestedEffort ? mapEffortToAnthropicAdaptiveEffort(model, requestedEffort) : undefined);
+			const effort = resolveAnthropicAdaptiveEffort(model, options, isOAuthToken);
 
 			const compat = getAnthropicCompat(model);
 			if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
-				// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
-				// response by default. Opt into summarized reasoning so thinking deltas keep
-				// streaming with human-readable content for callers that rely on it.
 				const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
-				if (supportsAdaptiveThinkingDisplay(model.id)) {
+				if (options.thinkingDisplay !== undefined || (!isOAuthToken && supportsAdaptiveThinkingDisplay(model.id))) {
 					adaptive.display = options.thinkingDisplay ?? "summarized";
 				}
 				params.thinking = adaptive as typeof params.thinking;
@@ -2209,7 +2341,7 @@ function buildParams(
 	if (options?.taskBudget) {
 		getAnthropicOutputConfig(params).task_budget = options.taskBudget;
 	}
-	const metadataUserId = resolveAnthropicMetadataUserId(options?.metadata?.user_id, isOAuthToken);
+	const metadataUserId = resolveAnthropicMetadataUserId(options?.metadata?.user_id, isOAuthToken, options?.sessionId);
 	if (metadataUserId) {
 		params.metadata = { user_id: metadataUserId };
 	}
@@ -2222,10 +2354,7 @@ function buildParams(
 		if (typeof options.toolChoice === "string") {
 			params.tool_choice = { type: options.toolChoice };
 		} else if (isOAuthToken && options.toolChoice.name) {
-			params.tool_choice = {
-				...options.toolChoice,
-				name: applyClaudeToolPrefix(options.toolChoice.name),
-			};
+			params.tool_choice = { ...options.toolChoice, name: applyClaudeToolPrefix(options.toolChoice.name) };
 		} else {
 			params.tool_choice = options.toolChoice;
 		}
@@ -2247,22 +2376,9 @@ function buildParams(
 	}
 
 	const shouldInjectClaudeCodeInstruction = isOAuthToken && !model.id.startsWith("claude-3-5-haiku");
-	// Extract the first user message text for the billing-header fingerprint.
-	// Must use pre-conversion messages so synthetic injections (system-reminders,
-	// etc.) don't pollute the seed — mirrors CC's computeFingerprintFromMessages.
-	let firstUserMessageText = "";
-	if (shouldInjectClaudeCodeInstruction) {
-		const first = context.messages.find(m => m.role === "user");
-		if (first) {
-			const { content } = first;
-			if (typeof content === "string") {
-				firstUserMessageText = content;
-			} else if (Array.isArray(content)) {
-				const tb = content.find((b): b is TextContent => b.type === "text");
-				firstUserMessageText = tb?.text ?? "";
-			}
-		}
-	}
+	const firstUserMessageText = shouldInjectClaudeCodeInstruction
+		? extractClaudeCodeFirstUserMessageText(context.messages)
+		: "";
 	const systemBlocks = buildAnthropicSystemBlocks(context.systemPrompt, {
 		includeClaudeCodeInstruction: shouldInjectClaudeCodeInstruction,
 		firstUserMessageText,
@@ -2271,6 +2387,7 @@ function buildParams(
 		params.system = systemBlocks;
 	}
 	disableThinkingIfToolChoiceForced(params);
+	applyClaudeCodeContextManagement(params, isOAuthToken);
 	ensureMaxTokensForThinking(params, model);
 	applyPromptCaching(params, cacheControl);
 	enforceCacheControlLimit(params, 4);
@@ -2946,10 +3063,14 @@ function convertTools(
 
 	return tools.map((tool, index) => {
 		const plan = schemaPlans[index];
-		return {
+		const baseTool = {
 			name: isOAuthToken ? applyClaudeToolPrefix(tool.name) : tool.name,
 			description: tool.description || "",
 			input_schema: plan.inputSchema,
+		};
+		if (isOAuthToken) return baseTool;
+		return {
+			...baseTool,
 			...(supportsEagerToolInputStreaming ? { eager_input_streaming: true } : {}),
 			...(plan.strict ? { strict: true } : {}),
 		};

@@ -89,6 +89,31 @@ function captureAnthropicPayload(
 	return promise;
 }
 
+function expectClaudeMetadataUserId(userId: string | undefined, expectedSessionId?: string): void {
+	expect(typeof userId).toBe("string");
+	const parsed = JSON.parse(userId ?? "{}") as {
+		device_id?: unknown;
+		account_uuid?: unknown;
+		session_id?: unknown;
+	};
+	expect(typeof parsed.device_id).toBe("string");
+	if (typeof parsed.device_id === "string") {
+		expect(parsed.device_id).toMatch(/^[0-9a-f]{64}$/);
+	}
+	expect(typeof parsed.account_uuid).toBe("string");
+	if (typeof parsed.account_uuid === "string") {
+		expect(parsed.account_uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+	}
+	if (expectedSessionId) {
+		expect(parsed.session_id).toBe(expectedSessionId);
+	} else {
+		expect(typeof parsed.session_id).toBe("string");
+		if (typeof parsed.session_id === "string") {
+			expect(parsed.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+		}
+	}
+}
+
 describe("Anthropic request fingerprint alignment", () => {
 	it("maps Stainless OS and arch values from explicit inputs", () => {
 		expect(mapStainlessOs("darwin")).toBe("MacOS");
@@ -116,42 +141,64 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(headers["X-Stainless-Arch"]).toBe(mapStainlessArch(process.arch));
 	});
 
-	it("matches Claude Code 2.1.158 OAuth header defaults", () => {
+	it("matches Claude Code OAuth header defaults", () => {
+		const sessionId = "167ec5b4-e711-4169-879f-84fa52679d9c";
 		const headers = buildAnthropicHeaders({
 			apiKey: "sk-ant-oat-test",
 			isOAuth: true,
 			stream: true,
-			claudeCodeSessionId: "167ec5b4-e711-4169-879f-84fa52679d9c",
+			claudeCodeSessionId: sessionId,
 		});
 
 		expect(headers.Accept).toBe("application/json");
 		expect(headers["User-Agent"]).toBe(`claude-cli/${claudeCodeVersion} (external, cli)`);
-		expect(headers["X-Claude-Code-Session-Id"]).toBe("167ec5b4-e711-4169-879f-84fa52679d9c");
+		expect(headers["X-Claude-Code-Session-Id"]).toBe(sessionId);
+		expect(headers["x-client-request-id"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 		expect(headers["Anthropic-Beta"]).toBe(
 			"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11",
 		);
 	});
 
-	it("matches CC system-block layout: billing and instruction uncached, merged content cached", () => {
+	it("matches Claude Code utility OAuth beta defaults when tools and thinking are absent", () => {
+		const options = buildAnthropicClientOptions({
+			model: ANTHROPIC_MODEL,
+			apiKey: "sk-ant-oat-test",
+			stream: true,
+			interleavedThinking: true,
+			hasTools: false,
+			thinkingEnabled: false,
+		});
+
+		expect(options.defaultHeaders["Anthropic-Beta"]).toBe(
+			"oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,structured-outputs-2025-12-15",
+		);
+	});
+
+	it("matches CC system-block layout: billing and instruction uncached, context cached in order", () => {
 		const blocks = buildAnthropicSystemBlocks(["Stay concise."], {
 			includeClaudeCodeInstruction: true,
 			extraInstructions: ["Use citations when possible"],
 			cacheControl: { type: "ephemeral" },
 		});
 
-		expect(blocks).toHaveLength(3);
-		// [0] billing header — never cached
+		expect(blocks).toHaveLength(4);
 		expect(blocks?.[0].text).toStartWith("x-anthropic-billing-header:");
 		expect(blocks?.[0].cache_control).toBeUndefined();
-		// [1] system instruction — never cached
 		expect(blocks?.[1].text).toBe(claudeCodeSystemInstruction);
 		expect(blocks?.[1].cache_control).toBeUndefined();
-		// [2] all user content merged — extra instructions then system prompt, joined with \n\n, cached
-		expect(blocks?.[2].text).toBe("Use citations when possible\n\nStay concise.");
-		expect(blocks?.[2].cache_control).toEqual({ type: "ephemeral" });
+		expect(blocks?.[2]).toEqual({
+			type: "text",
+			text: "Use citations when possible",
+			cache_control: { type: "ephemeral", scope: "global" },
+		});
+		expect(blocks?.[3]).toEqual({
+			type: "text",
+			text: "Stay concise.",
+			cache_control: { type: "ephemeral" },
+		});
 	});
 
-	it("keeps the Claude Code instruction uncached in OAuth request payloads", async () => {
+	it("caches Claude Code context and the last user block in OAuth request payloads", async () => {
 		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
 			systemPrompt: ["Stay concise."],
 			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
@@ -164,7 +211,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.system?.[0]?.cache_control).toBeUndefined();
 		expect(payload.system?.[1]?.text).toBe(claudeCodeSystemInstruction);
 		expect(payload.system?.[1]?.cache_control).toBeUndefined();
-		expect(payload.system?.[2]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+		expect(payload.system?.[2]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h", scope: "global" });
 		const content = payload.messages?.[0]?.content;
 		expect(Array.isArray(content)).toBe(true);
 		expect(Array.isArray(content) ? content[0]?.cache_control : undefined).toEqual({
@@ -291,29 +338,26 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(isClaudeCloakingUserId(userId)).toBe(true);
 	});
 
-	it("injects generated metadata.user_id for OAuth requests when missing", async () => {
+	it("injects Claude Code JSON metadata.user_id for OAuth requests when missing", async () => {
 		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
 			systemPrompt: ["Stay concise."],
 			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 		})) as { metadata?: { user_id?: string } };
-		const userId = payload.metadata?.user_id;
-		expect(typeof userId).toBe("string");
-		expect(isClaudeCloakingUserId(userId ?? "")).toBe(true);
+		expectClaudeMetadataUserId(payload.metadata?.user_id);
 	});
 
-	it("uses the explicit session id for OAuth metadata when caller metadata is missing", async () => {
+	it("uses the explicit session id for generated OAuth metadata", async () => {
+		const sessionId = "167ec5b4-e711-4169-879f-84fa52679d9c";
 		const payload = (await captureAnthropicPayload(
 			ANTHROPIC_MODEL,
 			{
 				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			},
-			{ sessionId: "167ec5b4-e711-4169-879f-84fa52679d9c" },
+			{ sessionId },
 		)) as { metadata?: { user_id?: string } };
 
-		expect(payload.metadata?.user_id).toBe(
-			JSON.stringify({ session_id: "167ec5b4-e711-4169-879f-84fa52679d9c" }),
-		);
+		expectClaudeMetadataUserId(payload.metadata?.user_id, sessionId);
 	});
 
 	it("does not inject metadata.user_id for non-OAuth requests without caller metadata", async () => {
@@ -349,10 +393,19 @@ describe("Anthropic request fingerprint alignment", () => {
 			account_uuid: "12345678-1234-1234-1234-1234567890ab",
 			session_id: sessionId,
 		});
-		const { promise, resolve } = Promise.withResolvers<string | null>();
+		const { promise, resolve } = Promise.withResolvers<{
+			sessionHeader: string | null;
+			url: string;
+			accept: string | null;
+		}>();
 		const controller = new AbortController();
-		const fakeFetch = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-			resolve(new Headers(init?.headers).get("X-Claude-Code-Session-Id"));
+		const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			const headers = new Headers(init?.headers);
+			resolve({
+				sessionHeader: headers.get("X-Claude-Code-Session-Id"),
+				url: input instanceof Request ? input.url : String(input),
+				accept: headers.get("Accept"),
+			});
 			controller.abort();
 			return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n', {
 				status: 200,
@@ -375,7 +428,11 @@ describe("Anthropic request fingerprint alignment", () => {
 			},
 		);
 
-		expect(await promise).toBe(sessionId);
+		expect(await promise).toEqual({
+			sessionHeader: sessionId,
+			url: "https://api.anthropic.com/v1/messages?beta=true",
+			accept: "application/json",
+		});
 	});
 
 	it("preserves real Claude Code JSON-format metadata.user_id for OAuth requests", async () => {
@@ -424,7 +481,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		)) as { metadata?: { user_id?: string } };
 
 		expect(payload.metadata?.user_id).not.toBe(userId);
-		expect(isClaudeCloakingUserId(payload.metadata?.user_id ?? "")).toBe(true);
+		expectClaudeMetadataUserId(payload.metadata?.user_id);
 	});
 
 	it("replaces invalid caller metadata.user_id for OAuth requests", async () => {
@@ -438,7 +495,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		)) as { metadata?: { user_id?: string } };
 
 		expect(payload.metadata?.user_id).not.toBe("invalid-user-id");
-		expect(isClaudeCloakingUserId(payload.metadata?.user_id ?? "")).toBe(true);
+		expectClaudeMetadataUserId(payload.metadata?.user_id);
 	});
 	it("adds additionalProperties false to Anthropic tool object schemas", async () => {
 		const originalNestedSchema = {
@@ -665,6 +722,33 @@ describe("Anthropic request fingerprint alignment", () => {
 		const block = payload.tools?.[0]?.input_schema?.properties?.block as Record<string, unknown> | undefined;
 		expect(block?.type).toBe("object");
 		expect(block).not.toHaveProperty("minItems");
+	});
+
+	it("keeps OAuth tool names behind the proxy prefix without strict or eager streaming flags", async () => {
+		const tools: Tool[] = [
+			{
+				name: "bash",
+				description: "run commands",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: { command: { type: "string" } },
+					required: ["command"],
+				} as TJsonSchema,
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: ["Stay concise."],
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			tools,
+		})) as {
+			tools?: Array<{ name?: string; strict?: boolean; eager_input_streaming?: boolean }>;
+		};
+
+		expect(payload.tools?.[0]?.name).toBe("proxy_bash");
+		expect(payload.tools?.[0]?.strict).toBeUndefined();
+		expect(payload.tools?.[0]?.eager_input_streaming).toBeUndefined();
 	});
 
 	it("marks only the Anthropic strict allowlist strict", async () => {
@@ -1199,11 +1283,15 @@ describe("Anthropic request fingerprint alignment", () => {
 				thinkingEnabled: true,
 				reasoning: Effort.High,
 			},
-		)) as { thinking?: { type?: string; display?: string }; context_management?: unknown; output_config?: { effort?: string } };
+		)) as {
+			thinking?: { type?: string; display?: string };
+			context_management?: unknown;
+			output_config?: { effort?: string };
+		};
 
 		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
 		expect(payload.context_management).toBeUndefined();
-		expect(payload.output_config).toEqual({ effort: "high" });
+		expect(payload.output_config).toEqual({ effort: "xhigh" });
 	});
 
 	it("sends task budgets through Anthropic output_config without dropping adaptive effort", async () => {
