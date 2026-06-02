@@ -10,6 +10,7 @@ import {
 	buildDiscoverableToolSearchIndex,
 	type DiscoverableTool,
 	type DiscoverableToolSearchIndex,
+	filterBySource,
 	formatDiscoverableToolServerSummary,
 	searchDiscoverableTools,
 	summarizeDiscoverableTools,
@@ -141,10 +142,15 @@ function isDiscoveryEnabled(session: ToolSession): boolean {
 
 export function renderSearchToolBm25Description(discoverableTools: DiscoverableTool[] = []): string {
 	const summary = summarizeDiscoverableTools(discoverableTools);
+	const builtinToolNames = filterBySource(discoverableTools, "builtin")
+		.map(t => t.name)
+		.sort();
 	return prompt.render(searchToolBm25Description, {
-		discoverableMCPToolCount: summary.toolCount,
+		discoverableToolCount: summary.toolCount,
 		discoverableMCPServerSummaries: summary.servers.map(formatDiscoverableToolServerSummary),
 		hasDiscoverableMCPServers: summary.servers.length > 0,
+		discoverableBuiltinToolNames: builtinToolNames,
+		hasDiscoverableBuiltinTools: builtinToolNames.length > 0,
 	});
 }
 
