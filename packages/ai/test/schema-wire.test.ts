@@ -90,6 +90,33 @@ describe("zodToWireSchema — empty-schema normalization", () => {
 	});
 });
 
+describe("zodToWireSchema — nullable scalar normalization", () => {
+	it("rewrites nullable scalar anyOf to a type array while preserving metadata", () => {
+		const schema = z.object({ skip: z.number().nullable().describe("matches to skip") });
+		const wire = zodToWireSchema(schema);
+		const skip = (wire.properties as Record<string, unknown>).skip as Record<string, unknown>;
+		expect(skip).toEqual({
+			type: ["number", "null"],
+			description: "matches to skip",
+		});
+	});
+
+	it("keeps nullable integers free of Zod safe-integer bounds", () => {
+		const schema = z.object({ count: z.number().int().nullable() });
+		const wire = zodToWireSchema(schema);
+		const count = (wire.properties as Record<string, unknown>).count as Record<string, unknown>;
+		expect(count).toEqual({ type: ["integer", "null"] });
+	});
+
+	it("leaves mixed nullable unions as anyOf", () => {
+		const schema = z.object({ value: z.union([z.string(), z.number()]).nullable() });
+		const wire = zodToWireSchema(schema);
+		const value = (wire.properties as Record<string, unknown>).value as Record<string, unknown>;
+		expect(value.type).toBeUndefined();
+		expect(Array.isArray(value.anyOf)).toBe(true);
+	});
+});
+
 // ---------------------------------------------------------------------------
 // normalizeEmptySchemas — provider-agnostic post-pipeline normalization
 // ---------------------------------------------------------------------------
@@ -154,6 +181,27 @@ describe("toolWireSchema — empty-schema normalization across both paths", () =
 		);
 		const extra = (wire.properties as Record<string, unknown>).extra as Record<string, unknown>;
 		expect(extra.additionalProperties).toBe(true);
+	});
+
+	it("normalizes nullable scalar anyOf for TypeBox / raw JSON Schema tools", () => {
+		const wire = toolWireSchema(
+			jsonTool({
+				type: "object",
+				properties: {
+					skip: {
+						anyOf: [{ type: "number", minimum: 0 }, { type: "null" }],
+						description: "matches to skip",
+					},
+				},
+				required: ["skip"],
+			}),
+		);
+		const skip = (wire.properties as Record<string, unknown>).skip as Record<string, unknown>;
+		expect(skip).toEqual({
+			type: ["number", "null"],
+			description: "matches to skip",
+			minimum: 0,
+		});
 	});
 });
 

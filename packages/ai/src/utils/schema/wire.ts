@@ -75,6 +75,80 @@ function postProcess(schema: Record<string, unknown>): Record<string, unknown> {
 
 const SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
 const SAFE_INTEGER_MIN = Number.MIN_SAFE_INTEGER;
+const NULLABLE_SCALAR_TYPES = new Set(["string", "number", "integer", "boolean"]);
+
+const SCHEMA_DEFINING_SIBLING_KEYS = new Set([
+	"$ref",
+	"additionalProperties",
+	"allOf",
+	"anyOf",
+	"const",
+	"contains",
+	"enum",
+	"if",
+	"items",
+	"not",
+	"oneOf",
+	"patternProperties",
+	"prefixItems",
+	"properties",
+	"propertyNames",
+	"then",
+	"else",
+	"unevaluatedItems",
+	"unevaluatedProperties",
+]);
+
+function isSchemaRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasSchemaDefiningSibling(schema: Record<string, unknown>): boolean {
+	for (const key in schema) {
+		if (key !== "anyOf" && SCHEMA_DEFINING_SIBLING_KEYS.has(key)) return true;
+	}
+	return false;
+}
+
+function isNullVariant(schema: Record<string, unknown>): boolean {
+	return schema.type === "null" && Object.keys(schema).length === 1;
+}
+
+function isScalarVariant(schema: Record<string, unknown>): schema is Record<string, unknown> & { type: string } {
+	return typeof schema.type === "string" && NULLABLE_SCALAR_TYPES.has(schema.type);
+}
+
+function hasIntegerType(type: unknown): boolean {
+	return type === "integer" || (Array.isArray(type) && type.includes("integer"));
+}
+
+function rewriteNullableScalarAnyOf(schema: Record<string, unknown>): void {
+	if (hasSchemaDefiningSibling(schema)) return;
+	const variants = schema.anyOf;
+	if (!Array.isArray(variants) || variants.length !== 2) return;
+
+	let scalarVariant: Record<string, unknown> | undefined;
+	let scalarType: string | undefined;
+	let sawNull = false;
+	for (const variant of variants) {
+		if (!isSchemaRecord(variant)) return;
+		if (isNullVariant(variant)) {
+			if (sawNull) return;
+			sawNull = true;
+			continue;
+		}
+		if (!isScalarVariant(variant) || scalarVariant) return;
+		scalarVariant = variant;
+		scalarType = variant.type;
+	}
+	if (!sawNull || !scalarVariant || !scalarType) return;
+
+	delete schema.anyOf;
+	for (const key in scalarVariant) {
+		if (key !== "type" && !Object.hasOwn(schema, key)) schema[key] = scalarVariant[key];
+	}
+	schema.type = [scalarType, "null"];
+}
 
 /** Keys whose values are a single JSON Schema (not an array or map). */
 const SCHEMA_VALUE_KEYS = [
@@ -109,9 +183,10 @@ function walk(node: unknown): void {
 	}
 	if (!node || typeof node !== "object") return;
 	const obj = node as Record<string, unknown>;
+	rewriteNullableScalarAnyOf(obj);
 
 	// Drop noise injected for `z.number().int()`.
-	if (obj.type === "integer") {
+	if (hasIntegerType(obj.type)) {
 		if (obj.minimum === SAFE_INTEGER_MIN) delete obj.minimum;
 		if (obj.maximum === SAFE_INTEGER_MAX) delete obj.maximum;
 	}
@@ -197,16 +272,15 @@ export function zodToWireSchema(schema: ZodType): Record<string, unknown> {
  * over the wire. Zod schemas are converted (and cached); legacy TypeBox / raw
  * JSON Schema parameters are upgraded to draft 2020-12 (and cached).
  *
- * Both branches finish with `normalizeEmptySchemas` so every provider —
- * OpenAI, Anthropic, Google, Ollama, Bedrock, Cursor — sees `{}` normalized
- * to `true` in schema-valued positions (issue #1179).
+ * Both branches finish with `postProcess` so every provider — OpenAI,
+ * Anthropic, Google, Ollama, Bedrock, Cursor — sees the same normalized
+ * schema-valued positions and nullable scalar unions.
  */
 export function toolWireSchema(tool: Tool): Record<string, unknown> {
 	const params: TSchema = tool.parameters;
 	if (isZodSchema(params)) return zodToWireSchema(params);
 	return stamp(params as Record<string, unknown>, kJsonWireSchema, p => {
 		const upgraded = upgradeJsonSchemaTo202012(p) as Record<string, unknown>;
-		normalizeEmptySchemas(upgraded);
-		return upgraded;
+		return postProcess(upgraded);
 	});
 }
