@@ -4,8 +4,8 @@ import { getTerminalId } from "@oh-my-pi/pi-tui/ttyid";
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const terminalEnvKeys = [
 	"KITTY_WINDOW_ID",
-	"CMUX_SURFACE_ID",
 	"TMUX_PANE",
+	"CMUX_SURFACE_ID",
 	"TERM_SESSION_ID",
 	"WT_SESSION",
 ] as const;
@@ -48,5 +48,12 @@ describe("getTerminalId", () => {
 		setTerminalEnv({ CMUX_SURFACE_ID: "surface-1234" });
 
 		expect(getTerminalId()).toBe("cmux-surface-1234");
+	});
+
+	it("prefers TMUX_PANE over CMUX_SURFACE_ID when both are present", () => {
+		Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+		setTerminalEnv({ TMUX_PANE: "%7", CMUX_SURFACE_ID: "surface-1234" });
+
+		expect(getTerminalId()).toBe("tmux-%7");
 	});
 });

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the "each kitty/tmux split" tip to include cmux.
+
 ## [15.8.0] - 2026-06-02
 
 ### Added
@@ -18,7 +22,6 @@
 - Changed resuming a session that belongs to a different project to switch the process into that project's working directory. `pi --resume` and the in-session `/resume` picker now `chdir` into the resumed session's `cwd` and re-scope every cwd-derived input — project dir, **project settings** (`.claude/settings.yml`, `.omp/settings.json`, path-scoped `enabledModels`/`disabledProviders`), plugin roots, capabilities, slash commands, and the ssh tool — so tools, discovery, configuration, and commands all follow the resumed project. The `SessionManager` adopts the resumed session's own `cwd`/session directory on load (rolled back if the switch fails).
 - Documented `ANTHROPIC_SEARCH_API_KEY` and `ANTHROPIC_SEARCH_BASE_URL` more thoroughly in `docs/environment-variables.md`, surfaced them in `docs/tools/web_search.md`'s Anthropic provider section, and added `ANTHROPIC_SEARCH_BASE_URL` to `omp --help`'s env-var summary so the search-only overrides are discoverable alongside `ANTHROPIC_SEARCH_API_KEY` ([#1694](https://github.com/can1357/oh-my-pi/issues/1694)).
 - Migrated the Kagi web search provider to Kagi's V1 Search API (`POST /api/v1/search`), replacing the sunset V0 endpoint while keeping the `kagi` provider id, `KAGI_API_KEY` credential, and `/login kagi` flow unchanged ([#1272](https://github.com/can1357/oh-my-pi/pull/1272) by [@thismat](https://github.com/thismat))
-- Updated the "each kitty/tmux split" tip to include cmux.
 
 ### Fixed
 
