@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed Cursor provider requests failing with `Cannot send empty user message to Cursor API` after tool-result history by selecting the latest user/developer turn instead of assuming the final context message is the active user turn.
 
 ## [15.7.5] - 2026-06-01
 

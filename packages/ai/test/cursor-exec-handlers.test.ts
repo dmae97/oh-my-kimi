@@ -41,6 +41,46 @@ function isAgentRunRequest(payload: unknown): payload is AgentRunRequest {
 	return !!payload && typeof payload === "object" && "$typeName" in payload;
 }
 
+function toolResultContext(): Context {
+	return {
+		messages: [
+			{ role: "user", content: "Use the read tool.", timestamp: 1 },
+			{
+				role: "assistant",
+				api: "cursor-agent",
+				provider: "cursor",
+				model: "cursor-composer-2.5",
+				content: [
+					{
+						type: "toolCall",
+						id: "call-read",
+						name: "read",
+						arguments: { path: "package.json" },
+					},
+				],
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 2,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "call-read",
+				toolName: "read",
+				content: [{ type: "text", text: "package contents" }],
+				isError: false,
+				timestamp: 3,
+			},
+		],
+	};
+}
+
 describe("Cursor resolveExecHandler execHandlers binding", () => {
 	it("invokes handler with correct this when passed as bound method", async () => {
 		const sentinel = { tag: "bound-correctly" };
@@ -105,6 +145,7 @@ describe("Cursor system prompt encoding", () => {
 		expect(JSON.parse(jsons[0])).toEqual({ role: "system", content: "You are a helpful assistant." });
 	});
 });
+
 describe("Cursor request action encoding", () => {
 	it("uses a resume action for empty user turns", async () => {
 		const payload = await captureCursorPayload({
@@ -120,6 +161,12 @@ describe("Cursor request action encoding", () => {
 		});
 
 		expect(payload.action?.action.case).toBe("userMessageAction");
+	});
+
+	it("uses a resume action when a tool result is the final context message", async () => {
+		const payload = await captureCursorPayload(toolResultContext());
+
+		expect(payload.action?.action.case).toBe("resumeAction");
 	});
 
 	it("uses a user message action with selected context for image-only user turns", async () => {
@@ -199,6 +246,25 @@ describe("Cursor history encoding", () => {
 					],
 				},
 			}),
+		]);
+	});
+
+	it("preserves trailing tool result history for resume actions", () => {
+		const history = buildCursorHistoryForTest(toolResultContext().messages, -1);
+
+		expect(history.rootPromptMessagesJson).toEqual([
+			{
+				role: "user",
+				content: [{ type: "text", text: "Use the read tool." }],
+			},
+			{
+				role: "user",
+				content: [{ type: "text", text: "[Tool Result]\npackage contents" }],
+			},
+		]);
+		expect(history.turnUserMessagesJson).toEqual([expect.objectContaining({ text: "Use the read tool." })]);
+		expect(history.turnStepMessagesJson).toEqual([
+			[expect.objectContaining({ assistantMessage: { text: "[Tool Result]\npackage contents" } })],
 		]);
 	});
 });
