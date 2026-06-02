@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [15.8.1] - 2026-06-02
+
+### Fixed
+
+- Deferred eager live scrollback rebuilds on VTE terminals so GNOME-style Linux terminals do not flash or erase readable scrollback during streaming ([#1719](https://github.com/can1357/oh-my-pi/issues/1719)).
+
 ## [15.8.0] - 2026-06-02
 
 ### Fixed
