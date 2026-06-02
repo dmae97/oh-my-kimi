@@ -116,6 +116,14 @@ You are a code reviewer. Read diffs, surface issues, never edit files.
 
 If you do this and want default tool guidance, exploration rules, or workflow rules, copy what you need from `packages/coding-agent/src/prompts/system/system-prompt.md` and maintain it yourself — there is currently no way to inherit selected sections from that stable default instruction block.
 
+### "Customize while keeping generated skills/rules/tool guidance"
+
+Use `APPEND_SYSTEM.md`, not `SYSTEM.md`. Skills, rulebook summaries, always-apply rules, the tool inventory, and the built-in guidance that tells the model when to read `skill://<name>` are part of block 0 (`system-prompt.md`). Because `SYSTEM.md` replaces block 0, those generated lists are not available to the model in a custom system prompt.
+
+The dynamic project/environment footer that remains after `SYSTEM.md` is only block 1 (`project-prompt.md`): workstation info, AGENTS.md context files, dir-context list, workspace tree, current date, cwd, and related project context. It does not include discovered skills.
+
+There is currently no supported CLI mode for "replace the stable default instructions but keep the generated skills/rules/tool guidance." If you need automatic skills loading, keep the default block and add your customization via `APPEND_SYSTEM.md`. If you fully replace with `SYSTEM.md`, you must hard-code any skill names/instructions you want the model to know about, and those will not track discovery automatically.
+
 ### "Replace everything, including project context" — SDK-only
 
 The normal CLI file/flag path intentionally preserves `defaultPrompt.slice(1)`. Code using `CreateAgentSessionOptions.systemPrompt` directly can return a full replacement array and omit the project footer, but that is not what `.omp/SYSTEM.md`, `~/.omp/agent/SYSTEM.md`, or `--system-prompt` do.
@@ -154,6 +162,7 @@ Net effect for CLI users: put `SYSTEM.md` / `APPEND_SYSTEM.md` directly under `<
 |---|---|
 | Add an instruction on top of the full default prompt | `APPEND_SYSTEM.md` or `--append-system-prompt` |
 | Replace the stable default instructions but keep project/environment context | `SYSTEM.md` or `--system-prompt` |
+| Preserve generated skills/rules/tool guidance while customizing | `APPEND_SYSTEM.md`; `SYSTEM.md` replaces that generated block |
 | Use `{{cwd}}` / `{{date}}` / other internals in my file | Not supported. Files are inserted verbatim. |
 | Inherit specific sections from `system-prompt.md` | Not supported; use append, or copy what you need into `SYSTEM.md`. |
 | Override at a per-repo level | Project `.omp/SYSTEM.md` under the cwd you launch `omp` from |
