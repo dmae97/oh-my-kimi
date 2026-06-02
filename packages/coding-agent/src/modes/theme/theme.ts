@@ -1272,11 +1272,22 @@ const langMap: Record<string, SymbolKey> = {
 	bin: "lang.binary",
 };
 
+/** Whether a resolved #rrggbb background reads as light (ITU-R BT.709 luminance > 0.5). */
+function bgIsLight(value: string | number | undefined): boolean {
+	if (typeof value !== "string" || !value.startsWith("#") || value.length !== 7) return false;
+	const r = parseInt(value.slice(1, 3), 16) / 255;
+	const g = parseInt(value.slice(3, 5), 16) / 255;
+	const b = parseInt(value.slice(5, 7), 16) / 255;
+	return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5;
+}
+
 export class Theme {
 	#fgColors: Record<ThemeColor, string>;
 	#bgColors: Record<ThemeBg, string>;
 	#symbols: SymbolMap;
 	#spinnerFramesOverrides: Partial<Record<SpinnerType, string[]>>;
+	/** True when the active theme has a light background; drives accent legibility. */
+	readonly isLight: boolean;
 
 	constructor(
 		fgColors: Record<ThemeColor, string | number>,
@@ -1286,6 +1297,7 @@ export class Theme {
 		symbolOverrides: Partial<Record<SymbolKey, string>>,
 		spinnerFramesOverrides: Partial<Record<SpinnerType, string[]>> = {},
 	) {
+		this.isLight = bgIsLight(bgColors.userMessageBg);
 		this.#fgColors = {} as Record<ThemeColor, string>;
 		for (const [key, value] of Object.entries(fgColors) as [ThemeColor, string | number][]) {
 			this.#fgColors[key] = fgAnsi(value, mode);
