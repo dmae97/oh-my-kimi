@@ -24,7 +24,7 @@ describe("xxhash64", () => {
 		const cases: [string, string][] = [
 			["cch=00000", "a47f7"],
 			['{"messages":[],"cch=00000","x":1}', "3073d"],
-			["x-anthropic-billing-header: cc_version=2.1.148; cc_entrypoint=cli; cch=00000;", "792eb"],
+			["x-anthropic-billing-header: cc_version=2.1.158; cc_entrypoint=cli; cch=00000;", "f2b0b"],
 		];
 
 		for (const [body, expected] of cases) {
