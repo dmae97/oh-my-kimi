@@ -123,7 +123,6 @@ export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readon
 const claudeCodeUtilityBetaDefaults = [
 	"oauth-2025-04-20",
 	"interleaved-thinking-2025-05-14",
-	"redact-thinking-2026-02-12",
 	"context-management-2025-06-27",
 	"prompt-caching-scope-2026-01-05",
 	"structured-outputs-2025-12-15",
@@ -133,7 +132,6 @@ const claudeCodeAgentBetaDefaults = [
 	"oauth-2025-04-20",
 	"context-1m-2025-08-07",
 	"interleaved-thinking-2025-05-14",
-	"redact-thinking-2026-02-12",
 	"context-management-2025-06-27",
 	"prompt-caching-scope-2026-01-05",
 	"mid-conversation-system-2026-04-07",
@@ -142,14 +140,30 @@ const claudeCodeAgentBetaDefaults = [
 const claudeCodeAgentPostEffortBetas = ["extended-cache-ttl-2025-04-11"] as const;
 const fineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14";
 const interleavedThinkingBeta = "interleaved-thinking-2025-05-14";
+// Asks the API to redact thinking blocks from responses. Only sent when the
+// caller explicitly hides thinking (`thinkingDisplay: "omitted"`); sending it
+// by default suppresses the thinking traces callers expect to stream.
+const redactThinkingBeta = "redact-thinking-2026-02-12";
 const fastModeBeta = "fast-mode-2026-02-01";
 const taskBudgetBeta = "task-budgets-2026-03-13";
 const effortBeta = "effort-2025-11-24";
 
-function buildClaudeCodeBetas(agentRequest: boolean, thinkingRequest: boolean): readonly string[] {
-	if (!agentRequest) return claudeCodeUtilityBetaDefaults;
-	if (!thinkingRequest) return [...claudeCodeAgentBetaDefaults, ...claudeCodeAgentPostEffortBetas];
-	return [...claudeCodeAgentBetaDefaults, effortBeta, ...claudeCodeAgentPostEffortBetas];
+function buildClaudeCodeBetas(
+	agentRequest: boolean,
+	thinkingRequest: boolean,
+	redactThinking: boolean,
+): readonly string[] {
+	if (!agentRequest && !redactThinking) return claudeCodeUtilityBetaDefaults;
+	const betas: string[] = [];
+	for (const beta of agentRequest ? claudeCodeAgentBetaDefaults : claudeCodeUtilityBetaDefaults) {
+		betas.push(beta);
+		// Match CC's header order: redact-thinking immediately follows interleaved-thinking.
+		if (redactThinking && beta === interleavedThinkingBeta) betas.push(redactThinkingBeta);
+	}
+	if (!agentRequest) return betas;
+	if (thinkingRequest) betas.push(effortBeta);
+	betas.push(...claudeCodeAgentPostEffortBetas);
+	return betas;
 }
 
 function getHeaderCaseInsensitive(headers: Record<string, string> | undefined, headerName: string): string | undefined {
@@ -189,7 +203,7 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 	const oauthToken = options.isOAuth ?? isAnthropicOAuthToken(options.apiKey);
 	const extraBetas = options.extraBetas ?? [];
 	const stream = options.stream ?? false;
-	const betaHeader = buildBetaHeader(options.claudeCodeBetas ?? buildClaudeCodeBetas(true, true), extraBetas);
+	const betaHeader = buildBetaHeader(options.claudeCodeBetas ?? buildClaudeCodeBetas(true, true, false), extraBetas);
 	const acceptHeader = oauthToken ? "application/json" : stream ? "text/event-stream" : "application/json";
 	const modelHeaders = Object.fromEntries(
 		Object.entries(options.modelHeaders ?? {}).filter(([key]) => !enforcedHeaderKeys.has(key.toLowerCase())),
@@ -867,6 +881,7 @@ export type AnthropicClientOptionsArgs = {
 	isOAuth?: boolean;
 	hasTools?: boolean;
 	thinkingEnabled?: boolean;
+	thinkingDisplay?: AnthropicThinkingDisplay;
 	onSseEvent?: AnthropicOptions["onSseEvent"];
 	fetch?: FetchImpl;
 	claudeCodeSessionId?: string;
@@ -1328,6 +1343,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					isOAuth: options?.isOAuth,
 					hasTools: !!context.tools?.length,
 					thinkingEnabled: options?.thinkingEnabled,
+					thinkingDisplay: options?.thinkingDisplay,
 					onSseEvent: options?.onSseEvent,
 					fetch: options?.fetch,
 					claudeCodeSessionId: options?.sessionId ?? extractClaudeMetadataSessionId(options?.metadata?.user_id),
@@ -1861,6 +1877,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		dynamicHeaders,
 		hasTools = false,
 		thinkingEnabled = false,
+		thinkingDisplay,
 		isOAuth,
 		onSseEvent,
 		claudeCodeSessionId,
@@ -1926,7 +1943,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		modelHeaders: mergeHeaders(model.headers, foundryCustomHeaders, headers, dynamicHeaders),
 		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
 		claudeCodeSessionId,
-		claudeCodeBetas: oauthToken ? buildClaudeCodeBetas(hasTools || thinkingEnabled, thinkingEnabled) : [],
+		claudeCodeBetas: oauthToken
+			? buildClaudeCodeBetas(hasTools || thinkingEnabled, thinkingEnabled, thinkingDisplay === "omitted")
+			: [],
 	});
 
 	if (model.provider === "cloudflare-ai-gateway") {
@@ -2350,7 +2369,10 @@ function buildParams(
 			const compat = getAnthropicCompat(model);
 			if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
 				const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
-				if (options.thinkingDisplay !== undefined || (!isOAuthToken && supportsAdaptiveThinkingDisplay(model.id))) {
+				// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
+				// response by default. Opt into summarized reasoning so thinking deltas keep
+				// streaming with human-readable content for callers that rely on it.
+				if (options.thinkingDisplay !== undefined || supportsAdaptiveThinkingDisplay(model.id)) {
 					adaptive.display = options.thinkingDisplay ?? "summarized";
 				}
 				params.thinking = adaptive as typeof params.thinking;

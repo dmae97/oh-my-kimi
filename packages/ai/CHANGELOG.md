@@ -23,6 +23,7 @@
 - Fixed Anthropic web search dropping `ANTHROPIC_CUSTOM_HEADERS` when `CLAUDE_CODE_USE_FOUNDRY` was unset, causing 401s from corporate API gateways. `resolveAnthropicCustomHeadersForBaseUrl` now forwards the parsed headers whenever the base URL is non-Anthropic (or Foundry is enabled), and `buildAnthropicSearchHeaders` threads them through `buildAnthropicHeaders` so the search and streaming paths behave identically ([#1693](https://github.com/can1357/oh-my-pi/issues/1693)).
 - Fixed OpenCode Go Anthropic-format models such as `qwen3.7-max` sending Anthropic `X-Api-Key` auth alongside the OpenCode bearer token, avoiding spurious Alibaba `401 Invalid API-key provided` errors. ([#1661](https://github.com/can1357/oh-my-pi/issues/1661))
 - Fixed OAuth token exchange and refresh flows to fetch Claude CLI bootstrap identity when token responses omit account information, so `accountId` and `email` are now recovered when available
+- Fixed OAuth Anthropic requests streaming no thinking traces. The Claude Code parity work both sent the `redact-thinking-2026-02-12` beta on every message request and stopped sending `thinking.display = "summarized"` for OAuth on Opus 4.7+ (whose adaptive thinking defaults to omitted content). The redact beta is now only sent when the caller explicitly hides thinking (`thinkingDisplay: "omitted"`, i.e. `hideThinkingSummary`), and OAuth requests opt back into summarized display like API-key requests.
 
 ## [15.7.5] - 2026-06-01
 
