@@ -158,6 +158,40 @@ def _patch_worker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_task_sets_impl_authorized_from_directive(
+    tmp_path: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs, _bindings = _make_inputs(tmp_path, settings, session_has_jsonl=False)
+    captured: dict[str, bool] = {}
+
+    monkeypatch.setattr(worker, "_build_prompt", lambda *args, **kwargs: "prompt")
+
+    def fake_run_rpc_blocking(
+        _inputs: worker.TaskInputs,
+        *,
+        task_kind: str,
+        prompt: str,
+        loop: asyncio.AbstractEventLoop,
+        bindings: worker.ToolBindings,
+        directive: worker.DirectiveInfo | None = None,
+    ) -> str:
+        del task_kind, prompt, loop, directive
+        captured["impl_authorized"] = bindings.impl_authorized
+        return "ok"
+
+    monkeypatch.setattr(worker, "_run_rpc_blocking", fake_run_rpc_blocking)
+
+    result = await worker.run_task(
+        task_kind="triage_issue",
+        inputs=inputs,
+        directive=worker.DirectiveInfo(body="go ahead", author="can1357", authorizes_impl=True),
+    )
+
+    assert result == "ok"
+    assert captured == {"impl_authorized": True}
+
+
+@pytest.mark.asyncio
 async def test_run_rpc_passes_continue_when_session_jsonl_present(tmp_path: Path, settings: Settings) -> None:
     inputs, bindings = _make_inputs(tmp_path, settings, session_has_jsonl=True)
     loop = asyncio.new_event_loop()
@@ -659,9 +693,73 @@ async def test_run_rpc_skips_reminder_when_unclassified(tmp_path: Path, settings
     assert len(fake.prompts) == 1
 
 
+@pytest.mark.asyncio
+async def test_run_rpc_review_pr_reminds_until_submit_pr_review(tmp_path: Path, settings: Settings) -> None:
+    inputs, bindings = _make_inputs(tmp_path, settings, session_has_jsonl=False)
+    loop = asyncio.new_event_loop()
+    try:
+        worker._run_rpc_blocking(
+            inputs,
+            task_kind="review_pr",
+            prompt="kickoff",
+            loop=loop,
+            bindings=bindings,  # type: ignore[arg-type]
+        )
+    finally:
+        loop.close()
+    fake = _FakeRpcClient.instances[0]
+    assert len(fake.prompts) == 1 + settings.task_completion_max_reminders
+    assert fake.prompts[0] == "kickoff"
+    assert all("submit_pr_review" in p for p in fake.prompts[1:])
+    assert all("gh_open_pr" not in p for p in fake.prompts[1:])
+
+
+@pytest.mark.asyncio
+async def test_run_rpc_review_pr_stops_after_submit_without_dirty_probe(
+    tmp_path: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs, bindings = _make_inputs(tmp_path, settings, session_has_jsonl=False)
+
+    def _probe(_workspace, _slot_uid):  # type: ignore[no-untyped-def]
+        raise AssertionError("review_pr must not run dirty-state probes")
+
+    monkeypatch.setattr(worker, "_probe_workspace_dirty", _probe)
+    original_on_tool_end = _FakeRpcClient.on_tool_execution_end
+
+    def _record_tool_end(self, cb) -> None:
+        self._tool_end_callbacks = getattr(self, "_tool_end_callbacks", [])
+        self._tool_end_callbacks.append(cb)
+
+    def _on_prompt(client: _FakeRpcClient, _prompt: str) -> None:
+        for cb in client._tool_end_callbacks:
+            cb(SimpleNamespace(tool_name="submit_pr_review", result={}))
+
+    _FakeRpcClient.on_tool_execution_end = _record_tool_end  # type: ignore[assignment]
+    try:
+        _FakeRpcClient.on_prompt = staticmethod(_on_prompt)  # type: ignore[attr-defined]
+        loop = asyncio.new_event_loop()
+        try:
+            worker._run_rpc_blocking(
+                inputs,
+                task_kind="review_pr",
+                prompt="kickoff",
+                loop=loop,
+                bindings=bindings,  # type: ignore[arg-type]
+            )
+        finally:
+            loop.close()
+    finally:
+        _FakeRpcClient.on_tool_execution_end = original_on_tool_end  # type: ignore[assignment]
+        delattr(_FakeRpcClient, "on_prompt")
+
+    fake = _FakeRpcClient.instances[0]
+    assert fake.prompts == ["kickoff"]
+
+
 # ---------------------------------------------------------------------------
 # Dirty-state watchdog
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_run_rpc_sends_dirty_state_reminder_when_worktree_has_unpushed_work(

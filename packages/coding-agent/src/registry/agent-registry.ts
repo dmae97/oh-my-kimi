@@ -8,7 +8,7 @@
 
 import type { AgentSession } from "../session/agent-session";
 
-export const MAIN_AGENT_ID = "0-Main";
+export const MAIN_AGENT_ID = "Main";
 
 export type AgentStatus = "running" | "idle" | "completed" | "aborted";
 export type AgentKind = "main" | "sub";

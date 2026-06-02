@@ -17,6 +17,8 @@ import {
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import {
 	createHarmonyAuditEvent,
+	detectHarmonyLeakInAssistantMessage,
+	extractHarmonyRemoved,
 	type HarmonyDetection,
 	type HarmonyRecoveredToolCall,
 	isHarmonyLeakMitigationTarget,
@@ -924,6 +926,17 @@ async function streamAssistantResponse(
 						case "done":
 						case "error": {
 							const finalMessage = await response.result();
+							if (harmonyMitigationEnabled) {
+								const detection = detectHarmonyLeakInAssistantMessage(finalMessage);
+								if (detection) {
+									const removed = extractHarmonyRemoved(finalMessage, detection);
+									if (addedPartial) {
+										context.messages.pop();
+										addedPartial = false;
+									}
+									throw new HarmonyLeakInterruption(detection, removed);
+								}
+							}
 							if (addedPartial) {
 								context.messages[context.messages.length - 1] = finalMessage;
 							} else {
@@ -943,6 +956,16 @@ async function streamAssistantResponse(
 			}
 
 			const trailing = await response.result();
+			if (harmonyMitigationEnabled) {
+				const detection = detectHarmonyLeakInAssistantMessage(trailing);
+				if (detection) {
+					if (addedPartial) {
+						context.messages.pop();
+						addedPartial = false;
+					}
+					throw new HarmonyLeakInterruption(detection, extractHarmonyRemoved(trailing, detection));
+				}
+			}
 			await finishChat(trailing);
 			return trailing;
 		});

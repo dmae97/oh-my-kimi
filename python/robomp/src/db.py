@@ -19,6 +19,7 @@ IssueState = Literal[
     "new",
     "reproducing",
     "fixing",
+    "reviewing",
     "opened",
     "merged",
     "closed",
@@ -71,6 +72,20 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   ts            TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tool_calls_issue ON tool_calls(issue_key, ts);
+
+CREATE TABLE IF NOT EXISTS pr_review_comments (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  issue_key   TEXT NOT NULL,
+  path        TEXT NOT NULL,
+  line        INTEGER NOT NULL,
+  side        TEXT NOT NULL DEFAULT 'RIGHT',
+  start_line  INTEGER,
+  start_side  TEXT,
+  body        TEXT NOT NULL,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pr_review_comments_key
+  ON pr_review_comments(issue_key);
 
 CREATE TABLE IF NOT EXISTS submissions (
   delivery_id   TEXT PRIMARY KEY,
@@ -130,6 +145,19 @@ class IssueRow:
     state: IssueState
     updated_at: str
     classification: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class StagedReviewComment:
+    id: int
+    issue_key: str
+    path: str
+    line: int
+    side: str
+    body: str
+    created_at: str
+    start_line: int | None = None
+    start_side: str | None = None
 
 
 def _event_row_from_db_row(row: sqlite3.Row) -> EventRow:
@@ -777,6 +805,93 @@ class Database:
                 ),
             )
             return int(cur.lastrowid or 0)
+
+    def has_successful_tool_call(self, issue_key: str, tool: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT 1
+                FROM tool_calls
+                WHERE issue_key=? AND tool=? AND error IS NULL
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (issue_key, tool),
+            ).fetchone()
+        return row is not None
+
+    # ---- PR review comment staging ----
+    def stage_review_comment(
+        self,
+        *,
+        issue_key: str,
+        path: str,
+        line: int,
+        body: str,
+        side: str = "RIGHT",
+        start_line: int | None = None,
+        start_side: str | None = None,
+    ) -> StagedReviewComment:
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                INSERT INTO pr_review_comments
+                  (issue_key, path, line, side, start_line, start_side, body, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (issue_key, path, line, side, start_line, start_side, body, _utcnow()),
+            )
+            row = self._conn.execute(
+                """
+                SELECT id, issue_key, path, line, side, start_line, start_side, body, created_at
+                FROM pr_review_comments
+                WHERE id=?
+                """,
+                (int(cur.lastrowid or 0),),
+            ).fetchone()
+        assert row is not None
+        return StagedReviewComment(
+            id=int(row["id"]),
+            issue_key=row["issue_key"],
+            path=row["path"],
+            line=int(row["line"]),
+            side=row["side"],
+            body=row["body"],
+            created_at=row["created_at"],
+            start_line=int(row["start_line"]) if row["start_line"] is not None else None,
+            start_side=row["start_side"],
+        )
+
+    def list_staged_review_comments(self, issue_key: str) -> list[StagedReviewComment]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, issue_key, path, line, side, start_line, start_side, body, created_at
+                FROM pr_review_comments
+                WHERE issue_key=?
+                ORDER BY id
+                """,
+                (issue_key,),
+            ).fetchall()
+        return [
+            StagedReviewComment(
+                id=int(row["id"]),
+                issue_key=row["issue_key"],
+                path=row["path"],
+                line=int(row["line"]),
+                side=row["side"],
+                body=row["body"],
+                created_at=row["created_at"],
+                start_line=int(row["start_line"]) if row["start_line"] is not None else None,
+                start_side=row["start_side"],
+            )
+            for row in rows
+        ]
+
+    def clear_staged_review_comments(self, issue_key: str) -> int:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM pr_review_comments WHERE issue_key=?", (issue_key,))
+            return int(cur.rowcount or 0)
 
     # ---- submissions (per-user rate limiting) ----
     def admit_submission(

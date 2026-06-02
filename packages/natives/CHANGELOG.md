@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ## [15.7.0] - 2026-05-31
+
 ### Added
 
 - Added `blockRangeAt` native API along with `BlockRange` and `BlockRangeOptions` types to return the 1-indexed line span of the outermost tree-sitter node beginning on a given line
@@ -24,6 +25,7 @@
 - Fixed background bash jobs pinning the JS main thread at ~200% CPU when the child process emits output in many tiny writes (printf-style progress, llama-cli token streams). `pi_shell`'s pipe reader forwarded every chunk through a separate `ThreadsafeFunction::call` per kernel `read(2)`, so a chatty child produced millions of cross-thread napi callbacks that the JS main thread had to drain serially — even after the child exited, the queue kept the process saturated for seconds. The bridge now greedily coalesces every chunk already in the mpsc queue into a single batched call (capped at 64 KiB) before crossing into JS, collapsing 1-byte writes into one napi dispatch and bringing the steady-state callback rate back to the JS event-loop's throughput.
 
 ## [15.5.9] - 2026-05-28
+
 ### Changed
 
 - Changed native addon extraction to skip re-extracting cached `.node` files when their size already matches embedded archive metadata
@@ -38,6 +40,7 @@
 - Hardened embedded addon archive extraction by rejecting unsafe entry names and non-file archive entries before writing binaries to disk
 
 ## [15.5.4] - 2026-05-27
+
 ### Added
 
 - Added `Hashline` class with methods to format headers, parse/apply hashline edits, split inputs, compute diffs, generate previews, and recover from stale hashes
@@ -67,12 +70,10 @@
 ### Fixed
 
 - Fixed `<sym> is not a function` crashes on Windows after `bun install -g @oh-my-pi/pi-coding-agent` updates while an `omp` process was running. Bun cannot overwrite a locked `node_modules/@oh-my-pi/pi-natives/native/pi_natives.win32-x64.node` and silently keeps the old binary alongside the new ESM wrapper, so the next launch loads mismatched code. The loader now mirrors the addon into `~/.omp/natives/<version>/` on Windows npm installs and prefers that copy at load time — each version gets its own filesystem path, so future updates land in `node_modules` unchallenged. The new version sentinel detects any remaining drift up front.
-
-### Fixed
-
 - Fixed `$env:NAME` PowerShell references being collapsed to `:NAME` when brush forwarded a command to a PowerShell (or any) subprocess. `pi-shell` now defines `env=$env` as a non-exported global on every brush session so the bash parameter expansion of `$env` yields the literal `$env`, leaving `$env:NAME` intact. User-driven assignments (`env=prod`) push their own command-scope binding and shadow the fallback, preserving the bash POSIX contract. ([#1079](https://github.com/can1357/oh-my-pi/issues/1079))
 
 ## [15.0.1] - 2026-05-14
+
 ### Breaking Changes
 
 - Raised the minimum required Bun runtime version to >=1.3.14
@@ -80,6 +81,7 @@
 - Removed `webp` Rust workspace dependency along with `PhotonImage`'s WebP encoder.
 
 ## [14.9.9] - 2026-05-12
+
 ### Breaking Changes
 
 - Removed `projfsOverlayProbe`, `projfsOverlayStart`, and `projfsOverlayStop` overlays APIs and `ProjfsOverlayProbeResult` type from the public natives interface
@@ -105,6 +107,7 @@
 - Removed the 20 Hz background descendant tracker that scanned the harness's process tree for the entire lifetime of every shell command. Cancellation now does a small rescan-and-signal loop on demand (up to three waves — SIGTERM, then SIGKILL, then SIGKILL — with early exit as soon as no descendants remain). The previous tracker existed to pin process identities against PID reuse races, but `Process::from_pid` already pins identity by kernel start time / pidfd, so the constant scanning paid for nothing and added meaningful syscall load on macOS where each scan now does `proc_listallpids` + `proc_pidinfo` per pid.
 
 ## [14.9.3] - 2026-05-10
+
 ### Added
 
 - Added `idle`, `system`, and `user` options to `MacOSPowerAssertion` so callers can request specific macOS sleep-prevention modes (`caffeinate -i`, `-s`, and `-u`) in addition to the existing `display` option
@@ -136,6 +139,7 @@
 - Fixed native `grep` count-mode limits applying to files instead of matches, and restored timeout/abort cancellation checks for small native filesystem scans.
 
 ## [14.7.0] - 2026-05-04
+
 ### Added
 
 - Added `summarizeCode` function to expose native code summarization with `kind`, `startLine`, `endLine`, and optional `text` segments plus parse/elision metadata
@@ -143,11 +147,13 @@
 - Added `SummaryOptions` and `SummaryResult` TypeScript definitions for typed `summarizeCode` input and output
 
 ## [14.6.1] - 2026-05-02
+
 ### Changed
 
 - Changed the native package loader from CommonJS analyzer-visible assignments to a template-rendered ESM entry point with explicit named exports
 
 ## [14.5.13] - 2026-05-01
+
 ### Changed
 
 - Stopped overriding `CARGO_TARGET_DIR` with an internal `target/napi-build/...` directory during native builds, so Cargo now uses the default or caller-provided target directory
@@ -160,6 +166,7 @@
 - Removed the `ci-release-verify-natives` script and its AVX-512 marker scan from the release pipeline
 
 ## [14.5.12] - 2026-04-30
+
 ### Breaking Changes
 
 - Changed `waitForExit` to accept a single options object instead of a numeric timeout argument
@@ -171,6 +178,7 @@
 - Added a `ProcessWaitOptions` type and updated `waitForExit` to accept an options object
 
 ## [14.5.9] - 2026-04-30
+
 ### Fixed
 
 - Fixed shell minimizer output so successful commands whose noise is fully stripped still return `OK` instead of an artifact-only result
@@ -182,6 +190,7 @@
 - Added shell minimizer support for CMake, CTest, Ninja, GoogleTest binaries, and Bun/Bunx wrappers that run those tools
 
 ## [14.5.2] - 2026-04-26
+
 ### Changed
 
 - Changed local native build profile from `dev` to `local` for non-CI builds, updating the profile used by the build and local build output label
@@ -193,6 +202,7 @@
 - Removed the `chunk` napi module (`ChunkState`, chunk schema, chunk rendering, chunk edit) and dropped `generate_chunk_schema()` from the build script
 
 ## [14.3.0] - 2026-04-25
+
 ### Added
 
 - Added `text` to `MinimizerResult` so consumers can replace rewritten output with the minimized replacement text
@@ -237,6 +247,7 @@
 - Removed the `fuzzyFind`, `glob`, and `grep` cache database argument previously used for search state
 
 ## [14.0.5] - 2026-04-11
+
 ### Breaking Changes
 
 - Made `tabWidth` parameter required (no longer optional) for `visibleWidth`, `truncateToWidth`, `wrapTextWithAnsi`, `sliceWithWidth`, and `extractSegments`
@@ -332,11 +343,13 @@
 - Updated `grep()`, `glob()`, and `fuzzyFind()` function signatures to accept optional `db` parameter for database-backed searching
 
 ## [13.12.0] - 2026-03-14
+
 ### Breaking Changes
 
 - Changed `abort()` method signature: removed optional `reason` parameter and changed return type from `void` to `Promise<void>`
 
 ## [13.4.0] - 2026-03-01
+
 ### Breaking Changes
 
 - Changed `AstFindOptions.pattern` to `patterns` (now accepts array of strings instead of single string)
@@ -349,6 +362,7 @@
 - Result ordering in `astGrep` is now deterministic: sorted by path, line, column using `BTreeSet`/`BTreeMap`
 
 ## [13.3.8] - 2026-02-28
+
 ### Added
 
 - Added `astGrep()` function for structural code search using AST patterns with support for language-specific matching, selectors, and meta-variable extraction
@@ -356,6 +370,7 @@
 - Added `./ast` export path for accessing AST search and rewrite functionality
 
 ## [12.18.0] - 2026-02-21
+
 ### Changed
 
 - Replaced custom `TextDecoder` usage with native `toString('utf-8')` for buffer decoding
@@ -375,16 +390,19 @@
 - Added README.md to package distribution files
 
 ## [12.10.0] - 2026-02-18
+
 ### Changed
 
 - Updated addon filename resolution to include default filename fallback in both modern and baseline variant paths
 
 ## [12.8.2] - 2026-02-17
+
 ### Breaking Changes
 
 - Removed `getSystemInfo()` and `SystemInfo` from package exports, breaking consumers that imported system info APIs from this package
 
 ## [12.8.0] - 2026-02-16
+
 ### Added
 
 - Added support for x64 CPU variant selection with `TARGET_VARIANT` environment variable (modern/baseline) during build to optimize for specific ISA levels
@@ -408,6 +426,7 @@
 - Fixed regex patterns containing literal braces (e.g. `${platform}`) failing with "repetition quantifier expects a valid decimal" by escaping `{`/`}` that don't form valid repetition quantifiers
 
 ## [12.5.0] - 2026-02-15
+
 ### Added
 
 - Added `recursive` option to `GlobOptions` to control whether simple patterns match recursively (defaults to true)
@@ -418,17 +437,20 @@
 - Updated `fileType` filter documentation to clarify that symlinks match file/dir filters based on their target type
 
 ## [12.4.0] - 2026-02-14
+
 ### Added
 
 - Exported `sanitizeText` function to strip ANSI codes, remove binary garbage, and normalize line endings in text output
 
 ## [12.1.0] - 2026-02-13
+
 ### Added
 
 - Added `cache` option to `glob()`, `grep()`, and `fuzzyFind()` to enable shared filesystem scan caching
 - Added `invalidateFsScanCache()` function to manually invalidate filesystem scan cache entries
 
 ## [11.14.0] - 2026-02-12
+
 ### Added
 
 - Added `PtySession` class for PTY-backed interactive command execution with streaming output
@@ -455,6 +477,7 @@
 - Native clipboard operations are now best-effort with graceful degradation
 
 ## [11.0.0] - 2026-02-05
+
 ### Removed
 
 - Removed legacy type aliases `WasmMatch` and `WasmSearchResult`
@@ -466,11 +489,13 @@
 - Added separate grep context before/after options in bindings
 
 ## [10.2.2] - 2026-02-02
+
 ### Added
 
 - Exported `getWorkProfile` function and `WorkProfile` type for work profiling capabilities
 
 ## [10.2.0] - 2026-02-02
+
 ### Breaking Changes
 
 - Replaced `find()` with `glob()` - update imports and function calls
@@ -512,6 +537,7 @@
 - Added `WorkProfile` type with folded stack format, markdown summary, SVG flamegraph, and sample metrics for profiling results
 
 ## [9.8.0] - 2026-02-01
+
 ### Breaking Changes
 
 - Removed `resize()` function; use `PhotonImage.resize()` method instead
@@ -581,11 +607,13 @@
 - Fixed potential issue where cross-compiled binaries could overwrite platform-specific native builds with incorrect architecture binaries
 
 ## [9.6.4] - 2026-02-01
+
 ### Breaking Changes
 
 - Changed callback signature for `find()` and `grep()` streaming callbacks to receive `(error, match)` instead of `(match)` for proper error handling
 
 ## [9.6.2] - 2026-02-01
+
 ### Breaking Changes
 
 - Renamed `EllipsisKind` enum to `Ellipsis`
@@ -609,6 +637,7 @@
 - Removed early return optimization in `truncateToWidth()` when text fits within maxWidth
 
 ## [9.6.1] - 2026-02-01
+
 ### Added
 
 - Added `matchesKittySequence` function to match Kitty protocol sequences for codepoint and modifier
@@ -618,6 +647,7 @@
 - Removed `visibleWidth` function from text utilities
 
 ## [9.6.0] - 2026-02-01
+
 ### Added
 
 - Support for cross-compilation via `CARGO_BUILD_TARGET` environment variable

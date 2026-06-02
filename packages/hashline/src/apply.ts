@@ -3,9 +3,9 @@
  * post-edit lines plus any diagnostic warnings. Pure function: no FS, no
  * mutation of the input.
  *
- * Replacement groups are first normalized by {@link repairBoundaryBalance},
- * which fixes the common model mistake of a payload that duplicates or drops
- * the closing delimiter bordering the range (balance-validated; see below).
+ * Replacement groups are first normalized by {@link repairReplacementBoundaries},
+ * which absorbs common model mistakes where a payload restates unchanged range
+ * boundaries or duplicates/drops structural closers.
  */
 import { UNRESOLVED_BLOCK_INTERNAL } from "./messages";
 import { cloneCursor } from "./tokenizer";
@@ -98,22 +98,19 @@ function bucketAnchorEditsByLine(edits: IndexedEdit[]): Map<number, IndexedEdit[
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Boundary-balance repair
+// Replacement-boundary repair
 //
-// Models routinely miscount a replacement range's edges. The payload either
-// re-states a closing delimiter that still lives just outside the range
-// (producing a DUPLICATE `}` / `);` / `]`) or the range deletes a closer the
-// payload never restates (DROPPING it). Both are the same defect — a
-// replacement whose payload does not preserve the deleted region's delimiter
-// balance — and both leave the file syntactically broken.
+// Models routinely miscount a replacement range's edges. Sometimes the payload
+// re-states unchanged lines that still live on both sides of the range
+// (duplicating a function header and final statement); sometimes it only
+// re-states or omits a structural closer, which leaves delimiter balance broken.
 //
-// A repair fires only when (a) the group's payload balance differs from the
-// deleted region's balance and (b) one boundary operation drives that
-// difference to exactly zero while leaving the surrounding text byte-identical.
-// The operation only ever drops an exact multi-line boundary echo or a single
-// pure structural-closer line, or spares a deleted pure structural-closer line,
-// so content lines are never moved or lost. Balance-preserving edits are left
-// strictly alone.
+// A balance-neutral boundary-echo repair fires only when both the leading and
+// trailing payload edges are exact copies of the surviving lines outside the
+// range. One-sided content echoes are left alone unless delimiter-balance repair
+// proves they are duplicated structural boundaries. This preserves intended
+// duplicate statements while absorbing the common "body includes the unchanged
+// wrapper" mistake.
 
 /** A line that is nothing but closing delimiters: `}`, `)`, `];`, `})`, `},`. */
 const STRUCTURAL_CLOSER_RE = /^\s*[)\]}]+[;,]?\s*$/;
@@ -322,6 +319,77 @@ function findDroppedSuffixClosers(
 	return 0;
 }
 
+interface BoundaryEcho {
+	leading: number;
+	trailing: number;
+}
+
+function hasNonWhitespace(text: string): boolean {
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code !== 9 && code !== 10 && code !== 11 && code !== 12 && code !== 13 && code !== 32) return true;
+	}
+	return false;
+}
+
+function countDuplicateLeadingBoundaryLines(group: ReplacementGroup, fileLines: readonly string[]): number {
+	const { payload, startLine } = group;
+	const max = Math.min(payload.length, startLine - 1);
+	for (let count = max; count >= 1; count--) {
+		let matches = true;
+		let hasContent = false;
+		for (let offset = 0; offset < count; offset++) {
+			const line = payload[offset];
+			if (line !== fileLines[startLine - 1 - count + offset]) {
+				matches = false;
+				break;
+			}
+			hasContent ||= hasNonWhitespace(line);
+		}
+		if (matches && hasContent) return count;
+	}
+	return 0;
+}
+
+function countDuplicateTrailingBoundaryLines(group: ReplacementGroup, fileLines: readonly string[]): number {
+	const { payload, endLine } = group;
+	const max = Math.min(payload.length, fileLines.length - endLine);
+	for (let count = max; count >= 1; count--) {
+		let matches = true;
+		let hasContent = false;
+		for (let offset = 0; offset < count; offset++) {
+			const line = payload[payload.length - count + offset];
+			if (line !== fileLines[endLine + offset]) {
+				matches = false;
+				break;
+			}
+			hasContent ||= hasNonWhitespace(line);
+		}
+		if (matches && hasContent) return count;
+	}
+	return 0;
+}
+
+function findBoundaryEcho(group: ReplacementGroup, fileLines: readonly string[]): BoundaryEcho | undefined {
+	const leadingMax = countDuplicateLeadingBoundaryLines(group, fileLines);
+	if (leadingMax === 0) return undefined;
+	const trailingMax = countDuplicateTrailingBoundaryLines(group, fileLines);
+	if (trailingMax === 0) return undefined;
+	// Bail when every payload line could be claimed by a boundary echo: any
+	// repair would strip explicit replacement content with no signal that the
+	// payload was a mistake rather than an intentional duplication.
+	if (leadingMax + trailingMax >= group.payload.length) return undefined;
+	return { leading: leadingMax, trailing: trailingMax };
+}
+
+function describeBoundaryEchoRepair(group: ReplacementGroup, echo: BoundaryEcho): string {
+	return (
+		`Auto-repaired a replacement boundary echo at line ${group.startLine}: ` +
+		`dropped ${echo.leading} leading and ${echo.trailing} trailing payload line(s) already present outside the range. ` +
+		`Issue the payload as the final desired content for the selected range only — never restate unchanged lines bordering the range.`
+	);
+}
+
 function describeBoundaryRepair(group: ReplacementGroup, action: string): string {
 	return (
 		`Auto-repaired a delimiter-balance mismatch in the replacement at line ${group.startLine}: ${action}. ` +
@@ -330,11 +398,11 @@ function describeBoundaryRepair(group: ReplacementGroup, action: string): string
 }
 
 /**
- * Normalize each replacement group so its payload preserves the deleted
- * region's delimiter balance. See the section header for the contract. Returns
- * the (possibly trimmed) edit list plus one warning per repaired group.
+ * Normalize replacement groups so common off-by-one boundaries do not duplicate
+ * unchanged surrounding lines or structural closers. Returns the repaired edit
+ * list plus one warning per repaired group.
  */
-function repairBoundaryBalance(
+function repairReplacementBoundaries(
 	edits: readonly AppliedEdit[],
 	fileLines: readonly string[],
 ): {
@@ -354,6 +422,13 @@ function repairBoundaryBalance(
 		const inserts = group.insertIndices.map(idx => edits[idx]);
 		const deletes = group.deleteIndices.map(idx => edits[idx]);
 		i = group.deleteIndices[group.deleteIndices.length - 1] + 1;
+
+		const boundaryEcho = findBoundaryEcho(group, fileLines);
+		if (boundaryEcho) {
+			warnings.push(describeBoundaryEchoRepair(group, boundaryEcho));
+			out.push(...inserts.slice(boundaryEcho.leading, inserts.length - boundaryEcho.trailing), ...deletes);
+			continue;
+		}
 
 		const delta = balanceDelta(
 			computeDelimiterBalance(group.payload),
@@ -429,7 +504,7 @@ export function applyEdits(text: string, edits: readonly Edit[]): ApplyResult {
 
 	const targetEdits = appliedEdits.map((edit, index) => cloneAppliedEdit(edit, index));
 	validateLineBounds(targetEdits, fileLines);
-	const { edits: repaired, warnings } = repairBoundaryBalance(targetEdits, fileLines);
+	const { edits: repaired, warnings } = repairReplacementBoundaries(targetEdits, fileLines);
 
 	// Partition edits into bof, eof, and anchor-targeted buckets.
 	const bofLines: string[] = [];

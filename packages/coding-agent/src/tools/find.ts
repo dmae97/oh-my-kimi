@@ -16,6 +16,7 @@ import type { ToolSession } from ".";
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
+	expandDelimitedPathEntries,
 	formatPathRelativeToCwd,
 	hasGlobPathChars,
 	normalizePathLikeInput,
@@ -51,33 +52,6 @@ const MAX_LIMIT = 200;
 const DEFAULT_GLOB_TIMEOUT_MS = 5000;
 const MIN_GLOB_TIMEOUT_MS = 500;
 const MAX_GLOB_TIMEOUT_MS = 60_000;
-
-/**
- * Reject comma-separated path lists packed into a single array element
- * (`["a.py,b.py"]`). The schema is array-of-string; agents that pass a
- * single comma-joined element get silent no-matches otherwise.
- *
- * Commas inside brace expansion (`{a,b}`) are legitimate glob syntax and
- * must pass through.
- */
-export function validateFindPathInputs(paths: readonly string[]): void {
-	for (const entry of paths) {
-		let braceDepth = 0;
-		for (let i = 0; i < entry.length; i++) {
-			const ch = entry.charCodeAt(i);
-			if (ch === 0x5c /* \ */ && i + 1 < entry.length) {
-				i++;
-				continue;
-			}
-			if (ch === 0x7b /* { */) braceDepth++;
-			else if (ch === 0x7d /* } */) {
-				if (braceDepth > 0) braceDepth--;
-			} else if (ch === 0x2c /* , */ && braceDepth === 0) {
-				throw new ToolError(`paths is an array — pass ["a", "b"] not ["a,b"] (got ${JSON.stringify(entry)})`);
-			}
-		}
-	}
-}
 
 /**
  * Group find matches by their directory so the model doesn't pay repeated
@@ -180,8 +154,10 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 
 		return untilAborted(signal, async () => {
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
-			validateFindPathInputs(paths);
-			const rawPatterns = paths.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
+			const rawPatternInputs = this.#customOps
+				? paths
+				: await expandDelimitedPathEntries(paths, this.session.cwd, { splitter: parseFindPattern });
+			const rawPatterns = rawPatternInputs.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
 			const internalRouter = InternalUrlRouter.instance();
 			const normalizedPatterns: string[] = [];
 			for (const rawPattern of rawPatterns) {
@@ -192,7 +168,12 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				if (hasGlobPathChars(rawPattern)) {
 					throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPattern}`);
 				}
-				const resource = await internalRouter.resolve(rawPattern);
+				const resource = await internalRouter.resolve(rawPattern, {
+					cwd: this.session.cwd,
+					settings: this.session.settings,
+					signal,
+					localProtocolOptions: this.session.localProtocolOptions,
+				});
 				if (!resource.sourcePath) {
 					throw new ToolError(`Cannot find internal URL without a backing file: ${rawPattern}`);
 				}
@@ -443,8 +424,12 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 // =============================================================================
 
 interface FindRenderArgs {
-	paths?: string[];
+	paths?: string | string[];
 	limit?: number;
+}
+
+function formatFindRenderPaths(paths: FindRenderArgs["paths"]): string | undefined {
+	return Array.isArray(paths) ? paths.join(", ") : paths;
 }
 
 const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
@@ -456,7 +441,7 @@ export const findToolRenderer = {
 		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 
 		const text = renderStatusLine(
-			{ icon: "pending", title: "Find", description: args.paths?.join(", ") || "*", meta },
+			{ icon: "pending", title: "Find", description: formatFindRenderPaths(args.paths) || "*", meta },
 			uiTheme,
 		);
 		return new Text(text, 0, 0);
@@ -493,7 +478,7 @@ export const findToolRenderer = {
 				{
 					icon: "success",
 					title: "Find",
-					description: args?.paths?.join(", "),
+					description: formatFindRenderPaths(args?.paths),
 					meta: [formatCount("file", lines.length)],
 				},
 				uiTheme,
@@ -528,7 +513,7 @@ export const findToolRenderer = {
 
 		if (fileCount === 0) {
 			const header = renderStatusLine(
-				{ icon: "warning", title: "Find", description: args?.paths?.join(", "), meta: ["0 files"] },
+				{ icon: "warning", title: "Find", description: formatFindRenderPaths(args?.paths), meta: ["0 files"] },
 				uiTheme,
 			);
 			const lines = [header, formatEmptyMessage("No files found", uiTheme)];
@@ -539,7 +524,12 @@ export const findToolRenderer = {
 		if (details?.scopePath) meta.push(`in ${details.scopePath}`);
 		if (truncated) meta.push(uiTheme.fg("warning", "truncated"));
 		const header = renderStatusLine(
-			{ icon: truncated ? "warning" : "success", title: "Find", description: args?.paths?.join(", "), meta },
+			{
+				icon: truncated ? "warning" : "success",
+				title: "Find",
+				description: formatFindRenderPaths(args?.paths),
+				meta,
+			},
 			uiTheme,
 		);
 

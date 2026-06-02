@@ -106,6 +106,30 @@ describe("AgentSession handoff", () => {
 		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
 	});
 
+	it("runs context maintenance before sending an oversized pending prompt", async () => {
+		session.settings.set("compaction.thresholdTokens", 50);
+		session.settings.set("compaction.keepRecentTokens", 1);
+		session.settings.set("contextPromotion.enabled", false);
+
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "pre-prompt compacted",
+			shortSummary: undefined,
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			details: {},
+		}));
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockImplementation(async () => {
+			expect(sessionManager.getEntries().some(entry => entry.type === "compaction")).toBe(true);
+		});
+
+		await session.prompt("pending prompt ".repeat(120));
+		await Bun.sleep(20);
+
+		expect(compactSpy).toHaveBeenCalledTimes(1);
+		expect(promptSpy).toHaveBeenCalledTimes(1);
+		expect(events).toContainEqual({ type: "auto_compaction_start", reason: "threshold", action: "context-full" });
+		expect(events.some(event => event.type === "auto_compaction_end" && event.aborted === false)).toBe(true);
+	});
 	it("does not run auto maintenance after final yield", async () => {
 		session.settings.set("compaction.strategy", "handoff");
 		session.settings.set("compaction.thresholdPercent", 1);

@@ -99,10 +99,8 @@ async function resolvePluginDir(
 async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 	const items: Skill[] = [];
 	const warnings: string[] = [];
-
 	const { roots, warnings: rootWarnings } = await listClaudePluginRoots(ctx.home, ctx.cwd);
 	warnings.push(...rootWarnings);
-
 	const results = await Promise.all(
 		roots.map(async root => {
 			const { dir: skillsDir, warning } = await resolvePluginDir(root, ["skills"], "skills");
@@ -114,16 +112,16 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 			return { root, result, warning };
 		}),
 	);
-
-	for (const { root, result, warning } of results) {
+	for (const { result, warning } of results) {
 		if (warning) warnings.push(warning);
-		for (const skill of result.items) {
-			if (root.plugin) skill.name = `${root.plugin}:${skill.name}`;
-			items.push(skill);
-		}
+		// Intentionally do NOT prefix skill names with `root.plugin`.
+		// The `plugin:name` format breaks skill:// URL parsing (colons are
+		// ambiguous with port separators) and is unintuitive for callers.
+		// Dedup-by-key in the capability layer already handles name collisions
+		// across providers using priority ordering.
+		items.push(...result.items);
 		if (result.warnings) warnings.push(...result.warnings);
 	}
-
 	return { items, warnings };
 }
 

@@ -75,16 +75,22 @@ describe("claude usage request headers", () => {
 
 		const headers = calls[0]?.init?.headers;
 		expect(getHeaderCaseInsensitive(headers, "authorization")).toBe(`Bearer ${token}`);
-		expect(getHeaderCaseInsensitive(headers, "user-agent")).toBe("claude-cli/2.1.63 (external, cli)");
+		expect(getHeaderCaseInsensitive(headers, "user-agent")).toBe("claude-cli/2.1.160 (external, cli)");
 
 		const beta = getHeaderCaseInsensitive(headers, "anthropic-beta");
 		expect(beta).toBeDefined();
 		const betaTokens = beta?.split(",").map(tokenValue => tokenValue.trim()) ?? [];
 		expect(betaTokens).toContain("claude-code-20250219");
 		expect(betaTokens).toContain("oauth-2025-04-20");
+		expect(betaTokens).toContain("context-1m-2025-08-07");
 		expect(betaTokens).toContain("interleaved-thinking-2025-05-14");
+		expect(betaTokens).toContain("redact-thinking-2026-02-12");
 		expect(betaTokens).toContain("context-management-2025-06-27");
 		expect(betaTokens).toContain("prompt-caching-scope-2026-01-05");
+		expect(betaTokens).toContain("mid-conversation-system-2026-04-07");
+		expect(betaTokens).toContain("advanced-tool-use-2025-11-20");
+		expect(betaTokens).toContain("effort-2025-11-24");
+		expect(betaTokens).toContain("extended-cache-ttl-2025-04-11");
 	});
 
 	it("does not invent reset timestamps when Claude omits them", async () => {

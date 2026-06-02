@@ -6,7 +6,7 @@ import {
 	type DiscoverableToolSearchIndex,
 } from "../../src/tool-discovery/tool-index";
 import type { ToolSession } from "../../src/tools/index";
-import { SearchToolBm25Tool } from "../../src/tools/search-tool-bm25";
+import { renderSearchToolBm25Description, SearchToolBm25Tool } from "../../src/tools/search-tool-bm25";
 
 type DiscoveryToolSession = ToolSession & {
 	isMCPDiscoveryEnabled: () => boolean;
@@ -207,5 +207,58 @@ describe("SearchToolBm25Tool", () => {
 		const result = await tool.execute("call-builtin", { query: "find files" });
 		const names = result.details?.tools.map(t => t.name) ?? [];
 		expect(names).toContain("find");
+	});
+});
+
+describe("renderSearchToolBm25Description", () => {
+	function lineWith(rendered: string, prefix: string): string | undefined {
+		return rendered.split("\n").find(line => line.startsWith(prefix));
+	}
+
+	it("lists discoverable built-in tool names alphabetically without leaking them into the MCP server line", () => {
+		const rendered = renderSearchToolBm25Description([
+			builtinTool("write", "Create or overwrite a file"),
+			builtinTool("find", "Find files by name"),
+			builtinTool("search", "Search file contents"),
+			mcpTool("mcp__github_create_issue", "github", "create_issue", "Create a GitHub issue", ["owner"]),
+			mcpTool("mcp__slack_post_message", "slack", "post_message", "Post a message to Slack", ["channel"]),
+		]);
+
+		// Built-in names are present verbatim, alphabetically ordered, on their own line.
+		expect(lineWith(rendered, "Discoverable built-in tools:")).toBe(
+			"Discoverable built-in tools: find, search, write.",
+		);
+
+		// Built-in names must not bleed into the MCP server-summary line.
+		const mcpLine = lineWith(rendered, "Discoverable MCP servers");
+		expect(mcpLine).toBe("Discoverable MCP servers in this session: github (1 tool), slack (1 tool).");
+		expect(mcpLine).not.toContain("write");
+		expect(mcpLine).not.toContain("find");
+		expect(rendered).toContain(
+			"Discoverable MCP servers in this session: github (1 tool), slack (1 tool).\n" +
+				"Discoverable built-in tools: find, search, write.\n" +
+				"Total discoverable tools available: 5.",
+		);
+	});
+
+	it("omits the built-in line when the corpus has no built-ins (mcp-only mode)", () => {
+		const rendered = renderSearchToolBm25Description([
+			mcpTool("mcp__github_create_issue", "github", "create_issue", "Create a GitHub issue", ["owner"]),
+		]);
+
+		expect(rendered).not.toContain("Discoverable built-in tools:");
+		expect(rendered).toContain(
+			"Discoverable MCP servers in this session: github (1 tool).\nTotal discoverable tools available: 1.",
+		);
+	});
+
+	it("keeps built-ins counted in the total discoverable tools line", () => {
+		const rendered = renderSearchToolBm25Description([
+			builtinTool("write", "Create or overwrite a file"),
+			builtinTool("find", "Find files by name"),
+			mcpTool("mcp__slack_post_message", "slack", "post_message", "Post a message to Slack", ["channel"]),
+		]);
+
+		expect(rendered).toContain("Total discoverable tools available: 3.");
 	});
 });

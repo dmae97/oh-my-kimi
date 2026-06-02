@@ -19,6 +19,7 @@ type ConfigurableEditorAction = Extract<
 	| "app.history.search"
 	| "app.message.dequeue"
 	| "app.clipboard.pasteImage"
+	| "app.clipboard.pasteTextRaw"
 	| "app.clipboard.copyPrompt"
 >;
 
@@ -38,6 +39,7 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.history.search": ["ctrl+r"],
 	"app.message.dequeue": ["alt+up"],
 	"app.clipboard.pasteImage": ["ctrl+v"],
+	"app.clipboard.pasteTextRaw": ["ctrl+shift+v", "alt+shift+v"],
 	"app.clipboard.copyPrompt": ["alt+shift+c"],
 };
 
@@ -49,7 +51,6 @@ export class CustomEditor extends Editor {
 	 *  them, skipping any occurrence inside code spans, fenced blocks, or XML sections. */
 	decorateText = (text: string): string => highlightMagicKeywords(text);
 	onEscape?: () => void;
-	shouldBypassAutocompleteOnEscape?: () => boolean;
 	onClear?: () => void;
 	onExit?: () => void;
 	onCycleThinkingLevel?: () => void;
@@ -66,6 +67,8 @@ export class CustomEditor extends Editor {
 	onCopyPrompt?: () => void;
 	/** Called when the configured image-paste shortcut is pressed. */
 	onPasteImage?: () => Promise<boolean>;
+	/** Called when the configured raw text-paste shortcut is pressed. */
+	onPasteTextRaw?: () => void;
 	/** Called when the configured dequeue shortcut is pressed. */
 	onDequeue?: () => void;
 	/** Called when Caps Lock is pressed. */
@@ -122,6 +125,12 @@ export class CustomEditor extends Editor {
 		// Intercept configured image paste (async - fires and handles result)
 		if (this.#matchesAction(data, "app.clipboard.pasteImage") && this.onPasteImage) {
 			void this.onPasteImage();
+			return;
+		}
+
+		// Intercept configured raw text paste (fires and handles result)
+		if (this.#matchesAction(data, "app.clipboard.pasteTextRaw") && this.onPasteTextRaw) {
+			this.onPasteTextRaw();
 			return;
 		}
 
@@ -186,12 +195,15 @@ export class CustomEditor extends Editor {
 		}
 
 		// Intercept configured interrupt shortcut.
-		// Default behavior keeps autocomplete dismissal, but parent can prioritize global interrupt handling.
-		if (this.#matchesAction(data, "app.interrupt") && this.onEscape) {
-			if (!this.isShowingAutocomplete() || this.shouldBypassAutocompleteOnEscape?.()) {
-				this.onEscape();
-				return;
-			}
+		// When the autocomplete popup is visible, ESC's first job is to dismiss
+		// the popup — let super.handleInput() route it to #cancelAutocomplete().
+		// The user can press ESC again afterward to fire the global interrupt
+		// handler. This matches the standard TUI/IDE pattern and prevents a
+		// single ESC from both closing an @ completion and aborting an active
+		// agent run (#1655).
+		if (this.#matchesAction(data, "app.interrupt") && this.onEscape && !this.isShowingAutocomplete()) {
+			this.onEscape();
+			return;
 		}
 
 		// Intercept configured clear shortcut

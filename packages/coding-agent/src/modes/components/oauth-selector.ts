@@ -67,8 +67,14 @@ export class OAuthSelectorComponent extends Container {
 		this.#validationGeneration += 1;
 		this.#stopSpinner();
 	}
+	#hasSelectableAuth(providerId: string): boolean {
+		return this.#mode === "logout" ? this.#authStorage.has(providerId) : this.#authStorage.hasAuth(providerId);
+	}
+
 	#loadProviders(): void {
-		this.#allProviders = getOAuthProviders();
+		const providers = getOAuthProviders();
+		this.#allProviders =
+			this.#mode === "logout" ? providers.filter(provider => this.#hasSelectableAuth(provider.id)) : providers;
 		this.#filteredProviders = this.#allProviders;
 	}
 
@@ -79,7 +85,7 @@ export class OAuthSelectorComponent extends Container {
 
 		let pending = 0;
 		for (const provider of this.#allProviders) {
-			if (!this.#authStorage.hasAuth(provider.id)) {
+			if (!this.#hasSelectableAuth(provider.id)) {
 				this.#authState.delete(provider.id);
 				continue;
 			}
@@ -145,8 +151,9 @@ export class OAuthSelectorComponent extends Container {
 		if (state === "valid") {
 			return theme.fg("success", ` ${theme.status.success} logged in`);
 		}
-		return this.#authStorage.hasAuth(providerId) ? theme.fg("success", ` ${theme.status.success} logged in`) : "";
+		return this.#hasSelectableAuth(providerId) ? theme.fg("success", ` ${theme.status.success} logged in`) : "";
 	}
+
 	#isSearchEnabled(): boolean {
 		return this.#allProviders.length > OAUTH_SELECTOR_MAX_VISIBLE;
 	}
@@ -167,7 +174,7 @@ export class OAuthSelectorComponent extends Container {
 
 	#getProviderSearchText(provider: OAuthProviderInfo): string {
 		let text = `${provider.name} ${provider.id}`;
-		if (this.#authStorage.hasAuth(provider.id)) {
+		if (this.#hasSelectableAuth(provider.id)) {
 			text += " logged in authenticated";
 		}
 		if (!provider.available) {
@@ -240,13 +247,12 @@ export class OAuthSelectorComponent extends Container {
 			this.#listContainer.addChild(new TruncatedText(this.#renderStatusLine(total), 0, 0));
 		}
 
-		// Show "no providers" if empty
 		if (total === 0) {
 			const message =
 				this.#allProviders.length === 0
 					? this.#mode === "login"
 						? "No OAuth providers available"
-						: "No OAuth providers logged in. Use /login first."
+						: "No stored provider credentials to log out"
 					: "No matching providers";
 			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", `  ${message}`), 0, 0));
 		}

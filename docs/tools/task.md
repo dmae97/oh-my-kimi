@@ -222,4 +222,4 @@ Artifacts and side channels:
 - Branch-mode merge temporarily stashes the parent repo before cherry-picking task branches. A stash-pop conflict is treated as merge failure and leaves recovery state behind.
 - Patch-mode only applies combined root patches if every successful task produced a patch and `git.patch.canApplyText(...)` succeeds.
 - Nested git repos are handled separately from the root repo. They are copied into isolated worktrees, diffed independently, and merged later with `applyNestedPatches(...)` because parent git cannot track their file-level changes.
-- `agent://` ids are numeric-prefixed (`0-Task`, `1-Task`, nested like `0-Parent.0-Child`) by `AgentOutputManager`; this is what prevents artifact collisions across repeated or nested task invocations.
+- `agent://` ids are name-based (`Task` first, `Task-2`/`Task-3` only when the name repeats, nested like `Parent.Child`) by `AgentOutputManager`; this is what prevents artifact collisions across repeated or nested task invocations.

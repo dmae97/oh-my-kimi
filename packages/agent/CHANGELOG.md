@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [15.8.0] - 2026-06-02
+
+### Fixed
+
+- Engaged GPT-5 Harmony leak detection on the committed assistant message (openai-codex only). `detectHarmonyLeakInAssistantMessage` now runs on the streamed `done`/`error` result and the trailing fallback, so a leaked final response is aborted-and-retried by the existing mitigation instead of being committed as-is. Tool-argument (`tool_arg`) scanning is gated on the trailing-garbage `T` co-signal and only fires when a caller supplies a parse boundary via `detectHarmonyLeakInAssistantMessage`'s new optional `toolArgParseEnd` resolver. The agent loop passes none — it cannot bound a streamed tool DSL — so that surface stays inert and a legitimate codex tool call whose content legitimately carries `to=functions.*` next to a channel word or non-Latin script (e.g. editing the harmony fixtures) is never hard-aborted.
+
 ## [15.7.4] - 2026-05-31
 
 ### Removed
@@ -19,6 +25,7 @@
 - Fixed tool-output pruning and shake protection for `read`: ordinary file/URL reads are now eligible for compaction, while `read` calls whose `path` starts with `skill://` remain protected like native `skill` results.
 
 ## [15.5.15] - 2026-05-30
+
 ### Added
 
 - Added `maxToolCallsPerTurn` to `AgentLoopConfig`/`AgentOptions`, allowing callers to cut a streamed assistant turn after a completed tool-call batch and execute the runnable partial turn instead of waiting for the provider to yield.
@@ -44,6 +51,7 @@
 - Changed `Agent.appendMessage`, `popMessage`, `clearMessages`, and `reset` to mutate `state.messages` and `state.pendingToolCalls` in place instead of allocating a fresh array/Set on every transition. Subscribers that capture `state.messages` by reference now observe updates without needing to re-read `state` after each event. The public type signature is unchanged (always `AgentMessage[]` / `Set<string>`).
 
 ## [15.5.0] - 2026-05-26
+
 ### Added
 
 - Added `approval` support to `AgentTool` declarations with the new `ToolTier` and `ToolApproval` APIs, allowing tools to declare capability tiers (`read`, `write`, or `exec`) and optional override/reason metadata for approval gating
@@ -55,23 +63,27 @@
 - Fixed chat-request telemetry storing the raw scoped `serviceTier` value (`"openai-only"`/`"claude-only"`) in `OpenAIAttr.RequestServiceTier` instead of the resolved wire value (`"priority"`). Dashboards and alerts filtering on the concrete tier name (`service_tier == "priority"`) were broken by the scoped placeholder; `buildChatRequestAttributes` now runs the tier through `resolveServiceTier(serviceTier, provider)` before recording, keeping the `shouldSendServiceTier` gate intact so non-OpenAI providers continue to omit the attribute entirely.
 
 ## [15.3.0] - 2026-05-25
+
 ### Fixed
 
 - Fixed `transformContext` receiving the loop config object as the `signal` argument instead of the actual `AbortSignal`, so hooks that check `signal.aborted` or call `signal.addEventListener` now work correctly under abort/timeout conditions
 - Fixed `appendOnlyContext` not being re-evaluated after `setModel()` — the mode was decided once at session construction based on the initial model's provider, so switching from/to DeepSeek (or changing `provider.appendOnlyContext`) mid-session produced incorrect mode behavior
 
 ## [15.2.3] - 2026-05-22
+
 ### Added
 
 - Added `onBeforeYield` hook support so user code can run right before the agent loop checks for follow-up messages
 
 ## [15.1.3] - 2026-05-17
+
 ### Added
 
 - Added optional `telemetry` support to `generateSummary`, `generateHandoff`, `generateBranchSummary`, and `compact` options so compaction, handoff, and branch summary one-shot LLM calls can emit OpenTelemetry chat telemetry when enabled
 - Added shared oneshot telemetry instrumentation for compaction, handoff, and branch summary calls, tagging spans with `pi.gen_ai.oneshot.kind` values such as `compaction_summary`, `compaction_short_summary`, `compaction_turn_prefix`, `handoff`, and `branch_summary`
 
 ## [15.1.2] - 2026-05-15
+
 ### Added
 
 - Added `responseHeaders` to `ChatUsageEvent` and `ManualChatTelemetryOptions` so telemetry hooks receive captured lowercase upstream response headers for each chat span
@@ -79,6 +91,7 @@
 - Added exported `detectGatewayFromHeaders` API for header-based gateway detection
 
 ## [15.1.0] - 2026-05-15
+
 ### Breaking Changes
 
 - Removed the `@oh-my-pi/pi-agent-core/compaction/handoff` exports from the package surface, including `extractHandoffDocument`, `createHandoffContext`, and `createHandoffFileName`
@@ -129,6 +142,7 @@
 - Fixed unbounded recursion in summary content capture when a captured value contains a cyclic or deeply nested array — array recursion now respects the same depth cap as plain-object recursion and replaces back-references with `"[Circular]"`
 
 ## [15.0.1] - 2026-05-14
+
 ### Breaking Changes
 
 - Raised the minimum required Bun version from >=1.3.7 to >=1.3.14
@@ -140,6 +154,7 @@
 - Added an `isError?: boolean` field on `AgentToolResult` so tools can flag a non-throwing failure (e.g. an aggregator that catches per-entry errors). `coerceToolResult` preserves the flag and the agent loop surfaces it as a tool error on the wire.
 
 ## [14.9.3] - 2026-05-10
+
 ### Added
 
 - Added `onHarmonyLeak` option on `Agent`/loop config to receive GPT-5 Harmony leak audit callbacks
@@ -155,13 +170,11 @@
 - Hardened failure handling so repeated GPT-5 Harmony leak mitigation is retried only up to two times before escalating to an explicit error
 
 ## [14.9.0] - 2026-05-10
+
 ### Added
 
 - Added `Agent#metadata` field forwarded to every API request; callers can set arbitrary provider metadata (e.g. `metadata.user_id`) once and have it applied to all subsequent stream calls without modifying per-call options
 - Added `Agent#setMetadataResolver(fn)` for installing a function that resolves request metadata at call time. The `metadata` getter dispatches through the resolver on every read (including the snapshot taken per `prompt()`), so callers reflect mutable external state (e.g. live OAuth account UUID after a token refresh) without manual re-syncs. Plain `agent.metadata = …` continues to set a static value and clears any installed resolver.
-
-### Added
-
 - Added an `onSseEvent` agent option and loop config forwarding path for raw provider SSE diagnostics.
 
 ## [14.7.6] - 2026-05-07
@@ -169,13 +182,16 @@
 ### Added
 
 - Added `hideThinkingSummary` option/getter/setter on `Agent` and `AgentLoopConfig`. Forwarded to the underlying stream call so providers can omit reasoning/thinking summaries on demand.
+
 ## [14.7.2] - 2026-05-06
+
 ### Added
 
 - Added `loadMode` option to `AgentTool` to mark built-in tools as `essential` for initial loading or `discoverable` for search activation
 - Added optional `summary` field to `AgentTool` definitions for one-line text used in tool discovery indexes
 
 ## [14.7.0] - 2026-05-04
+
 ### Breaking Changes
 
 - Changed `Agent` API types so `systemPrompt` is now a list of prompt strings, requiring callers to pass and update system prompts via string arrays
@@ -195,6 +211,7 @@
 - Fixed unhandled promise rejection when `getApiKey` or any other async error occurs during `streamAssistantResponse`: agent loop IIFEs now catch and route errors through `EventStream.fail()`, which terminates the `for await` loop and lets `Agent#runLoop`'s catch block create a proper error assistant message instead of crashing
 
 ## [14.6.0] - 2026-05-02
+
 ### Fixed
 
 - Fixed request cancellation before provider events by emitting an aborted assistant message and ending the stream with `stopReason: "aborted"`
@@ -212,6 +229,7 @@
 - Changed tool dispatch to match model-returned tool calls by either internal tool name or custom wire name, enabling custom OpenAI tool names such as `apply_patch`.
 
 ## [14.0.1] - 2026-04-08
+
 ### Added
 
 - Added `onAssistantMessageEvent` callback option to inspect assistant streaming events before they are emitted, enabling abort decisions before buffered events continue flowing
@@ -234,6 +252,7 @@
 - Fixed stale forced toolChoice being passed to provider after tools are refreshed mid-turn
 
 ## [13.9.16] - 2026-03-10
+
 ### Added
 
 - Added `onPayload` option to `AgentOptions` to inspect or replace provider payloads before they are sent
@@ -252,11 +271,13 @@
 - Updated `setThinkingLevel()` method to accept `Effort | undefined` instead of `ThinkingLevel` string
 
 ## [13.4.0] - 2026-03-01
+
 ### Added
 
 - Added `getToolChoice` option to dynamically override tool choice per LLM call
 
 ## [13.3.8] - 2026-02-28
+
 ### Changed
 
 - Changed intent field name from `agent__intent` to `_i` in tool schemas
@@ -264,12 +285,15 @@
 ### Fixed
 
 - Fixed synthetic tool result text formatting so aborted/error tool results no longer emit `Tool execution was aborted.: Request was aborted` style punctuation.
+
 ## [13.3.7] - 2026-02-27
+
 ### Added
 
 - Added `lenientArgValidation` option to tools to allow graceful handling of argument validation errors by passing raw arguments to execute() instead of returning an error to the LLM
 
 ## [13.3.1] - 2026-02-26
+
 ### Added
 
 - Added `topP`, `topK`, `minP`, `presencePenalty`, and `repetitionPenalty` options to `AgentOptions` for fine-grained sampling control
@@ -280,7 +304,9 @@
 ### Changed
 
 - Removed per-tool `agent__intent` field description from injected schema to reduce token usage; intent format is now documented once in the system prompt instead of repeated in every tool definition
+
 ## [12.19.0] - 2026-02-22
+
 ### Changed
 
 - Updated tool result messages to include error details when tool execution fails

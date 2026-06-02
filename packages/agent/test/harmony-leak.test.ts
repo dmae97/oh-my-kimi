@@ -42,6 +42,13 @@ function makeToolCallMessage(toolName: string, input: string | null, argJson: st
 	return createAssistantMessage([toolCall], "toolUse");
 }
 
+// Corpus tool-arg entries are wholly-contaminated args captured from real
+// production leaks. detectHarmonyLeakInAssistantMessage keeps the tool_arg
+// surface inert without a parse boundary (the production default), so these
+// tests inject a boundary at 0 — the entire payload is treated as trailing
+// garbage past the valid parse — to exercise tool-arg detection and recovery.
+const wholePayloadTrailing = () => 0;
+
 describe("isHarmonyLeakMitigationTarget", () => {
 	it("targets every openai-codex model (don't enumerate ids)", () => {
 		expect(isHarmonyLeakMitigationTarget(codexModel)).toBe(true);
@@ -55,7 +62,10 @@ describe("isHarmonyLeakMitigationTarget", () => {
 describe("detectHarmonyLeak — negative cases (must NOT trip)", () => {
 	for (const neg of negatives) {
 		it(neg.name, () => {
-			const detection = detectHarmonyLeak(neg.input, "tool_arg");
+			// Base content guards (co-signal requirement, fence exemption) are
+			// surface-independent; the extra `tool_arg` `T`-gate would mask them, so
+			// assert them on a surface without it — a pass proves the heuristics.
+			const detection = detectHarmonyLeak(neg.input, "assistant_text");
 			expect(detection).toBeUndefined();
 		});
 	}
@@ -79,8 +89,12 @@ describe("detectHarmonyLeak — positive corpus cases (must trip with co-signal)
 		const surfaceText = pos.input ?? pos.argJson;
 		if (surfaceText === null) continue;
 		it(`${pos.id} (${pos.kind}) trips with co-signals`, () => {
+			// Production feeds no boundary, so tool_arg stays inert. These corpus
+			// payloads are wholly-contaminated args from real leaks, so a boundary at
+			// 0 treats the whole payload as trailing and exercises the heuristics.
 			const detection = detectHarmonyLeak(surfaceText, "tool_arg", {
 				toolName: pos.kind === "eval" ? "eval" : "edit",
+				parsedEnd: 0,
 			});
 			expect(detection).toBeDefined();
 			// Every signal that did fire must include `M` plus at least one co-signal.
@@ -92,12 +106,41 @@ describe("detectHarmonyLeak — positive corpus cases (must trip with co-signal)
 	}
 });
 
+describe("detectHarmonyLeak — tool_arg T-gate", () => {
+	// The strongest co-signals (channel word + marker + CJK) that a legitimate
+	// edit of these very fixtures would carry inside its `input` argument.
+	const embedded = "header line one\nanalysis to=functions.edit code 大发官网";
+
+	it("does not trip on tool_arg without a parse boundary (no false hard-abort)", () => {
+		expect(detectHarmonyLeak(embedded, "tool_arg")).toBeUndefined();
+	});
+
+	it("trips the same content on a non-tool surface (gate is tool_arg-specific)", () => {
+		const detection = detectHarmonyLeak(embedded, "assistant_text");
+		expect(detection).toBeDefined();
+		expect(detection!.signals.some(s => s.classes.includes("M"))).toBe(true);
+	});
+
+	it("does not trip when the marker precedes the parse boundary (embedded content)", () => {
+		// Whole payload is structurally valid → marker is before parsedEnd → no `T`.
+		expect(detectHarmonyLeak(embedded, "tool_arg", { parsedEnd: embedded.length })).toBeUndefined();
+	});
+
+	it("trips when the marker trails the parse boundary (real leak signature)", () => {
+		const boundary = embedded.indexOf("analysis");
+		const detection = detectHarmonyLeak(embedded, "tool_arg", { parsedEnd: boundary });
+		expect(detection).toBeDefined();
+		// Every fired signal carries the `T` co-signal the gate requires.
+		expect(detection!.signals.every(s => s.classes.includes("T"))).toBe(true);
+	});
+});
+
 describe("recoverHarmonyToolCall — edit DSL", () => {
 	const editDsl = positives.filter(p => p.kind === "edit_dsl");
 	for (const fix of editDsl) {
 		it(`${fix.id}: produces an args-truncated message ending with the *** Abort sentinel`, () => {
 			const message = makeToolCallMessage("edit", fix.input, fix.argJson);
-			const detection = detectHarmonyLeakInAssistantMessage(message);
+			const detection = detectHarmonyLeakInAssistantMessage(message, wholePayloadTrailing);
 			expect(detection).toBeDefined();
 			const recovered = recoverHarmonyToolCall(message, detection!);
 			expect(recovered).toBeDefined();
@@ -125,9 +168,9 @@ describe("recoverHarmonyToolCall — edit DSL", () => {
 	it("idempotence: re-running detect+recover on the cleaned message is a no-op", () => {
 		const fix = editDsl[0];
 		const message = makeToolCallMessage("edit", fix.input, fix.argJson);
-		const detection = detectHarmonyLeakInAssistantMessage(message)!;
+		const detection = detectHarmonyLeakInAssistantMessage(message, wholePayloadTrailing)!;
 		const recovered = recoverHarmonyToolCall(message, detection)!;
-		const second = detectHarmonyLeakInAssistantMessage(recovered.message);
+		const second = detectHarmonyLeakInAssistantMessage(recovered.message, wholePayloadTrailing);
 		expect(second).toBeUndefined();
 	});
 
@@ -137,7 +180,7 @@ describe("recoverHarmonyToolCall — edit DSL", () => {
 		const applyPatchInput =
 			"*** Begin Patch\n*** Update File: a.ts\n@@\n-old\n+new\n*** End Patch\n analysis to=functions.edit code 大发官网";
 		const message = makeToolCallMessage("edit", applyPatchInput, null);
-		const detection = detectHarmonyLeakInAssistantMessage(message)!;
+		const detection = detectHarmonyLeakInAssistantMessage(message, wholePayloadTrailing)!;
 		expect(detection).toBeDefined();
 		const recovered = recoverHarmonyToolCall(message, detection);
 		expect(recovered).toBeUndefined();
@@ -148,7 +191,7 @@ describe("recoverHarmonyToolCall — edit JSON-schema (must NOT recover)", () =>
 	for (const fix of positives.filter(p => p.kind === "edit_json")) {
 		it(`${fix.id}: detects but refuses to recover`, () => {
 			const message = makeToolCallMessage("edit", fix.input, fix.argJson);
-			const detection = detectHarmonyLeakInAssistantMessage(message);
+			const detection = detectHarmonyLeakInAssistantMessage(message, wholePayloadTrailing);
 			expect(detection).toBeDefined();
 			const recovered = recoverHarmonyToolCall(message, detection!);
 			// argJson cases either lack a string `input` field, or their `input`
@@ -162,7 +205,7 @@ describe("recoverHarmonyToolCall — eval", () => {
 	for (const fix of positives.filter(p => p.kind === "eval")) {
 		it(`${fix.id}: cleaned input ends with *** Abort sentinel`, () => {
 			const message = makeToolCallMessage("eval", fix.input, fix.argJson);
-			const detection = detectHarmonyLeakInAssistantMessage(message);
+			const detection = detectHarmonyLeakInAssistantMessage(message, wholePayloadTrailing);
 			expect(detection).toBeDefined();
 			const recovered = recoverHarmonyToolCall(message, detection!);
 			expect(recovered).toBeDefined();
@@ -182,7 +225,7 @@ describe("recoverHarmonyToolCall — unsupported tools", () => {
 			'{"path":"src/foo.ts","sel":"raw"}' /* legitimate-looking */ +
 			" \tchangedFiles to=functions.read code  天天中彩票";
 		const message = makeToolCallMessage("read", text, null);
-		const detection = detectHarmonyLeakInAssistantMessage(message);
+		const detection = detectHarmonyLeakInAssistantMessage(message, wholePayloadTrailing);
 		// Detector trips because of `G` (changedFiles) + `M`.
 		expect(detection).toBeDefined();
 		// But `read` is not in RECOVERY_REGISTRY, so no recovery offered.
@@ -195,7 +238,7 @@ describe("extractHarmonyRemoved", () => {
 	it("returns the contaminated tail of a tool argument", () => {
 		const fix = positives.filter(p => p.kind === "edit_json")[0];
 		const message = makeToolCallMessage("edit", fix.input, fix.argJson);
-		const detection = detectHarmonyLeakInAssistantMessage(message)!;
+		const detection = detectHarmonyLeakInAssistantMessage(message, wholePayloadTrailing)!;
 		const removed = extractHarmonyRemoved(message, detection);
 		expect(removed.length).toBeGreaterThan(0);
 		expect(removed.startsWith("to=functions.")).toBe(true);
@@ -215,7 +258,7 @@ describe("createHarmonyAuditEvent", () => {
 	it("captures sha + redacted preview by default; raw blob hidden", () => {
 		const fix = positives.filter(p => p.kind === "edit_dsl")[0];
 		const message = makeToolCallMessage("edit", fix.input, fix.argJson);
-		const detection = detectHarmonyLeakInAssistantMessage(message)!;
+		const detection = detectHarmonyLeakInAssistantMessage(message, wholePayloadTrailing)!;
 		const recovered = recoverHarmonyToolCall(message, detection)!;
 		const event = createHarmonyAuditEvent({
 			action: "truncate_resume",

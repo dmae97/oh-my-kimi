@@ -17,11 +17,23 @@ import {
 	AuthStorage,
 	type StoredAuthCredential,
 } from "../src/auth-storage";
-import type { UsageReport } from "../src/usage";
+import type { UsageLimit, UsageReport } from "../src/usage";
 import * as claudeUsage from "../src/usage/claude";
 
 function anthropicReports(reports: UsageReport[] | null): UsageReport[] {
 	return (reports ?? []).filter(r => r.provider === "anthropic");
+}
+
+function requireAnthropicReport(reports: UsageReport[] | null): UsageReport {
+	const report = anthropicReports(reports)[0];
+	if (!report) throw new Error("expected anthropic usage report");
+	return report;
+}
+
+function requireLimit(report: UsageReport, id: string): UsageLimit {
+	const limit = report.limits.find(candidate => candidate.id === id);
+	if (!limit) throw new Error(`expected ${id} limit`);
+	return limit;
 }
 
 /**
@@ -117,6 +129,53 @@ function makeReport(account: string): UsageReport {
 			},
 		],
 		metadata: { email: account, accountId: `account-${account}` },
+	};
+}
+
+function makeTieredReport(account: string): UsageReport {
+	return {
+		provider: "anthropic",
+		fetchedAt: Date.now() - 10_000,
+		limits: [
+			{
+				id: "anthropic:5h",
+				label: "Claude 5 Hour",
+				scope: { provider: "anthropic", windowId: "5h", shared: true },
+				window: { id: "5h", label: "5 Hour" },
+				amount: { used: 42, limit: 100, usedFraction: 0.42, unit: "percent" },
+				status: "ok",
+			},
+			{
+				id: "anthropic:7d",
+				label: "Claude 7 Day",
+				scope: { provider: "anthropic", windowId: "7d", shared: true },
+				window: { id: "7d", label: "7 Day" },
+				amount: { used: 84, limit: 100, usedFraction: 0.84, unit: "percent" },
+				status: "ok",
+			},
+			{
+				id: "anthropic:7d:opus",
+				label: "Claude 7 Day (Opus)",
+				scope: { provider: "anthropic", windowId: "7d", tier: "opus" },
+				window: { id: "7d", label: "7 Day" },
+				amount: { used: 12, limit: 100, usedFraction: 0.12, unit: "percent" },
+				status: "ok",
+			},
+		],
+		metadata: {
+			email: account,
+			accountId: `account-${account}`,
+			endpoint: "https://api.anthropic.com/api/oauth/usage",
+		},
+	};
+}
+
+function usageHeaders(fiveHour: string, sevenDay: string): Record<string, string> {
+	return {
+		"anthropic-ratelimit-unified-5h-utilization": fiveHour,
+		"anthropic-ratelimit-unified-5h-reset": "1780405800",
+		"anthropic-ratelimit-unified-7d-utilization": sevenDay,
+		"anthropic-ratelimit-unified-7d-reset": "1780531200",
 	};
 }
 
@@ -270,6 +329,76 @@ describe("AuthStorage usage cache: jitter", () => {
 			storage.close();
 			vi.restoreAllMocks();
 		}
+	});
+});
+
+describe("AuthStorage usage cache: header ingestion", () => {
+	let store: ObservableStore;
+	let storage: AuthStorage;
+
+	beforeEach(async () => {
+		store = makeStore([oauthRow(1, "a@example.com")]);
+		storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
+		await storage.reload();
+	});
+
+	afterEach(() => {
+		storage.close();
+		vi.restoreAllMocks();
+	});
+
+	it("writes the same per-credential cache key that fetchUsageReports reads", async () => {
+		let calls = 0;
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => {
+			calls += 1;
+			throw new Error("usage endpoint should not be probed after header ingestion");
+		});
+
+		expect(await storage.getApiKey("anthropic", "s")).toBe("oat-1");
+		expect(storage.ingestUsageHeaders("anthropic", usageHeaders("0.02", "0.3"), { sessionId: "s" })).toBe(true);
+
+		const report = requireAnthropicReport(await storage.fetchUsageReports());
+		expect(calls).toBe(0);
+		expect(report.metadata?.source).toBe("ratelimit-headers");
+		expect(requireLimit(report, "anthropic:5h").amount.used).toBe(2);
+		expect(requireLimit(report, "anthropic:7d").amount.used).toBe(30);
+	});
+
+	it("throttles repeated header ingestion for the same credential cache key", async () => {
+		expect(await storage.getApiKey("anthropic", "s")).toBe("oat-1");
+		expect(storage.ingestUsageHeaders("anthropic", usageHeaders("0.02", "0.3"), { sessionId: "s" })).toBe(true);
+		expect(storage.ingestUsageHeaders("anthropic", usageHeaders("0.05", "0.6"), { sessionId: "s" })).toBe(false);
+	});
+
+	it("merges header umbrella windows onto the last real report and preserves tier limits", async () => {
+		const realReport = makeTieredReport("a@example.com");
+		let calls = 0;
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => {
+			calls += 1;
+			return realReport;
+		});
+
+		const initialReport = requireAnthropicReport(await storage.fetchUsageReports());
+		expect(requireLimit(initialReport, "anthropic:7d:opus").amount.used).toBe(12);
+		expect(calls).toBe(1);
+
+		expect(await storage.getApiKey("anthropic", "merge-session")).toBe("oat-1");
+		const beforeIngest = Date.now();
+		expect(storage.ingestUsageHeaders("anthropic", usageHeaders("0.05", "0.9"), { sessionId: "merge-session" })).toBe(
+			true,
+		);
+
+		const mergedReport = requireAnthropicReport(await storage.fetchUsageReports());
+		expect(calls).toBe(1);
+		expect(mergedReport.fetchedAt).toBeGreaterThan(realReport.fetchedAt);
+		expect(mergedReport.metadata?.email).toBe("a@example.com");
+		expect(mergedReport.metadata?.accountId).toBe("account-a@example.com");
+		expect(mergedReport.metadata?.headersUpdatedAt).toBeGreaterThanOrEqual(beforeIngest);
+		expect(requireLimit(mergedReport, "anthropic:5h").amount.used).toBe(5);
+		expect(requireLimit(mergedReport, "anthropic:7d").amount.used).toBe(90);
+		expect(requireLimit(mergedReport, "anthropic:7d:opus").amount.used).toBe(12);
 	});
 });
 

@@ -155,6 +155,86 @@ async function closeTransport(writable: WritableStream<unknown>): Promise<void> 
 }
 
 describe("ACP lazy startup", () => {
+	it("keeps ACP background jobs disabled by default and preserves explicit opt-ins", async () => {
+		const { runRootCommand } = await import("../src/main");
+
+		type ObservedBackgroundSettings = {
+			asyncEnabled: boolean;
+			asyncMaxJobs: number;
+			bashAutoBackground: boolean;
+			bashAutoBackgroundThresholdMs: number;
+		};
+
+		const runAcpStartup = async (settings: Settings): Promise<ObservedBackgroundSettings> => {
+			using tempDir = TempDir.createSync("@omp-acp-background-settings-");
+			const cwd = tempDir.path();
+			const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
+			let observed: ObservedBackgroundSettings | undefined;
+			const stopMessage = "stop test ACP mode";
+			try {
+				await runRootCommand(
+					{
+						mode: "acp",
+						messages: [],
+						fileArgs: [],
+						unknownFlags: new Map(),
+						noSkills: true,
+						noRules: true,
+						noTools: true,
+						noLsp: true,
+						sessionDir: cwd,
+					},
+					[],
+					{
+						discoverAuthStorage: async () => authStorage,
+						settings,
+						runAcpMode: async () => {
+							observed = {
+								asyncEnabled: settings.get("async.enabled"),
+								asyncMaxJobs: settings.get("async.maxJobs"),
+								bashAutoBackground: settings.get("bash.autoBackground.enabled"),
+								bashAutoBackgroundThresholdMs: settings.get("bash.autoBackground.thresholdMs"),
+							};
+							throw new Error(stopMessage);
+						},
+					},
+				);
+			} catch (error) {
+				if (!(error instanceof Error) || error.message !== stopMessage) {
+					throw error;
+				}
+			} finally {
+				authStorage.close();
+			}
+
+			if (!observed) {
+				throw new Error("Expected ACP mode to start");
+			}
+			return observed;
+		};
+
+		await expect(runAcpStartup(Settings.isolated())).resolves.toEqual({
+			asyncEnabled: false,
+			asyncMaxJobs: 100,
+			bashAutoBackground: false,
+			bashAutoBackgroundThresholdMs: 60000,
+		});
+		await expect(
+			runAcpStartup(
+				Settings.isolated({
+					"async.enabled": true,
+					"async.maxJobs": 7,
+					"bash.autoBackground.enabled": true,
+					"bash.autoBackground.thresholdMs": 1234,
+				}),
+			),
+		).resolves.toEqual({
+			asyncEnabled: true,
+			asyncMaxJobs: 7,
+			bashAutoBackground: true,
+			bashAutoBackgroundThresholdMs: 1234,
+		});
+	});
 	it("answers initialize before creating the first AgentSession", async () => {
 		const clientToAgent = new TransformStream();
 		const agentToClient = new TransformStream();

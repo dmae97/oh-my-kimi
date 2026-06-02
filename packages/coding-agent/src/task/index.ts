@@ -48,6 +48,7 @@ import { runSubprocess } from "./executor";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { renderResult, renderCall as renderTaskCall } from "./render";
+import { repairTaskParams } from "./repair-args";
 import { getTaskSimpleModeCapabilities, type TaskSimpleMode } from "./simple-mode";
 import {
 	applyNestedPatches,
@@ -247,7 +248,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}
 
 	renderCall(args: unknown, options: Parameters<typeof renderTaskCall>[1], theme: Theme) {
-		return renderTaskCall(args as TaskParams, options, theme);
+		return renderTaskCall(repairTaskParams(args as TaskParams), options, theme);
 	}
 
 	/** Dynamic description that reflects current disabled-agent settings */
@@ -292,7 +293,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 	): Promise<AgentToolResult<TaskToolDetails>> {
-		const params = rawParams as TaskParams;
+		const params = repairTaskParams(rawParams as TaskParams);
 		const simpleMode = this.#getTaskSimpleMode();
 		const validationError = validateTaskModeParams(simpleMode, params);
 		if (validationError) {

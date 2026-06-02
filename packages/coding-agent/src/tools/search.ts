@@ -10,6 +10,7 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { recordFileSnapshot } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import type { LocalProtocolOptions } from "../internal-urls/local-protocol";
 import { InternalUrlRouter } from "../internal-urls/router";
 import type { InternalResource, ResolveContext } from "../internal-urls/types";
 import type { Theme } from "../modes/theme/theme";
@@ -29,6 +30,7 @@ import { formatGroupedFiles } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
+	expandDelimitedPathEntries,
 	hasGlobPathChars,
 	isLineInRanges,
 	type LineRange,
@@ -93,29 +95,6 @@ export const SINGLE_FILE_MATCHES = 200;
 const INTERNAL_TOTAL_CAP = 2000;
 
 /**
- * Detect a `,` that is not inside a `{…}` brace expansion. Used to catch
- * `paths: ["a,b"]` mistakes where the caller flattened multiple entries
- * into a single string instead of passing a JSON array of strings.
- */
-function containsTopLevelComma(entry: string): boolean {
-	let depth = 0;
-	for (let i = 0; i < entry.length; i++) {
-		const ch = entry[i];
-		if (ch === "\\" && i + 1 < entry.length) {
-			i++;
-			continue;
-		}
-		if (ch === "{") depth++;
-		else if (ch === "}") {
-			if (depth > 0) depth--;
-		} else if (ch === "," && depth === 0) {
-			return true;
-		}
-	}
-	return false;
-}
-
-/**
  * Parsed `paths` entry — a path (possibly archive-shaped) plus an optional
  * line-range selector peeled off the trailing `:N-M` (or `:N+K`, `:N,M`, …)
  * chunk via {@link splitPathAndSel}.
@@ -144,9 +123,6 @@ function parsePathSpecs(rawEntries: readonly string[]): SearchPathSpec[] {
 			}
 			clean = split.path;
 			ranges = parsed;
-		}
-		if (containsTopLevelComma(clean)) {
-			throw new ToolError('paths is an array — pass ["a", "b"] not ["a,b"]');
 		}
 		specs.push({ original: entry, clean, ranges });
 	}
@@ -543,6 +519,7 @@ async function resolveInternalSearchInputs(opts: {
 	settings: unknown;
 	signal?: AbortSignal;
 	archiveDisplayMap: ReadonlyMap<string, string>;
+	localProtocolOptions?: LocalProtocolOptions;
 }): Promise<InternalSearchInputResolution> {
 	const internalRouter = InternalUrlRouter.instance();
 	const paths = opts.resolvedPaths.slice();
@@ -551,7 +528,12 @@ async function resolveInternalSearchInputs(opts: {
 	const virtualInputIndexes = new Set<number>();
 	const immutableSourcePaths = new Set<string>();
 	let virtualScopePath: string | undefined;
-	const context: ResolveContext = { cwd: opts.cwd, settings: opts.settings, signal: opts.signal };
+	const context: ResolveContext = {
+		cwd: opts.cwd,
+		settings: opts.settings,
+		signal: opts.signal,
+		localProtocolOptions: opts.localProtocolOptions,
+	};
 
 	for (let idx = 0; idx < paths.length; idx++) {
 		const rawPath = paths[idx];
@@ -656,7 +638,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			if (normalizedSkip < 0 || !Number.isFinite(normalizedSkip)) {
 				throw new ToolError("Skip must be a non-negative number");
 			}
-			const rawEntries = toPathList(rawPaths);
+			const rawEntries = await expandDelimitedPathEntries(toPathList(rawPaths), this.session.cwd);
 			const pathSpecs = parsePathSpecs(rawEntries);
 			const paths = pathSpecs.map(spec => spec.clean);
 			const {
@@ -674,6 +656,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					settings: this.session.settings,
 					signal,
 					archiveDisplayMap,
+					localProtocolOptions: this.session.localProtocolOptions,
 				});
 				const searchablePaths = internalResolution.paths;
 				const { virtualResources, virtualPathSet, virtualInputIndexes } = internalResolution;
@@ -738,6 +721,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						trackImmutableSources: true,
 						surfaceExactFilePaths: true,
 						multipathStatHint: " (`paths` entries must each exist relative to cwd)",
+						settings: this.session.settings,
+						signal,
+						localProtocolOptions: this.session.localProtocolOptions,
 					});
 					searchPath = scope.searchPath;
 					isDirectory = scope.isDirectory;

@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { isKeyRelease, matchesKey } from "./keys";
-import type { Terminal } from "./terminal";
+import { type Terminal, terminalHasEagerEraseScrollbackRisk } from "./terminal";
 import { ImageProtocol, setCellDimensions, setTerminalImageProtocol, TERMINAL } from "./terminal-capabilities";
 import {
 	Ellipsis,
@@ -386,9 +386,11 @@ export class TUI extends Container {
 	 * non-destructive repaint. This trades the anti-yank guarantee for a clean,
 	 * duplicate-free history and is meant for windows where output above the fold
 	 * is actively re-rendering — e.g. a tool whose result is still streaming and
-	 * re-laying-out rows that have already scrolled into history. A snap to the tail
-	 * is acceptable there. A terminal that can report a *known*-scrolled viewport
-	 * (Windows) still defers; only the unknown case is forced to rebuild.
+	 * re-laying-out rows that have already scrolled into history. A terminal that
+	 * can report a *known*-scrolled viewport (Windows) still defers; only the
+	 * unknown case is forced to rebuild. POSIX hosts known to disturb scrolled
+	 * readers on xterm ED3 (`CSI 3 J`, erase saved lines) also defer the eager
+	 * opt-in; checkpoint and direct user-input rebuilds are unaffected.
 	 */
 	setEagerNativeScrollbackRebuild(enabled: boolean): void {
 		this.#eagerNativeScrollbackRebuild = enabled;
@@ -664,16 +666,23 @@ export class TUI extends Container {
 			clearTimeout(this.#renderTimer);
 			this.#renderTimer = undefined;
 		}
-		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
+		// Place the parent shell on the first line after the rendered content. When
+		// that line is still inside the viewport, moving there and writing `\r` is
+		// enough; emitting `\r\n` would create an extra blank row. If the content
+		// already reaches the viewport bottom, scroll exactly once so the prompt
+		// lands directly below the last visible TUI row.
 		if (this.#previousLines.length > 0) {
-			const targetRow = this.#previousLines.length; // Line after the last content
-			const lineDiff = targetRow - this.#hardwareCursorRow;
+			const targetRow = this.#previousLines.length;
+			const viewportBottom = this.#viewportTopRow + this.terminal.rows - 1;
+			const clampedCursorRow = Math.max(this.#viewportTopRow, Math.min(this.#hardwareCursorRow, viewportBottom));
+			const moveTargetRow = Math.min(targetRow, viewportBottom);
+			const lineDiff = moveTargetRow - clampedCursorRow;
 			if (lineDiff > 0) {
 				this.terminal.write(`\x1b[${lineDiff}B`);
 			} else if (lineDiff < 0) {
 				this.terminal.write(`\x1b[${-lineDiff}A`);
 			}
-			this.terminal.write("\r\n");
+			this.terminal.write(targetRow <= viewportBottom ? "\r" : "\r\n");
 		}
 
 		this.terminal.showCursor();
@@ -1180,8 +1189,8 @@ export class TUI extends Container {
 		const prevHardwareCursorRow = this.#hardwareCursorRow;
 		const widthChanged = this.#previousWidth > 0 && this.#previousWidth !== width;
 		const heightChanged = this.#previousHeight > 0 && this.#previousHeight !== height;
-		const allowUnknownViewportMutation =
-			this.#allowUnknownViewportMutationOnNextRender || this.#eagerNativeScrollbackRebuild;
+		const eagerRebuildAllowed = this.#eagerNativeScrollbackRebuild && !terminalHasEagerEraseScrollbackRisk();
+		const allowUnknownViewportMutation = this.#allowUnknownViewportMutationOnNextRender || eagerRebuildAllowed;
 		this.#allowUnknownViewportMutationOnNextRender = false;
 
 		// 3. Classify intent.
@@ -1335,8 +1344,42 @@ export class TUI extends Container {
 			) {
 				return { kind: "historyRebuild" };
 			}
+			// POSIX terminals — and Windows Terminal/ConPTY — that cannot report the
+			// viewport position fall through here (`canRebuildNativeScrollbackLive` is
+			// false). A destructive rebuild emits `\x1b[3J` (xterm erase saved lines),
+			// which can clear or reposition native scrollback and yank a scrolled-up
+			// reader (issue #1635), so it is unsafe while the probe is unavailable.
+			//
+			// When the shrunk transcript now fits entirely in the viewport there is no
+			// new native history to preserve during the live frame: repaint the screen
+			// in place (no `\x1b[3J`) and defer stale-scrollback cleanup to the next
+			// checkpoint rebuild (e.g. prompt submit -> `refreshNativeScrollbackIfDirty`).
+			if (nativeViewportAtBottom === undefined && newLines.length <= height) {
+				this.#markNativeScrollbackDirty();
+				return { kind: "viewportRepaint" };
+			}
+			// The shrunk transcript still overflows the viewport. A plain viewport
+			// repaint would re-emit the rows between the new and old viewport tops on top
+			// of the copies the terminal already kept in native scrollback; `deferredShrink`
+			// pads to the previous row count so no committed row is re-emitted, and the
+			// next checkpoint rebuild cleans up.
+			//
+			// That deferral only carries real content when `newLines.length` reaches the
+			// padded viewport top (`previousLines.length - height`) — otherwise every row
+			// the padded repaint draws is past the end of `newLines` and renders blank,
+			// hiding the prompt until the next checkpoint. This can happen even when
+			// `scrollbackHighWater` is far below `previousLines.length - height`, because
+			// prior unknown-POSIX viewport repaints commit longer logical frames without
+			// moving the native scrollback boundary. For a shrink that large a blank,
+			// uninteractable viewport is the greater evil, so yank with `historyRebuild`.
+			// Real win32 unknown probes defer as scrolled above and never reach this; the
+			// yank only lands on non-win32 hosts whose probe is genuinely unavailable.
+			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
+			if (newLines.length <= paddedViewportTop) {
+				return { kind: "historyRebuild" };
+			}
 			this.#markNativeScrollbackDirty();
-			return { kind: "viewportRepaint" };
+			return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 		}
 
 		const suppressSuffixScroll = this.#suppressNextSuffixScroll;
@@ -1405,14 +1448,32 @@ export class TUI extends Container {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				this.#markNativeScrollbackDirty();
-				return { kind: "deferredMutation" };
+				// Confirmed scrolled (probe returned `false`): the reader is parked in
+				// scrollback and writing the live frame is wasted bytes — defer until
+				// the next checkpoint reconciles. Unknown viewport (e.g. native Windows
+				// Terminal where the probe cannot see WT host scrollback) is a
+				// different case: a no-op there freezes the editor on the keystroke
+				// that grows `lines.length` past the viewport (the wrap keystroke).
+				// Fall through to a non-destructive viewport repaint instead so the
+				// live UI keeps updating without yanking a possibly-scrolled reader.
+				if (this.#nativeViewportIsKnownScrolled(nativeViewportAtBottom)) {
+					return { kind: "deferredMutation" };
+				}
+				return { kind: "viewportRepaint" };
 			}
 		}
 		if (!pureAppend && structuralMutation && !isMultiplexerSession()) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				this.#markNativeScrollbackDirty();
-				return { kind: "deferredMutation" };
+				// See the matching comment on the pure-append branch above: confirmed
+				// scrolled stays a no-op; unknown viewport repaints the visible window
+				// so slash-command transitions and offscreen chrome edits paint on the
+				// same frame instead of stalling until the next prompt submit.
+				if (this.#nativeViewportIsKnownScrolled(nativeViewportAtBottom)) {
+					return { kind: "deferredMutation" };
+				}
+				return { kind: "viewportRepaint" };
 			}
 			// The append-tail path can only scroll a clean pure-tail append over an
 			// offscreen edit into history: the rows it pushes must equal the net
@@ -1587,6 +1648,10 @@ export class TUI extends Container {
 		);
 	}
 
+	#nativeViewportIsKnownScrolled(nativeViewportAtBottom: boolean | undefined): boolean {
+		return nativeViewportAtBottom === false;
+	}
+
 	#nativeViewportIsAtBottom(nativeViewportAtBottom: boolean | undefined): boolean {
 		return nativeViewportAtBottom === true;
 	}
@@ -1604,8 +1669,8 @@ export class TUI extends Container {
 	/**
 	 * Live-frame counterpart to {@link #canReplayNativeScrollbackAtCheckpoint}.
 	 * Decides whether a destructive native scrollback rebuild
-	 * (`historyRebuild`/`overlayRebuild`, which clear scrollback and snap the
-	 * viewport to the tail) is safe to emit *during ordinary rendering*. POSIX
+	 * (`historyRebuild`/`overlayRebuild`, which clears saved lines and may move
+	 * the native viewport) is safe to emit *during ordinary rendering*. POSIX
 	 * terminals cannot report whether the user has scrolled up
 	 * (`isNativeViewportAtBottom()` is `undefined`), so an unknown position is
 	 * treated as unsafe: defer to a non-destructive viewport repaint, mark
@@ -1613,10 +1678,11 @@ export class TUI extends Container {
 	 * ({@link refreshNativeScrollbackIfDirty} on prompt submit) where the
 	 * editor keystroke has already pinned the terminal to the bottom. Without
 	 * this, every offscreen transcript edit while streaming wiped scrollback and
-	 * yanked a scrolled-up reader back down. `allowUnknownViewportMutation`
-	 * (autocomplete/IME) opts directly user-driven frames back into the rebuild.
-	 * Unlike the checkpoint predicate this carries no `process.platform`
-	 * optimism — resize and checkpoint replays keep using that one.
+	 * yanked a scrolled-up reader out of their current context.
+	 * `allowUnknownViewportMutation` (autocomplete/IME) opts directly
+	 * user-driven frames back into the rebuild. Unlike the checkpoint predicate
+	 * this carries no `process.platform` optimism — resize and checkpoint replays
+	 * keep using that one.
 	 */
 	#canRebuildNativeScrollbackLive(
 		nativeViewportAtBottom: boolean | undefined,

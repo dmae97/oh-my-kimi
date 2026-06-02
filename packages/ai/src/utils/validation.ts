@@ -839,14 +839,19 @@ function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unkn
 		if (typeof currentValue !== "string") continue;
 
 		const result = tryParseJsonForTypes(currentValue, issue.expectedTypes);
-		if (!result.changed) continue;
+		const coercedValue = result.changed
+			? result.value
+			: issue.expectedTypes.includes("array")
+				? [currentValue]
+				: undefined;
+		if (coercedValue === undefined) continue;
 
 		if (!owned) {
 			nextArgs = structuredCloneJSON(nextArgs);
 			owned = true;
 			changed = true;
 		}
-		nextArgs = setValueAtPointer(nextArgs, issue.instancePath, result.value);
+		nextArgs = setValueAtPointer(nextArgs, issue.instancePath, coercedValue);
 	}
 
 	return { value: changed ? nextArgs : args, changed };

@@ -35,7 +35,7 @@ from robomp.config import Settings
 from robomp.db import Database, issue_key
 from robomp.git_ops import DirtyState, inspect_dirty_state
 from robomp.github_backend import GitHubBackend
-from robomp.github_client import CommentInfo, IssueInfo, RepoInfo
+from robomp.github_client import CommentInfo, IssueInfo, PullRequestInfo, RepoInfo
 from robomp.host_tools import AbortController, ToolBindings, _git_identity_env
 from robomp.natives_cache import NativesCache
 from robomp.natives_cache import compute_key as natives_compute_key
@@ -86,6 +86,7 @@ class DirectiveInfo:
     author: str
     thread: tuple[ThreadMessage, ...] = ()
     pragmas: tuple[tuple[str, str], ...] = ()
+    authorizes_impl: bool = False
 
 
 def _resolve_pragma_overrides(
@@ -190,6 +191,7 @@ def _build_extra_env(settings: Settings) -> dict[str, str]:
 
 
 _TERMINAL_TRIAGE_TOOLS: frozenset[str] = frozenset({"gh_open_pr", "mark_unable_to_reproduce", "abort_task"})
+_TERMINAL_REVIEW_TOOLS: frozenset[str] = frozenset({"submit_pr_review", "abort_task"})
 _PR_REQUIRING_CLASSIFICATIONS: frozenset[str] = frozenset({"bug", "documentation"})
 
 
@@ -200,15 +202,12 @@ def _needs_completion_reminder(
     bindings: ToolBindings,
     tools_called: set[str],
 ) -> bool:
-    """True iff a `triage_issue` turn ended before reaching a terminal tool.
-
-    Only enforced for `bug` / `documentation` classifications — `question`,
-    `enhancement`, `proposal`, `invalid`, `duplicate` terminate on a single
-    `gh_post_comment` which we can't reliably distinguish from a preamble.
-    """
-    if task_kind != "triage_issue":
-        return False
+    """True iff a task turn ended before reaching its terminal tool."""
     if bindings.abort is not None and bindings.abort.triggered:
+        return False
+    if task_kind == "review_pr":
+        return not (tools_called & _TERMINAL_REVIEW_TOOLS)
+    if task_kind != "triage_issue":
         return False
     row = inputs.db.get_issue(bindings.issue_key)
     if row is None or row.classification not in _PR_REQUIRING_CLASSIFICATIONS:
@@ -278,8 +277,9 @@ def _drive_turn(
         needs_completion = _needs_completion_reminder(
             task_kind=task_kind, inputs=inputs, bindings=bindings, tools_called=tools_called
         )
-        dirty: DirtyState | None = None
         if not needs_completion:
+            if task_kind == "review_pr":
+                break
             dirty = _probe_workspace_dirty(inputs.workspace, inputs.slot_uid)
             if not dirty.is_dirty:
                 break
@@ -294,7 +294,11 @@ def _drive_turn(
                     "max": max_reminders,
                 },
             )
-            reminder = persona.completion_reminder(repo=inputs.repo, issue=inputs.issue, workspace=inputs.workspace)
+            reminder = (
+                persona.review_completion_reminder(repo=inputs.repo, issue=inputs.issue, workspace=inputs.workspace)
+                if task_kind == "review_pr"
+                else persona.completion_reminder(repo=inputs.repo, issue=inputs.issue, workspace=inputs.workspace)
+            )
         else:
             assert dirty is not None
             log.warning(
@@ -331,7 +335,7 @@ def _drive_turn(
                 "tools_called": sorted(tools_called),
             },
         )
-    if reminders_used:
+    if reminders_used and task_kind != "review_pr":
         final_dirty = _probe_workspace_dirty(inputs.workspace, inputs.slot_uid)
         if final_dirty.is_dirty:
             log.warning(
@@ -368,6 +372,7 @@ def _build_prompt(
     comment: CommentInfo | None,
     pr_number: int | None,
     review_payload: dict[str, Any] | None,
+    pr: PullRequestInfo | None = None,
     directive: DirectiveInfo | None = None,
     thread: tuple[ThreadMessage, ...] = (),
     resuming: bool = False,
@@ -383,6 +388,9 @@ def _build_prompt(
                 directive=directive,
             )
         return persona.kickoff(repo=inputs.repo, issue=inputs.issue, workspace=inputs.workspace)
+    if task_kind == "review_pr":
+        assert pr is not None
+        return persona.kickoff_pr_review(repo=inputs.repo, pr=pr, workspace=inputs.workspace)
     if task_kind == "handle_comment":
         assert comment is not None
         issue_row = inputs.db.get_issue(issue_key(inputs.repo.full_name, inputs.issue.number))
@@ -503,6 +511,11 @@ def _run_rpc_blocking(
         },
     )
     inputs.db.set_event_model(inputs.delivery_id, chosen_model)
+    append_system_prompt = (
+        persona.system_append_pr_review(repo=inputs.repo, issue=inputs.issue, workspace=inputs.workspace)
+        if task_kind == "review_pr"
+        else persona.system_append(repo=inputs.repo, issue=inputs.issue, workspace=inputs.workspace)
+    )
 
     with RpcClient(
         executable=settings.omp_command,
@@ -514,7 +527,7 @@ def _run_rpc_blocking(
         model=chosen_model,
         provider=settings.provider,
         thinking=chosen_thinking if chosen_thinking != "off" else None,
-        append_system_prompt=persona.system_append(repo=inputs.repo, issue=inputs.issue, workspace=inputs.workspace),
+        append_system_prompt=append_system_prompt,
         custom_tools=host_tools.build(bindings),
         request_timeout=settings.request_timeout_seconds,
         startup_timeout=60.0,
@@ -557,13 +570,12 @@ def _run_rpc_blocking(
             phases = persona.seed_phases(task_kind)
             if phases:
                 try:
-                    if task_kind == "triage_issue" and not resuming:
-                        # Fresh triage: seed the full plan.
+                    if task_kind in ("triage_issue", "review_pr") and not resuming:
+                        # Fresh kickoff tasks seed the full plan.
                         client.set_todos(phases)
-                    elif task_kind == "triage_issue":
-                        # Resumed triage: prior phases are intact in the
-                        # JSONL transcript — re-seeding would clobber any
-                        # in-progress task statuses. Trust the loaded state.
+                    elif task_kind in ("triage_issue", "review_pr"):
+                        # Resumed kickoff tasks keep prior todo state from the
+                        # JSONL transcript; re-seeding would clobber progress.
                         log.info(
                             "set_todos skipped (resume)",
                             extra={"issue": bindings.issue_key, "task": task_kind},
@@ -653,10 +665,12 @@ async def run_task(
     comment: CommentInfo | None = None,
     pr_number: int | None = None,
     review_payload: dict[str, Any] | None = None,
+    pr: PullRequestInfo | None = None,
     directive: DirectiveInfo | None = None,
     thread: tuple[ThreadMessage, ...] = (),
 ) -> str | None:
     """Async wrapper that runs the synchronous RPC driver on a worker thread."""
+    review_mode = task_kind == "review_pr" or inputs.workspace.branch.startswith("review/pr-")
     loop = asyncio.get_running_loop()
     bindings = ToolBindings(
         db=inputs.db,
@@ -671,6 +685,8 @@ async def run_task(
         author_email=inputs.settings.git_author_email,
         inbound_thread_number=pr_number,
         inbound_is_pr=pr_number is not None,
+        review_mode=review_mode,
+        impl_authorized=bool(directive is not None and directive.authorizes_impl),
         slot_uid=inputs.slot_uid,
         abort=AbortController(),
     )
@@ -681,6 +697,7 @@ async def run_task(
         comment=comment,
         pr_number=pr_number,
         review_payload=review_payload,
+        pr=pr,
         directive=directive,
         thread=thread,
         resuming=resuming,

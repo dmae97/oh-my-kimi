@@ -13,7 +13,9 @@ class _Sentinel(Exception):
 
 def _start_and_capture(**kwargs):
     client = RpcClient(**kwargs)
-    with patch("omp_rpc.client.subprocess.Popen", side_effect=_Sentinel("aborted")) as mock_popen:
+    with patch(
+        "omp_rpc.client.subprocess.Popen", side_effect=_Sentinel("aborted")
+    ) as mock_popen:
         with pytest.raises(_Sentinel):
             client.start()
     assert mock_popen.call_count == 1

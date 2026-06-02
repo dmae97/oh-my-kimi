@@ -7,6 +7,8 @@
  * Used by `anthropic-messages.ts:parseRequest` to validate the inbound JSON
  * before walking it into pi-ai's canonical `Context`.
  */
+
+import * as z from "zod/v4";
 import type {
 	ContentBlockParam,
 	ImageBlockParam,
@@ -15,8 +17,7 @@ import type {
 	TextBlockParam,
 	Tool,
 	ToolChoice,
-} from "@anthropic-ai/sdk/resources/messages";
-import * as z from "zod/v4";
+} from "./anthropic-wire";
 
 // `cache_control` is accepted and translated to pi-ai's per-request
 // `cacheRetention` (any `ttl: "1h"` marker upgrades the request to "long";
@@ -189,6 +190,18 @@ export const thinkingConfigSchema = z.discriminatedUnion("type", [
 	}),
 ]);
 
+const taskBudgetSchema = z.object({
+	type: z.literal("tokens"),
+	total: z.number(),
+	remaining: z.number().optional(),
+});
+
+const outputConfigSchema = z.object({
+	effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+	task_budget: taskBudgetSchema.optional(),
+	format: z.unknown().optional(),
+});
+
 // ─── Top-level request ─────────────────────────────────────────────────────
 
 export const anthropicMessagesRequestSchema = z.object({
@@ -204,6 +217,7 @@ export const anthropicMessagesRequestSchema = z.object({
 	stop_sequences: z.array(z.string()).optional(),
 	stream: z.boolean().optional(),
 	thinking: thinkingConfigSchema.optional(),
+	output_config: outputConfigSchema.optional(),
 	// Anthropic clients commonly send `metadata: { user_id }`; the walker
 	// surfaces it on `options.metadata` for downstream provider forwarding.
 	metadata: z.record(z.string(), z.unknown()).optional(),

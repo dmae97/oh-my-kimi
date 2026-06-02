@@ -8,7 +8,6 @@
  */
 import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
 import { settings } from "../../../config/settings";
-import { callExaTool, findApiKey, isSearchResponse } from "../../../exa/mcp-client";
 
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
@@ -32,6 +31,12 @@ export interface ExaSearchParams {
 	start_published_date?: string;
 	end_published_date?: string;
 	signal?: AbortSignal;
+	/**
+	 * Credential source. Resolved before falling back to `EXA_API_KEY` so
+	 * Exa works when the key is stored via the broker/auth pipeline.
+	 */
+	authStorage?: AuthStorage;
+	sessionId?: string;
 }
 
 interface ExaSearchResult {
@@ -50,72 +55,6 @@ interface ExaSearchResponse {
 	results?: ExaSearchResult[];
 	costDollars?: { total: number };
 	searchTime?: number;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-	if (typeof value !== "object" || value === null) return null;
-	return value as Record<string, unknown>;
-}
-
-function parseOptionalField(section: string, label: string): string | null | undefined {
-	const regex = new RegExp(`(?:^|\\n)${label}:\\s*([^\\n]*)`);
-	const match = section.match(regex);
-	if (!match) return undefined;
-	const value = match[1].trim();
-	return value.length > 0 ? value : null;
-}
-
-function parseTextField(section: string): string | null | undefined {
-	const match = section.match(/(?:^|\n)Text:\s*([\s\S]*)$/);
-	if (!match) return undefined;
-	const value = match[1].trim();
-	return value.length > 0 ? value : null;
-}
-
-function parseExaMcpTextPayload(payload: unknown): ExaSearchResponse | null {
-	const root = asRecord(payload);
-	if (!root) return null;
-
-	const content = root.content;
-	if (!Array.isArray(content)) return null;
-
-	const textBlocks = content
-		.map(item => {
-			const part = asRecord(item);
-			const text = typeof part?.text === "string" ? part.text : "";
-			return text.replace(/\r\n?/g, "\n").trim();
-		})
-		.filter(text => text.length > 0);
-
-	if (textBlocks.length === 0) return null;
-
-	const sections = textBlocks
-		.join("\n\n")
-		.split(/\n{2,}(?=Title:\s*[^\n]*(?:\n(?:URL|Author|Published Date|Text):))/)
-		.map(section => section.trim())
-		.filter(section => section.startsWith("Title:"));
-
-	const results: ExaSearchResult[] = [];
-	for (const section of sections) {
-		const title = parseOptionalField(section, "Title");
-		const url = parseOptionalField(section, "URL");
-		const author = parseOptionalField(section, "Author");
-		const publishedDate = parseOptionalField(section, "Published Date");
-		const text = parseTextField(section);
-
-		if (!title && !url && !text) continue;
-
-		results.push({
-			title: title ?? undefined,
-			url: url ?? undefined,
-			author: author ?? undefined,
-			publishedDate: publishedDate ?? undefined,
-			text: text ?? undefined,
-		});
-	}
-
-	if (results.length === 0) return null;
-	return { results };
 }
 
 export function normalizeSearchType(type: ExaSearchParamType | undefined): ExaSearchType {
@@ -195,24 +134,17 @@ async function callExaSearch(apiKey: string, params: ExaSearchParams): Promise<E
 	return response.json() as Promise<ExaSearchResponse>;
 }
 
-async function callExaMcpSearch(params: ExaSearchParams): Promise<ExaSearchResponse> {
-	const response = await callExaTool("web_search_exa", { ...params }, findApiKey());
-	if (isSearchResponse(response)) {
-		return response as ExaSearchResponse;
-	}
-
-	const parsed = parseExaMcpTextPayload(response);
-	if (parsed) {
-		return parsed;
-	}
-
-	throw new Error("Exa MCP search returned unexpected response shape.");
-}
-
 /** Execute Exa web search */
 export async function searchExa(params: ExaSearchParams): Promise<SearchResponse> {
-	const apiKey = getEnvApiKey("exa");
-	const response = apiKey ? await callExaSearch(apiKey, params) : await callExaMcpSearch(params);
+	const storedKey = params.authStorage
+		? await params.authStorage.getApiKey("exa", params.sessionId, { signal: params.signal })
+		: undefined;
+	const apiKey = storedKey ?? getEnvApiKey("exa");
+	if (!apiKey) {
+		throw new Error("Exa credentials not found. Set EXA_API_KEY or login with 'omp /login exa'.");
+	}
+
+	const response = await callExaSearch(apiKey, params);
 
 	// Convert to unified SearchResponse
 	const sources: SearchSource[] = [];
@@ -250,15 +182,15 @@ export class ExaProvider extends SearchProvider {
 	readonly id = "exa";
 	readonly label = "Exa";
 
-	isAvailable(_authStorage: AuthStorage): boolean {
+	isAvailable(authStorage: AuthStorage): boolean {
 		try {
 			if (settings.get("exa.enabled") === false || settings.get("exa.enableSearch") === false) {
 				return false;
 			}
 		} catch {
-			// Settings not initialized; fall through to public MCP availability
+			// Settings may be unavailable before CLI initialization; credential availability is still authoritative.
 		}
-		return true;
+		return authStorage.hasAuth("exa");
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
@@ -266,6 +198,8 @@ export class ExaProvider extends SearchProvider {
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,
 			signal: params.signal,
+			authStorage: params.authStorage,
+			sessionId: params.sessionId,
 		});
 	}
 }

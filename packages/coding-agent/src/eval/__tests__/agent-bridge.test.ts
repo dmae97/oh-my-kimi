@@ -10,6 +10,8 @@ import { AgentOutputManager } from "../../task/output-manager";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../task/types";
 import type { ToolSession } from "../../tools";
 import { EVAL_AGENT_MAX_DEPTH, runEvalAgent } from "../agent-bridge";
+import { EVAL_HEARTBEAT_OP, setBridgeHeartbeatIntervalMs } from "../heartbeat";
+import { IdleTimeout } from "../idle-timeout";
 import { disposeAllVmContexts } from "../js/context-manager";
 import { executeJs } from "../js/executor";
 import { disposeAllKernelSessions, executePython } from "../py/executor";
@@ -104,6 +106,7 @@ function singleResult(options: ExecutorOptions, overrides: Partial<SingleResult>
 function makeEvalSession(
 	tempDir: TempDir,
 	prefix: string,
+	settings?: Settings,
 ): { session: ToolSession; sessionFile: string; sessionId: string } {
 	const sessionFile = path.join(tempDir.path(), "session.jsonl");
 	const artifactsDir = sessionFile.slice(0, -6);
@@ -111,6 +114,7 @@ function makeEvalSession(
 		cwd: tempDir.path(),
 		sessionFile,
 		artifactsDir,
+		settings,
 		outputManager: new AgentOutputManager(() => artifactsDir),
 	});
 	return { session, sessionFile, sessionId: `${prefix}:${crypto.randomUUID()}` };
@@ -232,6 +236,7 @@ describe("runEvalAgent", () => {
 describe("agent() through eval runtimes", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+		setBridgeHeartbeatIntervalMs();
 	});
 
 	afterAll(async () => {
@@ -258,9 +263,15 @@ describe("agent() through eval runtimes", () => {
 		expect(JSON.parse(result.output.trim())).toEqual(["hello from agent", { ok: true, n: 3 }]);
 	});
 
-	it("runs JavaScript parallel() with bounded concurrency while preserving order", async () => {
+	it("bounds JavaScript parallel() by the task.maxConcurrency setting while preserving order", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-agent-js-parallel-");
-		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "js-agent-parallel");
+		const settings = Settings.isolated({
+			"async.enabled": false,
+			"task.isolation.mode": "none",
+			"task.enableLsp": true,
+			"task.maxConcurrency": 2,
+		});
+		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "js-agent-parallel", settings);
 		mockAgents();
 		let inFlight = 0;
 		let maxInFlight = 0;
@@ -276,7 +287,7 @@ describe("agent() through eval runtimes", () => {
 		});
 
 		const result = await executeJs(
-			'const values = await parallel(["a", "b", "c", "d"].map(name => () => agent(name)), { concurrency: 2 }); return JSON.stringify(values);',
+			'const values = await parallel(["a", "b", "c", "d"].map(name => () => agent(name))); return JSON.stringify(values);',
 			{ cwd: tempDir.path(), sessionId, session, sessionFile },
 		);
 
@@ -297,7 +308,7 @@ describe("agent() through eval runtimes", () => {
 			return singleResult(options, { output: options.assignment ?? "" });
 		});
 
-		const result = await executeJs('await parallel([() => agent("ok"), () => agent("bad")], { concurrency: 2 });', {
+		const result = await executeJs('await parallel([() => agent("ok"), () => agent("bad")]);', {
 			cwd: tempDir.path(),
 			sessionId,
 			session,
@@ -338,6 +349,52 @@ describe("agent() through eval runtimes", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe("hello from python");
+	});
+
+	it("bounds Python parallel() by the task.maxConcurrency setting while preserving order", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-py-parallel-");
+		const settings = Settings.isolated({
+			"async.enabled": false,
+			"task.isolation.mode": "none",
+			"task.enableLsp": true,
+			"task.maxConcurrency": 2,
+		});
+		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "py-agent-parallel", settings);
+		mockAgents();
+		let inFlight = 0;
+		let maxInFlight = 0;
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			inFlight++;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			try {
+				await Bun.sleep(options.assignment === "a" ? 30 : 10);
+				return singleResult(options, { output: options.assignment ?? "" });
+			} finally {
+				inFlight--;
+			}
+		});
+
+		const probe = await executePython('print("probe")', {
+			cwd: tempDir.path(),
+			sessionId: `${sessionId}:probe`,
+			sessionFile,
+			kernelMode: "per-call",
+		});
+		if (probe.exitCode === undefined && probe.cancelled) {
+			expect(probe.output).toBe("");
+			return;
+		}
+		expect(probe.exitCode).toBe(0);
+
+		const result = await executePython(
+			'import json\nprint(json.dumps(parallel([lambda n=n: agent(n) for n in ["a", "b", "c", "d"]])))',
+			{ cwd: tempDir.path(), sessionId, sessionFile, kernelMode: "per-call", toolSession: session },
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.output.trim())).toEqual(["a", "b", "c", "d"]);
+		expect(maxInFlight).toBeGreaterThan(1);
+		expect(maxInFlight).toBeLessThanOrEqual(2);
 	});
 
 	it("streams enriched agent progress through onStatus before the cell finishes", async () => {
@@ -429,5 +486,92 @@ describe("agent() through eval runtimes", () => {
 			(output): output is Extract<typeof output, { type: "status" }> => output.type === "status",
 		);
 		expect(displayAgentEvents.length).toBe(2);
+	});
+
+	it("keeps the idle watchdog armed while a quiet agent() runs past the budget", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-heartbeat-");
+		const { session } = makeEvalSession(tempDir, "js-agent-heartbeat");
+		mockAgents();
+		// Heartbeat cadence well under the idle budget so a working-but-silent
+		// subagent re-arms the watchdog several times before it could expire.
+		setBridgeHeartbeatIntervalMs(15);
+
+		// runSubprocess runs far past the budget and emits NO progress of its own
+		// — the only thing standing between the subagent and a spurious idle abort
+		// is the heartbeat keepalive the bridge pumps while it awaits.
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			await Bun.sleep(200);
+			return singleResult(options, { output: "done" });
+		});
+
+		// Mirror the eval tool's wiring: an IdleTimeout drives cancellation and
+		// ONLY a bridge heartbeat re-arms it.
+		using idle = new IdleTimeout(60);
+		const result = await runEvalAgent(
+			{ prompt: "investigate" },
+			{
+				session,
+				signal: idle.signal,
+				emitStatus: event => {
+					if (event.op === EVAL_HEARTBEAT_OP) idle.bump();
+				},
+			},
+		);
+
+		expect(idle.signal.aborted).toBe(false);
+		expect(result.text).toBe("done");
+	});
+
+	it("does not let agent() progress snapshots re-arm the watchdog without a heartbeat", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-progress-no-rearm-");
+		const { session } = makeEvalSession(tempDir, "js-agent-progress-no-rearm");
+		mockAgents();
+		// Heartbeat slower than the budget: only the immediate beat at call start
+		// fires, so after the budget elapses nothing re-arms the watchdog.
+		setBridgeHeartbeatIntervalMs(10_000);
+
+		// Stream frequent progress snapshots (op:"agent") for well past the budget.
+		// Progress is rendered but MUST NOT count as activity — only heartbeats do.
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			for (let i = 0; i < 40; i++) {
+				options.onProgress?.({
+					index: options.index,
+					id: options.id,
+					agent: options.agent.name,
+					agentSource: options.agent.source,
+					status: "running",
+					task: options.task,
+					assignment: options.assignment,
+					description: options.description,
+					recentTools: [],
+					recentOutput: [],
+					toolCount: i,
+					tokens: 0,
+					cost: 0,
+					durationMs: i * 10,
+				});
+				await Bun.sleep(10);
+			}
+			return singleResult(options, { output: "done" });
+		});
+
+		const ops: string[] = [];
+		using idle = new IdleTimeout(80);
+		await runEvalAgent(
+			{ prompt: "investigate" },
+			{
+				session,
+				signal: idle.signal,
+				emitStatus: event => {
+					ops.push(event.op);
+					if (event.op === EVAL_HEARTBEAT_OP) idle.bump();
+				},
+			},
+		);
+
+		// Progress streamed, but the watchdog still fired: agent snapshots never
+		// re-armed it, and the lone start heartbeat lapsed before the call ended.
+		expect(ops).toContain("agent");
+		expect(idle.signal.aborted).toBe(true);
 	});
 });

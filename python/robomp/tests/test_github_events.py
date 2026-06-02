@@ -5,6 +5,7 @@ import hmac
 
 from robomp.github_events import (
     extract_mention,
+    is_implementation_authorizer,
     is_maintainer,
     rate_limit_cap,
     route,
@@ -131,7 +132,7 @@ def test_route_pr_conversation_uses_handle_pr_conversation() -> None:
         {
             "action": "created",
             "comment": {"user": {"login": "alice"}, "body": "looks good"},
-            "issue": {"number": 9, "pull_request": {"url": "x"}},
+            "issue": {"number": 9, "user": {"login": BOT}, "pull_request": {"url": "x"}},
             "repository": {"full_name": "octo/widget"},
         },
         allowlist=ALLOWLIST,
@@ -155,7 +156,7 @@ def test_route_pr_conversation_uses_resolver_for_inflight_key() -> None:
         {
             "action": "created",
             "comment": {"user": {"login": "alice"}, "body": "looks good"},
-            "issue": {"number": 9, "pull_request": {"url": "x"}},
+            "issue": {"number": 9, "user": {"login": BOT}, "pull_request": {"url": "x"}},
             "repository": {"full_name": "octo/widget"},
         },
         allowlist=ALLOWLIST,
@@ -175,7 +176,7 @@ def test_route_pr_conversation_falls_back_to_pr_key_when_resolver_misses() -> No
         {
             "action": "created",
             "comment": {"user": {"login": "alice"}, "body": "hi"},
-            "issue": {"number": 9, "pull_request": {"url": "x"}},
+            "issue": {"number": 9, "user": {"login": BOT}, "pull_request": {"url": "x"}},
             "repository": {"full_name": "octo/widget"},
         },
         allowlist=ALLOWLIST,
@@ -186,6 +187,98 @@ def test_route_pr_conversation_falls_back_to_pr_key_when_resolver_misses() -> No
     assert decision.task == "handle_pr_conversation"
     assert decision.submitter == "alice"
     assert decision.issue_key == "octo/widget#9"
+
+
+def test_route_incoming_pr_opened_queues_review_pr() -> None:
+    decision = route(
+        "pull_request",
+        {
+            "action": "opened",
+            "pull_request": {
+                "number": 9,
+                "draft": False,
+                "user": {"login": "alice", "type": "User"},
+                "author_association": "CONTRIBUTOR",
+            },
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+    )
+    assert decision.should_queue
+    assert decision.task == "review_pr"
+    assert decision.issue_key == "octo/widget#9"
+    assert decision.submitter == "alice"
+    assert decision.association == "CONTRIBUTOR"
+
+
+def test_route_incoming_pr_opened_skips_draft_bot_and_disabled() -> None:
+    payload = {
+        "action": "opened",
+        "pull_request": {"number": 9, "draft": True, "user": {"login": "alice", "type": "User"}},
+        "repository": {"full_name": "octo/widget"},
+    }
+    assert not route("pull_request", payload, allowlist=ALLOWLIST, bot_login=BOT).should_queue
+
+    payload["pull_request"]["draft"] = False  # type: ignore[index]
+    payload["pull_request"]["user"] = {"login": BOT, "type": "Bot"}  # type: ignore[index]
+    assert not route("pull_request", payload, allowlist=ALLOWLIST, bot_login=BOT).should_queue
+
+    payload["pull_request"]["user"] = {"login": "alice", "type": "User"}  # type: ignore[index]
+    disabled = route("pull_request", payload, allowlist=ALLOWLIST, bot_login=BOT, pr_review_enabled=False)
+    assert not disabled.should_queue
+    assert "disabled" in disabled.reason
+
+
+def test_route_pull_request_synchronize_stays_skipped() -> None:
+    decision = route(
+        "pull_request",
+        {
+            "action": "synchronize",
+            "pull_request": {"number": 9, "user": {"login": "alice"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+    )
+    assert not decision.should_queue
+
+
+def test_route_incoming_pr_comment_skips() -> None:
+    decision = route(
+        "issue_comment",
+        {
+            "action": "created",
+            "comment": {"user": {"login": "alice"}, "body": "ping"},
+            "issue": {"number": 9, "user": {"login": "contributor"}, "pull_request": {"url": "x"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+    )
+    assert not decision.should_queue
+    assert "incoming PR comments ignored" == decision.reason
+
+
+def test_route_incoming_pr_comment_with_maintainer_mention_still_skips() -> None:
+    decision = route(
+        "issue_comment",
+        {
+            "action": "created",
+            "comment": {
+                "user": {"login": "can1357"},
+                "author_association": "OWNER",
+                "body": "@robomp-bot please re-review",
+            },
+            "issue": {"number": 9, "user": {"login": "contributor"}, "pull_request": {"url": "x"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+    )
+    assert not decision.should_queue
+    assert decision.issue_key == "octo/widget#9"
+    assert decision.reason == "incoming PR comments ignored"
 
 
 def test_route_review_only_for_bot_authored_pr() -> None:
@@ -238,10 +331,10 @@ def test_route_review_comment_falls_back_to_pr_key_when_resolver_misses() -> Non
     assert decision.issue_key == "octo/widget#9"
 
 
-def test_route_pr_closed_only_when_merged_by_bot() -> None:
+def test_route_pr_closed_cleans_up_any_tracked_pr() -> None:
     payload = {
         "action": "closed",
-        "pull_request": {"number": 9, "user": {"login": BOT}, "merged": True},
+        "pull_request": {"number": 9, "user": {"login": "alice"}, "merged": False},
         "repository": {"full_name": "octo/widget"},
     }
     decision = route(
@@ -254,21 +347,21 @@ def test_route_pr_closed_only_when_merged_by_bot() -> None:
     assert decision.should_queue
     assert decision.task == "cleanup_workspace"
     assert decision.issue_key == "octo/widget#42"
+    assert decision.reason == "pull_request.closed"
 
-    fallback = route(
+    payload["pull_request"]["merged"] = True  # type: ignore[index]
+    merged = route(
         "pull_request",
         payload,
         allowlist=ALLOWLIST,
         bot_login=BOT,
         resolve_issue_from_pr=lambda _r, _n: None,
     )
-    assert fallback.should_queue
-    assert fallback.task == "cleanup_workspace"
-    assert fallback.issue_key == "octo/widget#9"
-    assert fallback.submitter is None
-
-    payload["pull_request"]["merged"] = False  # type: ignore[index]
-    assert not route("pull_request", payload, allowlist=ALLOWLIST, bot_login=BOT).should_queue
+    assert merged.should_queue
+    assert merged.task == "cleanup_workspace"
+    assert merged.issue_key == "octo/widget#9"
+    assert merged.reason == "pull_request.merged"
+    assert merged.submitter is None
 
 
 def test_route_skips_pull_request_issues_event() -> None:
@@ -453,6 +546,17 @@ def test_is_maintainer_rejects_contributor_and_none() -> None:
     assert is_maintainer(None, "OWNER", maintainers=frozenset())  # association still wins
 
 
+def test_is_implementation_authorizer_accepts_allowlist_and_owner() -> None:
+    assert is_implementation_authorizer("can1357", None, maintainers=frozenset({"can1357"}))
+    assert is_implementation_authorizer("Can1357", "NONE", maintainers=frozenset({"can1357"}))
+    assert is_implementation_authorizer("stranger", "OWNER", maintainers=frozenset())
+
+
+def test_is_implementation_authorizer_rejects_non_owner_associations() -> None:
+    for assoc in ("MEMBER", "COLLABORATOR", "NONE", "CONTRIBUTOR", None):
+        assert not is_implementation_authorizer("stranger", assoc, maintainers=frozenset()), assoc
+
+
 def test_route_directive_set_on_issue_comment_when_owner_mentions_bot() -> None:
     decision = route(
         "issue_comment",
@@ -473,6 +577,7 @@ def test_route_directive_set_on_issue_comment_when_owner_mentions_bot() -> None:
     assert decision.directive is True
     assert decision.directive_body == "please refactor X"
     assert decision.directive_author == "can1357"
+    assert decision.directive_authorizes_impl is True
 
 
 def test_route_directive_set_when_login_in_maintainers_list() -> None:
@@ -495,6 +600,28 @@ def test_route_directive_set_when_login_in_maintainers_list() -> None:
     assert decision.directive is True
     assert decision.directive_body == "do it"
     assert decision.directive_author == "can1357"
+    assert decision.directive_authorizes_impl is True
+
+
+def test_route_directive_from_collaborator_does_not_authorize_impl() -> None:
+    decision = route(
+        "issue_comment",
+        {
+            "action": "created",
+            "comment": {
+                "user": {"login": "oldschoola"},
+                "author_association": "COLLABORATOR",
+                "body": "@robomp-bot go ahead with the plan",
+            },
+            "issue": {"number": 9},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+    )
+    assert decision.directive is True
+    assert decision.directive_body == "go ahead with the plan"
+    assert decision.directive_authorizes_impl is False
 
 
 def test_route_directive_unset_for_random_user_even_with_mention() -> None:
@@ -537,7 +664,7 @@ def test_route_directive_unset_for_maintainer_without_mention() -> None:
     assert decision.directive is False
 
 
-def test_route_directive_set_on_pr_conversation() -> None:
+def test_route_directive_on_incoming_pr_conversation_is_ignored() -> None:
     decision = route(
         "issue_comment",
         {
@@ -554,10 +681,8 @@ def test_route_directive_set_on_pr_conversation() -> None:
         bot_login=BOT,
         resolve_issue_from_pr=lambda _r, _n: "octo/widget#42",
     )
-    assert decision.should_queue
-    assert decision.task == "handle_pr_conversation"
-    assert decision.directive is True
-    assert decision.directive_body == "change the indentation in foo.py"
+    assert not decision.should_queue
+    assert decision.reason == "incoming PR comments ignored"
 
 
 def test_route_directive_set_on_review_comment() -> None:
@@ -586,7 +711,7 @@ def test_route_directive_set_on_review_comment() -> None:
 # ---------- reviewer bots ----------
 
 
-def test_route_reviewer_bot_comment_is_directive_without_mention() -> None:
+def test_route_reviewer_bot_comment_on_incoming_pr_is_ignored() -> None:
     decision = route(
         "issue_comment",
         {
@@ -603,11 +728,8 @@ def test_route_reviewer_bot_comment_is_directive_without_mention() -> None:
         reviewer_bots=frozenset({"chatgpt-codex-connector"}),
         resolve_issue_from_pr=lambda _r, _n: "octo/widget#42",
     )
-    assert decision.should_queue
-    assert decision.task == "handle_pr_conversation"
-    assert decision.directive is True
-    assert decision.directive_body == "Found two issues in the diff: ..."
-    assert decision.directive_author == "chatgpt-codex-connector"
+    assert not decision.should_queue
+    assert decision.reason == "incoming PR comments ignored"
 
 
 def test_route_reviewer_bot_review_comment_is_directive() -> None:
@@ -632,6 +754,7 @@ def test_route_reviewer_bot_review_comment_is_directive() -> None:
     assert decision.directive is True
     assert decision.directive_body == "This branch leaks memory."
     assert decision.directive_author == "chatgpt-codex-connector"
+    assert decision.directive_authorizes_impl is False
 
 
 def test_route_random_bot_still_skipped_when_not_in_reviewer_list() -> None:
@@ -651,16 +774,16 @@ def test_route_random_bot_still_skipped_when_not_in_reviewer_list() -> None:
     assert "bot" in decision.reason
 
 
-def test_route_reviewer_bot_login_case_insensitive() -> None:
+def test_route_reviewer_bot_login_case_insensitive_for_review_comments() -> None:
     decision = route(
-        "issue_comment",
+        "pull_request_review_comment",
         {
             "action": "created",
             "comment": {
                 "user": {"login": "ChatGPT-Codex-Connector", "type": "Bot"},
                 "body": "feedback",
             },
-            "issue": {"number": 9, "pull_request": {"url": "x"}},
+            "pull_request": {"number": 9, "user": {"login": BOT}},
             "repository": {"full_name": "octo/widget"},
         },
         allowlist=ALLOWLIST,
@@ -693,16 +816,16 @@ def test_route_directive_strips_pragmas_from_maintainer_comment() -> None:
     assert decision.directive_pragmas == (("model", "gpt"), ("thinking", "low"))
 
 
-def test_route_directive_strips_pragmas_from_reviewer_bot_comment() -> None:
+def test_route_directive_strips_pragmas_from_reviewer_bot_review_comment() -> None:
     decision = route(
-        "issue_comment",
+        "pull_request_review_comment",
         {
             "action": "created",
             "comment": {
                 "user": {"login": "chatgpt-codex-connector", "type": "Bot"},
                 "body": "/model claude\nLeak in foo()",
             },
-            "issue": {"number": 9, "pull_request": {"url": "x"}},
+            "pull_request": {"number": 9, "user": {"login": BOT}},
             "repository": {"full_name": "octo/widget"},
         },
         allowlist=ALLOWLIST,

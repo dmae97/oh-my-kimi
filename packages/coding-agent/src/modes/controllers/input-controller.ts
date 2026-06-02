@@ -15,7 +15,7 @@ import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registr
 import { isTinyTitleLocalModelKey } from "../../tiny/models";
 import { tinyTitleClient } from "../../tiny/title-client";
 import type { TinyTitleProgressEvent } from "../../tiny/title-protocol";
-import { copyToClipboard, readImageFromClipboard } from "../../utils/clipboard";
+import { copyToClipboard, readImageFromClipboard, readTextFromClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { ensureSupportedImageInput } from "../../utils/image-loading";
 import { resizeImage } from "../../utils/image-resize";
@@ -86,21 +86,6 @@ export class InputController {
 
 	setupKeyHandlers(): void {
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
-		this.ctx.editor.shouldBypassAutocompleteOnEscape = () =>
-			Boolean(
-				this.ctx.loadingAnimation ||
-					this.ctx.hasActiveBtw() ||
-					this.ctx.hasActiveOmfg() ||
-					this.ctx.session.isStreaming ||
-					this.ctx.session.isCompacting ||
-					this.ctx.session.isGeneratingHandoff ||
-					this.ctx.session.isBashRunning ||
-					this.ctx.session.isEvalRunning ||
-					this.ctx.autoCompactionLoader ||
-					this.ctx.retryLoader ||
-					this.ctx.autoCompactionEscapeHandler ||
-					this.ctx.retryEscapeHandler,
-			);
 		this.ctx.editor.onEscape = () => {
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
@@ -188,6 +173,11 @@ export class InputController {
 			this.ctx.keybindings.getKeys("app.clipboard.pasteImage"),
 		);
 		this.ctx.editor.onPasteImage = () => this.handleImagePaste();
+		this.ctx.editor.setActionKeys(
+			"app.clipboard.pasteTextRaw",
+			this.ctx.keybindings.getKeys("app.clipboard.pasteTextRaw"),
+		);
+		this.ctx.editor.onPasteTextRaw = () => void this.handleClipboardTextRawPaste();
 		this.ctx.editor.setActionKeys(
 			"app.clipboard.copyPrompt",
 			this.ctx.keybindings.getKeys("app.clipboard.copyPrompt"),
@@ -702,6 +692,19 @@ export class InputController {
 		} catch {
 			this.ctx.showStatus("Failed to read clipboard");
 			return false;
+		}
+	}
+
+	async handleClipboardTextRawPaste(): Promise<void> {
+		try {
+			const text = await readTextFromClipboard();
+			if (text) {
+				this.ctx.editor.insertText(text);
+				this.ctx.ui.requestRender();
+				this.ctx.showStatus("No text in clipboard to paste raw");
+			}
+		} catch {
+			this.ctx.showStatus("Failed to paste raw text from clipboard");
 		}
 	}
 

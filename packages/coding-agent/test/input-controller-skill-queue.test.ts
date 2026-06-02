@@ -463,11 +463,12 @@ function createEventControllerFixtureForE10() {
 	const ctx = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
-		ui: { requestRender },
+		ui: { requestRender, setEagerNativeScrollbackRebuild: vi.fn() },
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		addMessageToChat,
 		updatePendingMessagesDisplay,
+		pendingTools: new Map(),
 		session: {},
 	} as unknown as InteractiveModeContext;
 

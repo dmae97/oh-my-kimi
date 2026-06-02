@@ -18,7 +18,7 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `paths` | `string[]` | Yes | One or more globs, files, directories, or internal URLs with backing files. Empty strings and comma-joined multi-path entries such as `["a,b"]` are rejected. Multiple entries may be merged into one brace-union search when their base paths can be resolved together. |
+| `paths` | `string[]` | Yes | One or more globs, files, directories, or internal URLs with backing files. Empty strings are rejected. Single entries accidentally joined with comma, semicolon, or whitespace are expanded only after existence validation; existing paths containing delimiters stay intact. Multiple entries may be merged into one brace-union search when their base paths can be resolved together. |
 | `hidden` | `boolean` | No | Whether hidden files are included. Defaults to `true` (`hidden ?? true`). |
 | `gitignore` | `boolean` | No | Whether `.gitignore` is respected during local native globbing. Defaults to `true`; set `false` to include gitignored files. |
 | `limit` | `number` | No | Max returned paths. Defaults to `200`; finite positive inputs are floored then clamped to `1..200`. |
@@ -41,22 +41,24 @@ The tool returns a single text block plus structured `details`.
 - Streaming: when the runtime supplies `onUpdate`, the local implementation emits incremental newline-delimited text snapshots during globbing, throttled to 200 ms. Final output is grouped; streaming snapshots are not.
 
 ## Flow
-1. `FindTool.execute()` normalizes each `paths` entry with `normalizePathLikeInput()` and `/\\/g -> "/"` (`packages/coding-agent/src/tools/find.ts`). Empty normalized entries fail with `` `paths` must contain non-empty globs or paths ``.
-2. For multi-path local calls, `partitionExistingPaths(..., parseFindPattern)` (`packages/coding-agent/src/tools/path-utils.ts`) stats each base path. Missing entries are skipped; if all are missing, the tool throws `Path not found: ...`. Single missing paths still hard-fail.
-3. The tool tries `resolveExplicitFindPatterns()` to merge multiple inputs into one search rooted at a common base path. If that does not apply, it parses one input with `parseFindPattern()`.
-4. `parseFindPattern()` determines `(basePath, globPattern, hasGlob)`:
+
+1. `FindTool.execute()` expands delimiter-flattened local `paths` entries with `expandDelimitedPathEntries(..., parseFindPattern)` unless custom operations are injected. The splitter validates candidate parts by statting their parsed base paths, keeps existing delimiter-containing paths intact, accepts comma/semicolon splits when at least one part resolves, and accepts whitespace splits only when every part resolves.
+2. The tool normalizes each resulting entry with `normalizePathLikeInput()` and `/\\/g -> "/"` (`packages/coding-agent/src/tools/find.ts`). Empty normalized entries fail with `` `paths` must contain non-empty globs or paths ``.
+3. For multi-path local calls, `partitionExistingPaths(..., parseFindPattern)` (`packages/coding-agent/src/tools/path-utils.ts`) stats each base path. Missing entries are skipped; if all are missing, the tool throws `Path not found: ...`. Single missing paths still hard-fail.
+4. The tool tries `resolveExplicitFindPatterns()` to merge multiple inputs into one search rooted at a common base path. If that does not apply, it parses one input with `parseFindPattern()`.
+5. `parseFindPattern()` determines `(basePath, globPattern, hasGlob)`:
    - no glob chars (`*`, `?`, `[`, `{`) => search that path with implicit `**/*`.
    - glob in the first segment => search from `.` and, unless the pattern already starts with `**/`, prefix it with `**/`.
    - glob later in the path => split at the first glob-bearing segment.
-5. `resolveToCwd()` converts the base path to an absolute path under the session cwd. A resolved `/` is rejected with `Searching from root directory '/' is not allowed`.
-6. `limit` defaults to `DEFAULT_LIMIT` (`200`), must be positive and finite, is floored, then clamped to `MAX_LIMIT` (`200`). `hidden` and `gitignore` both default to `true`. `timeout` is converted to milliseconds and clamped to `500..60_000` before building an `AbortSignal.timeout(...)`.
-7. Execution then branches:
+6. `resolveToCwd()` converts the base path to an absolute path under the session cwd. A resolved `/` is rejected with `Searching from root directory '/' is not allowed`.
+7. `limit` defaults to `DEFAULT_LIMIT` (`200`), must be positive and finite, is floored, then clamped to `MAX_LIMIT` (`200`). `hidden` and `gitignore` both default to `true`. `timeout` is converted to milliseconds and clamped to `500..60_000` before building an `AbortSignal.timeout(...)`.
+8. Execution then branches:
    - **Custom operations branch**: if `FindToolOptions.operations.glob` exists, the tool checks existence with `operations.exists()`, short-circuits exact-file inputs via `operations.stat()` when available, then calls `operations.glob(globPattern, searchPath, { ignore: ["**/node_modules/**", "**/.git/**"], limit })`.
    - **Built-in local branch**: the tool stats `searchPath`. Exact-file inputs return immediately. Directory inputs call `natives.glob()` with `hidden`, `maxResults: effectiveLimit`, `sortByMtime: true`, `gitignore: useGitignore`, and the combined abort signal.
-8. In the local branch, optional `onMatch` callbacks convert each match to a cwd-relative display path and emit throttled progress updates.
-9. After native glob returns, JS sorts `result.matches` by `mtime` descending (`(b.mtime ?? 0) - (a.mtime ?? 0)`) before formatting paths.
-10. `buildResult()` applies `applyListLimit()` to cap the array again at `effectiveLimit`, formats paths with `formatFindGroupedOutput()`, appends notices, then runs `truncateHead()` with `maxLines: Number.MAX_SAFE_INTEGER`. In practice this leaves the 50 KB byte cap in place while disabling the default 3000-line cap.
-11. `toolResult()` packages text plus `details`, and records result-limit / truncation metadata for renderers.
+9. In the local branch, optional `onMatch` callbacks convert each match to a cwd-relative display path and emit throttled progress updates.
+10. After native glob returns, JS sorts `result.matches` by `mtime` descending (`(b.mtime ?? 0) - (a.mtime ?? 0)`) before formatting paths.
+11. `buildResult()` applies `applyListLimit()` to cap the array again at `effectiveLimit`, formats paths with `formatFindGroupedOutput()`, appends notices, then runs `truncateHead()` with `maxLines: Number.MAX_SAFE_INTEGER`. In practice this leaves the 50 KB byte cap in place while disabling the default 3000-line cap.
+12. `toolResult()` packages text plus `details`, and records result-limit / truncation metadata for renderers.
 
 ## Modes / Variants
 - **Exact file path**: if the parsed input has no glob and the resolved path stats as a file, output is that one path.
@@ -90,7 +92,6 @@ The tool returns a single text block plus structured `details`.
 
 ## Errors
 - User-facing `ToolError`s from `FindTool.execute()` include:
-  - `paths is an array — pass ["a", "b"] not ["a,b"] ...`
   - `` `paths` must contain non-empty globs or paths ``
   - `Path not found: ...`
   - `Searching from root directory '/' is not allowed`
