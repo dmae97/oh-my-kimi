@@ -75,7 +75,7 @@ describe("Anthropic Copilot auth config", () => {
 		expect(options.defaultHeaders.Authorization).toBe(`Bearer ${token}`);
 	});
 
-	it("uses bearer-only auth for OpenCode Go Anthropic models", () => {
+	it("uses X-Api-Key auth for OpenCode Go Anthropic models", () => {
 		const model = makeOpenCodeGoQwen37Model();
 		const token = "opencode_test_key";
 		const options = buildAnthropicClientOptions({
@@ -86,9 +86,30 @@ describe("Anthropic Copilot auth config", () => {
 			dynamicHeaders: {},
 		});
 
-		expect(options.apiKey).toBeNull();
+		expect(options.apiKey).toBe(token);
 		expect(options.authToken).toBeNull();
-		expect(options.defaultHeaders.Authorization).toBe(`Bearer ${token}`);
+		expect(options.defaultHeaders.Authorization).toBeUndefined();
+	});
+
+	it("sends OpenCode Go Anthropic requests with X-Api-Key", async () => {
+		const requestedApiKeys: Array<string | null> = [];
+		const requestedAuthorizations: Array<string | null> = [];
+		global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			requestedApiKeys.push(getRequestHeader(input, init, "X-Api-Key"));
+			requestedAuthorizations.push(getRequestHeader(input, init, "Authorization"));
+			return new Response(JSON.stringify({ error: { type: "authentication_error", message: "Unauthorized" } }), {
+				status: 401,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as unknown as typeof fetch;
+
+		const result = await streamAnthropic(makeOpenCodeGoQwen37Model(), testContext, {
+			apiKey: "opencode_test_key",
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(requestedApiKeys[0]).toBe("opencode_test_key");
+		expect(requestedAuthorizations[0]).toBeNull();
 	});
 
 	it("unwraps structured Copilot credentials before setting Authorization", () => {
