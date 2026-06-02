@@ -22,7 +22,7 @@ import { HookEditorComponent } from "../../modes/components/hook-editor";
 import { HookInputComponent } from "../../modes/components/hook-input";
 import { HookSelectorComponent, type HookSelectorSlider } from "../../modes/components/hook-selector";
 import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, theme } from "../../modes/theme/theme";
-import type { InteractiveModeContext } from "../../modes/types";
+import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from "../../modes/types";
 import { setSessionTerminalTitle, setTerminalTitle } from "../../utils/title-generator";
 
 const MAX_WIDGET_LINES = 10;
@@ -583,7 +583,7 @@ export class ExtensionUiController {
 	showHookSelector(
 		title: string,
 		options: ExtensionUISelectItem[],
-		dialogOptions?: ExtensionUIDialogOptions,
+		dialogOptions?: InteractiveSelectorDialogOptions,
 		extra?: { slider?: HookSelectorSlider },
 	): Promise<string | undefined> {
 		const { promise, finish, attachAbort } = this.#createHookDialogState(
@@ -624,6 +624,7 @@ export class ExtensionUiController {
 				onTimeout: dialogOptions?.onTimeout,
 				tui: this.ctx.ui,
 				outline: dialogOptions?.outline,
+				disabledIndices: dialogOptions?.disabledIndices,
 				maxVisible,
 				slider: extra?.slider,
 			},
