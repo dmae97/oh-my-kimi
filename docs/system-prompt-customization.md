@@ -19,11 +19,11 @@ Four user-controllable inputs feed prompt assembly. All four resolve a value as 
 | Input | Source | Effect |
 |---|---|---|
 | `--system-prompt <text-or-file>` | CLI flag | Replaces block 0: the default stable instructions. Highest precedence. |
-| `SYSTEM.md` | `<cwd>/.omp/SYSTEM.md` (walk-up), then `~/.omp/agent/SYSTEM.md` (and equivalent paths under `.claude`, `.codex`, `.gemini`) | Same effect as `--system-prompt`; used when the flag is absent. |
+| `SYSTEM.md` | `<cwd>/.omp/SYSTEM.md`, then `~/.omp/agent/SYSTEM.md` (and equivalent paths under `.claude`, `.codex`, `.gemini`) | Same effect as `--system-prompt`; used when the flag is absent. |
 | `--append-system-prompt <text-or-file>` | CLI flag | Adds a prompt block. Without a custom system prompt it goes after all default blocks; with one it goes after the custom block and before the preserved project/environment footer. |
 | `APPEND_SYSTEM.md` | Same discovery as `SYSTEM.md` | Same effect as `--append-system-prompt`; used when the flag is absent. |
 
-Discovery for `SYSTEM.md` / `APPEND_SYSTEM.md` uses `findConfigFile` (`packages/coding-agent/src/config.ts`): the first existing file across the ordered bases (`.omp`, `.claude`, `.codex`, `.gemini` — project-level first, then user-level) wins. See [`docs/config-usage.md`](./config-usage.md) for the full discovery contract.
+Discovery for `SYSTEM.md` / `APPEND_SYSTEM.md` uses `findConfigFile` (`packages/coding-agent/src/config.ts`): the first existing file across the ordered bases (`.omp`, `.claude`, `.codex`, `.gemini` — project-level at `<cwd>` first, then user-level at `~`) wins. **No ancestor walk-up.** Running `omp` from `<repo>/subdir` does not pick up `<repo>/.omp/SYSTEM.md`; the file must live directly under the cwd's config base or in the user-level location. See [`docs/config-usage.md`](./config-usage.md) for the full discovery contract.
 
 Precedence (highest first):
 
@@ -137,14 +137,14 @@ Inside `buildSystemPrompt` itself, secondary customization and always-apply rule
 
 ---
 
-## 6) Discovery and the empty-directory rule
+## 6) Discovery paths
 
-Two code paths can read `SYSTEM.md` / `APPEND_SYSTEM.md`:
+Only one path actually drives the customization a CLI user sees: the primary CLI path. The capability layer exists but its `SYSTEM.md` output never reaches the rendered prompt under normal CLI startup.
 
-- The primary CLI path (`discoverSystemPromptFile` / `discoverAppendSystemPromptFile` in `main.ts`, which feeds `resolvedSystemPrompt` / `resolvedAppendPrompt`) calls `findConfigFile` and only checks file existence. It works even if `.omp/` contains only the `SYSTEM.md` file itself.
-- The secondary capability path (`loadSystemPromptFiles` → builtin discovery) requires the project `.omp/` directory to be non-empty (the same admission rule applied to every other config file under `.omp/`). When this path skips the file, the primary CLI path still populated `resolvedSystemPrompt`, so user-facing behavior is unchanged.
+- The primary CLI path (`discoverSystemPromptFile` / `discoverAppendSystemPromptFile` in `main.ts`, which feeds `resolvedSystemPrompt` / `resolvedAppendPrompt`) calls `findConfigFile`. `findConfigFile` checks only `<cwd>/.omp`, `<cwd>/.claude`, `<cwd>/.codex`, `<cwd>/.gemini`, and the user-level equivalents — it does **not** walk up ancestors. Files in `<ancestor>/.omp/SYSTEM.md` are ignored when `omp` is started from a subdirectory.
+- The secondary capability path (`loadSystemPromptFiles` → builtin discovery) does walk up via `findNearestProjectConfigDir` and requires the project `.omp/` directory to be non-empty. Its result is rendered into the template variable `systemPromptCustomization`. Under normal CLI startup the default template (`system-prompt.md`) never references that variable, so ancestor-walk capability content has no user-visible effect.
 
-Net effect: `SYSTEM.md` and `APPEND_SYSTEM.md` are picked up even from an otherwise empty `.omp/`. The non-empty rule documented in [`docs/config-usage.md`](./config-usage.md) applies to the capability layer specifically.
+Net effect for CLI users: put `SYSTEM.md` / `APPEND_SYSTEM.md` directly under `<cwd>/.omp` (or another supported config base under cwd) or in the user-level location (`~/.omp/agent/SYSTEM.md` etc.). Ancestor paths are not searched.
 
 ---
 
@@ -156,5 +156,5 @@ Net effect: `SYSTEM.md` and `APPEND_SYSTEM.md` are picked up even from an otherw
 | Replace the stable default instructions but keep project/environment context | `SYSTEM.md` or `--system-prompt` |
 | Use `{{cwd}}` / `{{date}}` / other internals in my file | Not supported. Files are inserted verbatim. |
 | Inherit specific sections from `system-prompt.md` | Not supported; use append, or copy what you need into `SYSTEM.md`. |
-| Override at a per-repo level | Project `.omp/SYSTEM.md` or `.omp/APPEND_SYSTEM.md` |
+| Override at a per-repo level | Project `.omp/SYSTEM.md` under the cwd you launch `omp` from |
 | Override globally | `~/.omp/agent/SYSTEM.md` or `~/.omp/agent/APPEND_SYSTEM.md` |
