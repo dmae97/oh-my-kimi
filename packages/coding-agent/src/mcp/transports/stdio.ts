@@ -328,28 +328,26 @@ export class StdioTransport implements MCPTransport {
 	}
 
 	async close(): Promise<void> {
-		if (!this.#connected) return;
-		this.#connected = false;
-
-		// Reject pending requests
-		for (const [, pending] of this.#pendingRequests) {
-			pending.reject(new Error("Transport closed"));
+		// `close()` is the authoritative resource teardown. `#handleClose()`
+		// may have already run (read-loop EOF, or a notify() write failure
+		// that surfaces the dead transport to the caller) and flipped
+		// `#connected` to false — but the subprocess and read loop are still
+		// alive in that path, so we MUST keep cleaning up regardless. Each
+		// step is individually guarded so this remains idempotent across
+		// repeat calls.
+		if (this.#connected) {
+			this.#handleClose();
 		}
-		this.#pendingRequests.clear();
 
-		// Kill subprocess
 		if (this.#process) {
 			this.#process.kill();
 			this.#process = null;
 		}
 
-		// Wait for read loop to finish
 		if (this.#readLoop) {
 			await this.#readLoop.catch(() => {});
 			this.#readLoop = null;
 		}
-
-		this.onClose?.();
 	}
 }
 

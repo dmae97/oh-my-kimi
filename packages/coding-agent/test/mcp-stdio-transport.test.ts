@@ -180,3 +180,83 @@ describe("StdioTransport.notify", () => {
 		}
 	});
 });
+
+// ---------------------------------------------------------------------------
+// StdioTransport.close — authoritative resource teardown that must keep
+// cleaning up the subprocess and read loop even when `#handleClose()` has
+// already flipped `#connected` (read-loop EOF, or a notify() write failure
+// in the connectToServer() failure path). See PR #1711 follow-up.
+//
+// Bun's parent-side stdout reader only sees EOF when the subprocess
+// actually exits, so the "subprocess closed its stdout but stayed alive"
+// state we'd love to test directly cannot be reproduced through a real
+// subprocess on this platform. Instead we exercise the post-handleClose
+// code path via the natural read-loop-EOF route and pair it with explicit
+// idempotency checks; the reviewer-flagged leak surfaces on Windows where
+// the notify() write actually throws.
+// ---------------------------------------------------------------------------
+
+describe("StdioTransport.close", () => {
+	let transport: StdioTransport | undefined;
+
+	afterEach(async () => {
+		await transport?.close().catch(() => {});
+		transport = undefined;
+	});
+
+	it("completes cleanup when called after the read loop has already torn down", async () => {
+		// Subprocess exits cleanly; the read loop sees EOF and fires
+		// `#handleClose()`, flipping `#connected` to false. `close()` then
+		// runs in exactly the state the reviewer flagged — `#connected`
+		// already false, `#process` and `#readLoop` still set — and must
+		// still null them out instead of early-returning.
+		transport = new StdioTransport({
+			type: "stdio",
+			command: "bun",
+			args: ["-e", "process.exit(0)"],
+		});
+
+		let closeCount = 0;
+		transport.onClose = () => {
+			closeCount++;
+		};
+
+		await transport.connect();
+
+		// Wait for the read loop to observe EOF and fire #handleClose.
+		for (let i = 0; i < 100 && transport.connected; i++) {
+			await Bun.sleep(10);
+		}
+		expect(transport.connected).toBe(false);
+		expect(closeCount).toBe(1);
+
+		// Must not throw and must not re-fire onClose.
+		await transport.close();
+		expect(closeCount).toBe(1);
+
+		// Second close is a no-op too — every resource is already released.
+		await transport.close();
+		expect(closeCount).toBe(1);
+	});
+
+	it("is idempotent — repeat close() calls fire onClose exactly once", async () => {
+		transport = new StdioTransport({
+			type: "stdio",
+			command: "bun",
+			args: ["-e", "await Bun.sleep(60_000)"],
+		});
+
+		let closeCount = 0;
+		transport.onClose = () => {
+			closeCount++;
+		};
+
+		await transport.connect();
+		await transport.close();
+		await transport.close();
+		await transport.close();
+
+		expect(closeCount).toBe(1);
+		expect(transport.connected).toBe(false);
+	});
+});

@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed an unhandled `EPIPE` rejection when an MCP stdio server exits between returning the `initialize` response and the client's `notifications/initialized` send. `StdioTransport.notify()` and `#sendResponse()` now route stdin writes through a shared helper that catches synchronous sink failures: `notify()` tears the transport down (firing `onClose`) and surfaces a `Transport closed while sending notification` rejection so `connectToServer()` treats the handshake as a failed connection instead of returning a "connected" handle wrapping a dead transport; `#sendResponse()` stays silent because a dead subprocess has no use for the response ([#1710](https://github.com/can1357/oh-my-pi/issues/1710)).
+- Fixed an unhandled `EPIPE` rejection when an MCP stdio server exits between returning the `initialize` response and the client's `notifications/initialized` send. `StdioTransport.notify()` and `#sendResponse()` now route stdin writes through a shared helper that catches synchronous sink failures: `notify()` tears the transport down (firing `onClose`) and surfaces a `Transport closed while sending notification` rejection so `connectToServer()` treats the handshake as a failed connection instead of returning a "connected" handle wrapping a dead transport; `#sendResponse()` stays silent because a dead subprocess has no use for the response. `StdioTransport.close()` is now the authoritative resource teardown — it no longer early-returns when `#handleClose()` has already flipped `#connected`, so the subprocess and read loop are always cleaned up (including in the `connectToServer()` failure path) ([#1710](https://github.com/can1357/oh-my-pi/issues/1710)).
 
 ## [15.8.0] - 2026-06-02
 
