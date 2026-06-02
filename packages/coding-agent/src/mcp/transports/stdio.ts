@@ -19,6 +19,34 @@ import type {
 import { toJsonRpcError } from "../../mcp/types";
 import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 
+/** Minimal write surface of `Subprocess.stdin` we need for framed sends. */
+interface FrameSink {
+	write(chunk: string): unknown;
+	flush(): unknown;
+}
+
+/**
+ * Write a newline-delimited JSON-RPC frame to the subprocess's stdin sink,
+ * swallowing synchronous errors so the caller can decide how to react.
+ *
+ * Bun's `FileSink` may throw synchronously (most reliably on Windows) when
+ * the read end of the pipe has been closed by a subprocess that exited
+ * between read-loop ticks. Letting that throw escape an `async` method
+ * surfaces as an unhandled promise rejection at the call site.
+ *
+ * Returns `true` when the frame was accepted by the sink, `false` when the
+ * sink threw — callers signal transport closure on `false`.
+ */
+export function writeFrame(stdin: FrameSink, frame: string): boolean {
+	try {
+		stdin.write(frame);
+		stdin.flush();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Stdio transport for MCP servers.
  * Spawns a subprocess and communicates via stdin/stdout.
@@ -162,11 +190,7 @@ export class StdioTransport implements MCPTransport {
 			const result = await this.onRequest(request.method, request.params);
 			this.#sendResponse(request.id, result);
 		} catch (error) {
-			try {
-				this.#sendResponse(request.id, undefined, toJsonRpcError(error));
-			} catch {
-				// Best-effort — process may have exited
-			}
+			this.#sendResponse(request.id, undefined, toJsonRpcError(error));
 		}
 	}
 
@@ -175,8 +199,9 @@ export class StdioTransport implements MCPTransport {
 		const response = error
 			? { jsonrpc: "2.0" as const, id, error }
 			: { jsonrpc: "2.0" as const, id, result: result ?? {} };
-		this.#process.stdin.write(`${JSON.stringify(response)}\n`);
-		this.#process.stdin.flush();
+		// Silent on failure — a dead subprocess has no use for the response,
+		// and the read loop will close the transport on EOF.
+		writeFrame(this.#process.stdin, `${JSON.stringify(response)}\n`);
 	}
 
 	#handleClose(): void {
@@ -286,10 +311,15 @@ export class StdioTransport implements MCPTransport {
 			params: params ?? {},
 		};
 
-		const message = `${JSON.stringify(notification)}\n`;
-		// Bun's FileSink has write() method directly
-		this.#process.stdin.write(message);
-		this.#process.stdin.flush();
+		// Bun's FileSink can throw EPIPE synchronously on Windows when the
+		// subprocess has exited between the last read-loop tick and this
+		// write (e.g. an MCP server that dies after returning `initialize`
+		// but before `notifications/initialized` is delivered). Treat any
+		// such failure as transport closure so the reconnect machinery
+		// engages instead of leaking an unhandled rejection — see #1710.
+		if (!writeFrame(this.#process.stdin, `${JSON.stringify(notification)}\n`)) {
+			this.#handleClose();
+		}
 	}
 
 	async close(): Promise<void> {

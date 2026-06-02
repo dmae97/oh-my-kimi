@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed an unhandled `EPIPE` rejection when an MCP stdio server exits between returning the `initialize` response and the client's `notifications/initialized` send. `StdioTransport.notify()` and `#sendResponse()` route stdin writes through a shared helper that swallows synchronous sink failures; `notify()` additionally tears the transport down so the reconnect machinery engages instead of leaking a rejection ([#1710](https://github.com/can1357/oh-my-pi/issues/1710)).
+
 ## [15.8.0] - 2026-06-02
 
 ### Added
