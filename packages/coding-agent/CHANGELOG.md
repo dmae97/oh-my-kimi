@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed empty assistant stop retry continuations preserving auto-retry state until a non-empty assistant turn completes or recovery reaches its retry cap.
 ### Changed
 
 - Changed the `search_tool_bm25` tool description to name the hidden discoverable built-in tools (e.g. `write`, `find`, `search`, `lsp`, `task`) when `tools.discoveryMode: "all"` is active, so a model can form a targeted discovery query by name instead of guessing or falling back to shell. `mcp-only` mode is unchanged (no built-ins are advertised) and the `Total discoverable tools available: N` count still includes them.
