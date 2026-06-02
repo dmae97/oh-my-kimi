@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { discoverAndLoadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import {
@@ -12,6 +13,8 @@ import {
 	ExtensionRunner,
 	testSetExtensionHandlerTimeoutMs,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
+import { Type } from "@oh-my-pi/pi-coding-agent/extensibility/typebox";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, logger, TempDir } from "@oh-my-pi/pi-utils";
@@ -771,6 +774,60 @@ describe("ExtensionRunner", () => {
 
 			expect(loadError).toBeDefined();
 			expect(loadError?.error).toContain("Extension runtime not initialized");
+		});
+	});
+
+	describe("tool_call input", () => {
+		it("exposes hashline edit paths to extension gate handlers", async () => {
+			const eventsPath = path.join(tempDir.path(), "tool-call-events.jsonl");
+			const extCode = `
+				import * as fs from "node:fs";
+
+				export default function(pi) {
+					pi.on("tool_call", async (event) => {
+						if (event.toolName !== "edit") return;
+						fs.appendFileSync(
+							${JSON.stringify(eventsPath)},
+							JSON.stringify({ path: event.input.path }) + "\\n",
+						);
+						if (typeof event.input.path !== "string") {
+							return { block: true, reason: \`Blocked: \${event.input.path}\` };
+						}
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "tool-call-path.ts"), extCode);
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const params = Type.Object({ input: Type.String() });
+			const editTool: AgentTool<typeof params, unknown> = {
+				name: "edit",
+				label: "Edit",
+				description: "Test edit tool",
+				parameters: params,
+				strict: true,
+				execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+			};
+			const wrapped = new ExtensionToolWrapper(editTool, runner);
+
+			const resultMessage = await wrapped.execute("tool-call-id", {
+				input: "¶plans/switch-case-array-syntax.md#ABC\\n27 27\\n+new content",
+			});
+
+			expect(resultMessage.content).toEqual([{ type: "text", text: "ok" }]);
+			const events = fs
+				.readFileSync(eventsPath, "utf8")
+				.trim()
+				.split("\\n")
+				.map(line => JSON.parse(line));
+			expect(events).toEqual([{ path: "plans/switch-case-array-syntax.md" }]);
 		});
 	});
 
