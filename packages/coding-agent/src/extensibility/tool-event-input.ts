@@ -36,12 +36,22 @@ function extractHashlinePaths(input: string): string[] {
 export function normalizeToolEventInput(toolName: string, input: Record<string, unknown>): Record<string, unknown> {
 	if (toolName !== "edit" || stringField(input, "path")) return input;
 
+	// Hashline edit mode: the only authoritative target list is the parsed
+	// `¶PATH#TAG` headers inside `input`/`_input`. Trusting a passthrough
+	// `_path` here would let a model-supplied field override the real edit
+	// target and bypass extension gates that allowlist by path.
+	const rawInput = stringField(input, "input") ?? stringField(input, "_input");
+	if (rawInput !== undefined) {
+		const hashlinePaths = extractHashlinePaths(rawInput);
+		if (hashlinePaths.length === 0) return input;
+		if (hashlinePaths.length === 1) return { ...input, path: hashlinePaths[0], paths: hashlinePaths };
+		return { ...input, paths: hashlinePaths };
+	}
+
+	// Replace/patch modes: `path` is the real parameter; some hosts forward
+	// it as `_path` after schema normalization, so propagate it for gates.
 	const directPath = stringField(input, "_path");
 	if (directPath) return { ...input, path: directPath };
 
-	const rawInput = stringField(input, "input") ?? stringField(input, "_input");
-	const hashlinePaths = rawInput ? extractHashlinePaths(rawInput) : [];
-	if (hashlinePaths.length === 0) return input;
-	if (hashlinePaths.length === 1) return { ...input, path: hashlinePaths[0], paths: hashlinePaths };
-	return { ...input, paths: hashlinePaths };
+	return input;
 }
