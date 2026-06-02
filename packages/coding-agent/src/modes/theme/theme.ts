@@ -1273,24 +1273,18 @@ const langMap: Record<string, SymbolKey> = {
 	bin: "lang.binary",
 };
 
-/** Whether a resolved background color reads as light (BT.709 luminance > 0.5). */
-function bgIsLight(value: string | number | undefined): boolean {
-	const luminance = colorLuminance(value);
-	return luminance !== undefined && luminance > 0.5;
-}
-
 export class Theme {
 	#fgColors: Record<ThemeColor, string>;
 	#bgColors: Record<ThemeBg, string>;
 	#symbols: SymbolMap;
 	#spinnerFramesOverrides: Partial<Record<SpinnerType, string[]>>;
 	/**
-	 * True when the status-line background is light. Session accents render on the
-	 * status line / editor chrome, so legibility is classified against that surface
-	 * (`statusLineBg`) rather than the chat bubble (`userMessageBg`), which some
-	 * themes — e.g. `porcelain` — style dark on an otherwise-light theme.
+	 * Relative luminance (0..1) of the status-line background — the surface session
+	 * accents render on — or undefined when it can't be resolved. Accents are sized
+	 * against this rather than the chat bubble (`userMessageBg`), which some themes
+	 * (e.g. `porcelain`) style dark on an otherwise-light theme.
 	 */
-	readonly isLight: boolean;
+	readonly statusLineLuminance: number | undefined;
 
 	constructor(
 		fgColors: Record<ThemeColor, string | number>,
@@ -1300,7 +1294,7 @@ export class Theme {
 		symbolOverrides: Partial<Record<SymbolKey, string>>,
 		spinnerFramesOverrides: Partial<Record<SpinnerType, string[]>> = {},
 	) {
-		this.isLight = bgIsLight(bgColors.statusLineBg);
+		this.statusLineLuminance = colorLuminance(bgColors.statusLineBg);
 		this.#fgColors = {} as Record<ThemeColor, string>;
 		for (const [key, value] of Object.entries(fgColors) as [ThemeColor, string | number][]) {
 			this.#fgColors[key] = fgAnsi(value, mode);
@@ -1320,6 +1314,19 @@ export class Theme {
 			}
 		}
 		this.#spinnerFramesOverrides = spinnerFramesOverrides;
+	}
+
+	/** True when the active theme has a light status-line background. */
+	get isLight(): boolean {
+		return this.statusLineLuminance !== undefined && this.statusLineLuminance > 0.5;
+	}
+
+	/**
+	 * Surface luminance to size session accents against on light themes; undefined on
+	 * dark themes so accents stay vivid. Pass straight to `getSessionAccentHex`.
+	 */
+	get accentSurfaceLuminance(): number | undefined {
+		return this.isLight ? this.statusLineLuminance : undefined;
 	}
 
 	fg(color: ThemeColor, text: string): string {

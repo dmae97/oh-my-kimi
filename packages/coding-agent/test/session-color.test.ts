@@ -9,43 +9,42 @@ function luminance(hex: string): number {
 }
 
 function contrast(a: number, b: number): number {
-	const hi = Math.max(a, b);
-	const lo = Math.min(a, b);
-	return (hi + 0.05) / (lo + 0.05);
+	return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
-
-// catppuccin Latte "crust" = statusLineBg the session title renders on.
-const LIGHT_STATUSLINE_BG = luminance("#dce0e8");
-const LIGHT_LUMINANCE_CAP = 0.205; // generator caps at 0.2; small epsilon for the bisection.
 
 const names = Array.from({ length: 600 }, (_, i) => `analyze-debian-trixie-${i}`);
 
+// Shipped light statusLineBg surfaces, near-white through mid-light.
+const SURFACES: Record<string, number> = {
+	"light-catppuccin crust (#dce0e8)": luminance("#dce0e8"),
+	"light-poimandres (#7390aa)": luminance("#7390aa"),
+};
+
 describe("getSessionAccentHex", () => {
-	it("is deterministic per name and mode", () => {
+	it("is deterministic per name and surface", () => {
 		expect(getSessionAccentHex("analyze debian trixie")).toBe(getSessionAccentHex("analyze debian trixie"));
-		expect(getSessionAccentHex("analyze debian trixie", true)).toBe(
-			getSessionAccentHex("analyze debian trixie", true),
-		);
+		expect(getSessionAccentHex("x", 0.9)).toBe(getSessionAccentHex("x", 0.9));
 	});
 
-	it("keeps vivid (bright) accents on dark themes", () => {
-		const maxDark = Math.max(...names.map(n => luminance(getSessionAccentHex(n, false))));
+	it("keeps vivid (bright) accents on dark themes (undefined surface)", () => {
+		const maxDark = Math.max(...names.map(n => luminance(getSessionAccentHex(n))));
 		expect(maxDark).toBeGreaterThan(0.5);
 	});
 
-	it("caps perceived luminance on light themes so no hue washes out (incl. yellow)", () => {
-		for (const name of names) {
-			const hex = getSessionAccentHex(name, true);
-			expect(luminance(hex)).toBeLessThanOrEqual(LIGHT_LUMINANCE_CAP);
-			// Readable against a light statusline background (>= AA large-text 3:1).
-			expect(contrast(luminance(hex), LIGHT_STATUSLINE_BG)).toBeGreaterThanOrEqual(3);
+	it("clears AA-large contrast against light surfaces, including mid-light backgrounds", () => {
+		for (const bg of Object.values(SURFACES)) {
+			for (const name of names) {
+				const hex = getSessionAccentHex(name, bg);
+				expect(contrast(luminance(hex), bg)).toBeGreaterThanOrEqual(2.99); // ~3:1, float margin
+			}
 		}
 	});
 
 	it("never produces a lighter accent on light themes than on dark for the same name", () => {
+		const nearWhite = SURFACES["light-catppuccin crust (#dce0e8)"];
 		for (const name of names) {
-			expect(luminance(getSessionAccentHex(name, true))).toBeLessThanOrEqual(
-				luminance(getSessionAccentHex(name, false)) + 1e-9,
+			expect(luminance(getSessionAccentHex(name, nearWhite))).toBeLessThanOrEqual(
+				luminance(getSessionAccentHex(name)) + 1e-9,
 			);
 		}
 	});
