@@ -287,7 +287,8 @@ export function getExtraHelpText(): string {
   PERPLEXITY_API_KEY         - Perplexity web search (API)
   PERPLEXITY_COOKIES         - Perplexity web search (session cookie)
   TAVILY_API_KEY             - Tavily web search
-  ANTHROPIC_SEARCH_API_KEY   - Anthropic search provider
+  ANTHROPIC_SEARCH_API_KEY   - Anthropic web search (override; isolates search from main ANTHROPIC_API_KEY)
+  ANTHROPIC_SEARCH_BASE_URL  - Anthropic web search base URL (override; pairs with ANTHROPIC_SEARCH_API_KEY)
 
   ${chalk.dim("# Configuration")}
   PI_CODING_AGENT_DIR        - Session storage directory (default: ~/${CONFIG_DIR_NAME}/agent)
