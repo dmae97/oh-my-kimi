@@ -31,6 +31,12 @@ export interface ExaSearchParams {
 	start_published_date?: string;
 	end_published_date?: string;
 	signal?: AbortSignal;
+	/**
+	 * Credential source. Resolved before falling back to `EXA_API_KEY` so
+	 * Exa works when the key is stored via the broker/auth pipeline.
+	 */
+	authStorage?: AuthStorage;
+	sessionId?: string;
 }
 
 interface ExaSearchResult {
@@ -130,9 +136,12 @@ async function callExaSearch(apiKey: string, params: ExaSearchParams): Promise<E
 
 /** Execute Exa web search */
 export async function searchExa(params: ExaSearchParams): Promise<SearchResponse> {
-	const apiKey = getEnvApiKey("exa");
+	const storedKey = params.authStorage
+		? await params.authStorage.getApiKey("exa", params.sessionId, { signal: params.signal })
+		: undefined;
+	const apiKey = storedKey ?? getEnvApiKey("exa");
 	if (!apiKey) {
-		throw new Error("EXA_API_KEY not found. Set it in environment or .env file.");
+		throw new Error("Exa credentials not found. Set EXA_API_KEY or login with 'omp /login exa'.");
 	}
 
 	const response = await callExaSearch(apiKey, params);
@@ -173,15 +182,15 @@ export class ExaProvider extends SearchProvider {
 	readonly id = "exa";
 	readonly label = "Exa";
 
-	isAvailable(_authStorage: AuthStorage): boolean {
+	isAvailable(authStorage: AuthStorage): boolean {
 		try {
 			if (settings.get("exa.enabled") === false || settings.get("exa.enableSearch") === false) {
 				return false;
 			}
 		} catch {
-			// Settings may be unavailable before CLI initialization; API-key availability is still authoritative.
+			// Settings may be unavailable before CLI initialization; credential availability is still authoritative.
 		}
-		return !!getEnvApiKey("exa");
+		return authStorage.hasAuth("exa");
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
@@ -189,6 +198,8 @@ export class ExaProvider extends SearchProvider {
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,
 			signal: params.signal,
+			authStorage: params.authStorage,
+			sessionId: params.sessionId,
 		});
 	}
 }

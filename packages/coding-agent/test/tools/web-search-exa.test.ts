@@ -366,7 +366,7 @@ describe("searchExa", () => {
 		expect(result.answer).toContain("**Has URL**: real summary");
 	});
 
-	it("requires EXA_API_KEY before starting a search", async () => {
+	it("requires Exa credentials before starting a search", async () => {
 		delete process.env.EXA_API_KEY;
 		const fetchSpy = vi.fn(async () => {
 			return new Response(JSON.stringify(makeMockExaResponse()), {
@@ -377,12 +377,32 @@ describe("searchExa", () => {
 		using _hook = hookFetch(fetchSpy);
 
 		await expect(searchExa({ query: "no key" })).rejects.toThrow(
-			"EXA_API_KEY not found. Set it in environment or .env file.",
+			"Exa credentials not found. Set EXA_API_KEY or login with 'omp /login exa'.",
 		);
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 
-	it("reports unavailable without EXA_API_KEY", async () => {
+	it("uses AuthStorage credentials when EXA_API_KEY is unset", async () => {
+		delete process.env.EXA_API_KEY;
+		let receivedKey: string | undefined;
+		using _hook = hookFetch((_url, init) => {
+			receivedKey = (init?.headers as Record<string, string> | undefined)?.["x-api-key"];
+			return new Response(JSON.stringify(makeMockExaResponse()), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		});
+
+		await withLocalAuthStorage(async authStorage => {
+			authStorage.setRuntimeApiKey("exa", "stored-key-xyz");
+			const result = await searchExa({ query: "from auth storage", authStorage });
+			expect(result.provider).toBe("exa");
+			expect(result.sources).toHaveLength(3);
+		});
+		expect(receivedKey).toBe("stored-key-xyz");
+	});
+
+	it("reports unavailable without EXA_API_KEY or stored credentials", async () => {
 		delete process.env.EXA_API_KEY;
 		const available = await withLocalAuthStorage(authStorage =>
 			Promise.resolve(new ExaProvider().isAvailable(authStorage)),
@@ -395,6 +415,15 @@ describe("searchExa", () => {
 		const available = await withLocalAuthStorage(authStorage =>
 			Promise.resolve(new ExaProvider().isAvailable(authStorage)),
 		);
+		expect(available).toBe(true);
+	});
+
+	it("reports available when AuthStorage holds a credential", async () => {
+		delete process.env.EXA_API_KEY;
+		const available = await withLocalAuthStorage(authStorage => {
+			authStorage.setRuntimeApiKey("exa", "stored-key");
+			return Promise.resolve(new ExaProvider().isAvailable(authStorage));
+		});
 		expect(available).toBe(true);
 	});
 
