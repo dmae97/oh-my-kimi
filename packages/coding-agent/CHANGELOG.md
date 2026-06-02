@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- Fixed Anthropic web search ignoring `ANTHROPIC_SEARCH_BASE_URL` when credentials came from stored Anthropic auth or generic Anthropic env fallback rather than `ANTHROPIC_SEARCH_API_KEY` ([#1694](https://github.com/can1357/oh-my-pi/issues/1694)).
 - Fixed opening exported local files from WSL by sending existing paths through `wslpath -w` and launching `wslview` directly when available, avoiding `xdg-open`'s broken file-handler path translation ([#950](https://github.com/can1357/oh-my-pi/pull/950) by [@rxreyn3](https://github.com/rxreyn3)).
 - Fixed `/move` (and cross-project resume) not re-scoping the live project settings to the destination directory. Changing a session's working directory now reloads the project settings layer in place (via `Settings.reloadForCwd`) so project-scoped configuration and path-scoped `enabledModels`/`disabledProviders` follow the move instead of remaining pinned to the launch directory.
 - Fixed `read <db.sqlite>` freezing the TUI on large databases. Listing tables ran an unbounded `SELECT COUNT(*)` per table, and since `bun:sqlite` executes synchronously on the same JS thread that drives rendering and input, a multi-GB database's full-table scans blocked the UI for seconds. The listing now reads the planner's `sqlite_stat1` estimate for tables above a scan cap (shown as `~N rows`) and only counts exactly when a table is provably small, reading at most `cap + 1` rows (a capped table shows `N+ rows`). On an 8.4 GB stats database the listing dropped from multi-second full scans to ~2 ms.

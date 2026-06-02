@@ -255,7 +255,7 @@ export async function searchAnthropic(
 		const apiKey = await params.authStorage.getApiKey("anthropic", params.sessionId, {
 			signal: params.signal,
 		});
-		if (apiKey) auth = buildAnthropicAuthConfig(apiKey);
+		if (apiKey) auth = buildAnthropicAuthConfig(apiKey, searchBaseUrl);
 	}
 
 	if (!auth) {
