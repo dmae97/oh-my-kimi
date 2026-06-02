@@ -19,6 +19,34 @@ import type {
 import { toJsonRpcError } from "../../mcp/types";
 import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 
+/** Minimal write surface of `Subprocess.stdin` we need for framed sends. */
+interface FrameSink {
+	write(chunk: string): unknown;
+	flush(): unknown;
+}
+
+/**
+ * Write a newline-delimited JSON-RPC frame to the subprocess's stdin sink,
+ * swallowing synchronous errors so the caller can decide how to react.
+ *
+ * Bun's `FileSink` may throw synchronously (most reliably on Windows) when
+ * the read end of the pipe has been closed by a subprocess that exited
+ * between read-loop ticks. Letting that throw escape an `async` method
+ * surfaces as an unhandled promise rejection at the call site.
+ *
+ * Returns `true` when the frame was accepted by the sink, `false` when the
+ * sink threw — callers signal transport closure on `false`.
+ */
+export function writeFrame(stdin: FrameSink, frame: string): boolean {
+	try {
+		stdin.write(frame);
+		stdin.flush();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Stdio transport for MCP servers.
  * Spawns a subprocess and communicates via stdin/stdout.
@@ -162,11 +190,7 @@ export class StdioTransport implements MCPTransport {
 			const result = await this.onRequest(request.method, request.params);
 			this.#sendResponse(request.id, result);
 		} catch (error) {
-			try {
-				this.#sendResponse(request.id, undefined, toJsonRpcError(error));
-			} catch {
-				// Best-effort — process may have exited
-			}
+			this.#sendResponse(request.id, undefined, toJsonRpcError(error));
 		}
 	}
 
@@ -175,8 +199,9 @@ export class StdioTransport implements MCPTransport {
 		const response = error
 			? { jsonrpc: "2.0" as const, id, error }
 			: { jsonrpc: "2.0" as const, id, result: result ?? {} };
-		this.#process.stdin.write(`${JSON.stringify(response)}\n`);
-		this.#process.stdin.flush();
+		// Silent on failure — a dead subprocess has no use for the response,
+		// and the read loop will close the transport on EOF.
+		writeFrame(this.#process.stdin, `${JSON.stringify(response)}\n`);
 	}
 
 	#handleClose(): void {
@@ -286,35 +311,43 @@ export class StdioTransport implements MCPTransport {
 			params: params ?? {},
 		};
 
-		const message = `${JSON.stringify(notification)}\n`;
-		// Bun's FileSink has write() method directly
-		this.#process.stdin.write(message);
-		this.#process.stdin.flush();
+		// Bun's FileSink can throw EPIPE synchronously on Windows when the
+		// subprocess has exited between the last read-loop tick and this
+		// write (e.g. an MCP server that dies after returning `initialize`
+		// but before `notifications/initialized` is delivered). Tear the
+		// transport down so any wired `onClose` (and reconnect machinery)
+		// engages, then surface the failure to the caller so a write that
+		// dropped on the floor is never silently treated as delivered —
+		// `initializeConnection()` runs before the manager installs its
+		// `onClose` handler, so a swallowed failure there would yield a
+		// "connected" handle wrapping a dead transport. See #1710.
+		if (!writeFrame(this.#process.stdin, `${JSON.stringify(notification)}\n`)) {
+			this.#handleClose();
+			throw new Error(`Transport closed while sending notification "${method}"`);
+		}
 	}
 
 	async close(): Promise<void> {
-		if (!this.#connected) return;
-		this.#connected = false;
-
-		// Reject pending requests
-		for (const [, pending] of this.#pendingRequests) {
-			pending.reject(new Error("Transport closed"));
+		// `close()` is the authoritative resource teardown. `#handleClose()`
+		// may have already run (read-loop EOF, or a notify() write failure
+		// that surfaces the dead transport to the caller) and flipped
+		// `#connected` to false — but the subprocess and read loop are still
+		// alive in that path, so we MUST keep cleaning up regardless. Each
+		// step is individually guarded so this remains idempotent across
+		// repeat calls.
+		if (this.#connected) {
+			this.#handleClose();
 		}
-		this.#pendingRequests.clear();
 
-		// Kill subprocess
 		if (this.#process) {
 			this.#process.kill();
 			this.#process = null;
 		}
 
-		// Wait for read loop to finish
 		if (this.#readLoop) {
 			await this.#readLoop.catch(() => {});
 			this.#readLoop = null;
 		}
-
-		this.onClose?.();
 	}
 }
 

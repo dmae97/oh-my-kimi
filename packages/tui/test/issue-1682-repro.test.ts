@@ -9,9 +9,9 @@ import { VirtualTerminal } from "./virtual-terminal";
 // `isNativeViewportAtBottom()` as `undefined`. The streaming eager-rebuild mode
 // intentionally used that unknown answer as permission to rewrite native
 // scrollback, but the rewrite emits xterm ED3 (`CSI 3 J`, erase saved lines).
-// On WezTerm/kitty/ghostty/alacritty this can disrupt a reader scrolled into
-// native history while assistant/tool output is still streaming. The eager flag
-// must therefore defer on those hosts, while ordinary POSIX terminals and
+// On WezTerm/kitty/ghostty/alacritty/VTE this can disrupt a reader scrolled
+// into native history while assistant/tool output is still streaming. The eager
+// flag must therefore defer on those hosts, while ordinary POSIX terminals and
 // direct user-input opt-ins keep their existing rebuild behavior.
 class LineList implements Component {
 	#lines: string[];
@@ -93,6 +93,7 @@ const CLEAR_TERMINAL_RISK_ENV: Record<string, string | undefined> = {
 	KITTY_WINDOW_ID: undefined,
 	GHOSTTY_RESOURCES_DIR: undefined,
 	ALACRITTY_WINDOW_ID: undefined,
+	VTE_VERSION: undefined,
 	TERM_PROGRAM: undefined,
 	TMUX: undefined,
 	STY: undefined,
@@ -110,6 +111,7 @@ describe("issue #1682: terminalHasEagerEraseScrollbackRisk", () => {
 		expect(terminalHasEagerEraseScrollbackRisk({ KITTY_WINDOW_ID: "1" }, "linux")).toBe(true);
 		expect(terminalHasEagerEraseScrollbackRisk({ GHOSTTY_RESOURCES_DIR: "/ghostty" }, "darwin")).toBe(true);
 		expect(terminalHasEagerEraseScrollbackRisk({ ALACRITTY_WINDOW_ID: "1" }, "darwin")).toBe(true);
+		expect(terminalHasEagerEraseScrollbackRisk({ VTE_VERSION: "7600" }, "linux")).toBe(true);
 		expect(terminalHasEagerEraseScrollbackRisk({ TERM_PROGRAM: "ghostty" }, "linux")).toBe(true);
 	});
 
@@ -126,33 +128,35 @@ describe("issue #1682: terminalHasEagerEraseScrollbackRisk", () => {
 
 describe("issue #1682: TUI eager scrollback rebuild", () => {
 	it("defers on ED3-risk POSIX terminals and rebuilds at the checkpoint", async () => {
-		await withPlatform("linux", async () => {
-			await withEnvPatch({ ...CLEAR_TERMINAL_RISK_ENV, WEZTERM_PANE: "pane-1" }, async () => {
-				const term = new VirtualTerminal(100, 24);
-				overrideProbe(term, undefined);
-				const tui = new TUI(term);
-				const component = new LineList(Array.from({ length: 80 }, (_value, index) => `init-${index}`));
-				tui.addChild(component);
+		for (const patch of [{ WEZTERM_PANE: "pane-1" }, { VTE_VERSION: "7600" }]) {
+			await withPlatform("linux", async () => {
+				await withEnvPatch({ ...CLEAR_TERMINAL_RISK_ENV, ...patch }, async () => {
+					const term = new VirtualTerminal(100, 24);
+					overrideProbe(term, undefined);
+					const tui = new TUI(term);
+					const component = new LineList(Array.from({ length: 80 }, (_value, index) => `init-${index}`));
+					tui.addChild(component);
 
-				try {
-					tui.start();
-					await settle(term);
-					const writes = capture(term);
-					tui.setEagerNativeScrollbackRebuild(true);
+					try {
+						tui.start();
+						await settle(term);
+						const writes = capture(term);
+						tui.setEagerNativeScrollbackRebuild(true);
 
-					component.setLines(Array.from({ length: 20 }, (_value, index) => `shrunk-${index}`));
-					tui.requestRender();
-					await settle(term);
+						component.setLines(Array.from({ length: 20 }, (_value, index) => `shrunk-${index}`));
+						tui.requestRender();
+						await settle(term);
 
-					expect(eraseScrollbackCount(writes)).toBe(0);
-					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
-					await settle(term);
-					expect(eraseScrollbackCount(writes)).toBe(1);
-				} finally {
-					tui.stop();
-				}
+						expect(eraseScrollbackCount(writes)).toBe(0);
+						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+						await settle(term);
+						expect(eraseScrollbackCount(writes)).toBe(1);
+					} finally {
+						tui.stop();
+					}
+				});
 			});
-		});
+		}
 	});
 
 	it("keeps eager live rebuilds for other POSIX terminals", async () => {
