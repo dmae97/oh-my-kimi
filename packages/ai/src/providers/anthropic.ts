@@ -16,6 +16,7 @@ import type {
 import {
 	$env,
 	extractHttpStatusFromError,
+	getInstallId,
 	isEnoent,
 	isRetryableError,
 	isUnexpectedSocketCloseMessage,
@@ -597,10 +598,12 @@ export function generateClaudeCloakingUserId(): string {
 	return `user_${userHash}_account_${accountId}_session_${sessionId}`;
 }
 
+function deriveClaudeDeviceIdFromInstallId(): string {
+	return nodeCrypto.createHash("sha256").update(`omp-claude-device-id-v1:${getInstallId()}`).digest("hex");
+}
 function generateClaudeJsonUserId(sessionId?: string): string {
 	return JSON.stringify({
-		device_id: nodeCrypto.randomBytes(32).toString("hex"),
-		account_uuid: nodeCrypto.randomUUID().toLowerCase(),
+		device_id: deriveClaudeDeviceIdFromInstallId(),
 		session_id: sessionId ?? nodeCrypto.randomUUID().toLowerCase(),
 	});
 }

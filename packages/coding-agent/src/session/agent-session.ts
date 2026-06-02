@@ -87,6 +87,7 @@ import { countTokens, MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
 	extractRetryHint,
 	getAgentDbPath,
+	getInstallId,
 	isEnoent,
 	isUnexpectedSocketCloseMessage,
 	logger,
@@ -581,15 +582,14 @@ function buildSessionMetadata(
 		const accountUuid = authStorage?.getOAuthAccountId("anthropic", sessionId);
 		if (typeof accountUuid === "string" && accountUuid.length > 0) {
 			userId.account_uuid = accountUuid;
-			// Derive device_id from account_uuid so the payload matches the real CC
-			// getAPIMetadata shape without hardware fingerprinting. A SHA-256 of a
-			// namespaced account UUID produces a stable 64-hex value that is
-			// indistinguishable from a randomly generated device ID on the wire, is
-			// deterministic per account (survives reinstalls), and is auditable: it
-			// is derived solely from the OAuth UUID the user already consented to
-			// share with Anthropic. Omitted when no OAuth credential is available
-			// (API-key callers) to avoid sending a hash of an empty string.
-			userId.device_id = crypto.createHash("sha256").update(`omp-device-id-v1:${accountUuid}`).digest("hex");
+			// Claude Code's `device_id` is a stable 64-hex install identifier. Use
+			// omp's persistent install id as the root instead of deriving it from
+			// `account_uuid`: logging into a different Claude account on the same
+			// install should not make the device look new.
+			userId.device_id = crypto
+				.createHash("sha256")
+				.update(`omp-claude-device-id-v1:${getInstallId()}`)
+				.digest("hex");
 		}
 	}
 	return { user_id: JSON.stringify(userId) };
@@ -2827,13 +2827,14 @@ export class AgentSession {
 
 	/**
 	 * Set agent.sessionId from the session manager and install a dynamic
-	 * metadata resolver so every API request carries `metadata.user_id` shaped
-	 * like real Claude Code's `getAPIMetadata` output: `{ session_id,
-	 * account_uuid }` (the latter only when an Anthropic OAuth credential with
-	 * a known account UUID is loaded). Resolving live keeps the value in sync
-	 * with auth-state changes (login/logout, token refresh that surfaces a new
-	 * account uuid) without needing to re-call `#syncAgentSessionId()` on every
-	 * such event.
+	 * metadata resolver so every Anthropic API request carries
+	 * `metadata.user_id` shaped like real Claude Code's `getAPIMetadata` output:
+	 * `{ session_id, account_uuid, device_id }`. `account_uuid` is included only
+	 * when an Anthropic OAuth credential with a known account UUID is loaded;
+	 * `device_id` is derived from the persistent omp install id. Resolving live
+	 * keeps the value in sync with auth-state changes (login/logout, token
+	 * refresh that surfaces a new account uuid) without needing to re-call
+	 * `#syncAgentSessionId()` on every such event.
 	 */
 	#syncAgentSessionId(sessionId?: string): void {
 		const sid = this.#providerSessionId ?? sessionId ?? this.sessionManager.getSessionId();

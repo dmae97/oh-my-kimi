@@ -1,9 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Changed
 
+- Changed generated OAuth metadata `user_id` to use a deterministic `device_id` derived from the install ID instead of a random value
 - `claudeCodeVersion` bumped to `2.1.148` to match current Claude Code release.
 - `X-Stainless-Package-Version` updated to `0.94.0` (matches the bundled `@anthropic-ai/sdk` version); `X-Stainless-Runtime-Version` pinned to `v24.3.0` (Bun version bundled with CC 2.1.148); `X-Stainless-Os` header key corrected to `X-Stainless-OS`.
 - `createClaudeBillingHeader` now emits a deterministic billing header (`cc_version=<claudeCodeVersion>.<suffix>; cc_entrypoint=cli; cch=00000;`), where `<suffix>` is the first 3 hex chars of `SHA-256(salt + msg[4] + msg[7] + msg[20] + version)` instead of random bytes. The fingerprint seed is taken from the first **user** message (skipping synthetic/developer injections), mirroring Claude Code's `computeFingerprintFromMessages`.
@@ -15,6 +15,10 @@
 - `applyPromptCaching` now caches the last two messages regardless of role instead of the last two *user* messages. The penultimate assistant message (tool calls + response from the previous turn) is larger and more recently created than the penultimate user message, making it the higher-value cache target.
 - OAuth scope set expanded: added `user:sessions:claude_code`, `user:mcp_servers`, `user:file_upload`. `AUTHORIZE_URL` stays at `claude.ai/oauth/authorize` and `TOKEN_URL` stays at `api.anthropic.com/v1/oauth/token` — the `platform.claude.com` equivalents are CC's console-credential flow and do not grant `user:inference`, which OMP requires for direct OAuth-token inference.
 - Token refresh POST now sends `anthropic-beta: oauth-2025-04-20` and `User-Agent: anthropic-sdk-typescript/0.94.0 userOAuthProvider` (CC sends these on refresh but not on the initial code exchange).
+
+### Fixed
+
+- Fixed OAuth token exchange and refresh flows to fetch Claude CLI bootstrap identity when token responses omit account information, so `accountId` and `email` are now recovered when available
 
 ## [15.7.5] - 2026-06-01
 

@@ -100,8 +100,7 @@ function expectClaudeMetadataUserId(userId: string | undefined, expectedSessionI
 	if (typeof parsed.device_id === "string") {
 		expect(parsed.device_id).toMatch(/^[0-9a-f]{64}$/);
 	}
-	expect(typeof parsed.account_uuid).toBe("string");
-	if (typeof parsed.account_uuid === "string") {
+	if (parsed.account_uuid !== undefined) {
 		expect(parsed.account_uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 	}
 	if (expectedSessionId) {
@@ -344,6 +343,29 @@ describe("Anthropic request fingerprint alignment", () => {
 			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 		})) as { metadata?: { user_id?: string } };
 		expectClaudeMetadataUserId(payload.metadata?.user_id);
+	});
+
+	it("derives generated OAuth device_id deterministically across sessions", async () => {
+		const first = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{ sessionId: "167ec5b4-e711-4169-879f-84fa52679d9c" },
+		)) as { metadata?: { user_id?: string } };
+		const second = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi again", timestamp: Date.now() }],
+			},
+			{ sessionId: "abcdefab-cdef-abcd-efab-cdefabcdef12" },
+		)) as { metadata?: { user_id?: string } };
+		const firstUserId = JSON.parse(first.metadata?.user_id ?? "{}") as { device_id?: string };
+		const secondUserId = JSON.parse(second.metadata?.user_id ?? "{}") as { device_id?: string };
+
+		expect(firstUserId.device_id).toBe(secondUserId.device_id);
 	});
 
 	it("uses the explicit session id for generated OAuth metadata", async () => {
@@ -743,12 +765,13 @@ describe("Anthropic request fingerprint alignment", () => {
 			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			tools,
 		})) as {
-			tools?: Array<{ name?: string; strict?: boolean; eager_input_streaming?: boolean }>;
+			tools?: Array<{ name?: string; strict?: boolean; eager_input_streaming?: boolean; cache_control?: unknown }>;
 		};
 
 		expect(payload.tools?.[0]?.name).toBe("proxy_bash");
 		expect(payload.tools?.[0]?.strict).toBeUndefined();
 		expect(payload.tools?.[0]?.eager_input_streaming).toBeUndefined();
+		expect(payload.tools?.[0]?.cache_control).toBeUndefined();
 	});
 
 	it("marks only the Anthropic strict allowlist strict", async () => {
