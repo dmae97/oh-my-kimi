@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.8.0] - 2026-06-02
+
 ### Added
 
 - Added an all-projects scope to the session picker (`pi --resume` / `/resume`). Press `Tab` to toggle between the current folder's sessions and every session across all projects; the all-projects list is loaded lazily and shows each session's directory. When the current folder has no sessions the picker now opens straight into all-projects scope instead of printing "No sessions found".

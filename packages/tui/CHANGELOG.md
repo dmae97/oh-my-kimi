@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.8.0] - 2026-06-02
+
 ### Fixed
 
 - Deferred eager live scrollback rebuilds on POSIX terminals where xterm ED3 (`CSI 3 J`, erase saved lines) can disturb scrolled-up readers during streaming, while keeping direct user-input and checkpoint rebuilds explicit ([#1682](https://github.com/can1357/oh-my-pi/issues/1682)).

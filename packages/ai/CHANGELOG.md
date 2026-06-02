@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.8.0] - 2026-06-02
 ### Added
 
 - Added `AnthropicMessagesClient` and related Anthropic wire types/errors via `anthropic-client` export so callers can build a standalone Anthropic Messages client without depending on `@anthropic-ai/sdk`
