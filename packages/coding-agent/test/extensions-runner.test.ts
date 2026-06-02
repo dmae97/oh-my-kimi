@@ -833,6 +833,44 @@ describe("ExtensionRunner", () => {
 				{ path: "plans/switch-case-array-syntax.md", paths: ["plans/switch-case-array-syntax.md"] },
 			]);
 		});
+		it("keeps non-tag hash suffixes in hashline edit paths", async () => {
+			const eventsPath = path.join(tempDir.path(), "tool-call-non-tag-path-events.jsonl");
+			const extCode = `
+				import * as fs from "node:fs";
+
+				export default function(pi) {
+					pi.on("tool_call", async (event) => {
+						if (event.toolName !== "edit") return;
+						fs.appendFileSync(
+							${JSON.stringify(eventsPath)},
+							JSON.stringify({ path: event.input.path, paths: event.input.paths }) + "\\n",
+						);
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "tool-call-non-tag-path.ts"), extCode);
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const wrapped = new ExtensionToolWrapper(createHashlineEditTool(), runner);
+
+			await wrapped.execute("tool-call-id", {
+				input: "¶plans/foo.md#notatag\n27 27\n+new content",
+			});
+
+			const events = fs
+				.readFileSync(eventsPath, "utf8")
+				.trim()
+				.split("\n")
+				.map(line => JSON.parse(line));
+			expect(events).toEqual([{ path: "plans/foo.md#notatag", paths: ["plans/foo.md#notatag"] }]);
+		});
 
 		it("leaves path unset and reports all targets for multi-file hashline edits", async () => {
 			const eventsPath = path.join(tempDir.path(), "tool-call-multi-path-events.jsonl");

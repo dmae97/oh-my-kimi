@@ -1,4 +1,5 @@
 const HASHLINE_FILE_PREFIX = "¶";
+const HASHLINE_FILE_TAG_RE = /#[0-9a-fA-F]{4}$/u;
 
 function stringField(input: Record<string, unknown>, key: string): string | undefined {
 	const value = input[key];
@@ -8,7 +9,7 @@ function stringField(input: Record<string, unknown>, key: string): string | unde
 function normalizeHashlineHeaderPath(body: string): string | undefined {
 	const trimmed = body.trim();
 	if (trimmed.length === 0) return undefined;
-	const hashStart = /#[^\s#]+$/u.exec(trimmed)?.index;
+	const hashStart = HASHLINE_FILE_TAG_RE.exec(trimmed)?.index;
 	const rawPath = hashStart === undefined ? trimmed : trimmed.slice(0, hashStart);
 	if (rawPath.length < 2) return rawPath.length > 0 ? rawPath : undefined;
 	const first = rawPath[0];
