@@ -5,6 +5,7 @@
 ### Added
 
 - Added an all-projects scope to the session picker (`pi --resume` / `/resume`). Press `Tab` to toggle between the current folder's sessions and every session across all projects; the all-projects list is loaded lazily and shows each session's directory. When the current folder has no sessions the picker now opens straight into all-projects scope instead of printing "No sessions found".
+- Migrated the Kagi web search provider to Kagi's V1 Search API (`POST /api/v1/search`), replacing the sunset V0 endpoint while keeping the `kagi` provider id, `KAGI_API_KEY` credential, and `/login kagi` flow unchanged ([#1272](https://github.com/can1357/oh-my-pi/pull/1272) by [@thismat](https://github.com/thismat))
 
 ### Changed
 
@@ -651,6 +652,7 @@
 - Updated hashline anchor parsing so copied `|TEXT` decorations remain cosmetic and payload must be provided on or after the operator
 - Unified subagent output-schema validation into a single shared module (`tools/output-schema-validator.ts`) used by both the in-process `yield` tool (validates before the subagent yields) and the executor's post-mortem `finalizeSubprocessOutput` path (validates after subprocess exit). Previously each side ran its own `normalizeSchema` → `jtdToJsonSchema` → `validateJsonSchemaValue` chain in parallel, which was semantically equivalent but invited drift: a future tweak on one side could silently disagree with the other and cause yields that pass in-tool to fail post-mortem (or vice versa). The unification preserves both call sites' existing behavior (yield throws an actionable per-issue error for the model; executor produces a `schema_violation` outcome with the first issue and missing-required fields) by exposing two output formatters (`formatAllValidationIssues` for retries, `formatValidationIssueHeadline` for headlines).
 - Changed web search provider credential lookup to use the shared `AuthStorage` pipeline (`getApiKey`/`getOAuthAccess`) for API-key and OAuth auth instead of direct `AgentStorage` access
+- Migrated the Kagi web search provider to Kagi's V1 Search API (`POST /api/v1/search`), replacing the sunset V0 endpoint while keeping the `kagi` provider id, `KAGI_API_KEY` credential, and `/login kagi` flow unchanged ([#1272](https://github.com/can1357/oh-my-pi/pull/1272) by [@thismat](https://github.com/thismat))
 - Changed the `codex` web search provider display label from `Codex` to `OpenAI`
 - Updated `anthropic` and `openai`/`gemini` web search option descriptions to reflect their native `web_search`/OAuth requirements
 
