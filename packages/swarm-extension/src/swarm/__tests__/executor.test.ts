@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ModelRegistry, SingleResult } from "@oh-my-pi/pi-coding-agent";
 import * as taskExecutor from "@oh-my-pi/pi-coding-agent";
+import { executeSwarmAgent } from "../executor";
+import { StateTracker } from "../state";
 
-// Stub runSubprocess to capture options without actually running an agent
-const runSubprocessSpy = vi.spyOn(taskExecutor, "runSubprocess").mockResolvedValue({
+const mockResult = {
 	index: 0,
 	id: "test-agent-0",
 	agent: "test",
@@ -17,22 +19,21 @@ const runSubprocessSpy = vi.spyOn(taskExecutor, "runSubprocess").mockResolvedVal
 	truncated: false,
 	durationMs: 100,
 	tokens: 0,
-} as SingleResult);
+} as SingleResult;
 
 afterEach(() => {
-	runSubprocessSpy.mockClear();
+	vi.restoreAllMocks();
 });
 
 describe("executeSwarmAgent", () => {
 	it("does not pass authStorage to runSubprocess when modelRegistry is provided", async () => {
-		const { executeSwarmAgent } = await import("../executor");
-		const { StateTracker } = await import("../state");
+		const runSubprocessSpy = vi.spyOn(taskExecutor, "runSubprocess").mockResolvedValue(mockResult);
 
 		const mockModelRegistry = {
 			authStorage: { discover: vi.fn() },
 		} as unknown as ModelRegistry;
 
-		const workspace = path.join(os.tmpdir(), "test-workspace");
+		const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-test-"));
 		const stateTracker = new StateTracker(workspace, "test-swarm");
 		await stateTracker.init(["test-agent"], 1, "parallel");
 
