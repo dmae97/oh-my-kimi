@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the status line session name (and the editor border / status-line gap fill) being nearly illegible on light themes. The per-session accent hashed the name to `hsl(hue, 0.9, 0.72)` — a fixed lightness tuned for dark backgrounds — so high-luminance hues (yellow/lime/cyan) dropped to ~1.3:1 contrast on a light background such as `light-catppuccin`, and `statusLine.sessionAccent` (#918) only gated the border/gap, not the segment text. A new `Theme.isLight` (derived from `userMessageBg` luminance) now drives `getSessionAccentHex`, which caps the accent's perceived luminance on light themes — keeping each session's distinct hue while staying readable ([#1715](https://github.com/can1357/oh-my-pi/pull/1715)).
+
 ## [15.8.0] - 2026-06-02
 
 ### Added
