@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { Effort } from "@oh-my-pi/pi-ai";
 import { parseArgs } from "../src/cli/args";
 
 describe("parseArgs — --hide-thinking flag", () => {
@@ -20,9 +21,9 @@ describe("parseArgs — --hide-thinking flag", () => {
 	});
 
 	it("parses --hide-thinking with --thinking flag (both can coexist)", () => {
-		const result = parseArgs(["--hide-thinking", "--thinking", "extended"]);
+		const result = parseArgs(["--hide-thinking", "--thinking", "xhigh"]);
 		expect(result.hideThinking).toBe(true);
-		expect(result.thinking).toBe("extended");
+		expect(result.thinking).toBe(Effort.XHigh);
 	});
 
 	it("parses --hide-thinking in any position", () => {
