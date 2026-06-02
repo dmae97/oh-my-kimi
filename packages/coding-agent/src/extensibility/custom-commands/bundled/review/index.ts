@@ -449,7 +449,7 @@ async function getGitStatus(api: CustomCommandAPI): Promise<string> {
 }
 
 async function getUncommittedReviewDiff(api: CustomCommandAPI): Promise<CurrentReviewDiff> {
-	if (await jj.isRepository(api.cwd)) {
+	if (await jj.repo.is(api.cwd)) {
 		return {
 			diffText: await jj.diff(api.cwd),
 			diffInstruction: JJ_UNCOMMITTED_DIFF_INSTRUCTION,

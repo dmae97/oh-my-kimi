@@ -120,7 +120,7 @@ describe("ReviewCommand", () => {
 
 	it("uses JJ diff for uncommitted review prompts", async () => {
 		const dir = await createTempDir();
-		const jjRepoSpy = spyOn(jj, "isRepository").mockResolvedValue(true);
+		const jjRepoSpy = spyOn(jj.repo, "is").mockResolvedValue(true);
 		const jjDiffSpy = spyOn(jj, "diff").mockResolvedValue(SAMPLE_JJ_DIFF);
 		const gitStatusSpy = spyOn(git, "status").mockResolvedValue(" M src/workspace.ts\n");
 		const gitDiffSpy = spyOn(git, "diff").mockResolvedValue("");
@@ -150,7 +150,7 @@ describe("ReviewCommand", () => {
 
 	it("includes reviewer task orchestration for single-agent diff reviews", async () => {
 		const dir = await createTempDir();
-		const jjRepoSpy = spyOn(jj, "isRepository").mockResolvedValue(false);
+		const jjRepoSpy = spyOn(jj.repo, "is").mockResolvedValue(false);
 		const gitStatusSpy = spyOn(git, "status").mockResolvedValue(" M review-target.ts\n");
 		const gitDiffSpy = spyOn(git, "diff").mockResolvedValue(`diff --git a/review-target.ts b/review-target.ts
 --- a/review-target.ts
@@ -181,7 +181,7 @@ describe("ReviewCommand", () => {
 
 	it("includes JJ diff context for custom review prompts", async () => {
 		const dir = await createTempDir();
-		const jjRepoSpy = spyOn(jj, "isRepository").mockResolvedValue(true);
+		const jjRepoSpy = spyOn(jj.repo, "is").mockResolvedValue(true);
 		const jjDiffSpy = spyOn(jj, "diff").mockResolvedValue(SAMPLE_JJ_DIFF);
 		const gitStatusSpy = spyOn(git, "status").mockResolvedValue("");
 		const gitDiffSpy = spyOn(git, "diff").mockResolvedValue("");
