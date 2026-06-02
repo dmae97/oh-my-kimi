@@ -61520,9 +61520,9 @@
 		"minimax-m3": {
 			"id": "minimax-m3",
 			"name": "MiniMax M3",
-			"api": "anthropic-messages",
+			"api": "openai-completions",
 			"provider": "opencode-go",
-			"baseUrl": "https://opencode.ai/zen/go",
+			"baseUrl": "https://opencode.ai/zen/go/v1",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -62924,9 +62924,9 @@
 		"minimax-m3-free": {
 			"id": "minimax-m3-free",
 			"name": "MiniMax M3 Free",
-			"api": "anthropic-messages",
+			"api": "openai-completions",
 			"provider": "opencode-zen",
-			"baseUrl": "https://opencode.ai/zen",
+			"baseUrl": "https://opencode.ai/zen/v1",
 			"reasoning": true,
 			"input": [
 				"text",
