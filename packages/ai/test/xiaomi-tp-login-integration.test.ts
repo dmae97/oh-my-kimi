@@ -71,7 +71,7 @@ describe("loginXiaomi with tp- key", () => {
 	it("falls back SGP → AMS → CN during validation", async () => {
 		const seen: string[] = [];
 
-		using _hook = hookFetch((input) => {
+		using _hook = hookFetch(input => {
 			const url = String(input);
 			seen.push(url);
 			if (url.includes(TOKEN_PLAN_HOSTS.sgp) || url.includes(TOKEN_PLAN_HOSTS.ams)) {
@@ -94,7 +94,7 @@ describe("loginXiaomi with tp- key", () => {
 	});
 
 	it("throws when all three token-plan hosts return 401", async () => {
-		using _hook = hookFetch((_input) => {
+		using _hook = hookFetch(_input => {
 			return new Response("Invalid API Key", { status: 401 });
 		});
 
@@ -110,7 +110,7 @@ describe("loginXiaomi with tp- key", () => {
 	it("falls back through timeouts: SGP timeout → AMS timeout → CN success", async () => {
 		const seen: string[] = [];
 
-		using _hook = hookFetch((input) => {
+		using _hook = hookFetch(input => {
 			const url = String(input);
 			seen.push(url);
 			if (url.includes(TOKEN_PLAN_HOSTS.sgp) || url.includes(TOKEN_PLAN_HOSTS.ams)) {
@@ -135,7 +135,7 @@ describe("loginXiaomi with tp- key", () => {
 	it("does NOT hit the standard api.xiaomimimo.com for tp- keys", async () => {
 		const seen: string[] = [];
 
-		using _hook = hookFetch((input) => {
+		using _hook = hookFetch(input => {
 			seen.push(String(input));
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
 		});
@@ -158,7 +158,7 @@ describe("xiaomiModelManagerOptions with tp- key", () => {
 	it("discovers models from SGP first", async () => {
 		const seen: string[] = [];
 
-		using _hook = hookFetch((input) => {
+		using _hook = hookFetch(input => {
 			seen.push(String(input));
 			return new Response(JSON.stringify({ data: [{ id: "mimo-v2.5" }] }), {
 				status: 200,
@@ -178,7 +178,7 @@ describe("xiaomiModelManagerOptions with tp- key", () => {
 	it("falls back SGP → AMS → CN during discovery", async () => {
 		const seen: string[] = [];
 
-		using _hook = hookFetch((input) => {
+		using _hook = hookFetch(input => {
 			const url = String(input);
 			seen.push(url);
 
@@ -217,7 +217,7 @@ describe("xiaomiModelManagerOptions with tp- key", () => {
 	it("does NOT use standard host for tp- key model discovery", async () => {
 		const seen: string[] = [];
 
-		using _hook = hookFetch((input) => {
+		using _hook = hookFetch(input => {
 			seen.push(String(input));
 			return new Response(JSON.stringify({ data: [] }), {
 				status: 200,
@@ -241,7 +241,7 @@ describe("Xiaomi tp- full round-trip", () => {
 		// Phase 1: Login
 		const loginUrls: string[] = [];
 
-		using _hook1 = hookFetch((input) => {
+		using _hook1 = hookFetch(input => {
 			loginUrls.push(String(input));
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
 		});
@@ -262,7 +262,7 @@ describe("Xiaomi tp- full round-trip", () => {
 		// Phase 2: Model discovery with the returned key
 		const discoveryUrls: string[] = [];
 
-		using _hook2 = hookFetch((input) => {
+		using _hook2 = hookFetch(input => {
 			discoveryUrls.push(String(input));
 			return new Response(JSON.stringify({ data: [{ id: "mimo-v2.5" }] }), {
 				status: 200,
