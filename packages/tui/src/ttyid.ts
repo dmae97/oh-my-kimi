@@ -52,6 +52,8 @@ export function getTerminalId(): string | null {
 	// Fallback to terminal-specific env vars
 	const kittyId = process.env.KITTY_WINDOW_ID;
 	if (kittyId) return `kitty-${kittyId}`;
+	const cmuxSurface = process.env.CMUX_SURFACE_ID;
+	if (cmuxSurface) return `cmux-${cmuxSurface}`;
 
 	const tmuxPane = process.env.TMUX_PANE;
 	if (tmuxPane) return `tmux-${tmuxPane}`;
