@@ -1204,7 +1204,8 @@ export class TUI extends Container {
 		const prevHardwareCursorRow = this.#hardwareCursorRow;
 		const widthChanged = this.#previousWidth > 0 && this.#previousWidth !== width;
 		const heightChanged = this.#previousHeight > 0 && this.#previousHeight !== height;
-		const eagerRebuildAllowed = this.#eagerNativeScrollbackRebuild && !TERMINAL.eagerEraseScrollbackRisk;
+		const eagerEraseScrollbackRisk = process.platform !== "win32" && TERMINAL.eagerEraseScrollbackRisk;
+		const eagerRebuildAllowed = this.#eagerNativeScrollbackRebuild && !eagerEraseScrollbackRisk;
 		const allowUnknownViewportMutation = this.#allowUnknownViewportMutationOnNextRender || eagerRebuildAllowed;
 		this.#allowUnknownViewportMutationOnNextRender = false;
 
@@ -1317,6 +1318,7 @@ export class TUI extends Container {
 		if (this.#clearScrollbackOnNextRender) return { kind: "sessionReplace" };
 
 		const forceViewportRepaint = this.#forceViewportRepaintOnNextRender;
+		const eagerEraseScrollbackRisk = process.platform !== "win32" && TERMINAL.eagerEraseScrollbackRisk;
 		if (overlayVisibilityReduced && !isMultiplexerSession()) {
 			return hasVisibleOverlay ? { kind: "overlayRebuild" } : { kind: "historyRebuild" };
 		}
@@ -1384,23 +1386,27 @@ export class TUI extends Container {
 				return { kind: "viewportRepaint" };
 			}
 			// The shrunk transcript still overflows the viewport. A plain viewport
-			// repaint would re-emit the rows between the new and old viewport tops on top
-			// of the copies the terminal already kept in native scrollback; `deferredShrink`
-			// pads to the previous row count so no committed row is re-emitted, and the
-			// next checkpoint rebuild cleans up.
-			//
+			// repaint can duplicate stale rows in native scrollback, while a destructive
+			// history rebuild (`CSI 3 J`) can yank readers in ED3-risk terminals whose
+			// viewport position is unobservable. Outside foreground-tool streaming,
+			// keep the old visible history frozen and reconcile at the next explicit
+			// checkpoint. During a foreground tool, a literal no-op freezes the live
+			// command/status view; continue with a non-destructive repaint path instead.
+			if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk && !this.#eagerNativeScrollbackRebuild) {
+				this.#markNativeScrollbackDirty();
+				return { kind: "deferredMutation" };
+			}
+
 			// If the shrink still leaves enough rows to cover the previous viewport
 			// top, `deferredShrink` can repaint that stable slice without committing
 			// duplicate rows to native scrollback. When the shrink jumps above that
 			// padded viewport top, `deferredShrink` would draw only blank padding and
 			// hide the live prompt. Ordinary POSIX terminals rebuild history in that
-			// case. ED3-risk terminals cannot safely erase saved lines while the
-			// viewport is unobservable, but a non-destructive viewport repaint keeps
-			// the live UI moving and leaves stale scrollback queued for the next
-			// explicit checkpoint.
+			// case; ED3-risk foreground-tool frames use a non-destructive viewport
+			// repaint and leave stale scrollback queued for the next checkpoint.
 			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
 			if (newLines.length <= paddedViewportTop) {
-				if (nativeViewportAtBottom === undefined && TERMINAL.eagerEraseScrollbackRisk) {
+				if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk) {
 					this.#markNativeScrollbackDirty();
 					return { kind: "viewportRepaint" };
 				}
@@ -1417,6 +1423,20 @@ export class TUI extends Container {
 		// base rows stale/blank, so repaint the live viewport in place.
 		if (
 			isMultiplexerSession() &&
+			diff.firstChanged !== -1 &&
+			newLines.length < this.#previousLines.length &&
+			naturalViewportTop !== prevViewportTop
+		) {
+			return { kind: "viewportRepaint" };
+		}
+
+		// Direct-input shrink can also move the natural viewport upward even when
+		// no stale high-water scrollback is involved (for example slash autocomplete
+		// filtering from many rows to a few). The diff emitter is anchored to the
+		// previous viewport top and would only clear the old suffix, hiding the
+		// editor above the live window.
+		if (
+			allowUnknownViewportMutation &&
 			diff.firstChanged !== -1 &&
 			newLines.length < this.#previousLines.length &&
 			naturalViewportTop !== prevViewportTop
@@ -1697,10 +1717,6 @@ export class TUI extends Container {
 
 	#nativeViewportIsKnownScrolled(nativeViewportAtBottom: boolean | undefined): boolean {
 		return nativeViewportAtBottom === false;
-	}
-
-	#nativeViewportIsAtBottom(nativeViewportAtBottom: boolean | undefined): boolean {
-		return nativeViewportAtBottom === true;
 	}
 
 	#canReplayNativeScrollbackAtCheckpoint(
