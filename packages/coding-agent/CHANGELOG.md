@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed extension `tool_call`/`tool_result` events for hashline `edit` calls to expose `event.input.path` by deriving it from the `¶PATH#TAG` header, so planning-mode gates can allow markdown plan edits instead of blocking them as `undefined` ([#1678](https://github.com/can1357/oh-my-pi/issues/1678)).
+- Fixed extension `tool_call`/`tool_result` events for hashline `edit` calls to expose `event.input.path` for single-file edits and `event.input.paths` for every parsed target, so planning-mode gates can allow one markdown plan edit but still block multi-file hashline calls that cannot be represented by one path ([#1678](https://github.com/can1357/oh-my-pi/issues/1678)).
 - Fixed a module-load crash (`ReferenceError: Cannot access 'evalToolRenderer' before initialization`) triggered whenever `tools/eval` was imported before `tools/renderers`. The eval JS backend statically pulls the agent/task/sdk/extension chain, which re-enters the root barrel → `modes/components` → `tool-execution` → `renderers` while `eval.ts` was still initializing, so `renderers.ts` read `evalToolRenderer` in its TDZ. The eval TUI renderer is now split into a dependency-light `tools/eval-render.ts` that `renderers.ts` imports directly (decoupling pure rendering from the eval runtime); `eval.ts` re-exports `evalToolRenderer`/`EVAL_DEFAULT_PREVIEW_LINES` for compatibility.
 
 ## [15.7.6] - 2026-06-01
