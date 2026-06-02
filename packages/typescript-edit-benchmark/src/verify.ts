@@ -244,27 +244,48 @@ function normalizeBlankLines(text: string): string {
 }
 
 function restoreWhitespaceOnlyLineDiffs(expected: string, actual: string): string {
-	const expectedLines = expected.split("\n");
-	const actualLines = actual.split("\n");
-	const max = Math.max(expectedLines.length, actualLines.length);
-	const out = new Array<string>(max);
+	const changes = diffLines(expected, actual);
+	const out: string[] = [];
+	let pendingRemoved: string[] = [];
+	let pendingAdded: string[] = [];
 
-	for (let i = 0; i < max; i++) {
-		const expectedLine = expectedLines[i];
-		const actualLine = actualLines[i];
-		if (expectedLine === undefined || actualLine === undefined) {
-			out[i] = actualLine ?? "";
+	const flush = () => {
+		const pairs = Math.min(pendingRemoved.length, pendingAdded.length);
+		for (let i = 0; i < pairs; i++) {
+			const removedLine = pendingRemoved[i]!;
+			const addedLine = pendingAdded[i]!;
+			out.push(
+				removedLine !== addedLine && equalsIgnoringWhitespace(removedLine, addedLine) ? removedLine : addedLine,
+			);
+		}
+		// Unmatched added lines (insertions beyond the removal window) stay as-is.
+		for (let i = pairs; i < pendingAdded.length; i++) {
+			out.push(pendingAdded[i]!);
+		}
+		// Unmatched removed lines have no counterpart in actual — drop them.
+		pendingRemoved = [];
+		pendingAdded = [];
+	};
+
+	for (const change of changes) {
+		const lines = splitLines(change.value);
+		if (change.removed) {
+			pendingRemoved.push(...lines);
 			continue;
 		}
-
-		if (expectedLine !== actualLine && equalsIgnoringWhitespace(expectedLine, actualLine)) {
-			out[i] = expectedLine;
-		} else {
-			out[i] = actualLine;
+		if (change.added) {
+			pendingAdded.push(...lines);
+			continue;
 		}
+		flush();
+		out.push(...lines);
 	}
+	flush();
 
-	return out.join("\n");
+	// Preserve trailing newline semantics: rejoin with "\n" and add a trailing
+	// newline iff actual originally ended with one.
+	const joined = out.join("\n");
+	return actual.endsWith("\n") ? `${joined}\n` : joined;
 }
 
 function equalsIgnoringWhitespace(a: string, b: string): boolean {

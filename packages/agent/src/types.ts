@@ -15,6 +15,7 @@ import type {
 	ToolResultMessage,
 	TSchema,
 } from "@oh-my-pi/pi-ai";
+import type { AppendOnlyContextManager } from "./append-only-context";
 import type { HarmonyAuditEvent } from "./harmony-leak";
 import type { AgentRunCoverage, AgentRunSummary } from "./run-collector";
 import type { AgentTelemetryConfig } from "./telemetry";
@@ -36,6 +37,14 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * - "wait" = defer steering until the current turn completes
 	 */
 	interruptMode?: "immediate" | "wait";
+
+	/**
+	 * Maximum completed tool calls to accept from one streamed assistant turn before
+	 * cutting the provider stream and executing that batch. The cap is enforced on
+	 * `toolcall_end` so every executed call has complete arguments. Undefined disables
+	 * batching.
+	 */
+	maxToolCallsPerTurn?: number;
 
 	/**
 	 * Optional session identifier forwarded to LLM providers.
@@ -154,6 +163,15 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * then strips from arguments before executing tools.
 	 */
 	intentTracing?: boolean;
+	/**
+	 * Append-only context mode — stabilizes system prompt + tool spec bytes
+	 * across turns so provider prefix caches hit at maximum rate.
+	 *
+	 * When set, the loop reads messages from the append-only log (stable
+	 * byte prefix) and caches system prompt + tools. Tools exclude per-turn
+	 * `_i` intent fields.
+	 */
+	appendOnlyContext?: AppendOnlyContextManager;
 
 	/**
 	 * Inspect assistant streaming events before they are published to the outer agent event stream.
@@ -359,6 +377,21 @@ export interface RenderResultOptions {
 	spinnerFrame?: number;
 }
 
+/** Capability tier a tool exercises. Determines which approval modes auto-approve it. */
+export type ToolTier = "read" | "write" | "exec";
+
+/**
+ * Per-tool approval declaration.
+ * - bare tier ("read" / "write" / "exec") — static classification.
+ * - object form — adds a `reason` (shown in the prompt) and/or `override: true`
+ *   (force-prompt even in modes that would otherwise auto-approve this tier).
+ * - function — dynamic, given parsed args. Returns either form above.
+ *
+ * Omitted approvals are treated as "exec" by callers that enforce approvals.
+ */
+export type ToolApprovalDecision = ToolTier | { tier: ToolTier; reason?: string; override?: boolean };
+export type ToolApproval = ToolApprovalDecision | ((args: unknown) => ToolApprovalDecision);
+
 /**
  * Context passed to tool execution.
  * Apps can extend via declaration merging.
@@ -407,6 +440,12 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 * - function: `_i` is NOT injected; intent is derived dynamically from (potentially partial / streaming) args.
 	 */
 	intent?: "omit" | "optional" | "require" | ((args: Partial<Static<TParameters>>) => string | undefined);
+
+	/** Capability tier declaration used by approval gates. Omitted means "exec". */
+	approval?: ToolApproval;
+
+	/** Lines appended after the standard approval prompt header. */
+	formatApprovalDetails?: (args: unknown) => string | string[] | undefined;
 
 	/** The main execution callback for this tool. */
 	execute: AgentToolExecFn<TParameters, TDetails, TTheme>;

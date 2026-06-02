@@ -100,6 +100,44 @@ export const snapshotResponseSchema = z
 	})
 	.strict();
 
+// ─── Snapshot stream (SSE) ────────────────────────────────────────────────
+
+/** First frame on connect — full snapshot embedded inline with a `kind` tag. */
+export const snapshotStreamSnapshotEventSchema = snapshotResponseSchema
+	.extend({
+		kind: z.literal("snapshot"),
+	})
+	.strict();
+
+/** Per-credential upsert/refresh delta. */
+export const snapshotStreamEntryEventSchema = z
+	.object({
+		kind: z.literal("entry"),
+		generation: z.number().int(),
+		serverNowMs: z.number(),
+		refresher: refresherScheduleSchema,
+		entry: snapshotEntrySchema,
+	})
+	.strict();
+
+/** Per-credential delete delta. */
+export const snapshotStreamRemovedEventSchema = z
+	.object({
+		kind: z.literal("removed"),
+		generation: z.number().int(),
+		serverNowMs: z.number(),
+		refresher: refresherScheduleSchema,
+		id: z.number().int(),
+	})
+	.strict();
+
+/** Discriminated union over every event frame the snapshot stream emits. */
+export const snapshotStreamEventSchema = z.discriminatedUnion("kind", [
+	snapshotStreamSnapshotEventSchema,
+	snapshotStreamEntryEventSchema,
+	snapshotStreamRemovedEventSchema,
+]);
+
 // ─── Healthz ────────────────────────────────────────────────────────────────
 
 export const healthzResponseSchema = z

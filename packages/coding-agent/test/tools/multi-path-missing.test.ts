@@ -85,10 +85,12 @@ describe("multi-path tools tolerate missing entries", () => {
 		});
 
 		const text = getText(result);
-		const details = result.details as { fileCount?: number; missingPaths?: string[] } | undefined;
+		const details = result.details as { fileCount?: number; missingPaths?: string[]; files?: string[] } | undefined;
 
-		expect(text).toContain("src/alpha.ts");
-		expect(text).toContain("src/beta.ts");
+		expect(text).toContain("# src/");
+		expect(text).toContain("alpha.ts");
+		expect(text).toContain("beta.ts");
+		expect(details?.files).toEqual(expect.arrayContaining(["src/alpha.ts", "src/beta.ts"]));
 		expect(text).toContain("Skipped missing paths: tests/**/*.ts");
 		expect(details?.fileCount).toBe(2);
 		expect(details?.missingPaths).toEqual(["tests/**/*.ts"]);

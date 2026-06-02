@@ -3,6 +3,7 @@ import { calculatePromptTokens } from "@oh-my-pi/pi-agent-core/compaction/compac
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { type Component, Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
+import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import {
 	ReadToolGroupComponent,
@@ -24,6 +25,19 @@ type AgentSessionEventKind = AgentSessionEvent["type"];
 
 const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
 
+// Events that change foreground streaming state, or that reset a turn. The TUI
+// eager native-scrollback rebuild mode is recomputed only on these so unrelated
+// IRC/notices/status refreshes do not toggle scrollback replay policy.
+const STREAM_RENDER_MODE_EVENTS: Record<string, true> = {
+	agent_start: true,
+	agent_end: true,
+	message_start: true,
+	message_end: true,
+	tool_execution_start: true,
+	tool_execution_update: true,
+	tool_execution_end: true,
+};
+
 type AgentSessionEventHandlers = {
 	[E in AgentSessionEventKind]: (event: Extract<AgentSessionEvent, { type: E }>) => Promise<void>;
 };
@@ -34,6 +48,7 @@ export class EventController {
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
 	#backgroundToolCallIds = new Set<string>();
+	#assistantMessageStreaming = false;
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#lastAssistantComponent: AssistantMessageComponent | undefined = undefined;
@@ -64,7 +79,11 @@ export class EventController {
 			todo_auto_clear: e => this.#handleTodoAutoClear(e),
 			irc_message: e => this.#handleIrcMessage(e),
 			notice: e => this.#handleNotice(e),
-			thinking_level_changed: async () => {},
+			thinking_level_changed: async () => {
+				this.ctx.statusLine.invalidate();
+				this.ctx.updateEditorBorderColor();
+				this.ctx.ui.requestRender();
+			},
 			goal_updated: async () => {},
 		} satisfies AgentSessionEventHandlers;
 	}
@@ -153,12 +172,37 @@ export class EventController {
 
 		const run = this.#handlers[event.type] as (e: AgentSessionEvent) => Promise<void>;
 		await run(event);
+		// While assistant text or a foreground tool is streaming, rows above the
+		// viewport can re-layout after they have already entered native scrollback
+		// (Markdown fences, wrapping, previews). Let the TUI rebuild history on
+		// those offscreen edits instead of deferring, which otherwise leaves stale
+		// tail rows duplicated above the live viewport.
+		// Background-running tools are excluded so late async updates outside the
+		// active foreground stream keep the no-yank deferral; agent_start resets
+		// the mode at every turn boundary.
+		if (STREAM_RENDER_MODE_EVENTS[event.type]) {
+			this.#refreshToolRenderMode();
+		}
+	}
+
+	#refreshToolRenderMode(): void {
+		let foregroundToolActive = this.#assistantMessageStreaming;
+		if (!foregroundToolActive) {
+			for (const toolCallId of this.ctx.pendingTools.keys()) {
+				if (!this.#backgroundToolCallIds.has(toolCallId)) {
+					foregroundToolActive = true;
+					break;
+				}
+			}
+		}
+		this.ctx.ui.setEagerNativeScrollbackRebuild(foregroundToolActive);
 	}
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
 		this.#lastIntent = undefined;
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
+		this.#assistantMessageStreaming = false;
 		this.#lastAssistantComponent = undefined;
 		if (this.ctx.retryEscapeHandler) {
 			this.ctx.editor.onEscape = this.ctx.retryEscapeHandler;
@@ -231,9 +275,13 @@ export class EventController {
 			this.ctx.ui.requestRender();
 		} else if (event.message.role === "assistant") {
 			this.#lastThinkingCount = 0;
+			this.#assistantMessageStreaming = true;
 			this.#resetReadGroup();
-			this.ctx.streamingComponent = new AssistantMessageComponent(undefined, this.ctx.hideThinkingBlock, () =>
-				this.ctx.ui.requestRender(),
+			this.ctx.streamingComponent = new AssistantMessageComponent(
+				undefined,
+				this.ctx.hideThinkingBlock,
+				() => this.ctx.ui.requestRender(),
+				this.ctx.session.extensionRunner?.getAssistantThinkingRenderers(),
 			);
 			this.ctx.streamingMessage = event.message;
 			this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
@@ -329,10 +377,10 @@ export class EventController {
 						content.name,
 						renderArgs,
 						{
+							snapshots: getFileSnapshotStore(this.ctx.session),
 							showImages: settings.get("terminal.showImages"),
 							editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 							editAllowFuzzy: settings.get("edit.fuzzyMatch"),
-							hashlineAutoDropPureInsertDuplicates: settings.get("edit.hashlineAutoDropPureInsertDuplicates"),
 						},
 						tool,
 						this.ctx.ui,
@@ -377,6 +425,9 @@ export class EventController {
 
 	async #handleMessageEnd(event: Extract<AgentSessionEvent, { type: "message_end" }>): Promise<void> {
 		if (event.message.role === "user") return;
+		if (event.message.role === "assistant") {
+			this.#assistantMessageStreaming = false;
+		}
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.ctx.streamingMessage = event.message;
 			let errorMessage: string | undefined;
@@ -444,10 +495,10 @@ export class EventController {
 				event.toolName,
 				event.args,
 				{
+					snapshots: getFileSnapshotStore(this.ctx.session),
 					showImages: settings.get("terminal.showImages"),
 					editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 					editAllowFuzzy: settings.get("edit.fuzzyMatch"),
-					hashlineAutoDropPureInsertDuplicates: settings.get("edit.hashlineAutoDropPureInsertDuplicates"),
 				},
 				tool,
 				this.ctx.ui,
@@ -559,8 +610,8 @@ export class EventController {
 			}
 		}
 	}
-
 	async #handleAgentEnd(_event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
+		this.#assistantMessageStreaming = false;
 		if (this.ctx.loadingAnimation) {
 			this.ctx.loadingAnimation.stop();
 			this.ctx.loadingAnimation = undefined;
@@ -598,8 +649,19 @@ export class EventController {
 		};
 		this.ctx.statusContainer.clear();
 		const reasonText =
-			event.reason === "overflow" ? "Context overflow detected, " : event.reason === "idle" ? "Idle " : "";
-		const actionLabel = event.action === "handoff" ? "Auto-handoff" : "Auto context-full maintenance";
+			event.reason === "overflow"
+				? "Context overflow detected, "
+				: event.reason === "incomplete"
+					? "Response incomplete, "
+					: event.reason === "idle"
+						? "Idle "
+						: "";
+		const actionLabel =
+			event.action === "handoff"
+				? "Auto-handoff"
+				: event.action === "shake"
+					? "Auto-shake"
+					: "Auto context-full maintenance";
 		this.ctx.autoCompactionLoader = new Loader(
 			this.ctx.ui,
 			spinner => theme.fg("accent", spinner),
@@ -623,8 +685,25 @@ export class EventController {
 			this.ctx.statusContainer.clear();
 		}
 		const isHandoffAction = event.action === "handoff";
+		const isShakeAction = event.action === "shake";
 		if (event.aborted) {
-			this.ctx.showStatus(isHandoffAction ? "Auto-handoff cancelled" : "Auto context-full maintenance cancelled");
+			this.ctx.showStatus(
+				isHandoffAction
+					? "Auto-handoff cancelled"
+					: isShakeAction
+						? "Auto-shake cancelled"
+						: "Auto context-full maintenance cancelled",
+			);
+		} else if (isShakeAction) {
+			// Shake produces no CompactionResult; rebuild on success, suppress benign skips.
+			if (event.errorMessage) {
+				this.ctx.showWarning(event.errorMessage);
+			} else if (!event.skipped) {
+				this.ctx.rebuildChatFromMessages();
+				this.ctx.statusLine.invalidate();
+				this.ctx.updateEditorTopBorder();
+				this.ctx.showStatus("Auto-shake completed");
+			}
 		} else if (event.result) {
 			this.ctx.rebuildChatFromMessages();
 			this.ctx.statusLine.invalidate();
@@ -760,6 +839,14 @@ export class EventController {
 		if (this.ctx.isBackgrounded === false) return;
 		const notify = settings.get("completion.notify");
 		if (notify === "off") return;
+
+		// Skip when the turn was aborted (e.g. ask cancelled with Ctrl+C) or
+		// errored — those are not "Task complete" events. Mirrors the gate
+		// already used by #currentContextTokens, #handleMessageEnd, and the
+		// retry / TTSR / compaction skip paths across agent-session.ts.
+		const last = this.ctx.session.getLastAssistantMessage?.();
+		if (last?.stopReason === "aborted" || last?.stopReason === "error") return;
+
 		const title = this.ctx.sessionManager.getSessionName();
 		const message = title ? `${title}: Complete` : "Complete";
 		TERMINAL.sendNotification(message);

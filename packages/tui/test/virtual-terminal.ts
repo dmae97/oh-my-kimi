@@ -1,5 +1,5 @@
 import type { Terminal, TerminalAppearance } from "@oh-my-pi/pi-tui/terminal";
-import type { Terminal as XtermTerminalType } from "@xterm/headless";
+import type { ITerminalInitOnlyOptions, ITerminalOptions, Terminal as XtermTerminalType } from "@xterm/headless";
 import xterm from "@xterm/headless";
 
 // Extract Terminal class from the module
@@ -15,18 +15,23 @@ export class VirtualTerminal implements Terminal {
 	private _columns: number;
 	private _rows: number;
 
-	constructor(columns = 80, rows = 24) {
+	constructor(columns = 80, rows = 24, scrollback?: number) {
 		this._columns = columns;
 		this._rows = rows;
 
-		// Create xterm instance with specified dimensions
-		this.xterm = new XtermTerminal({
+		const options: ITerminalOptions & ITerminalInitOnlyOptions = {
 			cols: columns,
 			rows: rows,
 			// Disable all interactive features for testing
 			disableStdin: true,
 			allowProposedApi: true,
-		});
+		};
+		if (scrollback !== undefined) {
+			options.scrollback = scrollback;
+		}
+
+		// Create xterm instance with specified dimensions
+		this.xterm = new XtermTerminal(options);
 	}
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
@@ -115,8 +120,10 @@ export class VirtualTerminal implements Terminal {
 
 	/** Wait for TUI's throttled render pipeline to settle (matches the 16ms frame budget). */
 	async waitForRender(): Promise<void> {
-		await new Promise<void>(resolve => process.nextTick(resolve));
-		await new Promise<void>(resolve => setTimeout(resolve, 20));
+		const nextTick = Promise.withResolvers<void>();
+		process.nextTick(nextTick.resolve);
+		await nextTick.promise;
+		await Bun.sleep(20);
 		await this.flush();
 	}
 
@@ -129,6 +136,25 @@ export class VirtualTerminal implements Terminal {
 		if (this.inputHandler) {
 			this.inputHandler(data);
 		}
+	}
+	/**
+	 * Simulate the user scrolling through native terminal scrollback.
+	 * Negative values scroll up; positive values scroll down.
+	 */
+	scrollLines(lines: number): void {
+		this.xterm.scrollLines(lines);
+	}
+
+	/** Return whether the virtual viewport is at the scrollback tail. */
+	isNativeViewportAtBottom(): boolean | undefined {
+		const buffer = this.xterm.buffer.active;
+		return buffer.viewportY >= buffer.baseY;
+	}
+
+	/** Get the terminal buffer's scrollback and viewport offsets. */
+	getBufferPosition(): { baseY: number; viewportY: number } {
+		const buffer = this.xterm.buffer.active;
+		return { baseY: buffer.baseY, viewportY: buffer.viewportY };
 	}
 
 	/**
@@ -148,9 +174,9 @@ export class VirtualTerminal implements Terminal {
 	 */
 	async flush(): Promise<void> {
 		// Write an empty string to ensure all previous writes are flushed
-		return new Promise<void>(resolve => {
-			this.xterm.write("", () => resolve());
-		});
+		const done = Promise.withResolvers<void>();
+		this.xterm.write("", done.resolve);
+		return done.promise;
 	}
 
 	/**
@@ -200,6 +226,15 @@ export class VirtualTerminal implements Terminal {
 		}
 
 		return lines;
+	}
+
+	/**
+	 * Get the hardware cursor position within the visible viewport.
+	 * Both coordinates are 0-indexed; row is relative to the top of the viewport.
+	 */
+	getCursor(): { row: number; col: number } {
+		const buffer = this.xterm.buffer.active;
+		return { row: buffer.cursorY, col: buffer.cursorX };
 	}
 
 	/**

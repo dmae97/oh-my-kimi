@@ -18,6 +18,7 @@ import {
 	getProjectDir,
 	getSessionsDir,
 	getTerminalSessionsDir,
+	hasFsCode,
 	isEnoent,
 	logger,
 	parseJsonlLenient,
@@ -701,6 +702,53 @@ export function buildSessionContext(
 		}
 	}
 
+	// Strip dangling tool_use blocks — a tool_use with no matching tool_result on the
+	// resolved leaf→root path — from ANY assistant turn, not just the trailing one.
+	// This happens whenever the leaf (or a branch point) lands such that an assistant
+	// turn's tool results are off the selected path: its result children live on a
+	// sibling branch, or it is the leaf itself (results are children below it). Left
+	// in place, `transformMessages` fabricates one synthetic "aborted"/"No result
+	// provided" result per dangling call plus a `<turn-aborted>` developer note, which
+	// render as phantom failed calls and re-inject the failed batch into the model's
+	// context — the rewind/restore loop.
+	//
+	// Stripping is necessary but not sufficient: a *modified* assistant turn that still
+	// carries signed `thinking`/`redacted_thinking` is rejected by Anthropic — "thinking
+	// blocks in the latest assistant message cannot be modified", and signed thinking
+	// replayed out of its original turn shape can also fail signature validation (this
+	// bites the handoff/branch-summary request). So when we rewrite a turn we also
+	// neutralize its protected reasoning: drop `redactedThinking` (encrypted, no
+	// plaintext to keep) and clear `thinking` signatures so the provider encoder
+	// downgrades them to plain text (verified accepted by the live API), preserving the
+	// visible reasoning while removing the immutability/invalid-signature hazard. Drop a
+	// turn left with no content. (Live turns never qualify: their results are persisted
+	// on the same path before any context rebuild.)
+	const pairedToolResultIds = new Set<string>();
+	for (const message of messages) {
+		if (message.role === "toolResult") pairedToolResultIds.add(message.toolCallId);
+	}
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message.role !== "assistant") continue;
+		const hasDangling = message.content.some(
+			block => block.type === "toolCall" && !pairedToolResultIds.has(block.id),
+		);
+		if (!hasDangling) continue;
+		const normalized = message.content
+			.filter(
+				block =>
+					!(block.type === "toolCall" && !pairedToolResultIds.has(block.id)) && block.type !== "redactedThinking",
+			)
+			.map(block =>
+				block.type === "thinking" && block.thinkingSignature ? { ...block, thinkingSignature: undefined } : block,
+			);
+		if (normalized.length === 0) {
+			messages.splice(i, 1);
+		} else {
+			messages[i] = { ...message, content: normalized };
+		}
+	}
+
 	return {
 		messages,
 		thinkingLevel,
@@ -942,11 +990,70 @@ function extractFirstUserPrompt(entries: Array<Record<string, unknown>>): string
 }
 
 /**
+ * Promote orphaned `<basename>.jsonl.<snowflake>.bak` backups created by
+ * `#replaceSessionFileAfterEperm` back to their primary path when the primary
+ * is missing. This runs once per session-dir scan, before the main `*.jsonl`
+ * glob, so a crash between the two renames in the EPERM-rewrite path does not
+ * leave the user's last good state stranded outside the loader's view.
+ *
+ * Exported for testing.
+ */
+export async function recoverOrphanedBackups(sessionDir: string, storage: SessionStorage): Promise<void> {
+	let backups: string[];
+	try {
+		backups = storage.listFilesSync(sessionDir, "*.bak");
+	} catch {
+		return;
+	}
+	if (backups.length === 0) return;
+	// For each primary path, pick the newest backup (highest mtime) as the recovery source.
+	const candidates = new Map<string, { backup: string; mtimeMs: number }>();
+	for (const backup of backups) {
+		const name = path.basename(backup);
+		// Expect "<primary>.<snowflake>.bak" where <primary> ends in ".jsonl".
+		if (!name.endsWith(".bak")) continue;
+		const trimmed = name.slice(0, -".bak".length);
+		const dotIdx = trimmed.lastIndexOf(".");
+		if (dotIdx <= 0) continue;
+		const primaryName = trimmed.slice(0, dotIdx);
+		if (!primaryName.endsWith(".jsonl")) continue;
+		const primaryPath = path.join(sessionDir, primaryName);
+		let mtimeMs = 0;
+		try {
+			mtimeMs = storage.statSync(backup).mtimeMs;
+		} catch {
+			continue;
+		}
+		const existing = candidates.get(primaryPath);
+		if (!existing || mtimeMs > existing.mtimeMs) {
+			candidates.set(primaryPath, { backup, mtimeMs });
+		}
+	}
+	for (const [primaryPath, { backup }] of candidates) {
+		if (storage.existsSync(primaryPath)) continue;
+		try {
+			await storage.rename(backup, primaryPath);
+			logger.warn("Recovered orphaned session backup", {
+				sessionFile: primaryPath,
+				backupPath: backup,
+			});
+		} catch (err) {
+			logger.warn("Failed to recover orphaned session backup", {
+				sessionFile: primaryPath,
+				backupPath: backup,
+				error: toError(err).message,
+			});
+		}
+	}
+}
+
+/**
  * Reads all session files from the directory and returns them sorted by mtime (newest first).
  * Uses low-level file I/O to efficiently read only the first 4KB of each file
  * to extract the JSON header and first user message without loading entire session logs into memory.
  */
 async function getSortedSessions(sessionDir: string, storage: SessionStorage): Promise<RecentSessionInfo[]> {
+	await recoverOrphanedBackups(sessionDir, storage);
 	try {
 		const files: string[] = storage.listFilesSync(sessionDir, "*.jsonl");
 		const sessions: RecentSessionInfo[] = [];
@@ -1701,6 +1808,8 @@ export async function resolveResumableSession(
 	return { session: globalMatch, scope: "global" };
 }
 interface SessionManagerStateSnapshot {
+	cwd: string;
+	sessionDir: string;
 	sessionId: string;
 	sessionName: string | undefined;
 	titleSource: "auto" | "user" | undefined;
@@ -1730,6 +1839,12 @@ export class SessionManager {
 		premiumRequests: 0,
 		cost: 0,
 	} satisfies UsageStatistics;
+	/** Per-turn output-token budget set by a `+Nk` directive (total null when none this turn). */
+	#turnBudget: { total: number | null; hard: boolean } = { total: null, hard: false };
+	/** Cumulative `output` snapshot captured when the current turn budget window opened. */
+	#turnBaselineOutput = 0;
+	/** Output tokens consumed by eval-spawned subagents in the current turn window. */
+	#turnEvalOutput = 0;
 	#persistWriter: NdjsonFileWriter | undefined;
 	#persistWriterPath: string | undefined;
 	#persistChain: Promise<void> = Promise.resolve();
@@ -1767,6 +1882,8 @@ export class SessionManager {
 
 	captureState(): SessionManagerStateSnapshot {
 		return {
+			cwd: this.cwd,
+			sessionDir: this.sessionDir,
 			sessionId: this.#sessionId,
 			sessionName: this.#sessionName,
 			titleSource: this.#titleSource,
@@ -1780,6 +1897,8 @@ export class SessionManager {
 	}
 
 	restoreState(snapshot: SessionManagerStateSnapshot): void {
+		this.cwd = snapshot.cwd;
+		this.sessionDir = snapshot.sessionDir;
 		this.#sessionId = snapshot.sessionId;
 		this.#sessionName = snapshot.sessionName;
 		this.#titleSource = snapshot.titleSource;
@@ -1824,6 +1943,18 @@ export class SessionManager {
 			this.#sessionId = header?.id ?? createSessionId();
 			this.#sessionName = header?.title;
 			this.#titleSource = header?.titleSource;
+
+			// Adopt the loaded session's own working directory. Sessions are stored in
+			// a directory keyed by their cwd, so resuming a session from another
+			// project (e.g. global review in the picker) must re-point cwd/sessionDir
+			// at that project. Same-cwd resumes and in-place reloads are a no-op; old
+			// sessions with no recorded cwd keep the current cwd.
+			const headerCwd = header?.cwd ? path.resolve(header.cwd) : undefined;
+			if (headerCwd && headerCwd !== this.cwd) {
+				this.cwd = headerCwd;
+				this.sessionDir = path.resolve(this.#sessionFile, "..");
+				writeTerminalBreadcrumb(this.cwd, this.#sessionFile);
+			}
 
 			this.#needsFullRewriteOnNextPersist = migrateToCurrentVersion(this.#fileEntries);
 
@@ -2146,7 +2277,64 @@ export class SessionManager {
 			{ ignoreError: true },
 		);
 	}
+	// Windows can reject overwrite-style rename with EPERM even after our own writer is closed.
+	// Move the old session file aside first so a failed retry can roll back to the last good file.
+	// The backup uses a plain `<basename>.<snowflake>.bak` name (no leading dot) so that if the
+	// process crashes between the two renames, `recoverOrphanedBackups` can find it via the
+	// shared `*.bak` glob on both real and in-memory storage backends and promote it back to
+	// the primary on the next session-dir scan.
 
+	async #replaceSessionFileAfterEperm(tempPath: string, targetPath: string, renameError: unknown): Promise<void> {
+		const dir = path.resolve(targetPath, "..");
+		const backupPath = path.join(dir, `${path.basename(targetPath)}.${Snowflake.next()}.bak`);
+		try {
+			await this.storage.rename(targetPath, backupPath);
+		} catch (err) {
+			if (isEnoent(err)) {
+				await this.storage.rename(tempPath, targetPath);
+				return;
+			}
+			throw toError(renameError);
+		}
+
+		try {
+			await this.storage.rename(tempPath, targetPath);
+		} catch (err) {
+			const replaceError = toError(err);
+			const originalError = toError(renameError);
+			try {
+				await this.storage.rename(backupPath, targetPath);
+			} catch (rollbackErr) {
+				const rollbackError = toError(rollbackErr);
+				throw new Error(
+					`Failed to replace session file after EPERM (original: ${originalError.message}; retry: ${replaceError.message}); rollback from ${backupPath} also failed: ${rollbackError.message}`,
+					{ cause: originalError },
+				);
+			}
+			throw replaceError;
+		}
+
+		try {
+			await this.storage.unlink(backupPath);
+		} catch (err) {
+			if (!isEnoent(err)) {
+				logger.warn("Failed to remove session rewrite backup", {
+					sessionFile: targetPath,
+					backupPath,
+					error: toError(err).message,
+				});
+			}
+		}
+	}
+
+	async #replaceSessionFile(tempPath: string, targetPath: string): Promise<void> {
+		try {
+			await this.storage.rename(tempPath, targetPath);
+		} catch (err) {
+			if (!hasFsCode(err, "EPERM")) throw toError(err);
+			await this.#replaceSessionFileAfterEperm(tempPath, targetPath, err);
+		}
+	}
 	async #writeEntriesAtomically(entries: FileEntry[]): Promise<void> {
 		if (!this.#sessionFile) return;
 		const dir = path.resolve(this.#sessionFile, "..");
@@ -2159,7 +2347,7 @@ export class SessionManager {
 			await writer.flush();
 			await writer.fsync();
 			await writer.close();
-			await this.storage.rename(tempPath, this.#sessionFile);
+			await this.#replaceSessionFile(tempPath, this.#sessionFile);
 		} catch (err) {
 			try {
 				await writer.close();
@@ -2231,6 +2419,32 @@ export class SessionManager {
 	/** Get usage statistics across all assistant messages in the session. */
 	getUsageStatistics(): UsageStatistics {
 		return this.#usageStatistics;
+	}
+
+	/**
+	 * Open a new per-turn budget window: snapshot the cumulative output baseline,
+	 * reset the eval-subagent counter, and set the (optional) ceiling. Called once
+	 * per real user message; `total` is null when no `+Nk` directive was present.
+	 */
+	beginTurnBudget(total: number | null, hard: boolean): void {
+		this.#turnBudget = { total, hard };
+		this.#turnBaselineOutput = this.#usageStatistics.output;
+		this.#turnEvalOutput = 0;
+	}
+
+	/** Record output tokens consumed by an eval-spawned subagent in the current turn. */
+	recordEvalSubagentOutput(output: number): void {
+		if (Number.isFinite(output) && output > 0) this.#turnEvalOutput += output;
+	}
+
+	/**
+	 * Current turn budget for the eval `budget` helper: the ceiling (null = none),
+	 * output tokens spent this turn (main loop + eval-spawned subagents, no
+	 * double-count), and whether the ceiling is hard.
+	 */
+	getTurnBudget(): { total: number | null; spent: number; hard: boolean } {
+		const mainDelta = Math.max(0, this.#usageStatistics.output - this.#turnBaselineOutput);
+		return { total: this.#turnBudget.total, spent: mainDelta + this.#turnEvalOutput, hard: this.#turnBudget.hard };
 	}
 
 	getSessionDir(): string {
@@ -3191,6 +3405,7 @@ export class SessionManager {
 	): Promise<SessionInfo[]> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		try {
+			await recoverOrphanedBackups(dir, storage);
 			const files = storage.listFilesSync(dir, "*.jsonl");
 			return await collectSessionsFromFiles(files, storage);
 		} catch {

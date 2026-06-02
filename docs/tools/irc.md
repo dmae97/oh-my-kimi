@@ -28,7 +28,7 @@
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `op` | `"send"` | Yes | Sends one message to one peer or to `"all"`. |
-| `to` | `string` | Yes | Peer id such as `0-Main`, or `"all"` for broadcast. Whitespace is trimmed. |
+| `to` | `string` | Yes | Peer id such as `Main`, or `"all"` for broadcast. Whitespace is trimmed. |
 | `message` | `string` | Yes | Message body. Whitespace is trimmed; empty-after-trim is rejected. |
 | `awaitReply` | `boolean` | No | Wait for prose replies. Defaults to `true` for direct messages and `false` for `to: "all"`. |
 
@@ -44,7 +44,7 @@
 
 ## Flow
 1. `IrcTool.createIf` only constructs the tool when `irc.enabled` is on and the session has both an `AgentRegistry` and `getAgentId` (`packages/coding-agent/src/tools/irc.ts`).
-2. Tool discovery adds another gate in `packages/coding-agent/src/tools/index.ts`: if the caller is `0-Main` and `async.enabled` is off, `irc` is hidden because the main agent cannot talk to concurrent peers in sync mode.
+2. Tool discovery adds another gate in `packages/coding-agent/src/tools/index.ts`: if the caller is `Main` and `async.enabled` is off, `irc` is hidden because the main agent cannot talk to concurrent peers in sync mode.
 3. `execute` resolves the process-global registry and sender id. Missing either returns a text error result instead of throwing.
 4. `op: "list"` calls `registry.listVisibleTo(senderId)`, which exposes every other agent in flat namespace whose status is `running` or `idle` (`packages/coding-agent/src/registry/agent-registry.ts`).
 5. `list` formats human-readable lines and returns `channels` as `['all', ...peerIds]`. These are logical targets only; there is no channel join state.
@@ -58,7 +58,8 @@
     - queues just the incoming message for later history injection when `awaitReply === false`, or
     - renders `packages/coding-agent/src/prompts/system/irc-incoming.md`, runs `runEphemeralTurn` with `toolChoice: "none"`, emits an auto-reply event, then queues both incoming and reply messages for history injection.
 11. Deferred injection waits until the recipient is no longer streaming; `#flushPendingBackgroundExchanges` appends the custom messages through normal `message_start`/`message_end` external events so persistence and listeners see them.
-12. `send` aggregates `delivered`, `replies`, `failed`, and `notFound`, then returns one text summary plus matching `details`.
+12. Dispatch waits are bounded by `irc.timeoutMs` (default `120_000` ms). A value of `0` disables the local timeout; parent aborts still abort the dispatch.
+13. `send` aggregates `delivered`, `replies`, `failed`, and `notFound`, then returns one text summary plus matching `details`.
 
 ## Modes / Variants
 - `list`: enumerate visible peers and logical channels.
@@ -79,7 +80,7 @@
   - Auto-replies are generated from `packages/coding-agent/src/prompts/system/irc-incoming.md` and explicitly forbid tool use.
 - Background work / cancellation
   - `send` starts one background `respondAsBackground` call per target.
-  - The caller's `AbortSignal` is forwarded into each background reply turn.
+  - The caller's `AbortSignal` is forwarded into each background reply turn. `irc.timeoutMs` creates a per-recipient `AbortController` and reports timeout failures per target.
 - Network
   - No IRC server connection.
   - When `awaitReply: true`, the recipient may make model-provider API calls through `runEphemeralTurn`.
@@ -93,7 +94,8 @@
 - Visibility scope: only peers in status `running` or `idle` are addressable via `listVisibleTo`.
 - Reply execution:
   - No tools are available in auto-reply turns (`toolChoice: "none"` in `runEphemeralTurn`).
-  - No internal timeout, retry, backoff, rate limit, or reply length cap is defined in `irc.ts`; behavior relies on the underlying model stream and any upstream API limits.
+  - `irc.timeoutMs` defaults to `120_000`; `0` disables the timeout, non-finite values fall back to the default, and positive values are truncated and clamped to at least `1` ms.
+  - No retry, backoff, rate limit, or reply length cap is defined in `irc.ts`; behavior otherwise relies on the underlying model stream and any upstream API limits.
 - Flush scheduling: deferred history injection polls every `50` ms while the recipient is still streaming (`#scheduleBackgroundExchangeFlush` in `packages/coding-agent/src/session/agent-session.ts`).
 
 ## Errors
@@ -105,7 +107,7 @@
   - unknown op: `Unknown irc op.`
 - Unknown, self-addressed, non-running, and non-idle direct targets are reported under `details.notFound` and in the text footer `Unknown / unavailable peers:`.
 - If a target has no attached session, it is treated as not found.
-- Exceptions thrown by `respondAsBackground` or `runEphemeralTurn` are caught per-target and surfaced under `details.failed` as `{ id, error }`; other recipients still complete.
+- Exceptions thrown by `respondAsBackground`, `runEphemeralTurn`, abort handling, or timeout handling are caught per-target and surfaced under `details.failed` as `{ id, error }`; other recipients still complete.
 - If no target succeeds, `send` still returns normally with `No recipients received the message.` and optional `failed`/`notFound` metadata.
 
 ## Notes

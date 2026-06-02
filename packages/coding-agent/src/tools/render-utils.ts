@@ -177,7 +177,8 @@ export function formatMeta(meta: string[], theme: Theme): string {
 
 export function formatErrorMessage(message: string | undefined, theme: Theme): string {
 	const clean = (message ?? "").replace(/^Error:\s*/, "").trim();
-	return `${theme.styledSymbol("status.error", "error")} ${theme.fg("error", `Error: ${clean || "Unknown error"}`)}`;
+	const safe = clean ? replaceTabs(truncateToWidth(clean, TRUNCATE_LENGTHS.LINE)) : "Unknown error";
+	return `${theme.styledSymbol("status.error", "error")} ${theme.fg("error", `Error: ${safe}`)}`;
 }
 
 export function formatEmptyMessage(message: string, theme: Theme): string {
@@ -469,7 +470,22 @@ export function truncateDiffByHunk(
 	diffText: string,
 	maxHunks: number,
 	maxLines: number,
+	options?: { fromTail?: boolean },
 ): { text: string; hiddenHunks: number; hiddenLines: number } {
+	if (options?.fromTail) {
+		// Streaming previews want to track the tail of the diff as new hunks
+		// arrive. Reversing the line buffer reuses the head-mode logic without
+		// duplicating the segment-budget bookkeeping: hunk runs survive
+		// reversal (a continuous `+`/`-` block stays contiguous) and so do the
+		// per-line `+`/`-` markers, so getDiffStats yields identical counts.
+		const reversed = (diffText ?? "").split("\n").reverse().join("\n");
+		const result = truncateDiffByHunk(reversed, maxHunks, maxLines);
+		return {
+			text: result.text.split("\n").reverse().join("\n"),
+			hiddenHunks: result.hiddenHunks,
+			hiddenLines: result.hiddenLines,
+		};
+	}
 	const lines = diffText ? diffText.split("\n") : [];
 	const totalStats = getDiffStats(diffText);
 

@@ -180,7 +180,11 @@ function normalizeMixedSchemaNode(schema: unknown): unknown {
 	}
 
 	if (isJTDSchema(schema)) {
-		return normalizeMixedSchemaNode(convertSchema(schema));
+		// `convertSchema` is itself fully recursive and emits pure JSON Schema, so
+		// re-walking the result with `normalizeMixedSchemaNode` is unnecessary and
+		// unsafe: it would treat user-named properties whose keys happen to be JTD
+		// keywords (e.g. `ref`, `elements`) as nested JTD forms (#1345).
+		return convertSchema(schema);
 	}
 
 	const normalized: Record<string, unknown> = {};

@@ -28,6 +28,7 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
+import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import { toolWireSchema } from "../utils/schema/wire";
 import type { McpToolDefinition } from "./cursor/gen/agent_pb";
@@ -103,6 +104,9 @@ import {
 	RequestContextResultSchema,
 	RequestContextSchema,
 	RequestContextSuccessSchema,
+	ResumeActionSchema,
+	SelectedContextSchema,
+	SelectedImageSchema,
 	SetBlobResultSchema,
 	type ShellArgs,
 	ShellFailureSchema,
@@ -328,6 +332,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 		let h2Client: http2.ClientHttp2Session | null = null;
 		let h2Request: http2.ClientHttp2Stream | null = null;
 		let heartbeatTimer: NodeJS.Timeout | null = null;
+		let debugResponseLogPromise: Promise<RequestDebugResponseLog | undefined> | undefined;
 
 		try {
 			const apiKey = options?.apiKey;
@@ -348,11 +353,10 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			const requestContextTools = buildMcpToolDefinitions(context.tools);
 
 			const baseUrl = model.baseUrl || CURSOR_API_URL;
-			h2Client = http2.connect(baseUrl);
-
-			h2Request = h2Client.request({
+			const requestPath = "/agent.v1.AgentService/Run";
+			const requestHeaders = {
 				":method": "POST",
-				":path": "/agent.v1.AgentService/Run",
+				":path": requestPath,
 				"content-type": "application/connect+proto",
 				"connect-protocol-version": "1",
 				te: "trailers",
@@ -361,7 +365,20 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				"x-cursor-client-version": CURSOR_CLIENT_VERSION,
 				"x-cursor-client-type": "cli",
 				"x-request-id": crypto.randomUUID(),
-			});
+			};
+			const debugSession = isRequestDebugEnabled()
+				? await createRequestDebugSession({
+						protocol: "http2",
+						method: "POST",
+						url: new URL(requestPath, baseUrl).toString(),
+						headers: requestHeaders,
+						bodyBase64: Buffer.from(requestBytes).toString("base64"),
+					})
+				: undefined;
+
+			h2Client = http2.connect(baseUrl);
+
+			h2Request = h2Client.request(requestHeaders);
 
 			stream.push({ type: "start", partial: output });
 
@@ -405,7 +422,19 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			let resolveH2: (() => void) | undefined;
 
+			h2Request.on("response", headers => {
+				debugResponseLogPromise = debugSession?.openResponseLog(
+					`HTTP/2 ${headers[":status"] ?? ""}`.trim(),
+					headers,
+				);
+			});
+
 			h2Request.on("data", (chunk: Buffer) => {
+				if (debugResponseLogPromise) {
+					void debugResponseLogPromise.then(log => {
+						log?.write(chunk);
+					});
+				}
 				pendingBuffer = Buffer.concat([pendingBuffer, chunk]);
 
 				while (pendingBuffer.length >= 5) {
@@ -477,29 +506,44 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			await new Promise<void>((resolve, reject) => {
 				resolveH2 = resolve;
 
+				const closeDebugLog = async (): Promise<void> => {
+					const log = await debugResponseLogPromise;
+					await log?.close();
+				};
+
 				h2Request!.on("trailers", trailers => {
 					const status = trailers["grpc-status"];
 					const msg = trailers["grpc-message"];
 					if (status && status !== "0") {
-						reject(new Error(`gRPC error ${status}: ${decodeURIComponent(String(msg || ""))}`));
+						void closeDebugLog().finally(() => {
+							reject(new Error(`gRPC error ${status}: ${decodeURIComponent(String(msg || ""))}`));
+						});
 					}
 				});
 
 				h2Request!.on("end", () => {
 					resolveH2 = undefined;
-					if (endStreamError) {
-						reject(endStreamError);
-						return;
-					}
-					resolve();
+					void closeDebugLog()
+						.then(() => {
+							if (endStreamError) {
+								reject(endStreamError);
+								return;
+							}
+							resolve();
+						})
+						.catch(reject);
 				});
 
-				h2Request!.on("error", reject);
+				h2Request!.on("error", error => {
+					void closeDebugLog().finally(() => reject(error));
+				});
 
 				if (options?.signal) {
 					options.signal.addEventListener("abort", () => {
 						h2Request?.close();
-						reject(new Error("Request was aborted"));
+						void closeDebugLog().finally(() => {
+							reject(new Error("Request was aborted"));
+						});
 					});
 				}
 			});
@@ -554,6 +598,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		} finally {
+			const log = await debugResponseLogPromise;
+			await log?.close();
 			if (heartbeatTimer) {
 				clearInterval(heartbeatTimer);
 				heartbeatTimer = null;
@@ -2055,6 +2101,14 @@ function storeCursorBlob(blobStore: Map<string, Uint8Array>, data: Uint8Array): 
 	return blobId;
 }
 
+function readCursorBlob(blobStore: Map<string, Uint8Array>, blobId: Uint8Array): Uint8Array {
+	const data = blobStore.get(Buffer.from(blobId).toString("hex"));
+	if (!data) {
+		throw new Error("Cursor blob not found");
+	}
+	return data;
+}
+
 const CURSOR_NATIVE_TOOL_NAMES = new Set(["bash", "read", "write", "delete", "ls", "grep", "lsp", "todo_write"]);
 
 function buildMcpToolDefinitions(tools: Tool[] | undefined): McpToolDefinition[] {
@@ -2098,6 +2152,52 @@ function extractUserMessageText(msg: Message): string {
 	return text.trim();
 }
 
+function hasUserMessageImages(msg: Message): boolean {
+	return (
+		(msg.role === "user" || msg.role === "developer") &&
+		Array.isArray(msg.content) &&
+		msg.content.some(item => item.type === "image")
+	);
+}
+
+type CursorRootPromptContentPart = { type: "text"; text: string } | { type: "image"; image: string; mediaType: string };
+
+function buildCursorRootPromptContent(content: string | (TextContent | ImageContent)[]): CursorRootPromptContentPart[] {
+	if (typeof content === "string") {
+		const text = content.trim();
+		return text ? [{ type: "text", text }] : [];
+	}
+	const parts: CursorRootPromptContentPart[] = [];
+	for (const item of content) {
+		if (item.type === "text") {
+			const text = item.text.trim();
+			if (text) {
+				parts.push({ type: "text", text });
+			}
+		} else {
+			parts.push({ type: "image", image: item.data, mediaType: item.mimeType });
+		}
+	}
+	return parts;
+}
+
+function cursorUserContentKey(content: string | (TextContent | ImageContent)[]): string {
+	if (typeof content === "string") {
+		return content.trim();
+	}
+	const hash = createHash("sha256");
+	for (const item of content) {
+		hash.update(item.type);
+		if (item.type === "text") {
+			hash.update(item.text);
+		} else {
+			hash.update(item.mimeType);
+			hash.update(item.data);
+		}
+	}
+	return hash.digest("hex");
+}
+
 /**
  * Extract text content from an assistant message.
  */
@@ -2116,7 +2216,9 @@ function extractAssistantMessageText(msg: Message): string {
  * requests, so `conversationBlobStores` does not grow unboundedly and
  * unchanged history reuses existing blob IDs.
  */
-function deterministicMessageId(key: string): string {
+type CursorMessageId = `${string}-${string}-${string}-${string}-${string}`;
+
+function deterministicMessageId(key: string): CursorMessageId {
 	const hex = createHash("sha256").update(key).digest("hex");
 	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
@@ -2145,7 +2247,7 @@ function findLastUserMessageIndex(messages: Message[]): number {
  * actual model prompt. `turns[]` is UI/display metadata. Without populating
  * this field, multi-turn conversations lose prior context — the model sees
  * only an empty placeholder where historical user turns should be.
- * The last user message is excluded because it is sent in the action.
+ * The active user message is excluded because it is sent in the action.
  */
 /**
  * Build one Cursor system-message JSON blob per ordered system prompt. Emitting separate blobs
@@ -2168,22 +2270,21 @@ function buildRootPromptMessagesJson(
 	messages: Message[],
 	systemPromptIds: Uint8Array[],
 	blobStore: Map<string, Uint8Array>,
+	activeUserMessageIndex = findLastUserMessageIndex(messages),
 ): Uint8Array[] {
 	const entries: Uint8Array[] = [...systemPromptIds];
-	const lastUserIdx = findLastUserMessageIndex(messages);
-
 	const pushJson = (obj: unknown) => {
 		const bytes = new TextEncoder().encode(JSON.stringify(obj));
 		entries.push(storeCursorBlob(blobStore, bytes));
 	};
 
 	for (let i = 0; i < messages.length; i++) {
-		if (i === lastUserIdx) break;
+		if (i === activeUserMessageIndex) break;
 		const msg = messages[i];
 		if (msg.role === "user" || msg.role === "developer") {
-			const text = extractUserMessageText(msg);
-			if (!text) continue;
-			pushJson({ role: "user", content: [{ type: "text", text }] });
+			const content = buildCursorRootPromptContent(msg.content);
+			if (content.length === 0) continue;
+			pushJson({ role: "user", content });
 		} else if (msg.role === "assistant") {
 			const text = extractAssistantMessageText(msg);
 			if (!text) continue;
@@ -2204,12 +2305,16 @@ function buildRootPromptMessagesJson(
 /**
  * Convert context.messages to Cursor's ConversationTurnStructure blob IDs.
  * Groups messages into turns: each turn is a user message followed by the assistant's response.
- * Excludes the last user message (which goes in the action).
+ * Excludes the active user message (which goes in the action).
  *
  * Each `AgentConversationTurnStructure.user_message`, `steps[]`, and the outer
  * `ConversationStateStructure.turns[]` entry is a blob ID into `blobStore`.
  */
-function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint8Array>): Uint8Array[] {
+function buildConversationTurns(
+	messages: Message[],
+	blobStore: Map<string, Uint8Array>,
+	activeUserMessageIndex = findLastUserMessageIndex(messages),
+): Uint8Array[] {
 	const turns: Uint8Array[] = [];
 
 	// Find turn boundaries - each turn starts with a user message
@@ -2223,29 +2328,25 @@ function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint
 			continue;
 		}
 
-		// Check if this is the last user message (which goes in the action, not turns)
-		let isLastUserMessage = true;
-		for (let j = i + 1; j < messages.length; j++) {
-			if (messages[j].role === "user" || messages[j].role === "developer") {
-				isLastUserMessage = false;
-				break;
-			}
-		}
-		if (isLastUserMessage) {
+		// The active user message goes in the action, not turns. A prior user
+		// followed by assistant/tool-result messages is complete history and
+		// must remain serialized for resume actions.
+		if (i === activeUserMessageIndex) {
 			break;
 		}
 
 		// Create and serialize user message
 		const userText = extractUserMessageText(msg);
-		if (!userText || userText.length === 0) {
+		if (userText.length === 0 && !hasUserMessageImages(msg)) {
 			i++;
 			continue;
 		}
 
-		const userMessage = create(UserMessageSchema, {
-			text: userText,
-			messageId: deterministicMessageId(`u:${turns.length}:${userText}`),
-		});
+		const userMessage = createCursorUserMessage(
+			msg.content,
+			userText,
+			deterministicMessageId(`u:${turns.length}:${cursorUserContentKey(msg.content)}`),
+		);
 		const userMessageBytes = toBinary(UserMessageSchema, userMessage);
 		const userMessageBlobId = storeCursorBlob(blobStore, userMessageBytes);
 
@@ -2302,6 +2403,71 @@ function buildConversationTurns(messages: Message[], blobStore: Map<string, Uint
 	return turns;
 }
 
+/** Exported for tests: decodes Cursor history blobs built from conversation messages. */
+export function buildCursorHistoryForTest(
+	messages: Message[],
+	activeUserMessageIndex = findLastUserMessageIndex(messages),
+): {
+	rootPromptMessagesJson: unknown[];
+	turnUserMessagesJson: JsonValue[];
+	turnStepMessagesJson: JsonValue[][];
+} {
+	const blobStore = new Map<string, Uint8Array>();
+	const rootPromptMessagesJson = buildRootPromptMessagesJson(messages, [], blobStore, activeUserMessageIndex).map(
+		blobId => JSON.parse(new TextDecoder().decode(readCursorBlob(blobStore, blobId))),
+	);
+	const turnUserMessagesJson: JsonValue[] = [];
+	const turnStepMessagesJson: JsonValue[][] = [];
+	for (const turnBlobId of buildConversationTurns(messages, blobStore, activeUserMessageIndex)) {
+		const turn = fromBinary(ConversationTurnStructureSchema, readCursorBlob(blobStore, turnBlobId));
+		if (turn.turn.case !== "agentConversationTurn") {
+			continue;
+		}
+		const userMessage = fromBinary(UserMessageSchema, readCursorBlob(blobStore, turn.turn.value.userMessage));
+		turnUserMessagesJson.push(toJson(UserMessageSchema, userMessage));
+		turnStepMessagesJson.push(
+			turn.turn.value.steps.map(stepBlobId => {
+				const step = fromBinary(ConversationStepSchema, readCursorBlob(blobStore, stepBlobId));
+				return toJson(ConversationStepSchema, step);
+			}),
+		);
+	}
+	return { rootPromptMessagesJson, turnUserMessagesJson, turnStepMessagesJson };
+}
+function createCursorUserMessage(
+	content: string | (TextContent | ImageContent)[],
+	text: string,
+	messageId = crypto.randomUUID(),
+) {
+	const images = typeof content === "string" ? [] : extractImages(content);
+	return create(UserMessageSchema, {
+		text,
+		messageId,
+		...(images.length > 0
+			? {
+					selectedContext: create(SelectedContextSchema, {
+						selectedImages: images,
+					}),
+				}
+			: {}),
+	});
+}
+
+function extractImages(content: (TextContent | ImageContent)[]) {
+	return content
+		.filter((item): item is ImageContent => item.type === "image")
+		.map(image =>
+			create(SelectedImageSchema, {
+				uuid: crypto.randomUUID(),
+				mimeType: image.mimeType,
+				dataOrBlobId: {
+					case: "data",
+					value: Uint8Array.from(Buffer.from(image.data, "base64")),
+				},
+			}),
+		);
+}
+
 function buildGrpcRequest(
 	model: Model<"cursor-agent">,
 	context: Context,
@@ -2322,40 +2488,52 @@ function buildGrpcRequest(
 		storeCursorBlob(blobStore, new TextEncoder().encode(json)),
 	);
 
-	const lastMessage = context.messages[context.messages.length - 1];
-	const userText =
-		lastMessage?.role === "user" || lastMessage?.role === "developer"
-			? typeof lastMessage.content === "string"
-				? lastMessage.content.trim()
-				: extractText(lastMessage.content)
-			: "";
-
-	// Validate that we have non-empty user text for the action
-	if (!userText || userText.trim().length === 0) {
-		throw new Error("Cannot send empty user message to Cursor API");
+	const activeUserMessageIndex = context.messages.length - 1;
+	const activeMessage = context.messages[activeUserMessageIndex];
+	const activeUserMessage =
+		activeMessage?.role === "user" || activeMessage?.role === "developer" ? activeMessage : undefined;
+	let userContent: string | (TextContent | ImageContent)[] | undefined;
+	let userText = "";
+	let hasUserImages = false;
+	if (activeUserMessage?.role === "user" || activeUserMessage?.role === "developer") {
+		userContent = activeUserMessage.content;
+		if (typeof userContent === "string") {
+			userText = userContent.trim();
+		} else {
+			userText = extractText(userContent);
+			hasUserImages = hasImages(userContent);
+		}
 	}
 
-	const userMessage = create(UserMessageSchema, {
-		text: userText,
-		messageId: crypto.randomUUID(),
-	});
-
 	const action = create(ConversationActionSchema, {
-		action: {
-			case: "userMessageAction",
-			value: create(UserMessageActionSchema, { userMessage }),
-		},
+		action:
+			userContent && (userText.trim().length > 0 || hasUserImages)
+				? {
+						case: "userMessageAction",
+						value: create(UserMessageActionSchema, {
+							userMessage: createCursorUserMessage(userContent, userText),
+						}),
+					}
+				: {
+						case: "resumeAction",
+						value: create(ResumeActionSchema, {}),
+					},
 	});
 
-	// Build conversation turns from prior messages (excluding the last user message).
-	// This populates the UI-side history view (`turns[]`).
-	const turns = buildConversationTurns(context.messages, blobStore);
+	// Build conversation turns from prior messages, excluding only the active user message
+	// when the request is sending one. Resume actions must preserve trailing tool results.
+	const turns = buildConversationTurns(context.messages, blobStore, activeUserMessage ? activeUserMessageIndex : -1);
 
 	// Build `rootPromptMessagesJson` from prior messages. Cursor's server uses this
 	// field (not `turns[]`) to construct the actual model prompt; if we only send the
 	// system prompt here, multi-turn conversations lose prior context and the model
 	// sees only the current user message.
-	const rootPromptMessagesJson = buildRootPromptMessagesJson(context.messages, systemPromptIds, blobStore);
+	const rootPromptMessagesJson = buildRootPromptMessagesJson(
+		context.messages,
+		systemPromptIds,
+		blobStore,
+		activeUserMessage ? activeUserMessageIndex : -1,
+	);
 
 	// Preserve cached non-history state fields (todos, file states, summaries, etc.)
 	// when the system prompt is unchanged; otherwise start fresh.
@@ -2432,6 +2610,9 @@ function buildGrpcRequest(
 	return { requestBytes, blobStore, conversationState };
 }
 
+function hasImages(content: (TextContent | ImageContent)[]): boolean {
+	return content.some(item => item.type === "image");
+}
 function extractText(content: (TextContent | ImageContent)[]): string {
 	return content
 		.filter((c): c is TextContent => c.type === "text")

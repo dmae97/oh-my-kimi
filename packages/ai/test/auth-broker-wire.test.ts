@@ -5,8 +5,10 @@ import * as path from "node:path";
 import {
 	AuthBrokerClient,
 	type AuthBrokerServerHandle,
+	AuthBrokerStreamUnsupportedError,
 	AuthStorage,
 	REMOTE_REFRESH_SENTINEL,
+	type SnapshotStreamEvent,
 	SqliteAuthCredentialStore,
 	startAuthBroker,
 } from "../src";
@@ -179,4 +181,215 @@ describe("auth-broker wire surface", () => {
 		});
 		expect(res.status).toBe(404);
 	});
+
+	test("GET /v1/snapshot/stream requires bearer", async () => {
+		const res = await fetch(`${handle!.url}/v1/snapshot/stream`);
+		expect(res.status).toBe(401);
+	});
+
+	test("SSE stream emits initial snapshot then upsert delta", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const controller = new AbortController();
+		const iter = client.openSnapshotStream({ signal: controller.signal });
+		try {
+			const first = await iter.next();
+			if (first.done) throw new Error("expected snapshot frame");
+			expect(first.value.kind).toBe("snapshot");
+			if (first.value.kind === "snapshot") {
+				expect(first.value.credentials).toHaveLength(1);
+				expect(first.value.credentials[0].provider).toBe("anthropic");
+			}
+
+			storage!.upsertCredential("anthropic", mintOAuthCredential("b", Date.now() + 120_000));
+
+			const next = await nextMatching(iter, event => event.kind === "entry");
+			if (next.kind !== "entry") throw new Error("expected entry frame");
+			expect(next.entry.provider).toBe("anthropic");
+			expect(next.entry.credential.type).toBe("oauth");
+			if (next.entry.credential.type === "oauth") {
+				expect(next.entry.credential.access).toBe("access-b");
+				expect(next.entry.credential.refresh).toBe(REMOTE_REFRESH_SENTINEL);
+			}
+		} finally {
+			controller.abort();
+			await iter.return(undefined).catch(() => {});
+		}
+	});
+
+	test("SSE stream pushes entry frame on refresh", async () => {
+		const refreshed = {
+			access: "access-rotated",
+			refresh: "refresh-rotated",
+			expires: Date.now() + 120_000,
+			accountId: "account-a",
+			email: "a@example.com",
+		};
+		vi.spyOn(oauthUtils, "refreshOAuthToken").mockResolvedValue(refreshed);
+
+		const initialSnapshot = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
+		if (initialSnapshot.status !== 200) throw new Error("expected snapshot");
+		const id = initialSnapshot.snapshot.credentials[0].id;
+
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const controller = new AbortController();
+		const iter = client.openSnapshotStream({ signal: controller.signal });
+		try {
+			const first = await iter.next();
+			if (first.done) throw new Error("expected snapshot frame");
+
+			await storage!.refreshCredentialById(id);
+
+			const next = await nextMatching(
+				iter,
+				event => event.kind === "entry" && event.entry.credential.type === "oauth" && event.entry.id === id,
+			);
+			if (next.kind !== "entry") throw new Error("expected entry frame");
+			if (next.entry.credential.type !== "oauth") throw new Error("expected oauth credential");
+			expect(next.entry.credential.access).toBe("access-rotated");
+			expect(next.entry.credential.refresh).toBe(REMOTE_REFRESH_SENTINEL);
+		} finally {
+			controller.abort();
+			await iter.return(undefined).catch(() => {});
+		}
+	});
+
+	test("SSE stream pushes removed frame on disable", async () => {
+		const initialSnapshot = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
+		if (initialSnapshot.status !== 200) throw new Error("expected snapshot");
+		const id = initialSnapshot.snapshot.credentials[0].id;
+
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const controller = new AbortController();
+		const iter = client.openSnapshotStream({ signal: controller.signal });
+		try {
+			const first = await iter.next();
+			if (first.done) throw new Error("expected snapshot frame");
+
+			const disabled = storage!.disableCredentialById(id, "revoked by test");
+			expect(disabled).toBe(true);
+
+			const next = await nextMatching(iter, event => event.kind === "removed");
+			if (next.kind !== "removed") throw new Error("expected removed frame");
+			expect(next.id).toBe(id);
+		} finally {
+			controller.abort();
+			await iter.return(undefined).catch(() => {});
+		}
+	});
+
+	test("SSE stream keepalive comment arrives on cadence", async () => {
+		const localStore = await SqliteAuthCredentialStore.open(path.join(tempDir, "keepalive.db"));
+		localStore.saveOAuth("anthropic", mintOAuthCredential("k", Date.now() + 60_000));
+		const localStorage = new AuthStorage(localStore);
+		await localStorage.reload();
+		const localToken = "keepalive-bearer";
+		const localHandle = startAuthBroker({
+			storage: localStorage,
+			bind: "127.0.0.1:0",
+			bearerTokens: [localToken],
+			disableRefresher: true,
+			streamKeepaliveMs: 25,
+		});
+		const controller = new AbortController();
+		try {
+			const res = await fetch(`${localHandle.url}/v1/snapshot/stream`, {
+				headers: { Authorization: `Bearer ${localToken}`, Accept: "text/event-stream" },
+				signal: controller.signal,
+			});
+			expect(res.status).toBe(200);
+			expect(res.headers.get("content-type") ?? "").toContain("text/event-stream");
+			expect(res.body).not.toBeNull();
+			const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+			const decoder = new TextDecoder();
+			const deadline = Date.now() + 1_000;
+			let seenKeepalive = false;
+			let buffer = "";
+			try {
+				while (Date.now() < deadline) {
+					const { value, done } = await reader.read();
+					if (done) break;
+					buffer += decoder.decode(value, { stream: true });
+					if (buffer.includes(": keepalive\n\n")) {
+						seenKeepalive = true;
+						break;
+					}
+				}
+			} finally {
+				await reader.cancel().catch(() => {});
+			}
+			expect(seenKeepalive).toBe(true);
+		} finally {
+			controller.abort();
+			await localHandle.close();
+			localStorage.close();
+			localStore.close();
+		}
+	});
+
+	test("openSnapshotStream throws AuthBrokerStreamUnsupportedError on 404", async () => {
+		const dummy = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => new Response("Not Found", { status: 404 }),
+		});
+		try {
+			const client = new AuthBrokerClient({ url: `http://${dummy.hostname}:${dummy.port}`, token });
+			const iter = client.openSnapshotStream();
+			await expect(iter.next()).rejects.toBeInstanceOf(AuthBrokerStreamUnsupportedError);
+		} finally {
+			dummy.stop(true);
+		}
+	});
+
+	test("openSnapshotStream rejects 200 responses that are not SSE", async () => {
+		const dummy = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+		});
+		try {
+			const client = new AuthBrokerClient({ url: `http://${dummy.hostname}:${dummy.port}`, token });
+			const iter = client.openSnapshotStream();
+			await expect(iter.next()).rejects.toThrow(/non-SSE/);
+		} finally {
+			dummy.stop(true);
+		}
+	});
+
+	test("openSnapshotStream rejects SSE responses without an initial snapshot", async () => {
+		const dummy = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () =>
+				new Response(": keepalive\n\n", { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+		});
+		try {
+			const client = new AuthBrokerClient({ url: `http://${dummy.hostname}:${dummy.port}`, token });
+			const iter = client.openSnapshotStream();
+			await expect(iter.next()).rejects.toThrow(/initial snapshot/);
+		} finally {
+			dummy.stop(true);
+		}
+	});
 });
+
+async function nextMatching(
+	iter: AsyncGenerator<SnapshotStreamEvent>,
+	predicate: (event: SnapshotStreamEvent) => boolean,
+	timeoutMs = 2_000,
+): Promise<SnapshotStreamEvent> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) throw new Error("nextMatching timeout");
+		const timer = Promise.withResolvers<never>();
+		const handle = setTimeout(() => timer.reject(new Error("nextMatching timeout")), remaining);
+		try {
+			const res = await Promise.race([iter.next(), timer.promise]);
+			if (res.done) throw new Error("stream ended before predicate satisfied");
+			if (predicate(res.value)) return res.value;
+		} finally {
+			clearTimeout(handle);
+		}
+	}
+}

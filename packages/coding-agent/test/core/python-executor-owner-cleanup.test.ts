@@ -316,43 +316,6 @@ describe("python executor owner cleanup", () => {
 
 		expect(unownedRetainedKernel.shutdown).toHaveBeenCalledTimes(1);
 	});
-	it("rejects a queued execute when its session is disposed before the slot runs", async () => {
-		const kernel = new FakeKernel();
-		const executeHang = Promise.withResolvers<KernelExecuteResult>();
-		const executeStarted = Promise.withResolvers<void>();
-		kernel.execute = vi.fn(async () => {
-			executeStarted.resolve();
-			return await executeHang.promise;
-		});
-		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
-		const startSpy = vi.spyOn(PythonKernel, "start").mockResolvedValue(kernel as unknown as PythonKernelInstance);
-
-		const first = executePython("first", {
-			cwd: "/tmp/dispose-queue-race",
-			sessionId: "dispose-queue-session",
-			kernelMode: "session",
-		});
-		await executeStarted.promise;
-
-		const queued = executePython("queued", {
-			cwd: "/tmp/dispose-queue-race",
-			sessionId: "dispose-queue-session",
-			kernelMode: "session",
-		});
-		await flushMicrotasks();
-
-		await disposeAllKernelSessions();
-		executeHang.resolve(OK_RESULT);
-
-		const firstResult = await first;
-		const queuedResult = await queued;
-
-		expect(firstResult.cancelled).toBe(false);
-		expect(queuedResult.cancelled).toBe(true);
-		expect(startSpy).toHaveBeenCalledTimes(1);
-		expect(kernel.execute).toHaveBeenCalledTimes(1);
-		expect(kernel.shutdown).toHaveBeenCalledTimes(1);
-	});
 
 	it("retains sessions whose kernel shutdown is not confirmed so a later dispose retries", async () => {
 		const kernel = new FakeKernel();

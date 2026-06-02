@@ -7,9 +7,10 @@
 /// <reference types="./bun-imports.d.ts" />
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { formatHashlineHeader, InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { computeLineHash, formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
+import { formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { diffLines } from "diff";
 import { formatDirectory } from "./formatter";
@@ -42,7 +43,7 @@ type ConversationDumpSessionState = {
 /** Common interface for both RPC and in-process clients */
 interface BenchmarkClient {
 	start(): Promise<void>;
-	setThinkingLevel(level: import("@oh-my-pi/pi-agent-core").ResolvedThinkingLevel): Promise<void>;
+	setThinkingLevel(level: ResolvedThinkingLevel): Promise<void>;
 	onEvent(listener: (event: { type: string; [key: string]: unknown }) => void): () => void;
 	prompt(text: string): Promise<void>;
 	followUp(text: string): Promise<void>;
@@ -294,27 +295,30 @@ function buildMutationPreviewAgainstOriginal(original: string, current: string):
 
 	const changes = diffLines(original, current);
 	const preview: string[] = [];
-	let lineNum = 1;
+	let origLineNum = 1;
+	let newLineNum = 1;
 
+	// Hashline diff-preview format: `-LINE:TEXT` for removed (pre-edit line
+	// number), `+LINE:TEXT` for added (post-edit line number). No per-line hash.
 	for (const change of changes) {
 		const lines = splitLines(change.value);
 		if (!change.added && !change.removed) {
-			lineNum += lines.length;
+			origLineNum += lines.length;
+			newLineNum += lines.length;
 			continue;
 		}
 
 		if (change.removed) {
 			for (const line of lines) {
-				const hash = computeLineHash(lineNum, line);
-				preview.push(`${lineNum}#${hash}|-${line}`);
-				lineNum += 1;
+				preview.push(`-${origLineNum}:${line}`);
+				origLineNum += 1;
 			}
 			continue;
 		}
 
 		for (const line of lines) {
-			const hash = computeLineHash(lineNum, line);
-			preview.push(`${lineNum}#${hash}|+${line}`);
+			preview.push(`+${newLineNum}:${line}`);
+			newLineNum += 1;
 		}
 	}
 
@@ -524,69 +528,56 @@ async function evaluateMutationIntent(
 	};
 }
 
-type GuidedHashlineEdit =
-	| { set: { ref: string; body: string[] } }
-	| { set_range: { beg: string; end: string; body: string[] } }
-	| { insert: { after: string; body: string[] } };
-
-function buildGuidedHashlineEdits(actual: string, expected: string): GuidedHashlineEdit[] {
+/**
+ * Build a textual hashline patch (with `¶path#tag` section header) that
+ * transforms `actual` into `expected`. Returns null when no changes are
+ * needed or the diff isn't expressible as straight insert/replace/delete ops.
+ */
+function buildGuidedHashlinePatch(file: string, actual: string, expected: string): string | null {
 	const changes = diffLines(actual, expected);
 	const actualLines = actual.split("\n");
+	// File-trailing newline produces a phantom empty last entry that is not a
+	// real line; the hashline grammar's line numbers count real lines only.
+	const fileLineCount =
+		actualLines.length > 0 && actualLines[actualLines.length - 1] === ""
+			? actualLines.length - 1
+			: actualLines.length;
 
+	const ops: string[] = [];
 	let line = 1;
 	let pendingStart = 1;
-	let pendingRemoved: string[] = [];
+	let pendingRemoved = 0;
 	let pendingAdded: string[] = [];
-	const edits: GuidedHashlineEdit[] = [];
+
+	const formatPayload = (body: string[]): string => (body.length === 0 ? "" : `\n${body.join("\n")}`);
 
 	const flush = () => {
-		if (pendingRemoved.length === 0 && pendingAdded.length === 0) {
-			return;
-		}
+		if (pendingRemoved === 0 && pendingAdded.length === 0) return;
 
-		if (pendingRemoved.length === 0) {
-			const insertLine = pendingStart;
+		if (pendingRemoved === 0) {
+			// Pure insertion at `pendingStart` (line numbers are 1-indexed and
+			// refer to the pre-edit file).
 			if (pendingAdded.length === 0) return;
-			if (insertLine === 1) {
-				const firstLine = actualLines[0] ?? "";
-				const firstRef = `1#${computeLineHash(1, firstLine)}`;
-				edits.push({
-					set: { ref: firstRef, body: [...pendingAdded, firstLine] },
-				});
-			} else if (insertLine <= actualLines.length) {
-				const afterLine = actualLines[insertLine - 2] ?? "";
-				const afterRef = `${insertLine - 1}#${computeLineHash(insertLine - 1, afterLine)}`;
-				edits.push({
-					insert: { after: afterRef, body: [...pendingAdded] },
-				});
-			} else if (insertLine === actualLines.length + 1 && actualLines.length > 0) {
-				const afterLine = actualLines[actualLines.length - 1] ?? "";
-				const afterRef = `${actualLines.length}#${computeLineHash(actualLines.length, afterLine)}`;
-				edits.push({
-					insert: { after: afterRef, body: [...pendingAdded] },
-				});
+			if (pendingStart <= 1) {
+				ops.push(`BOF↓${formatPayload(pendingAdded)}`);
+			} else if (pendingStart > fileLineCount) {
+				ops.push(`EOF↓${formatPayload(pendingAdded)}`);
+			} else {
+				// Insert above `pendingStart` so the new content lands at that line.
+				ops.push(`${pendingStart}↑${formatPayload(pendingAdded)}`);
 			}
 		} else {
 			const startLine = pendingStart;
-			const endLine = pendingStart + pendingRemoved.length - 1;
-			const startContent = actualLines[startLine - 1] ?? "";
-			const startRef = `${startLine}#${computeLineHash(startLine, startContent)}`;
-			if (startLine === endLine) {
-				edits.push({ set: { ref: startRef, body: [...pendingAdded] } });
+			const endLine = pendingStart + pendingRemoved - 1;
+			const anchor = startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`;
+			if (pendingAdded.length === 0) {
+				ops.push(`${anchor}!`);
 			} else {
-				const endContent = actualLines[endLine - 1] ?? "";
-				const endRef = `${endLine}#${computeLineHash(endLine, endContent)}`;
-				edits.push({
-					set_range: {
-						beg: startRef,
-						end: endRef,
-						body: [...pendingAdded],
-					},
-				});
+				ops.push(`${anchor}:${formatPayload(pendingAdded)}`);
 			}
 		}
 
-		pendingRemoved = [];
+		pendingRemoved = 0;
 		pendingAdded = [];
 	};
 
@@ -595,13 +586,14 @@ function buildGuidedHashlineEdits(actual: string, expected: string): GuidedHashl
 		if (!change.added && !change.removed) {
 			flush();
 			line += lines.length;
+			pendingStart = line;
 			continue;
 		}
-		if (pendingRemoved.length === 0 && pendingAdded.length === 0) {
+		if (pendingRemoved === 0 && pendingAdded.length === 0) {
 			pendingStart = line;
 		}
 		if (change.removed) {
-			pendingRemoved.push(...lines);
+			pendingRemoved += lines.length;
 			line += lines.length;
 		}
 		if (change.added) {
@@ -610,7 +602,12 @@ function buildGuidedHashlineEdits(actual: string, expected: string): GuidedHashl
 	}
 	flush();
 
-	return edits;
+	if (ops.length === 0) return null;
+	const normalizedActual = actual.replace(/\r\n?/g, "\n");
+	const snapshots = new InMemorySnapshotStore();
+	const tag = snapshots.record(file, normalizedActual);
+	const header = formatHashlineHeader(file, tag);
+	return `${header}\n${ops.join("\n")}`;
 }
 
 async function buildGuidedContext(
@@ -635,11 +632,13 @@ async function buildGuidedContext(
 		.catch(() => null);
 	if (actual === null || expected === null) return null;
 
-	const edits = buildGuidedHashlineEdits(actual, expected);
-	if (edits.length === 0) return null;
-	if (edits.length > 25) return null;
+	const patch = buildGuidedHashlinePatch(file, actual, expected);
+	if (patch === null) return null;
+	// Rough complexity guard: too many ops or too long → skip guidance.
+	const opCount = patch.split("\n").filter(l => /[↑↓→]/.test(l)).length;
+	if (opCount === 0 || opCount > 25) return null;
 
-	const args = { path: file, edits };
+	const args = { path: file, input: patch };
 	const argsText = JSON.stringify(args, null, 2);
 	if (argsText.length > 20_000) return null;
 	const metaParts: string[] = [];
@@ -836,46 +835,84 @@ export interface TaskResult {
 	name: string;
 	files: string[];
 	runs: TaskRunResult[];
-	successRate: number;
-	avgTokens: TokenStats;
-	avgDuration: number;
-	avgIndentScore: number;
-	avgToolCalls: ToolCallStats;
+	/** Index into `runs` (ordered by runIndex) of the selected best run; -1 if no runs completed. */
+	bestRunIndex: number;
+	/** True when the selected best run succeeded. */
+	success: boolean;
+	/** Token usage of the best run. */
+	tokens: TokenStats;
+	/** Duration (ms) of the best run. */
+	duration: number;
+	/** Indent score of the best run, or 0 if unscored. */
+	indentScore: number;
+	/** Tool call stats of the best run. */
+	toolCalls: ToolCallStats;
+	/** Edit-tool success rate of the best run (defaults to 1 when no edit attempts). */
 	editSuccessRate: number;
-	autocorrectFreeSuccessRate: number;
+	/** True if the best run succeeded with zero autocorrects. */
+	autocorrectFreeSuccess: boolean;
+	/** Fraction of completed (non-ghost) runs that succeeded — flakiness indicator. */
+	flakeSuccessRate: number;
 }
 
 export interface BenchmarkSummary {
 	totalTasks: number;
+	/** Total completed runs across all tasks (excludes ghost runs). */
 	totalRuns: number;
+	/** Successful runs across every executed run (any of N). Diagnostic. */
 	successfulRuns: number;
-	overallSuccessRate: number;
-	tasksWithAllPassing: number;
-	tasksWithAnyFailing: number;
+	/** Tasks whose best run succeeded (best-of-N). Primary headline metric. */
+	successfulTasks: number;
+	/** successfulTasks / totalTasks. */
+	taskSuccessRate: number;
+	/** Tasks where best succeeded but at least one of N failed (flakiness). */
+	flakyTasks: number;
+	/** Tasks where every executed non-ghost run succeeded. */
+	consistentlyPassingTasks: number;
+	/** Tokens summed over the best run of each task. */
 	totalTokens: TokenStats;
-	avgTokensPerRun: TokenStats;
+	/** Average tokens per task (sum of best runs / number of tasks). */
+	avgTokensPerTask: TokenStats;
+	/** Median tokens across best runs (per-task distribution). */
+	medianTokensPerTask: TokenStats;
+	/** 1st-percentile tokens across best runs (per-task distribution). */
+	p1TokensPerTask: TokenStats;
+	/** 99th-percentile tokens across best runs (per-task distribution). */
+	p99TokensPerTask: TokenStats;
+	/** Duration summed over best runs. */
 	totalDuration: number;
-	avgDurationPerRun: number;
+	/** Average duration of the best run per task. */
+	avgDurationPerTask: number;
+	/** Average indent score over best runs (only counts runs with a score). */
 	avgIndentScore: number;
+	/** Tool calls summed over best runs. */
 	totalToolCalls: ToolCallStats;
-	avgToolCallsPerRun: ToolCallStats;
+	/** Average tool calls per task (sum of best runs / number of tasks). */
+	avgToolCallsPerTask: ToolCallStats;
+	/** Edit-tool success rate aggregated across best runs. */
 	editSuccessRate: number;
-	autocorrectFreeSuccessfulRuns: number;
+	/** Tasks where the best run succeeded without any autocorrects. */
+	autocorrectFreeSuccessfulTasks: number;
+	/** autocorrectFreeSuccessfulTasks / totalTasks. */
 	autocorrectFreeSuccessRate: number;
-	autocorrectedRuns: number;
+	/** Best runs with any autocorrects. */
+	autocorrectedBestRuns: number;
+	/** Autocorrect rate across best-run edit successes. */
 	editAutocorrectRate: number;
+	/** Diagnostic: runs (across all N) that timed out. */
 	timeoutRuns: number;
-	/** Total retry counts across all runs */
+	/** Diagnostic: total retry counts across all runs. */
 	totalTimeoutRetries: number;
 	totalZeroToolRetries: number;
 	totalProviderFailureRetries: number;
-	/** Runs where the 0/0/0 ghost signature was detected (0 tokens, 0 tool calls) */
+	/** Diagnostic: ghost runs (0 tokens, 0 tool calls) across all N. */
 	ghostRuns: number;
-	/** Runs excluded because provider/transport stalls exhausted retries (subset of ghostRuns when error matches). */
+	/** Diagnostic: runs excluded because provider/transport stalls exhausted retries. */
 	transportFailureRuns: number;
 	mutationIntentMatchRate?: number;
+	/** Edit failure categories across all runs. */
 	editFailureCategories: Record<EditFailureCategory, number>;
-	/** Hashline edit subtype totals — only when editVariant is hashline */
+	/** Hashline edit subtype totals across all runs — only when editVariant is hashline. */
 	hashlineEditSubtypes?: Record<string, number>;
 }
 
@@ -1629,70 +1666,71 @@ function isGhostRun(r: TaskRunResult): boolean {
 	return noProgress || isTransportFailure(r);
 }
 
+const EMPTY_TOOL_CALL_STATS: ToolCallStats = {
+	read: 0,
+	edit: 0,
+	write: 0,
+	editSuccesses: 0,
+	editFailures: 0,
+	editWarnings: 0,
+	editAutocorrects: 0,
+	totalInputChars: 0,
+};
+
+/**
+ * Strict ordering used to pick the "best" run for a task:
+ *   1. Successful runs win over failed runs.
+ *   2. Then prefer non-ghost runs (real work over 0/0/0 stalls).
+ *   3. Then prefer the run with lower total token usage.
+ *   4. Then prefer the earlier runIndex for stability.
+ */
+function isBetterRun(a: TaskRunResult, b: TaskRunResult): boolean {
+	if (a.success !== b.success) return a.success;
+	const aGhost = isGhostRun(a);
+	const bGhost = isGhostRun(b);
+	if (aGhost !== bGhost) return !aGhost;
+	if (a.tokens.total !== b.tokens.total) return a.tokens.total < b.tokens.total;
+	return a.runIndex < b.runIndex;
+}
+
+function pickBestRunIndex(orderedRuns: TaskRunResult[]): number {
+	if (orderedRuns.length === 0) return -1;
+	let bestIdx = 0;
+	for (let i = 1; i < orderedRuns.length; i++) {
+		if (isBetterRun(orderedRuns[i]!, orderedRuns[bestIdx]!)) bestIdx = i;
+	}
+	return bestIdx;
+}
+
 function summarizeTaskRuns(task: EditTask, runs: TaskRunResult[]): TaskResult {
 	const orderedRuns = runs.slice().sort((a, b) => a.runIndex - b.runIndex);
 	const nonGhostRuns = orderedRuns.filter(r => !isGhostRun(r));
-	const effective = nonGhostRuns.length;
-	const successfulRuns = orderedRuns.filter(r => r.success).length;
-	const successRate = effective > 0 ? successfulRuns / effective : 0;
+	const successfulNonGhost = nonGhostRuns.filter(r => r.success).length;
+	const flakeSuccessRate = nonGhostRuns.length > 0 ? successfulNonGhost / nonGhostRuns.length : 0;
+	const bestIdx = pickBestRunIndex(orderedRuns);
+	const best = bestIdx === -1 ? undefined : orderedRuns[bestIdx]!;
 
-	const avgTokens: TokenStats =
-		effective > 0
-			? {
-					input: Math.round(nonGhostRuns.reduce((sum, r) => sum + r.tokens.input, 0) / effective),
-					output: Math.round(nonGhostRuns.reduce((sum, r) => sum + r.tokens.output, 0) / effective),
-					total: Math.round(nonGhostRuns.reduce((sum, r) => sum + r.tokens.total, 0) / effective),
-				}
-			: { input: 0, output: 0, total: 0 };
-
-	const avgDuration = effective > 0 ? Math.round(nonGhostRuns.reduce((sum, r) => sum + r.duration, 0) / effective) : 0;
-	const indentScores = orderedRuns
-		.map(run => run.indentScore)
-		.filter((score): score is number => typeof score === "number");
-	const avgIndentScore =
-		indentScores.length > 0 ? indentScores.reduce((sum, score) => sum + score, 0) / indentScores.length : 0;
-
-	const avgToolCalls: ToolCallStats =
-		effective > 0
-			? {
-					read: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.read, 0) / effective,
-					edit: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.edit, 0) / effective,
-					write: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.write, 0) / effective,
-					editSuccesses: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.editSuccesses, 0) / effective,
-					editFailures: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.editFailures, 0) / effective,
-					editWarnings: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.editWarnings, 0) / effective,
-					editAutocorrects: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.editAutocorrects, 0) / effective,
-					totalInputChars: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.totalInputChars, 0) / effective,
-				}
-			: {
-					read: 0,
-					edit: 0,
-					write: 0,
-					editSuccesses: 0,
-					editFailures: 0,
-					editWarnings: 0,
-					editAutocorrects: 0,
-					totalInputChars: 0,
-				};
-
-	const totalEditAttempts = nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.edit, 0);
-	const totalEditSuccesses = nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.editSuccesses, 0);
-	const editSuccessRate = totalEditAttempts > 0 ? totalEditSuccesses / totalEditAttempts : 1;
-	const autocorrectFreeSuccesses = nonGhostRuns.filter(run => run.success && run.editAutocorrectCount === 0).length;
-	const autocorrectFreeSuccessRate = effective > 0 ? autocorrectFreeSuccesses / effective : 0;
+	const tokens: TokenStats = best ? { ...best.tokens } : { input: 0, output: 0, total: 0 };
+	const duration = best?.duration ?? 0;
+	const indentScore = typeof best?.indentScore === "number" ? best.indentScore : 0;
+	const toolCalls: ToolCallStats = best ? { ...best.toolCalls } : { ...EMPTY_TOOL_CALL_STATS };
+	const editSuccessRate = toolCalls.edit > 0 ? toolCalls.editSuccesses / toolCalls.edit : 1;
+	const autocorrectFreeSuccess = Boolean(best?.success) && (best?.editAutocorrectCount ?? 0) === 0;
 
 	return {
 		id: task.id,
 		name: task.name,
 		files: task.files,
 		runs: orderedRuns,
-		successRate,
-		avgTokens,
-		avgDuration,
-		avgIndentScore,
-		avgToolCalls,
+		bestRunIndex: best?.runIndex ?? -1,
+		success: Boolean(best?.success),
+		tokens,
+		duration,
+		indentScore,
+		toolCalls,
 		editSuccessRate,
-		autocorrectFreeSuccessRate,
+		autocorrectFreeSuccess,
+		flakeSuccessRate,
 	};
 }
 
@@ -1743,6 +1781,42 @@ async function runConcurrentBenchmarkRun(
 	}
 }
 
+/**
+ * Linear-interpolated percentile (NumPy "linear" / type-7) over an ascending-sorted
+ * sample. `p` is a percentage in [0, 100]. Returns 0 for an empty sample.
+ */
+export function percentile(sortedAscending: readonly number[], p: number): number {
+	const n = sortedAscending.length;
+	if (n === 0) return 0;
+	if (n === 1) return sortedAscending[0]!;
+	const rank = (p / 100) * (n - 1);
+	const lo = Math.floor(rank);
+	const loVal = sortedAscending[lo]!;
+	const hi = Math.ceil(rank);
+	if (lo === hi) return loVal;
+	return loVal + (sortedAscending[hi]! - loVal) * (rank - lo);
+}
+
+/** Median / 1st / 99th percentile token stats over a set of runs (one sample per run). */
+export interface TokenDistribution {
+	median: TokenStats;
+	p1: TokenStats;
+	p99: TokenStats;
+}
+
+/** Compute the per-run token distribution (median, p1, p99) across the given runs. */
+export function summarizeTokenDistribution(runs: readonly TaskRunResult[]): TokenDistribution {
+	const input = runs.map(r => r.tokens.input).sort((a, b) => a - b);
+	const output = runs.map(r => r.tokens.output).sort((a, b) => a - b);
+	const total = runs.map(r => r.tokens.total).sort((a, b) => a - b);
+	const at = (p: number): TokenStats => ({
+		input: Math.round(percentile(input, p)),
+		output: Math.round(percentile(output, p)),
+		total: Math.round(percentile(total, p)),
+	});
+	return { median: at(50), p1: at(1), p99: at(99) };
+}
+
 export function buildBenchmarkResult(params: {
 	tasks: EditTask[];
 	config: BenchmarkConfig;
@@ -1754,45 +1828,14 @@ export function buildBenchmarkResult(params: {
 
 	const endTime = params.endTime ?? new Date().toISOString();
 
+	// Diagnostic aggregates run over *every* executed run (across all N) so the
+	// report still surfaces ghost/timeout/retry signals.
 	const allRuns = taskResults.flatMap(t => t.runs);
-	const totalRuns = allRuns.length;
 	const ghostRuns = allRuns.filter(r => isGhostRun(r)).length;
 	const transportFailureRuns = allRuns.filter(r => isTransportFailure(r)).length;
-	const effectiveRuns = totalRuns - ghostRuns;
 	const nonGhostRuns = allRuns.filter(r => !isGhostRun(r));
+	const totalRuns = nonGhostRuns.length;
 	const successfulRuns = allRuns.filter(r => r.success).length;
-
-	const totalTokens: TokenStats = {
-		input: nonGhostRuns.reduce((sum, r) => sum + r.tokens.input, 0),
-		output: nonGhostRuns.reduce((sum, r) => sum + r.tokens.output, 0),
-		total: nonGhostRuns.reduce((sum, r) => sum + r.tokens.total, 0),
-	};
-
-	const totalDuration = nonGhostRuns.reduce((sum, r) => sum + r.duration, 0);
-	const indentScores = nonGhostRuns
-		.map(run => run.indentScore)
-		.filter((score): score is number => typeof score === "number");
-	const avgIndentScore =
-		indentScores.length > 0 ? indentScores.reduce((sum, score) => sum + score, 0) / indentScores.length : 0;
-
-	const totalToolCalls: ToolCallStats = {
-		read: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.read, 0),
-		edit: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.edit, 0),
-		write: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.write, 0),
-		editSuccesses: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.editSuccesses, 0),
-		editFailures: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.editFailures, 0),
-		editWarnings: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.editWarnings, 0),
-		editAutocorrects: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.editAutocorrects, 0),
-		totalInputChars: nonGhostRuns.reduce((sum, r) => sum + r.toolCalls.totalInputChars, 0),
-	};
-
-	const editSuccessRate = totalToolCalls.edit > 0 ? totalToolCalls.editSuccesses / totalToolCalls.edit : 1;
-	const autocorrectFreeSuccessfulRuns = nonGhostRuns.filter(
-		run => run.success && run.editAutocorrectCount === 0,
-	).length;
-	const autocorrectedRuns = nonGhostRuns.filter(run => run.editAutocorrectCount > 0).length;
-	const editAutocorrectRate =
-		totalToolCalls.editSuccesses > 0 ? totalToolCalls.editAutocorrects / totalToolCalls.editSuccesses : 0;
 	const timeoutRuns = nonGhostRuns.filter(
 		r => r.error?.includes("Timeout") || r.error?.includes("Timeout exhausted"),
 	).length;
@@ -1802,13 +1845,7 @@ export function buildBenchmarkResult(params: {
 		(sum, r) => sum + (r.retryStats?.providerFailureRetries ?? 0),
 		0,
 	);
-	const runsWithMutationIntent = nonGhostRuns.filter(r => typeof r.mutationIntentMatched === "boolean");
-	const mutationIntentMatchRate =
-		runsWithMutationIntent.length > 0
-			? runsWithMutationIntent.filter(r => r.mutationIntentMatched).length / runsWithMutationIntent.length
-			: undefined;
 	const editFailureCategories = countEditFailureCategories(nonGhostRuns);
-
 	const hashlineEditSubtypes: Record<string, number> | undefined =
 		params.config.editVariant === "hashline"
 			? Object.fromEntries(
@@ -1816,38 +1853,95 @@ export function buildBenchmarkResult(params: {
 				)
 			: undefined;
 
-	const denom = effectiveRuns || 1;
+	// Primary aggregates run over the *best* run of each completed task.
+	const bestRuns: TaskRunResult[] = [];
+	for (const task of taskResults) {
+		if (task.bestRunIndex < 0) continue;
+		const best = task.runs.find(r => r.runIndex === task.bestRunIndex);
+		if (best) bestRuns.push(best);
+	}
+	const tasksWithBestRun = bestRuns.length;
+	const totalTasks = params.tasks.length;
+	const denom = totalTasks || 1;
+
+	const successfulTasks = taskResults.filter(t => t.success).length;
+	const consistentlyPassingTasks = taskResults.filter(
+		t => t.success && t.runs.filter(r => !isGhostRun(r)).every(r => r.success),
+	).length;
+	const flakyTasks = taskResults.filter(
+		t => t.success && t.runs.filter(r => !isGhostRun(r)).some(r => !r.success),
+	).length;
+
+	const totalTokens: TokenStats = {
+		input: bestRuns.reduce((sum, r) => sum + r.tokens.input, 0),
+		output: bestRuns.reduce((sum, r) => sum + r.tokens.output, 0),
+		total: bestRuns.reduce((sum, r) => sum + r.tokens.total, 0),
+	};
+	const tokenDistribution = summarizeTokenDistribution(bestRuns);
+	const totalDuration = bestRuns.reduce((sum, r) => sum + r.duration, 0);
+	const totalToolCalls: ToolCallStats = {
+		read: bestRuns.reduce((sum, r) => sum + r.toolCalls.read, 0),
+		edit: bestRuns.reduce((sum, r) => sum + r.toolCalls.edit, 0),
+		write: bestRuns.reduce((sum, r) => sum + r.toolCalls.write, 0),
+		editSuccesses: bestRuns.reduce((sum, r) => sum + r.toolCalls.editSuccesses, 0),
+		editFailures: bestRuns.reduce((sum, r) => sum + r.toolCalls.editFailures, 0),
+		editWarnings: bestRuns.reduce((sum, r) => sum + r.toolCalls.editWarnings, 0),
+		editAutocorrects: bestRuns.reduce((sum, r) => sum + r.toolCalls.editAutocorrects, 0),
+		totalInputChars: bestRuns.reduce((sum, r) => sum + r.toolCalls.totalInputChars, 0),
+	};
+	const bestIndentScores = bestRuns
+		.map(r => r.indentScore)
+		.filter((score): score is number => typeof score === "number");
+	const avgIndentScore =
+		bestIndentScores.length > 0 ? bestIndentScores.reduce((sum, s) => sum + s, 0) / bestIndentScores.length : 0;
+
+	const editSuccessRate = totalToolCalls.edit > 0 ? totalToolCalls.editSuccesses / totalToolCalls.edit : 1;
+	const autocorrectFreeSuccessfulTasks = bestRuns.filter(r => r.success && r.editAutocorrectCount === 0).length;
+	const autocorrectedBestRuns = bestRuns.filter(r => r.editAutocorrectCount > 0).length;
+	const editAutocorrectRate =
+		totalToolCalls.editSuccesses > 0 ? totalToolCalls.editAutocorrects / totalToolCalls.editSuccesses : 0;
+	const bestWithMutationIntent = bestRuns.filter(r => typeof r.mutationIntentMatched === "boolean");
+	const mutationIntentMatchRate =
+		bestWithMutationIntent.length > 0
+			? bestWithMutationIntent.filter(r => r.mutationIntentMatched).length / bestWithMutationIntent.length
+			: undefined;
+
+	const taskDenom = tasksWithBestRun || 1;
 	const summary: BenchmarkSummary = {
-		totalTasks: params.tasks.length,
-		totalRuns: effectiveRuns,
+		totalTasks,
+		totalRuns,
 		successfulRuns,
-		overallSuccessRate: successfulRuns / denom,
-		tasksWithAllPassing: taskResults.filter(t => t.successRate === 1).length,
-		tasksWithAnyFailing: taskResults.filter(t => t.successRate < 1).length,
+		successfulTasks,
+		taskSuccessRate: successfulTasks / denom,
+		flakyTasks,
+		consistentlyPassingTasks,
 		totalTokens,
-		avgTokensPerRun: {
-			input: Math.round(totalTokens.input / denom),
-			output: Math.round(totalTokens.output / denom),
-			total: Math.round(totalTokens.total / denom),
+		avgTokensPerTask: {
+			input: Math.round(totalTokens.input / taskDenom),
+			output: Math.round(totalTokens.output / taskDenom),
+			total: Math.round(totalTokens.total / taskDenom),
 		},
+		medianTokensPerTask: tokenDistribution.median,
+		p1TokensPerTask: tokenDistribution.p1,
+		p99TokensPerTask: tokenDistribution.p99,
 		totalDuration,
-		avgDurationPerRun: Math.round(totalDuration / denom),
+		avgDurationPerTask: Math.round(totalDuration / taskDenom),
 		avgIndentScore,
 		totalToolCalls,
-		avgToolCallsPerRun: {
-			read: totalToolCalls.read / denom,
-			edit: totalToolCalls.edit / denom,
-			write: totalToolCalls.write / denom,
-			editSuccesses: totalToolCalls.editSuccesses / denom,
-			editFailures: totalToolCalls.editFailures / denom,
-			editWarnings: totalToolCalls.editWarnings / denom,
-			editAutocorrects: totalToolCalls.editAutocorrects / denom,
-			totalInputChars: totalToolCalls.totalInputChars / denom,
+		avgToolCallsPerTask: {
+			read: totalToolCalls.read / taskDenom,
+			edit: totalToolCalls.edit / taskDenom,
+			write: totalToolCalls.write / taskDenom,
+			editSuccesses: totalToolCalls.editSuccesses / taskDenom,
+			editFailures: totalToolCalls.editFailures / taskDenom,
+			editWarnings: totalToolCalls.editWarnings / taskDenom,
+			editAutocorrects: totalToolCalls.editAutocorrects / taskDenom,
+			totalInputChars: totalToolCalls.totalInputChars / taskDenom,
 		},
 		editSuccessRate,
-		autocorrectFreeSuccessfulRuns,
-		autocorrectFreeSuccessRate: autocorrectFreeSuccessfulRuns / denom,
-		autocorrectedRuns,
+		autocorrectFreeSuccessfulTasks,
+		autocorrectFreeSuccessRate: autocorrectFreeSuccessfulTasks / denom,
+		autocorrectedBestRuns,
 		editAutocorrectRate,
 		timeoutRuns,
 		totalTimeoutRetries,
@@ -1887,32 +1981,50 @@ export async function runBenchmark(
 			})
 		: undefined;
 
-	const runItems: TaskRunItem[] = tasks.flatMap(task =>
-		Array.from({ length: config.runsPerTask }, (_, runIndex) => ({ task, runIndex })),
-	);
+	try {
+		const runsPerTask = Math.max(1, Math.floor(config.runsPerTask));
+		const taskQueue = shuffle(tasks.slice());
+		const resultsByTask = new Map<string, TaskRunResult[]>();
+		const concurrency = Math.max(1, Math.floor(config.taskConcurrency));
 
-	const pending = shuffle(runItems);
-	const resultsByTask = new Map<string, TaskRunResult[]>();
-	const concurrency = Math.max(1, Math.floor(config.taskConcurrency));
-	const running: Promise<void>[] = [];
+		const recordResult = (task: EditTask, result: TaskRunResult) => {
+			const list = resultsByTask.get(task.id) ?? [];
+			list.push(result);
+			resultsByTask.set(task.id, list);
+			onResultSnapshot?.(buildBenchmarkResult({ tasks, config, resultsByTask, startTime }));
+		};
 
-	const runNext = async (): Promise<void> => {
-		const nextItem = pending.shift();
-		if (!nextItem) return;
-		const { task, result } = await runConcurrentBenchmarkRun(nextItem, config, onProgress, shared);
-		const list = resultsByTask.get(task.id) ?? [];
-		list.push(result);
-		resultsByTask.set(task.id, list);
-		onResultSnapshot?.(buildBenchmarkResult({ tasks, config, resultsByTask, startTime }));
-		await runNext();
-	};
+		// Each worker takes one task at a time and launches all N runs for that
+		// task concurrently. The best run is chosen later via summarizeTaskRuns;
+		// taskConcurrency caps the number of in-flight tasks (not runs).
+		const runTaskAllRuns = async (task: EditTask): Promise<void> => {
+			const items: TaskRunItem[] = Array.from({ length: runsPerTask }, (_, runIndex) => ({ task, runIndex }));
+			await Promise.all(
+				items.map(async item => {
+					const { result } = await runConcurrentBenchmarkRun(item, config, onProgress, shared);
+					recordResult(task, result);
+				}),
+			);
+		};
 
-	const slots = Math.min(concurrency, pending.length);
-	for (let i = 0; i < slots; i++) {
-		running.push(runNext());
+		const worker = async (): Promise<void> => {
+			while (true) {
+				const task = taskQueue.shift();
+				if (!task) return;
+				await runTaskAllRuns(task);
+			}
+		};
+
+		const slots = Math.min(concurrency, taskQueue.length);
+		const running: Promise<void>[] = [];
+		for (let i = 0; i < slots; i++) {
+			running.push(worker());
+		}
+
+		await Promise.all(running);
+
+		return buildBenchmarkResult({ tasks, config, resultsByTask, startTime });
+	} finally {
+		shared?.authStorage.close();
 	}
-
-	await Promise.all(running);
-
-	return buildBenchmarkResult({ tasks, config, resultsByTask, startTime });
 }

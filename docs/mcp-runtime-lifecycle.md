@@ -5,7 +5,7 @@ This document describes how MCP servers are discovered, connected, exposed as to
 ## Lifecycle at a glance
 
 1. **SDK startup** calls `discoverAndLoadMCPTools()` (unless MCP is disabled).
-2. **Discovery** (`loadAllMCPConfigs`) resolves MCP server configs from capability sources, filters disabled/project/Exa entries, and preserves source metadata.
+2. **Discovery** (`loadAllMCPConfigs`) resolves MCP server configs from capability sources, filters disabled/project/Exa entries and browser MCP servers when the built-in browser tool is enabled, and preserves source metadata.
 3. **Manager connect phase** (`MCPManager.connectServers`) starts per-server connect + `tools/list` in parallel.
 4. **Fast startup gate** waits up to 250ms, then may return:
    - fully loaded `MCPTool`s,
@@ -23,7 +23,7 @@ This document describes how MCP servers are discovered, connected, exposed as to
 `createAgentSession()` in `src/sdk.ts` performs MCP startup when `enableMCP` is true (default):
 
 - calls `discoverAndLoadMCPTools(cwd, { ... })`,
-- passes `authStorage`, cache storage, and `mcp.enableProjectConfig` setting,
+- passes `authStorage`, cache storage, `mcp.enableProjectConfig`, and browser-MCP filtering based on the `browser.enabled` setting,
 - always sets `filterExa: true`,
 - logs per-server load/connect errors,
 - stores returned manager in `toolSession.mcpManager` and session result.
@@ -38,7 +38,7 @@ Filtering behavior:
 
 - `enableProjectConfig: false` removes project-level entries (`_source.level === "project"`).
 - `enabled: false` servers are skipped before connect attempts.
-- Exa servers are filtered out by default and API keys are extracted for native Exa tool integration.
+- Exa servers are filtered out by default and API keys are extracted for native Exa tool integration; browser automation MCP servers are filtered when `filterBrowser` is true.
 
 Result includes both `configs` and `sources` (metadata used later for provider labeling).
 
@@ -91,7 +91,7 @@ For each discovered server in `connectServers()`:
 - performs MCP `initialize`,
 - for HTTP/SSE, starts the optional background SSE listener before `notifications/initialized`,
 - sends `notifications/initialized`,
-- uses timeout (`config.timeout` or 30s default),
+- uses timeout (`OMP_MCP_TIMEOUT_MS`, `config.timeout`, or 30s default; `0` disables the client-side timeout),
 - closes transport on init failure.
 
 ### Fast startup gate + deferred fallback
@@ -180,7 +180,7 @@ Operationally:
 - removes pending entries, source metadata, saved config, resource refresh/subscription state,
 - detaches `onClose` so explicit close does not trigger reconnect,
 - closes transport if connected,
-- filters manager tool state for names beginning with `mcp__${name}_`.
+- removes manager tool entries using the current raw-name prefix filter (`mcp__${name}_`); generated tool names are sanitized by `tool-bridge.ts`.
 
 ### Global teardown
 

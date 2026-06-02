@@ -1,5 +1,85 @@
 import { describe, expect, it } from "bun:test";
-import { buildCursorSystemPromptJsons, resolveExecHandler } from "../src/providers/cursor";
+import {
+	buildCursorHistoryForTest,
+	buildCursorSystemPromptJsons,
+	resolveExecHandler,
+	streamCursor,
+} from "../src/providers/cursor";
+import type { AgentRunRequest } from "../src/providers/cursor/gen/agent_pb";
+import type { Context, Model } from "../src/types";
+
+const cursorModel: Model<"cursor-agent"> = {
+	id: "cursor-composer-2.5",
+	name: "Cursor Composer 2.5",
+	api: "cursor-agent",
+	provider: "cursor",
+	baseUrl: "",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1,
+	maxTokens: 1,
+};
+
+function captureCursorPayload(context: Context): Promise<AgentRunRequest> {
+	const { promise, resolve, reject } = Promise.withResolvers<AgentRunRequest>();
+	streamCursor(cursorModel, context, {
+		apiKey: "test-token",
+		onPayload: payload => {
+			if (isAgentRunRequest(payload)) {
+				resolve(payload);
+			} else {
+				reject(new Error("Cursor payload was not an AgentRunRequest"));
+			}
+			throw new Error("stop after capturing Cursor payload");
+		},
+	});
+	return promise;
+}
+
+function isAgentRunRequest(payload: unknown): payload is AgentRunRequest {
+	return !!payload && typeof payload === "object" && "$typeName" in payload;
+}
+
+function toolResultContext(): Context {
+	return {
+		messages: [
+			{ role: "user", content: "Use the read tool.", timestamp: 1 },
+			{
+				role: "assistant",
+				api: "cursor-agent",
+				provider: "cursor",
+				model: "cursor-composer-2.5",
+				content: [
+					{
+						type: "toolCall",
+						id: "call-read",
+						name: "read",
+						arguments: { path: "package.json" },
+					},
+				],
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 2,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "call-read",
+				toolName: "read",
+				content: [{ type: "text", text: "package contents" }],
+				isError: false,
+				timestamp: 3,
+			},
+		],
+	};
+}
 
 describe("Cursor resolveExecHandler execHandlers binding", () => {
 	it("invokes handler with correct this when passed as bound method", async () => {
@@ -63,5 +143,128 @@ describe("Cursor system prompt encoding", () => {
 		const jsons = buildCursorSystemPromptJsons(["", ""]);
 		expect(jsons).toHaveLength(1);
 		expect(JSON.parse(jsons[0])).toEqual({ role: "system", content: "You are a helpful assistant." });
+	});
+});
+
+describe("Cursor request action encoding", () => {
+	it("uses a resume action for empty user turns", async () => {
+		const payload = await captureCursorPayload({
+			messages: [{ role: "user", content: "   ", timestamp: 0 }],
+		});
+
+		expect(payload.action?.action.case).toBe("resumeAction");
+	});
+
+	it("uses a user message action for non-empty user turns", async () => {
+		const payload = await captureCursorPayload({
+			messages: [{ role: "user", content: "continue", timestamp: 0 }],
+		});
+
+		expect(payload.action?.action.case).toBe("userMessageAction");
+	});
+
+	it("uses a resume action when a tool result is the final context message", async () => {
+		const payload = await captureCursorPayload(toolResultContext());
+
+		expect(payload.action?.action.case).toBe("resumeAction");
+	});
+
+	it("uses a user message action with selected context for image-only user turns", async () => {
+		const imageData = "aW1hZ2U=";
+		const payload = await captureCursorPayload({
+			messages: [
+				{
+					role: "user",
+					content: [{ type: "image", data: imageData, mimeType: "image/png" }],
+					timestamp: 0,
+				},
+			],
+		});
+
+		if (payload.action?.action.case !== "userMessageAction") {
+			throw new Error("Expected Cursor userMessageAction");
+		}
+		const userMessage = payload.action.action.value.userMessage;
+		expect(userMessage?.text).toBe("");
+		expect(userMessage?.selectedContext?.selectedImages).toHaveLength(1);
+		const selectedImage = userMessage?.selectedContext?.selectedImages[0];
+		expect(selectedImage?.mimeType).toBe("image/png");
+		if (selectedImage?.dataOrBlobId.case !== "data") {
+			throw new Error("Expected Cursor selected image data");
+		}
+		expect(Array.from(selectedImage.dataOrBlobId.value)).toEqual(Array.from(Buffer.from(imageData, "base64")));
+	});
+});
+
+describe("Cursor history encoding", () => {
+	it("preserves image-only user turns in root prompt history and conversation turns", () => {
+		const imageData = "aW1hZ2U=";
+		const history = buildCursorHistoryForTest([
+			{
+				role: "user",
+				content: [{ type: "image", data: imageData, mimeType: "image/png" }],
+				timestamp: 0,
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "I can see it." }],
+				api: "cursor-agent",
+				provider: "cursor",
+				model: "cursor-composer-2.5",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: 0,
+			},
+			{ role: "user", content: "what is in the image?", timestamp: 0 },
+		]);
+
+		expect(history.rootPromptMessagesJson).toEqual([
+			{
+				role: "user",
+				content: [{ type: "image", image: imageData, mediaType: "image/png" }],
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "I can see it." }],
+			},
+		]);
+		expect(history.turnUserMessagesJson).toEqual([
+			expect.objectContaining({
+				selectedContext: {
+					selectedImages: [
+						expect.objectContaining({
+							mimeType: "image/png",
+							data: imageData,
+						}),
+					],
+				},
+			}),
+		]);
+	});
+
+	it("preserves trailing tool result history for resume actions", () => {
+		const history = buildCursorHistoryForTest(toolResultContext().messages, -1);
+
+		expect(history.rootPromptMessagesJson).toEqual([
+			{
+				role: "user",
+				content: [{ type: "text", text: "Use the read tool." }],
+			},
+			{
+				role: "user",
+				content: [{ type: "text", text: "[Tool Result]\npackage contents" }],
+			},
+		]);
+		expect(history.turnUserMessagesJson).toEqual([expect.objectContaining({ text: "Use the read tool." })]);
+		expect(history.turnStepMessagesJson).toEqual([
+			[expect.objectContaining({ assistantMessage: { text: "[Tool Result]\npackage contents" } })],
+		]);
 	});
 });

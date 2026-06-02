@@ -130,6 +130,22 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(await toolNamesFor(harness)).not.toContain("goal");
 	});
 
+	it("replaces the active goal via /goal set", async () => {
+		await harness.mode.handleGoalModeCommand("Ship the release");
+		const originalGoal = harness.session.getGoalModeState()?.goal;
+		if (!originalGoal) throw new Error("expected active goal");
+
+		await harness.mode.handleGoalModeCommand("set Replace the objective");
+
+		const state = harness.session.getGoalModeState();
+		expect(state?.enabled).toBe(true);
+		expect(state?.goal.objective).toBe("Replace the objective");
+		expect(state?.goal.status).toBe("active");
+		expect(state?.goal.id).not.toBe(originalGoal.id);
+		expect(harness.mode.goalModeEnabled).toBe(true);
+		expect(await toolNamesFor(harness)).toContain("goal");
+	});
+
 	it("refuses /goal while plan mode is active", async () => {
 		const showWarning = vi.spyOn(harness.mode, "showWarning");
 		harness.mode.planModeEnabled = true;

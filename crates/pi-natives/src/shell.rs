@@ -280,8 +280,29 @@ fn bridge_chunks(
 	};
 	let (tx, mut rx) = mpsc::unbounded_channel::<String>();
 	let handle = napi::tokio::spawn(async move {
-		while let Some(chunk) = rx.recv().await {
-			on_chunk.call(Ok(chunk), ThreadsafeFunctionCallMode::NonBlocking);
+		// Hard cap on one coalesced batch so the JS main thread never sees a
+		// multi-MB napi callback (a giant single string would stall sanitize +
+		// tail-buffer maintenance for the whole copy).
+		const MAX_BATCH_BYTES: usize = 64 * 1024;
+		// Initial capacity sized for typical bursty pipe output. Re-allocated
+		// each batch because `String` ownership is moved into the napi call.
+		const INITIAL_BATCH_CAP: usize = 8 * 1024;
+		let mut batch = String::with_capacity(INITIAL_BATCH_CAP);
+		while let Some(first) = rx.recv().await {
+			batch.push_str(&first);
+			// Greedily drain everything already queued. Child processes that
+			// write byte-at-a-time (printf-style progress, llama-cli token
+			// streams) otherwise produce one napi callback per `write(2)`,
+			// saturating the JS main thread (~200% CPU observed) and leaving
+			// the queue draining long after the child exits.
+			while batch.len() < MAX_BATCH_BYTES {
+				match rx.try_recv() {
+					Ok(more) => batch.push_str(&more),
+					Err(_) => break,
+				}
+			}
+			let payload = std::mem::replace(&mut batch, String::with_capacity(INITIAL_BATCH_CAP));
+			on_chunk.call(Ok(payload), ThreadsafeFunctionCallMode::NonBlocking);
 		}
 	});
 	(Some(tx), Some(handle))
@@ -335,9 +356,11 @@ mod tests {
 		}
 
 		#[test]
-		fn non_terminal_stdin_leading_new_pgroup_detaches_unless_pipeline() {
+		fn non_terminal_stdin_detaches_regardless_of_pipeline() {
 			assert_eq!(child_session_action(true, false, false), ChildSessionAction::DetachSession);
-			assert_eq!(child_session_action(true, false, true), ChildSessionAction::None);
+			// A leading-new-pgroup stage of a pipeline still detaches: setsid keeps
+			// it off the host's controlling tty.
+			assert_eq!(child_session_action(true, false, true), ChildSessionAction::DetachSession);
 		}
 
 		#[test]
@@ -356,8 +379,11 @@ mod tests {
 		}
 
 		#[test]
-		fn pipeline_stage_does_not_detach() {
-			assert_eq!(child_session_action(false, false, true), ChildSessionAction::None);
+		fn pipeline_stage_with_non_terminal_stdin_detaches() {
+			// Regression: an interactive child inside a pipeline (`zsh -i | awk`)
+			// must not stay in the host session and seize its tty. Pre-fix this
+			// returned `None`, leaving the stage attached and able to SIGTTIN the host.
+			assert_eq!(child_session_action(false, false, true), ChildSessionAction::DetachSession);
 		}
 	}
 

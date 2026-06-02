@@ -1,9 +1,7 @@
 //! Runtime-agnostic brush shell execution.
 
-#[cfg(windows)]
-use std::collections::HashSet;
 use std::{
-	collections::HashMap,
+	collections::{HashMap, HashSet},
 	fs,
 	io::{self, Write},
 	str,
@@ -242,6 +240,7 @@ async fn run_shell_session(
 	ct: &mut CancelToken,
 ) -> Result<ShellRunResult> {
 	let tokio_cancel = CancellationToken::new();
+	let baseline_descendants = process::current_descendant_pids();
 
 	let mut run_task = tokio::spawn({
 		let session = session.clone();
@@ -264,6 +263,7 @@ async fn run_shell_session(
 		res = &mut run_task => res,
 		reason = ct.wait() => {
 			tokio_cancel.cancel();
+			terminate_new_descendants(&baseline_descendants).await;
 			let graceful = time::timeout(Duration::from_secs(2), &mut run_task).await;
 			if graceful.is_err() {
 				run_task.abort();
@@ -308,6 +308,7 @@ async fn run_shell_oneshot(
 	ct: CancelToken,
 ) -> Result<ShellExecuteResult> {
 	let tokio_cancel = CancellationToken::new();
+	let baseline_descendants = process::current_descendant_pids();
 
 	let mut task = tokio::spawn({
 		let tokio_cancel = tokio_cancel.clone();
@@ -321,6 +322,7 @@ async fn run_shell_oneshot(
 		result = &mut task => result,
 		reason = ct.wait() => {
 			tokio_cancel.cancel();
+			terminate_new_descendants(&baseline_descendants).await;
 			let graceful = time::timeout(Duration::from_secs(2), &mut task).await;
 			if graceful.is_err() {
 				task.abort();
@@ -353,6 +355,7 @@ async fn run_shell_oneshot_streams(
 	ct: CancelToken,
 ) -> Result<ShellExecuteResult> {
 	let tokio_cancel = CancellationToken::new();
+	let baseline_descendants = process::current_descendant_pids();
 
 	let mut task = tokio::spawn({
 		let tokio_cancel = tokio_cancel.clone();
@@ -366,6 +369,7 @@ async fn run_shell_oneshot_streams(
 		result = &mut task => result,
 		reason = ct.wait() => {
 			tokio_cancel.cancel();
+			terminate_new_descendants(&baseline_descendants).await;
 			let graceful = time::timeout(Duration::from_secs(2), &mut task).await;
 			if graceful.is_err() {
 				task.abort();
@@ -649,34 +653,7 @@ async fn run_shell_command(
 		let baseline_descendants = baseline_descendants.clone();
 		async move {
 			cancel_token.cancelled().await;
-			// Rescan-and-signal loop. Each pass picks up grandchildren spawned
-			// during the previous wave's grace period, then exits early as soon
-			// as no descendants remain. The first wave is SIGTERM so well-behaved
-			// programs get a chance to clean up; subsequent waves escalate to
-			// SIGKILL. Cheaper than the previous 20 Hz tracker loop and avoids
-			// the constant kernel chatter when no cancellation ever happens.
-			const WAVES: u32 = 3;
-			for wave in 0..WAVES {
-				let mut targets = process::TerminationTargets::new();
-				process::add_new_descendants(&mut targets, &baseline_descendants);
-				if targets.is_empty() {
-					return;
-				}
-				let signal = if wave == 0 {
-					process::TERM_SIGNAL
-				} else {
-					process::KILL_SIGNAL
-				};
-				targets.signal(signal);
-				if wave + 1 < WAVES {
-					let pause = if wave == 0 {
-						Duration::from_millis(75)
-					} else {
-						Duration::from_millis(150)
-					};
-					time::sleep(pause).await;
-				}
-			}
+			terminate_new_descendants(&baseline_descendants).await;
 		}
 	});
 	let source_info = SourceInfo::from("pi-natives:command");
@@ -846,28 +823,7 @@ async fn run_shell_command_streams(
 		let baseline_descendants = baseline_descendants.clone();
 		async move {
 			cancel_token.cancelled().await;
-			const WAVES: u32 = 3;
-			for wave in 0..WAVES {
-				let mut targets = process::TerminationTargets::new();
-				process::add_new_descendants(&mut targets, &baseline_descendants);
-				if targets.is_empty() {
-					return;
-				}
-				let signal = if wave == 0 {
-					process::TERM_SIGNAL
-				} else {
-					process::KILL_SIGNAL
-				};
-				targets.signal(signal);
-				if wave + 1 < WAVES {
-					let pause = if wave == 0 {
-						Duration::from_millis(75)
-					} else {
-						Duration::from_millis(150)
-					};
-					time::sleep(pause).await;
-				}
-			}
+			terminate_new_descendants(&baseline_descendants).await;
 		}
 	});
 	let source_info = SourceInfo::from("pi-shell:streams");
@@ -1015,6 +971,33 @@ async fn read_output_bytes(
 	}
 }
 
+// Rescan-and-signal loop for cancellation. Each pass picks up descendants
+// spawned during the previous wave's grace period, then exits as soon as no
+// targets remain so unrelated later commands are not swept into old cancels.
+async fn terminate_new_descendants<S: std::hash::BuildHasher + Sync>(baseline: &HashSet<i32, S>) {
+	const WAVES: u32 = 3;
+	for wave in 0..WAVES {
+		let mut targets = process::TerminationTargets::new();
+		process::add_new_descendants(&mut targets, baseline);
+		if targets.is_empty() {
+			return;
+		}
+		let signal = if wave == 0 {
+			process::TERM_SIGNAL
+		} else {
+			process::KILL_SIGNAL
+		};
+		targets.signal(signal);
+		if wave + 1 < WAVES {
+			let pause = if wave == 0 {
+				Duration::from_millis(75)
+			} else {
+				Duration::from_millis(150)
+			};
+			time::sleep(pause).await;
+		}
+	}
+}
 fn terminate_background_jobs(shell: &BrushShell) {
 	let mut targets = process::TerminationTargets::new();
 	for job in &shell.jobs().jobs {
@@ -1651,13 +1634,16 @@ mod tests {
 			assert_eq!(child_session_action(true, true, true), ChildSessionAction::TakeForeground,);
 		}
 
-		/// Brush leading a new pgroup with non-terminal stdin detaches only when
-		/// it is not part of a multi-command pipeline. Pipeline leaders must stay
-		/// in the parent session so later stages can join their process group.
+		/// Brush leading a new pgroup with non-terminal stdin always detaches —
+		/// including the first stage of a pipeline. `setsid()` keeps the child
+		/// off the host's controlling tty; the spawn path skips
+		/// `process_group(...)` for detached children, so later stages no
+		/// longer try to `setpgid`-join a leader that has moved sessions (the
+		/// historical EPERM hazard).
 		#[test]
-		fn non_terminal_stdin_leading_new_pgroup_detaches_unless_pipeline() {
+		fn non_terminal_stdin_detaches_regardless_of_pipeline() {
 			assert_eq!(child_session_action(true, false, false), ChildSessionAction::DetachSession,);
-			assert_eq!(child_session_action(true, false, true), ChildSessionAction::None,);
+			assert_eq!(child_session_action(true, false, true), ChildSessionAction::DetachSession,);
 		}
 
 		/// Non-interactive brush, terminal stdin, no pipeline: nothing to do.
@@ -1682,16 +1668,16 @@ mod tests {
 			assert_eq!(child_session_action(false, false, false), ChildSessionAction::DetachSession,);
 		}
 
-		/// **Pipeline carve-out.** Non-interactive brush, non-terminal stdin
-		/// (pipe), and a multi-command pipeline: MUST NOT detach. For the first
-		/// external stage, `setsid()` puts the process-group leader into a
-		/// different session, so later stages fail to join its group with
-		/// EPERM. For later stages, `setsid()` would either fail with EPERM or
-		/// move the child into a new session, breaking the pipeline's shared
-		/// process group and job-control signal propagation.
+		/// **Pipeline tty-safety.** Non-interactive brush, non-terminal stdin
+		/// (pipe), and a multi-command pipeline: detach. An interactive child in
+		/// a pipeline (`zsh -i ... | awk`) would otherwise open `/dev/tty`,
+		/// `tcsetpgrp` itself to the foreground, and leave the host stopped on
+		/// its next tty read (`suspended (tty input)`). Each stage gets its own
+		/// session instead; the embedded host cancels via the descendant tree,
+		/// not a shared pgroup, and pipes are session-independent.
 		#[test]
-		fn pipeline_stage_does_not_detach() {
-			assert_eq!(child_session_action(false, false, true), ChildSessionAction::None,);
+		fn pipeline_stage_with_non_terminal_stdin_detaches() {
+			assert_eq!(child_session_action(false, false, true), ChildSessionAction::DetachSession,);
 		}
 	}
 
@@ -1810,6 +1796,126 @@ mod tests {
 		assert_eq!(
 			child_sid, child_pid,
 			"child PID {child_pid} should be its own session leader after setsid",
+		);
+	}
+
+	/// Regression for the `suspended (tty input)` bug: an **interactive child
+	/// inside a pipeline** (`zsh -i ... | awk`) used to stay in the host
+	/// session, open `/dev/tty`, `tcsetpgrp` itself to the foreground, and
+	/// leave the embedded host (OMP) stopped on its next tty read. The earlier
+	/// embedded-host fix carved pipelines out of `detach_session` because a
+	/// later stage that `setpgid`-joined a detached leader failed with EPERM.
+	///
+	/// This test boots a real embedded `BrushShell` and runs a two-stage
+	/// pipeline whose first stage prints its PID then sleeps (forwarded to us
+	/// by `cat`). It asserts two contracts at once:
+	///   1. the first stage runs in its **own session** (`getsid == own pid`),
+	///      so it can never reach the host's controlling tty — guards the
+	///      decision; and
+	///   2. the pipeline still exits **successfully**, proving the second stage
+	///      spawned without the cross-session `setpgid` EPERM — guards the
+	///      wiring that skips `process_group(...)` for detached children.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn embedded_pipeline_stage_runs_in_its_own_session() {
+		use std::io::Read as _;
+
+		// SAFETY: `getsid(0)` only queries the current process session; checked below.
+		let host_sid = unsafe { libc::getsid(0) };
+		assert!(host_sid > 0, "getsid(0) failed: {}", std::io::Error::last_os_error());
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+
+		let (mut reader, writer) = pipe_to_files("e2e-pipe").expect("pipe");
+		let stdout_file = OpenFile::from(writer.try_clone().expect("clone"));
+		let stderr_file = OpenFile::from(writer);
+
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null stdin"));
+		params.set_fd(OpenFiles::STDOUT_FD, stdout_file);
+		params.set_fd(OpenFiles::STDERR_FD, stderr_file);
+
+		let (pid_tx, pid_rx) = tokio::sync::oneshot::channel::<i32>();
+		let reader_handle = tokio::task::spawn_blocking(move || {
+			let mut buf = Vec::new();
+			let mut chunk = [0u8; 64];
+			let mut pid_tx = Some(pid_tx);
+			while let Ok(n) = reader.read(&mut chunk)
+				&& n > 0
+			{
+				buf.extend_from_slice(&chunk[..n]);
+				if pid_tx.is_some()
+					&& let Some(line_end) = buf.iter().position(|&byte| byte == b'\n')
+					&& let Ok(line) = std::str::from_utf8(&buf[..line_end])
+					&& let Ok(pid) = line.trim().parse::<i32>()
+				{
+					let _ = pid_tx
+						.take()
+						.expect("pid sender should be present")
+						.send(pid);
+				}
+			}
+			buf
+		});
+
+		let shell_handle = tokio::spawn(async move {
+			let source_info = SourceInfo::from("pi-natives:test");
+			// First stage prints its own PID and sleeps; `cat` forwards the PID
+			// line to our reader and exits on EOF. The first stage leads the
+			// pipeline's process group, the second (`cat`) is the join-or-detach
+			// stage that would EPERM without the wiring fix.
+			let exec = session
+				.shell
+				.run_string(
+					"/bin/sh -c 'printf \"%d\\n\" \"$$\"; sleep 1' | /bin/cat",
+					&source_info,
+					&params,
+				)
+				.await
+				.expect("run_string");
+			drop(params);
+			(session, exec)
+		});
+
+		let child_pid = time::timeout(Duration::from_secs(5), pid_rx)
+			.await
+			.expect("timed out waiting for first-stage PID")
+			.expect("reader closed pid channel without sending");
+		assert!(child_pid > 0, "got non-positive child pid: {child_pid}");
+
+		// SAFETY: `child_pid` is a live positive PID (still in `sleep`); the return
+		// value is checked.
+		let child_sid = unsafe { libc::getsid(child_pid) };
+		assert!(
+			child_sid > 0,
+			"getsid({child_pid}) failed: {} (child may have already exited)",
+			std::io::Error::last_os_error(),
+		);
+
+		let (_session, exec) = time::timeout(Duration::from_secs(5), shell_handle)
+			.await
+			.expect("shell timed out")
+			.expect("shell task panicked");
+		// Guards the wiring: the second stage spawned without a cross-session
+		// `setpgid` EPERM, so the whole pipeline succeeded.
+		assert!(
+			matches!(exec.exit_code, ExecutionExitCode::Success),
+			"pipeline did not succeed (second stage may have hit setpgid EPERM): {}",
+			exit_code(&exec),
+		);
+		let _ = time::timeout(Duration::from_secs(2), reader_handle).await;
+
+		// Guards the decision: a pipeline stage must not share the host session,
+		// or it could seize the controlling tty and SIGTTIN the host.
+		assert_ne!(
+			child_sid, host_sid,
+			"pipeline stage PID {child_pid} inherited host session {host_sid}; it could seize the \
+			 controlling tty — the pipeline tty-suspend bug is back",
+		);
+		assert_eq!(
+			child_sid, child_pid,
+			"pipeline stage PID {child_pid} should be its own session leader after setsid",
 		);
 	}
 
@@ -1935,5 +2041,33 @@ mod tests {
 			stdout.extend_from_slice(&chunk);
 		}
 		assert_eq!(stdout, b"prod:8080");
+	}
+
+	/// Regression for a Windows/macOS deadlock in
+	/// `brush_core::interp::setup_open_file_with_contents`. The body is
+	/// 256 KiB — well past the default pipe buffer on every platform
+	/// (Windows ~4 KiB, macOS 16-64 KiB, Linux 64 KiB), so any inline
+	/// `write_all` on the calling thread blocks forever. The `:` builtin
+	/// never reads its stdin, so the only way `echo done` runs is if the
+	/// heredoc writer is decoupled from the main thread (or, on Linux,
+	/// the pipe buffer was grown via `F_SETPIPE_SZ`). The
+	/// `tokio::time::timeout` is the safety net that turns a regression
+	/// into a 10 s failure instead of hanging CI for the full
+	/// hard-timeout window.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn large_heredoc_does_not_deadlock() {
+		let body = "X".repeat(256 * 1024);
+		let command = format!(": <<'EOF'\n{body}\nEOF\necho done");
+		let options = ShellExecuteOptions { command, ..Default::default() };
+
+		let result = time::timeout(
+			Duration::from_secs(10),
+			execute_shell(options, None, CancelToken::default()),
+		)
+		.await
+		.expect("execute_shell hung past 10 s — heredoc writer deadlocked")
+		.expect("execute_shell errored");
+
+		assert_eq!(result.exit_code, Some(0), "command did not run to completion");
 	}
 }

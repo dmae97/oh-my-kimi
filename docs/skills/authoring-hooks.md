@@ -123,8 +123,8 @@ Contract:
 - Handlers run in registration order. For `HookAPI`, each handler receives the original tool result event, and the last returned override wins.
 - `content` replaces the full content array for the LLM.
 - `details` replaces the structured details object.
-- `isError` overrides the error flag (typed, but note: `HookToolWrapper` behavior for error path rethrows regardless).
-- On a tool failure, `tool_result` is still emitted with `isError: true`; the original error is rethrown after handlers complete.
+- `isError` exists on the shared result type, but `HookToolWrapper` does not propagate it into a successful tool result; on a tool failure, the original error is rethrown after handlers complete.
+- On a tool failure, `tool_result` is still emitted with `isError: true`.
 
 ## Context modification contract
 
@@ -245,11 +245,13 @@ export default function contextFilter(omp: HookAPI): void {
 | `select(title, options)` | Show a selection dialog |
 | `confirm(title, message)` | Show a yes/no dialog |
 | `input(title, placeholder?)` | Show a text input dialog |
-| `editor(title, prefill?, { signal }?)` | Show a multi-line editor |
+| `editor(title, prefill?, { signal }?, { promptStyle }?)` | Show a multi-line editor |
 | `setEditorText(text)` | Set the input editor content |
 | `getEditorText()` | Get current input editor content |
 | `custom(factory)` | Render a custom TUI component |
 | `theme` | Current theme object |
+
+Pass `{ promptStyle: true }` as the fourth argument when Enter should submit and Shift+Enter should insert a newline. The default hook editor behavior keeps Enter as newline and Ctrl+Enter as submit.
 
 `ctx.hasUI` is `false` in headless/print/subagent mode — always guard interactive calls.
 

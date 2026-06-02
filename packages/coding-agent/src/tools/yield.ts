@@ -8,15 +8,13 @@ import type { TSchema } from "@oh-my-pi/pi-ai/types";
 import {
 	dereferenceJsonSchema,
 	isValidJsonSchema,
-	type JsonSchemaValidationIssue,
 	type JsonSchemaValidationResult,
 	sanitizeSchemaForStrictMode,
 	tryEnforceStrictSchema,
-	validateJsonSchemaValue,
 } from "@oh-my-pi/pi-ai/utils/schema";
 import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
 import type { ToolSession } from ".";
-import { jtdToJsonSchema, normalizeSchema } from "./jtd-to-json-schema";
+import { buildOutputValidator, formatAllValidationIssues } from "./output-schema-validator";
 
 export interface YieldDetails {
 	data: unknown;
@@ -32,16 +30,6 @@ function formatSchema(schema: unknown): string {
 	} catch {
 		return "[unserializable schema]";
 	}
-}
-
-function formatJsonSchemaIssues(issues: ReadonlyArray<JsonSchemaValidationIssue> | undefined): string {
-	if (!issues || issues.length === 0) return "Unknown schema validation error.";
-	return issues
-		.map(issue => {
-			const path = issue.path.length === 0 ? "" : `${issue.path.map(seg => String(seg)).join("/")}: `;
-			return `${path}${issue.message}`;
-		})
-		.join("; ");
 }
 
 function looseRecordSchema(description: string): Record<string, unknown> {
@@ -100,8 +88,18 @@ function wrapYieldParameters(dataSchema: Record<string, unknown>): Record<string
 	};
 }
 
+/**
+ * Max consecutive schema-validation failures before the yield tool overrides validation
+ * and lets non-conforming data through. The override is a safety net for schemas the
+ * JTD→JSON-Schema converter cannot fully express; it should not be reached during normal
+ * model retries. Three matches the existing "3 reminders" pattern elsewhere in the agent
+ * runtime.
+ */
+const MAX_SCHEMA_RETRIES = 3;
+
 export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 	readonly name = "yield";
+	readonly approval = "read" as const;
 	readonly label = "Submit Result";
 	readonly description =
 		"Finish the task with structured JSON output. Call exactly once at the end of the task.\n\n" +
@@ -120,21 +118,14 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 		let parameters: TSchema;
 
 		try {
-			const schemaResult = normalizeSchema(session.outputSchema);
-			const normalizedSchema =
-				schemaResult.normalized !== undefined ? jtdToJsonSchema(schemaResult.normalized) : undefined;
-			let schemaError = schemaResult.error;
-
-			if (!schemaError && normalizedSchema === false) {
-				schemaError = "boolean false schema rejects all outputs";
-			}
-
-			if (normalizedSchema !== undefined && normalizedSchema !== false && !schemaError) {
-				if (!isValidJsonSchema(normalizedSchema)) {
-					schemaError = "invalid JSON schema";
-				} else {
-					validate = value => validateJsonSchemaValue(normalizedSchema, value);
-				}
+			const {
+				validator,
+				jsonSchema: normalizedSchema,
+				normalized,
+				error: schemaError,
+			} = buildOutputValidator(session.outputSchema);
+			if (validator) {
+				validate = value => validator.validate(value);
 			}
 
 			const schemaHint = formatSchema(normalizedSchema ?? session.outputSchema);
@@ -142,21 +133,15 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 				? `Structured JSON output (output schema invalid; accepting unconstrained object): ${schemaError}`
 				: `Structured output matching the schema:\n${schemaHint}`;
 			let sanitizedSchema: Record<string, unknown> | undefined;
-			if (
-				!schemaError &&
-				normalizedSchema != null &&
-				typeof normalizedSchema === "object" &&
-				!Array.isArray(normalizedSchema)
-			) {
-				const normalizedRecord = normalizedSchema as Record<string, unknown>;
-				const strictProbe = tryEnforceStrictSchema(normalizedRecord);
+			if (!schemaError && normalizedSchema !== undefined) {
+				const strictProbe = tryEnforceStrictSchema(normalizedSchema);
 				if (strictProbe.strict) {
-					sanitizedSchema = sanitizeSchemaForStrictMode(normalizedRecord);
+					sanitizedSchema = sanitizeSchemaForStrictMode(normalizedSchema);
 				} else {
-					sanitizedSchema = normalizedRecord;
+					sanitizedSchema = normalizedSchema;
 					this.strict = false;
 				}
-			} else if (!schemaError && normalizedSchema === true) {
+			} else if (!schemaError && normalized === true) {
 				sanitizedSchema = {};
 				this.strict = false;
 			}
@@ -229,8 +214,15 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 				const parsed = this.#validate(data);
 				if (!parsed.success) {
 					this.#schemaValidationFailures++;
-					if (this.#schemaValidationFailures <= 1) {
-						throw new Error(`Output does not match schema: ${formatJsonSchemaIssues(parsed.issues)}`);
+					if (this.#schemaValidationFailures <= MAX_SCHEMA_RETRIES) {
+						const remaining = MAX_SCHEMA_RETRIES - this.#schemaValidationFailures;
+						const retryHint =
+							remaining > 0
+								? ` Call yield again with the corrected shape — ${remaining} retry attempt(s) remain before the schema constraint is dropped.`
+								: " Call yield again with the corrected shape — this is the final retry before the schema constraint is dropped.";
+						throw new Error(
+							`Output does not match schema: ${formatAllValidationIssues(parsed.issues)}.${retryHint}`,
+						);
 					}
 					schemaValidationOverridden = true;
 				}

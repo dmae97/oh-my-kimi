@@ -18,7 +18,21 @@ function textOutput(result: AgentToolResult<ReadToolDetails>): string {
 		.join("\n");
 }
 
-function createSession(cwd: string, settings = Settings.isolated()): ToolSession {
+/**
+ * Defaults that pin tests to the legacy outermost-only collector so small
+ * fixtures keep emitting deterministic elisions:
+ *   - `minTotalLines: 0` skips the size gate.
+ *   - `unfoldUntil: 0` short-circuits BFS unfolding.
+ * Tests that need BFS or the size gate override these explicitly.
+ */
+const LEGACY_SUMMARY_OVERRIDES: Record<string, unknown> = {
+	"read.summarize.minTotalLines": 0,
+	"read.summarize.unfoldUntil": 0,
+	"read.summarize.unfoldLimit": 0,
+};
+
+function createSession(cwd: string, overrides: Record<string, unknown> = {}): ToolSession {
+	const settings = Settings.isolated({ ...LEGACY_SUMMARY_OVERRIDES, ...overrides });
 	const sessionFile = path.join(cwd, "session.jsonl");
 	const sessionDir = path.join(cwd, "session");
 	return {
@@ -76,7 +90,7 @@ describe("read summary", () => {
 		expect(textOutput(defaultResult)).toContain("const clean = 'alpha';");
 		expect(defaultResult.details?.summary).toBeUndefined();
 
-		const proseTool = new ReadTool(createSession(tmpDir, Settings.isolated({ "read.summarize.prose": true })));
+		const proseTool = new ReadTool(createSession(tmpDir, { "read.summarize.prose": true }));
 		const proseResult = await proseTool.execute("read-summary-md-prose", { path: fixture });
 		expect(textOutput(proseResult)).not.toContain("const clean = 'alpha';");
 		expect(proseResult.details?.summary?.elidedSpans).toBe(1);
@@ -91,7 +105,7 @@ describe("read summary", () => {
 		).join("\n\n");
 		await fs.writeFile(fixture, `${source}\n`);
 
-		const tool = new ReadTool(createSession(tmpDir, Settings.isolated({ "read.defaultLimit": 10 })));
+		const tool = new ReadTool(createSession(tmpDir, { "read.defaultLimit": 10 }));
 		const result = await tool.execute("read-summary-no-truncate", { path: fixture });
 		const text = textOutput(result);
 
@@ -154,7 +168,7 @@ describe("read summary", () => {
 		await fs.writeFile(valid, "export function alpha(): string {\n\tconst clean = 'alpha';\n\treturn clean;\n}\n");
 		await fs.writeFile(broken, "export function broken( {\n");
 
-		const disabledTool = new ReadTool(createSession(tmpDir, Settings.isolated({ "read.summarize.enabled": false })));
+		const disabledTool = new ReadTool(createSession(tmpDir, { "read.summarize.enabled": false }));
 		const disabled = await disabledTool.execute("read-summary-disabled", { path: valid });
 		expect(textOutput(disabled)).toContain("const clean = 'alpha';");
 		expect(disabled.details?.summary).toBeUndefined();
@@ -183,10 +197,10 @@ describe("read summary", () => {
 		expect(text).toContain("name: Ada");
 	});
 
-	it("renders brace-pair elisions as a single anchored line with `..`", async () => {
+	it("renders brace-pair elisions as a single numbered line with `..`", async () => {
 		// Regression for the read-tool format request: collapse the head /
-		// elided / closing-brace sandwich into one anchored line of the form
-		// `LINE+ID-LINE+ID|head { .. }` instead of three separate lines.
+		// elided / closing-brace sandwich into one numbered line of the form
+		// `START-END:head { .. }` instead of three separate lines.
 		const fixture = path.join(tmpDir, "merge.ts");
 		await fs.writeFile(
 			fixture,
@@ -200,8 +214,8 @@ describe("read summary", () => {
 		expect(text).toContain("export function stripNewLinePrefixes(lines: string[]): string[] { .. }");
 		// The plain `...` ellipsis line must NOT appear once the merge fires.
 		expect(text).not.toContain("\n...\n");
-		// The merged anchor must be a hash-line range (LINE+ID-LINE+ID|head).
-		expect(text).toMatch(/\b1[a-z]{2}-7[a-z]{2}\|export function stripNewLinePrefixes/);
+		// The merged line must use the numbered range shape.
+		expect(text).toMatch(/\b1-7:export function stripNewLinePrefixes/);
 		expect(result.details?.summary?.elidedSpans).toBe(1);
 	});
 
@@ -240,7 +254,7 @@ describe("read summary", () => {
 		expect(text).not.toContain(" .. ");
 	});
 
-	it("appends an elision footer that names the path and `:raw` recovery selector", async () => {
+	it("appends an elision footer that names targeted recovery ranges", async () => {
 		// Regression for issue #1046: summarized reads must tell the model how
 		// to recover the elided body so it does not stall on `...` / `{ .. }`
 		// markers and burn a turn guessing the selector.
@@ -256,12 +270,13 @@ describe("read summary", () => {
 
 		expect(result.details?.summary?.elidedSpans).toBe(2);
 		expect(result.details?.summary?.elidedLines).toBeGreaterThan(0);
-		expect(text).toContain("elided regions");
-		expect(text).toContain(`${fixture}:raw`);
-		expect(text).toContain(`${fixture}:1-9999`);
+		expect(text).toContain("lines elided");
+		expect(text).toContain(`${fixture}:1-5,7-11`);
+		expect(text).not.toContain(`${fixture}:raw`);
+		expect(text).not.toContain(`${fixture}:1-9999`);
 		// Footer must be the LAST block of output so the recovery hint sits
 		// next to the structural summary it describes.
-		expect(text.trimEnd().endsWith("for verbatim content]")).toBe(true);
+		expect(text.trimEnd().endsWith("]")).toBe(true);
 	});
 
 	it("does not append a footer when the file has no elision", async () => {

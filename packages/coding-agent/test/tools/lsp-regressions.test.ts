@@ -2,17 +2,24 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
+import { preloadPluginRoots } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
 import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
 import * as lspConfig from "@oh-my-pi/pi-coding-agent/lsp/config";
 import { getServersForFile, loadConfig } from "@oh-my-pi/pi-coding-agent/lsp/config";
+import { applyWorkspaceEdit } from "@oh-my-pi/pi-coding-agent/lsp/edits";
 import { renderCall, renderResult } from "@oh-my-pi/pi-coding-agent/lsp/render";
 import type {
 	CodeAction,
+	CreateFile,
+	DeleteFile,
 	Diagnostic,
 	LspClient,
+	RenameFile,
 	ServerConfig,
 	SymbolInformation,
+	TextDocumentEdit,
+	WorkspaceEdit,
 } from "@oh-my-pi/pi-coding-agent/lsp/types";
 import {
 	applyCodeAction,
@@ -46,6 +53,96 @@ describe("lsp regressions", () => {
 		expect(clampTimeout("lsp")).toBe(20);
 		expect(clampTimeout("lsp", 1)).toBe(5);
 		expect(clampTimeout("lsp", 1000)).toBe(60);
+	});
+
+	async function markerExists(filePath: string): Promise<boolean> {
+		try {
+			await Bun.file(filePath).bytes();
+			return true;
+		} catch (error) {
+			if (piUtils.isEnoent(error)) return false;
+			throw error;
+		}
+	}
+
+	it("sends the LSP exit notification after shutdown completes", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-shutdown-");
+		try {
+			const markerDir = tempDir.path();
+			const serverPath = path.join(markerDir, "server.ts");
+			await Bun.write(
+				serverPath,
+				`
+const markerDir = process.argv[2];
+const decoder = new TextDecoder();
+let buffer = "";
+
+async function mark(name) {
+	await Bun.write(\`\${markerDir}/\${name}\`, "1\\n");
+}
+
+function send(message) {
+	const content = JSON.stringify(message);
+	process.stdout.write(\`Content-Length: \${Buffer.byteLength(content, "utf8")}\\r\\n\\r\\n\${content}\`);
+}
+
+process.on("SIGTERM", () => {
+	void mark("sigterm").finally(() => process.abort());
+});
+
+for await (const chunk of Bun.stdin.stream()) {
+	buffer += decoder.decode(chunk, { stream: true });
+	while (true) {
+		const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
+		if (headerEnd === -1) break;
+
+		const header = buffer.slice(0, headerEnd);
+		const match = /Content-Length: (\\d+)/i.exec(header);
+		if (!match) process.exit(2);
+
+		const contentLength = Number(match[1]);
+		const contentStart = headerEnd + 4;
+		const contentEnd = contentStart + contentLength;
+		if (buffer.length < contentEnd) break;
+
+		const message = JSON.parse(buffer.slice(contentStart, contentEnd));
+		buffer = buffer.slice(contentEnd);
+
+		if (message.method === "initialize") {
+			await mark("initialize");
+			send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+		} else if (message.method === "shutdown") {
+			await mark("shutdown");
+			send({ jsonrpc: "2.0", id: message.id, result: null });
+		} else if (message.method === "exit") {
+			await mark("exit");
+			process.exit(0);
+		}
+	}
+}
+
+await mark("stdin-closed");
+process.abort();
+`,
+			);
+
+			const server: ServerConfig = {
+				command: process.execPath,
+				args: [serverPath, markerDir],
+				fileTypes: ["ts"],
+				rootMarkers: [],
+			};
+
+			await lspClient.getOrCreateClient(server, tempDir.path(), 1_000);
+			await lspClient.shutdownAll();
+
+			expect(await markerExists(path.join(markerDir, "shutdown"))).toBe(true);
+			expect(await markerExists(path.join(markerDir, "exit"))).toBe(true);
+			expect(await markerExists(path.join(markerDir, "sigterm"))).toBe(false);
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
 	});
 
 	it("limits glob collection to avoid large diagnostic stalls", async () => {
@@ -419,6 +516,91 @@ describe("lsp regressions", () => {
 			expect(detectLanguageId(specPath)).toBe("tlaplus");
 			expect(detectLanguageId(aliasPath)).toBe("tlaplus");
 		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	it("loads config-only marketplace LSP servers from Claude plugin cache", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-marketplace-config-");
+		const home = path.join(tempDir.path(), "home");
+		const cwd = path.join(tempDir.path(), "repo");
+		const pluginRoot = path.join(
+			home,
+			".claude",
+			"plugins",
+			"cache",
+			"claude-plugins-official",
+			"csharp-lsp",
+			"1.0.0",
+		);
+		const marketplaceRoot = path.dirname(path.dirname(pluginRoot));
+		const registryPath = path.join(home, ".claude", "plugins", "installed_plugins.json");
+
+		await fs.promises.mkdir(pluginRoot, { recursive: true });
+		await fs.promises.mkdir(cwd, { recursive: true });
+		await fs.promises.mkdir(path.dirname(registryPath), { recursive: true });
+		await Bun.write(path.join(cwd, "Example.csproj"), "<Project />\n");
+		await Bun.write(
+			registryPath,
+			`${JSON.stringify(
+				{
+					version: 2,
+					plugins: {
+						"csharp-lsp@claude-plugins-official": [
+							{
+								scope: "user",
+								installPath: pluginRoot,
+								version: "1.0.0",
+								installedAt: "2026-05-25T00:00:00.000Z",
+								lastUpdated: "2026-05-25T00:00:00.000Z",
+							},
+						],
+					},
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		await Bun.write(
+			path.join(marketplaceRoot, "marketplace.json"),
+			`${JSON.stringify(
+				{
+					name: "claude-plugins-official",
+					owner: { name: "anthropic" },
+					plugins: [
+						{
+							name: "csharp-lsp",
+							version: "1.0.0",
+							source: "./csharp-lsp/1.0.0",
+							lspServers: {
+								"csharp-ls": {
+									command: "csharp-ls",
+									extensionToLanguage: { ".cs": "csharp" },
+								},
+							},
+						},
+					],
+				},
+				null,
+				2,
+			)}\n`,
+		);
+
+		const whichSpy = vi
+			.spyOn(piUtils, "$which")
+			.mockImplementation(command => (command === "csharp-ls" ? "/usr/local/bin/csharp-ls" : null));
+
+		try {
+			await preloadPluginRoots(home, cwd);
+
+			const config = loadConfig(cwd);
+
+			expect(config.servers["csharp-ls"]?.resolvedCommand).toBe("/usr/local/bin/csharp-ls");
+			expect(getServersForFile(config, path.join(cwd, "Program.cs")).map(([name]) => name)).toEqual(["csharp-ls"]);
+			expect(config.servers["csharp-ls"]?.rootMarkers).toEqual(["."]);
+			expect(whichSpy).toHaveBeenCalledWith("csharp-ls");
+		} finally {
+			await preloadPluginRoots(path.join(tempDir.path(), "empty-home"), cwd);
 			tempDir.removeSync();
 		}
 	});
@@ -841,6 +1023,239 @@ describe("lsp regressions", () => {
 			expect(output).toContain("rust-analyzer/expandMacro");
 		} finally {
 			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("flushes pending descendant text edits before a folder rename", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-folder-rename-");
+		try {
+			const srcDir = path.join(tempDir.path(), "src");
+			fs.mkdirSync(srcDir, { recursive: true });
+			const childPath = path.join(srcDir, "a.ts");
+			await Bun.write(childPath, "export const a = 1;\n");
+
+			const childUri = fileToUri(childPath);
+			const oldFolderUri = fileToUri(srcDir);
+			const newFolderUri = fileToUri(path.join(tempDir.path(), "src2"));
+
+			const childEdit: TextDocumentEdit = {
+				textDocument: { uri: childUri, version: null },
+				edits: [
+					{
+						range: {
+							start: { line: 0, character: 13 },
+							end: { line: 0, character: 14 },
+						},
+						newText: "renamed",
+					},
+				],
+			};
+			const folderRename: RenameFile = {
+				kind: "rename",
+				oldUri: oldFolderUri,
+				newUri: newFolderUri,
+			};
+			const workspaceEdit: WorkspaceEdit = {
+				documentChanges: [childEdit, folderRename],
+			};
+
+			const applied = await applyWorkspaceEdit(workspaceEdit, tempDir.path());
+
+			// Old folder is gone, new folder holds the edited child.
+			expect(fs.existsSync(srcDir)).toBe(false);
+			const renamedChildPath = path.join(tempDir.path(), "src2", "a.ts");
+			expect(fs.existsSync(renamedChildPath)).toBe(true);
+			expect(fs.readFileSync(renamedChildPath, "utf8")).toBe("export const renamed = 1;\n");
+
+			// Both ops are reported in original order: edit first, then rename.
+			expect(applied).toHaveLength(2);
+			expect(applied[0]).toContain("Applied 1 edit(s)");
+			expect(applied[0]).toContain("src/a.ts");
+			expect(applied[1]).toContain("Renamed");
+			expect(applied[1]).toContain("src");
+			expect(applied[1]).toContain("src2");
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	it("flushes pending edits queued against a rename target before performing the rename", async () => {
+		// LSP §3.16.2: documentChanges run in declared order. When a TextDocumentEdit
+		// targets `renameOp.newUri` *before* the rename, those edits must land on the
+		// existing file at that location BEFORE the rename overwrites/replaces it.
+		// Otherwise the rename clobbers the post-edit content (or worse, the edits
+		// land on the moved-in file with stale offsets).
+		const tempDir = TempDir.createSync("@omp-lsp-rename-target-prefill-");
+		try {
+			const oldPath = path.join(tempDir.path(), "old.ts");
+			const newPath = path.join(tempDir.path(), "new.ts");
+			await Bun.write(oldPath, "export const moved = 1;\n");
+			// A pre-existing target file the rename is about to clobber.
+			await Bun.write(newPath, "export const target = 2;\n");
+
+			const oldUri = fileToUri(oldPath);
+			const newUri = fileToUri(newPath);
+
+			// Edit the target file first, then rename onto it. Pre-edit content
+			// MUST be observable somewhere in the applied log — proving the flush
+			// ran before the rename clobbered the file.
+			const targetEdit: TextDocumentEdit = {
+				textDocument: { uri: newUri, version: null },
+				edits: [
+					{
+						range: {
+							start: { line: 0, character: 13 },
+							end: { line: 0, character: 19 },
+						},
+						newText: "before",
+					},
+				],
+			};
+			const renameOp: RenameFile = {
+				kind: "rename",
+				oldUri,
+				newUri,
+			};
+			const workspaceEdit: WorkspaceEdit = {
+				documentChanges: [targetEdit, renameOp],
+			};
+
+			const applied = await applyWorkspaceEdit(workspaceEdit, tempDir.path());
+
+			// Three steps observable in order: edit on newUri, then rename clobbers it.
+			expect(applied).toHaveLength(2);
+			expect(applied[0]).toContain("Applied 1 edit(s)");
+			expect(applied[0]).toContain("new.ts");
+			expect(applied[1]).toContain("Renamed");
+
+			// Final state: new.ts holds the moved-in content (rename ran last and won).
+			expect(fs.existsSync(oldPath)).toBe(false);
+			expect(fs.readFileSync(newPath, "utf8")).toBe("export const moved = 1;\n");
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+	it("resolves $-prefixed identifiers past compound matches", async () => {
+		// Pre-fix, BARE_IDENTIFIER_RE rejected leading `$`, so requireWordBoundary
+		// was false and `resolveSymbolColumn(_, _, "$store")` returned the column
+		// inside `bar$store` rather than the standalone occurrence, feeding the
+		// LSP server the wrong column. The new regex `/^[$A-Za-z_][\w$]*$/` plus
+		// IDENTIFIER_CHAR_RE's existing `$` membership enforces the boundary.
+		const tempDir = TempDir.createSync("@omp-lsp-dollar-identifier-");
+		try {
+			const filePath = path.join(tempDir.path(), "store.ts");
+			// Standalone `$store` starts at column 16; compound `bar$store`
+			// contains the substring at column 7. Old code returned 7; new code
+			// returns 16.
+			await Bun.write(filePath, "let bar$store = $store + 1;\n");
+
+			const column = await resolveSymbolColumn(filePath, 1, "$store");
+			expect(column).toBe(16);
+
+			// `bar$store` is itself a valid `$`-bearing identifier and resolves
+			// to its own start, not into either fragment.
+			const compoundColumn = await resolveSymbolColumn(filePath, 1, "bar$store");
+			expect(compoundColumn).toBe(4);
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	it("applies a create op followed by a text edit for the same URI in declared order", async () => {
+		// LSP §3.16.2 motivating case for the rewrite: "Extract to new file"
+		// code actions emit `[CreateFile(newUri), TextDocumentEdit(newUri, ...)]`.
+		// Pre-fix, all text edits flushed first → applyTextEdits opened a
+		// not-yet-created file → ENOENT. The new walk processes each entry in
+		// order, so the create lands first and the edit reads the empty file
+		// the create just wrote.
+		const tempDir = TempDir.createSync("@omp-lsp-create-then-edit-");
+		try {
+			const newFilePath = path.join(tempDir.path(), "extracted.ts");
+			expect(fs.existsSync(newFilePath)).toBe(false);
+
+			const newUri = fileToUri(newFilePath);
+			const createOp: CreateFile = {
+				kind: "create",
+				uri: newUri,
+			};
+			const textEdit: TextDocumentEdit = {
+				textDocument: { uri: newUri, version: null },
+				edits: [
+					{
+						range: {
+							start: { line: 0, character: 0 },
+							end: { line: 0, character: 0 },
+						},
+						newText: "export const extracted = 42;\n",
+					},
+				],
+			};
+			const workspaceEdit: WorkspaceEdit = {
+				documentChanges: [createOp, textEdit],
+			};
+
+			const applied = await applyWorkspaceEdit(workspaceEdit, tempDir.path());
+
+			expect(fs.existsSync(newFilePath)).toBe(true);
+			expect(fs.readFileSync(newFilePath, "utf8")).toBe("export const extracted = 42;\n");
+
+			// Declared order observable in the applied log: create first, then edit.
+			expect(applied).toHaveLength(2);
+			expect(applied[0]).toContain("Created");
+			expect(applied[0]).toContain("extracted.ts");
+			expect(applied[1]).toContain("Applied 1 edit(s)");
+			expect(applied[1]).toContain("extracted.ts");
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	it("flushes pending descendant text edits before a folder delete", async () => {
+		// Mirror of the folder-rename subtree-flush test for the `delete` arm:
+		// edits queued against a child URI must land at the original path
+		// BEFORE the parent folder is removed, otherwise the flush at end of
+		// walk would target a non-existent path and throw.
+		const tempDir = TempDir.createSync("@omp-lsp-folder-delete-");
+		try {
+			const srcDir = path.join(tempDir.path(), "src");
+			fs.mkdirSync(srcDir, { recursive: true });
+			const childPath = path.join(srcDir, "a.ts");
+			await Bun.write(childPath, "export const a = 1;\n");
+
+			const childUri = fileToUri(childPath);
+			const folderUri = fileToUri(srcDir);
+
+			const childEdit: TextDocumentEdit = {
+				textDocument: { uri: childUri, version: null },
+				edits: [
+					{
+						range: {
+							start: { line: 0, character: 18 },
+							end: { line: 0, character: 19 },
+						},
+						newText: "999",
+					},
+				],
+			};
+			const folderDelete: DeleteFile = {
+				kind: "delete",
+				uri: folderUri,
+			};
+			const workspaceEdit: WorkspaceEdit = {
+				documentChanges: [childEdit, folderDelete],
+			};
+
+			const applied = await applyWorkspaceEdit(workspaceEdit, tempDir.path());
+
+			// Folder is gone; "Applied" message proves the flush ran before delete.
+			expect(fs.existsSync(srcDir)).toBe(false);
+			expect(applied).toHaveLength(2);
+			expect(applied[0]).toContain("Applied 1 edit(s)");
+			expect(applied[0]).toContain("src/a.ts");
+			expect(applied[1]).toContain("Deleted");
+			expect(applied[1]).toContain("src");
+		} finally {
 			tempDir.removeSync();
 		}
 	});

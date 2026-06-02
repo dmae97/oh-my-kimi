@@ -15,7 +15,8 @@ import { OmpProtocolHandler } from "./omp-protocol";
 import { parseInternalUrl } from "./parse";
 import { RuleProtocolHandler } from "./rule-protocol";
 import { SkillProtocolHandler } from "./skill-protocol";
-import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext } from "./types";
+import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
+import { VaultProtocolHandler } from "./vault-protocol";
 
 export class InternalUrlRouter {
 	static #instance: InternalUrlRouter | undefined;
@@ -28,6 +29,7 @@ export class InternalUrlRouter {
 		this.register(new ArtifactProtocolHandler());
 		this.register(new MemoryProtocolHandler());
 		this.register(new LocalProtocolHandler());
+		this.register(new VaultProtocolHandler());
 		this.register(new SkillProtocolHandler());
 		this.register(new RuleProtocolHandler());
 		this.register(new McpProtocolHandler());
@@ -62,6 +64,25 @@ export class InternalUrlRouter {
 		const match = input.match(/^([a-z][a-z0-9+.-]*):\/\//i);
 		if (!match) return false;
 		return this.#handlers.has(match[1].toLowerCase());
+	}
+
+	/** Schemes whose handler supports host/path autocomplete. */
+	completionSchemes(): string[] {
+		const schemes: string[] = [];
+		for (const [scheme, handler] of this.#handlers) {
+			if (handler.complete) schemes.push(scheme);
+		}
+		return schemes;
+	}
+
+	/**
+	 * Candidate completions for the host/path portion of `scheme://<query>`.
+	 * Returns `null` when the scheme is unknown or does not support completion.
+	 */
+	async complete(scheme: string, query: string): Promise<UrlCompletion[] | null> {
+		const handler = this.#handlers.get(scheme.toLowerCase());
+		if (!handler?.complete) return null;
+		return handler.complete(query);
 	}
 
 	async resolve(input: string, context?: ResolveContext): Promise<InternalResource> {

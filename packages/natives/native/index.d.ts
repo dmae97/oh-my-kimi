@@ -136,7 +136,7 @@ export declare class Shell {
  * `packages/natives/native/index.js` (which derives the name from
  * `package.json#version`).
  */
-export declare function __piNativesV15_2_4(): void
+export declare function __piNativesV15_7_6(): void
 
 /**
  * Apply conservative pre-execution rewrites to a bash command.
@@ -342,6 +342,33 @@ export interface BashFixupResult {
   command: string
   /** Substrings removed, in source order — suitable for a user-facing notice. */
   stripped: Array<string>
+}
+
+export interface BlockRange {
+  /** 1-indexed inclusive first line of the resolved block. */
+  startLine: number
+  /** 1-indexed inclusive last line of the resolved block. */
+  endLine: number
+}
+
+/**
+ * Find the outermost named tree-sitter node that begins on `options.line`.
+ *
+ * Returns its 1-indexed inclusive line span, or `null` when the language is
+ * unrecognized, the line is out of range / blank, no node begins on that line,
+ * or the resolved subtree contains a syntax error.
+ */
+export declare function blockRangeAt(options: BlockRangeOptions): BlockRange | null
+
+export interface BlockRangeOptions {
+  /** Source code to inspect. */
+  code: string
+  /** Language alias (e.g. "rust", "typescript") used before path inference. */
+  lang?: string
+  /** File path used to infer language by extension when `lang` is omitted. */
+  path?: string
+  /** 1-indexed source line the block must begin on. */
+  line: number
 }
 
 /** Clipboard image payload encoded as PNG bytes. */
@@ -1296,6 +1323,16 @@ export interface SummaryOptions {
   minBodyLines?: number
   /** Minimum total comment lines before eliding a multiline block comment. */
   minCommentLines?: number
+  /**
+   * Target visible-line count for BFS unfold. `None` or `0` keeps only
+   * the outermost elisions (no progressive unfolding).
+   */
+  unfoldUntilLines?: number
+  /**
+   * Hard ceiling for BFS unfold. Defaults to `unfold_until_lines * 2`
+   * when omitted.
+   */
+  unfoldLimitLines?: number
 }
 
 export interface SummaryResult {

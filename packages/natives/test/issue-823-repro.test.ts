@@ -26,8 +26,16 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { detectCompiledBinary, getAddonFilenames, resolveLoaderCandidates } from "../native/loader-state.js";
+import {
+	detectCompiledBinary,
+	type EmbeddedAddonFile,
+	extractEmbeddedAddonArchive,
+	getAddonFilenames,
+	resolveLoaderCandidates,
+} from "../native/loader-state.js";
 
 describe("issue 823: standalone-binary native loader path resolution", () => {
 	it("detects compiled-binary mode from embedded-addon presence when env and url markers are absent", () => {
@@ -128,5 +136,102 @@ describe("issue 823: standalone-binary native loader path resolution", () => {
 		});
 		expect(candidates).not.toContain(path.join(versionedDir, "pi_natives.linux-x64-baseline.node"));
 		expect(candidates).not.toContain(path.join(userDataDir, "pi_natives.linux-x64-baseline.node"));
+	});
+
+	it("prefers platform leaf package candidates ahead of core nativeDir candidates on npm installs", () => {
+		const leafPackageDir = "/app/node_modules/@oh-my-pi/pi-natives-linux-x64";
+		const nativeDir = "/app/node_modules/@oh-my-pi/pi-natives/native";
+		const candidates = resolveLoaderCandidates({
+			addonFilenames: getAddonFilenames({ tag: "linux-x64", arch: "x64", variant: "baseline" }),
+			isCompiledBinary: false,
+			leafPackageDir,
+			nativeDir,
+			execDir: "/app/node_modules/.bin",
+			versionedDir: "/home/u/.omp/natives/15.5.15",
+			userDataDir: "/home/u/.local/bin",
+		});
+
+		const leafBaseline = path.join(leafPackageDir, "pi_natives.linux-x64-baseline.node");
+		const coreBaseline = path.join(nativeDir, "pi_natives.linux-x64-baseline.node");
+		expect(candidates).toContain(leafBaseline);
+		expect(candidates.indexOf(leafBaseline)).toBeLessThan(candidates.indexOf(coreBaseline));
+	});
+
+	it("keeps Windows staging ahead of leaf package and core nativeDir candidates", () => {
+		const versionedDir = "/home/u/.omp/natives/15.5.15";
+		const leafPackageDir = "/app/node_modules/@oh-my-pi/pi-natives-win32-x64";
+		const nativeDir = "/app/node_modules/@oh-my-pi/pi-natives/native";
+		const candidates = resolveLoaderCandidates({
+			addonFilenames: getAddonFilenames({ tag: "win32-x64", arch: "x64", variant: "baseline" }),
+			isCompiledBinary: false,
+			stageFromNodeModules: true,
+			leafPackageDir,
+			nativeDir,
+			execDir: "/app/node_modules/.bin",
+			versionedDir,
+			userDataDir: "/home/u/AppData/Local/omp",
+		});
+
+		const stagedBaseline = path.join(versionedDir, "pi_natives.win32-x64-baseline.node");
+		const leafBaseline = path.join(leafPackageDir, "pi_natives.win32-x64-baseline.node");
+		const coreBaseline = path.join(nativeDir, "pi_natives.win32-x64-baseline.node");
+		expect(candidates.indexOf(stagedBaseline)).toBeLessThan(candidates.indexOf(leafBaseline));
+		expect(candidates.indexOf(leafBaseline)).toBeLessThan(candidates.indexOf(coreBaseline));
+	});
+
+	it("keeps the development candidate list unchanged when no leaf package is installed", () => {
+		const nativeDir = "/repo/packages/natives/native";
+		const execDir = "/usr/bin";
+		const addonFilenames = getAddonFilenames({ tag: "linux-x64", arch: "x64", variant: "baseline" });
+		const candidates = resolveLoaderCandidates({
+			addonFilenames,
+			isCompiledBinary: false,
+			nativeDir,
+			execDir,
+			versionedDir: "/home/u/.omp/natives/15.5.15",
+			userDataDir: "/home/u/.local/bin",
+		});
+
+		expect(candidates).toEqual(
+			addonFilenames.flatMap(filename => [path.join(nativeDir, filename), path.join(execDir, filename)]),
+		);
+	});
+
+	it("extracts all bundled native variants from one gzip archive and skips current files", async () => {
+		const testDir = await fs.mkdtemp(path.join(os.tmpdir(), "natives-embedded-archive-"));
+		try {
+			const archivePath = path.join(testDir, "embedded-addons.linux-x64.tar.gz");
+			const targetDir = path.join(testDir, "cache");
+			await fs.mkdir(targetDir);
+
+			const modern = Buffer.from("modern native addon");
+			const baseline = Buffer.from("baseline native addon");
+			const modernFilename = "pi_natives.linux-x64-modern.node";
+			const baselineFilename = "pi_natives.linux-x64-baseline.node";
+			await Bun.write(
+				archivePath,
+				await new Bun.Archive(
+					{
+						[modernFilename]: modern,
+						[baselineFilename]: baseline,
+					},
+					{ compress: "gzip", level: 9 },
+				).bytes(),
+			);
+
+			const files: EmbeddedAddonFile[] = [
+				{ variant: "modern", filename: modernFilename, size: modern.length },
+				{ variant: "baseline", filename: baselineFilename, size: baseline.length },
+			];
+
+			const written = extractEmbeddedAddonArchive({ archivePath, files, targetDir });
+			expect(written.map(filePath => path.basename(filePath)).sort()).toEqual([baselineFilename, modernFilename]);
+			expect(await fs.readFile(path.join(targetDir, modernFilename), "utf8")).toBe("modern native addon");
+			expect(await fs.readFile(path.join(targetDir, baselineFilename), "utf8")).toBe("baseline native addon");
+
+			expect(extractEmbeddedAddonArchive({ archivePath, files, targetDir })).toEqual([]);
+		} finally {
+			await fs.rm(testDir, { recursive: true, force: true });
+		}
 	});
 });

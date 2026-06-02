@@ -428,7 +428,7 @@ describe("anthropic stream envelope handling", () => {
 
 		const toolCall = result.content[0];
 		expect(toolCall?.type).toBe("toolCall");
-		if (!toolCall || toolCall.type !== "toolCall") {
+		if (toolCall?.type !== "toolCall") {
 			throw new Error("Expected toolCall content in terminal error payload");
 		}
 		expect("partialJson" in toolCall).toBe(false);
@@ -498,6 +498,42 @@ describe("anthropic stream envelope handling", () => {
 
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toEqual([{ type: "text", text: "line\\qbreak" }]);
+	});
+	it("surfaces a refusal fallback message when stop_details is null", async () => {
+		const refusalEvents: MockAnthropicEvent[] = [
+			{
+				type: "message_start",
+				message: {
+					id: "msg_refusal_no_details",
+					usage: {
+						input_tokens: 5,
+						output_tokens: 0,
+						cache_read_input_tokens: 0,
+						cache_creation_input_tokens: 0,
+					},
+				},
+			},
+			{
+				type: "message_delta",
+				delta: { stop_reason: "refusal", stop_sequence: null, stop_details: null },
+				usage: { input_tokens: 5, output_tokens: 0 },
+			},
+			{ type: "message_stop" },
+		];
+		vi.spyOn(Messages.prototype, "create").mockImplementation(() => createMockRequest(refusalEvents) as never);
+
+		const stream = streamAnthropic(model, context, { apiKey: "sk-ant-test" });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Refusal (no details provided)");
+		expect(result.errorMessage).not.toContain("An unknown error occurred");
+		expect(countEvents(events, "error")).toBe(1);
+		expect(countEvents(events, "done")).toBe(0);
 	});
 
 	it("emits per-tool eager_input_streaming only when Anthropic compat allows it", async () => {

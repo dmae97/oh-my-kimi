@@ -12,6 +12,10 @@ function getModelOrThrow(id: string) {
 
 function createSettings(modelRoles: Record<string, string>) {
 	return {
+		get(path: string) {
+			if (path === "providers.tinyModel") return "online";
+			return undefined;
+		},
 		getModelRole(role: string) {
 			return modelRoles[role];
 		},

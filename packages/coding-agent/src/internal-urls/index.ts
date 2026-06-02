@@ -21,3 +21,4 @@ export * from "./router";
 export * from "./rule-protocol";
 export * from "./skill-protocol";
 export type * from "./types";
+export * from "./vault-protocol";

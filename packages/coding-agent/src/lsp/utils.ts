@@ -221,6 +221,27 @@ export function formatDiagnosticsSummary(diagnostics: Diagnostic[]): string {
 	return parts.length > 0 ? parts.join(", ") : "no issues";
 }
 
+export function summarizeDiagnosticMessages(messages: string[]): { summary: string; errored: boolean } {
+	const counts = { error: 0, warning: 0, info: 0, hint: 0 };
+	for (const message of messages) {
+		const match = message.match(/\[(error|warning|info|hint)\]/i);
+		if (!match) continue;
+		const key = match[1].toLowerCase() as keyof typeof counts;
+		counts[key] += 1;
+	}
+
+	const parts: string[] = [];
+	if (counts.error > 0) parts.push(`${counts.error} error(s)`);
+	if (counts.warning > 0) parts.push(`${counts.warning} warning(s)`);
+	if (counts.info > 0) parts.push(`${counts.info} info(s)`);
+	if (counts.hint > 0) parts.push(`${counts.hint} hint(s)`);
+
+	return {
+		summary: parts.length > 0 ? parts.join(", ") : "no issues",
+		errored: counts.error > 0,
+	};
+}
+
 // =============================================================================
 // Location Formatting
 // =============================================================================
@@ -581,7 +602,7 @@ function firstNonWhitespaceColumn(lineText: string): number {
 	return match ? (match.index ?? 0) : 0;
 }
 
-const BARE_IDENTIFIER_RE = /^[A-Za-z_][\w]*$/;
+const BARE_IDENTIFIER_RE = /^[$A-Za-z_][\w$]*$/;
 const IDENTIFIER_CHAR_RE = /[A-Za-z0-9_$]/;
 
 function findSymbolMatchIndexes(lineText: string, symbol: string, caseInsensitive = false): number[] {

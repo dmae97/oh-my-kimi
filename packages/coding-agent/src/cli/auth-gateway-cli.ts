@@ -19,6 +19,10 @@ import {
 	type Api,
 	AuthBrokerClient,
 	AuthStorage,
+	type CompletionProbe,
+	type CompletionProbeInput,
+	type CredentialCompletionResult,
+	completeSimple,
 	DEFAULT_AUTH_GATEWAY_BIND,
 	type GeneratedProvider,
 	getBundledModels,
@@ -32,7 +36,7 @@ import { getConfigRootDir, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { type AuthBrokerClientConfig, resolveAuthBrokerConfig } from "../session/auth-broker-config";
 
-export type AuthGatewayAction = "serve" | "token" | "status";
+export type AuthGatewayAction = "serve" | "token" | "status" | "check";
 
 export interface AuthGatewayCommandArgs {
 	action: AuthGatewayAction;
@@ -46,10 +50,18 @@ export interface AuthGatewayCommandArgs {
 		 * to wire token-paste plumbing into every local client.
 		 */
 		noAuth?: boolean;
+		/**
+		 * Strict mode for `check` — additionally exercise every credential
+		 * against its provider's chat-completion endpoint. The usage probe (run
+		 * unconditionally) can pass while the chat endpoint still 401s the same
+		 * bearer, so strict mode is the definitive "is this credential
+		 * actually usable" signal. Slower and consumes a tiny amount of quota.
+		 */
+		strict?: boolean;
 	};
 }
 
-const ACTIONS: readonly AuthGatewayAction[] = ["serve", "token", "status"];
+const ACTIONS: readonly AuthGatewayAction[] = ["serve", "token", "status", "check"];
 
 function getTokenFilePath(): string {
 	return path.join(getConfigRootDir(), "auth-gateway.token");
@@ -332,10 +344,268 @@ export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promis
 		case "status":
 			await runStatus(cmd.flags);
 			return;
+		case "check":
+			await runCheck(cmd.flags);
+			return;
 		default: {
 			const _exhaustive: never = cmd.action;
 			throw new Error(`Unknown auth-gateway action: ${String(_exhaustive)}`);
 		}
+	}
+}
+
+/**
+ * Providers whose chat endpoint expects a JSON-serialized credential blob
+ * (`{ token, projectId, refreshToken, expiresAt, … }`) rather than the raw
+ * access token. Mirrors `getOAuthApiKey` in `packages/ai/src/utils/oauth`.
+ */
+const STRUCTURED_API_KEY_PROVIDERS: ReadonlySet<string> = new Set([
+	"github-copilot",
+	"google-gemini-cli",
+	"google-antigravity",
+]);
+
+/**
+ * Provider API types that strict-mode chat probes intentionally skip:
+ * - `bedrock-converse-stream` resolves credentials from the AWS env/profile, not the broker bearer.
+ * - `google-vertex` uses Application Default Credentials; the broker bearer is not the right key.
+ * - `cursor-agent` and `pi-native` (gateway forwarding) have transport quirks
+ *   that make a bearer-only "ping" a poor signal.
+ */
+const STRICT_PROBE_SKIPPED_APIS: ReadonlySet<Api> = new Set<Api>([
+	"bedrock-converse-stream",
+	"google-vertex",
+	"cursor-agent",
+]);
+
+/** Max chat models to try per credential before reporting failure. */
+const STRICT_PROBE_MAX_CANDIDATES = 4;
+
+/** Per-attempt deadline. Each candidate gets its own slice instead of sharing one budget. */
+const STRICT_PROBE_PER_ATTEMPT_TIMEOUT_MS = 15_000;
+
+/**
+ * Overall per-credential budget passed to {@link AuthStorage.checkCredentials}.
+ * Big enough to walk every candidate at the per-attempt cap with a small
+ * margin for refresh/network overhead.
+ */
+const STRICT_PROBE_OVERALL_TIMEOUT_MS = STRICT_PROBE_PER_ATTEMPT_TIMEOUT_MS * (STRICT_PROBE_MAX_CANDIDATES + 1);
+
+/** Match upstream errors that mean "this model is gone, try a different one" so we walk the catalog instead of declaring the credential bad. */
+const RETRYABLE_MODEL_ERROR_RE =
+	/not[_ -]found|invalid[_ -]model|model[_ -]is[_ -]not[_ -]valid|no longer supported|deprecated|404|decommissioned/i;
+
+/**
+ * Rank bundled models for a provider in probe order: cheapest first, then by
+ * id for determinism. Filters out non-bearer-auth APIs (Vertex/Bedrock),
+ * pi-native transport (would loop through the gateway), and placeholder /
+ * router entries with negative/missing cost.
+ */
+function pickProbeCandidates(provider: string): Model<Api>[] {
+	const bundled = getBundledModels(provider as GeneratedProvider);
+	if (bundled.length === 0) return [];
+	const candidates = bundled.filter(model => {
+		if (model.transport === "pi-native") return false;
+		if (STRICT_PROBE_SKIPPED_APIS.has(model.api)) return false;
+		if (!model.input.includes("text")) return false;
+		const totalCost = (model.cost?.input ?? 0) + (model.cost?.output ?? 0);
+		if (!Number.isFinite(totalCost) || totalCost < 0) return false;
+		if (model.maxTokens <= 0) return false;
+		return true;
+	});
+	candidates.sort((a, b) => a.cost.input + a.cost.output - (b.cost.input + b.cost.output) || a.id.localeCompare(b.id));
+	return candidates;
+}
+
+/**
+ * Compose the apiKey bytes a provider's chat endpoint expects, given a
+ * post-refresh probe credential. Mirrors `getOAuthApiKey` for the providers
+ * that require a structured blob; otherwise returns the raw access token /
+ * API key.
+ */
+function composeProbeApiKey(provider: string, credential: CompletionProbeInput["credential"]): string {
+	if (credential.type === "api_key") return credential.apiKey;
+	if (!STRUCTURED_API_KEY_PROVIDERS.has(provider)) return credential.accessToken;
+	return JSON.stringify({
+		token: credential.accessToken,
+		enterpriseUrl: credential.enterpriseUrl,
+		projectId: credential.projectId,
+		refreshToken: credential.refreshToken,
+		expiresAt: credential.expiresAt,
+		email: credential.email,
+		accountId: credential.accountId,
+	});
+}
+
+async function probeOneModel(
+	model: Model<Api>,
+	apiKey: string,
+	outerSignal: AbortSignal,
+): Promise<CredentialCompletionResult> {
+	const start = Date.now();
+	const attemptTimeoutSignal = AbortSignal.timeout(STRICT_PROBE_PER_ATTEMPT_TIMEOUT_MS);
+	const attemptSignal = AbortSignal.any([outerSignal, attemptTimeoutSignal]);
+	// `systemPrompt` is mandatory for some providers (Codex 400s "Instructions
+	// are required" without it). `disableReasoning` is intentionally NOT set:
+	// providers like Fireworks reject the "none" effort it maps to, and we'd
+	// rather burn 16 reasoning tokens than misdiagnose a healthy credential.
+	const response = await completeSimple(
+		model,
+		{
+			systemPrompt: ["Connectivity check. Reply with the single word 'pong'."],
+			messages: [{ role: "user", content: "ping", timestamp: start }],
+		},
+		{
+			apiKey,
+			maxTokens: 32,
+			signal: attemptSignal,
+		},
+	);
+	const latencyMs = Date.now() - start;
+	if (response.stopReason === "error" || response.stopReason === "aborted") {
+		return {
+			ok: false,
+			reason: response.errorMessage ?? `chat probe ended with stopReason=${response.stopReason}`,
+			modelId: model.id,
+			latencyMs,
+		};
+	}
+	return { ok: true, modelId: model.id, latencyMs };
+}
+
+/**
+ * Build the {@link CompletionProbe} consumed by
+ * {@link AuthStorage.checkCredentials} in `--strict` mode. Walks the cheapest
+ * candidates per provider, retrying on "model not found / invalid model"
+ * errors so a stale catalog entry doesn't masquerade as a bad credential.
+ * Stops as soon as one model returns a successful response (the credential
+ * authenticated against at least one model in the catalog).
+ */
+function createStrictCompletionProbe(): CompletionProbe {
+	return async (input: CompletionProbeInput): Promise<CredentialCompletionResult> => {
+		const candidates = pickProbeCandidates(input.provider).slice(0, STRICT_PROBE_MAX_CANDIDATES);
+		if (candidates.length === 0) {
+			return { ok: null, reason: `no bearer-compatible probe model bundled for provider ${input.provider}` };
+		}
+		const apiKey = composeProbeApiKey(input.provider, input.credential);
+		let lastFailure: CredentialCompletionResult | undefined;
+		for (const model of candidates) {
+			if (input.signal.aborted) {
+				return {
+					ok: false,
+					reason: "aborted",
+					modelId: model.id,
+				};
+			}
+			const result = await probeOneModel(model, apiKey, input.signal);
+			if (result.ok === true) return result;
+			lastFailure = result;
+			if (!RETRYABLE_MODEL_ERROR_RE.test(result.reason ?? "")) {
+				// Non-model error (401, 403, 5xx, network) — the credential is the
+				// issue, not the catalog. Stop walking.
+				return result;
+			}
+		}
+		return (
+			lastFailure ?? {
+				ok: false,
+				reason: `all ${candidates.length} probe models failed for provider ${input.provider}`,
+			}
+		);
+	};
+}
+
+function formatCompletionStatus(completion: CredentialCompletionResult | undefined): string {
+	if (!completion) return "";
+	if (completion.ok === true) return chalk.green(" [chat: ok]");
+	if (completion.ok === false) return chalk.red(" [chat: FAIL]");
+	return chalk.yellow(" [chat: skip]");
+}
+
+/**
+ * `omp auth-gateway check` — probe each broker-supplied credential and print
+ * per-credential auth health. Use this when the gateway is returning 401s and
+ * you need to find which row in a multi-account pool is the bad one. The
+ * aggregate `/v1/usage` endpoint silently drops failed credentials, so a
+ * dedicated diagnostic is the only way to see which credentials failed.
+ *
+ * Strict mode (`--strict`) additionally exercises each credential against a
+ * cheap chat model from its provider's bundled catalog. This catches the case
+ * where the usage endpoint reports 200 but the chat endpoint 401s the same
+ * bearer (revoked OAuth scope, mislabeled provider row, etc).
+ */
+async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
+	const brokerConfig = await resolveAuthBrokerConfig();
+	if (!brokerConfig) {
+		throw new Error(
+			"`omp auth-gateway check` requires OMP_AUTH_BROKER_URL (or `auth.broker.url`/`auth.broker.token` in config.yml). It probes the same credentials the gateway would serve.",
+		);
+	}
+
+	const client = createBrokerClient(brokerConfig);
+	const initialSnapshot = await fetchBrokerSnapshot(client);
+	const store = new RemoteAuthCredentialStore({ client, initialSnapshot });
+	const storage = new AuthStorage(store, { sourceLabel: `broker ${brokerConfig.url}` });
+	try {
+		await storage.reload();
+		const results = await storage.checkCredentials(
+			flags.strict
+				? { completionProbe: createStrictCompletionProbe(), completionTimeoutMs: STRICT_PROBE_OVERALL_TIMEOUT_MS }
+				: undefined,
+		);
+
+		if (flags.json) {
+			process.stdout.write(
+				`${JSON.stringify({ broker: brokerConfig.url, strict: flags.strict === true, credentials: results }, null, 2)}\n`,
+			);
+		} else {
+			const grouped = new Map<string, typeof results>();
+			for (const row of results) {
+				const list = grouped.get(row.provider) ?? [];
+				list.push(row);
+				grouped.set(row.provider, list);
+			}
+			const providers = [...grouped.keys()].sort();
+			process.stdout.write(`broker: ${brokerConfig.url}${flags.strict ? chalk.dim(" [strict]") : ""}\n`);
+			for (const provider of providers) {
+				const rows = grouped.get(provider) ?? [];
+				process.stdout.write(`\n${chalk.bold(provider)} (${rows.length})\n`);
+				for (const row of rows) {
+					const status =
+						row.ok === true
+							? chalk.green("ok      ")
+							: row.ok === false
+								? chalk.red("FAIL    ")
+								: chalk.yellow("unknown ");
+					const identity =
+						row.email ?? row.accountId ?? (row.type === "api_key" ? "(api key)" : "(no identity on credential)");
+					const remote = row.remoteRefresh ? chalk.dim(" [remote-refresh]") : "";
+					const reasonParts: string[] = [];
+					if (row.reason) reasonParts.push(row.reason);
+					if (row.completion?.reason) reasonParts.push(`chat: ${row.completion.reason}`);
+					const reason = reasonParts.length > 0 ? chalk.dim(` — ${reasonParts.join("; ")}`) : "";
+					const chat = formatCompletionStatus(row.completion);
+					process.stdout.write(
+						`  ${status}${chat} id=${row.id.toString().padStart(3)} ${row.type.padEnd(7)} ${identity}${remote}${reason}\n`,
+					);
+				}
+			}
+			const failed = results.filter(row => row.ok === false).length;
+			const unverifiable = results.filter(row => row.ok === null).length;
+			const passing = results.filter(row => row.ok === true).length;
+			const chatFailed = flags.strict ? results.filter(row => row.completion?.ok === false).length : 0;
+			const summaryParts = [
+				chalk.green(`${passing} ok`),
+				chalk.red(`${failed} failed`),
+				chalk.yellow(`${unverifiable} unverifiable`),
+			];
+			if (flags.strict) summaryParts.push(chalk.red(`${chatFailed} chat-failed`));
+			summaryParts.push(`${results.length} total`);
+			process.stdout.write(`\n${summaryParts.join(", ")}\n`);
+			if (failed > 0 || chatFailed > 0) process.exitCode = 1;
+		}
+	} finally {
+		storage.close();
 	}
 }
 

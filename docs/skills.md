@@ -55,6 +55,7 @@ Supported frontmatter fields on the skill type:
 - `description?: string`
 - `globs?: string[]`
 - `alwaysApply?: boolean`
+- `hide?: boolean`
 - additional keys are preserved as unknown metadata
 
 Current runtime behavior:
@@ -81,13 +82,15 @@ Provider ordering is priority-first (higher wins), then registration order for t
 Current registered skill providers:
 
 1. `native` (priority 100) — `.omp` user/project skills via `src/discovery/builtin.ts`
-2. `claude` (priority 80)
-3. priority 70 group (in registration order):
+2. `omp-plugins` (priority 90) — `skills/` bundled next to extension packages loaded through `extensions:` or `--extension`/`-e`
+3. `claude` (priority 80)
+4. priority 70 group (in registration order):
    - `claude-plugins`
    - `agents`
    - `codex`
-4. `opencode` (priority 55)
-   Dedup key is skill name. First item with a given name wins.
+5. `opencode` (priority 55)
+
+Dedup key is skill name. First item with a given name wins.
 
 ### Source toggles and filtering
 
@@ -122,9 +125,11 @@ Filter order is:
 System prompt construction (`src/system-prompt.ts`) uses discovered skills as follows:
 
 - if `read` tool is available:
-  - include discovered skills list in prompt
+  - include discovered skills list in prompt, excluding skills with `hide: true`
 - otherwise:
   - omit discovered list
+
+`hide: true` does not disable the skill. Hidden skills are still loaded and remain reachable through `skill://<name>` and `/skill:<name>` when skill commands are enabled.
 
 Task tool subagents receive the session's discovered/provided skills list via normal session creation; there is no per-task skill pinning override.
 
@@ -142,7 +147,7 @@ If `skills.enableSkillCommands` is true, interactive mode registers one slash co
   - **Ctrl+Enter** (`app.message.followUp`) → invokes the skill on the `followUp` queue while streaming, or as a normal idle prompt when the agent is not streaming
 - appends metadata (`Skill: <path>`, optional `User: <args>`)
 
-There is no flag, mode-selector, or frontmatter knob to override this — the keybinding *is* the choice, identical to how free text is routed during streaming (`input-controller.ts:243-249` for Enter, `input-controller.ts:462-500` for Ctrl+Enter; both dispatch through `#invokeSkillCommand`).
+There is no flag, mode-selector, or frontmatter knob to override this — the keybinding _is_ the choice, identical to how free text is routed during streaming (`input-controller.ts:243-249` for Enter, `input-controller.ts:462-500` for Ctrl+Enter; both dispatch through `#invokeSkillCommand`).
 
 ## `skill://` URL behavior
 

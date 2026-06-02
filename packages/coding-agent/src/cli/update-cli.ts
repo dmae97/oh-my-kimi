@@ -14,6 +14,18 @@ import { theme } from "../modes/theme/theme";
 
 const REPO = "can1357/oh-my-pi";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
+/**
+ * Official npm registry origin.
+ *
+ * Pinned across both the version check and the bun install step so the two
+ * agree on which catalog they are talking to. A user's bun may be pointed at
+ * an unofficial mirror (corporate proxy, Taobao, etc.) that lags the upstream
+ * registry by minutes-to-hours, in which case `getLatestRelease` would resolve
+ * a version the mirror has not yet replicated and the install would fail with
+ * `No version matching "X" found for specifier "<pkg>" (but package exists)`.
+ * See #1686.
+ */
+const NPM_REGISTRY = "https://registry.npmjs.org/";
 
 interface ReleaseInfo {
 	tag: string;
@@ -130,7 +142,7 @@ async function resolveUpdateTarget(): Promise<UpdateTarget> {
  * Uses npm instead of GitHub API to avoid unauthenticated rate limiting.
  */
 async function getLatestRelease(): Promise<ReleaseInfo> {
-	const response = await fetch(`https://registry.npmjs.org/${PACKAGE}/latest`);
+	const response = await fetch(`${NPM_REGISTRY}${PACKAGE}/latest`);
 	if (!response.ok) {
 		throw new Error(`Failed to fetch release info: ${response.statusText}`);
 	}
@@ -293,11 +305,32 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
 }
 
 /**
+ * Build the bun argv used to globally install a specific omp version.
+ *
+ * The version is selected by hitting {@link NPM_REGISTRY} directly in
+ * {@link getLatestRelease}, so the install MUST observe the same catalog:
+ *
+ * - `--registry=${NPM_REGISTRY}` pins the install to the official registry
+ *   regardless of the user's bunfig/`.npmrc`. A mirror (corporate proxy,
+ *   Taobao, …) that hasn't yet replicated the release would otherwise reject
+ *   a version the upstream registry already advertises.
+ * - `--no-cache` tells bun to ignore its on-disk manifest snapshot so it
+ *   re-fetches metadata from that registry on every invocation.
+ *
+ * Together these two flags make `omp update` produce exactly the registry
+ * lookup the version check just performed. See #1686.
+ */
+export function buildBunInstallArgs(expectedVersion: string): string[] {
+	return ["install", "-g", "--no-cache", `--registry=${NPM_REGISTRY}`, `${PACKAGE}@${expectedVersion}`];
+}
+
+/**
  * Update via bun package manager.
  */
 async function updateViaBun(expectedVersion: string): Promise<void> {
 	console.log(chalk.dim("Updating via bun..."));
-	const result = await $`bun install -g ${PACKAGE}@${expectedVersion}`.nothrow();
+	const args = buildBunInstallArgs(expectedVersion);
+	const result = await $`bun ${args}`.nothrow();
 	if (result.exitCode !== 0) {
 		throw new Error(`bun install failed with exit code ${result.exitCode}`);
 	}

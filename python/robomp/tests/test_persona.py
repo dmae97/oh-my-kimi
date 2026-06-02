@@ -37,6 +37,16 @@ class _Workspace:
 
 
 @dataclass(slots=True, frozen=True)
+class _Pr:
+    number: int = 99
+    author: str = "alice"
+    head_ref: str = "fix-crash"
+    base_ref: str = "main"
+    head_repo: str = "alice/widget"
+    html_url: str = "https://github.com/octo/widget/pull/99"
+
+
+@dataclass(slots=True, frozen=True)
 class _Comment:
     id: int = 1
     author: str = "can1357"
@@ -102,6 +112,27 @@ def test_directive_prompt_embeds_thread_and_directive_body() -> None:
     assert "PR #1080 is open" in out
 
 
+def test_followup_comment_prompt_embeds_thread_context() -> None:
+    thread = (
+        ThreadMessage(kind="pr_body", author="roboomp", body="PR body", created_at=""),
+        ThreadMessage(kind="comment", author="can1357", body="prior request", created_at="2026-05-01T10:00:00Z"),
+    )
+    out = persona.followup_comment(
+        repo=_Repo(),
+        issue=_Issue(),
+        comment=_Comment(body="current request"),
+        workspace=_Workspace(),
+        pr_status="PR #1080 is open",
+        pr_number=1080,
+        thread=thread,
+    )
+
+    assert "Prior conversation" in out
+    assert "PR body" in out
+    assert "prior request" in out
+    assert "current request" in out
+
+
 def test_kickoff_directive_prompt_embeds_thread_and_classify_instruction() -> None:
     thread = (ThreadMessage(kind="issue_body", author="alice", body="failing on macos", created_at=""),)
     out = persona.kickoff_directive(
@@ -130,3 +161,23 @@ def test_resume_triage_renders_branch_and_issue() -> None:
     assert "broken thing" in out
     # The prompt instructs the agent to reconcile drift via fetch_issue_thread.
     assert "fetch_issue_thread" in out
+
+
+def test_kickoff_pr_review_formats_head_repo_and_origin_base() -> None:
+    out = persona.kickoff_pr_review(
+        repo=_Repo(),
+        pr=_Pr(),
+        workspace=_Workspace(),
+    )
+    assert "`fix-crash` from `alice/widget`" in out
+    assert "git diff origin/main...HEAD" in out
+
+
+def test_review_completion_reminder_mentions_submit_only() -> None:
+    out = persona.review_completion_reminder(
+        repo=_Repo(),
+        issue=_Issue(number=99, title="Fix parser"),
+        workspace=_Workspace(branch="review/pr-99"),
+    )
+    assert "submit_pr_review" in out
+    assert "gh_open_pr" not in out

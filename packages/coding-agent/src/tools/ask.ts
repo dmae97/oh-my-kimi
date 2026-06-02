@@ -20,6 +20,7 @@ import { type Component, Container, Markdown, renderInlineMarkdown, TERMINAL, Te
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import type { ExtensionUISelectItem } from "../extensibility/extensions";
 import { getMarkdownTheme, type Theme, theme } from "../modes/theme/theme";
 import askDescription from "../prompts/tools/ask.md" with { type: "text" };
 import { renderStatusLine } from "../tui";
@@ -33,6 +34,7 @@ import { ToolAbortError } from "./tool-errors";
 
 const OptionItem = z.object({
 	label: z.string().describe("display label"),
+	description: z.string().describe("optional explanatory text displayed below the label").optional(),
 });
 
 const QuestionItem = z.object({
@@ -69,6 +71,23 @@ export interface AskToolDetails {
 	results?: QuestionResult[];
 }
 
+interface AskOption {
+	label: string;
+	description?: string;
+}
+
+function getAskOptionLabel(option: AskOption): string {
+	return option.label;
+}
+
+function getSelectOptionLabel(option: ExtensionUISelectItem): string {
+	return typeof option === "string" ? option : option.label;
+}
+
+function toSelectOption(option: AskOption, label = option.label): ExtensionUISelectItem {
+	return option.description ? { label, description: option.description } : label;
+}
+
 // =============================================================================
 // Constants
 // =============================================================================
@@ -81,24 +100,25 @@ function getDoneOptionLabel(): string {
 }
 
 /** Add "(Recommended)" suffix to the option at the given index if not already present */
-function addRecommendedSuffix(labels: string[], recommendedIndex?: number): string[] {
-	if (recommendedIndex === undefined || recommendedIndex < 0 || recommendedIndex >= labels.length) {
-		return labels;
+function addRecommendedSuffix(options: AskOption[], recommendedIndex?: number): ExtensionUISelectItem[] {
+	if (recommendedIndex === undefined || recommendedIndex < 0 || recommendedIndex >= options.length) {
+		return options.map(option => toSelectOption(option));
 	}
-	return labels.map((label, i) => {
-		if (i === recommendedIndex && !label.endsWith(RECOMMENDED_SUFFIX)) {
-			return label + RECOMMENDED_SUFFIX;
-		}
-		return label;
+	return options.map((option, i) => {
+		const label =
+			i === recommendedIndex && !option.label.endsWith(RECOMMENDED_SUFFIX)
+				? option.label + RECOMMENDED_SUFFIX
+				: option.label;
+		return toSelectOption(option, label);
 	});
 }
 
-function getAutoSelectionOnTimeout(optionLabels: string[], recommended?: number): string[] {
-	if (optionLabels.length === 0) return [];
-	if (typeof recommended === "number" && recommended >= 0 && recommended < optionLabels.length) {
-		return [optionLabels[recommended]];
+function getAutoSelectionOnTimeout(options: AskOption[], recommended?: number): string[] {
+	if (options.length === 0) return [];
+	if (typeof recommended === "number" && recommended >= 0 && recommended < options.length) {
+		return [options[recommended]!.label];
 	}
-	return [optionLabels[0]];
+	return [options[0]!.label];
 }
 
 /** Strip "(Recommended)" suffix from a label */
@@ -134,7 +154,7 @@ interface AskSingleQuestionOptions {
 interface UIContext {
 	select(
 		prompt: string,
-		options: string[],
+		options: ExtensionUISelectItem[],
 		options_?: {
 			initialIndex?: number;
 			timeout?: number;
@@ -157,7 +177,7 @@ interface UIContext {
 async function askSingleQuestion(
 	ui: UIContext,
 	question: string,
-	optionLabels: string[],
+	questionOptions: AskOption[],
 	multi: boolean,
 	options: AskSingleQuestionOptions = {},
 ): Promise<SelectionResult> {
@@ -169,7 +189,7 @@ async function askSingleQuestion(
 
 	const selectOption = async (
 		prompt: string,
-		optionsToShow: string[],
+		optionsToShow: ExtensionUISelectItem[],
 		initialIndex?: number,
 	): Promise<{ choice: string | undefined; timedOut: boolean; navigation?: "back" | "forward" }> => {
 		let timeoutTriggered = false;
@@ -218,18 +238,19 @@ async function askSingleQuestion(
 	const promptWithProgress = navigation?.progressText ? `${question} (${navigation.progressText})` : question;
 	if (multi) {
 		const selected = new Set<string>(selectedOptions);
-		let cursorIndex = Math.min(Math.max(recommended ?? 0, 0), Math.max(optionLabels.length - 1, 0));
+		let cursorIndex = Math.min(Math.max(recommended ?? 0, 0), Math.max(questionOptions.length - 1, 0));
 		const firstSelected = selectedOptions[0];
 		if (firstSelected) {
-			const selectedIndex = optionLabels.indexOf(firstSelected);
+			const selectedIndex = questionOptions.findIndex(option => option.label === firstSelected);
 			if (selectedIndex >= 0) cursorIndex = selectedIndex;
 		}
 		while (true) {
-			const opts: string[] = [];
+			const opts: ExtensionUISelectItem[] = [];
 
-			for (const opt of optionLabels) {
-				const checkbox = selected.has(opt) ? theme.checkbox.checked : theme.checkbox.unchecked;
-				opts.push(`${checkbox} ${opt}`);
+			for (const opt of questionOptions) {
+				const checkbox = selected.has(opt.label) ? theme.checkbox.checked : theme.checkbox.unchecked;
+				const displayLabel = `${checkbox} ${opt.label}`;
+				opts.push(toSelectOption(opt, displayLabel));
 			}
 
 			if (!navigation?.allowForward && selected.size > 0) {
@@ -269,7 +290,7 @@ async function askSingleQuestion(
 				break;
 			}
 
-			const selectedIdx = opts.indexOf(choice);
+			const selectedIdx = opts.findIndex(opt => getSelectOptionLabel(opt) === choice);
 			if (selectedIdx >= 0) {
 				cursorIndex = selectedIdx;
 			}
@@ -297,16 +318,16 @@ async function askSingleQuestion(
 		}
 		selectedOptions = Array.from(selected);
 	} else {
-		const displayLabels = addRecommendedSuffix(optionLabels, recommended);
-		const optionsWithNavigation = [...displayLabels, OTHER_OPTION];
+		const displayOptions = addRecommendedSuffix(questionOptions, recommended);
+		const optionsWithNavigation: ExtensionUISelectItem[] = [...displayOptions, OTHER_OPTION];
 
 		let initialIndex = recommended;
 		const previouslySelected = selectedOptions[0];
 		if (previouslySelected) {
-			const selectedIndex = optionLabels.indexOf(previouslySelected);
+			const selectedIndex = questionOptions.findIndex(option => option.label === previouslySelected);
 			if (selectedIndex >= 0) initialIndex = selectedIndex;
 		} else if (customInput !== undefined) {
-			initialIndex = displayLabels.length;
+			initialIndex = displayOptions.length;
 		}
 		if (initialIndex !== undefined) {
 			const maxIndex = Math.max(optionsWithNavigation.length - 1, 0);
@@ -346,7 +367,7 @@ async function askSingleQuestion(
 	}
 
 	if (timedOut && selectedOptions.length === 0 && customInput === undefined) {
-		selectedOptions = getAutoSelectionOnTimeout(optionLabels, recommended);
+		selectedOptions = getAutoSelectionOnTimeout(questionOptions, recommended);
 	}
 
 	return { selectedOptions, customInput, timedOut };
@@ -378,6 +399,7 @@ type AskParams = AskToolInput;
  */
 export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly name = "ask";
+	readonly approval = "read" as const;
 	readonly label = "Ask";
 	readonly summary = "Ask the user a clarifying question";
 	readonly description: string;
@@ -441,12 +463,16 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 			q: AskParams["questions"][number],
 			options?: { previous?: QuestionResult; navigation?: NavigationControls },
 		) => {
-			const optionLabels = q.options.map(o => o.label);
+			const questionOptions = q.options.map(option => ({
+				label: option.label,
+				...(option.description?.trim() ? { description: option.description.trim() } : {}),
+			}));
+			const optionLabels = questionOptions.map(getAskOptionLabel);
 			try {
 				const { selectedOptions, customInput, navigation, cancelled, timedOut } = await askSingleQuestion(
 					ui,
 					q.question,
-					optionLabels,
+					questionOptions,
 					q.multi ?? false,
 					{
 						recommended: q.recommended,
@@ -567,14 +593,19 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 // TUI Renderer
 // =============================================================================
 
+interface AskRenderOption {
+	label: string;
+	description?: string;
+}
+
 interface AskRenderArgs {
 	question?: string;
-	options?: Array<{ label: string }>;
+	options?: AskRenderOption[];
 	multi?: boolean;
 	questions?: Array<{
 		id: string;
 		question: string;
-		options: Array<{ label: string }>;
+		options: AskRenderOption[];
 		multi?: boolean;
 	}>;
 }
@@ -633,6 +664,13 @@ export const askToolRenderer = {
 						const optBranch = isLastOpt ? uiTheme.tree.last : uiTheme.tree.branch;
 						const optLabel = renderInlineMarkdown(opt.label, mdTheme, t => uiTheme.fg("muted", t));
 						optText += `\n ${uiTheme.fg("dim", continuation)}   ${uiTheme.fg("dim", optBranch)} ${uiTheme.fg("dim", uiTheme.checkbox.unchecked)} ${optLabel}`;
+						if (opt.description?.trim()) {
+							const optContinuation = isLastOpt ? " " : uiTheme.tree.vertical;
+							const description = renderInlineMarkdown(opt.description.trim(), mdTheme, t =>
+								uiTheme.fg("dim", t),
+							);
+							optText += `\n ${uiTheme.fg("dim", continuation)}   ${uiTheme.fg("dim", optContinuation)}   ${uiTheme.fg("dim", "↳")} ${description}`;
+						}
 					}
 					container.addChild(new Text(optText, 0, 0));
 				}
@@ -660,6 +698,11 @@ export const askToolRenderer = {
 				const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
 				const optLabel = renderInlineMarkdown(opt.label, mdTheme, t => uiTheme.fg("muted", t));
 				optText += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg("dim", uiTheme.checkbox.unchecked)} ${optLabel}`;
+				if (opt.description?.trim()) {
+					const continuation = isLast ? " " : uiTheme.tree.vertical;
+					const description = renderInlineMarkdown(opt.description.trim(), mdTheme, t => uiTheme.fg("dim", t));
+					optText += `\n ${uiTheme.fg("dim", continuation)}   ${uiTheme.fg("dim", "↳")} ${description}`;
+				}
 			}
 			container.addChild(new Text(optText, 0, 0));
 		}

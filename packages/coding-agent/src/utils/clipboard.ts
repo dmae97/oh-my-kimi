@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import type { ClipboardImage } from "@oh-my-pi/pi-natives";
 import * as native from "@oh-my-pi/pi-natives";
+import { logger } from "@oh-my-pi/pi-utils";
 
 function hasDisplay(): boolean {
 	return process.platform !== "linux" || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
@@ -80,7 +81,7 @@ if ($img -ne $null) {
 }
 `;
 
-const POWERSHELL_TIMEOUT_MS = 5000;
+const POWERSHELL_TIMEOUT_MS = 8000;
 
 /**
  * Read a clipboard image through the Windows host's PowerShell.
@@ -104,6 +105,12 @@ async function readImageViaPowerShell(): Promise<ClipboardImage | null> {
 		try {
 			stdout = await new Response(proc.stdout).text();
 			await proc.exited;
+		} catch (err) {
+			// powershell.exe is a Windows process reached over WSL interop; if it
+			// doesn't reap cleanly, swallow the error so the dispatcher can fall
+			// through to the native bridge instead of throwing.
+			logger.warn("clipboard: powershell read failed", { error: String(err) });
+			return null;
 		} finally {
 			clearTimeout(timer);
 		}
@@ -136,10 +143,51 @@ export async function readImageFromClipboard(): Promise<ClipboardImage | null> {
 	if (isWsl()) {
 		const image = await readImageViaPowerShell();
 		if (image) return image;
-		// Fall through: arboard may still succeed on a future WSLg release.
-	} else if (!hasDisplay()) {
+		// Fall through: arboard may still succeed on a future WSLg release —
+		// but only when we actually have a display server. Headless WSL has
+		// no display, so arboard would reject anyway.
+	}
+
+	if (!hasDisplay()) {
 		return null;
 	}
 
 	return (await native.readImageFromClipboard()) ?? null;
+}
+
+/**
+ * Read plain text from the system clipboard.
+ */
+export async function readTextFromClipboard(): Promise<string> {
+	try {
+		const p = process.platform;
+		if (p === "darwin") {
+			return execSync("pbpaste", { encoding: "utf8", timeout: 2000 }).toString();
+		}
+		if (p === "win32") {
+			return execSync('powershell.exe -NoProfile -Command "Get-Clipboard"', {
+				encoding: "utf8",
+				timeout: 2000,
+			}).toString();
+		}
+		if (process.env.TERMUX_VERSION) {
+			return execSync("termux-clipboard-get", { encoding: "utf8", timeout: 2000 }).toString();
+		}
+		const hasWaylandDisplay = Boolean(process.env.WAYLAND_DISPLAY);
+		const hasX11Display = Boolean(process.env.DISPLAY);
+		if (hasWaylandDisplay) {
+			try {
+				return execSync("wl-paste --type text/plain --no-newline", { encoding: "utf8", timeout: 2000 }).toString();
+			} catch {
+				if (hasX11Display) {
+					return execSync("xclip -selection clipboard -o", { encoding: "utf8", timeout: 2000 }).toString();
+				}
+			}
+		} else if (hasX11Display) {
+			return execSync("xclip -selection clipboard -o", { encoding: "utf8", timeout: 2000 }).toString();
+		}
+	} catch (error) {
+		logger.warn("clipboard: failed to read clipboard text", { error: String(error) });
+	}
+	return "";
 }

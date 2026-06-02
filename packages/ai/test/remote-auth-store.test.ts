@@ -105,6 +105,39 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		expect(refreshSpy).toHaveBeenCalledTimes(1);
 		clientStorage.close();
 	});
+	test("suspect credential refresh updates the client snapshot from the broker response", async () => {
+		const rotated = {
+			access: "server-access-after-401",
+			refresh: "server-refresh-after-401",
+			expires: Date.now() + 120_000,
+			accountId: "account-1",
+			email: "a@example.com",
+		};
+		const refreshSpy = vi.spyOn(oauthUtils, "refreshOAuthToken").mockResolvedValue(rotated);
+
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await brokerClient.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const initialEntry = initialResult.snapshot.credentials[0];
+		if (!initialEntry) throw new Error("expected credential");
+
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			initialSnapshot: initialResult.snapshot,
+		});
+
+		await remoteStore.markCredentialSuspect(initialEntry.id);
+		const rows = remoteStore.listAuthCredentials("anthropic");
+
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.credential.type).toBe("oauth");
+		if (rows[0]?.credential.type === "oauth") {
+			expect(rows[0].credential.access).toBe("server-access-after-401");
+			expect(rows[0].credential.refresh).toBe(REMOTE_REFRESH_SENTINEL);
+		}
+		expect(refreshSpy).toHaveBeenCalledTimes(1);
+		remoteStore.close();
+	});
 
 	test("RemoteAuthCredentialStore rejects writes from the client", () => {
 		const remoteStore = new RemoteAuthCredentialStore({

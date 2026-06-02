@@ -98,8 +98,8 @@
         },
         "timeout": {
           "type": "number",
-          "exclusiveMinimum": 0,
-          "description": "Connection timeout in milliseconds."
+          "minimum": 0,
+          "description": "MCP request timeout in milliseconds. Set to 0 to disable client-side MCP timeouts."
         },
         "auth": {
           "$ref": "#/$defs/authConfig"

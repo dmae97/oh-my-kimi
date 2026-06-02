@@ -18,6 +18,20 @@ describe("matchesKey", () => {
 		expect(matchesKey("\x1b[5~", "pageUp")).toBe(true);
 	});
 
+	it("matches legacy Alt+letter pairs in enhanced keyboard mixed mode", () => {
+		setKittyProtocolActive(true);
+		expect(matchesKey("\x1bp", "alt+p")).toBe(true);
+		expect(matchesKey("\x1bh", "alt+h")).toBe(true);
+		expect(matchesKey("\x1bP", "alt+shift+p")).toBe(true);
+		expect(matchesKey("\x1bp", "alt+shift+p")).toBe(false);
+		expect(matchesKey("\x1b[1;3A", "alt+up")).toBe(true);
+		expect(matchesKey("\x1bp", "alt+up")).toBe(false);
+		expect(matchesKey("\x1bn", "alt+down")).toBe(false);
+		expect(matchesKey("\x1bb", "alt+left")).toBe(false);
+		expect(matchesKey("\x1bf", "alt+right")).toBe(false);
+		setKittyProtocolActive(false);
+	});
+
 	it("should prefer codepoint for Latin letters even when base layout differs", () => {
 		setKittyProtocolActive(true);
 		// Dvorak Ctrl+K reports codepoint 'k' (107) and base layout 'v' (118)
@@ -66,6 +80,15 @@ describe("matchesKey", () => {
 });
 
 describe("parseKey", () => {
+	it("parses legacy Alt+letter pairs in enhanced keyboard mixed mode", () => {
+		setKittyProtocolActive(true);
+		expect(parseKey("\x1bp")).toBe("alt+p");
+		expect(parseKey("\x1bh")).toBe("alt+h");
+		expect(parseKey("\x1bP")).toBe("alt+shift+p");
+		expect(parseKey("\x1b[1;3A")).toBe("alt+up");
+		setKittyProtocolActive(false);
+	});
+
 	it("should prefer codepoint for Latin letters when base layout differs", () => {
 		setKittyProtocolActive(true);
 		const dvorakCtrlK = "\x1b[107::118;5u";

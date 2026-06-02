@@ -12,10 +12,12 @@ Source of truth in code:
 
 ## Preferred config locations
 
-OMP can discover MCP servers from multiple tools (`.claude/`, `.cursor/`, `.vscode/`, `opencode.json`, and more), but for OMP-native configuration you should usually use one of these files:
+OMP can discover MCP servers from multiple tools (`.claude/`, `.cursor/`, `.vscode/`, `opencode.json`, and more), but for OMP-native configuration you should usually use one of these primary files:
 
 - Project: `.omp/mcp.json`
 - User: `~/.omp/agent/mcp.json`
+
+The native provider also reads `.omp/.mcp.json` and `~/.omp/agent/.mcp.json` for compatibility, but OMP writes to the primary `mcp.json` paths above.
 
 OMP also accepts fallback standalone files in the project root:
 
@@ -68,9 +70,11 @@ Server names must match `^[a-zA-Z0-9_.-]{1,100}$`.
 Shared fields for every transport:
 
 - `enabled?: boolean` — skip this server when `false`
-- `timeout?: number` — connection timeout in milliseconds
+- `timeout?: number` — MCP request timeout in milliseconds; `0` disables client-side MCP timeouts
 - `auth?: { ... }` — auth metadata used by OMP for OAuth/API-key flows
 - `oauth?: { ... }` — explicit OAuth client settings used during auth/reauth
+
+Set `OMP_MCP_TIMEOUT_MS=0` to disable the client-side timeout for every MCP server in the current process. Set it to a positive millisecond value, such as `OMP_MCP_TIMEOUT_MS=120000`, to apply one global timeout without editing each server entry.
 
 ### `stdio` transport
 
@@ -315,7 +319,27 @@ This matches GitHub's official local Docker image `ghcr.io/github/github-mcp-ser
 
 This is the part that usually trips people up.
 
-### In `.omp/mcp.json` and `~/.omp/agent/mcp.json`
+### Discovery-time `${...}` expansion
+
+OMP expands `${VAR}` and `${VAR:-default}` placeholders while discovering MCP configs from OMP-native files and standalone fallback files. Expansion applies recursively to string values in `command`, `args`, `env`, `cwd`, `url`, `headers`, `auth`, and `oauth`; unresolved placeholders remain literal strings.
+
+Example:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${GITHUB_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+### Pre-connect env/header resolution
 
 Before OMP launches a stdio server or makes an HTTP/SSE request, it resolves stdio `env` values and HTTP/SSE `headers` values like this:
 
@@ -342,28 +366,6 @@ That means this is valid and convenient for local secrets:
 - `"GITHUB_PERSONAL_ACCESS_TOKEN": "GITHUB_PERSONAL_ACCESS_TOKEN"` → copy from the current shell environment
 - `"Authorization": "Bearer hardcoded-token"` → use the literal value
 - `"Authorization": "!printf 'Bearer %s' \"$GITHUB_TOKEN\""` → build the header from a command
-
-### In root `mcp.json` and `.mcp.json`
-
-The standalone fallback loader also expands `${VAR}` and `${VAR:-default}` inside strings during discovery for `command`, `args`, `env`, `cwd`, `url`, `headers`, `auth`, and `oauth`.
-
-Example:
-
-```json
-{
-  "mcpServers": {
-    "github": {
-      "type": "http",
-      "url": "https://api.githubcopilot.com/mcp/",
-      "headers": {
-        "Authorization": "Bearer ${GITHUB_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-If you want the least surprising OMP behavior, prefer `.omp/mcp.json` or `~/.omp/agent/mcp.json` and use explicit env/header values.
 
 ## `disabledServers`
 

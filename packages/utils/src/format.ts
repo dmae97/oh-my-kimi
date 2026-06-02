@@ -8,6 +8,7 @@ const DAY = 24 * HOUR;
  * Examples: "123ms", "1.5s", "30m15s", "2h30m", "3d2h"
  */
 export function formatDuration(ms: number): string {
+	if (!Number.isFinite(ms) || ms <= 0) return "0ms";
 	if (ms < SEC) return `${ms}ms`;
 	if (ms < MIN) return `${(ms / SEC).toFixed(1)}s`;
 	if (ms < HOUR) {

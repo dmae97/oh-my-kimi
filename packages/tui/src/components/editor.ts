@@ -19,9 +19,14 @@ import {
 } from "../utils";
 import { SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list";
 
+const AUTOCOMPLETE_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
+	overflowSearch: false,
+};
+
 const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	minPrimaryColumnWidth: 12,
 	maxPrimaryColumnWidth: 32,
+	overflowSearch: false,
 };
 
 function sanitizeLoadedText(text: string): string {
@@ -325,6 +330,10 @@ export class Editor implements Component, Focusable {
 	cursorOverride: string | undefined;
 	/** Display width of the cursorOverride glyph (needed because override may contain ANSI escapes). */
 	cursorOverrideWidth: number | undefined;
+	/** Optional hook that styles displayed input text with zero-width ANSI escapes.
+	 *  MUST preserve visible width (may only add SGR codes, never glyphs). Applied per
+	 *  layout line to the user-text segments — never to the cursor glyph or inline hint. */
+	decorateText: ((text: string) => string) | undefined;
 	#promptGutter: string | undefined;
 
 	// Store last layout width for cursor navigation
@@ -583,9 +592,18 @@ export class Editor implements Component, Focusable {
 		return Math.max(1, this.#maxHeight - verticalChrome);
 	}
 
+	/** Apply the optional input decorator to a plain (ANSI-free) text segment.
+	 *  Decoration only adds zero-width SGR codes, so visible width is unchanged. */
+	#decorate(text: string): string {
+		const decorate = this.decorateText;
+		return decorate !== undefined && text.length > 0 ? decorate(text) : text;
+	}
+
 	#getStyledInputCursor(): { text: string; width: number } {
 		const cursorChar = this.#theme.symbols.inputCursor;
-		return { text: `\x1b[5m${cursorChar}\x1b[0m`, width: visibleWidth(cursorChar) };
+		// Keep the software cursor steady. Ghostty/cmux can leave visual
+		// afterimages for SGR blink cells during rapid input-row repaints.
+		return { text: cursorChar, width: visibleWidth(cursorChar) };
 	}
 
 	#renderEndOfLineCursorAtWidthLimit(
@@ -732,6 +750,7 @@ export class Editor implements Component, Focusable {
 			let displayText = layoutLine.text;
 			let displayWidth = visibleWidth(layoutLine.text);
 			let cursorInPadding = false;
+			let decorated = false;
 			const showPromptGutter = promptGutter !== undefined && visibleIndex === 0;
 			const gutterText =
 				promptGutter === undefined ? "" : showPromptGutter ? promptGutter.firstLine : promptGutter.continuation;
@@ -809,7 +828,11 @@ export class Editor implements Component, Focusable {
 					const firstGrapheme = afterGraphemes[0]?.segment || "";
 					const restAfter = after.slice(firstGrapheme.length);
 					const cursor = `\x1b[7m${firstGrapheme}\x1b[0m`;
-					displayText = before + marker + cursor + restAfter;
+					// Decorate the plain text on each side of the cursor glyph. The reverse-video
+					// reset (\x1b[0m) ends in "m" (a word char), so a boundary match on restAfter
+					// would fail in the whole-line fallback below — decorate the segments here.
+					displayText = this.#decorate(before) + marker + cursor + this.#decorate(restAfter);
+					decorated = true;
 					// displayWidth stays the same - we're replacing, not adding
 				} else if (this.cursorOverride) {
 					// Cursor override replaces the normal end-of-text cursor glyph
@@ -854,6 +877,13 @@ export class Editor implements Component, Focusable {
 						cursorInPadding = true;
 					}
 				}
+			}
+
+			// No cursor on this line, or a branch that left the user text intact: decorate the
+			// whole line. CURSOR_MARKER and cursor glyphs begin with ESC, so word boundaries
+			// around a decorated keyword stay intact when matched against the assembled line.
+			if (!decorated) {
+				displayText = this.#decorate(displayText);
 			}
 
 			const linePad = padding(Math.max(0, lineContentWidth - displayWidth));
@@ -1462,19 +1492,7 @@ export class Editor implements Component, Focusable {
 	/** Insert text at the current cursor position */
 	insertText(text: string): void {
 		this.#exitHistoryForEditing();
-		this.#resetKillSequence();
-		this.#recordUndoState();
-
-		const line = this.#state.lines[this.#state.cursorLine] || "";
-		const before = line.slice(0, this.#state.cursorCol);
-		const after = line.slice(this.#state.cursorCol);
-
-		this.#state.lines[this.#state.cursorLine] = before + text + after;
-		this.#setCursorCol(this.#state.cursorCol + text.length);
-
-		if (this.onChange) {
-			this.onChange(this.getText());
-		}
+		this.#insertTextAtCursor(text);
 	}
 
 	// All the editor methods from before...
@@ -1558,6 +1576,10 @@ export class Editor implements Component, Focusable {
 				else if (textBeforeCursor.match(/(?:^|[\s([{>]):[a-zA-Z0-9_+-]*$/)) {
 					this.#tryTriggerAutocomplete();
 				}
+				// Check if we're typing an internal URL scheme (e.g. local://, skill://)
+				else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
+					this.#tryTriggerAutocomplete();
+				}
 			}
 		} else {
 			this.#debouncedUpdateAutocomplete();
@@ -1582,8 +1604,14 @@ export class Editor implements Component, Focusable {
 				return match;
 			});
 
-			// Clean the pasted text
-			const cleanText = decodedText.replace(/\r\n?/g, "\n");
+			// Clean the pasted text. NFC-normalize so macOS Finder drag-drops of
+			// Korean filenames (which arrive as NFD: e.g. `ᄒ`+`ᅪ` instead of `화`)
+			// land in the buffer as the same precomposed syllables a terminal
+			// renders — without this, cursor column accounting drifts by
+			// `(NFD cells − NFC cells)` and the visible glyph desyncs from the
+			// hardware cursor. Matches the `Input` component's prior fix; this
+			// is the same fix on the real OMP prompt component (`Editor`).
+			const cleanText = decodedText.replace(/\r\n?/g, "\n").normalize("NFC");
 
 			// Convert tabs to spaces (4 spaces per tab)
 			const tabExpandedText = cleanText.replace(/\t/g, "    ");
@@ -1743,6 +1771,10 @@ export class Editor implements Component, Focusable {
 			else if (textBeforeCursor.match(/#[^\s#]*$/)) {
 				this.#tryTriggerAutocomplete();
 			}
+			// internal URL scheme context (e.g. local://, skill://)
+			else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
+				this.#tryTriggerAutocomplete();
+			}
 		}
 	}
 
@@ -1893,6 +1925,8 @@ export class Editor implements Component, Focusable {
 			} else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
 				this.#tryTriggerAutocomplete();
 			} else if (textBeforeCursor.match(/#[^\s#]*$/)) {
+				this.#tryTriggerAutocomplete();
+			} else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
 				this.#tryTriggerAutocomplete();
 			}
 		}
@@ -2213,6 +2247,10 @@ export class Editor implements Component, Focusable {
 			else if (textBeforeCursor.match(/#[^\s#]*$/)) {
 				this.#tryTriggerAutocomplete();
 			}
+			// internal URL scheme context (e.g. local://, skill://)
+			else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
+				this.#tryTriggerAutocomplete();
+			}
 		}
 	}
 
@@ -2444,6 +2482,17 @@ export class Editor implements Component, Focusable {
 	}
 
 	// Autocomplete methods
+	/**
+	 * Whether the text ending at the cursor looks like a `scheme://` URL token.
+	 * Generic by design: any scheme triggers a suggestion fetch and the active
+	 * provider decides whether it has candidates (returning none is a no-op).
+	 * MUST stay in sync with the token grammar in coding-agent's
+	 * `internal-url-autocomplete.ts`.
+	 */
+	#textTriggersUrlAutocomplete(textBeforeCursor: string): boolean {
+		return /(?:^|[\s"'`(<=])[a-z][a-z0-9+.-]*:\/{1,2}[^\s"'`()<>]*$/i.test(textBeforeCursor);
+	}
+
 	async #tryTriggerAutocomplete(explicitTab: boolean = false): Promise<void> {
 		if (!this.#autocompleteProvider) return;
 		// Check if we should trigger file completion on Tab
@@ -2480,11 +2529,8 @@ export class Editor implements Component, Focusable {
 		prefix: string,
 		items: Array<{ value: string; label: string; description?: string }>,
 	): SelectList {
-		// Layout options prepared for future SelectList enhancements (e.g., for slash commands)
-		const layout = prefix.startsWith("/") ? SLASH_COMMAND_SELECT_LIST_LAYOUT : undefined;
-		// TODO: Pass layout to SelectList when constructor is updated to support it
-		void layout; // Use layout variable to avoid lint warnings
-		return new SelectList(items, this.#autocompleteMaxVisible, this.#theme.selectList);
+		const layout = prefix.startsWith("/") ? SLASH_COMMAND_SELECT_LIST_LAYOUT : AUTOCOMPLETE_SELECT_LIST_LAYOUT;
+		return new SelectList(items, this.#autocompleteMaxVisible, this.#theme.selectList, layout);
 	}
 
 	#handleTabCompletion(): void {

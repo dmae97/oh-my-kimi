@@ -8,10 +8,18 @@ export interface ChangelogEntry {
 }
 
 /**
- * Parse changelog entries from CHANGELOG.md
- * Scans for ## lines and collects content until next ## or EOF
+ * Parse changelog entries from the file at `changelogPath`. Scans for `## [x.y.z]`
+ * headings and collects each block until the next heading or EOF.
+ *
+ * Returns `[]` when `changelogPath` is `undefined` (package directory not
+ * resolvable — see `getChangelogPath`) or the file is missing. Callers MUST NOT
+ * synthesize a fallback path from the host project's cwd; doing so caused issue
+ * #1423 (the host project's `CHANGELOG.md` was rendered as omp's).
  */
-export async function parseChangelog(changelogPath: string): Promise<ChangelogEntry[]> {
+export async function parseChangelog(changelogPath: string | undefined): Promise<ChangelogEntry[]> {
+	if (!changelogPath) {
+		return [];
+	}
 	try {
 		const content = await Bun.file(changelogPath).text();
 		const lines = content.split("\n");

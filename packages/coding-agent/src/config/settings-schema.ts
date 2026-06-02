@@ -1,6 +1,27 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { TASK_SIMPLE_MODES } from "../task/simple-mode";
-import { getThinkingLevelMetadata } from "../thinking";
+import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
+import {
+	TINY_MODEL_DEVICE_DEFAULT,
+	TINY_MODEL_DEVICE_SETTING_OPTIONS,
+	TINY_MODEL_DEVICE_SETTING_VALUES,
+} from "../tiny/device";
+import {
+	TINY_MODEL_DTYPE_DEFAULT,
+	TINY_MODEL_DTYPE_SETTING_OPTIONS,
+	TINY_MODEL_DTYPE_SETTING_VALUES,
+} from "../tiny/dtype";
+import {
+	AUTO_THINKING_MODEL_OPTIONS,
+	AUTO_THINKING_MODEL_VALUES,
+	ONLINE_AUTO_THINKING_MODEL_KEY,
+	ONLINE_MEMORY_MODEL_KEY,
+	ONLINE_TINY_TITLE_MODEL_KEY,
+	TINY_MEMORY_MODEL_OPTIONS,
+	TINY_MEMORY_MODEL_VALUES,
+	TINY_TITLE_MODEL_OPTIONS,
+	TINY_TITLE_MODEL_VALUES,
+} from "../tiny/models";
 import { EDIT_MODES } from "../utils/edit-mode";
 
 /** Unified settings schema - single source of truth for all settings.
@@ -81,7 +102,9 @@ export type StatusLineSegmentId =
 	| "hostname"
 	| "cache_read"
 	| "cache_write"
-	| "session_name";
+	| "cache_hit"
+	| "session_name"
+	| "usage";
 
 /** Submenu choice metadata. */
 export type SubmenuOption<V extends string = string> = {
@@ -233,6 +256,7 @@ export const SETTINGS_SCHEMA = {
 	// General settings (no UI)
 	// ────────────────────────────────────────────────────────────────────────
 	lastChangelogVersion: { type: "string", default: undefined },
+	setupVersion: { type: "number", default: 0 },
 
 	// Auth broker — credentials proxied through a remote `omp auth-broker serve`
 	// host. Hidden from the UI; populate via env vars or hand-edited config.yml.
@@ -650,13 +674,16 @@ export const SETTINGS_SCHEMA = {
 	// Reasoning and prompts
 	defaultThinkingLevel: {
 		type: "enum",
-		values: THINKING_EFFORTS,
+		values: [...THINKING_EFFORTS, AUTO_THINKING],
 		default: "high",
 		ui: {
 			tab: "model",
 			label: "Thinking Level",
 			description: "Reasoning depth for thinking-capable models",
-			options: [...THINKING_EFFORTS.map(getThinkingLevelMetadata)],
+			options: [
+				getConfiguredThinkingLevelMetadata(AUTO_THINKING),
+				...THINKING_EFFORTS.map(getThinkingLevelMetadata),
+			],
 		},
 	},
 
@@ -836,6 +863,16 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	"retry.baseDelayMs": { type: "number", default: 2000 },
+	"retry.maxDelayMs": {
+		type: "number",
+		default: 5 * 60 * 1000,
+		ui: {
+			tab: "model",
+			label: "Max Retry Delay",
+			description:
+				"Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows).",
+		},
+	},
 	"retry.fallbackChains": { type: "record", default: {} as Record<string, string[]> },
 	"retry.fallbackRevertPolicy": {
 		type: "enum",
@@ -979,6 +1016,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"startup.setupWizard": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			label: "Setup Wizard",
+			description: "Show newly added onboarding steps once per setup version",
+		},
+	},
+
 	"startup.checkUpdate": {
 		type: "boolean",
 		default: true,
@@ -1089,12 +1136,13 @@ export const SETTINGS_SCHEMA = {
 
 	"compaction.strategy": {
 		type: "enum",
-		values: ["context-full", "handoff", "off"] as const,
+		values: ["context-full", "handoff", "shake", "off"] as const,
 		default: "context-full",
 		ui: {
 			tab: "context",
 			label: "Compaction Strategy",
-			description: "Choose in-place context-full maintenance, auto-handoff, or disable auto maintenance (off)",
+			description:
+				"Choose in-place context-full maintenance, auto-handoff, surgical shake (drop heavy content), or disable auto maintenance (off)",
 			options: [
 				{
 					value: "context-full",
@@ -1102,6 +1150,11 @@ export const SETTINGS_SCHEMA = {
 					description: "Summarize in-place and keep the current session",
 				},
 				{ value: "handoff", label: "Handoff", description: "Generate handoff and continue in a new session" },
+				{
+					value: "shake",
+					label: "Shake",
+					description: "Drop heavy content (tool results + large blocks) in place; recover via artifact",
+				},
 				{
 					value: "off",
 					label: "Off",
@@ -1280,23 +1333,192 @@ export const SETTINGS_SCHEMA = {
 	"memories.summaryInjectionTokenLimit": { type: "number", default: 5000 },
 
 	// Memory backend selector — picks between local memories pipeline,
-	// Hindsight remote memory, or off. Legacy `memories.enabled` keeps gating
-	// the local backend; see config/settings.ts migration for details.
+	// Mnemopi local SQLite, Hindsight remote memory, or off. Legacy
+	// `memories.enabled` keeps gating the local backend; see config/settings.ts
+	// migration for details.
 	"memory.backend": {
 		type: "enum",
-		values: ["off", "local", "hindsight"] as const,
+		values: ["off", "local", "hindsight", "mnemopi"] as const,
 		default: "off",
 		ui: {
 			tab: "memory",
 			label: "Memory Backend",
-			description: "Off, local memory pipeline, or Hindsight remote memory",
+			description: "Off, local summary pipeline, Mnemopi SQLite, or Hindsight remote memory",
 			options: [
 				{ value: "off", label: "Off", description: "No memory subsystem runs" },
 				{ value: "local", label: "Local", description: "Local rollout summarisation pipeline (memory_summary.md)" },
 				{ value: "hindsight", label: "Hindsight", description: "Vectorize Hindsight remote memory service" },
+				{
+					value: "mnemopi",
+					label: "Mnemopi",
+					description: "Local SQLite recall/retain backend with optional embeddings",
+				},
 			],
 		},
 	},
+
+	// Mnemopi local SQLite memory backend.
+	"mnemopi.dbPath": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemopi DB Path",
+			description: "Optional SQLite DB path. Defaults to the agent memories directory.",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.bank": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemopi Bank",
+			description: "Optional shared bank base name. Per-project modes derive project-local banks from it.",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.scoping": {
+		type: "enum",
+		values: ["global", "per-project", "per-project-tagged"] as const,
+		default: "per-project",
+		ui: {
+			tab: "memory",
+			label: "Mnemopi Scoping",
+			description:
+				"global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = project-local writes plus global recall visibility",
+			options: [
+				{
+					value: "global",
+					label: "Global",
+					description: "One shared Mnemopi bank for every project",
+				},
+				{
+					value: "per-project",
+					label: "Per project",
+					description: "Project-local Mnemopi bank per cwd basename",
+				},
+				{
+					value: "per-project-tagged",
+					label: "Per project (tagged)",
+					description: "Write to a project-local bank but merge project + shared recall results",
+				},
+			],
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.autoRecall": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "memory",
+			label: "Mnemopi Auto Recall",
+			description: "Recall local memories into the first turn of each session",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.autoRetain": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "memory",
+			label: "Mnemopi Auto Retain",
+			description: "Retain completed conversation turns into local Mnemopi memory",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.noEmbeddings": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "memory",
+			label: "Mnemopi Disable Embeddings",
+			description: "Force deterministic FTS-only recall instead of vector embeddings",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.embeddingModel": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemopi Embedding Model",
+			description: "Optional embedding model override passed to Mnemopi",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.embeddingApiUrl": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemopi Embedding API URL",
+			description: "Optional OpenAI-compatible embedding endpoint passed to Mnemopi",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.embeddingApiKey": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemopi Embedding API Key",
+			description: "Optional embedding API key passed to Mnemopi",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.llmMode": {
+		type: "enum",
+		values: ["none", "smol", "remote"] as const,
+		default: "smol",
+		ui: {
+			tab: "memory",
+			label: "Mnemopi LLM Mode",
+			description: "Use no LLM, the configured smol model, or a remote OpenAI-compatible endpoint",
+			condition: "mnemopiActive",
+			options: [
+				{ value: "none", label: "None", description: "Disable Mnemopi LLM-backed extraction" },
+				{ value: "smol", label: "Smol", description: "Use the configured pi-ai smol model" },
+				{ value: "remote", label: "Remote", description: "Use the Mnemopi remote LLM settings below" },
+			],
+		},
+	},
+	"mnemopi.llmBaseUrl": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemopi LLM Base URL",
+			description: "Optional OpenAI-compatible LLM endpoint for Mnemopi remote mode",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.llmApiKey": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemopi LLM API Key",
+			description: "Optional LLM API key for Mnemopi remote mode",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.llmModel": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			label: "Mnemopi LLM Model",
+			description: "Optional LLM model name for Mnemopi remote mode",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.retainEveryNTurns": { type: "number", default: 4 },
+	"mnemopi.recallLimit": { type: "number", default: 8 },
+	"mnemopi.recallContextTurns": { type: "number", default: 3 },
+	"mnemopi.recallMaxQueryChars": { type: "number", default: 4000 },
+	"mnemopi.injectionTokenLimit": { type: "number", default: 5000 },
+	"mnemopi.debug": { type: "boolean", default: false },
 
 	// Hindsight (https://hindsight.vectorize.io)
 	"hindsight.apiUrl": {
@@ -1505,6 +1727,26 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"ttsr.builtinRules": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "context",
+			label: "Builtin Rules",
+			description: "Load the default rules shipped with the agent (override individually with ttsr.disabledRules)",
+		},
+	},
+
+	"ttsr.disabledRules": {
+		type: "array",
+		default: [] as string[],
+		ui: {
+			tab: "context",
+			label: "Disabled Rules",
+			description: "Rule names to ignore entirely (applies to bundled defaults and your own rules)",
+		},
+	},
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Editing
 	// ────────────────────────────────────────────────────────────────────────
@@ -1517,7 +1759,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "editing",
 			label: "Edit Mode",
-			description: "Select the edit tool variant (replace, patch, hashline, vim, or apply_patch)",
+			description: "Select the edit tool variant (replace, patch, hashline, or apply_patch)",
 		},
 	},
 
@@ -1557,15 +1799,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"edit.hashlineAutoDropPureInsertDuplicates": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "editing",
-			label: "Hashline Duplicate Insert Drop",
-			description: "Drop 2+ pure-insert payload lines that duplicate adjacent file context",
-		},
-	},
 	"edit.blockAutoGenerated": {
 		type: "boolean",
 		default: true,
@@ -1592,7 +1825,8 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "editing",
 			label: "Hash Lines",
-			description: "Include line hashes in read output for hashline edit mode (LINE+ID|content)",
+			description:
+				"Include snapshot-tag headers and line numbers in read output for hashline edit mode (¶PATH#tag plus LINE:content)",
 		},
 	},
 
@@ -1653,6 +1887,38 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"read.summarize.minTotalLines": {
+		type: "number",
+		default: 100,
+		ui: {
+			tab: "editing",
+			label: "Read Summary Minimum File Length",
+			description: "Files with fewer total lines are read verbatim instead of structurally summarized",
+		},
+	},
+
+	"read.summarize.unfoldUntil": {
+		type: "number",
+		default: 50,
+		ui: {
+			tab: "editing",
+			label: "Read Summary Unfold Target",
+			description:
+				"BFS-unfold elidable spans until the summary is at least this many visible lines. 0 keeps only the outermost elisions.",
+		},
+	},
+
+	"read.summarize.unfoldLimit": {
+		type: "number",
+		default: 100,
+		ui: {
+			tab: "editing",
+			label: "Read Summary Unfold Ceiling",
+			description:
+				"Hard ceiling on summary size while BFS-unfolding. An unfold that would exceed this is reverted and unfolding stops.",
+		},
+	},
+
 	"read.toolResultPreview": {
 		type: "boolean",
 		default: false,
@@ -1697,6 +1963,16 @@ export const SETTINGS_SCHEMA = {
 			tab: "editing",
 			label: "Diagnostics on Edit",
 			description: "Return LSP diagnostics after editing code files",
+		},
+	},
+
+	"lsp.diagnosticsDeduplicate": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "editing",
+			label: "Deduplicate Diagnostics",
+			description: "Suppress post-edit LSP diagnostics already shown for a file; only surface new or changed ones",
 		},
 	},
 
@@ -1776,6 +2052,53 @@ export const SETTINGS_SCHEMA = {
 	// ────────────────────────────────────────────────────────────────────────
 	// Tools
 	// ────────────────────────────────────────────────────────────────────────
+
+	// Tool approval policies
+	"tools.approval": {
+		type: "record",
+		default: {},
+		ui: {
+			tab: "tools",
+			label: "Tool Approval Policies",
+			description:
+				"Per-tool approval policies. Set to 'allow' to auto-approve, 'prompt' to require confirmation, or 'deny' to block. Overrides are honored in every approval mode.",
+		},
+	},
+
+	// Default tool approval mode (interaction tab, but governs the tool wrapper).
+	//   "always-ask" — auto-approves read-tier tools only; prompts for write/exec.
+	//   "write"      — auto-approves read and write-tier tools; prompts for exec.
+	//   "yolo"       — auto-approves every tier.
+	"tools.approvalMode": {
+		type: "enum",
+		values: ["always-ask", "write", "yolo"] as const,
+		default: "yolo",
+		ui: {
+			tab: "interaction",
+			label: "Tool Approval",
+			description:
+				"Default approval behaviour for tool calls. 'Always ask' auto-approves read-only tools only. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
+			options: [
+				{
+					value: "always-ask",
+					label: "Always ask",
+					description: "Auto-approve read-only tools; require confirmation for write and exec tools.",
+				},
+				{
+					value: "write",
+					label: "Write",
+					description:
+						"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, task, and ssh.",
+				},
+				{
+					value: "yolo",
+					label: "Yolo",
+					description:
+						"Auto-approve read, write, and exec tools. User policy can still require confirmation or block calls.",
+				},
+			],
+		},
+	},
 
 	// Todo tool
 	"todo.enabled": {
@@ -1894,6 +2217,24 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"irc.timeoutMs": {
+		type: "number",
+		default: 120_000,
+		ui: {
+			tab: "tools",
+			label: "IRC Timeout",
+			description:
+				"Drop IRC messages whose recipient does not respond within this many milliseconds (0 disables the timeout)",
+			options: [
+				{ value: "0", label: "Disabled" },
+				{ value: "30000", label: "30 seconds" },
+				{ value: "60000", label: "1 minute" },
+				{ value: "120000", label: "2 minutes" },
+				{ value: "300000", label: "5 minutes" },
+			],
+		},
+	},
+
 	// Optional tools
 
 	"renderMermaid.enabled": {
@@ -1916,24 +2257,13 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"calc.enabled": {
+	"tts.enabled": {
 		type: "boolean",
 		default: false,
 		ui: {
 			tab: "tools",
-			label: "Calculator",
-			description: "Enable the calculator tool for basic calculations",
-		},
-	},
-
-	"recipe.enabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			label: "Recipe",
-			description:
-				"Enable the recipe tool when a justfile / package.json / Cargo.toml / Makefile / Taskfile is present",
+			label: "Text-to-Speech",
+			description: "Enable the tts tool for xAI Grok Voice speech synthesis",
 		},
 	},
 
@@ -1962,6 +2292,17 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: { tab: "tools", label: "Read URLs", description: "Allow the read tool to fetch and process URLs" },
+	},
+
+	"vault.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			label: "Obsidian Vault",
+			description:
+				"Enable the vault:// internal URL for reading and editing Obsidian vault content via the Obsidian CLI. When disabled, vault:// resolution is refused and the vault:// entry is omitted from the system prompt.",
+		},
 	},
 
 	"github.enabled": {
@@ -2327,7 +2668,7 @@ export const SETTINGS_SCHEMA = {
 	"task.simple": {
 		type: "enum",
 		values: TASK_SIMPLE_MODES,
-		default: "default",
+		default: "schema-free",
 		ui: {
 			tab: "tasks",
 			label: "Task Input Mode",
@@ -2369,6 +2710,17 @@ export const SETTINGS_SCHEMA = {
 				{ value: "32", label: "32 tasks" },
 				{ value: "64", label: "64 tasks" },
 			],
+		},
+	},
+
+	"task.enableLsp": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			label: "LSP in Subagents",
+			description:
+				"Allow subagents spawned via the task tool to use the lsp tool. Off by default to keep subagents cheap; enable when LSP-aware delegation is worth the extra tokens.",
 		},
 	},
 
@@ -2433,6 +2785,16 @@ export const SETTINGS_SCHEMA = {
 				{ value: "3600", label: "1 hour" },
 				{ value: "-1", label: "Never" },
 			],
+		},
+	},
+
+	"task.showResolvedModelBadge": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			label: "Show Resolved Model Badge",
+			description: "Display the actual model ID used by each subagent in the task widget status line",
 		},
 	},
 
@@ -2541,10 +2903,24 @@ export const SETTINGS_SCHEMA = {
 					label: "Perplexity",
 					description: "Requires PERPLEXITY_COOKIES or PERPLEXITY_API_KEY",
 				},
-				{ value: "anthropic", label: "Anthropic", description: "Uses Anthropic web search" },
+				{
+					value: "anthropic",
+					label: "Anthropic",
+					description: "Claude's native web_search tool (uses Anthropic OAuth or ANTHROPIC_API_KEY)",
+				},
+				{
+					value: "codex",
+					label: "OpenAI",
+					description: "OpenAI's native web_search (uses ChatGPT OAuth via /login openai-codex)",
+				},
+				{
+					value: "gemini",
+					label: "Gemini",
+					description: "Google Search grounding via Gemini (uses google-gemini-cli or google-antigravity OAuth)",
+				},
 				{ value: "zai", label: "Z.AI", description: "Calls Z.AI webSearchPrime MCP" },
 				{ value: "tavily", label: "Tavily", description: "Requires TAVILY_API_KEY" },
-				{ value: "kagi", label: "Kagi", description: "Requires KAGI_API_KEY and Kagi Search API beta access" },
+				{ value: "kagi", label: "Kagi", description: "Requires KAGI_API_KEY (Kagi V1 Search API)" },
 				{ value: "synthetic", label: "Synthetic", description: "Requires SYNTHETIC_API_KEY" },
 				{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
 				{ value: "searxng", label: "SearXNG", description: "Requires SEARXNG_ENDPOINT or searxng.endpoint" },
@@ -2553,7 +2929,7 @@ export const SETTINGS_SCHEMA = {
 	},
 	"providers.image": {
 		type: "enum",
-		values: ["auto", "openai", "gemini", "openrouter"] as const,
+		values: ["auto", "openai", "antigravity", "xai", "gemini", "openrouter"] as const,
 		default: "auto",
 		ui: {
 			tab: "providers",
@@ -2563,12 +2939,84 @@ export const SETTINGS_SCHEMA = {
 				{
 					value: "auto",
 					label: "Auto",
-					description: "Priority: GPT model image tool > Antigravity > OpenRouter > Gemini",
+					description: "Priority: GPT model image tool > Antigravity > xAI > OpenRouter > Gemini",
 				},
 				{ value: "openai", label: "OpenAI", description: "Uses the active GPT Responses/Codex model" },
+				{
+					value: "antigravity",
+					label: "Antigravity",
+					description: "Requires google-antigravity OAuth",
+				},
+				{
+					value: "xai",
+					label: "xAI Grok Imagine",
+					description: "Requires xAI Grok OAuth or XAI_API_KEY",
+				},
 				{ value: "gemini", label: "Gemini", description: "Requires GEMINI_API_KEY" },
 				{ value: "openrouter", label: "OpenRouter", description: "Requires OPENROUTER_API_KEY" },
 			],
+		},
+	},
+	"providers.tinyModel": {
+		type: "enum",
+		values: TINY_TITLE_MODEL_VALUES,
+		default: ONLINE_TINY_TITLE_MODEL_KEY,
+		ui: {
+			tab: "providers",
+			label: "Tiny Model",
+			description: "Session-title model: online pi/smol by default, or a local on-device model",
+			options: TINY_TITLE_MODEL_OPTIONS,
+		},
+	},
+	"providers.tinyModelDevice": {
+		type: "enum",
+		values: TINY_MODEL_DEVICE_SETTING_VALUES,
+		default: TINY_MODEL_DEVICE_DEFAULT,
+		ui: {
+			tab: "providers",
+			label: "Tiny Model Device",
+			description:
+				"ONNX execution provider for local tiny models (titles + memory). Default uses CPU-only inference. The PI_TINY_DEVICE env var overrides this.",
+			options: TINY_MODEL_DEVICE_SETTING_OPTIONS,
+		},
+	},
+	"providers.tinyModelDtype": {
+		type: "enum",
+		values: TINY_MODEL_DTYPE_SETTING_VALUES,
+		default: TINY_MODEL_DTYPE_DEFAULT,
+		ui: {
+			tab: "providers",
+			label: "Tiny Model Precision",
+			description:
+				"ONNX quantization/precision for local tiny models. Default uses each model's shipped dtype (q4); lower precision is faster, higher is more faithful. The PI_TINY_DTYPE env var overrides this.",
+			options: TINY_MODEL_DTYPE_SETTING_OPTIONS,
+		},
+	},
+	"providers.memoryModel": {
+		type: "enum",
+		values: TINY_MEMORY_MODEL_VALUES,
+		default: ONLINE_MEMORY_MODEL_KEY,
+		ui: {
+			tab: "memory",
+			label: "Memory Model",
+			description:
+				"Mnemopi LLM for fact extraction + consolidation: online (smol/remote) by default, or a local on-device model",
+			condition: "mnemopiActive",
+			options: TINY_MEMORY_MODEL_OPTIONS,
+		},
+	},
+
+	"providers.autoThinkingModel": {
+		type: "enum",
+		values: AUTO_THINKING_MODEL_VALUES,
+		default: ONLINE_AUTO_THINKING_MODEL_KEY,
+		ui: {
+			tab: "model",
+			label: "Auto Thinking Model",
+			description:
+				"Difficulty classifier for the `auto` thinking level: online smol by default, or a local on-device model",
+			condition: "autoThinkingActive",
+			options: AUTO_THINKING_MODEL_OPTIONS,
 		},
 	},
 
@@ -2603,6 +3051,28 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"providers.openrouterVariant": {
+		type: "enum",
+		values: ["default", "nitro", "floor", "online", "exacto"] as const,
+		default: "default",
+		ui: {
+			tab: "providers",
+			label: "OpenRouter Routing",
+			description:
+				"Default routing-variant suffix appended to OpenRouter model IDs (overridden when the selector already names a variant)",
+			options: [
+				{ value: "default", label: "Default", description: "No suffix; use OpenRouter's default routing" },
+				{ value: "nitro", label: ":nitro", description: "Prioritize throughput / lowest latency" },
+				{ value: "floor", label: ":floor", description: "Prioritize cheapest available provider" },
+				{ value: "online", label: ":online", description: "Enable OpenRouter's web-search plugin" },
+				{
+					value: "exacto",
+					label: ":exacto",
+					description: "Cherry-picked high-quality providers (only defined for select models)",
+				},
+			],
+		},
+	},
 	"providers.parallelFetch": {
 		type: "boolean",
 		default: true,
@@ -2610,6 +3080,22 @@ export const SETTINGS_SCHEMA = {
 			tab: "providers",
 			label: "Parallel Fetch",
 			description: "Use Parallel extract API for URL fetching when credentials are available",
+		},
+	},
+	"provider.appendOnlyContext": {
+		type: "enum",
+		values: ["auto", "on", "off"] as const,
+		default: "auto",
+		ui: {
+			tab: "providers",
+			label: "Append-Only Context",
+			description:
+				"Cache system prompt + tool specs and keep an append-only message log so provider prefix caches (DeepSeek, Anthropic) hit at maximum rate. Auto enables for DeepSeek.",
+			options: [
+				{ value: "auto", label: "Auto", description: "Enable for DeepSeek (recommended)" },
+				{ value: "on", label: "On", description: "Always enable append-only context" },
+				{ value: "off", label: "Off", description: "Disable append-only context" },
+			],
 		},
 	},
 
@@ -2822,7 +3308,7 @@ export type TreeFilterMode = SettingValue<"treeFilterMode">;
 
 export interface CompactionSettings {
 	enabled: boolean;
-	strategy: "context-full" | "handoff" | "off";
+	strategy: "context-full" | "handoff" | "shake" | "off";
 	thresholdPercent: number;
 	thresholdTokens: number;
 	reserveTokens: number;
@@ -2843,6 +3329,7 @@ export interface RetrySettings {
 	enabled: boolean;
 	maxRetries: number;
 	baseDelayMs: number;
+	maxDelayMs: number;
 }
 
 export interface MemoriesSettings {
@@ -2902,6 +3389,10 @@ export interface TtsrSettings {
 	interruptMode: "never" | "prose-only" | "tool-only" | "always";
 	repeatMode: "once" | "after-gap";
 	repeatGap: number;
+	/** Bucketing-only (read by bucketRules, not the TtsrManager). */
+	builtinRules?: boolean;
+	/** Bucketing-only (read by bucketRules, not the TtsrManager). */
+	disabledRules?: string[];
 }
 
 export interface ExaSettings {

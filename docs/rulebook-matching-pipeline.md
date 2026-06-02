@@ -9,18 +9,21 @@ It reflects the current implementation, including partial semantics and metadata
 
 ## Implementation files
 
-- [`../src/capability/rule.ts`](../packages/coding-agent/src/capability/rule.ts)
-- [`../src/capability/index.ts`](../packages/coding-agent/src/capability/index.ts)
-- [`../src/discovery/index.ts`](../packages/coding-agent/src/discovery/index.ts)
-- [`../src/discovery/helpers.ts`](../packages/coding-agent/src/discovery/helpers.ts)
-- [`../src/discovery/builtin.ts`](../packages/coding-agent/src/discovery/builtin.ts)
-- [`../src/discovery/cursor.ts`](../packages/coding-agent/src/discovery/cursor.ts)
-- [`../src/discovery/windsurf.ts`](../packages/coding-agent/src/discovery/windsurf.ts)
-- [`../src/discovery/cline.ts`](../packages/coding-agent/src/discovery/cline.ts)
-- [`../src/sdk.ts`](../packages/coding-agent/src/sdk.ts)
-- [`../src/system-prompt.ts`](../packages/coding-agent/src/system-prompt.ts)
-- [`../src/internal-urls/rule-protocol.ts`](../packages/coding-agent/src/internal-urls/rule-protocol.ts)
-- [`../src/utils/frontmatter.ts`](../packages/coding-agent/src/utils/frontmatter.ts)
+- [`packages/coding-agent/src/capability/rule.ts`](../packages/coding-agent/src/capability/rule.ts)
+- [`packages/coding-agent/src/capability/rule-buckets.ts`](../packages/coding-agent/src/capability/rule-buckets.ts)
+- [`packages/coding-agent/src/capability/index.ts`](../packages/coding-agent/src/capability/index.ts)
+- [`packages/coding-agent/src/discovery/index.ts`](../packages/coding-agent/src/discovery/index.ts)
+- [`packages/coding-agent/src/discovery/helpers.ts`](../packages/coding-agent/src/discovery/helpers.ts)
+- [`packages/coding-agent/src/discovery/builtin.ts`](../packages/coding-agent/src/discovery/builtin.ts)
+- [`packages/coding-agent/src/discovery/builtin-defaults.ts`](../packages/coding-agent/src/discovery/builtin-defaults.ts)
+- [`packages/coding-agent/src/discovery/agents.ts`](../packages/coding-agent/src/discovery/agents.ts)
+- [`packages/coding-agent/src/discovery/cursor.ts`](../packages/coding-agent/src/discovery/cursor.ts)
+- [`packages/coding-agent/src/discovery/windsurf.ts`](../packages/coding-agent/src/discovery/windsurf.ts)
+- [`packages/coding-agent/src/discovery/cline.ts`](../packages/coding-agent/src/discovery/cline.ts)
+- [`packages/coding-agent/src/sdk.ts`](../packages/coding-agent/src/sdk.ts)
+- [`packages/coding-agent/src/system-prompt.ts`](../packages/coding-agent/src/system-prompt.ts)
+- [`packages/coding-agent/src/internal-urls/rule-protocol.ts`](../packages/coding-agent/src/internal-urls/rule-protocol.ts)
+- [`packages/utils/src/frontmatter.ts`](../packages/utils/src/frontmatter.ts)
 
 ## 1. Canonical rule shape
 
@@ -50,16 +53,20 @@ Consequence: precedence and deduplication are **name-based only**. Two different
 `src/discovery/index.ts` auto-registers providers. For `rules`, current providers are:
 
 - `native` (priority `100`)
+- `agents` (priority `70`)
 - `cursor` (priority `50`)
 - `windsurf` (priority `50`)
 - `cline` (priority `40`)
+- `builtin-defaults` (priority `1`)
 
 ### Native provider (`builtin.ts`)
 
 Loads `.omp` rules from:
 
-- project: `<cwd>/.omp/rules/*.{md,mdc}`
+- project: `<cwd>/.omp/rules/*.{md,mdc}` when the cwd `.omp` directory exists
 - user: `~/.omp/agent/rules/*.{md,mdc}`
+- sticky user rule: `~/.omp/agent/RULES.md`
+- sticky project rule: nearest ancestor `.omp/RULES.md` while walking from cwd toward the repository root
 
 Normalization:
 
@@ -67,8 +74,18 @@ Normalization:
 - frontmatter parsed via `parseFrontmatter`
 - `content` = body (frontmatter stripped)
 - `globs`, `alwaysApply`, `description`, `condition`/legacy `ttsr_trigger`, `scope`, and `interruptMode` are parsed by `buildRuleFromMarkdown`
+- top-level `RULES.md` is synthesized as rule name `RULES` and forced to `alwaysApply: true`
 
 Important caveat: `condition` values that look like file globs are converted into `tool:edit(...)` / `tool:write(...)` scope shorthands with catch-all condition `.*`.
+
+### Agents provider (`agents.ts`)
+
+Loads from both `.agent` and `.agents` directories:
+
+- project: walk upward from `cwd` to repo root, loading `<ancestor>/.agent/rules/*.{md,mdc}` and `<ancestor>/.agents/rules/*.{md,mdc}`
+- user: `~/.agent/rules/*.{md,mdc}` and `~/.agents/rules/*.{md,mdc}`
+
+Normalization uses the shared `buildRuleFromMarkdown` path: filename-derived name, stripped frontmatter body, and parsed `globs`, `alwaysApply`, `description`, `condition`/legacy `ttsr_trigger`, `scope`, and `interruptMode`.
 
 ### Cursor provider (`cursor.ts`)
 
@@ -141,9 +158,11 @@ Ambiguity consequences:
 Effective rule provider order is currently:
 
 1. `native` (100)
-2. `cursor` (50)
-3. `windsurf` (50)
-4. `cline` (40)
+2. `agents` (70)
+3. `cursor` (50)
+4. `windsurf` (50)
+5. `cline` (40)
+6. `builtin-defaults` (1)
 
 ### Intra-provider ordering caveat
 
@@ -151,35 +170,29 @@ Within a provider, item order comes from `loadFilesFromDir` glob result ordering
 
 Notable source-order differences:
 
-- `native` appends project then user config dirs.
+- `native` appends project `.omp/rules`, user `~/.omp/agent/rules`, user `RULES.md`, then nearest project `RULES.md`.
+- `agents` appends project-walk `.agent`/`.agents` rule dirs before user home dirs.
 - `cursor` appends user then project results.
 - `windsurf` appends user `global_rules` first, then project rules.
 - `cline` loads only nearest `.clinerules` source.
+- `builtin-defaults` uses the embedded rule source order.
 
 ## 5. Split into Rulebook, Always-Apply, and TTSR buckets
 
-After rule discovery in `createAgentSession` (`sdk.ts`):
+After rule discovery in `createAgentSession` (`sdk.ts`), `bucketRules(...)` applies session-level filtering and bucket assignment:
 
-1. All discovered rules are scanned.
-2. Rules with `condition` entries are registered into `TtsrManager`; legacy `ttsr_trigger` / `ttsrTrigger` are accepted during rule parsing as condition fallbacks.
-3. A separate `rulebookRules` list is built with this predicate:
-
-```ts
-!isTtsrRule && rule.alwaysApply !== true && !!rule.description;
-```
-
-4. An `alwaysApplyRules` list is built:
-
-```ts
-!isTtsrRule && rule.alwaysApply === true;
-```
+1. Drop rules listed in `ttsr.disabledRules`.
+2. Drop rules from the `builtin-defaults` provider when `ttsr.builtinRules === false`.
+3. Register rules with non-empty `condition` into `TtsrManager`; if registration succeeds, the rule is TTSR-only.
+4. Put remaining `alwaysApply === true` rules into `alwaysApplyRules`.
+5. Put remaining rules with `description` into `rulebookRules`.
 
 ### Bucket behavior
 
-- **TTSR bucket**: any rule with a non-empty parsed `condition` that `TtsrManager.addRule(...)` accepts. Takes priority over other buckets.
+- **TTSR bucket**: any enabled rule with a non-empty parsed `condition` that `TtsrManager.addRule(...)` accepts. Takes priority over other buckets.
 - **Always-apply bucket**: `alwaysApply === true`, not TTSR. Full content injected into system prompt. Resolvable via `rule://`.
 - **Rulebook bucket**: must have description, must not be TTSR, must not be `alwaysApply`. Listed in system prompt by name+description; content read on demand via `rule://`.
-- A rule with both `condition` and `alwaysApply` goes to TTSR only (TTSR takes priority).
+- A rule with both `condition` and `alwaysApply` goes to TTSR only if TTSR registration accepts it; otherwise it can fall through to always-apply.
 - A rule with both `alwaysApply` and `description` goes to always-apply only (not rulebook).
 
 ## 6. How metadata affects runtime surfaces
@@ -195,7 +208,8 @@ After rule discovery in `createAgentSession` (`sdk.ts`):
 - Carried through on `Rule`.
 - Rendered as `<glob>...</glob>` entries in the system prompt rules block.
 - Exposed in rules UI state (`extensions` mode list).
-- **Not enforced for automatic matching in this pipeline.** There is no runtime glob matcher selecting rules by current file/tool target.
+- Used by TTSR as a global path gate: if a TTSR rule has globs, the match context must include at least one matching file path.
+- Not used to automatically select rulebook rules for `rule://`; rulebook matching remains advisory prompt behavior.
 
 ### `alwaysApply`
 
@@ -244,7 +258,7 @@ Implications:
 
 ## 9. Known partial / non-enforced semantics
 
-1. Provider descriptions mention legacy files (`.cursorrules`, `.windsurfrules`), but current loader code paths do not actually read those files.
-2. `globs` metadata is surfaced to prompt/UI but not enforced by rule selection logic.
+1. The rule providers currently loaded for `rules` are `native`, `agents`, `cursor`, `windsurf`, `cline`, and embedded `builtin-defaults`; provider files for other tools may parse other config formats but do not register rule loaders.
+2. `globs` metadata is surfaced to prompt/UI and is used as a global path gate for TTSR matching, but it is not used to automatically select rulebook rules for `rule://`.
 3. Rule selection for `rule://` includes rulebook and always-apply rules, but not TTSR-only rules.
 4. Discovery warnings (`loadCapability("rules").warnings`) are produced but `createAgentSession` does not currently surface/log them in this path.

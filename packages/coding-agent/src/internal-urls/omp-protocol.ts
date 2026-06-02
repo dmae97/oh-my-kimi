@@ -9,7 +9,7 @@
  */
 import * as path from "node:path";
 import { EMBEDDED_DOC_FILENAMES, EMBEDDED_DOCS } from "./docs-index.generated";
-import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
+import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 /**
  * Handler for omp:// URLs.
@@ -31,6 +31,10 @@ export class OmpProtocolHandler implements ProtocolHandler {
 		}
 
 		return this.#readDoc(filename, url);
+	}
+
+	async complete(): Promise<UrlCompletion[]> {
+		return EMBEDDED_DOC_FILENAMES.map(value => ({ value }));
 	}
 
 	async #listDocs(url: InternalUrl): Promise<InternalResource> {

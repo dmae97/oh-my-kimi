@@ -6,10 +6,12 @@ import { htmlToMarkdown } from "@oh-my-pi/pi-natives";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { $which, ptree, truncate } from "@oh-my-pi/pi-utils";
 import { parseHTML } from "linkedom";
+import { LRUCache } from "lru-cache/raw";
 import type { Settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { type Theme, theme } from "../modes/theme/theme";
 import type { ToolSession } from "../sdk";
+import type { AgentStorage } from "../session/agent-storage";
 import { DEFAULT_MAX_BYTES, truncateHead } from "../session/streaming-output";
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
@@ -22,6 +24,7 @@ import { finalizeOutput, loadPage, looksLikeHtml, MAX_OUTPUT_CHARS } from "../we
 import { convertWithMarkit, fetchBinary } from "../web/scrapers/utils";
 import { applyListLimit } from "./list-limit";
 import { formatStyledArtifactReference, type OutputMeta } from "./output-meta";
+import { type LineRange, parseLineRanges } from "./path-utils";
 import { formatExpandHint, getDomain, replaceTabs } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -137,16 +140,31 @@ export function isReadableUrlPath(value: string): boolean {
 	return /^https?:\/\//i.test(value) || /^www\./i.test(value);
 }
 
-// URL line selectors mirror the file form: `:50`, `:50-100`, `:50+150`, `:raw`.
-// If a URL would otherwise look like `host:port`, add a trailing slash before the selector
-// (e.g. `https://example.com/:80` to read line 80 of the document at `https://example.com/`).
-const URL_LINE_RANGE_RE = /^(\d+)(?:([-+])(\d+))?$/;
+// URL line selectors mirror the file form: `:50`, `:50-100`, `:50+150`, `:5-10,20-30`, `:raw`,
+// or `:raw:N-M` / `:N-M:raw` to combine raw mode with a range. If a URL would otherwise look
+// like `host:port`, add a trailing slash before the selector (e.g. `https://example.com/:80`
+// to read line 80 of the document at `https://example.com/`).
 
 export interface ParsedReadUrlTarget {
 	path: string;
 	raw: boolean;
 	offset?: number;
 	limit?: number;
+	/** Populated only when the selector carries 2+ ranges. Single-range stays on offset/limit. */
+	ranges?: readonly LineRange[];
+}
+
+/** Recognize a single selector token (`raw` or one/many line ranges). */
+function isUrlSelectorToken(token: string): boolean {
+	if (token === "raw") return true;
+	try {
+		return parseLineRanges(token) !== null;
+	} catch {
+		// `parseLineRanges` throws `ToolError` for malformed ranges (e.g. `5+0`). Only treat the
+		// token as a selector when it parses cleanly so URL ports like `:80` keep flowing
+		// through to the URL path.
+		return false;
+	}
 }
 
 export function parseReadUrlTarget(readPath: string): ParsedReadUrlTarget | null {
@@ -156,62 +174,71 @@ export function parseReadUrlTarget(readPath: string): ParsedReadUrlTarget | null
 		return null;
 	}
 
-	const selector = embedded?.sel;
-	const raw = selector === "raw";
-	const lineMatch = selector && selector !== "raw" ? URL_LINE_RANGE_RE.exec(selector) : null;
-	if (lineMatch) {
-		const startLine = Number.parseInt(lineMatch[1]!, 10);
-		if (startLine < 1) {
-			throw new ToolError("URL line selector 0 is invalid; lines are 1-indexed. Use :1.");
+	let raw = false;
+	let ranges: readonly LineRange[] | undefined;
+	for (const sel of embedded?.sels ?? []) {
+		if (sel === "raw") {
+			raw = true;
+			continue;
 		}
-		const sep = lineMatch[2];
-		const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
-		let endLine: number | undefined;
-		if (sep === "+") {
-			if (rhs === undefined || rhs < 1) {
-				throw new ToolError(`Invalid range ${startLine}+${rhs ?? 0}: count must be >= 1.`);
-			}
-			endLine = startLine + rhs - 1;
-		} else if (sep === "-") {
-			if (rhs === undefined || rhs < startLine) {
-				throw new ToolError(`Invalid range ${startLine}-${rhs ?? 0}: end must be >= start.`);
-			}
-			endLine = rhs;
+		if (ranges !== undefined) {
+			// Two range groups on the same URL (`…:5-10:20-30`) — combine with commas instead.
+			throw new ToolError(
+				`URL selector has multiple range groups; combine them with commas (e.g. \`:5-10,20-30\`).`,
+			);
 		}
+		const parsed = parseLineRanges(sel);
+		if (parsed === null) {
+			// Shouldn't happen — isUrlSelectorToken vetted it. Belt-and-suspenders.
+			throw new ToolError(`Invalid URL line selector: ${sel}`);
+		}
+		ranges = parsed;
+	}
+
+	if (!ranges || ranges.length === 0) return { path: urlPath, raw };
+	if (ranges.length === 1) {
+		const r = ranges[0];
 		return {
 			path: urlPath,
-			raw: false,
-			offset: startLine,
-			limit: endLine !== undefined ? endLine - startLine + 1 : undefined,
+			raw,
+			offset: r.startLine,
+			limit: r.endLine !== undefined ? r.endLine - r.startLine + 1 : undefined,
 		};
 	}
-
-	return { path: urlPath, raw };
+	return { path: urlPath, raw, ranges };
 }
 
-function tryExtractEmbeddedUrlSelector(readPath: string): { path: string; sel?: string } | null {
-	const lastColonIndex = readPath.lastIndexOf(":");
-	if (lastColonIndex <= 0) {
-		return null;
-	}
+/**
+ * Peel one or more selector tokens off the right of a URL string. Walks back through
+ * trailing `:tok` segments while each token (a) looks like a selector and (b) leaves
+ * behind a string that still parses as a URL. Returns selectors left-to-right so callers
+ * can apply them in source order.
+ */
+function tryExtractEmbeddedUrlSelector(readPath: string): { path: string; sels: string[] } | null {
+	let basePath = readPath;
+	const sels: string[] = [];
+	while (true) {
+		const lastColonIndex = basePath.lastIndexOf(":");
+		if (lastColonIndex <= 0) break;
 
-	const candidateSelector = readPath.slice(lastColonIndex + 1);
-	const basePath = readPath.slice(0, lastColonIndex);
-	if (!isReadableUrlPath(basePath)) {
-		return null;
-	}
+		const candidate = basePath.slice(lastColonIndex + 1);
+		const remainder = basePath.slice(0, lastColonIndex);
+		if (!isReadableUrlPath(remainder)) break;
+		if (!isUrlSelectorToken(candidate)) break;
 
-	const isEmbeddedSelector = candidateSelector === "raw" || URL_LINE_RANGE_RE.test(candidateSelector);
-	if (!isEmbeddedSelector) {
-		return null;
-	}
+		try {
+			new URL(
+				remainder.startsWith("http://") || remainder.startsWith("https://") ? remainder : `https://${remainder}`,
+			);
+		} catch {
+			break;
+		}
 
-	try {
-		new URL(basePath.startsWith("http://") || basePath.startsWith("https://") ? basePath : `https://${basePath}`);
-		return { path: basePath, sel: candidateSelector };
-	} catch {
-		return null;
+		sels.unshift(candidate);
+		basePath = remainder;
 	}
+	if (sels.length === 0) return null;
+	return { path: basePath, sels };
 }
 
 /**
@@ -535,33 +562,52 @@ function parseFeedToMarkdown(content: string, maxItems = 10): string {
 }
 
 /**
- * Render HTML to markdown using Parallel, jina, trafilatura, lynx (in order of preference)
+ * Cap on any single remote reader-mode request (Parallel, Jina) so a stalled
+ * remote endpoint cannot consume the whole reader-mode budget and starve the
+ * local fallback renderers (trafilatura, lynx, native). See #1449.
  */
-async function renderHtmlToText(
+const REMOTE_READER_MAX_MS = 10_000;
+
+/**
+ * Render HTML to markdown using Parallel, jina, trafilatura, lynx, then the
+ * in-process native converter. The overall `timeout` budget bounds the call,
+ * but remote reader requests are additionally capped at `REMOTE_READER_MAX_MS`
+ * so that a hung remote endpoint cannot prevent local fallbacks from running.
+ * Only a real `userSignal` cancellation aborts the chain — remote per-attempt
+ * timeouts and the overall reader-mode timeout still allow later renderers
+ * (especially the purely-local native converter) to be tried.
+ */
+export async function renderHtmlToText(
 	url: string,
 	html: string,
 	timeout: number,
 	settings: Settings,
-	userSignal?: AbortSignal,
+	userSignal: AbortSignal | undefined,
+	storage: AgentStorage | null,
 ): Promise<{ content: string; ok: boolean; method: string }> {
-	const signal = ptree.combineSignals(userSignal, timeout * 1000);
+	const overallSignal = ptree.combineSignals(userSignal, timeout * 1000);
 	const execOptions = {
 		mode: "group" as const,
 		allowNonZero: true,
 		allowAbort: true,
 		stderr: "full" as const,
-		signal,
+		signal: overallSignal,
 	};
+	const remoteBudgetMs = Math.min(timeout * 1000, REMOTE_READER_MAX_MS);
 
 	// Try Parallel extract first when credentials are configured
-	if (settings.get("providers.parallelFetch") && (await findParallelApiKey())) {
+	if (settings.get("providers.parallelFetch") && findParallelApiKey(storage)) {
 		try {
-			const parallelResult = await extractWithParallel([url], {
-				objective: "Extract the main content",
-				excerpts: true,
-				fullContent: false,
-				signal,
-			});
+			const parallelResult = await extractWithParallel(
+				[url],
+				{
+					objective: "Extract the main content",
+					excerpts: true,
+					fullContent: false,
+					signal: ptree.combineSignals(userSignal, remoteBudgetMs),
+				},
+				storage,
+			);
 			const firstDocument = parallelResult.results[0];
 			if (firstDocument) {
 				const content = getParallelExtractContent(firstDocument);
@@ -570,17 +616,18 @@ async function renderHtmlToText(
 				}
 			}
 		} catch {
-			// Parallel extract failed, continue to next method
-			signal?.throwIfAborted();
+			// Parallel extract failed or stalled; honour real cancellation only.
+			userSignal?.throwIfAborted();
 		}
 	}
 
-	// Try jina first (reader API)
+	// Try jina reader API with its own sub-budget so a stall cannot starve
+	// later fallbacks (#1449).
 	try {
 		const jinaUrl = `https://r.jina.ai/${url}`;
 		const response = await fetch(jinaUrl, {
 			headers: { Accept: "text/markdown" },
-			signal,
+			signal: ptree.combineSignals(userSignal, remoteBudgetMs),
 		});
 		if (response.ok) {
 			const content = await response.text();
@@ -589,37 +636,50 @@ async function renderHtmlToText(
 			}
 		}
 	} catch {
-		// Jina failed, continue to next method
-		signal?.throwIfAborted();
+		// Jina failed or stalled; honour real cancellation only.
+		userSignal?.throwIfAborted();
 	}
 
 	// Try trafilatura (auto-install via uv/pip)
-	const trafilatura = await ensureTool("trafilatura", { signal, silent: true });
-	if (trafilatura) {
-		const result = await ptree.exec([trafilatura, "-u", url, "--output-format", "markdown"], execOptions);
-		if (result.ok && result.stdout.trim().length > 100) {
-			return { content: result.stdout, ok: true, method: "trafilatura" };
+	try {
+		const trafilatura = await ensureTool("trafilatura", { signal: overallSignal, silent: true });
+		if (trafilatura) {
+			const result = await ptree.exec([trafilatura, "-u", url, "--output-format", "markdown"], execOptions);
+			if (result.ok && result.stdout.trim().length > 100) {
+				return { content: result.stdout, ok: true, method: "trafilatura" };
+			}
 		}
+	} catch {
+		// trafilatura unavailable or stalled; continue to next method.
+		userSignal?.throwIfAborted();
 	}
 
 	// Try lynx (can't auto-install, system package)
-	const lynx = hasCommand("lynx");
-	if (lynx) {
-		const result = await ptree.exec(["lynx", "-dump", "-nolist", "-width", "250", url], execOptions);
-		if (result.ok) {
-			return { content: result.stdout, ok: true, method: "lynx" };
+	try {
+		const lynx = hasCommand("lynx");
+		if (lynx) {
+			const result = await ptree.exec(["lynx", "-dump", "-nolist", "-width", "250", url], execOptions);
+			if (result.ok) {
+				return { content: result.stdout, ok: true, method: "lynx" };
+			}
 		}
+	} catch {
+		// lynx failed or stalled; continue to native converter.
+		userSignal?.throwIfAborted();
 	}
 
-	// Fall back to native converter (fastest, no network/subprocess)
+	// Fall back to native converter (purely local, no network/subprocess).
+	// Always attempted: even if remote renderers and subprocesses were aborted
+	// by the overall reader-mode timeout, this still works on already-loaded
+	// HTML (#1449).
 	try {
 		const content = await htmlToMarkdown(html, { cleanContent: true });
 		if (content.trim().length > 100 && !isLowQualityOutput(content)) {
 			return { content, ok: true, method: "native" };
 		}
 	} catch {
-		// Native converter failed, continue to next method
-		signal?.throwIfAborted();
+		// Native converter failed; nothing else to try.
+		userSignal?.throwIfAborted();
 	}
 	return { content: "", ok: false, method: "none" };
 }
@@ -682,13 +742,14 @@ type FetchRenderResult = RenderResult & {
 async function handleSpecialUrls(
 	url: string,
 	timeout: number,
-	signal?: AbortSignal,
+	signal: AbortSignal | undefined,
+	storage: AgentStorage | null,
 ): Promise<FetchRenderResult | null> {
 	for (const handler of specialHandlers) {
 		if (signal?.aborted) {
 			throw new ToolAbortError();
 		}
-		const result = await handler(url, timeout, signal);
+		const result = await handler(url, timeout, signal, storage);
 		if (result) return result;
 	}
 	return null;
@@ -706,7 +767,8 @@ async function renderUrl(
 	timeout: number,
 	raw: boolean,
 	settings: Settings,
-	signal?: AbortSignal,
+	signal: AbortSignal | undefined,
+	storage: AgentStorage | null,
 ): Promise<FetchRenderResult> {
 	const notes: string[] = [];
 	const fetchedAt = new Date().toISOString();
@@ -733,7 +795,7 @@ async function renderUrl(
 
 	// Step 1: Try special handlers for known sites (unless raw mode)
 	if (!raw) {
-		const specialResult = await handleSpecialUrls(url, timeout, signal);
+		const specialResult = await handleSpecialUrls(url, timeout, signal, storage);
 		if (specialResult) return specialResult;
 	}
 
@@ -923,6 +985,22 @@ async function renderUrl(
 	const isText = mime.includes("text/plain") || mime.includes("text/markdown");
 	const isFeed = mime.includes("rss") || mime.includes("atom") || mime.includes("feed");
 
+	// Raw mode skips every text-shaping branch below (JSON pretty-print, feed-to-markdown,
+	// HTML extraction) and returns the response body verbatim. The image/markit branches
+	// above already ran because raw isn't useful for binary payloads.
+	if (raw) {
+		const output = finalizeOutput(rawContent);
+		return {
+			url,
+			finalUrl,
+			contentType: mime,
+			method: "raw",
+			content: output.content,
+			fetchedAt,
+			truncated: output.truncated,
+			notes,
+		};
+	}
 	if (isJson) {
 		const output = finalizeOutput(formatJson(rawContent));
 		return {
@@ -1051,7 +1129,7 @@ async function renderUrl(
 		}
 
 		// 5E: Render HTML with lynx or html2text
-		const htmlResult = await renderHtmlToText(finalUrl, rawContent, timeout, settings, signal);
+		const htmlResult = await renderHtmlToText(finalUrl, rawContent, timeout, settings, signal, storage);
 		if (!htmlResult.ok) {
 			notes.push("html rendering failed (lynx/html2text unavailable)");
 			const output = finalizeOutput(rawContent);
@@ -1166,7 +1244,8 @@ interface ReadUrlCacheEntry {
 	output: string;
 }
 
-const readUrlCache = new Map<string, ReadUrlCacheEntry>();
+const READ_URL_CACHE_MAX_ENTRIES = 100;
+const readUrlCache = new LRUCache<string, ReadUrlCacheEntry>({ max: READ_URL_CACHE_MAX_ENTRIES });
 
 function getReadUrlCacheKey(session: ToolSession, requestedUrl: string, raw: boolean): string {
 	const scope = session.getSessionFile() ?? session.cwd;
@@ -1233,7 +1312,8 @@ async function buildReadUrlCacheEntry(
 		throw new ToolAbortError();
 	}
 
-	const result = await renderUrl(url, effectiveTimeout, raw, session.settings, signal);
+	const storage = session.settings.getStorage();
+	const result = await renderUrl(url, effectiveTimeout, raw, session.settings, signal, storage);
 	const output = buildUrlReadOutput(result, result.content);
 	const artifactId = options?.ensureArtifact ? await persistReadUrlArtifact(session, output) : undefined;
 

@@ -3,13 +3,12 @@
  *
  * Supports three auth modes:
  * - Cookies (`PERPLEXITY_COOKIES`) via `www.perplexity.ai/rest/sse/perplexity_ask`
- * - OAuth JWT (stored in `agent.db`) via `www.perplexity.ai/rest/sse/perplexity_ask`
+ * - OAuth/session bearer via `AuthStorage` and `www.perplexity.ai/rest/sse/perplexity_ask`
  * - API key (`PERPLEXITY_API_KEY`) via `api.perplexity.ai/chat/completions`
  */
 
-import { getEnvApiKey } from "@oh-my-pi/pi-ai";
-import { $env, getAgentDbPath, readSseJson } from "@oh-my-pi/pi-utils";
-import { AgentStorage } from "../../../session/agent-storage";
+import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { $env, readSseJson } from "@oh-my-pi/pi-utils";
 import type {
 	PerplexityMessageOutput,
 	PerplexityRequest,
@@ -33,12 +32,6 @@ const DEFAULT_NUM_SEARCH_RESULTS = 10;
 const OAUTH_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 const OAUTH_API_VERSION = "2.18";
 const OAUTH_USER_AGENT = "Perplexity/641 CFNetwork/1568 Darwin/25.2.0";
-
-interface PerplexityOAuthCredential {
-	type: "oauth";
-	access: string;
-	expires: number;
-}
 
 type PerplexityAuth =
 	| {
@@ -168,6 +161,8 @@ export interface PerplexitySearchParams {
 	temperature?: number;
 	/** Number of search results to retrieve. Defaults to 10. */
 	num_search_results?: number;
+	authStorage: AuthStorage;
+	sessionId?: string;
 }
 
 /** Find PERPLEXITY_API_KEY from environment or .env files (also checks PPLX_API_KEY) */
@@ -194,41 +189,49 @@ function jwtExpiryMs(token: string): number | undefined {
 	}
 }
 
-async function findOAuthToken(): Promise<string | null> {
-	const now = Date.now();
+async function findOAuthToken(
+	authStorage: AuthStorage,
+	sessionId: string | undefined,
+	signal: AbortSignal | undefined,
+): Promise<string | null> {
 	try {
-		const storage = await AgentStorage.open(getAgentDbPath());
-		const records = storage.listAuthCredentials("perplexity");
-		for (const record of records) {
-			if (record.credential.type !== "oauth") continue;
-			const credential = record.credential as PerplexityOAuthCredential;
-			if (!credential.access) continue;
-			// Trust the JWT's own `exp` claim if it has one; otherwise treat as
-			// non-expiring. The stored `expires` field is unreliable: older logins
-			// wrote `loginTime + 1h` even though Perplexity JWTs typically lack `exp`.
-			const jwtExpiry = jwtExpiryMs(credential.access);
-			if (jwtExpiry !== undefined && jwtExpiry <= now + OAUTH_EXPIRY_BUFFER_MS) continue;
-			return credential.access;
-		}
+		// `getOAuthAccess` returns the raw OAuth bearer only — runtime/config
+		// api_key overrides and stored api_key credentials are intentionally
+		// suppressed so we don't POST an `api.perplexity.ai` key to the
+		// `www.perplexity.ai` session/SSE endpoint.
+		const access = await authStorage.getOAuthAccess("perplexity", sessionId, { signal });
+		const token = access?.accessToken;
+		if (!token) return null;
+		// Trust the JWT's own `exp` claim if it has one; otherwise treat as
+		// non-expiring. Perplexity session JWTs commonly omit `exp`.
+		const jwtExpiry = jwtExpiryMs(token);
+		if (jwtExpiry !== undefined && jwtExpiry <= Date.now() + OAUTH_EXPIRY_BUFFER_MS) return null;
+		return token;
 	} catch {
 		return null;
 	}
-	return null;
 }
 
-async function findPerplexityAuth(): Promise<PerplexityAuth | null> {
+async function findPerplexityAuth(
+	authStorage: AuthStorage,
+	sessionId: string | undefined,
+	signal: AbortSignal | undefined,
+): Promise<PerplexityAuth | null> {
 	// 1. PERPLEXITY_COOKIES env var
 	const cookies = $env.PERPLEXITY_COOKIES?.trim();
 	if (cookies) {
 		return { type: "cookies", cookies };
 	}
-	// 2. OAuth token from agent.db
-	const oauthToken = await findOAuthToken();
+
+	const apiKey = findApiKey();
+
+	// 2. OAuth/session bearer from AuthStorage.
+	const oauthToken = await findOAuthToken(authStorage, sessionId, signal);
 	if (oauthToken) {
 		return { type: "oauth", token: oauthToken };
 	}
+
 	// 3. PERPLEXITY_API_KEY env var
-	const apiKey = findApiKey();
 	if (apiKey) {
 		return { type: "api_key", token: apiKey };
 	}
@@ -493,7 +496,7 @@ function applySourceLimit(result: SearchResponse, limit?: number): SearchRespons
 
 /** Execute Perplexity web search */
 export async function searchPerplexity(params: PerplexitySearchParams): Promise<SearchResponse> {
-	const auth = await findPerplexityAuth();
+	const auth = await findPerplexityAuth(params.authStorage, params.sessionId, params.signal);
 	if (!auth) {
 		throw new Error("Perplexity auth not found. Set PERPLEXITY_COOKIES, PERPLEXITY_API_KEY, or login via OAuth.");
 	}
@@ -551,12 +554,8 @@ export class PerplexityProvider extends SearchProvider {
 	readonly id = "perplexity";
 	readonly label = "Perplexity";
 
-	async isAvailable() {
-		try {
-			return !!(await findPerplexityAuth());
-		} catch {
-			return false;
-		}
+	isAvailable(authStorage: AuthStorage): boolean {
+		return !!$env.PERPLEXITY_COOKIES?.trim() || authStorage.hasAuth("perplexity") || !!findApiKey();
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
@@ -569,6 +568,8 @@ export class PerplexityProvider extends SearchProvider {
 			system_prompt: params.systemPrompt,
 			search_recency_filter: params.recency,
 			num_results: params.limit,
+			authStorage: params.authStorage,
+			sessionId: params.sessionId,
 		});
 	}
 }

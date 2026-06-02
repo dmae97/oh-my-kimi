@@ -1,4 +1,5 @@
 import { getEnvApiKey } from "@oh-my-pi/pi-ai";
+import type { AgentStorage } from "../session/agent-storage";
 import { findCredential, withHardTimeout } from "./search/providers/utils";
 
 const PARALLEL_API_URL = "https://api.parallel.ai";
@@ -73,8 +74,8 @@ export class ParallelApiError extends Error {
 	}
 }
 
-export async function findParallelApiKey(): Promise<string | null> {
-	return findCredential(getEnvApiKey("parallel"), "parallel");
+export function findParallelApiKey(storage: AgentStorage | null | undefined): string | null {
+	return findCredential(storage, getEnvApiKey("parallel"), "parallel");
 }
 
 export function getParallelExtractContent(document: ParallelExtractDocument): string {
@@ -284,9 +285,10 @@ function parseExtractPayload(payload: unknown): ParallelExtractResult {
 export async function searchWithParallel(
 	objective: string,
 	queries: string[],
-	options: ParallelSearchOptions = {},
+	options: ParallelSearchOptions,
+	storage: AgentStorage | null | undefined,
 ): Promise<ParallelSearchResult> {
-	const apiKey = await findParallelApiKey();
+	const apiKey = findParallelApiKey(storage);
 	if (!apiKey) {
 		throw new ParallelApiError(
 			"Parallel credentials not found. Set PARALLEL_API_KEY or login with 'omp /login parallel'.",
@@ -316,9 +318,10 @@ export async function searchWithParallel(
 
 export async function extractWithParallel(
 	urls: string[],
-	options: ParallelExtractOptions = {},
+	options: ParallelExtractOptions,
+	storage: AgentStorage | null | undefined,
 ): Promise<ParallelExtractResult> {
-	const apiKey = await findParallelApiKey();
+	const apiKey = findParallelApiKey(storage);
 	if (!apiKey) {
 		throw new ParallelApiError(
 			"Parallel credentials not found. Set PARALLEL_API_KEY or login with 'omp /login parallel'.",

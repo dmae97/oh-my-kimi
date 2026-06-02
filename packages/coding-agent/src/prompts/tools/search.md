@@ -2,14 +2,14 @@ Searches files using powerful regex matching.
 
 <instruction>
 - Supports Rust regex syntax (RE2-style — no lookaround or backreferences). Use line anchors or post-filters instead of (?!…)/(?<!…)
-- `paths` is required and accepts an array of files, directories, globs, or internal URLs
-- `paths` is an array; do not embed commas or spaces inside a single entry. Pass `["src", "tests"]` not `["src,tests"]`.
+- `paths` is required and accepts either one string or an array of files, directories, globs, or internal URLs
+- For multiple targets, pass an array with one target per element. Do not comma-join targets inside one string: pass `["src", "tests"]`, not `"src,tests"` or `["src,tests"]`.
 - Cross-line patterns are detected from literal `\n` or escaped `\\n` in `pattern`
 </instruction>
 
 <output>
 {{#if IS_HL_MODE}}
-- Text output is anchor-prefixed: `*5th|content` (match) or ` 9x}|content` (context, leading space). The 2-char suffix is a content fingerprint. The `|` before content is a separator, not part of the file content.
+- Text output emits a file snapshot tag header per matched file plus numbered lines: `¶src/login.ts#1f`, `*42:if (user.id) {` (match), ` 43:return user;` (context). Copy the header for anchored edits; ops use bare line numbers.
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - Text output is line-number-prefixed

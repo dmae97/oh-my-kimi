@@ -262,7 +262,10 @@ function decodeSseLineBytes(line: Uint8Array, end: number): string {
 }
 
 function flushSseEvent(state: SseEventState): ServerSentEvent | null {
-	if (state.event === null && state.data === null) return null;
+	if (state.event === null && state.data === null) {
+		state.raw = [];
+		return null;
+	}
 	const event: ServerSentEvent = {
 		event: state.event,
 		data: state.data ?? "",

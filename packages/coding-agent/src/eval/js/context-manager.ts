@@ -48,10 +48,11 @@ interface JsSession {
 	worker: WorkerHandle;
 	state: "alive" | "dead";
 	pending: Map<string, PendingRun>;
-	queue: Promise<void>;
 }
 
 const sessions = new Map<string, JsSession>();
+const startingSessions = new Map<string, Promise<JsSession>>();
+const resettingSessions = new Set<string>();
 const READY_TIMEOUT_MS_DEFAULT = 5_000;
 
 export async function executeInVmContext(options: {
@@ -66,43 +67,44 @@ export async function executeInVmContext(options: {
 	runState: VmRunState;
 }): Promise<{ value: unknown }> {
 	if (options.reset) {
-		await resetVmContext(options.sessionKey);
+		if (resettingSessions.has(options.sessionKey)) {
+			throw new ToolError("JS context reset already in progress");
+		}
+		resettingSessions.add(options.sessionKey);
+		try {
+			await resetVmContext(options.sessionKey);
+		} finally {
+			resettingSessions.delete(options.sessionKey);
+		}
+	} else if (resettingSessions.has(options.sessionKey)) {
+		throw new ToolError("JS context reset in progress");
 	}
 	const session = await acquireSession(
 		options.sessionKey,
 		{ cwd: options.cwd, sessionId: options.sessionId },
 		options.timeoutMs,
 	);
-	return await runQueued(session, () => runOnce(session, options));
+	return await runOnce(session, options);
 }
 
 export async function resetVmContext(sessionKey: string): Promise<void> {
-	const session = sessions.get(sessionKey);
+	const session = sessions.get(sessionKey) ?? (await startingSessions.get(sessionKey)?.catch(() => undefined));
 	if (!session) return;
 	sessions.delete(sessionKey);
 	await killSession(session, new ToolError("JS context reset"));
 }
 
 export async function disposeAllVmContexts(): Promise<void> {
+	const pending = [...startingSessions.values()];
+	startingSessions.clear();
+	const started = await Promise.allSettled(pending);
 	const all = [...sessions.values()];
+	for (const result of started) {
+		if (result.status !== "fulfilled") continue;
+		if (!all.includes(result.value)) all.push(result.value);
+	}
 	sessions.clear();
 	await Promise.all(all.map(session => killSession(session, new ToolError("JS context disposed"))));
-}
-
-async function runQueued<T>(session: JsSession, work: () => Promise<T>): Promise<T> {
-	const previous = session.queue;
-	const { promise, resolve } = Promise.withResolvers<void>();
-	session.queue = promise;
-	try {
-		await previous;
-	} catch {
-		// Previous run's failure must not poison this one.
-	}
-	try {
-		return await work();
-	} finally {
-		resolve();
-	}
 }
 
 async function runOnce(
@@ -162,43 +164,52 @@ async function runOnce(
 async function acquireSession(sessionKey: string, snapshot: SessionSnapshot, timeoutMs?: number): Promise<JsSession> {
 	const existing = sessions.get(sessionKey);
 	if (existing && existing.state === "alive") return existing;
+	const starting = startingSessions.get(sessionKey);
+	if (starting) return await starting;
 
-	const worker = await spawnJsWorker();
-	const session: JsSession = {
-		sessionKey,
-		worker,
-		state: "alive",
-		pending: new Map(),
-		queue: Promise.resolve(),
-	};
-	const { promise: readyPromise, resolve: resolveReady, reject: rejectReady } = Promise.withResolvers<void>();
-	let resolved = false;
-	const unsubscribe = worker.onMessage(msg => {
-		if (!resolved && msg.type === "ready") {
-			resolved = true;
-			resolveReady();
-			return;
+	const startup = (async (): Promise<JsSession> => {
+		const worker = await spawnJsWorker();
+		const session: JsSession = {
+			sessionKey,
+			worker,
+			state: "alive",
+			pending: new Map(),
+		};
+		const { promise: readyPromise, resolve: resolveReady, reject: rejectReady } = Promise.withResolvers<void>();
+		let resolved = false;
+		const unsubscribe = worker.onMessage(msg => {
+			if (!resolved && msg.type === "ready") {
+				resolved = true;
+				resolveReady();
+				return;
+			}
+			if (!resolved && msg.type === "init-failed") {
+				resolved = true;
+				rejectReady(errorFromPayload(msg.error));
+				return;
+			}
+			handleSessionMessage(session, msg);
+		});
+		try {
+			// Cold-start can exceed 5s on slow hosts. Let the caller's per-cell timeout dominate so
+			// users can grant more headroom when they raise `timeout` on a cell.
+			const readyTimeoutMs = Math.max(READY_TIMEOUT_MS_DEFAULT, timeoutMs ?? 0);
+			await raceWithTimeout(readyPromise, readyTimeoutMs, "Timed out initializing JS eval worker");
+			worker.send({ type: "init", snapshot });
+			sessions.set(sessionKey, session);
+			return session;
+		} catch (error) {
+			unsubscribe();
+			await worker.terminate().catch(() => undefined);
+			throw error;
 		}
-		if (!resolved && msg.type === "init-failed") {
-			resolved = true;
-			rejectReady(errorFromPayload(msg.error));
-			return;
-		}
-		handleSessionMessage(session, msg);
-	});
+	})();
+	startingSessions.set(sessionKey, startup);
 	try {
-		// Cold-start can exceed 5s on slow hosts. Let the caller's per-cell timeout dominate so
-		// users can grant more headroom when they raise `timeout` on a cell.
-		const readyTimeoutMs = Math.max(READY_TIMEOUT_MS_DEFAULT, timeoutMs ?? 0);
-		await raceWithTimeout(readyPromise, readyTimeoutMs, "Timed out initializing JS eval worker");
-	} catch (error) {
-		unsubscribe();
-		await worker.terminate().catch(() => undefined);
-		throw error;
+		return await startup;
+	} finally {
+		if (startingSessions.get(sessionKey) === startup) startingSessions.delete(sessionKey);
 	}
-	worker.send({ type: "init", snapshot });
-	sessions.set(sessionKey, session);
-	return session;
 }
 
 function handleSessionMessage(session: JsSession, msg: WorkerOutbound): void {

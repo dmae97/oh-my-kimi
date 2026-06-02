@@ -1,5 +1,12 @@
 import type { Effort } from "../model-thinking";
-import type { AssistantMessage, AssistantMessageEventStream, CacheRetention, Context, ServiceTier } from "../types";
+import type {
+	AssistantMessage,
+	AssistantMessageEventStream,
+	CacheRetention,
+	Context,
+	ServiceTier,
+	TokenTaskBudget,
+} from "../types";
 
 /**
  * Wire types for the omp auth-gateway.
@@ -61,13 +68,15 @@ export interface AuthGatewayParsedRequestOptions {
 	thinkingBudgets?: Partial<Record<Effort, number>>;
 	/** Suppress the provider's reasoning summary stream. */
 	hideThinkingSummary?: boolean;
+	/** Anthropic `output_config.task_budget` advisory loop budget. */
+	taskBudget?: TokenTaskBudget;
 
 	// ── Service / routing ─────────────────────────────────────────────────
 	/** OpenAI service tier (auto|default|flex|scale|priority). */
 	serviceTier?: ServiceTier;
 	/** Cache retention hint derived from inbound `cache_control` markers. */
 	cacheRetention?: CacheRetention;
-	/** OpenAI Responses `prompt_cache_key`; bridges to pi-ai `sessionId`. */
+	/** OpenAI Responses `prompt_cache_key`; also seeds provider routing when no separate session id exists. */
 	promptCacheKey?: string;
 	/** OpenAI Responses `previous_response_id` for response chaining. */
 	previousResponseId?: string;

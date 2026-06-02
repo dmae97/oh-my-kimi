@@ -37,6 +37,10 @@ function renderLines(component: HookEditorComponent, width = 120): string[] {
 	return Bun.stripANSI(component.render(width).join("\n")).split("\n");
 }
 
+function largePasteText(): string {
+	return Array.from({ length: 11 }, (_, index) => `pasted line ${index + 1}`).join("\n");
+}
+
 type TestContext = InteractiveModeContext & {
 	editorContainer: {
 		children: unknown[];
@@ -126,6 +130,35 @@ describe("HookEditorComponent default (hook) mode", () => {
 		}
 	});
 
+	it("submits LF-prefixed modified Enter sequences", () => {
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const component = new HookEditorComponent(createTui(), "Prompt", "draft", onSubmit, onCancel);
+
+		component.handleInput("\n\x1b[13;5u");
+
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit).toHaveBeenCalledWith("draft");
+		expect(onCancel).not.toHaveBeenCalled();
+	});
+
+	it("expands large paste markers when submitting on Ctrl+Enter", () => {
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const component = new HookEditorComponent(createTui(), "Prompt", undefined, onSubmit, onCancel);
+		const pasted = largePasteText();
+
+		component.handleInput(`\x1b[200~${pasted}\x1b[201~`);
+
+		expect(renderText(component)).toContain("[paste #1 +11 lines]");
+
+		component.handleInput("\x1b[13;5u");
+
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit).toHaveBeenCalledWith(pasted);
+		expect(onCancel).not.toHaveBeenCalled();
+	});
+
 	it("cancels on Escape", () => {
 		const onSubmit = vi.fn();
 		const onCancel = vi.fn();
@@ -182,6 +215,25 @@ describe("HookEditorComponent prompt-style mode", () => {
 
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 		expect(onSubmit).toHaveBeenCalledWith("a");
+		expect(onCancel).not.toHaveBeenCalled();
+	});
+
+	it("expands large paste markers when submitting on Enter", () => {
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const component = new HookEditorComponent(createTui(), "Prompt", undefined, onSubmit, onCancel, {
+			promptStyle: true,
+		});
+		const pasted = largePasteText();
+
+		component.handleInput(`\x1b[200~${pasted}\x1b[201~`);
+
+		expect(renderText(component)).toContain("[paste #1 +11 lines]");
+
+		component.handleInput("\r");
+
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit).toHaveBeenCalledWith(pasted);
 		expect(onCancel).not.toHaveBeenCalled();
 	});
 

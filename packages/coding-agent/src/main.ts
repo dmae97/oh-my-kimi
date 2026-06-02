@@ -9,6 +9,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
+import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	$env,
@@ -20,7 +21,9 @@ import {
 	VERSION,
 } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
+import { reset as resetCapabilities } from "./capability";
 import type { Args } from "./cli/args";
+import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { runListModelsCommand } from "./cli/list-models";
@@ -36,7 +39,9 @@ import {
 	preloadPluginRoots,
 	resolveActiveProjectRegistryPath,
 } from "./discovery/helpers";
+import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
 import { exportFromFile } from "./export/html";
+import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import {
 	getInstalledPluginsRegistryPath,
@@ -47,6 +52,7 @@ import {
 } from "./extensibility/plugins/marketplace";
 import type { MCPManager } from "./mcp";
 import { InteractiveMode, runAcpMode, runPrintMode, runRpcMode } from "./modes";
+import { ALL_SCENES, runSetupWizard, selectSetupScenes } from "./modes/setup-wizard";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
 import {
@@ -54,14 +60,16 @@ import {
 	type CreateAgentSessionResult,
 	createAgentSession,
 	discoverAuthStorage,
+	loadSessionExtensions,
 } from "./sdk";
 import type { AgentSession } from "./session/agent-session";
 import type { AuthStorage } from "./session/auth-storage";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
 import { resolvePromptInput } from "./system-prompt";
+import { AUTO_THINKING } from "./thinking";
 import type { LspStartupServerInfo } from "./tools";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
-import type { EventBus } from "./utils/event-bus";
+import { EventBus } from "./utils/event-bus";
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
 	if (!settings.get("startup.checkUpdate")) {
@@ -155,6 +163,7 @@ export async function submitInteractiveInput(
 	}
 
 	try {
+		using _keepalive = new EventLoopKeepalive();
 		// Continue shortcuts submit an already-started empty prompt with no optimistic user message.
 		if (!input.started && !mode.markPendingSubmissionStarted(input)) {
 			return;
@@ -176,37 +185,6 @@ export async function submitInteractiveInput(
 		mode.finishPendingSubmission(input);
 		await mode.checkShutdownRequested();
 	}
-}
-
-function applyExtensionFlagValues(session: AgentSession, rawArgs: string[]): Map<string, boolean | string> {
-	const extensionRunner = session.extensionRunner;
-	if (!extensionRunner) {
-		return new Map();
-	}
-
-	const extFlags = extensionRunner.getFlags();
-	if (extFlags.size > 0) {
-		for (let i = 0; i < rawArgs.length; i++) {
-			const arg = rawArgs[i];
-			if (!arg.startsWith("--")) {
-				continue;
-			}
-			const flagName = arg.slice(2);
-			const extFlag = extFlags.get(flagName);
-			if (!extFlag) {
-				continue;
-			}
-			if (extFlag.type === "boolean") {
-				extensionRunner.setFlagValue(flagName, true);
-				continue;
-			}
-			if (i + 1 < rawArgs.length) {
-				extensionRunner.setFlagValue(flagName, rawArgs[++i]);
-			}
-		}
-	}
-
-	return extensionRunner.getFlagValues();
 }
 
 type AcpSessionFactory = (cwd: string) => Promise<AgentSession>;
@@ -251,7 +229,7 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 		if (args.parsedArgs.apiKey && !args.baseOptions.model && nextSession.model) {
 			args.authStorage.setRuntimeApiKey(nextSession.model.provider, args.parsedArgs.apiKey);
 		}
-		applyExtensionFlagValues(nextSession, args.rawArgs);
+		applyExtensionFlags(nextSession.extensionRunner, args.rawArgs);
 		return nextSession;
 	};
 }
@@ -266,6 +244,8 @@ async function runInteractiveMode(
 	setExtensionUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
 	lspServers: LspStartupServerInfo[] | undefined,
 	mcpManager: MCPManager | undefined,
+	resuming: boolean,
+	forceSetupWizard: boolean,
 	eventBus?: EventBus,
 	initialMessage?: string,
 	initialImages?: ImageContent[],
@@ -280,7 +260,18 @@ async function runInteractiveMode(
 		eventBus,
 	);
 
-	await mode.init();
+	const setupScenes = await selectSetupScenes(settings.get("setupVersion"), ALL_SCENES, mode, {
+		resuming,
+		isTTY: process.stdin.isTTY && process.stdout.isTTY,
+		setupWizardEnabled: settings.get("startup.setupWizard"),
+		force: forceSetupWizard,
+	});
+
+	await mode.init({ suppressWelcomeIntro: setupScenes.length > 0 });
+
+	if (setupScenes.length > 0) {
+		await runSetupWizard(mode, setupScenes);
+	}
 
 	versionCheckPromise
 		.then(newVersion => {
@@ -293,7 +284,7 @@ async function runInteractiveMode(
 		})
 		.catch(() => {});
 
-	mode.renderInitialMessages();
+	mode.renderInitialMessages(undefined, { preserveExistingChat: true });
 
 	for (const notify of notifs) {
 		if (!notify) {
@@ -310,6 +301,7 @@ async function runInteractiveMode(
 
 	if (initialMessage !== undefined) {
 		try {
+			using _keepalive = new EventLoopKeepalive();
 			await session.prompt(initialMessage, { images: initialImages });
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
@@ -319,6 +311,7 @@ async function runInteractiveMode(
 
 	for (const message of initialMessages) {
 		try {
+			using _keepalive = new EventLoopKeepalive();
 			await session.prompt(message);
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
@@ -332,15 +325,19 @@ async function runInteractiveMode(
 	}
 }
 
-async function promptForkSession(session: SessionInfo): Promise<boolean> {
+type ForkSessionPromptResult = "accepted" | "declined" | "unavailable";
+
+type ForkSessionPrompt = (session: SessionInfo) => Promise<ForkSessionPromptResult>;
+
+async function promptForkSession(session: SessionInfo): Promise<ForkSessionPromptResult> {
 	if (!process.stdin.isTTY) {
-		return false;
+		return "unavailable";
 	}
 	const message = `Session found in different project: ${session.cwd}. Fork into current directory? [y/N] `;
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
 		const answer = (await rl.question(message)).trim().toLowerCase();
-		return answer === "y" || answer === "yes";
+		return answer === "y" || answer === "yes" ? "accepted" : "declined";
 	} finally {
 		rl.close();
 	}
@@ -386,10 +383,12 @@ async function flushChangelogVersion(): Promise<void> {
 	}
 }
 
-async function createSessionManager(
+/** Resolves CLI session flags into an existing, forked, in-memory, or cancelled session manager. */
+export async function createSessionManager(
 	parsed: Args,
 	cwd: string,
 	activeSettings: Settings = settings,
+	askToForkSession: ForkSessionPrompt = promptForkSession,
 ): Promise<SessionManager | undefined> {
 	if (parsed.fork) {
 		if (parsed.noSession) {
@@ -422,9 +421,17 @@ async function createSessionManager(
 			const normalizedCwd = normalizePathForComparison(cwd);
 			const normalizedMatchCwd = normalizePathForComparison(match.session.cwd || cwd);
 			if (normalizedCwd !== normalizedMatchCwd) {
-				const shouldFork = await promptForkSession(match.session);
-				if (!shouldFork) {
-					throw new Error(`Session "${sessionArg}" is in another project (${match.session.cwd}).`);
+				const forkPromptResult = await askToForkSession(match.session);
+				if (forkPromptResult === "unavailable") {
+					throw new Error(
+						`Session "${sessionArg}" is in another project (${match.session.cwd}); run interactively to fork it into the current project.`,
+					);
+				}
+				if (forkPromptResult === "declined") {
+					// User declined the cross-project fork prompt. Caller distinguishes
+					// this cancellation from the "default new session" undefined return
+					// by checking `typeof parsed.resume === "string"`.
+					return undefined;
 				}
 				return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir);
 			}
@@ -541,6 +548,7 @@ async function buildSessionOptions(
 ): Promise<{ options: CreateAgentSessionOptions }> {
 	const options: CreateAgentSessionOptions = {
 		cwd: parsed.cwd ?? getProjectDir(),
+		autoApprove: parsed.autoApprove ?? false,
 	};
 
 	// Auto-discover SYSTEM.md if no CLI system prompt provided
@@ -635,7 +643,11 @@ async function buildSessionOptions(
 
 	// Scoped models for Ctrl+P cycling - fill in default thinking levels when not explicit
 	if (scopedModels.length > 0) {
-		const defaultThinkingLevel = activeSettings.get("defaultThinkingLevel");
+		// `auto` is a session-level concept only; per-scoped-model (Ctrl+P) thinking
+		// overrides stay concrete, so coerce the auto default to "unset" here.
+		const defaultThinkingLevelSetting = activeSettings.get("defaultThinkingLevel");
+		const defaultThinkingLevel =
+			defaultThinkingLevelSetting === AUTO_THINKING ? undefined : defaultThinkingLevelSetting;
 		options.scopedModels = scopedModels.map(scopedModel => ({
 			model: scopedModel.model,
 			thinkingLevel: scopedModel.explicitThinkingLevel
@@ -699,6 +711,7 @@ interface RunRootCommandDependencies {
 	discoverAuthStorage?: typeof discoverAuthStorage;
 	runAcpMode?: typeof runAcpMode;
 	settings?: Settings;
+	forceSetupWizard?: boolean;
 }
 
 export async function runRootCommand(
@@ -779,9 +792,25 @@ export async function runRootCommand(
 	// warning before we reach the await site below.
 	pluginPreloadPromise.catch(() => {});
 
-	const cwd = getProjectDir();
+	// Register CLI-provided extension package paths (`--extension`, `--hook`) so
+	// the `omp-plugins` discovery provider can surface their `skills/`, `hooks/`,
+	// `tools/`, `commands/`, `rules/`, `prompts/`, and `.mcp.json` sub-trees.
+	// `--no-extensions` short-circuits both the factory load and the sub-discovery.
+	if (!parsedArgs.noExtensions) {
+		const cliExtensions = [...(parsedArgs.extensions ?? []), ...(parsedArgs.hooks ?? [])];
+		if (cliExtensions.length > 0) {
+			injectOmpExtensionCliRoots(cliExtensions, home, getProjectDir());
+		}
+	}
+
+	let cwd = getProjectDir();
 	const settingsInstance = deps.settings ?? (await logger.time("settings:init", Settings.init, { cwd }));
-	if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") {
+	if (parsedArgs.approvalMode) {
+		// Runtime override (not persisted): every settings.get("tools.approvalMode") downstream
+		// sees this value. The wrapper still honours --auto-approve / --yolo on top of it.
+		settingsInstance.override("tools.approvalMode", parsedArgs.approvalMode);
+	}
+	if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") {
 		applyRpcDefaultSettingOverrides(settingsInstance);
 	} else if (parsedArgs.mode === "acp") {
 		applyAcpDefaultSettingOverrides(settingsInstance);
@@ -792,22 +821,7 @@ export async function runRootCommand(
 	if (parsedArgs.noTitle || parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") {
 		Bun.env.PI_NO_TITLE = "1";
 	}
-	const { pipedInput, fileText, fileImages } = await logger.time("prepareInitialMessage", async () => {
-		const pipedInput = await readPipedInput();
-		if (parsedArgs.fileArgs.length === 0) {
-			return { pipedInput, fileText: undefined, fileImages: undefined };
-		}
-		const processed = await processFileArguments(parsedArgs.fileArgs, {
-			autoResizeImages: settingsInstance.get("images.autoResize"),
-		});
-		return { pipedInput, fileText: processed.text, fileImages: processed.images };
-	});
-	const { initialMessage, initialImages } = buildInitialMessage({
-		parsed: parsedArgs,
-		fileText,
-		fileImages,
-		stdinContent: pipedInput,
-	});
+	const pipedInput = await logger.time("readPipedInput", readPipedInput);
 	const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 	const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
 	const mode = parsedArgs.mode || "text";
@@ -861,19 +875,53 @@ export async function runRootCommand(
 		settingsInstance,
 	);
 
+	// User declined the cross-project fork prompt — exit cleanly with a friendly
+	// message rather than letting the decline bubble up as an uncaught exception
+	// (see issue #1668).
+	if (typeof parsedArgs.resume === "string" && !sessionManager) {
+		process.stdout.write(`${chalk.dim("Resume cancelled: session is in another project.")}\n`);
+		return;
+	}
+
 	// Handle --resume (no value): show session picker
 	if (parsedArgs.resume === true && !parsedArgs.fork) {
-		const sessions = await logger.time("SessionManager.list", SessionManager.list, cwd, parsedArgs.sessionDir);
-		if (sessions.length === 0) {
-			process.stdout.write(`${chalk.dim("No sessions found")}\n`);
-			return;
+		const folderSessions = await logger.time("SessionManager.list", SessionManager.list, cwd, parsedArgs.sessionDir);
+		let preloadedAllSessions: SessionInfo[] | undefined;
+		let startInAllScope = false;
+		if (folderSessions.length === 0) {
+			// Nothing in the current folder — fall back to a global scan so the
+			// picker can still open in all-projects scope instead of dead-ending.
+			preloadedAllSessions = await logger.time("SessionManager.listAll", SessionManager.listAll);
+			if (preloadedAllSessions.length === 0) {
+				process.stdout.write(`${chalk.dim("No sessions found")}\n`);
+				return;
+			}
+			startInAllScope = true;
 		}
-		const selectedPath = await logger.time("selectSession", selectSession, sessions);
-		if (!selectedPath) {
+		const selected = await logger.time("selectSession", selectSession, folderSessions, {
+			allSessions: preloadedAllSessions,
+			startInAllScope,
+		});
+		if (!selected) {
 			process.stdout.write(`${chalk.dim("No session selected")}\n`);
 			return;
 		}
-		sessionManager = await SessionManager.open(selectedPath);
+		// Resuming a session from another project: switch the process into that
+		// project's directory and refresh cwd-derived caches before the session is
+		// built, so settings discovery, plugins, and capabilities all scope to it.
+		if (selected.cwd && normalizePathForComparison(selected.cwd) !== normalizePathForComparison(getProjectDir())) {
+			// Let the original (launch-cwd) plugin-root preload settle first so its
+			// late resolution can't clobber the re-warm we trigger below.
+			await pluginPreloadPromise.catch(() => {});
+			setProjectDir(selected.cwd);
+			clearPluginRootsAndCaches();
+			resetCapabilities();
+			cwd = getProjectDir();
+			// Re-scope project settings (.claude/settings.yml etc.) to the resumed
+			// project in place so the session is built with its configuration.
+			await settingsInstance.reloadForCwd(cwd);
+		}
+		sessionManager = await SessionManager.open(selected.path);
 	}
 
 	await pluginPreloadPromise;
@@ -956,8 +1004,42 @@ export async function runRootCommand(
 		});
 		await (deps.runAcpMode ?? runAcpMode)(createAcpSession);
 	} else {
-		const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager, eventBus } =
-			await createSession(sessionOptions);
+		// Resolve extension-registered CLI flags before creating the session so a
+		// bad `@file` fails fast WITHOUT leaving a junk session/breadcrumb
+		// (createAgentSession writes the terminal breadcrumb eagerly). Loading the
+		// extensions here also makes `@file` classification extension-aware — e.g. a
+		// string-flag value such as `--target @notes.md` is the flag's value, not a
+		// file — and the same result is handed to createAgentSession via
+		// `preloadedExtensions` so the discovery work is not repeated.
+		const eventBus = new EventBus();
+		const extensionsResult = await loadSessionExtensions(sessionOptions, cwd, settingsInstance, eventBus);
+		const extensionFlagSink: ExtensionFlagSink = {
+			getFlags: () => ExtensionRunner.aggregateFlags(extensionsResult.extensions),
+			setFlagValue: (name, value) => {
+				extensionsResult.runtime.flagValues.set(name, value);
+			},
+		};
+		const initialArgs = applyExtensionFlags(extensionFlagSink, rawArgs) ?? parsedArgs;
+		const processedFiles =
+			initialArgs.fileArgs.length > 0
+				? await logger.time("processFileArguments", () =>
+						processFileArguments(initialArgs.fileArgs, {
+							autoResizeImages: settingsInstance.get("images.autoResize"),
+						}),
+					)
+				: undefined;
+		const { initialMessage, initialImages } = buildInitialMessage({
+			parsed: initialArgs,
+			fileText: processedFiles?.text,
+			fileImages: processedFiles?.images,
+			stdinContent: pipedInput,
+		});
+
+		const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager } = await createSession({
+			...sessionOptions,
+			eventBus,
+			preloadedExtensions: extensionsResult,
+		});
 		if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 			authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
 		}
@@ -970,8 +1052,6 @@ export async function runRootCommand(
 		if (modelRegistryError) {
 			notifs.push({ kind: "error", message: modelRegistryError.message });
 		}
-
-		applyExtensionFlagValues(session, rawArgs);
 
 		if (!isInteractive && !session.model) {
 			if (modelFallbackMessage) {
@@ -1016,10 +1096,12 @@ export async function runRootCommand(
 				changelogMarkdown,
 				notifs,
 				versionCheckPromise,
-				parsedArgs.messages,
+				initialArgs.messages,
 				setToolUIContext,
 				lspServers,
 				mcpManager,
+				Boolean(parsedArgs.continue || parsedArgs.resume || parsedArgs.fork),
+				deps.forceSetupWizard === true,
 				eventBus,
 				initialMessage,
 				initialImages,
@@ -1027,7 +1109,7 @@ export async function runRootCommand(
 		} else {
 			await runPrintMode(session, {
 				mode,
-				messages: parsedArgs.messages,
+				messages: initialArgs.messages,
 				initialMessage,
 				initialImages,
 			});

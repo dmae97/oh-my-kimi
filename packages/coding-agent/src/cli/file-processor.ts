@@ -1,5 +1,5 @@
 /**
- * Process @file CLI arguments into text content and image attachments
+ * Process @file CLI arguments into text, document content, and image attachments
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -9,11 +9,13 @@ import chalk from "chalk";
 import { resolveReadPath } from "../tools/path-utils";
 import { formatBytes } from "../tools/render-utils";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
+import { convertFileWithMarkit } from "../utils/markit";
 
 // Keep CLI startup responsive and avoid OOM when users pass huge files.
 // If a file exceeds these limits, we include it as a path-only <file/> block.
 const MAX_CLI_TEXT_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_CLI_IMAGE_BYTES = 25 * 1024 * 1024; // 25MB
+const CONVERTIBLE_EXTENSIONS = new Set([".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".rtf", ".epub"]);
 
 export interface ProcessedFiles {
 	text: string;
@@ -25,7 +27,7 @@ export interface ProcessFileOptions {
 	autoResizeImages?: boolean;
 }
 
-/** Process @file arguments into text content and image attachments */
+/** Process @file arguments into text, document content, and image attachments */
 export async function processFileArguments(fileArgs: string[], options?: ProcessFileOptions): Promise<ProcessedFiles> {
 	const autoResizeImages = options?.autoResizeImages ?? true;
 	let text = "";
@@ -43,6 +45,7 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 
 		const imageMetadata = await readImageMetadata(absolutePath);
 		const mimeType = imageMetadata?.mimeType;
+		const ext = path.extname(absolutePath).toLowerCase();
 		const maxBytes = mimeType ? MAX_CLI_IMAGE_BYTES : MAX_CLI_TEXT_BYTES;
 		if (stat.size > maxBytes) {
 			console.error(
@@ -105,6 +108,13 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 				text += `<file name="${absolutePath}">${dimensionNote}</file>\n`;
 			} else {
 				text += `<file name="${absolutePath}"></file>\n`;
+			}
+		} else if (CONVERTIBLE_EXTENSIONS.has(ext)) {
+			const result = await convertFileWithMarkit(absolutePath);
+			if (result.ok) {
+				text += `<file name="${absolutePath}">\n${result.content}\n</file>\n`;
+			} else {
+				text += `<file name="${absolutePath}">[Cannot read ${ext} file: ${result.error || "conversion failed"}]</file>\n`;
 			}
 		} else {
 			// Handle text file

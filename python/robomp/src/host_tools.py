@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from collections.abc import Callable, Mapping
@@ -25,7 +26,7 @@ from robomp.config import Settings
 from robomp.db import Database, issue_key
 from robomp.git_ops import GitCommandError, HeadDriftError
 from robomp.github_backend import GitHubBackend
-from robomp.github_client import GitHubError, IssueInfo, RepoInfo
+from robomp.github_client import GitHubError, IssueInfo, PullRequestFileInfo, RepoInfo
 from robomp.sandbox import (
     GitTransport,
     Workspace,
@@ -109,6 +110,9 @@ class ToolBindings:
     # — the originating issue has already been classified and the PR
     # itself does not carry triage labels.
     inbound_is_pr: bool = False
+    # True only for incoming-PR review tasks. Review tools require it; mutating
+    # branch/PR publication tools reject when it is set.
+    review_mode: bool = False
     slot_uid: int | None = None
     # Set by the worker before launching omp. Carries the abort-task signal
     # back out to the worker; `None` for unit tests that exercise tools
@@ -514,6 +518,10 @@ def _build_post_comment(bindings: ToolBindings) -> HostTool[Any, Any]:
 
 
 def _guarded_push_branch(bindings: ToolBindings, args: Mapping[str, Any], tool_name: str, branch: str) -> str:
+    if bindings.review_mode:
+        msg = "refusing to push: PR review worktrees are read-only."
+        _audit(bindings, tool_name, args, error=msg)
+        _raise_command(msg)
     if branch != bindings.workspace.branch:
         _raise_command(
             f"refusing to push: branch={branch!r} does not match workspace branch {bindings.workspace.branch!r}."
@@ -611,6 +619,10 @@ def _guarded_push_branch(bindings: ToolBindings, args: Mapping[str, Any], tool_n
 # ---------- gh_push_branch ----------
 def _build_push_branch(bindings: ToolBindings) -> HostTool[Any, Any]:
     def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
+        if bindings.review_mode:
+            msg = "refusing to push: PR review worktrees are read-only."
+            _audit(bindings, "gh_push_branch", args, error=msg)
+            _raise_command(msg)
         branch = str(args.get("branch") or bindings.workspace.branch)
         skip = bool(args.get("skip_checks", False))
         # Same gate as gh_open_pr — formatter + check before bytes leave the
@@ -648,6 +660,10 @@ def _build_push_branch(bindings: ToolBindings) -> HostTool[Any, Any]:
 # ---------- gh_open_pr ----------
 def _build_open_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
     def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
+        if bindings.review_mode:
+            msg = "refusing to open PR: PR review tasks are read-only."
+            _audit(bindings, "gh_open_pr", args, error=msg)
+            _raise_command(msg)
         title = args.get("title")
         body = args.get("body")
         if not isinstance(title, str) or not title.strip():
@@ -969,6 +985,301 @@ _PRIMARY_TYPES = ("bug", "enhancement", "question", "proposal", "documentation",
 _PRIORITIES = ("prio:p0", "prio:p1", "prio:p2", "prio:p3")
 _FUNCTIONAL = ("agent", "tool", "tui", "cli", "prompting", "sdk", "auth", "setup", "ux", "providers")
 _PLATFORMS = ("platform:linux", "platform:macos", "platform:windows", "platform:wsl")
+_PR_RANKS = ("review:p0", "review:p1", "review:p2", "review:p3")
+_PR_TYPES = ("feat", "fix", "docs", "refactor", "perf", "test", "chore", "ci", "build")
+_CLOSING_ISSUE_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.IGNORECASE)
+
+
+def _require_review_mode(bindings: ToolBindings, name: str, args: Mapping[str, Any]) -> None:
+    if bindings.review_mode:
+        return
+    msg = f"{name} is only available during incoming PR review tasks."
+    _audit(bindings, name, args, error=msg)
+    _raise_command(msg)
+
+
+def _format_pr_file(file: PullRequestFileInfo) -> str:
+    return f"- `{file.path}` ({file.status}, +{file.additions}/-{file.deletions})"
+
+
+def _build_fetch_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
+    def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
+        _require_review_mode(bindings, "fetch_pr", args)
+        pr_number = bindings.default_comment_number
+        try:
+            pr = _run_coro(bindings.loop, bindings.github.get_pull_request(bindings.repo.full_name, pr_number))
+            files = _run_coro(bindings.loop, bindings.github.list_pr_files(bindings.repo.full_name, pr_number))
+        except GitHubError as exc:
+            _audit(bindings, "fetch_pr", args, error=str(exc))
+            _raise_command(f"GitHub fetch failed: {exc.status} {exc.message}")
+        linked = tuple(sorted({int(match.group(1)) for match in _CLOSING_ISSUE_RE.finditer(pr.body)}))
+        lines = [
+            f"# {pr.repo}#{pr.number} ({pr.state})",
+            f"title: {pr.title or '(untitled)'}",
+            f"author: @{pr.author}",
+            f"head: {pr.head_repo or pr.repo}:{pr.head_ref}",
+            f"base: {pr.base_ref}",
+            f"url: {pr.html_url}",
+            "",
+            "## Body",
+            pr.body.strip() or "(empty)",
+            "",
+            "## Linked issues",
+            ", ".join(f"#{n}" for n in linked) if linked else "(none found in PR body)",
+            "",
+            f"## Changed files ({len(files)})",
+        ]
+        lines.extend(_format_pr_file(file) for file in files)
+        rendered = "\n".join(lines)
+        _audit(bindings, "fetch_pr", args, result={"files": len(files), "linked_issues": list(linked)})
+        return rendered
+
+    return host_tool(
+        name="fetch_pr",
+        description=persona.host_tool_description("fetch_pr"),
+        parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        execute=execute,
+    )
+
+
+def _build_classify_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
+    def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
+        _require_review_mode(bindings, "classify_pr", args)
+        rank = args.get("rank")
+        if rank not in _PR_RANKS:
+            msg = f"classify_pr 'rank' must be one of {_PR_RANKS}; got {rank!r}."
+            _audit(bindings, "classify_pr", args, error=msg)
+            _raise_command(msg)
+        pr_type = args.get("type")
+        if pr_type not in _PR_TYPES:
+            msg = f"classify_pr 'type' must be one of {_PR_TYPES}; got {pr_type!r}."
+            _audit(bindings, "classify_pr", args, error=msg)
+            _raise_command(msg)
+        rationale = args.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            msg = "classify_pr requires a one-sentence 'rationale'."
+            _audit(bindings, "classify_pr", args, error=msg)
+            _raise_command(msg)
+
+        labels: list[str] = ["triaged", str(rank), str(pr_type)]
+        for area in args.get("area") or ():
+            if isinstance(area, str) and area in _FUNCTIONAL:
+                labels.append(area)
+        provider = args.get("provider")
+        if isinstance(provider, str) and provider.strip() and provider.startswith("provider:"):
+            labels.append("providers")
+            labels.append(provider)
+        try:
+            applied = _run_coro(
+                bindings.loop,
+                bindings.github.add_issue_labels(bindings.repo.full_name, bindings.default_comment_number, labels),
+            )
+        except GitHubError as exc:
+            _audit(bindings, "classify_pr", args, error=str(exc))
+            _raise_command(f"GitHub rejected labels: {exc.status} {exc.message}")
+        bindings.db.set_issue_classification(bindings.issue_key, str(rank))
+        _audit(
+            bindings,
+            "classify_pr",
+            args,
+            result={"rank": rank, "type": pr_type, "labels": list(applied), "rationale": rationale},
+        )
+        return f"classified PR as {rank}; labels applied: {', '.join(applied)}."
+
+    return host_tool(
+        name="classify_pr",
+        description=persona.host_tool_description("classify_pr"),
+        parameters={
+            "type": "object",
+            "properties": {
+                "rank": {
+                    "type": "string",
+                    "enum": list(_PR_RANKS),
+                    "description": persona.host_tool_parameter_description("classify_pr", "rank"),
+                },
+                "type": {
+                    "type": "string",
+                    "enum": list(_PR_TYPES),
+                    "description": persona.host_tool_parameter_description("classify_pr", "type"),
+                },
+                "area": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(_FUNCTIONAL)},
+                    "description": persona.host_tool_parameter_description("classify_pr", "area"),
+                },
+                "provider": {
+                    "type": "string",
+                    "description": persona.host_tool_parameter_description("classify_pr", "provider"),
+                },
+                "rationale": {
+                    "type": "string",
+                    "description": persona.host_tool_parameter_description("classify_pr", "rationale"),
+                },
+            },
+            "required": ["rank", "type", "rationale"],
+            "additionalProperties": False,
+        },
+        execute=execute,
+    )
+
+
+def _review_comment_to_payload(comment: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "path": comment.path,
+        "line": comment.line,
+        "side": comment.side,
+        "body": comment.body,
+    }
+    if comment.start_line is not None:
+        payload["start_line"] = comment.start_line
+    if comment.start_side is not None:
+        payload["start_side"] = comment.start_side
+    return payload
+
+
+def _build_pr_review_comment(bindings: ToolBindings) -> HostTool[Any, Any]:
+    def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
+        _require_review_mode(bindings, "pr_review_comment", args)
+        path = args.get("path")
+        line = args.get("line")
+        body = args.get("body")
+        if not isinstance(path, str) or not path.strip():
+            msg = "pr_review_comment requires a non-empty 'path'."
+            _audit(bindings, "pr_review_comment", args, error=msg)
+            _raise_command(msg)
+        if not isinstance(line, int) or line <= 0:
+            msg = "pr_review_comment requires a positive integer 'line'."
+            _audit(bindings, "pr_review_comment", args, error=msg)
+            _raise_command(msg)
+        if not isinstance(body, str) or not body.strip():
+            msg = "pr_review_comment requires a non-empty 'body'."
+            _audit(bindings, "pr_review_comment", args, error=msg)
+            _raise_command(msg)
+        side = str(args.get("side") or "RIGHT")
+        if side not in ("RIGHT", "LEFT"):
+            msg = "pr_review_comment 'side' must be RIGHT or LEFT."
+            _audit(bindings, "pr_review_comment", args, error=msg)
+            _raise_command(msg)
+        start_line = args.get("start_line")
+        if start_line is not None and (not isinstance(start_line, int) or start_line <= 0):
+            msg = "pr_review_comment 'start_line' must be a positive integer when provided."
+            _audit(bindings, "pr_review_comment", args, error=msg)
+            _raise_command(msg)
+        start_side_raw = args.get("start_side")
+        start_side = str(start_side_raw) if start_side_raw is not None else None
+        if start_side is not None and start_side not in ("RIGHT", "LEFT"):
+            msg = "pr_review_comment 'start_side' must be RIGHT or LEFT when provided."
+            _audit(bindings, "pr_review_comment", args, error=msg)
+            _raise_command(msg)
+        staged = bindings.db.stage_review_comment(
+            issue_key=bindings.issue_key,
+            path=path.strip(),
+            line=line,
+            side=side,
+            start_line=start_line,
+            start_side=start_side,
+            body=body.strip(),
+        )
+        count = len(bindings.db.list_staged_review_comments(bindings.issue_key))
+        _audit(bindings, "pr_review_comment", args, result={"id": staged.id, "staged": count})
+        return f"staged review comment #{staged.id}; staged_count={count}"
+
+    return host_tool(
+        name="pr_review_comment",
+        description=persona.host_tool_description("pr_review_comment"),
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": persona.host_tool_parameter_description("pr_review_comment", "path"),
+                },
+                "line": {
+                    "type": "integer",
+                    "description": persona.host_tool_parameter_description("pr_review_comment", "line"),
+                },
+                "body": {
+                    "type": "string",
+                    "description": persona.host_tool_parameter_description("pr_review_comment", "body"),
+                },
+                "side": {
+                    "type": "string",
+                    "enum": ["RIGHT", "LEFT"],
+                    "default": "RIGHT",
+                    "description": persona.host_tool_parameter_description("pr_review_comment", "side"),
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": persona.host_tool_parameter_description("pr_review_comment", "start_line"),
+                },
+                "start_side": {
+                    "type": "string",
+                    "enum": ["RIGHT", "LEFT"],
+                    "description": persona.host_tool_parameter_description("pr_review_comment", "start_side"),
+                },
+            },
+            "required": ["path", "line", "body"],
+            "additionalProperties": False,
+        },
+        execute=execute,
+    )
+
+
+def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
+    def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
+        _require_review_mode(bindings, "submit_pr_review", args)
+        body = args.get("body")
+        if not isinstance(body, str) or not body.strip():
+            msg = "submit_pr_review requires a non-empty 'body'."
+            _audit(bindings, "submit_pr_review", args, error=msg)
+            _raise_command(msg)
+        staged = bindings.db.list_staged_review_comments(bindings.issue_key)
+        comments = [_review_comment_to_payload(comment) for comment in staged]
+        try:
+            review = _run_coro(
+                bindings.loop,
+                bindings.github.submit_pr_review(
+                    repo=bindings.repo.full_name,
+                    pr_number=bindings.default_comment_number,
+                    body=body.strip(),
+                    event="COMMENT",
+                    comments=comments,
+                ),
+            )
+        except GitHubError as exc:
+            _audit(bindings, "submit_pr_review", args, error=str(exc))
+            _raise_command(f"GitHub rejected PR review: {exc.status} {exc.message}")
+        cleared = bindings.db.clear_staged_review_comments(bindings.issue_key)
+        _audit(
+            bindings,
+            "submit_pr_review",
+            args,
+            result={"review_id": review.id, "comments": len(comments), "cleared": cleared, "event": "COMMENT"},
+        )
+        return f"submitted PR review id={review.id}; comments={len(comments)}"
+
+    return host_tool(
+        name="submit_pr_review",
+        description=persona.host_tool_description("submit_pr_review"),
+        parameters={
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string",
+                    "description": persona.host_tool_parameter_description("submit_pr_review", "body"),
+                },
+                "event": {
+                    "type": "string",
+                    "enum": ["COMMENT"],
+                    "default": "COMMENT",
+                    "description": persona.host_tool_parameter_description("submit_pr_review", "event"),
+                },
+            },
+            "required": ["body"],
+            "additionalProperties": False,
+        },
+        execute=execute,
+    )
 
 
 def _build_set_issue_labels(bindings: ToolBindings) -> HostTool[Any, Any]:
@@ -1093,20 +1404,6 @@ def _build_classify_issue(bindings: ToolBindings) -> HostTool[Any, Any]:
             labels.append(platform)
         labels.append("triaged")
 
-        try:
-            applied = _run_coro(
-                bindings.loop,
-                bindings.github.add_issue_labels(
-                    bindings.repo.full_name,
-                    bindings.issue.number,
-                    labels,
-                ),
-            )
-        except GitHubError as exc:
-            _audit(bindings, "classify_issue", args, error=str(exc))
-            _raise_command(f"GitHub rejected labels: {exc.status} {exc.message}")
-
-        bindings.db.set_issue_classification(bindings.issue_key, primary)
         renamed_to: str | None = None
         if branch_slug:
             try:
@@ -1128,6 +1425,21 @@ def _build_classify_issue(bindings: ToolBindings) -> HostTool[Any, Any]:
                 # refactor of that helper still surfaces the mismatch.
                 _raise_command("classify_issue internal: branch rename inconsistent.")
             bindings.db.set_issue_branch(bindings.issue_key, renamed_to)
+
+        try:
+            applied = _run_coro(
+                bindings.loop,
+                bindings.github.add_issue_labels(
+                    bindings.repo.full_name,
+                    bindings.issue.number,
+                    labels,
+                ),
+            )
+        except GitHubError as exc:
+            _audit(bindings, "classify_issue", args, error=str(exc))
+            _raise_command(f"GitHub rejected labels: {exc.status} {exc.message}")
+
+        bindings.db.set_issue_classification(bindings.issue_key, primary)
         _audit(
             bindings,
             "classify_issue",
@@ -1204,6 +1516,10 @@ def build(bindings: ToolBindings) -> tuple[HostTool[Any, Any], ...]:
     return (
         _build_classify_issue(bindings),
         _build_set_issue_labels(bindings),
+        _build_fetch_pr(bindings),
+        _build_classify_pr(bindings),
+        _build_pr_review_comment(bindings),
+        _build_submit_pr_review(bindings),
         _build_post_comment(bindings),
         _build_push_branch(bindings),
         _build_open_pr(bindings),

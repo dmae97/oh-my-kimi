@@ -31,6 +31,10 @@ const TEST_MODEL: Model = {
 	maxTokens: 8_192,
 };
 
+function emptyWorkspaceTree(cwd: string) {
+	return { rootPath: cwd, rendered: ".\n", truncated: false, totalLines: 1, agentsMdFiles: [] };
+}
+
 class TestClient implements Client {
 	readonly updates: SessionNotification[] = [];
 
@@ -133,6 +137,21 @@ class LazyFakeSession {
 	async fork(): Promise<boolean> {
 		return false;
 	}
+}
+
+/**
+ * Close one direction of the in-memory transport used by these tests. The ACP
+ * SDK's `ndJsonStream` acquires a transient writer per message, so immediately
+ * after the final response resolves on the peer the writer-release is still a
+ * queued microtask. Closing while that writer is held rejects with "WritableStream
+ * .close ... locked", which leaves the peer's readable open and hangs
+ * `connection.closed`. Wait for the lock to clear (bounded) before closing.
+ */
+async function closeTransport(writable: WritableStream<unknown>): Promise<void> {
+	for (let i = 0; i < 100 && writable.locked; i++) {
+		await Bun.sleep(0);
+	}
+	await Promise.allSettled([writable.close()]);
 }
 
 describe("ACP lazy startup", () => {
@@ -261,7 +280,8 @@ describe("ACP lazy startup", () => {
 			const sessionResponse = await newSessionPromise;
 			expect(sessionResponse.sessionId).toEqual(expect.any(String));
 		} finally {
-			await Promise.allSettled([clientToAgent.writable.close(), agentToClient.writable.close()]);
+			await closeTransport(clientToAgent.writable);
+			await closeTransport(agentToClient.writable);
 			await Promise.allSettled([agentConnection.closed, serverConnection.closed]);
 		}
 	});
@@ -316,7 +336,13 @@ describe("ACP lazy startup", () => {
 				[],
 				{
 					discoverAuthStorage: async () => authStorage,
-					createAgentSession,
+					createAgentSession: options => {
+						const sessionOptions = options ?? {};
+						return createAgentSession({
+							...sessionOptions,
+							workspaceTree: sessionOptions.workspaceTree ?? emptyWorkspaceTree(sessionOptions.cwd ?? cwd),
+						});
+					},
 					settings,
 					runAcpMode: async createAcpSession => {
 						session = await createAcpSession(cwd);

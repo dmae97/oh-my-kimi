@@ -8,6 +8,7 @@
 // The `label`/`id` metadata is kept inline so callers needing a display name
 // (error formatting, UI listings) do not force a load.
 
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import type { SearchProvider } from "./providers/base";
 import type { SearchProviderId } from "./types";
 
@@ -64,7 +65,7 @@ const PROVIDER_META: Record<SearchProviderId, ProviderMeta> = {
 	},
 	codex: {
 		id: "codex",
-		label: "Codex",
+		label: "OpenAI",
 		load: async () => new (await import("./providers/codex")).CodexProvider(),
 	},
 	tavily: {
@@ -148,13 +149,14 @@ export function setPreferredSearchProvider(provider: SearchProviderId | "auto"):
  * is walked, so unconfigured providers never pay the load cost.
  */
 export async function resolveProviderChain(
+	authStorage: AuthStorage,
 	preferredProvider: SearchProviderId | "auto" = preferredProvId,
 ): Promise<SearchProvider[]> {
 	const providers: SearchProvider[] = [];
 
 	if (preferredProvider !== "auto") {
 		const provider = await getSearchProvider(preferredProvider);
-		if (await provider.isAvailable()) {
+		if (await provider.isAvailable(authStorage)) {
 			providers.push(provider);
 		}
 	}
@@ -162,7 +164,7 @@ export async function resolveProviderChain(
 	for (const id of SEARCH_PROVIDER_ORDER) {
 		if (id === preferredProvider) continue;
 		const provider = await getSearchProvider(id);
-		if (await provider.isAvailable()) {
+		if (await provider.isAvailable(authStorage)) {
 			providers.push(provider);
 		}
 	}

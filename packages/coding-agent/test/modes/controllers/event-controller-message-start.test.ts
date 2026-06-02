@@ -39,7 +39,7 @@ function createContext(options: {
 		isInitialized: true,
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
-		ui: { requestRender: vi.fn() },
+		ui: { requestRender: vi.fn(), setEagerNativeScrollbackRebuild: vi.fn() },
 		editor,
 		addMessageToChat,
 		updatePendingMessagesDisplay,
@@ -52,6 +52,7 @@ function createContext(options: {
 						.join(""),
 		optimisticUserMessageSignature: options.optimisticSignature,
 		locallySubmittedUserSignatures: new Set<string>(options.locallySubmittedSignatures ?? []),
+		pendingTools: new Map(),
 	} as unknown as InteractiveModeContext;
 	return { ctx, editor, setText, addMessageToChat, updatePendingMessagesDisplay };
 }

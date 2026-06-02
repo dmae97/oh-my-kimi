@@ -1,38 +1,23 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "../../src/config/settings";
-// Back-compat import check — these re-exports from mcp/discoverable-tool-metadata should still work
-import { buildDiscoverableMCPSearchIndex, type DiscoverableMCPTool } from "../../src/mcp/discoverable-tool-metadata";
-import type { DiscoverableMCPSearchIndex, DiscoverableTool } from "../../src/tool-discovery/tool-index";
+import {
+	buildDiscoverableToolSearchIndex,
+	type DiscoverableTool,
+	type DiscoverableToolSearchIndex,
+} from "../../src/tool-discovery/tool-index";
 import type { ToolSession } from "../../src/tools/index";
 import { SearchToolBm25Tool } from "../../src/tools/search-tool-bm25";
 
-type TestDiscoverableTool = DiscoverableTool;
-
-/** Adapt a generic discoverable tool to the legacy MCP shape (with `description`). */
-function toLegacyMCP(t: DiscoverableTool): DiscoverableMCPTool {
-	return {
-		name: t.name,
-		label: t.label,
-		description: t.summary,
-		serverName: t.serverName,
-		mcpToolName: t.mcpToolName,
-		schemaKeys: t.schemaKeys,
-	};
-}
-
 type DiscoveryToolSession = ToolSession & {
 	isMCPDiscoveryEnabled: () => boolean;
-	getDiscoverableMCPTools: () => DiscoverableMCPTool[];
-	getDiscoverableMCPSearchIndex?: () => DiscoverableMCPSearchIndex;
+	getDiscoverableTools: (filter?: { source?: DiscoverableTool["source"] }) => DiscoverableTool[];
+	getDiscoverableToolSearchIndex?: () => DiscoverableToolSearchIndex;
 	getSelectedMCPToolNames: () => string[];
 	activateDiscoveredMCPTools: (toolNames: string[]) => Promise<string[]>;
 	getSelected: () => string[];
 };
 
-function createSession(
-	tools: TestDiscoverableTool[],
-	overrides: Partial<DiscoveryToolSession> = {},
-): DiscoveryToolSession {
+function createSession(tools: DiscoverableTool[], overrides: Partial<DiscoveryToolSession> = {}): DiscoveryToolSession {
 	const selected: string[] = [];
 	return {
 		cwd: "/tmp/test",
@@ -41,7 +26,7 @@ function createSession(
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated({ "mcp.discoveryMode": true }),
 		isMCPDiscoveryEnabled: () => true,
-		getDiscoverableMCPTools: () => tools.map(toLegacyMCP),
+		getDiscoverableTools: () => tools,
 		getSelectedMCPToolNames: () => [...selected],
 		activateDiscoveredMCPTools: async (toolNames: string[]) => {
 			for (const name of toolNames) {
@@ -56,7 +41,7 @@ function createSession(
 	};
 }
 
-/** Helper to create a discoverable MCP tool (new unified shape) */
+/** Helper to create a discoverable MCP tool. */
 function mcpTool(
 	name: string,
 	serverName: string,
@@ -75,7 +60,7 @@ function mcpTool(
 	};
 }
 
-/** Helper to create a discoverable built-in tool (new unified shape) */
+/** Helper to create a discoverable built-in tool. */
 function builtinTool(name: string, summary: string, schemaKeys: string[] = []): DiscoverableTool {
 	return {
 		name,
@@ -109,14 +94,13 @@ describe("SearchToolBm25Tool", () => {
 	it("uses the session-provided cached search index during execution", async () => {
 		let rawToolsCalls = 0;
 		let searchIndexCalls = 0;
-		// Build via the legacy helper so documents expose `tool.description` (the legacy shape).
-		const searchIndex = buildDiscoverableMCPSearchIndex(discoverableTools.map(toLegacyMCP));
+		const searchIndex = buildDiscoverableToolSearchIndex(discoverableTools);
 		const session = createSession(discoverableTools, {
-			getDiscoverableMCPTools: () => {
+			getDiscoverableTools: () => {
 				rawToolsCalls++;
-				return discoverableTools.map(toLegacyMCP);
+				return discoverableTools;
 			},
-			getDiscoverableMCPSearchIndex: () => {
+			getDiscoverableToolSearchIndex: () => {
 				searchIndexCalls++;
 				return searchIndex;
 			},
@@ -216,30 +200,12 @@ describe("SearchToolBm25Tool", () => {
 		const allTools = [...discoverableTools, ...builtinTools];
 		const session = createSession(discoverableTools, {
 			settings: Settings.isolated({ "tools.discoveryMode": "all" }),
-			// Override to provide all tools including built-ins (legacy MCP shape).
-			getDiscoverableMCPTools: () => allTools.map(toLegacyMCP),
+			getDiscoverableTools: () => allTools,
 		});
 		const tool = new SearchToolBm25Tool(session);
 
 		const result = await tool.execute("call-builtin", { query: "find files" });
-		// Should find built-in 'find' tool
 		const names = result.details?.tools.map(t => t.name) ?? [];
 		expect(names).toContain("find");
-	});
-
-	it("back-compat: buildDiscoverableMCPSearchIndex still works via mcp/discoverable-tool-metadata", () => {
-		// This test ensures the legacy MCP module re-exports still function correctly
-		const index = buildDiscoverableMCPSearchIndex([
-			{
-				name: "mcp__test",
-				label: "test/tool",
-				description: "A test MCP tool",
-				serverName: "test",
-				mcpToolName: "tool",
-				schemaKeys: ["query"],
-			},
-		]);
-		expect(index.documents).toHaveLength(1);
-		expect(index.documents[0]?.tool.name).toBe("mcp__test");
 	});
 });

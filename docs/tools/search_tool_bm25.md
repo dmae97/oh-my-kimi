@@ -42,7 +42,7 @@
 - The renderer shows a status line plus up to 5 collapsed tree items by default (`COLLAPSED_MATCH_LIMIT`), each with label, optional server name, score to 3 decimals, and truncated description. The ranked match list is not serialized into `content`.
 
 ## Flow
-1. `SearchToolBm25Tool.createIf()` in `packages/coding-agent/src/tools/search-tool-bm25.ts` exposes the tool only when `tools.discoveryMode !== "off"` or legacy `mcp.discoveryMode === true`, and only if the session implements the discovery hooks.
+1. `SearchToolBm25Tool.createIf()` in `packages/coding-agent/src/tools/search-tool-bm25.ts` exposes the tool only when `tools.discoveryMode` is set to a non-`"off"` value or legacy `mcp.discoveryMode === true`, and only if the session implements the discovery hooks.
 2. `description` is rendered from `packages/coding-agent/src/prompts/tools/search-tool-bm25.md` via `renderSearchToolBm25Description()`, using the current discoverable-tool list plus per-server summary/count.
 3. `execute()` re-checks capability and settings:
    - missing discovery hooks -> `ToolError("Tool discovery is unavailable in this session.")`
@@ -87,9 +87,10 @@
 - Renderer truncation widths:
   - label: `72` chars (`MATCH_LABEL_LEN`)
   - description: `96` chars (`MATCH_DESCRIPTION_LEN`)
-- BM25 parameters in `packages/coding-agent/src/tool-discovery/tool-index.ts`:
+- BM25+ parameters in `packages/coding-agent/src/tool-discovery/tool-index.ts`:
   - `BM25_K1 = 1.2`
   - `BM25_B = 0.75`
+  - `BM25_DELTA = 1.0`
 - Weighted corpus fields (`FIELD_WEIGHTS`):
   - `name`: `6`
   - `label`: `4`
@@ -101,7 +102,7 @@
 
 ## Errors
 - `execute()` throws `ToolError` for unavailable discovery hooks, disabled discovery mode, empty trimmed query, and non-positive/non-integer `limit`.
-- `searchDiscoverableTools()` throws `Error("Query must contain at least one letter or number.")` if tokenization produces no alphanumeric tokens; `execute()` catches `Error` and rethrows `ToolError(error.message)`.
+- `searchDiscoverableTools()` throws `Error("Query must contain at least one letter or number.")` if tokenization produces no letter/number tokens; `execute()` catches `Error` and rethrows `ToolError(error.message)`.
 - Empty corpus is not an error; search returns `[]`, activation is skipped, and the renderer message becomes either `No discoverable tools are currently loaded.` or `No matching tools found.`
 - `getDiscoverableToolsForDescription()` and `getDiscoverableToolSearchIndexForExecution()` swallow discovery-hook/cache errors and fall back to an empty corpus or rebuilt index.
 
@@ -113,5 +114,5 @@
   - Hidden/internal built-ins are intentionally excluded from the built-in corpus: `resolve`, `yield`, `report_finding`, `report_tool_issue` are called out in the `#collectDiscoverableBuiltinTools()` comment.
 - `DiscoverableToolSource` includes `"extension"` and `"custom"`, but `AgentSession.getDiscoverableTools()` currently assembles only built-in and MCP sources.
 - On startup, `packages/coding-agent/src/sdk.ts` hides non-essential discoverable built-ins in `tools.discoveryMode = "all"`; defaults are `read`, `bash`, and `edit` unless `tools.essentialOverride` changes them.
-- Query tokenization is simple and deterministic: camelCase is split, non-alphanumerics become spaces, tokens are lowercased, and only non-empty alphanumeric tokens survive.
+- Query tokenization is simple and deterministic: Unicode is NFKD-normalized, combining marks are dropped, acronym/camelCase and digit-to-capital boundaries are split, non-letter/non-number characters become spaces, tokens are lowercased, and only non-empty tokens survive.
 - Scores are rounded differently by surface: `details.tools[].score` keeps 6 decimals; the TUI line renders 3.

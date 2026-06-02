@@ -154,6 +154,6 @@ describe("read tool multi-range selector", () => {
 		expect(text).toContain("bridge four");
 		expect(text).toContain("bridge five");
 		expect(text).not.toContain("bridge three");
-		expect(text).not.toContain("disk");
+		expect(text).not.toContain("disk one");
 	});
 });

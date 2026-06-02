@@ -51,6 +51,10 @@ export interface SegmentContext {
 		status: { staged: number; unstaged: number; untracked: number } | null;
 		pr: { number: number; url: string } | null;
 	};
+	usage: {
+		fiveHour?: { percent: number; resetMinutes?: number };
+		sevenDay?: { percent: number; resetHours?: number };
+	} | null;
 }
 
 export interface RenderedSegment {

@@ -1,14 +1,14 @@
 Run code in a persistent kernel using a list of cells.
 
 <instruction>
-Each call submits one or more cells. Cells run in array order. State persists within each language across cells **and across tool calls**.
+Each call submits one or more cells. Cells run in array order. State persists within each language across cells, tool calls, and subagents spawned with `task`; variables a parent or subagent declares are visible to the other on the same shared executor. Lean on this: stage helpers, loaded datasets, or live clients once, then fan out `task` subagents that call them directly — no re-importing, re-fetching, or serializing across the boundary.
 
 Cell fields:
 
 - `language` — {{#if py}}`"py"` for the IPython kernel{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`"js"` for the persistent JavaScript VM{{/if}}.
 - `code` — cell body, verbatim. Newlines, quotes, and indentation are JSON-encoded; no fences, no headers.
 - `title` (optional) — short label shown in the transcript (e.g. `"imports"`, `"load config"`).
-- `timeout` (optional) — per-cell timeout in seconds (1-600). Default 30.
+- `timeout` (optional) — per-cell wall-clock budget in seconds (1-600). Default 30. It bounds the cell's **own** work, but is paused while an `agent()`/`parallel()`/`llm()` call is in flight — so a long fanout or a slow completion runs to completion, while the cell itself is still bounded. Compute, `print`/stdout, `log()`/`phase()`, and ordinary tool calls all count against the budget; raise `timeout` for a cell that does heavy local work or long non-agent tool calls.
 - `reset` (optional) — wipe this cell's language kernel before running.{{#ifAll py js}} Reset is per-language: a `py` cell's reset does not touch the JavaScript VM and vice versa.{{/ifAll}}
 
 **Work incrementally:**
@@ -44,6 +44,20 @@ output(*ids, format?="raw", query?=None, offset?=None, limit?=None) → str | di
     Read task/agent output by ID. Single id returns text/dict; multiple ids return a list.
 tool.<name>(args) → unknown
     Invoke any session tool by name. `args` is the tool's parameter object.
+llm(prompt, model?="default", system?=None, schema?=None) → str | dict
+    Oneshot, stateless LLM call (no history, no tools). `model` picks a tier: "smol" (fast), "default" (this session's model), "slow" (most capable). Pass `system` for a system prompt. Pass a JSON-Schema `schema` to force structured output and get the parsed object back; otherwise returns the completion text.
+agent(prompt, agent_type?="task", model?=None, context?=None, label?=None, schema?=None) → str | dict
+    Run a subagent and return its final output. Defaults to the bundled "task" agent; pass `agent_type`/`agentType` for another discovered agent. Pass a JSON-Schema `schema` to force structured output and get the parsed object back.
+parallel(thunks) → list
+    Run thunks (callables) through a bounded pool, preserving input order. The pool is as wide as a `task` tool batch (tracks the `task.maxConcurrency` setting), so fan out as wide as the work divides — don't pre-shrink it. Barrier: returns once all finish; a thunk that throws propagates.
+pipeline(items, ...stages) → list
+    Map each item through stages left-to-right; a barrier runs between stages (every item clears stage N before stage N+1). Each stage is a one-arg callable: stage 1 gets the original item, later stages get the previous result. Same pool width as parallel().
+log(message) → None
+    Emit a progress line above the status tree.
+phase(title) → None
+    Start a phase; the status lines that follow group under it.
+budget → per-turn token budget
+    {{#if py}}`budget.total` (ceiling or None), `budget.spent()` (output tokens this turn), `budget.remaining()` (math.inf when no ceiling), `budget.hard` (bool).{{/if}}{{#if js}}`await budget.total()` (ceiling or null), `await budget.spent()`, `await budget.remaining()` (Infinity when no ceiling), `await budget.hard()`.{{/if}} A ceiling is set by a `+Nk` message directive (advisory) or `+Nk!`/Goal Mode (hard — `agent()` refuses to spawn past it); otherwise total is None/null and spend is still tracked across the turn (main loop + eval subagents).
 ```
 </prelude>
 

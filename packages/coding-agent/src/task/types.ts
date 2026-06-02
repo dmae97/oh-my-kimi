@@ -173,6 +173,7 @@ export interface AgentDefinition {
 	thinkingLevel?: ThinkingLevel;
 	output?: unknown;
 	blocking?: boolean;
+	autoloadSkills?: string[];
 	source: AgentSource;
 	filePath?: string;
 }
@@ -209,8 +210,42 @@ export interface AgentProgress {
 	cost: number;
 	durationMs: number;
 	modelOverride?: string | string[];
+	/** Resolved model display string in the form `<provider>/<id>`, optionally suffixed with `:<thinkingLevel>` when the level was set explicitly. Undefined when the model could not be resolved. */
+	resolvedModel?: string;
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
 	extractedToolData?: Record<string, unknown[]>;
+	/**
+	 * Auto-retry state when the subagent is sleeping between provider retries
+	 * (e.g. 429 rate-limit with retry-after). Cleared when the retry resolves
+	 * or fails. Surfacing this to the parent prevents the task tool from
+	 * looking indefinitely "in progress" when a child is actually blocked on
+	 * provider quota.
+	 */
+	retryState?: {
+		attempt: number;
+		maxAttempts: number;
+		delayMs: number;
+		errorMessage: string;
+		startedAtMs: number;
+	};
+	/**
+	 * Terminal retry failure surfaced once the subagent gave up retrying
+	 * (e.g. retry-after exceeded the cap, or all attempts exhausted). Carries
+	 * the final error so the parent UI can render "blocked: rate-limited"
+	 * instead of waiting for a status that never arrives.
+	 */
+	retryFailure?: {
+		attempt: number;
+		errorMessage: string;
+	};
+	/**
+	 * Snapshot of the most recent `task` tool call's in-flight `TaskToolDetails`,
+	 * captured from `tool_execution_update`. Lets the parent UI surface live
+	 * nested-subagent progress while this agent is still inside its own `task`
+	 * call. Cleared when the call ends — finalized data lives in
+	 * `extractedToolData.task` after that.
+	 */
+	inflightTaskDetails?: TaskToolDetails;
 }
 
 /** Result from a single agent execution */
@@ -235,6 +270,8 @@ export interface SingleResult {
 	/** Model's context window in tokens, when known. */
 	contextWindow?: number;
 	modelOverride?: string | string[];
+	/** Resolved model display string in the form `<provider>/<id>`, optionally suffixed with `:<thinkingLevel>` when the level was set explicitly. Omitted from tool-result JSON when undefined to keep wire payloads small. */
+	resolvedModel?: string;
 	error?: string;
 	aborted?: boolean;
 	abortReason?: string;
@@ -250,6 +287,16 @@ export interface SingleResult {
 	nestedPatches?: NestedRepoPatch[];
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
 	extractedToolData?: Record<string, unknown[]>;
+	/**
+	 * Terminal retry failure, when the subagent exited because the auto-retry
+	 * loop gave up (retry-after exceeded the cap, or all attempts exhausted).
+	 * Lets the parent task tool surface a "blocked: rate-limited" outcome
+	 * instead of a generic failure.
+	 */
+	retryFailure?: {
+		attempt: number;
+		errorMessage: string;
+	};
 	/** Output metadata for agent:// URL integration */
 	outputMeta?: { lineCount: number; charCount: number };
 }

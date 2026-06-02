@@ -66,4 +66,47 @@ describe("parseAgentFields", () => {
 
 		expect(fields?.tools).toEqual(["read", "search", "yield"]);
 	});
+
+	test("parses autoloadSkills from array frontmatter", () => {
+		const fields = parseAgentFields({
+			name: "oracle",
+			description: "desc",
+			autoloadSkills: ["user-created-skill-a", "user-created-skill-b"],
+		});
+
+		expect(fields).toBeDefined();
+		expect(fields?.autoloadSkills).toEqual(["user-created-skill-a", "user-created-skill-b"]);
+	});
+
+	test("parses autoloadSkills from CSV string", () => {
+		const fields = parseAgentFields({
+			name: "oracle",
+			description: "desc",
+			autoloadSkills: "user-created-skill-a, user-created-skill-b",
+		});
+
+		expect(fields).toBeDefined();
+		expect(fields?.autoloadSkills).toEqual(["user-created-skill-a", "user-created-skill-b"]);
+	});
+
+	test("returns undefined autoloadSkills when field absent", () => {
+		const fields = parseAgentFields({
+			name: "oracle",
+			description: "desc",
+		});
+
+		expect(fields).toBeDefined();
+		expect(fields?.autoloadSkills).toBeUndefined();
+	});
+
+	test("returns undefined autoloadSkills for empty array", () => {
+		const fields = parseAgentFields({
+			name: "oracle",
+			description: "desc",
+			autoloadSkills: [],
+		});
+
+		expect(fields).toBeDefined();
+		expect(fields?.autoloadSkills).toBeUndefined();
+	});
 });

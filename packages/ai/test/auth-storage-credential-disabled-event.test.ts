@@ -22,7 +22,11 @@ const expiredOAuth = () =>
 	}) as const;
 
 const failOAuthRefresh = (message = 'HTTP 400 invalid_grant {"error":"invalid_grant"}'): void => {
-	vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async () => {
+	// AuthStorage now refreshes through `refreshOAuthToken` before formatting
+	// the API key, so intercept the refresh call itself to simulate a failed
+	// refresh attempt. Mocking `getOAuthApiKey` no longer fires because the
+	// refresh short-circuits the path with a real provider call.
+	vi.spyOn(oauthUtils, "refreshOAuthToken").mockImplementation(async () => {
 		throw new Error(message);
 	});
 };

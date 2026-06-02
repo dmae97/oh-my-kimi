@@ -290,6 +290,83 @@ async def triage_issue(
     await run_task(task_kind="triage_issue", inputs=inputs)
 
 
+async def review_pr(
+    *,
+    settings: Settings,
+    db: Database,
+    github: GitHubBackend,
+    sandbox: SandboxManager,
+    git_transport: GitTransport,
+    payload: Mapping[str, Any],
+    delivery_id: str,
+    attempts: int = 0,
+    slot_uid: int | None = None,
+) -> None:
+    pr_node = payload.get("pull_request") or {}
+    pr_number = int(pr_node.get("number") or 0)
+    repo_payload = payload.get("repository") or {}
+    repo_full = str(repo_payload.get("full_name") or "")
+    if pr_number <= 0 or not repo_full:
+        log.info("skip: review_pr missing repo/number")
+        return
+    try:
+        repo = await github.get_repo(repo_full)
+        issue = await github.get_issue(repo_full, pr_number)
+        pr = await github.get_pull_request(repo_full, pr_number)
+    except GitHubError as exc:
+        log.warning("review_pr fetch failed", extra={"repo": repo_full, "pr": pr_number, "err": str(exc)})
+        return
+
+    labels = {label.lower() for label in issue.labels}
+    key = issue_key(repo.full_name, pr_number)
+    review_labeled = "triaged" in labels or any(label.startswith("review:") for label in labels)
+    if db.has_successful_tool_call(key, "submit_pr_review"):
+        log.info("skip: PR review already submitted", extra={"repo": repo_full, "pr": pr_number})
+        return
+    if review_labeled:
+        log.info(
+            "review labels present without submitted review; retrying",
+            extra={"repo": repo_full, "pr": pr_number, "labels": sorted(labels)},
+        )
+
+    db.upsert_issue(key=key, repo=repo.full_name, number=pr_number, state="reviewing", pr_number=pr_number)
+    workspace = sandbox.ensure_workspace(
+        repo=repo.full_name,
+        number=pr_number,
+        title=issue.title,
+        clone_url=repo.clone_url,
+        default_branch=repo.default_branch,
+        pr_head=pr_number,
+        author_name=settings.resolved_author_name,
+        author_email=settings.git_author_email,
+        slot_uid=slot_uid,
+    )
+    db.upsert_issue(
+        key=key,
+        repo=repo.full_name,
+        number=pr_number,
+        state="reviewing",
+        branch=workspace.branch,
+        session_dir=str(workspace.session_dir),
+        pr_number=pr_number,
+    )
+    inputs = TaskInputs(
+        settings=settings,
+        db=db,
+        github=github,
+        git_transport=git_transport,
+        repo=repo,
+        issue=issue,
+        workspace=workspace,
+        delivery_id=delivery_id,
+        attempts=attempts,
+        slot_uid=slot_uid,
+        natives_cache=sandbox.natives_cache,
+    )
+    await run_task(task_kind="review_pr", inputs=inputs, pr_number=pr_number, pr=pr)
+    return
+
+
 async def handle_comment(
     *,
     settings: Settings,
@@ -566,6 +643,9 @@ async def handle_pr_conversation(
         if pr_info is None or not _can_handle_pr_directly(settings=settings, repo_full=repo_full, pr=pr_info):
             return
     directive = _directive_from_payload(payload)
+    if issue_row is not None and issue_row.state == "reviewing":
+        log.info("skip: incoming PR conversation unsupported", extra={"key": issue_row.key, "pr": pr_number})
+        return
     if issue_row is not None and issue_row.state in ("merged", "closed", "abandoned"):
         if directive is None:
             log.info("skip: pr-conversation on finalized issue", extra={"key": issue_row.key, "state": issue_row.state})
@@ -666,8 +746,19 @@ async def handle_pr_conversation(
         slot_uid=slot_uid,
         natives_cache=sandbox.natives_cache,
     )
-    directive = await _attach_thread(github, directive, repo_full, pr_number, is_pr=True)
-    await run_task(task_kind="handle_comment", inputs=inputs, comment=comment, pr_number=pr_number, directive=directive)
+    thread: tuple[ThreadMessage, ...] = ()
+    if directive is None:
+        thread = await _fetch_thread(github, repo_full, pr_number, is_pr=True)
+    else:
+        directive = await _attach_thread(github, directive, repo_full, pr_number, is_pr=True)
+    await run_task(
+        task_kind="handle_comment",
+        inputs=inputs,
+        comment=comment,
+        pr_number=pr_number,
+        directive=directive,
+        thread=thread,
+    )
 
 
 async def cleanup_workspace(
@@ -705,5 +796,6 @@ __all__ = [
     "handle_comment",
     "handle_pr_conversation",
     "handle_review",
+    "review_pr",
     "triage_issue",
 ]

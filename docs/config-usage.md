@@ -137,7 +137,7 @@ Legacy migration still supported:
 The runtime settings model is layered:
 
 1. Global settings: `~/.omp/agent/config.yml`
-2. Project settings: discovered via settings capability (`settings.json` from providers)
+2. Project settings: discovered via settings capability (`settings.json` and `config.yml` from providers)
 3. Runtime overrides: in-memory, non-persistent
 4. Schema defaults: from `SETTINGS_SCHEMA`
 
@@ -217,7 +217,7 @@ Native provider (`id: native`) reads native config from:
 
 - Slash commands, rules, prompts, instructions, hooks, tools, extensions, extension modules, and settings use a project/user root only when the root directory exists and is non-empty.
 - Skills scan `<ancestor>/.omp/skills` for each ancestor from the current working directory up to the repo root/home boundary, plus `~/.omp/agent/skills`, without requiring the root `.omp` directory itself to be non-empty.
-- `SYSTEM.md` and `AGENTS.md` read user-level files directly and use nearest-ancestor project `.omp` lookup for project files, but the project `.omp` directory must be non-empty.
+- `SYSTEM.md` and `AGENTS.md` read user-level files directly and use nearest-ancestor project `.omp` lookup for project files, but the project `.omp` directory must be non-empty. See [`docs/system-prompt-customization.md`](./system-prompt-customization.md) for the full `SYSTEM.md` / `APPEND_SYSTEM.md` contract (replace vs. append, templating).
 
 ### Scope-specific loading
 
@@ -230,7 +230,7 @@ Native provider (`id: native`) reads native config from:
 - Tools: `tools/*.{json,md,ts,js,sh,bash,py}` and `tools/<name>/index.ts`
 - Extension modules: discovered under `extensions/` (+ legacy `settings.json.extensions` string array)
 - Extensions: `extensions/<name>/gemini-extension.json`
-- Settings capability: `settings.json`
+- Settings capability: `settings.json`, then `config.yml`
 
 ### Nearest-project lookup nuance
 
@@ -240,7 +240,7 @@ Native provider (`id: native`) reads native config from:
 
 ## Settings subsystem
 
-- `Settings.init()` loads global `config.yml` + discovered project `settings.json` capability items.
+- `Settings.init()` loads global `config.yml` + discovered project settings capability items.
 - Only capability items with `level === "project"` are merged into project layer.
 
 ## Skills subsystem
@@ -285,7 +285,7 @@ Settings capability items are not deduplicated; `Settings.#loadProjectSettings()
 
 - `ConfigFile` JSON -> YAML migration for YAML-targeted files.
 - Settings migration from `settings.json` and `agent.db` to `config.yml`.
-- Settings key migrations (`queueMode`, `ask.timeout`, flat `theme`, `task.isolation.enabled`, `statusLine.plan_mode`).
+- Settings key migrations include `queueMode`, `ask.timeout`, flat `theme`, `task.isolation.enabled`, legacy `task.isolation.mode` values, removed edit modes, `statusLine.plan_mode`, `memories.enabled`, and hindsight scoping/name fields.
 - Legacy setting names `skills.enablePiUser` / `skills.enablePiProject` are still active gates for native skill source.
 
 If these compatibility paths are removed in code, update this document immediately; several runtime behaviors still depend on them today.

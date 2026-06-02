@@ -1,51 +1,21 @@
 /**
  * Text normalization utilities for the edit tool.
  *
- * Handles line endings, BOM, whitespace, and Unicode normalization.
+ * Whitespace, Unicode, and indentation helpers. Line-ending and BOM
+ * primitives live in `@oh-my-pi/hashline` and are re-exported here so
+ * existing consumers see one stable surface.
  */
 
 import { padding } from "@oh-my-pi/pi-tui";
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Line Ending Utilities
-// ═══════════════════════════════════════════════════════════════════════════
-
-export type LineEnding = "\r\n" | "\n";
-
-/** Detect the predominant line ending in content */
-export function detectLineEnding(content: string): LineEnding {
-	const crlfIdx = content.indexOf("\r\n");
-	const lfIdx = content.indexOf("\n");
-	if (lfIdx === -1) return "\n";
-	if (crlfIdx === -1) return "\n";
-	return crlfIdx < lfIdx ? "\r\n" : "\n";
-}
-
-/** Normalize all line endings to LF */
-export function normalizeToLF(text: string): string {
-	return text.replace(/\r\n?/g, "\n");
-}
-
-/** Restore line endings to the specified type */
-export function restoreLineEndings(text: string, ending: LineEnding): string {
-	return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// BOM Handling
-// ═══════════════════════════════════════════════════════════════════════════
-
-export interface BomResult {
-	/** The BOM character if present, empty string otherwise */
-	bom: string;
-	/** The text without the BOM */
-	text: string;
-}
-
-/** Strip UTF-8 BOM if present */
-export function stripBom(content: string): BomResult {
-	return content.startsWith("\uFEFF") ? { bom: "\uFEFF", text: content.slice(1) } : { bom: "", text: content };
-}
+export {
+	type BomResult,
+	detectLineEnding,
+	type LineEnding,
+	normalizeToLF,
+	restoreLineEndings,
+	stripBom,
+} from "@oh-my-pi/hashline";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Whitespace Utilities

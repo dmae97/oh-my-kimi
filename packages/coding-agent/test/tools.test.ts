@@ -711,6 +711,19 @@ describe("Coding Agent Tools", () => {
 			expect(result.content.some(c => c.type === "image")).toBe(false);
 		});
 
+		it("omits inspect_image from the description when the tool is disabled", () => {
+			const enabled = new ReadTool(
+				createTestToolSession(testDir, Settings.isolated({ "inspect_image.enabled": true })),
+			);
+			const disabled = new ReadTool(
+				createTestToolSession(testDir, Settings.isolated({ "inspect_image.enabled": false })),
+			);
+
+			expect(enabled.description).toContain("inspect_image");
+			expect(disabled.description).not.toContain("inspect_image");
+			expect(disabled.description).toContain("inline");
+		});
+
 		it("should treat files with image extension but non-image content as text", async () => {
 			const testFile = path.join(testDir, "not-an-image.png");
 			fs.writeFileSync(testFile, "definitely not a png");
@@ -957,6 +970,16 @@ function b() {
 			expect(result.details?.timeoutSeconds).toBe(300);
 		});
 
+		it("should record wall time in text content and details", async () => {
+			const result = await bashTool.execute("test-call-walltime", { command: "echo wt" });
+
+			const output = getTextOutput(result);
+			expect(output).toContain("wt");
+			expect(output).toMatch(/Wall time: \d+\.\d{2} seconds/);
+			expect(typeof result.details?.wallTimeMs).toBe("number");
+			expect(result.details?.wallTimeMs).toBeGreaterThanOrEqual(0);
+		});
+
 		it("should expose built-in interceptor defaults truthfully", () => {
 			const defaultSettings = Settings.isolated({ "bashInterceptor.enabled": true });
 			const explicitEmptySettings = Settings.isolated({
@@ -1085,7 +1108,7 @@ function b() {
 			const updates: string[] = [];
 			const result = await bashTool.execute(
 				"test-call-8-stream",
-				{ command: "for i in 1 2 3; do echo $i; sleep 0.05; done" },
+				{ command: "for i in 1 2 3; do echo $i; sleep 0.2; done" },
 				undefined,
 				update => {
 					const text = update.content?.find(c => c.type === "text")?.text ?? "";
@@ -1121,10 +1144,13 @@ function b() {
 			}
 		});
 
-		it("should handle command errors", async () => {
-			await expect(bashTool.execute("test-call-9", { command: "exit 1" })).rejects.toThrow(
-				/(Command failed|code 1)/,
-			);
+		it("should surface non-zero exits as an error result", async () => {
+			// A completed-but-failed command resolves as a non-throwing error
+			// result carrying the exit code, so the renderer keeps its footer.
+			const result = await bashTool.execute("test-call-9", { command: "exit 1" });
+			expect(result.isError).toBe(true);
+			expect(result.details?.exitCode).toBe(1);
+			expect(getTextOutput(result)).toContain("Command exited with code 1");
 		});
 
 		it("should keep short commands inline when auto-background is enabled", async () => {
@@ -1141,7 +1167,7 @@ function b() {
 						testDir,
 						Settings.isolated({
 							"bash.autoBackground.enabled": true,
-							"bash.autoBackground.thresholdMs": 50,
+							"bash.autoBackground.thresholdMs": 2_000,
 						}),
 						{
 							getSessionId: () => "test-session",
@@ -1269,16 +1295,11 @@ function b() {
 
 		it("should abort and recover for subsequent commands", async () => {
 			const controller = new AbortController();
-			const promise = bashTool.execute(
-				"test-call-10-abort",
-				{ command: "printf 'started\\n'; sleep 60" },
-				controller.signal,
-				update => {
-					if (update.content?.some(content => content.type === "text" && content.text.includes("started"))) {
-						controller.abort("test abort");
-					}
-				},
-			);
+			const promise = bashTool.execute("test-call-10-abort", { command: "sleep 60" }, controller.signal);
+			// Give the native shell a beat to enter `sleep`; do not depend on chunk
+			// delivery timing, which is flaky on loaded CI runners.
+			await Bun.sleep(100);
+			controller.abort("test abort");
 			await expect(promise).rejects.toThrow(/abort|cancel|timed out/i);
 
 			const result = await bashTool.execute("test-call-10-after-abort", { command: "echo ok" });
@@ -1678,13 +1699,9 @@ function b() {
 				hidden: true,
 			});
 
-			const outputLines = getTextOutput(result)
-				.split("\n")
-				.map(line => line.trim())
-				.filter(Boolean);
-
-			expect(outputLines).toContain("visible.txt");
-			expect(outputLines).toContain(".secret/hidden.txt");
+			const files = (result.details?.files ?? []).slice().sort();
+			expect(files).toContain("visible.txt");
+			expect(files).toContain(".secret/hidden.txt");
 		});
 
 		it("should respect .gitignore", async () => {
@@ -1722,12 +1739,7 @@ function b() {
 				paths: [`${testDir}/**/auth-actions.spec.ts`],
 			});
 
-			const outputLines = getTextOutput(result)
-				.split("\n")
-				.map(line => line.trim())
-				.filter(Boolean);
-
-			expect(outputLines).toEqual(["z/auth-actions.spec.ts", "a/auth-actions.spec.ts"]);
+			expect(result.details?.files).toEqual(["z/auth-actions.spec.ts", "a/auth-actions.spec.ts"]);
 		});
 
 		it("should render nested glob results relative to the session cwd", async () => {
@@ -1739,12 +1751,7 @@ function b() {
 				paths: ["apps/daemon/src/**/daemon-telemetry.ts"],
 			});
 
-			const outputLines = getTextOutput(result)
-				.split("\n")
-				.map(line => line.trim())
-				.filter(Boolean);
-
-			expect(outputLines).toEqual(["apps/daemon/src/telemetry/daemon-telemetry.ts"]);
+			expect(result.details?.files).toEqual(["apps/daemon/src/telemetry/daemon-telemetry.ts"]);
 		});
 
 		it("should not double-prefix multi-pattern results under a shared base", async () => {
@@ -1759,13 +1766,8 @@ function b() {
 				paths: ["apps/daemon/src/**/*.ts", "apps/client/src/**/*.ts"],
 			});
 
-			const outputLines = getTextOutput(result)
-				.split("\n")
-				.map(line => line.trim())
-				.filter(Boolean)
-				.sort();
-
-			expect(outputLines).toEqual(["apps/client/src/client.ts", "apps/daemon/src/daemon.ts"]);
+			const files = (result.details?.files ?? []).slice().sort();
+			expect(files).toEqual(["apps/client/src/client.ts", "apps/daemon/src/daemon.ts"]);
 		});
 
 		it("should not disable gitignore after an ignored broad hidden-file search finds no matches", async () => {
@@ -1786,6 +1788,33 @@ function b() {
 			expect(output).not.toContain(".env.local");
 			expect(output).not.toContain(".env.generated");
 			expect(elapsedMs).toBeLessThan(1000);
+		});
+
+		it("should return directories alongside files with a trailing slash", async () => {
+			fs.mkdirSync(path.join(testDir, "pkg"));
+			fs.mkdirSync(path.join(testDir, "pkg", "nested"));
+			fs.writeFileSync(path.join(testDir, "pkg", "file.txt"), "f");
+			fs.writeFileSync(path.join(testDir, "pkg", "nested", "deep.txt"), "d");
+
+			const result = await findTool.execute("test-call-14f", {
+				paths: [`${testDir}/pkg/**/*`],
+			});
+
+			const files = (result.details?.files ?? []).slice().sort();
+			expect(files).toEqual(["pkg/file.txt", "pkg/nested/", "pkg/nested/deep.txt"]);
+		});
+
+		it("should match a directory by glob and emit it with trailing slash", async () => {
+			fs.mkdirSync(path.join(testDir, "alpha", "tests"), { recursive: true });
+			fs.mkdirSync(path.join(testDir, "beta", "tests"), { recursive: true });
+			fs.writeFileSync(path.join(testDir, "alpha", "tests", "a.ts"), "a");
+
+			const result = await findTool.execute("test-call-14g", {
+				paths: [`${testDir}/**/tests`],
+			});
+
+			const files = (result.details?.files ?? []).slice().sort();
+			expect(files).toEqual(["alpha/tests/", "beta/tests/"]);
 		});
 	});
 });

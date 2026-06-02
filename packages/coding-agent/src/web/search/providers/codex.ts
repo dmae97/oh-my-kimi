@@ -2,15 +2,15 @@
  * OpenAI Codex Web Search Provider
  *
  * Uses Codex's built-in web_search tool via the Responses API.
- * Requires OAuth credentials stored in agent.db for provider "openai-codex".
- * Returns synthesized answers with web search sources.
+ * Auth is resolved through `AuthStorage.getOAuthAccess("openai-codex")` so the
+ * broker is the sole refresh authority — this module never opens a sibling
+ * SQLite store, never POSTs the broker sentinel to an OpenAI token endpoint.
  */
 import * as os from "node:os";
-import { getBundledModels } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, getBundledModels } from "@oh-my-pi/pi-ai";
 import { decodeJwt } from "@oh-my-pi/pi-ai/utils/oauth/openai-codex";
-import { $env, getAgentDbPath, readSseJson } from "@oh-my-pi/pi-utils";
+import { $env, readSseJson } from "@oh-my-pi/pi-utils";
 import packageJson from "../../../../package.json" with { type: "json" };
-import { AgentStorage } from "../../../session/agent-storage";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
@@ -19,29 +19,49 @@ import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const CODEX_RESPONSES_PATH = "/codex/responses";
-const FALLBACK_MODEL = "gpt-5-codex-mini";
+const FALLBACK_MODEL = "gpt-5.5";
 const DEFAULT_MODEL_PREFERENCES = [
-	"gpt-5-codex-mini",
+	"gpt-5.5",
 	"gpt-5.4",
+	"gpt-5-codex",
+	"gpt-5",
 	"gpt-5.3-codex",
 	"gpt-5.2-codex",
 	"gpt-5.1-codex",
-	"gpt-5-codex",
+	"gpt-5-codex-mini",
 ];
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 const DEFAULT_INSTRUCTIONS =
 	"You are a helpful assistant with web search capabilities. Search the web to answer the user's question accurately and cite your sources.";
 
-function getModel(): string {
+function getConfiguredModel(): string | undefined {
 	const configuredModel = $env.PI_CODEX_WEB_SEARCH_MODEL?.trim();
-	if (configuredModel) return configuredModel;
+	return configuredModel ? configuredModel : undefined;
+}
 
+function getDefaultModelCandidates(): string[] {
 	const bundledModels = getBundledModels("openai-codex");
 	const bundledIds = new Set(bundledModels.map(model => model.id));
-	const preferred = DEFAULT_MODEL_PREFERENCES.find(modelId => bundledIds.has(modelId));
-	if (preferred) return preferred;
+	const candidates = DEFAULT_MODEL_PREFERENCES.filter(modelId => bundledIds.has(modelId));
+
+	if (candidates.length > 0) {
+		return candidates;
+	}
+
 	const nonMini = bundledModels.find(model => !model.id.includes("mini") && !model.id.includes("spark"));
-	return nonMini?.id ?? bundledModels[0]?.id ?? FALLBACK_MODEL;
+	if (nonMini) {
+		return [nonMini.id];
+	}
+
+	return bundledModels[0]?.id ? [bundledModels[0].id] : [FALLBACK_MODEL];
+}
+
+function shouldRetryWithNextDefaultModel(error: unknown): boolean {
+	if (!(error instanceof SearchProviderError)) return false;
+	if (error.provider !== "codex" || error.status !== 400) return false;
+	return /model is not supported|requested model is not supported|not supported when using codex with a chatgpt account/i.test(
+		error.message,
+	);
 }
 
 export interface CodexSearchParams {
@@ -51,15 +71,6 @@ export interface CodexSearchParams {
 	num_results?: number;
 	/** Search context size: controls how much web content to include */
 	search_context_size?: "low" | "medium" | "high";
-}
-
-/** OAuth credential stored in agent.db */
-interface CodexOAuthCredential {
-	type: "oauth";
-	access: string;
-	refresh?: string;
-	expires: number;
-	accountId?: string;
 }
 
 /** Codex API response structure */
@@ -231,7 +242,7 @@ function extractTextSources(text: string): SearchSource[] {
  * @param accessToken - JWT access token
  * @returns Account ID string, or null if not found
  */
-function getAccountId(accessToken: string): string | null {
+function getAccountIdFromJwt(accessToken: string): string | null {
 	const payload = decodeJwt(accessToken);
 	const auth = payload?.[JWT_CLAIM_PATH] as { chatgpt_account_id?: string } | undefined;
 	const accountId = auth?.chatgpt_account_id;
@@ -239,43 +250,25 @@ function getAccountId(accessToken: string): string | null {
 }
 
 /**
- * Finds valid Codex OAuth credentials from agent.db.
- * Checks agent credentials and returns the first non-expired credential.
- * @returns OAuth credential with access token and account ID, or null if none found
+ * Resolve a Codex bearer + accountId through {@link AuthStorage} — the single
+ * refresh authority. Returns `null` when no OAuth credential is configured,
+ * when the credential cannot be refreshed (broker error, revoked token, etc.),
+ * or when the access token carries no `chatgpt_account_id` claim.
  */
-async function findCodexAuth(): Promise<{ accessToken: string; accountId: string } | null> {
-	const expiryBuffer = 5 * 60 * 1000; // 5 minutes
-	const now = Date.now();
-
-	try {
-		const storage = await AgentStorage.open(getAgentDbPath());
-		const records = storage.listAuthCredentials("openai-codex");
-
-		for (const record of records) {
-			const credential = record.credential;
-			if (credential.type !== "oauth") continue;
-
-			const oauthCred = credential as CodexOAuthCredential;
-			if (!oauthCred.access) continue;
-			if (oauthCred.expires <= now + expiryBuffer) continue;
-
-			const accountId = oauthCred.accountId ?? getAccountId(oauthCred.access);
-			if (!accountId) continue;
-
-			return { accessToken: oauthCred.access, accountId };
-		}
-	} catch {
-		return null;
-	}
-
-	return null;
+async function findCodexAuth(
+	authStorage: AuthStorage,
+	sessionId: string | undefined,
+	signal: AbortSignal | undefined,
+): Promise<{ accessToken: string; accountId: string } | null> {
+	const access = await authStorage.getOAuthAccess("openai-codex", sessionId, { signal });
+	if (!access) return null;
+	const accountId = access.accountId ?? getAccountIdFromJwt(access.accessToken);
+	if (!accountId) return null;
+	return { accessToken: access.accessToken, accountId };
 }
 
 /**
  * Builds HTTP headers for Codex API requests.
- * @param accessToken - OAuth access token
- * @param accountId - ChatGPT account ID
- * @returns Headers object for fetch requests
  */
 function buildCodexHeaders(accessToken: string, accountId: string): Record<string, string> {
 	return {
@@ -291,17 +284,19 @@ function buildCodexHeaders(accessToken: string, accountId: string): Record<strin
 
 /**
  * Calls the Codex Responses API with web search tool enabled.
- * Streams the response and collects all events.
- * @param auth - Authentication info (access token and account ID)
- * @param query - Search query from the user
- * @param options - Search options including system prompt and context size
- * @returns Parsed response with answer, sources, and usage
- * @throws {SearchProviderError} If the API request fails
+ * The caller provides the exact model id to send; retry / fallback policy
+ * lives one layer up in `searchCodex()` so we can distinguish explicit user
+ * overrides from the default ChatGPT-account model-selection path.
  */
 async function callCodexSearch(
 	auth: { accessToken: string; accountId: string },
 	query: string,
-	options: { signal?: AbortSignal; systemPrompt?: string; searchContextSize?: "low" | "medium" | "high" },
+	options: {
+		signal?: AbortSignal;
+		systemPrompt?: string;
+		searchContextSize?: "low" | "medium" | "high";
+		modelId: string;
+	},
 ): Promise<{
 	answer: string;
 	sources: SearchSource[];
@@ -312,7 +307,7 @@ async function callCodexSearch(
 	const url = `${CODEX_BASE_URL}${CODEX_RESPONSES_PATH}`;
 	const headers = buildCodexHeaders(auth.accessToken, auth.accountId);
 
-	const requestedModel = getModel();
+	const requestedModel = options.modelId;
 
 	const body: Record<string, unknown> = {
 		model: requestedModel,
@@ -457,29 +452,67 @@ async function callCodexSearch(
 
 /**
  * Executes a web search using OpenAI Codex's built-in web search tool.
- * Requires OAuth credentials stored in agent.db for provider "openai-codex".
- * @param params - Search parameters including query and optional settings
- * @returns Search response with synthesized answer, sources, and usage
- * @throws {Error} If no Codex OAuth credentials are configured
+ *
+ * Default-model behavior:
+ * - If `PI_CODEX_WEB_SEARCH_MODEL` is set, use it exactly once and surface any
+ *   upstream error verbatim.
+ * - Otherwise prefer ChatGPT-account-safe bundled defaults (GPT-5.4, GPT-5
+ *   Codex, GPT-5, …) and retry the next candidate only when Codex returns the
+ *   known 400 "model is not supported" family. This avoids selecting
+ *   `gpt-5-codex-mini` first on ChatGPT accounts, which OpenAI rejects.
  */
-export async function searchCodex(params: CodexSearchParams): Promise<SearchResponse> {
-	const auth = await findCodexAuth();
+export async function searchCodex(params: SearchParams): Promise<SearchResponse> {
+	const auth = await findCodexAuth(params.authStorage, params.sessionId, params.signal);
 	if (!auth) {
 		throw new Error(
 			"No Codex OAuth credentials found. Login with 'omp /login openai-codex' to enable Codex web search.",
 		);
 	}
 
-	const result = await callCodexSearch(auth, params.query, {
-		systemPrompt: params.system_prompt,
-		searchContextSize: params.search_context_size ?? "high",
-	});
+	const configuredModel = getConfiguredModel();
+	const modelCandidates = configuredModel ? [configuredModel] : getDefaultModelCandidates();
+
+	let result:
+		| {
+				answer: string;
+				sources: SearchSource[];
+				model: string;
+				requestId: string;
+				usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+		  }
+		| undefined;
+	let lastError: unknown;
+
+	for (let index = 0; index < modelCandidates.length; index += 1) {
+		const modelId = modelCandidates[index];
+		if (!modelId) continue;
+
+		try {
+			result = await callCodexSearch(auth, params.query, {
+				signal: params.signal,
+				systemPrompt: params.systemPrompt,
+				searchContextSize: "high",
+				modelId,
+			});
+			break;
+		} catch (error) {
+			lastError = error;
+			const isLastCandidate = index === modelCandidates.length - 1;
+			if (configuredModel || isLastCandidate || !shouldRetryWithNextDefaultModel(error)) {
+				throw error;
+			}
+		}
+	}
+
+	if (!result) {
+		throw lastError ?? new Error("Codex search failed without returning a result");
+	}
 
 	let sources = result.sources;
 
-	// Apply num_results limit if specified
-	if (params.num_results && sources.length > params.num_results) {
-		sources = sources.slice(0, params.num_results);
+	const numResults = params.numSearchResults ?? params.limit;
+	if (numResults && sources.length > numResults) {
+		sources = sources.slice(0, numResults);
 	}
 
 	return {
@@ -500,28 +533,25 @@ export async function searchCodex(params: CodexSearchParams): Promise<SearchResp
 
 /**
  * Checks if Codex web search is available.
- * @returns True if valid OAuth credentials exist for openai-codex
  */
-export async function hasCodexSearch(): Promise<boolean> {
-	const auth = await findCodexAuth();
-	return auth !== null;
+export async function hasCodexSearch(authStorage: AuthStorage): Promise<boolean> {
+	// `isAvailable` runs before every request — keep the probe cheap.
+	// `hasOAuth(...)` is a synchronous in-memory check that returns true as soon
+	// as a Codex OAuth credential is loaded, without driving the refresh
+	// pipeline. The actual refresh happens lazily in `searchCodex`.
+	return authStorage.hasOAuth("openai-codex");
 }
 
 /** Search provider for OpenAI Codex web search. */
 export class CodexProvider extends SearchProvider {
 	readonly id = "codex";
-	readonly label = "Codex";
+	readonly label = "OpenAI";
 
-	isAvailable(): Promise<boolean> {
-		return Promise.resolve(hasCodexSearch());
+	isAvailable(authStorage: AuthStorage): Promise<boolean> | boolean {
+		return hasCodexSearch(authStorage);
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
-		return searchCodex({
-			signal: params.signal,
-			query: params.query,
-			system_prompt: params.systemPrompt,
-			num_results: params.numSearchResults ?? params.limit,
-		});
+		return searchCodex(params);
 	}
 }

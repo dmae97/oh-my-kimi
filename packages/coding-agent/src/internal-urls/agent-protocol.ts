@@ -16,7 +16,7 @@ import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { applyQuery, pathToQuery } from "./json-query";
 import { artifactsDirsFromRegistry } from "./registry-helpers";
-import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
+import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 /**
  * Handler for agent:// URLs.
@@ -125,5 +125,22 @@ export class AgentProtocolHandler implements ProtocolHandler {
 			sourcePath: foundPath,
 			notes,
 		};
+	}
+
+	async complete(): Promise<UrlCompletion[]> {
+		const ids = new Set<string>();
+		for (const dir of artifactsDirsFromRegistry()) {
+			let files: string[];
+			try {
+				files = await fs.readdir(dir);
+			} catch (err) {
+				if (isEnoent(err)) continue;
+				throw err;
+			}
+			for (const f of files) {
+				if (f.endsWith(".md")) ids.add(f.slice(0, -3));
+			}
+		}
+		return [...ids].sort().map(value => ({ value }));
 	}
 }

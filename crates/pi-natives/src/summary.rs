@@ -6,15 +6,21 @@ use napi_derive::napi;
 #[napi(object)]
 pub struct SummaryOptions {
 	/// Source code to summarize.
-	pub code:              String,
+	pub code:               String,
 	/// Language alias (e.g. "rust", "typescript") used before path inference.
-	pub lang:              Option<String>,
+	pub lang:               Option<String>,
 	/// File path used to infer language by extension when `lang` is omitted.
-	pub path:              Option<String>,
+	pub path:               Option<String>,
 	/// Minimum total node lines before eliding a body/literal node.
-	pub min_body_lines:    Option<u32>,
+	pub min_body_lines:     Option<u32>,
 	/// Minimum total comment lines before eliding a multiline block comment.
-	pub min_comment_lines: Option<u32>,
+	pub min_comment_lines:  Option<u32>,
+	/// Target visible-line count for BFS unfold. `None` or `0` keeps only
+	/// the outermost elisions (no progressive unfolding).
+	pub unfold_until_lines: Option<u32>,
+	/// Hard ceiling for BFS unfold. Defaults to `unfold_until_lines * 2`
+	/// when omitted.
+	pub unfold_limit_lines: Option<u32>,
 }
 
 #[napi(object)]
@@ -69,11 +75,13 @@ impl From<pi_ast::summary::SummaryResult> for SummaryResult {
 #[napi]
 pub fn summarize_code(options: SummaryOptions) -> Result<SummaryResult> {
 	pi_ast::summary::summarize_code(pi_ast::summary::SummaryOptions {
-		code:              options.code,
-		lang:              options.lang,
-		path:              options.path,
-		min_body_lines:    options.min_body_lines,
-		min_comment_lines: options.min_comment_lines,
+		code:               options.code,
+		lang:               options.lang,
+		path:               options.path,
+		min_body_lines:     options.min_body_lines,
+		min_comment_lines:  options.min_comment_lines,
+		unfold_until_lines: options.unfold_until_lines,
+		unfold_limit_lines: options.unfold_limit_lines,
 	})
 	.map(Into::into)
 	.map_err(|error| Error::from_reason(error.to_string()))

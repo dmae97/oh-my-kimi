@@ -16,15 +16,14 @@ import { astEditToolRenderer } from "./ast-edit";
 import { astGrepToolRenderer } from "./ast-grep";
 import { bashToolRenderer } from "./bash";
 import { browserToolRenderer } from "./browser/render";
-import { calculatorToolRenderer } from "./calculator";
 import { debugToolRenderer } from "./debug";
-import { evalToolRenderer } from "./eval";
+import { evalToolRenderer } from "./eval-render";
 import { findToolRenderer } from "./find";
 import { githubToolRenderer } from "./gh-renderer";
 import { inspectImageToolRenderer } from "./inspect-image-renderer";
 import { jobToolRenderer } from "./job";
+import { recallToolRenderer, reflectToolRenderer, retainToolRenderer } from "./memory-render";
 import { readToolRenderer } from "./read";
-import { recipeToolRenderer } from "./recipe/render";
 import { resolveToolRenderer } from "./resolve";
 import { searchToolRenderer } from "./search";
 import { searchToolBm25Renderer } from "./search-tool-bm25";
@@ -51,10 +50,8 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	ast_edit: astEditToolRenderer as ToolRenderer,
 	bash: bashToolRenderer as ToolRenderer,
 	browser: browserToolRenderer as ToolRenderer,
-	recipe: recipeToolRenderer as ToolRenderer,
 	debug: debugToolRenderer as ToolRenderer,
 	eval: evalToolRenderer as ToolRenderer,
-	calc: calculatorToolRenderer as ToolRenderer,
 	edit: editToolRenderer as ToolRenderer,
 	apply_patch: editToolRenderer as ToolRenderer,
 	find: findToolRenderer as ToolRenderer,
@@ -64,6 +61,9 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	read: readToolRenderer as ToolRenderer,
 	job: jobToolRenderer as ToolRenderer,
 	resolve: resolveToolRenderer as ToolRenderer,
+	retain: retainToolRenderer as ToolRenderer,
+	recall: recallToolRenderer as ToolRenderer,
+	reflect: reflectToolRenderer as ToolRenderer,
 	search_tool_bm25: searchToolBm25Renderer as ToolRenderer,
 	ssh: sshToolRenderer as ToolRenderer,
 	task: taskToolRenderer as ToolRenderer,

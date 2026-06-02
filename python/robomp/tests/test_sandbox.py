@@ -393,6 +393,73 @@ def test_ensure_workspace_creates_worktree(tmp_path: Path, upstream_repo: Path) 
     assert ws.artifacts_dir.is_dir()
 
 
+def test_ensure_workspace_pr_head_uses_detached_pr_ref(tmp_path: Path, upstream_repo: Path) -> None:
+    contributor = tmp_path / "contributor"
+    _git(["clone", str(upstream_repo), str(contributor)], cwd=tmp_path)
+    (contributor / "README.md").write_text("hello from pr\n", encoding="utf-8")
+    _git(["-C", str(contributor), "add", "README.md"], cwd=tmp_path)
+    subprocess.run(
+        ["git", "commit", "-m", "pr change"],
+        cwd=str(contributor),
+        check=True,
+        capture_output=True,
+        text=True,
+        env=os.environ
+        | {
+            "GIT_AUTHOR_NAME": "c",
+            "GIT_AUTHOR_EMAIL": "c@t",
+            "GIT_COMMITTER_NAME": "c",
+            "GIT_COMMITTER_EMAIL": "c@t",
+        },
+    )
+    pr_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(contributor),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _git(["-C", str(contributor), "push", "origin", "HEAD:refs/pull/9/head"], cwd=tmp_path)
+
+    mgr = SandboxManager(tmp_path / "workspaces")
+    ws = mgr.ensure_workspace(
+        repo="octo/widget",
+        number=9,
+        title="incoming PR",
+        clone_url=str(upstream_repo),
+        default_branch="main",
+        pr_head=9,
+        author_name="robomp-bot",
+        author_email="robomp-bot@example.invalid",
+    )
+
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(ws.repo_dir),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    symbolic = subprocess.run(
+        ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+        cwd=str(ws.repo_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    pushurl = subprocess.run(
+        ["git", "config", "--get", "remote.origin.pushurl"],
+        cwd=str(ws.repo_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert head == pr_head
+    assert symbolic.returncode != 0
+    assert ws.branch == "review/pr-9"
+    assert pushurl.returncode != 0
+
+
 def test_chown_workspace_noops_when_not_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[list[str], bool]] = []
 
@@ -614,6 +681,28 @@ def test_slot_subprocess_kwargs_run_as_slot_on_linux_root(monkeypatch: pytest.Mo
         "extra_groups": [2000],
         "umask": 0o002,
     }
+
+
+def test_chown_workspace_normalizes_to_root_when_slots_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[list[str], bool | None]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((cmd, kwargs.get("check") if isinstance(kwargs.get("check"), bool) else None))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("robomp.sandbox.platform.system", lambda: "Linux")
+    monkeypatch.setattr("robomp.sandbox.os.geteuid", lambda: 0)
+    monkeypatch.setattr("robomp.sandbox.os.getegid", lambda: 0)
+    monkeypatch.setattr("robomp.sandbox.subprocess.run", fake_run)
+
+    _chown_workspace(tmp_path, None)
+
+    assert calls == [
+        (["chown", "-R", "0:0", str(tmp_path)], True),
+        (["chmod", "-R", "u=rwX,g=rwX,o=", str(tmp_path)], True),
+    ]
 
 
 def test_prepare_slot_runtime_env_returns_workspace_private_paths_without_chown(

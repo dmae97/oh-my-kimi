@@ -322,7 +322,7 @@ describe("OpenAI responses history payload", () => {
 		expect(payload.prompt_cache_key).toBe("session-abc");
 	});
 
-	it("falls back to system instructions for OpenAI-compatible endpoints without developer-role support", async () => {
+	it("uses canonical instructions field for endpoints without developer-role support", async () => {
 		const model = {
 			...getOpenAIReasoningModel("openai", "gpt-5-mini"),
 			baseUrl: "https://proxy.example.com/v1",
@@ -330,13 +330,10 @@ describe("OpenAI responses history payload", () => {
 		const payload = (await captureResponsesPayload(model, {
 			systemPrompt: ["stable instructions", "second instructions"],
 			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
-		})) as { input?: unknown[] };
+		})) as { input?: unknown[]; instructions?: string };
 
-		expect(payload.input).toEqual([
-			{ role: "system", content: "stable instructions" },
-			{ role: "system", content: "second instructions" },
-			{ role: "user", content: [{ type: "input_text", text: "hi" }] },
-		]);
+		expect(payload.instructions).toBe("stable instructions\n\nsecond instructions");
+		expect(payload.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "hi" }] }]);
 	});
 
 	it("keeps system instruction order ahead of replayed native history", async () => {
@@ -759,5 +756,72 @@ describe("OpenAI responses history payload", () => {
 			call_id: callId,
 			output: "Tool execution was aborted.",
 		});
+	});
+
+	it("converts orphan function_call_output replayed from providerPayload into an assistant note (issue #1351)", async () => {
+		// Reproduces the symptom: a previous turn's snapshot carries a
+		// `function_call_output` whose matching `function_call` was wiped by an
+		// earlier `dt: false` splice (or never landed because the call was
+		// rejected locally). OpenAI rejects that with
+		// `400 No tool call found for function call output with call_id …`.
+		const orphanCallId = "call_jR3cVxeU10g0YVtR2KSgpveO";
+		const orphanOutput = "(see attached image)";
+		const pairedCallId = "call_paired_ok";
+		const context: Context = {
+			messages: [
+				{
+					role: "user",
+					content: "follow-up after aborted turn",
+					providerPayload: createOpenAIResponsesHistoryPayload("openai", [
+						{
+							type: "function_call",
+							call_id: pairedCallId,
+							name: "read",
+							arguments: '{"path":"README.md"}',
+						},
+						{
+							type: "function_call_output",
+							call_id: pairedCallId,
+							output: "file contents",
+						},
+						{
+							type: "function_call_output",
+							call_id: orphanCallId,
+							output: orphanOutput,
+						},
+					]),
+					timestamp: Date.now(),
+				},
+			],
+		};
+
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
+		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
+
+		const orphanSurvivors = (payload.input ?? []).filter(item => {
+			if (!item || typeof item !== "object") return false;
+			const candidate = item as { type?: unknown; call_id?: unknown };
+			return candidate.type === "function_call_output" && candidate.call_id === orphanCallId;
+		});
+		expect(orphanSurvivors).toEqual([]);
+
+		const pairedOutputs = (payload.input ?? []).filter(item => {
+			if (!item || typeof item !== "object") return false;
+			const candidate = item as { type?: unknown; call_id?: unknown };
+			return candidate.type === "function_call_output" && candidate.call_id === pairedCallId;
+		});
+		expect(pairedOutputs).toHaveLength(1);
+
+		const note = (payload.input ?? []).find(item => {
+			if (!item || typeof item !== "object") return false;
+			const candidate = item as { type?: unknown; role?: unknown; content?: unknown };
+			return (
+				candidate.type === "message" &&
+				candidate.role === "assistant" &&
+				typeof candidate.content === "string" &&
+				(candidate.content as string).includes(orphanCallId)
+			);
+		}) as { content?: string } | undefined;
+		expect(note?.content).toContain(orphanOutput);
 	});
 });

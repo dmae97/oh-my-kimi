@@ -11,7 +11,7 @@ const COPILOT_PREMIUM_MULTIPLIERS: Record<string, number> = {
 
 import * as path from "node:path";
 import { $env } from "@oh-my-pi/pi-utils";
-import { SqliteAuthCredentialStore } from "../src/auth-storage";
+import { AuthStorage, type OAuthAccess, SqliteAuthCredentialStore } from "../src/auth-storage";
 import { createModelManager } from "../src/model-manager";
 import {
 	applyGeneratedModelPolicies,
@@ -27,6 +27,7 @@ import {
 	PROVIDER_DESCRIPTORS,
 } from "../src/provider-models/descriptors";
 import {
+	buildXaiOAuthStaticSeed,
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
 	mapModelsDevToModels,
 	UNK_CONTEXT_WINDOW,
@@ -37,8 +38,7 @@ import { JWT_CLAIM_PATH } from "../src/providers/openai-codex/constants";
 import type { Model } from "../src/types";
 import { fetchAntigravityDiscoveryModels } from "../src/utils/discovery/antigravity";
 import { fetchCodexModels } from "../src/utils/discovery/codex";
-import { getOAuthApiKey } from "../src/utils/oauth";
-import type { OAuthCredentials, OAuthProvider } from "../src/utils/oauth/types";
+import type { OAuthProvider } from "../src/utils/oauth/types";
 
 const packageRoot = path.join(import.meta.dir, "..");
 
@@ -51,24 +51,26 @@ async function resolveProviderApiKey(providerId: string, catalog: CatalogDiscove
 	}
 
 	try {
-		const storage = await SqliteAuthCredentialStore.open();
+		const store = await SqliteAuthCredentialStore.open();
+		const authStorage = new AuthStorage(store);
 		try {
-			const storedApiKey = storage.getApiKey(providerId);
+			await authStorage.reload();
+			const storedApiKey = await authStorage.getApiKey(providerId);
 			if (storedApiKey) {
 				return storedApiKey;
 			}
 			if (catalog.oauthProvider) {
-				const storedOAuth = storage.getOAuth(catalog.oauthProvider);
-				if (storedOAuth) {
-					const result = await getOAuthApiKey(catalog.oauthProvider, { [catalog.oauthProvider]: storedOAuth });
-					if (result) {
-						storage.saveOAuth(catalog.oauthProvider, result.newCredentials);
-						return result.apiKey;
-					}
+				// AuthStorage.getApiKey refreshes through the broker-aware
+				// single-flighted machinery, so a build-time invocation no
+				// longer silently falls back to bundled models when an
+				// expired-but-refreshable OAuth credential is on disk.
+				const oauthKey = await authStorage.getApiKey(catalog.oauthProvider);
+				if (oauthKey) {
+					return oauthKey;
 				}
 			}
 		} finally {
-			storage.close();
+			store.close();
 		}
 	} catch {
 		// Ignore missing/unreadable auth storage.
@@ -212,22 +214,19 @@ function applyCodexPricingFallback(models: readonly Model[]): Model[] {
 
 const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 
-async function getOAuthCredentialsFromStorage(provider: OAuthProvider): Promise<OAuthCredentials | null> {
+async function getOAuthAccessFromStorage(provider: OAuthProvider): Promise<OAuthAccess | null> {
 	try {
-		const storage = await SqliteAuthCredentialStore.open();
+		const store = await SqliteAuthCredentialStore.open();
+		const authStorage = new AuthStorage(store);
 		try {
-			const creds = storage.getOAuth(provider);
-			if (!creds) {
-				return null;
-			}
-			const result = await getOAuthApiKey(provider, { [provider]: creds });
-			if (!result) {
-				return null;
-			}
-			storage.saveOAuth(provider, result.newCredentials);
-			return result.newCredentials;
+			await authStorage.reload();
+			// `getOAuthAccess` runs the full AuthStorage refresh pipeline so an
+			// expired-but-refreshable credential gets rotated before discovery,
+			// and identity metadata (accountId/projectId/email) flows through
+			// for Codex/Antigravity downstream calls.
+			return (await authStorage.getOAuthAccess(provider)) ?? null;
 		} finally {
-			storage.close();
+			store.close();
 		}
 	} catch {
 		return null;
@@ -239,15 +238,15 @@ async function getOAuthCredentialsFromStorage(provider: OAuthProvider): Promise<
  * Returns empty array if no auth is available (previous models used as fallback).
  */
 async function fetchAntigravityModels(): Promise<Model<"google-gemini-cli">[]> {
-	const credentials = await getOAuthCredentialsFromStorage("google-antigravity");
-	if (!credentials) {
+	const access = await getOAuthAccessFromStorage("google-antigravity");
+	if (!access) {
 		console.log("No Antigravity credentials found, will use previous models");
 		return [];
 	}
 	try {
 		console.log("Fetching models from Antigravity API...");
 		const discovered = await fetchAntigravityDiscoveryModels({
-			token: credentials.access,
+			token: access.accessToken,
 			endpoint: ANTIGRAVITY_ENDPOINT,
 		});
 		if (discovered === null) {
@@ -283,14 +282,14 @@ function extractCodexAccountId(accessToken: string): string | null {
 }
 
 async function fetchCodexDiscoveryModels(): Promise<Model<"openai-codex-responses">[]> {
-	const credentials = await getOAuthCredentialsFromStorage("openai-codex");
-	if (!credentials) {
+	const access = await getOAuthAccessFromStorage("openai-codex");
+	if (!access) {
 		return [];
 	}
 	try {
 		console.log("Fetching models from Codex API...");
-		const accessToken = credentials.access;
-		const accountId = credentials.accountId ?? extractCodexAccountId(accessToken);
+		const accessToken = access.accessToken;
+		const accountId = access.accountId ?? extractCodexAccountId(accessToken);
 		const codexDiscovery = await fetchCodexModels({
 			accessToken,
 			accountId: accountId ?? undefined,
@@ -329,6 +328,15 @@ async function generateModels() {
 		allModels.push(CLOUDFLARE_FALLBACK_MODEL);
 	}
 
+	// xai-oauth has no upstream catalog source (not in models.dev or
+	// MODELS_DEV_PROVIDER_DESCRIPTORS). The curated chat models live in
+	// XAI_OAUTH_CURATED_MODELS and reach the runtime via
+	// xaiOAuthModelManagerOptions().staticModels. Bundling them here too lets
+	// ModelRegistry.#loadModels() pick them up synchronously at boot, so a
+	// persisted `modelRoles.default = "xai-oauth/<id>"` is honored before the
+	// async refresh fires (interactive boot does not await refresh).
+	allModels.push(...buildXaiOAuthStaticSeed());
+
 	const specialDiscoverySources = [
 		{ label: "Antigravity", fetch: fetchAntigravityModels },
 		{ label: "Codex", fetch: fetchCodexDiscoveryModels },
@@ -346,18 +354,27 @@ async function generateModels() {
 		}
 	}
 
-	// Merge previous models.json entries as fallback for any provider/model
-	// not fetched dynamically. This replaces all hardcoded fallback lists —
-	// static-only providers (vertex, gemini-cli), auth-gated providers when
-	// credentials are unavailable, and ad-hoc model additions all persist
-	// through the existing models.json seed.
+	const modelsDevAuthoritativeProviders = new Set<string>();
+	for (const model of modelsDevModels) {
+		if (model.provider === "google-vertex") {
+			modelsDevAuthoritativeProviders.add(model.provider);
+		}
+	}
+	// Merge previous models.json entries as fallback for provider/model pairs not
+	// fetched dynamically. Providers that models.dev covers authoritatively keep
+	// the upstream list exactly, so retired entries from the previous snapshot do
+	// not reappear during regeneration.
 	// Discovery-only providers (local inference servers) — never bundle static models.
 	const discoveryOnlyProviders = new Set(["ollama", "vllm"]);
 	const fetchedKeys = new Set(allModels.map(model => `${model.provider}/${model.id}`));
 
 	for (const models of Object.values(prevModelsJson as Record<string, Record<string, Model>>)) {
 		for (const model of Object.values(models)) {
-			if (!fetchedKeys.has(`${model.provider}/${model.id}`) && !discoveryOnlyProviders.has(model.provider)) {
+			if (
+				!fetchedKeys.has(`${model.provider}/${model.id}`) &&
+				!discoveryOnlyProviders.has(model.provider) &&
+				!modelsDevAuthoritativeProviders.has(model.provider)
+			) {
 				allModels.push(model);
 			}
 		}

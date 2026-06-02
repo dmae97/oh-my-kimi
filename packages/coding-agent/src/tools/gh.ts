@@ -2,7 +2,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	ToolApprovalDecision,
+} from "@oh-my-pi/pi-agent-core";
 
 import { getWorktreeDir, hashPath, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
@@ -69,6 +75,7 @@ const GH_PR_FIELDS = [
 	"labels",
 	"mergeStateStatus",
 	"number",
+	"reviews",
 	"reviewDecision",
 	"state",
 	"title",
@@ -196,6 +203,15 @@ const RUN_URL_PATTERN = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/actions\/runs\/
 const RUN_SUCCESS_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 const RUN_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
 const JOB_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required"]);
+const GITHUB_READONLY_OPS: ReadonlySet<string> = new Set([
+	"repo_view",
+	"search_issues",
+	"search_prs",
+	"search_code",
+	"search_commits",
+	"search_repos",
+	"run_watch",
+]);
 
 const githubSchema = z
 	.object({
@@ -1748,9 +1764,13 @@ async function fetchRunsForCommit(
 	cwd: string,
 	repo: string,
 	headSha: string,
-	branch: string | undefined,
 	signal?: AbortSignal,
 ): Promise<GhRunSnapshot[]> {
+	// Filter only by `head_sha`. The SHA uniquely identifies the commit, so
+	// adding the GitHub `branch=` filter would wrongly exclude workflow runs
+	// whose `head_branch` is not the local checkout — e.g. tag-push triggered
+	// release workflows (`head_branch=v1.2.3`) or PR-triggered runs
+	// (`head_branch=<pr head>`). See coding-agent issue tracker for details.
 	const response = await git.github.json<GhActionsRunListResponse>(
 		cwd,
 		[
@@ -1762,7 +1782,6 @@ async function fetchRunsForCommit(
 			`head_sha=${headSha}`,
 			"-F",
 			`per_page=${RUN_JOBS_PAGE_SIZE}`,
-			...(branch ? ["-F", `branch=${branch}`] : []),
 		],
 		signal,
 		{ repoProvided: true },
@@ -2341,6 +2360,11 @@ function buildTextResult(
 
 export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails> {
 	readonly name = "github";
+	readonly approval = (args: unknown): ToolApprovalDecision => {
+		const rawOp = (args as Partial<GithubInput>).op;
+		const op = typeof rawOp === "string" ? rawOp : "";
+		return GITHUB_READONLY_OPS.has(op) ? "read" : "exec";
+	};
 	readonly summary = "Interact with GitHub issues, pull requests, and repositories";
 	readonly loadMode = "discoverable";
 	readonly label = "GitHub";
@@ -3406,7 +3430,7 @@ async function executeRunWatch(
 		throwIfAborted(signal);
 		pollCount += 1;
 
-		let runs = await fetchRunsForCommit(session.cwd, repo, headSha, branch, signal);
+		let runs = await fetchRunsForCommit(session.cwd, repo, headSha, signal);
 		const details = buildCommitRunWatchDetails(repo, headSha, branch, runs, {
 			state: "watching",
 			pollCount,
@@ -3434,7 +3458,7 @@ async function executeRunWatch(
 					}),
 				});
 				await scheduler.wait(graceSeconds * 1000, { signal });
-				runs = await fetchRunsForCommit(session.cwd, repo, headSha, branch, signal);
+				runs = await fetchRunsForCommit(session.cwd, repo, headSha, signal);
 			}
 
 			const failedJobLogs = await fetchFailedJobLogs(

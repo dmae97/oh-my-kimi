@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-utils",
-	"version": "15.2.4",
+	"version": "15.7.6",
 	"description": "Shared utilities for pi packages",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
@@ -26,7 +26,7 @@
 		"check": "biome check . && bun run check:types",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
 		"lint": "biome lint .",
-		"test": "bun test",
+		"test": "bun test --parallel",
 		"fix": "biome check --write --unsafe .",
 		"fmt": "biome format --write ."
 	},

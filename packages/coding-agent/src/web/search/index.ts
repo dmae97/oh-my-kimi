@@ -3,15 +3,16 @@
  *
  * Single tool supporting Anthropic, Perplexity, Exa, Brave, Jina, Kimi, Gemini, Codex, Tavily, Kagi, Z.AI, SearXNG, and Synthetic
  * providers with provider-specific parameters exposed conditionally.
- *
  */
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { CustomTool, CustomToolContext, RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme } from "../../modes/theme/theme";
 import webSearchSystemPrompt from "../../prompts/system/web-search.md" with { type: "text" };
 import webSearchDescription from "../../prompts/tools/web-search.md" with { type: "text" };
+import { discoverAuthStorage } from "../../sdk";
 import type { ToolSession } from "../../tools";
 import { formatAge } from "../../tools/render-utils";
 import { throwIfAborted } from "../../tools/tool-errors";
@@ -114,18 +115,25 @@ function formatForLLM(response: SearchResponse): string {
 	return parts.join("\n");
 }
 
+interface ExecuteSearchOptions {
+	authStorage: AuthStorage;
+	sessionId?: string;
+	signal?: AbortSignal;
+}
+
 /** Execute web search */
 async function executeSearch(
 	_toolCallId: string,
 	params: SearchQueryParams,
-	signal?: AbortSignal,
+	options: ExecuteSearchOptions,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails }> {
+	const { authStorage, sessionId, signal } = options;
 	const providers =
 		params.provider && params.provider !== "auto"
-			? await getSearchProvider(params.provider).then(provider =>
-					provider.isAvailable() ? [provider] : resolveProviderChain("auto"),
+			? await getSearchProvider(params.provider).then(async provider =>
+					(await provider.isAvailable(authStorage)) ? [provider] : resolveProviderChain(authStorage, "auto"),
 				)
-			: await resolveProviderChain();
+			: await resolveProviderChain(authStorage);
 	if (providers.length === 0) {
 		const message = "No web search provider configured.";
 		return {
@@ -148,6 +156,8 @@ async function executeSearch(
 				numSearchResults: params.num_search_results,
 				temperature: params.temperature,
 				signal,
+				authStorage,
+				sessionId,
 			});
 
 			const text = formatForLLM(response);
@@ -190,21 +200,31 @@ async function executeSearch(
 
 /**
  * Execute a web search query for CLI/testing workflows.
+ *
+ * `authStorage` may be omitted; in that case we discover one via the standard
+ * factory (`discoverAuthStorage`), which honours `OMP_AUTH_BROKER_URL` and
+ * otherwise opens the local SQLite credential store.
  */
 export async function runSearchQuery(
 	params: SearchQueryParams,
+	options: { authStorage?: AuthStorage; sessionId?: string; signal?: AbortSignal } = {},
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails }> {
-	return executeSearch("cli-web-search", params);
+	const authStorage = options.authStorage ?? (await discoverAuthStorage());
+	return executeSearch("cli-web-search", params, {
+		authStorage,
+		sessionId: options.sessionId,
+		signal: options.signal,
+	});
 }
 
 /**
  * Web search tool implementation.
  *
  * Supports Anthropic, Perplexity, Exa, Brave, Jina, Kimi, Gemini, Codex, Z.AI, SearXNG, and Synthetic providers with automatic fallback.
- * Session is accepted for interface consistency but not used.
  */
 export class WebSearchTool implements AgentTool<typeof webSearchSchema, SearchRenderDetails> {
 	readonly name = "web_search";
+	readonly approval = "read" as const;
 	readonly label = "Web Search";
 	readonly description: string;
 	readonly parameters = webSearchSchema;
@@ -212,7 +232,10 @@ export class WebSearchTool implements AgentTool<typeof webSearchSchema, SearchRe
 	readonly loadMode = "discoverable";
 	readonly summary = "Search the web for up-to-date information";
 
-	constructor(_session: ToolSession) {
+	#session: ToolSession;
+
+	constructor(session: ToolSession) {
+		this.#session = session;
 		this.description = prompt.render(webSearchDescription);
 	}
 
@@ -223,7 +246,9 @@ export class WebSearchTool implements AgentTool<typeof webSearchSchema, SearchRe
 		_onUpdate?: AgentToolUpdateCallback<SearchRenderDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<SearchRenderDetails>> {
-		return executeSearch(_toolCallId, params, signal);
+		const authStorage = this.#session.authStorage ?? (await discoverAuthStorage());
+		const sessionId = this.#session.getSessionId?.() ?? undefined;
+		return executeSearch(_toolCallId, params, { authStorage, sessionId, signal });
 	}
 }
 
@@ -234,14 +259,17 @@ export const webSearchCustomTool: CustomTool<typeof webSearchSchema, SearchRende
 	description: prompt.render(webSearchDescription),
 	parameters: webSearchSchema,
 
+	approval: "read",
 	async execute(
 		toolCallId: string,
 		params: SearchToolParams,
 		_onUpdate,
-		_ctx: CustomToolContext,
+		ctx: CustomToolContext,
 		signal?: AbortSignal,
 	) {
-		return executeSearch(toolCallId, params, signal);
+		const authStorage = ctx.modelRegistry?.authStorage ?? (await discoverAuthStorage());
+		const sessionId = ctx.sessionManager.getSessionId();
+		return executeSearch(toolCallId, params, { authStorage, sessionId, signal });
 	},
 
 	renderCall(args: SearchToolParams, options: RenderResultOptions, theme: Theme) {

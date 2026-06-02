@@ -121,7 +121,7 @@ export const ModelOverrideSchema = z.object({
 export type ModelOverride = z.infer<typeof ModelOverrideSchema>;
 
 export const ProviderDiscoverySchema = z.object({
-	type: z.enum(["ollama", "llama.cpp", "lm-studio", "openai-models-list"]),
+	type: z.enum(["ollama", "llama.cpp", "lm-studio", "openai-models-list", "proxy"]),
 });
 
 export const ProviderAuthSchema = z.enum(["apiKey", "none", "oauth"]);

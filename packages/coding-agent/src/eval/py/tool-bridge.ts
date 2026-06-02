@@ -44,21 +44,23 @@ async function startServer(): Promise<BridgeServer> {
 				return new Response("Forbidden", { status: 403 });
 			}
 
-			let body: { session?: unknown; name?: unknown; args?: unknown };
+			let body: { session?: unknown; run?: unknown; name?: unknown; args?: unknown };
 			try {
-				body = (await req.json()) as { session?: unknown; name?: unknown; args?: unknown };
+				body = (await req.json()) as { session?: unknown; run?: unknown; name?: unknown; args?: unknown };
 			} catch {
 				return Response.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
 			}
 			const sessionId = typeof body.session === "string" ? body.session : "";
+			const runId = typeof body.run === "string" ? body.run : "";
 			const name = typeof body.name === "string" ? body.name : "";
-			if (!sessionId || !name) {
-				return Response.json({ ok: false, error: "Missing session/name" }, { status: 400 });
+			if (!sessionId || !runId || !name) {
+				return Response.json({ ok: false, error: "Missing session/run/name" }, { status: 400 });
 			}
-			const entry = registrations.get(sessionId);
+			const registrationKey = bridgeRegistrationKey(sessionId, runId);
+			const entry = registrations.get(registrationKey) ?? registrations.get(sessionId);
 			if (!entry) {
 				return Response.json(
-					{ ok: false, error: `No active Python tool bridge session: ${sessionId}` },
+					{ ok: false, error: `No active Python tool bridge session: ${registrationKey}` },
 					{ status: 200 },
 				);
 			}
@@ -111,11 +113,16 @@ export async function ensurePyToolBridge(): Promise<PyToolBridgeInfo> {
  * Register a tool session for the duration of one execution. The returned
  * function MUST be called to remove the entry once execution finishes.
  */
-export function registerPyToolBridge(sessionId: string, entry: PyToolBridgeEntry): () => void {
-	registrations.set(sessionId, entry);
+function bridgeRegistrationKey(sessionId: string, runId: string): string {
+	return `${sessionId}:${runId}`;
+}
+
+export function registerPyToolBridge(sessionId: string, runId: string, entry: PyToolBridgeEntry): () => void {
+	const key = bridgeRegistrationKey(sessionId, runId);
+	registrations.set(key, entry);
 	return () => {
-		if (registrations.get(sessionId) === entry) {
-			registrations.delete(sessionId);
+		if (registrations.get(key) === entry) {
+			registrations.delete(key);
 		}
 	};
 }

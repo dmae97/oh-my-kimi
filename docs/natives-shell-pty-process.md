@@ -1,11 +1,14 @@
 # Natives Shell, PTY, Process, and Key Internals
 
-This document covers the execution/process/terminal primitives in `@oh-my-pi/pi-natives`: `shell`, `pty`, `ps`, and `keys`, using the architecture terms from `docs/natives-architecture.md`.
+This document covers execution/process/terminal primitives in `@oh-my-pi/pi-natives`: `shell`, `pty`, `ps`, and `keys`, using the architecture terms from `docs/natives-architecture.md`.
 
 ## Implementation files
 
 - `crates/pi-natives/src/shell.rs`
-- `crates/pi-natives/src/shell/windows.rs` (Windows-only PATH enrichment)
+- `crates/pi-shell/src/shell.rs`
+- `crates/pi-shell/src/fixup.rs`
+- `crates/pi-shell/src/windows.rs` (Windows-only PATH enrichment)
+- `crates/pi-shell/src/process.rs`
 - `crates/pi-natives/src/pty.rs`
 - `crates/pi-natives/src/ps.rs`
 - `crates/pi-natives/src/keys.rs`
@@ -15,19 +18,24 @@ This document covers the execution/process/terminal primitives in `@oh-my-pi/pi-
 ## Layer ownership
 
 - **Package entrypoint** (`packages/natives/native/index.js`): loads the `.node` addon and exports generated N-API bindings.
-- **Rust N-API module layer** (`crates/pi-natives/src/*`): shell/PTY process execution, process-tree traversal/termination, and key-sequence parsing.
+- **Rust N-API module layer** (`crates/pi-natives/src/*`): JS-facing shell/PTY/process/key exports and callback bridging.
+- **Runtime core** (`crates/pi-shell/src/*`): brush shell execution, cancellation cleanup, minimizer integration, command fixups, and cross-platform process references.
 - **Consumers** (`packages/coding-agent`, `packages/tui`): higher-level session policy, output artifact/minimizer handling, render policy, and UI key handling.
 
 ## Shell subsystem (`shell`)
 
 ### API model
 
-Two execution modes are exposed:
+Shell execution modes:
 
 1. **One-shot** via `executeShell(options, onChunk?)`.
 2. **Persistent session** via `new Shell(options?)` then `shell.run(...)` repeatedly.
 
-Both stream output through a threadsafe callback and return `{ exitCode?, cancelled, timedOut, minimized? }`.
+Both stream merged stdout/stderr text through a threadsafe callback and return `{ exitCode?, cancelled, timedOut, minimized? }`.
+
+Related synchronous helper:
+
+- `applyBashFixups(command)` strips safe trailing `| head`/`| tail` pipeline caps and redundant trailing `2>&1` according to `pi_shell::fixup` rules. It returns `{ command, stripped }` and does not execute anything.
 
 `ShellOptions` supports `sessionEnv`, `snapshotPath`, and optional output `minimizer`. `ShellExecuteOptions` supports command-scoped `env`, session-level `sessionEnv`, `snapshotPath`, timeout/signal, and optional minimizer. `ShellRunOptions` supports command, cwd, command-scoped env, timeout, and signal.
 
@@ -35,19 +43,19 @@ Both stream output through a threadsafe callback and return `{ exitCode?, cancel
 
 Rust creates `brush_core::Shell` with:
 
-- non-interactive, non-login mode,
-- `no_profile` and `no_rc`,
-- `do_not_inherit_env: true`,
+- inherited environment disabled (`do_not_inherit_env: true`), followed by explicit environment reconstruction from host env,
+- profile and rc loading skipped,
 - bash-mode builtins, with `exec` and `suspend` disabled,
-- explicit environment reconstruction from host env,
-- skip-list for shell-sensitive vars (`PS1`, `PWD`, `SHLVL`, bash function exports, etc.).
+- native `sleep` and `timeout` builtins registered,
+- skip-list for shell-sensitive vars (`PS1`, `PWD`, `SHLVL`, bash function exports, etc.),
+- a non-exported `env="$env"` fallback so PowerShell-style `$env:NAME` survives brush parameter expansion unless the user shadows `env`.
 
 Session env behavior:
 
 - `ShellOptions.sessionEnv` / one-shot `sessionEnv` is applied at session creation.
 - `ShellRunOptions.env` / one-shot `env` is command-scoped (`EnvironmentScope::Command`) and popped after the command.
 - `PATH` is merged specially on Windows with case-insensitive dedupe.
-- Windows-only path enrichment (`shell/windows.rs`) appends discovered Git-for-Windows paths when present and not already included.
+- Windows-only path enrichment (`pi-shell/src/windows.rs`) appends discovered Git-for-Windows paths when present and not already included.
 - `snapshotPath`, when present, is sourced during session creation with stdout/stderr/stdin wired to null files.
 
 ### Runtime lifecycle and state transitions
@@ -58,7 +66,7 @@ Persistent shell (`Shell.run`) uses this state machine:
 - **Running**: first `run()` lazily creates a session, stores an abort token, executes command.
 - **Completed + keepalive**: if execution control flow is normal, abort state is cleared and session is reused.
 - **Completed + teardown**: if control flow is loop/script/shell-exit related, session is dropped.
-- **Cancelled/Timed out**: run task is cancelled, grace wait is 2 seconds, task may be force-aborted, session is dropped if lock can be acquired.
+- **Cancelled/Timed out**: Tokio cancellation token is triggered, descendants started after the baseline snapshot receive termination waves, a 2-second graceful wait is allowed, the task may be aborted, and the persistent session is dropped if the lock can be acquired.
 - **Error**: session is dropped.
 
 One-shot shell (`executeShell`) always creates and drops a fresh session per call.
@@ -67,14 +75,15 @@ One-shot shell (`executeShell`) always creates and drops a fresh session per cal
 
 - Stdout/stderr are routed into a shared pipe and read concurrently.
 - Reader decodes UTF-8 incrementally; invalid byte sequences emit `U+FFFD` replacement chunks.
-- The command runs in a new process group policy.
+- The command runs with `ProcessGroupPolicy::NewProcessGroup`.
+- After the foreground command completes, the reader drains until EOF, 250ms of idle output, or 2s maximum; reader shutdown then gets a 250ms timeout.
 - Optional minimizer configuration can capture and rewrite output. When minimization occurs, the result includes `minimized` with filter name, replacement text, original text, and byte counts.
 - Consumers are responsible for persisting or displaying minimizer artifacts; the native result only carries the data.
 
 ### Cancellation, timeout, and abort
 
-- `CancelToken` is constructed from `timeoutMs` and optional `AbortSignal`.
-- On cancellation/timeout, shell cancellation token is triggered, then task gets a 2-second graceful window before forced abort.
+- `CancelToken` is constructed from `timeoutMs` and optional `AbortSignal`, then converted into the shared `pi_shell::cancel::CancelToken`.
+- On cancellation/timeout, shell cancellation token is triggered, descendant cleanup runs, then the task gets a 2-second graceful window before forced abort.
 - Structured result flags are used:
   - timeout -> `exitCode` omitted, `timedOut: true`.
   - abort signal / `Shell.abort()` -> `exitCode` omitted, `cancelled: true`.
@@ -107,7 +116,7 @@ Common surfaced errors include:
 - `resize(cols, rows)`
 - `kill()`
 
-`PtyStartOptions` supports `command`, optional `cwd`, optional `env`, `timeoutMs`, `signal`, `cols`, and `rows`.
+`PtyStartOptions` supports `command`, optional `cwd`, optional `env`, `timeoutMs`, `signal`, `cols`, `rows`, and optional `shell`. The default shell is `sh`.
 
 ### Runtime lifecycle and state transitions
 
@@ -126,11 +135,15 @@ Concurrency guard:
 ### Spawn/attach/write/read/terminate patterns
 
 - PTY opened via `portable_pty::native_pty_system().openpty(...)`.
-- Command currently runs as `sh -lc <command>` with optional `cwd` and env overrides.
-- Default size is `120x40`; dimensions are clamped (`cols 20..400`, `rows 5..200`).
+- On Windows, `openpty()` is run on a helper thread with a 5s startup timeout; timeout rejects with `PTY creation timed out (5s). ConPTY may be unavailable on this system.`
+- Command runs through the configured shell:
+  - `cmd.exe`/`cmd` gets `/c`,
+  - `powershell`/`pwsh` gets `-Command`,
+  - other shells get `-lc`.
+- Default size is `120x40`; dimensions are clamped (`cols 20..400`, `rows 5..200`) on start and resize.
 - `write()` sends raw bytes to PTY stdin.
 - `resize()` sends a control message and clamps dimensions again.
-- `kill()` sends a control message that marks the run cancelled and terminates the child/process tree.
+- `kill()` sends a control message that marks the run cancelled and terminates PTY process targets.
 
 Output path:
 
@@ -140,8 +153,9 @@ Output path:
 
 Termination path:
 
-- Unix: terminate process group when known, terminate child tree, call child kill, then repeat with SIGKILL.
-- Non-Unix: terminate child tree, call child kill, then repeat with SIGKILL-equivalent process-tree helper.
+- `terminate_pty_processes` targets the PTY process group when available and the child pid when available.
+- It sends the platform `TERM_SIGNAL`, calls `child.kill()`, then sends the platform `KILL_SIGNAL`.
+- On Windows, ConPTY input is closed before dropping the master; master drop is offloaded to a background thread and waited for up to 2s to avoid deadlock.
 
 ### Cancellation and timeout semantics
 
@@ -149,12 +163,14 @@ Termination path:
 - Loop calls `ct.heartbeat()` periodically with a 16ms maximum wait cadence.
 - Timeout classification is based on the heartbeat error string containing `Timeout`.
 - Cancellation/kill starts a 300ms post-cancel drain window; normal child exit starts a 300ms post-exit drain window.
+- Final reader drain is 50ms on non-Windows and 500ms on Windows.
 
 ### Failure behavior
 
 Error surfaces include:
 
 - PTY allocation/open failure,
+- Windows PTY startup timeout,
 - PTY spawn failure,
 - writer/reader acquisition failure,
 - child status/wait failures,
@@ -165,38 +181,27 @@ Control call failures when not running:
 
 - `write/resize/kill` return `PTY session is not running`.
 
-## Process-tree subsystem (`ps`)
+## Process subsystem (`ps`)
 
 ### API model
 
-- `killTree(pid, signal) -> number`
-- `listDescendants(pid) -> number[]`
+Current JS surface is the `Process` class:
 
-### Platform-specific implementation
+- `Process.fromPid(pid) -> Process | null`
+- `Process.fromPath(path) -> Process[]`
+- getters: `pid`, `ppid`
+- methods: `args()`, `killTree(signal?)`, `terminate(options?)`, `waitForExit(options?)`, `groupId()`, `children()`, `status()`
 
-- **Linux**: recursively reads `/proc/<pid>/task/<pid>/children`.
-- **macOS**: uses `libproc` `proc_listchildpids`.
-- **Windows**: snapshots process table with `CreateToolhelp32Snapshot`, builds parent->children map, terminates with `OpenProcess(PROCESS_TERMINATE)` + `TerminateProcess`.
+`ProcessTerminateOptions` supports `{ group?, gracefulMs?, timeoutMs?, signal? }`. `ProcessWaitOptions` supports `{ timeoutMs?, signal? }`.
 
-### Kill-tree behavior
+### Behavior
 
-- Descendants are collected recursively.
-- Kill order is bottom-up (deepest descendants first).
-- Root pid is killed last.
-- Return value is count of successful terminations.
+- `killTree(signal?)` sends the requested signal to the process and descendants, children first; on Windows the signal argument is ignored and processes are terminated via `TerminateProcess`.
+- `terminate(options?)` is async. By default it uses a 1000ms graceful phase and a 5000ms post-hard-kill wait. Passing `gracefulMs < 0` skips the graceful phase.
+- `waitForExit(options?)` resolves `true` when the process exits and `false` on timeout.
+- `status()` returns `"running"` or `"exited"`.
 
-Signal behavior:
-
-- POSIX: provided `signal` is passed to `kill`.
-- Windows: `signal` is ignored; termination is unconditional process terminate.
-
-### Failure behavior
-
-This module is intentionally non-throwing at API surface for ordinary process misses:
-
-- missing/inaccessible process tree branches are skipped,
-- per-pid kill failures are counted as unsuccessful,
-- lookup miss typically yields `[]` from `listDescendants` and `0` from `killTree`.
+The platform-specific implementation lives in `pi_shell::process`; `crates/pi-natives/src/ps.rs` is a N-API shim plus re-exports used by PTY termination.
 
 ## Key parsing subsystem (`keys`)
 
@@ -239,19 +244,25 @@ Layout behavior:
 
 ### Shell + PTY + Process
 
-| JS API                            | Rust N-API export                      | Notes                                     |
-| --------------------------------- | -------------------------------------- | ----------------------------------------- |
-| `executeShell(options, onChunk?)` | `executeShell` (`execute_shell`)       | One-shot shell execution                  |
-| `new Shell(options?)`             | `Shell` class                          | Persistent shell session                  |
-| `shell.run(options, onChunk?)`    | `Shell::run`                           | Reuses session on keepalive control flow  |
-| `shell.abort()`                   | `Shell::abort`                         | Aborts active run for that shell instance |
-| `new PtySession()`                | `PtySession` class                     | Stateful PTY session                      |
-| `pty.start(options, onChunk?)`    | `PtySession::start`                    | Interactive PTY run                       |
-| `pty.write(data)`                 | `PtySession::write`                    | Raw stdin passthrough                     |
-| `pty.resize(cols, rows)`          | `PtySession::resize`                   | Clamped terminal dimensions               |
-| `pty.kill()`                      | `PtySession::kill`                     | Force-kills active PTY child              |
-| `killTree(pid, signal)`           | `killTree` (`kill_tree`)               | Children-first process tree termination   |
-| `listDescendants(pid)`            | `listDescendants` (`list_descendants`) | Recursive descendants listing             |
+| JS API                            | Rust N-API export                       | Notes                                     |
+| --------------------------------- | --------------------------------------- | ----------------------------------------- |
+| `executeShell(options, onChunk?)` | `executeShell` (`execute_shell`)        | One-shot shell execution                  |
+| `new Shell(options?)`             | `Shell` class                           | Persistent shell session                  |
+| `shell.run(options, onChunk?)`    | `Shell::run`                            | Reuses session on keepalive control flow  |
+| `shell.abort()`                   | `Shell::abort`                          | Aborts active run for that shell instance |
+| `applyBashFixups(command)`        | `applyBashFixups` (`apply_bash_fixups`) | Synchronous command rewrite helper        |
+| `new PtySession()`                | `PtySession` class                      | Stateful PTY session                      |
+| `pty.start(options, onChunk?)`    | `PtySession::start`                     | Interactive PTY run                       |
+| `pty.write(data)`                 | `PtySession::write`                     | Raw stdin passthrough                     |
+| `pty.resize(cols, rows)`          | `PtySession::resize`                    | Clamped terminal dimensions               |
+| `pty.kill()`                      | `PtySession::kill`                      | Terminates active PTY child/targets       |
+| `Process.fromPid(pid)`            | `Process::from_pid`                     | Stable process reference lookup           |
+| `Process.fromPath(path)`          | `Process::from_path`                    | Executable-path process lookup            |
+| `process.killTree(signal?)`       | `Process::kill_tree`                    | Children-first process tree termination   |
+| `process.terminate(options?)`     | `Process::terminate`                    | Graceful then hard process termination    |
+| `process.waitForExit(options?)`   | `Process::wait_for_exit`                | Async exit wait                           |
+| `process.children()`              | `Process::children`                     | Direct children as `Process[]`            |
+| `process.status()`                | `Process::status`                       | `running` / `exited`                      |
 
 ### Keys
 

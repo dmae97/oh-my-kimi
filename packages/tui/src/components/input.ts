@@ -357,8 +357,21 @@ export class Input implements Component, Focusable {
 		this.#lastAction = null;
 		this.#pushUndo();
 
-		// Clean the pasted text - remove newlines and carriage returns, then normalize tabs.
-		const cleanText = replaceTabs(pastedText.replace(/[\r\n]/g, ""));
+		// Clean the pasted text — remove newlines and carriage returns, normalize
+		// tabs, AND normalize Unicode to NFC.
+		//
+		// NFC normalization rationale: macOS Finder drag-drops file paths in NFD
+		// (Conjoining Jamo, U+1100..U+11FF). `Bun.stringWidth` counts each
+		// conjoining jamo as a separate cell — a Korean syllable like `화` is
+		// 1 char and 2 cells in NFC, but 2 chars and 3 cells in NFD (ᄒ=2 cells
+		// + ᅪ=1 cell). The terminal renders the NFD sequence as a single
+		// combined syllable (2 cells visible), so the width mismatch shows up
+		// as cursor drift past the visible filename — N×~1.5 cells for a path
+		// with N Korean syllables. NFC normalization at paste time stores the
+		// value in the same form everything else in the codebase assumes.
+		const cleanText = replaceTabs(pastedText.replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, "")).normalize(
+			"NFC",
+		);
 
 		// Insert at cursor position
 		this.#value = this.#value.slice(0, this.#cursor) + cleanText + this.#value.slice(this.#cursor);

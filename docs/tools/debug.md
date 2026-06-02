@@ -44,8 +44,8 @@
 | `port` | `number` | No | Remote attach port. If no adapter is forced, attach prefers `debugpy` when `port` is present. |
 | `host` | `string` | No | Remote attach host for `attach`. |
 | `levels` | `number` | No | Max stack frames for `stack_trace`. |
-| `memory_reference` | `string` | No | Memory reference/address for `disassemble`, `read_memory`, `write_memory`. `disassemble` also accepts it via `instruction_reference` fallback logic in `resolveDisassemblyReference()`. |
-| `instruction_reference` | `string` | No | Instruction breakpoint reference; required for instruction breakpoint actions. |
+| `memory_reference` | `string` | No | Memory reference/address for `disassemble`, `read_memory`, `write_memory`. `disassemble` uses this when provided; otherwise it falls back to the current stopped location's instruction-pointer reference if the adapter supplied one. |
+| `instruction_reference` | `string` | No | Instruction breakpoint reference; required for instruction breakpoint actions. Not used by `disassemble`. |
 | `instruction_count` | `number` | No | Required for `disassemble`. |
 | `instruction_offset` | `number` | No | Instruction offset for `disassemble`. |
 | `count` | `number` | No | Byte count for `read_memory`. Required there. |
@@ -70,7 +70,7 @@
 - `set_data_breakpoint` / `remove_data_breakpoint`: `data_id`
 - `evaluate`: `expression`
 - `variables`: `variable_ref` or `scope_id`
-- `disassemble`: capability `supportsDisassembleRequest`, plus `instruction_count`
+- `disassemble`: capability `supportsDisassembleRequest`, plus `instruction_count`, and either `memory_reference` or a current stopped location with `instructionPointerReference`
 - `read_memory`: capability `supportsReadMemoryRequest`, plus `memory_reference` and `count`
 - `write_memory`: capability `supportsWriteMemoryRequest`, plus `memory_reference` and `data`
 - `modules`: capability `supportsModulesRequest`
@@ -108,6 +108,7 @@ The agent tool returns a standard `toolResult()` payload from `packages/coding-a
 Streaming/UI behavior:
 - The tool renderer merges call and result (`mergeCallAndResult: true`) and renders inline.
 - `debug.ts` itself does not emit progress updates through `_onUpdate`; result delivery is single-shot.
+- Approval is action-sensitive: read-only actions (`output`, `threads`, `stack_trace`, `scopes`, `variables`, `disassemble`, `read_memory`, `loaded_sources`, `modules`, `sessions`) request read approval; all other actions request exec approval.
 - The interactive selector is UI-driven instead of model-driven. It swaps TUI components, appends status lines to the chat pane, opens files in external viewers, or writes archives/temp files.
 
 Side-channel artifacts outside the model tool result:
@@ -168,7 +169,7 @@ Side-channel artifacts outside the model tool result:
   - `threads` — fetches current threads.
   - `scopes` — frame scopes for an explicit `frame_id` or the current stopped frame.
   - `variables` — variables for `variable_ref` or `scope_id`.
-  - `disassemble` — require `supportsDisassembleRequest`; disassembles around a memory reference.
+  - `disassemble` — require `supportsDisassembleRequest`; disassembles around `memory_reference`, or around the current stopped instruction pointer when no memory reference is supplied.
   - `read_memory` — require `supportsReadMemoryRequest`; returns address, base64 data, unreadable-byte count.
   - `write_memory` — require `supportsWriteMemoryRequest`; writes base64 data and reports bytes written.
   - `modules` — require `supportsModulesRequest`; optional pagination via `start_module` / `module_count`.
@@ -249,6 +250,8 @@ Side-channel artifacts outside the model tool result:
   - `attach requires pid or port`
   - `set_breakpoint requires file+line or function`
   - `variables requires variable_ref or scope_id`
+  - `instruction_count is required for disassemble`
+  - `disassemble requires memory_reference unless the current stop location has an instruction pointer reference`
   - `memory_reference is required for read_memory`
   - `count is required for read_memory`
   - `data is required for write_memory`
@@ -280,7 +283,7 @@ Side-channel artifacts outside the model tool result:
 - Session summaries expose `needsConfigurationDone`; this is derived from adapter capabilities and whether `configurationDone` has been sent.
 - Source breakpoint file paths are normalized with `path.resolve()` before caching and sending to the adapter.
 - `evaluate` defaults to `repl`, so the tool can forward raw debugger commands when the adapter supports them.
-- `disassemble` resolves its target from `memory_reference` first, then `instruction_reference`; it throws if neither is present.
+- `disassemble` resolves its target from `memory_reference` first, then the current stopped session's `instructionPointerReference`; it throws if neither is present.
 - `RawSseDebugBuffer.recordEvent()` increments `totalEvents` before bounded retention. A snapshot can therefore show fewer retained records than total observed events.
 - Raw SSE buffer listener failures are swallowed so viewer bugs do not break capture.
 - `createDebugLogSource()` walks daily log files newest-first, but `loadOlderLogs()` reverses each requested slice before concatenation so older chunks prepend in chronological order.

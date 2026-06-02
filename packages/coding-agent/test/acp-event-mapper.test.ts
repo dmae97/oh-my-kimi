@@ -188,6 +188,128 @@ describe("ACP event mapper", () => {
 		expect(doneUpdates).toEqual([]);
 	});
 
+	it("preserves command text when a new command tool is started", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "tc-command-start",
+				toolName: "bash",
+				args: { command: "npm run check" },
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			sessionUpdate: string;
+			content?: Array<{ type: string; content?: { type: string; text?: string } }>;
+		};
+		expect(update.sessionUpdate).toBe("tool_call");
+		expect(update.content).toContainEqual({ type: "content", content: { type: "text", text: "$ npm run check" } });
+	});
+
+	it("uses command text for a new command tool even when intent is generic", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "tc-command-start-generic-intent",
+				toolName: "bash",
+				args: { command: "echo hi" },
+				intent: "Running command",
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			title: string;
+			content?: Array<{ type: string; content?: { type: string; text?: string } }>;
+		};
+		expect(update.title).toBe("$ echo hi");
+		expect(update.content).toContainEqual({ type: "content", content: { type: "text", text: "$ echo hi" } });
+	});
+
+	it("preserves eval source when a new eval tool is started", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "tc-eval-start",
+				toolName: "eval",
+				args: { cells: [{ language: "js", title: "sum", code: "return 1 + 1;" }] },
+				intent: "sum",
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			sessionUpdate: string;
+			title: string;
+			kind?: string;
+			status?: string;
+			rawInput?: unknown;
+			content?: Array<{ type: string; content?: { type: string; text?: string } }>;
+		};
+		expect(update.sessionUpdate).toBe("tool_call");
+		expect(update.title).toBe("[js] sum\nreturn 1 + 1;");
+		expect(update.kind).toBe("execute");
+		expect(update.status).toBe("pending");
+		expect(update.rawInput).toEqual({ cells: [{ language: "js", title: "sum", code: "return 1 + 1;" }] });
+		expect(update.content).toContainEqual({
+			type: "content",
+			content: { type: "text", text: "[js] sum\nreturn 1 + 1;" },
+		});
+	});
+
+	it("builds eval source content from valid cells only", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "tc-eval-mixed-cells",
+				toolName: "eval",
+				args: {
+					cells: [null, {}, { code: "" }, { code: "x" }, { language: "py", code: "y" }],
+				},
+				intent: "evaluating",
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			title: string;
+			content?: Array<{ type: string; content?: { type: string; text?: string } }>;
+		};
+		expect(update.title).toBe("[?]\nx\n[py]\ny");
+		expect(update.content).toEqual([{ type: "content", content: { type: "text", text: "[?]\nx\n[py]\ny" } }]);
+	});
+
+	it("limits eval source before emitting visible tool-call text", () => {
+		const source = "x".repeat(4_100);
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "tc-eval-long-source",
+				toolName: "eval",
+				args: { cells: [{ language: "js", code: source }] },
+			} as AgentSessionEvent,
+			"session-1",
+		);
+
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			title: string;
+			content?: Array<{ type: string; content?: { type: string; text?: string } }>;
+		};
+		expect(update.title).toHaveLength(4_000);
+		expect(update.title.endsWith("…")).toBe(true);
+		expect(update.content).toEqual([{ type: "content", content: { type: "text", text: update.title } }]);
+	});
 	it("emits a diff ToolCallContent for each per-file edit result", () => {
 		const updates = mapAgentSessionEventToAcpSessionUpdates(
 			{
@@ -547,7 +669,7 @@ describe("ACP event mapper", () => {
 		};
 		expect(update.sessionUpdate).toBe("tool_call");
 		expect(update.toolCallId).toBe("toolu_bash_1");
-		expect(update.title).toBe("bash: npm run check");
+		expect(update.title).toBe("$ npm run check");
 		expect(update.kind).toBe("execute");
 		expect(update.status).toBe("pending");
 		expect(update.rawInput).toEqual({ command: "npm run check", cwd: "/repo" });
@@ -676,7 +798,7 @@ describe("ACP event mapper", () => {
 		expect(update).toMatchObject({
 			sessionUpdate: "tool_call",
 			toolCallId: "toolu_replay_1",
-			title: "bash: npm test",
+			title: "$ npm test",
 			kind: "execute",
 			status: "completed",
 			rawInput: { command: "npm test", cwd: "/repo" },
@@ -741,7 +863,7 @@ describe("ACP event mapper", () => {
 		expect(replayArgs.args).toBe(rawArgs);
 		expectAcpStructure(zSessionNotification, { sessionId: "session-1", update });
 		expect(update).toMatchObject({
-			title: "bash: bun test",
+			title: "$ bun test",
 			status: "completed",
 			rawInput: rawArgs,
 			content: [{ type: "content", content: { type: "text", text: "$ bun test" } }],

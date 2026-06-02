@@ -21,8 +21,8 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
-import { refreshAntigravityToken } from "../utils/oauth/google-antigravity";
-import { refreshGoogleCloudToken } from "../utils/oauth/google-gemini-cli";
+// Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
+// the stream provider trusts the access token threaded through `options.apiKey`.
 import { normalizeSchemaForCCA } from "../utils/schema";
 import { ANTIGRAVITY_SYSTEM_INSTRUCTION, getAntigravityUserAgent, getGeminiCliHeaders } from "./google-gemini-headers";
 import type { Content, FunctionCallingConfigMode, ThinkingConfig } from "./google-shared";
@@ -47,7 +47,12 @@ import {
 export type { GoogleThinkingLevel };
 
 export interface GoogleGeminiCliOptions extends StreamOptions {
-	toolChoice?: "auto" | "none" | "any";
+	/**
+	 * Tool selection mode. String forms map directly to Gemini
+	 * `FunctionCallingConfigMode`. The object form forces a single named tool —
+	 * `mode: "ANY"` is wire-required when `allowedFunctionNames` is set.
+	 */
+	toolChoice?: "auto" | "none" | "any" | { mode: "ANY"; allowedFunctionNames: [string, ...string[]] };
 	/**
 	 * Thinking/reasoning configuration.
 	 * - Gemini 2.x models: use `budgetTokens` to set the thinking budget
@@ -191,38 +196,6 @@ export function shouldRefreshGeminiCliCredentials(
 	return nowMs + skewMs >= expiresAt;
 }
 
-async function refreshGeminiCliCredentialsIfNeeded(
-	credentials: ParsedGeminiCliCredentials,
-	isAntigravity: boolean,
-): Promise<ParsedGeminiCliCredentials> {
-	if (!credentials.refreshToken || !shouldRefreshGeminiCliCredentials(credentials.expiresAt, isAntigravity)) {
-		return credentials;
-	}
-
-	try {
-		const refreshed = isAntigravity
-			? await refreshAntigravityToken(credentials.refreshToken, credentials.projectId)
-			: await refreshGoogleCloudToken(credentials.refreshToken, credentials.projectId);
-		return {
-			accessToken: refreshed.access,
-			projectId: credentials.projectId,
-			refreshToken: refreshed.refresh,
-			expiresAt: refreshed.expires,
-		};
-	} catch (error) {
-		const reason = error instanceof Error ? error.message : String(error);
-		// Permanent auth failure (revoked/invalid token) — re-authentication required.
-		// Google returns 400 invalid_grant when a token is revoked or expired server-side.
-		if (/invalid_grant|invalid_token|token.*revoked|account.*disabled/i.test(reason)) {
-			throw new Error(`OAuth token has been revoked or invalidated. Use /login to re-authenticate. (${reason})`);
-		}
-		// Transient failure (network, 5xx) — fall back to existing token if not yet expired.
-		if (credentials.expiresAt !== undefined && Date.now() >= credentials.expiresAt) {
-			throw new Error(`OAuth token refresh failed before request: ${reason}`);
-		}
-		return credentials;
-	}
-}
 interface CloudCodeAssistRequest {
 	project: string;
 	model: string;
@@ -244,6 +217,7 @@ interface CloudCodeAssistRequest {
 		toolConfig?: {
 			functionCallingConfig: {
 				mode: FunctionCallingConfigMode;
+				allowedFunctionNames?: string[];
 			};
 		};
 	};
@@ -321,8 +295,21 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 
 			const isAntigravity = model.provider === "google-antigravity";
 			const parsedCredentials = parseGeminiCliCredentials(apiKeyRaw);
-			const activeCredentials = await refreshGeminiCliCredentialsIfNeeded(parsedCredentials, isAntigravity);
-			const { accessToken, projectId } = activeCredentials;
+			// AuthStorage already refreshed credentials before threading them
+			// here (see {@link OAUTH_REFRESH_SKEW_MS}). If the credential lands
+			// expired we bail rather than POSTing a stale token; the next call
+			// — driven by AuthStorage's invalidate+retry path — will carry a
+			// fresh credential.
+			if (
+				shouldRefreshGeminiCliCredentials(parsedCredentials.expiresAt, isAntigravity) &&
+				parsedCredentials.expiresAt !== undefined &&
+				Date.now() >= parsedCredentials.expiresAt
+			) {
+				throw new Error(
+					"OAuth token expired before request — please retry; AuthStorage will refresh on the next attempt.",
+				);
+			}
+			const { accessToken, projectId } = parsedCredentials;
 
 			const baseUrl = model.baseUrl?.trim();
 			const endpoints = baseUrl ? [baseUrl] : isAntigravity ? ANTIGRAVITY_ENDPOINT_FALLBACKS : [DEFAULT_ENDPOINT];
@@ -764,11 +751,19 @@ export function buildRequest(
 		const convertedTools = convertTools(context.tools, model);
 		request.tools = isAntigravity ? normalizeAntigravityTools(convertedTools) : convertedTools;
 		if (options.toolChoice) {
-			request.toolConfig = {
-				functionCallingConfig: {
-					mode: mapToolChoice(options.toolChoice),
-				},
-			};
+			const choice = options.toolChoice;
+			if (typeof choice === "string") {
+				request.toolConfig = {
+					functionCallingConfig: { mode: mapToolChoice(choice) },
+				};
+			} else {
+				request.toolConfig = {
+					functionCallingConfig: {
+						mode: "ANY",
+						allowedFunctionNames: [...choice.allowedFunctionNames],
+					},
+				};
+			}
 		}
 	}
 

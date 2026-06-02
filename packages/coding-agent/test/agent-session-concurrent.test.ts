@@ -268,6 +268,38 @@ describe("AgentSession concurrent prompt guard", () => {
 		// Second prompt should work
 		await expect(session.prompt("Second message")).resolves.toBeUndefined();
 	});
+	it("queues extension follow-up user messages on an idle session without starting a turn", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+			},
+			streamFn: mock.stream,
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-idle-followup.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models-idle-followup.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+		});
+
+		await session.sendUserMessage("hello from session_start", { deliverAs: "followUp" });
+
+		expect(mock.calls).toHaveLength(0);
+		expect(session.queuedMessageCount).toBe(1);
+	});
 
 	// Regression: a subscriber that fires the next prompt synchronously from the
 	// agent_end listener (the shape every wire transport ends up in — rpc-mode

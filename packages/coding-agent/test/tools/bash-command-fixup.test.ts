@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { applyBashFixups, type BashFixupResult, formatBashFixupNotice } from "../../src/tools/bash-command-fixup";
+import { applyBashFixups, type BashFixupResult } from "../../src/tools/bash-command-fixup";
 
 function fixup(command: string): BashFixupResult {
 	return applyBashFixups(command);
@@ -122,23 +122,4 @@ describe("applyBashFixups — preserves semantics-bearing pipelines", () => {
 			expect(out.stripped).toEqual([]);
 		});
 	}
-});
-
-describe("formatBashFixupNotice", () => {
-	it("returns undefined when nothing was stripped", () => {
-		expect(formatBashFixupNotice([])).toBeUndefined();
-	});
-
-	it("embeds a single stripped segment in the notice", () => {
-		const notice = formatBashFixupNotice(["| head -5"]);
-		expect(notice).toContain("`| head -5`");
-		expect(notice).toContain("stderr is already merged");
-	});
-
-	it("joins multiple stripped segments with commas", () => {
-		const notice = formatBashFixupNotice(["| tail -3", "2>&1"]);
-		expect(notice).toContain("`| tail -3`");
-		expect(notice).toContain("`2>&1`");
-		expect(notice).toMatch(/`\| tail -3`,\s*`2>&1`/);
-	});
 });

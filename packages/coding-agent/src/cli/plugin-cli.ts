@@ -348,10 +348,12 @@ async function handleInstall(
 	flags: { json?: boolean; force?: boolean; dryRun?: boolean; scope?: "user" | "project" },
 ): Promise<void> {
 	if (packages.length === 0) {
-		console.error(chalk.red(`Usage: ${APP_NAME} plugin install <package[@version]>[features] ...`));
+		console.error(chalk.red(`Usage: ${APP_NAME} plugin install <source>[features] ...`));
 		console.error(chalk.dim("Examples:"));
 		console.error(chalk.dim(`  ${APP_NAME} plugin install @oh-my-pi/exa`));
 		console.error(chalk.dim(`  ${APP_NAME} plugin install name@marketplace`));
+		console.error(chalk.dim(`  ${APP_NAME} plugin install github:user/repo`));
+		console.error(chalk.dim(`  ${APP_NAME} plugin install https://github.com/user/repo#v1.0`));
 		process.exit(1);
 	}
 
@@ -898,7 +900,7 @@ export function printPluginHelp(): void {
 	console.log(`${chalk.bold(`${APP_NAME} plugin`)} - Plugin lifecycle management
 
 ${chalk.bold("Commands:")}
-  install <pkg[@ver]>[features]  Install plugins from npm
+  install <source>[features]     Install plugins from npm, GitHub, or git URL
   uninstall <pkg>                Remove plugins
   list                           Show installed plugins
   link <path>                    Link local plugin for development
@@ -915,6 +917,12 @@ ${chalk.bold("Feature Syntax:")}
   pkg[feat1,feat2]   Install with specific features
   pkg[*]             Install with all features
   pkg[]              Install with no optional features
+
+${chalk.bold("Sources:")}
+  pkg, pkg@1.2.3                  npm package (optionally pinned)
+  github:user/repo[#ref]          GitHub shorthand (also gitlab:, bitbucket:, codeberg:, sourcehut:)
+  https://github.com/user/repo    Full git URL (https, ssh, or git protocol)
+  name@marketplace                Marketplace plugin (see marketplace command)
 
 ${chalk.bold("Config Subcommands:")}
   config list <pkg>              List all settings
@@ -938,5 +946,6 @@ ${chalk.bold("Examples:")}
   ${APP_NAME} plugin config set my-plugin apiKey sk-xxx
   ${APP_NAME} plugin doctor --fix
   ${APP_NAME} plugin install --scope project name@marketplace
+  ${APP_NAME} plugin install github:user/repo#v1.0
 `);
 }

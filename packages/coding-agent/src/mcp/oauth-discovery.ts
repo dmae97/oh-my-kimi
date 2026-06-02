@@ -17,22 +17,23 @@ export interface AuthDetectionResult {
 	authType?: "oauth" | "apikey" | "unknown";
 	oauth?: OAuthEndpoints;
 	authServerUrl?: string;
+	resourceMetadataUrl?: string;
 	message?: string;
 }
 
-function parseMcpAuthServerUrl(errorMessage: string): string | undefined {
+function parseMcpAuthServerUrl(errorMessage: string, serverUrl?: string): string | undefined {
 	const match = errorMessage.match(/Mcp-Auth-Server:\s*([^;\]\s]+)/i);
 	if (!match?.[1]) return undefined;
 
 	try {
-		return new URL(match[1]).toString();
+		return new URL(match[1], serverUrl).toString();
 	} catch {
 		return undefined;
 	}
 }
 
-export function extractMcpAuthServerUrl(error: Error): string | undefined {
-	return parseMcpAuthServerUrl(error.message);
+export function extractMcpAuthServerUrl(error: Error, serverUrl?: string): string | undefined {
+	return parseMcpAuthServerUrl(error.message, serverUrl);
 }
 
 /**
@@ -189,12 +190,15 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
  * Analyze an error to determine authentication requirements.
  * Returns structured info about what auth is needed.
  */
-export function analyzeAuthError(error: Error): AuthDetectionResult {
+export function analyzeAuthError(error: Error, serverUrl?: string): AuthDetectionResult {
 	if (!detectAuthError(error)) {
 		return { requiresAuth: false };
 	}
 
-	const authServerUrl = extractMcpAuthServerUrl(error);
+	const authServerUrl = extractMcpAuthServerUrl(error, serverUrl);
+	// Extract resource_metadata URL from challenge entries in error message
+	const resourceMetaMatch = error.message.match(/resource_metadata\s*=\s*"([^"]+)"/i);
+	const resourceMetadataUrl = resourceMetaMatch?.[1];
 
 	// Try to extract OAuth endpoints
 	const oauth = extractOAuthEndpoints(error);
@@ -205,6 +209,7 @@ export function analyzeAuthError(error: Error): AuthDetectionResult {
 			authType: "oauth",
 			oauth,
 			authServerUrl,
+			resourceMetadataUrl,
 			message: "Server requires OAuth authentication. Launching authorization flow...",
 		};
 	}
@@ -221,6 +226,7 @@ export function analyzeAuthError(error: Error): AuthDetectionResult {
 			requiresAuth: true,
 			authType: "apikey",
 			authServerUrl,
+			resourceMetadataUrl,
 			message: "Server requires API key authentication.",
 		};
 	}
@@ -230,6 +236,7 @@ export function analyzeAuthError(error: Error): AuthDetectionResult {
 		requiresAuth: true,
 		authType: "unknown",
 		authServerUrl,
+		resourceMetadataUrl,
 		message: "Server requires authentication but type could not be determined.",
 	};
 }
@@ -241,6 +248,7 @@ export function analyzeAuthError(error: Error): AuthDetectionResult {
 export async function discoverOAuthEndpoints(
 	serverUrl: string,
 	authServerUrl?: string,
+	resourceMetadataUrl?: string,
 ): Promise<OAuthEndpoints | null> {
 	const wellKnownPaths = [
 		"/.well-known/oauth-authorization-server",
@@ -250,8 +258,43 @@ export async function discoverOAuthEndpoints(
 		"/.mcp/auth",
 		"/authorize", // Some MCP servers expose OAuth config here
 	];
-	const urlsToQuery = [authServerUrl, serverUrl].filter((value): value is string => Boolean(value));
+	const urlsToQuery: string[] = [];
 	const visitedAuthServers = new Set<string>();
+
+	// Step 1: If a resource_metadata URL was provided, fetch it to discover auth servers.
+	// This follows the RFC 9728 chain: resource_metadata → authorization_servers.
+	if (resourceMetadataUrl && !visitedAuthServers.has(resourceMetadataUrl)) {
+		visitedAuthServers.add(resourceMetadataUrl);
+		try {
+			const metaResp = await fetch(resourceMetadataUrl, {
+				method: "GET",
+				headers: { Accept: "application/json" },
+				redirect: "follow",
+			});
+			if (metaResp.ok) {
+				const meta = (await metaResp.json()) as Record<string, unknown>;
+				const authServers = Array.isArray(meta.authorization_servers)
+					? meta.authorization_servers.filter((entry): entry is string => typeof entry === "string")
+					: [];
+				for (const s of authServers) {
+					if (!visitedAuthServers.has(s)) {
+						urlsToQuery.push(s);
+						visitedAuthServers.add(s);
+					}
+				}
+			}
+		} catch {
+			// Ignore errors, continue to try explicit URLs
+		}
+	}
+
+	// Step 2: Add explicit authServerUrl and serverUrl (deduped against visited)
+	for (const url of [authServerUrl, serverUrl].filter((v): v is string => Boolean(v))) {
+		if (!visitedAuthServers.has(url)) {
+			urlsToQuery.push(url);
+			visitedAuthServers.add(url);
+		}
+	}
 
 	const findEndpoints = (metadata: Record<string, unknown>): OAuthEndpoints | null => {
 		if (metadata.authorization_endpoint && metadata.token_endpoint) {
@@ -311,39 +354,84 @@ export async function discoverOAuthEndpoints(
 	};
 
 	for (const baseUrl of urlsToQuery) {
-		visitedAuthServers.add(baseUrl);
 		for (const path of wellKnownPaths) {
-			try {
-				const url = new URL(path, baseUrl);
-				const response = await fetch(url.toString(), {
-					method: "GET",
-					headers: { Accept: "application/json" },
-				});
+			// Try each well-known path at both the absolute origin and relative
+			const urlsToTry = buildWellKnownUrls(path, baseUrl);
+			for (const url of urlsToTry) {
+				try {
+					const response = await fetch(url.toString(), {
+						method: "GET",
+						headers: { Accept: "application/json" },
+						redirect: "follow",
+					});
 
-				if (response.ok) {
-					const metadata = (await response.json()) as Record<string, unknown>;
-					const endpoints = findEndpoints(metadata);
-					if (endpoints) return endpoints;
+					if (response.ok) {
+						const metadata = (await response.json()) as Record<string, unknown>;
+						const endpoints = findEndpoints(metadata);
+						if (endpoints) return endpoints;
 
-					if (path === "/.well-known/oauth-protected-resource") {
-						const authServers = Array.isArray(metadata.authorization_servers)
-							? metadata.authorization_servers.filter((entry): entry is string => typeof entry === "string")
-							: [];
+						if (path === "/.well-known/oauth-protected-resource") {
+							const authServers = Array.isArray(metadata.authorization_servers)
+								? metadata.authorization_servers.filter((entry): entry is string => typeof entry === "string")
+								: [];
 
-						for (const discoveredAuthServer of authServers) {
-							if (visitedAuthServers.has(discoveredAuthServer)) {
-								continue;
+							for (const discoveredAuthServer of authServers) {
+								if (visitedAuthServers.has(discoveredAuthServer)) {
+									continue;
+								}
+								const discovered = await discoverOAuthEndpoints(serverUrl, discoveredAuthServer);
+								if (discovered) return discovered;
 							}
-							const discovered = await discoverOAuthEndpoints(serverUrl, discoveredAuthServer);
-							if (discovered) return discovered;
 						}
 					}
+				} catch {
+					// Ignore errors, try next path
 				}
-			} catch {
-				// Ignore errors, try next path
 			}
 		}
 	}
 
 	return null;
+}
+
+function buildWellKnownUrls(wellKnownPath: string, baseUrl: string): URL[] {
+	let parsed: URL;
+	try {
+		parsed = new URL(baseUrl);
+	} catch {
+		return [];
+	}
+
+	const absUrl = new URL(wellKnownPath, parsed);
+	if (!wellKnownPath.startsWith("/")) return [absUrl];
+
+	const normalizedPath = parsed.pathname.replace(/\/$/, "");
+	const lastSlash = normalizedPath.lastIndexOf("/");
+	// Bare origin (no path beyond "/") — only the origin-root candidate applies.
+	if (lastSlash < 0) return [absUrl];
+
+	// Path-prefixed well-known (common for gateways with sub-path routing).
+	// Multi-segment paths drop the trailing segment (typically the MCP endpoint);
+	// single-segment paths (lastSlash === 0) are themselves the gateway prefix.
+	const prefixPath = lastSlash === 0 ? normalizedPath : normalizedPath.slice(0, lastSlash);
+	const relUrl = new URL(wellKnownPath.slice(1), `${parsed.origin}${prefixPath}/`);
+
+	const candidates: URL[] = [absUrl];
+	const seen = new Set<string>([absUrl.href]);
+	const push = (u: URL): void => {
+		if (!seen.has(u.href)) {
+			candidates.push(u);
+			seen.add(u.href);
+		}
+	};
+	push(relUrl);
+
+	// RFC 8414 §3.1 path-ful issuer form: /.well-known/<suffix>/<issuer-path>.
+	// Only meaningful for well-known metadata documents.
+	if (wellKnownPath.startsWith("/.well-known/")) {
+		const pathfulUrl = new URL(`${wellKnownPath}${normalizedPath}`, parsed.origin);
+		push(pathfulUrl);
+	}
+
+	return candidates;
 }

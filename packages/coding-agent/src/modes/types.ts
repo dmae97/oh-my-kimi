@@ -7,6 +7,7 @@ import type { Settings } from "../config/settings";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUISelectItem,
 	ExtensionWidgetContent,
 	ExtensionWidgetOptions,
 } from "../extensibility/extensions";
@@ -16,6 +17,7 @@ import type { PlanApprovalDetails } from "../plan-mode/approved-plan";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
+import type { ShakeMode } from "../session/shake-types";
 import type { LspStartupServerInfo } from "../tools";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
@@ -58,6 +60,10 @@ export type TodoPhase = {
 	tasks: TodoItem[];
 };
 
+export interface InteractiveModeInitOptions {
+	suppressWelcomeIntro?: boolean;
+}
+
 export interface InteractiveModeContext {
 	// UI access
 	ui: TUI;
@@ -66,6 +72,7 @@ export interface InteractiveModeContext {
 	statusContainer: Container;
 	todoContainer: Container;
 	btwContainer: Container;
+	omfgContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	hookWidgetContainerAbove: Container;
@@ -129,7 +136,8 @@ export interface InteractiveModeContext {
 	todoPhases: TodoPhase[];
 
 	// Lifecycle
-	init(): Promise<void>;
+	init(options?: InteractiveModeInitOptions): Promise<void>;
+	playWelcomeIntro(): void;
 	shutdown(): Promise<void>;
 	checkShutdownRequested(): Promise<void>;
 
@@ -186,7 +194,10 @@ export interface InteractiveModeContext {
 		sessionContext: SessionContext,
 		options?: { updateFooter?: boolean; populateHistory?: boolean },
 	): void;
-	renderInitialMessages(prebuiltContext?: SessionContext): void;
+	renderInitialMessages(
+		prebuiltContext?: SessionContext,
+		options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean },
+	): void;
 	getUserMessageText(message: Message): string;
 	findLastAssistantMessage(): AssistantMessage | undefined;
 	extractAssistantText(message: AssistantMessage): string;
@@ -220,6 +231,7 @@ export interface InteractiveModeContext {
 	handleSSHCommand(text: string): Promise<void>;
 	handleCompactCommand(customInstructions?: string): Promise<CompactionOutcome>;
 	handleHandoffCommand(customInstructions?: string): Promise<void>;
+	handleShakeCommand(mode: ShakeMode): Promise<void>;
 	handleMoveCommand(targetPath: string): Promise<void>;
 	handleRenameCommand(title: string): Promise<void>;
 	handleMemoryCommand(text: string): Promise<void>;
@@ -230,6 +242,7 @@ export interface InteractiveModeContext {
 	): Promise<CompactionOutcome>;
 	openInBrowser(urlOrPath: string): void;
 	refreshSlashCommandState(cwd?: string): Promise<void>;
+	applyCwdChange(newCwd: string): Promise<void>;
 
 	// Selector handling
 	showSettingsSelector(): void;
@@ -259,8 +272,11 @@ export interface InteractiveModeContext {
 	handleBtwCommand(question: string): Promise<void>;
 	hasActiveBtw(): boolean;
 	handleBtwEscape(): boolean;
+	handleOmfgCommand(complaint: string): Promise<void>;
+	hasActiveOmfg(): boolean;
+	handleOmfgEscape(): boolean;
 	cycleThinkingLevel(): void;
-	cycleRoleModel(options?: { temporary?: boolean }): Promise<void>;
+	cycleRoleModel(direction?: "forward" | "backward"): Promise<void>;
 	toggleToolOutputExpansion(): void;
 	setToolsExpanded(expanded: boolean): void;
 	toggleThinkingBlockVisibility(): void;
@@ -283,7 +299,7 @@ export interface InteractiveModeContext {
 	setHookStatus(key: string, text: string | undefined): void;
 	showHookSelector(
 		title: string,
-		options: string[],
+		options: ExtensionUISelectItem[],
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<string | undefined>;
 	hideHookSelector(): void;

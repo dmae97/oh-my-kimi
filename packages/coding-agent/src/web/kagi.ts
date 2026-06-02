@@ -1,41 +1,91 @@
-import { getEnvApiKey } from "@oh-my-pi/pi-ai";
-import { findCredential, withHardTimeout } from "./search/providers/utils";
+/**
+ * Kagi API Client
+ *
+ * Implements the Kagi V1 Search API (POST /api/v1/search), the public-preview
+ * successor to the sunset V0 endpoint. Authentication is resolved exclusively
+ * through the shared {@link AuthStorage} broker (Bearer token), and responses
+ * are categorized result buckets rather than the legacy flat object array.
+ */
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
+import { withHardTimeout } from "./search/providers/utils";
 
-const KAGI_SEARCH_URL = "https://kagi.com/api/v0/search";
+const KAGI_SEARCH_URL = "https://kagi.com/api/v1/search";
 
-interface KagiSearchResultObject {
-	t: 0;
+// ---------------------------------------------------------------------------
+// Request / Response Types
+// ---------------------------------------------------------------------------
+
+/** V1 search request body. */
+export interface KagiSearchRequest {
+	query: string;
+	/** Workflow mode: "search" | "research". */
+	workflow?: string;
+	/** Number of results (1-100). */
+	limit?: number;
+	/** Lens identifier (e.g. "news", "reddit"). */
+	lens?: string;
+	/** Time-based filters as ISO date strings (YYYY-MM-DD). */
+	filters?: {
+		after?: string;
+		before?: string;
+	};
+}
+
+/** Individual V1 result item. */
+export interface KagiSearchResultItem {
 	url: string;
 	title: string;
 	snippet?: string;
-	published?: string;
+	/** ISO timestamp or relative string ("2h ago"). */
+	time?: string;
+	/** Thumbnail image. */
+	image?: { url: string; height?: number; width?: number };
+	/** Extra metadata key-value pairs. */
+	props?: Record<string, unknown>;
 }
 
-interface KagiRelatedSearchesObject {
-	t: 1;
-	list: string[];
+/** V1 categorizes results into named buckets; only consumed buckets are typed. */
+export interface KagiSearchData {
+	search?: KagiSearchResultItem[];
+	video?: KagiSearchResultItem[];
+	news?: KagiSearchResultItem[];
+	infobox?: KagiSearchResultItem[];
+	adjacent_question?: KagiSearchResultItem[];
+	related_search?: KagiSearchResultItem[];
+	direct_answer?: KagiSearchResultItem[];
 }
 
-type KagiSearchObject = KagiSearchResultObject | KagiRelatedSearchesObject;
-
-interface KagiErrorEntry {
+/** V1 error entry. */
+export interface KagiErrorEntry {
 	code?: number;
+	url?: string;
+	message?: string;
 	msg?: string;
+	location?: string;
 }
 
-interface KagiSearchResponse {
-	meta: {
-		id: string;
+/** V1 success response. */
+export interface KagiSearchResponse {
+	meta?: {
+		trace?: string;
+		id?: string;
+		ms?: number;
 	};
-	data: KagiSearchObject[];
+	data?: KagiSearchData;
 	error?: KagiErrorEntry[];
 }
 
-interface KagiErrorResponse {
+/** V1 error response. */
+export interface KagiErrorResponse {
+	meta?: Record<string, unknown>;
 	error?: string | KagiErrorEntry[];
 	message?: string;
 	detail?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Error Handling
+// ---------------------------------------------------------------------------
 
 export class KagiApiError extends Error {
 	readonly statusCode?: number;
@@ -64,9 +114,11 @@ function extractKagiErrorMessage(payload: unknown): string | null {
 	if (Array.isArray(record.error)) {
 		for (const entry of record.error) {
 			if (!entry || typeof entry !== "object") continue;
-			const message = (entry as Record<string, unknown>).msg;
-			if (typeof message === "string" && message.trim().length > 0) {
-				return message.trim();
+			const e = entry as Record<string, unknown>;
+			for (const value of [e.message, e.msg]) {
+				if (typeof value === "string" && value.trim().length > 0) {
+					return value.trim();
+				}
 			}
 		}
 	}
@@ -82,21 +134,27 @@ function createKagiApiError(statusCode: number, detail?: string): KagiApiError {
 }
 
 function parseKagiErrorResponse(statusCode: number, responseText: string): KagiApiError {
-	const trimmedResponseText = responseText.trim();
-	if (trimmedResponseText.length === 0) {
+	const trimmed = responseText.trim();
+	if (trimmed.length === 0) {
 		return createKagiApiError(statusCode);
 	}
 
 	try {
-		const payload = JSON.parse(trimmedResponseText) as KagiErrorResponse;
-		return createKagiApiError(statusCode, extractKagiErrorMessage(payload) ?? trimmedResponseText);
+		const payload = JSON.parse(trimmed) as KagiErrorResponse;
+		return createKagiApiError(statusCode, extractKagiErrorMessage(payload) ?? trimmed);
 	} catch {
-		return createKagiApiError(statusCode, trimmedResponseText);
+		return createKagiApiError(statusCode, trimmed);
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 export interface KagiSearchOptions {
 	limit?: number;
+	recency?: "day" | "week" | "month" | "year";
+	sessionId?: string;
 	signal?: AbortSignal;
 }
 
@@ -111,64 +169,134 @@ export interface KagiSearchResult {
 	requestId: string;
 	sources: KagiSearchSource[];
 	relatedQuestions: string[];
+	answer?: string;
 }
 
-export async function findKagiApiKey(): Promise<string | null> {
-	return findCredential(getEnvApiKey("kagi"), "kagi");
+export async function findKagiApiKey(
+	authStorage: AuthStorage,
+	sessionId?: string,
+	signal?: AbortSignal,
+): Promise<string | null> {
+	return (await authStorage.getApiKey("kagi", sessionId, { signal })) ?? null;
 }
 
-function getAuthHeaders(apiKey: string): Record<string, string> {
-	return {
-		Authorization: `Bot ${apiKey}`,
-		Accept: "application/json",
+/**
+ * Compute a YYYY-MM-DD date string `recency` units before now, in UTC.
+ * UTC keeps the recency window deterministic regardless of host timezone and
+ * matches Kagi's date-formatted `filters.after`. Date setters handle month
+ * drift (Mar 31 −1mo → Feb 28/29) and leap years correctly.
+ */
+function recencyToDate(recency: "day" | "week" | "month" | "year"): string {
+	const d = new Date();
+	switch (recency) {
+		case "day":
+			d.setUTCDate(d.getUTCDate() - 1);
+			break;
+		case "week":
+			d.setUTCDate(d.getUTCDate() - 7);
+			break;
+		case "month":
+			d.setUTCMonth(d.getUTCMonth() - 1);
+			break;
+		case "year":
+			d.setUTCFullYear(d.getUTCFullYear() - 1);
+			break;
+	}
+	const yyyy = d.getUTCFullYear();
+	const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+	const dd = String(d.getUTCDate()).padStart(2, "0");
+	return `${yyyy}-${mm}-${dd}`;
+}
+
+function buildRequestBody(query: string, options: KagiSearchOptions): KagiSearchRequest {
+	const req: KagiSearchRequest = {
+		query,
+		workflow: "search",
+		limit: options.limit,
 	};
+
+	if (options.recency) {
+		req.filters = { after: recencyToDate(options.recency) };
+	}
+
+	return req;
 }
 
-export async function searchWithKagi(query: string, options: KagiSearchOptions = {}): Promise<KagiSearchResult> {
-	const apiKey = await findKagiApiKey();
+/** Push every item in a result bucket as a source, with an optional title tag. */
+function collectSources(sources: KagiSearchSource[], items: KagiSearchResultItem[] | undefined, tag?: string): void {
+	if (!items) return;
+	for (const item of items) {
+		sources.push({
+			title: tag ? `${tag} ${item.title}` : item.title,
+			url: item.url,
+			snippet: item.snippet,
+			publishedDate: item.time,
+		});
+	}
+}
+
+/** Pull a related/adjacent question from an item's props or fall back to title. */
+function questionOf(item: KagiSearchResultItem): string | undefined {
+	const q = item.props?.question ?? item.props?.query ?? item.title;
+	return typeof q === "string" && q.length > 0 ? q : undefined;
+}
+
+export async function searchWithKagi(
+	query: string,
+	options: KagiSearchOptions = {},
+	authStorage: AuthStorage,
+): Promise<KagiSearchResult> {
+	const apiKey = await findKagiApiKey(authStorage, options.sessionId, options.signal);
 	if (!apiKey) {
 		throw new KagiApiError("Kagi credentials not found. Set KAGI_API_KEY or login with 'omp /login kagi'.");
 	}
 
-	const requestUrl = new URL(KAGI_SEARCH_URL);
-	requestUrl.searchParams.set("q", query);
-	if (options.limit !== undefined) {
-		requestUrl.searchParams.set("limit", String(options.limit));
-	}
-
-	const response = await fetch(requestUrl, {
-		headers: getAuthHeaders(apiKey),
+	const response = await fetch(KAGI_SEARCH_URL, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${apiKey}`,
+			"Content-Type": "application/json",
+			Accept: "application/json",
+		},
+		body: JSON.stringify(buildRequestBody(query, options)),
 		signal: withHardTimeout(options.signal),
 	});
+
 	if (!response.ok) {
 		throw parseKagiErrorResponse(response.status, await response.text());
 	}
 
 	const payload = (await response.json()) as KagiSearchResponse;
 	if (payload.error && payload.error.length > 0) {
-		const firstError = payload.error[0];
-		throw createKagiApiError(firstError.code ?? response.status, extractKagiErrorMessage(payload) ?? undefined);
+		const first = payload.error[0];
+		throw createKagiApiError(first.code ?? response.status, extractKagiErrorMessage(payload) ?? first.message);
 	}
 
+	const data = payload.data;
 	const sources: KagiSearchSource[] = [];
 	const relatedQuestions: string[] = [];
 
-	for (const item of payload.data) {
-		if (item.t === 0) {
-			sources.push({
-				title: item.title,
-				url: item.url,
-				snippet: item.snippet,
-				publishedDate: item.published ?? undefined,
-			});
-		} else if (item.t === 1) {
-			relatedQuestions.push(...item.list);
-		}
+	collectSources(sources, data?.search);
+	collectSources(sources, data?.video, "[Video]");
+	collectSources(sources, data?.news, "[News]");
+	collectSources(sources, data?.infobox, "[Info]");
+
+	for (const item of data?.adjacent_question ?? []) {
+		const q = questionOf(item);
+		if (q) relatedQuestions.push(q);
+	}
+	for (const item of data?.related_search ?? []) {
+		const q = questionOf(item);
+		if (q) relatedQuestions.push(q);
 	}
 
+	const directAnswer = data?.direct_answer?.[0];
+	const answer = directAnswer ? (directAnswer.snippet ?? directAnswer.title) : undefined;
+
 	return {
-		requestId: payload.meta.id,
+		requestId: payload.meta?.trace ?? payload.meta?.id ?? "",
 		sources,
 		relatedQuestions,
+		answer,
 	};
 }

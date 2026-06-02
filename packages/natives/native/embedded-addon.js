@@ -8,6 +8,14 @@
  * @typedef {Object} EmbeddedAddonFile
  * @property {EmbeddedAddonVariant} variant
  * @property {string} filename
+ * @property {number} size
+ * @property {string=} filePath
+ */
+
+/**
+ * @typedef {Object} EmbeddedAddonArchive
+ * @property {"tar.gz"} format
+ * @property {string} filename
  * @property {string} filePath
  */
 
@@ -16,6 +24,7 @@
  * @property {string} platformTag
  * @property {string} version
  * @property {EmbeddedAddonFile[]} files
+ * @property {EmbeddedAddonArchive=} archive
  */
 
 /** @type {EmbeddedAddon|null} */

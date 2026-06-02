@@ -4,7 +4,8 @@
  * Uses brush-core via native bindings for shell execution.
  */
 import * as fs from "node:fs/promises";
-import { executeShell, type MinimizerOptions, Shell } from "@oh-my-pi/pi-natives";
+import { ExponentialYield } from "@oh-my-pi/pi-agent-core/utils/yield";
+import { executeShell, type MinimizerOptions, Shell, type ShellRunResult } from "@oh-my-pi/pi-natives";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
@@ -15,6 +16,7 @@ export interface BashExecutorOptions {
 	cwd?: string;
 	timeout?: number;
 	onChunk?: (chunk: string) => void;
+	chunkThrottleMs?: number;
 	signal?: AbortSignal;
 	/** Session key suffix to isolate shell sessions per agent */
 	sessionKey?: string;
@@ -48,10 +50,29 @@ export interface BashResult {
 	artifactId?: string;
 }
 
-const HARD_TIMEOUT_GRACE_MS = 5_000;
-
 const shellSessions = new Map<string, Shell>();
 const brokenShellSessions = new Set<string>();
+const shellSessionQuarantines = new Map<string, Promise<unknown>>();
+
+function quarantineShellSession(
+	sessionKey: string,
+	runPromise: Promise<ShellRunResult>,
+	abortCleanupPromise: Promise<void> | undefined,
+): void {
+	brokenShellSessions.add(sessionKey);
+	const cleanup = abortCleanupPromise
+		? Promise.allSettled([runPromise, abortCleanupPromise])
+		: Promise.allSettled([runPromise]);
+	shellSessionQuarantines.set(sessionKey, cleanup);
+	void cleanup
+		.finally(() => {
+			if (shellSessionQuarantines.get(sessionKey) === cleanup) {
+				shellSessionQuarantines.delete(sessionKey);
+				brokenShellSessions.delete(sessionKey);
+			}
+		})
+		.catch(() => undefined);
+}
 
 async function resolveShellCwd(cwd: string | undefined): Promise<string | undefined> {
 	if (!cwd) return undefined;
@@ -98,16 +119,15 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		artifactId: options?.artifactId,
 		headBytes: resolveOutputSinkHeadBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),
-		// Throttle the streaming preview callback to avoid saturating the
-		// event loop when commands produce massive output (e.g. seq 1 50M).
-		chunkThrottleMs: options?.onChunk ? 50 : 0,
+		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? 50) : 0,
 	});
 
 	// sink.push() is synchronous — buffer management, counters, and onChunk
 	// all run inline. File writes (artifact path) are handled asynchronously
 	// inside the sink. No promise chain needed.
+	let acceptingChunks = true;
 	const enqueueChunk = (chunk: string) => {
-		sink.push(chunk);
+		if (acceptingChunks) sink.push(chunk);
 	};
 
 	if (options?.signal?.aborted) {
@@ -135,30 +155,31 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	}
 	const userSignal = options?.signal;
 	const runAbortController = new AbortController();
+	let abortCleanupPromise: Promise<void> | undefined;
 	const abortCurrentExecution = () => {
 		if (!runAbortController.signal.aborted) {
 			runAbortController.abort();
 		}
-		if (shellSession) {
-			// Native abort is async; fire-and-forget because the caller races the command separately.
-			void shellSession.abort();
+		if (shellSession && !abortCleanupPromise) {
+			abortCleanupPromise = shellSession.abort().catch(() => undefined);
 		}
 	};
+	const abortDeferred = Promise.withResolvers<"abort">();
 	const abortHandler = () => {
 		abortCurrentExecution();
+		abortDeferred.resolve("abort");
 	};
 	if (userSignal) {
 		userSignal.addEventListener("abort", abortHandler, { once: true });
 	}
 
-	let hardTimeoutTimer: NodeJS.Timeout | undefined;
-	const hardTimeoutDeferred = Promise.withResolvers<"hard-timeout">();
+	let timeoutTimer: NodeJS.Timeout | undefined;
+	const timeoutDeferred = Promise.withResolvers<"timeout">();
 	const baseTimeoutMs = Math.max(1_000, options?.timeout ?? 300_000);
-	const hardTimeoutMs = baseTimeoutMs + HARD_TIMEOUT_GRACE_MS;
-	hardTimeoutTimer = setTimeout(() => {
+	timeoutTimer = setTimeout(() => {
 		abortCurrentExecution();
-		hardTimeoutDeferred.resolve("hard-timeout");
-	}, hardTimeoutMs);
+		timeoutDeferred.resolve("timeout");
+	}, baseTimeoutMs);
 
 	let resetSession = false;
 
@@ -196,23 +217,36 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 					},
 				);
 
-		const winner = await Promise.race([
+		const ey = new ExponentialYield();
+		const winner = await ey.race<
+			{ kind: "result"; result: ShellRunResult } | { kind: "timeout" } | { kind: "abort" }
+		>([
 			runPromise.then(result => ({ kind: "result" as const, result })),
-			hardTimeoutDeferred.promise.then(() => ({ kind: "hard-timeout" as const })),
+			timeoutDeferred.promise.then(kind => ({ kind })),
+			abortDeferred.promise.then(kind => ({ kind })),
 		]);
 
-		if (winner.kind === "hard-timeout") {
+		if (winner.kind === "timeout" || winner.kind === "abort") {
+			acceptingChunks = false;
 			if (shellSession) {
 				resetSession = true;
-				// Fall back to one-shot execution for the rest of the process once
-				// a persistent session has stopped responding to cancellation.
-				brokenShellSessions.add(sessionKey);
+				quarantineShellSession(sessionKey, runPromise, abortCleanupPromise);
+			} else {
+				void runPromise.catch(() => undefined);
 			}
 			return {
 				exitCode: undefined,
 				cancelled: true,
-				...(await sink.dump(`Command exceeded hard timeout after ${Math.round(hardTimeoutMs / 1000)} seconds`)),
+				...(await sink.dump(
+					winner.kind === "timeout"
+						? `Command timed out after ${Math.round(baseTimeoutMs / 1000)} seconds`
+						: "Command cancelled",
+				)),
 			};
+		}
+		if (timeoutTimer) {
+			clearTimeout(timeoutTimer);
+			timeoutTimer = undefined;
 		}
 
 		// Handle timeout
@@ -221,6 +255,9 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 				? `Command timed out after ${Math.round(options.timeout / 1000)} seconds`
 				: "Command timed out";
 			resetSession = true;
+			if (shellSession) {
+				quarantineShellSession(sessionKey, runPromise, abortCleanupPromise);
+			}
 			return {
 				exitCode: undefined,
 				cancelled: true,
@@ -231,6 +268,9 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		// Handle cancellation
 		if (winner.result.cancelled) {
 			resetSession = true;
+			if (shellSession) {
+				quarantineShellSession(sessionKey, runPromise, abortCleanupPromise);
+			}
 			return {
 				exitCode: undefined,
 				cancelled: true,
@@ -268,8 +308,8 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		resetSession = true;
 		throw err;
 	} finally {
-		if (hardTimeoutTimer) {
-			clearTimeout(hardTimeoutTimer);
+		if (timeoutTimer) {
+			clearTimeout(timeoutTimer);
 		}
 		if (userSignal) {
 			userSignal.removeEventListener("abort", abortHandler);

@@ -61,7 +61,7 @@ export interface MCPAuthConfig {
 interface MCPServerConfigBase {
 	/** Whether this server is enabled (default: true) */
 	enabled?: boolean;
-	/** Connection timeout in milliseconds (default: 30000) */
+	/** MCP request timeout in milliseconds (default: 30000, 0 to disable) */
 	timeout?: number;
 	/** Authentication configuration (optional) */
 	auth?: MCPAuthConfig;

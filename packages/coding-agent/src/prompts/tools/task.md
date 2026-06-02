@@ -2,7 +2,7 @@ Launches subagents to parallelize workflows.
 
 {{#if asyncEnabled}}
 - Results are delivered automatically when complete.
-- The tool result lists the assigned task ids (e.g. `0-AuthLoader`) — those are the live agent ids.
+- The tool result lists the assigned task ids (e.g. `AuthLoader`) — those are the live agent ids.
 {{#if ircEnabled}}
 - Coordinate with running tasks via `irc` using those ids. `job cancel` terminates a task and **cannot carry a message** — only use it for stalled/abandoned work.
 - If genuinely blocked on completion, wait with `job poll`; otherwise keep working.
@@ -30,15 +30,12 @@ Subagents have no conversation history. Every fact, file path, and direction the
 </parameters>
 
 <rules>
+- **Maximize batch width.** Spawn the widest parallel set the work decomposes into. NEVER spawn a single-task batch for divisible work, or defer work that could have been concurrent.
 - NEVER assign tasks to run project-wide build/test/lint. Caller verifies after the batch.
 - **Subagents do not verify, lint, or format.** Every assignment MUST instruct the subagent to skip all gates and formatters. You run them once at the end across the union of changed files — avoids redundant runs and racing formatter passes.
-{{#if ircEnabled}}
-- Each task: ≤3–5 explicit files. Overlapping file sets are tolerable when peers can coordinate via `irc`, but still fan out to a cluster when the scopes are cleanly separable.
-- No globs, no "update all", no package-wide scope.
-{{else}}
-- Each task: ≤3–5 explicit files. No globs, no "update all", no package-wide scope. Fan out to a cluster instead.
-{{/if}}
-- Pass large payloads via `local://<path>` URIs, not inline.
+- No globs, no "update all", no package-wide scope. Fan out.
+- Do not concern yourself with how agents might overlap on certain actions. Never use it as an excuse to go slower: they can resolve collisions in real-time with the harness facilities.
+- Pass large payloads via `local://<path>` URIs, not inline. {{#if contextEnabled}} (other than the context){{/if}}
 {{#if contextEnabled}}- Put shared constraints in `context` once; do not duplicate across assignments.{{/if}}
 - Prefer agents that investigate **and** edit in one pass; only spin a read-only discovery step when affected files are genuinely unknown.
 </rules>

@@ -11,10 +11,8 @@ import {
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
 import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi/pi-tui";
-import { formatDuration, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
+import { formatDuration, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
-import { reset as resetCapabilities } from "../../capability";
-import { clearClaudePluginRootsCache } from "../../discovery/helpers";
 import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
 import {
@@ -39,6 +37,7 @@ import { buildToolsMarkdown } from "../../modes/utils/tools-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { AuthStorage } from "../../session/auth-storage";
 import type { NewSessionOptions } from "../../session/session-manager";
+import { formatShakeSummary, type ShakeMode, type ShakeResult } from "../../session/shake-types";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
 import { replaceTabs } from "../../tools/render-utils";
@@ -395,6 +394,15 @@ export class CommandController {
 		info += `${theme.fg("dim", "Tool Calls:")} ${stats.toolCalls}\n`;
 		info += `${theme.fg("dim", "Tool Results:")} ${stats.toolResults}\n`;
 		info += `${theme.fg("dim", "Total:")} ${stats.totalMessages}\n\n`;
+		// Append-only context
+		{
+			const setting = this.ctx.settings.get("provider.appendOnlyContext") ?? "auto";
+			const provider = this.ctx.session.model?.provider;
+			const mode = setting === "on" ? true : setting === "off" ? false : provider === "deepseek";
+			const activeLabel = mode ? theme.fg("success", "active") : theme.fg("dim", "inactive");
+			const settingLabel = setting === "auto" ? `${setting} (${provider ?? "?"})` : setting;
+			info += `${theme.fg("dim", "Append-Only:")} ${activeLabel} (setting: ${settingLabel})\n`;
+		}
 		info += `${theme.bold("Tokens")}\n`;
 		info += `${theme.fg("dim", "Input:")} ${stats.tokens.input.toLocaleString()}\n`;
 		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
@@ -611,12 +619,27 @@ export class CommandController {
 			return;
 		}
 
+		if (action === "stats" || action === "diagnose") {
+			const hook = action === "stats" ? backend.stats : backend.diagnose;
+			try {
+				const payload = await hook?.(agentDir, this.ctx.sessionManager.getCwd(), this.ctx.session);
+				if (!payload) {
+					this.ctx.showWarning(`Memory ${action} is not available for the ${backend.id} backend.`);
+					return;
+				}
+				showMarkdownPanel(this.ctx, `Memory ${action === "stats" ? "Stats" : "Diagnostics"}`, payload);
+			} catch (error) {
+				this.ctx.showError(`Memory ${action} failed: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			return;
+		}
+
 		if (action === "mm") {
 			await this.#handleMentalModelsSubcommand(argumentText);
 			return;
 		}
 
-		this.ctx.showError("Usage: /memory <view|clear|reset|enqueue|rebuild|mm ...>");
+		this.ctx.showError("Usage: /memory <view|stats|diagnose|clear|reset|enqueue|rebuild|mm ...>");
 	}
 
 	async #handleMentalModelsSubcommand(argumentText: string): Promise<void> {
@@ -885,8 +908,6 @@ export class CommandController {
 		this.ctx.statusLine.setSessionStartTime(Date.now());
 		this.ctx.updateEditorTopBorder();
 		this.ctx.updateEditorBorderColor();
-		this.ctx.ui.requestRender();
-
 		this.ctx.chatContainer.clear();
 		this.ctx.pendingMessagesContainer.clear();
 		this.ctx.compactionQueuedMessages = [];
@@ -897,7 +918,7 @@ export class CommandController {
 		this.ctx.chatContainer.addChild(new Spacer(1));
 		this.ctx.chatContainer.addChild(new Text(`${theme.fg("accent", `${theme.status.success} ${label}`)}`, 1, 1));
 		await this.ctx.reloadTodos();
-		this.ctx.ui.requestRender();
+		this.ctx.ui.requestRender(true, { clearScrollback: true });
 	}
 
 	async handleClearCommand(): Promise<void> {
@@ -970,14 +991,7 @@ export class CommandController {
 		try {
 			await this.ctx.sessionManager.flush();
 			await this.ctx.sessionManager.moveTo(resolvedPath);
-			setProjectDir(resolvedPath);
-			clearClaudePluginRootsCache(); // re-warms preloadedPluginRoots with new project dir (async)
-			resetCapabilities();
-			await this.ctx.refreshSlashCommandState(resolvedPath);
-			await this.ctx.session.refreshSshTool({ activateIfAvailable: true });
-
-			this.ctx.statusLine.invalidate();
-			this.ctx.updateEditorTopBorder();
+			await this.ctx.applyCwdChange(resolvedPath);
 
 			this.ctx.chatContainer.addChild(new Spacer(1));
 			this.ctx.chatContainer.addChild(
@@ -1098,6 +1112,30 @@ export class CommandController {
 		}
 
 		return this.executeCompaction(customInstructions, false);
+	}
+
+	/**
+	 * TUI handler for `/shake`. `elide` drops heavy structural content and
+	 * `images` strips image blocks. Rebuilds the chat and reports counts.
+	 */
+	async handleShakeCommand(mode: ShakeMode): Promise<void> {
+		let result: ShakeResult;
+		try {
+			result = await this.ctx.session.shake(mode);
+		} catch (error) {
+			this.ctx.showError(`Shake failed: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
+
+		const dropped = result.toolResultsDropped + result.blocksDropped + (result.imagesDropped ?? 0);
+		if (dropped === 0) {
+			this.ctx.showStatus("Nothing to shake.");
+			return;
+		}
+		this.ctx.rebuildChatFromMessages();
+		this.ctx.statusLine.invalidate();
+		this.ctx.updateEditorTopBorder();
+		this.ctx.showStatus(formatShakeSummary(result));
 	}
 
 	async handleSkillCommand(skillPath: string, args: string): Promise<void> {
@@ -1361,10 +1399,12 @@ function formatUnlimitedReportLabel(report: UsageReport, index: number): string 
 }
 
 function formatResetShort(limit: UsageLimit, nowMs: number): string | undefined {
-	if (limit.window?.resetsAt !== undefined) {
-		return formatDuration(limit.window.resetsAt - nowMs);
-	}
-	return undefined;
+	const resetsAt = limit.window?.resetsAt;
+	if (resetsAt === undefined) return undefined;
+	// Codex returns the prior window's reset_at until a new request opens a fresh window —
+	// rendering a negative delta is meaningless, so drop the suffix in that case.
+	if (resetsAt <= nowMs) return undefined;
+	return formatDuration(resetsAt - nowMs);
 }
 
 function formatAccountHeaderRow(

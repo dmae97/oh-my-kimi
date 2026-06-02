@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { replaceBinaryForUpdate, resolveUpdateMethodForTest } from "../src/cli/update-cli";
+import { buildBunInstallArgs, replaceBinaryForUpdate, resolveUpdateMethodForTest } from "../src/cli/update-cli";
 
 const tempDirs: string[] = [];
 
@@ -32,6 +32,26 @@ describe("update-cli install target detection", () => {
 		const method = resolveUpdateMethodForTest("/Users/test/.local/bin/omp", undefined);
 
 		expect(method).toBe("binary");
+	});
+});
+
+describe("update-cli bun install command", () => {
+	it("pins the official npm registry and bypasses the manifest cache so a stale mirror or snapshot cannot mask a freshly published version", () => {
+		// Regression: omp queries https://registry.npmjs.org/<pkg>/latest directly.
+		// The install MUST hit the same registry, otherwise:
+		//   - a lagging mirror (corp proxy, Taobao, …) rejects the version with
+		//     `No version matching "X" (but package exists)`,
+		//   - or bun's local manifest snapshot does the same when the user's bun
+		//     is already pointed at the official registry but its cache predates
+		//     the release.
+		// See https://github.com/can1357/oh-my-pi/issues/1686.
+		expect(buildBunInstallArgs("15.7.6")).toEqual([
+			"install",
+			"-g",
+			"--no-cache",
+			"--registry=https://registry.npmjs.org/",
+			"@oh-my-pi/pi-coding-agent@15.7.6",
+		]);
 	});
 });
 

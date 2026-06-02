@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { AgentTelemetryConfig, Tracer } from "@oh-my-pi/pi-agent-core";
+import { AgentBusyError, type AgentTelemetryConfig, type Tracer } from "@oh-my-pi/pi-agent-core";
 import { type AssistantMessage, Effort } from "@oh-my-pi/pi-ai";
+import { logger } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
-import type { LoadExtensionsResult } from "../../src/extensibility/extensions/types";
+import type { ExtensionActions, LoadExtensionsResult } from "../../src/extensibility/extensions/types";
 import type { CreateAgentSessionResult } from "../../src/sdk";
 import * as sdkModule from "../../src/sdk";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "../../src/session/agent-session";
@@ -114,6 +115,61 @@ describe("runSubprocess yield reminders", () => {
 		enableLsp: false,
 	};
 
+	it("waits for session_start extension user messages before prompting the subagent", async () => {
+		let extensionSendUserMessage: ExtensionActions["sendUserMessage"] | undefined;
+		let messageInFlight = false;
+		let sendStarted = false;
+
+		const session = createMockSession(({ emit }) => {
+			if (messageInFlight) {
+				throw new AgentBusyError();
+			}
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-extension-session-start",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+		const mutableSession = session as unknown as {
+			extensionRunner: NonNullable<AgentSession["extensionRunner"]>;
+			sendUserMessage: AgentSession["sendUserMessage"];
+		};
+		mutableSession.sendUserMessage = async () => {
+			sendStarted = true;
+			messageInFlight = true;
+			await Bun.sleep(20);
+			messageInFlight = false;
+		};
+		mutableSession.extensionRunner = {
+			initialize: (actions: ExtensionActions) => {
+				extensionSendUserMessage = actions.sendUserMessage;
+			},
+			onError: () => {},
+			emit: async (event: { type: string }) => {
+				if (event.type === "session_start") {
+					extensionSendUserMessage?.("hello from session_start", { deliverAs: "followUp" });
+				}
+				return undefined;
+			},
+		} as unknown as NonNullable<AgentSession["extensionRunner"]>;
+
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-session-start-extension",
+		});
+
+		expect(sendStarted).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.error).toBeUndefined();
+	});
+
 	it("skips modelRegistry.refresh when reusing the parent registry", async () => {
 		const session = createMockSession(({ emit }) => {
 			emit({
@@ -171,10 +227,10 @@ describe("runSubprocess yield reminders", () => {
 		expect(systemPrompt).toHaveLength(4);
 		expect(systemPrompt?.[0]).toBe("system");
 		expect(systemPrompt?.[1]).toBe("project");
-		expect(systemPrompt?.[2]).toContain("[CONTEXT]\nShared task background\n[/CONTEXT]");
-		expect(systemPrompt?.[2]).toContain("[ROLE]\ntest\n[/ROLE]");
+		expect(systemPrompt?.[2]).toMatch(/CONTEXT\n=+\n\nShared task background/);
+		expect(systemPrompt?.[2]).toMatch(/ROLE\n=+\n\ntest/);
 		expect(systemPrompt?.[3]).toBe("now");
-		expect(userPrompt).not.toContain("[CONTEXT]");
+		expect(userPrompt).not.toMatch(/CONTEXT\n=+/);
 		expect(userPrompt).not.toContain("Shared task background");
 	});
 
@@ -465,6 +521,42 @@ describe("runSubprocess yield reminders", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toMatch(/options\.authStorage.*modelRegistry\.authStorage/);
 		expect(createAgentSessionSpy).not.toHaveBeenCalled();
+	});
+
+	it("logs reminder-loop aborts at debug, not error (issue #1623)", async () => {
+		// Repro: user ^C or compaction aborts pending operations while the
+		// yield-reminder loop is awaiting session.prompt. awaitAbortable rejects
+		// with ToolAbortError, which previously surfaced as logger.error and
+		// polluted operator dashboards.
+		const abortController = new AbortController();
+		const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+		const session = createMockSession(({ promptIndex, emit, state }) => {
+			if (promptIndex === 1) {
+				// Initial prompt: stop without yielding so the reminder loop kicks in.
+				const assistant = createAssistantStopMessage("no yield yet");
+				state.messages.push(assistant);
+				emit({ type: "message_end", message: assistant });
+				return;
+			}
+			// Reminder prompt: abort the run while it is in flight. The follow-up
+			// awaitAbortable(session.waitForIdle()) then throws ToolAbortError into
+			// the catch we are guarding.
+			abortController.abort();
+		});
+
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-abort-during-reminder",
+			signal: abortController.signal,
+		});
+
+		expect(result.aborted).toBe(true);
+		expect(errorSpy).not.toHaveBeenCalledWith("Subagent prompt failed", expect.anything());
+		expect(debugSpy).toHaveBeenCalledWith("Subagent prompt aborted", expect.anything());
 	});
 });
 

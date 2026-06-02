@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import { AgentStorage } from "../../src/session/agent-storage";
 import { searchTavily } from "../../src/web/search/providers/tavily";
 import type { SearchProviderError } from "../../src/web/search/types";
 
@@ -13,6 +13,23 @@ describe("Tavily web search provider", () => {
 		vi.restoreAllMocks();
 		delete process.env.TAVILY_API_KEY;
 	});
+
+	const fakeAuthStorage = {
+		async getApiKey() {
+			return process.env.TAVILY_API_KEY ?? undefined;
+		},
+		hasAuth() {
+			return Boolean(process.env.TAVILY_API_KEY);
+		},
+	} as unknown as AuthStorage;
+
+	function makeParams(query: string) {
+		return {
+			query,
+			authStorage: fakeAuthStorage,
+			systemPrompt: "Tavily test prompt",
+		} as const;
+	}
 
 	it("maps Tavily responses into SearchResponse and forwards recency filters", async () => {
 		let requestBody: Record<string, unknown> | null = null;
@@ -40,7 +57,7 @@ describe("Tavily web search provider", () => {
 			);
 		});
 
-		const response = await searchTavily({ query: "latest ai news", num_results: 2, recency: "week" });
+		const response = await searchTavily({ ...makeParams("latest ai news"), numSearchResults: 2, recency: "week" });
 		// Recency must not couple to topic — topic should be absent (Tavily defaults to general)
 		expect(requestBody).toMatchObject({
 			query: "latest ai news",
@@ -81,7 +98,7 @@ describe("Tavily web search provider", () => {
 				}),
 		);
 
-		await expect(searchTavily({ query: "bad auth" })).rejects.toEqual(
+		await expect(searchTavily(makeParams("bad auth"))).rejects.toEqual(
 			expect.objectContaining({
 				provider: "tavily",
 				status: 401,
@@ -92,11 +109,8 @@ describe("Tavily web search provider", () => {
 
 	it("throws a clear error when Tavily credentials are missing", async () => {
 		delete process.env.TAVILY_API_KEY;
-		vi.spyOn(AgentStorage, "open").mockResolvedValue({
-			listAuthCredentials: () => [],
-		} as unknown as AgentStorage);
-		await expect(searchTavily({ query: "missing creds" })).rejects.toThrow(
-			'Tavily credentials not found. Set TAVILY_API_KEY or store an API key for provider "tavily" in agent.db.',
+		await expect(searchTavily(makeParams("missing creds"))).rejects.toThrow(
+			'Tavily credentials not found. Set TAVILY_API_KEY or configure an API key for provider "tavily".',
 		);
 	});
 });

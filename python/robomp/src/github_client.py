@@ -65,6 +65,16 @@ class PullRequestInfo:
     state: str
     author: str = ""
     head_repo: str = ""
+    title: str = ""
+    body: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class PullRequestFileInfo:
+    path: str
+    status: str
+    additions: int
+    deletions: int
 
 
 @dataclass(slots=True, frozen=True)
@@ -254,6 +264,21 @@ class GitHubClient:
         data = await self.request("GET", f"/repos/{repo}/pulls/{number}")
         return _pr_from_payload(repo, data)
 
+    async def list_pr_files(self, repo: str, pr_number: int) -> list[PullRequestFileInfo]:
+        files: list[PullRequestFileInfo] = []
+        page = 1
+        while True:
+            data = await self.request(
+                "GET",
+                f"/repos/{repo}/pulls/{pr_number}/files",
+                params={"per_page": 100, "page": page},
+            )
+            batch = [_pr_file_from_payload(item) for item in (data or [])]
+            files.extend(batch)
+            if len(batch) < 100:
+                return files
+            page += 1
+
     async def list_issues(
         self,
         repo: str,
@@ -421,6 +446,22 @@ class GitHubClient:
         )
         return tuple(str(lbl["name"]) if isinstance(lbl, dict) else str(lbl) for lbl in (data or []))
 
+    async def submit_pr_review(
+        self,
+        *,
+        repo: str,
+        pr_number: int,
+        body: str,
+        event: str,
+        comments: list[Mapping[str, Any]],
+    ) -> PullRequestReviewInfo:
+        data = await self.request(
+            "POST",
+            f"/repos/{repo}/pulls/{pr_number}/reviews",
+            json={"body": body, "event": event, "comments": comments},
+        )
+        return _pr_review_from_payload(data)
+
     async def add_assignees(self, repo: str, number: int, assignees: list[str]) -> None:
         if not assignees:
             return
@@ -482,6 +523,27 @@ def _issue_from_payload(repo: str, data: Mapping[str, Any]) -> IssueInfo:
     )
 
 
+def _pr_review_from_payload(data: Mapping[str, Any]) -> PullRequestReviewInfo:
+    user = data.get("user") or {}
+    body = str(data.get("body") or "").strip()
+    return PullRequestReviewInfo(
+        id=int(data.get("id") or 0),
+        author=str(user.get("login") or "") if isinstance(user, Mapping) else "",
+        body=body,
+        state=str(data.get("state") or ""),
+        submitted_at=str(data.get("submitted_at") or data.get("created_at") or ""),
+    )
+
+
+def _pr_file_from_payload(data: Mapping[str, Any]) -> PullRequestFileInfo:
+    return PullRequestFileInfo(
+        path=str(data.get("filename") or data.get("path") or ""),
+        status=str(data.get("status") or ""),
+        additions=int(data.get("additions") or 0),
+        deletions=int(data.get("deletions") or 0),
+    )
+
+
 def _pr_from_payload(repo: str, data: Mapping[str, Any]) -> PullRequestInfo:
     head = data.get("head") or {}
     base = data.get("base") or {}
@@ -496,6 +558,8 @@ def _pr_from_payload(repo: str, data: Mapping[str, Any]) -> PullRequestInfo:
         state=str(data.get("state") or "open"),
         author=str(user.get("login") or "") if isinstance(user, Mapping) else "",
         head_repo=str(head_repo.get("full_name") or "") if isinstance(head_repo, Mapping) else "",
+        title=str(data.get("title") or ""),
+        body=str(data.get("body") or ""),
     )
 
 
@@ -534,6 +598,7 @@ __all__ = [
     "GitHubError",
     "IssueInfo",
     "IssueSummary",
+    "PullRequestFileInfo",
     "PullRequestInfo",
     "PullRequestReviewInfo",
     "ReactionInfo",

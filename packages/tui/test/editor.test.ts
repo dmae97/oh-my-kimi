@@ -113,6 +113,19 @@ describe("Editor component", () => {
 			expect(editor.getText()).toBe("second");
 		});
 
+		it("exits history mode at the history edit anchor before public insertText", () => {
+			const editor = new Editor(defaultEditorTheme);
+
+			editor.addToHistory("line1\nline2");
+			editor.handleInput("\x1b[A"); // Up - recalls at the top edit anchor
+			expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
+
+			editor.insertText("[Image #1] ");
+
+			expect(editor.getText()).toBe("line1\nline2[Image #1] ");
+			expect(editor.getCursor()).toEqual({ line: 1, col: "line2[Image #1] ".length });
+		});
+
 		it("does not add empty strings to history", () => {
 			const editor = new Editor(defaultEditorTheme);
 
@@ -508,6 +521,18 @@ describe("Editor component", () => {
 			expect(text).toBe("äöü\nÄÖÜ");
 		});
 
+		it("splits public insertText newlines into logical editor rows", () => {
+			const editor = new Editor(defaultEditorTheme);
+
+			editor.insertText("a\nb");
+
+			expect(editor.getText()).toBe("a\nb");
+			expect(editor.getCursor()).toEqual({ line: 1, col: 1 });
+			for (const renderedLine of editor.render(80)) {
+				expect(renderedLine).not.toContain("\n");
+			}
+		});
+
 		it("replaces the entire document with unicode text via setText (paste simulation)", () => {
 			const editor = new Editor(defaultEditorTheme);
 
@@ -715,10 +740,11 @@ describe("Editor component", () => {
 			// Cursor should be at end (after B)
 			const lines = editor.render(width);
 
-			// The cursor (blinking bar) should be visible
+			// The software cursor should be visible without SGR blink; Ghostty/cmux
+			// can leave afterimages for blinking cells during rapid row repaints.
 			const contentLine = lines[1]!;
-			expect(contentLine.includes("\x1b[5m")).toBeTruthy();
-
+			expect(contentLine).toContain(defaultEditorTheme.symbols.inputCursor);
+			expect(contentLine).not.toContain("\x1b[5m");
 			// Line should still be correct width
 			expect(visibleWidth(contentLine)).toBeLessThanOrEqual(width);
 		});
@@ -729,7 +755,7 @@ describe("Editor component", () => {
 				const width = 20;
 				const contentWidth = width - 2 * (paddingX + 1);
 				const layoutWidth = Math.max(1, contentWidth - (paddingX === 0 ? 1 : 0));
-				const cursorToken = `\x1b[5m${defaultEditorTheme.symbols.inputCursor}\x1b[0m`;
+				const cursorToken = defaultEditorTheme.symbols.inputCursor;
 
 				for (let i = 0; i < layoutWidth; i++) {
 					editor.handleInput("a");
@@ -806,13 +832,13 @@ describe("Editor component", () => {
 			let lines = editor.render(2);
 			expect(lines).toHaveLength(2);
 			expect(lines[0]).toBe("> ");
-			expect(lines[1]).toBe(` \x1b[5m${defaultEditorTheme.symbols.inputCursor}\x1b[0m${CURSOR_MARKER}`);
+			expect(lines[1]).toBe(` ${defaultEditorTheme.symbols.inputCursor}${CURSOR_MARKER}`);
 
 			editor.handleInput("\x1b[A");
 
 			expect(editor.getCursor()).toEqual({ line: 1, col: 1 });
 			lines = editor.render(2);
-			expect(lines).toEqual([`>\x1b[5m${defaultEditorTheme.symbols.inputCursor}\x1b[0m${CURSOR_MARKER}`, "  "]);
+			expect(lines).toEqual([`>${defaultEditorTheme.symbols.inputCursor}${CURSOR_MARKER}`, "  "]);
 		});
 
 		it("keeps the prompt gutter visible at the borderless width limit", () => {
@@ -2037,6 +2063,46 @@ describe("Editor component", () => {
 			editor.handleInput("\r");
 
 			expect(submitted).toBe(pastedText);
+		});
+	});
+
+	describe("Korean NFC paste normalization", () => {
+		// macOS Finder drag-drops/Copy-As-Pathname emit Korean filenames as
+		// NFD (decomposed) — e.g. `화` becomes `ᄒ`(U+1112) + `ᅪ`(U+116A).
+		// `Bun.stringWidth` measures NFD jamo at 3 cells per syllable while
+		// terminals render the precomposed syllable at 2 cells, so without
+		// normalization the cursor column drifts past the visible filename
+		// and subsequent input renders into the wrong row. The earlier fix
+		// landed on the legacy `Input` component; OMP's interactive prompt
+		// uses `Editor`, so the fix has to live here too.
+
+		it("normalizes NFD Korean bracketed-paste to NFC", () => {
+			const editor = new Editor(defaultEditorTheme);
+			const nfcPath = "/Users/leo/Documents/260411_아빠-창고-미팅-1회차";
+			const nfdPath = nfcPath.normalize("NFD");
+			expect(nfdPath).not.toBe(nfcPath);
+			expect(nfdPath.length).toBeGreaterThan(nfcPath.length);
+
+			editor.handleInput(`\x1b[200~${nfdPath}\x1b[201~`);
+
+			expect(editor.getText()).toBe(nfcPath);
+		});
+
+		it("renders pasted Korean path as precomposed syllables, not NFD jamo", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.focused = true;
+			const nfdPath = "/Users/leo/화면 기록.mov".normalize("NFD");
+			editor.handleInput(`\x1b[200~${nfdPath}\x1b[201~`);
+
+			const rendered = editor.render(120).join("\n");
+			// Precomposed syllables (`화`, `면`, `기`, `록`) must appear in the
+			// rendered output. If NFC normalization is missing, the rendered
+			// text contains NFD jamo (`ᄒ`+`ᅪ`+`ᇁ` etc.) instead.
+			expect(rendered).toContain("화면");
+			expect(rendered).toContain("기록");
+			// The leading Hangul jamo block (U+1100..U+1112) only appears in
+			// NFD output. The Editor must not leak it after normalization.
+			expect(rendered).not.toMatch(/[\u1100-\u1112]/);
 		});
 	});
 });

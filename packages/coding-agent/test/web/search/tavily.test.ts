@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import {
 	buildRequestBody,
 	searchTavily,
@@ -52,6 +53,24 @@ describe("Tavily searchTavily request shape (integration)", () => {
 		delete process.env.TAVILY_API_KEY;
 	});
 
+	const fakeAuthStorage = {
+		async getApiKey() {
+			return process.env.TAVILY_API_KEY ?? undefined;
+		},
+		hasAuth() {
+			return Boolean(process.env.TAVILY_API_KEY);
+		},
+	} as unknown as AuthStorage;
+
+	function makeParams(query: string, extras: Partial<TavilySearchParams> = {}) {
+		return {
+			query,
+			authStorage: fakeAuthStorage,
+			systemPrompt: "Tavily integration test prompt",
+			...extras,
+		};
+	}
+
 	it("does not send topic=news to the upstream API when recency is set", async () => {
 		process.env.TAVILY_API_KEY = "test-key";
 
@@ -79,20 +98,13 @@ describe("Tavily searchTavily request shape (integration)", () => {
 			return new Response("not mocked", { status: 500 });
 		});
 
-		const params: TavilySearchParams = {
-			query: "Bun runtime latest release notes",
-			recency: "week",
-		};
-		const response = await searchTavily(params);
+		const response = await searchTavily(makeParams("Bun runtime latest release notes", { recency: "week" }));
 
 		expect(capturedBody).toBeDefined();
-		// The core regression: recency must not coerce topic to news. Topic should
-		// be absent entirely (Tavily defaults to "general").
 		expect(capturedBody).not.toHaveProperty("topic");
 		expect(capturedBody?.time_range).toBe("week");
 		expect(capturedBody?.query).toBe("Bun runtime latest release notes");
 
-		// And the response should still be parsed correctly end-to-end.
 		expect(response.provider).toBe("tavily");
 		expect(response.answer).toBe("test answer");
 		expect(response.sources).toHaveLength(1);
@@ -115,7 +127,7 @@ describe("Tavily searchTavily request shape (integration)", () => {
 			return new Response("not mocked", { status: 500 });
 		});
 
-		await searchTavily({ query: "bun sqlite" });
+		await searchTavily(makeParams("bun sqlite"));
 
 		expect(capturedBody).toBeDefined();
 		expect(capturedBody).not.toHaveProperty("topic");

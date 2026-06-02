@@ -7,6 +7,7 @@ import type {
 	AgentMessage,
 	AgentTool,
 	AgentToolContext,
+	StreamFn,
 	ToolCallContext,
 } from "@oh-my-pi/pi-agent-core/types";
 import type { AssistantMessage, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
@@ -62,7 +63,7 @@ describe("agentLoop with AgentMessage", () => {
 			tools: [],
 		};
 		const mock = createMockModel();
-		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, maxToolCallsPerTurn: 8 };
 		const controller = new AbortController();
 		// The mock provider would reject without a configured response; we want the
 		// agent's abort path to kick in before any event is emitted. Use a raw stream
@@ -273,6 +274,118 @@ describe("agentLoop with AgentMessage", () => {
 		}
 	});
 
+	it("cuts a streamed assistant turn after the configured completed tool-call batch", async () => {
+		const toolSchema = z.object({ value: z.string() });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel();
+		let modelCalls = 0;
+		let firstRequestSignal: AbortSignal | undefined;
+
+		const makeToolCall = (index: number): AssistantMessage["content"][number] => ({
+			type: "toolCall",
+			id: `tool-${index}`,
+			name: "echo",
+			arguments: { value: String(index) },
+		});
+		const makeMessage = (count: number, stopReason: AssistantMessage["stopReason"] = "stop") =>
+			createAssistantMessage(
+				Array.from({ length: count }, (_, index) => makeToolCall(index + 1)),
+				stopReason,
+			);
+
+		const streamFn: StreamFn = (_model, _llmContext, options) => {
+			modelCalls++;
+			const stream = new AssistantMessageEventStream();
+			if (modelCalls > 1) {
+				queueMicrotask(() => {
+					const done = createAssistantMessage([{ type: "text", text: "done" }], "stop");
+					stream.push({ type: "start", partial: done });
+					stream.push({ type: "text_start", contentIndex: 0, partial: done });
+					stream.push({ type: "text_delta", contentIndex: 0, delta: "done", partial: done });
+					stream.push({ type: "text_end", contentIndex: 0, content: "done", partial: done });
+					stream.push({ type: "done", reason: "stop", message: done });
+				});
+				return stream;
+			}
+
+			queueMicrotask(async () => {
+				firstRequestSignal = options?.signal;
+				stream.push({ type: "start", partial: makeMessage(0) });
+				for (let index = 1; index <= 10; index++) {
+					if (options?.signal?.aborted) {
+						const aborted = createAssistantMessage([], "aborted");
+						stream.push({ type: "error", reason: "aborted", error: aborted });
+						return;
+					}
+					const partial = makeMessage(index);
+					const toolCall = partial.content[index - 1];
+					if (toolCall?.type !== "toolCall") throw new Error("Expected tool call");
+					stream.push({ type: "toolcall_start", contentIndex: index - 1, partial });
+					stream.push({
+						type: "toolcall_delta",
+						contentIndex: index - 1,
+						delta: JSON.stringify(toolCall.arguments),
+						partial,
+					});
+					stream.push({ type: "toolcall_end", contentIndex: index - 1, toolCall, partial });
+					await Bun.sleep(0);
+				}
+				stream.push({ type: "done", reason: "toolUse", message: makeMessage(10, "toolUse") });
+			});
+			return stream;
+		};
+
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			maxToolCallsPerTurn: 8,
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("echo many")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		expect(executed).toEqual(["1", "2", "3", "4", "5", "6", "7", "8"]);
+		expect(firstRequestSignal?.aborted).toBe(true);
+		expect(modelCalls).toBe(2);
+
+		const batchedTurn = events.find(
+			(event): event is Extract<AgentEvent, { type: "turn_end" }> =>
+				event.type === "turn_end" && event.toolResults.length === 8,
+		);
+		expect(batchedTurn).toBeDefined();
+		if (batchedTurn?.message.role !== "assistant") return;
+		expect(batchedTurn.message.stopReason).toBe("toolUse");
+		expect(batchedTurn.message.content.filter(block => block.type === "toolCall")).toHaveLength(8);
+		expect(batchedTurn.toolResults.map(result => result.toolCallId).sort()).toEqual([
+			"tool-1",
+			"tool-2",
+			"tool-3",
+			"tool-4",
+			"tool-5",
+			"tool-6",
+			"tool-7",
+			"tool-8",
+		]);
+	});
+
 	it("injects and strips intent when intent tracing is enabled", async () => {
 		const toolSchema = z.object({ value: z.string() });
 		const executedParams: Record<string, unknown>[] = [];
@@ -458,7 +571,7 @@ describe("agentLoop with AgentMessage", () => {
 				e.type === "message_end" && e.message.role === "toolResult",
 		);
 		expect(toolResultEvent).toBeDefined();
-		if (!toolResultEvent || toolResultEvent.message.role !== "toolResult") return;
+		if (toolResultEvent?.message.role !== "toolResult") return;
 		expect(toolResultEvent.message.isError).toBe(true);
 		expect(toolResultEvent.message.toolCallId).toBe("tool-1");
 		expect(toolResultEvent.message.content[0]?.type).toBe("text");

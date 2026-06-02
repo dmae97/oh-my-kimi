@@ -8,7 +8,9 @@ import path from "node:path";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Container, Text } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
+import { settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
 import type { Theme } from "../modes/theme/theme";
 import {
 	formatBadge,
@@ -28,7 +30,7 @@ import {
 } from "../tools/review";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine } from "../tui";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
-import type { AgentProgress, SingleResult, TaskParams, TaskToolDetails } from "./types";
+import type { AgentProgress, SingleResult, TaskItem, TaskParams, TaskToolDetails } from "./types";
 
 /**
  * Get status icon for agent state.
@@ -50,7 +52,9 @@ function getStatusIcon(status: AgentProgress["status"], theme: Theme, spinnerFra
 	}
 }
 
-/** Append tool-count, context, cumulative-tokens, and cost stats to a status line string. */
+/**
+ * Append tool-count, context, and cost stats to a status line string.
+ */
 function appendAgentStats(
 	line: string,
 	opts: {
@@ -59,29 +63,27 @@ function appendAgentStats(
 		contextTokens?: number;
 		contextWindow?: number;
 		cost: number;
+		resolvedModel?: string;
+		showResolvedModelBadge?: boolean;
 	},
 	theme: Theme,
 ): string {
 	if (opts.toolCount) {
-		line += `${theme.sep.dot}${theme.fg("dim", `${opts.toolCount} tools`)}`;
+		line += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(opts.toolCount)} ${theme.icon.extensionTool}`)}`;
 	}
-	// Current per-turn context — what the user reads as "how full is the context".
-	// Cumulative tokens (billing volume) renders separately with a Σ sigil to avoid
-	// being mistaken for current window pressure.
+	// Current per-turn context — match the status line's `<pct>%/<window>` gauge (e.g. `5.1%/1M`).
 	if (opts.contextTokens && opts.contextTokens > 0) {
 		const ctx =
 			opts.contextWindow && opts.contextWindow > 0
-				? `${formatNumber(opts.contextTokens)}/${formatNumber(opts.contextWindow)} ctx`
-				: `${formatNumber(opts.contextTokens)} ctx`;
+				? formatContextUsage((opts.contextTokens / opts.contextWindow) * 100, opts.contextWindow)
+				: `${formatNumber(opts.contextTokens)}`;
 		line += `${theme.sep.dot}${theme.fg("dim", ctx)}`;
-		if (opts.tokens > 0) {
-			line += `${theme.sep.dot}${theme.fg("dim", `Σ${formatNumber(opts.tokens)}`)}`;
-		}
-	} else if (opts.tokens > 0) {
-		line += `${theme.sep.dot}${theme.fg("dim", `Σ${formatNumber(opts.tokens)}`)}`;
 	}
 	if (opts.cost > 0) {
 		line += `${theme.sep.dot}${theme.fg("statusLineCost", `$${opts.cost.toFixed(2)}`)}`;
+	}
+	if (opts.resolvedModel && opts.showResolvedModelBadge) {
+		line += `${theme.sep.dot}${theme.fg("dim", truncateToWidth(replaceTabs(opts.resolvedModel), 30))}`;
 	}
 	return line;
 }
@@ -126,15 +128,10 @@ function formatJsonScalar(value: unknown, _theme: Theme): string {
 }
 
 function formatTaskId(id: string): string {
+	// Ids are name-based (e.g. "Anna", "Anna-2"); a "." separates nesting levels
+	// (e.g. "Anna.Bob"). Render the hierarchy with a ">" breadcrumb.
 	const segments = id.split(".");
-	if (segments.length < 2) return id;
-
-	const parsed = segments.map(segment => segment.match(/^(\d+)-(.+)$/));
-	if (parsed.some(match => !match)) return id;
-
-	const indices = parsed.map(match => match![1]).join(".");
-	const labels = parsed.map(match => match![2]).join(">");
-	return `${indices} ${labels}`;
+	return segments.length < 2 ? id : segments.join(">");
 }
 
 const MISSING_YIELD_WARNING_PREFIX = "SYSTEM WARNING: Subagent exited without calling yield tool";
@@ -485,19 +482,62 @@ function formatOutputInline(data: unknown, theme: Theme, maxWidth = 80): string 
 }
 
 /**
+ * Render the per-task list (`id` + ui `description`) for the streaming call
+ * preview. The args stream in token by token, so the array grows over time and
+ * trailing entries may be partially parsed — every field access is defensive.
+ */
+function renderTaskItemLines(
+	tasks: TaskItem[] | undefined,
+	contPrefix: string,
+	expanded: boolean,
+	theme: Theme,
+): string[] {
+	const items = tasks ?? [];
+	if (items.length === 0) return [];
+
+	const branch = theme.fg("dim", theme.tree.branch);
+	const last = theme.fg("dim", theme.tree.last);
+	const cap = expanded ? items.length : Math.min(items.length, 12);
+	const truncated = cap < items.length;
+
+	const lines: string[] = [];
+	for (let i = 0; i < cap; i++) {
+		const task = items[i] as Partial<TaskItem> | undefined;
+		const isLastLine = !truncated && i === items.length - 1;
+		const connector = isLastLine ? last : branch;
+		const rawId = task?.id?.trim();
+		const idLabel = rawId ? formatTaskId(rawId) : `#${i + 1}`;
+		let line = `${contPrefix}${connector} ${theme.fg("accent", theme.bold(idLabel))}`;
+		const desc = task?.description?.trim();
+		if (desc) {
+			line += `: ${theme.fg("muted", truncateToWidth(replaceTabs(desc), 64))}`;
+		}
+		lines.push(line);
+	}
+	if (truncated) {
+		lines.push(`${contPrefix}${last} ${theme.fg("dim", formatMoreItems(items.length - cap, "agent"))}`);
+	}
+	return lines;
+}
+
+/**
  * Render the tool call arguments.
  */
-export function renderCall(args: TaskParams, _options: RenderResultOptions, theme: Theme): Component {
+export function renderCall(
+	args: TaskParams,
+	options: RenderResultOptions & { renderContext?: { hasResult?: boolean } },
+	theme: Theme,
+): Component {
 	const lines: string[] = [];
 	lines.push(renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme));
 
-	const contextTemplate = args.context ?? "";
-	const context = contextTemplate.trim();
+	const context = (args.context ?? "").trim();
 	const hasContext = context.length > 0;
 	const branch = theme.fg("dim", theme.tree.branch);
 	const last = theme.fg("dim", theme.tree.last);
 	const vertical = theme.fg("dim", theme.tree.vertical);
 	const showIsolated = "isolated" in args && args.isolated === true;
+	const taskCount = args.tasks?.length ?? 0;
 
 	if (hasContext) {
 		lines.push(` ${branch} ${theme.fg("dim", "Context")}`);
@@ -505,19 +545,23 @@ export function renderCall(args: TaskParams, _options: RenderResultOptions, them
 			const content = line ? theme.fg("muted", replaceTabs(line)) : "";
 			lines.push(` ${vertical}  ${content}`);
 		}
-		const taskPrefix = showIsolated ? branch : last;
-		lines.push(
-			` ${taskPrefix} ${theme.fg("dim", "Tasks")}: ${theme.fg("muted", `${args.tasks?.length ?? 0} agents`)}`,
-		);
-		if (showIsolated) {
-			lines.push(` ${last} ${theme.fg("dim", "Isolated")}: ${theme.fg("muted", "true")}`);
-		}
-		return new Text(lines.join("\n"), 0, 0);
 	}
 
-	lines.push(`${theme.fg("dim", "Tasks")}: ${theme.fg("muted", `${args.tasks?.length ?? 0} agents`)}`);
+	// `Tasks` is the last child unless the isolation flag follows it.
+	const tasksIsLast = !showIsolated;
+	const tasksPrefix = tasksIsLast ? last : branch;
+	lines.push(` ${tasksPrefix} ${theme.fg("dim", "Tasks")} ${theme.fg("muted", `(${taskCount})`)}`);
+	const tasksContPrefix = tasksIsLast ? "    " : ` ${vertical}  `;
+	// The per-task preview list only exists to surface dispatched agents while
+	// the call args stream in. Once a result snapshot exists, `renderResult`
+	// draws the same agents as progress/result lines (id + description), so
+	// emitting the preview here would render every task twice.
+	if (!options.renderContext?.hasResult) {
+		lines.push(...renderTaskItemLines(args.tasks, tasksContPrefix, options.expanded, theme));
+	}
+
 	if (showIsolated) {
-		lines.push(`${theme.fg("dim", "Isolated")}: ${theme.fg("muted", "true")}`);
+		lines.push(` ${last} ${theme.fg("dim", "Isolated")}: ${theme.fg("muted", "true")}`);
 	}
 
 	return new Text(lines.join("\n"), 0, 0);
@@ -551,20 +595,28 @@ function renderAgentProgress(
 	const titlePart = description ? `${theme.bold(displayId)}: ${description}` : displayId;
 	let statusLine = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;
 
-	// Only show badge for non-running states (spinner already indicates running)
-	if (progress.status === "failed" || progress.status === "aborted") {
+	// Show retry-blocked badge so the parent immediately sees that a child
+	// is sleeping on a provider 429, not silently progressing. Wins over the
+	// generic running spinner because "we're waiting on a quota window" is
+	// the operationally meaningful state.
+	if (progress.retryState && progress.status === "running") {
+		statusLine += ` ${formatBadge("retrying", "warning", theme)}`;
+	} else if (progress.retryFailure && (progress.status === "failed" || progress.status === "aborted")) {
+		statusLine += ` ${formatBadge("rate-limited", "error", theme)}`;
+	} else if (progress.status === "failed" || progress.status === "aborted") {
 		const statusLabel = progress.status === "failed" ? "failed" : "aborted";
 		statusLine += ` ${formatBadge(statusLabel, iconColor, theme)}`;
 	}
 
+	const showBadge = settings.get("task.showResolvedModelBadge");
 	if (progress.status === "running") {
 		if (!description) {
 			const taskPreview = truncateToWidth(progress.assignment ?? progress.task, 40);
 			statusLine += ` ${theme.fg("muted", taskPreview)}`;
 		}
-		statusLine = appendAgentStats(statusLine, progress, theme);
+		statusLine = appendAgentStats(statusLine, { ...progress, showResolvedModelBadge: showBadge }, theme);
 	} else if (progress.status === "completed") {
-		statusLine = appendAgentStats(statusLine, progress, theme);
+		statusLine = appendAgentStats(statusLine, { ...progress, showResolvedModelBadge: showBadge }, theme);
 	}
 
 	lines.push(statusLine);
@@ -598,6 +650,23 @@ function renderAgentProgress(
 		}
 	}
 
+	// Retry detail line: surface why the subagent is paused and roughly how
+	// long until the next attempt. Without this, the parent UI would just
+	// keep spinning while a child sleeps on a 3-hour provider rate-limit.
+	if (progress.retryState && progress.status === "running") {
+		const remainingMs = Math.max(0, progress.retryState.startedAtMs + progress.retryState.delayMs - Date.now());
+		const waitLabel = remainingMs > 0 ? `in ${formatDuration(remainingMs)}` : "now";
+		const summary =
+			`retrying ${progress.retryState.attempt}/${progress.retryState.maxAttempts} ${waitLabel}: ` +
+			truncateToWidth(replaceTabs(progress.retryState.errorMessage), 60);
+		lines.push(`${continuePrefix}${theme.tree.hook} ${theme.fg("warning", summary)}`);
+	} else if (progress.retryFailure && progress.status !== "running") {
+		const summary = `auto-retry gave up after ${progress.retryFailure.attempt} attempt${
+			progress.retryFailure.attempt === 1 ? "" : "s"
+		}: ${truncateToWidth(replaceTabs(progress.retryFailure.errorMessage), 80)}`;
+		lines.push(`${continuePrefix}${theme.tree.hook} ${theme.fg("error", summary)}`);
+	}
+
 	// Render extracted tool data inline (e.g., review findings)
 	if (progress.extractedToolData) {
 		// For completed tasks, check for review verdict from yield tool
@@ -615,7 +684,8 @@ function renderAgentProgress(
 			}
 		}
 
-		for (const [toolName, dataArray] of Object.entries(progress.extractedToolData)) {
+		for (const toolName in progress.extractedToolData) {
+			const dataArray = progress.extractedToolData[toolName];
 			// Handle report_finding with tree formatting
 			if (toolName === "report_finding") {
 				const findings = normalizeReportFindings(dataArray);
@@ -624,6 +694,11 @@ function renderAgentProgress(
 				lines.push(...renderFindings(findings, continuePrefix, expanded, theme));
 				continue;
 			}
+
+			// Nested `task` data has its own dedicated tree renderer below that
+			// also merges in the in-flight snapshot — skip the generic inline
+			// path so we don't render twice.
+			if (toolName === "task") continue;
 
 			const handler = subprocessToolRegistry.getHandler(toolName);
 			if (handler?.renderInline) {
@@ -644,6 +719,20 @@ function renderAgentProgress(
 					);
 				}
 			}
+		}
+	}
+
+	// Nested `task` tree: completed sub-calls from `extractedToolData.task` plus
+	// the in-flight snapshot (if any). Surfacing this in the live view means
+	// the user sees deep-tree progress without waiting for this agent to finish
+	// its own turn.
+	const completedTaskCalls = (progress.extractedToolData?.task as TaskToolDetails[] | undefined) ?? [];
+	const inflight = progress.inflightTaskDetails;
+	if (completedTaskCalls.length > 0 || inflight) {
+		const snapshots = inflight ? [...completedTaskCalls, inflight] : completedTaskCalls;
+		const nestedLines = renderNestedTaskTree(snapshots, expanded, theme, spinnerFrame);
+		for (const line of nestedLines) {
+			lines.push(`${continuePrefix}${line}`);
 		}
 	}
 
@@ -794,6 +883,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 		iconColor,
 		theme,
 	)}`;
+	const showBadge = settings.get("task.showResolvedModelBadge");
 	statusLine = appendAgentStats(
 		statusLine,
 		{
@@ -801,6 +891,8 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 			contextTokens: result.contextTokens,
 			contextWindow: result.contextWindow,
 			cost: result.usage?.cost.total ?? 0,
+			resolvedModel: result.resolvedModel,
+			showResolvedModelBadge: showBadge,
 		},
 		theme,
 	);
@@ -1039,6 +1131,38 @@ function renderNestedTaskResults(detailsList: TaskToolDetails[], expanded: boole
 			const isLast = index === details.results.length - 1;
 			lines.push(...renderAgentResult(result, isLast, expanded, theme));
 		});
+	}
+	return lines;
+}
+
+/**
+ * Render a list of `TaskToolDetails` snapshots — completed (`results[]`) or
+ * in-flight (`progress[]`) — as an interleaved tree. Used by the live progress
+ * view to surface nested subagent activity while this agent is still running.
+ */
+function renderNestedTaskTree(
+	detailsList: TaskToolDetails[],
+	expanded: boolean,
+	theme: Theme,
+	spinnerFrame?: number,
+): string[] {
+	const lines: string[] = [];
+	for (const details of detailsList) {
+		const hasResults = Boolean(details.results && details.results.length > 0);
+		if (hasResults) {
+			details.results.forEach((result, index) => {
+				const isLast = index === details.results.length - 1;
+				lines.push(...renderAgentResult(result, isLast, expanded, theme));
+			});
+			continue;
+		}
+		const inflight = details.progress;
+		if (inflight && inflight.length > 0) {
+			inflight.forEach((prog, index) => {
+				const isLast = index === inflight.length - 1;
+				lines.push(...renderAgentProgress(prog, isLast, expanded, theme, spinnerFrame));
+			});
+		}
 	}
 	return lines;
 }

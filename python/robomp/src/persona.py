@@ -16,7 +16,7 @@ from importlib import resources
 from typing import Any
 
 from robomp.git_ops import DirtyState
-from robomp.github_client import CommentInfo, IssueInfo, RepoInfo
+from robomp.github_client import CommentInfo, IssueInfo, PullRequestInfo, RepoInfo
 from robomp.sandbox import Workspace
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
@@ -132,8 +132,16 @@ def system_append(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> 
     return render(_load("system_append.md"), {"repo": repo, "issue": issue, "workspace": workspace})
 
 
+def system_append_pr_review(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> str:
+    return render(_load("system_append_pr_review.md"), {"repo": repo, "issue": issue, "workspace": workspace})
+
+
 def kickoff(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> str:
     return render(_load("kickoff_issue.md"), {"repo": repo, "issue": issue, "workspace": workspace})
+
+
+def kickoff_pr_review(*, repo: RepoInfo, pr: PullRequestInfo, workspace: Workspace) -> str:
+    return render(_load("kickoff_pr_review.md"), {"repo": repo, "pr": pr, "workspace": workspace})
 
 
 def resume_triage(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> str:
@@ -144,6 +152,11 @@ def resume_triage(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> 
 def completion_reminder(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> str:
     """Reminder injected when a triage turn ends before a terminal tool fired."""
     return render(_load("completion_reminder.md"), {"repo": repo, "issue": issue, "workspace": workspace})
+
+
+def review_completion_reminder(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> str:
+    """Reminder injected when a PR review turn ends before submission."""
+    return render(_load("review_completion_reminder.md"), {"repo": repo, "issue": issue, "workspace": workspace})
 
 
 def dirty_state_reminder(
@@ -263,6 +276,7 @@ def followup_comment(
     workspace: Workspace,
     pr_status: str,
     pr_number: int | None = None,
+    thread: tuple = (),
 ) -> str:
     return render(
         _load("followup_comment.md"),
@@ -271,6 +285,7 @@ def followup_comment(
             "issue": issue,
             "workspace": workspace,
             "comment": comment,
+            "thread": _render_thread(thread),
             "state": {"pr_status": pr_status},
             "inbound": _inbound_scope(issue, pr_number),
             "origin": _origin_scope(issue),
@@ -374,8 +389,11 @@ __all__ = [
     "host_tool_parameter_description",
     "kickoff",
     "kickoff_directive",
+    "kickoff_pr_review",
     "render",
     "completion_reminder",
+    "review_completion_reminder",
+    "system_append_pr_review",
     "dirty_state_reminder",
     "resume_triage",
     "seed_phases",
