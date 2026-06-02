@@ -9,7 +9,6 @@ import type {
 	AgentDefinition,
 	AgentProgress,
 	AgentSource,
-	AuthStorage,
 	ModelRegistry,
 	Settings,
 	SingleResult,
@@ -25,7 +24,6 @@ export interface SwarmExecutorOptions {
 	modelOverride?: string;
 	signal?: AbortSignal;
 	onProgress?: (agentName: string, progress: AgentProgress) => void;
-	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
 	stateTracker: StateTracker;
@@ -45,18 +43,8 @@ export async function executeSwarmAgent(
 	index: number,
 	options: SwarmExecutorOptions,
 ): Promise<SingleResult> {
-	const {
-		workspace,
-		swarmName,
-		iteration,
-		modelOverride,
-		signal,
-		onProgress,
-		authStorage,
-		modelRegistry,
-		settings,
-		stateTracker,
-	} = options;
+	const { workspace, swarmName, iteration, modelOverride, signal, onProgress, modelRegistry, settings, stateTracker } =
+		options;
 
 	const agentId = `swarm-${swarmName}-${agent.name}-${iteration}`;
 
@@ -84,7 +72,6 @@ export async function executeSwarmAgent(
 			modelOverride,
 			signal,
 			onProgress: progress => onProgress?.(agent.name, progress),
-			authStorage,
 			modelRegistry,
 			settings,
 			enableLsp: false,
