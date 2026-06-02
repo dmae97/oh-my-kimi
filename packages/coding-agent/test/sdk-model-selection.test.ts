@@ -214,4 +214,75 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			authStorage.close();
 		}
 	});
+
+	test("restores extension role model when saved default cannot be restored before extensions load", async () => {
+		const settingsDefaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!settingsDefaultModel) {
+			throw new Error("Expected bundled anthropic default model");
+		}
+
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorage.setRuntimeApiKey(settingsDefaultModel.provider, "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+
+		// Saved default points at a provider that has no usable credentials. The
+		// last active role (`smol`) is supplied by the inline extension and is
+		// only resolvable once provider registrations are processed.
+		const targetSessionFile = path.join(tempDir, "resume-extension-default-missing.jsonl");
+		const timestamp = "2026-06-01T00:00:00.000Z";
+		await Bun.write(
+			targetSessionFile,
+			`${[
+				{ type: "session", version: 3, id: "resume-ext-no-default", timestamp, cwd: tempDir },
+				{
+					type: "model_change",
+					id: "default-model",
+					parentId: null,
+					timestamp,
+					model: "anthropic/not-available",
+					role: "default",
+				},
+				{
+					type: "model_change",
+					id: "smol-model",
+					parentId: "default-model",
+					timestamp,
+					model: "runtime-provider/runtime-model",
+					role: "smol",
+				},
+			]
+				.map(entry => JSON.stringify(entry))
+				.join("\n")}\n`,
+		);
+		const sessionManager = await SessionManager.open(targetSessionFile, path.join(tempDir, "sessions-no-default"));
+
+		const settings = Settings.isolated();
+		settings.setModelRole("default", `${settingsDefaultModel.provider}/${settingsDefaultModel.id}`);
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			sessionManager,
+			settings,
+			disableExtensionDiscovery: true,
+			extensions: [providerExtension],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("runtime-model");
+		} finally {
+			await session.dispose();
+			authStorage.close();
+		}
+	});
 });

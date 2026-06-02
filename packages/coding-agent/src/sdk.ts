@@ -1056,26 +1056,29 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const taskDepth = options.taskDepth ?? 0;
 
-	let thinkingLevel = options.thinkingLevel;
-
-	// If session has data and includes a thinking entry, restore it
-	if (thinkingLevel === undefined && hasExistingSession && hasThinkingEntry) {
-		thinkingLevel = parseThinkingLevel(existingSession.thinkingLevel);
-	}
-
-	if (thinkingLevel === undefined && !hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel) {
-		thinkingLevel = defaultRoleSpec.thinkingLevel;
-	}
-
-	// Prefer the selected model's configured defaultLevel, otherwise fall back
-	// to the global settings default.
-	if (thinkingLevel === undefined && model?.thinking?.defaultLevel !== undefined) {
-		thinkingLevel = model.thinking.defaultLevel;
-	}
-	if (thinkingLevel === undefined) {
-		thinkingLevel = settings.get("defaultThinkingLevel");
-	}
-	const autoThinking = thinkingLevel === AUTO_THINKING;
+	// Resolves the session/agent thinking level using the same precedence we
+	// apply at startup: explicit option → persisted session entry → default
+	// role's explicit selector → selected model's defaultLevel → global
+	// settings default. Run again after extension role reclaim so the final
+	// model's own defaults aren't masked by an earlier fallback model's.
+	const pickInitialThinkingLevel = (selectedModel: Model | undefined): ConfiguredThinkingLevel | undefined => {
+		let level = options.thinkingLevel;
+		if (level === undefined && hasExistingSession && hasThinkingEntry) {
+			level = parseThinkingLevel(existingSession.thinkingLevel);
+		}
+		if (level === undefined && !hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel) {
+			level = defaultRoleSpec.thinkingLevel;
+		}
+		if (level === undefined && selectedModel?.thinking?.defaultLevel !== undefined) {
+			level = selectedModel.thinking.defaultLevel;
+		}
+		if (level === undefined) {
+			level = settings.get("defaultThinkingLevel");
+		}
+		return level;
+	};
+	let thinkingLevel = pickInitialThinkingLevel(model);
+	let autoThinking = thinkingLevel === AUTO_THINKING;
 	// Concrete level the agent/session start with. With `auto` this is the
 	// provisional level shown until the first per-turn classification resolves;
 	// `auto` itself stays a session-only concept handled by AgentSession.
@@ -1461,13 +1464,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			extensionsResult.runtime.pendingProviderRegistrations = [];
 		}
 
-		// Retry preferred session-model candidates now that extension providers
-		// are registered. The initial restore above runs before extensions load,
-		// so a role model supplied by an extension would have fallen back to the
-		// session's saved default; reclaim it here so resume honors the last
-		// active role.
-		if (!hasExplicitModel && restoredSessionModelIndex > 0 && sessionModelStrings.length > 0) {
-			for (let i = 0; i < restoredSessionModelIndex; i++) {
+		// Retry session-model candidates now that extension providers are
+		// registered. The initial restore runs before extensions load, so a role
+		// model supplied by an extension would have either fallen back to the
+		// saved default (`restoredSessionModelIndex > 0`) or failed entirely
+		// (`restoredSessionModelIndex === -1`, with the settings default or
+		// downstream fallback filling `model`). Reclaim it here so resume
+		// honors the last active role in either case.
+		const sessionRetryLimit = restoredSessionModelIndex >= 0 ? restoredSessionModelIndex : sessionModelStrings.length;
+		if (!hasExplicitModel && sessionRetryLimit > 0) {
+			for (let i = 0; i < sessionRetryLimit; i++) {
 				const sessionModelStr = sessionModelStrings[i];
 				const parsedModel = parseModelString(sessionModelStr);
 				if (!parsedModel) continue;
@@ -1476,6 +1482,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					model = restoredModel;
 					modelFallbackMessage = undefined;
 					restoredSessionModelIndex = i;
+					// Recompute thinking-level from scratch against the reclaimed
+					// model: any value derived from the earlier fallback model's
+					// `thinking.defaultLevel` must not become sticky.
+					thinkingLevel = pickInitialThinkingLevel(restoredModel);
+					autoThinking = thinkingLevel === AUTO_THINKING;
+					effectiveThinkingLevel = thinkingLevel === AUTO_THINKING ? undefined : thinkingLevel;
 					effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
 						autoThinking
 							? resolveProvisionalAutoLevel(restoredModel)
