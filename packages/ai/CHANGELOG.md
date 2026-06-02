@@ -1,13 +1,15 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added `AnthropicMessagesClient` and related Anthropic wire types/errors via `anthropic-client` export so callers can build a standalone Anthropic Messages client without depending on `@anthropic-ai/sdk`
 - Added `parseClaudeRateLimitHeaders` and `AuthStorage.ingestUsageHeaders` so Anthropic rate-limit response headers can warm the per-credential usage cache with throttling while preserving per-tier data from the last full usage report.
 
 ### Changed
 
+- Changed Anthropic request handling to use the package-local `AnthropicMessagesClient` implementation instead of `@anthropic-ai/sdk` as the default transport
+- Updated the `AnthropicOptions.client` surface to accept any `AnthropicMessagesClientLike` implementation with `messages.create`, enabling custom compatible clients
 - Changed generated OAuth metadata `user_id` to use a deterministic `device_id` derived from the install ID instead of a random value
 - `claudeCodeVersion` bumped to `2.1.148` to match current Claude Code release.
 - `X-Stainless-Package-Version` updated to `0.94.0` (matches the bundled `@anthropic-ai/sdk` version); `X-Stainless-Runtime-Version` pinned to `v24.3.0` (Bun version bundled with CC 2.1.148); `X-Stainless-Os` header key corrected to `X-Stainless-OS`.
@@ -23,11 +25,18 @@
 
 ### Fixed
 
+- Restored `eager_input_streaming` and strict flags on OAuth Anthropic tool definitions when model compatibility allows eager streaming.
+- Fixed OAuth stream calls with injected custom clients missing a `beta` client by falling back to `client.messages.create` instead of requiring `client.beta.messages.create`
+- Fixed direct use of internal API client typing so retry/timeouts and malformed-error classification remain compatible while not requiring the external SDK
 - Fixed Cursor provider requests failing with `Cannot send empty user message to Cursor API` after tool-result history by selecting the latest user/developer turn instead of assuming the final context message is the active user turn.
 - Fixed Anthropic web search dropping `ANTHROPIC_CUSTOM_HEADERS` when `CLAUDE_CODE_USE_FOUNDRY` was unset, causing 401s from corporate API gateways. `resolveAnthropicCustomHeadersForBaseUrl` now forwards the parsed headers whenever the base URL is non-Anthropic (or Foundry is enabled), and `buildAnthropicSearchHeaders` threads them through `buildAnthropicHeaders` so the search and streaming paths behave identically ([#1693](https://github.com/can1357/oh-my-pi/issues/1693)).
 - Fixed OpenCode Go Anthropic-format models such as `qwen3.7-max` sending Anthropic `X-Api-Key` auth alongside the OpenCode bearer token, avoiding spurious Alibaba `401 Invalid API-key provided` errors. ([#1661](https://github.com/can1357/oh-my-pi/issues/1661))
 - Fixed OAuth token exchange and refresh flows to fetch Claude CLI bootstrap identity when token responses omit account information, so `accountId` and `email` are now recovered when available
-- Fixed OAuth Anthropic requests streaming no thinking traces. The Claude Code parity work both sent the `redact-thinking-2026-02-12` beta on every message request and stopped sending `thinking.display = "summarized"` for OAuth on Opus 4.7+ (whose adaptive thinking defaults to omitted content). The redact beta is now only sent when the caller explicitly hides thinking (`thinkingDisplay: "omitted"`, i.e. `hideThinkingSummary`), and OAuth requests opt back into summarized display like API-key requests.
+- Fixed Anthropic thinking traces being lost across both direct OAuth and Anthropic Messages gateway paths. Direct OAuth requests no longer send `redact-thinking-2026-02-12` unless thinking is explicitly hidden and always opt Opus 4.7+ adaptive thinking into `display: "summarized"`; gateway-parsed Anthropic requests now translate inbound `thinking` / `output_config.effort` / `thinking.display` into `streamSimple` reasoning and hide-summary options instead of silently dropping them.
+
+### Removed
+
+- Removed the `@anthropic-ai/sdk` runtime dependency. The Anthropic provider now uses the package-local `AnthropicMessagesClient` and hand-maintained wire types in `providers/anthropic-wire.ts`; the SDK was only ever used for URL assembly, auth-header injection, bounded retries, the pre-response timeout, and HTTP-error-to-status mapping, all of which are reproduced with identical observable behavior.
 
 ## [15.7.5] - 2026-06-01
 

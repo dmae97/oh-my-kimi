@@ -775,7 +775,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(block).not.toHaveProperty("minItems");
 	});
 
-	it("keeps OAuth tool names behind the proxy prefix without strict or eager streaming flags", async () => {
+	it("keeps OAuth tool names behind the proxy prefix with eager streaming and strict flags", async () => {
 		const tools: Tool[] = [
 			{
 				name: "bash",
@@ -798,8 +798,8 @@ describe("Anthropic request fingerprint alignment", () => {
 		};
 
 		expect(payload.tools?.[0]?.name).toBe("proxy_bash");
-		expect(payload.tools?.[0]?.strict).toBeUndefined();
-		expect(payload.tools?.[0]?.eager_input_streaming).toBeUndefined();
+		expect(payload.tools?.[0]?.strict).toBe(true);
+		expect(payload.tools?.[0]?.eager_input_streaming).toBe(true);
 		expect(payload.tools?.[0]?.cache_control).toBeUndefined();
 	});
 
