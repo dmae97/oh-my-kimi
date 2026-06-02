@@ -50,6 +50,7 @@ export function getTerminalId(): string | null {
 	}
 
 	// Fallback to terminal-specific env vars
+	// Preserve precedence for nested terminals: kitty first, then tmux panes before outer cmux surfaces.
 	const kittyId = process.env.KITTY_WINDOW_ID;
 	if (kittyId) return `kitty-${kittyId}`;
 
