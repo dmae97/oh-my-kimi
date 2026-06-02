@@ -1286,7 +1286,12 @@ export class Theme {
 	#bgColors: Record<ThemeBg, string>;
 	#symbols: SymbolMap;
 	#spinnerFramesOverrides: Partial<Record<SpinnerType, string[]>>;
-	/** True when the active theme has a light background; drives accent legibility. */
+	/**
+	 * True when the status-line background is light. Session accents render on the
+	 * status line / editor chrome, so legibility is classified against that surface
+	 * (`statusLineBg`) rather than the chat bubble (`userMessageBg`), which some
+	 * themes — e.g. `porcelain` — style dark on an otherwise-light theme.
+	 */
 	readonly isLight: boolean;
 
 	constructor(
@@ -1297,7 +1302,7 @@ export class Theme {
 		symbolOverrides: Partial<Record<SymbolKey, string>>,
 		spinnerFramesOverrides: Partial<Record<SpinnerType, string[]>> = {},
 	) {
-		this.isLight = bgIsLight(bgColors.userMessageBg);
+		this.isLight = bgIsLight(bgColors.statusLineBg);
 		this.#fgColors = {} as Record<ThemeColor, string>;
 		for (const [key, value] of Object.entries(fgColors) as [ThemeColor, string | number][]) {
 			this.#fgColors[key] = fgAnsi(value, mode);
