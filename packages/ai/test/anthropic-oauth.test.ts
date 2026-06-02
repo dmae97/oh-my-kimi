@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { buildAnthropicAuthConfig, buildAnthropicUrl } from "../src/utils/anthropic-auth";
+import { buildAnthropicAuthConfig, buildAnthropicSearchHeaders, buildAnthropicUrl } from "../src/utils/anthropic-auth";
 import { AnthropicOAuthFlow, refreshAnthropicToken } from "../src/utils/oauth/anthropic";
 import { withEnv } from "./helpers";
 
@@ -259,5 +259,68 @@ describe("buildAnthropicAuthConfig", () => {
 				expect(config.baseUrl).toBe("https://api.anthropic.com");
 			},
 		);
+	});
+});
+
+describe("buildAnthropicSearchHeaders", () => {
+	it("forwards ANTHROPIC_CUSTOM_HEADERS when the base URL is an enterprise gateway", async () => {
+		await withEnv(
+			{
+				CLAUDE_CODE_USE_FOUNDRY: undefined,
+				FOUNDRY_BASE_URL: undefined,
+				ANTHROPIC_BASE_URL: "https://gateway.example.com",
+				ANTHROPIC_CUSTOM_HEADERS: "X-Gateway-Key: secret, X-Route: search",
+			},
+			() => {
+				const auth = buildAnthropicAuthConfig("sk-ant-api-key");
+				expect(auth.baseUrl).toBe("https://gateway.example.com");
+				const headers = buildAnthropicSearchHeaders(auth);
+				expect(headers["X-Gateway-Key"]).toBe("secret");
+				expect(headers["X-Route"]).toBe("search");
+				// Non-Anthropic base URL uses Bearer auth, not X-Api-Key.
+				expect(headers.Authorization).toBe("Bearer sk-ant-api-key");
+				expect(headers["X-Api-Key"]).toBeUndefined();
+			},
+		);
+	});
+
+	it("omits ANTHROPIC_CUSTOM_HEADERS when targeting api.anthropic.com without Foundry", async () => {
+		await withEnv(
+			{
+				CLAUDE_CODE_USE_FOUNDRY: undefined,
+				FOUNDRY_BASE_URL: undefined,
+				ANTHROPIC_BASE_URL: undefined,
+				ANTHROPIC_CUSTOM_HEADERS: "X-Gateway-Key: secret",
+			},
+			() => {
+				const auth = buildAnthropicAuthConfig("sk-ant-api-key");
+				expect(auth.baseUrl).toBe("https://api.anthropic.com");
+				const headers = buildAnthropicSearchHeaders(auth);
+				expect(headers["X-Gateway-Key"]).toBeUndefined();
+				expect(headers["X-Api-Key"]).toBe("sk-ant-api-key");
+			},
+		);
+	});
+
+	it("forwards ANTHROPIC_CUSTOM_HEADERS in Foundry mode even on an Anthropic-shaped base URL", async () => {
+		await withEnv(
+			{
+				CLAUDE_CODE_USE_FOUNDRY: "true",
+				FOUNDRY_BASE_URL: undefined,
+				ANTHROPIC_BASE_URL: undefined,
+				ANTHROPIC_CUSTOM_HEADERS: "user-id: alice",
+			},
+			() => {
+				const auth = buildAnthropicAuthConfig("sk-ant-api-key", "https://api.anthropic.com");
+				const headers = buildAnthropicSearchHeaders(auth);
+				expect(headers["user-id"]).toBe("alice");
+			},
+		);
+	});
+
+	it("includes the web-search beta in Anthropic-Beta", () => {
+		const auth = buildAnthropicAuthConfig("sk-ant-api-key");
+		const headers = buildAnthropicSearchHeaders(auth);
+		expect(headers["Anthropic-Beta"]).toContain("web-search-2025-03-05");
 	});
 });

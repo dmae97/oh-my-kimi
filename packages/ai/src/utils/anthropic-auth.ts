@@ -12,6 +12,7 @@ import { $env } from "@oh-my-pi/pi-utils";
 import {
 	buildAnthropicHeaders as buildProviderAnthropicHeaders,
 	normalizeAnthropicBaseUrl,
+	resolveAnthropicCustomHeadersForBaseUrl,
 } from "../providers/anthropic";
 import { isFoundryEnabled } from "./foundry";
 
@@ -66,6 +67,10 @@ export function buildAnthropicAuthConfig(apiKey: string, baseUrl?: string): Anth
 
 /**
  * Builds HTTP headers for Anthropic API requests (search variant).
+ *
+ * Forwards `ANTHROPIC_CUSTOM_HEADERS` when the resolver deems them applicable
+ * (Foundry mode, or a non-Anthropic base URL — typically an enterprise
+ * gateway), matching the streaming path so web search behaves identically.
  */
 export function buildAnthropicSearchHeaders(auth: AnthropicAuthConfig): Record<string, string> {
 	return buildProviderAnthropicHeaders({
@@ -74,6 +79,7 @@ export function buildAnthropicSearchHeaders(auth: AnthropicAuthConfig): Record<s
 		isOAuth: auth.isOAuth,
 		extraBetas: ["web-search-2025-03-05"],
 		stream: false,
+		modelHeaders: resolveAnthropicCustomHeadersForBaseUrl(auth.baseUrl),
 	});
 }
 
