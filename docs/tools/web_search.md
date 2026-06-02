@@ -145,8 +145,8 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
     - `limit` and `num_search_results` are collapsed together before dispatch.
     - Output may include parsed free-text `answer`, `sources`, `requestId`.
   - **Exa** — `packages/coding-agent/src/web/search/providers/exa.ts`
-    - Availability: always true unless settings explicitly disable `exa.enabled` or `exa.enableSearch`; the adapter can use public MCP even without `EXA_API_KEY`.
-    - Querying: with `EXA_API_KEY`, POST `https://api.exa.ai/search`; otherwise call MCP tool `web_search_exa`.
+    - Availability: env or `agent.db` credential for `exa`; settings must not explicitly disable `exa.enabled` or `exa.enableSearch`.
+    - Querying: POST `https://api.exa.ai/search` with the resolved Exa API key.
     - `limit` and `num_search_results` are collapsed together before dispatch.
     - Output: synthesized `answer` from up to 3 result summaries, `sources`, `requestId`.
   - **Parallel** — `packages/coding-agent/src/web/search/providers/parallel.ts`, `packages/coding-agent/src/web/parallel.ts`
