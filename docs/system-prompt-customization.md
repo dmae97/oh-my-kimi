@@ -6,8 +6,8 @@ Primary implementation:
 
 - `packages/coding-agent/src/system-prompt.ts` (`buildSystemPrompt`, `loadSystemPromptFiles`)
 - `packages/coding-agent/src/main.ts` (`discoverSystemPromptFile`, `discoverAppendSystemPromptFile`)
-- `packages/coding-agent/src/prompts/system/system-prompt.md` (default template)
-- `packages/coding-agent/src/prompts/system/custom-system-prompt.md` (override template)
+- `packages/coding-agent/src/prompts/system/system-prompt.md` (default stable instruction template)
+- `packages/coding-agent/src/prompts/system/custom-system-prompt.md` (internal custom-prompt template; not the normal CLI `SYSTEM.md` path)
 - `packages/coding-agent/src/prompts/system/project-prompt.md` (project/environment footer)
 
 ---
@@ -18,9 +18,9 @@ Four user-controllable inputs feed prompt assembly. All four resolve a value as 
 
 | Input | Source | Effect |
 |---|---|---|
-| `--system-prompt <text-or-file>` | CLI flag | Replaces the default prompt. Highest precedence. |
+| `--system-prompt <text-or-file>` | CLI flag | Replaces block 0: the default stable instructions. Highest precedence. |
 | `SYSTEM.md` | `<cwd>/.omp/SYSTEM.md` (walk-up), then `~/.omp/agent/SYSTEM.md` (and equivalent paths under `.claude`, `.codex`, `.gemini`) | Same effect as `--system-prompt`; used when the flag is absent. |
-| `--append-system-prompt <text-or-file>` | CLI flag | Appended after the (default or custom) prompt. |
+| `--append-system-prompt <text-or-file>` | CLI flag | Adds a prompt block. Without a custom system prompt it goes after all default blocks; with one it goes after the custom block and before the preserved project/environment footer. |
 | `APPEND_SYSTEM.md` | Same discovery as `SYSTEM.md` | Same effect as `--append-system-prompt`; used when the flag is absent. |
 
 Discovery for `SYSTEM.md` / `APPEND_SYSTEM.md` uses `findConfigFile` (`packages/coding-agent/src/config.ts`): the first existing file across the ordered bases (`.omp`, `.claude`, `.codex`, `.gemini` — project-level first, then user-level) wins. See [`docs/config-usage.md`](./config-usage.md) for the full discovery contract.
@@ -37,35 +37,38 @@ For append, the same precedence applies between `--append-system-prompt`, projec
 
 ## 2) Replace vs. append
 
-Two templates exist:
-
-- `system-prompt.md` (default) — full staff-engineer preamble, env/workstation info, tool inventory, skills/rules, exploration rules, etc.
-- `custom-system-prompt.md` (override) — minimal wrapper: user content, then optional context blocks (AGENTS.md files, skills list, always-apply rules, domain rules).
-
-`buildSystemPrompt` picks the template based on whether a custom prompt was supplied:
+Normal CLI startup builds the default provider-facing prompt blocks first, then applies CLI / discovered file overrides in `packages/coding-agent/src/main.ts`:
 
 ```ts
-const rendered = prompt.render(
-  resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate,
-  data,
-);
+if (resolvedSystemPrompt && resolvedAppendPrompt) {
+  options.systemPrompt = defaultPrompt => [resolvedSystemPrompt, resolvedAppendPrompt, ...defaultPrompt.slice(1)];
+} else if (resolvedSystemPrompt) {
+  options.systemPrompt = defaultPrompt => [resolvedSystemPrompt, ...defaultPrompt.slice(1)];
+} else if (resolvedAppendPrompt) {
+  options.systemPrompt = defaultPrompt => [...defaultPrompt, resolvedAppendPrompt];
+}
 ```
 
-Consequences:
+The default blocks come from `buildSystemPrompt`:
 
-- Providing `--system-prompt` or `SYSTEM.md` **replaces** the default prompt entirely. The default "staff engineer" preamble, the `ENV` / `Tools` / `Exploration` / `Tool Priority` / `Workflow` sections, the workstation info, the workspace tree, the today's-date/cwd footer (`project-prompt.md`), and the dir-context list are NOT injected. The override template only adds: context files (AGENTS.md), skills list, always-apply rules, and domain rules.
-- Providing `--append-system-prompt` or `APPEND_SYSTEM.md` **appends** to whichever template was selected. The default prompt and its project footer remain intact.
+- block 0: `system-prompt.md` — the stable default instructions (staff-engineer preamble, tool inventory, exploration rules, workflow rules, etc.);
+- block 1, when non-empty: `project-prompt.md` — dynamic project/environment context (workstation info, context files, dir-context list, workspace tree, current date/cwd, and other project footer content).
 
-If you want to keep the default prompt and add to it, use `--append-system-prompt` / `APPEND_SYSTEM.md`. If you want to start from scratch, use `--system-prompt` / `SYSTEM.md`.
+Consequences for normal CLI use:
+
+- Providing `--system-prompt` or `SYSTEM.md` replaces only block 0. The stable default instructions are removed, but the dynamic project/environment footer from `project-prompt.md` remains as `defaultPrompt.slice(1)`.
+- Providing `--append-system-prompt` or `APPEND_SYSTEM.md` without a custom system prompt appends a new block after all default blocks.
+- Providing both a custom system prompt and an append prompt produces: custom system prompt block, append prompt block, then the preserved dynamic project/environment footer.
+
+If you want to keep both default blocks and add to them, use `--append-system-prompt` / `APPEND_SYSTEM.md` without `--system-prompt` / `SYSTEM.md`. If you want to replace the stable default instructions while keeping the dynamic footer, use `--system-prompt` / `SYSTEM.md`.
 
 ---
 
 ## 3) Templating contract
 
-**Contents of `SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, and `--append-system-prompt` are treated as plain text.** They are interpolated verbatim into the parent template.
+**Contents of `SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, and `--append-system-prompt` are treated as plain text.** They are resolved before prompt-block replacement and are not rendered as Handlebars templates.
 
-The parent template is Handlebars (`packages/utils/src/prompt.ts`), but a `{{value}}` reference in Handlebars does not recursively render its substituted contents — the value is emitted as a string. Concretely:
-
+The built-in prompt templates are Handlebars (`packages/utils/src/prompt.ts`), but user-provided strings are not compiled with that renderer. The secondary capability path can insert `systemPromptCustomization` into a Handlebars parent template, but a `{{value}}` reference in Handlebars still does not recursively render its substituted contents — the value is emitted as a string. Concretely:
 ```handlebars
 {{! parent template — handled by Handlebars }}
 {{#if systemPromptCustomization}}
@@ -92,7 +95,7 @@ If a future release exposes a templating surface for `SYSTEM.md`, it will be opt
 
 ### "Tweak the default" — keep default, add a few rules
 
-Use `APPEND_SYSTEM.md` (or `--append-system-prompt`). The default prompt — including environment info, workspace tree, and the dated project footer — stays intact; your text is appended at the very end.
+Use `APPEND_SYSTEM.md` (or `--append-system-prompt`) without `SYSTEM.md`. The default stable instructions and the dynamic project/environment footer stay intact; your text is appended as an additional block.
 
 ```text
 # ~/.omp/agent/APPEND_SYSTEM.md
@@ -100,9 +103,9 @@ Prefer Bun APIs over Node APIs in this project.
 When you change a public function, run `bun check` before yielding.
 ```
 
-### "Replace the default entirely" — bring your own prompt
+### "Replace the stable default instructions" — bring your own base prompt
 
-Use `SYSTEM.md` (or `--system-prompt`). You own everything except the auto-appended context blocks (AGENTS.md, skills list, always-apply rules, domain rules). You will NOT get the default tool guidance, exploration rules, or environment-aware footer — copy what you need from `packages/coding-agent/src/prompts/system/system-prompt.md` and adjust.
+Use `SYSTEM.md` (or `--system-prompt`). You replace the stable default instructions in block 0, but normal CLI startup still preserves the dynamic project/environment footer block (`project-prompt.md`): workstation info, context files, dir-context list, workspace tree, current date, cwd, and related project context.
 
 ```text
 # ~/.omp/agent/SYSTEM.md
@@ -111,31 +114,35 @@ You are a code reviewer. Read diffs, surface issues, never edit files.
 - Prefer concrete fixes over abstract advice.
 ```
 
-If you do this and want environment info (cwd, date, GPU, etc.) anyway, paste a snapshot or read it from the tooling at conversation time — there is currently no way to reuse the default template's rendering pieces from `SYSTEM.md`.
+If you do this and want default tool guidance, exploration rules, or workflow rules, copy what you need from `packages/coding-agent/src/prompts/system/system-prompt.md` and maintain it yourself — there is currently no way to inherit selected sections from that stable default instruction block.
 
-### "Replace, but keep one section of the default" — not directly supported
+### "Replace everything, including project context" — SDK-only
 
-There is no built-in way to inherit specific blocks of the default prompt while overriding the rest. The two supported modes are full-replace (`SYSTEM.md`) and append (`APPEND_SYSTEM.md`). If you need this, file a feature request describing the section you want to inherit.
+The normal CLI file/flag path intentionally preserves `defaultPrompt.slice(1)`. Code using `CreateAgentSessionOptions.systemPrompt` directly can return a full replacement array and omit the project footer, but that is not what `.omp/SYSTEM.md`, `~/.omp/agent/SYSTEM.md`, or `--system-prompt` do.
+
+### "Replace, but keep one section of the default instructions" — not directly supported
+
+There is no built-in way to inherit specific sections from `system-prompt.md` while replacing the rest. The supported CLI modes are: append to the default prompt, or replace block 0 and keep the dynamic footer.
 
 ---
 
 ## 5) Deduplication
 
-To avoid double-injecting the same content, `buildSystemPrompt` deduplicates:
+The CLI path avoids double-injecting discovered `SYSTEM.md` by replacing block 0 after the default prompt blocks are rendered. Any `systemPromptCustomization` from the secondary capability path would have been rendered into block 0, and that block is discarded when `main.ts` applies `[resolvedSystemPrompt, ...defaultPrompt.slice(1)]`.
 
-- If both `SYSTEM.md` (via `loadSystemPromptFiles`) and `--system-prompt` / discovered `SYSTEM.md` (via `discoverSystemPromptFile`) resolve to the same path, the `systemPromptCustomization` block is dropped because its blocks already appear in `customPrompt` (`dedupePromptSource`).
-- Always-apply rules whose body appears verbatim in any of `{customPrompt, appendPrompt, systemPromptCustomization}` are omitted from the rules block (`dedupeAlwaysApplyRules`).
+Inside `buildSystemPrompt` itself, secondary customization and always-apply rules are still deduplicated:
 
-These passes work on **whitespace-normalized blocks separated by blank lines**, so trivial reformatting will not defeat them, but semantic restatements will not be matched.
+- `dedupePromptSource` drops a `systemPromptCustomization` block when it already appears in an internally supplied `customPrompt` or append prompt.
+- `dedupeAlwaysApplyRules` omits always-apply rules whose body appears verbatim in any of `{customPrompt, appendPrompt, systemPromptCustomization}`.
 
 ---
 
 ## 6) Discovery and the empty-directory rule
 
-Two code paths exist for reading `SYSTEM.md` / `APPEND_SYSTEM.md`:
+Two code paths can read `SYSTEM.md` / `APPEND_SYSTEM.md`:
 
-- The primary path (`discoverSystemPromptFile` in `main.ts`, which feeds `customPrompt` / `appendPrompt`) calls `findConfigFile` and only checks file existence. It works even if `.omp/` contains only the `SYSTEM.md` file itself.
-- The secondary capability path (`loadSystemPromptFiles` → builtin discovery) requires the project `.omp/` directory to be non-empty (the same admission rule applied to every other config file under `.omp/`). When this path skips the file, the primary path's copy already populated `customPrompt`, so deduplication leaves user-facing behavior unchanged.
+- The primary CLI path (`discoverSystemPromptFile` / `discoverAppendSystemPromptFile` in `main.ts`, which feeds `resolvedSystemPrompt` / `resolvedAppendPrompt`) calls `findConfigFile` and only checks file existence. It works even if `.omp/` contains only the `SYSTEM.md` file itself.
+- The secondary capability path (`loadSystemPromptFiles` → builtin discovery) requires the project `.omp/` directory to be non-empty (the same admission rule applied to every other config file under `.omp/`). When this path skips the file, the primary CLI path still populated `resolvedSystemPrompt`, so user-facing behavior is unchanged.
 
 Net effect: `SYSTEM.md` and `APPEND_SYSTEM.md` are picked up even from an otherwise empty `.omp/`. The non-empty rule documented in [`docs/config-usage.md`](./config-usage.md) applies to the capability layer specifically.
 
@@ -145,9 +152,9 @@ Net effect: `SYSTEM.md` and `APPEND_SYSTEM.md` are picked up even from an otherw
 
 | Goal | Use |
 |---|---|
-| Add an instruction on top of the default prompt | `APPEND_SYSTEM.md` or `--append-system-prompt` |
-| Replace the prompt entirely | `SYSTEM.md` or `--system-prompt` |
+| Add an instruction on top of the full default prompt | `APPEND_SYSTEM.md` or `--append-system-prompt` |
+| Replace the stable default instructions but keep project/environment context | `SYSTEM.md` or `--system-prompt` |
 | Use `{{cwd}}` / `{{date}}` / other internals in my file | Not supported. Files are inserted verbatim. |
-| Inherit specific parts of the default prompt | Not supported; use append, or copy what you need into `SYSTEM.md`. |
+| Inherit specific sections from `system-prompt.md` | Not supported; use append, or copy what you need into `SYSTEM.md`. |
 | Override at a per-repo level | Project `.omp/SYSTEM.md` or `.omp/APPEND_SYSTEM.md` |
 | Override globally | `~/.omp/agent/SYSTEM.md` or `~/.omp/agent/APPEND_SYSTEM.md` |
