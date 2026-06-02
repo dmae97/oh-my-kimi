@@ -26,6 +26,20 @@ function makeCopilotClaudeModel(): Model<"anthropic-messages"> {
 		maxTokens: 16000,
 	};
 }
+function makeOpenCodeGoQwen37Model(): Model<"anthropic-messages"> {
+	return {
+		id: "qwen3.7-max",
+		name: "Qwen3.7 Max",
+		api: "anthropic-messages",
+		provider: "opencode-go",
+		baseUrl: "https://opencode.ai/zen/go",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1_000_000,
+		maxTokens: 65_536,
+	};
+}
 
 const testContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
@@ -58,6 +72,22 @@ describe("Anthropic Copilot auth config", () => {
 		});
 
 		expect(options.apiKey).toBeNull();
+		expect(options.defaultHeaders.Authorization).toBe(`Bearer ${token}`);
+	});
+
+	it("uses bearer-only auth for OpenCode Go Anthropic models", () => {
+		const model = makeOpenCodeGoQwen37Model();
+		const token = "opencode_test_key";
+		const options = buildAnthropicClientOptions({
+			model,
+			apiKey: token,
+			extraBetas: [],
+			stream: true,
+			dynamicHeaders: {},
+		});
+
+		expect(options.apiKey).toBeNull();
+		expect(options.authToken).toBeNull();
 		expect(options.defaultHeaders.Authorization).toBe(`Bearer ${token}`);
 	});
 
