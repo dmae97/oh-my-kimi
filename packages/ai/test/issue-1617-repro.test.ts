@@ -70,8 +70,8 @@ describe("opencode-zen/-go resolver routes MiniMax M3 to openai-completions (iss
 				JSON.stringify({
 					data: [
 						{
-							id: "minimax-m3-future",
-							name: "MiniMax M3 Future",
+							id: "minimax-m3-free",
+							name: "MiniMax M3 Free",
 							context_length: 200000,
 						},
 					],
@@ -83,7 +83,7 @@ describe("opencode-zen/-go resolver routes MiniMax M3 to openai-completions (iss
 
 		const options = opencodeZenModelManagerOptions({ apiKey: "opencode-test-key" });
 		const models = await options.fetchDynamicModels?.();
-		const m3 = models?.find(model => model.id === "minimax-m3-future");
+		const m3 = models?.find(model => model.id === "minimax-m3-free");
 
 		expect(requestedUrl).toBe("https://opencode.ai/zen/v1/models");
 		expect(m3?.api).toBe("openai-completions");
@@ -98,8 +98,8 @@ describe("opencode-zen/-go resolver routes MiniMax M3 to openai-completions (iss
 				JSON.stringify({
 					data: [
 						{
-							id: "minimax-m3-future",
-							name: "MiniMax M3 Future",
+							id: "minimax-m3",
+							name: "MiniMax M3",
 							context_length: 200000,
 						},
 					],
@@ -111,7 +111,7 @@ describe("opencode-zen/-go resolver routes MiniMax M3 to openai-completions (iss
 
 		const options = opencodeGoModelManagerOptions({ apiKey: "opencode-test-key" });
 		const models = await options.fetchDynamicModels?.();
-		const m3 = models?.find(model => model.id === "minimax-m3-future");
+		const m3 = models?.find(model => model.id === "minimax-m3");
 
 		expect(requestedUrl).toBe("https://opencode.ai/zen/go/v1/models");
 		expect(m3?.api).toBe("openai-completions");
