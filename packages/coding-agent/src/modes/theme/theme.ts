@@ -13,6 +13,7 @@ import type { EditorTheme, MarkdownTheme, SelectListTheme, SymbolTheme } from "@
 import { adjustHsv, getCustomThemesDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import * as z from "zod/v4";
+import { hexLuminance } from "../../utils/color";
 // Embed theme JSON files at build time
 import darkThemeJson from "./dark.json" with { type: "json" };
 import { defaultThemes } from "./defaults";
@@ -1272,13 +1273,11 @@ const langMap: Record<string, SymbolKey> = {
 	bin: "lang.binary",
 };
 
-/** Whether a resolved #rrggbb background reads as light (ITU-R BT.709 luminance > 0.5). */
+/** Whether a resolved background color reads as light (BT.709 luminance > 0.5). */
 function bgIsLight(value: string | number | undefined): boolean {
-	if (typeof value !== "string" || !value.startsWith("#") || value.length !== 7) return false;
-	const r = parseInt(value.slice(1, 3), 16) / 255;
-	const g = parseInt(value.slice(3, 5), 16) / 255;
-	const b = parseInt(value.slice(5, 7), 16) / 255;
-	return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5;
+	if (typeof value !== "string") return false;
+	const luminance = hexLuminance(value);
+	return luminance !== undefined && luminance > 0.5;
 }
 
 export class Theme {
@@ -2329,13 +2328,9 @@ export function isLightTheme(themeName?: string): boolean {
 	}
 	try {
 		const resolved = resolveVarRefs(themeJson.colors.userMessageBg, themeJson.vars ?? {});
-		if (typeof resolved !== "string" || !resolved.startsWith("#") || resolved.length !== 7) return false;
-		const r = parseInt(resolved.slice(1, 3), 16) / 255;
-		const g = parseInt(resolved.slice(3, 5), 16) / 255;
-		const b = parseInt(resolved.slice(5, 7), 16) / 255;
-		// Relative luminance (ITU-R BT.709)
-		const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-		return luminance > 0.5;
+		if (typeof resolved !== "string") return false;
+		const luminance = hexLuminance(resolved);
+		return luminance !== undefined && luminance > 0.5;
 	} catch {
 		return false;
 	}
