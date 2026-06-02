@@ -1,3 +1,34 @@
+[fetch_pr]
+description = "Fetch the inbound PR premise and changed-file list for review. Review-mode only."
+
+[classify_pr]
+description = "Classify and rank an incoming PR, apply triaged/review labels, and persist the rank. Review-mode only."
+
+[classify_pr.parameters]
+rank = "Required review verdict label: one of `review:p0..p3`."
+type = "Exactly one PR type: feat, fix, docs, refactor, perf, test, chore, ci, or build."
+area = "Zero or more functional labels. Unknown values are dropped silently; omit when none apply."
+provider = "Only when provider-scoped; format `provider:<name>`. Omit otherwise."
+rationale = "One sentence explaining what the PR changes and why it earns this rank."
+
+[pr_review_comment]
+description = "Stage one inline PR review comment in sqlite. Does not call GitHub until submit_pr_review. Review-mode only."
+
+[pr_review_comment.parameters]
+path = "Changed file path to comment on."
+line = "Line number in the PR diff."
+body = "Markdown body for one concrete finding."
+side = "`RIGHT` for added/changed lines, `LEFT` for removed lines. Defaults to `RIGHT`."
+start_line = "Optional first line for a multi-line comment range."
+start_side = "Optional side for start_line; `RIGHT` or `LEFT`."
+
+[submit_pr_review]
+description = "Submit one GitHub PR review with all staged inline comments. Always posts event=`COMMENT`; never approves or requests changes. Review-mode only."
+
+[submit_pr_review.parameters]
+body = "Markdown review summary. Required even when there are no inline comments."
+event = "Ignored except for schema compatibility; the orchestrator always sends `COMMENT`."
+
 [gh_post_comment]
 description = "Post a comment on the inbound thread (PR for PR conversations/reviews, originating issue otherwise). Pass `number` ONLY to post elsewhere."
 

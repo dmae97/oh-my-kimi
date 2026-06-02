@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     git_author_name: str | None = Field(None, alias="ROBOMP_GIT_AUTHOR_NAME")
     git_author_email: str = Field(..., alias="ROBOMP_GIT_AUTHOR_EMAIL")
     repo_allowlist_raw: str = Field("", alias="ROBOMP_REPO_ALLOWLIST")
+    pr_review_enabled: bool = Field(True, alias="ROBOMP_PR_REVIEW_ENABLED")
 
     # gh-proxy. Set BOTH to route GitHub through the proxy; leave both empty
     # to keep PAT-on-orchestrator behavior. Mixing the two (PAT + proxy) is

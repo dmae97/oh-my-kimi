@@ -60,6 +60,9 @@ from robomp.git_ops import (
     clone as git_clone,
 )
 from robomp.git_ops import (
+    fetch_pr_head as git_fetch_pr_head,
+)
+from robomp.git_ops import (
     fetch_prune as git_fetch_prune,
 )
 from robomp.git_ops import (
@@ -231,6 +234,10 @@ class GitTransport(Protocol):
         """Best-effort `git fetch origin <ref>` to ensure the base branch is local."""
         ...
 
+    def fetch_pr_head(self, *, repo: str, pool_dir: Path, pr_number: int) -> None:
+        """Fetch `refs/pull/<n>/head` into FETCH_HEAD for detached PR review checkouts."""
+        ...
+
     def push_branch(
         self,
         *,
@@ -269,6 +276,10 @@ class LocalGitTransport:
     def fetch_base_ref(self, *, repo: str, pool_dir: Path, ref: str) -> None:
         del repo
         git_fetch_ref(pool_dir, ref, token=self._token)
+
+    def fetch_pr_head(self, *, repo: str, pool_dir: Path, pr_number: int) -> None:
+        del repo
+        git_fetch_pr_head(pool_dir, pr_number, token=self._token)
 
     def push_branch(
         self,
@@ -679,11 +690,14 @@ class SandboxManager:
         clone_url: str,
         default_branch: str,
         existing_branch: str | None = None,
+        pr_head: int | None = None,
         author_name: str,
         author_email: str,
         slot_uid: int | None = None,
     ) -> Workspace:
         """Create or resume a per-issue worktree."""
+        if pr_head is not None and existing_branch is not None:
+            raise ValueError("ensure_workspace accepts either pr_head or existing_branch, not both")
         pool = self.ensure_clone(repo=repo, clone_url=clone_url, default_branch=default_branch)
         ws_root = self.workspace_root(repo, number)
         repo_dir = ws_root / "repo"
@@ -693,10 +707,15 @@ class SandboxManager:
         for path in (ws_root, session_dir, context_dir, context_dir / "repro", artifacts_dir):
             path.mkdir(parents=True, exist_ok=True)
 
-        branch = existing_branch or make_branch(
-            issue_number=number,
-            title=title,
-            seed=f"{repo}#{number}",
+        branch = (
+            f"review/pr-{pr_head}"
+            if pr_head is not None
+            else existing_branch
+            or make_branch(
+                issue_number=number,
+                title=title,
+                seed=f"{repo}#{number}",
+            )
         )
 
         repo_exists = (repo_dir / ".git").exists()
@@ -713,35 +732,39 @@ class SandboxManager:
             _chown_workspace(ws_root, slot_uid)
             workspace_prepared = True
         if not repo_exists:
-            # Make sure the requested start point exists locally (best-effort).
-            # For follow-ups on an existing PR, `existing_branch` is the remote
-            # head branch we need to amend; starting from default would silently
-            # lose the PR's current commits if the local pool branch is absent.
-            self.transport.fetch_base_ref(repo=repo, pool_dir=pool, ref=existing_branch or default_branch)
-            check = _safe_run(["git", "rev-parse", "--verify", f"refs/heads/{branch}"], cwd=pool)
-            if check.returncode == 0:
-                _run(["git", "worktree", "add", str(repo_dir), branch], cwd=pool)
+            if pr_head is not None:
+                self.transport.fetch_pr_head(repo=repo, pool_dir=pool, pr_number=pr_head)
+                _run(["git", "worktree", "add", "--detach", str(repo_dir), "FETCH_HEAD"], cwd=pool)
             else:
-                start_point = f"origin/{default_branch}"
-                if existing_branch:
-                    remote = _safe_run(
-                        ["git", "rev-parse", "--verify", f"refs/remotes/origin/{existing_branch}"],
+                # Make sure the requested start point exists locally (best-effort).
+                # For follow-ups on an existing PR, `existing_branch` is the remote
+                # head branch we need to amend; starting from default would silently
+                # lose the PR's current commits if the local pool branch is absent.
+                self.transport.fetch_base_ref(repo=repo, pool_dir=pool, ref=existing_branch or default_branch)
+                check = _safe_run(["git", "rev-parse", "--verify", f"refs/heads/{branch}"], cwd=pool)
+                if check.returncode == 0:
+                    _run(["git", "worktree", "add", str(repo_dir), branch], cwd=pool)
+                else:
+                    start_point = f"origin/{default_branch}"
+                    if existing_branch:
+                        remote = _safe_run(
+                            ["git", "rev-parse", "--verify", f"refs/remotes/origin/{existing_branch}"],
+                            cwd=pool,
+                        )
+                        if remote.returncode == 0:
+                            start_point = f"origin/{existing_branch}"
+                    _run(
+                        [
+                            "git",
+                            "worktree",
+                            "add",
+                            "-b",
+                            branch,
+                            str(repo_dir),
+                            start_point,
+                        ],
                         cwd=pool,
                     )
-                    if remote.returncode == 0:
-                        start_point = f"origin/{existing_branch}"
-                _run(
-                    [
-                        "git",
-                        "worktree",
-                        "add",
-                        "-b",
-                        branch,
-                        str(repo_dir),
-                        start_point,
-                    ],
-                    cwd=pool,
-                )
         else:
             slot_git_env = _git_env_for_repo(repo_dir)
             current = _safe_run(

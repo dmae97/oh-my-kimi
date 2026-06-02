@@ -25,6 +25,7 @@ from robomp.github_client import (
     GitHubError,
     IssueInfo,
     IssueSummary,
+    PullRequestFileInfo,
     PullRequestInfo,
     PullRequestReviewInfo,
     ReactionInfo,
@@ -169,6 +170,14 @@ class GitHubProxyClient:
         data = await self._request("GET", "/gh/v1/pull_request", params={"repo": repo, "number": number})
         return _pr_from(data)
 
+    async def list_pr_files(self, repo: str, pr_number: int) -> list[PullRequestFileInfo]:
+        data = await self._request(
+            "GET",
+            "/gh/v1/pr_files",
+            params={"repo": repo, "pr_number": pr_number},
+        )
+        return [_pr_file_from(item) for item in (data.get("items") if isinstance(data, dict) else None) or []]
+
     async def list_issues(
         self,
         repo: str,
@@ -273,6 +282,28 @@ class GitHubProxyClient:
         )
         return tuple(str(lbl) for lbl in (data.get("labels") if isinstance(data, dict) else None) or [])
 
+    async def submit_pr_review(
+        self,
+        *,
+        repo: str,
+        pr_number: int,
+        body: str,
+        event: str,
+        comments: list[Mapping[str, Any]],
+    ) -> PullRequestReviewInfo:
+        data = await self._request(
+            "POST",
+            "/gh/v1/submit_pr_review",
+            json_body={
+                "repo": repo,
+                "pr_number": pr_number,
+                "body": body,
+                "event": event,
+                "comments": comments,
+            },
+        )
+        return _pr_review_from(data)
+
     async def add_assignees(self, repo: str, number: int, assignees: list[str]) -> None:
         if not assignees:
             return
@@ -359,6 +390,10 @@ class ProxyGitTransport:
     def fetch_base_ref(self, *, repo: str, pool_dir: Path, ref: str) -> None:
         del pool_dir
         self._post("/gh/v1/git/fetch_ref", {"repo": repo, "ref": ref})
+
+    def fetch_pr_head(self, *, repo: str, pool_dir: Path, pr_number: int) -> None:
+        del pool_dir
+        self._post("/gh/v1/git/fetch_pr_head", {"repo": repo, "pr_number": pr_number})
 
     def push_branch(
         self,
@@ -477,6 +512,17 @@ def _pr_review_from(data: Any) -> PullRequestReviewInfo:
     )
 
 
+def _pr_file_from(data: Any) -> PullRequestFileInfo:
+    if not isinstance(data, dict):
+        raise GitHubError(500, "proxy returned malformed pr_file payload")
+    return PullRequestFileInfo(
+        path=str(data.get("path") or ""),
+        status=str(data.get("status") or ""),
+        additions=int(data.get("additions") or 0),
+        deletions=int(data.get("deletions") or 0),
+    )
+
+
 def _pr_from(data: Any) -> PullRequestInfo:
     if not isinstance(data, dict):
         raise GitHubError(500, "proxy returned malformed pr payload")
@@ -489,6 +535,8 @@ def _pr_from(data: Any) -> PullRequestInfo:
         state=str(data.get("state") or "open"),
         author=str(data.get("author") or ""),
         head_repo=str(data.get("head_repo") or ""),
+        title=str(data.get("title") or ""),
+        body=str(data.get("body") or ""),
     )
 
 
