@@ -128,15 +128,10 @@ function formatJsonScalar(value: unknown, _theme: Theme): string {
 }
 
 function formatTaskId(id: string): string {
+	// Ids are name-based (e.g. "Anna", "Anna-2"); a "." separates nesting levels
+	// (e.g. "Anna.Bob"). Render the hierarchy with a ">" breadcrumb.
 	const segments = id.split(".");
-	if (segments.length < 2) return id;
-
-	const parsed = segments.map(segment => segment.match(/^(\d+)-(.+)$/));
-	if (parsed.some(match => !match)) return id;
-
-	const indices = parsed.map(match => match![1]).join(".");
-	const labels = parsed.map(match => match![2]).join(">");
-	return `${indices} ${labels}`;
+	return segments.length < 2 ? id : segments.join(">");
 }
 
 const MISSING_YIELD_WARNING_PREFIX = "SYSTEM WARNING: Subagent exited without calling yield tool";

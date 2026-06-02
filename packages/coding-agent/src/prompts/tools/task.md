@@ -2,7 +2,7 @@ Launches subagents to parallelize workflows.
 
 {{#if asyncEnabled}}
 - Results are delivered automatically when complete.
-- The tool result lists the assigned task ids (e.g. `0-AuthLoader`) — those are the live agent ids.
+- The tool result lists the assigned task ids (e.g. `AuthLoader`) — those are the live agent ids.
 {{#if ircEnabled}}
 - Coordinate with running tasks via `irc` using those ids. `job cancel` terminates a task and **cannot carry a message** — only use it for stalled/abandoned work.
 - If genuinely blocked on completion, wait with `job poll`; otherwise keep working.
