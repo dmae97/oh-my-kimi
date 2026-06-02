@@ -1332,7 +1332,10 @@ export class TUI extends Container {
 			return { kind: "viewportRepaint" };
 		}
 
-		if (this.#nativeScrollbackDirty && this.#nativeViewportIsAtBottom(this.#readNativeViewportAtBottom())) {
+		if (
+			this.#nativeScrollbackDirty &&
+			this.#canRebuildNativeScrollbackLive(this.#readNativeViewportAtBottom(), allowUnknownViewportMutation)
+		) {
 			return { kind: "historyRebuild" };
 		}
 
@@ -1386,23 +1389,21 @@ export class TUI extends Container {
 			// pads to the previous row count so no committed row is re-emitted, and the
 			// next checkpoint rebuild cleans up.
 			//
-			// That deferral only carries real content when `newLines.length` reaches the
-			// padded viewport top (`previousLines.length - height`) — otherwise every row
-			// the padded repaint draws is past the end of `newLines` and renders blank,
-			// hiding the prompt until the next checkpoint. This can happen even when
-			// `scrollbackHighWater` is far below `previousLines.length - height`, because
-			// prior unknown-POSIX viewport repaints commit longer logical frames without
-			// moving the native scrollback boundary. For most POSIX terminals a shrink
-			// that large chooses `historyRebuild` rather than a blank, uninteractable
-			// viewport. Known ED3-risk terminals are stricter: with an unobservable
-			// viewport, `CSI 3 J` can yank a scrolled reader to the top, so ordinary
-			// live frames defer completely and wait for an explicit checkpoint.
-			if (nativeViewportAtBottom === undefined && TERMINAL.eagerEraseScrollbackRisk) {
-				this.#markNativeScrollbackDirty();
-				return { kind: "deferredMutation" };
-			}
+			// If the shrink still leaves enough rows to cover the previous viewport
+			// top, `deferredShrink` can repaint that stable slice without committing
+			// duplicate rows to native scrollback. When the shrink jumps above that
+			// padded viewport top, `deferredShrink` would draw only blank padding and
+			// hide the live prompt. Ordinary POSIX terminals rebuild history in that
+			// case. ED3-risk terminals cannot safely erase saved lines while the
+			// viewport is unobservable, but a non-destructive viewport repaint keeps
+			// the live UI moving and leaves stale scrollback queued for the next
+			// explicit checkpoint.
 			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
 			if (newLines.length <= paddedViewportTop) {
+				if (nativeViewportAtBottom === undefined && TERMINAL.eagerEraseScrollbackRisk) {
+					this.#markNativeScrollbackDirty();
+					return { kind: "viewportRepaint" };
+				}
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();

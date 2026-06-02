@@ -191,6 +191,44 @@ describe("issue #1682: TUI eager scrollback rebuild", () => {
 		});
 	});
 
+	it("paints an overflowing ED3-risk shrink instead of freezing until input", async () => {
+		await withEnvPatch(CLEAR_MULTIPLEXER_ENV, async () => {
+			await withTerminalRisk(true, async () => {
+				const term = new VirtualTerminal(40, 5);
+				overrideProbe(term, undefined);
+				const tui = new TUI(term);
+				const component = new LineList(Array.from({ length: 30 }, (_value, index) => `init-${index}`));
+				tui.addChild(component);
+
+				try {
+					tui.start();
+					await settle(term);
+					const writes = capture(term);
+					tui.setEagerNativeScrollbackRebuild(true);
+
+					component.setLines(Array.from({ length: 20 }, (_value, index) => `shrunk-${index}`));
+					tui.requestRender();
+					await settle(term);
+
+					expect(writes.join("")).not.toBe("");
+					expect(eraseScrollbackCount(writes)).toBe(0);
+					expect(term.getViewport().map(line => line.trim())).toEqual([
+						"shrunk-15",
+						"shrunk-16",
+						"shrunk-17",
+						"shrunk-18",
+						"shrunk-19",
+					]);
+					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+					await settle(term);
+					expect(eraseScrollbackCount(writes)).toBe(1);
+				} finally {
+					tui.stop();
+				}
+			});
+		});
+	});
+
 	it("treats focused keyboard input as a user-input opt-in after an ED3-risk shrink defers", async () => {
 		await withEnvPatch(CLEAR_MULTIPLEXER_ENV, async () => {
 			await withTerminalRisk(true, async () => {
