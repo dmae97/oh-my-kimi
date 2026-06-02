@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Changed Anthropic API request metadata `user_id.device_id` to be derived from the persistent install ID so it remains stable across Anthropic account changes on the same install
 
 ### Added
 

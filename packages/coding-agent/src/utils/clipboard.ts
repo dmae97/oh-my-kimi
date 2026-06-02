@@ -119,7 +119,7 @@ async function readImageViaPowerShell(): Promise<ClipboardImage | null> {
 		if (!b64) return null;
 		const bytes = Buffer.from(b64, "base64");
 		if (bytes.byteLength === 0) return null;
-		return { data: new Uint8Array(bytes), mimeType: "image/png" };
+		return { data: bytes, mimeType: "image/png" };
 	} catch {
 		return null;
 	}
