@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { AuthStorage, ModelRegistry, SingleResult } from "@oh-my-pi/pi-coding-agent";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { ModelRegistry, SingleResult } from "@oh-my-pi/pi-coding-agent";
 import * as taskExecutor from "@oh-my-pi/pi-coding-agent";
 
 // Stub runSubprocess to capture options without actually running an agent
@@ -26,12 +28,12 @@ describe("executeSwarmAgent", () => {
 		const { executeSwarmAgent } = await import("../executor");
 		const { StateTracker } = await import("../state");
 
-		const mockAuthStorage = { discover: vi.fn() } as unknown as AuthStorage;
 		const mockModelRegistry = {
 			authStorage: { discover: vi.fn() },
 		} as unknown as ModelRegistry;
 
-		const stateTracker = new StateTracker("/tmp/test-workspace", "test-swarm");
+		const workspace = path.join(os.tmpdir(), "test-workspace");
+		const stateTracker = new StateTracker(workspace, "test-swarm");
 		await stateTracker.init(["test-agent"], 1, "parallel");
 
 		const agent = {
@@ -42,15 +44,13 @@ describe("executeSwarmAgent", () => {
 			waitsFor: [],
 		};
 
-		// Cast to allow passing authStorage to verify it is not forwarded
 		await executeSwarmAgent(agent, 0, {
-			workspace: "/tmp/test-workspace",
+			workspace,
 			swarmName: "test-swarm",
 			iteration: 0,
-			authStorage: mockAuthStorage,
 			modelRegistry: mockModelRegistry,
 			stateTracker,
-		} as Parameters<typeof executeSwarmAgent>[2]);
+		});
 
 		expect(runSubprocessSpy).toHaveBeenCalledTimes(1);
 		const passedOptions = runSubprocessSpy.mock.calls[0][0];
