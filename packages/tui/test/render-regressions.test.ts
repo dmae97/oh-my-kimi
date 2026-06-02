@@ -2006,6 +2006,8 @@ describe("TUI terminal-state regressions", () => {
 						const tui = new TUI(term);
 						const component = new MutableLinesComponent(rows("row-", 16));
 						tui.addChild(component);
+						const savedTerminalRisk = TERMINAL.eagerEraseScrollbackRisk;
+						mutableTerminalInfo.eagerEraseScrollbackRisk = false;
 
 						try {
 							tui.start();
@@ -2027,6 +2029,7 @@ describe("TUI terminal-state regressions", () => {
 							expect(buffer.filter(line => line === "tail-3")).toHaveLength(1);
 							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 						} finally {
+							mutableTerminalInfo.eagerEraseScrollbackRisk = savedTerminalRisk;
 							tui.stop();
 						}
 					},
