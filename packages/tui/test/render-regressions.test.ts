@@ -27,6 +27,10 @@ class WrappingLinesComponent implements Component {
 		this.#lines = [...lines];
 	}
 
+	setLines(lines: string[]): void {
+		this.#lines = [...lines];
+	}
+
 	invalidate(): void {}
 
 	render(width: number): string[] {
@@ -67,6 +71,24 @@ class FocusedInputComponent implements Component, Focusable {
 class UnknownViewportTerminal extends VirtualTerminal {
 	isNativeViewportAtBottom(): undefined {
 		return undefined;
+	}
+}
+
+class StaleBottomViewportTerminal extends VirtualTerminal {
+	#previous: boolean | undefined;
+	#returnStale = false;
+
+	isNativeViewportAtBottom(): boolean | undefined {
+		const current = super.isNativeViewportAtBottom();
+		if (this.#returnStale) {
+			this.#returnStale = false;
+			const stale = this.#previous;
+			this.#previous = current;
+			return stale;
+		}
+		this.#returnStale = true;
+		this.#previous = current;
+		return current;
 	}
 }
 
@@ -429,6 +451,39 @@ describe("TUI terminal-state regressions", () => {
 				expect(viewport[0]!.length).toBeLessThanOrEqual(16);
 				expect(viewport[1]!.length).toBeLessThanOrEqual(16);
 				expect(viewport[2]?.trim()).toBe("");
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("width shrink rebuilds stale native history before later appends", async () => {
+			const term = new VirtualTerminal(40, 3, 200);
+			const tui = new TUI(term);
+			const component = new WrappingLinesComponent(["A".repeat(20), "B".repeat(20)]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				// Root cause: shrinking the width can turn a frame that fit on screen
+				// into overflowing wrapped rows. A viewport repaint leaves the old
+				// terminal-reflowed fragments in native history; the next append then
+				// grows scrollback by fewer rows than the logical frame grew.
+				term.resize(10, 3);
+				await settle(term);
+				component.setLines(["A".repeat(20), "B".repeat(20), "C".repeat(20)]);
+				tui.requestRender();
+				await settle(term);
+
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual([
+					"AAAAAAAAAA",
+					"AAAAAAAAAA",
+					"BBBBBBBBBB",
+					"BBBBBBBBBB",
+					"CCCCCCCCCC",
+					"CCCCCCCCCC",
+				]);
 			} finally {
 				tui.stop();
 			}
@@ -1809,6 +1864,44 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("does not trust a single stale at-bottom probe for live rebuilds", async () => {
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			try {
+				await withEnvPatch(
+					{ TMUX: undefined, STY: undefined, ZELLIJ: undefined, WT_SESSION: undefined },
+					async () => {
+						const term = new StaleBottomViewportTerminal(32, 5, 200);
+						const tui = new TUI(term);
+						const component = new MutableLinesComponent(rows("seed-", 12));
+						tui.addChild(component);
+
+						try {
+							tui.start();
+							await settle(term);
+							expect(term.isNativeViewportAtBottom()).toBe(true);
+
+							term.scrollLines(-4);
+							const before = term.getBufferPosition();
+							const anchored = visible(term).map(line => line.trim());
+							expect(before.viewportY).toBeLessThan(before.baseY);
+
+							component.setLines(["seed-EDIT", ...rows("seed-", 12).slice(1), ...rows("tail-", 4)]);
+							tui.requestRender();
+							await settle(term);
+
+							const after = term.getBufferPosition();
+							expect(after.viewportY).toBe(before.viewportY);
+							expect(visible(term).map(line => line.trim())).toEqual(anchored);
+						} finally {
+							tui.stop();
+						}
+					},
+				);
+			} finally {
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			}
+		});
 		it("rebuilds offscreen edits into clean scrollback while eager rebuild is enabled (active tool)", async () => {
 			// The streaming-text default defers offscreen edits on POSIX (no yank, but a
 			// growing/re-laying-out tool result leaves stale duplicated rows above the
@@ -2296,6 +2389,67 @@ describe("TUI terminal-state regressions", () => {
 			} finally {
 				tui.stop();
 			}
+		});
+
+		it("hiding an overlay scrubs sentinel rows leaked into scrollback by resize reflow", async () => {
+			const term = new VirtualTerminal(40, 4, 200);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(rows("base-", 20)));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const handle = tui.showOverlay(
+					new MutableLinesComponent(["OV_SENTINEL_4_ov4-0-0-0-0-0-0", "ov4-1-0-0-0-0"]),
+					{ row: 2, col: 18 },
+				);
+				await settle(term);
+				term.resize(20, 4);
+				await settle(term);
+
+				expect(term.getScrollBuffer().some(line => line.includes("OV_SENTINEL_4_"))).toBeTrue();
+
+				term.scrollLines(-1);
+				await settle(term);
+				handle.hide();
+				await settle(term);
+
+				expect(term.getScrollBuffer().some(line => line.includes("OV_SENTINEL_4_"))).toBeFalse();
+				expect(visible(term).some(line => line.includes("OV_SENTINEL_4_"))).toBeFalse();
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("tmux overlay hide repaints rows exposed by a shorter base frame", async () => {
+			await withEnvPatch({ TMUX: "1", STY: undefined, ZELLIJ: undefined }, async () => {
+				const term = new UnknownViewportTerminal(40, 3);
+				const tui = new TUI(term);
+				tui.addChild(new MutableLinesComponent(["base-0", "base-1", "base-2"]));
+
+				try {
+					tui.start();
+					await settle(term);
+
+					const handle = tui.showOverlay(new MutableLinesComponent(["OV-0", "OV-1", "OV-2"]), {
+						row: 2,
+						col: 0,
+					});
+					await settle(term);
+					expect(visible(term)).toEqual(["OV-0", "OV-1", "OV-2"]);
+
+					// Root cause: tmux disables destructive history rebuilds, so overlay
+					// removal that shrinks the composite frame must repaint the viewport;
+					// diffing from the old viewport top clears only the overlay suffix.
+					handle.hide();
+					await settle(term);
+
+					expect(visible(term)).toEqual(["base-0", "base-1", "base-2"]);
+				} finally {
+					tui.stop();
+				}
+			});
 		});
 	});
 

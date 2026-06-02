@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { isKeyRelease, matchesKey } from "./keys";
-import { type Terminal, terminalHasEagerEraseScrollbackRisk } from "./terminal";
+import type { Terminal } from "./terminal";
 import { ImageProtocol, setCellDimensions, setTerminalImageProtocol, TERMINAL } from "./terminal-capabilities";
 import {
 	Ellipsis,
@@ -332,6 +332,8 @@ export class TUI extends Container {
 	#forceViewportRepaintOnNextRender = false;
 	#allowUnknownViewportMutationOnNextRender = false;
 	#eagerNativeScrollbackRebuild = false;
+	#previousVisibleOverlayComponents: Component[] = [];
+	#visibleOverlayComponentsThisRender: Component[] = [];
 	#hasEverRendered = false;
 	#stopped = false;
 
@@ -494,6 +496,14 @@ export class TUI extends Container {
 			}
 		}
 		return undefined;
+	}
+
+	#overlayVisibilityReduced(visibleComponents: readonly Component[]): boolean {
+		if (this.#previousVisibleOverlayComponents.length === 0) return false;
+		for (const component of this.#previousVisibleOverlayComponents) {
+			if (!visibleComponents.includes(component)) return true;
+		}
+		return false;
 	}
 
 	override invalidate(): void {
@@ -1173,10 +1183,15 @@ export class TUI extends Container {
 
 		// 1. Compose the frame.
 		let baseLines = this.render(width);
-		let lines = baseLines;
-		if (this.overlayStack.length > 0) {
-			lines = this.#compositeOverlays(baseLines, width, height);
+		const visibleOverlayComponents: Component[] = [];
+		if (this.overlayStack.length > 0 || this.#previousVisibleOverlayComponents.length > 0) {
+			for (const entry of this.overlayStack) {
+				if (this.#isOverlayVisible(entry)) visibleOverlayComponents.push(entry.component);
+			}
 		}
+		this.#visibleOverlayComponentsThisRender = visibleOverlayComponents;
+		const overlayVisibilityReduced = this.#overlayVisibilityReduced(visibleOverlayComponents);
+		let lines = visibleOverlayComponents.length > 0 ? this.#compositeOverlays(baseLines, width, height) : baseLines;
 		const cursorPos = this.#extractCursorPosition(lines, height);
 		lines = this.#fitLinesToWidth(this.#applyLineResets(lines), width);
 		if (lines !== baseLines) {
@@ -1189,7 +1204,7 @@ export class TUI extends Container {
 		const prevHardwareCursorRow = this.#hardwareCursorRow;
 		const widthChanged = this.#previousWidth > 0 && this.#previousWidth !== width;
 		const heightChanged = this.#previousHeight > 0 && this.#previousHeight !== height;
-		const eagerRebuildAllowed = this.#eagerNativeScrollbackRebuild && !terminalHasEagerEraseScrollbackRisk();
+		const eagerRebuildAllowed = this.#eagerNativeScrollbackRebuild && !TERMINAL.eagerEraseScrollbackRisk;
 		const allowUnknownViewportMutation = this.#allowUnknownViewportMutationOnNextRender || eagerRebuildAllowed;
 		this.#allowUnknownViewportMutationOnNextRender = false;
 
@@ -1200,6 +1215,8 @@ export class TUI extends Container {
 			heightChanged,
 			prevViewportTop,
 			height,
+			visibleOverlayComponents.length > 0,
+			overlayVisibilityReduced,
 			allowUnknownViewportMutation,
 		);
 		this.#logRedraw(intent, lines.length, height);
@@ -1287,6 +1304,8 @@ export class TUI extends Container {
 		heightChanged: boolean,
 		prevViewportTop: number,
 		height: number,
+		hasVisibleOverlay: boolean,
+		overlayVisibilityReduced: boolean,
 		allowUnknownViewportMutation: boolean,
 	): RenderIntent {
 		// Initial paint after start(): scrollback must keep its prior shell
@@ -1298,7 +1317,10 @@ export class TUI extends Container {
 		if (this.#clearScrollbackOnNextRender) return { kind: "sessionReplace" };
 
 		const forceViewportRepaint = this.#forceViewportRepaintOnNextRender;
-		if (this.hasOverlay()) {
+		if (overlayVisibilityReduced && !isMultiplexerSession()) {
+			return hasVisibleOverlay ? { kind: "overlayRebuild" } : { kind: "historyRebuild" };
+		}
+		if (hasVisibleOverlay) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (
 				this.#nativeScrollbackDirty &&
@@ -1382,6 +1404,20 @@ export class TUI extends Container {
 			return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 		}
 
+		// Multiplexer panes do not give us a safe native-history rebuild path, but
+		// a shrink can still move the logical viewport upward (for example hiding an
+		// overlay that extended past the base frame). A row-diff from the old
+		// viewport top would only clear the old suffix and leave the newly exposed
+		// base rows stale/blank, so repaint the live viewport in place.
+		if (
+			isMultiplexerSession() &&
+			diff.firstChanged !== -1 &&
+			newLines.length < this.#previousLines.length &&
+			naturalViewportTop !== prevViewportTop
+		) {
+			return { kind: "viewportRepaint" };
+		}
+
 		const suppressSuffixScroll = this.#suppressNextSuffixScroll;
 		this.#suppressNextSuffixScroll = false;
 		if (
@@ -1425,20 +1461,20 @@ export class TUI extends Container {
 			return { kind: "noop" };
 		}
 
-		// Width changes rewrap the whole transcript. An offscreen edit leaves
-		// native history at the old width, so rebuild it now — the terminal already
-		// reflowed and the user is at the terminal to resize. Pure appends fall
-		// through to the diff path so the append handler scrolls them into history.
+		// Width changes rewrap native history. Any non-append content change must
+		// rebuild the committed transcript when the viewport is safe; a viewport
+		// repaint can leave old-width wrapped fragments above the live frame, and
+		// later appends then splice new rows onto stale history.
 		if (widthChanged) {
-			if (diff.firstChanged < prevViewportTop) {
-				if (this.#nativeViewportIsScrolled(this.#readNativeViewportAtBottom(), allowUnknownViewportMutation)) {
+			const pureAppend = diff.appendedLines && diff.firstChanged === this.#previousLines.length;
+			if (!pureAppend) {
+				const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
+				if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 					this.#markNativeScrollbackDirty();
 					return { kind: "viewportRepaint" };
 				}
-				return { kind: "historyRebuild" };
+				return isMultiplexerSession() ? { kind: "viewportRepaint" } : { kind: "historyRebuild" };
 			}
-			const pureAppend = diff.appendedLines && diff.firstChanged === this.#previousLines.length;
-			if (!pureAppend) return { kind: "viewportRepaint" };
 		}
 
 		const contentGrew = newLines.length > this.#previousLines.length;
@@ -1635,7 +1671,12 @@ export class TUI extends Container {
 	}
 
 	#readNativeViewportAtBottom(): boolean | undefined {
-		return this.terminal.isNativeViewportAtBottom?.();
+		// A stale positive is destructive: live history rebuilds clear native
+		// scrollback. Require two consecutive at-bottom probes before trusting it.
+		const first = this.terminal.isNativeViewportAtBottom?.();
+		if (first !== true) return first;
+		const second = this.terminal.isNativeViewportAtBottom?.();
+		return second === true ? true : second;
 	}
 
 	#nativeViewportIsScrolled(
@@ -1680,15 +1721,18 @@ export class TUI extends Container {
 	 * this, every offscreen transcript edit while streaming wiped scrollback and
 	 * yanked a scrolled-up reader out of their current context.
 	 * `allowUnknownViewportMutation` (autocomplete/IME) opts directly
-	 * user-driven frames back into the rebuild. Unlike the checkpoint predicate
-	 * this carries no `process.platform` optimism — resize and checkpoint replays
-	 * keep using that one.
+	 * user-driven POSIX frames back into the rebuild. Native Windows and Windows
+	 * Terminal still cannot trust an unknown probe during live rendering — ConPTY
+	 * may be fronting host scrollback we cannot observe — so they keep deferring.
 	 */
 	#canRebuildNativeScrollbackLive(
 		nativeViewportAtBottom: boolean | undefined,
 		allowUnknownViewportMutation: boolean,
 	): boolean {
-		return nativeViewportAtBottom === true || (nativeViewportAtBottom === undefined && allowUnknownViewportMutation);
+		return (
+			nativeViewportAtBottom === true ||
+			(nativeViewportAtBottom === undefined && allowUnknownViewportMutation && process.platform !== "win32")
+		);
 	}
 
 	#padDeferredShrinkLines(lines: string[], paddedLength: number): string[] {
@@ -1722,6 +1766,7 @@ export class TUI extends Container {
 	 */
 	#commit(lines: string[], width: number, height: number, viewportTop: number, hardwareCursorRow: number): void {
 		this.#previousLines = lines;
+		this.#previousVisibleOverlayComponents = this.#visibleOverlayComponentsThisRender;
 		this.#forceViewportRepaintOnNextRender = false;
 		this.#previousWidth = width;
 		this.#previousHeight = height;

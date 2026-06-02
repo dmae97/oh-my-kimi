@@ -46,6 +46,7 @@ describe("text utils", () => {
 		expect(visibleWidth("\u26a0\ufe0f")).toBe(2); // ⚠️
 		expect(visibleWidth("\u2139\ufe0f")).toBe(2); // ℹ️
 		expect(visibleWidth("\u2764\ufe0f")).toBe(2); // ❤️
+		expect(visibleWidth("0\ufe0f\u20e3")).toBe(2); // 0️⃣
 		// Bare symbol without VS16 keeps its text-presentation width.
 		expect(visibleWidth("\u26a0")).toBe(1);
 		// Intrinsically wide emoji are unaffected by the change.

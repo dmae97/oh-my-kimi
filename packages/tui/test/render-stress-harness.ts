@@ -2501,7 +2501,9 @@ export function buildScenarios(): Scenario[] {
 	const seedCount = parsePositiveInt("TUI_STRESS_SEEDS", defaultSeedCount);
 	const iterations = parsePositiveInt("TUI_STRESS_ITER", soak ? SOAK_ITERATIONS : CORE_ITERATIONS);
 	const bulkMax = soak ? SOAK_BULK_MAX : CORE_BULK_MAX;
-	const timeoutMs = soak ? SOAK_TIMEOUT_MS : CORE_TIMEOUT_MS;
+	const baseIterations = soak ? SOAK_ITERATIONS : CORE_ITERATIONS;
+	const baseTimeoutMs = soak ? SOAK_TIMEOUT_MS : CORE_TIMEOUT_MS;
+	const timeoutMs = Math.max(baseTimeoutMs, Math.ceil((baseTimeoutMs * iterations) / baseIterations));
 	const seeds = buildSeeds(seedCount);
 	const scenarios: Scenario[] = [];
 	for (let i = 0; i < seeds.length; i++) {

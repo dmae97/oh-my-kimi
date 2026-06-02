@@ -32,9 +32,20 @@ interface ScenarioGroup {
 	scenarios: Scenario[];
 }
 
-function stressBatchTimeoutMs(): number {
-	const fallback = Bun.env.TUI_STRESS_SOAK === "1" ? SOAK_BATCH_TIMEOUT_MS : CORE_BATCH_TIMEOUT_MS;
-	return parsePositiveInt("TUI_STRESS_BATCH_TIMEOUT_MS", fallback);
+function stressBatchTimeoutMs(scenarios: readonly Scenario[]): number {
+	const raw = Bun.env.TUI_STRESS_BATCH_TIMEOUT_MS;
+	if (raw !== undefined && raw.length > 0) {
+		const fallback = Bun.env.TUI_STRESS_SOAK === "1" ? SOAK_BATCH_TIMEOUT_MS : CORE_BATCH_TIMEOUT_MS;
+		return parsePositiveInt("TUI_STRESS_BATCH_TIMEOUT_MS", fallback);
+	}
+	let total = 0;
+	for (const group of groupScenariosByEnv(scenarios)) {
+		const workers = stressWorkerCount(group.scenarios);
+		const batches = Math.ceil(group.scenarios.length / Math.max(1, workers));
+		const slowest = group.scenarios.reduce((max, scenario) => Math.max(max, scenario.timeoutMs), 0);
+		total += batches * slowest;
+	}
+	return Math.max(Bun.env.TUI_STRESS_SOAK === "1" ? SOAK_BATCH_TIMEOUT_MS : CORE_BATCH_TIMEOUT_MS, total);
 }
 
 function stressBatchLabel(scenarios: readonly Scenario[]): string {
@@ -165,6 +176,6 @@ describe("TUI randomized render stress", () => {
 		async () => {
 			await runScenariosInWorkers(scenarios);
 		},
-		stressBatchTimeoutMs(),
+		stressBatchTimeoutMs(scenarios),
 	);
 });

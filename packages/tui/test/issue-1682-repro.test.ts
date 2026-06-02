@@ -1,6 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, TUI } from "@oh-my-pi/pi-tui";
-import { terminalHasEagerEraseScrollbackRisk } from "@oh-my-pi/pi-tui/terminal";
+import {
+	type Component,
+	detectTerminalEagerEraseScrollbackRisk,
+	getTerminalInfo,
+	TERMINAL,
+	TUI,
+} from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/1682
@@ -53,6 +58,22 @@ function overrideProbe(term: VirtualTerminal, answer: boolean | undefined): void
 	(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () => answer;
 }
 
+type MutableTerminalInfo = {
+	eagerEraseScrollbackRisk: boolean;
+};
+
+const mutableTerminalInfo = TERMINAL as unknown as MutableTerminalInfo;
+
+async function withTerminalRisk<T>(risk: boolean, run: () => T | Promise<T>): Promise<T> {
+	const saved = TERMINAL.eagerEraseScrollbackRisk;
+	mutableTerminalInfo.eagerEraseScrollbackRisk = risk;
+	try {
+		return await run();
+	} finally {
+		mutableTerminalInfo.eagerEraseScrollbackRisk = saved;
+	}
+}
+
 async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
 	const saved: Record<string, string | undefined> = {};
 	for (const key in patch) {
@@ -78,23 +99,7 @@ async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: (
 	}
 }
 
-async function withPlatform<T>(platform: NodeJS.Platform, run: () => T | Promise<T>): Promise<T> {
-	const originalPlatform = process.platform;
-	Object.defineProperty(process, "platform", { configurable: true, value: platform });
-	try {
-		return await run();
-	} finally {
-		Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-	}
-}
-
-const CLEAR_TERMINAL_RISK_ENV: Record<string, string | undefined> = {
-	WEZTERM_PANE: undefined,
-	KITTY_WINDOW_ID: undefined,
-	GHOSTTY_RESOURCES_DIR: undefined,
-	ALACRITTY_WINDOW_ID: undefined,
-	VTE_VERSION: undefined,
-	TERM_PROGRAM: undefined,
+const CLEAR_MULTIPLEXER_ENV: Record<string, string | undefined> = {
 	TMUX: undefined,
 	STY: undefined,
 	ZELLIJ: undefined,
@@ -105,63 +110,75 @@ function eraseScrollbackCount(writes: string[]): number {
 	return writes.join("").match(ERASE_SCROLLBACK)?.length ?? 0;
 }
 
-describe("issue #1682: terminalHasEagerEraseScrollbackRisk", () => {
+describe("issue #1682: detectTerminalEagerEraseScrollbackRisk", () => {
 	it("detects known POSIX terminal identifiers", () => {
-		expect(terminalHasEagerEraseScrollbackRisk({ WEZTERM_PANE: "1" }, "linux")).toBe(true);
-		expect(terminalHasEagerEraseScrollbackRisk({ KITTY_WINDOW_ID: "1" }, "linux")).toBe(true);
-		expect(terminalHasEagerEraseScrollbackRisk({ GHOSTTY_RESOURCES_DIR: "/ghostty" }, "darwin")).toBe(true);
-		expect(terminalHasEagerEraseScrollbackRisk({ ALACRITTY_WINDOW_ID: "1" }, "darwin")).toBe(true);
-		expect(terminalHasEagerEraseScrollbackRisk({ VTE_VERSION: "7600" }, "linux")).toBe(true);
-		expect(terminalHasEagerEraseScrollbackRisk({ TERM_PROGRAM: "ghostty" }, "linux")).toBe(true);
+		expect(detectTerminalEagerEraseScrollbackRisk({ WEZTERM_PANE: "1" }, "linux")).toBe(true);
+		expect(detectTerminalEagerEraseScrollbackRisk({ KITTY_WINDOW_ID: "1" }, "linux")).toBe(true);
+		expect(detectTerminalEagerEraseScrollbackRisk({ GHOSTTY_RESOURCES_DIR: "/ghostty" }, "darwin")).toBe(true);
+		expect(detectTerminalEagerEraseScrollbackRisk({ ALACRITTY_WINDOW_ID: "1" }, "darwin")).toBe(true);
+		expect(detectTerminalEagerEraseScrollbackRisk({ VTE_VERSION: "7600" }, "linux")).toBe(true);
+		expect(detectTerminalEagerEraseScrollbackRisk({ TERM_PROGRAM: "ghostty" }, "linux")).toBe(true);
+		expect(detectTerminalEagerEraseScrollbackRisk({ TERM_PROGRAM: "Apple_Terminal" }, "darwin")).toBe(true);
+		expect(detectTerminalEagerEraseScrollbackRisk({ TERM_PROGRAM: "iTerm.app" }, "darwin")).toBe(true);
+		expect(detectTerminalEagerEraseScrollbackRisk({ ITERM_SESSION_ID: "w0t0p0" }, "darwin")).toBe(true);
+	});
+
+	it("stores fixed risk on known terminal traits", () => {
+		expect(getTerminalInfo("kitty").eagerEraseScrollbackRisk).toBe(true);
+		expect(getTerminalInfo("ghostty").eagerEraseScrollbackRisk).toBe(true);
+		expect(getTerminalInfo("wezterm").eagerEraseScrollbackRisk).toBe(true);
+		expect(getTerminalInfo("iterm2").eagerEraseScrollbackRisk).toBe(true);
+		expect(getTerminalInfo("alacritty").eagerEraseScrollbackRisk).toBe(true);
+		expect(getTerminalInfo("base").eagerEraseScrollbackRisk).toBe(false);
+		expect(getTerminalInfo("trueColor").eagerEraseScrollbackRisk).toBe(false);
 	});
 
 	it("does not trust terminal identifiers on native Windows", () => {
-		expect(terminalHasEagerEraseScrollbackRisk({ WEZTERM_PANE: "1" }, "win32")).toBe(false);
-		expect(terminalHasEagerEraseScrollbackRisk({ TERM_PROGRAM: "ghostty" }, "win32")).toBe(false);
+		expect(detectTerminalEagerEraseScrollbackRisk({ WEZTERM_PANE: "1" }, "win32")).toBe(false);
+		expect(detectTerminalEagerEraseScrollbackRisk({ TERM_PROGRAM: "Apple_Terminal" }, "win32")).toBe(false);
+		expect(detectTerminalEagerEraseScrollbackRisk({ ITERM_SESSION_ID: "w0t0p0" }, "win32")).toBe(false);
 	});
 
 	it("leaves unrecognized POSIX terminals on the eager path", () => {
-		expect(terminalHasEagerEraseScrollbackRisk({}, "linux")).toBe(false);
-		expect(terminalHasEagerEraseScrollbackRisk({ TERM_PROGRAM: "Apple_Terminal" }, "darwin")).toBe(false);
+		expect(detectTerminalEagerEraseScrollbackRisk({}, "linux")).toBe(false);
+		expect(detectTerminalEagerEraseScrollbackRisk({ TERM_PROGRAM: "vscode" }, "darwin")).toBe(false);
 	});
 });
 
 describe("issue #1682: TUI eager scrollback rebuild", () => {
-	it("defers on ED3-risk POSIX terminals and rebuilds at the checkpoint", async () => {
-		for (const patch of [{ WEZTERM_PANE: "pane-1" }, { VTE_VERSION: "7600" }]) {
-			await withPlatform("linux", async () => {
-				await withEnvPatch({ ...CLEAR_TERMINAL_RISK_ENV, ...patch }, async () => {
-					const term = new VirtualTerminal(100, 24);
-					overrideProbe(term, undefined);
-					const tui = new TUI(term);
-					const component = new LineList(Array.from({ length: 80 }, (_value, index) => `init-${index}`));
-					tui.addChild(component);
+	it("defers on ED3-risk terminal traits and rebuilds at the checkpoint", async () => {
+		await withEnvPatch(CLEAR_MULTIPLEXER_ENV, async () => {
+			await withTerminalRisk(true, async () => {
+				const term = new VirtualTerminal(100, 24);
+				overrideProbe(term, undefined);
+				const tui = new TUI(term);
+				const component = new LineList(Array.from({ length: 80 }, (_value, index) => `init-${index}`));
+				tui.addChild(component);
 
-					try {
-						tui.start();
-						await settle(term);
-						const writes = capture(term);
-						tui.setEagerNativeScrollbackRebuild(true);
+				try {
+					tui.start();
+					await settle(term);
+					const writes = capture(term);
+					tui.setEagerNativeScrollbackRebuild(true);
 
-						component.setLines(Array.from({ length: 20 }, (_value, index) => `shrunk-${index}`));
-						tui.requestRender();
-						await settle(term);
+					component.setLines(Array.from({ length: 20 }, (_value, index) => `shrunk-${index}`));
+					tui.requestRender();
+					await settle(term);
 
-						expect(eraseScrollbackCount(writes)).toBe(0);
-						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
-						await settle(term);
-						expect(eraseScrollbackCount(writes)).toBe(1);
-					} finally {
-						tui.stop();
-					}
-				});
+					expect(eraseScrollbackCount(writes)).toBe(0);
+					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+					await settle(term);
+					expect(eraseScrollbackCount(writes)).toBe(1);
+				} finally {
+					tui.stop();
+				}
 			});
-		}
+		});
 	});
 
-	it("keeps eager live rebuilds for other POSIX terminals", async () => {
-		await withPlatform("linux", async () => {
-			await withEnvPatch(CLEAR_TERMINAL_RISK_ENV, async () => {
+	it("keeps eager live rebuilds for other terminal traits", async () => {
+		await withEnvPatch(CLEAR_MULTIPLEXER_ENV, async () => {
+			await withTerminalRisk(false, async () => {
 				const term = new VirtualTerminal(100, 24);
 				overrideProbe(term, undefined);
 				const tui = new TUI(term);
@@ -187,9 +204,9 @@ describe("issue #1682: TUI eager scrollback rebuild", () => {
 		});
 	});
 
-	it("still honors explicit user-input opt-ins on ED3-risk POSIX terminals", async () => {
-		await withPlatform("linux", async () => {
-			await withEnvPatch({ ...CLEAR_TERMINAL_RISK_ENV, WEZTERM_PANE: "pane-1" }, async () => {
+	it("still honors explicit user-input opt-ins on ED3-risk terminal traits", async () => {
+		await withEnvPatch(CLEAR_MULTIPLEXER_ENV, async () => {
+			await withTerminalRisk(true, async () => {
 				const term = new VirtualTerminal(100, 24);
 				overrideProbe(term, undefined);
 				const tui = new TUI(term);
