@@ -4,44 +4,85 @@
  * Unified types for web search responses across supported providers.
  */
 
+export const SEARCH_PROVIDER_ORDER = [
+	"tavily",
+	"perplexity",
+	"brave",
+	"jina",
+	"kimi",
+	"anthropic",
+	"gemini",
+	"codex",
+	"zai",
+	"exa",
+	"parallel",
+	"kagi",
+	"synthetic",
+	"searxng",
+] as const;
+
 /** Supported web search providers */
-export type SearchProviderId =
-	| "exa"
-	| "brave"
-	| "jina"
-	| "kimi"
-	| "zai"
-	| "anthropic"
-	| "perplexity"
-	| "gemini"
-	| "codex"
-	| "tavily"
-	| "parallel"
-	| "kagi"
-	| "synthetic"
-	| "searxng";
+export type SearchProviderId = (typeof SEARCH_PROVIDER_ORDER)[number];
+
+export const SEARCH_PROVIDER_PREFERENCES = ["auto", ...SEARCH_PROVIDER_ORDER] as const;
+
+export const SEARCH_PROVIDER_OPTIONS = [
+	{
+		value: "auto",
+		label: "Auto",
+		description: "Automatically uses the first configured web-search provider",
+	},
+	{ value: "tavily", label: "Tavily", description: "Requires TAVILY_API_KEY" },
+	{ value: "perplexity", label: "Perplexity", description: "Requires PERPLEXITY_COOKIES or PERPLEXITY_API_KEY" },
+	{ value: "brave", label: "Brave", description: "Requires BRAVE_API_KEY" },
+	{ value: "jina", label: "Jina", description: "Requires JINA_API_KEY" },
+	{ value: "kimi", label: "Kimi", description: "Requires MOONSHOT_SEARCH_API_KEY or MOONSHOT_API_KEY" },
+	{
+		value: "anthropic",
+		label: "Anthropic",
+		description: "Claude's native web_search tool (uses Anthropic OAuth or ANTHROPIC_API_KEY)",
+	},
+	{
+		value: "gemini",
+		label: "Gemini",
+		description: "Google Search grounding via Gemini (uses google-gemini-cli or google-antigravity OAuth)",
+	},
+	{
+		value: "codex",
+		label: "OpenAI",
+		description: "OpenAI's native web_search (uses ChatGPT OAuth via /login openai-codex)",
+	},
+	{ value: "zai", label: "Z.AI", description: "Calls Z.AI webSearchPrime MCP" },
+	{ value: "exa", label: "Exa", description: "Requires EXA_API_KEY" },
+	{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
+	{ value: "kagi", label: "Kagi", description: "Requires KAGI_API_KEY and Kagi Search API beta access" },
+	{ value: "synthetic", label: "Synthetic", description: "Requires SYNTHETIC_API_KEY" },
+	{ value: "searxng", label: "SearXNG", description: "Requires SEARXNG_ENDPOINT or searxng.endpoint" },
+] as const;
+
+export const SEARCH_PROVIDER_LABELS: Record<SearchProviderId, string> = {
+	tavily: "Tavily",
+	perplexity: "Perplexity",
+	brave: "Brave",
+	jina: "Jina",
+	kimi: "Kimi",
+	anthropic: "Anthropic",
+	gemini: "Gemini",
+	codex: "OpenAI",
+	zai: "Z.AI",
+	exa: "Exa",
+	parallel: "Parallel",
+	kagi: "Kagi",
+	synthetic: "Synthetic",
+	searxng: "SearXNG",
+};
 
 export function isSearchProviderId(value: string): value is SearchProviderId {
-	return [
-		"exa",
-		"brave",
-		"jina",
-		"kimi",
-		"zai",
-		"anthropic",
-		"perplexity",
-		"gemini",
-		"codex",
-		"tavily",
-		"parallel",
-		"kagi",
-		"synthetic",
-		"searxng",
-	].includes(value);
+	return SEARCH_PROVIDER_ORDER.includes(value as SearchProviderId);
 }
 
 export function isSearchProviderPreference(value: string): value is SearchProviderId | "auto" {
-	return value === "auto" || isSearchProviderId(value);
+	return SEARCH_PROVIDER_PREFERENCES.includes(value as SearchProviderId | "auto");
 }
 
 /** Source returned by search (all providers) */

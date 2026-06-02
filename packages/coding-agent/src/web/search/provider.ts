@@ -5,15 +5,16 @@
 // fetch/parse/format helpers) and only one — at most — is needed per session,
 // so eager construction was wasted work at startup.
 //
-// The `label`/`id` metadata is kept inline so callers needing a display name
-// (error formatting, UI listings) do not force a load.
+// Provider modules are loaded lazily; display metadata lives in types.ts so UI
+// listings can share it without importing provider implementations.
 
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import type { SearchProvider } from "./providers/base";
-import type { SearchProviderId } from "./types";
+import { SEARCH_PROVIDER_LABELS, SEARCH_PROVIDER_ORDER, type SearchProviderId } from "./types";
 
 export type { SearchParams } from "./providers/base";
 export { SearchProvider } from "./providers/base";
+export { SEARCH_PROVIDER_ORDER } from "./types";
 
 interface ProviderMeta {
 	id: SearchProviderId;
@@ -25,72 +26,72 @@ interface ProviderMeta {
 const PROVIDER_META: Record<SearchProviderId, ProviderMeta> = {
 	exa: {
 		id: "exa",
-		label: "Exa",
+		label: SEARCH_PROVIDER_LABELS.exa,
 		load: async () => new (await import("./providers/exa")).ExaProvider(),
 	},
 	brave: {
 		id: "brave",
-		label: "Brave",
+		label: SEARCH_PROVIDER_LABELS.brave,
 		load: async () => new (await import("./providers/brave")).BraveProvider(),
 	},
 	jina: {
 		id: "jina",
-		label: "Jina",
+		label: SEARCH_PROVIDER_LABELS.jina,
 		load: async () => new (await import("./providers/jina")).JinaProvider(),
 	},
 	perplexity: {
 		id: "perplexity",
-		label: "Perplexity",
+		label: SEARCH_PROVIDER_LABELS.perplexity,
 		load: async () => new (await import("./providers/perplexity")).PerplexityProvider(),
 	},
 	kimi: {
 		id: "kimi",
-		label: "Kimi",
+		label: SEARCH_PROVIDER_LABELS.kimi,
 		load: async () => new (await import("./providers/kimi")).KimiProvider(),
 	},
 	zai: {
 		id: "zai",
-		label: "Z.AI",
+		label: SEARCH_PROVIDER_LABELS.zai,
 		load: async () => new (await import("./providers/zai")).ZaiProvider(),
 	},
 	anthropic: {
 		id: "anthropic",
-		label: "Anthropic",
+		label: SEARCH_PROVIDER_LABELS.anthropic,
 		load: async () => new (await import("./providers/anthropic")).AnthropicProvider(),
 	},
 	gemini: {
 		id: "gemini",
-		label: "Gemini",
+		label: SEARCH_PROVIDER_LABELS.gemini,
 		load: async () => new (await import("./providers/gemini")).GeminiProvider(),
 	},
 	codex: {
 		id: "codex",
-		label: "OpenAI",
+		label: SEARCH_PROVIDER_LABELS.codex,
 		load: async () => new (await import("./providers/codex")).CodexProvider(),
 	},
 	tavily: {
 		id: "tavily",
-		label: "Tavily",
+		label: SEARCH_PROVIDER_LABELS.tavily,
 		load: async () => new (await import("./providers/tavily")).TavilyProvider(),
 	},
 	parallel: {
 		id: "parallel",
-		label: "Parallel",
+		label: SEARCH_PROVIDER_LABELS.parallel,
 		load: async () => new (await import("./providers/parallel")).ParallelProvider(),
 	},
 	kagi: {
 		id: "kagi",
-		label: "Kagi",
+		label: SEARCH_PROVIDER_LABELS.kagi,
 		load: async () => new (await import("./providers/kagi")).KagiProvider(),
 	},
 	synthetic: {
 		id: "synthetic",
-		label: "Synthetic",
+		label: SEARCH_PROVIDER_LABELS.synthetic,
 		load: async () => new (await import("./providers/synthetic")).SyntheticProvider(),
 	},
 	searxng: {
 		id: "searxng",
-		label: "SearXNG",
+		label: SEARCH_PROVIDER_LABELS.searxng,
 		load: async () => new (await import("./providers/searxng")).SearXNGProvider(),
 	},
 };
@@ -117,23 +118,6 @@ export async function getSearchProvider(id: SearchProviderId): Promise<SearchPro
 	instanceCache.set(id, provider);
 	return provider;
 }
-
-export const SEARCH_PROVIDER_ORDER: SearchProviderId[] = [
-	"tavily",
-	"perplexity",
-	"brave",
-	"jina",
-	"kimi",
-	"anthropic",
-	"gemini",
-	"codex",
-	"zai",
-	"exa",
-	"parallel",
-	"kagi",
-	"synthetic",
-	"searxng",
-];
 
 /** Preferred provider set via settings (default: auto) */
 let preferredProvId: SearchProviderId | "auto" = "auto";
