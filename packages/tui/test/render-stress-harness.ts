@@ -584,6 +584,7 @@ class StressModel {
 	#initialText(index: number): string {
 		if (this.#uniqueContent) return index % 13 === 0 ? "" : `${this.#labelPrefix}init${index.toString(36)}`;
 		if (index % 13 === 0) return "";
+		if (index % 29 === 0) return arabicCombiningText(`ar${index.toString(36)}`);
 		if (index % 23 === 0) return longText(`L${index.toString(36)}`, 4);
 		if (index % 19 === 0) return linkedText(`link${index.toString(36)}`);
 		if (index % 17 === 0) return styledText(`sg${index.toString(36)}界`, 31 + (index % 6));
@@ -2359,6 +2360,13 @@ function wideText(label: string): string {
 	return `${label}界${SMILE}한`;
 }
 
+function arabicCombiningText(label: string): string {
+	// Arabic tashkeel are nonspacing marks stored in the base cell. Stress them
+	// alongside LTR labels because mis-measuring the marks used to overrun TUI
+	// rows and crash on width verification (issue #643).
+	return `${label}-بَسِمَ-قُرْآن`;
+}
+
 function styledText(label: string, color: number): string {
 	return `${ESC}[${color}m${label}${ESC}[0m`;
 }
@@ -2377,10 +2385,11 @@ function longText(label: string, repeats: number): string {
 
 function randomDecoratedText(rng: Rng, label: string): string {
 	const roll = rng.next();
-	if (roll < 0.22) return wideText(label);
-	if (roll < 0.42) return styledText(`${label}界`, 31 + rng.int(0, 6));
-	if (roll < 0.62) return linkedText(label);
-	if (roll < 0.82) return longText(label, rng.int(2, 6));
+	if (roll < 0.18) return wideText(label);
+	if (roll < 0.36) return styledText(`${label}界`, 31 + rng.int(0, 6));
+	if (roll < 0.54) return linkedText(label);
+	if (roll < 0.72) return longText(label, rng.int(2, 6));
+	if (roll < 0.86) return arabicCombiningText(label);
 	return label;
 }
 
@@ -2503,7 +2512,9 @@ export function buildScenarios(): Scenario[] {
 	const bulkMax = soak ? SOAK_BULK_MAX : CORE_BULK_MAX;
 	const baseIterations = soak ? SOAK_ITERATIONS : CORE_ITERATIONS;
 	const baseTimeoutMs = soak ? SOAK_TIMEOUT_MS : CORE_TIMEOUT_MS;
-	const timeoutMs = Math.max(baseTimeoutMs, Math.ceil((baseTimeoutMs * iterations) / baseIterations));
+	// Higher-iteration hunts scale worse than linearly because exhaustive
+	// scrollback probes and resize/overlay rebuilds revisit larger buffers.
+	const timeoutMs = Math.max(baseTimeoutMs, Math.ceil((baseTimeoutMs * iterations * 3) / baseIterations));
 	const seeds = buildSeeds(seedCount);
 	const scenarios: Scenario[] = [];
 	for (let i = 0; i < seeds.length; i++) {

@@ -1392,10 +1392,15 @@ export class TUI extends Container {
 			// hiding the prompt until the next checkpoint. This can happen even when
 			// `scrollbackHighWater` is far below `previousLines.length - height`, because
 			// prior unknown-POSIX viewport repaints commit longer logical frames without
-			// moving the native scrollback boundary. For a shrink that large a blank,
-			// uninteractable viewport is the greater evil, so yank with `historyRebuild`.
-			// Real win32 unknown probes defer as scrolled above and never reach this; the
-			// yank only lands on non-win32 hosts whose probe is genuinely unavailable.
+			// moving the native scrollback boundary. For most POSIX terminals a shrink
+			// that large chooses `historyRebuild` rather than a blank, uninteractable
+			// viewport. Known ED3-risk terminals are stricter: with an unobservable
+			// viewport, `CSI 3 J` can yank a scrolled reader to the top, so ordinary
+			// live frames defer completely and wait for an explicit checkpoint.
+			if (nativeViewportAtBottom === undefined && TERMINAL.eagerEraseScrollbackRisk) {
+				this.#markNativeScrollbackDirty();
+				return { kind: "deferredMutation" };
+			}
 			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
 			if (newLines.length <= paddedViewportTop) {
 				return { kind: "historyRebuild" };

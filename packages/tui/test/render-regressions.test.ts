@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { type Component, CURSOR_MARKER, type Focusable, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, CURSOR_MARKER, type Focusable, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class MutableLinesComponent implements Component {
@@ -147,6 +147,22 @@ async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: (
 				Bun.env[key] = value;
 			}
 		}
+	}
+}
+
+type MutableTerminalInfo = {
+	eagerEraseScrollbackRisk: boolean;
+};
+
+const mutableTerminalInfo = TERMINAL as unknown as MutableTerminalInfo;
+
+async function withTerminalRisk<T>(risk: boolean, run: () => T | Promise<T>): Promise<T> {
+	const saved = TERMINAL.eagerEraseScrollbackRisk;
+	mutableTerminalInfo.eagerEraseScrollbackRisk = risk;
+	try {
+		return await run();
+	} finally {
+		mutableTerminalInfo.eagerEraseScrollbackRisk = saved;
 	}
 }
 
@@ -1650,6 +1666,8 @@ describe("TUI terminal-state regressions", () => {
 			const body = rows("line-", 99);
 			const component = new MutableLinesComponent([...body, "prompt-row"]);
 			tui.addChild(component);
+			const savedTerminalRisk = TERMINAL.eagerEraseScrollbackRisk;
+			mutableTerminalInfo.eagerEraseScrollbackRisk = false;
 
 			try {
 				tui.start();
@@ -1680,7 +1698,65 @@ describe("TUI terminal-state regressions", () => {
 				}
 				expect(scrollback.join("\n")).not.toContain("line-");
 			} finally {
+				mutableTerminalInfo.eagerEraseScrollbackRisk = savedTerminalRisk;
 				tui.stop();
+			}
+		});
+
+		it("defers ED3-risk huge shrink while unknown viewport is scrolled", async () => {
+			// The huge-shrink fallback normally prefers `historyRebuild` over a blank
+			// padded viewport. On terminals where ED3 can move an unobservable
+			// scrollback viewport, that fallback is worse: it yanks the reader to the
+			// top. Keep the old visible history frozen and rebuild only at checkpoint.
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			try {
+				await withTerminalRisk(true, async () => {
+					const term = new UnknownViewportTerminal(40, 10);
+					const tui = new TUI(term);
+					const body = rows("line-", 99);
+					const component = new MutableLinesComponent([...body, "prompt-row"]);
+					tui.addChild(component);
+
+					try {
+						tui.start();
+						await settle(term);
+						term.scrollLines(-2);
+						const before = term.getBufferPosition();
+						const beforeViewport = visible(term).map(line => line.trim());
+						expect(before.viewportY).toBeGreaterThan(0);
+
+						const short = rows("short-", 19);
+						component.setLines([...short, "prompt-row"]);
+						tui.requestRender();
+						await settle(term);
+
+						const after = term.getBufferPosition();
+						expect(after.viewportY).toBe(before.viewportY);
+						expect(visible(term).map(line => line.trim())).toEqual(beforeViewport);
+						expect(term.getScrollBuffer().join("\n")).not.toContain("short-");
+
+						term.scrollLines(999);
+						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+						await settle(term);
+						expect(visible(term).map(line => line.trim())).toEqual([
+							"short-10",
+							"short-11",
+							"short-12",
+							"short-13",
+							"short-14",
+							"short-15",
+							"short-16",
+							"short-17",
+							"short-18",
+							"prompt-row",
+						]);
+					} finally {
+						tui.stop();
+					}
+				});
+			} finally {
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 			}
 		});
 		it("rebuilds history when prior POSIX repaint left the padded viewport past the new tail", async () => {
@@ -1689,6 +1765,8 @@ describe("TUI terminal-state regressions", () => {
 			const initial = rows("line-", 19);
 			const component = new MutableLinesComponent([...initial, "prompt-row"]);
 			tui.addChild(component);
+			const savedTerminalRisk = TERMINAL.eagerEraseScrollbackRisk;
+			mutableTerminalInfo.eagerEraseScrollbackRisk = false;
 
 			try {
 				tui.start();
@@ -1735,6 +1813,7 @@ describe("TUI terminal-state regressions", () => {
 				]);
 				expect(term.getScrollBuffer().join("\n")).not.toContain("line-");
 			} finally {
+				mutableTerminalInfo.eagerEraseScrollbackRisk = savedTerminalRisk;
 				tui.stop();
 			}
 		});
