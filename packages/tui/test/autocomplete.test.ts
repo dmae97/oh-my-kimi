@@ -61,6 +61,36 @@ describe("CombinedAutocompleteProvider", () => {
 		});
 	});
 
+	describe("applyCompletion", () => {
+		it("replaces the live slash command prefix when rendered suggestions are stale", () => {
+			const provider = new CombinedAutocompleteProvider([], "/tmp");
+			const result = provider.applyCompletion(
+				["/ski"],
+				0,
+				4,
+				{ value: "skills:fix-bug", label: "/skills:fix-bug" },
+				"/s",
+			);
+
+			expect(result.lines[0]).toBe("/skills:fix-bug ");
+			expect(result.cursorCol).toBe("/skills:fix-bug ".length);
+		});
+
+		it("replaces the live slash command argument when rendered suggestions are stale", () => {
+			const provider = new CombinedAutocompleteProvider([], "/tmp");
+			const result = provider.applyCompletion(
+				["/model clau"],
+				0,
+				11,
+				{ value: "claude-sonnet", label: "claude-sonnet" },
+				"cl",
+			);
+
+			expect(result.lines[0]).toBe("/model claude-sonnet");
+			expect(result.cursorCol).toBe("/model claude-sonnet".length);
+		});
+	});
+
 	describe("hidden paths", () => {
 		let baseDir: string;
 

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import type { AutocompleteItem, AutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
+import {
+	type AutocompleteItem,
+	type AutocompleteProvider,
+	CombinedAutocompleteProvider,
+} from "@oh-my-pi/pi-tui/autocomplete";
 import { Editor } from "@oh-my-pi/pi-tui/components/editor";
 import { defaultEditorTheme } from "./test-themes";
 
@@ -53,6 +57,26 @@ describe("Editor hash autocomplete actions", () => {
 
 		expect(editor.getText()).toBe("");
 		expect(provider.calls).toBe(1);
+	});
+});
+
+describe("Editor slash autocomplete acceptance", () => {
+	it("replaces characters typed after the rendered prefix before accepting with Tab", async () => {
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider(
+			new CombinedAutocompleteProvider([{ name: "skills:fix-bug", description: "Fix a bug" }], "/tmp"),
+		);
+
+		editor.handleInput("/");
+		await Bun.sleep(0);
+		expect(editor.isShowingAutocomplete()).toBe(true);
+
+		editor.handleInput("s");
+		editor.handleInput("k");
+		editor.handleInput("i");
+		editor.handleInput("\t");
+
+		expect(editor.getText()).toBe("/skills:fix-bug ");
 	});
 });
 class SyncSlashProvider implements AutocompleteProvider {
