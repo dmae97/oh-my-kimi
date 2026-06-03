@@ -9,6 +9,8 @@ import type { AgentSession } from "../src/session/agent-session";
 import { AuthStorage } from "../src/session/auth-storage";
 import { SessionManager } from "../src/session/session-manager";
 
+const TEST_API_KEY = "test-key";
+
 function createAssistantMessage(text: string): AssistantMessage {
 	return {
 		role: "assistant",
@@ -88,8 +90,7 @@ describe("AgentSession compaction Copilot initiator attribution", () => {
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${taskDepth}.db`));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("github-copilot", "test-key");
-
+		authStorage.setRuntimeApiKey("github-copilot", TEST_API_KEY);
 		const sessionManager = SessionManager.inMemory();
 		sessionManager.appendMessage({
 			role: "user",
@@ -129,6 +130,7 @@ describe("AgentSession compaction Copilot initiator attribution", () => {
 			settings: Settings.isolated({
 				"compaction.autoContinue": false,
 				"compaction.keepRecentTokens": 1,
+				"contextPromotion.enabled": false,
 			}),
 			disableExtensionDiscovery: true,
 			skills: [],
@@ -160,6 +162,7 @@ describe("AgentSession compaction Copilot initiator attribution", () => {
 	async function triggerAutoCompaction(
 		session: Pick<AgentSession, "agent" | "subscribe">,
 		model: { api: string; provider: string; id: string; contextWindow: number },
+		marker: string,
 	) {
 		const { promise, resolve } = Promise.withResolvers<void>();
 		const unsubscribe = session.subscribe(event => {
@@ -171,7 +174,9 @@ describe("AgentSession compaction Copilot initiator attribution", () => {
 
 		const assistantMessage = {
 			role: "assistant" as const,
-			content: [],
+			content: [
+				{ type: "text" as const, text: `Oversized response that should trigger auto-compaction. ${marker}` },
+			],
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
@@ -211,7 +216,7 @@ describe("AgentSession compaction Copilot initiator attribution", () => {
 		const capturedOptions = captureCompactionCalls(marker);
 		const { model, session } = await createSession(0, marker);
 
-		await triggerAutoCompaction(session, model);
+		await triggerAutoCompaction(session, model, marker);
 
 		expect(model.provider).toBe("github-copilot");
 		expect(model.id).toBe("gpt-4o");
@@ -237,7 +242,7 @@ describe("AgentSession compaction Copilot initiator attribution", () => {
 		const capturedOptions = captureCompactionCalls(marker);
 		const { model, session } = await createSession(1, marker);
 
-		await triggerAutoCompaction(session, model);
+		await triggerAutoCompaction(session, model, marker);
 
 		expect(model.provider).toBe("github-copilot");
 		expect(model.id).toBe("gpt-4o");
