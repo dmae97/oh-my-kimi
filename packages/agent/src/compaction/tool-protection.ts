@@ -24,10 +24,19 @@ export function collectToolCallsById(entries: readonly SessionEntry[]): Map<stri
 	return toolCalls;
 }
 
-export function isSkillReadToolResult({ toolResult, toolCall }: ProtectedToolContext): boolean {
-	if (toolResult.toolName !== "read" || toolCall?.name !== "read") return false;
+/**
+ * Extract the `path` argument from a paired `read` tool call, when the result
+ * is a `read` result carrying a string path. Returns `undefined` otherwise.
+ * Shared primitive for read-targeted protection matchers (skills, plans, …).
+ */
+export function getReadToolPath({ toolResult, toolCall }: ProtectedToolContext): string | undefined {
+	if (toolResult.toolName !== "read" || toolCall?.name !== "read") return undefined;
 	const path = (toolCall.arguments as Record<string, unknown>).path;
-	return typeof path === "string" && path.startsWith(SKILL_INTERNAL_URL_PREFIX);
+	return typeof path === "string" ? path : undefined;
+}
+
+export function isSkillReadToolResult(context: ProtectedToolContext): boolean {
+	return getReadToolPath(context)?.startsWith(SKILL_INTERNAL_URL_PREFIX) ?? false;
 }
 
 export function isProtectedToolResult(
