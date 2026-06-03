@@ -1089,5 +1089,24 @@ describe("Tool argument coercion", () => {
 			}) as { value: unknown };
 			expect(result.value).toBe('["not-a-list"]');
 		});
+
+		it("re-runs union coercion after the root arguments object is JSON-parsed", () => {
+			// Some providers double-encode the entire arguments object — the call
+			// arrives with `arguments` as the JSON string of an object whose own
+			// `paths` field is itself a JSON-encoded array. Both layers must
+			// unwind for the search bug fix (#1788) to actually take effect.
+			const rootStringArgs = JSON.stringify({
+				pattern: "name",
+				paths: '["package.json"]',
+			}) as unknown as Record<string, unknown>;
+			const result = validateToolArguments(unionTool, {
+				type: "toolCall",
+				id: "u9",
+				name: "search",
+				arguments: rootStringArgs,
+			}) as { pattern: string; paths: unknown };
+			expect(result.pattern).toBe("name");
+			expect(result.paths).toEqual(["package.json"]);
+		});
 	});
 });
