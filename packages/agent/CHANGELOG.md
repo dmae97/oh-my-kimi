@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.8.3] - 2026-06-03
 ### Added
 
 - Added `getReadToolPath(context)` to `@oh-my-pi/pi-agent-core/compaction/tool-protection` to extract a paired `read` tool call's `path` for embedders building read-targeted protection matchers

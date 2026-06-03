@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.8.3] - 2026-06-03
 ### Fixed
 
 - Fixed Jujutsu workspace detection failing in non-default workspaces created by `jj workspace add`, whose `.jj/repo` is a FILE pointing at the shared repo dir rather than a directory. Detection now matches jj's own criterion (`.jj/repo` present, file or dir) instead of requiring a `.jj/repo/store` directory, and `jj.repo.resolve`'s `storeDir` follows the file indirection to the shared store.
