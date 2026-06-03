@@ -4,6 +4,7 @@
 ### Added
 
 - Added an injectable render scheduler for TUI tests, allowing deterministic render drains without patching global clocks or event-loop timing.
+- Added `ImageBudget`, an inline-image cap that keeps only the most recent N images as live terminal graphics and demotes older ones to their text fallback. Once a new image pushes the count past the cap, the renderer hides the oldest via a full redraw plus an explicit Kitty graphics purge (`a=d,d=I`) — text-clear escapes (`CSI 2 J`/`CSI 3 J`) do not remove Kitty images. Inline images now also carry a stable Kitty image id (`i=`) keyed off the host's `imageKey`, so repaints replace placements instead of stacking duplicate images in the terminal's store. Configure the cap via `TUI#setMaxInlineImages` (`0` disables it).
 
 ### Fixed
 

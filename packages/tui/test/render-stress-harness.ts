@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { TERMINAL } from "../src/terminal-capabilities";
 import {
@@ -7,10 +10,10 @@ import {
 	type OverlayAnchor,
 	type OverlayHandle,
 	type OverlayOptions,
-	type RenderScheduler,
 	TUI,
 } from "../src/tui";
 import { Ellipsis, extractSegments, sliceByColumn, sliceWithWidth, truncateToWidth, visibleWidth } from "../src/utils";
+import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal, type VirtualTerminalWidthModel } from "./virtual-terminal";
 
 const BASE_SEEDS = [
@@ -33,6 +36,15 @@ type TestPlatform = "darwin" | "linux" | "win32";
 type TerminalMode = "normal" | "unknown" | "intermittentUnknown" | "staleBottom";
 type GeometryMode = "small" | "large";
 type EnvMode = "plain" | "tmux" | "termux" | "appleTerminal" | "iterm2" | "wsl" | "vteNoSync" | "ghostty";
+export type ScenarioTag =
+	| "small"
+	| "large"
+	| "tmux"
+	| "strictScrollback"
+	| "unknownViewport"
+	| "foregroundStream"
+	| "ed3Risk"
+	| "modernWidth";
 const ENV_KEYS = [
 	"TMUX",
 	"STY",
@@ -55,7 +67,7 @@ type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 type JsonObject = { [key: string]: JsonValue };
 
-type OperationKind =
+export type OperationKind =
 	| "appendSmall"
 	| "appendExactWidth"
 	| "appendBulk"
@@ -103,6 +115,61 @@ type OperationKind =
 	| "detachChild"
 	| "reorderChildren"
 	| "mutateChild";
+
+export const OPERATION_KINDS = [
+	"appendSmall",
+	"appendExactWidth",
+	"appendBulk",
+	"streamOne",
+	"editVisibleLine",
+	"editOffscreenLine",
+	"offscreenEditAppendRepeatedTail",
+	"insertOffscreen",
+	"insertMiddle",
+	"deleteTrailing",
+	"deleteMiddle",
+	"replaceAll",
+	"toggleCollapsible",
+	"tickStatusHeader",
+	"appendRepeatedTail",
+	"injectBlankCluster",
+	"appendDuplicateOfExisting",
+	"highWaterPreviewCollapse",
+	"eagerStreamingMutation",
+	"scrollUp",
+	"scrollToBottom",
+	"scrollPartial",
+	"resizeWidth",
+	"resizeHeight",
+	"resizeWithAppend",
+	"forceRender",
+	"toggleFocusInput",
+	"moveCursorVisible",
+	"moveCursorOffscreen",
+	"showOverlay",
+	"hideOverlay",
+	"toggleOverlayHidden",
+	"editOverlay",
+	"moveOverlayCursor",
+	"coalescedBurst",
+	"rotateUp",
+	"collapseToFew",
+	"swapOffscreenRows",
+	"resizeBoth",
+	"resizeNoop",
+	"forceRenderAllowUnknown",
+	"forceRenderClearScrollback",
+	"forceRenderAfterEmptyOverflow",
+	"attachChild",
+	"detachChild",
+	"reorderChildren",
+	"mutateChild",
+] as const satisfies readonly OperationKind[];
+const OPERATION_KIND_SET = new Set<string>(OPERATION_KINDS);
+
+export function isOperationKind(value: unknown): value is OperationKind {
+	return typeof value === "string" && OPERATION_KIND_SET.has(value);
+}
 
 const BURST_STEP_KINDS = [
 	"appendSmall",
@@ -208,6 +275,8 @@ export interface Scenario {
 	// fixed-line components never produced. Paired with the modern width model so
 	// the wrap agrees with the terminal's cell widths.
 	reflow: boolean;
+	tags: readonly ScenarioTag[];
+	replayOperations?: readonly OperationKind[];
 }
 
 type ViewportProbeTrait = "known" | "unknown" | "intermittentUnknown" | "staleBottom";
@@ -263,6 +332,51 @@ interface AppliedOperation {
 	// render cannot rebuild ConPTY-hidden history (it defers to the next submit),
 	// so the clean-buffer oracle keys on this flag for non-`normal` scenarios.
 	reconcilesNativeScrollback?: boolean;
+}
+
+type AppliedOperationOverrides = Partial<Omit<AppliedOperation, "kind" | "detail">>;
+
+function appliedOperation(
+	kind: OperationKind,
+	detail: JsonObject,
+	overrides: AppliedOperationOverrides,
+): AppliedOperation {
+	return {
+		kind,
+		detail,
+		mutatesContent: false,
+		checksRowAccounting: false,
+		geometryChanged: false,
+		forcedRender: false,
+		checkpoint: false,
+		mutatesViewport: false,
+		...overrides,
+	};
+}
+
+function contentOperation(
+	kind: OperationKind,
+	detail: JsonObject,
+	checksRowAccounting: boolean,
+	overrides: AppliedOperationOverrides = {},
+): AppliedOperation {
+	return appliedOperation(kind, detail, { mutatesContent: true, checksRowAccounting, ...overrides });
+}
+
+function viewOperation(
+	kind: OperationKind,
+	detail: JsonObject,
+	overrides: AppliedOperationOverrides = {},
+): AppliedOperation {
+	return appliedOperation(kind, detail, overrides);
+}
+
+function forceRenderOperation(
+	kind: OperationKind,
+	detail: JsonObject,
+	overrides: AppliedOperationOverrides = {},
+): AppliedOperation {
+	return appliedOperation(kind, detail, { forcedRender: true, ...overrides });
 }
 
 type OperationLogKind = OperationKind | "periodicCheckpoint";
@@ -356,52 +470,6 @@ class MutableLinesComponent implements Component {
 	}
 }
 
-class StressRenderScheduler implements RenderScheduler {
-	#time = 0;
-	#nextTimerId = 0;
-	#immediateCallbacks: (() => void)[] = [];
-	#renderCallbacks = new Map<number, () => void>();
-
-	now(): number {
-		this.#time += 20;
-		return this.#time;
-	}
-
-	scheduleImmediate(callback: () => void): void {
-		this.#immediateCallbacks.push(callback);
-	}
-
-	scheduleRender(callback: () => void, _delayMs: number): { cancel(): void } {
-		const id = this.#nextTimerId;
-		this.#nextTimerId += 1;
-		this.#renderCallbacks.set(id, callback);
-		return {
-			cancel: () => {
-				this.#renderCallbacks.delete(id);
-			},
-		};
-	}
-
-	async drain(term: VirtualTerminal): Promise<void> {
-		let rounds = 0;
-		while (this.#immediateCallbacks.length > 0 || this.#renderCallbacks.size > 0) {
-			rounds += 1;
-			if (rounds > 100) {
-				throw new Error("Render scheduler did not settle after 100 drain rounds");
-			}
-			const immediate = this.#immediateCallbacks;
-			this.#immediateCallbacks = [];
-			for (const callback of immediate) callback();
-
-			if (this.#renderCallbacks.size === 0) continue;
-			const render = [...this.#renderCallbacks.values()];
-			this.#renderCallbacks.clear();
-			for (const callback of render) callback();
-		}
-		await term.flush();
-	}
-}
-
 class Rng {
 	#state: number;
 
@@ -432,6 +500,40 @@ class Rng {
 		}
 		return items[this.int(0, items.length - 1)]!;
 	}
+}
+
+interface StressRandomStreams {
+	readonly ops: Rng;
+	readonly content: Rng;
+	readonly overlay: Rng;
+	readonly geometry: Rng;
+	readonly cursor: Rng;
+	readonly children: Rng;
+}
+
+function createRandomStreams(seed: number): StressRandomStreams {
+	return {
+		ops: new Rng(mixSeed(seed, 0x01)),
+		content: new Rng(mixSeed(seed, 0x02)),
+		overlay: new Rng(mixSeed(seed, 0x03)),
+		geometry: new Rng(mixSeed(seed, 0x04)),
+		cursor: new Rng(mixSeed(seed, 0x05)),
+		children: new Rng(mixSeed(seed, 0x06)),
+	};
+}
+
+function mixSeed(seed: number, stream: number): number {
+	let mixed = (seed ^ Math.imul(stream, 0x9e3779b9)) >>> 0;
+	mixed = Math.imul(mixed ^ (mixed >>> 16), 0x7feb352d);
+	mixed = Math.imul(mixed ^ (mixed >>> 15), 0x846ca68b);
+	return (mixed ^ (mixed >>> 16)) >>> 0;
+}
+
+function isEd3RiskScenario(terminalMode: TerminalMode, envMode: EnvMode): boolean {
+	return (
+		terminalMode === "unknown" &&
+		(envMode === "appleTerminal" || envMode === "iterm2" || envMode === "wsl" || envMode === "ghostty")
+	);
 }
 
 interface WeightedCandidate<T> {
@@ -465,16 +567,26 @@ function terminalStressTraits(scenario: Scenario): TerminalStressTraits {
 		strictNativeScrollback: scenario.strictScrollback,
 		syncOutputDisabled: scenario.envMode === "vteNoSync",
 		viewportProbe: scenario.terminalMode === "normal" ? "known" : scenario.terminalMode,
-		ed3ScrollbackEraseRisk:
-			scenario.terminalMode === "unknown" &&
-			(scenario.envMode === "appleTerminal" ||
-				scenario.envMode === "iterm2" ||
-				scenario.envMode === "wsl" ||
-				scenario.envMode === "ghostty"),
+		ed3ScrollbackEraseRisk: isEd3RiskScenario(scenario.terminalMode, scenario.envMode),
 		conptyHostScrollbackUnobservable: scenario.platform === "win32" && scenario.terminalMode === "unknown",
 		foregroundStreaming: scenario.foregroundStream,
 		widthModel: scenario.widthModel ?? "legacy",
 	};
+}
+
+function scenarioTags(
+	template: Pick<Scenario, "envMode" | "terminalMode" | "geometryMode" | "widthModel">,
+	strictNativeScrollback: boolean,
+	foregroundStreaming: boolean,
+): readonly ScenarioTag[] {
+	const tags: ScenarioTag[] = [template.geometryMode];
+	if (template.envMode === "tmux") tags.push("tmux");
+	if (strictNativeScrollback) tags.push("strictScrollback");
+	if (template.terminalMode !== "normal") tags.push("unknownViewport");
+	if (foregroundStreaming) tags.push("foregroundStream");
+	if (isEd3RiskScenario(template.terminalMode, template.envMode)) tags.push("ed3Risk");
+	if (template.widthModel === "modern") tags.push("modernWidth");
+	return tags;
 }
 
 class StressModel {
@@ -991,7 +1103,7 @@ class StressOverlayComponent implements Component, Focusable {
 
 class StressDriver {
 	#scenario: Scenario;
-	#rng: Rng;
+	#streams: StressRandomStreams;
 	#traits: TerminalStressTraits;
 	#scheduler: StressRenderScheduler;
 	#term: VirtualTerminal;
@@ -1026,15 +1138,15 @@ class StressDriver {
 
 	constructor(scenario: Scenario) {
 		this.#scenario = scenario;
-		this.#rng = new Rng(scenario.seed);
+		this.#streams = createRandomStreams(scenario.seed);
 		this.#traits = terminalStressTraits(scenario);
 		this.#scheduler = new StressRenderScheduler();
 		const maxHeight = maxOf(scenario.heightChoices);
-		this.#model = new StressModel(this.#rng, maxHeight + 12, scenario.uniqueContent, "root-");
+		this.#model = new StressModel(this.#streams.content, maxHeight + 12, scenario.uniqueContent, "root-");
 		this.#component = new StressComponent(this.#model, scenario.reflow);
 		this.#children = [0, 1].map(id => {
 			const model = new StressModel(
-				this.#rng,
+				this.#streams.children,
 				Math.max(1, Math.min(3, maxHeight)),
 				scenario.uniqueContent,
 				`child${id}-`,
@@ -1084,7 +1196,7 @@ class StressDriver {
 
 			for (let index = 0; index < this.#scenario.iterations; index++) {
 				const before = this.#snapshot();
-				const kind = this.#chooseOperation(index, before);
+				const kind = this.#scenario.replayOperations?.[index] ?? this.#chooseOperation(index, before);
 				const op = await this.#applyOperation(kind);
 				const after = this.#snapshot();
 				this.#recordOperation(index, op.kind, op.detail, before, after);
@@ -1183,7 +1295,7 @@ class StressDriver {
 		if (this.#traits.strictNativeScrollback && before.atBottom && index % 41 === 0) {
 			return "offscreenEditAppendRepeatedTail";
 		}
-		if (!before.atBottom && this.#rng.chance(0.28)) {
+		if (!before.atBottom && this.#streams.ops.chance(0.28)) {
 			return "scrollToBottom";
 		}
 
@@ -1248,7 +1360,7 @@ class StressDriver {
 			{ item: "reorderChildren", weight: this.#children.filter(child => child.active).length > 1 ? 1 : 0 },
 			{ item: "mutateChild", weight: this.#children.some(child => child.active) ? 3 : 0 },
 		];
-		return weightedPick(this.#rng, weighted);
+		return weightedPick(this.#streams.ops, weighted);
 	}
 
 	async #applyOperation(kind: OperationKind): Promise<AppliedOperation> {
@@ -1359,38 +1471,22 @@ class StressDriver {
 	): Promise<AppliedOperation> {
 		this.#renderContentFrame();
 		await this.#settle();
-		return {
-			kind,
-			detail,
-			mutatesContent: true,
-			checksRowAccounting,
-			geometryChanged: false,
-			forcedRender: false,
-			mutatesViewport: false,
-			checkpoint: false,
-		};
+		return contentOperation(kind, detail, checksRowAccounting);
 	}
 
 	async #eagerStreamingMutation(): Promise<AppliedOperation> {
 		this.#tui.setEagerNativeScrollbackRebuild(true);
 		let detail: JsonObject = {};
 		try {
-			detail = this.#rng.chance(0.5) ? this.#model.streamOne() : this.#model.editOffscreenLine(this.#term.rows);
+			detail = this.#streams.content.chance(0.5)
+				? this.#model.streamOne()
+				: this.#model.editOffscreenLine(this.#term.rows);
 			this.#renderContentFrame();
 			await this.#settle();
 		} finally {
 			this.#tui.setEagerNativeScrollbackRebuild(false);
 		}
-		return {
-			kind: "eagerStreamingMutation",
-			detail,
-			mutatesContent: true,
-			checksRowAccounting: false,
-			geometryChanged: false,
-			forcedRender: false,
-			mutatesViewport: false,
-			checkpoint: false,
-		};
+		return contentOperation("eagerStreamingMutation", detail, false);
 	}
 
 	#renderContentFrame(): void {
@@ -1452,14 +1548,14 @@ class StressDriver {
 	}
 
 	async #coalescedBurst(): Promise<AppliedOperation> {
-		const count = this.#rng.int(2, 6);
+		const count = this.#streams.ops.int(2, 6);
 		const steps: JsonValue[] = [];
 		let mutatesContent = false;
 		let geometryChanged = false;
 		let forcedRender = false;
 		let mutatesViewport = false;
 		for (let i = 0; i < count; i++) {
-			const stepKind = this.#rng.pick(BURST_STEP_KINDS);
+			const stepKind = this.#streams.ops.pick(BURST_STEP_KINDS);
 			const detail = this.#applyBurstStep(stepKind);
 			steps.push({ kind: stepKind, detail });
 			const metadata = BURST_STEP_METADATA[stepKind];
@@ -1512,8 +1608,8 @@ class StressDriver {
 				return { rows };
 			}
 			case "scrollPartial": {
-				const amount = this.#rng.int(1, Math.max(1, this.#term.rows));
-				const direction = this.#rng.chance(0.5) ? -1 : 1;
+				const amount = this.#streams.geometry.int(1, Math.max(1, this.#term.rows));
+				const direction = this.#streams.geometry.chance(0.5) ? -1 : 1;
 				this.#term.scrollLines(direction * amount);
 				return { amount: direction * amount };
 			}
@@ -1544,7 +1640,7 @@ class StressDriver {
 	async #showOverlay(): Promise<AppliedOperation> {
 		const id = this.#nextOverlayId;
 		this.#nextOverlayId += 1;
-		const model = new StressOverlayModel(this.#rng, id);
+		const model = new StressOverlayModel(this.#streams.overlay, id);
 		const component = new StressOverlayComponent(model);
 		const { options, detail } = this.#randomOverlayOptions();
 		const handle = this.#tui.showOverlay(component, options);
@@ -1613,62 +1709,63 @@ class StressDriver {
 
 	#pickOverlay(): StressOverlayEntry | undefined {
 		if (this.#overlays.length === 0) return undefined;
-		return this.#overlays[this.#rng.int(0, this.#overlays.length - 1)];
+		return this.#overlays[this.#streams.overlay.int(0, this.#overlays.length - 1)];
 	}
 
 	#randomOverlayOptions(): { options: OverlayOptions; detail: JsonObject } {
+		const rng = this.#streams.overlay;
 		const options: OverlayOptions = {};
 		const detail: JsonObject = {};
-		if (this.#rng.chance(0.75)) {
-			const width = this.#rng.chance(0.35)
-				? (`${this.#rng.pick([25, 40, 60, 80])}%` as `${number}%`)
-				: this.#rng.int(1, Math.max(1, this.#term.columns + 8));
+		if (rng.chance(0.75)) {
+			const width = rng.chance(0.35)
+				? (`${rng.pick([25, 40, 60, 80])}%` as `${number}%`)
+				: rng.int(1, Math.max(1, this.#term.columns + 8));
 			options.width = width;
 			detail.width = width;
 		}
-		if (this.#rng.chance(0.35)) {
-			const maxHeight = this.#rng.chance(0.35)
-				? (`${this.#rng.pick([25, 50, 75])}%` as `${number}%`)
-				: this.#rng.int(1, Math.max(1, this.#term.rows));
+		if (rng.chance(0.35)) {
+			const maxHeight = rng.chance(0.35)
+				? (`${rng.pick([25, 50, 75])}%` as `${number}%`)
+				: rng.int(1, Math.max(1, this.#term.rows));
 			options.maxHeight = maxHeight;
 			detail.maxHeight = maxHeight;
 		}
-		if (this.#rng.chance(0.25)) {
-			const minWidth = this.#rng.int(1, Math.max(1, this.#term.columns + 4));
+		if (rng.chance(0.25)) {
+			const minWidth = rng.int(1, Math.max(1, this.#term.columns + 4));
 			options.minWidth = minWidth;
 			detail.minWidth = minWidth;
 		}
-		if (this.#rng.chance(0.5)) {
-			const anchor = this.#rng.pick(OVERLAY_ANCHORS);
+		if (rng.chance(0.5)) {
+			const anchor = rng.pick(OVERLAY_ANCHORS);
 			options.anchor = anchor;
-			options.offsetX = this.#rng.int(-3, 3);
-			options.offsetY = this.#rng.int(-2, 2);
+			options.offsetX = rng.int(-3, 3);
+			options.offsetY = rng.int(-2, 2);
 			detail.anchor = anchor;
 			detail.offsetX = options.offsetX;
 			detail.offsetY = options.offsetY;
 		} else {
-			const row = this.#rng.chance(0.45)
-				? (`${this.#rng.pick([0, 25, 50, 75, 100])}%` as `${number}%`)
-				: this.#rng.int(-2, this.#term.rows + 2);
-			const col = this.#rng.chance(0.45)
-				? (`${this.#rng.pick([0, 25, 50, 75, 100])}%` as `${number}%`)
-				: this.#rng.int(-4, this.#term.columns + 4);
+			const row = rng.chance(0.45)
+				? (`${rng.pick([0, 25, 50, 75, 100])}%` as `${number}%`)
+				: rng.int(-2, this.#term.rows + 2);
+			const col = rng.chance(0.45)
+				? (`${rng.pick([0, 25, 50, 75, 100])}%` as `${number}%`)
+				: rng.int(-4, this.#term.columns + 4);
 			options.row = row;
 			options.col = col;
 			detail.row = row;
 			detail.col = col;
 		}
-		if (this.#rng.chance(0.6)) {
-			if (this.#rng.chance(0.5)) {
-				const margin = this.#rng.int(0, 2);
+		if (rng.chance(0.6)) {
+			if (rng.chance(0.5)) {
+				const margin = rng.int(0, 2);
 				options.margin = margin;
 				detail.margin = margin;
 			} else {
 				const margin = {
-					top: this.#rng.int(0, 2),
-					right: this.#rng.int(0, 2),
-					bottom: this.#rng.int(0, 2),
-					left: this.#rng.int(0, 2),
+					top: rng.int(0, 2),
+					right: rng.int(0, 2),
+					bottom: rng.int(0, 2),
+					left: rng.int(0, 2),
 				};
 				options.margin = margin;
 				detail.margin = margin;
@@ -1688,35 +1785,17 @@ class StressDriver {
 			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
 		}
 		await this.#settle();
-		return {
-			kind: "resizeBoth",
-			detail: { columns, rows },
-			mutatesContent: false,
-			checksRowAccounting: false,
-			geometryChanged: true,
-			forcedRender: false,
-			mutatesViewport: true,
-			checkpoint: false,
-		};
+		return viewOperation("resizeBoth", { columns, rows }, { geometryChanged: true, mutatesViewport: true });
 	}
 
 	async #resizeNoop(): Promise<AppliedOperation> {
 		this.#term.resize(this.#term.columns, this.#term.rows);
 		await this.#settle();
-		return {
-			kind: "resizeNoop",
-			detail: { columns: this.#term.columns, rows: this.#term.rows },
-			mutatesContent: false,
-			checksRowAccounting: false,
-			geometryChanged: false,
-			forcedRender: false,
-			mutatesViewport: false,
-			checkpoint: false,
-		};
+		return viewOperation("resizeNoop", { columns: this.#term.columns, rows: this.#term.rows });
 	}
 
 	async #scrollUp(): Promise<AppliedOperation> {
-		const amount = this.#rng.int(1, Math.max(1, this.#term.rows * 2));
+		const amount = this.#streams.geometry.int(1, Math.max(1, this.#term.rows * 2));
 		this.#term.scrollLines(-amount);
 		await this.#settle();
 		return this.#viewOperation("scrollUp", { amount });
@@ -1729,21 +1808,16 @@ class StressDriver {
 			clearScrollback: this.#traits.strictNativeScrollback,
 		});
 		await this.#settle();
-		return {
-			kind: "scrollToBottom",
-			detail: { forcedCheckpoint: this.#traits.strictNativeScrollback },
-			mutatesContent: false,
-			checksRowAccounting: false,
-			geometryChanged: false,
-			forcedRender: true,
-			mutatesViewport: true,
-			checkpoint: true,
-		};
+		return forceRenderOperation(
+			"scrollToBottom",
+			{ forcedCheckpoint: this.#traits.strictNativeScrollback },
+			{ checkpoint: true, mutatesViewport: true },
+		);
 	}
 
 	async #scrollPartial(): Promise<AppliedOperation> {
-		const amount = this.#rng.int(1, Math.max(1, this.#term.rows));
-		const direction = this.#rng.chance(0.5) ? -1 : 1;
+		const amount = this.#streams.geometry.int(1, Math.max(1, this.#term.rows));
+		const direction = this.#streams.geometry.chance(0.5) ? -1 : 1;
 		this.#term.scrollLines(direction * amount);
 		await this.#settle();
 		return this.#viewOperation("scrollPartial", { amount: direction * amount });
@@ -1755,16 +1829,7 @@ class StressDriver {
 			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
 		}
 		await this.#settle();
-		return {
-			kind: "resizeWidth",
-			detail: { columns },
-			mutatesContent: false,
-			checksRowAccounting: false,
-			geometryChanged: true,
-			forcedRender: false,
-			mutatesViewport: true,
-			checkpoint: false,
-		};
+		return viewOperation("resizeWidth", { columns }, { geometryChanged: true, mutatesViewport: true });
 	}
 
 	async #resizeHeight(): Promise<AppliedOperation> {
@@ -1774,16 +1839,7 @@ class StressDriver {
 			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
 		}
 		await this.#settle();
-		return {
-			kind: "resizeHeight",
-			detail: { rows },
-			mutatesContent: false,
-			checksRowAccounting: false,
-			geometryChanged: true,
-			forcedRender: false,
-			mutatesViewport: true,
-			checkpoint: false,
-		};
+		return viewOperation("resizeHeight", { rows }, { geometryChanged: true, mutatesViewport: true });
 	}
 
 	// SIGWINCH racing a streamed token: the model grows and the terminal
@@ -1794,21 +1850,15 @@ class StressDriver {
 	async #resizeWithAppend(): Promise<AppliedOperation> {
 		const appended = this.#model.appendSmall();
 		const rows = this.#pickDifferent(this.#scenario.heightChoices, this.#term.rows);
-		const columns = this.#rng.chance(0.5)
+		const columns = this.#streams.geometry.chance(0.5)
 			? this.#pickDifferent(this.#scenario.widthChoices, this.#term.columns)
 			: this.#term.columns;
 		this.#term.resize(columns, rows);
 		await this.#settle();
-		return {
-			kind: "resizeWithAppend",
-			detail: { appended, columns, rows },
-			mutatesContent: true,
-			checksRowAccounting: false,
+		return contentOperation("resizeWithAppend", { appended, columns, rows }, false, {
 			geometryChanged: true,
-			forcedRender: false,
 			mutatesViewport: true,
-			checkpoint: false,
-		};
+		});
 	}
 
 	async #forceRender(): Promise<AppliedOperation> {
@@ -1845,7 +1895,7 @@ class StressDriver {
 		// header + residual rows), so the transient bound must cover everything
 		// this op writes: the cleared frame plus the fresh overflow appends.
 		const clearedFrameLength = this.#expectedFrame().frame.length;
-		const overflowCount = this.#term.rows + this.#rng.int(1, 4);
+		const overflowCount = this.#term.rows + this.#streams.geometry.int(1, 4);
 		const overflow = this.#model.appendCount(overflowCount, "overflow");
 		this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
 		await this.#settle();
@@ -1859,16 +1909,9 @@ class StressDriver {
 	}
 
 	#forceOperation(kind: OperationKind, detail: JsonObject): AppliedOperation {
-		return {
-			kind,
-			detail,
-			mutatesContent: false,
-			checksRowAccounting: false,
-			geometryChanged: false,
-			forcedRender: true,
+		return forceRenderOperation(kind, detail, {
 			mutatesViewport: kind === "forceRenderClearScrollback" || kind === "forceRenderAfterEmptyOverflow",
-			checkpoint: false,
-		};
+		});
 	}
 
 	async #toggleFocusInput(): Promise<AppliedOperation> {
@@ -1876,23 +1919,14 @@ class StressDriver {
 		if (this.#component.focused) {
 			this.#tui.setFocus(null);
 		} else {
-			cursor = this.#rng.chance(0.25)
+			cursor = this.#streams.cursor.chance(0.25)
 				? this.#model.setCursorOffscreen(this.#term.rows, this.#term.columns)
 				: this.#model.setCursorVisible(this.#term.rows, this.#term.columns);
 			this.#tui.setFocus(this.#component);
 		}
 		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
 		await this.#settle();
-		return {
-			kind: "toggleFocusInput",
-			detail: { focused: this.#component.focused, cursor },
-			mutatesContent: false,
-			checksRowAccounting: false,
-			geometryChanged: false,
-			forcedRender: false,
-			mutatesViewport: false,
-			checkpoint: false,
-		};
+		return viewOperation("toggleFocusInput", { focused: this.#component.focused, cursor });
 	}
 
 	// Container.addChild appends and Container.render walks children in array
@@ -1917,36 +1951,18 @@ class StressDriver {
 		this.#syncChildOrder();
 		this.#renderContentFrame();
 		await this.#settle();
-		return {
-			kind: "attachChild",
-			detail: { id: child.id, lines: child.model.debugLines() },
-			mutatesContent: true,
-			checksRowAccounting: false,
-			geometryChanged: false,
-			forcedRender: false,
-			mutatesViewport: false,
-			checkpoint: false,
-		};
+		return contentOperation("attachChild", { id: child.id, lines: child.model.debugLines() }, false);
 	}
 
 	async #detachChild(): Promise<AppliedOperation> {
 		const active = this.#children.filter(entry => entry.active);
-		const child = active.length === 0 ? undefined : active[this.#rng.int(0, active.length - 1)];
+		const child = active.length === 0 ? undefined : active[this.#streams.children.int(0, active.length - 1)];
 		if (child === undefined) return this.#viewOperation("detachChild", { skipped: true });
 		child.active = false;
 		this.#tui.removeChild(child.component);
 		this.#renderContentFrame();
 		await this.#settle();
-		return {
-			kind: "detachChild",
-			detail: { id: child.id },
-			mutatesContent: true,
-			checksRowAccounting: false,
-			geometryChanged: false,
-			forcedRender: false,
-			mutatesViewport: false,
-			checkpoint: false,
-		};
+		return contentOperation("detachChild", { id: child.id }, false);
 	}
 
 	async #reorderChildren(): Promise<AppliedOperation> {
@@ -1957,53 +1973,34 @@ class StressDriver {
 		this.#syncChildOrder();
 		this.#renderContentFrame();
 		await this.#settle();
-		return {
-			kind: "reorderChildren",
-			detail: { activeOrder: this.#children.filter(child => child.active).map(child => child.id) },
-			mutatesContent: true,
-			checksRowAccounting: false,
-			geometryChanged: false,
-			forcedRender: false,
-			mutatesViewport: false,
-			checkpoint: false,
-		};
+		return contentOperation(
+			"reorderChildren",
+			{ activeOrder: this.#children.filter(child => child.active).map(child => child.id) },
+			false,
+		);
 	}
 
 	async #mutateChild(): Promise<AppliedOperation> {
 		const active = this.#children.filter(entry => entry.active);
-		const child = active.length === 0 ? undefined : active[this.#rng.int(0, active.length - 1)];
+		const child = active.length === 0 ? undefined : active[this.#streams.children.int(0, active.length - 1)];
 		if (child === undefined) return this.#viewOperation("mutateChild", { skipped: true });
-		const detail = this.#rng.chance(0.5) ? child.model.appendSmall() : child.model.editVisibleLine(this.#term.rows);
+		const detail = this.#streams.children.chance(0.5)
+			? child.model.appendSmall()
+			: child.model.editVisibleLine(this.#term.rows);
 		this.#renderContentFrame();
 		await this.#settle();
-		return {
-			kind: "mutateChild",
-			detail: { id: child.id, detail },
-			mutatesContent: true,
-			checksRowAccounting: false,
-			geometryChanged: false,
-			forcedRender: false,
-			mutatesViewport: false,
-			checkpoint: false,
-		};
+		return contentOperation("mutateChild", { id: child.id, detail }, false);
 	}
 
 	#viewOperation(kind: OperationKind, detail: JsonObject): AppliedOperation {
-		return {
-			kind,
-			detail,
-			mutatesContent: false,
-			checksRowAccounting: false,
-			geometryChanged: false,
-			forcedRender: false,
+		return viewOperation(kind, detail, {
 			mutatesViewport: kind === "scrollUp" || kind === "scrollPartial",
-			checkpoint: false,
-		};
+		});
 	}
 
 	#pickDifferent(values: readonly number[], current: number): number {
 		const candidates = values.filter(value => value !== current);
-		return candidates.length === 0 ? current : this.#rng.pick(candidates);
+		return candidates.length === 0 ? current : this.#streams.geometry.pick(candidates);
 	}
 
 	async #checkpoint(index: number, kind: "periodicCheckpoint"): Promise<void> {
@@ -2619,11 +2616,13 @@ class StressDriver {
 		index: number,
 		extra: JsonObject,
 	): never {
+		const replayLogPath = writeReplayLog(this.#scenario, this.#opLog);
 		const replay = `TUI_STRESS_REPLAY=${JSON.stringify({
 			scenario: this.#scenario.name,
 			seed: formatSeed(this.#scenario.seed),
 			iterations: index + 1,
 		})}`;
+		const replayLog = `TUI_STRESS_REPLAY_LOG=${replayLogPath}`;
 		const fullDump = Bun.env.TUI_STRESS_FULL_DUMP === "1";
 		const dump = {
 			message,
@@ -2631,9 +2630,12 @@ class StressDriver {
 			seed: formatSeed(this.#scenario.seed),
 			opIndex: index,
 			replay,
+			replayLog,
+			replayLogPath,
 			op: { kind: op.kind, detail: op.detail },
 			extra,
 			traits: this.#traits,
+			tags: this.#scenario.tags,
 			operationCoverage: Object.fromEntries(this.#operationCoverage.entries()),
 			lastOperations: this.#opLog.slice(-50),
 			children: this.#children.map(child => ({
@@ -3257,16 +3259,21 @@ export function buildScenarios(): Scenario[] {
 	const soak = Bun.env.TUI_STRESS_SOAK === "1";
 	const templates = soak ? soakTemplates() : coreTemplates();
 	const replay = parseReplay(templates);
+	const replayOperations = parseReplayOperations();
+	if (replayOperations !== null && replay === null) {
+		throw new Error("TUI_STRESS_REPLAY_LOG requires TUI_STRESS_REPLAY to select the scenario and seed");
+	}
 	if (replay !== null) {
 		const maxHeight = maxOf(replay.template.heightChoices);
 		return [
 			materializeScenario(
 				replay.template,
 				replay.seed,
-				replay.iterations,
+				replayOperations?.length ?? replay.iterations,
 				SOAK_BULK_MAX,
 				SOAK_TIMEOUT_MS,
 				maxHeight,
+				replayOperations ?? undefined,
 			),
 		];
 	}
@@ -3296,19 +3303,25 @@ function materializeScenario(
 	bulkMax: number,
 	timeoutMs: number,
 	maxHeight: number,
+	replayOperations?: readonly OperationKind[],
 ): Scenario {
+	const strictScrollback =
+		template.envMode !== "tmux" && template.terminalMode === "normal" && template.platform !== "win32";
+	const foregroundStream = template.foregroundStream ?? false;
+	const reflow = template.reflow ?? false;
 	return {
 		...template,
 		seed,
 		iterations,
 		bulkMax,
 		scrollback: template.scrollbackRows ?? Math.max(10_000, maxHeight + 64 + iterations * (bulkMax + 8)),
-		strictScrollback:
-			template.envMode !== "tmux" && template.terminalMode === "normal" && template.platform !== "win32",
+		strictScrollback,
 		timeoutMs,
 		uniqueContent: template.uniqueContent ?? false,
-		foregroundStream: template.foregroundStream ?? false,
-		reflow: template.reflow ?? false,
+		foregroundStream,
+		reflow,
+		tags: scenarioTags(template, strictScrollback, foregroundStream),
+		replayOperations,
 	};
 }
 
@@ -3360,6 +3373,36 @@ function parseReplaySeed(seed: unknown): number {
 	throw new Error("Invalid TUI_STRESS_REPLAY.seed: expected a number or integer string");
 }
 
+function parseReplayOperations(): readonly OperationKind[] | null {
+	const path = Bun.env.TUI_STRESS_REPLAY_LOG;
+	if (path === undefined || path.length === 0) return null;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(fs.readFileSync(path, "utf8"));
+	} catch (error) {
+		throw new Error(`Invalid TUI_STRESS_REPLAY_LOG JSON: ${path}`, { cause: error });
+	}
+	const entries = Array.isArray(parsed)
+		? parsed
+		: isJsonRecord(parsed) && Array.isArray(parsed.operations)
+			? parsed.operations
+			: null;
+	if (entries === null) {
+		throw new Error("Invalid TUI_STRESS_REPLAY_LOG: expected an operation array or { operations } object");
+	}
+	const operations: OperationKind[] = [];
+	for (let index = 0; index < entries.length; index++) {
+		const entry = entries[index];
+		const kind = isJsonRecord(entry) ? entry.kind : entry;
+		if (kind === "periodicCheckpoint") continue;
+		if (!isOperationKind(kind)) {
+			throw new Error(`Invalid TUI_STRESS_REPLAY_LOG operation at index ${index}`);
+		}
+		operations.push(kind);
+	}
+	return operations;
+}
+
 function buildSeeds(count: number): number[] {
 	const seeds: number[] = [];
 	for (let i = 0; i < count; i++) {
@@ -3380,12 +3423,23 @@ type ScenarioTemplate = Omit<
 	| "uniqueContent"
 	| "foregroundStream"
 	| "reflow"
+	| "tags"
+	| "replayOperations"
 > & {
 	scrollbackRows?: number;
 	uniqueContent?: boolean;
 	foregroundStream?: boolean;
 	reflow?: boolean;
 };
+
+function writeReplayLog(scenario: Scenario, operations: readonly OperationLogEntry[]): string {
+	const filePath = path.join(
+		os.tmpdir(),
+		`omp-tui-stress-${scenario.name}-${(scenario.seed >>> 0).toString(16)}-${Date.now().toString(36)}.json`,
+	);
+	fs.writeFileSync(filePath, JSON.stringify(operations, null, 2));
+	return filePath;
+}
 
 function coreTemplates(): ScenarioTemplate[] {
 	return [
