@@ -242,3 +242,55 @@ describe("apply_patch streaming preview (trailing partial line)", () => {
 		expect(cIdx).toBeGreaterThan(posB);
 	});
 });
+
+describe("matcherDigest", () => {
+	test("hashline: digests stripped `+` body rows only, never headers or op lines", () => {
+		const input = ["¶a.ts#AB12", "replace 1..2:", "+const x = 1;", "+const y = 2;", "delete 5", ""].join("\n");
+		expect(EDIT_MODE_STRATEGIES.hashline.matcherDigest({ input })).toBe("const x = 1;\nconst y = 2;");
+	});
+
+	test("hashline: grammar-only payload digests to empty, missing input to undefined", () => {
+		expect(EDIT_MODE_STRATEGIES.hashline.matcherDigest({ input: "¶a.ts#AB12\ndelete 3\n" })).toBe("");
+		expect(EDIT_MODE_STRATEGIES.hashline.matcherDigest({})).toBeUndefined();
+	});
+
+	test("apply_patch: digests added lines, never envelope markers or context", () => {
+		const input = [
+			"*** Begin Patch",
+			"*** Update File: a.ts",
+			"@@",
+			" const a = 1;",
+			"-const old = 1;",
+			"+const fresh = 2;",
+			"*** End Patch",
+			"",
+		].join("\n");
+		expect(EDIT_MODE_STRATEGIES.apply_patch.matcherDigest({ input })).toBe("const fresh = 2;");
+	});
+
+	test("patch: digests added lines from diffs and passes create content through whole", () => {
+		expect(
+			EDIT_MODE_STRATEGIES.patch.matcherDigest({
+				edits: [{ diff: " ctx\n-removed line\n+added line\n" }],
+			}),
+		).toBe("added line");
+		const createContent = "full file content\nwith no diff markers\n";
+		expect(
+			EDIT_MODE_STRATEGIES.patch.matcherDigest({
+				edits: [{ op: "create", diff: createContent }],
+			}),
+		).toBe(createContent);
+	});
+
+	test("replace: digests new_text of every edit", () => {
+		expect(
+			EDIT_MODE_STRATEGIES.replace.matcherDigest({
+				edits: [
+					{ old_text: "a", new_text: "const b = 1;" },
+					{ old_text: "c", new_text: "const d = 2;" },
+				],
+			}),
+		).toBe("const b = 1;\nconst d = 2;");
+		expect(EDIT_MODE_STRATEGIES.replace.matcherDigest({})).toBeUndefined();
+	});
+});
