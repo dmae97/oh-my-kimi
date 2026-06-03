@@ -6,6 +6,10 @@
 
 - Added optional `AgentTool.matcherDigest(args)` hook: tools whose streamed arguments encode content in a wire grammar (patch formats, escaped strings) can expose the real content they introduce, so stream-content matchers (e.g. TTSR rules) run against plain source text instead of the wire format.
 
+### Fixed
+
+- Fixed the agent loop wedging the model when a `write`/`edit` tool call is truncated by `stop_reason: length` (e.g. an OpenCode Zen / Claude-3.5-Haiku turn that emits >~1000 lines of code, blowing past the 8K `max_tokens` output cap). The skipped tool result now surfaces an actionable hint — naming `stop_reason: length` and telling the model to split the payload into multiple smaller calls — instead of the generic "Tool call was not executed because the assistant ended its turn" placeholder, which left the auto-continue loop re-emitting the same oversized payload until the user gave up. Tools are still NOT executed when the arguments are truncated. ([#1785](https://github.com/can1357/oh-my-pi/issues/1785))
+
 ## [15.8.0] - 2026-06-02
 
 ### Fixed

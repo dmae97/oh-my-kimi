@@ -1135,4 +1135,73 @@ describe("agentLoopContinue with AgentMessage", () => {
 		expect(messages.map(message => message.role)).toEqual(["user", "assistant", "user", "assistant"]);
 		expect(messages[2]).toMatchObject({ role: "user", content: "follow-up" });
 	});
+
+	it("skips tool calls when the assistant turn was truncated by max_tokens (stop_reason: length) and tells the model to chunk", async () => {
+		// Regression for issue #1785 (`write` tool crash on >1020-line content).
+		// When a model emits a `write` call whose `content` argument exceeds the
+		// model's `max_tokens` output cap, the provider cuts the stream off mid-
+		// arguments and reports `stop_reason: length`. The agent must NOT execute
+		// the truncated call (its `content` is a partial string), AND the synthetic
+		// tool result must guide the model towards a chunked retry — otherwise the
+		// auto-continue loop re-emits the same oversized payload and the file never
+		// gets written ("write tool crash" from the reporter's POV).
+		const writeSchema = z.object({ path: z.string(), content: z.string() });
+		const executed: { path: string; content: string }[] = [];
+		const writeTool: AgentTool<typeof writeSchema, { path: string }> = {
+			name: "write",
+			label: "Write",
+			description: "Write tool",
+			parameters: writeSchema,
+			async execute(_id, params) {
+				executed.push({ path: params.path, content: params.content });
+				return { content: [{ type: "text", text: "ok" }], details: { path: params.path } };
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [writeTool] };
+
+		// The model emits one write tool call, then the stream ends with
+		// stop_reason: "length". The arguments field carries a truncated content
+		// payload — exactly what the streaming JSON parser produces when the
+		// closing quote/brace never arrive.
+		const truncatedContent = "line 1\nline 2\n... (cut off mid-string"; // no closing quote
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							id: "tc-write-1",
+							name: "write",
+							arguments: { path: "/tmp/huge.ts", content: truncatedContent },
+						},
+					],
+					stopReason: "length",
+				},
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+		const stream = agentLoop([createUserMessage("write huge file")], context, config, undefined, mock.stream);
+		for await (const _event of stream) {
+			// drain
+		}
+		const messages = await stream.result();
+
+		// The tool MUST NOT have been executed — the arguments are mid-string and
+		// running them would persist a half-written file.
+		expect(executed).toEqual([]);
+
+		// The synthetic tool result must surface the truncation cause so the model
+		// can recover by chunking instead of re-emitting the same payload.
+		const toolResult = messages.find(m => m.role === "toolResult");
+		expect(toolResult).toBeDefined();
+		if (toolResult?.role !== "toolResult") throw new Error("expected tool result");
+		expect(toolResult.toolCallId).toBe("tc-write-1");
+		expect(toolResult.isError).toBe(true);
+		const text = toolResult.content
+			.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map(c => c.text)
+			.join("\n");
+		expect(text).toContain("stop_reason: length");
+		expect(text).toMatch(/split|chunk/i);
+	});
 });
