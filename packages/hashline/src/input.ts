@@ -50,14 +50,14 @@ function stripApplyPatchPathNoise(pathText: string): string {
  * Best-effort recovery for `¶`-prefixed lines the strict tokenizer
  * rejects. Strips apply_patch keyword noise (`Update File:`, `Update:`,
  * etc.) and an extra leading `***` (some models emit a hybrid `¶***foo.ts`
- * shape), then expects `PATH(#HASH)?` with no embedded whitespace.
+ * shape), then expects `PATH(#HASH)?`.
  * Returns `null` when no clean path can be salvaged.
  */
 function tryParseRecoveryHeader(line: string, cwd?: string): RawSection | null {
 	if (!line.startsWith(HL_FILE_PREFIX)) return null;
 	const body = stripApplyPatchPathNoise(line.slice(HL_FILE_PREFIX.length).trim());
 	if (body.length === 0) return null;
-	const match = new RegExp(`^(\\S+?)(?:#([0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}}))?\\s*$`).exec(body);
+	const match = new RegExp(`^(.+?)(?:#([0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}}))?\\s*$`).exec(body);
 	if (match === null) return null;
 	const path = normalizeHashlinePath(match[1], cwd);
 	if (path.length === 0) return null;

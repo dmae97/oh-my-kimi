@@ -312,28 +312,22 @@ function tryParseHunkHeader(line: string): ParsedHunkHeader | null {
 function tryParseHeader(line: string): { path: string; fileHash?: string } | null {
 	if (!line.startsWith(HL_FILE_PREFIX)) return null;
 	const end = trimEndIndex(line);
-	let index = FILE_PREFIX_LENGTH;
-	if (index >= end) return null;
-	const pathStart = index;
-	while (index < end) {
-		const code = line.charCodeAt(index);
-		if (code === CHAR_HASH || code === CHAR_SPACE || code === CHAR_TAB) break;
-		index++;
-	}
-	if (index === pathStart) return null;
-	const path = line.slice(pathStart, index);
+	if (FILE_PREFIX_LENGTH >= end) return null;
+
+	let pathEnd = end;
 	let fileHash: string | undefined;
-	if (index < end && line.charCodeAt(index) === CHAR_HASH) {
-		const hashStart = index + 1;
-		const hashEnd = hashStart + HL_FILE_HASH_LENGTH;
-		if (hashEnd > end) return null;
-		for (let probe = hashStart; probe < hashEnd; probe++) {
+	const hashStart = end - HL_FILE_HASH_LENGTH - 1;
+	if (hashStart >= FILE_PREFIX_LENGTH && line.charCodeAt(hashStart) === CHAR_HASH) {
+		const tagStart = hashStart + 1;
+		for (let probe = tagStart; probe < end; probe++) {
 			if (!isHexDigitCode(line.charCodeAt(probe))) return null;
 		}
-		fileHash = line.slice(hashStart, hashEnd).toUpperCase();
-		index = hashEnd;
+		pathEnd = hashStart;
+		fileHash = line.slice(tagStart, end).toUpperCase();
 	}
-	if (skipWhitespace(line, index, end) !== end) return null;
+
+	if (pathEnd === FILE_PREFIX_LENGTH) return null;
+	const path = line.slice(FILE_PREFIX_LENGTH, pathEnd);
 	return fileHash !== undefined ? { path, fileHash } : { path };
 }
 
