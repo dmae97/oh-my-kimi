@@ -31,11 +31,22 @@ const LINE_TERMINATOR = "\x1b[0m\x1b]8;;\x07";
 // row under a visible cursor. Paint writes also disable terminal autowrap:
 // several terminals keep a "pending wrap" flag after an exact-width row, so a
 // following cursor move can first wrap to the next row and produce staircase
-// trails. The TUI emits explicit CRLFs and restores autowrap before leaving
-// synchronized output mode.
+// trails. The TUI emits explicit CRLFs and restores autowrap before leaving the
+// paint. Synchronized output can be disabled for terminals with broken DEC 2026
+// implementations; autowrap discipline stays on either way.
 const HIDE_CURSOR = "\x1b[?25l";
-const PAINT_BEGIN = `${HIDE_CURSOR}\x1b[?2026h\x1b[?7l`;
-const PAINT_END = "\x1b[?7h\x1b[?2026l";
+const SYNC_OUTPUT_BEGIN = "\x1b[?2026h";
+const SYNC_OUTPUT_END = "\x1b[?2026l";
+const DISABLE_AUTOWRAP = "\x1b[?7l";
+const ENABLE_AUTOWRAP = "\x1b[?7h";
+const PAINT_BEGIN = `${HIDE_CURSOR}${SYNC_OUTPUT_BEGIN}${DISABLE_AUTOWRAP}`;
+const PAINT_END = `${ENABLE_AUTOWRAP}${SYNC_OUTPUT_END}`;
+const PAINT_BEGIN_NO_SYNC = `${HIDE_CURSOR}${DISABLE_AUTOWRAP}`;
+const PAINT_END_NO_SYNC = ENABLE_AUTOWRAP;
+const CURSOR_BEGIN = `${HIDE_CURSOR}${SYNC_OUTPUT_BEGIN}`;
+const CURSOR_BEGIN_NO_SYNC = HIDE_CURSOR;
+const CURSOR_END = SYNC_OUTPUT_END;
+const CURSOR_END_NO_SYNC = "";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
@@ -155,10 +166,6 @@ function parseSizeValue(value: SizeValue | undefined, referenceSize: number): nu
 		return Math.floor((referenceSize * parseFloat(match[1])) / 100);
 	}
 	return undefined;
-}
-
-function isTermuxSession(): boolean {
-	return Boolean(process.env.TERMUX_VERSION);
 }
 
 /** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
@@ -316,6 +323,11 @@ export class TUI extends Container {
 	#sixelProbeUnsubscribe?: () => void;
 	#showHardwareCursor = $flag("PI_HARDWARE_CURSOR");
 	#clearOnShrink = $flag("PI_CLEAR_ON_SHRINK"); // Clear empty rows when content shrinks (default: off)
+	#synchronizedOutputEnabled = !$flag("PI_NO_SYNC_OUTPUT");
+	#paintBeginSequence = this.#synchronizedOutputEnabled ? PAINT_BEGIN : PAINT_BEGIN_NO_SYNC;
+	#paintEndSequence = this.#synchronizedOutputEnabled ? PAINT_END : PAINT_END_NO_SYNC;
+	#cursorBeginSequence = this.#synchronizedOutputEnabled ? CURSOR_BEGIN : CURSOR_BEGIN_NO_SYNC;
+	#cursorEndSequence = this.#synchronizedOutputEnabled ? CURSOR_END : CURSOR_END_NO_SYNC;
 	#maxLinesRendered = 0; // Line count from last render, used for viewport calculation
 	// Highest count of content rows currently sitting in terminal scrollback
 	// above the visible viewport. Used to detect shrink-across-viewport-boundary
@@ -1539,10 +1551,12 @@ export class TUI extends Container {
 			// viewport, but it must keep the existing diff basis so later coalesced
 			// content mutations can still update native scrollback correctly.
 			if (forceViewportRepaint) return { kind: "viewportRepaint" };
-			// Width change still alters wrapping geometry; height change shifts the
-			// visible window. Either needs a repaint (outside hostile environments).
+			// Width changes alter wrapping geometry; height changes expose or hide
+			// viewport rows. Repaint any non-multiplexer resize, including Termux
+			// software-keyboard toggles: leaving the new rows blank creates phantom
+			// viewport space that later appends can fill without growing scrollback.
 			if (widthChanged) return { kind: "viewportRepaint" };
-			if (heightChanged && !isTermuxSession() && !isMultiplexerSession()) return { kind: "viewportRepaint" };
+			if (heightChanged && !isMultiplexerSession()) return { kind: "viewportRepaint" };
 			return { kind: "noop" };
 		}
 
@@ -1628,11 +1642,10 @@ export class TUI extends Container {
 
 		// Height changes shift the visible window. Repaint when content didn't grow,
 		// but skip inside multiplexers (panes manage their own redraws — handled by
-		// the multiplexer geometry branch below). Termux is NOT excluded here: a
-		// pure keyboard-toggle height change carries no content change and was
-		// already resolved as a `noop` in the `firstChanged === -1` block above, so
-		// reaching this point means real content must be repainted at the new
-		// geometry — diffing against the pre-resize screen would offset it.
+		// the multiplexer geometry branch below). Termux is deliberately included:
+		// a resize with no content change still exposes or hides viewport rows, and
+		// leaving those rows blank lets later appends fill phantom space instead of
+		// growing native scrollback.
 		if (heightChanged && !contentGrew && !isMultiplexerSession()) {
 			return { kind: "viewportRepaint" };
 		}
@@ -1889,6 +1902,7 @@ export class TUI extends Container {
 	 * Single state-transition point. Every emitter calls this exactly once at
 	 * the end so cursor/viewport/scrollback accounting stays consistent.
 	 */
+
 	#commit(lines: string[], width: number, height: number, viewportTop: number, hardwareCursorRow: number): void {
 		this.#previousLines = lines;
 		this.#previousVisibleOverlayComponents = this.#visibleOverlayComponentsThisRender;
@@ -1912,7 +1926,7 @@ export class TUI extends Container {
 		options: { clearViewport: boolean; clearScrollback: boolean },
 	): void {
 		this.#fullRedrawCount += 1;
-		let buffer = PAINT_BEGIN;
+		let buffer = this.#paintBeginSequence;
 		if (options.clearViewport) {
 			buffer += options.clearScrollback ? "\x1b[2J\x1b[H\x1b[3J" : "\x1b[2J\x1b[H";
 		}
@@ -1923,7 +1937,7 @@ export class TUI extends Container {
 		const finalRow = Math.max(0, lines.length - 1);
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
 		buffer += seq;
-		buffer += PAINT_END;
+		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = options.clearViewport ? lines.length : Math.max(this.#maxLinesRendered, lines.length);
@@ -1950,7 +1964,7 @@ export class TUI extends Container {
 	): void {
 		this.#fullRedrawCount += 1;
 		const viewportTop = Math.max(0, lines.length - height);
-		let buffer = `${PAINT_BEGIN}\x1b[H`;
+		let buffer = `${this.#paintBeginSequence}\x1b[H`;
 		for (let screenRow = 0; screenRow < height; screenRow++) {
 			if (screenRow > 0) buffer += "\r\n";
 			buffer += "\x1b[2K";
@@ -1967,7 +1981,7 @@ export class TUI extends Container {
 		const finalRow = viewportTop + height - 1;
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
 		buffer += seq;
-		buffer += PAINT_END;
+		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = lines.length;
@@ -1989,7 +2003,7 @@ export class TUI extends Container {
 		prevHardwareCursorRow: number,
 	): void {
 		if (start >= lines.length) return;
-		let buffer = PAINT_BEGIN;
+		let buffer = this.#paintBeginSequence;
 		// Clamp tracked cursor to the visible viewport bottom — terminals clamp
 		// on resize, so a prior frame may have committed a row that no longer
 		// exists. Without this the scroll math points outside the viewport.
@@ -2001,7 +2015,7 @@ export class TUI extends Container {
 			buffer += "\r\n";
 			buffer += this.#fitLineToWidth(lines[i], width);
 		}
-		buffer += PAINT_END;
+		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 		const pushedNow = Math.max(0, lines.length - height);
 		if (pushedNow > this.#scrollbackHighWater) {
@@ -2037,7 +2051,7 @@ export class TUI extends Container {
 		const viewportTop = Math.max(0, this.#maxLinesRendered - height);
 		const targetRow = Math.max(0, lines.length - 1);
 
-		let buffer = PAINT_BEGIN;
+		let buffer = this.#paintBeginSequence;
 
 		const clampedCursor = Math.min(prevHardwareCursorRow, prevViewportTop + height - 1);
 		const currentScreenRow = clampedCursor - prevViewportTop;
@@ -2062,7 +2076,7 @@ export class TUI extends Container {
 
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, targetRow);
 		buffer += seq;
-		buffer += PAINT_END;
+		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = lines.length;
@@ -2096,7 +2110,7 @@ export class TUI extends Container {
 		const appendStart = appendedLines && firstChanged === this.#previousLines.length && firstChanged > 0;
 		const moveTargetRow = appendStart ? firstChanged - 1 : firstChanged;
 
-		let buffer = PAINT_BEGIN;
+		let buffer = this.#paintBeginSequence;
 
 		// Scroll-down branch: target row is past the bottom of the previous
 		// viewport (a pure append). Emit `\r\n`s so the terminal pushes the
@@ -2147,7 +2161,7 @@ export class TUI extends Container {
 
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalCursorRow);
 		buffer += seq;
-		buffer += PAINT_END;
+		buffer += this.#paintEndSequence;
 
 		this.#writeDiffDebug(
 			lines,
@@ -2277,6 +2291,6 @@ export class TUI extends Container {
 		}
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, totalLines, this.#hardwareCursorRow);
 		this.#hardwareCursorRow = toRow;
-		this.terminal.write(`${HIDE_CURSOR}\x1b[?2026h${seq}\x1b[?2026l`);
+		this.terminal.write(`${this.#cursorBeginSequence}${seq}${this.#cursorEndSequence}`);
 	}
 }

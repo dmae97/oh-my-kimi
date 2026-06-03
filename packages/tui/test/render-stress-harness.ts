@@ -35,7 +35,7 @@ const SMILE = String.fromCodePoint(0x1f642);
 type TestPlatform = "darwin" | "linux" | "win32";
 type TerminalMode = "normal" | "unknown" | "intermittentUnknown" | "staleBottom";
 type GeometryMode = "small" | "large";
-type EnvMode = "plain" | "tmux" | "termux" | "appleTerminal" | "iterm2" | "wsl";
+type EnvMode = "plain" | "tmux" | "termux" | "appleTerminal" | "iterm2" | "wsl" | "vteNoSync";
 const ENV_KEYS = [
 	"TMUX",
 	"STY",
@@ -46,6 +46,7 @@ const ENV_KEYS = [
 	"GHOSTTY_RESOURCES_DIR",
 	"ALACRITTY_WINDOW_ID",
 	"VTE_VERSION",
+	"PI_NO_SYNC_OUTPUT",
 	"TERM_PROGRAM",
 	"ITERM_SESSION_ID",
 	"WT_SESSION",
@@ -1903,6 +1904,7 @@ class StressDriver {
 	// 2026 block (Contour synchronized-output spec), so the renderer alone owns
 	// the invariant. Audits incrementally from #writeLogScanned to stay O(bytes).
 	#assertSyncOutputDiscipline(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		const syncOutputDisabled = this.#scenario.envMode === "vteNoSync";
 		for (; this.#writeLogScanned < this.#writeLog.length; this.#writeLogScanned++) {
 			const chunk = this.#writeLog[this.#writeLogScanned]!;
 			let cursor = 0;
@@ -1910,6 +1912,18 @@ class StressDriver {
 				const esc = chunk.indexOf("\x1b[?", cursor);
 				if (esc === -1) break;
 				if (chunk.startsWith("\x1b[?2026h", esc)) {
+					if (syncOutputDisabled) {
+						this.#fail(
+							"synchronized-output begin emitted while PI_NO_SYNC_OUTPUT is set",
+							op,
+							before,
+							after,
+							index,
+							{
+								sequence: "BSU",
+							},
+						);
+					}
 					this.#syncDepth++;
 					if (this.#syncDepth > 1) {
 						this.#fail("nested synchronized-output begin (BSU within BSU)", op, before, after, index, {
@@ -1918,6 +1932,18 @@ class StressDriver {
 					}
 					cursor = esc + 8;
 				} else if (chunk.startsWith("\x1b[?2026l", esc)) {
+					if (syncOutputDisabled) {
+						this.#fail(
+							"synchronized-output end emitted while PI_NO_SYNC_OUTPUT is set",
+							op,
+							before,
+							after,
+							index,
+							{
+								sequence: "ESU",
+							},
+						);
+					}
 					this.#syncDepth--;
 					if (this.#syncDepth < 0) {
 						this.#fail("synchronized-output end (ESU) without matching begin", op, before, after, index, {
@@ -2854,7 +2880,8 @@ function scenarioEnv(envMode: EnvMode): Record<EnvKey, string | undefined> {
 		KITTY_WINDOW_ID: undefined,
 		GHOSTTY_RESOURCES_DIR: undefined,
 		ALACRITTY_WINDOW_ID: undefined,
-		VTE_VERSION: undefined,
+		VTE_VERSION: envMode === "vteNoSync" ? "6800" : undefined,
+		PI_NO_SYNC_OUTPUT: envMode === "vteNoSync" ? "1" : undefined,
 		TERM_PROGRAM: envMode === "appleTerminal" ? "Apple_Terminal" : envMode === "iterm2" ? "iTerm.app" : undefined,
 		ITERM_SESSION_ID: envMode === "iterm2" ? "w0t0p0" : undefined,
 		// WSL fronted by Windows Terminal: WT propagates WT_SESSION into the
@@ -2984,6 +3011,22 @@ function coreTemplates(): ScenarioTemplate[] {
 			platform: "linux",
 			terminalMode: "normal",
 			envMode: "plain",
+			geometryMode: "small",
+			columns: 40,
+			rows: 6,
+			widthChoices: [10, 18, 32, 40],
+			heightChoices: [3, 4, 6],
+		},
+		{
+			// VTE 0.68 reports DEC 2026 synchronized output as permanently reset
+			// and users can opt out when a terminal's implementation is buggy or
+			// visually worse. The renderer must remove only the 2026 wrapper; it
+			// still keeps autowrap disabled around paints to avoid pending-wrap
+			// staircase corruption.
+			name: "linux-normal-vteNoSync-small",
+			platform: "linux",
+			terminalMode: "normal",
+			envMode: "vteNoSync",
 			geometryMode: "small",
 			columns: 40,
 			rows: 6,
@@ -3129,7 +3172,7 @@ function soakTemplates(): ScenarioTemplate[] {
 	const templates: ScenarioTemplate[] = [];
 	const platformEnvModes: readonly { platform: TestPlatform; envModes: readonly EnvMode[] }[] = [
 		{ platform: "darwin", envModes: ["plain", "tmux"] },
-		{ platform: "linux", envModes: ["plain", "tmux", "termux"] },
+		{ platform: "linux", envModes: ["plain", "tmux", "termux", "vteNoSync"] },
 		{ platform: "win32", envModes: ["plain"] },
 	];
 	const terminalModes: readonly TerminalMode[] = ["normal", "unknown", "intermittentUnknown", "staleBottom"];
@@ -3215,6 +3258,7 @@ export function applyStressEnv(envMode: Scenario["envMode"]): StressEnvSnapshot 
 			GHOSTTY_RESOURCES_DIR: undefined,
 			ALACRITTY_WINDOW_ID: undefined,
 			VTE_VERSION: undefined,
+			PI_NO_SYNC_OUTPUT: undefined,
 			TERM_PROGRAM: undefined,
 			ITERM_SESSION_ID: undefined,
 			WT_SESSION: undefined,
@@ -3231,6 +3275,7 @@ export function applyStressEnv(envMode: Scenario["envMode"]): StressEnvSnapshot 
 			GHOSTTY_RESOURCES_DIR: undefined,
 			ALACRITTY_WINDOW_ID: undefined,
 			VTE_VERSION: undefined,
+			PI_NO_SYNC_OUTPUT: undefined,
 			TERM_PROGRAM: undefined,
 			ITERM_SESSION_ID: undefined,
 			WT_SESSION: undefined,

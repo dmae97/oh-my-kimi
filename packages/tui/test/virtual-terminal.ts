@@ -337,6 +337,44 @@ export class VirtualTerminal implements Terminal {
 	}
 
 	/**
+	 * Columns in a viewport row whose cells carry a non-default foreground color.
+	 * Used with unreset-SGR regressions to ensure per-line resets confine
+	 * foreground attributes to the row that emitted them.
+	 */
+	getViewportRowForegroundColumns(row: number): number[] {
+		const buffer = this.xterm.buffer.active;
+		const line = buffer.getLine(buffer.viewportY + row);
+		if (!line) return [];
+		const columns: number[] = [];
+		for (let col = 0; col < this.xterm.cols; col++) {
+			const cell = line.getCell(col);
+			if (cell && !cell.isFgDefault()) {
+				columns.push(col);
+			}
+		}
+		return columns;
+	}
+
+	/**
+	 * Columns in a viewport row whose cells carry underline.
+	 * Used with unreset-SGR regressions to ensure style attributes do not bleed
+	 * into later rows or erased blanks.
+	 */
+	getViewportRowUnderlineColumns(row: number): number[] {
+		const buffer = this.xterm.buffer.active;
+		const line = buffer.getLine(buffer.viewportY + row);
+		if (!line) return [];
+		const columns: number[] = [];
+		for (let col = 0; col < this.xterm.cols; col++) {
+			const cell = line.getCell(col);
+			if (cell?.isUnderline()) {
+				columns.push(col);
+			}
+		}
+		return columns;
+	}
+
+	/**
 	 * Get the entire scroll buffer
 	 */
 	getScrollBuffer(): string[] {

@@ -1074,9 +1074,9 @@ describe("TUI terminal-state regressions", () => {
 			// on software-keyboard height toggles), so a real resize carrying new
 			// content fell through to the diff/append emitter, which scrolls relative
 			// to the pre-resize viewport top — offsetting the appended rows by the
-			// geometry delta. Keyboard toggles (pure height change, no content) are
-			// still no-ops via the unchanged-content path; a content-bearing resize
-			// must repaint at the new geometry.
+			// geometry delta. Pure height changes repaint too: otherwise the terminal
+			// exposes blank rows that a later append can fill without growing
+			// scrollback.
 			await withEnvPatch({ TERMUX_VERSION: "0.118" }, async () => {
 				const term = new VirtualTerminal(120, 12);
 				const tui = new TUI(term);
@@ -1098,6 +1098,41 @@ describe("TUI terminal-state regressions", () => {
 					await settle(term);
 
 					expect(visible(term)).toEqual([...final, ...Array<string>(24 - final.length).fill("")]);
+				} finally {
+					tui.stop();
+				}
+			});
+		});
+
+		it("repaints pure Termux height grows so later appends cannot fill phantom blank rows", async () => {
+			// Stress repro: linux-normal-termux-small seed 0x207adeeb op 1257-1259.
+			// A pure Termux height grow (software keyboard/rotation, no content
+			// change) used to no-op. The terminal exposed two blank rows at the bottom
+			// of the viewport, and the next append wrote into that phantom space
+			// instead of scrolling a new row into native history, breaking row
+			// accounting and hiding the true frame tail.
+			await withEnvPatch({ TERMUX_VERSION: "0.118" }, async () => {
+				const term = new VirtualTerminal(16, 4, 100);
+				const tui = new TUI(term);
+				const lines = rows("row-", 12);
+				const component = new MutableLinesComponent(lines);
+				tui.addChild(component);
+
+				try {
+					tui.start();
+					await settle(term);
+
+					term.resize(16, 6);
+					await settle(term);
+					expect(visible(term)).toEqual(lines.slice(6));
+
+					const final = [...lines, "row-12"];
+					component.setLines(final);
+					tui.requestRender();
+					await settle(term);
+
+					expect(visible(term)).toEqual(final.slice(7));
+					expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(final);
 				} finally {
 					tui.stop();
 				}
@@ -3081,11 +3116,28 @@ describe("TUI terminal-state regressions", () => {
 		}
 
 		const UNRESET_BG_ROW = "\x1b[41mRED-BG-NO-RESET";
+		const UNRESET_FG_UNDERLINE_ROW = "\x1b[32;4mGREEN-UNDER-NO-RESET";
 
 		function backgroundRows(term: VirtualTerminal, height: number): number[] {
 			const rows: number[] = [];
 			for (let row = 0; row < height; row++) {
 				if (term.getViewportRowBackgroundColumns(row).length > 0) rows.push(row);
+			}
+			return rows;
+		}
+
+		function foregroundRows(term: VirtualTerminal, height: number): number[] {
+			const rows: number[] = [];
+			for (let row = 0; row < height; row++) {
+				if (term.getViewportRowForegroundColumns(row).length > 0) rows.push(row);
+			}
+			return rows;
+		}
+
+		function underlineRows(term: VirtualTerminal, height: number): number[] {
+			const rows: number[] = [];
+			for (let row = 0; row < height; row++) {
+				if (term.getViewportRowUnderlineColumns(row).length > 0) rows.push(row);
 			}
 			return rows;
 		}
@@ -3118,6 +3170,41 @@ describe("TUI terminal-state regressions", () => {
 				await settle(term);
 				expect(backgroundRows(term, height)).toEqual([1]);
 				expect(visible(term)[2]).toBe("");
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("confines unreset foreground and underline to their own row", async () => {
+			const height = 6;
+			const term = new VirtualTerminal(24, height);
+			const tui = new TUI(term);
+			const component = new RawLinesComponent(["plain-0", UNRESET_FG_UNDERLINE_ROW, "plain-2"]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(foregroundRows(term, height)).toEqual([1]);
+				expect(underlineRows(term, height)).toEqual([1]);
+
+				// Rewriting the next row starts with an erase; leaked SGR would make
+				// the edited row green/underlined despite containing plain text.
+				component.setLines(["plain-0", UNRESET_FG_UNDERLINE_ROW, "EDITED-2"]);
+				tui.requestRender();
+				await settle(term);
+				expect(foregroundRows(term, height)).toEqual([1]);
+				expect(underlineRows(term, height)).toEqual([1]);
+				expect(term.getViewportRowForegroundColumns(2)).toEqual([]);
+				expect(term.getViewportRowUnderlineColumns(2)).toEqual([]);
+
+				component.setLines(["plain-0", UNRESET_FG_UNDERLINE_ROW]);
+				tui.requestRender();
+				await settle(term);
+				expect(foregroundRows(term, height)).toEqual([1]);
+				expect(underlineRows(term, height)).toEqual([1]);
+				expect(term.getViewportRowForegroundColumns(2)).toEqual([]);
+				expect(term.getViewportRowUnderlineColumns(2)).toEqual([]);
 			} finally {
 				tui.stop();
 			}
@@ -3240,6 +3327,20 @@ describe("TUI terminal-state regressions", () => {
 			}
 		}
 
+		class CursorVisibilityTerminal extends VirtualTerminal {
+			visibilityWrites: string[] = [];
+
+			override hideCursor(): void {
+				this.visibilityWrites.push("\x1b[?25l");
+				super.hideCursor();
+			}
+
+			override showCursor(): void {
+				this.visibilityWrites.push(SHOW_CURSOR);
+				super.showCursor();
+			}
+		}
+
 		afterEach(() => {
 			vi.restoreAllMocks();
 		});
@@ -3286,6 +3387,25 @@ describe("TUI terminal-state regressions", () => {
 					vi.restoreAllMocks();
 				}
 			}
+		});
+
+		it("shows the terminal cursor during stop even when paints keep it hidden", async () => {
+			// DECSC/DECRC restore cursor position and attributes, not DECTCEM
+			// visibility. The TUI hides the hardware cursor before paints, so stop()
+			// must explicitly show it even when the session disabled hardware-cursor
+			// rendering and no paint ever emitted \x1b[?25h.
+			const term = new CursorVisibilityTerminal(20, 4);
+			const tui = new TUI(term, false);
+			tui.addChild(new MutableLinesComponent(["prompt"]));
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(term.visibilityWrites).not.toContain(SHOW_CURSOR);
+			} finally {
+				tui.stop();
+			}
+			expect(term.visibilityWrites.at(-1)).toBe(SHOW_CURSOR);
 		});
 	});
 
