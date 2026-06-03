@@ -126,19 +126,27 @@ fn match_is_worse(a: &GlobMatch, b: &GlobMatch) -> bool {
 	compare_matches_by_rank(a, b) == Ordering::Greater
 }
 
-fn push_bounded_match(heap: &mut BinaryHeap<RankedGlobMatch>, entry: GlobMatch, limit: usize) {
+/// Returns `true` when `entry` was admitted into the bounded top-`limit` heap
+/// (either filling free space or evicting a worse existing entry).
+fn push_bounded_match(
+	heap: &mut BinaryHeap<RankedGlobMatch>,
+	entry: GlobMatch,
+	limit: usize,
+) -> bool {
 	if heap.len() < limit {
 		heap.push(RankedGlobMatch { entry });
-		return;
+		return true;
 	}
 
 	let Some(worst) = heap.peek() else {
-		return;
+		return false;
 	};
 	if match_is_worse(&worst.entry, &entry) {
 		heap.pop();
 		heap.push(RankedGlobMatch { entry });
+		return true;
 	}
+	false
 }
 
 fn resolve_symlink_target_type(root: &Path, relative_path: &str) -> Option<FileType> {
@@ -233,7 +241,6 @@ fn collect_sorted_matches_uncached(
 	);
 	let mut top_matches = BinaryHeap::with_capacity(config.max_results.min(1024));
 	let mut visited = 0usize;
-	let mut streamed_matches = 0usize;
 
 	for entry in builder.build() {
 		if visited == 0 || visited >= 128 {
@@ -260,13 +267,12 @@ fn collect_sorted_matches_uncached(
 			continue;
 		};
 		matched_entry.file_type = effective_file_type;
-		if streamed_matches < config.max_results {
-			streamed_matches += 1;
-			if let Some(callback) = on_match {
-				callback.call(Ok(matched_entry.clone()), ThreadsafeFunctionCallMode::NonBlocking);
-			}
+		let streamable = on_match.map(|cb| (cb, matched_entry.clone()));
+		if push_bounded_match(&mut top_matches, matched_entry, config.max_results)
+			&& let Some((callback, payload)) = streamable
+		{
+			callback.call(Ok(payload), ThreadsafeFunctionCallMode::NonBlocking);
 		}
-		push_bounded_match(&mut top_matches, matched_entry, config.max_results);
 	}
 
 	let mut matches: Vec<GlobMatch> = top_matches.into_iter().map(|ranked| ranked.entry).collect();
