@@ -752,6 +752,30 @@ function schemaAcceptsStringAndArray(schema: Record<string, unknown>): boolean {
 	return false;
 }
 
+function schemaNodeAcceptsArray(schema: unknown): schema is Record<string, unknown> {
+	if (!schema || typeof schema !== "object") return false;
+	const schemaObject = schema as Record<string, unknown>;
+	const schemaType = schemaObject.type;
+	return schemaType === "array" || (Array.isArray(schemaType) && schemaType.includes("array"));
+}
+
+function parsedArrayMatchesArrayBranch(schema: Record<string, unknown>, value: unknown[]): boolean {
+	if (schemaNodeAcceptsArray(schema)) {
+		return isJsonSchemaValueValid(schema, value);
+	}
+
+	for (const key of ["anyOf", "oneOf"] as const) {
+		const branches = schema[key];
+		if (!Array.isArray(branches)) continue;
+		const branchList: unknown[] = branches;
+		for (const branch of branchList) {
+			if (!schemaNodeAcceptsArray(branch)) continue;
+			if (isJsonSchemaValueValid(branch, value)) return true;
+		}
+	}
+	return false;
+}
+
 /**
  * Pre-validation normalization: when a schema field accepts BOTH `string` and
  * `array`, providers that double-serialize tool arguments (e.g. Z.AI / GLM)
@@ -762,10 +786,9 @@ function schemaAcceptsStringAndArray(schema: Record<string, unknown>): boolean {
  * (silently producing zero matches or glob parse errors).
  *
  * Walk the schema; when both shapes are accepted AND the incoming value is a
- * JSON-array-shaped string, substitute the parsed array. Conservative: only
- * fires when the schema explicitly allows both shapes AND parsing yields an
- * Array — anything else falls through to the regular validator, which can
- * still surface a clean type error.
+ * JSON-array-shaped string, substitute the parsed array only if it validates
+ * against the schema's array branch. Conservative: array-shaped strings like
+ * `"[1]"` stay on the string branch when the array branch is `string[]`.
  *
  * See https://github.com/can1357/oh-my-pi/issues/1788.
  */
@@ -781,7 +804,7 @@ function normalizeStringEncodedArrayUnions(schema: unknown, value: unknown): { v
 		if (!trimmed.startsWith("[")) return { value, changed: false };
 		try {
 			const parsed = JSON.parse(trimmed) as unknown;
-			if (Array.isArray(parsed)) {
+			if (Array.isArray(parsed) && parsedArrayMatchesArrayBranch(schemaObject, parsed)) {
 				return { value: parsed, changed: true };
 			}
 		} catch {

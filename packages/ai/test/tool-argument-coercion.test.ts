@@ -1065,6 +1065,16 @@ describe("Tool argument coercion", () => {
 			expect(result.paths).toBe("[abc]");
 		});
 
+		it("preserves JSON-array-shaped strings that do not satisfy the array branch", () => {
+			const result = validateToolArguments(unionTool, {
+				type: "toolCall",
+				id: "u7",
+				name: "search",
+				arguments: { pattern: "name", paths: "[1]" },
+			}) as { paths: unknown };
+			expect(result.paths).toBe("[1]");
+		});
+
 		it("does not coerce JSON-shape strings when the schema only accepts string", () => {
 			const stringOnly: Tool = {
 				name: "string_only",
@@ -1073,7 +1083,7 @@ describe("Tool argument coercion", () => {
 			};
 			const result = validateToolArguments(stringOnly, {
 				type: "toolCall",
-				id: "u7",
+				id: "u8",
 				name: "string_only",
 				arguments: { value: '["not-a-list"]' },
 			}) as { value: unknown };
