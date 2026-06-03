@@ -988,4 +988,96 @@ describe("Tool argument coercion", () => {
 		const result = validateToolArguments(tool, toolCall) as Record<string, unknown>;
 		expect(result.op).toBe("fix");
 	});
+
+	describe("string|array union (regression: #1788)", () => {
+		// `search` and `gh` tools declare `paths`/`pr` as `union(string, array<string>)`
+		// so the LLM can pass a single path or many. Some providers (Z.AI / GLM)
+		// double-serialize array tool-call arguments into JSON strings, which the
+		// union accepts as a string — silently feeding the downstream tool a literal
+		// `["a","b"]` path string.
+		const unionTool: Tool = {
+			name: "search",
+			description: "",
+			parameters: z.object({
+				pattern: z.string(),
+				paths: z.union([z.string(), z.array(z.string()).min(1)]),
+			}),
+		};
+
+		it("parses a JSON-encoded single-element array into a real array", () => {
+			const result = validateToolArguments(unionTool, {
+				type: "toolCall",
+				id: "u1",
+				name: "search",
+				arguments: { pattern: "name", paths: '["package.json"]' },
+			}) as { paths: unknown };
+			expect(result.paths).toEqual(["package.json"]);
+		});
+
+		it("parses a JSON-encoded multi-element array into a real array", () => {
+			const result = validateToolArguments(unionTool, {
+				type: "toolCall",
+				id: "u2",
+				name: "search",
+				arguments: { pattern: "name", paths: '["package.json","App.tsx"]' },
+			}) as { paths: unknown };
+			expect(result.paths).toEqual(["package.json", "App.tsx"]);
+		});
+
+		it("parses a JSON-encoded array containing an absolute path", () => {
+			const result = validateToolArguments(unionTool, {
+				type: "toolCall",
+				id: "u3",
+				name: "search",
+				arguments: { pattern: "name", paths: '["/home/user/project/package.json"]' },
+			}) as { paths: unknown };
+			expect(result.paths).toEqual(["/home/user/project/package.json"]);
+		});
+
+		it("preserves a plain string path (no brackets) untouched", () => {
+			const result = validateToolArguments(unionTool, {
+				type: "toolCall",
+				id: "u4",
+				name: "search",
+				arguments: { pattern: "name", paths: "package.json" },
+			}) as { paths: unknown };
+			expect(result.paths).toBe("package.json");
+		});
+
+		it("preserves a real array path untouched", () => {
+			const result = validateToolArguments(unionTool, {
+				type: "toolCall",
+				id: "u5",
+				name: "search",
+				arguments: { pattern: "name", paths: ["package.json", "App.tsx"] },
+			}) as { paths: unknown };
+			expect(result.paths).toEqual(["package.json", "App.tsx"]);
+		});
+
+		it("leaves a glob-style string with brackets untouched when it does not parse as JSON", () => {
+			// `[abc]` is a glob char class; not valid JSON without quoted members.
+			const result = validateToolArguments(unionTool, {
+				type: "toolCall",
+				id: "u6",
+				name: "search",
+				arguments: { pattern: "name", paths: "[abc]" },
+			}) as { paths: unknown };
+			expect(result.paths).toBe("[abc]");
+		});
+
+		it("does not coerce JSON-shape strings when the schema only accepts string", () => {
+			const stringOnly: Tool = {
+				name: "string_only",
+				description: "",
+				parameters: z.object({ value: z.string() }),
+			};
+			const result = validateToolArguments(stringOnly, {
+				type: "toolCall",
+				id: "u7",
+				name: "string_only",
+				arguments: { value: '["not-a-list"]' },
+			}) as { value: unknown };
+			expect(result.value).toBe('["not-a-list"]');
+		});
+	});
 });
