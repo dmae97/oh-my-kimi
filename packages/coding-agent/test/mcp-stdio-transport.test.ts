@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { StdioTransport, writeFrame } from "../src/mcp/transports/stdio";
 
 // ---------------------------------------------------------------------------
-// writeFrame — the seam that catches synchronous FileSink failures so the
-// async `notify` / `#sendResponse` paths can decide whether to swallow or
-// surface the error. See issue #1710.
+// writeFrame — the seam that catches synchronous FileSink throws AND neutralizes
+// asynchronous (Promise) rejections, so the async `notify` / `#sendResponse` /
+// `request` paths never let an un-awaited broken-pipe rejection escape as a fatal
+// unhandled rejection. See issue #1710 and its async follow-up.
 // ---------------------------------------------------------------------------
 
 describe("writeFrame", () => {
@@ -64,6 +65,50 @@ describe("writeFrame", () => {
 		};
 
 		expect(writeFrame(sink, "x")).toBe(false);
+	});
+
+	it("returns true and neutralizes an asynchronous write rejection (broken pipe surfaced as a Promise)", async () => {
+		const sink = {
+			flushed: 0,
+			write() {
+				return Promise.reject(new Error("EPIPE: broken pipe, write"));
+			},
+			flush() {
+				this.flushed++;
+			},
+		};
+
+		const tracker = trackUnhandled();
+		try {
+			// No synchronous throw, so the frame is "accepted"; the async rejection
+			// must be neutralized rather than escaping as an unhandled rejection.
+			expect(writeFrame(sink, "frame\n")).toBe(true);
+			await Bun.sleep(50);
+			expect(tracker.capture()).toEqual([]);
+		} finally {
+			tracker.release();
+		}
+	});
+
+	it("returns true and neutralizes an asynchronous flush rejection", async () => {
+		const sink = {
+			writes: [] as string[],
+			write(chunk: string) {
+				this.writes.push(chunk);
+			},
+			flush() {
+				return Promise.reject(new Error("EPIPE: broken pipe, flush"));
+			},
+		};
+
+		const tracker = trackUnhandled();
+		try {
+			expect(writeFrame(sink, "frame\n")).toBe(true);
+			await Bun.sleep(50);
+			expect(tracker.capture()).toEqual([]);
+		} finally {
+			tracker.release();
+		}
 	});
 });
 
