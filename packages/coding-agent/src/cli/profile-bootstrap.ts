@@ -35,6 +35,10 @@
 import { isSubcommand } from "../cli-commands";
 import { OPTIONAL_FLAGS, OPTIONAL_VALUE_FLAGS, STRING_VALUE_FLAGS, VALUELESS_FLAGS } from "./flag-tables";
 
+function isProfileBootstrapSubcommand(arg: string): boolean {
+	return arg === "launch" || arg === "acp";
+}
+
 export interface ProfileBootstrapResult {
 	argv: string[];
 	profile?: string;
@@ -47,11 +51,12 @@ export interface ProfileBootstrapResult {
  * and the captured flag values.
  *
  * Global flag extraction stops only when the first residual argv token names a
- * registered non-launch subcommand (e.g. `grep`): everything from that token
- * onward is forwarded verbatim so a subcommand's own flags and positionals are
- * never stolen (`omp grep --profile <path>` greps for `--profile`; it does not
- * select a profile). `launch` is the explicit spelling of the default command,
- * so `omp launch --profile work` still selects profile `work`.
+ * registered command that owns its own flags (e.g. `grep`): everything from
+ * that token onward is forwarded verbatim so a subcommand's own flags and
+ * positionals are never stolen (`omp grep --profile <path>` greps for
+ * `--profile`; it does not select a profile). `launch` and `acp` are explicit
+ * spellings of launch-shaped commands, so `omp launch --profile work` and
+ * `omp acp --profile work` still select profile `work`.
  *
  * Throws when either flag is supplied without a value.
  */
@@ -175,9 +180,9 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 
 		// Only the first residual argv token can be the dispatched subcommand. Once
 		// any other token has been forwarded, later subcommand names are launch text.
-		// `launch` is special: it is an explicit spelling of the default command,
-		// so global launch flags that follow it must still be extracted.
-		if (canDispatchSubcommand && isSubcommand(arg) && arg !== "launch") {
+		// `launch` and `acp` are explicit spellings of launch-shaped commands, so
+		// global launch flags that follow them must still be extracted.
+		if (canDispatchSubcommand && isSubcommand(arg) && !isProfileBootstrapSubcommand(arg)) {
 			sawSubcommand = true;
 		}
 		canDispatchSubcommand = false;

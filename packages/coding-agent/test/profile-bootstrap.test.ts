@@ -111,6 +111,14 @@ describe("extractProfileFlags", () => {
 		});
 	});
 
+	it("treats explicit acp as launch-shaped and keeps extracting globals", () => {
+		expect(extractProfileFlags(["acp", "--profile", "work"])).toEqual({
+			argv: ["acp"],
+			profile: "work",
+			aliasName: undefined,
+		});
+	});
+
 	it("treats later subcommand-shaped words as launch text after explicit launch", () => {
 		const result = extractProfileFlags(["launch", "grep", "--profile", "work"]);
 		expect(result.profile).toBe("work");
