@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { extractSegments, sliceWithWidth, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import {
+	encodeTextSized,
+	extractSegments,
+	sliceWithWidth,
+	truncateToWidth,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui/utils";
 
 describe("text utils", () => {
 	it("computes visible width for ANSI and tabs", () => {
@@ -76,6 +82,18 @@ describe("text utils", () => {
 		expect(result.before).toContain("hel");
 		expect(result.after.startsWith("\x1b[31m")).toBe(true);
 		expect(result.afterWidth).toBeGreaterThan(0);
+	});
+
+	it("encodes OSC 66 text sizing spans with ST terminators", () => {
+		const encoded = encodeTextSized("Hi", {
+			scale: 2,
+			widthCells: 3,
+			verticalAlign: "center",
+			horizontalAlign: "right",
+		});
+		expect(encoded).toBe("\x1b]66;s=2:w=3:v=2:h=1;Hi\x1b\\");
+		expect(visibleWidth(encoded)).toBe(6);
+		expect(encodeTextSized("A\nB", { scale: 1 })).toBe("\x1b]66;s=1;A B\x1b\\");
 	});
 
 	it("counts OSC 66 text-sizing spans as visible text", () => {
